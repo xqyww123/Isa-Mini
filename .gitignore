@@ -1,0 +1,15 @@
+# VIM
+*.ll
+*~
+*.swn
+*.swp
+*.swo
+.*.marks
+
+\#*
+output
+.*#
+*.proof-cache
+*.phi-cache
+
+doc/.obsidian
