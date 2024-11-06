@@ -110,7 +110,11 @@ $$\begin{gather*}
 
 A bundle $(ctxt,gs)$ collects several subgoals $gs$ and specifies their common context $ctxt$. Since the subgoals $gs$ can also be bundles, a bundle forms a tree where a leaf is a proposition, a node and its subtree form a bundle, and the children of the node is given by the subgoals of the bundle. The state of our state machine, called *proof state*, is a tree as described above.
 
-A tree is *valid* iff each variable and hypothesis in the tree has a unique name within its own category. A tree is *normal* iff (1) it is valid, (2) no node has no child, (3) no node has one child. The conditions (1), (2) are invariants maintained by our commands. The condition (3) is maintained by applying the following reduction exhaustively for every subtree and instantly after every command application.
+A tree is *valid* iff each variable and hypothesis in the tree has a unique name within its own category. A tree is *normal* iff the following invariants hold
+1. the tree is valid
+2. no node has no child
+3. no node has one child.
+The invariants (1), (2) are maintained by our commands. The invariant (3) is maintained by applying the following reduction exhaustively for every subtree and instantly after every command application.
 
 $$(ctxt,[(ctxt',goal)]) \leadsto (ctxt + ctxt', goal)$$
 
@@ -167,7 +171,7 @@ Basically any `GOAL`, `HAVE`, `OBTAIN` (introduced later) should be ended by an 
 
 If the `@current_goal` is not in a form clearly demonstrating it is proved (e.g., `True`), `HAMMER` command will be applied to try to prove the goal first. Thus, command sequence (`HAMMER`; `END`)  can be simply written as `END`.
 
-Given a proof state whose current bundle is $(ctxt, [g]+gs)$, this command replaces the current bundle with $(ctxt, gs)$, if $g$ is trivially true or provable by `HAMMER`.
+Given a proof state whose current bundle is $(ctxt, [g]+gs)$, this command replaces the current bundle with $(ctxt, gs)$, if $g$ is trivially true or provable by `HAMMER`. In this way, the current goal will be transferred from $g$ to the head of $gs$ (By the invariant (3), we know $gs$ cannot be empty).
 
 Specially, if the proof state is a leaf $(ctxt, g)$, this command checks if $g$ is the boolean literal $\texttt{True}$. If not, it applies `HAMMER` to prove $g$.
 
@@ -187,6 +191,24 @@ Given a proof state whose current goal (i.e., the left-most node) is $(ctxt, g)$
 The command first attempts the `auto` tactic which can be non-terminating. Thus we set a configurable timeout (by default, 10 seconds). If it timeouts, we instead use a weaker tactic `(clarsimp; rule conj+)`. If it still timeouts, the command fails with error message "timeout". If the tactics cannot simplify the `@current_goal` even a bit, the commands fails with error message "fail".
 
 `@rules` is an optional list of simplification rules should be additionally used.
+
+--------------------------
+
+**COMMAND SYNTAX:**   `@chan INDUCT ...` <br />
+Its argument has the same syntax with Isabelle's `induct` tactic <br />
+**RESPONSE:**  Proof State <br />
+**DESCRIPTION:** Apply induction to the current goal.
+
+Given a proof state whose current goal is $(ctxt,g)$, this command applies induction to the goal. Assuming the application returns subgoals $gs'$, the command replaces the current goal with $(ctxt,gs')$.
+
+--------------------------
+
+**COMMAND SYNTAX:**   `@chan CASE_SPLIT ...` <br />
+Its argument has the same syntax with Isabelle's `case` tactic <br />
+**RESPONSE:**  Proof State <br />
+**DESCRIPTION:** Apply case analysis to the current goal.
+
+Given a proof state whose current goal is $(ctxt,g)$, this command applies case analysis to the goal. Assuming the application returns subgoals $gs'$, the command replaces the current goal with $(ctxt,gs')$.
 
 -----------
 
