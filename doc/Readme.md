@@ -12,6 +12,8 @@ This shell offers a minimal language and abstraction layer that eliminates human
 - **Minimized Interface**: Minimal number of commands integrating powerful automation tools like Sledgehammer
 - **Concurrency**: Efficient concurrent proof sessions powered by Isabelle's built-in thread scheduler
 - **State Management**: Support for restore historical proof states.
+- **Bidirectional Portal**: That also eases Isabelle to call AI agents in future.
+	- A shell script that successfully proves a goal, also produces an Isabelle tactic script able to reproduce the proof without using the shell.
 ## Motivation
 
 Isabelle/HOL has evolved into a sophisticated system with numerous features optimized for human interaction. While powerful, many of these features—such as the human-readable Isar language—are unnecessary overhead when working with AI agents. This shell aims to:
