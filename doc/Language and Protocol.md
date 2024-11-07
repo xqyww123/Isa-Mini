@@ -49,9 +49,9 @@ GOAL "sqrt 2 ∉ ℚ"
     HAVE "False"; END
 END
 ```
-Our language is much conciser because we use Sledgehammer to automatically generate every small proof script used in the original code. The idea is to let AI agent focus on the macroscopic proof route planing, and leave all the trivial small stuffs to existing proof automation mechanisms like Sledgehammer. 
+Our language is more concise because we use Sledgehammer to automatically generate every small proof script used in the original code. The idea is to let AI agents focus on the macroscopic proof route planning, and leave all the trivial small stuff to existing proof automation mechanisms like Sledgehammer. 
 
-Clients just need to start up our shell, send the above text through the standard input pipeline (`stdin`), and that is all required to prove lemmas using our shell. If the proof works, our shell shall return an Isabelle script allowing anyone to reproduce the proof.
+Clients just need to start up our shell, and send the above text through the standard input pipeline (`stdin`), and that is all required to prove lemmas using our shell. If the proof works, our shell shall return an Isabelle script allowing anyone to reproduce the proof.
 ## Communication Protocol
 
 The communication is based on text, over the standard Input and Output pipeline (`stdin, stdout`). A request / response is written in a line and multiple requests / responses are separated by line breaks or semicolon symbol `;`. Also note, any term / type expression is not allowed to include line breaks.
@@ -74,9 +74,9 @@ A response is a single-line JSON.
 Commands and supported features are categorized and discussed as follows.
 
 ##### Notation
-In any syntax definition presented in this document, variables are leaded by `@`. Any other word not leaded by `@` is a plan literal that must be included as it is in the requests sent to our shell.
+In any syntax definition presented in this document, variables are led by `@`. Any other word not led by `@` is a plan literal that must be included as it is in the requests sent to our shell.
 
-For example, an instance of `@chan GOAL "@expr"` is `42 GOAL "1 + 1 = 2"`. The double quote symbol `"` is a literal must be presented in the request text.
+For example, an instance of `@chan GOAL "@expr"` is `42 GOAL "1 + 1 = 2"`. The double quote symbol `"` is a literal that must be presented in the request text.
 
 ### Concurrency & Multiplex
 
@@ -89,7 +89,7 @@ The shell supports multiplex. Clients can open multiple concurrent channels whil
 
 If a request calls a non-existing or released channel, the shell responds with error message `bad channel`.  The shell continues running even when all channels are released.
 
-Processes in different channels are parallel. However, we cannot guarantee a channel to use exactly one thread. Some Isabelle tactic can use multiple threads. Luckily, Isabelle has its own thread scheduling. Thus, it is safe to open as many channels as your CPU cores.
+Processes in different channels are parallel. However, we cannot guarantee that a channel uses exactly one thread. Some Isabelle tactic can use multiple threads. Luckily, Isabelle has its own thread scheduling. Thus, it is safe to open as many channels as your CPU cores.
 
 ## Proof Model
 
@@ -143,7 +143,7 @@ There are different ways to print a term / type expression into a string. Comman
 **RESPONSE:**  Proof State <br />
 **DESCRIPTION:** 
 - `@mode = 1` uses pretty printer, i.e., the output will be the same as what you can see in Isabelle's GUI
-- `@mode = 2` prints s-expression with full names (every constant will be printed in long-identifier format, `Theory_Name.Constant_Name`). This allows one to overcome syntax overloading and reconstruct the internal terms. Lambda variables are represented by de-Bruijn indexes, in format `_123`, (the index number leaded by an underscore). Lambda expression $\lambda(x:\tau). t$ will be printed as (`\<lambda>` $\tau$ $t$). Lambda application $f\ a\ b\ \cdots\ c$ will be `(f a b ... c)`
+- `@mode = 2` prints s-expression with full names (every constant will be printed in long-identifier format, `Theory_Name.Constant_Name`). This allows one to overcome syntax overloading and reconstruct the internal terms. Lambda variables are represented by de-Bruijn indexes, in format `_123`, (the index number led by an underscore). Lambda expression $\lambda(x:\tau). t$ will be printed as (`\<lambda>` $\tau$ $t$). Lambda application $f\ a\ b\ \cdots\ c$ will be `(f a b ... c)`
 
 ### Semantics
 
@@ -175,7 +175,7 @@ Given a proof state whose current bundle is $(ctxt, [g]+gs)$, this command repla
 
 Specially, if the proof state is a leaf $(ctxt, g)$, this command checks if $g$ is the boolean literal $\texttt{True}$. If not, it applies `HAMMER` to prove $g$.
 
-Command `NEXT` is an abbreviation of `END`. We introduce this abbreviation because some commands (e.g., `auto`) and tactics (e.g., `CRUSH`) can introduce subgoals whose number is unknown until the runtime. `END` has a structural meaning suggesting its number should equal the number of commands opening some context, e.g., `HAVE ...; END; OBTAIN ...; END`. However, if `CRUSH` introduces 3 subgoals, `CURSH; END; END; END` looks weird. Thus we use the abbreviation to write it as `CRUSH; NEXT; NEXT; END` which looks better.
+Command `NEXT` is an abbreviation of `END`. We introduce this abbreviation because some commands (e.g., `auto`) and tactics (e.g., `CRUSH`) can introduce subgoals whose number is unknown until the runtime. `END` has a structural meaning suggesting its number should equal the number of commands opening some context, e.g., `HAVE ...; END; OBTAIN ...; END`. However, if `CRUSH` introduces 3 subgoals, `CURSH; END; END; END` looks weird. Thus, we use the abbreviation to write it as `CRUSH; NEXT; NEXT; END` which looks better.
 ### Proof Tactics that All you Need
 
 Even when Isabelle provides tens of various tactics, the really useful tactics that an AI agent needs are very little. The following commands provide common combinations of these tactics.
@@ -215,7 +215,7 @@ Given a proof state whose current goal is $(ctxt,g)$, this command applies case 
 **COMMAND SYNTAX:**   `@chan HAVE @name "@expr"` <br />
 **RESPONSE:**  Proof State <br />
 **DESCRIPTION:** Ask the shell to suspend the `@current_goal`, and turn to first prove a subgoal `@expr` within the hypothesis context of `@current_goal`. The proof of `@expr` will be later added as a hypothesis into the context.
-This is similar with Isabelle's `have` command.
+This is similar to Isabelle's `have` command.
 
 The `@name` is optional. If not given, the shell generates a random name.
 
@@ -251,7 +251,7 @@ END
 **COMMAND SYNTAX:**   `@chan OBTAIN @varnames where @name : \<open> @condition \<close>` <br />
 This `OBTAIN` command has the same syntax with Isabelle's `obtain` commands, except the attributes of `@name`. <br />
 **RESPONSE:**  Proof State <br />
-**DESCRIPTION:** It has the same semantics with Isabelle's `obtain` command. In terms of the shell's state machine, it behaviors similarly to the `HAVE` command, except that the subgoal expression `@expr` is $\exists\texttt{varnames}.\;\texttt{condition}$.
+**DESCRIPTION:** It has the same semantics with Isabelle's `obtain` command. In terms of the shell's state machine, it behaves similarly to the `HAVE` command, except that the subgoal expression `@expr` is $\exists\texttt{varnames}.\;\texttt{condition}$.
 
 The `@name` is optional. If not given, the shell generates a random name.
 
@@ -260,18 +260,18 @@ Given a proof state whose current goal is $(ctxt,g)$, this command replaces the 
 ------------
 **COMMAND SYNTAX:**   `@chan HAMMER @timeout` <br />
 **RESPONSE:**  Proof State <br />
-**DESCRIPTION:** If the AI agent believes the `@current_goal` is straightforward enough, call this command to invoke Sledgehammer to finalize the proof for this `@current_goal`. Sledgehammer terminates only when it successfully solves the goal. Thus `@timeout` is used to indicate when should the shell give up and respond with error message "timeout". Note, Sledgehammer is generally slow, the recommended timeout is 30 seconds.
+**DESCRIPTION:** If the AI agent believes the `@current_goal` is straightforward enough, call this command to invoke Sledgehammer to finalize the proof for this `@current_goal`. Sledgehammer terminates only when it successfully solves the goal. Thus `@timeout` is used to indicate when should the shell give up and respond with error message "timeout". Note, Sledgehammer is generally slow; the recommended timeout is 30 seconds.
 
 Given a proof state whose current goal is $g$, this command replace the goal with $\texttt{True}$ if the proof search succeeds.
 
 This command uses a smart strategy. Before applying Sledgehammer, it first applies `CRUSH` to simplify and split the goal into several smaller subgoals. For each such subgoal, the command first applies `blast` within a timeout (1 second). If fails, try `fastforce` within 2 seconds. If still fails, finally the command tries the Sledgehammer.
 
 -----------------------
-Above, we described all the commonly used automatic tactics. The tactics above should be enough for the most situations. However, sometimes, manual proof is still required. Here the shell provides three commands that cover all kinds of manual proofs --- applying introduction and elimination rules, in a resolution manner, and applying unfolding.
+Above, we described all the commonly used automatic tactics. The tactics above should be enough for the most situations. However, sometimes, manual proof is still required. Here, the shell provides three commands that cover all kinds of manual proofs --- applying introduction and elimination rules, in a resolution manner, and applying unfolding.
 
 **COMMAND SYNTAX:**   `@chan RULE @rule` <br />
 **RESPONSE:**  Proof State <br />
-**DESCRIPTION:** Applying the introduction / elimination rule `@rule` to the `@current_goal`. Multiple new subgoals can be introduced as the consequence. The `@rule` is the name of the rule. To parse the name, we first check local context (the named hypotheses in the proof environment) and then the Isabelle system.
+**DESCRIPTION:** Applying the introduction / elimination rule `@rule` to the `@current_goal`. Multiple new subgoals can be introduced as a consequence. The `@rule` is the name of the rule. To parse the name, we first check the local context (the named hypotheses) and then the Isabelle system.
 
 Given a proof state whose current goal is $(ctxt, g)$, this command applies the introduction resolution if the given `@rule` is an introduction rule, or the elimination resolution if `@rule` is an elimination rule.
 Assuming the resolution returns a list $gs'$ of subgoals, the command replaces the current goal with $(ctxt, gs')$.
@@ -291,7 +291,7 @@ Attributes are allowed in `@rule`, e.g., `exI[where x=1]`, though it is generall
 
 ----------
 
-Finally, readers may expect Isabelle's `apply` command for applying an arbitrary tactic. Though this command is really unnecessary when the above commands are presents, we still decide to support it in our shell.
+Finally, readers may expect Isabelle's `apply` command for applying an arbitrary tactic. Though this command is really unnecessary when the above commands are present, we still decide to support it in our shell.
 
 **COMMAND SYNTAX:**   `@chan APPLY @tactic` <br />
 **RESPONSE:**  Proof State <br />

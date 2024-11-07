@@ -29,7 +29,7 @@ The current Isabelle system includes:
 
 Many of these commands and tactics have subtle differences and overlapping functionality. Our shell reduces this complexity to fewer than 10 essential proof commands (see [Language Reference](/doc/Language%20and%20Protocol.md) for details).
 
-Now, take the proof for "the square root of two is irrational" given in [the Wikipedia page of Isabelle](https://en.wikipedia.org/wiki/Isabelle_(proof_assistant))
+As an example, take the proof for "the square root of two is irrational" given in [the Wikipedia page of Isabelle](https://en.wikipedia.org/wiki/Isabelle_(proof_assistant))
 ```isabelle
 theorem sqrt2_not_rational:
   "sqrt 2 ∉ ℚ"
@@ -73,9 +73,9 @@ GOAL "sqrt 2 ∉ ℚ"
     HAVE "False"; END
 END
 ```
-Our language is much conciser because we use Sledgehammer to automatically generate every small proof script used in the original code. The idea is to let AI agent focus on the macroscopic proof route planing, and leave all the trivial small stuffs to existing proof automation mechanisms like Sledgehammer. 
+Our language is more concise because we use Sledgehammer to automatically generate every small proof script used in the original code. The idea is to let AI agents focus on the macroscopic proof route planning, and leave all the trivial small stuff to existing proof automation mechanisms like Sledgehammer. 
 
-Clients just need to start up our shell, send the above text through the standard input pipeline (`stdin`), and that is all required to prove lemmas using our shell. If the proof works, our shell shall return an Isabelle script allowing anyone to reproduce the proof.
+Clients just need to start up our shell, and send the above text through the standard input pipeline (`stdin`), and that is all required to prove lemmas using our shell. If the proof works, our shell shall return an Isabelle script allowing anyone to reproduce the proof.
 
 ## Schedule (Planned)
 
