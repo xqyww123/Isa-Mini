@@ -1,24 +1,23 @@
 Isa Proof Shell
 ====
 
-A streamlined, UNIX-pipeline-based shell for Isabelle's proof system, designed to simplify the integration between Isabelle and machine learning systems.
-This shell adopts a simplified language and an abstraction layer that abstract away all the complex Isabelle components designed for humans, making it particularly suitable for AI agents.
-	
+A streamlined, Unix-pipeline-based shell for Isabelle's proof system, optimized for integration between Isabelle and machine learning systems.
+This shell offers a minimal language and abstraction layer that eliminates human-oriented complexities in Isabelle, making it particularly suitable for AI agents.
+
 > This project is currently in the proposal stage. We welcome suggestions, feature requests, and concerns through GitHub issues.
 
 ## Key Features
 
 - **Communication**: Text-based standard I/O with JSON format
 - **Minimized Interface**: Minimal number of commands integrating powerful automation tools like Sledgehammer
-- **Concurrency**: Efficient concurrent proof sessions based on Isabelle's builtin thread scheduler.
-- **State Management**: Supports proof state revocation for historical state restoration
+- **Concurrency**: Efficient concurrent proof sessions powered by Isabelle's built-in thread scheduler
+- **State Management**: Support for restore historical proof states.
 ## Motivation
 
 Isabelle/HOL has evolved into a sophisticated system with numerous features optimized for human interaction. While powerful, many of these features—such as the human-readable Isar language—are unnecessary overhead when working with AI agents. This shell aims to:
 
-1. Strip away non-essential elements
+1. Strip away non-essential elements and provide a minimal, agent-friendly interface
 2. Integrate existing automation mechanisms
-3. Provide a minimal, agent-friendly interface
 
 ### Example of Simplification
 
@@ -80,14 +79,13 @@ Clients just need to start up our shell, send the above text through the standar
 
 ## Schedule (Planned)
 
-| Due Date       | Phase                       |
-| -------------- | --------------------------- |
-| 1st week, Nov. | Proposal Draft Release      |
-| 4th week, Nov. | Design Specification Freeze |
-| 2nd week, Dec. | Alpha Release               |
-| 4th week, Dec. | Stable Release              |
+| Due Date         | Phase                       |
+| ---------------- | --------------------------- |
+| Week 1, November | Proposal Draft Release      |
+| Week 4, November | Design Specification Freeze |
+| Week 2, December | Alpha Release               |
+| Week 4, December | Stable Release              |
 
 ## Design Specification (Draft)
 
 - [Language and Protocol](/doc/Language%20and%20Protocol.md)
-
