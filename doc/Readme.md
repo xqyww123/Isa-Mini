@@ -4,7 +4,7 @@ Isa Proof Shell
 A streamlined, Unix-pipeline-based shell for Isabelle's proof system, optimized for integration between Isabelle and machine learning systems.
 This shell offers a minimal language and abstraction layer that eliminates human-oriented complexities in Isabelle, making it particularly suitable for AI agents.
 
-> This project is currently in the proposal stage. We welcome suggestions, feature requests, and concerns through GitHub issues.
+> The development currently works in progress. We welcome suggestions, feature requests, and concerns through GitHub issues.
 
 ## Key Features
 
