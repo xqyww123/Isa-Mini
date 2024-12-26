@@ -40,6 +40,9 @@ val OBTAIN : (binding * string option * mixfix) list
           -> operation
 val OBTAIN_CMD : command
 
+val END : operation
+val END_CMD : command
+
 end
 
 structure IPS_Proof : IPS_PROOF = struct
@@ -57,6 +60,7 @@ datatype frame = HHF   of thm (*a local_facts bundle node, represented as a Here
                         * intro_subgaols
                | MAGIC of (Proof.context -> thm * local_facts * intro_subgaols * frame list -> Proof.context * frame list)
                         * (tree -> tree)
+               | ENDBLK 
 
 type stack = Proof.context * (frame list)
   (*invariant: the head must be an HHF*)
@@ -150,7 +154,8 @@ fun maintain (c,[]) = (c,[])
              | (HHF (st1, facts', IA') :: L') =>
                   maintain (ctxt, HHF (MP st1 st, facts' @ facts, IA') :: L')
              | (MAGIC (cb,_) :: L') =>
-                  (case cb ctxt (st, facts, IA, L') of (ctxt', S) => maintain (ctxt', S) ))
+                  (case cb ctxt (st, facts, IA, L') of (ctxt', S) => maintain (ctxt', S) )
+             | ENDBLK :: _ => origin )
          | _ => if IA
                 then let val goal = Thm.cprop_of st
                                 |> Thm.dest_arg1
@@ -161,6 +166,7 @@ fun maintain (c,[]) = (c,[])
                      end
                 else origin)
   | maintain (_, MAGIC _ :: _) = raise BROKEN_INVARIANT
+  | maintain (_, ENDBLK :: _) = raise BROKEN_INVARIANT
 
 fun INTROS_ALL_SUBGOALS (ctxt, HHF (st, facts, _) :: L) =
       maintain (ctxt, HHF (st, facts, true) :: L)
@@ -220,6 +226,7 @@ fun print_stack [] = PROP ([], [], SOLVED_GOAL)
                  in prt (BUNDL ([], facts, t::nodes)) L
                 end
             | prt t (MAGIC (_, PRT) :: L) = prt (PRT t) L
+            | prt t (ENDBLK :: L) = prt t L
           fun prt0 (HHF (st, facts, _)) = PROP ([], facts, Thm.prop_of st)
             | prt0 _ = raise BROKEN_INVARIANT
        in prt (prt0 S) L
@@ -447,5 +454,16 @@ fun OBTAIN' raw_fixes raw_statements s =
 val OBTAIN = OPR oo OBTAIN'
 val OBTAIN_CMD = K (Parse.vars --| Parse.where_ -- Parse_Spec.statement
               >> (fn (vs,ss) => OBTAIN vs ss))
+
+(* END *)
+
+fun END' (ctxt, HHF s :: ENDBLK :: SK) =
+  (case Thm.nprems_of (#1 s)
+     of 0 => maintain (ctxt, HHF s :: SK)
+      | _ => raise OPR_FAIL "The proof goal is not solved." )
+  | END' _ = raise BROKEN_INVARIANT
+
+val END = OPR END'
+val END_CMD = K (Scan.succeed END)
 
 end
