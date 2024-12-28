@@ -3,13 +3,15 @@ signature IPS_PROOF = sig
 type stack
 type state
 type operation = state -> state
-type command = Proof.context -> operation parser
+type parse_ctxt = Context.generic
+type command = parse_ctxt -> operation parser
 
 exception OPR_FAIL of string
 
 (* Operations *)
 
-val init : Proof.context -> stack
+val INIT : Proof.context -> thm -> state
+val INIT': Proof.state -> state
 
 val INTROS : operation
 val INTROS_CMD : command
@@ -43,6 +45,11 @@ val OBTAIN_CMD : command
 val END : operation
 val END_CMD : command
 
+(* Toplevel *)
+
+val parse_cmds : parse_ctxt -> string -> state -> state
+val METHOD : parse_ctxt -> string -> Method.method
+
 end
 
 structure IPS_Proof : IPS_PROOF = struct
@@ -69,7 +76,8 @@ type state = stack              (*current stack*)
            * stack Symtab.table (*history*)
 
 type operation = state -> state
-type command = Proof.context -> operation parser
+type parse_ctxt = Context.generic
+type command = parse_ctxt -> operation parser
 
 exception BROKEN_INVARIANT
 
@@ -84,7 +92,9 @@ structure IPS_Data = Proof_Data (
   val init = K NONE
 )
 
-fun init c = (IPS_Data.put (SOME (Unsynchronized.ref 0, Unsynchronized.ref 0)) c , [])
+val init_ctxt = IPS_Data.put (SOME (Unsynchronized.ref 0, Unsynchronized.ref 0))
+fun INIT c st = ((init_ctxt c, [HHF (st, [], false)]), Symtab.empty)
+fun INIT' st = INIT (Proof.context_of st) (#goal (Proof.simple_goal st))
 
 (*Modus Ponens*)
 fun MP thAB thA =
@@ -197,7 +207,7 @@ fun restore_history name (_,his) =
 
 val OPR = apfst : (stack -> stack) -> (state -> state)
 val INTROS = OPR INTROS'
-val INTROS_CMD = K (Args.$$$ "INTROS" >> K INTROS)
+val INTROS_CMD = K (Args.$$$ "intros" >> K INTROS)
 
 fun strip_meta_hhf term =
   let fun strip (V,P) (Const("Pure.imp", _) $ H $ B) = strip (V,("",H)::P) B
@@ -262,7 +272,7 @@ fun CRUSH' (ctxt, []) = (ctxt, [])
 
 val CRUSH = OPR CRUSH'
 
-val CRUSH_CMD = K (Args.$$$ "CRUSH" >> K CRUSH)
+val CRUSH_CMD = K (Args.$$$ "crush" >> K CRUSH)
 
 (* INDUCT & CASE *)
 
@@ -338,7 +348,8 @@ fun INDUCT' (no_simp, (insts, ((arbitrary, taking), opt_rule))) s =
 
 val INDUCT = OPR o INDUCT'
 fun INDUCT_CMD ctxt =
-      ind_synt (Context.Proof ctxt) >> (fn (no_simp, (insts, ((arbitrary, taking), opt_rule))) =>
+         Args.$$$ "induct" |-- ind_synt ctxt
+      >> (fn (no_simp, (insts, ((arbitrary, taking), opt_rule))) =>
           INDUCT (no_simp, (insts, ((arbitrary, taking), opt_rule))) )
 
 fun CASE' (no_simp, (insts, opt_rule)) s =
@@ -348,7 +359,8 @@ fun CASE' (no_simp, (insts, opt_rule)) s =
 
 val CASE = OPR o CASE'
 fun CASE_CMD ctxt =
-      case_synt (Context.Proof ctxt) >> (fn (no_simp, (insts, opt_rule)) =>
+         case_synt ctxt
+      >> (fn (no_simp, (insts, opt_rule)) =>
           CASE (no_simp, (insts, opt_rule)))
 
 end
@@ -378,7 +390,7 @@ fun HAVE' _ _ (ctxt, []) = (ctxt, [])
 
 val HAVE = OPR oo HAVE'
 
-val HAVE_CMD = K (Args.$$$ "HAVE" |--
+val HAVE_CMD = K (
         Scan.option (Parse.name -- Parse.opt_attribs --| \<^keyword>\<open>:\<close>) --
         Parse.term
      >> (fn (name, expr) => HAVE name expr))
@@ -452,8 +464,9 @@ fun OBTAIN' raw_fixes raw_statements s =
     | _ => raise BROKEN_INVARIANT )
 
 val OBTAIN = OPR oo OBTAIN'
-val OBTAIN_CMD = K (Parse.vars --| Parse.where_ -- Parse_Spec.statement
-              >> (fn (vs,ss) => OBTAIN vs ss))
+val OBTAIN_CMD =
+        K (Parse.vars --| Parse.where_ -- Parse_Spec.statement
+     >> (fn (vs,ss) => OBTAIN vs ss))
 
 (* END *)
 
@@ -465,5 +478,87 @@ fun END' (ctxt, HHF s :: ENDBLK :: SK) =
 
 val END = OPR END'
 val END_CMD = K (Scan.succeed END)
+
+(** Toplevel **)
+
+val CMDS = Symtab.make [
+      ("end",     END_CMD),
+      ("obtain",  OBTAIN_CMD),
+      ("have",    HAVE_CMD),
+      ("case",    CASE_CMD),
+      ("crush",   CRUSH_CMD)]
+
+val keywords = let open Keyword
+      in empty_keywords
+      |> add_keywords
+         [ (("where", \<^here>), quasi_command_spec),
+           (("::",    \<^here>), quasi_command_spec),
+           ((":",     \<^here>), quasi_command_spec),
+           ((",",     \<^here>), quasi_command_spec),
+           (("and",   \<^here>), quasi_command_spec),
+           (("in",   \<^here>), quasi_command_spec),
+           (("when",  \<^here>), quasi_command_spec),
+           (("if",    \<^here>), quasi_command_spec),
+           (("obtains",\<^here>),quasi_command_spec),
+           (("shows", \<^here>), quasi_command_spec),
+           (("fixes", \<^here>), quasi_command_spec),
+           (("defines",\<^here>),quasi_command_spec),
+           (("shows", \<^here>), quasi_command_spec),
+           (("constrains",\<^here>),quasi_command_spec),
+           (("assumes",\<^here>),quasi_command_spec),
+           (("notes", \<^here>), quasi_command_spec),
+           (("includes",\<^here>),quasi_command_spec),
+           (("|",     \<^here>), quasi_command_spec),
+           (("(",     \<^here>), quasi_command_spec),
+           ((")",     \<^here>), quasi_command_spec),
+           (("[",     \<^here>), quasi_command_spec),
+           (("]",     \<^here>), quasi_command_spec),
+           (("?",     \<^here>), quasi_command_spec),
+           (("for",   \<^here>), quasi_command_spec),
+
+           (("end",   \<^here>), command_spec (thy_end, [])),
+           (("obtain",\<^here>), command_spec (prf_asm_goal, [])),
+           (("have",  \<^here>), command_spec (prf_goal, [])),
+           (("case",  \<^here>), command_spec (prf_goal, [])),
+           (("crush", \<^here>), command_spec (prf_goal, []))
+         ]
+     end
+
+fun parse_cmds ctxt source =
+  let val pos = Position.make {
+                  line=1, offset=1, end_offset=1,
+                  props={label="", file="#MINSHELL SCRIPT", id="no_id"} }
+      val src = Symbol_Pos.explode (source, pos)
+      val toks = Token.tokenize keywords {strict = false} src
+
+      fun split ret buf [] = rev (Token.eof :: buf) :: ret
+        | split ret buf (x::L) =
+            if Token.is_command x
+            then split (rev (Token.eof :: buf) :: ret) [x] L
+            else split ret (x::buf) L
+
+      val cmds = split [] [] toks
+              |> map (fn (h::toks) =>
+                    case Symtab.lookup CMDS (Token.content_of h)
+                      of SOME parser => fst (parser ctxt toks)
+                       | NONE => error ("Bad Command " ^ Token.content_of h) )
+   in fold I cmds
+  end
+
+fun METHOD_i tr : Method.method = fn _ => fn (ctxt,st) =>
+  Seq.make (fn () =>
+      INIT ctxt st
+   |> tr
+   |> (fn ((ctxt', [HHF (st',_,_)]),_) => SOME (Seq.Result (ctxt',st'), Seq.empty)
+        | _ => error "incomplete MINSHELL script" ) )
+
+val METHOD = METHOD_i oo parse_cmds
+
+val _ = Theory.setup (
+  Method.setup \<^binding>\<open>MINSHELL\<close> (
+    Scan.peek (fn ctxt => Parse.embedded >> (fn src => fn _ =>
+        METHOD ctxt src)))
+  ""
+)
 
 end

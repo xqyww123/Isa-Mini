@@ -85,8 +85,8 @@ Clients just need to start up our shell, and send the above text through the sta
 | ---------------- | --------------------------- |
 | Week 1, November | Proposal Draft Release      |
 | Week 4, November | Design Specification Freeze |
-| Week 2, December | Alpha Release               |
-| Week 4, December | Stable Release              |
+| ~~Week 2, December~~ Week2, January | Alpha Release               |
+| ~~Week 4, December~~ Week4, January | Stable Release              |
 
 ## Design Specification (Draft)
 

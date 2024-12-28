@@ -1,3 +1,5 @@
+text \<open>Driven by AI purely and only.\<close>
+
 theory Proof_Shell
   imports HOL.HOL
 begin
