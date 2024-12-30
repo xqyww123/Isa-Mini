@@ -57,6 +57,9 @@ val END_CMD : command
 val PRINT : operation
 val PRINT_CMD : command
 
+val RULE : (Facts.ref * Token.src list) list -> (Facts.ref * Token.src list) list -> operation
+val RULE_CMD : command
+
 (* Toplevel *)
 
 val parse_cmds : parse_ctxt -> string -> state -> state
@@ -229,9 +232,9 @@ fun SKIP_SUCCESS F (SK as (_, HHF (st,_) :: _)) =
         if Thm.no_prems st then SK else F SK
   | SKIP_SUCCESS F SK = F SK
 fun OPR (f : stack -> stack) ((S,TAB,ID) : state) : state
-  = (SKIP_SUCCESS f S, TAB, ID+1)
+  = (f S, TAB, ID+1)
 fun OPR_ID (f : int -> stack -> stack) ((S,TAB,ID) : state) : state
-  = (SKIP_SUCCESS (f ID) S, TAB, ID+1)
+  = (f ID S, TAB, ID+1)
 
 val INTROS = OPR (INTROS' false)
 val INTROS_CMD = K (Scan.succeed INTROS)
@@ -391,6 +394,23 @@ fun CASE_CMD ctxt =
 
 end
 
+(* RULE *)
+
+fun RULE'_i rules facts =
+  apply' (fn s => CONTEXT_TACTIC (HEADGOAL (Classical.rule_tac (#1 s) rules facts)) s) NONE
+
+fun RULE' raw_rules raw_facts (SK as (ctxt, _)) =
+  let val rules = Attrib.eval_thms ctxt raw_rules
+      val facts = Attrib.eval_thms ctxt raw_facts
+   in RULE'_i rules facts SK
+  end
+
+val RULE = OPR oo RULE'
+val RULE_CMD = let open Parse
+      in K ( Scan.optional thms1 []
+          -- Scan.optional (($$$ "with" || $$$ "WITH") |-- thms1) [] >> uncurry RULE) end
+
+
 (* HAVE *)
 
 fun HAVE' _ _ (ctxt, []) = (ctxt, [])
@@ -517,7 +537,7 @@ fun OBTAIN' raw_decls raw_fixes raw_prems raw_statements (ctxt, HHF (st,facts) :
                                      map (apsnd (map Thm.prop_of)) new_facts) pctxt'
          in (ctxt'3, HHF (st, pctxt'3) :: S)
         end
-      fun PRT t = BUNDL (([],[]), [t, print_stack [HHF (st,facts)]])
+      fun PRT t = BUNDL (facts, [t, print_stack [HHF (st,([],[]))]])
 
       val ctxt_sub = ctxt
             |> fold Variable.bind_term result_binds
@@ -687,7 +707,8 @@ val CMDS = Symtab.make [
       ("CRUSH",   CRUSH_CMD),
       ("INTROS",  INTROS_CMD),
       ("HAMMER",  HAMMER_CMD),
-      ("PRINT",   PRINT_CMD)
+      ("PRINT",   PRINT_CMD),
+      ("RULE",    RULE_CMD)
     ]
 
 val keywords = let open Keyword
@@ -717,6 +738,8 @@ val keywords = let open Keyword
            (("]",     \<^here>), quasi_command_spec),
            (("?",     \<^here>), quasi_command_spec),
            (("for",   \<^here>), quasi_command_spec),
+           (("with",  \<^here>), quasi_command_spec),
+           (("WITH",  \<^here>), quasi_command_spec),
 
            (("end",   \<^here>), command_spec (thy_end, [])),
            (("obtain",\<^here>), command_spec (prf_asm_goal, [])),
@@ -729,7 +752,8 @@ val keywords = let open Keyword
            (("CRUSH", \<^here>), command_spec (prf_goal, [])),
            (("INTROS",\<^here>), command_spec (prf_goal, [])),
            (("HAMMER",\<^here>), command_spec (prf_goal, [])),
-           (("PRINT", \<^here>), command_spec (prf_goal, []))
+           (("PRINT", \<^here>), command_spec (prf_goal, [])),
+           (("RULE",  \<^here>), command_spec (prf_goal, []))
          ]
      end
 

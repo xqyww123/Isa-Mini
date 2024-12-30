@@ -35,5 +35,15 @@ lemma
   INTROS
   obtain x :: int and z :: nat where "0 < x" and c: "2 < z" and "1 < x" PRINT end PRINT end\<close>)
 
+lemma
+  \<open> \<And>y. A \<and> B \<Longrightarrow> \<forall>x. P x \<Longrightarrow> P y \<and> B\<close>
+  by (min_script \<open>
+    INTROS
+    RULE
+    HAMMER
+    RULE assm0(1)[THEN conjunct2]
+    END
+ \<close>)
+
 
 end
