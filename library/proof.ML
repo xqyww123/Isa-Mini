@@ -77,11 +77,9 @@ datatype tree = PROP  of (string * typ) list (*variables*) * local_facts * term 
               | BUNDL of (string * typ) list (*variables*) * local_facts * tree list
 
 
-type intro_subgaols = bool (*whether to intro the variables & assumpstions for all its subgoals*)
 datatype frame = HHF   of thm (*a local_facts bundle node, represented as a Hereditary Harrop Formula*)
                         * local_facts
-                        * intro_subgaols
-               | MAGIC of (Proof.context -> thm * local_facts * intro_subgaols * frame list -> Proof.context * frame list)
+               | MAGIC of (Proof.context -> thm * local_facts * frame list -> Proof.context * frame list)
                         * (tree -> tree)
                | ENDBLK 
 
@@ -116,7 +114,7 @@ fun init_ctxt c st = IPS_Data.put (
               Unsynchronized.ref 0,
               Hasher.term (Thm.prop_of st))
         ) c
-fun INIT c st = ((init_ctxt c st, [HHF (st, [], false), ENDBLK]), Symtab.empty, 0)
+fun INIT c st = ((init_ctxt c st, [HHF (st, []), ENDBLK]), Symtab.empty, 0)
 fun INIT'  st = INIT (Proof.context_of st) (#goal (Proof.simple_goal st))
 
 (*Modus Ponens*)
@@ -148,27 +146,41 @@ fun augment_print (vs',hs') (PROP (vs, hs, goal))
   | augment_print (vs',hs') (BUNDL (vs, hs, goal))
       = (BUNDL (join_lstL (vs, vs'), hs' @ hs, goal))
 
+fun maintain (c,[]) = (c,[])
+  | maintain (origin as (ctxt, HHF (st, facts) :: L)) =
+    ( case Thm.nprems_of st
+        of 0 => (case L
+            of [] => origin
+             | (HHF (st1, facts') :: L') =>
+                  maintain (ctxt, HHF (MP st1 st, facts' @ facts) :: L')
+             | (MAGIC (cb,_) :: L') =>
+                  (case cb ctxt (st, facts, L') of (ctxt', S) => maintain (ctxt', S) )
+             | ENDBLK :: _ => origin )
+         | _ => origin)
+  | maintain (_, MAGIC _ :: _) = raise BROKEN_INVARIANT
+  | maintain (_, ENDBLK :: _) = raise BROKEN_INVARIANT
+
 (*fix local variables & facts*)
-fun INTROS'' F (ctxt, HHF (st, facts, IA) :: L) =
+fun INTROS'' all_subgoals F (ctxt, HHF (st, facts) :: L) =
      (case Thm.nprems_of st
         of 0 => raise BROKEN_INVARIANT
          | _ => if Thm.nprems_of st > 1 orelse need_intro st
                 then let val (foc, st') = Subgoal.focus_prems ctxt 1 NONE st
                          val PRT = augment_print (map (apsnd Thm.typ_of_cterm) (#params foc), [])
-                         fun CB ctxt' (st',_,IA,S) =
+                         fun CB ctxt' (st',_,S) =
                             (ctxt', HHF (
                                 Subgoal.retrofit ctxt' ctxt (#params foc) (#asms foc) 1 st' st
                                   |> Seq.hd,
-                                [],
-                                IA) :: S)
+                                []) :: S)
+                            |> all_subgoals ? INTROS'' all_subgoals F
                          val (facts', ctxt') = F foc
-                      in (ctxt', HHF (st', facts' @ facts, IA) :: MAGIC (CB,PRT) :: L)
+                      in (ctxt', HHF (st', facts' @ facts) :: MAGIC (CB,PRT) :: L)
                      end
-                else (ctxt, HHF (st, facts, IA) :: L)
+                else (ctxt, HHF (st, facts) :: L)
       )
-  | INTROS'' _ _ = raise BROKEN_INVARIANT
+  | INTROS'' _ _ _ = raise BROKEN_INVARIANT
 
-val INTROS' = INTROS'' (fn foc =>
+fun INTROS' all_subgoals = INTROS'' all_subgoals (fn foc =>
   let val ctxt = #context foc
       val SOME (ii,_,_) = IPS_Data.get ctxt
       val i = !ii
@@ -179,38 +191,12 @@ val INTROS' = INTROS'' (fn foc =>
    |> apfst (apsnd (map Thm.prop_of) #> single)
   end )
 
-fun maintain (c,[]) = (c,[])
-  | maintain (origin as (ctxt, HHF (st, facts, IA) :: L)) =
-    ( case Thm.nprems_of st
-        of 0 => (case L
-            of [] => origin
-             | (HHF (st1, facts', IA') :: L') =>
-                  maintain (ctxt, HHF (MP st1 st, facts' @ facts, IA') :: L')
-             | (MAGIC (cb,_) :: L') =>
-                  (case cb ctxt (st, facts, IA, L') of (ctxt', S) => maintain (ctxt', S) )
-             | ENDBLK :: _ => origin )
-         | _ => if IA
-                then let val goal = Thm.cprop_of st
-                                |> Thm.dest_arg1
-                                |> Goal.init
-                        val st' = Conv.gconv_rule (Conv.rewr_conv @{thm prop_def[symmetric]}) 1 st
-                      in (ctxt, (HHF (goal,[],false))::(HHF (st',facts,IA))::L)
-                      |> INTROS'
-                     end
-                else origin)
-  | maintain (_, MAGIC _ :: _) = raise BROKEN_INVARIANT
-  | maintain (_, ENDBLK :: _) = raise BROKEN_INVARIANT
-
-fun INTROS_ALL_SUBGOALS (ctxt, HHF (st, facts, _) :: L) =
-      maintain (ctxt, HHF (st, facts, true) :: L)
-  | INTROS_ALL_SUBGOALS _ = raise BROKEN_INVARIANT
-
-fun raw_apply tac timeout (ctxt, HHF (st, facts, IA) :: L) =
+fun raw_apply tac timeout (ctxt, HHF (st, facts) :: L) =
     ( case (case timeout
               of SOME time => Timeout.apply time Seq.pull (tac (ctxt, st))
                | NONE      => Seq.pull (tac (ctxt, st)) )
         of NONE => raise OPR_FAIL "Fail to apply the tactic"
-         | SOME (Seq.Result (ctxt', st'), _) => (ctxt', HHF (st', facts, IA) :: L)
+         | SOME (Seq.Result (ctxt', st'), _) => (ctxt', HHF (st', facts) :: L)
          | SOME (Seq.Error E, _) => raise OPR_FAIL (E ()) )
   | raw_apply _ _ _ = raise BROKEN_INVARIANT
 
@@ -233,9 +219,12 @@ fun OPR (f : stack -> stack) ((S,TAB,ID) : state) : state
 fun OPR_ID (f : int -> stack -> stack) ((S,TAB,ID) : state) : state
   = (f ID S, TAB, ID+1)
 
-val INTROS = OPR INTROS'
+val INTROS = OPR (INTROS' false)
 val INTROS_CMD = K (Scan.succeed INTROS)
+val INTROS_ALL = OPR (INTROS' true)
+val INTROS_ALL_CMD = K (Scan.succeed INTROS_ALL)
 
+(*
 fun strip_meta_hhf N term =
   let fun strip (V,P) (Const("Pure.imp", _) $ H $ B) = strip (V,(N,[H])::P) B
         | strip (V,P) (Const("Pure.all", _) $ Abs (a, T, B)) = strip ((a,T)::V,P) B
@@ -243,28 +232,24 @@ fun strip_meta_hhf N term =
             strip (V,P) (\<^Const>\<open>Pure.all ty\<close> $ Abs ("_", ty, Term.incr_boundvars 1 X $ Bound 0))
         | strip (V,P) X = (rev V, rev P, X)
    in strip ([],[]) term end
+*)
 
 val SOLVED_GOAL = \<^prop>\<open>True\<close>
 
 fun print_stack [] = PROP ([], [], SOLVED_GOAL)
   | print_stack (S::L) =
       let fun prt t [] = t
-            | prt t (HHF (st, facts, IA) :: L) =
+            | prt t (HHF (st, facts) :: L) =
                 let val goals = case Thm.prems_of st
                                   of [] => raise BROKEN_INVARIANT
                                    | (_::prems) => prems
     
-                    val nodes = map (fn goal =>
-                          if IA
-                          then let val (vs, hs, concl) = strip_meta_hhf "<inaccessible>" goal
-                                in PROP (vs, hs, concl)
-                               end
-                          else PROP ([], [], goal)) goals
+                    val nodes = map (fn goal => PROP ([], [], goal)) goals
                  in prt (BUNDL ([], facts, t::nodes)) L
                 end
             | prt t (MAGIC (_, PRT) :: L) = prt (PRT t) L
             | prt t (ENDBLK :: L) = prt t L
-          fun prt0 (HHF (st, facts, _)) = PROP ([], facts, Thm.prop_of st)
+          fun prt0 (HHF (st, facts)) = PROP ([], facts, Thm.prop_of st)
             | prt0 _ = raise BROKEN_INVARIANT
        in prt (prt0 S) L
       end
@@ -289,12 +274,12 @@ fun CRUSH' (ctxt, []) = (ctxt, [])
       handle Timeout.TIMEOUT _ => 
       raw_apply (CONTEXT_TACTIC (Clasimp.clarsimp_tac ctxt 1)) (SOME time) s)
       handle OPR_FAIL E =>
-                (case s of (_, HHF (st, _, _) :: _) =>
+                (case s of (_, HHF (st, _) :: _) =>
                                 if need_intro st then s else raise OPR_FAIL E
                          | _ => raise OPR_FAIL E )
            | Timeout.TIMEOUT _ =>
                 raise OPR_FAIL "Timeout")
-   |> INTROS_ALL_SUBGOALS
+   |> INTROS' true
   end
 
 val CRUSH = OPR CRUSH'
@@ -395,7 +380,7 @@ end
 (* HAVE *)
 
 fun HAVE' _ _ (ctxt, []) = (ctxt, [])
-  | HAVE' raw_name expr (ctxt, HHF (G,facts,IA) :: S) =
+  | HAVE' raw_name expr (ctxt, HHF (G,facts) :: S) =
       let val SOME (_, jj, _) = IPS_Data.get ctxt
           val name = Option.map (fn (name, raw_attrs) =>
                         (Binding.name name,
@@ -408,13 +393,13 @@ fun HAVE' _ _ (ctxt, []) = (ctxt, [])
                                  end)
           val goal_term = Syntax.read_prop ctxt expr
           val goal = Goal.init (Thm.cterm_of ctxt goal_term)
-          fun CB ctxt' (st',facts',_,S) =
+          fun CB ctxt' (st',facts',S) =
             let val ((name,[thm]), ctxt'') =
                         Proof_Context.note_thms "" (name, [([Goal.conclude st'],[])]) ctxt'
-             in (ctxt'', HHF (G, (name, [Thm.prop_of thm]) :: facts' @ facts, IA) :: S)
+             in (ctxt'', HHF (G, (name, [Thm.prop_of thm]) :: facts' @ facts) :: S)
             end
-          fun PRT t = BUNDL ([], facts, [t, print_stack [HHF (G,[],IA)]])
-       in (ctxt, HHF (goal, [], false) :: ENDBLK :: MAGIC (CB, PRT) :: S)
+          fun PRT t = BUNDL ([], facts, [t, print_stack [HHF (G,[])]])
+       in (ctxt, HHF (goal, []) :: ENDBLK :: MAGIC (CB, PRT) :: S)
       end
   | HAVE' _ _ _ = raise BROKEN_INVARIANT
 
@@ -438,7 +423,7 @@ val elim_Ex = @{lemma \<open>Ex (\<lambda>x. P x) \<Longrightarrow> (\<And>x. P 
 val conjD1 = @{lemma \<open>conj A B \<Longrightarrow> A\<close> by (unfold conj_def, blast)}
 val conjD2 = @{lemma \<open>conj A B \<Longrightarrow> B\<close> by (unfold conj_def, blast)}
 
-fun OBTAIN' raw_fixes raw_statements (ctxt, HHF (st,facts,IA) :: S) =
+fun OBTAIN' raw_fixes raw_statements (ctxt, HHF (st,facts) :: S) =
   let val raw_props = map snd raw_statements
 
       val binders = map fst raw_statements
@@ -467,14 +452,14 @@ fun OBTAIN' raw_fixes raw_statements (ctxt, HHF (st,facts,IA) :: S) =
               |> Local_Defs.unfold_tac ctxt @{thms Ex_def conj_def}
               |> Seq.hd
 
-      fun CB ctxt' (lem, facts', _, S) =
+      fun CB ctxt' (lem, facts', S) =
         let val lem = Goal.conclude lem
             val st' = Method.insert_tac ctxt' [lem] 1 st
                    |> Seq.hd
                    |> REPEAT_DETERM (eresolve_tac ctxt' [elim_Ex] 1)
                    |> Seq.hd
-         in (ctxt', HHF (st', facts' @ facts, IA) :: S)
-         |> INTROS'' (fn foc =>
+         in (ctxt', HHF (st', facts' @ facts) :: S)
+         |> INTROS'' false (fn foc =>
             let val lem = case #prems foc
                             of [lem] => lem
                              | _ => error "5ViUXLLqRB+AA9ffsaEPDQ"
@@ -489,10 +474,10 @@ fun OBTAIN' raw_fixes raw_statements (ctxt, HHF (st,facts,IA) :: S) =
              |> apfst (map (apsnd (map Thm.prop_of)))
             end)
         end
-      fun PRT t = BUNDL ([], [], [t, print_stack [HHF (st,facts,IA)]])
+      fun PRT t = BUNDL ([], [], [t, print_stack [HHF (st,facts)]])
                |> augment_print (map (apsnd Term.fastype_of o snd) (#vars stmt),
                                  [])
-   in (ctxt, HHF (goal, [], false) :: ENDBLK :: MAGIC (CB, PRT) :: S)
+   in (ctxt, HHF (goal, []) :: ENDBLK :: MAGIC (CB, PRT) :: S)
   end
   | OBTAIN' _ _ _ = raise BROKEN_INVARIANT
 
@@ -550,16 +535,16 @@ fun CONSIDER' raw_terms (ctxt, HHF (st,facts,IA) :: SK) =
 
 (* HAMMER *)
 
-fun HAMMER_i step_id (ctxt, HHF (s,facts,SG) :: S) =
+fun HAMMER_i step_id (ctxt, HHF (s,facts) :: S) =
   let val SOME (_, _, ID_BASE) = IPS_Data.get ctxt
       val ID = ID_BASE ^ "/" ^ step_id
       val s' = Phi_Sledgehammer_Solver.auto (SOME ID) ctxt s
-   in maintain (ctxt, HHF (s', facts, SG) :: S)
+   in maintain (ctxt, HHF (s', facts) :: S)
   end
 
 fun HAMMER_all step_id =
   let val ID_BASE = string_of_int step_id ^ "/"
-      fun loop j (stack as (_, HHF (s,_,_) :: _)) =
+      fun loop j (stack as (_, HHF (s,_) :: _)) =
         if Thm.no_prems s then stack
         else HAMMER_i (ID_BASE ^ string_of_int j) stack
           |> HAMMER_all (j+1)
@@ -730,7 +715,7 @@ fun METHOD_i tr : Method.method = CONTEXT_METHOD (fn _ => fn (ctxt,st) =>
   else Seq.make (fn () =>
         INIT ctxt st
      |> tr
-     |> (fn ((ctxt', S  as [HHF (st',_,_)]),_,_) =>
+     |> (fn ((ctxt', S  as [HHF (st',_)]),_,_) =>
              (Pretty.writeln (pretty_state ctxt' (print_stack S));
               SOME (Seq.Result (ctxt',st'), Seq.empty))
           | ((ctxt', S), _, _) =>
