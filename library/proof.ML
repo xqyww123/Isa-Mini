@@ -174,19 +174,23 @@ fun need_intro st =
   end
 
 (*fix local variables & facts*)
-fun INTROS'' F all_subgoals (ctxt, HHF (st, pctxt) :: L) =
+fun INTROS'' F all_subgoals (origin as (ctxt, HHF (st, pctxt) :: L)) =
      (case Thm.nprems_of st
-        of 0 => raise OPR_FAIL "All goals are proven!"
+        of 0 => origin
          | _ => if Thm.nprems_of st > 1 orelse need_intro st
                 then let val (foc, st') = Subgoal.focus_prems ctxt 1 NONE st
                          val PRT = augment_print (map (apsnd Thm.typ_of_cterm) (#params foc), [])
-                         fun CB ctxt' (st',_,S) =
-                            (ctxt', HHF (
-                                Subgoal.retrofit ctxt' ctxt (#params foc) (#asms foc) 1 st' st
+                         val (st'', (pctxt', ctxt')) = F (st', foc)
+                         fun CB ctxt'' (st'',_,S) =
+                          let val st'3 = Goal.conclude st''
+                                      |> singleton (Proof_Context.export ctxt'' ctxt')
+                                      |> Goal.protect 0
+                           in (ctxt, HHF (
+                                     Subgoal.retrofit ctxt'' ctxt (#params foc) (#asms foc) 1 st'3 st
                                   |> Seq.hd,
                                 ([],[])) :: S)
-                            |> all_subgoals ? INTROS'' F all_subgoals
-                         val (st'', (pctxt', ctxt')) = F (st', foc)
+                           |> all_subgoals ? INTROS'' F all_subgoals
+                          end
                       in (ctxt', HHF (st'', cat_pctxt pctxt' pctxt) :: MAGIC (CB,PRT) :: L)
                      end
                 else (ctxt, HHF (st, pctxt) :: L)
@@ -461,14 +465,21 @@ fun mk_obtain_rule ctxt CN EN =
                      |> fold (fn (i,_) => fn X => X $ Bound (EN - 1 - i)) TS
       val C = HOLogic.mk_Trueprop (var [] "C")
       val PS = List.tabulate (CN, fn i => var TS ("P" ^ string_of_int i))
+      fun import_vars ctxt th =
+        let val ((_, [th']), ctxt') = ctxt |> Variable.set_body false |> Variable.import true [th];
+         in (ctxt', th') end;
+
    in foldr1 (fn (A,B) => \<^Const>\<open>conj\<close> $ A $ B) PS
    |> fold_rev (fn (i,T) => fn X => \<^Const>\<open>Ex T\<close> $ Abs ("x" ^ string_of_int i, T, X)) TS
    |> (fn X => Logic.mk_implies (HOLogic.mk_Trueprop X, C))
    |> Thm.cterm_of ctxt
    |> Thm.trivial
+   |> import_vars ctxt
+   |-> (fn ctxt' => fn th => th
    |> Seq.REPEAT (Thm.biresolution NONE true [(true, @{thm exE}), (true, @{thm conjE})] 1)
    |> Seq.hd
    |> Thm.permute_prems 0 1
+   |> singleton (Variable.export ctxt' ctxt))
   end
 
 (*
@@ -559,8 +570,8 @@ val OBTAIN_CMD =
 (*
 val elim_disj = @{lemma \<open>disj P Q \<Longrightarrow> (P \<Longrightarrow> C) \<Longrightarrow> (Q \<Longrightarrow> C) \<Longrightarrow> C\<close>
                      by (unfold disj_def, blast)}
-*)
-(*
+
+
 fun CONSIDER' raw_terms (ctxt, HHF (st,facts,IA) :: SK) =
   let val terms = Syntax.read_props ctxt raw_terms
                |> map (atomize_term ctxt)
@@ -600,8 +611,8 @@ fun CONSIDER' raw_terms (ctxt, HHF (st,facts,IA) :: SK) =
                                  [])
    in (ctxt, HHF (goal, [], false) :: ENDBLK :: MAGIC (CB, PRT) :: SK)
   end
-*)
 
+*)
 (* HAMMER *)
 
 fun HAMMER_i step_id (ctxt, HHF (s,facts) :: S) =
@@ -632,7 +643,7 @@ fun END' ID (stack as (_, HHF _ :: _)) =
    of HHF s :: ENDBLK :: SK' => maintain (ctxt, HHF s :: SK')
     | _ => raise BROKEN_INVARIANT
   end
-  | END' _ S = raise BROKEN_INVARIANT
+  | END' _ _ = raise BROKEN_INVARIANT
 
 val END = OPR_ID END'
 val END_CMD = K (Scan.succeed END)
@@ -789,8 +800,10 @@ fun METHOD_i tr : Method.method = CONTEXT_METHOD (fn _ => fn (ctxt,st) =>
         INIT ctxt st
      |> tr
      |> (fn ((ctxt', S  as [HHF (st',_)]),_,_) =>
-             (Pretty.writeln (pretty_state ctxt' (print_stack S));
-              SOME (Seq.Result (ctxt',st'), Seq.empty))
+            let val st'' = singleton (Proof_Context.export ctxt' ctxt) st'
+             in (Pretty.writeln (pretty_state ctxt' (print_stack S));
+                 SOME (Seq.Result (ctxt,st''), Seq.empty))
+            end
           | ((ctxt', S), _, _) =>
              (Pretty.writeln (pretty_state ctxt' (print_stack S));
               error "incomplete MINSHELL script") ) ))

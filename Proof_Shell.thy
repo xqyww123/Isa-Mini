@@ -24,14 +24,36 @@ ML \<open>
 ML \<open>mk_rule \<^context> 3 3\<close>
 
 lemma XX:
-  \<open>Ex (\<lambda>x. P x) \<Longrightarrow> (\<And>x. P x \<Longrightarrow> Q) \<Longrightarrow> Q\<close>
+  \<open>True\<close>
   unfolding Ex_def
+proof -
+  consider (a) "Q" | (b) x :: bool where "\<not> Q \<or> x" by blast
+  then show ?thesis
+    thm a
+    apply cases
+ML_val \<open>Proof_Context.check_case \<^context> true ("a", \<^here>) []\<close>
+proof -
+  ML_val \<open>Proof_Context.check_case \<^context> false ("a", \<^here>) []\<close>
+  case aa: a
+  thm aa
+    then show ?thesis by simp
+  next
+ML_val \<open>Proof_Context.check_case \<^context> false ("b", \<^here>) []\<close>
+  case aa: (b v)
+  thm aa
+  term \<open>?case\<close>
+    then show ?thesis sorry
+  qed
+
+
   apply (rule conjI)
   by blast
 
 declare [[ML_debugger, ML_exception_trace]]
 
 ML_file \<open>./library/proof.ML\<close>
+
+
 
 
 notepad begin
