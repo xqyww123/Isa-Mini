@@ -42,6 +42,8 @@ val HAVE : (bstring * Token.src list) option -> string -> operation
 val HAVE_CMD : command
 
 val OBTAIN : (binding * string option * mixfix) list
+          -> (binding * string option * mixfix) list
+          -> (string * string list) list list
           -> ((binding * Token.src list) * (string * string list) list) list
           -> operation
 val OBTAIN_CMD : command
@@ -72,14 +74,16 @@ fun assm_name i = assm_N ^ string_of_int i
 val atomize_goals = Attrib.setup_config_bool \<^binding>\<open>min_shell_atomize_goals\<close> (K true)
 
 (*only for printing*)
+type variables = (string * typ) list
 type local_facts = (string * term list) list
-datatype tree = PROP  of (string * typ) list (*variables*) * local_facts * term (*goal*)
-              | BUNDL of (string * typ) list (*variables*) * local_facts * tree list
+type pctxt = variables * local_facts
+datatype tree = PROP  of pctxt * term (*goal*)
+              | BUNDL of pctxt * tree list
 
 
 datatype frame = HHF   of thm (*a local_facts bundle node, represented as a Hereditary Harrop Formula*)
-                        * local_facts
-               | MAGIC of (Proof.context -> thm * local_facts * frame list -> Proof.context * frame list)
+                        * pctxt
+               | MAGIC of (Proof.context -> thm * pctxt * frame list -> Proof.context * frame list)
                         * (tree -> tree)
                | ENDBLK 
 
@@ -98,8 +102,6 @@ exception BROKEN_INVARIANT
 
 exception OPR_FAIL of string
 
-
-
 (** Basic Operations **)
 
 structure IPS_Data = Proof_Data (
@@ -114,8 +116,13 @@ fun init_ctxt c st = IPS_Data.put (
               Unsynchronized.ref 0,
               Hasher.term (Thm.prop_of st))
         ) c
-fun INIT c st = ((init_ctxt c st, [HHF (st, []), ENDBLK]), Symtab.empty, 0)
+fun INIT c st = ((init_ctxt c st, [HHF (st, ([],[])), ENDBLK]), Symtab.empty, 0)
 fun INIT'  st = INIT (Proof.context_of st) (#goal (Proof.simple_goal st))
+
+fun beta_eta_contract th =
+  if Term.could_beta_eta_contract (Thm.prop_of th)
+  then Thm.equal_elim (Drule.beta_eta_conversion (Thm.cprop_of th)) th
+  else th
 
 (*Modus Ponens*)
 fun MP thAB thA =
@@ -123,8 +130,33 @@ fun MP thAB thA =
              |> Thm.dest_arg1
       val inst = Thm.match (LHS, Thm.cprop_of thA)
       val thAB' = Thm.instantiate inst thAB
-   in Thm.implies_elim thAB' thA
+   in Thm.implies_elim (beta_eta_contract thAB') (beta_eta_contract thA)
   end
+
+(* fun join_lstR pr = AList.join (op =) (fn _ => fn (_,x) => x) pr *)
+fun join_lstL pr = AList.join (op =) (fn _ => fn (x,_) => x) pr
+
+fun cat_pctxt (vs',hs') (vs,hs)
+      = (join_lstL (vs, vs'), hs' @ hs)
+fun augment_print pctxt' (PROP (pctxt, goal))
+      = (PROP  (cat_pctxt pctxt' pctxt, goal))
+  | augment_print pctxt' (BUNDL (pctxt, goal))
+      = (BUNDL (cat_pctxt pctxt' pctxt, goal))
+
+fun maintain (c,[]) = (c,[])
+  | maintain (origin as (ctxt, HHF (st, pctxt) :: L)) =
+    ( case Thm.nprems_of st
+        of 0 => (case L
+            of [] => origin
+             | (HHF (st1, pctxt') :: L') =>
+                  maintain (ctxt, HHF (MP st1 st, cat_pctxt pctxt' pctxt) :: L')
+             | (MAGIC (cb,_) :: L') =>
+                  (case cb ctxt (st, pctxt, L') of (ctxt', S) => maintain (ctxt', S) )
+             | ENDBLK :: _ => origin )
+         | _ => origin)
+  | maintain (_, MAGIC _ :: _) = raise BROKEN_INVARIANT
+  | maintain (_, ENDBLK :: _) = raise BROKEN_INVARIANT
+
 
 fun need_intro st =
   let fun need' (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ _) = true
@@ -138,32 +170,10 @@ fun need_intro st =
          | _ => false
   end
 
-(* fun join_lstR pr = AList.join (op =) (fn _ => fn (_,x) => x) pr *)
-fun join_lstL pr = AList.join (op =) (fn _ => fn (x,_) => x) pr
-
-fun augment_print (vs',hs') (PROP (vs, hs, goal))
-      = (PROP  (join_lstL (vs, vs'), hs' @ hs, goal))
-  | augment_print (vs',hs') (BUNDL (vs, hs, goal))
-      = (BUNDL (join_lstL (vs, vs'), hs' @ hs, goal))
-
-fun maintain (c,[]) = (c,[])
-  | maintain (origin as (ctxt, HHF (st, facts) :: L)) =
-    ( case Thm.nprems_of st
-        of 0 => (case L
-            of [] => origin
-             | (HHF (st1, facts') :: L') =>
-                  maintain (ctxt, HHF (MP st1 st, facts' @ facts) :: L')
-             | (MAGIC (cb,_) :: L') =>
-                  (case cb ctxt (st, facts, L') of (ctxt', S) => maintain (ctxt', S) )
-             | ENDBLK :: _ => origin )
-         | _ => origin)
-  | maintain (_, MAGIC _ :: _) = raise BROKEN_INVARIANT
-  | maintain (_, ENDBLK :: _) = raise BROKEN_INVARIANT
-
 (*fix local variables & facts*)
-fun INTROS'' all_subgoals F (ctxt, HHF (st, facts) :: L) =
+fun INTROS'' F all_subgoals (ctxt, HHF (st, pctxt) :: L) =
      (case Thm.nprems_of st
-        of 0 => raise BROKEN_INVARIANT
+        of 0 => raise OPR_FAIL "All goals are proven!"
          | _ => if Thm.nprems_of st > 1 orelse need_intro st
                 then let val (foc, st') = Subgoal.focus_prems ctxt 1 NONE st
                          val PRT = augment_print (map (apsnd Thm.typ_of_cterm) (#params foc), [])
@@ -171,16 +181,16 @@ fun INTROS'' all_subgoals F (ctxt, HHF (st, facts) :: L) =
                             (ctxt', HHF (
                                 Subgoal.retrofit ctxt' ctxt (#params foc) (#asms foc) 1 st' st
                                   |> Seq.hd,
-                                []) :: S)
-                            |> all_subgoals ? INTROS'' all_subgoals F
-                         val (facts', ctxt') = F foc
-                      in (ctxt', HHF (st', facts' @ facts) :: MAGIC (CB,PRT) :: L)
+                                ([],[])) :: S)
+                            |> all_subgoals ? INTROS'' F all_subgoals
+                         val (st'', (pctxt', ctxt')) = F (st', foc)
+                      in (ctxt', HHF (st'', cat_pctxt pctxt' pctxt) :: MAGIC (CB,PRT) :: L)
                      end
-                else (ctxt, HHF (st, facts) :: L)
+                else (ctxt, HHF (st, pctxt) :: L)
       )
   | INTROS'' _ _ _ = raise BROKEN_INVARIANT
 
-fun INTROS' all_subgoals = INTROS'' all_subgoals (fn foc =>
+val INTROS' = INTROS'' (fn (st, foc) =>
   let val ctxt = #context foc
       val SOME (ii,_,_) = IPS_Data.get ctxt
       val i = !ii
@@ -188,7 +198,8 @@ fun INTROS' all_subgoals = INTROS'' all_subgoals (fn foc =>
    in ctxt
    |> Proof_Context.note_thms "" ((Binding.name (assm_name i), []),
                                   map (fn th => ([th], [])) (#prems foc))
-   |> apfst (apsnd (map Thm.prop_of) #> single)
+   |> apfst (apsnd (map Thm.prop_of) #> single #> pair [])
+   |> pair st
   end )
 
 fun raw_apply tac timeout (ctxt, HHF (st, facts) :: L) =
@@ -214,10 +225,13 @@ fun restore_history name (_,his,ID) =
       of NONE => raise OPR_FAIL ("history " ^ name ^ " not found")
        | SOME s => (s, his,ID)
 
+fun SKIP_SUCCESS F (SK as (_, HHF (st,_) :: _)) =
+        if Thm.no_prems st then SK else F SK
+  | SKIP_SUCCESS F SK = F SK
 fun OPR (f : stack -> stack) ((S,TAB,ID) : state) : state
-  = (f S, TAB, ID+1)
+  = (SKIP_SUCCESS f S, TAB, ID+1)
 fun OPR_ID (f : int -> stack -> stack) ((S,TAB,ID) : state) : state
-  = (f ID S, TAB, ID+1)
+  = (SKIP_SUCCESS (f ID) S, TAB, ID+1)
 
 val INTROS = OPR (INTROS' false)
 val INTROS_CMD = K (Scan.succeed INTROS)
@@ -236,20 +250,20 @@ fun strip_meta_hhf N term =
 
 val SOLVED_GOAL = \<^prop>\<open>True\<close>
 
-fun print_stack [] = PROP ([], [], SOLVED_GOAL)
+fun print_stack [] = PROP (([], []), SOLVED_GOAL)
   | print_stack (S::L) =
       let fun prt t [] = t
-            | prt t (HHF (st, facts) :: L) =
+            | prt t (HHF (st, pctxt) :: L) =
                 let val goals = case Thm.prems_of st
                                   of [] => raise BROKEN_INVARIANT
                                    | (_::prems) => prems
     
-                    val nodes = map (fn goal => PROP ([], [], goal)) goals
-                 in prt (BUNDL ([], facts, t::nodes)) L
+                    val nodes = map (fn goal => PROP (([],[]), goal)) goals
+                 in prt (BUNDL (pctxt, t::nodes)) L
                 end
             | prt t (MAGIC (_, PRT) :: L) = prt (PRT t) L
             | prt t (ENDBLK :: L) = prt t L
-          fun prt0 (HHF (st, facts)) = PROP ([], facts, Thm.prop_of st)
+          fun prt0 (HHF (st, pctxt)) = PROP (pctxt, Thm.prop_of st)
             | prt0 _ = raise BROKEN_INVARIANT
        in prt (prt0 S) L
       end
@@ -279,7 +293,7 @@ fun CRUSH' (ctxt, []) = (ctxt, [])
                          | _ => raise OPR_FAIL E )
            | Timeout.TIMEOUT _ =>
                 raise OPR_FAIL "Timeout")
-   |> INTROS' true
+   |> SKIP_SUCCESS (INTROS' true)
   end
 
 val CRUSH = OPR CRUSH'
@@ -380,7 +394,7 @@ end
 (* HAVE *)
 
 fun HAVE' _ _ (ctxt, []) = (ctxt, [])
-  | HAVE' raw_name expr (ctxt, HHF (G,facts) :: S) =
+  | HAVE' raw_name expr (ctxt, HHF (G,pctxt) :: S) =
       let val SOME (_, jj, _) = IPS_Data.get ctxt
           val name = Option.map (fn (name, raw_attrs) =>
                         (Binding.name name,
@@ -393,13 +407,13 @@ fun HAVE' _ _ (ctxt, []) = (ctxt, [])
                                  end)
           val goal_term = Syntax.read_prop ctxt expr
           val goal = Goal.init (Thm.cterm_of ctxt goal_term)
-          fun CB ctxt' (st',facts',S) =
+          fun CB ctxt' (st',pctxt',S) =
             let val ((name,[thm]), ctxt'') =
                         Proof_Context.note_thms "" (name, [([Goal.conclude st'],[])]) ctxt'
-             in (ctxt'', HHF (G, (name, [Thm.prop_of thm]) :: facts' @ facts) :: S)
+             in (ctxt'', HHF (G, cat_pctxt ([], [(name, [Thm.prop_of thm])]) pctxt) :: S)
             end
-          fun PRT t = BUNDL ([], facts, [t, print_stack [HHF (G,[])]])
-       in (ctxt, HHF (goal, []) :: ENDBLK :: MAGIC (CB, PRT) :: S)
+          fun PRT t = BUNDL (pctxt, [t, print_stack [HHF (G,([],[]))]])
+       in (ctxt, HHF (goal, ([],[])) :: ENDBLK :: MAGIC (CB, PRT) :: S)
       end
   | HAVE' _ _ _ = raise BROKEN_INVARIANT
 
@@ -418,12 +432,40 @@ fun atomize_term ctxt =
               then X
               else raise OPR_FAIL "Fail to atomize the proposition into HOL")
 
+
+(* can be cached *)
+fun mk_obtain_rule ctxt CN EN =
+  let val TS = List.tabulate (EN, fn i =>
+                  (i, TVar (("'x" ^ string_of_int i, 0), \<^sort>\<open>type\<close>)))
+      fun var TS name = Var((name,0), (map #2 TS) ---> \<^Type>\<open>bool\<close>)
+                     |> fold (fn (i,_) => fn X => X $ Bound (EN - 1 - i)) TS
+      val C = HOLogic.mk_Trueprop (var [] "C")
+      val PS = List.tabulate (CN, fn i => var TS ("P" ^ string_of_int i))
+   in foldr1 (fn (A,B) => \<^Const>\<open>conj\<close> $ A $ B) PS
+   |> fold_rev (fn (i,T) => fn X => \<^Const>\<open>Ex T\<close> $ Abs ("x" ^ string_of_int i, T, X)) TS
+   |> (fn X => Logic.mk_implies (HOLogic.mk_Trueprop X, C))
+   |> Thm.cterm_of ctxt
+   |> Thm.trivial
+   |> Seq.REPEAT (Thm.biresolution NONE true [(true, @{thm exE}), (true, @{thm conjE})] 1)
+   |> Seq.hd
+   |> Thm.permute_prems 0 1
+  end
+
+(*
 val elim_Ex = @{lemma \<open>Ex (\<lambda>x. P x) \<Longrightarrow> (\<And>x. P x \<Longrightarrow> Q) \<Longrightarrow> Q\<close>
                    by (unfold Ex_def, blast)}
 val conjD1 = @{lemma \<open>conj A B \<Longrightarrow> A\<close> by (unfold conj_def, blast)}
 val conjD2 = @{lemma \<open>conj A B \<Longrightarrow> B\<close> by (unfold conj_def, blast)}
+*)
 
-fun OBTAIN' raw_fixes raw_statements (ctxt, HHF (st,facts) :: S) =
+(*
+local val prop_def = @{thm prop_def}
+   in val protect_goal   = Conv.gconv_rule (Conv.rewr_conv (Thm.symmetric prop_def))
+      val unprotect_goal = Conv.gconv_rule (Conv.rewr_conv prop_def)
+end
+*)
+
+fun OBTAIN' raw_decls raw_fixes raw_prems raw_statements (ctxt, HHF (st,facts) :: S) =
   let val raw_props = map snd raw_statements
 
       val binders = map fst raw_statements
@@ -431,7 +473,6 @@ fun OBTAIN' raw_fixes raw_statements (ctxt, HHF (st,facts) :: S) =
                                    #> Attrib.attribute ctxt )))
 
       val SOME (_, jj, _) = IPS_Data.get ctxt
-      val nn = fold (fn (B,_) => fn N => if Binding.is_empty B then N+1 else N) binders 0
       val (binders, nn) =
             fold_map (fn (B,AT) => fn N =>
                 if Binding.is_empty B
@@ -439,58 +480,66 @@ fun OBTAIN' raw_fixes raw_statements (ctxt, HHF (st,facts) :: S) =
                 else ((B,AT),N)) binders (!jj)
       val _ = jj := nn
 
-      val (stmt, _) = Proof_Context.read_stmt raw_fixes raw_props ctxt
-      val prop = #propss stmt
-              |> flat
-              |> map (atomize_term ctxt)
+      val ({vars, propss, binds, result_binds, ...}, params_ctxt) =
+              Proof_Context.read_stmt (raw_decls @ raw_fixes) (raw_prems @ raw_props) ctxt
+      val (decls, fixes) = chop (length raw_decls) vars ||> map #2;
+      val (premss, conclss) = chop (length raw_prems) propss;
+      val propss' = (map o map) (Logic.close_prop fixes (flat premss)) conclss
+                 |> flat
+                 |> map (atomize_term ctxt)
+      val AS = map (Thm.cterm_of ctxt o HOLogic.mk_Trueprop) propss'
+
+      val prop = propss'
               |> foldr1 (fn (A, B) => \<^Const>\<open>conj\<close> $ A $ B)
               |> fold_rev (fn (_, t) => fn T =>
                     \<^Const>\<open>Ex \<open>Term.type_of (snd t)\<close>\<close> $ Term.lambda_name t T
-                  ) (#vars stmt)
+                  ) decls
               |> (fn X => HOLogic.Trueprop $ X)
       val goal = Goal.init (Thm.cterm_of ctxt prop)
-              |> Local_Defs.unfold_tac ctxt @{thms Ex_def conj_def}
-              |> Seq.hd
 
-      fun CB ctxt' (lem, facts', S) =
-        let val lem = Goal.conclude lem
-            val st' = Method.insert_tac ctxt' [lem] 1 st
-                   |> Seq.hd
-                   |> REPEAT_DETERM (eresolve_tac ctxt' [elim_Ex] 1)
-                   |> Seq.hd
-         in (ctxt', HHF (st', facts' @ facts) :: S)
-         |> INTROS'' false (fn foc =>
-            let val lem = case #prems foc
-                            of [lem] => lem
-                             | _ => error "5ViUXLLqRB+AA9ffsaEPDQ"
-                fun split th =
-                  case Thm.prop_of th
-                    of Const(\<^const_name>\<open>Trueprop\<close>, _) $ (Const(\<^const_name>\<open>conj\<close>, _) $ _ $ _) =>
-                        MP conjD1 th :: split (MP conjD2 th)
-                     | _ => [th]
-                val facts = binders ~~ map (map (fn X => ([X],[]))) (unflat raw_props (split lem))
-             in #context foc
-             |> Proof_Context.note_thmss "" facts
-             |> apfst (map (apsnd (map Thm.prop_of)))
-            end)
+      val cparams = map (Thm.cterm_of params_ctxt o #2 o #2) decls;
+      val rule = mk_obtain_rule ctxt (length propss') (length decls)
+
+
+      fun CB ctxt' (lem, pctxt', S) =
+        let val lem = lem
+                   |> singleton (Proof_Context.export ctxt' ctxt)
+                   |> Goal.conclude
+            val rule' = MP rule lem
+            val export = Obtain.obtain_export ctxt rule' cparams
+            val (lems', ctxt'') = Proof_Context.add_fixes (map #1 decls) ctxt
+                               |> snd
+                               |> fold (Variable.bind_term o apsnd (Logic.close_term fixes)) binds
+                               |> Assumption.add_assms export AS
+            val lems'' = binders ~~ map (map (fn X => ([X],[]))) (unflat raw_props lems')
+            val (new_facts, ctxt'3) = Proof_Context.note_thmss "" lems'' ctxt''
+            val pctxt'3 = cat_pctxt (map (apsnd Term.fastype_of o snd) decls,
+                                     map (apsnd (map Thm.prop_of)) new_facts) pctxt'
+         in (ctxt'3, HHF (st, pctxt'3) :: S)
         end
-      fun PRT t = BUNDL ([], [], [t, print_stack [HHF (st,facts)]])
-               |> augment_print (map (apsnd Term.fastype_of o snd) (#vars stmt),
-                                 [])
-   in (ctxt, HHF (goal, []) :: ENDBLK :: MAGIC (CB, PRT) :: S)
-  end
-  | OBTAIN' _ _ _ = raise BROKEN_INVARIANT
+      fun PRT t = BUNDL (([],[]), [t, print_stack [HHF (st,facts)]])
 
-val OBTAIN = OPR oo OBTAIN'
+      val ctxt_sub = ctxt
+            |> fold Variable.bind_term result_binds
+   in (ctxt_sub, HHF (goal,([],[])) :: ENDBLK :: MAGIC (CB, PRT) :: S)
+  end
+  | OBTAIN' _ _ _ _ _ = raise BROKEN_INVARIANT
+
+val structured_statement =
+  Parse_Spec.statement -- Parse_Spec.if_statement' -- Parse.for_fixes
+    >> (fn ((shows, assumes), fixes) => (fixes, assumes, shows));
+
+val OBTAIN = OPR oooo OBTAIN'
 val OBTAIN_CMD =
-        K (Parse.vars --| Parse.where_ -- Parse_Spec.statement
-     >> (fn (vs,ss) => OBTAIN vs ss))
+        K (Parse.vars --| Parse.where_ -- structured_statement
+     >> (fn (vs,(a,b,c)) => OBTAIN vs a b c))
 
 (* CONSIDER *)
 
+(*
 val elim_disj = @{lemma \<open>disj P Q \<Longrightarrow> (P \<Longrightarrow> C) \<Longrightarrow> (Q \<Longrightarrow> C) \<Longrightarrow> C\<close>
                      by (unfold disj_def, blast)}
-
+*)
 (*
 fun CONSIDER' raw_terms (ctxt, HHF (st,facts,IA) :: SK) =
   let val terms = Syntax.read_props ctxt raw_terms
@@ -604,8 +653,8 @@ fun pretty_state ctxt tree =
               map (fn X => item [prt_term X]) prems
               @ tails)
         end
-      fun collect V F (PROP  (V',F',term)) = (V' @ V, F' @ F, term)
-        | collect V F (BUNDL (V',F',chil)) = collect (V' @ V) (F' @ F) (hd chil)
+      fun collect V F (PROP  ((V',F'),term)) = (V' @ V, F' @ F, term)
+        | collect V F (BUNDL ((V',F'),chil)) = collect (V' @ V) (F' @ F) (hd chil)
    in collect [] [] tree
    |> ap2_3 (map (apsnd (filter_out (contains_outdated_fixes ctxt)))
           #> filter_out (null o snd))

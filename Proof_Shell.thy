@@ -6,52 +6,44 @@ begin
 
 thm exE
 
-definition Ex   where \<open>Ex   \<equiv> HOL.Ex\<close>
+(*definition Ex   where \<open>Ex   \<equiv> HOL.Ex\<close> 
 definition disj where \<open>disj \<equiv> HOL.disj\<close>
-definition conj where \<open>conj \<equiv> HOL.conj\<close>
+definition conj where \<open>conj \<equiv> HOL.conj\<close> *)
+
+thm exE
+thm exE[OF exE]
+thm conjE
+ML \<open>
+   Thm.biresolution NONE false [(true, @{thm exE})] 2 exE |> Seq.hd
+ \<close>
+
+ML \<open>
+
+\<close>
+
+ML \<open>mk_rule \<^context> 3 3\<close>
 
 lemma XX:
   \<open>Ex (\<lambda>x. P x) \<Longrightarrow> (\<And>x. P x \<Longrightarrow> Q) \<Longrightarrow> Q\<close>
   unfolding Ex_def
+  apply (rule conjI)
   by blast
 
-declare [[ML_debugger]]
+declare [[ML_debugger, ML_exception_trace]]
 
 ML_file \<open>./library/proof.ML\<close>
 
-hide_const Ex conj disj
-        
-lemma  
-  \<open> \<And>a. A \<and> B \<Longrightarrow> \<forall>x. P x \<Longrightarrow> P a \<and> A\<close>
-  by (min_script \<open>END\<close>)
- 
-lemma  
-  \<open> \<And>a. A \<and> B \<Longrightarrow> \<forall>x. P x \<Longrightarrow> P a \<and> A\<close>
-  by (min_script \<open>INTROS HAVE "A" PRINT END END\<close>)
 
-lemma  
-  \<open> \<And>a. A \<and> B \<Longrightarrow> \<forall>x. P x \<Longrightarrow> P a \<and> A\<close>
-  by (min_script \<open>INTROS CRUSH PRINT HAVE "A" END PRINT HAMMER PRINT END\<close>)
+notepad begin
 
-lemma  
-  \<open> \<And>a. A \<and> B \<Longrightarrow> \<forall>x. P x \<Longrightarrow> P a \<and> B\<close>
-  by (min_script \<open>PRINT INTROS END\<close>)
-
-
-notepad
-begin
-
-  fix x :: int
-
-  assume A: \<open>0 < x\<close>
-
-  fix x :: int
-assume B: \<open>0 < x\<close>
-  thm A
-  ML_val \<open>Thm.prop_of @{thm A} |> (fn _ $ (_ $ X) => X)\<close>
-  ML_val \<open>Variable.revert_fixed \<^context> "x__"\<close>
-ML_val \<open>Thm.prop_of @{thm B}\<close>
+  assume RULE: "A \<Longrightarrow> B \<Longrightarrow> C \<Longrightarrow> D"
+     and RULE': "AA \<Longrightarrow> B \<Longrightarrow> C \<Longrightarrow> D"
+  assume A: "A" and B: "B"
+  have "D"
+    apply (rule RULE[OF A B])
+    using A B apply (rule RULE' RULE)
 
 end
+
 
 end
