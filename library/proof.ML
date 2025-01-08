@@ -11,6 +11,7 @@ exception OPR_FAIL of string
 (* options *)
 
 val atomize_goals : bool Config.T
+val END_completes_all_NEXT : bool Config.T
 
 (* Operations *)
 
@@ -41,18 +42,23 @@ val restore_history : string -> operation
 val HAVE : (bstring * Token.src list) option -> string -> operation
 val HAVE_CMD : command
 
-val OBTAIN : (binding * string option * mixfix) list
-          -> (binding * string option * mixfix) list
-          -> (string * string list) list list
-          -> ((binding * Token.src list) * (string * string list) list) list
+val CONSIDER : (
+               (binding * string option * mixfix) list
+             * (binding * string option * mixfix) list
+             * (string * string list) list list
+             * ((binding * Token.src list) * (string * string list) list) list
+             ) list
           -> operation
-val OBTAIN_CMD : command
+val CONSIDER_CMD : command
 
 val HAMMER : operation
 val HAMMER_CMD : command
 
 val END : operation
 val END_CMD : command
+
+val NXT : operation
+val NXT_CMD : command
 
 val PRINT : operation
 val PRINT_CMD : command
@@ -62,7 +68,9 @@ val RULE_CMD : command
 
 (* Toplevel *)
 
-val parse_cmds : parse_ctxt -> string -> state -> state
+val parse_cmds : parse_ctxt -> string -> operation
+val PROVE : operation -> Proof.context -> thm -> thm
+
 val METHOD : parse_ctxt -> string -> Method.method
 
 end
@@ -75,6 +83,7 @@ fun assm_name i = assm_N ^ string_of_int i
 (* options *)
 
 val atomize_goals = Attrib.setup_config_bool \<^binding>\<open>min_shell_atomize_goals\<close> (K true)
+val END_completes_all_NEXT = Attrib.setup_config_bool \<^binding>\<open>END_completes_all_NEXT\<close> (K true)
 
 (*only for printing*)
 type variables = (string * typ) list
@@ -83,12 +92,12 @@ type pctxt = variables * local_facts
 datatype tree = PROP  of pctxt * term (*goal*)
               | BUNDL of pctxt * tree list
 
-
+datatype endblk_type = T_END | T_NXT
 datatype frame = HHF   of thm (*a local_facts bundle node, represented as a Hereditary Harrop Formula*)
                         * pctxt
                | MAGIC of (Proof.context -> thm * pctxt * frame list -> Proof.context * frame list)
                         * (tree -> tree)
-               | ENDBLK 
+               | ENDBLK of endblk_type
 
 type stack = Proof.context * (frame list)
   (*invariant: the head must be an HHF*)
@@ -119,7 +128,7 @@ fun init_ctxt c st = IPS_Data.put (
               Unsynchronized.ref 0,
               Hasher.term (Thm.prop_of st))
         ) c
-fun INIT c st = ((init_ctxt c st, [HHF (st, ([],[])), ENDBLK]), Symtab.empty, 0)
+fun INIT c st = ((init_ctxt c st, [HHF (st, ([],[])), ENDBLK T_END]), Symtab.empty, 0)
 fun INIT'  st = INIT (Proof.context_of st) (#goal (Proof.simple_goal st))
 
 fun beta_eta_contract th =
@@ -155,10 +164,10 @@ fun maintain (c,[]) = (c,[])
                   maintain (ctxt, HHF (MP st1 st, cat_pctxt pctxt' pctxt) :: L')
              | (MAGIC (cb,_) :: L') =>
                   (case cb ctxt (st, pctxt, L') of (ctxt', S) => maintain (ctxt', S) )
-             | ENDBLK :: _ => origin )
+             | ENDBLK _ :: _ => origin )
          | _ => origin)
   | maintain (_, MAGIC _ :: _) = raise BROKEN_INVARIANT
-  | maintain (_, ENDBLK :: _) = raise BROKEN_INVARIANT
+  | maintain (_, ENDBLK _ :: _) = raise BROKEN_INVARIANT
 
 
 fun need_intro st =
@@ -182,9 +191,7 @@ fun INTROS'' F all_subgoals (origin as (ctxt, HHF (st, pctxt) :: L)) =
                          val PRT = augment_print (map (apsnd Thm.typ_of_cterm) (#params foc), [])
                          val (st'', (pctxt', ctxt')) = F (st', foc)
                          fun CB ctxt'' (st'',_,S) =
-                          let val st'3 = Goal.conclude st''
-                                      |> singleton (Proof_Context.export ctxt'' ctxt')
-                                      |> Goal.protect 0
+                          let val st'3 = singleton (Proof_Context.export ctxt'' ctxt') st''
                            in (ctxt, HHF (
                                      Subgoal.retrofit ctxt'' ctxt (#params foc) (#asms foc) 1 st'3 st
                                   |> Seq.hd,
@@ -269,7 +276,7 @@ fun print_stack [] = PROP (([], []), SOLVED_GOAL)
                  in prt (BUNDL (pctxt, t::nodes)) L
                 end
             | prt t (MAGIC (_, PRT) :: L) = prt (PRT t) L
-            | prt t (ENDBLK :: L) = prt t L
+            | prt t (ENDBLK _ :: L) = prt t L
           fun prt0 (HHF (st, pctxt)) = PROP (pctxt, Thm.prop_of st)
             | prt0 _ = raise BROKEN_INVARIANT
        in prt (prt0 S) L
@@ -431,13 +438,13 @@ fun HAVE' _ _ (ctxt, []) = (ctxt, [])
                                  end)
           val goal_term = Syntax.read_prop ctxt expr
           val goal = Goal.init (Thm.cterm_of ctxt goal_term)
-          fun CB ctxt' (st',pctxt',S) =
+          fun CB ctxt' (st',(*pctxt'*) _,S) =
             let val ((name,[thm]), ctxt'') =
                         Proof_Context.note_thms "" (name, [([Goal.conclude st'],[])]) ctxt'
              in (ctxt'', HHF (G, cat_pctxt ([], [(name, [Thm.prop_of thm])]) pctxt) :: S)
             end
           fun PRT t = BUNDL (pctxt, [t, print_stack [HHF (G,([],[]))]])
-       in (ctxt, HHF (goal, ([],[])) :: ENDBLK :: MAGIC (CB, PRT) :: S)
+       in (ctxt, HHF (goal, ([],[])) :: ENDBLK T_END :: MAGIC (CB, PRT) :: S)
       end
   | HAVE' _ _ _ = raise BROKEN_INVARIANT
 
@@ -458,6 +465,7 @@ fun atomize_term ctxt =
 
 
 (* can be cached *)
+(*
 fun mk_obtain_rule ctxt CN EN =
   let val TS = List.tabulate (EN, fn i =>
                   (i, TVar (("'x" ^ string_of_int i, 0), \<^sort>\<open>type\<close>)))
@@ -481,6 +489,42 @@ fun mk_obtain_rule ctxt CN EN =
    |> Thm.permute_prems 0 1
    |> singleton (Variable.export ctxt' ctxt))
   end
+*)
+
+(* can be cached *)
+fun mk_consider_rule ctxt DNF_SPEC =
+  let fun var TS name =
+        let val EN = length TS
+         in Var((name,0), (map #2 TS) ---> \<^Type>\<open>bool\<close>)
+         |> fold (fn (i,_) => fn X => X $ Bound (EN - 1 - i)) TS
+        end
+      fun mk_conj_clause (ii, (EN,CN)) =
+        let val TS = List.tabulate (EN, fn i =>
+                      (i, TVar (("'x" ^ string_of_int ii ^ "'" ^ string_of_int i, 0), \<^sort>\<open>type\<close>)))
+            val PS = List.tabulate (CN, fn i =>
+                      var TS ("P"  ^ string_of_int ii ^ "'" ^ string_of_int i))
+         in foldr1 (fn (A,B) => \<^Const>\<open>conj\<close> $ A $ B) PS
+         |> fold_rev (fn (i,T) => fn X =>
+                      \<^Const>\<open>Ex T\<close> $ Abs ("x" ^ string_of_int ii ^ "'" ^ string_of_int i, T, X)) TS
+        end
+      fun import_vars ctxt th =
+        let val ((_, [th']), ctxt') = ctxt |> Variable.set_body false |> Variable.import true [th];
+         in (ctxt', th')
+        end
+      val C = HOLogic.mk_Trueprop (var [] "C")
+   in map_index mk_conj_clause DNF_SPEC
+   |> foldr1 (fn (A,B) => \<^Const>\<open>disj\<close> $ A $ B)
+   |> (fn X => Logic.mk_implies (HOLogic.mk_Trueprop X, C))
+   |> Thm.cterm_of ctxt
+   |> Thm.trivial
+   |> import_vars ctxt
+   |-> (fn ctxt' => fn th => th
+   |> Seq.REPEAT (REPEAT_DETERM_SOME (Thm.biresolution NONE true
+              [(true, @{thm exE}), (true, @{thm conjE}), (true, @{thm disjE})]))
+   |> Seq.hd
+   |> Thm.permute_prems 0 ~1
+   |> singleton (Variable.export ctxt' ctxt))
+  end
 
 (*
 val elim_Ex = @{lemma \<open>Ex (\<lambda>x. P x) \<Longrightarrow> (\<And>x. P x \<Longrightarrow> Q) \<Longrightarrow> Q\<close>
@@ -496,74 +540,128 @@ local val prop_def = @{thm prop_def}
 end
 *)
 
-fun OBTAIN' raw_decls raw_fixes raw_prems raw_statements (ctxt, HHF (st,facts) :: S) =
-  let val raw_props = map snd raw_statements
+(* raw_decls raw_fixes raw_prems raw_statements *)
 
-      val binders = map fst raw_statements
-                 |> map (apsnd (map ( Attrib.check_src ctxt
-                                   #> Attrib.attribute ctxt )))
-
-      val SOME (_, jj, _) = IPS_Data.get ctxt
-      val (binders, nn) =
-            fold_map (fn (B,AT) => fn N =>
-                if Binding.is_empty B
-                then ((Binding.name ("fact" ^ string_of_int N), AT), N+1)
-                else ((B,AT),N)) binders (!jj)
-      val _ = jj := nn
-
-      val ({vars, propss, binds, result_binds, ...}, params_ctxt) =
-              Proof_Context.read_stmt (raw_decls @ raw_fixes) (raw_prems @ raw_props) ctxt
-      val (decls, fixes) = chop (length raw_decls) vars ||> map #2;
-      val (premss, conclss) = chop (length raw_prems) propss;
-      val propss' = (map o map) (Logic.close_prop fixes (flat premss)) conclss
-                 |> flat
-                 |> map (atomize_term ctxt)
-      val AS = map (Thm.cterm_of ctxt o HOLogic.mk_Trueprop) propss'
-
-      val prop = propss'
-              |> foldr1 (fn (A, B) => \<^Const>\<open>conj\<close> $ A $ B)
-              |> fold_rev (fn (_, t) => fn T =>
-                    \<^Const>\<open>Ex \<open>Term.type_of (snd t)\<close>\<close> $ Term.lambda_name t T
-                  ) decls
-              |> (fn X => HOLogic.Trueprop $ X)
-      val goal = Goal.init (Thm.cterm_of ctxt prop)
-
-      val cparams = map (Thm.cterm_of params_ctxt o #2 o #2) decls;
-      val rule = mk_obtain_rule ctxt (length propss') (length decls)
-
-
-      fun CB ctxt' (lem, pctxt', S) =
-        let val lem = lem
-                   |> singleton (Proof_Context.export ctxt' ctxt)
-                   |> Goal.conclude
-            val rule' = MP rule lem
-            val export = Obtain.obtain_export ctxt rule' cparams
-            val (lems', ctxt'') = Proof_Context.add_fixes (map #1 decls) ctxt
-                               |> snd
-                               |> fold (Variable.bind_term o apsnd (Logic.close_term fixes)) binds
-                               |> Assumption.add_assms export AS
-            val lems'' = binders ~~ map (map (fn X => ([X],[]))) (unflat raw_props lems')
-            val (new_facts, ctxt'3) = Proof_Context.note_thmss "" lems'' ctxt''
-            val pctxt'3 = cat_pctxt (map (apsnd Term.fastype_of o snd) decls,
-                                     map (apsnd (map Thm.prop_of)) new_facts) pctxt'
-         in (ctxt'3, HHF (st, pctxt'3) :: S)
+fun CONSIDER' raw_dnf (ctxt0, HHF (st0, pctxt0) :: S) =
+  let val SOME (_, jj, _) = IPS_Data.get ctxt0
+      fun parse (raw_decls, raw_fixes, raw_prems, raw_statements) ctxt =
+        let val raw_props = map snd raw_statements
+      
+            val binders = map fst raw_statements
+                       |> map (apsnd (map ( Attrib.check_src ctxt
+                                         #> Attrib.attribute ctxt )))
+      
+            val (binders, nn) =
+                  fold_map (fn (B,AT) => fn N =>
+                      if Binding.is_empty B
+                      then ((Binding.name ("fact" ^ string_of_int N), AT), N+1)
+                      else ((B,AT),N)) binders (!jj)
+            val _ = jj := nn
+      
+            val ({vars, propss, binds, result_binds, ...}, params_ctxt) =
+                    Proof_Context.read_stmt (raw_decls @ raw_fixes) (raw_prems @ raw_props) ctxt
+            val (decls, fixes) = chop (length raw_decls) vars ||> map #2;
+            val (premss, conclss) = chop (length raw_prems) propss;
+            val propss' = (map o map) (Logic.close_prop fixes (flat premss)) conclss
+                       |> flat
+                       |> map (atomize_term ctxt)
+            val AS = map (Thm.cterm_of ctxt o HOLogic.mk_Trueprop) propss'
+      
+            val goal = propss'
+                    |> foldr1 (fn (A, B) => \<^Const>\<open>conj\<close> $ A $ B)
+                    |> fold_rev (fn (_, t) => fn T =>
+                          \<^Const>\<open>Ex \<open>Term.type_of (snd t)\<close>\<close> $ Term.lambda_name t T
+                        ) decls
+      
+            val cparams = map (Thm.cterm_of params_ctxt o #2 o #2) decls
+         in ((cparams,
+             (length decls, length propss'),
+             (decls,
+              fixes,
+              AS,
+              raw_props,
+              binds,
+              binders),
+             (goal,
+              result_binds)),
+             params_ctxt)
         end
-      fun PRT t = BUNDL (facts, [t, print_stack [HHF (st,([],[]))]])
+      val (conj_clauses, params_ctxt) = fold_map parse raw_dnf ctxt0
+      val rule0 = mk_consider_rule ctxt0 (map #2 conj_clauses)
 
-      val ctxt_sub = ctxt
-            |> fold Variable.bind_term result_binds
-   in (ctxt_sub, HHF (goal,([],[])) :: ENDBLK :: MAGIC (CB, PRT) :: S)
+      val goal = map (#1 o #4) conj_clauses
+              |> foldr1 (fn (A,B) => \<^Const>\<open>disj\<close> $ A $ B)
+              |> (fn X => HOLogic.Trueprop $ X)
+              |> Thm.cterm_of params_ctxt
+              |> Goal.init
+              |> singleton (Variable.export params_ctxt ctxt0)
+      val goal_binds = map (#2 o #4) conj_clauses
+              |> foldl1 (AList.merge (op =) (op aconv))
+      val ctxt_rule = params_ctxt
+                   |> fold Variable.bind_term goal_binds
+
+      val subgoals = map (fn (_, _, (decls, fixes, AS, raw_props, _, binders), _) =>
+              print_stack [HHF (st0, (  map (apsnd Term.fastype_of o snd) decls
+                                      @ map (apsnd Term.fastype_of) fixes,
+                                     map (Binding.name_of o fst) binders ~~
+                                        (unflat raw_props (map Thm.term_of AS)) ))] ) conj_clauses
+      fun PRT0 sgs t = BUNDL (pctxt0, t :: sgs)
+      fun CB _ _ [] _  _ = raise BROKEN_INVARIANT
+        | CB initial sgs
+             ((cparams, _, (decls, fixes, AS, raw_props, binds, binders), _) :: remain_clauses)
+             ctxt' (lem, _, S) =
+            let val rule' = lem
+                         |> Goal.conclude
+                         |> singleton (Proof_Context.export ctxt' ctxt0)
+                         |> initial ? MP rule0
+                fun export a b =
+                    let val (A,B) = Obtain.obtain_export ctxt0 rule' cparams a b 
+                        fun export_thm thm =
+                          let val protected = (case Thm.prop_of thm
+                                                 of \<^Const>\<open>Pure.prop\<close> $ _ => true
+                                                  | _ => false)
+                           in thm
+                           |> protected? Goal.conclude
+                           |> A
+                           |> protected? Goal.protect 0
+                          end
+                     in (export_thm,B)
+                    end
+                val (lems', ctxt'') = Proof_Context.add_fixes (map #1 decls) ctxt0
+                                   |> snd
+                                   |> fold (Variable.bind_term o apsnd (Logic.close_term fixes)) binds
+                                   |> Assumption.add_assms export AS
+                val lems'' = binders ~~ map (map (fn X => ([X],[]))) (unflat raw_props lems')
+                val (new_facts, ctxt'3) = Proof_Context.note_thmss "" lems'' ctxt''
+                val pctxt'3 = (map (apsnd Term.fastype_of o snd) decls,
+                               map (apsnd (map Thm.prop_of)) new_facts)
+                           |> null remain_clauses ? (fn X => cat_pctxt X pctxt0)
+             in (ctxt'3, HHF (st0, pctxt'3)
+                          :: (case remain_clauses
+                                of [] => S
+                                 |  _ =>    ENDBLK T_NXT
+                                         :: MAGIC (CB false (tl sgs) remain_clauses, PRT0 sgs)
+                                         :: S))
+            end
+
+   in (ctxt_rule,
+          HHF (goal,([],[]))
+       :: ENDBLK (case conj_clauses of [_] => T_END | _ => T_NXT)
+       :: MAGIC (CB true subgoals conj_clauses, PRT0 subgoals) :: S)
   end
-  | OBTAIN' _ _ _ _ _ = raise BROKEN_INVARIANT
+  | CONSIDER' _ _ = raise BROKEN_INVARIANT
 
 val structured_statement =
   Parse_Spec.statement -- Parse_Spec.if_statement' -- Parse.for_fixes
     >> (fn ((shows, assumes), fixes) => (fixes, assumes, shows));
 
-val OBTAIN = OPR oooo OBTAIN'
-val OBTAIN_CMD =
-        K (Parse.vars --| Parse.where_ -- structured_statement
-     >> (fn (vs,(a,b,c)) => OBTAIN vs a b c))
+val CONSIDER = OPR o CONSIDER'
+val CONSIDER_CMD = K (fn toks => (
+     Parse.enum1 "|"
+        (Scan.optional (Parse.vars --| Parse.where_) []
+          -- structured_statement
+        >> (fn (vs,(a,b,c)) => (vs,a,b,c)))
+     >> CONSIDER) toks)
 
 (* CONSIDER *)
 
@@ -621,13 +719,14 @@ fun HAMMER_i step_id (ctxt, HHF (s,facts) :: S) =
       val s' = Phi_Sledgehammer_Solver.auto (SOME ID) ctxt s
    in maintain (ctxt, HHF (s', facts) :: S)
   end
+  | HAMMER_i _ _ = raise BROKEN_INVARIANT
 
 fun HAMMER_all step_id =
-  let val ID_BASE = string_of_int step_id ^ "/"
+  let val ID_BASE = step_id ^ "/"
       fun loop j (stack as (_, HHF (s,_) :: _)) =
         if Thm.no_prems s then stack
         else HAMMER_i (ID_BASE ^ string_of_int j) stack
-          |> HAMMER_all (j+1)
+          |> loop (j+1)
         | loop _ _ = raise BROKEN_INVARIANT
    in loop 0
   end
@@ -637,16 +736,28 @@ val HAMMER_CMD = K (Scan.succeed HAMMER)
 
 (* END *)
 
-fun END' ID (stack as (_, HHF _ :: _)) =
-  let val (ctxt, SK'1) = HAMMER_all ID stack
+fun END' T jj ID (stack as (_, HHF _ :: _)) =
+  let val ID_BASE = if jj = 0 then string_of_int ID 
+                    else string_of_int ID ^ "+" ^ string_of_int jj
+      val (ctxt, SK'1) = HAMMER_all ID_BASE stack
    in case SK'1
-   of HHF s :: ENDBLK :: SK' => maintain (ctxt, HHF s :: SK')
+   of HHF s :: ENDBLK T' :: SK' =>
+           if T = T' then maintain (ctxt, HHF s :: SK')
+           else if T = T_END andalso T' = T_NXT andalso Config.get ctxt END_completes_all_NEXT
+           then maintain (ctxt, HHF s :: SK')
+             |> END' T_END (jj+1) ID
+           else raise OPR_FAIL (
+                  "This block should be closed by the " ^
+                  (case T' of T_END => "END" | T_NXT => "NEXT") ^
+                  " command.")
     | _ => raise BROKEN_INVARIANT
   end
-  | END' _ _ = raise BROKEN_INVARIANT
+  | END' _ _ _ _ = raise BROKEN_INVARIANT
 
-val END = OPR_ID END'
+val END = OPR_ID (END' T_END 0)
+val NXT = OPR_ID (END' T_NXT 0)
 val END_CMD = K (Scan.succeed END)
+val NXT_CMD = K (Scan.succeed NXT)
 
 (* PRINT *)
 
@@ -708,10 +819,12 @@ val PRINT_CMD = K  (Scan.succeed PRINT)
 
 val CMDS = Symtab.make [
       ("end",     END_CMD),
-      ("obtain",  OBTAIN_CMD),
+      ("next",    NXT_CMD),
+      ("consider",CONSIDER_CMD),
       ("have",    HAVE_CMD),
       ("END",     END_CMD),
-      ("OBTAIN",  OBTAIN_CMD),
+      ("NEXT",    NXT_CMD),
+      ("CONSIDER",CONSIDER_CMD),
       ("HAVE",    HAVE_CMD),
       ("CASE_SPLIT",    CASE_CMD),
       ("INDUCT",  INDUCT_CMD),
@@ -753,10 +866,12 @@ val keywords = let open Keyword
            (("WITH",  \<^here>), quasi_command_spec),
 
            (("end",   \<^here>), command_spec (thy_end, [])),
-           (("obtain",\<^here>), command_spec (prf_asm_goal, [])),
+           (("next",  \<^here>), command_spec (thy_end, [])),
+           (("consider",\<^here>),command_spec (prf_asm_goal, [])),
            (("have",  \<^here>), command_spec (prf_goal, [])),
            (("END",   \<^here>), command_spec (thy_end, [])),
-           (("OBTAIN",\<^here>), command_spec (prf_asm_goal, [])),
+           (("NEXT",  \<^here>), command_spec (thy_end, [])),
+           (("CONSIDER",\<^here>),command_spec (prf_asm_goal, [])),
            (("HAVE",  \<^here>), command_spec (prf_goal, [])),
            (("CASE_SPLIT",  \<^here>), command_spec (prf_goal, [])),
            (("INDUCT",\<^here>), command_spec (prf_goal, [])),
@@ -793,20 +908,23 @@ fun parse_cmds ctxt source =
    in fold_rev I cmds
   end
 
+fun PROVE tr ctxt st =
+      INIT ctxt st
+   |> tr
+   |> (fn ((ctxt', S  as [HHF (st',_)]),_,_) =>
+          let val st'' = singleton (Proof_Context.export ctxt' ctxt) st'
+           in Pretty.writeln (pretty_state ctxt' (print_stack S));
+              st''
+          end
+        | ((ctxt', S), _, _) =>
+           (Pretty.writeln (pretty_state ctxt' (print_stack S));
+            error "incomplete MINSHELL script") )
+
 fun METHOD_i tr : Method.method = CONTEXT_METHOD (fn _ => fn (ctxt,st) =>
   if Thm.no_prems st
   then Seq.single (Seq.Result (ctxt, st))
   else Seq.make (fn () =>
-        INIT ctxt st
-     |> tr
-     |> (fn ((ctxt', S  as [HHF (st',_)]),_,_) =>
-            let val st'' = singleton (Proof_Context.export ctxt' ctxt) st'
-             in (Pretty.writeln (pretty_state ctxt' (print_stack S));
-                 SOME (Seq.Result (ctxt,st''), Seq.empty))
-            end
-          | ((ctxt', S), _, _) =>
-             (Pretty.writeln (pretty_state ctxt' (print_stack S));
-              error "incomplete MINSHELL script") ) ))
+        SOME (Seq.Result (ctxt, PROVE tr ctxt st), Seq.empty)))
 
 val METHOD = METHOD_i oo parse_cmds
 
