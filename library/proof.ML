@@ -24,6 +24,7 @@ val INTROS_CMD : command
 
 val apply : context_tactic -> Time.time option -> stack -> stack
 val apply_method : Method.method -> Time.time option -> stack -> stack
+val APPLY_CMD : command
 
 val crush_timeout : int Config.T
 val CRUSH : operation
@@ -149,15 +150,20 @@ fun MP thAB thA =
    in Thm.implies_elim (beta_eta_contract thAB') (beta_eta_contract thA)
   end
 
-(* fun join_lstR pr = AList.join (op =) (fn _ => fn (_,x) => x) pr *)
-fun join_lstL pr = AList.join (op =) (fn _ => fn (x,_) => x) pr
+fun join_lstR pr = AList.join (op =) (fn _ => fn (_,x) => x) pr
+(*fun join_lstL pr = AList.join (op =) (fn _ => fn (x,_) => x) pr *)
 
+(*primary is the newer. The newer is appended to the list*)
 fun cat_pctxt (vs',hs') (vs,hs)
-      = (join_lstL (vs, vs'), hs' @ hs)
-fun augment_print pctxt' (PROP (pctxt, goal))
+      = (join_lstR (vs', vs), hs @ hs')
+fun append_print pctxt' (PROP (pctxt, goal))
       = (PROP  (cat_pctxt pctxt' pctxt, goal))
-  | augment_print pctxt' (BUNDL (pctxt, goal))
+  | append_print pctxt' (BUNDL (pctxt, goal))
       = (BUNDL (cat_pctxt pctxt' pctxt, goal))
+fun prepend_print pctxt' (PROP (pctxt, goal))
+      = (PROP  (cat_pctxt pctxt pctxt', goal))
+  | prepend_print pctxt' (BUNDL (pctxt, goal))
+      = (BUNDL (cat_pctxt pctxt pctxt', goal))
 
 fun maintain (c,[]) = (c,[])
   | maintain (origin as (ctxt, HHF (st, pctxt) :: L)) =
@@ -165,7 +171,7 @@ fun maintain (c,[]) = (c,[])
         of 0 => (case L
             of [] => origin
              | (HHF (st1, pctxt') :: L') =>
-                  maintain (ctxt, HHF (MP st1 st, cat_pctxt pctxt' pctxt) :: L')
+                  maintain (ctxt, HHF (MP st1 st, cat_pctxt pctxt pctxt') :: L')
              | (MAGIC (cb,_) :: L') =>
                   (case cb ctxt (st, pctxt, L') of (ctxt', S) => maintain (ctxt', S) )
              | ENDBLK _ :: _ => origin )
@@ -201,7 +207,7 @@ fun INTROS'' F mode (origin as (ctxt, HHF (st0, pctxt) :: L)) =
                                           (case mode of ALL_SUBGOALS => NONE
                                                       | SINGLE_GOAL bs => bs)
                                           st
-                       val PRT = augment_print (map (
+                       val PRT = prepend_print (map (
                                          snd
                                       #> Thm.term_of
                                       #> Term.dest_Free
@@ -309,9 +315,13 @@ fun print_stack [] = PROP (([], []), SOLVED_GOAL)
   
 
 (* APPLY *)
-(*
-fun APPLY' prep_meth meth
-*)
+
+fun APPLY text =
+      OPR (fn SK as (ctxt, _) =>
+        apply_method (Method.evaluate_runtime text ctxt) NONE SK)
+
+val APPLY_CMD = K (Method.parse >> (fn (m,_) => APPLY m))
+
 (* Crush *)
 
 val crush_timeout = Attrib.setup_config_int \<^binding>\<open>crush_timeout\<close> (K 10) (*in seconds*)
@@ -663,7 +673,7 @@ fun CONSIDER' raw_dnf (ctxt0, HHF (st0, pctxt0) :: S) =
                           :: (case remain_clauses
                                 of [] => S
                                  |  _ =>    ENDBLK T_NXT
-                                         :: MAGIC (CB false (tl sgs) remain_clauses, PRT0 sgs)
+                                         :: MAGIC (CB false (tl sgs) remain_clauses, PRT0 (tl sgs))
                                          :: S))
             end
 
@@ -858,8 +868,8 @@ fun pretty_state ctxt tree =
               map (fn X => item [prt_term X]) prems
               @ tails)
         end
-      fun collect V F (PROP  ((V',F'),term)) = (V' @ V, F' @ F, term)
-        | collect V F (BUNDL ((V',F'),chil)) = collect (V' @ V) (F' @ F) (hd chil)
+      fun collect V F (PROP  ((V',F'),term)) = (V @ V', F @ F', term)
+        | collect V F (BUNDL ((V',F'),chil)) = collect (V @ V') (F @ F') (hd chil)
    in collect [] [] tree
    |> ap2_3 (map (apsnd (filter_out (contains_outdated_fixes ctxt)))
           #> filter_out (null o snd))
@@ -897,7 +907,9 @@ val CMDS = Symtab.make [
       ("PRINT",   PRINT_CMD),
       ("RULE",    RULE_CMD),
       ("LET",     LET_CMD),
-      ("let",     LET_CMD)
+      ("let",     LET_CMD),
+      ("APPLY",   APPLY_CMD),
+      ("apply",   APPLY_CMD)
     ]
 
 val keywords = let open Keyword
@@ -947,7 +959,9 @@ val keywords = let open Keyword
            (("PRINT", \<^here>), command_spec (prf_goal, [])),
            (("RULE",  \<^here>), command_spec (prf_goal, [])),
            (("let",   \<^here>), command_spec (prf_goal, [])),
-           (("LET",   \<^here>), command_spec (prf_goal, []))
+           (("LET",   \<^here>), command_spec (prf_goal, [])),
+           (("apply", \<^here>), command_spec (prf_goal, [])),
+           (("APPLY", \<^here>), command_spec (prf_goal, []))
          ]
      end
 

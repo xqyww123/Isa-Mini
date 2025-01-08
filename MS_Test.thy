@@ -184,7 +184,8 @@ qed
 lemma lexn_transI':
   assumes "trans r" shows "trans (lexn r n)"
   unfolding trans_def
-  apply (min_script \<open>
+  by (min_script \<open>
+  PRINT
   INTROS as bs cs
   CONSIDER abs a b as' bs' where
     "length as = n" and "length bs = n" and
@@ -210,14 +211,19 @@ lemma lexn_transI':
     HAVE "take ?k as = take ?k cs" END
   NEXT
     LET ?k = "length abs"
-    HAVE "bs ! ?k = cs ! ?k" APPLY (unfold as bs, simp add: nth_append) PRINT END
+    HAVE "abs = bcs" "b = b'" END
+    HAVE "(a, c') \<in> r" END
+  NEXT
+    LET ?k = "length abs"
+    HAVE "bs ! ?k = cs ! ?k" END
     HAVE "(as ! ?k, cs ! ?k) \<in> r" END
+    HAVE "length abs < length as" END
+    HAVE "as = take ?k as @ as ! ?k # drop (Suc ?k) as" END
+    HAVE "length abs < length cs" END
+    HAVE "cs = take ?k cs @ cs ! ?k # drop (Suc ?k) cs" END
+    HAVE "take ?k as = take ?k cs" END
+  END
 \<close>)
-
-
-
-
-
 
 
 
