@@ -133,7 +133,19 @@ fun init_ctxt c st = IPS_Data.put (
               Unsynchronized.ref 0,
               Hasher.term (Thm.prop_of st))
         ) c
-fun INIT c st = ((init_ctxt c st, [HHF (st, ([],[])), ENDBLK T_END]), Symtab.empty, 0)
+
+fun INIT c st =
+  let val facts = Proof_Context.facts_of c;
+      val local_facts =
+        Facts.dest_static false [Global_Theory.facts_of (Proof_Context.theory_of c)] facts
+          |> map (apsnd (map Thm.prop_of))
+
+      val (vars, _) = Variable.constraints_of c
+      val vars' = Vartab.fold (fn ((N,~1),T) => (fn L => (N,T) :: L)
+                                | _ => I) vars []
+
+   in ((init_ctxt c st, [HHF (st, (vars',local_facts)), ENDBLK T_END]), Symtab.empty, 0)
+  end
 fun INIT'  st = INIT (Proof.context_of st) (#goal (Proof.simple_goal st))
 
 fun beta_eta_contract th =
@@ -207,7 +219,8 @@ fun INTROS'' F mode (origin as (ctxt, HHF (st0, pctxt) :: L)) =
                                           (case mode of ALL_SUBGOALS => NONE
                                                       | SINGLE_GOAL bs => bs)
                                           st
-                       val PRT = prepend_print (map (
+                       val PRT = prepend_print pctxt
+                               o prepend_print (map (
                                          snd
                                       #> Thm.term_of
                                       #> Term.dest_Free
@@ -222,7 +235,7 @@ fun INTROS'' F mode (origin as (ctxt, HHF (st0, pctxt) :: L)) =
                               ([],[])) :: S)
                          |> mode = ALL_SUBGOALS ? INTROS'' F mode
                         end
-                    in (ctxt', HHF (st'', cat_pctxt pctxt' pctxt) :: MAGIC (CB,PRT) :: L)
+                    in (ctxt', HHF (st'', pctxt') :: MAGIC (CB,PRT) :: L)
                    end
               else (ctxt, HHF (st0, pctxt) :: L)
     )
@@ -845,6 +858,11 @@ fun contains_outdated_fixes ctxt term =
 
 fun ap2_3 f (a,b,c) = (a, f b, c)
 
+fun simp_name name =
+  if String.isPrefix "local." name
+  then String.substring (name, 6, size name - 6)
+  else name
+
 fun pretty_state ctxt tree =
   let open Pretty
       val atom_goals = Config.get ctxt atomize_goals
@@ -852,13 +870,14 @@ fun pretty_state ctxt tree =
       val prt_term= Syntax.pretty_term ctxt o (atom_goals ? Object_Logic.atomize_term ctxt)
       fun prt_bundle (vars, facts, term) =
         let val prems = Logic.strip_imp_prems term
+            val name = str o simp_name
             val tails =
                  (if null vars   then [] else [keyword1 "fixed variables"])
                 @ map (fn (N,T) => item [str N, brk 1, str "::", brk 1, prt_typ  T]) vars
                 @ (if null facts then [] else [keyword1 "contextual facts"])
-                @ map (fn (N,[])  => item [str N, brk 1, str ":", brk 1, str "<empty>"]
-                        | (N,[T]) => item [str N, brk 1, str ":", brk 1, prt_term T]
-                        | (N,TS)  => item [str N, brk 1, str ":", brk 1, chunks (map prt_term TS)]
+                @ map (fn (N,[])  => item [name N, brk 1, str ":", brk 1, str "<empty>"]
+                        | (N,[T]) => item [name N, brk 1, str ":", brk 1, prt_term T]
+                        | (N,TS)  => item [name N, brk 1, str ":", brk 1, chunks (map prt_term TS)]
                       ) facts
          in case prems
          of [] => str "All goals are proven!"

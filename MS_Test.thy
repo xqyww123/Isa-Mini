@@ -222,6 +222,7 @@ lemma lexn_transI':
     HAVE "length abs < length cs" END
     HAVE "cs = take ?k cs @ cs ! ?k # drop (Suc ?k) cs" END
     HAVE "take ?k as = take ?k cs" END
+    PRINT
   END
 \<close>)
 

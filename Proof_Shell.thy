@@ -8,6 +8,14 @@ declare [[ML_debugger, ML_exception_trace]]
 
 ML_file \<open>./library/proof.ML\<close>
 
-  apply
+notepad begin
+
+  fix a b c :: nat
+  let ?x = \<open>a\<close>
+
+  ML_val \<open>Variable.constraints_of \<^context>\<close>
+
+end
+
 
 end
