@@ -183,9 +183,8 @@ qed
  
 lemma lexn_transI':
   assumes "trans r" shows "trans (lexn r n)"
-  unfolding trans_def
   by (min_script \<open>
-  PRINT
+  UNFOLD trans_def
   CRUSH VARS as bs cs
   CONSIDER abs a b as' bs' where
     "length as = n" and "length bs = n" and
@@ -197,9 +196,10 @@ lemma lexn_transI':
     "bs = bcs @ b' # bs'" and
     "cs = bcs @ c' # cs'" and
     "(b', c') \<in> r" END
+PRINT
   CONSIDER "length bcs < length abs"
-    | "length bcs = length abs"
-    | "length bcs > length abs"
+         | "length bcs = length abs"
+         | "length bcs > length abs"
   NEXT
     LET ?k = "length bcs"
     HAVE "as ! ?k = bs ! ?k" END
@@ -227,17 +227,41 @@ lemma lexn_transI':
 \<close>)
 
 
+definition \<open>TAG X = X\<close>
+
+lemma test_unfold_prem:
+  \<open>TAG P \<Longrightarrow> P\<close>
+  by (min_script \<open>INTRO UNFOLD TAG_def IN assm0 PRINT END\<close>)
 
 
-
+lemma comm_append_are_replicate':
+  "xs @ ys = ys @ xs \<Longrightarrow> \<exists>m n zs. concat (replicate m zs) = xs \<and> concat (replicate n zs) = ys"
+by (min_script \<open>
+  INDUCT "length (xs @ ys) + length xs" arbitrary: xs ys rule: less_induct
+  PRINT
+  CONSIDER "length ys < length xs" | "xs = []" | "length xs \<le> length ys \<and> xs \<noteq> []"
+  NEXT
+  NEXT
+    HAVE "concat (replicate 0 ys) = xs \<and> concat (replicate 1 ys) = ys" END
+  PRINT
+  NEXT
+    
+\<close>)
 
 lemma comm_append_are_replicate:
   "xs @ ys = ys @ xs \<Longrightarrow> \<exists>m n zs. concat (replicate m zs) = xs \<and> concat (replicate n zs) = ys"
-proof (induction "length (xs @ ys) + length xs" arbitrary: xs ys rule: less_induct)
+proof (induct "length (xs @ ys) + length xs" arbitrary: xs ys rule: less_induct)
+ML_val \<open>Proof_Context.dest_cases NONE \<^context> |> hd |> snd
+    |> (fn C => Proof_Context.apply_case C \<^context> )\<close>
   case less
+thm less
   consider (1) "length ys < length xs" | (2) "xs = []" | (3) "length xs \<le> length ys \<and> xs \<noteq> []"
     by linarith
   then show ?case
+thm less.hyps
+thm less.prems
+
+
   proof (cases)
     case 1
     then show ?thesis

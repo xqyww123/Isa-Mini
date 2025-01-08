@@ -30,6 +30,9 @@ val crush_timeout : int Config.T
 val CRUSH : intros_mode -> operation
 val CRUSH_CMD : command
 
+val UNFOLD : thm list -> operation
+val UNFOLD_CMD : command
+
 val INDUCT : bool * ((binding option * (term * bool)) option list list *
               (((string * typ) list list * term option list) * thm list option))
           -> state -> state
@@ -163,11 +166,11 @@ fun MP thAB thA =
   end
 
 fun join_lstR pr = AList.join (op =) (fn _ => fn (_,x) => x) pr
-(*fun join_lstL pr = AList.join (op =) (fn _ => fn (x,_) => x) pr *)
+fun join_lstL pr = AList.join (op =) (fn _ => fn (x,_) => x) pr
 
 (*primary is the newer. The newer is appended to the list*)
 fun cat_pctxt (vs',hs') (vs,hs)
-      = (join_lstR (vs', vs), hs @ hs')
+      = (join_lstR (vs', vs), join_lstL (hs', hs))
 fun append_print pctxt' (PROP (pctxt, goal))
       = (PROP  (cat_pctxt pctxt' pctxt, goal))
   | append_print pctxt' (BUNDL (pctxt, goal))
@@ -285,8 +288,10 @@ fun OPR_ID (f : int -> stack -> stack) ((S,TAB,ID) : state) : state
   = (f ID S, TAB, ID+1)
 
 val INTRO = OPR o INTRO'
-val VARS = Parse.$$$ "VARS" |-- Scan.repeat Parse.binding
+val VARS = (Parse.$$$ "VARS" || Parse.$$$ "vars") |-- Scan.repeat Parse.binding
 val VARS_FOR_SINGLE_GOAL = Scan.option VARS >> SINGLE_GOAL
+val IN = (Parse.$$$ "IN" || Parse.$$$ "in")
+
 val INTRO_CMD = K ( VARS_FOR_SINGLE_GOAL >> INTRO)
 val INTRO_ALL_CMD = K (Scan.succeed (INTRO ALL_SUBGOALS))
 
@@ -320,6 +325,12 @@ fun print_stack [] = PROP (([], []), SOLVED_GOAL)
        in prt (prt0 S) L
       end
 
+val collect_context =
+  let fun collect V F (PROP  ((V',F'),term)) = (V @ V', F @ F', term)
+        | collect V F (BUNDL ((V',F'),chil)) = collect (V @ V') (F @ F') (hd chil)
+   in collect [] []
+  end
+
 
 (** Interfaces **)
 
@@ -334,6 +345,43 @@ fun APPLY text =
         apply_method (Method.evaluate_runtime text ctxt) NONE SK)
 
 val APPLY_CMD = K (Method.parse >> (fn (m,_) => APPLY m))
+
+(* UNFOLD *)
+
+fun UNFOLD' prep_thms raw_defs (ctxt, HHF (st, pctxt) :: S) =
+  let val defs = prep_thms ctxt raw_defs
+      val st' = Local_Defs.unfold_goals ctxt defs st
+   in (ctxt, HHF (st', pctxt) :: S)
+  end
+  | UNFOLD' _ _ _ = raise BROKEN_INVARIANT
+
+fun simp_name name =
+  if String.isPrefix "local." name
+  then String.substring (name, 6, size name - 6)
+  else name
+
+
+fun UNFOLD_FACT' prep_thms raw_defs fact_names (ctxt, SK as HHF (st, pctxt) :: S) =
+  let val defs = prep_thms ctxt raw_defs
+      val fact_names = if member (op =) fact_names "*"
+                       then collect_context (print_stack SK)
+                         |> #2
+                         |> map (#1 #> simp_name)
+                       else fact_names
+      val facts = map ( Proof_Context.get_thms ctxt
+                     #> map ( Local_Defs.unfold ctxt defs ) ) fact_names
+   in ctxt
+   |> Proof_Context.note_thmss "" ( map (rpair [] o Binding.name) fact_names
+                                      ~~ map (single o rpair []) facts)
+   |-> (fn new_facts =>
+     rpair (HHF (st, cat_pctxt ([], map (apsnd (map Thm.prop_of)) new_facts) pctxt) :: S))
+  end
+  | UNFOLD_FACT' _ _ _ _ = raise BROKEN_INVARIANT
+
+val UNFOLD = OPR o UNFOLD' (K I)
+val UNFOLD_CMD = K ( Parse.thms1 -- Scan.option (IN |-- Scan.repeat1 Parse.name) >> (
+      fn (defs, NONE)       => OPR (UNFOLD' Attrib.eval_thms defs)
+       | (defs, SOME facts) => OPR (UNFOLD_FACT' Attrib.eval_thms defs facts) ))
 
 (* Crush *)
 
@@ -858,11 +906,6 @@ fun contains_outdated_fixes ctxt term =
 
 fun ap2_3 f (a,b,c) = (a, f b, c)
 
-fun simp_name name =
-  if String.isPrefix "local." name
-  then String.substring (name, 6, size name - 6)
-  else name
-
 fun pretty_state ctxt tree =
   let open Pretty
       val atom_goals = Config.get ctxt atomize_goals
@@ -887,9 +930,7 @@ fun pretty_state ctxt tree =
               map (fn X => item [prt_term X]) prems
               @ tails)
         end
-      fun collect V F (PROP  ((V',F'),term)) = (V @ V', F @ F', term)
-        | collect V F (BUNDL ((V',F'),chil)) = collect (V @ V') (F @ F') (hd chil)
-   in collect [] [] tree
+   in collect_context tree
    |> ap2_3 (map (apsnd (filter_out (contains_outdated_fixes ctxt)))
           #> filter_out (null o snd))
    |> prt_bundle
@@ -928,7 +969,8 @@ val CMDS = Symtab.make [
       ("LET",     LET_CMD),
       ("let",     LET_CMD),
       ("APPLY",   APPLY_CMD),
-      ("apply",   APPLY_CMD)
+      ("apply",   APPLY_CMD),
+      ("UNFOLD",  UNFOLD_CMD)
     ]
 
 val keywords = let open Keyword
@@ -962,6 +1004,8 @@ val keywords = let open Keyword
            (("with",  \<^here>), quasi_command_spec),
            (("WITH",  \<^here>), quasi_command_spec),
            (("VARS",  \<^here>), quasi_command_spec),
+           (("IN",    \<^here>), quasi_command_spec),
+           (("in",    \<^here>), quasi_command_spec),
 
            (("end",   \<^here>), command_spec (thy_end, [])),
            (("next",  \<^here>), command_spec (thy_end, [])),
@@ -981,7 +1025,8 @@ val keywords = let open Keyword
            (("let",   \<^here>), command_spec (prf_goal, [])),
            (("LET",   \<^here>), command_spec (prf_goal, [])),
            (("apply", \<^here>), command_spec (prf_goal, [])),
-           (("APPLY", \<^here>), command_spec (prf_goal, []))
+           (("APPLY", \<^here>), command_spec (prf_goal, [])),
+           (("UNFOLD",\<^here>), command_spec (prf_goal, []))
          ]
      end
 

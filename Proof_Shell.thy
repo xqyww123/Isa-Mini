@@ -14,7 +14,8 @@ notepad begin
   let ?x = \<open>a\<close>
 
   ML_val \<open>Variable.constraints_of \<^context>\<close>
-
+  have True
+  apply unfold
 end
 
 
