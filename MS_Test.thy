@@ -55,7 +55,19 @@ lemma
     END
  \<close>)
 
+lemma \<comment> \<open>Meta and Object-level \<open>\<forall>, \<and>\<close> are unified.
+          The two following proofs have the same pretty print.\<close>
+  \<open> \<And>y. A \<and> B \<Longrightarrow> (\<forall>x. P x) \<Longrightarrow> P y \<and> B\<close>
+  by (min_script \<open>
+  PRINT INTROS PRINT END
+\<close>)
 
+lemma
+  \<open> \<forall>y. A \<and> B \<longrightarrow> (\<forall>x. P x) \<longrightarrow> P y \<and> B\<close>
+  by (min_script \<open>
+  PRINT INTROS PRINT END
+\<close>)
+ 
 
 theorem sqrt2_not_rational:
   "sqrt 2 \<notin> \<rat>"
@@ -168,22 +180,49 @@ proof (intro allI impI)
     with * show ?thesis using n n' unfolding lexn_conv as bs cs by auto
   qed
 qed
-
+ 
 lemma lexn_transI':
   assumes "trans r" shows "trans (lexn r n)"
   unfolding trans_def
-  by (min_script \<open>CRUSH
-    CONSIDER abs a b as' bs' where
-      "length x = n" "length y = n"
-      "x = abs @ a # as'"
-      "y = abs @ b # bs'"
-      "(a, b) \<in> r" END
-    CONSIDER bcs b' c' cs' bs' where
-      "length z = n" and "length y = n" and
-      "y = bcs @ b' # bs'" and
-    cs: "cs = bcs @ c' # cs'" and
-    b'c'r: "(b', c') \<in> r"
+  apply (min_script \<open>
+  INTROS as bs cs
+  CONSIDER abs a b as' bs' where
+    "length as = n" and "length bs = n" and
+    "as = abs @ a # as'" and
+    "bs = abs @ b # bs'" and
+    "(a, b) \<in> r" END
+  CONSIDER bcs b' c' cs' bs' where
+    "length cs = n" and "length bs = n" and
+    "bs = bcs @ b' # bs'" and
+    "cs = bcs @ c' # cs'" and
+    "(b', c') \<in> r" END
+  CONSIDER "length bcs < length abs"
+    | "length bcs = length abs"
+    | "length bcs > length abs"
+  NEXT
+    LET ?k = "length bcs"
+    HAVE "as ! ?k = bs ! ?k" END
+    HAVE "(as ! ?k, cs ! ?k) \<in> r" END
+    HAVE "length bcs < length as" END
+    HAVE "as = take ?k as @ as ! ?k # drop (Suc ?k) as" END
+    HAVE "length bcs < length cs" END
+    HAVE "cs = take ?k cs @ cs ! ?k # drop (Suc ?k) cs" END
+    HAVE "take ?k as = take ?k cs" END
+  NEXT
+    LET ?k = "length abs"
+    HAVE "bs ! ?k = cs ! ?k" APPLY (unfold as bs, simp add: nth_append) PRINT END
+    HAVE "(as ! ?k, cs ! ?k) \<in> r" END
 \<close>)
+
+
+
+
+
+
+
+
+
+
 
 lemma comm_append_are_replicate:
   "xs @ ys = ys @ xs \<Longrightarrow> \<exists>m n zs. concat (replicate m zs) = xs \<and> concat (replicate n zs) = ys"

@@ -8,4 +8,6 @@ declare [[ML_debugger, ML_exception_trace]]
 
 ML_file \<open>./library/proof.ML\<close>
 
+  apply
+
 end

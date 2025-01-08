@@ -18,7 +18,8 @@ val END_completes_all_NEXT : bool Config.T
 val INIT : Proof.context -> thm -> state
 val INIT': Proof.state -> state
 
-val INTROS : operation
+datatype intros_mode = ALL_SUBGOALS | SINGLE_GOAL of binding list option
+val INTROS : intros_mode -> operation
 val INTROS_CMD : command
 
 val apply : context_tactic -> Time.time option -> stack -> stack
@@ -59,6 +60,9 @@ val END_CMD : command
 
 val NXT : operation
 val NXT_CMD : command
+
+val LET : (term list * term) list -> operation
+val LET_CMD : command
 
 val PRINT : operation
 val PRINT_CMD : command
@@ -183,25 +187,39 @@ fun need_intro st =
   end
 
 (*fix local variables & facts*)
-fun INTROS'' F all_subgoals (origin as (ctxt, HHF (st, pctxt) :: L)) =
-     (case Thm.nprems_of st
-        of 0 => origin
-         | _ => if Thm.nprems_of st > 1 orelse need_intro st
-                then let val (foc, st') = Subgoal.focus_prems ctxt 1 NONE st
-                         val PRT = augment_print (map (apsnd Thm.typ_of_cterm) (#params foc), [])
-                         val (st'', (pctxt', ctxt')) = F (st', foc)
-                         fun CB ctxt'' (st'',_,S) =
-                          let val st'3 = singleton (Proof_Context.export ctxt'' ctxt') st''
-                           in (ctxt, HHF (
-                                     Subgoal.retrofit ctxt'' ctxt (#params foc) (#asms foc) 1 st'3 st
-                                  |> Seq.hd,
-                                ([],[])) :: S)
-                           |> all_subgoals ? INTROS'' F all_subgoals
-                          end
-                      in (ctxt', HHF (st'', cat_pctxt pctxt' pctxt) :: MAGIC (CB,PRT) :: L)
-                     end
-                else (ctxt, HHF (st, pctxt) :: L)
-      )
+datatype intros_mode = ALL_SUBGOALS | SINGLE_GOAL of binding list option
+
+fun INTROS'' F mode (origin as (ctxt, HHF (st0, pctxt) :: L)) =
+   (case Thm.nprems_of st0
+      of 0 => origin
+       | _ => if Thm.nprems_of st0 > 1 orelse need_intro st0
+              then let val st = st0
+                             |> Seq.REPEAT (Thm.biresolution NONE true
+                                      [(false, @{thm allI}), (false, @{thm impI})] 1)
+                             |> Seq.hd
+                       val (foc, st') = Subgoal.focus_prems ctxt 1
+                                          (case mode of ALL_SUBGOALS => NONE
+                                                      | SINGLE_GOAL bs => bs)
+                                          st
+                       val PRT = augment_print (map (
+                                         snd
+                                      #> Thm.term_of
+                                      #> Term.dest_Free
+                                      #> apfst (Variable.revert_fixed (#context foc)
+                                   )) (#params foc), [])
+                       val (st'', (pctxt', ctxt')) = F (st', foc)
+                       fun CB ctxt'' (st'',_,S) =
+                        let val st'3 = singleton (Proof_Context.export ctxt'' ctxt') st''
+                         in (ctxt, HHF (
+                                   Subgoal.retrofit ctxt'' ctxt (#params foc) (#asms foc) 1 st'3 st
+                                |> Seq.hd,
+                              ([],[])) :: S)
+                         |> mode = ALL_SUBGOALS ? INTROS'' F mode
+                        end
+                    in (ctxt', HHF (st'', cat_pctxt pctxt' pctxt) :: MAGIC (CB,PRT) :: L)
+                   end
+              else (ctxt, HHF (st0, pctxt) :: L)
+    )
   | INTROS'' _ _ _ = raise BROKEN_INVARIANT
 
 val INTROS' = INTROS'' (fn (st, foc) =>
@@ -247,10 +265,11 @@ fun OPR (f : stack -> stack) ((S,TAB,ID) : state) : state
 fun OPR_ID (f : int -> stack -> stack) ((S,TAB,ID) : state) : state
   = (f ID S, TAB, ID+1)
 
-val INTROS = OPR (INTROS' false)
-val INTROS_CMD = K (Scan.succeed INTROS)
-val INTROS_ALL = OPR (INTROS' true)
-val INTROS_ALL_CMD = K (Scan.succeed INTROS_ALL)
+val INTROS = OPR o INTROS'
+val INTROS_CMD = K ( Scan.repeat Parse.binding
+                  >> (fn [] => NONE | vs => SOME vs)
+                  >> (INTROS o SINGLE_GOAL))
+val INTROS_ALL_CMD = K (Scan.succeed (INTROS ALL_SUBGOALS))
 
 (*
 fun strip_meta_hhf N term =
@@ -289,6 +308,10 @@ fun print_stack [] = PROP (([], []), SOLVED_GOAL)
 (*fun INTROS_ALL (ctxt, HHF (st, facts) :: L) = *)
   
 
+(* APPLY *)
+(*
+fun APPLY' prep_meth meth
+*)
 (* Crush *)
 
 val crush_timeout = Attrib.setup_config_int \<^binding>\<open>crush_timeout\<close> (K 10) (*in seconds*)
@@ -307,7 +330,7 @@ fun CRUSH' (ctxt, []) = (ctxt, [])
                          | _ => raise OPR_FAIL E )
            | Timeout.TIMEOUT _ =>
                 raise OPR_FAIL "Timeout")
-   |> SKIP_SUCCESS (INTROS' true)
+   |> SKIP_SUCCESS (INTROS' ALL_SUBGOALS)
   end
 
 val CRUSH = OPR CRUSH'
@@ -759,8 +782,48 @@ val NXT = OPR_ID (END' T_NXT 0)
 val END_CMD = K (Scan.succeed END)
 val NXT_CMD = K (Scan.succeed NXT)
 
-(* PRINT *)
+(* LET *)
 
+local
+
+fun gen_bind prep_terms raw_binds ctxt =
+    let
+      fun prep_bind (raw_pats, t) ctxt1 =
+        let
+          val T = Term.fastype_of t;
+          val ctxt2 = Variable.declare_term t ctxt1;
+          val pats = prep_terms (Proof_Context.set_mode Proof_Context.mode_pattern ctxt2) T raw_pats;
+          val binds = Proof_Context.simult_matches ctxt2 (t, pats);
+        in (binds, ctxt2) end;
+
+      val ts = prep_terms ctxt dummyT (map snd raw_binds);
+      val (binds, ctxt') = apfst flat (fold_map prep_bind (map fst raw_binds ~~ ts) ctxt);
+      val binds' = map #1 binds ~~ Variable.exportT_terms ctxt' ctxt (map #2 binds);
+
+      val ctxt'' =
+        ctxt
+        |> fold Variable.declare_term (map #2 binds')
+        |> fold Proof_Context.bind_term binds';
+      val _ = Variable.warn_extra_tfrees ctxt ctxt'';
+    in ctxt'' end
+
+fun read_terms ctxt T =
+  map (Syntax.parse_term ctxt #> Type.constraint T) #> Syntax.check_terms ctxt;
+
+in
+
+fun LET' prep_terms raw_binds (ctxt, S) =
+      (gen_bind prep_terms raw_binds ctxt, S)
+
+val LET = OPR o LET' (fn ctxt => fn _ => map (Proof_Context.cert_term ctxt))
+val LET_CMD = K (
+  (Parse.and_list1 (Parse.and_list1 Parse.term -- (\<^keyword>\<open>=\<close> |-- Parse.term))
+    >> (OPR o LET' read_terms)))
+
+
+end
+
+(* PRINT *)
 
 fun fixes_is_outdated ctxt var_name =
   Name.is_skolem var_name andalso Variable.revert_fixed ctxt var_name = var_name
@@ -832,7 +895,9 @@ val CMDS = Symtab.make [
       ("INTROS",  INTROS_CMD),
       ("HAMMER",  HAMMER_CMD),
       ("PRINT",   PRINT_CMD),
-      ("RULE",    RULE_CMD)
+      ("RULE",    RULE_CMD),
+      ("LET",     LET_CMD),
+      ("let",     LET_CMD)
     ]
 
 val keywords = let open Keyword
@@ -861,6 +926,7 @@ val keywords = let open Keyword
            (("[",     \<^here>), quasi_command_spec),
            (("]",     \<^here>), quasi_command_spec),
            (("?",     \<^here>), quasi_command_spec),
+           (("=",     \<^here>), quasi_command_spec),
            (("for",   \<^here>), quasi_command_spec),
            (("with",  \<^here>), quasi_command_spec),
            (("WITH",  \<^here>), quasi_command_spec),
@@ -879,7 +945,9 @@ val keywords = let open Keyword
            (("INTROS",\<^here>), command_spec (prf_goal, [])),
            (("HAMMER",\<^here>), command_spec (prf_goal, [])),
            (("PRINT", \<^here>), command_spec (prf_goal, [])),
-           (("RULE",  \<^here>), command_spec (prf_goal, []))
+           (("RULE",  \<^here>), command_spec (prf_goal, [])),
+           (("let",   \<^here>), command_spec (prf_goal, [])),
+           (("LET",   \<^here>), command_spec (prf_goal, []))
          ]
      end
 
