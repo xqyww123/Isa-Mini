@@ -19,15 +19,15 @@ lemma
  
 lemma  
   \<open> \<And>a. A \<and> B \<Longrightarrow> \<forall>x. P x \<Longrightarrow> P a \<and> A\<close>
-  by (min_script \<open>INTROS HAVE "A" PRINT END END\<close>)
+  by (min_script \<open>INTRO HAVE "A" PRINT END END\<close>)
 
 lemma  
   \<open> \<And>a y. A \<and> B \<Longrightarrow> \<forall>x. P x \<Longrightarrow> P a \<and> A\<close>
-  by (min_script \<open>INTROS CRUSH PRINT HAVE "A" END PRINT HAMMER PRINT END\<close>)
+  by (min_script \<open>INTRO CRUSH PRINT HAVE "A" END PRINT HAMMER PRINT END\<close>)
 
 lemma  
   \<open> \<And>a. A \<and> B \<Longrightarrow> \<forall>x. P x \<Longrightarrow> P a \<and> B\<close>
-  by (min_script \<open>PRINT INTROS END\<close>)
+  by (min_script \<open>PRINT INTRO END\<close>)
 
 lemma   
   \<open> A \<and> B \<Longrightarrow> \<forall>x. P x \<Longrightarrow> P y \<and> B\<close>
@@ -42,13 +42,13 @@ lemma
 lemma  
   \<open> \<And>y. A \<and> B \<Longrightarrow> \<forall>x. P x \<Longrightarrow> P y \<and> B\<close>
   by (min_script \<open> 
-  INTROS
+  INTRO
   CONSIDER x :: int and z :: nat where "0 < x" and c: "2 < z" and "1 < x" PRINT end PRINT end\<close>)
 
 lemma
   \<open> \<And>y. A \<and> B \<Longrightarrow> \<forall>x. P x \<Longrightarrow> P y \<and> B\<close>
   by (min_script \<open>
-    INTROS
+    INTRO
     RULE
     HAMMER
     RULE assm0(1)[THEN conjunct2]
@@ -59,13 +59,13 @@ lemma \<comment> \<open>Meta and Object-level \<open>\<forall>, \<and>\<close> a
           The two following proofs have the same pretty print.\<close>
   \<open> \<And>y. A \<and> B \<Longrightarrow> (\<forall>x. P x) \<Longrightarrow> P y \<and> B\<close>
   by (min_script \<open>
-  PRINT INTROS PRINT END
+  PRINT INTRO PRINT END
 \<close>)
 
 lemma
   \<open> \<forall>y. A \<and> B \<longrightarrow> (\<forall>x. P x) \<longrightarrow> P y \<and> B\<close>
   by (min_script \<open>
-  PRINT INTROS PRINT END
+  PRINT INTRO PRINT END
 \<close>)
  
 
@@ -186,7 +186,7 @@ lemma lexn_transI':
   unfolding trans_def
   by (min_script \<open>
   PRINT
-  INTROS as bs cs
+  CRUSH VARS as bs cs
   CONSIDER abs a b as' bs' where
     "length as = n" and "length bs = n" and
     "as = abs @ a # as'" and

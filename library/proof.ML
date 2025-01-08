@@ -19,15 +19,15 @@ val INIT : Proof.context -> thm -> state
 val INIT': Proof.state -> state
 
 datatype intros_mode = ALL_SUBGOALS | SINGLE_GOAL of binding list option
-val INTROS : intros_mode -> operation
-val INTROS_CMD : command
+val INTRO : intros_mode -> operation
+val INTRO_CMD : command
 
 val apply : context_tactic -> Time.time option -> stack -> stack
 val apply_method : Method.method -> Time.time option -> stack -> stack
 val APPLY_CMD : command
 
 val crush_timeout : int Config.T
-val CRUSH : operation
+val CRUSH : intros_mode -> operation
 val CRUSH_CMD : command
 
 val INDUCT : bool * ((binding option * (term * bool)) option list list *
@@ -207,7 +207,7 @@ fun need_intro st =
 (*fix local variables & facts*)
 datatype intros_mode = ALL_SUBGOALS | SINGLE_GOAL of binding list option
 
-fun INTROS'' F mode (origin as (ctxt, HHF (st0, pctxt) :: L)) =
+fun INTRO'' F mode (origin as (ctxt, HHF (st0, pctxt) :: L)) =
    (case Thm.nprems_of st0
       of 0 => origin
        | _ => if Thm.nprems_of st0 > 1 orelse need_intro st0
@@ -233,15 +233,15 @@ fun INTROS'' F mode (origin as (ctxt, HHF (st0, pctxt) :: L)) =
                                    Subgoal.retrofit ctxt'' ctxt (#params foc) (#asms foc) 1 st'3 st
                                 |> Seq.hd,
                               ([],[])) :: S)
-                         |> mode = ALL_SUBGOALS ? INTROS'' F mode
+                         |> mode = ALL_SUBGOALS ? INTRO'' F mode
                         end
                     in (ctxt', HHF (st'', pctxt') :: MAGIC (CB,PRT) :: L)
                    end
               else (ctxt, HHF (st0, pctxt) :: L)
     )
-  | INTROS'' _ _ _ = raise BROKEN_INVARIANT
+  | INTRO'' _ _ _ = raise BROKEN_INVARIANT
 
-val INTROS' = INTROS'' (fn (st, foc) =>
+val INTRO' = INTRO'' (fn (st, foc) =>
   let val ctxt = #context foc
       val SOME (ii,_,_) = IPS_Data.get ctxt
       val i = !ii
@@ -284,11 +284,11 @@ fun OPR (f : stack -> stack) ((S,TAB,ID) : state) : state
 fun OPR_ID (f : int -> stack -> stack) ((S,TAB,ID) : state) : state
   = (f ID S, TAB, ID+1)
 
-val INTROS = OPR o INTROS'
-val INTROS_CMD = K ( Scan.repeat Parse.binding
-                  >> (fn [] => NONE | vs => SOME vs)
-                  >> (INTROS o SINGLE_GOAL))
-val INTROS_ALL_CMD = K (Scan.succeed (INTROS ALL_SUBGOALS))
+val INTRO = OPR o INTRO'
+val VARS = Parse.$$$ "VARS" |-- Scan.repeat Parse.binding
+val VARS_FOR_SINGLE_GOAL = Scan.option VARS >> SINGLE_GOAL
+val INTRO_CMD = K ( VARS_FOR_SINGLE_GOAL >> INTRO)
+val INTRO_ALL_CMD = K (Scan.succeed (INTRO ALL_SUBGOALS))
 
 (*
 fun strip_meta_hhf N term =
@@ -324,7 +324,7 @@ fun print_stack [] = PROP (([], []), SOLVED_GOAL)
 (** Interfaces **)
 
 
-(*fun INTROS_ALL (ctxt, HHF (st, facts) :: L) = *)
+(*fun INTRO_ALL (ctxt, HHF (st, facts) :: L) = *)
   
 
 (* APPLY *)
@@ -339,8 +339,8 @@ val APPLY_CMD = K (Method.parse >> (fn (m,_) => APPLY m))
 
 val crush_timeout = Attrib.setup_config_int \<^binding>\<open>crush_timeout\<close> (K 10) (*in seconds*)
 
-fun CRUSH' (ctxt, []) = (ctxt, [])
-  | CRUSH' (s as (ctxt, _)) =
+fun CRUSH' _ (ctxt, []) = (ctxt, [])
+  | CRUSH' imode (s as (ctxt, _)) =
   let val time = Config.get ctxt crush_timeout
               |> Time.fromSeconds
    in
@@ -353,12 +353,12 @@ fun CRUSH' (ctxt, []) = (ctxt, [])
                          | _ => raise OPR_FAIL E )
            | Timeout.TIMEOUT _ =>
                 raise OPR_FAIL "Timeout")
-   |> SKIP_SUCCESS (INTROS' ALL_SUBGOALS)
+   |> SKIP_SUCCESS (INTRO' imode)
   end
 
-val CRUSH = OPR CRUSH'
+val CRUSH = OPR o CRUSH'
 
-val CRUSH_CMD = K (Scan.succeed CRUSH)
+val CRUSH_CMD = K (Scan.optional (VARS >> (SINGLE_GOAL o SOME)) ALL_SUBGOALS >> CRUSH)
 
 (* INDUCT & CASE *)
 
@@ -735,7 +735,7 @@ fun CONSIDER' raw_terms (ctxt, HHF (st,facts,IA) :: SK) =
                    |> REPEAT_DETERM (eresolve_tac ctxt' [elim_Ex] 1)
                    |> Seq.hd
          in (ctxt', HHF (st', facts' @ facts, IA) :: S)
-         |> INTROS'' (fn foc =>
+         |> INTRO'' (fn foc =>
             let val lem = case #prems foc
                             of [lem] => lem
                              | _ => error "5ViUXLLqRB+AA9ffsaEPDQ"
@@ -921,7 +921,7 @@ val CMDS = Symtab.make [
       ("CASE_SPLIT",    CASE_CMD),
       ("INDUCT",  INDUCT_CMD),
       ("CRUSH",   CRUSH_CMD),
-      ("INTROS",  INTROS_CMD),
+      ("INTRO",  INTRO_CMD),
       ("HAMMER",  HAMMER_CMD),
       ("PRINT",   PRINT_CMD),
       ("RULE",    RULE_CMD),
@@ -961,6 +961,7 @@ val keywords = let open Keyword
            (("for",   \<^here>), quasi_command_spec),
            (("with",  \<^here>), quasi_command_spec),
            (("WITH",  \<^here>), quasi_command_spec),
+           (("VARS",  \<^here>), quasi_command_spec),
 
            (("end",   \<^here>), command_spec (thy_end, [])),
            (("next",  \<^here>), command_spec (thy_end, [])),
@@ -973,7 +974,7 @@ val keywords = let open Keyword
            (("CASE_SPLIT",  \<^here>), command_spec (prf_goal, [])),
            (("INDUCT",\<^here>), command_spec (prf_goal, [])),
            (("CRUSH", \<^here>), command_spec (prf_goal, [])),
-           (("INTROS",\<^here>), command_spec (prf_goal, [])),
+           (("INTRO",\<^here>), command_spec (prf_goal, [])),
            (("HAMMER",\<^here>), command_spec (prf_goal, [])),
            (("PRINT", \<^here>), command_spec (prf_goal, [])),
            (("RULE",  \<^here>), command_spec (prf_goal, [])),
