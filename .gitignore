@@ -14,3 +14,7 @@ output
 
 doc/.obsidian
 doc/Advertisement.md
+result.csv
+.idea
+Isa_Mini/__pycache__/
+Translator

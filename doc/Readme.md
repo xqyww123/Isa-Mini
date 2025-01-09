@@ -1,10 +1,12 @@
 Isa Proof Shell
 ====
 
-A streamlined, Unix-pipeline-based shell for Isabelle's proof system, optimized for integration between Isabelle and machine learning systems.
-This shell offers a minimal language and abstraction layer that eliminates human-oriented complexities in Isabelle, making it particularly suitable for AI agents.
+A minimal language eliminates human-oriented complexities in Isabelle, making it particularly suitable for AI agents.
 
-> The development currently works in progress. We welcome suggestions, feature requests, and concerns through GitHub issues.
+Visit our [Example Gallery](https://docs.google.com/presentation/d/14VY5HkMRmOhRkKBvmISymKtNg5e650EZgzt-KajqMRI/edit?usp=sharing)!
+
+> Any suggestions, feature requests, and concerns through GitHub issues are higly welcome! Looking for feedbacks!
+
 
 ## Key Features
 
@@ -83,10 +85,10 @@ Clients just need to start up our shell, and send the above text through the sta
 
 | Due Date         | Phase                       |
 | ---------------- | --------------------------- |
-| Week 1, November | Proposal Draft Release      |
-| Week 4, November | Design Specification Freeze |
-| ~~Week 2, December~~ Week2, January | Alpha Release               |
-| ~~Week 4, December~~ Week4, January | Stable Release              |
+| Week 1, November | ✅ Proposal Draft Release      |
+| Week 4, November | ✅ Design Specification Freeze |
+| Week 2, January  | ✅ The language is almost done. [Example Gallery](https://docs.google.com/presentation/d/14VY5HkMRmOhRkKBvmISymKtNg5e650EZgzt-KajqMRI/edit?usp=sharing) |
+| Week 4, January  | ⏳ Translating AFP to this lang. |
 
 ## Design Specification (Draft)
 
