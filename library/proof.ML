@@ -122,6 +122,14 @@ exception BROKEN_INVARIANT
 
 exception OPR_FAIL of string
 
+(** Helpers **)
+
+fun is_protected (\<^Const>\<open>Pure.prop\<close> $ _) = true
+  | is_protected (\<^Const>\<open>Pure.imp\<close> $ _ $ X) = is_protected X
+  | is_protected (\<^Const>\<open>Pure.all _\<close> $ Abs (_,_, X)) = is_protected X
+  | is_protected _ = false
+  
+
 (** Basic Operations **)
 
 structure IPS_Data = Proof_Data (
@@ -157,12 +165,56 @@ fun beta_eta_contract th =
   else th
 
 (*Modus Ponens*)
-fun MP thAB thA =
-  let val LHS = Thm.cprop_of thAB
+fun norm_tyenv tyenv
+  = TVars.build (Vartab.fold (fn (N,(S,T)) => TVars.add ((N,S), Envir.norm_type tyenv T)) tyenv)
+
+fun norm_tenv tyenv tenv =
+  Vars.build (Vartab.fold (fn (N,(TY,TM)) =>
+      Vars.add ((N, Envir.norm_type tyenv TY),
+                    Envir.norm_term (Envir.Envir {maxidx = ~1, tenv=tenv,tyenv=tyenv}) TM
+                                |> Envir.eta_contract)) tenv)
+
+fun norm_env' (TY,TM) = (norm_tyenv TY, norm_tenv TY TM)
+fun certify_tyvars ctxt = TVars.map (K (Context.cases Thm.global_ctyp_of Thm.ctyp_of ctxt))
+fun certify_tmvars ctxt = Vars.map (K (Context.cases Thm.global_cterm_of Thm.cterm_of ctxt))
+fun certify_vars ctxt (ty, tm) = (certify_tyvars ctxt ty, certify_tmvars ctxt tm)
+fun norm_env ctxt (Envir.Envir {tenv, tyenv, ...}) = certify_vars ctxt (norm_env' (tyenv, tenv))
+
+fun MP ctxt thAB thA =
+  let val thAB = beta_eta_contract thAB
+      val thA  = beta_eta_contract thA
+      val LHS = Thm.cprop_of thAB
              |> Thm.dest_arg1
-      val inst = Thm.match (LHS, Thm.cprop_of thA)
-      val thAB' = Thm.instantiate inst thAB
-   in Thm.implies_elim (beta_eta_contract thAB') (beta_eta_contract thA)
+
+      fun qnum (\<^Const>\<open>Pure.all _\<close> $ Abs (_, _, A)) = 1 + qnum A
+        | qnum _ = 0
+      val diff = qnum (Thm.term_of LHS) - qnum (Thm.prop_of thA)
+      val (thAB', thA') =
+          if diff <= 0
+          then (Thm.instantiate (Thm.match (LHS, Thm.cprop_of thA)) thAB |> beta_eta_contract,
+                thA)
+          else let
+              val frees = Term.declare_term_frees (Thm.prop_of thA)
+                              (Term.declare_term_frees (Thm.term_of LHS) Name.context)
+              val names = Name.invent frees "x" diff 
+              val (fixes, LHS') = fold_map (fn name => Thm.dest_abs_fresh name o Thm.dest_arg)
+                                           names LHS
+              val thA = Thm.incr_indexes (Thm.maxidx_of thAB + 1) thA
+              val inst = Unify.smash_unifiers (Context.Proof ctxt)
+                                              [(Thm.term_of LHS', Thm.prop_of thA)]
+                                              (Envir.empty (Thm.maxidx_of thA + 1))
+                     |> Seq.pull
+                     |> (fn SOME (ret, _) => ret
+                          | NONE => raise THM ("unification fail", 1, [thAB, thA]))
+                     |> norm_env (Context.Proof ctxt)
+              val thAB = Thm.instantiate inst thAB |> beta_eta_contract
+              val thA  = Thm.instantiate inst thA  |> beta_eta_contract
+                                                   |> fold_rev Thm.forall_intr fixes
+
+           in (thAB, thA)
+          end
+
+   in Thm.implies_elim thAB' thA'
   end
 
 fun join_lstR pr = AList.join (op =) (fn _ => fn (_,x) => x) pr
@@ -186,7 +238,7 @@ fun maintain (c,[]) = (c,[])
         of 0 => (case L
             of [] => origin
              | (HHF (st1, pctxt') :: L') =>
-                  maintain (ctxt, HHF (MP st1 st, cat_pctxt pctxt pctxt') :: L')
+                  maintain (ctxt, HHF (MP ctxt st1 st, cat_pctxt pctxt pctxt') :: L')
              | (MAGIC (cb,_) :: L') =>
                   (case cb ctxt (st, pctxt, L') of (ctxt', S) => maintain (ctxt', S) )
              | ENDBLK _ :: _ => origin )
@@ -331,6 +383,18 @@ val collect_context =
    in collect [] []
   end
 
+fun fold_all_names f (PROP ((V,F),_)) x =
+      x |> fold (f o fst) V |> fold (f o fst) F
+  | fold_all_names f (BUNDL ((V,F), chil)) x =
+      x |> fold (f o fst) V |> fold (f o fst) F
+        |> fold (fold_all_names f) chil
+
+fun quanlifiers_of tree =
+  let fun merge [] L = L
+        | merge [_] L = L
+        | merge (h::L') L = merge L' (insert (op =) h L)
+   in fold_all_names (merge o Long_Name.explode) tree []
+  end
 
 (** Interfaces **)
 
@@ -410,6 +474,8 @@ val CRUSH_CMD = K (Scan.optional (VARS >> (SINGLE_GOAL o SOME)) ALL_SUBGOALS >> 
 
 (* INDUCT & CASE *)
 
+(* Syntax *)
+
 local (*copied from $ISABELLE_HOME/src/Tools/induct.ML*)
 
 val arbitraryN = "arbitrary";
@@ -475,9 +541,62 @@ fun case_synt ctxt toks = case case_synt' (ctxt, toks) of (x, (_, toks)) => (x,t
 
 in
 
-fun INDUCT' (no_simp, (insts, ((arbitrary, taking), opt_rule))) s =
-  let val tac = Induct.induct_context_tactic no_simp insts arbitrary taking opt_rule [] 1
-   in apply' tac NONE s
+fun CASES' tac (SK as (ctxt0, _)) =
+  apply' tac NONE SK |> (fn (ctxt, SK as HHF (rule, pctxt0) :: REMAIN_SK) =>
+   let val cases = Proof_Context.dest_cases (SOME ctxt0) ctxt
+       val used_qualifiers = quanlifiers_of (print_stack SK)
+       val cases = Name.variant_list used_qualifiers (map #1 cases)
+                ~~ map #2 cases
+       fun CB initial rule cases
+              ctxt' (lem, _, SK) =
+        let val rulexx = rule
+            val rule' =
+                if initial then rule
+                else lem
+                  |> is_protected (Thm.prop_of lem) ? Goal.conclude
+                  |> singleton (Proof_Context.export ctxt' ctxt)
+                  |> not initial ? MP ctxt rule
+         in case cases
+         of [] =>
+            (ctxt, HHF (rule, pctxt0) :: SK)
+          | ((name, kase) :: remaining_cases) =>
+        let val Rule_Cases.Case {fixes, cases, binds, ...} = kase
+            val _ = if null cases then () else error "XQY: Unsupported! #1"
+
+            val (asms, ctxt) = Proof_Context.apply_case kase ctxt
+            val goal = Vartab.lookup (Variable.binds_of ctxt) (Rule_Cases.case_conclN, 0)
+                    |> (fn SOME (\<^Type>\<open>bool\<close>, goal) => HOLogic.mk_Trueprop goal
+                         | _ => error "BUG 0ejOD0qNRfaTJCrbK7lH3w")
+                    |> Thm.cterm_of ctxt
+                    |> Goal.init
+
+            val binding = Binding.name name
+            val bindings = map (rpair [] o Binding.qualify_name true binding o fst) asms
+         in ctxt
+         |> fold_burrow ( Assumption.add_assms Assumption.assume_export
+                        o map (Thm.cterm_of ctxt) ) (map #2 asms)
+         |-> (fn thms =>
+            Proof_Context.note_thmss "" (bindings ~~ (map o map) (fn th => ([th], [])) thms))
+         |-> (fn thms =>
+        let val pctxt' = (map (apfst Binding.name_of) fixes, map (apsnd (map Thm.prop_of)) thms)
+         in rpair ( HHF (goal, pctxt')
+                 :: MAGIC (CB false rule' remaining_cases, I)
+                 :: SK)
+        end )
+        end
+        end
+    in CB true rule cases ctxt (Drule.dummy_thm, ([],[]), REMAIN_SK)
+   end
+     | _ => raise BROKEN_INVARIANT)
+
+fun INDUCT' (no_simp, (insts, ((arbitrary, taking), opt_rule))) =
+  let val tac = Induct.induct_context_tactic (not no_simp) insts arbitrary taking opt_rule [] 1
+   in CASES' tac
+  end
+
+fun CASE' (no_simp, (insts, opt_rule)) =
+  let val tac = Induct.cases_context_tactic (not no_simp) insts opt_rule [] 1
+   in CASES' tac
   end
 
 val INDUCT = OPR o INDUCT'
@@ -485,11 +604,6 @@ fun INDUCT_CMD ctxt =
          ind_synt ctxt
       >> (fn (no_simp, (insts, ((arbitrary, taking), opt_rule))) =>
           INDUCT (no_simp, (insts, ((arbitrary, taking), opt_rule))) )
-
-fun CASE' (no_simp, (insts, opt_rule)) s =
-  let val tac = Induct.cases_context_tactic no_simp insts opt_rule [] 1
-   in apply' tac NONE s
-  end
 
 val CASE = OPR o CASE'
 fun CASE_CMD ctxt =
@@ -707,13 +821,11 @@ fun CONSIDER' raw_dnf (ctxt0, HHF (st0, pctxt0) :: S) =
             let val rule' = lem
                          |> Goal.conclude
                          |> singleton (Proof_Context.export ctxt' ctxt0)
-                         |> initial ? MP rule0
+                         |> initial ? MP ctxt0 rule0
                 fun export a b =
                     let val (A,B) = Obtain.obtain_export ctxt0 rule' cparams a b 
                         fun export_thm thm =
-                          let val protected = (case Thm.prop_of thm
-                                                 of \<^Const>\<open>Pure.prop\<close> $ _ => true
-                                                  | _ => false)
+                          let val protected = is_protected (Thm.prop_of thm)
                            in thm
                            |> protected? Goal.conclude
                            |> A
