@@ -262,6 +262,14 @@ fun need_intro st =
 (*fix local variables & facts*)
 datatype intros_mode = ALL_SUBGOALS | SINGLE_GOAL of binding list option
 
+fun strip_meta_hhf term =
+  let fun strip (V,P) (Const("Pure.imp", _) $ H $ B) = strip (V,H::P) B
+        | strip (V,P) (Const("Pure.all", _) $ Abs (a, T, B)) = strip ((a,T)::V,P) B
+        | strip (V,P) (\<^Const>\<open>Pure.all ty\<close> $ X) =
+            strip (V,P) (\<^Const>\<open>Pure.all ty\<close> $ Abs ("_", ty, Term.incr_boundvars 1 X $ Bound 0))
+        | strip (V,P) X = (rev V, rev P, X)
+   in strip ([],[]) term end
+
 fun INTRO'' F mode (origin as (ctxt, HHF (st0, pctxt) :: L)) =
    (case Thm.nprems_of st0
       of 0 => origin
@@ -270,9 +278,20 @@ fun INTRO'' F mode (origin as (ctxt, HHF (st0, pctxt) :: L)) =
                              |> Seq.REPEAT (Thm.biresolution NONE true
                                       [(false, @{thm allI}), (false, @{thm impI})] 1)
                              |> Seq.hd
+
                        val (foc, st') = Subgoal.focus_prems ctxt 1
-                                          (case mode of ALL_SUBGOALS => NONE
-                                                      | SINGLE_GOAL bs => bs)
+                                          ((case mode of ALL_SUBGOALS => NONE
+                                                       | SINGLE_GOAL bs => bs)
+                                           |> (fn NONE => Thm.prop_of st
+                                                       |> Logic.dest_implies |> fst
+                                                       |> strip_meta_hhf
+                                                       |> #1 |> map #1
+                                                       |> (fn L => fold_map Name.variant L
+                                                                        (Variable.names_of ctxt))
+                                                       |> #1
+                                                       |> map Binding.name
+                                                       |> SOME
+                                                | some => some))
                                           st
                        val PRT = prepend_print pctxt
                                o prepend_print (map (
@@ -346,16 +365,6 @@ val IN = (Parse.$$$ "IN" || Parse.$$$ "in")
 
 val INTRO_CMD = K ( VARS_FOR_SINGLE_GOAL >> INTRO)
 val INTRO_ALL_CMD = K (Scan.succeed (INTRO ALL_SUBGOALS))
-
-(*
-fun strip_meta_hhf N term =
-  let fun strip (V,P) (Const("Pure.imp", _) $ H $ B) = strip (V,(N,[H])::P) B
-        | strip (V,P) (Const("Pure.all", _) $ Abs (a, T, B)) = strip ((a,T)::V,P) B
-        | strip (V,P) (\<^Const>\<open>Pure.all ty\<close> $ X) =
-            strip (V,P) (\<^Const>\<open>Pure.all ty\<close> $ Abs ("_", ty, Term.incr_boundvars 1 X $ Bound 0))
-        | strip (V,P) X = (rev V, rev P, X)
-   in strip ([],[]) term end
-*)
 
 val SOLVED_GOAL = \<^prop>\<open>True\<close>
 
@@ -474,6 +483,88 @@ val CRUSH_CMD = K (Scan.optional (VARS >> (SINGLE_GOAL o SOME)) ALL_SUBGOALS >> 
 
 (* INDUCT & CASE *)
 
+fun CASES' tac (SK as (ctxt0, HHF (st00, _) :: _)) =
+  apply' tac NONE SK |> (fn (ctxt, SK as HHF (rule, pctxt0) :: REMAIN_SK) =>
+   let val cases = Proof_Context.dest_cases (SOME ctxt0) ctxt
+       val used_qualifiers = quanlifiers_of (print_stack SK)
+       val cases = Name.variant_list used_qualifiers (map #1 cases)
+                ~~ map #2 cases
+       fun CB initial rule cases
+              ctxt' (lem, _, SK) =
+        let val rule' =
+                if initial then rule
+                else lem
+                  |> is_protected (Thm.prop_of lem) ? Goal.conclude
+                  |> singleton (Proof_Context.export ctxt' ctxt)
+                  |> not initial ? MP ctxt rule
+         in case cases
+         of [] =>
+            (ctxt, HHF (rule', pctxt0) :: SK)
+          | ((name, kase) :: remaining_cases) =>
+        let val kase = case kase
+                  of Rule_Cases.Case {fixes, assumes, binds, cases} =>
+                     Rule_Cases.Case {
+                       fixes = fold_map (fn (B,T) => fn names =>
+                            let val name = Binding.name_of B
+                                val name = if Name.is_internal name then Name.dest_internal name
+                                                                    else name
+                                (* val (name, names) = Name.variant name names *)
+                             in ((Binding.name name,T), names)
+                            end ) fixes (Variable.names_of ctxt)
+                            |> #1,
+                       assumes=assumes,
+                       binds=binds,
+                       cases=cases
+                     }
+
+            val Rule_Cases.Case {fixes, cases, binds, ...} = kase
+            val _ = if null cases then () else error "XQY: Unsupported! #1"
+
+            
+            val (asms, ctxt) = Proof_Context.apply_case kase ctxt
+
+            fun is_case x t =
+                x = Rule_Cases.case_conclN andalso not (Term.exists_subterm Term.is_Var t);
+            val goal =
+               (if exists (fn ((x, _), SOME t) => is_case x t | _ => false) binds
+                then Vartab.lookup (Variable.binds_of ctxt) (Rule_Cases.case_conclN, 0)
+                  |> (fn SOME (\<^Type>\<open>bool\<close>, goal) => HOLogic.mk_Trueprop goal
+                       | _ => error "BUG 0ejOD0qNRfaTJCrbK7lH3w")
+                  |> Thm.cterm_of ctxt
+                else Thm.cprop_of st00
+                  |> Thm.dest_arg1)
+                  |> Goal.init
+
+            val binding = Binding.name name
+            val bindings = map (rpair [] o Binding.qualify_name true binding o fst) asms
+
+            fun export is_G asms =
+                let val (A,B) = Assumption.assume_export is_G asms
+                 in (A #> Thm.permute_prems 0 (length asms) ,B)
+                end
+         in ctxt
+         |> fold_burrow ( Assumption.add_assms export
+                        o map (Thm.cterm_of ctxt) ) (map #2 asms)
+         |-> (fn thms =>
+            Proof_Context.note_thmss "" (bindings ~~ (map o map) (fn th => ([th], [])) thms))
+         |-> (fn thms =>
+        let val pctxt' = (map (apfst Binding.name_of) fixes, map (apsnd (map Thm.prop_of)) thms)
+         in if null remaining_cases
+         then rpair ( HHF (goal, pctxt')
+                 :: MAGIC (CB false rule' remaining_cases, I)
+                 :: SK)
+         else rpair ( HHF (goal, pctxt')
+                 :: ENDBLK T_NXT
+                 :: MAGIC (CB false rule' remaining_cases, I)
+                 :: SK)
+        end )
+        end
+        end
+    in CB true rule cases ctxt (Drule.dummy_thm, ([],[]), REMAIN_SK)
+   end
+     | _ => raise BROKEN_INVARIANT)
+  | CASES' _ _ = raise BROKEN_INVARIANT
+
 (* Syntax *)
 
 local (*copied from $ISABELLE_HOME/src/Tools/induct.ML*)
@@ -540,54 +631,6 @@ val case_synt' =
 fun case_synt ctxt toks = case case_synt' (ctxt, toks) of (x, (_, toks)) => (x,toks)
 
 in
-
-fun CASES' tac (SK as (ctxt0, _)) =
-  apply' tac NONE SK |> (fn (ctxt, SK as HHF (rule, pctxt0) :: REMAIN_SK) =>
-   let val cases = Proof_Context.dest_cases (SOME ctxt0) ctxt
-       val used_qualifiers = quanlifiers_of (print_stack SK)
-       val cases = Name.variant_list used_qualifiers (map #1 cases)
-                ~~ map #2 cases
-       fun CB initial rule cases
-              ctxt' (lem, _, SK) =
-        let val rulexx = rule
-            val rule' =
-                if initial then rule
-                else lem
-                  |> is_protected (Thm.prop_of lem) ? Goal.conclude
-                  |> singleton (Proof_Context.export ctxt' ctxt)
-                  |> not initial ? MP ctxt rule
-         in case cases
-         of [] =>
-            (ctxt, HHF (rule, pctxt0) :: SK)
-          | ((name, kase) :: remaining_cases) =>
-        let val Rule_Cases.Case {fixes, cases, binds, ...} = kase
-            val _ = if null cases then () else error "XQY: Unsupported! #1"
-
-            val (asms, ctxt) = Proof_Context.apply_case kase ctxt
-            val goal = Vartab.lookup (Variable.binds_of ctxt) (Rule_Cases.case_conclN, 0)
-                    |> (fn SOME (\<^Type>\<open>bool\<close>, goal) => HOLogic.mk_Trueprop goal
-                         | _ => error "BUG 0ejOD0qNRfaTJCrbK7lH3w")
-                    |> Thm.cterm_of ctxt
-                    |> Goal.init
-
-            val binding = Binding.name name
-            val bindings = map (rpair [] o Binding.qualify_name true binding o fst) asms
-         in ctxt
-         |> fold_burrow ( Assumption.add_assms Assumption.assume_export
-                        o map (Thm.cterm_of ctxt) ) (map #2 asms)
-         |-> (fn thms =>
-            Proof_Context.note_thmss "" (bindings ~~ (map o map) (fn th => ([th], [])) thms))
-         |-> (fn thms =>
-        let val pctxt' = (map (apfst Binding.name_of) fixes, map (apsnd (map Thm.prop_of)) thms)
-         in rpair ( HHF (goal, pctxt')
-                 :: MAGIC (CB false rule' remaining_cases, I)
-                 :: SK)
-        end )
-        end
-        end
-    in CB true rule cases ctxt (Drule.dummy_thm, ([],[]), REMAIN_SK)
-   end
-     | _ => raise BROKEN_INVARIANT)
 
 fun INDUCT' (no_simp, (insts, ((arbitrary, taking), opt_rule))) =
   let val tac = Induct.induct_context_tactic (not no_simp) insts arbitrary taking opt_rule [] 1
@@ -1006,6 +1049,20 @@ val LET_CMD = K (
 
 end
 
+(* CHOOSE -- Instantiate Existential Quantification *)
+
+fun CHOOSE' prep_terms raw_terms (ctxt, HHF (st, pctxt) :: SK) =
+  let val terms = prep_terms ctxt raw_terms
+      val rules = map (fn X => @{thm exI}
+                            |> Drule.infer_instantiate ctxt [(("x",0), Thm.cterm_of ctxt X)] ) terms
+      val st' = fold (fn rule => fn st => rule RS st) rules st
+   in (ctxt, HHF (st', pctxt) :: SK)
+  end
+  | CHOOSE' _ _ _ = raise BROKEN_INVARIANT
+
+val CHOOSE = OPR o CHOOSE' (K I)
+val CHOOSE_CMD = K (Scan.repeat1 Parse.term >> (OPR o CHOOSE' Syntax.read_terms))
+
 (* PRINT *)
 
 fun fixes_is_outdated ctxt var_name =
@@ -1074,7 +1131,7 @@ val CMDS = Symtab.make [
       ("CASE_SPLIT",    CASE_CMD),
       ("INDUCT",  INDUCT_CMD),
       ("CRUSH",   CRUSH_CMD),
-      ("INTRO",  INTRO_CMD),
+      ("INTRO",   INTRO_CMD),
       ("HAMMER",  HAMMER_CMD),
       ("PRINT",   PRINT_CMD),
       ("RULE",    RULE_CMD),
@@ -1082,7 +1139,8 @@ val CMDS = Symtab.make [
       ("let",     LET_CMD),
       ("APPLY",   APPLY_CMD),
       ("apply",   APPLY_CMD),
-      ("UNFOLD",  UNFOLD_CMD)
+      ("UNFOLD",  UNFOLD_CMD),
+      ("CHOOSE",  CHOOSE_CMD)
     ]
 
 val keywords = let open Keyword
@@ -1113,17 +1171,12 @@ val keywords = let open Keyword
            (("?",     \<^here>), quasi_command_spec),
            (("=",     \<^here>), quasi_command_spec),
            (("for",   \<^here>), quasi_command_spec),
-           (("with",  \<^here>), quasi_command_spec),
            (("WITH",  \<^here>), quasi_command_spec),
-           (("VARS",  \<^here>), quasi_command_spec),
            (("IN",    \<^here>), quasi_command_spec),
-           (("in",    \<^here>), quasi_command_spec),
+           (("VARS",  \<^here>), quasi_command_spec),
 
-           (("end",   \<^here>), command_spec (thy_end, [])),
-           (("next",  \<^here>), command_spec (thy_end, [])),
-           (("consider",\<^here>),command_spec (prf_asm_goal, [])),
-           (("have",  \<^here>), command_spec (prf_goal, [])),
            (("END",   \<^here>), command_spec (thy_end, [])),
+           (("end",   \<^here>), command_spec (thy_end, [])),
            (("NEXT",  \<^here>), command_spec (thy_end, [])),
            (("CONSIDER",\<^here>),command_spec (prf_asm_goal, [])),
            (("HAVE",  \<^here>), command_spec (prf_goal, [])),
@@ -1134,11 +1187,10 @@ val keywords = let open Keyword
            (("HAMMER",\<^here>), command_spec (prf_goal, [])),
            (("PRINT", \<^here>), command_spec (prf_goal, [])),
            (("RULE",  \<^here>), command_spec (prf_goal, [])),
-           (("let",   \<^here>), command_spec (prf_goal, [])),
            (("LET",   \<^here>), command_spec (prf_goal, [])),
-           (("apply", \<^here>), command_spec (prf_goal, [])),
            (("APPLY", \<^here>), command_spec (prf_goal, [])),
-           (("UNFOLD",\<^here>), command_spec (prf_goal, []))
+           (("UNFOLD",\<^here>), command_spec (prf_goal, [])),
+           (("CHOOSE",\<^here>), command_spec (prf_goal, []))
          ]
      end
 

@@ -2,7 +2,7 @@ theory MS_Test
   imports Main Proof_Shell HOL.Transcendental HOL.Groups_Big
 begin
 
-
+  
 lemma \<open>0 < length x \<Longrightarrow> x \<noteq> []\<close>
   by (min_script \<open>CASE_SPLIT x PRINT END\<close>)
 
@@ -234,21 +234,26 @@ lemma test_unfold_prem:
   by (min_script \<open>INTRO UNFOLD TAG_def IN assm0 PRINT END\<close>)
 
 
-          
+           
 lemma comm_append_are_replicate':
   "xs @ ys = ys @ xs \<Longrightarrow> \<exists>m n zs. concat (replicate m zs) = xs \<and> concat (replicate n zs) = ys"
+   
 by (min_script \<open>
   INDUCT "length (xs @ ys) + length xs" arbitrary: xs ys rule: less_induct
+PRINT
+  CONSIDER "length ys < length xs" | "xs = []" | "length xs \<le> length ys \<and> xs \<noteq> []"
+  NEXT
+  NEXT
+    HAVE "concat (replicate 0 ys) = xs \<and> concat (replicate 1 ys) = ys" END
+  NEXT
+    HAVE "length xs \<le> length ys" and "xs \<noteq> []" END
+    CONSIDER ws where "ys = xs @ ws" END
+    HAVE "length ws < length ys" END
+    HAVE "xs @ ws = ws @ xs" END
+    CONSIDER m n' zs where "concat (replicate m zs) = xs" and  "concat (replicate n' zs) = ws" END
+    HAVE "concat (replicate (m+n') zs) = ys" END
   END
-(* 
-CONSIDER "length ys < length xs" | "xs = []" | "length xs \<le> length ys \<and> xs \<noteq> []"
-   *)
 \<close>)
-
-
-
-
-
 
 
 lemma comm_append_are_replicate:
@@ -293,14 +298,112 @@ proof (induction "length (xs @ ys) + length xs" arbitrary: xs ys rule: less_indu
 qed
 
 
+   
+lemma polyfun_extremal_lemma': 
+    fixes c :: "nat \<Rightarrow> 'a::real_normed_div_algebra"
+  assumes "0 < e"
+    shows "\<exists>M. \<forall>z. M \<le> norm(z) \<longrightarrow> norm (\<Sum>i\<le>n. c(i) * z^i) \<le> e * norm(z) ^ (Suc n)"
+  by (min_script \<open>
+INDUCT n
+PRINT
+NEXT
+CONSIDER M where "\<And>z. M \<le> norm z \<Longrightarrow> norm (\<Sum>i\<le>n. c i * z^i) \<le> e * norm z ^ Suc n" END
+RULE exI [where x= "max M (1 + norm(c(Suc n)) / e)"]
+CRUSH
+PRINT
+HAVE "e + norm (c (Suc n)) \<le> e * norm z" END
+HAVE "norm (\<Sum>i\<le>n. c i * z^i) \<le> e * norm z ^ Suc n" END
+HAVE "norm (\<Sum>i\<le>n. c i * z^i) + norm (c (Suc n) * z ^ Suc n) \<le> e * norm z ^ Suc n + norm (c (Suc n) * z ^ Suc n)" END
+HAVE "norm ((\<Sum>i\<le>n. c i * z^i) + c (Suc n) * z ^ Suc n) \<le> e * norm z ^ Suc n + norm (c (Suc n) * z ^ Suc n)" END
+HAVE "e * norm z ^ Suc n + norm (c (Suc n) * z ^ Suc n) \<le> (e + norm (c (Suc n))) * norm z ^ Suc n"  END
+HAVE "(e + norm (c (Suc n))) * norm z ^ Suc n \<le> e * norm z * norm z ^ Suc n" END
+END
+\<close>)
+
+lemma polyfun_extremal_lemma: 
+    fixes c :: "nat \<Rightarrow> 'a::real_normed_div_algebra"
+  assumes "0 < e"
+    shows "\<exists>M. \<forall>z. M \<le> norm(z) \<longrightarrow> norm (\<Sum>i\<le>n. c(i) * z^i) \<le> e * norm(z) ^ (Suc n)"
+proof (induct n)
+
+  case 0 with assms
+  show ?case
+    apply (rule_tac x="norm (c 0) / e" in exI)
+    apply (auto simp: field_simps)
+    done
+next
+  case (Suc n)
+  obtain M where M: "\<And>z. M \<le> norm z \<Longrightarrow> norm (\<Sum>i\<le>n. c i * z^i) \<le> e * norm z ^ Suc n"
+    using Suc assms by blast
+  show ?case
+  proof (rule exI [where x= "max M (1 + norm(c(Suc n)) / e)"], clarsimp simp del: power_Suc)
+    fix z::'a
+    assume z1: "M \<le> norm z" and "1 + norm (c (Suc n)) / e \<le> norm z"
+    then have z2: "e + norm (c (Suc n)) \<le> e * norm z"
+      using assms by (simp add: field_simps)
+    have "norm (\<Sum>i\<le>n. c i * z^i) \<le> e * norm z ^ Suc n"
+      using M [OF z1] by simp
+    then have "norm (\<Sum>i\<le>n. c i * z^i) + norm (c (Suc n) * z ^ Suc n) \<le> e * norm z ^ Suc n + norm (c (Suc n) * z ^ Suc n)"
+      by simp
+    then have "norm ((\<Sum>i\<le>n. c i * z^i) + c (Suc n) * z ^ Suc n) \<le> e * norm z ^ Suc n + norm (c (Suc n) * z ^ Suc n)"
+      by (blast intro: norm_triangle_le elim: )
+    also have "... \<le> (e + norm (c (Suc n))) * norm z ^ Suc n"
+      by (simp add: norm_power norm_mult algebra_simps)
+    also have "... \<le> (e * norm z) * norm z ^ Suc n"
+      by (metis z2 mult.commute mult_left_mono norm_ge_zero norm_power)
+    finally show "norm ((\<Sum>i\<le>n. c i * z^i) + c (Suc n) * z ^ Suc n) \<le> e * norm z ^ Suc (Suc n)"
+      by simp
+  qed
+qed
+
+no_notation
+  less_eq  ("'(\<le>')") and
+  less_eq  ("(_/ \<le> _)"  [51, 51] 50) and
+  less  ("'(<')") and
+  less  ("(_/ < _)"  [51, 51] 50)
+
+notation
+  less_eq  ("'(\<le>')") and
+  less_eq  ("(_/ \<le> _)"  [50, 51] 50) and
+  less  ("'(<')") and
+  less  ("(_/ < _)"  [50, 51] 50)
 
 
+term \<open>a \<le> b\<close>
 
+translations
+  "a \<le> b \<le> c" => "a \<le> b \<and> b \<le> c"
+  "a < b < c" => "a < b \<and> b < c"
+  "a = b = c" => "a = b \<and> b = c"
+  "a \<longleftrightarrow> b \<longleftrightarrow> c" => "(a \<longleftrightarrow> b) \<and> (b \<longleftrightarrow> c)"
 
+term \<open>a \<le> b \<le> c\<close>
+term \<open>a < b < c\<close>
+term \<open>a = b = c\<close>
+term \<open>a = b \<longleftrightarrow> c = d\<close>
+term \<open>a \<longleftrightarrow> b \<longleftrightarrow> c \<longleftrightarrow> d\<close>
 
-
-
-
+lemma polyfun_extremal_lemma'': 
+    fixes c :: "nat \<Rightarrow> 'a::real_normed_div_algebra"
+  assumes "0 < e"
+    shows "\<exists>M. \<forall>z. M \<le> norm(z) \<longrightarrow> norm (\<Sum>i\<le>n. c(i) * z^i) \<le> e * norm(z) ^ (Suc n)"
+  by (min_script \<open>
+INDUCT n
+PRINT
+NEXT
+CONSIDER M where "\<And>z. M \<le> norm z \<Longrightarrow> norm (\<Sum>i\<le>n. c i * z^i) \<le> e * norm z ^ Suc n" END
+CHOOSE "max M (1 + norm(c(Suc n)) / e)"
+CRUSH
+PRINT
+HAVE "e + norm (c (Suc n)) \<le> e * norm z" END
+HAVE "norm (\<Sum>i\<le>n. c i * z^i) \<le> e * norm z ^ Suc n" END
+HAVE "norm (\<Sum>i\<le>n. c i * z^i) + norm (c (Suc n) * z ^ Suc n) \<le> e * norm z ^ Suc n + norm (c (Suc n) * z ^ Suc n)" END
+HAVE "norm ((\<Sum>i\<le>n. c i * z^i) + c (Suc n) * z ^ Suc n)
+    \<le> e * norm z ^ Suc n + norm (c (Suc n) * z ^ Suc n)
+    \<le> (e + norm (c (Suc n))) * norm z ^ Suc n
+    \<le> e * norm z * norm z ^ Suc n" END
+END
+\<close>)
 
 (*
 lemma comm_append_are_replicate':
