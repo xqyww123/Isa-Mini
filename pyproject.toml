@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "IsaMini"
+version = "0.2.0"
+description = "The minimal proof language for Isabelle"
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [
+    { name="Qiyuan Xu", email="xqyww123@gmail.com" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+dependencies = ["msgpack"]
+
+[project.urls]
+"Homepage" = "https://github.com/xqyww123/Isa-Proof-Shell"
+
+[tool.setuptools.packages.find]
+include = ["Isa_Mini", "Isa_Mini.*"]

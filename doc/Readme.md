@@ -5,8 +5,6 @@ A minimal language eliminates human-oriented complexities in Isabelle, making it
 
 Visit our [Example Gallery](https://docs.google.com/presentation/d/14VY5HkMRmOhRkKBvmISymKtNg5e650EZgzt-KajqMRI/edit?usp=sharing)!
 
-A [slide](https://docs.google.com/presentation/d/1sgdIBkZ_B1kdhiZqVqTch9BcBvoZQNfq_9Kyti4v4Vg/edit?usp=sharing) is also available
-
 > Any suggestions, feature requests, and concerns through GitHub issues are higly welcome! Looking for feedbacks!
 
 

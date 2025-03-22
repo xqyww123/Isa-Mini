@@ -11,10 +11,24 @@ val induction_tac:
     thm list -> int -> context_tactic
 
 val xOF : Proof.context -> thm list -> thm -> thm
+val xof : Proof.context -> string option list * string option list ->
+    (binding * string option * mixfix) list -> thm -> thm
 
 val print_toks : Token.src -> string list
 val trim_markup : string -> string
 val method_sorry : Method.text
+
+val ind_synt' :
+      (bool * ((binding option * (term * bool)) option list list *
+        (((string * typ) list list * term option list) *
+         thm list option))) context_parser
+val ind_synt : Context.generic ->
+        (bool * ((binding option * (term * bool)) option list list
+          * (((string * typ) list list * term option list) *
+            thm list option))) parser
+val rule_of_ind : Context.generic -> Token.T list -> thm list option
+val case_synt' : (bool * (term option list list * thm option)) context_parser
+val case_synt : Context.generic -> (bool * (term option list list * thm option)) parser
 
 end
 
@@ -119,6 +133,26 @@ fun xOF ctxt thms st =
      end
   end
 
+fun xof ctxt (args, concl_args) fixes thm =
+  let val num_var = length args - length (Term.add_vars (Thm.prop_of thm) [])
+      fun spec_rule thm =
+        case Thm.concl_of thm
+          of Const(\<^const_name>\<open>Trueprop\<close>, _) $ (Const(\<^const_name>\<open>HOL.All\<close>, _) $ _) =>
+              thm RS Thms.spec
+           | _ => error "More instantiations than variables in theorem"
+   in thm
+   |> num_var > 0 ? funpow num_var spec_rule
+   |> Rule_Insts.of_rule ctxt (args, concl_args) fixes
+  end
+
+
+
+
+
+
+
+
+
 fun print_toks [] = []
   | print_toks toks =
   let open Token Position
@@ -146,5 +180,78 @@ fun print_toks [] = []
 val method_sorry = Method.Basic (fn _ =>
       CONTEXT_METHOD (fn _ => fn (ctxt, st) =>
       TACTIC_CONTEXT ctxt (ALLGOALS (Skip_Proof.cheat_tac ctxt) st)))
+
+
+local (*copied from $ISABELLE_HOME/src/Tools/induct.ML*)
+
+val arbitraryN = "arbitrary";
+val takingN = "taking";
+val ruleN = "rule";
+
+fun unless_more_args scan = Scan.unless (Scan.lift
+  ((Args.$$$ arbitraryN || Args.$$$ takingN || Args.$$$ Induct.typeN ||
+    Args.$$$ Induct.predN || Args.$$$ Induct.setN || Args.$$$ ruleN) -- Args.colon)) scan;
+
+val inst = Scan.lift (Args.$$$ "_") >> K NONE || Args.term >> SOME;
+
+val inst' = Scan.lift (Args.$$$ "_") >> K NONE ||
+  Args.term >> (SOME o rpair false) ||
+  Scan.lift (Args.$$$ "(") |-- (Args.term >> (SOME o rpair true)) --|
+    Scan.lift (Args.$$$ ")");
+
+val def_inst =
+  ((Scan.lift (Args.binding --| (Args.$$$ "\<equiv>" || Args.$$$ "==")) >> SOME)
+      -- (Args.term >> rpair false)) >> SOME ||
+    inst' >> Option.map (pair NONE);
+
+val free = Args.context -- Args.term >> (fn (_, Free v) => v | (ctxt, t) =>
+  error ("Bad free variable: " ^ Syntax.string_of_term ctxt t));
+
+val arbitrary = Scan.optional (Scan.lift (Args.$$$ arbitraryN -- Args.colon) |--
+  Parse.and_list1' (Scan.repeat (unless_more_args free))) [];
+
+val taking = Scan.optional (Scan.lift (Args.$$$ takingN -- Args.colon) |--
+  Scan.repeat1 (unless_more_args inst)) [];
+
+fun single_rule [rule] = rule
+  | single_rule _ = error "Single rule expected";
+
+fun named_rule k arg get =
+  Scan.lift (Args.$$$ k -- Args.colon) |-- Scan.repeat arg :|--
+    (fn names => Scan.peek (fn context => Scan.succeed (names |> map (fn name =>
+      (case get (Context.proof_of context) name of SOME x => x
+      | NONE => error ("No rule for " ^ k ^ " " ^ quote name))))));
+
+fun rule get_type get_pred =
+  named_rule Induct.typeN (Args.type_name {proper = false, strict = false}) get_type ||
+  named_rule Induct.predN (Args.const {proper = false, strict = false}) get_pred ||
+  named_rule Induct.setN (Args.const {proper = false, strict = false}) get_pred ||
+  Scan.lift (Args.$$$ ruleN -- Args.colon) |-- Attrib.thms;
+
+val induct_rule = rule Induct.lookup_inductT Induct.lookup_inductP;
+val cases_rule = rule Induct.lookup_casesT Induct.lookup_casesP >> single_rule;
+
+
+
+in
+
+val ind_synt' =
+      (Scan.lift (Args.mode Induct.no_simpN) --
+      (Parse.and_list' (Scan.repeat (unless_more_args def_inst)) --
+        (arbitrary -- taking -- Scan.option induct_rule)))
+
+fun ind_synt ctxt toks = case ind_synt' (ctxt, toks) of (x, (_, toks)) => (x,toks)
+fun rule_of_ind ctxt toks =
+  case ind_synt ctxt toks
+    of ((_, (_, ((_, _), opt_rule))), _) => opt_rule
+
+val case_synt' =
+      (Scan.lift (Args.mode Induct.no_simpN) --
+        (Parse.and_list' (Scan.repeat (unless_more_args inst)) -- Scan.option cases_rule))
+
+fun case_synt ctxt toks = case case_synt' (ctxt, toks) of (x, (_, toks)) => (x,toks)
+
+
+end
 
 end

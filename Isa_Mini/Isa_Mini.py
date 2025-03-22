@@ -13,11 +13,12 @@ class Mini:
         REPL.Client._parse_control_ (self.repl.unpack.unpack())
 
     def __turn_off (self):
-        mp.pack ("\\close", self.repl.cout)
-        self.repl.cout.flush()
-        return REPL.Client._parse_control_ (self.repl.unpack.unpack())
+        if self.pos:
+            mp.pack ("\\close", self.repl.cout)
+            self.repl.cout.flush()
+            return REPL.Client._parse_control_ (self.repl.unpack.unpack())
 
-    def __init__(self, repl, initial_pos = None):
+    def __init__(self, addr, thy_qualifier, initial_pos = None):
         """
         Argument repl: a REPL client
 
@@ -32,19 +33,22 @@ class Mini:
         instance will start.
         """
 
-        self.repl = repl
+        self.repl = REPL.Client(addr, thy_qualifier)
+        self.repl.set_trace(False)
         try:
-            repl._initialized_mini_
+            self.repl._initialized_mini_
         except AttributeError:
-            repl.load_theory (['Minilang_REPL.Minilang_Top'])
-            repl.add_lib (["Minilang.Minilang_Base"])
-            repl.run_ML ("Minilang_REPL.Minilang_Top",
+            self.repl.load_theory (['Minilang_REPL.Minilang_Top'])
+            self.repl.add_lib (["Minilang.Minilang_Base"])
+            self.repl.run_ML ("Minilang_REPL.Minilang_Top",
                 """REPL_Server.register_app "Minilang-REPL" Minilang_Top.REPL_App""")
-            repl._initialized_mini_ = True
-        repl.record_state ("mini-init")
+            self.repl._initialized_mini_ = True
+        self.repl.record_state ("mini-init")
         if initial_pos:
-            repl.eval_file(initial_pos[0], initial_pos[1], initial_pos[2])
-        self.__run()
+            self.repl.eval_file(initial_pos[0], initial_pos[1], initial_pos[2])
+        self.pos = initial_pos
+        if self.pos:
+            self.__run()
 
     def close(self):
         """
@@ -62,6 +66,8 @@ class Mini:
             1. the pretty-print string of the proven thm
             2. the obtained proof.
         """
+        if not self.pos:
+            raise ValueError("Mini: not started yet. Call `move_to` to indicate where to start the proof.")
         mp.pack ("\\conclude", self.repl.cout)
         self.repl.cout.flush()
         return REPL.Client._parse_control_ (self.repl.unpack.unpack())
@@ -70,30 +76,57 @@ class Mini:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        pass
-        #self.close()
+        self.close()
 
     def move_to (self, file, line, offset=0):
         self.__turn_off()
         self.repl.rollback ('mini-init')
         self.repl.eval_file (file, line, offset)
+        self.pos = (file, line, offset)
         self.__run()
 
+    def set_theory_and_goal(self, src):
+        self.__turn_off()
+        self.repl.rollback('mini-init')
+        self.repl.eval(src)
+        self.pos = ("#REPL", 0, 0)
+        self.__run()
+
+    def set_timeout(self, timeout):
+        """
+        Sets the timeout for evaluation
+        
+        Args:
+            timeout: An integer representing timeout in seconds, or None for no timeout
+        """
+        if timeout is not None and not isinstance(timeout, int):
+            raise TypeError("Timeout must be an integer or None")
+        
+        mp.pack("\\timeout", self.repl.cout)
+        mp.pack(timeout, self.repl.cout)
+        self.repl.cout.flush()
+        return REPL.Client._parse_control_(self.repl.unpack.unpack())
+    
     def eval (self, src):
         """
         Evaluates the given source Minilang code.
         The given source can contain multiple commands.
         Returns the list of the respective proof states after evaluating each of the command.
         """
+        if not self.pos:
+            raise ValueError("Mini: not started yet. Call `move_to` to indicate where to start the proof.")
         mp.pack (src, self.repl.cout)
         self.repl.cout.flush()
         return REPL.Client._parse_control_ (self.repl.unpack.unpack())
 
+    @staticmethod
     def parse_item(data):
         return {
             'vars' : data[0],
             'facts': data[1]
         }
+    
+    @staticmethod
     def parse_prooftree (data):
         match data[0]:
             case 0:
@@ -115,11 +148,14 @@ class Mini:
                 return {
                     'block': Mini.parse_prooftree(data[1])
                 }
-    def parse_eval_return (data):
+    @staticmethod
+    def parse_eval_return (response):
+        data, status = response
         return {
             'new_items': Mini.parse_item (data[0]),
             'new_case' : data[1],
-            'state'    : Mini.parse_prooftree (data[2])
+            'state'    : Mini.parse_prooftree (data[2]),
+            'finished' : status
         }
 
     def pretty_eval (self, src):
@@ -127,12 +163,8 @@ class Mini:
         return Mini.parse_eval_return (ret)
 
     def print(self):
+        if not self.pos:
+            raise ValueError("Mini: not started yet. Call `move_to` to indicate where to start the proof.")
         mp.pack('\print', self.repl.cout)
         self.repl.cout.flush()
         return REPL.Client._parse_control_(self.repl.unpack.unpack())
-
-
-
-
-
-

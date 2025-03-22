@@ -39,7 +39,7 @@ fun pack_tree ctxt =
 fun pack_response' (ctxt, items, ccase, tree) =
       packTuple3 (pack_items ctxt, packOption packString, pack_tree ctxt)
                  (items, ccase, tree) 
-val pack_response = packList pack_response'
+val pack_response = packPair (packList pack_response', packBool)
 end
 
 
@@ -81,7 +81,7 @@ fun RE cout msgs src s =
         end
       ) oprs s
     |> (fn (data, s') => (
-        REPL_Server.output cout pack_response data
+        REPL_Server.output cout pack_response (data, Minilang.is_finished (fst s'))
       ; BinIO.StreamIO.flushOut cout
       ; s'))
   end
@@ -93,7 +93,8 @@ fun REPL cout cin0 msgs init_state =
                          in cin := cin'
                           ; ret
                         end
-      fun loop s =
+      val timeout = Unsynchronized.ref NONE
+      fun loop s = \<^try>\<open>
         let val cmd = read unpackString
          in if String.isPrefix "\\" cmd
            then case cmd
@@ -122,7 +123,17 @@ fun REPL cout cin0 msgs init_state =
                     val s0 = minlang_of s
                     val ctxt' = Minilang.context_of s0
                     val tree = Minilang.print_state s0
-                 in REPL_Server.output cout pack_response [(ctxt', Minilang.empty_items, NONE, tree)]
+                 in REPL_Server.output cout pack_response
+                            ([(ctxt', Minilang.empty_items, NONE, tree)],
+                             Minilang.is_finished s0)
+                  ; BinIO.StreamIO.flushOut cout
+                  ; loop s
+                end
+              | "\\timeout" => let
+                    val time = read (unpackOption unpackInt)
+                            |> Option.map Time.fromMilliseconds
+                 in timeout := time
+                  ; REPL_Server.output cout packUnit ()
                   ; BinIO.StreamIO.flushOut cout
                   ; loop s
                 end
@@ -135,16 +146,19 @@ fun REPL cout cin0 msgs init_state =
                              ^ " is only available in REPL mode, but \
                   \you are at Minilang mode.")
            else s
-             |> apfst (RE cout msgs cmd)
+             |> apfst (
+                  case ! timeout
+                    of SOME time => Timeout.apply time (RE cout msgs cmd)
+                     | NONE      => RE cout msgs cmd)
              |> loop
         end
-        handle REPL.REPL_fail E => (
+        catch REPL.REPL_fail E => (
                       REPL_Server.output_err cout E
                     ; BinIO.StreamIO.flushOut cout
                     ; loop s )
              | E => ( REPL_Server.output_err cout (Runtime.exn_message E)
                     ; BinIO.StreamIO.flushOut cout
-                    ; loop s )
+                    ; loop s )\<close>
    in loop init_state
     ; !cin
   end

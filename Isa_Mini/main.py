@@ -33,14 +33,12 @@ except ValueError:
     print("Invalid format of FILE:LINE:OFFSET")
     abort()
 
-repl = IsaREPL.Client(args.addr, 'HOL')
-repl.set_trace(False)
-
 initial_pos = (file, int(line), int(offst))
 
 console = Console()
 
-def CLI_print_state(ret):
+def CLI_print_state1(ret):
+    print (ret[2])
     state = Mini.parse_prooftree(ret[2])
     new_items = Mini.parse_item(ret[0])
     rich.print_json(json.dumps(state, indent=2))
@@ -49,18 +47,26 @@ def CLI_print_state(ret):
     if ret[0][0] or ret[0][1]:
         console.print('newly introduced: ' + json.dumps(new_items, indent=2), style='bold grey66')
 
+def CLI_print_state (response):
+    returns = response[0]
+    finished = response[1]
+    for ret in returns:
+        CLI_print_state1 (ret)
+    if finished:
+        console.print('All goals are proven', style='bold green')
 
-with Mini(repl, initial_pos) as mini:
-    CLI_print_state(mini.print()[0])
+
+with Mini(args.addr, 'HOL', initial_pos) as mini:
+    CLI_print_state(mini.print())
 
     while True:
         try:
             s = input('mini> ')
             match s:
-                case '\conclude':
+                case r'\conclude':
                     console.print(mini.conclude())
                     break
-                case '\close':
+                case r'\close':
                     mini.close()
                     break
                 case str(x) if x.startswith('\move_to '):
@@ -70,13 +76,12 @@ with Mini(repl, initial_pos) as mini:
                         line = int(m[2])
                         offset = int(m[4] or 0)
                         mini.move_to(file, line, offset)
-                        CLI_print_state(mini.print()[0])
+                        CLI_print_state(mini.print())
                     else:
                         console.print('Bad Syntax, \move_to <file>:<line>:[offset]', style='bold red')
                 case _:
                     rets = mini.eval(s)
-                    for ret in rets:
-                        CLI_print_state(ret)
+                    CLI_print_state(rets)
         except KeyboardInterrupt:
             break
         except EOFError:

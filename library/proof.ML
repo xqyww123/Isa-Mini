@@ -11,9 +11,12 @@ type items = variables * local_facts
 type fact = Facts.ref * Token.src list
 
 val context_of  : state -> Proof.context
+val equiv_proof_state : state * state -> bool
+val num_goals   : state -> int
 val map_context : (Proof.context -> Proof.context) -> state -> state
 
-exception OPR_FAIL of string
+datatype fail_reason = INVALID_OPR | PROOF_FAIL
+exception OPR_FAIL of fail_reason * string
 
 type with_clause = (bool (*with or without*) * string (*name*) * thm) list
 type opt_var_names = string option list option
@@ -32,6 +35,7 @@ val is_finished : state -> bool
 
 (*Thread local*)
 datatype message = New_Items of items
+                 | Goals     of term list option
                  | Consider_Case of string
                  | Internal of exn
 val set_reporter : (message (*new items*) -> unit) -> unit
@@ -53,6 +57,9 @@ val APPLY_CMD : command
 val crush_timeout : int Config.T
 val CRUSH : opt_var_names * with_clause -> operation
 val CRUSH_CMD : command
+val SIMP : with_clause -> operation
+val SIMP'' : (bool * (Facts.ref * Token.src list)) list -> operation
+val SIMP_CMD : command
 
 val UNFOLD : thm list -> operation
 val UNFOLD_CMD : command
@@ -96,6 +103,7 @@ val CONSIDER_CMD : command
 
 val HAMMER : Sledgehammer.fact_override -> operation
 val HAMMER_CMD : command
+val enable_cache_by_step : bool Config.T
 
 val END : Sledgehammer.fact_override -> operation
 val END_CMD : command
@@ -137,6 +145,10 @@ val RULE : (Facts.ref * Token.src list) list (*rule*)
         -> (Facts.ref * Token.src list) list (*with facts*)
         -> operation
 val RULE_CMD : command
+
+val CHOOSE : term list -> operation
+val CHOOSE'' : (string * (binding * string option * mixfix) list) list -> operation
+val CHOOSE_CMD : command
 
 val DEFINE : (binding * typ option * mixfix) list
           -> (Thm.binding * (term * term list) list) list
@@ -223,11 +235,15 @@ type operation = state -> state
 type command = operation parser
 
 fun context_of ((ctxt,_), _, _) = ctxt
+(*only checks state sequent*)
+fun equiv_proof_state ( ((ctxt, HHF (st, _) :: _), _, _) , ((_, HHF (st', _) :: _), _, _) )
+      = Thm.equiv_thm (Proof_Context.theory_of ctxt) (st, st')
 fun map_context F ((ctxt,SK), his, ID) = ((F ctxt,SK), his, ID)
 
 exception BROKEN_INVARIANT
 
-exception OPR_FAIL of string
+datatype fail_reason = INVALID_OPR | PROOF_FAIL
+exception OPR_FAIL of fail_reason * string
 
 (* Helpers *)
 
@@ -259,6 +275,20 @@ fun protect_goals th =
    in Conv.fconv_rule conv th
   end
 
+fun pop_n_goals n th =
+  let open Conv
+      fun conv N ctm =
+        if N <= 1 then all_conv ctm
+        else case Thm.term_of ctm
+          of Const (\<^const_name>\<open>Pure.imp\<close>, _) $ _
+                $ (Const(\<^const_name>\<open>GOAL\<close>, _) $ _ ) =>
+             (arg_conv (rewr_conv Thms.GOAL_def) then_conv
+              arg_conv (conv (N-1)) then_conv
+              rewr_conv Thms.conjunction_imp'sym) ctm
+           | _ => raise THM ("pop_n_goals: insufficient goals", n, [th])
+   in if n <= 1 then th else fconv_rule (conv n) th
+  end
+
 fun init_goal ctxt th = th
       |> Conv.fconv_rule (concl_conv iso_atomize ctxt)
       |> protect_goals
@@ -273,6 +303,8 @@ val num_goals_of =
        | tm => calc 0 tm
   end
 val num_goals_of' = num_goals_of o Thm.prop_of
+fun num_goals ((_, HHF (st, _) :: _), _, _) = num_goals_of' st
+  | num_goals _ = raise BROKEN_INVARIANT
 
 fun no_goal (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ (Const(\<^const_name>\<open>GOAL\<close>, _) $ _)) = false
   | no_goal (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ (Const(\<^const_name>\<open>Pure.prop\<close>, _) $ _)) = false
@@ -343,6 +375,10 @@ fun print_stack [] = SOLVED_TREE
 
 fun print_state ((_,SK),_,_) = print_stack SK
 
+fun cat_tree (PROP (items, goal)) (PROP (items', _)) = PROP (cat_items items items', goal)
+  | cat_tree (BUNDL (items, goal)) (PROP (items', _)) = BUNDL (cat_items items items', goal)
+  | cat_tree T (BUNDL (items', goals)) = BUNDL (items', cat_tree T (hd goals) :: tl goals)
+
 fun atomize_tree ctxt (PROP (items, goal)) = PROP (items, Object_Logic.atomize_term ctxt goal)
   | atomize_tree ctxt (BUNDL (items, goal)) = BUNDL (items, map (atomize_tree ctxt) goal)
   | atomize_tree ctxt (BLOCK tree) = BLOCK (atomize_tree ctxt tree)
@@ -403,6 +439,7 @@ fun apply_WITH with_lems =
 (** REPORTER **)
 
 datatype message = New_Items of items
+                 | Goals     of term list option
                  | Consider_Case of string
                  | Internal of exn
 val reporter = Thread_Data.var () : (message -> unit) Thread_Data.var
@@ -414,6 +451,14 @@ fun get_reporter () =
   case Thread_Data.get reporter
     of NONE => default_reporter
      | SOME r => r
+
+fun report_goal (ctxt, SK) = (
+          (case SK of HHF (st, _) :: _ =>
+             (case try Logic.dest_implies (Thm.prop_of st)
+                of SOME (goal, _) => get_reporter () (Goals (SOME [goal]))
+                 | NONE => get_reporter () (Goals (SOME [])))
+              | _ => raise BROKEN_INVARIANT )
+          ; (ctxt, SK) )
 
 (** Basic Operations **)
 
@@ -476,7 +521,30 @@ fun certify_tmvars ctxt = Vars.map (K (Context.cases Thm.global_cterm_of Thm.cte
 fun certify_vars ctxt (ty, tm) = (certify_tyvars ctxt ty, certify_tmvars ctxt tm)
 fun norm_env ctxt (Envir.Envir {tenv, tyenv, ...}) = certify_vars ctxt (norm_env' (tyenv, tenv))
 
+local fun protect_prop ctxt ctm = let open Conv
+                       in case Thm.term_of ctm
+                           of Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs _ =>
+                                (arg_conv (abs_conv (protect_prop o snd) ctxt)) ctm
+                            | Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ _ =>
+                                (combination_conv (arg_conv (rewr_conv Thms.prop_def'sym))
+                                                  (protect_prop ctxt) ctm)
+                            | _ => Conv.all_conv ctm
+                      end
+ in
+fun MP' ctxt rule thA0 =
+                        let val thA = Conv.fconv_rule (protect_prop ctxt) thA0
+                         in rule
+                            |> Conv.fconv_rule (Conv.arg1_conv (protect_prop ctxt))
+                            |> (Thm.biresolution (SOME ctxt) true [(false, thA)]
+                                  THEN_ALL_NEW Thm.assumption (SOME ctxt)) 1
+                            |> Seq.pull
+                            |> (fn SOME (ret, _) => ret
+                                 | NONE => error "BUG: CASES' MP")
+                       end
+end
+
 fun MP ctxt thAB thA =
+  \<^try>\<open>
   let val thAB = beta_eta_contract thAB
       val thA  = beta_eta_contract thA
       val LHS = Thm.cprop_of thAB
@@ -504,6 +572,7 @@ fun MP ctxt thAB thA =
                           | NONE => raise THM ("unification fail", 1, [thAB, thA]))
                      |> norm_env (Context.Proof ctxt)
               val thAB = Thm.instantiate inst thAB |> beta_eta_contract
+              val xxxx = thA
               val thA  = Thm.instantiate inst thA  |> beta_eta_contract
                                                    |> fold_rev Thm.forall_intr fixes
 
@@ -512,6 +581,8 @@ fun MP ctxt thAB thA =
 
    in Thm.implies_elim thAB' thA'
   end
+  catch _ => MP' ctxt thAB thA \<close>
+
 
 (* Helpers II *)
 
@@ -703,6 +774,8 @@ fun INTRO'' F mode bs (origin as (ctxt, HHF (st0, items) :: L)) =
                              of NONE => default_binds
                               | SOME bs' => map2_opt (fn NONE => I
                                                        | SOME b => K b) bs' default_binds
+                                            handle ListPair.UnequalLengths =>
+                                              raise OPR_FAIL (INVALID_OPR, "Incorrect number of VARS")
                val (foc, st') = Subgoal.focus_prems ctxt 1 (SOME (map Binding.name binds)) st
                val (st'', (items', ctxt')) = F (st', foc)
                val _ = get_reporter () (New_Items items')
@@ -745,19 +818,23 @@ val INTRO' = INTRO'' (fn (st, foc) =>
    |> pair st
   end )
 
-fun raw_apply tac timeout (ctxt, HHF (st, facts) :: L) =
+fun raw_apply report tac timeout (ctxt, HHF (st, facts) :: L) =
     ( case (case timeout
-              of SOME time => Timeout.apply time Seq.pull (tac (ctxt, st))
+              of SOME time => Timeout.apply time (Seq.pull o tac) (ctxt, st)
                | NONE      => Seq.pull (tac (ctxt, st)) )
-        of NONE => raise OPR_FAIL "Fail to apply the tactic"
-         | SOME (Seq.Result (ctxt', st'), _) => (ctxt', HHF (protect_goals st', facts) :: L)
-         | SOME (Seq.Error E, _) => raise OPR_FAIL (E ()) )
-  | raw_apply _ _ _ = raise BROKEN_INVARIANT
+        of NONE => raise OPR_FAIL (PROOF_FAIL, "Fail to apply the tactic")
+         | SOME (Seq.Result (ctxt', st'), _) =>
+            let val new_goals = Thm.prems_of st'
+             in report (Goals (SOME new_goals))
+              ; (ctxt', HHF (protect_goals st', facts) :: L)
+            end
+         | SOME (Seq.Error E, _) => raise OPR_FAIL (PROOF_FAIL, E ()) )
+  | raw_apply _ _ _ _ = raise BROKEN_INVARIANT
 
-fun apply' tac timeout s = maintain (raw_apply tac timeout s)
+fun apply' report tac timeout s = maintain (raw_apply report tac timeout s)
 
-fun apply tac time s = apply' tac time s
-      handle Timeout.TIMEOUT _ => raise OPR_FAIL "Timeout"
+fun apply tac time s = apply' (get_reporter()) tac time s
+      handle Timeout.TIMEOUT _ => raise OPR_FAIL (PROOF_FAIL, "Timeout")
 
 fun apply_method using meth timeout s = apply (meth using) timeout s
 
@@ -765,7 +842,7 @@ fun apply_method using meth timeout s = apply (meth using) timeout s
 fun record_history name (s,his,ID) = (s, Symtab.update (name,s) his,ID)
 fun restore_history name (_,his,ID) =
     case Symtab.lookup his name
-      of NONE => raise OPR_FAIL ("history " ^ name ^ " not found")
+      of NONE => raise OPR_FAIL (INVALID_OPR, "history " ^ name ^ " not found")
        | SOME s => (s, his,ID)
 
 fun SKIP_SUCCESS F (SK as (_, HHF (st,_) :: _)) =
@@ -785,8 +862,8 @@ fun CONTEXTUAL_CMD (parser : Proof.context -> command)
 
 
 val VARS_KWD = (Parse.$$$ "VARS" || Parse.$$$ "vars")
-val OPT_VARS = Scan.option (VARS_KWD |-- Scan.repeat (Parse.maybe Parse.name))
-val VARS = VARS_KWD |-- Scan.repeat Parse.binding
+val OPT_VARS = Scan.option (VARS_KWD |-- Parse.and_list (Scan.repeat1 (Parse.maybe Parse.name)) >> flat)
+val VARS = VARS_KWD |-- Parse.and_list (Scan.repeat1 Parse.binding) >> flat
 val IN = (Parse.$$$ "IN" || Parse.$$$ "in")
 
 
@@ -799,7 +876,7 @@ val IN = (Parse.$$$ "IN" || Parse.$$$ "in")
 
 fun gen_APPLY prep_thms timeout using text =
       OPR (fn SK as (ctxt, _) =>
-        apply_method (prep_thms ctxt using) (Method.evaluate_runtime text ctxt) timeout SK)
+        apply_method (prep_thms ctxt using) (Method.evaluate text ctxt) timeout SK)
 val APPLY   = gen_APPLY (K I)
 val APPLY'' = gen_APPLY Attrib.eval_thms
 
@@ -812,6 +889,7 @@ fun UNFOLD' prep_thms raw_defs (ctxt, HHF (st, items) :: S) =
   let val defs = prep_thms ctxt raw_defs
       val st' = Local_Defs.unfold_goals ctxt defs st
    in (ctxt, HHF (st', items) :: S)
+   |> report_goal
   end
   | UNFOLD' _ _ _ = raise BROKEN_INVARIANT
 
@@ -845,7 +923,7 @@ fun NEED_STANDARD (ctxt, HHF (st, _) :: _) = Phi_Sledgehammer_Solver.need_standa
 
 fun TRY_STANDARD SK =
   if NEED_STANDARD SK
-  then apply' (CONTEXT_TACTIC (Classical.standard_tac (#1 SK) [])) NONE SK
+  then apply' (K ()) (CONTEXT_TACTIC (Classical.standard_tac (#1 SK) [])) NONE SK
   else SK
 
 val INTRO = OPR oo INTRO'
@@ -930,19 +1008,19 @@ end
 
 (** Crush **)
 
-val crush_timeout = Attrib.setup_config_int \<^binding>\<open>crush_timeout\<close> (K 10) (*in seconds*)
+val crush_timeout = Attrib.setup_config_int \<^binding>\<open>crush_timeout\<close> (K 3) (*in seconds*)
 
-fun CRUSH' _ _ (ctxt, []) = (ctxt, [])
-  | CRUSH' prep_with (vars, raw_with_lems) SK0 =
-  TRY_STANDARD SK0 |> (fn (s as (ctxt, _)) =>
+fun SIMP' _ _ (ctxt, []) = (ctxt, [])
+  | SIMP' prep_with raw_with_lems SK0 =
+    TRY_STANDARD SK0 |> (fn (s as (ctxt, _)) =>
   let val with_lems = prep_with ctxt raw_with_lems
       val ctxt = apply_WITH with_lems ctxt
       val time = Config.get ctxt crush_timeout
               |> Time.fromSeconds
    in
-   (( raw_apply (CONTEXT_TACTIC (Clasimp.auto_tac ctxt)) (SOME time) s
+   (( raw_apply (K ()) (CONTEXT_TACTIC (Clasimp.auto_tac ctxt)) (SOME time) s
       handle Timeout.TIMEOUT _ => 
-      raw_apply (CONTEXT_TACTIC (Clasimp.clarsimp_tac ctxt 1)) (SOME time) s)
+      raw_apply (K ()) (CONTEXT_TACTIC (Clasimp.clarsimp_tac ctxt 1)) (SOME time) s)
       handle OPR_FAIL E =>
                 (case s of (_, HHF (st, _) :: _) =>
                                 if need_intro st orelse NEED_STANDARD SK0
@@ -950,15 +1028,22 @@ fun CRUSH' _ _ (ctxt, []) = (ctxt, [])
                                 else raise OPR_FAIL E
                          | _ => raise OPR_FAIL E )
            | Timeout.TIMEOUT _ =>
-                raise OPR_FAIL "Timeout")
-   |> SKIP_SUCCESS (INTRO' ALL_SUBGOALS vars)
+                raise OPR_FAIL (PROOF_FAIL, "Timeout"))
   end)
 
-val CRUSH = OPR o (CRUSH' (K I))
+fun CRUSH' prep_with (vars, raw_with_lems) SK0 =
+     SIMP' prep_with raw_with_lems SK0
+  |> SKIP_SUCCESS (INTRO' ALL_SUBGOALS vars)
+  |> report_goal
 
-val CRUSH_CMD =
-      ( OPT_VARS -- with_parser )
-     >> (OPR o CRUSH' read_with)
+
+val SIMP   = OPR o (report_goal oo SIMP'  (K I))
+val SIMP'' = OPR o (report_goal oo SIMP'  read_with)
+val CRUSH  = OPR o (CRUSH' (K I))
+
+val SIMP_CMD  = with_parser >> SIMP''
+val CRUSH_CMD = ( OPT_VARS -- with_parser )
+             >> (OPR o CRUSH' read_with)
 
 (** INDUCT & CASE **)
 
@@ -983,8 +1068,9 @@ fun powerful_MP ctxt rule thA0 =
        | NONE => error "BUG: CASES' MP")
  end
 
-fun CASES' ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, _) :: _)) =
-  apply' tac NONE SK |> (fn (ctxt, SK as HHF (rule, items0) :: REMAIN_SK) =>
+fun CASES' diff ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, items00) :: _)) =
+  apply' (get_reporter()) tac NONE SK
+    |> (fn (ctxt, SK as HHF (rule, items0) :: REMAIN_SK) =>
    let val cases = Proof_Context.dest_cases (SOME ctxt0) ctxt
                 |> filter (fn (_, Rule_Cases.Case {binds,...}) =>
                       forall (fn ((name,_), SOME term) =>
@@ -993,12 +1079,28 @@ fun CASES' ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, _) :: _)) =
                                                 | Const(\<^const_name>\<open>HOL.True\<close>, _) => false
                                                 | _ => true)
                                | _ => true) binds)
-       val _ = if length cases = num_goals_of' rule - num_goals_of' st00 + 1
+       val _ = if length cases = num_goals_of' rule - num_goals_of' st00 + 1 + diff
                then () else error "BUG REWLK"
        val used_qualifiers = quanlifiers_of (print_stack SK)
        val cases = Name.variant_list used_qualifiers (map #1 cases)
                 ~~ map #2 cases
-       fun CB initial rule cases
+
+       fun is_case x t =
+            x = Rule_Cases.case_conclN andalso not (Term.exists_subterm Term.is_Var t)
+       fun goal_term_of ctxt binds =
+            if exists (fn ((x, _), SOME t) => is_case x t | _ => false) binds
+            then Vartab.lookup (Variable.binds_of ctxt) (Rule_Cases.case_conclN, 0)
+                  |> (fn SOME (\<^Type>\<open>bool\<close>, goal) => HOLogic.mk_Trueprop goal
+                       | _ => error "BUG 0ejOD0qNRfaTJCrbK7lH3w")
+            else fst (Logic.dest_implies (Thm.prop_of st00))
+
+       val siblings = map (fn (_, kase as Rule_Cases.Case {fixes, assumes, binds, ...}) =>
+              let val (asms, ctxt) = Proof_Context.apply_case kase ctxt
+               in PROP ((map (apfst Binding.name_of) fixes, asms), goal_term_of ctxt binds)
+              end
+            ) cases
+
+       fun CB initial rule cases siblings
               ctxt' (lem, _, SK, param) =
         let val rule' =
                 if initial then rule
@@ -1024,9 +1126,11 @@ fun CASES' ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, _) :: _)) =
                        fixes = (
                          case opt_case_name
                            of SOME fixes' =>
-                              map2_opt (fn NONE => I
+                             (map2_opt (fn NONE => I
                                          | SOME name => fn (_, T) => (Binding.name name, T)
                                        ) fixes' fixes
+                              handle ListPair.UnequalLengths =>
+                                  raise OPR_FAIL (INVALID_OPR, "Incorrect number of VARS"))
                             | _ => fold_map (fn (B,T) => fn names =>
                               let val name = Binding.name_of B
                                   val name = if Name.is_internal name then Name.dest_internal name
@@ -1051,9 +1155,7 @@ fun CASES' ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, _) :: _)) =
             
             val (asms, ctxt) = Proof_Context.apply_case kase ctxt
 
-            fun is_case x t =
-                x = Rule_Cases.case_conclN andalso not (Term.exists_subterm Term.is_Var t);
-            val goal =
+            val goalx =
                (if exists (fn ((x, _), SOME t) => is_case x t | _ => false) binds
                 then Vartab.lookup (Variable.binds_of ctxt) (Rule_Cases.case_conclN, 0)
                   |> (fn SOME (\<^Type>\<open>bool\<close>, goal) => HOLogic.mk_Trueprop goal
@@ -1091,90 +1193,32 @@ fun CASES' ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, _) :: _)) =
             val items' = ( map (apfst Binding.name_of) fixes,
                            map (apfst simp_name o apsnd (map Thm.prop_of)) thms )
             val report = get_reporter ()
+            fun PRT _ T = case siblings
+                            of [_] => cat_tree T (print_stack [HHF (st00, items00)])
+                             | _ => cat_tree (BUNDL (empty_items, T :: tl siblings))
+                                             (print_stack [HHF (st00, items00)])
          in report (New_Items items')
           ; report (Consider_Case (Binding.name_of binding))
           ; if null remaining_cases
-         then rpair ( HHF (goal, items')
-                 :: MAGIC (CB false rule' remaining_cases, K I, NO_PARAM)
+         then rpair ( HHF (goalx, items')
+                 :: MAGIC (CB false rule' remaining_cases (tl siblings), PRT, NO_PARAM)
                  :: SK)
-         else rpair ( HHF (goal, items')
+         else rpair ( HHF (goalx, items')
                  :: ENDBLK T_NXT
-                 :: MAGIC (CB false rule' remaining_cases, K I, NO_PARAM)
+                 :: MAGIC (CB false rule' remaining_cases (tl siblings), PRT, NO_PARAM)
                  :: SK)
         end )
         end
         end
-    in CB true rule cases ctxt (Drule.dummy_thm, ([],[]), REMAIN_SK, CASE_NAME first_vars)
+    in CB true rule cases siblings
+          ctxt (Drule.dummy_thm, ([],[]), REMAIN_SK, CASE_NAME first_vars)
    end
      | _ => raise BROKEN_INVARIANT)
-  | CASES' _ _ _ _ = raise BROKEN_INVARIANT
+  | CASES' _ _ _ _ _ = raise BROKEN_INVARIANT
 
 (* Syntax *)
 
-local (*copied from $ISABELLE_HOME/src/Tools/induct.ML*)
 
-val arbitraryN = "arbitrary";
-val takingN = "taking";
-val ruleN = "rule";
-
-fun unless_more_args scan = Scan.unless (Scan.lift
-  ((Args.$$$ arbitraryN || Args.$$$ takingN || Args.$$$ Induct.typeN ||
-    Args.$$$ Induct.predN || Args.$$$ Induct.setN || Args.$$$ ruleN) -- Args.colon)) scan;
-
-val inst = Scan.lift (Args.$$$ "_") >> K NONE || Args.term >> SOME;
-
-val inst' = Scan.lift (Args.$$$ "_") >> K NONE ||
-  Args.term >> (SOME o rpair false) ||
-  Scan.lift (Args.$$$ "(") |-- (Args.term >> (SOME o rpair true)) --|
-    Scan.lift (Args.$$$ ")");
-
-val def_inst =
-  ((Scan.lift (Args.binding --| (Args.$$$ "\<equiv>" || Args.$$$ "==")) >> SOME)
-      -- (Args.term >> rpair false)) >> SOME ||
-    inst' >> Option.map (pair NONE);
-
-val free = Args.context -- Args.term >> (fn (_, Free v) => v | (ctxt, t) =>
-  error ("Bad free variable: " ^ Syntax.string_of_term ctxt t));
-
-val arbitrary = Scan.optional (Scan.lift (Args.$$$ arbitraryN -- Args.colon) |--
-  Parse.and_list1' (Scan.repeat (unless_more_args free))) [];
-
-val taking = Scan.optional (Scan.lift (Args.$$$ takingN -- Args.colon) |--
-  Scan.repeat1 (unless_more_args inst)) [];
-
-fun single_rule [rule] = rule
-  | single_rule _ = error "Single rule expected";
-
-fun named_rule k arg get =
-  Scan.lift (Args.$$$ k -- Args.colon) |-- Scan.repeat arg :|--
-    (fn names => Scan.peek (fn context => Scan.succeed (names |> map (fn name =>
-      (case get (Context.proof_of context) name of SOME x => x
-      | NONE => error ("No rule for " ^ k ^ " " ^ quote name))))));
-
-fun rule get_type get_pred =
-  named_rule Induct.typeN (Args.type_name {proper = false, strict = false}) get_type ||
-  named_rule Induct.predN (Args.const {proper = false, strict = false}) get_pred ||
-  named_rule Induct.setN (Args.const {proper = false, strict = false}) get_pred ||
-  Scan.lift (Args.$$$ ruleN -- Args.colon) |-- Attrib.thms;
-
-val induct_rule = rule Induct.lookup_inductT Induct.lookup_inductP;
-val cases_rule = rule Induct.lookup_casesT Induct.lookup_casesP >> single_rule;
-
-
-val ind_synt' =
-      (Scan.lift (Args.mode Induct.no_simpN) --
-      (Parse.and_list' (Scan.repeat (unless_more_args def_inst)) --
-        (arbitrary -- taking -- Scan.option induct_rule)))
-
-fun ind_synt ctxt toks = case ind_synt' (ctxt, toks) of (x, (_, toks)) => (x,toks)
-
-val case_synt' =
-      (Scan.lift (Args.mode Induct.no_simpN) --
-        (Parse.and_list' (Scan.repeat (unless_more_args inst)) -- Scan.option cases_rule))
-
-fun case_synt ctxt toks = case case_synt' (ctxt, toks) of (x, (_, toks)) => (x,toks)
-
-in
 
 exception IH_MAP of (string * string list) list
 
@@ -1202,10 +1246,15 @@ fun INDUCT' (no_simp, (insts, ((arbitrary, taking), opt_rule))) first_vars using
         else ([], [])
 
       val IH_map = Unsynchronized.ref []
-      val tac = induction_tac IH_map (not no_simp) insts arbitrary taking opt_rule
-                  (if null using
-                   then if null tamper_fact' then [] else [wraps ctxt tamper_fact']
-                   else using) 1
+      val diff = case opt_rule of NONE => 0
+                    | SOME rules => length rules - 1
+      fun tac (ctxt, st) =
+        let val st' = pop_n_goals (diff + 1) st
+         in induction_tac IH_map (not no_simp) insts arbitrary taking opt_rule
+              (if null using
+               then if null tamper_fact' then [] else [wraps ctxt tamper_fact']
+               else using) 1 (ctxt, st')
+        end
 
       fun update_tampered ctxt th =
         let val ths = unwrap_conjs ctxt th
@@ -1224,7 +1273,7 @@ fun INDUCT' (no_simp, (insts, ((arbitrary, taking), opt_rule))) first_vars using
             val tamper_facts'' = burrow tamper_facts ths
          in map (fn (B,ths) => ((mk_binding B, []), [(ths,[])]) ) tamper_facts''
         end
-      val ret = CASES' (maps o update_tampered) tac first_vars (ctxt, SK)
+      val ret = CASES' diff (maps o update_tampered) tac first_vars (ctxt, SK)
    in get_reporter () (Internal (IH_MAP (!IH_map)))
     ; ret
   end
@@ -1232,13 +1281,13 @@ fun INDUCT' (no_simp, (insts, ((arbitrary, taking), opt_rule))) first_vars using
 fun CASE_SPLIT' (no_simp, (insts, opt_rule)) vars facts =
   let val facts' = if not (null (flat insts)) orelse is_some opt_rule then [] else facts
       val tac = Induct.cases_context_tactic (not no_simp) insts opt_rule facts' 1
-   in CASES' (K (K [])) tac vars
+   in CASES' 0 (K (K [])) tac vars
   end
 
 val INDUCT = OPR ooo INDUCT'
 fun INDUCT'' (args, vars, raw_using) s =
   let val ctxt = context_of s
-      val toks = if (Token.is_eof (List.last args) handle _ => false)
+      val toks = if \<^try>\<open>Token.is_eof (List.last args) catch _ => false\<close>
                  then args
                  else args @ [Token.eof]
       val (args', _) = ind_synt (Context.Proof ctxt) toks
@@ -1261,7 +1310,7 @@ val CASE_SPLIT_CMD = CONTEXTUAL_CMD (fn ctxt =>
         end ) )
 fun CASE_SPLIT'' (args, vars, raw_facts) s =
   let val ctxt = context_of s
-      val toks = if (Token.is_eof (List.last args) handle _ => false)
+      val toks = if \<^try>\<open>Token.is_eof (List.last args) catch _ => false\<close>
                  then args
                  else args @ [Token.eof]
       val (args', _) = case_synt (Context.Proof ctxt) toks
@@ -1269,38 +1318,60 @@ fun CASE_SPLIT'' (args, vars, raw_facts) s =
    in OPR (CASE_SPLIT' args' vars facts) s
   end
 
-end
 
 (** RULE **)
 
-fun RULE'_i rules facts =
-  apply' (fn s => CONTEXT_TACTIC (HEADGOAL (Classical.rule_tac (#1 s) rules facts)) s) NONE
-
 fun RULE' [] raw_facts (SK as (ctxt, _)) =
-    if NEED_STANDARD SK
+    let val facts = Attrib.eval_thms ctxt raw_facts
+     in apply' (get_reporter())
+               (CONTEXT_TACTIC (Classical.standard_tac (#1 SK) facts)) NONE SK
+    end
+ (* if NEED_STANDARD SK
     then TRY_STANDARD SK
     else let val facts = Attrib.eval_thms ctxt raw_facts
      in RULE'_i [] facts SK
-    end
+    end *)
   | RULE' raw_rules raw_facts (ctxt, HHF (st, items) :: SK) =
     let val facts = Attrib.eval_thms ctxt raw_facts
+
+        fun transpose [] [] = []
+          | transpose nxt [] = transpose [] (rev nxt)
+          | transpose nxt ([] :: L) = transpose nxt L
+          | transpose nxt ((x :: L) :: L') = x :: transpose (L :: nxt) L'
         val rules = maps (fn raw_rule =>
               let val name = name_of_ref (fst raw_rule)
                in map (fn rule0 =>
                     let open Phi_Sledgehammer_Solver
                         val rule = rule0 OF facts
-                     in case infer_type_of_rule name rule0
-                     of T_ELIM => (true, rule)
-                      | T_DEST => (true, Tactic.make_elim rule)
-                      | _      => (false, rule)
+                        fun try_drule rule =
+                         (case try Tactic.make_elim rule
+                            of SOME rule' => [(true, rule')]
+                             | NONE => [])
+                     in case infer_type_of_rule name rule
+                     of T_ELIM => [(true, rule)]
+                      | T_DEST => (case try Tactic.make_elim rule
+                                     of SOME rule => [(true, rule)]
+                                      | NONE      => [(false, rule)])
+                      | T_UNKNOWN =>
+                            if Thm.nprems_of rule = 1
+                            then [(false, rule)] @ try_drule rule
+                            else [(false, rule)]
+                      | _      => [(false, rule)]
                     end
-                  ) (Attrib.eval_thms ctxt raw_rules)
+                    handle THM _ => []
+                  ) (Attrib.eval_thms ctxt [raw_rule])
               end ) raw_rules
+          |> transpose []
      in st
      |> Thm.biresolution NONE false rules 1
+     |> Seq.map Thm.solve_constraints
      |> Seq.pull
-     |> (fn SOME (st', _) => (ctxt, HHF (protect_goals st', items) :: SK)
-          | NONE => raise OPR_FAIL "Fail to apply the rules" )
+     |> (fn SOME (st', _) =>
+              let val new_goals = Thm.prems_of st'
+               in get_reporter () (Goals (SOME new_goals))
+                ; (ctxt, HHF (protect_goals st', items) :: SK)
+              end 
+          | NONE => raise OPR_FAIL (PROOF_FAIL, "Fail to apply the rules" ))
      |> maintain
     end
   | RULE' _ _ _ = raise BROKEN_INVARIANT
@@ -1376,6 +1447,8 @@ fun gen_HAVE' mkG shows (ctxt0, HHF (st,items) :: S) =
           val thy01 = Proof_Context.theory_of ctxt01
           val preruns = concl_of (Thm.prop_of goal)
                   |> Logic.dest_conjunctions
+                  |> filter_out (fn Const(\<^const_name>\<open>Pure.term\<close>, _) $ _ => false
+                                  | _ => true)
                   |> map (Skip_Proof.make_thm thy01)
                   |> unflat (map snd shows)
           val (fakes, _) = Proof_Context.note_thmss "" (binds ~~ map (fn x => [(x, [])]) preruns) ctxt0
@@ -1417,7 +1490,7 @@ fun atomize_term ctxt =
       Object_Logic.atomize_term ctxt
   #> (fn X => if Term.fastype_of X = \<^Type>\<open>bool\<close>
               then X
-              else raise OPR_FAIL "Fail to atomize the proposition into HOL")
+              else raise OPR_FAIL (INVALID_OPR, "Fail to atomize the proposition into HOL"))
 
 (*can be cached*)
 fun mk_consider_rule ctxt DNF_SPEC =
@@ -1502,9 +1575,11 @@ fun CONSIDER' raw_dnf (ctxt0, HHF (st0, items0) :: S) =
       val (conj_clauses, params_ctxt) = fold_map parse raw_dnf ctxt0
       val rule0 = mk_consider_rule ctxt0 (map #2 conj_clauses)
 
-      val goal = map (#1 o #4) conj_clauses
+      val goal0= map (#1 o #4) conj_clauses
               |> foldr1 (fn (A,B) => \<^Const>\<open>disj\<close> $ A $ B)
-              |> (fn X => HOLogic.Trueprop $ X)
+              |> (fn X => HOLogic.Trueprop $ X) 
+      val _ = get_reporter () (Goals (SOME [goal0]))
+      val goal = goal0
               |> Thm.cterm_of params_ctxt
               |> Goal.init
               |> singleton (Variable.export params_ctxt ctxt0)
@@ -1586,7 +1661,7 @@ fun STEP' prep_term opt_rule raw_term (ctxt, HHF (st, items) :: SK) =
                                                | _ => (NONE, term0))
                            | _ => (NONE, term0)
       val term = Thm.cterm_of ctxt term
-      fun err () = raise OPR_FAIL "The goal is not about a known transitive operator"
+      fun err () = raise OPR_FAIL (INVALID_OPR, "The goal is not about a known transitive operator")
       fun parse_opr (Const(\<^const_name>\<open>Trueprop\<close>, _) $ X) = parse_opr X
         | parse_opr (C $ _ $ _) = C
         | parse_opr _ = err ()
@@ -1664,10 +1739,16 @@ fun conclude_SK (ctxt, HHF (st, itms) :: S) = (ctxt, HHF (conclude_goal st, itms
 exception SH_PRF of string
 exception REPLACE_CMD of string * string
 
+val enable_cache_by_step = Config.declare_bool ("enable_cache_by_step", \<^here>) (K true)
+
 fun HAMMER_i override step_id (ctxt, HHF (s,facts) :: S) =
   let val (_, _, ID_BASE) = IPS_Data.get ctxt
       val ID = ID_BASE ^ "/" ^ step_id
-      val (prf, s') = Phi_Sledgehammer_Solver.auto override (SOME ID) ctxt s
+      val ID' = if Config.get ctxt enable_cache_by_step
+                then SOME ID
+                else NONE
+      val (prf, s') = Phi_Sledgehammer_Solver.auto override ID' ctxt s
+                      handle ERROR E => raise OPR_FAIL (PROOF_FAIL, E)
    in get_reporter () (Internal (SH_PRF prf))
     ; (ctxt, HHF (s', facts) :: S)
    |> maintain
@@ -1706,7 +1787,7 @@ fun END' param SH_override jj ID (stack as (_, HHF _ :: _)) =
           else if Config.get ctxt END_completes_all_NEXT
           then maintain (ctxt, HHF s :: SK')
             |> END' param SH_override (jj+1) ID
-          else raise OPR_FAIL (
+          else raise OPR_FAIL (INVALID_OPR, 
                   "This block should be closed by the " ^
                   (case T' of T_END => "END" | T_NXT => "NEXT") ^
                   " command.") )
@@ -1714,7 +1795,7 @@ fun END' param SH_override jj ID (stack as (_, HHF _ :: _)) =
     else if Config.get ctxt END_completes_all_NEXT
     then ( get_reporter () (Internal (REPLACE_CMD ("NEXT", "NEXT")))
          ; END' param SH_override (jj+1) ID (ctxt, SK'1) )
-    else raise OPR_FAIL "This block should be closed by the NEXT command."
+    else raise OPR_FAIL (INVALID_OPR, "This block should be closed by the NEXT command.")
   end
   | END' _ _ _ _ _ = raise BROKEN_INVARIANT
 
@@ -1722,25 +1803,29 @@ fun NXT' param SH_override ID (stack as (_, HHF (st, _) :: _)) =
   let val ID_BASE = string_of_int ID
       val (ctxt, SK'1) = HAMMER_i SH_override ID_BASE stack
                       |> conclude_SK
-   in if num_goals_of' st > 1
-    then (ctxt, SK'1)
-    else case SK'1
+      val st' = case SK'1 of HHF (st', _) :: _ => st'
+                           | _ => raise BROKEN_INVARIANT
+   in if no_goal' st'
+    then case SK'1
       of HHF s :: ENDBLK T' :: SK' =>
         ( get_reporter () (Internal (REPLACE_CMD ("END", "END")))
         ; if T' = T_NXT
           then (case SK'
             of MAGIC (CB, PRT, _) :: SK'' =>
                     maintain (ctxt, HHF s :: MAGIC (CB, PRT, param) :: SK'')
-             | _ => maintain (ctxt, HHF s :: SK') )
-          else raise OPR_FAIL "This block should be closed by the END command." )
+                 |> report_goal
+             | _ => maintain (ctxt, HHF s :: SK')
+                 |> report_goal )
+          else raise OPR_FAIL(INVALID_OPR,  "This block should be closed by the END command." ))
        | _ => raise BROKEN_INVARIANT
+    else report_goal (ctxt, SK'1)
   end
   | NXT' _ _ _ _ = raise BROKEN_INVARIANT
 
 fun END SH_override = OPR_ID (END' NO_PARAM SH_override 0)
 fun NXT param SH_override = OPR_ID (NXT' (CASE_NAME param) SH_override)
 val END_CMD  = orverride_parser >> END
-val NXT_CMD  = OPT_VARS -- orverride_parser >> uncurry NXT 
+val NXT_CMD  = (fn toks => (OPT_VARS -- orverride_parser >> uncurry NXT ) toks)
 
 fun type_of_end' [] = NONE
   | type_of_end' (ENDBLK typ :: _) = SOME typ
@@ -1795,15 +1880,33 @@ end
 
 fun CHOOSE' prep_terms raw_terms (ctxt, HHF (st, items) :: SK) =
   let val terms = prep_terms ctxt raw_terms
-      val rules = map (fn X => Thms.exI
-                            |> Drule.infer_instantiate ctxt [(("x",0), Thm.cterm_of ctxt X)] ) terms
-      val st' = fold (fn rule => fn st => rule RS st) rules st
-   in (ctxt, HHF (st', items) :: SK)
+
+      fun rule_of st =
+          case Thm.major_prem_of st
+            of Const(\<^const_name>\<open>Trueprop\<close>, _) $ (Const(\<^const_name>\<open>Ex\<close>, _) $ _) => Thms.exI
+             | Const(\<^const_name>\<open>Trueprop\<close>, _) $ (Const(\<^const_name>\<open>Ex1\<close>, _) $ _) => Thms.ex1I
+             | Const(\<^const_name>\<open>Trueprop\<close>, _) $ (Const(\<^const_name>\<open>Set.Bex\<close>, _) $ _) =>
+                Proof_Context.get_thm ctxt "Set.bexI"
+             | _ => raise OPR_FAIL (INVALID_OPR, "The leading goal is not about existential quantification")
+
+      val st' = fold (fn term => fn st =>
+            let val rule = rule_of st
+                        |> Drule.infer_instantiate ctxt [(("x",0), Thm.cterm_of ctxt term)]
+             in rule RS st
+            end ) terms st
+   in report_goal (ctxt, HHF (st', items) :: SK)
   end
   | CHOOSE' _ _ _ = raise BROKEN_INVARIANT
 
+fun read_term ctxt (raw_term, vs) =
+  let val (_, ctxt') = Proof_Context.add_fixes_cmd vs ctxt
+      val term = Syntax.read_term ctxt' raw_term
+   in singleton (Variable.export_terms ctxt' ctxt) term
+  end
+
 val CHOOSE = OPR o CHOOSE' (K I)
-val CHOOSE_CMD = Scan.repeat1 Parse.term >> (OPR o CHOOSE' Syntax.read_terms)
+val CHOOSE'' = OPR o CHOOSE' (map o read_term)
+val CHOOSE_CMD = Parse.and_list (Scan.repeat1 (Parse.term -- Scan.optional (VARS_KWD |-- Parse.vars) [])) >> (CHOOSE'' o flat)
 
 (** PRINT **)
 fun fixes_is_outdated ctxt var_name =
@@ -2053,6 +2156,7 @@ fun OPEN_MODULE' interp expr (lthy, HHF (st, items) :: SK) =
        :: ENDBLK T_END
        :: MAGIC (CB, PRT, NO_PARAM)
        :: SK)
+   |> report_goal
   end
   | OPEN_MODULE' _ _ _ = raise BROKEN_INVARIANT
 
@@ -2131,6 +2235,7 @@ val CMDS = Symtab.make [
       ("HAVE",    HAVE_CMD),
       ("CASE_SPLIT", CASE_SPLIT_CMD),
       ("INDUCT",  INDUCT_CMD),
+      ("SIMP" ,   SIMP_CMD),
       ("CRUSH",   CRUSH_CMD),
       ("INTRO",   INTRO_CMD),
       ("ALL_INTRO",INTRO_ALL_CMD),
@@ -2194,6 +2299,7 @@ val keywords = let open Keyword
            (("CASE_SPLIT",  \<^here>), command_spec (prf_goal, [])),
            (("INDUCT",\<^here>), command_spec (prf_goal, [])),
            (("CRUSH", \<^here>), command_spec (prf_goal, [])),
+           (("SIMP" , \<^here>), command_spec (prf_goal, [])),
            (("INTRO", \<^here>), command_spec (prf_goal, [])),
            (("ALL_INTRO", \<^here>), command_spec (prf_goal, [])),
            (("HAMMER",\<^here>), command_spec (prf_goal, [])),
@@ -2229,6 +2335,7 @@ fun lex_cmds source =
             else split ret (x::buf) L
 
    in split [] [] toks
+   |> rev
   end
 
 fun parse_cmds toks =
@@ -2237,7 +2344,7 @@ fun parse_cmds toks =
                     case Symtab.lookup CMDS (Token.content_of h)
                       of SOME parser => fst (parser toks)
                        | NONE => error ("Bad Command " ^ Token.content_of h) )
-   in fold_rev I cmds
+   in fold I cmds
   end
 
 fun stack_is_finished (_, [HHF (st', _)]) = no_goal' st'

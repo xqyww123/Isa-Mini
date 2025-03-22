@@ -1,0 +1,3 @@
+[submodule "Isa-Mini-Translator"]
+	path = translator
+	url = git@github.com:xqyww123/Isa-Mini-Translator.git

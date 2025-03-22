@@ -3,8 +3,10 @@ signature MINILANG_AUX = sig
 structure Thms : sig
   val TrueI : thm
   val allI : thm
+  val spec : thm
   val impI : thm
   val exI : thm
+  val ex1I : thm
   val exE : thm
   val conjI : thm
   val conjE : thm
@@ -26,6 +28,10 @@ structure Thms : sig
   val GOAL_def'sym : thm
   val TAG_def : thm
   val TAG_def'sym : thm
+
+  val conjunction_imp : thm
+  val conjunction_imp'sym : thm
+
 end
 
 val iso_atomize : Proof.context -> conv
@@ -41,9 +47,11 @@ structure Minilang_Aux : MINILANG_AUX = struct
 structure Thms = struct
 val TrueI = @{thm TrueI}
 val allI = @{thm allI}
+val spec = @{thm spec}
 val impI = @{thm impI}
 val exI = @{thm exI}
 val exE = @{thm exE}
+val ex1I = @{thm ex1I}
 val conjI= @{thm conjI}
 val conjE = @{thm conjE}
 val disjE = @{thm disjE}
@@ -72,6 +80,9 @@ val ISO_IMP_def  = @{thm atomize_imp[folded ISO_IMP_def, symmetric]}
 val ISO_IMP'sym_def  = @{thm atomize_imp[folded ISO_IMP_def]}
 val ISO_PROP_def  = @{thm ISO_PROP}
 val ISO_PROP'sym_def  = @{thm ISO_PROP[symmetric]}
+
+val conjunction_imp = @{thm conjunction_imp}
+val conjunction_imp'sym = @{thm conjunction_imp[symmetric]}
 
 end
 
