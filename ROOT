@@ -1,10 +1,10 @@
 
-session Minilang = HOL +
+session Minilang = Auto_Sledgehammer +
   theories
     Minilang_Base
     Minilang
 
-session Minilang_Translator in Translator = Minilang +
+session Minilang_Translator in translator = Minilang +
   sessions
     Isa_REPL
   theories
