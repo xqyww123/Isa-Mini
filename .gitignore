@@ -18,3 +18,6 @@ result.csv
 .idea
 Isa_Mini/__pycache__/
 Translator
+
+IsaMini.egg-info
+dist

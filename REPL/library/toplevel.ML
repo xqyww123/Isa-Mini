@@ -92,8 +92,60 @@ fun REPL cout cin msgs init_state =
                          in cin := cin'
                           ; ret
                         end
-      val timeout = Unsynchronized.ref NONE
-      fun loop s = \<^try>\<open>
+      exception Termination
+      fun iteration s =
+        let val cmd = read unpackString
+         in if String.isPrefix "\\" cmd
+           then case cmd
+             of "\\stamp" => let
+                     val name = read unpackString
+                     val s' = record_state name s
+                  in REPL_Server.output cout packUnit ()
+                   ; s'
+                 end
+              | "\\rollback" => let
+                     val name = read unpackString
+                     val s' = rollback name s
+                  in REPL_Server.output cout packUnit ()
+                   ; s'
+                 end
+              | "\\conclude" => let
+                     val ctxt = Minilang.context_of (minlang_of s)
+                     val ret = Minilang.conclude (Minilang.context_of (minlang_of init_state)) (minlang_of s)
+                  in REPL_Server.output cout (packPair (pack_term ctxt, packString)) (Thm.prop_of ret, "")
+                   ; s
+                 end
+              | "\\close" => ( REPL_Server.output cout packUnit ()
+                             ; BinIO.StreamIO.flushOut cout
+                             ; raise Termination )
+              | "\\print" => let
+                    val s0 = minlang_of s
+                    val ctxt' = Minilang.context_of s0
+                    val tree = Minilang.print_state s0
+                 in REPL_Server.output cout pack_response
+                            ([(ctxt', Minilang.empty_items, NONE, tree)],
+                             Minilang.is_finished s0)
+                  ; s
+                end
+              | "\\eval" => let
+                    val (timeout, src) = read (unpackPair (unpackOption unpackInt, unpackString))
+                    val timeout = Option.map Time.fromMilliseconds timeout
+                 in case timeout
+                      of SOME time => Timeout.apply time (apfst (RE cout msgs src)) s
+                       | NONE      => apfst (RE cout msgs src) s
+                end
+              | bad => raise REPL.REPL_fail (
+                  "Command " ^ String.substring (bad, 1, size bad - 1)
+                             ^ " is unsupported in Minilang mode")
+           else if String.isPrefix "\005" cmd
+           then raise REPL.REPL_fail (
+                  "Command " ^ String.substring (cmd, 1, size cmd - 1)
+                             ^ " is only available in REPL mode, but \
+                  \you are at Minilang mode.")
+           else s
+             |> apfst (RE cout msgs cmd)
+        end
+(*      fun loop s = \<^try>\<open>
         let val cmd = read unpackString
          in if String.isPrefix "\\" cmd
            then case cmd
@@ -157,8 +209,18 @@ fun REPL cout cin msgs init_state =
                     ; loop s )
              | E => ( REPL_Server.output_err cout (Runtime.exn_message E)
                     ; BinIO.StreamIO.flushOut cout
-                    ; loop s )\<close>
-   in loop init_state
+                    ; loop s )\<close> *)
+      val state = Unsynchronized.ref init_state
+   in (* loop init_state *)
+    ( while true do \<^try>\<open> (
+        state := iteration (!state)
+      ; BinIO.StreamIO.flushOut cout )
+      catch REPL.REPL_fail E => (
+                      REPL_Server.output_err cout E
+                    ; BinIO.StreamIO.flushOut cout)
+             | E => ( REPL_Server.output_err cout (Runtime.exn_message E)
+                    ; BinIO.StreamIO.flushOut cout) \<close> )
+      handle Termination => ()
   end
 
 

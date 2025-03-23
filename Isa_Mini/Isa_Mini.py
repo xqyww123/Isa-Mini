@@ -6,7 +6,7 @@ class Mini:
     A REPL client for Isabelle/Mini
     """
 
-    VERSION='0.1.0'
+    VERSION='0.3.0'
 
     def __run(self):
         self.repl.run_app("Minilang-REPL")
@@ -56,7 +56,8 @@ class Mini:
         and turns the REPL session into the usual mode.
         :return: None
         """
-        return self.__turn_off()
+        self.__turn_off()
+        self.repl.close()
 
     def conclude (self):
         """
@@ -92,22 +93,7 @@ class Mini:
         self.pos = ("#REPL", 0, 0)
         self.__run()
 
-    def set_timeout(self, timeout):
-        """
-        Sets the timeout for evaluation
-        
-        Args:
-            timeout: An integer representing timeout in seconds, or None for no timeout
-        """
-        if timeout is not None and not isinstance(timeout, int):
-            raise TypeError("Timeout must be an integer or None")
-        
-        mp.pack("\\timeout", self.repl.cout)
-        mp.pack(timeout, self.repl.cout)
-        self.repl.cout.flush()
-        return REPL.Client._parse_control_(self.repl.unpack.unpack())
-    
-    def eval (self, src):
+    def eval (self, src, timeout=None):
         """
         Evaluates the given source Minilang code.
         The given source can contain multiple commands.
@@ -115,7 +101,13 @@ class Mini:
         """
         if not self.pos:
             raise ValueError("Mini: not started yet. Call `move_to` to indicate where to start the proof.")
-        mp.pack (src, self.repl.cout)
+        if timeout is not None and not isinstance(timeout, int):
+            raise TypeError("timeout must be an integer or None")
+        if timeout is None:
+            mp.pack (src, self.repl.cout)
+        else:
+            mp.pack ("\\eval", self.repl.cout)
+            mp.pack ((timeout, src), self.repl.cout)
         self.repl.cout.flush()
         return REPL.Client._parse_control_ (self.repl.unpack.unpack())
 
@@ -165,6 +157,6 @@ class Mini:
     def print(self):
         if not self.pos:
             raise ValueError("Mini: not started yet. Call `move_to` to indicate where to start the proof.")
-        mp.pack('\print', self.repl.cout)
+        mp.pack('\\print', self.repl.cout)
         self.repl.cout.flush()
         return REPL.Client._parse_control_(self.repl.unpack.unpack())
