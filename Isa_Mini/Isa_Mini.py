@@ -78,11 +78,11 @@ class Mini:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
 
-    def move_to (self, file, line, offset=0):
+    def move_to (self, file, line, column=0):
         self.__turn_off()
         self.repl.rollback ('mini-init')
-        self.repl.eval_file (file, line, offset)
-        self.pos = (file, line, offset)
+        self.repl.eval_file (file, line, column)
+        self.pos = (file, line, column)
         self.__run()
 
     def set_theory_and_goal(self, src):
