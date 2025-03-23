@@ -86,9 +86,8 @@ fun RE cout msgs src s =
       ; s'))
   end
 
-fun REPL cout cin0 msgs init_state =
-  let val cin = Unsynchronized.ref cin0
-      open MessagePackBinIO.Unpack MessagePackBinIO.Pack
+fun REPL cout cin msgs init_state =
+  let open MessagePackBinIO.Unpack MessagePackBinIO.Pack
       fun read packer = let val (ret, cin') = doUnpack packer (!cin)
                          in cin := cin'
                           ; ret
@@ -160,7 +159,6 @@ fun REPL cout cin0 msgs init_state =
                     ; BinIO.StreamIO.flushOut cout
                     ; loop s )\<close>
    in loop init_state
-    ; !cin
   end
 
 
@@ -182,8 +180,7 @@ fun REPL_App (cin, cout) =
       end
     else (
       REPL_Server.output_err cout "Not in a proof"
-    ; BinIO.StreamIO.flushOut cout
-    ; cin)
+    ; BinIO.StreamIO.flushOut cout )
   end
 
 
