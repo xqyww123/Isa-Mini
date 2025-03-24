@@ -2,8 +2,10 @@ theory Minilang_Base
   imports HOL.HOL
 begin
 
+(*
 definition \<open>TAG X \<equiv> X\<close>
 definition \<open>GOAL (X::prop) \<equiv> X\<close>
+definition \<open>PROTECT X \<equiv> X\<close>
 definition \<open>ISO_ALL \<equiv> HOL.All\<close>
 definition \<open>ISO_IMP \<equiv> HOL.implies\<close>
 definition \<open>ISO_PROP (X::bool) \<equiv> X\<close>
@@ -15,5 +17,6 @@ lemma ISO_PROP:
 ML_file \<open>./library/aux_thms.ML\<close>
 
 hide_fact ISO_PROP
+*)
 
 end

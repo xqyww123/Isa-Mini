@@ -1,4 +1,4 @@
 [submodule "translator"]
 	path = translator
 	url = git@github.com:xqyww123/Isa-Mini-Translator.git
-	branch = Isabelle2024
+	branch = Isabelle2024-ML

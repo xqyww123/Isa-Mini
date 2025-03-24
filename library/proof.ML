@@ -268,7 +268,7 @@ fun protect_goals th =
           of Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ X =>
             (case X
                of Const(\<^const_name>\<open>Pure.prop\<close>, _) $ _ => Conv.all_conv ctm
-                | Const(\<^const_name>\<open>GOAL\<close>, _) $ _ => Conv.all_conv ctm
+                | Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ _ => Conv.all_conv ctm
                 | _ => (Conv.arg_conv (conv then_conv 
                                        Conv.rewr_conv Thms.GOAL_def'sym)) ctm)
            | _ => Conv.all_conv ctm
@@ -281,7 +281,7 @@ fun pop_n_goals n th =
         if N <= 1 then all_conv ctm
         else case Thm.term_of ctm
           of Const (\<^const_name>\<open>Pure.imp\<close>, _) $ _
-                $ (Const(\<^const_name>\<open>GOAL\<close>, _) $ _ ) =>
+                $ (Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ _ ) =>
              (arg_conv (rewr_conv Thms.GOAL_def) then_conv
               arg_conv (conv (N-1)) then_conv
               rewr_conv Thms.conjunction_imp'sym) ctm
@@ -294,10 +294,10 @@ fun init_goal ctxt th = th
       |> protect_goals
 
 val num_goals_of =
-  let fun calc ret (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ (Const(\<^const_name>\<open>GOAL\<close>, _) $ X))
+  let fun calc ret (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ (Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ X))
             = calc (ret+1) X
         | calc ret (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ (Const(\<^const_name>\<open>Pure.prop\<close>, _) $ _)) = ret + 1
-        | calc ret (Const(\<^const_name>\<open>GOAL\<close>, _) $ X) = calc (ret+1) X
+        | calc ret (Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ X) = calc (ret+1) X
         | calc _ _ = raise BROKEN_INVARIANT
    in fn Const (\<^const_name>\<open>Pure.prop\<close>, _) $ _ => 0
        | tm => calc 0 tm
@@ -306,16 +306,16 @@ val num_goals_of' = num_goals_of o Thm.prop_of
 fun num_goals ((_, HHF (st, _) :: _), _, _) = num_goals_of' st
   | num_goals _ = raise BROKEN_INVARIANT
 
-fun no_goal (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ (Const(\<^const_name>\<open>GOAL\<close>, _) $ _)) = false
+fun no_goal (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ (Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ _)) = false
   | no_goal (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ (Const(\<^const_name>\<open>Pure.prop\<close>, _) $ _)) = false
-  | no_goal (Const(\<^const_name>\<open>GOAL\<close>, _) $ _) = false
+  | no_goal (Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ _) = false
   | no_goal _ = true
 val no_goal' = no_goal o Thm.prop_of
 
 val goals_of =
-  let fun collect (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ G $ (Const(\<^const_name>\<open>GOAL\<close>, _) $ X))
+  let fun collect (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ G $ (Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ X))
             = G :: collect X
-        | collect (Const(\<^const_name>\<open>GOAL\<close>, _) $ X)
+        | collect (Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ X)
             = \<^prop>\<open>True\<close> :: collect X
         | collect (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ G $ (Const(\<^const_name>\<open>Pure.prop\<close>, _) $ _))
             = [G]
@@ -325,8 +325,8 @@ val goals_of =
   end
 val goals_of' = goals_of o Thm.prop_of
 
-fun concl_of (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ (Const(\<^const_name>\<open>GOAL\<close>, _) $ X)) = concl_of X
-  | concl_of (Const(\<^const_name>\<open>GOAL\<close>, _) $ X) = concl_of X
+fun concl_of (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ (Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ X)) = concl_of X
+  | concl_of (Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ X) = concl_of X
   | concl_of (Const(\<^const_name>\<open>Pure.prop\<close>, _) $ X) = X
   | concl_of (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ (Const(\<^const_name>\<open>Pure.prop\<close>, _) $ X)) = X
   | concl_of _ = raise BROKEN_INVARIANT
@@ -335,7 +335,7 @@ fun concl_of (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ (Const(\<^co
 fun conclude_goal th =
   let fun conv ctm =
         (case Thm.term_of ctm
-           of Const(\<^const_name>\<open>GOAL\<close>, _) $ _ => Conv.rewr_conv Thms.GOAL_def ctm
+           of Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ _ => Conv.rewr_conv Thms.GOAL_def ctm
             | Const(\<^const_name>\<open>Pure.prop\<close>, _) $ _ => Conv.all_conv ctm
             | _ => raise THM ("conclude_goal", 0, [th]))
    in Conv.fconv_rule conv th
@@ -605,7 +605,7 @@ fun wraps ctxt ths = ths
 
 val is_tagged =
   let fun chk (\<^Const>\<open>Trueprop\<close> $ X) = chk X
-        | chk (\<^Const>\<open>TAG _\<close> $ _) = true
+        | chk (\<^Const>\<open>HOL.TAG _\<close> $ _) = true
         | chk (\<^Const>\<open>HOL.conj\<close> $ A $ B) = chk A andalso chk B
         | chk (\<^Const>\<open>Pure.imp\<close> $ A $ B) = chk A orelse chk B
         | chk (\<^Const>\<open>Pure.all _\<close> $ Abs (_, _, X)) = chk X
@@ -629,7 +629,7 @@ fun remove_TAG_premises ctxt th =
                   of \<^Const>\<open>Trueprop\<close> $ (\<^Const>\<open>conj\<close> $ _ $ _) =>
                       (Conv.rewr_conv Thms.conj_imp_eq_imp_imp
                        then_conv conv ctxt) ctm
-                   | \<^Const>\<open>Trueprop\<close> $ (\<^Const>\<open>TAG _\<close> $ _) =>
+                   | \<^Const>\<open>Trueprop\<close> $ (\<^Const>\<open>HOL.TAG _\<close> $ _) =>
                       (Conv.arg1_conv (HOLogic.Trueprop_conv (Conv.rewr_conv Thms.TAG_def))
                        then_conv conv ctxt) ctm)
                 else Conv.combination_conv (Conv.arg_conv (conv ctxt)) (conv ctxt) ctm
@@ -659,7 +659,7 @@ fun unwrap_tags ctxt th =
             | Const(\<^const_name>\<open>Pure.imp\<close>, _)
                 $ (Const(\<^const_name>\<open>HOL.Trueprop\<close>, _)
                     $ (Const(\<^const_name>\<open>HOL.conj\<close>, _)
-                        $ (Const(\<^const_name>\<open>TAG\<close>, _) $ _)
+                        $ (Const(\<^const_name>\<open>HOL.TAG\<close>, _) $ _)
                         $ _ ) )
                 $ _ =>
               ( Conv.rewr_conv Thms.conj_imp_eq_imp_imp
@@ -667,7 +667,7 @@ fun unwrap_tags ctxt th =
               ) ctm
             | Const(\<^const_name>\<open>Pure.imp\<close>, _)
                 $ (Const(\<^const_name>\<open>HOL.Trueprop\<close>, _)
-                    $ (Const(\<^const_name>\<open>TAG\<close>, _) $ _) )
+                    $ (Const(\<^const_name>\<open>HOL.TAG\<close>, _) $ _) )
                 $ _ =>
               ( Conv.arg1_conv (HOLogic.Trueprop_conv (Conv.rewr_conv Thms.TAG_def))
               then_conv conv ctxt
@@ -675,7 +675,7 @@ fun unwrap_tags ctxt th =
             | Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ _ =>
               (Conv.combination_conv (Conv.arg_conv (conv ctxt)) (conv ctxt)) ctm
             | _ => Conv.all_conv ctm)
-      val qchk = Term.exists_Const (fn (\<^const_name>\<open>TAG\<close>, _) => true | _ => false)
+      val qchk = Term.exists_Const (fn (\<^const_name>\<open>HOL.TAG\<close>, _) => true | _ => false)
    in if qchk (Thm.prop_of th)
     then Conv.fconv_rule (conv ctxt) th
     else th

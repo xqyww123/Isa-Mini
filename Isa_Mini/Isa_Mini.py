@@ -39,7 +39,7 @@ class Mini:
             self.repl._initialized_mini_
         except AttributeError:
             self.repl.load_theory (['Minilang_REPL.Minilang_Top'])
-            self.repl.add_lib (["Minilang.Minilang_Base"])
+            #self.repl.add_lib (["Minilang.Minilang_Base"])
             self.repl.run_ML ("Minilang_REPL.Minilang_Top",
                 """REPL_Server.register_app "Minilang-REPL" Minilang_Top.REPL_App""")
             self.repl._initialized_mini_ = True
