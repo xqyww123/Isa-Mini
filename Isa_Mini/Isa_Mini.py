@@ -18,7 +18,7 @@ class Mini:
             self.repl.cout.flush()
             return REPL.Client._parse_control_ (self.repl.unpack.unpack())
 
-    def __init__(self, addr, thy_qualifier, initial_pos = None):
+    def __init__(self, addr, thy_qualifier, initial_pos = None, ML_base_injection=True):
         """
         Argument repl: a REPL client
 
@@ -31,6 +31,7 @@ class Mini:
 
         :param initial_pos: Optional position (file,line,offset) from which the Mini
         instance will start.
+        :param ML_base_injection: Internally used only. Please do not change its default value.
         """
 
         self.repl = REPL.Client(addr, thy_qualifier)
@@ -39,7 +40,8 @@ class Mini:
             self.repl._initialized_mini_
         except AttributeError:
             self.repl.load_theory (['Minilang_REPL.Minilang_Top'])
-            self.repl.add_lib (["Minilang.Minilang_Base"])
+            if ML_base_injection:
+                self.repl.add_lib (["Minilang.Minilang_Base"])
             self.repl.run_ML ("Minilang_REPL.Minilang_Top",
                 """REPL_Server.register_app "Minilang-REPL" Minilang_Top.REPL_App""")
             self.repl._initialized_mini_ = True
