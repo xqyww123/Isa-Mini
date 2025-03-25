@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "IsaMini"
-version = "0.3.0"
+version = "0.3.1"
 description = "The minimal proof language for Isabelle"
 readme = "README.md"
 license = {file = "LICENSE"}
