@@ -30,6 +30,8 @@ val rule_of_ind : Context.generic -> Token.T list -> thm list option
 val case_synt' : (bool * (term option list list * thm option)) context_parser
 val case_synt : Context.generic -> (bool * (term option list list * thm option)) parser
 
+val simp_fact_name : Proof.context -> string -> string
+
 end
 
 structure Minilang_Aux : MINILANG_AUX = struct
@@ -253,5 +255,17 @@ fun case_synt ctxt toks = case case_synt' (ctxt, toks) of (x, (_, toks)) => (x,t
 
 
 end
+
+fun simp_fact_name ctxt name =
+  if String.isPrefix "local." name
+  then let
+      val name' = String.substring (name, 6, size name - 6)
+      val ths  = Proof_Context.get_thms ctxt name
+      val ths' = Proof_Context.get_thms ctxt name'
+   in if eq_list (Thm.equiv_thm (Proof_Context.theory_of ctxt)) (ths, ths')
+     then name'
+     else name
+  end
+  else name
 
 end
