@@ -18,7 +18,7 @@ class Mini:
             self.repl.cout.flush()
             return REPL.Client._parse_control_ (self.repl.unpack.unpack())
 
-    def __init__(self, addr, thy_qualifier, initial_pos = None, ML_base_injection=True):
+    def __init__(self, addr, thy_qualifier, initial_pos = None, ML_base_injection=True, timeout=3600):
         """
         Argument repl: a REPL client
 
@@ -34,7 +34,7 @@ class Mini:
         :param ML_base_injection: Internally used only. Please do not change its default value.
         """
 
-        self.repl = REPL.Client(addr, thy_qualifier)
+        self.repl = REPL.Client(addr, thy_qualifier, timeout)
         self.repl.set_trace(False)
         try:
             self.repl._initialized_mini_
