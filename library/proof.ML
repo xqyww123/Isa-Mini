@@ -1747,7 +1747,7 @@ fun HAMMER_i override step_id (ctxt, HHF (s,facts) :: S) =
       val ID' = if Config.get ctxt enable_cache_by_step
                 then SOME ID
                 else NONE
-      val (prf, s') = Phi_Sledgehammer_Solver.auto override ID' ctxt s
+      val (prf, s') = Phi_Sledgehammer_Solver.auto true override ID' ctxt s
                       handle ERROR E => raise OPR_FAIL (PROOF_FAIL, E)
    in get_reporter () (Internal (SH_PRF prf))
     ; (ctxt, HHF (s', facts) :: S)

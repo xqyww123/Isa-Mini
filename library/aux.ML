@@ -32,6 +32,9 @@ val case_synt : Context.generic -> (bool * (term option list list * thm option))
 
 val simp_fact_name : Proof.context -> string -> string
 
+val implode_with' : 'a -> 'a list list -> 'a list -> 'a list
+val implode_with : 'a -> 'a list list -> 'a list
+
 end
 
 structure Minilang_Aux : MINILANG_AUX = struct
@@ -267,5 +270,18 @@ fun simp_fact_name ctxt name =
      else name
   end
   else name
+
+
+
+
+fun implode_with' _ []  R = R
+  | implode_with' _ [x] R = x @ R
+  | implode_with' s (h::L) R = h @ s :: implode_with' s L R
+
+fun implode_with _ [] = []
+  | implode_with _ [x] = x
+  | implode_with s (h::L) = h @ s :: implode_with s L
+
+
 
 end
