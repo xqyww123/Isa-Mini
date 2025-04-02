@@ -47,7 +47,7 @@ class Mini:
             self.repl._initialized_mini_ = True
         self.repl.record_state ("mini-init")
         if initial_pos:
-            self.repl.eval_file(initial_pos[0], initial_pos[1], initial_pos[2])
+            self.repl.file(initial_pos[0], initial_pos[1], initial_pos[2], use_cache=True, cache_position=True)
         self.pos = initial_pos
         if self.pos:
             self.__run()
@@ -84,7 +84,7 @@ class Mini:
     def move_to (self, file, line, column=0):
         self.__turn_off()
         self.repl.rollback ('mini-init')
-        self.repl.eval_file (file, line, column)
+        self.repl.file(file, line, column, use_cache=True, cache_position=True)
         self.pos = (file, line, column)
         self.__run()
 
