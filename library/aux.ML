@@ -14,6 +14,11 @@ val xOF : Proof.context -> thm list -> thm -> thm
 val xof : Proof.context -> string option list * string option list ->
     (binding * string option * mixfix) list -> thm -> thm
 
+val xwhere : Proof.context ->
+      ((indexname * Position.T) * string) list ->
+        (binding * string option * mixfix) list ->
+          thm -> thm
+
 val print_toks : Token.src -> string list
 val trim_markup : string -> string
 val method_sorry : Method.text
@@ -150,8 +155,51 @@ fun xof ctxt (args, concl_args) fixes thm =
    |> Rule_Insts.of_rule ctxt (args, concl_args) fixes
   end
 
-
-
+fun xwhere ctxt inst fixes thm =
+  let val vs = Term.add_var_names (Thm.prop_of thm) []
+   in if forall (fn ((name, _), _) => exists (fn name' => name' = name) vs) inst
+    then Rule_Insts.where_rule ctxt inst fixes thm
+    else let
+      fun concl_conv C ctxt ctm =
+        case Thm.term_of ctm
+          of Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs _ =>
+              Conv.arg_conv (Conv.abs_conv (concl_conv C o snd) ctxt) ctm
+           | Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ _ =>
+              Conv.arg_conv (concl_conv C ctxt) ctm
+           | _ => C ctxt ctm
+      fun swap_all [] _ ctm = Conv.all_conv ctm
+        | swap_all (NONE :: L) ctxt ctm =
+            let fun swap [] ctm = Conv.all_conv ctm
+                  | swap (NONE :: L) ctm = swap L ctm
+                  | swap (SOME _ :: L) ctm =
+                     (Conv.rewr_conv @{thm HOL.all_comm[folded atomize_eq]} then_conv
+                      Conv.arg_conv (swap L)
+                     ) ctm
+             in (Conv.arg_conv (Conv.abs_conv (swap_all L o snd) ctxt) then_conv swap L) ctm
+            end
+        | swap_all (SOME _ :: L) ctxt ctm =
+            Conv.arg_conv (Conv.abs_conv (swap_all L o snd) ctxt) ctm
+      fun foralls (Const(\<^const_name>\<open>Trueprop\<close>, _) $ X) = foralls X
+        | foralls (Const(\<^const_name>\<open>HOL.implies\<close>, _) $ _ $ X) = foralls X
+        | foralls (Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs (name, T, X)) = (name, T) :: foralls X
+        | foralls (Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs (_, _, X)) = foralls X
+        | foralls (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ X) = foralls X
+        | foralls _ = []
+      val alls = foralls (Thm.concl_of thm)
+              |> map (fn (name, T) =>
+                  if exists (fn (((name', 0), _), _) => name' = name
+                              | _ => false ) inst andalso
+                     not (exists (fn (name', _) => name' = name) vs)
+                  then SOME (Thm.var ((name, 0), Thm.ctyp_of ctxt T))
+                  else NONE )
+      val thm'= Conv.fconv_rule (concl_conv (fn ctxt =>
+                  HOLogic.Trueprop_conv (swap_all alls ctxt)) ctxt) thm
+             |> fold (fn SOME ctm => (fn thm =>
+                  thm RS Drule.infer_instantiate ctxt [(("x", 0), ctm)] @{thm spec})
+                       | NONE => I ) alls
+   in Rule_Insts.where_rule ctxt inst fixes thm'
+  end
+  end
 
 
 

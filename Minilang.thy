@@ -21,5 +21,15 @@ attribute_setup of = \<open>let
             uncurry (Minilang_Aux.xof (Context.proof_of context)) args))
  end \<close> "positional instantiation of theorem"
 
+attribute_setup "where" = \<open>let
+     val named_insts =
+          Parse.and_list1
+            (Parse.position Args.var -- (Args.$$$ "=" |-- Parse.!!! Parse.embedded_inner_syntax))
+            -- Parse.for_fixes
+  in Scan.lift named_insts >> (fn args =>
+        Thm.rule_attribute [] (fn context =>
+            uncurry (Minilang_Aux.xwhere (Context.proof_of context)) args))
+ end \<close> "positional instantiation of theorem"
+
 
 end
