@@ -15,7 +15,7 @@ val xof : Proof.context -> string option list * string option list ->
     (binding * string option * mixfix) list -> thm -> thm
 
 val xwhere : Proof.context ->
-      ((indexname * Position.T) * string) list ->
+      ((indexname * Position.T) * (string * string)) list ->
         (binding * string option * mixfix) list ->
           thm -> thm
 
@@ -155,8 +155,13 @@ fun xof ctxt (args, concl_args) fixes thm =
    |> Rule_Insts.of_rule ctxt (args, concl_args) fixes
   end
 
-fun xwhere ctxt inst fixes thm =
+fun xwhere ctxt inst0 fixes thm =
   let val vs = Term.add_var_names (Thm.prop_of thm) []
+      val inst = map_filter (fn (((name,0),pos), (name',src)) =>
+                                  if name = name'
+                                  then NONE
+                                  else SOME (((name,0),pos), src)
+                              | (x, (_, src)) => SOME (x, src) ) inst0
    in if forall (fn ((name, _), _) => exists (fn name' => name' = name) vs) inst
     then Rule_Insts.where_rule ctxt inst fixes thm
     else let

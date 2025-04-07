@@ -4,6 +4,8 @@ theory Minilang
   imports HOL.HOL Minilang_Base Auto_Sledgehammer.Auto_Sledgehammer
 begin
 
+declare [[ML_debugger]]
+
 ML_file \<open>./library/aux.ML\<close>
 ML_file \<open>./library/proof.ML\<close>
 
@@ -22,14 +24,18 @@ attribute_setup of = \<open>let
  end \<close> "positional instantiation of theorem"
 
 attribute_setup "where" = \<open>let
+     fun peek parserX toks =
+          let val (retX, toks') = parserX toks
+           in ((Token.content_of (hd toks), retX), toks')
+          end
      val named_insts =
           Parse.and_list1
-            (Parse.position Args.var -- (Args.$$$ "=" |-- Parse.!!! Parse.embedded_inner_syntax))
+            (Parse.position Args.var -- 
+                (Args.$$$ "=" |-- peek (Parse.!!! Parse.embedded_inner_syntax) ))
             -- Parse.for_fixes
   in Scan.lift named_insts >> (fn args =>
         Thm.rule_attribute [] (fn context =>
             uncurry (Minilang_Aux.xwhere (Context.proof_of context)) args))
  end \<close> "positional instantiation of theorem"
-
 
 end
