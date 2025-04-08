@@ -133,6 +133,16 @@ fun REPL cout cin msgs init_state =
                       of SOME time => Timeout.apply time (apfst (RE cout msgs src)) s
                        | NONE      => apfst (RE cout msgs src) s
                 end
+              | "\\END_mode" => let
+                    val mode = read unpackString
+                    val _ = if member (op =) ["RELAXED", "COMPLETE_NEXT", "USUAL"] mode 
+                            then ()
+                            else raise REPL.REPL_fail "END_mode must be either RELEXED or COMPLETE_NEXT"
+                 in REPL_Server.output cout packUnit ()
+                  ; s
+                 |> apfst (apfst (
+                      Minilang.map_context (Config.put Minilang.END_behavior mode)))
+                end
               | bad => raise REPL.REPL_fail (
                   "Command " ^ String.substring (bad, 1, size bad - 1)
                              ^ " is unsupported in Minilang mode")

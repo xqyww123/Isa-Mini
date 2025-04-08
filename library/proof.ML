@@ -24,7 +24,7 @@ type opt_var_names = string option list option
 (* options *)
 
 val atomize_goals : bool Config.T
-val END_completes_all_NEXT : bool Config.T
+val END_behavior : string Config.T
 
 (* Operations *)
 
@@ -192,7 +192,7 @@ fun assm_name i = assm_N ^ string_of_int i
 (* options *)
 
 val atomize_goals = Attrib.setup_config_bool \<^binding>\<open>min_shell_atomize_goals\<close> (K true)
-val END_completes_all_NEXT = Attrib.setup_config_bool \<^binding>\<open>END_completes_all_NEXT\<close> (K true)
+val END_behavior = Attrib.setup_config_string \<^binding>\<open>END_behavior\<close> (K "USUAL")
 
 type variables = (string * typ) list
 type local_facts = (string * term list) list
@@ -1784,7 +1784,8 @@ fun END' param SH_override jj ID (stack as (_, HHF _ :: _)) =
       of HHF s :: ENDBLK T' :: SK' =>
         ( get_reporter () (Internal (REPLACE_CMD ("END", "END")))
         ; if T' = T_END then maintain (ctxt, HHF s :: SK')
-          else if Config.get ctxt END_completes_all_NEXT
+          else if member (op =) ["COMPLETE_NEXT", "RELAXED"]
+                                (Config.get ctxt END_behavior)
           then maintain (ctxt, HHF s :: SK')
             |> END' param SH_override (jj+1) ID
           else raise OPR_FAIL (INVALID_OPR, 
@@ -1792,14 +1793,15 @@ fun END' param SH_override jj ID (stack as (_, HHF _ :: _)) =
                   (case T' of T_END => "END" | T_NXT => "NEXT") ^
                   " command.") )
        | _ => raise BROKEN_INVARIANT
-    else if Config.get ctxt END_completes_all_NEXT
+    else if member (op =) ["COMPLETE_NEXT", "RELAXED"]
+                          (Config.get ctxt END_behavior)
     then ( get_reporter () (Internal (REPLACE_CMD ("NEXT", "NEXT")))
          ; END' param SH_override (jj+1) ID (ctxt, SK'1) )
     else raise OPR_FAIL (INVALID_OPR, "This block should be closed by the NEXT command.")
   end
   | END' _ _ _ _ _ = raise BROKEN_INVARIANT
 
-fun NXT' param SH_override ID (stack as (_, HHF (st, _) :: _)) =
+fun NXT' param SH_override ID (origin as stack as (_, HHF (st, _) :: _)) =
   let val ID_BASE = string_of_int ID
       val (ctxt, SK'1) = HAMMER_i SH_override ID_BASE stack
                       |> conclude_SK
@@ -1816,7 +1818,10 @@ fun NXT' param SH_override ID (stack as (_, HHF (st, _) :: _)) =
                  |> report_goal
              | _ => maintain (ctxt, HHF s :: SK')
                  |> report_goal )
-          else raise OPR_FAIL(INVALID_OPR,  "This block should be closed by the END command." ))
+          else (case Config.get ctxt END_behavior
+            of "RELAXED" => origin
+             | _ => raise OPR_FAIL(INVALID_OPR,  "This block should be closed by the END command."
+          )))
        | _ => raise BROKEN_INVARIANT
     else report_goal (ctxt, SK'1)
   end

@@ -6,11 +6,16 @@ class Mini:
     A REPL client for Isabelle/Mini
     """
 
-    VERSION='0.3.0'
+    VERSION='0.3.2'
 
     def __run(self):
         self.repl.run_app("Minilang-REPL")
         REPL.Client._parse_control_ (self.repl.unpack.unpack())
+        if self.mode != 'USUAL':
+            mp.pack("\\END_mode", self.repl.cout)
+            mp.pack(self.mode, self.repl.cout)
+            self.repl.cout.flush()
+            REPL.Client._parse_control_ (self.repl.unpack.unpack())
 
     def __turn_off (self):
         if self.pos:
@@ -49,6 +54,7 @@ class Mini:
         if initial_pos:
             self.repl.file(initial_pos[0], initial_pos[1], initial_pos[2], use_cache=True, cache_position=True)
         self.pos = initial_pos
+        self.mode = 'USUAL'
         if self.pos:
             self.__run()
 
@@ -80,6 +86,17 @@ class Mini:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
+
+    def set_mode(self, mode):
+        if not isinstance(mode, str):
+            raise TypeError("mode must be a string")
+        if mode not in ['USUAL', 'COMPLETE_NEXT', 'RELAXED']:
+            raise ValueError("mode must be one of: 'USUAL', 'COMPLETE_NEXT', 'RELAXED'")
+        self.mode = mode
+        mp.pack("\\END_mode", self.repl.cout)
+        mp.pack(mode, self.repl.cout)
+        self.repl.cout.flush()
+        return REPL.Client._parse_control_ (self.repl.unpack.unpack())
 
     def move_to (self, file, line, column=0):
         self.__turn_off()

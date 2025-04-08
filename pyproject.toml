@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "IsaMini"
-version = "0.3.1"
+version = "0.3.2"
 description = "The minimal proof language for Isabelle"
 readme = "README.md"
-license = {file = "LICENSE"}
+license = "LGPL-2.1-or-later"
 authors = [
     { name="Qiyuan Xu", email="xqyww123@gmail.com" },
 ]
