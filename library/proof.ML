@@ -192,7 +192,7 @@ fun assm_name i = assm_N ^ string_of_int i
 (* options *)
 
 val atomize_goals = Attrib.setup_config_bool \<^binding>\<open>min_shell_atomize_goals\<close> (K true)
-val END_behavior = Attrib.setup_config_string \<^binding>\<open>END_behavior\<close> (K "USUAL")
+val END_behavior = Attrib.setup_config_string \<^binding>\<open>END_behavior\<close> (K "RELAXED")
 
 type variables = (string * typ) list
 type local_facts = (string * term list) list

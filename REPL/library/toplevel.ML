@@ -135,9 +135,9 @@ fun REPL cout cin msgs init_state =
                 end
               | "\\END_mode" => let
                     val mode = read unpackString
-                    val _ = if member (op =) ["RELAXED", "COMPLETE_NEXT", "USUAL"] mode 
+                    val _ = if member (op =) ["RELAXED", "COMPLETE_NEXT", "STRICT"] mode 
                             then ()
-                            else raise REPL.REPL_fail "END_mode must be either RELEXED or COMPLETE_NEXT"
+                            else raise REPL.REPL_fail "END_mode must be either STRICT, RELAXED or COMPLETE_NEXT"
                  in REPL_Server.output cout packUnit ()
                   ; s
                  |> apfst (apfst (
