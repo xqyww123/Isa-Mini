@@ -1068,10 +1068,23 @@ fun powerful_MP ctxt rule thA0 =
        | NONE => error "BUG: CASES' MP")
  end
 
+fun make_case term =
+  let val (vars, prems, concl) = strip_meta_hhf term
+      val vars' = Name.variant_list [] (map fst vars) ~~ map snd vars
+      val fixes = map (apfst Binding.name) vars
+      val assms = map_index (fn (i, tm) =>
+                    ("prem" ^ string_of_int i, [fold_rev Term.abs vars' tm])) prems
+      val binds = [((Rule_Cases.case_conclN, 0), SOME (HOLogic.dest_Trueprop concl))]
+   in Rule_Cases.Case {
+        fixes=fixes, assumes=assms, binds=binds, cases=[]
+    }
+  end
+
+
 fun CASES' diff ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, items00) :: _)) =
   apply' (get_reporter()) tac NONE SK
     |> (fn (ctxt, SK as HHF (rule, items0) :: REMAIN_SK) =>
-   let val cases = Proof_Context.dest_cases (SOME ctxt0) ctxt
+   let val cases0 = Proof_Context.dest_cases (SOME ctxt0) ctxt
                 |> filter (fn (_, Rule_Cases.Case {binds,...}) =>
                       forall (fn ((name,_), SOME term) =>
                                     name <> Rule_Cases.case_conclN orelse
@@ -1079,8 +1092,18 @@ fun CASES' diff ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, items0
                                                 | Const(\<^const_name>\<open>HOL.True\<close>, _) => false
                                                 | _ => true)
                                | _ => true) binds)
-       val _ = if length cases = num_goals_of' rule - num_goals_of' st00 + 1 + diff
-               then () else error "BUG REWLK"
+       val diffxxx = (num_goals_of' rule - num_goals_of' st00 + 1 + diff) - length cases0
+       val cases =
+               if diffxxx = 0
+               then cases0
+               else if diffxxx > 0
+               then let
+                    val additional = take diffxxx (goals_of' rule)
+                                  |> map_index (fn (i,x) =>
+                                        ("Prem" ^ string_of_int i, make_case x))
+                 in additional @ cases0
+                end
+               else error "BUG REWLK"
        val used_qualifiers = quanlifiers_of (print_stack SK)
        val cases = Name.variant_list used_qualifiers (map #1 cases)
                 ~~ map #2 cases
@@ -1279,7 +1302,8 @@ fun INDUCT' (no_simp, (insts, ((arbitrary, taking), opt_rule))) first_vars using
   end
 
 fun CASE_SPLIT' (no_simp, (insts, opt_rule)) vars facts =
-  let val facts' = if not (null (flat insts)) orelse is_some opt_rule then [] else facts
+  let (* val facts' = if (* not (null (flat insts)) orelse *) is_some opt_rule then [] else facts *)
+      val facts' = facts
       val tac = Induct.cases_context_tactic (not no_simp) insts opt_rule facts' 1
    in CASES' 0 (K (K [])) tac vars
   end
