@@ -1074,7 +1074,8 @@ fun make_case term =
       val fixes = map (apfst Binding.name) vars
       val assms = map_index (fn (i, tm) =>
                     ("prem" ^ string_of_int i, [fold_rev Term.abs vars' tm])) prems
-      val binds = [((Rule_Cases.case_conclN, 0), SOME (HOLogic.dest_Trueprop concl))]
+      val binds = [((Rule_Cases.case_conclN, 0),
+                   SOME (fold_rev Term.abs vars' (HOLogic.dest_Trueprop concl)))]
    in Rule_Cases.Case {
         fixes=fixes, assumes=assms, binds=binds, cases=[]
     }
@@ -1098,10 +1099,10 @@ fun CASES' diff ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, items0
                then cases0
                else if diffxxx > 0
                then let
-                    val additional = take diffxxx (goals_of' rule)
+                    val additional = drop (length cases0) (goals_of' rule)
                                   |> map_index (fn (i,x) =>
                                         ("Prem" ^ string_of_int i, make_case x))
-                 in additional @ cases0
+                 in cases0 @ additional
                 end
                else error "BUG REWLK"
        val used_qualifiers = quanlifiers_of (print_stack SK)
@@ -1117,7 +1118,7 @@ fun CASES' diff ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, items0
                        | _ => error "BUG 0ejOD0qNRfaTJCrbK7lH3w")
             else fst (Logic.dest_implies (Thm.prop_of st00))
 
-       val siblings = map (fn (_, kase as Rule_Cases.Case {fixes, assumes, binds, ...}) =>
+       val siblings = map (fn (_, kase as Rule_Cases.Case {fixes, binds, ...}) =>
               let val (asms, ctxt) = Proof_Context.apply_case kase ctxt
                in PROP ((map (apfst Binding.name_of) fixes, asms), goal_term_of ctxt binds)
               end

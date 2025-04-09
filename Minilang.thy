@@ -4,8 +4,6 @@ theory Minilang
   imports HOL.HOL Minilang_Base Auto_Sledgehammer.Auto_Sledgehammer
 begin
 
-declare [[ML_debugger]]
-
 ML_file \<open>./library/aux.ML\<close>
 ML_file \<open>./library/proof.ML\<close>
 
