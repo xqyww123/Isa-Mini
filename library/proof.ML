@@ -26,6 +26,7 @@ type opt_var_names = string option list option
 val atomize_goals : bool Config.T
 val END_behavior : string Config.T
 val mini_single_cmd_timeout : int Config.T
+val typ_parsing_mode : string Config.T
 
 (* Operations *)
 
@@ -480,26 +481,6 @@ fun incr_fact_counter delta ctxt =
    in (jj, IPS_Data.put (ii,jj+delta,ID) ctxt)
   end
 
-fun init_ctxt c st = IPS_Data.put (
-        (0, 0, Hasher.term (Thm.prop_of st))
-      ) c
-
-fun INIT c st =
-  let val facts = Proof_Context.facts_of c
-      val facts' = if can Local_Theory.assert c
-                   then Proof_Context.facts_of (Local_Theory.target_of c)
-                   else Global_Theory.facts_of (Proof_Context.theory_of c)
-      val local_facts =
-        Facts.dest_static false [facts'] facts
-          |> map (apsnd (map Thm.prop_of))
-
-      val (vars, _) = Variable.constraints_of c
-      val vars' = Vartab.fold (fn ((N,~1),T) => (fn L => (N,T) :: L)
-                                | _ => I) vars []
-      val st' = init_goal c st
-   in ((init_ctxt c st, [HHF (st', (vars',local_facts)), ENDBLK T_END]), Symtab.empty, 0)
-  end
-fun INIT'  st = INIT (Proof.context_of st) (#goal (Proof.simple_goal st))
 
 fun beta_eta_contract th =
   if Term.could_beta_eta_contract (Thm.prop_of th)
@@ -925,6 +906,41 @@ val UNFOLD_CMD = Parse.thms1 -- Scan.option (IN |-- Scan.repeat1 Parse.name) >> 
 
 (** INITIATION PROCESS **)
 
+(* Flexible Type *)
+
+(*either ["", "no_typ", "flexible"]*)
+val typ_parsing_mode = Attrib.setup_config_string \<^binding>\<open>mini_typ_mode\<close> (K "flexible")
+fun typ_parsing ctxt terms =
+  let fun filter_out_typ (Const ("_type_constraint_", _) $ X) = X
+        | filter_out_typ (origin as (A $ B)) =
+            let val A' = filter_out_typ A
+                val B' = filter_out_typ B
+             in if pointer_eq (A, A') andalso pointer_eq (B, B')
+              then origin
+              else A' $ B'
+            end
+        | filter_out_typ (origin as (Abs (N,T,X))) =
+            let val X' = filter_out_typ X
+             in if pointer_eq (X, X')
+              then origin
+              else Abs (N,T,X')
+            end
+        | filter_out_typ X = X
+   in case Config.get ctxt typ_parsing_mode
+   of "" => terms
+    | "no_typ" => map filter_out_typ terms
+    | "flexible" =>
+        let val ctxt't = Config.put typ_parsing_mode "" ctxt
+         in if can (Syntax.check_terms ctxt't) terms
+           then terms
+           else map filter_out_typ terms
+        end
+    | wrong => error ("Minilang.mini_typ_mode must be either [\"\", \"no_typ\", \"flexible\"] but " ^
+                      wrong ^ " is given.")
+  end
+
+(*...*)
+
 fun NEED_STANDARD (ctxt, HHF (st, _) :: _) = Phi_Sledgehammer_Solver.need_standard_tac ctxt st
   | NEED_STANDARD _ = false
 
@@ -1009,9 +1025,39 @@ fun INIT_SYNTAX ctxt = ctxt
       (Const (\<^const_name>\<open>less_eq\<close>, dummyT), Mixfix (Input.string "(_/ \<le> _)", [50, 51], 50, Position.no_range)),
       (Const (\<^const_name>\<open>less\<close>,    dummyT), Mixfix (Input.string "(_/ < _)",     [50, 51], 50, Position.no_range))
     ]
-  |> Context.proof_map (Syntax_Phases.term_check ~200 "a < b < c" (K (map term_check)))
+  |> Context.proof_map (
+        Syntax_Phases.term_check ~200  "a < b < c" (K (map term_check)))
 
 end
+
+
+(* INIT *)
+
+fun init_ctxt c st = c
+  |> IPS_Data.put (
+        (0, 0, Hasher.term (Thm.prop_of st))
+      )
+  |> Context.proof_map (
+        Syntax_Phases.term_check ~1000 "minlang-flexible-typ" typ_parsing
+    )
+
+fun INIT c st =
+  let val facts = Proof_Context.facts_of c
+      val facts' = if can Local_Theory.assert c
+                   then Proof_Context.facts_of (Local_Theory.target_of c)
+                   else Global_Theory.facts_of (Proof_Context.theory_of c)
+      val local_facts =
+        Facts.dest_static false [facts'] facts
+          |> map (apsnd (map Thm.prop_of))
+
+      val (vars, _) = Variable.constraints_of c
+      val vars' = Vartab.fold (fn ((N,~1),T) => (fn L => (N,T) :: L)
+                                | _ => I) vars []
+      val st' = init_goal c st
+   in ((init_ctxt c st, [HHF (st', (vars',local_facts)), ENDBLK T_END]), Symtab.empty, 0)
+  end
+
+fun INIT'  st = INIT (Proof.context_of st) (#goal (Proof.simple_goal st))
 
 (** Crush **)
 
