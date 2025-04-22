@@ -127,11 +127,22 @@ fun REPL cout cin msgs init_state =
                   ; s
                 end
               | "\\eval" => let
-                    val (timeout, src) = read (unpackPair (unpackOption unpackInt, unpackString))
+                    val (timeout, timeout_cmd, src) =
+                            read (unpackTuple3 (unpackOption unpackInt, unpackOption unpackInt, unpackString))
                     val timeout = Option.map Time.fromMilliseconds timeout
-                 in case timeout
-                      of SOME time => Timeout.apply time (apfst (RE cout msgs src)) s
-                       | NONE      => apfst (RE cout msgs src) s
+                    val c0 = Minilang.context_of (fst (fst s))
+                    val s' = if is_some timeout_cmd
+                             then apfst (apfst (Minilang.map_context (
+                                    Config.put Minilang.mini_single_cmd_timeout (the timeout_cmd)))) s
+                             else s
+                    
+                 in(case timeout
+                      of SOME time => Timeout.apply time (apfst (RE cout msgs src)) s'
+                       | NONE      => apfst (RE cout msgs src) s')
+                 |> (if is_some timeout_cmd
+                     then apfst (apfst (Minilang.map_context (
+                              Config.restore Minilang.mini_single_cmd_timeout c0)))
+                     else I)
                 end
               | "\\END_mode" => let
                     val mode = read unpackString

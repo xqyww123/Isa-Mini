@@ -6,7 +6,7 @@ class Mini:
     A REPL client for Isabelle/Mini
     """
 
-    VERSION='0.3.2'
+    VERSION='0.3.3'
 
     def __run(self):
         self.repl.run_app("Minilang-REPL")
@@ -112,21 +112,26 @@ class Mini:
         self.pos = ("#REPL", 0, 0)
         self.__run()
 
-    def eval (self, src, timeout=None):
+    def eval (self, src, timeout=None, timeout_cmd=None):
         """
         Evaluates the given source Minilang code.
         The given source can contain multiple commands.
         Returns the list of the respective proof states after evaluating each of the command.
+
+        timeout: timeout in milliseconds
+        timeout_cmd: timeout to wait for every single command, in milliseconds
         """
         if not self.pos:
             raise ValueError("Mini: not started yet. Call `move_to` to indicate where to start the proof.")
         if timeout is not None and not isinstance(timeout, int):
             raise TypeError("timeout must be an integer or None")
-        if timeout is None:
+        if timeout_cmd is not None and not isinstance(timeout_cmd, int):
+            raise TypeError("timeout_cmd must be an integer or None")
+        if timeout is None and timeout_cmd is None:
             mp.pack (src, self.repl.cout)
         else:
             mp.pack ("\\eval", self.repl.cout)
-            mp.pack ((timeout, src), self.repl.cout)
+            mp.pack ((timeout, timeout_cmd, src), self.repl.cout)
         self.repl.cout.flush()
         return REPL.Client._parse_control_ (self.repl.unpack.unpack())
 
