@@ -6,15 +6,15 @@ class Mini:
     A REPL client for Isabelle/Mini
     """
 
-    VERSION='0.3.3'
+    VERSION='0.3.4'
 
     def __run(self):
         self.repl.run_app("Minilang-REPL")
-        REPL.Client._parse_control_ (self.repl.unpack.unpack())
-        mp.pack("\\END_mode", self.repl.cout)
-        mp.pack(self.mode, self.repl.cout)
+        mp.pack((self.hasty, self.mode, self.SH_params), self.repl.cout)
         self.repl.cout.flush()
-        REPL.Client._parse_control_ (self.repl.unpack.unpack())
+        version = REPL.Client._parse_control_ (self.repl.unpack.unpack())
+        if version != Mini.VERSION:
+            raise Exception(f"Mini: incompatible client version {Mini.VERSION} of Server {version}")
 
     def __turn_off (self):
         if self.pos:
@@ -22,7 +22,7 @@ class Mini:
             self.repl.cout.flush()
             return REPL.Client._parse_control_ (self.repl.unpack.unpack())
 
-    def __init__(self, addr, thy_qualifier, initial_pos = None, ML_base_injection=True, timeout=3600):
+    def __init__(self, addr, thy_qualifier, initial_pos = None, ML_base_injection=True, timeout=3600, hasty=False, SH_params=""):
         """
         Argument repl: a REPL client
 
@@ -54,6 +54,8 @@ class Mini:
             self.repl.file(initial_pos[0], initial_pos[1], initial_pos[2], use_cache=True, cache_position=True)
         self.pos = initial_pos
         self.mode = 'RELAXED'
+        self.hasty = hasty
+        self.SH_params = SH_params
         if self.pos:
             self.__run()
 

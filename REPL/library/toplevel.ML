@@ -86,6 +86,11 @@ fun RE cout msgs src s =
       ; s'))
   end
 
+fun chk_END_mode mode =
+      if member (op =) ["RELAXED", "COMPLETE_NEXT", "STRICT"] mode 
+      then ()
+      else raise REPL.REPL_fail "END_mode must be either STRICT, RELAXED or COMPLETE_NEXT"
+
 fun REPL cout cin msgs init_state =
   let open MessagePackBinIO.Unpack MessagePackBinIO.Pack
       fun read packer = let val (ret, cin') = doUnpack packer (!cin)
@@ -146,9 +151,7 @@ fun REPL cout cin msgs init_state =
                 end
               | "\\END_mode" => let
                     val mode = read unpackString
-                    val _ = if member (op =) ["RELAXED", "COMPLETE_NEXT", "STRICT"] mode 
-                            then ()
-                            else raise REPL.REPL_fail "END_mode must be either STRICT, RELAXED or COMPLETE_NEXT"
+                    val _ = chk_END_mode mode
                  in REPL_Server.output cout packUnit ()
                   ; s
                  |> apfst (apfst (
@@ -189,20 +192,34 @@ fun REPL cout cin msgs init_state =
 
 fun REPL_App (cin, cout) =
   let open MessagePackBinIO.Unpack MessagePackBinIO.Pack
+      fun read packer = let val (ret, cin') = doUnpack packer (!cin)
+                         in cin := cin'
+                          ; ret
+                        end
+
       val is = REPL.get_toplevel_state ()
    in if Toplevel.is_proof is
-    then let
-      val _ = REPL_Server.output cout packString ""
-      val _ = BinIO.StreamIO.flushOut cout
+    then \<^try>\<open>let
+      val (hasty, END_mode, SH_params) =
+              read (unpackTuple3 (unpackBool, unpackString, unpackOption unpackString))
+      val _ = chk_END_mode END_mode
       val ps = Toplevel.proof_of is
-            |> Proof.map_context (Config.put Printer.show_markup false)
+            |> Proof.map_context (
+                  Config.put Printer.show_markup false
+               #> Config.put Phi_Sledgehammer_Solver.hasty_mode hasty
+               #> Config.put Minilang.END_behavior END_mode
+               #> Config.put Phi_Sledgehammer_Solver.sledgehammer_params (the_default "" SH_params))
       val ms = Minilang.INIT' ps
       val s  = ((ms,[]), Symtab.empty)
       val msgs = Unsynchronized.ref []
       fun reporter msg = msgs := msg :: !msgs
-       in Minilang.set_reporter reporter
+       in REPL_Server.output cout packString "0.3.4"
+        ; BinIO.StreamIO.flushOut cout
+        ; Minilang.set_reporter reporter
         ; REPL cout cin msgs s
       end
+      catch E => ( REPL_Server.output_err cout (Runtime.exn_message E)
+                 ; BinIO.StreamIO.flushOut cout)\<close>
     else (
       REPL_Server.output_err cout "Not in a proof"
     ; BinIO.StreamIO.flushOut cout )
