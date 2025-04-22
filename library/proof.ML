@@ -25,6 +25,7 @@ type opt_var_names = string option list option
 
 val atomize_goals : bool Config.T
 val END_behavior : string Config.T
+val mini_single_cmd_timeout : int Config.T
 
 (* Operations *)
 
@@ -874,6 +875,8 @@ val IN = (Parse.$$$ "IN" || Parse.$$$ "in")
 
 (** APPLY **)
 
+val mini_single_cmd_timeout = Attrib.setup_config_int \<^binding>\<open>mini_single_cmd_timeout\<close> (K 15000)
+
 fun gen_APPLY prep_thms timeout using text =
       OPR (fn SK as (ctxt, _) =>
         apply_method (prep_thms ctxt using) (Method.evaluate text ctxt) timeout SK)
@@ -881,7 +884,11 @@ val APPLY   = gen_APPLY (K I)
 val APPLY'' = gen_APPLY Attrib.eval_thms
 
 val APPLY_CMD = (Method.parse -- Scan.optional WITH_CLAUSE [])
-             >> (fn ((m,_),using) => APPLY'' NONE using m)
+             >> (fn ((m,_),using) => fn s =>
+                let val timeout = Config.get (context_of s) mini_single_cmd_timeout
+                               |> Time.fromMilliseconds
+                 in APPLY'' (SOME timeout) using m s
+                end )
 
 (** UNFOLD **)
 
