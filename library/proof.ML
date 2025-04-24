@@ -24,7 +24,7 @@ type opt_var_names = string option list option
 (* options *)
 
 val atomize_goals : bool Config.T
-val END_behavior : string Config.T
+val working_mode : string Config.T
 val mini_single_cmd_timeout : int Config.T
 val typ_parsing_mode : string Config.T
 
@@ -194,7 +194,7 @@ fun assm_name i = assm_N ^ string_of_int i
 (* options *)
 
 val atomize_goals = Attrib.setup_config_bool \<^binding>\<open>min_shell_atomize_goals\<close> (K true)
-val END_behavior = Attrib.setup_config_string \<^binding>\<open>END_behavior\<close> (K "RELAXED")
+val working_mode = Attrib.setup_config_string \<^binding>\<open>working_mode\<close> (K "RELAXED")
 
 type variables = (string * typ) list
 type local_facts = (string * term list) list
@@ -754,10 +754,16 @@ fun INTRO'' F mode bs (origin as (ctxt, HHF (st0, items) :: L)) =
                                 |> #1
                val binds = case bs
                              of NONE => default_binds
-                              | SOME bs' => map2_opt (fn NONE => I
-                                                       | SOME b => K b) bs' default_binds
-                                            handle ListPair.UnequalLengths =>
-                                              raise OPR_FAIL (INVALID_OPR, "Incorrect number of VARS")
+                              | SOME bs'0 =>
+                                  let val bs' = if member (op =) ["COMPLETE_NEXT", "RELAXED"]
+                                                                 (Config.get ctxt working_mode)
+                                                then take (length default_binds) bs'0
+                                                else bs'0
+                                   in map2_opt (fn NONE => I
+                                                 | SOME b => K b) bs' default_binds
+                                      handle ListPair.UnequalLengths =>
+                                        raise OPR_FAIL (INVALID_OPR, "Incorrect number of VARS")
+                                  end
                val (foc, st') = Subgoal.focus_prems ctxt 1 (SOME (map Binding.name binds)) st
                val (st'', (items', ctxt')) = F (st', foc)
                val _ = get_reporter () (New_Items items')
@@ -1202,12 +1208,17 @@ fun CASES' diff ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, items0
                      Rule_Cases.Case {
                        fixes = (
                          case opt_case_name
-                           of SOME fixes' =>
-                             (map2_opt (fn NONE => I
-                                         | SOME name => fn (_, T) => (Binding.name name, T)
-                                       ) fixes' fixes
-                              handle ListPair.UnequalLengths =>
-                                  raise OPR_FAIL (INVALID_OPR, "Incorrect number of VARS"))
+                           of SOME fixes'0 =>
+                              let val fixes' = if member (op =) ["COMPLETE_NEXT", "RELAXED"]
+                                                                 (Config.get ctxt working_mode)
+                                               then take (length fixes) fixes'0
+                                               else fixes'0
+                               in map2_opt (fn NONE => I
+                                             | SOME name => fn (_, T) => (Binding.name name, T)
+                                           ) fixes' fixes
+                                  handle ListPair.UnequalLengths =>
+                                      raise OPR_FAIL (INVALID_OPR, "Incorrect number of VARS")
+                              end
                             | _ => fold_map (fn (B,T) => fn names =>
                               let val name = Binding.name_of B
                                   val name = if Name.is_internal name then Name.dest_internal name
@@ -1863,7 +1874,7 @@ fun END' param SH_override jj ID (stack as (_, HHF _ :: _)) =
         ( get_reporter () (Internal (REPLACE_CMD ("END", "END")))
         ; if T' = T_END then maintain (ctxt, HHF s :: SK')
           else if member (op =) ["COMPLETE_NEXT", "RELAXED"]
-                                (Config.get ctxt END_behavior)
+                                (Config.get ctxt working_mode)
           then maintain (ctxt, HHF s :: SK')
             |> END' param SH_override (jj+1) ID
           else raise OPR_FAIL (INVALID_OPR, 
@@ -1872,7 +1883,7 @@ fun END' param SH_override jj ID (stack as (_, HHF _ :: _)) =
                   " command.") )
        | _ => raise BROKEN_INVARIANT
     else if member (op =) ["COMPLETE_NEXT", "RELAXED"]
-                          (Config.get ctxt END_behavior)
+                          (Config.get ctxt working_mode)
     then ( get_reporter () (Internal (REPLACE_CMD ("NEXT", "NEXT")))
          ; END' param SH_override (jj+1) ID (ctxt, SK'1) )
     else raise OPR_FAIL (INVALID_OPR, "This block should be closed by the NEXT command.")
@@ -1896,7 +1907,7 @@ fun NXT' param SH_override ID (origin as stack as (_, HHF (st, _) :: _)) =
                  |> report_goal
              | _ => maintain (ctxt, HHF s :: SK')
                  |> report_goal )
-          else (case Config.get ctxt END_behavior
+          else (case Config.get ctxt working_mode
             of "RELAXED" => origin
              | _ => raise OPR_FAIL(INVALID_OPR,  "This block should be closed by the END command."
           )))

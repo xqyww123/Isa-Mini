@@ -155,7 +155,7 @@ fun REPL cout cin msgs init_state =
                  in REPL_Server.output cout packUnit ()
                   ; s
                  |> apfst (apfst (
-                      Minilang.map_context (Config.put Minilang.END_behavior mode)))
+                      Minilang.map_context (Config.put Minilang.working_mode mode)))
                 end
               | bad => raise REPL.REPL_fail (
                   "Command " ^ String.substring (bad, 1, size bad - 1)
@@ -207,7 +207,7 @@ fun REPL_App (cin, cout) =
             |> Proof.map_context (
                   Config.put Printer.show_markup false
                #> Config.put Phi_Sledgehammer_Solver.hasty_mode hasty
-               #> Config.put Minilang.END_behavior END_mode
+               #> Config.put Minilang.working_mode END_mode
                #> Config.put Phi_Sledgehammer_Solver.sledgehammer_params (the_default "" SH_params))
       val ms = Minilang.INIT' ps
       val s  = ((ms,[]), Symtab.empty)
