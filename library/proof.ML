@@ -27,6 +27,7 @@ val atomize_goals : bool Config.T
 val working_mode : string Config.T
 val mini_single_cmd_timeout : int Config.T
 val typ_parsing_mode : string Config.T
+val install_relaxed_typ_parsing : Context.generic -> Context.generic
 
 (* Operations *)
 
@@ -236,7 +237,7 @@ type state = stack              (*current stack*)
 type operation = state -> state
 type command = operation parser
 
-fun context_of ((ctxt,_), _, _) = ctxt
+fun context_of (((ctxt,_), _, _) : state) = ctxt
 (*only checks state sequent*)
 fun equiv_proof_state ( ((ctxt, HHF (st, _) :: _), _, _) , ((_, HHF (st', _) :: _), _, _) )
       = Thm.equiv_thm (Proof_Context.theory_of ctxt) (st, st')
@@ -717,6 +718,41 @@ fun simp_name name =
   else name
 
 
+(* Hacks *)
+
+fun remove_typ str =
+  let datatype state = MARK of state | USUAL | TYP1 | TYP of int
+      fun auto _ [] = []
+        | auto s (#"\127" :: L) = auto s L
+        | auto (MARK s) (#"\005" :: L) = auto s L
+        | auto (MARK s) (_ :: L) = auto (MARK s) L
+        | auto s (#"\005" :: L) = auto (MARK s) L
+        | auto USUAL (#":" :: L) = auto TYP1 L
+        | auto USUAL (x :: L) = x :: auto USUAL L
+        | auto TYP1 (#":" :: L) = auto (TYP 0) L
+        | auto TYP1 L = #":" :: auto USUAL L
+        | auto (TYP i) (#"(" :: L) = auto (TYP (i+1)) L
+        | auto (TYP 0) (#")" :: L) = #")" :: auto USUAL L
+        | auto (TYP i) (#")" :: L) = auto (TYP (i-1)) L
+        | auto (TYP i) (_ :: L) = auto (TYP i) L
+   in String.implode (auto USUAL (String.explode str))
+  end
+
+fun remove_typ_ass x = map (apsnd (map (apfst remove_typ #> apsnd (map remove_typ)))) x
+fun remove_typ_ss x = map (map (apfst remove_typ #> apsnd (map remove_typ))) x
+
+val typ_parsing_mode = Attrib.setup_config_string \<^binding>\<open>mini_typ_mode\<close> (K "flexible")
+
+fun tolerate_typ tr fix s =
+  tr s handle E as ERROR msg =>
+    if String.isPrefix "Undefined type name: " msg
+    then let val ctxt = context_of s
+      in if Config.get ctxt typ_parsing_mode = "flexible"
+       then fix s
+       else Exn.reraise E
+     end
+    else Exn.reraise E
+
 (*** COMMANDS ***)
 
 (** INTRO **)
@@ -915,7 +951,7 @@ val UNFOLD_CMD = Parse.thms1 -- Scan.option (IN |-- Scan.repeat1 Parse.name) >> 
 (* Flexible Type *)
 
 (*either ["", "no_typ", "flexible"]*)
-val typ_parsing_mode = Attrib.setup_config_string \<^binding>\<open>mini_typ_mode\<close> (K "flexible")
+
 fun typ_parsing ctxt terms =
   let fun filter_out_typ (Const ("_type_constraint_", _) $ X) = X
         | filter_out_typ (origin as (A $ B)) =
@@ -1044,8 +1080,10 @@ fun init_ctxt c st = c
         (0, 0, Hasher.term (Thm.prop_of st))
       )
   |> Context.proof_map (
-        Syntax_Phases.term_check ~1000 "minlang-flexible-typ" typ_parsing
+        Syntax_Phases.term_check ~10000 "minlang-flexible-typ" typ_parsing
     )
+
+val install_relaxed_typ_parsing = Syntax_Phases.term_check ~10000 "minlang-flexible-typ" typ_parsing
 
 fun INIT c st =
   let val facts = Proof_Context.facts_of c
@@ -1571,7 +1609,9 @@ val HAVE'' = gen_HAVE Specification.schematic_theorem
 
 val HAVE_CMD =
         Parse_Spec.statement -- Parse_Spec.if_statement -- Parse.for_fixes
-     >> (fn ((shows, assumes), fixes) => HAVE fixes assumes shows)
+     >> (fn ((shows, assumes), fixes) =>
+          tolerate_typ (HAVE fixes assumes shows)
+                       (fn s => HAVE fixes (remove_typ_ass assumes) (remove_typ_ass shows) s) )
 
 (** CONSIDER **)
 
@@ -1739,7 +1779,11 @@ fun CONSIDER_CMD toks = (
      Parse.enum1 "|"
         (Scan.optional (Parse.vars --| Parse.where_) []
           -- structured_statement)
-     >> CONSIDER) toks
+     >> (fn x =>
+          tolerate_typ (CONSIDER x)
+                       (fn s => CONSIDER (map (apsnd (fn (a,b,c) =>
+                                  (a,remove_typ_ss b,remove_typ_ass c) )) x) s)
+        )) toks
 
 (** STEP, the alternative calculation mechanism **)
 
