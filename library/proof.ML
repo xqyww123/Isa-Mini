@@ -744,7 +744,7 @@ fun remove_typ_ss x = map (map (apfst remove_typ #> apsnd (map remove_typ))) x
 val typ_parsing_mode = Attrib.setup_config_string \<^binding>\<open>mini_typ_mode\<close> (K "flexible")
 
 fun tolerate_typ tr fix s =
-  tr s handle E as ERROR msg =>
+  tr s handle E as Exn.EXCEPTIONS [ERROR msg] =>
     if String.isPrefix "Undefined type name: " msg
     then let val ctxt = context_of s
       in if Config.get ctxt typ_parsing_mode = "flexible"
