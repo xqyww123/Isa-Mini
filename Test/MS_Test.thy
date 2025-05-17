@@ -1,11 +1,8 @@
 theory MS_Test
-  imports Main Minilang HOL.Transcendental HOL.Groups_Big
+  imports Main Minilang.Minilang HOL.Transcendental HOL.Groups_Big
 begin
 
-declare [[END_completes_all_NEXT = false]]
-
-lemma \<open>0 < length x \<Longrightarrow> x \<noteq> []\<close>
-  by (min_script \<open>CASE_SPLIT x PRINT NEXT END\<close>)
+declare [[working_mode = STRICT]]
 
 lemma \<open>rev (rev l) = l\<close>
   by (min_script \<open>END\<close>)

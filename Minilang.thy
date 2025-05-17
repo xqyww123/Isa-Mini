@@ -7,7 +7,6 @@ begin
 ML_file \<open>./library/aux.ML\<close>
 ML_file \<open>./library/proof.ML\<close>
 
-
 attribute_setup OF = \<open>Attrib.thms >> (fn Bs =>
       Thm.rule_attribute Bs (fn ctxt => Minilang_Aux.xOF (Context.proof_of ctxt) Bs))\<close>
 

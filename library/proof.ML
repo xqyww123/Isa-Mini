@@ -753,6 +753,62 @@ fun tolerate_typ tr fix s =
      end
     else Exn.reraise E
 
+(* Calculation *)
+
+structure Calc_Data = Proof_Data (
+  type T = (thm (*current calculation*) * int (*length of the calc chain*)) list
+  val init = K []
+)
+
+fun extend_calc thm ctxt =
+  let val calcs = Calc_Data.get ctxt
+      val stat = Proof.init ctxt
+      fun extend calc thm = stat
+         |> Proof.set_facts [calc]
+         |> Calculation.also NONE false
+         |> Seq.pull
+         |> (fn SOME (Seq.Error _, _) => NONE
+              | NONE => NONE
+              | SOME (Seq.Result stat, _) => stat
+         |> Proof.set_facts [thm]
+         |> Calculation.also NONE false
+         |> Seq.pull
+         |> (fn SOME (Seq.Error _, _) => NONE
+              | NONE => NONE
+              | SOME (Seq.Result stat, _) => stat
+         |> Calculation.check
+         |> (fn SOME [ret] => SOME ret
+              | _ => NONE )))
+      val (calcs', (_, default_calc)) =
+          fold_map (fn (calc, N) => fn (M, default_calc) =>
+            case extend calc thm
+              of SOME calc' =>
+                    if N > M
+                    then ((calc', N+1), (N, SOME calc'))
+                    else ((calc', N+1), (M, default_calc))
+               | NONE       => ((calc, N), (M, default_calc))
+          ) calcs (0, NONE)
+      val calcs'N = length calcs'
+      val calcs'3 =
+            map_filter (fn ((i,(x, N)), (x', _)) =>
+                if N > 1 andalso not (pointer_eq (x, x'))
+                then SOME (calcs'N - 1 - i,x)
+                else NONE
+            ) (map_index I calcs' ~~ calcs)
+      val calcs'' =
+            if is_some default_calc
+            then calcs'
+            else (thm, 1) :: calcs'
+      val new_facts = map (fn (i,th) =>
+            (if i = 0 then "calculation" else "calculation" ^ string_of_int i, th)) calcs'3
+      
+   in Calc_Data.put calcs'' ctxt
+   |> Proof_Context.note_thmss ""
+       ( map (fn (s,th) => ((Binding.name s, []), [([th], [])]) ) new_facts )
+   |> snd
+   |> pair (map (apsnd (single o Thm.prop_of)) new_facts)
+  end
+
 (*** COMMANDS ***)
 
 (** INTRO **)
@@ -1567,8 +1623,9 @@ fun gen_HAVE' mkG shows (ctxt0, HHF (st,items) :: S) =
                 val (lems, ctxt02) = Proof_Context.note_thmss "" (binds ~~ map (fn x => [(x, [])]) lems) ctxt0
                 val ctxt03 = Proof_Context.auto_bind_facts (maps (map Thm.prop_of o snd) lems) ctxt02
                 val items' = ([], map (apsnd (map Thm.prop_of)) lems)
+                val (itemss, ctxt04) = fold_map extend_calc (maps snd lems) ctxt03
              in get_reporter () (New_Items items')
-              ; (ctxt03, HHF (st, cat_items items' items) :: S)
+              ; (ctxt04, HHF (st, cat_items ([], flat itemss) (cat_items items' items)) :: S)
             end
 
           val thy01 = Proof_Context.theory_of ctxt01
