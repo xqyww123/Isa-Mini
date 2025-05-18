@@ -213,7 +213,7 @@ fun REPL_App (cin, cout) =
       val s  = ((ms,[]), Symtab.empty)
       val msgs = Unsynchronized.ref []
       fun reporter msg = msgs := msg :: !msgs
-       in REPL_Server.output cout packString "0.3.4"
+       in REPL_Server.output cout packString "0.3.5"
         ; BinIO.StreamIO.flushOut cout
         ; Minilang.set_reporter reporter
         ; REPL cout cin msgs s

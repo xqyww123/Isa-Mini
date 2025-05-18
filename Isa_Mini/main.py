@@ -69,8 +69,8 @@ with Mini(args.addr, 'HOL', initial_pos) as mini:
                 case r'\close':
                     mini.close()
                     break
-                case str(x) if x.startswith('\move_to '):
-                    m = re.match(r'^\\move_to\s+([^:\s]+):(\d+)(:(\d+))?$', x)
+                case str(x) if x.startswith(r'\move_to'):
+                    m = re.match(r'^\\move_to\s+([^:\s]+):(\d+)(:(\d+))?\s*$', x)
                     if m:
                         file = m[1]
                         line = int(m[2])
@@ -78,7 +78,23 @@ with Mini(args.addr, 'HOL', initial_pos) as mini:
                         mini.move_to(file, line, offset)
                         CLI_print_state(mini.print())
                     else:
-                        console.print('Bad Syntax, \move_to <file>:<line>:[offset]', style='bold red')
+                        console.print(r'Bad Syntax, \move_to <file>:<line>:[offset]', style='bold red')
+                case str(x) if x.startswith(r'\record'):
+                    m = re.match(r'^\\record\s+(\w+)\s*$', x)
+                    if m:
+                        name = m[1]
+                        mini.record(name)
+                        CLI_print_state(mini.print())
+                    else:
+                        console.print(r'Bad Syntax, \record <name>', style='bold red')
+                case str(x) if x.startswith(r'\rollback'):
+                    m = re.match(r'^\\rollback\s+(\w+)\s*$', x)
+                    if m:
+                        name = m[1]
+                        mini.rollback(name)
+                        CLI_print_state(mini.print())
+                    else:
+                        console.print(r'Bad Syntax, \rollback <name>', style='bold red')
                 case _:
                     rets = mini.eval(s)
                     CLI_print_state(rets)

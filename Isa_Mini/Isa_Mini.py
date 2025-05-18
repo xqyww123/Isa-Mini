@@ -6,7 +6,7 @@ class Mini:
     A REPL client for Isabelle/Mini
     """
 
-    VERSION='0.3.4'
+    VERSION='0.3.5'
 
     def __run(self):
         self.repl.run_app("Minilang-REPL")
@@ -136,6 +136,25 @@ class Mini:
             mp.pack ((timeout, timeout_cmd, src), self.repl.cout)
         self.repl.cout.flush()
         return REPL.Client._parse_control_ (self.repl.unpack.unpack())
+    
+    def record(self, name):
+        """
+        record the current proof state with the given name, so that it can be retrieved later using `rollback` method.
+        """
+        mp.pack ("\\stamp", self.repl.cout)
+        mp.pack (name, self.repl.cout)
+        self.repl.cout.flush()
+        return REPL.Client._parse_control_ (self.repl.unpack.unpack())
+
+    def rollback(self, name):
+        """
+        roll back to the proof state recorded with the given name.
+        """
+        mp.pack ("\\rollback", self.repl.cout)
+        mp.pack (name, self.repl.cout)
+        self.repl.cout.flush()
+        return REPL.Client._parse_control_ (self.repl.unpack.unpack())
+    
 
     @staticmethod
     def parse_item(data):
