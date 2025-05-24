@@ -2384,8 +2384,13 @@ datatype config = CFG_NOTE   of Thm.binding * (thm list * attribute list) list
 
 fun CONFIG' prep_attr_thms raw_thms (ctxt, SK) =
   let val cfgs = prep_attr_thms ctxt raw_thms
-   in (fold (fn CFG_BUNDLE name => Bundle.includes [name]
-              | CFG_NOTE   note => snd o Proof_Context.note_thms "" note) cfgs ctxt, SK)
+      val timeout = Config.get ctxt mini_single_cmd_timeout
+                 |> Time.fromMilliseconds
+      val ctxt' =
+            Timeout.apply timeout
+                 (fold (fn CFG_BUNDLE name => Bundle.includes [name]
+                         | CFG_NOTE   note => snd o Proof_Context.note_thms "" note) cfgs) ctxt
+   in (ctxt', SK)
   end
 
 val CONFIG   = OPR o CONFIG' (K I)
