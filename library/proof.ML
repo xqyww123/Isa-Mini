@@ -939,6 +939,7 @@ fun OPR_ID (f : int -> stack -> stack) ((S,TAB,ID) : state) : state
 fun timed_OPR t f s
   = Timeout.apply (Time.fromSeconds t) (OPR f) s
     handle Timeout.TIMEOUT _ => raise OPR_FAIL (PROOF_FAIL, "Timeout")
+         | Exn.Interrupt_Breakdown => raise OPR_FAIL (PROOF_FAIL, "Timeout")
 
 fun CONTEXTUAL_CMD (parser : Proof.context -> command)
                    (toks : Token.src)
