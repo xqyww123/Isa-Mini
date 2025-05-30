@@ -936,6 +936,10 @@ fun OPR (f : stack -> stack) ((S,TAB,ID) : state) : state
 fun OPR_ID (f : int -> stack -> stack) ((S,TAB,ID) : state) : state
   = (f ID S, TAB, ID+1)
 
+fun timed_OPR t f s
+  = Timeout.apply (Time.fromSeconds t) (OPR f) s
+    handle Timeout.TIMEOUT _ => raise OPR_FAIL (PROOF_FAIL, "Timeout")
+
 fun CONTEXTUAL_CMD (parser : Proof.context -> command)
                    (toks : Token.src)
   = ((fn (s:state) => fst (parser (#1 (#1 s)) toks) s), [])
@@ -996,10 +1000,10 @@ fun UNFOLD_FACT' prep_thms raw_defs fact_names (ctxt, SK as HHF (st, items) :: S
   end
   | UNFOLD_FACT' _ _ _ _ = raise BROKEN_INVARIANT
 
-val UNFOLD = OPR o UNFOLD' (K I)
+val UNFOLD = timed_OPR 2 o UNFOLD' (K I)
 val UNFOLD_CMD = Parse.thms1 -- Scan.option (IN |-- Scan.repeat1 Parse.name) >> (
-      fn (defs, NONE)       => OPR (UNFOLD' Attrib.eval_thms defs)
-       | (defs, SOME facts) => OPR (UNFOLD_FACT' Attrib.eval_thms defs facts) )
+      fn (defs, NONE)       => timed_OPR 2 (UNFOLD' Attrib.eval_thms defs)
+       | (defs, SOME facts) => timed_OPR 4 (UNFOLD_FACT' Attrib.eval_thms defs facts) )
 
 
 (** INITIATION PROCESS **)
@@ -1047,9 +1051,9 @@ fun TRY_STANDARD SK =
   then apply' (K ()) (CONTEXT_TACTIC (Classical.standard_tac (#1 SK) [])) NONE SK
   else SK
 
-val INTRO = OPR oo INTRO'
-val INTRO_CMD = OPT_VARS >> (OPR o INTRO' SINGLE_GOAL)
-val INTRO_ALL_CMD = OPT_VARS >> (OPR o INTRO' ALL_SUBGOALS)
+val INTRO = timed_OPR 2 oo INTRO'
+val INTRO_CMD = OPT_VARS >> (timed_OPR 2 o INTRO' SINGLE_GOAL)
+val INTRO_ALL_CMD = OPT_VARS >> (timed_OPR 2 o INTRO' ALL_SUBGOALS)
 
 local
 (*
@@ -1467,7 +1471,7 @@ fun CASE_SPLIT' (no_simp, (insts, opt_rule)) vars facts =
    in CASES' 0 (K (K [])) tac vars
   end
 
-val INDUCT = OPR ooo INDUCT'
+val INDUCT = timed_OPR 10 ooo INDUCT'
 fun INDUCT'' (args, vars, raw_using) s =
   let val ctxt = context_of s
       val toks = if \<^try>\<open>Token.is_eof (List.last args) catch _ => false\<close>
@@ -1475,7 +1479,7 @@ fun INDUCT'' (args, vars, raw_using) s =
                  else args @ [Token.eof]
       val (args', _) = ind_synt (Context.Proof ctxt) toks
       val using = Attrib.eval_thms ctxt raw_using
-   in OPR (INDUCT' args' vars using) s
+   in timed_OPR 10 (INDUCT' args' vars using) s
   end
 val INDUCT_CMD = CONTEXTUAL_CMD (fn ctxt =>
          ind_synt (Context.Proof ctxt) -- OPT_VARS -- Scan.optional WITH_CLAUSE []
@@ -1484,7 +1488,7 @@ val INDUCT_CMD = CONTEXTUAL_CMD (fn ctxt =>
          in INDUCT (no_simp, (insts, ((arbitrary, taking), opt_rule))) vars using
         end ))
 
-val CASE_SPLIT = OPR ooo CASE_SPLIT'
+val CASE_SPLIT = timed_OPR 10 ooo CASE_SPLIT'
 val CASE_SPLIT_CMD = CONTEXTUAL_CMD (fn ctxt =>
          case_synt (Context.Proof ctxt) -- OPT_VARS -- Scan.optional WITH_CLAUSE []
       >> (fn (((no_simp, (insts, opt_rule)), vars), raw_facts) =>
@@ -1498,7 +1502,7 @@ fun CASE_SPLIT'' (args, vars, raw_facts) s =
                  else args @ [Token.eof]
       val (args', _) = case_synt (Context.Proof ctxt) toks
       val facts = Attrib.eval_thms ctxt raw_facts
-   in OPR (CASE_SPLIT' args' vars facts) s
+   in timed_OPR 10 (CASE_SPLIT' args' vars facts) s
   end
 
 
@@ -1559,7 +1563,7 @@ fun RULE' [] raw_facts (SK as (ctxt, _)) =
     end
   | RULE' _ _ _ = raise BROKEN_INVARIANT
 
-val RULE = OPR oo RULE'
+val RULE = timed_OPR 8 oo RULE'
 val RULE_CMD = let open Parse
       in Scan.optional thms1 []
       -- Scan.optional (($$$ "with" || $$$ "WITH") |-- thms1) [] >> uncurry RULE
@@ -1644,7 +1648,7 @@ fun gen_HAVE' mkG shows (ctxt0, HHF (st,items) :: S) =
   | gen_HAVE' _ _ _ = raise BROKEN_INVARIANT
 
 fun gen_HAVE mkspec fixes assumes shows =
-  OPR (fn (ctxt, SK) =>
+  timed_OPR 8 (fn (ctxt, SK) =>
     let val delta = fold (fn ((B,_),_) => fn N =>
                             if Binding.is_empty B then (N+1) else N
                          ) shows 0
@@ -1831,7 +1835,7 @@ val structured_statement =
   Parse_Spec.statement -- Parse_Spec.if_statement' -- Parse.for_fixes
     >> (fn ((shows, assumes), fixes) => (fixes, assumes, shows));
 
-val CONSIDER = OPR o CONSIDER'
+val CONSIDER = timed_OPR 8 o CONSIDER'
 fun CONSIDER_CMD toks = (
      Parse.enum1 "|"
         (Scan.optional (Parse.vars --| Parse.where_) []
@@ -1915,8 +1919,8 @@ fun STEP' prep_term opt_rule raw_term (ctxt, HHF (st, items) :: SK) =
   end
   | STEP' _ _ _ _ = raise BROKEN_INVARIANT
 
-val STEP   = OPR oo STEP' (K I)
-val STEP'' = OPR oo STEP' Syntax.read_term
+val STEP   = timed_OPR 8 oo STEP' (K I)
+val STEP'' = timed_OPR 8 oo STEP' Syntax.read_term
 val STEP_CMD = Scan.optional (\<^keyword>\<open>(\<close> |-- Parse.thms1 --| \<^keyword>\<open>)\<close>) []
             -- Parse.term >> uncurry STEP''
 
@@ -2062,11 +2066,11 @@ in
 fun LET' prep_terms raw_binds (ctxt, S) =
       (gen_bind prep_terms raw_binds ctxt, S)
 
-val LET = OPR o LET' (fn ctxt => fn _ => map (Proof_Context.cert_term ctxt))
-val LET'' = OPR o LET' read_terms
+val LET = timed_OPR 3 o LET' (fn ctxt => fn _ => map (Proof_Context.cert_term ctxt))
+val LET'' = timed_OPR 3 o LET' read_terms
 val LET_CMD =
   (Parse.and_list1 (Parse.and_list1 Parse.term -- (\<^keyword>\<open>=\<close> |-- Parse.term))
-    >> (OPR o LET' read_terms))
+    >> (timed_OPR 3 o LET' read_terms))
 
 
 end
@@ -2099,8 +2103,8 @@ fun read_term ctxt (raw_term, vs) =
    in singleton (Variable.export_terms ctxt' ctxt) term
   end
 
-val CHOOSE = OPR o CHOOSE' (K I)
-val CHOOSE'' = OPR o CHOOSE' (map o read_term)
+val CHOOSE = timed_OPR 5 o CHOOSE' (K I)
+val CHOOSE'' = timed_OPR 5 o CHOOSE' (map o read_term)
 val CHOOSE_CMD = Parse.and_list (Scan.repeat1 (Parse.term -- Scan.optional (VARS_KWD |-- Parse.vars) [])) >> (CHOOSE'' o flat)
 
 (** PRINT **)
@@ -2219,10 +2223,10 @@ in
 fun WRITE' prep_arg mode args (ctxt, SK) =
   (Proof_Context.notation true mode (fst (fold_map prep_arg args ctxt)) ctxt, SK)
 
-val NOTATION   = OPR oo WRITE' pair
-val NOTATION'' = OPR oo WRITE' read_arg
+val NOTATION   = timed_OPR 3 oo WRITE' pair
+val NOTATION'' = timed_OPR 3 oo WRITE' read_arg
 val NOTATION_CMD = Parse.syntax_mode -- Parse.and_list1 (Parse.const -- Parse.mixfix)
-             >> (fn (mode, args) => OPR (WRITE' read_arg mode args))
+             >> (fn (mode, args) => timed_OPR 3 (WRITE' read_arg mode args))
 
 end
 
@@ -2355,10 +2359,10 @@ fun OPEN_MODULE' interp expr (lthy, HHF (st, items) :: SK) =
   end
   | OPEN_MODULE' _ _ _ = raise BROKEN_INVARIANT
 
-val OPEN_MODULE   = OPR o OPEN_MODULE' interpretation
-val OPEN_MODULE'' = OPR o OPEN_MODULE' interpretation_cmd
+val OPEN_MODULE   = timed_OPR 60 o OPEN_MODULE' interpretation
+val OPEN_MODULE'' = timed_OPR 60 o OPEN_MODULE' interpretation_cmd
 val OPEN_MODULE_CMD = Parse.!!! Parse_Spec.locale_expression
-                  >> (OPR o OPEN_MODULE' interpretation_cmd)
+                  >> (timed_OPR 60 o OPEN_MODULE' interpretation_cmd)
 
 (** LOCAL DEFINITION **)
 
@@ -2369,10 +2373,10 @@ fun DEFINE' define (ctxt, SK) =
     |> Proof.context_of,
    SK)
 
-fun DEFINE   names exprs fixes = OPR (DEFINE' (Proof.define names fixes exprs))
-fun DEFINE'' names exprs fixes = OPR (DEFINE' (Proof.define_cmd names fixes exprs))
+fun DEFINE   names exprs fixes = timed_OPR 5 (DEFINE' (Proof.define names fixes exprs))
+fun DEFINE'' names exprs fixes = timed_OPR 5 (DEFINE' (Proof.define_cmd names fixes exprs))
 val DEFINE_CMD = (Parse.vars --| Parse.where_) -- Parse_Spec.statement -- Parse.for_fixes
-              >> (fn ((a,b),c) => OPR (DEFINE' (Proof.define_cmd a c b)))
+              >> (fn ((a,b),c) => timed_OPR 5 (DEFINE' (Proof.define_cmd a c b)))
 
 
 (** CONFIG **)
@@ -2393,21 +2397,21 @@ fun CONFIG' prep_attr_thms raw_thms (ctxt, SK) =
    in (ctxt', SK)
   end
 
-val CONFIG   = OPR o CONFIG' (K I)
-val CONFIG_FACTS'' = OPR o CONFIG' (fn ctxt =>
+val CONFIG   = timed_OPR 10 o CONFIG' (K I)
+val CONFIG_FACTS'' = timed_OPR 10 o CONFIG' (fn ctxt =>
     let fun parse_fact ((b,attrs), facts) =
               ((b, map (Attrib.attribute_cmd ctxt) attrs),
                map (apfst (Proof_Context.get_fact ctxt)
                  #> apsnd (map (Attrib.attribute_cmd ctxt))) facts)
      in map (CFG_NOTE o parse_fact)
     end )
-val CONFIG_BUNDL'' = OPR o CONFIG' (fn ctxt =>
+val CONFIG_BUNDL'' = timed_OPR 10 o CONFIG' (fn ctxt =>
     let fun parse name = CFG_BUNDLE (Bundle.check ctxt (name, Position.none))
      in map parse
     end )
 
 val CONFIG_CMD = Parse_Spec.name_facts >> (
-      OPR o CONFIG' (fn ctxt => fn facts =>
+      timed_OPR 10 o CONFIG' (fn ctxt => fn facts =>
     let fun parse_fact ((b,attrs), facts) =
               ((b, map (Attrib.attribute_cmd ctxt) attrs),
                map (apfst (Proof_Context.get_fact ctxt)
