@@ -1,7 +1,7 @@
 text \<open>Driven by AI purely and only.\<close>
 
 theory Minilang
-  imports HOL.HOL Minilang_Base Auto_Sledgehammer.Auto_Sledgehammer
+  imports HOL.HOL Auto_Sledgehammer.Auto_Sledgehammer
 begin
 
 ML_file \<open>./library/aux.ML\<close>

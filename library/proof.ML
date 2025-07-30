@@ -28,6 +28,13 @@ val working_mode : string Config.T
 val mini_single_cmd_timeout : int Config.T
 val typ_parsing_mode : string Config.T
 val install_relaxed_typ_parsing : Context.generic -> Context.generic
+val transparent_intro : bool Config.T
+    (*If enabled, no INTRO command is required. All premises and universal variables in proof goals
+      will be introduced (i.e., moved into the meta) transparently:
+      1. All premises and universal variables in proof goals are always displayed as meta
+         facts / variables.
+      2. MiniLang determines the appropriate time to introduce the premises and the variables.
+         This time is the moment before command HAVE and CONSIDER happen.*)
 
 (* Operations *)
 
@@ -196,11 +203,13 @@ fun assm_name i = assm_N ^ string_of_int i
 
 val atomize_goals = Attrib.setup_config_bool \<^binding>\<open>min_shell_atomize_goals\<close> (K true)
 val working_mode = Attrib.setup_config_string \<^binding>\<open>working_mode\<close> (K "RELAXED")
+val transparent_intro = Attrib.setup_config_bool \<^binding>\<open>transparent_intro\<close> (K false)
 
 type variables = (string * typ) list
 type local_facts = (string * term list) list
 type items = variables * local_facts
 type fact = Facts.ref * Token.src list
+type has_introduced = bool
 
 val empty_items : items = ([],[])
 fun join_lstR pr = AList.join (op =) (fn _ => fn (_,x) => x) pr
@@ -481,6 +490,8 @@ fun incr_fact_counter delta ctxt =
   let val (ii,jj,ID) = IPS_Data.get ctxt
    in (jj, IPS_Data.put (ii,jj+delta,ID) ctxt)
   end
+
+fun get_fact_counter ctxt = #2 (IPS_Data.get ctxt)
 
 
 fun beta_eta_contract th =
@@ -809,6 +820,46 @@ fun extend_calc thm ctxt =
    |> pair (map (apsnd (single o Thm.prop_of)) new_facts)
   end
 
+(* transparent introduciton helpers *)
+
+val has_prems_universal_vars =
+  let fun chk (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ _) = true
+        | chk (Const(\<^const_name>\<open>Pure.all\<close>, _) $ _ ) = true
+        | chk (Const(\<^const_name>\<open>Trueprop\<close>, _) $ X) = chk X
+        | chk (Const(\<^const_name>\<open>HOL.implies\<close>, _) $ _ $ _) = true
+        | chk (Const(\<^const_name>\<open>HOL.All\<close>, _) $ _) = true
+        | chk _ = false
+   in chk
+  end
+
+fun strip_prems_universal_vars ctxt =
+  let val base = get_fact_counter ctxt
+      val counter = Unsynchronized.ref 0
+      fun assign_name () =
+        let val i = !counter
+         in counter := i + 1
+          ; "fact" ^ string_of_int (i + base)
+        end
+      fun dest (vs,hs) (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ A $ X)
+            = dest (vs, (assign_name (), [A]) :: hs) X
+        | dest (vs,hs) (Const(\<^const_name>\<open>HOL.implies\<close>, _) $ A $ X)
+            = dest (vs, (assign_name (), [HOLogic.mk_Trueprop A]) :: hs) X
+        | dest (vs,hs) (Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs (name, ty, X))
+            = dest ((name,ty) :: vs, hs) X
+        | dest (vs,hs) (Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs (name, ty, X))
+            = dest ((name,ty) :: vs, hs) X
+        | dest vh (Const(\<^const_name>\<open>Trueprop\<close>, _) $ X) = dest vh X
+        | dest (vs,hs) X =
+            let val (vnames, ctxt) =
+                      Proof_Context.add_fixes
+                        (map (fn (name,typ) => (Binding.name name, SOME typ, NoSyn)) vs)
+                        ctxt
+                val X = subst_bounds (map Free (vnames ~~ map snd vs), X)
+             in (ctxt, (rev vs, rev hs), X)
+            end
+   in dest ([],[])
+  end
+
 (*** COMMANDS ***)
 
 (** INTRO **)
@@ -897,6 +948,14 @@ val INTRO' = INTRO'' (fn (st, foc) =>
           #> pair (#params foc |> map ( apsnd Thm.typ_of_cterm )))
    |> pair st
   end )
+
+fun TRANSPARENT_INTRO' (origin as (ctxt, HHF (st, _) :: _)) =
+      if Config.get ctxt transparent_intro andalso
+         has_prems_universal_vars (fst (Logic.dest_implies (Thm.prop_of st)))
+      then INTRO' SINGLE_GOAL NONE origin
+      else origin
+  | TRANSPARENT_INTRO' _ = raise BROKEN_INVARIANT
+
 
 fun raw_apply report tac timeout (ctxt, HHF (st, facts) :: L) =
     ( case (case timeout
@@ -1055,6 +1114,8 @@ fun TRY_STANDARD SK =
 val INTRO = timed_OPR 2 oo INTRO'
 val INTRO_CMD = OPT_VARS >> (timed_OPR 2 o INTRO' SINGLE_GOAL)
 val INTRO_ALL_CMD = OPT_VARS >> (timed_OPR 2 o INTRO' ALL_SUBGOALS)
+val TRANSPARENT_INTRO = OPR TRANSPARENT_INTRO'
+
 
 local
 (*
@@ -1649,7 +1710,9 @@ fun gen_HAVE' mkG shows (ctxt0, HHF (st,items) :: S) =
   | gen_HAVE' _ _ _ = raise BROKEN_INVARIANT
 
 fun gen_HAVE mkspec fixes assumes shows =
-  timed_OPR 8 (fn (ctxt, SK) =>
+  timed_OPR 8 (
+     TRANSPARENT_INTRO'
+  #> (fn (ctxt, SK) =>
     let val delta = fold (fn ((B,_),_) => fn N =>
                             if Binding.is_empty B then (N+1) else N
                          ) shows 0
@@ -1664,7 +1727,7 @@ fun gen_HAVE mkspec fixes assumes shows =
      in gen_HAVE' (mkspec false "" NONE (K I) Binding.empty_atts []
                   [Element.Fixes fixes, Element.Assumes assumes] (Element.Shows shows) false)
                   shows' (ctxt', SK)
-    end )
+    end ))
 
 val HAVE   = gen_HAVE Specification.schematic_theorem_cmd
 val HAVE'' = gen_HAVE Specification.schematic_theorem
@@ -1718,7 +1781,7 @@ fun mk_consider_rule ctxt DNF_SPEC =
    |> singleton (Variable.export ctxt' ctxt))
   end
 
-fun CONSIDER' raw_dnf (ctxt0, HHF (st0, items0) :: S) =
+fun CONSIDER'i raw_dnf (ctxt0, HHF (st0, items0) :: S) =
   let fun parse (raw_decls, (raw_fixes, raw_prems, raw_statements)) ctxt =
         let val raw_props = map snd raw_statements
       
@@ -1830,7 +1893,9 @@ fun CONSIDER' raw_dnf (ctxt0, HHF (st0, items0) :: S) =
        :: ENDBLK (case conj_clauses of [_] => T_END | _ => T_NXT)
        :: MAGIC (CB true subgoals conj_clauses, PRT0 subgoals, NO_PARAM) :: S)
   end
-  | CONSIDER' _ _ = raise BROKEN_INVARIANT
+  | CONSIDER'i _ _ = raise BROKEN_INVARIANT
+
+fun CONSIDER' raw_dnf = CONSIDER'i raw_dnf o TRANSPARENT_INTRO'
 
 val structured_statement =
   Parse_Spec.statement -- Parse_Spec.if_statement' -- Parse.for_fixes
@@ -2155,8 +2220,12 @@ fun pretty_tree0 _ (BUNDL (_,[])) =
       Pretty.keyword1 "All goals are solved!"
   | pretty_tree0 ctxt tree =
   let open Pretty
-      val prt_typ = Syntax.pretty_typ ctxt
-      val prt_term= Syntax.pretty_term ctxt
+      val prt_typ  = Syntax.pretty_typ ctxt
+      val prt_term = Syntax.pretty_term ctxt
+      val prt_prop =
+        if Config.get ctxt transparent_intro
+        then strip_prems_universal_vars ctxt
+        else fn tm => (ctxt, ([],[]), tm)
 
       val name = str o simp_name
       fun pretty_items (vars0, facts0) =
@@ -2171,11 +2240,14 @@ fun pretty_tree0 _ (BUNDL (_,[])) =
                 ) facts
         end
       fun pretty prefix (PROP (items, term)) =
-            if items = empty_items andalso null prefix
-            then prt_term term
-            else chunks ( keyword1 (String.concat prefix ^ "goal")
-                       :: item [prt_term term]
-                       :: pretty_items items )
+          let val (ctxt, items', term) = prt_prop term
+              val items = cat_items items' items
+           in if items = empty_items andalso null prefix
+              then Syntax.pretty_term ctxt term
+              else chunks ( keyword1 (String.concat prefix ^ "goal")
+                         :: item [Syntax.pretty_term ctxt term]
+                         :: pretty_items items )
+          end
         | pretty prefix (BUNDL (items, children)) =
               chunks ( keyword1 (String.concat prefix ^ 
                                 (case children
@@ -2189,7 +2261,7 @@ fun pretty_tree0 _ (BUNDL (_,[])) =
   end
 
 fun pretty_tree ctxt tree = tree
-      |> Config.get ctxt atomize_goals ? atomize_tree ctxt
+      |> (Config.get ctxt atomize_goals orelse Config.get ctxt transparent_intro) ? atomize_tree ctxt
       |> pretty_tree0 ctxt
 
 (* fun pretty_tree (POPL ) *)

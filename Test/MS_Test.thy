@@ -3,6 +3,7 @@ theory MS_Test
 begin
 
 declare [[working_mode = STRICT]]
+declare [[transparent_intro]]
 
 lemma \<open>rev (rev l) = l\<close>
   by (min_script \<open>END\<close>)
@@ -18,7 +19,7 @@ lemma
 lemma        
   \<open> \<And>a. A \<and> B \<Longrightarrow> \<forall>x. P x \<Longrightarrow> P a \<and> A\<close>
   by (min_script \<open>
-    INTRO
+    PRINT
     HAVE A and "A" "P x" and A if "B" for x
       NEXT
       NEXT
@@ -30,16 +31,13 @@ lemma
 lemma  
   \<open> \<And>a y. A \<and> B \<Longrightarrow> \<forall>x. P x \<Longrightarrow> P a \<and> A\<close>
   by (min_script \<open>
-    INTRO CRUSH
     HAVE A END
-    HAMMER
-    NEXT
     END
 \<close>)
 
 lemma  
   \<open> \<And>a. A \<and> B \<Longrightarrow> \<forall>x. P x \<Longrightarrow> P a \<and> B\<close>
-  by (min_script \<open>INTRO RULE NEXT END\<close>)
+  by (min_script \<open>RULE NEXT END\<close>)
             
 lemma         
   \<open> A \<and> B \<Longrightarrow> \<forall>x. P x \<Longrightarrow> P y \<and> B\<close>
@@ -61,7 +59,6 @@ lemma
 lemma  
   \<open> \<And>y. A \<and> B \<Longrightarrow> \<forall>x. P x \<Longrightarrow> P y \<and> B\<close>
   by (min_script \<open> 
-  INTRO
   CONSIDER x :: int and z :: nat where "0 < x" and c: "2 < z" and "1 < x" PRINT end PRINT end\<close>)
    
 lemma
@@ -91,11 +88,6 @@ lemma \<comment> \<open>Meta and Object-level \<open>\<forall>, \<and>\<close> a
 
 
 
-lemma
-  \<open> \<forall>y. A \<and> B \<longrightarrow> (\<forall>x. P x) \<longrightarrow> P y \<and> B\<close>
-  by (min_script \<open>
-    
-\<close>)
 
 
 
@@ -106,17 +98,10 @@ lemma
 
 
 
-
-
-
-
-
-
-  
+   
   theorem sqrt2_not_rational:
     "sqrt 2 \<notin> \<rat>"
   by (min_script \<open>
-    INTRO
     CONSIDER m n :: nat where "\<bar>sqrt 2\<bar> = m / n" and "coprime m n" END
     HAVE "m^2 = (sqrt 2)^2 * n^2" END
     HAVE "m^2 = 2 * n^2" 
@@ -445,8 +430,6 @@ lemma
   \<open>A \<Longrightarrow> B \<Longrightarrow> A \<and> B\<close>
   by (min_script \<open>
   RULE
-  PRINT
-  INTRO
   PRINT
   NEXT
   PRINT
