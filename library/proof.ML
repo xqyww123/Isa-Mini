@@ -204,6 +204,7 @@ fun assm_name i = assm_N ^ string_of_int i
 val atomize_goals = Attrib.setup_config_bool \<^binding>\<open>min_shell_atomize_goals\<close> (K true)
 val working_mode = Attrib.setup_config_string \<^binding>\<open>working_mode\<close> (K "RELAXED")
 val transparent_intro = Attrib.setup_config_bool \<^binding>\<open>transparent_intro\<close> (K false)
+val high_auto_mode = Attrib.setup_config_bool \<^binding>\<open>high_auto_mode\<close> (K false)
 
 type variables = (string * typ) list
 type local_facts = (string * term list) list
@@ -1337,6 +1338,10 @@ fun CASES' diff ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, items0
                        | _ => error "BUG 0ejOD0qNRfaTJCrbK7lH3w")
             else fst (Logic.dest_implies (Thm.prop_of st00))
 
+       (*TODO: consider the
+            `Conv.gconv_rule (Simplifier.full_rewrite (ctxt addsimps simp_thms)) 1 goalx`
+          in case of the high_auto_mode.
+          We need a preplay to get the shape of the goals.*)
        val siblings = map (fn (_, kase as Rule_Cases.Case {fixes, binds, ...}) =>
               let val (asms, ctxt) = Proof_Context.apply_case kase ctxt
                in PROP ((map (apfst Binding.name_of) fixes, asms), goal_term_of ctxt binds)
@@ -1436,8 +1441,22 @@ fun CASES' diff ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, items0
                ( Proof_Context.note_thms "" ((binding,[]), [(maps snd pairs,[])]) #> snd)
             |> Proof_Context.note_thmss "" (ADDITIONAL_NOTES ctxt tagged @ notes)
            end )
-         |-> (fn thms0 =>
+         |> (fn (thms0, ctxt) =>
         let val thms = map (apfst simp_name) thms0
+            val goalx =
+              if Config.get ctxt high_auto_mode
+              then let
+                   val simp_thms = maps snd thms
+                                |> filter ((
+                                      fn _ $ (Const(\<^const_name>\<open>HOL.eq\<close>, _) $ _ $ _) => true
+                                       | Const(\<^const_name>\<open>Pure.eq\<close>, _) $ _ $ _ => true
+                                       | _ => false
+                                      ) o Thm.concl_of)
+                in if null simp_thms
+                 then goalx
+                 else Conv.gconv_rule (Simplifier.full_rewrite (ctxt addsimps simp_thms)) 1 goalx
+               end
+              else goalx
             val items' = ( map (apfst Binding.name_of) fixes,
                            map (apfst simp_name o apsnd (map Thm.prop_of)) thms )
             val report = get_reporter ()
@@ -1448,13 +1467,13 @@ fun CASES' diff ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, items0
          in report (New_Items items')
           ; report (Consider_Case (Binding.name_of binding))
           ; if null remaining_cases
-         then rpair ( HHF (goalx, items')
+         then (ctxt, ( HHF (goalx, items')
                  :: MAGIC (CB false rule' remaining_cases (tl siblings), PRT, NO_PARAM)
-                 :: SK)
-         else rpair ( HHF (goalx, items')
+                 :: SK))
+         else (ctxt, ( HHF (goalx, items')
                  :: ENDBLK T_NXT
                  :: MAGIC (CB false rule' remaining_cases (tl siblings), PRT, NO_PARAM)
-                 :: SK)
+                 :: SK))
         end )
         end
         end
@@ -1550,7 +1569,7 @@ val INDUCT_CMD = CONTEXTUAL_CMD (fn ctxt =>
          in INDUCT (no_simp, (insts, ((arbitrary, taking), opt_rule))) vars using
         end ))
 
-val CASE_SPLIT = timed_OPR 10 ooo CASE_SPLIT'
+val CASE_SPLIT = timed_OPR 1000 ooo CASE_SPLIT'
 val CASE_SPLIT_CMD = CONTEXTUAL_CMD (fn ctxt =>
          case_synt (Context.Proof ctxt) -- OPT_VARS -- Scan.optional WITH_CLAUSE []
       >> (fn (((no_simp, (insts, opt_rule)), vars), raw_facts) =>
@@ -1564,7 +1583,7 @@ fun CASE_SPLIT'' (args, vars, raw_facts) s =
                  else args @ [Token.eof]
       val (args', _) = case_synt (Context.Proof ctxt) toks
       val facts = Attrib.eval_thms ctxt raw_facts
-   in timed_OPR 10 (CASE_SPLIT' args' vars facts) s
+   in timed_OPR 1000 (CASE_SPLIT' args' vars facts) s
   end
 
 

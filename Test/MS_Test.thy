@@ -1,9 +1,28 @@
 theory MS_Test
-  imports Main Minilang.Minilang HOL.Transcendental HOL.Groups_Big
+  imports Main Minilang.Minilang HOL.Transcendental HOL.Groups_Big "HOL-Library.Sublist"
 begin
 
 declare [[working_mode = STRICT]]
+declare [[high_auto_mode]]
+
+definition \<open>myrev = rev\<close>
+
+lemma \<open>myrev (myrev l) = l\<close>
+  by (min_script \<open>
+  CASE_SPLIT l
+  NEXT
+  END
+\<close>)
+
+theorem prefix_Cons: "prefix xs (y # ys) = (xs = [] \<or> (\<exists>zs. xs = y # zs \<and> prefix zs ys))"
+  by (min_script \<open>
+  CASE_SPLIT xs
+  NEXT
+  END
+\<close>)
+
 declare [[transparent_intro]]
+
 
 lemma \<open>rev (rev l) = l\<close>
   by (min_script \<open>END\<close>)
@@ -457,6 +476,9 @@ lemma \<open>XXX a = XXX (XXX a)\<close>
 
 lemma \<open>XXX a = XXX (XXX a)\<close>
   by (min_script \<open>END WITH XXX_def\<close>)
+
+
+
 
 
 attribute_setup test = \<open>Scan.succeed (Thm.declaration_attribute (K @{print}))\<close>
