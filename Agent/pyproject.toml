@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "IsaMini_Agent"
+version = "0.1.0"
+description = "Isabelle Proof Agent over Minilang"
+readme = "README.md"
+license = "LGPL-2.1-or-later"
+authors = [
+    { name="Qiyuan Xu", email="xqyww123@gmail.com" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+dependencies = ["msgpack"]
+
+[project.urls]
+"Homepage" = "https://github.com/xqyww123/Isa-Mini"
+
+[tool.setuptools.packages.find]
+include = ["Agent", "Agent.*"]
+
+# Include data files in the package
+[tool.setuptools.package-data]
+Agent = [
+    "data/*",
+    "config/*", 
+    "templates/*",
+    "*.json",
+    "*.txt",
+    "*.yml",
+    "*.yaml"
+]
