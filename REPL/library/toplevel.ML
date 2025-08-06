@@ -86,11 +86,6 @@ fun RE cout msgs src s =
       ; s'))
   end
 
-fun chk_END_mode mode =
-      if member (op =) ["RELAXED", "COMPLETE_NEXT", "STRICT"] mode 
-      then ()
-      else raise REPL.REPL_fail "END_mode must be either STRICT, RELAXED or COMPLETE_NEXT"
-
 fun REPL cout cin msgs init_state =
   let open MessagePackBinIO.Unpack MessagePackBinIO.Pack
       fun read packer = let val (ret, cin') = doUnpack packer (!cin)
@@ -135,7 +130,7 @@ fun REPL cout cin msgs init_state =
                     val (timeout, timeout_cmd, src) =
                             read (unpackTuple3 (unpackOption unpackInt, unpackOption unpackInt, unpackString))
                     val timeout = Option.map Time.fromMilliseconds timeout
-                    val c0 = Minilang.context_of (fst (fst s))
+                    val c0 = Minilang.context_of (minlang_of s)
                     val s' = if is_some timeout_cmd
                              then apfst (apfst (Minilang.map_context (
                                     Config.put Minilang.mini_single_cmd_timeout (the timeout_cmd)))) s
@@ -151,7 +146,7 @@ fun REPL cout cin msgs init_state =
                 end
               | "\\END_mode" => let
                     val mode = read unpackString
-                    val _ = chk_END_mode mode
+                    val _ = Minilang.chk_working_mode mode
                  in REPL_Server.output cout packUnit ()
                   ; s
                  |> apfst (apfst (
@@ -202,7 +197,7 @@ fun REPL_App (cin, cout) =
     then \<^try>\<open>let
       val (hasty, END_mode, SH_params) =
               read (unpackTuple3 (unpackBool, unpackString, unpackOption unpackString))
-      val _ = chk_END_mode END_mode
+      val _ = Minilang.chk_working_mode END_mode
       val ps = Toplevel.proof_of is
             |> Proof.map_context (
                   Config.put Printer.show_markup false

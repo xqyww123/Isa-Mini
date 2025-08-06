@@ -1,0 +1,173 @@
+[{
+    "name": "RETRIEVE",
+    "description": "Retrieves facts from the system knowledge-base",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "patterns": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "patterns that the target facts should match",
+            },
+            "negative patterns": {
+				"type": "array",
+				"items": {"type": "string"},
+                "description": "negative patterns that the target facts should NOT match",
+            },
+            "names": {
+				"type": "array",
+				"items": {"type": "string"},
+                "description": "substrings that the names of the target facts should contain",
+            }
+			// TODO: negative names
+        },
+        "required": [],
+    },
+}, {
+    "name": "SIMPLIFY",
+    "description": "Simplify the proof goal",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "rules": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Additional simplification rules to use",
+            }
+        },
+        "required": [],
+    },
+}, {
+    "name": "UNFOLD",
+    "description": "Unfolding definitions.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "target": {
+                "type": "string",
+                "description": "The target constant to unfold",
+            }
+        },
+        "required": ["target"],
+    },
+}, {
+    "name": "CHOOSE",
+    "description": "Instantiate witnesses of existential quantifications in the proof goal.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "inst": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Terms of witnesses to instantiate. The number of the terms must be smaller than the number of the leading existential quantifications in the goal.",
+            }
+        },
+    },
+}, {
+    "name": "RULE",
+    "description": "Reduce the proof goal by applying a reasoning rule",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "rule": {
+                "type": "string",
+                "description": "The reasoning rule to apply. If omitted, the default rule will be taken.",
+            },
+	        "required": ["target"],
+        },
+    },
+}, {
+    "name": "CASE_SPLIT",
+    "description": "Apply structural case analysis over a given term.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "target": {
+                "type": "string",
+                "description": "target term of the case analysis",
+            }
+        },
+        "required": ["target"],
+    },
+}, {
+    "name": "INDUCT",
+    "description": "Apply induction over a given term.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "target": {
+                "type": "string",
+                "description": "target term of the induction",
+            },
+            "arbitrary": {
+				"type": "array",
+				"items": {"type": "string"},
+                "description": "variables to be re-quantified universally in each induction subgoal, allowing them to take different values in different inductive cases, rather than being fixed to a single value throughout the entire induction",
+            },
+            "rule": {
+				"type": "string",
+				"description": "optional induction rule indicating how the induction should work"
+            }
+        },
+        "required": ["target"],
+    },
+}, {
+    "name": "ATP",
+    "description": "Apply Automated Theorem Provers (e.g., SMT solvers) to prove a simple goal.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "lemmas": {
+				"type": "array",
+				"items": {"type": "string"},
+                "description": "additional lemmas that can be helpful for proving the goal",
+            },
+        }
+    },
+}, {
+    "name": "BRANCH",
+    "description": "Conduct case-by-case discussion and split the proof goal into cases",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "cases": {
+				"type": "array",
+				"items": {
+					"type": "array",
+					"items": {"type": "string"},
+	                "description": "conditions in each case",
+				},
+                "description": "The cases that the proof goal is split into. Each case can consist of more than one conditions.",
+            },
+        }
+    },
+}, {
+    "name": "HAVE",
+    "description": "Introduce subgoals",
+    "parameters": {
+        "type": "array",
+        "items": {
+			"type": "string",
+			"description": "the expression of the subgoal proposition",
+        },
+        "description": "subgoals",
+    },
+}, {
+    "name": "OBTAIN",
+    "description": "Extract witnesses from existential statements, e.g., let x be such that P(x)",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "variables": {
+				"type": "array",
+				"items": { "type": "string", },
+                "description": "variable names",
+            },
+            "conditions": {
+				"type": "array",
+				"items": { "type": "string" },
+                "description": "constraints of the variables",
+            }
+        }
+    },
+}]

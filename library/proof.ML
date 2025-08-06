@@ -36,6 +36,8 @@ val transparent_intro : bool Config.T
       2. MiniLang determines the appropriate time to introduce the premises and the variables.
          This time is the moment before command HAVE and CONSIDER happen.*)
 
+val chk_working_mode : string -> unit
+
 (* Operations *)
 
 val INIT : Proof.context -> thm -> state
@@ -126,6 +128,7 @@ val NOTATION_CMD : command
 
 val NXT : opt_var_names -> Sledgehammer.fact_override -> operation
 val NXT_CMD : command
+val END_or_NXT : opt_var_names -> Sledgehammer.fact_override -> operation
 
 val LET   : (term list * term) list -> operation
 val LET'' : (string list * string) list -> operation
@@ -136,6 +139,7 @@ datatype tree = PROP  of items * term (*goal*)
               | BLOCK of tree
 val print_state : state -> tree
 val atomize_tree : Proof.context -> tree -> tree
+val context_of_leading_goal : tree -> items * term (*goal*)
 val PRINT : operation
 val PRINT_CMD : command
 
@@ -205,6 +209,12 @@ val atomize_goals = Attrib.setup_config_bool \<^binding>\<open>min_shell_atomize
 val working_mode = Attrib.setup_config_string \<^binding>\<open>working_mode\<close> (K "RELAXED")
 val transparent_intro = Attrib.setup_config_bool \<^binding>\<open>transparent_intro\<close> (K false)
 val high_auto_mode = Attrib.setup_config_bool \<^binding>\<open>high_auto_mode\<close> (K false)
+
+fun chk_working_mode mode =
+      if member (op =) ["RELAXED", "COMPLETE_NEXT", "STRICT"] mode 
+      then ()
+      else error "working_mode must be either STRICT, RELAXED or COMPLETE_NEXT"
+
 
 type variables = (string * typ) list
 type local_facts = (string * term list) list
@@ -397,8 +407,8 @@ fun atomize_tree ctxt (PROP (items, goal)) = PROP (items, Object_Logic.atomize_t
   | atomize_tree ctxt (BLOCK tree) = BLOCK (atomize_tree ctxt tree)
 
 
-val collect_context =
-  let fun collect V F (PROP  ((V',F'),term)) = (V @ V', F @ F', term)
+val context_of_leading_goal =
+  let fun collect V F (PROP  ((V',F'),term)) = ((V @ V', F @ F'), term)
         | collect V F (BUNDL ((V',F'),chil)) = collect (V @ V') (F @ F') (hd chil)
         | collect V F (BLOCK tree) = collect V F tree
    in collect [] []
@@ -1047,8 +1057,8 @@ fun UNFOLD' prep_thms raw_defs (ctxt, HHF (st, items) :: S) =
 fun UNFOLD_FACT' prep_thms raw_defs fact_names (ctxt, SK as HHF (st, items) :: S) =
   let val defs = prep_thms ctxt raw_defs
       val fact_names = if member (op =) fact_names "*"
-                       then collect_context (print_stack SK)
-                         |> #2
+                       then context_of_leading_goal (print_stack SK)
+                         |> #1 |> #2
                          |> map (#1 #> simp_name)
                        else fact_names
       val facts = map ( Proof_Context.get_thms ctxt
@@ -1495,7 +1505,7 @@ fun INDUCT' (no_simp, (insts, ((arbitrary, taking), opt_rule))) first_vars using
   let val (tamper_facts, tamper_fact') =
         if Config.get ctxt induct_auto_use_facts
         then let
-            val (_, facts, _) = collect_context (print_stack SK)
+            val ((_, facts), _) = context_of_leading_goal (print_stack SK)
             val facts = map (fn (name, _) => (name, Proof_Context.get_thms ctxt name)) facts
             
             val dirty_frees = fold (fold (fn NONE => I
@@ -1569,7 +1579,7 @@ val INDUCT_CMD = CONTEXTUAL_CMD (fn ctxt =>
          in INDUCT (no_simp, (insts, ((arbitrary, taking), opt_rule))) vars using
         end ))
 
-val CASE_SPLIT = timed_OPR 1000 ooo CASE_SPLIT'
+val CASE_SPLIT = timed_OPR 10 ooo CASE_SPLIT'
 val CASE_SPLIT_CMD = CONTEXTUAL_CMD (fn ctxt =>
          case_synt (Context.Proof ctxt) -- OPT_VARS -- Scan.optional WITH_CLAUSE []
       >> (fn (((no_simp, (insts, opt_rule)), vars), raw_facts) =>
@@ -1583,7 +1593,7 @@ fun CASE_SPLIT'' (args, vars, raw_facts) s =
                  else args @ [Token.eof]
       val (args', _) = case_synt (Context.Proof ctxt) toks
       val facts = Attrib.eval_thms ctxt raw_facts
-   in timed_OPR 1000 (CASE_SPLIT' args' vars facts) s
+   in timed_OPR 10 (CASE_SPLIT' args' vars facts) s
   end
 
 
@@ -1820,6 +1830,45 @@ fun CONSIDER'i raw_dnf (ctxt0, HHF (st0, items0) :: S) =
                     Proof_Context.read_stmt (raw_decls @ raw_fixes) (raw_prems @ raw_props) ctxt
             val (decls, fixes) = chop (length raw_decls) vars ||> map #2;
             val (premss, conclss) = chop (length raw_prems) propss;
+
+            val (params_ctxt, decls, conclss) =
+              if Config.get ctxt0 high_auto_mode
+              then let
+                   fun ex_var_of (Const(\<^const_name>\<open>Trueprop\<close>, _) $ X) ret = ex_var_of X ret
+                     | ex_var_of (Const(\<^const_name>\<open>Ex\<close>, _) $ Abs (name,ty,X)) ret
+                          = ex_var_of X ((name,ty) :: ret)
+                     | ex_var_of _ ret = rev ret
+                   val vs = fold (fold ex_var_of) conclss []
+                         |> Variable.variant_frees params_ctxt []
+                in if null vs
+                 then (params_ctxt, decls, conclss)
+                 else let
+                   val (names, params_ctxt) = Variable.add_fixes (map fst vs) params_ctxt
+                   val decls = map2 (fn name => fn (xname, ty) =>
+                                 ((Binding.name xname, SOME ty, NoSyn), (xname, Free (name, ty)))
+                               ) names vs @ decls
+                   val vars = map2 (fn name => fn (_, ty) => Free (name, ty)) names vs
+                   fun sub_one (var::vars) (Const(\<^const_name>\<open>Ex\<close>, _) $ Abs (_, _, X)) =
+                        sub_one vars (Term.subst_bound (var, X))
+                     | sub_one [] (Const(\<^const_name>\<open>Ex\<close>, _) $ _) =
+                        error "CONSIDER'i :: Insuffient vars"
+                     | sub_one vars ((H as Const(\<^const_name>\<open>Trueprop\<close>, _)) $ X) =
+                        let val (vars', X') = sub_one vars X
+                         in (vars', H $ X')
+                        end
+                     | sub_one vars X = (vars, X)
+                   fun subs [] [] = []
+                     | subs _ [] = error "CONSIDER'i :: more vars"
+                     | subs vs (concl :: concls) =
+                        let val (vs', concl') = sub_one vs concl
+                            val concls' = subs vs' concls
+                         in concl' :: concls'
+                        end
+                in (params_ctxt, decls, burrow (subs vars) conclss)
+               end
+               end
+              else (params_ctxt, decls, conclss)
+
             val propss' = (map o map) (Logic.close_prop fixes (flat premss)) conclss
                        |> flat
                        |> map (atomize_term ctxt)
@@ -2089,7 +2138,7 @@ fun NXT' param SH_override ID (origin as stack as (_, HHF (st, _) :: _)) =
    in if no_goal' st'
     then case SK'1
       of HHF s :: ENDBLK T' :: SK' =>
-        ( get_reporter () (Internal (REPLACE_CMD ("END", "END")))
+        ( get_reporter () (Internal (REPLACE_CMD ("NEXT", "NEXT")))
         ; if T' = T_NXT
           then (case SK'
             of MAGIC (CB, PRT, _) :: SK'' =>
@@ -2106,8 +2155,32 @@ fun NXT' param SH_override ID (origin as stack as (_, HHF (st, _) :: _)) =
   end
   | NXT' _ _ _ _ = raise BROKEN_INVARIANT
 
+fun END_or_NXT' param SH_override ID stack =
+  let val ID_BASE = string_of_int ID
+      val (ctxt, SK'1) = HAMMER_i SH_override ID_BASE stack
+                      |> conclude_SK
+      val st' = case SK'1 of HHF (st', _) :: _ => st'
+                           | _ => raise BROKEN_INVARIANT
+   in if no_goal' st'
+    then case SK'1
+      of HHF s :: ENDBLK T' :: SK' =>
+          let val opr = case T' of T_NXT => "NEXT" | T_END => "END"
+           in get_reporter () (Internal (REPLACE_CMD (opr, opr)))
+            ; case (T', SK')
+                of (T_NXT, MAGIC (CB, PRT, _) :: SK'') =>
+                        maintain (ctxt, HHF s :: MAGIC (CB, PRT, param) :: SK'')
+                     |> report_goal
+                 | _ => maintain (ctxt, HHF s :: SK')
+                     |> report_goal
+          end
+       | _ => raise BROKEN_INVARIANT
+    else report_goal (ctxt, SK'1)
+  end
+
+
 fun END SH_override = OPR_ID (END' NO_PARAM SH_override 0)
 fun NXT param SH_override = OPR_ID (NXT' (CASE_NAME param) SH_override)
+fun END_or_NXT param SH_override = OPR_ID (END_or_NXT' (CASE_NAME param) SH_override)
 val END_CMD  = orverride_parser >> END
 val NXT_CMD  = (fn toks => (OPT_VARS -- orverride_parser >> uncurry NXT ) toks)
 

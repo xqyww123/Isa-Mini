@@ -6,12 +6,10 @@ declare [[working_mode = STRICT]]
 declare [[high_auto_mode]]
 
 definition \<open>myrev = rev\<close>
-
+    
 lemma \<open>myrev (myrev l) = l\<close>
   by (min_script \<open>
-  CASE_SPLIT l
-  NEXT
-  END
+  CONSIDER "l = []" | "\<exists>a l'. l = a # l'"
 \<close>)
 
 theorem prefix_Cons: "prefix xs (y # ys) = (xs = [] \<or> (\<exists>zs. xs = y # zs \<and> prefix zs ys))"
