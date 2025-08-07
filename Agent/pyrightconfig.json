@@ -1,0 +1,6 @@
+{
+  "extraPaths": [
+    "./IsaMini_Agent",
+    "."
+  ],
+} 

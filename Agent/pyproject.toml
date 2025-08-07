@@ -21,4 +21,11 @@ dependencies = ["msgpack"]
 "Homepage" = "https://github.com/xqyww123/Isa-Mini"
 
 [tool.setuptools.packages.find]
-include = ["Agent", "Agent.*"]
+include = ["IsaMini_Agent", "IsaMini_Agent.*"]
+
+# Include data files in the package
+[tool.setuptools.package-data]
+IsaMini_Agent = [
+    "prompts/*.md",
+    "prompts/*.json",
+]

@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: IsaMini_Agent
+Version: 0.1.0
+Summary: Isabelle Proof Agent over Minilang
+Author-email: Qiyuan Xu <xqyww123@gmail.com>
+License-Expression: LGPL-2.1-or-later
+Project-URL: Homepage, https://github.com/xqyww123/Isa-Mini
+Classifier: Programming Language :: Python :: 3
+Classifier: Operating System :: OS Independent
+Description-Content-Type: text/markdown
+Requires-Dist: msgpack

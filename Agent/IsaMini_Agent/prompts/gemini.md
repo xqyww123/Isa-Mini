@@ -9,7 +9,7 @@ The operations fall into five sorts:
 1. Reduction operations
 - `SIMPLIFY`, for simplifying proof goals
 - `UNFOLD`, for unfolding definitions
-- `CHOOSE`, for instantiating existential quantifications
+- `WITNESS`, for indicating the witness of existential quantification goals
 - `RULE`, for reducing the proof goal by an indicated reasoning rule
 - `CASE_SPLIT`, for case analysis
 - `INDUCT`, for induction
@@ -203,7 +203,7 @@ GOAL: suffix xs (y # ys) ⟷ xs = y # ys ∨ suffix xs ys
 
 function calling {
 	"name": "UNFOLD",
-	"arguments": ["suffix"]
+	"arguments": {"targets": ["suffix"]}
 } reduces the context to:
 
 TYPE VARIABLES:
@@ -216,8 +216,8 @@ LOCAL FACTS: empty
 GOAL: (∃zs. y # ys = zs @ xs) = (xs = y # ys ∨ (∃zs. ys = zs @ xs))
 ```
 
-### CHOOSE
-`CHOOSE` instantiates witnesses of existential quantifications in the proof goal. For example,
+### WITNESS
+`WITNESS` instantiates witnesses of existential quantifications in the proof goal. For example,
 ```
 Given a proof context:
 TYPE VARIABLES:
@@ -235,8 +235,8 @@ LOCAL FACTS:
 GOAL: ∃xs'. suffix xs' ys ∧ xs = map f xs'
 
 function calling {
-	"name": "CHOOSE",
-	"arguments": ["drop n ys"]
+	"name": "WITNESS",
+	"arguments": {"witnesses": ["drop n ys"]}
 } reduces the context to:
 
 TYPE VARIABLES:
@@ -254,9 +254,9 @@ LOCAL FACTS:
 GOAL: suffix (drop n ys) ys ∧ xs = map f (drop n ys)
 ```
 
-`CHOOSE` is available only when an existential quantification is the leading connective of the goal.
+`WITNESS` is available only when an existential quantification is the leading connective of the goal.
 
-When the goal has more than one existential quantifications, `CHOOSE` accepts corresponding multiple witenesses to instantiate the quantifications in a single call, e.g.,
+When the goal has more than one existential quantifications, `WITNESS` accepts corresponding multiple witenesses to instantiate the quantifications in a single call, e.g.,
 ```
 Given a proof context:
 TYPE VARIABLES: empty
@@ -265,8 +265,8 @@ LOCAL FACTS: empty
 GOAL: ∃n k. 7 = 3 * n + k
 
 function calling {
-	"name": "CHOOSE",
-	"arguments": ["2", "1"]
+	"name": "WITNESS",
+	"arguments": {"witnesses": ["2", "1"]}
 } reduces the context to:
 
 TYPE VARIABLES: empty
@@ -357,7 +357,7 @@ GOAL: prefix xs (y # ys) = (xs = [] ∨ (∃zs. xs = y # zs ∧ prefix zs ys))
 
 function calling {
 	"name": "CASE_SPLIT",
-	"arguments": ["xs"]
+	"arguments": {"target": ["xs"]}
 } generates two sub goals.
 
 The first subgoal is:
@@ -708,4 +708,8 @@ LOCAL FACTS:
 GOAL: prefix (rev xs) (rev ys)
 ```
 
+### ROLLBACK
+`ROLLBACK` rollbacks the proof state back to a previous state, so that you can revise and reapply previous proof operations.
+Specifically, each proof state is assigned with an index and each operation application increases the index by one.
 
+## Now Let's Start the Proof Task

@@ -3,40 +3,163 @@ import IsaREPL as REPL
 import socket
 import threading
 import logging
+import os
+#from . import driver
+import driver
+import sys
 
-from google import genai
-from google.genai import types
+class ColorFormatter(logging.Formatter):
+    COLORS = {
+        'DEBUG': '\033[94m',    # Blue
+        'INFO': '\033[92m',     # Green
+        'WARNING': '\033[93m',  # Yellow
+        'ERROR': '\033[91m',    # Red
+        'CRITICAL': '\033[95m', # Magenta
+    }
+    RESET = '\033[0m'
+
+    def format(self, record):
+        color = self.COLORS.get(record.levelname, self.RESET)
+        message = super().format(record)
+        return f"{color}{message}{self.RESET}"
 
 class Agent:
-    VERSION = '0.1.0'
-    def __init__(self, socket):
+    class Cancel(Exception):
+        pass
+
+    API_VERSION = '0.1'
+
+    def __init__(self, socket, logger=None):
         """
         @param socket: the socket towards Isabelle MiniLang Agent.
         """
+        self.logger = logger
         self.sock = socket
         self.cout = self.sock.makefile('wb')
         self.cin = self.sock.makefile('rb', buffering=0)
         self.unpack = mp.Unpacker(self.cin)
 
-        mp.pack(Agent.VERSION, self.cout)
+        mp.pack(Agent.API_VERSION, self.cout)
         self.cout.flush()
+        driver_name, banner = REPL.Client._parse_control_(self.unpack.unpack())
+        banner = REPL.Client.pretty_unicode(banner)
+        if self.logger:
+            self.logger.debug(f"Driver: {driver_name}, Banner:\n{banner}")
 
+        if driver_name == '':
+            driver_name = 'Gemini'
+        self.driver = driver.proof_chat(driver_name)(banner)
+    
+    def run(self):
+        def pack(name, args):
+            match name:
+                case 'ATP':
+                    return args.get('lemmas', [])
+                case 'RETRIEVE':
+                    return (args.get('patterns', []), args.get('negative patterns', []), args.get('names', []))
+                case 'SIMPLIFY':
+                    return args.get('rules', [])
+                case 'UNFOLD':
+                    return args.get('targets', [])
+                case 'WITNESS':
+                    return args.get('witnesses', [])
+                case 'RULE':
+                    return args.get('rule', None) or []
+                case 'CASE_SPLIT':
+                    return (args.get('target', ''), args.get('rule', None))
+                case 'INDUCT':
+                    return (args.get('target', ''), args.get('arbitrary', []), args.get('rule', None))
+                case 'BRANCH':
+                    return args.get('cases', [])
+                case 'HAVE':
+                    return args.get('subgoals', [])
+                case 'OBTAIN':
+                    return (args.get('variables', []), args.get('conditions', []))
+                case 'ROLLBACK':
+                    return args.get('step', 0)
+                case _:
+                    raise Exception(f"Unknown operation: {name}")
+        def opr(name, args):
+            if self.logger:
+                self.logger.debug(f"Call {name}:\n{args}")
+            mp.pack((name, pack(name, args)), self.cout)
+            self.cout.flush()
+            try:
+                state, response = REPL.Client._parse_control_(self.unpack.unpack())
+                response = REPL.Client.pretty_unicode(response)
+                if state == 2:
+                    raise Agent.Cancel
+                is_proved = state == 1
+            except REPL.REPLFail as e:
+                is_proved = False
+                response = 'Operation failed.\n\n' + str(e)
+            if self.logger:
+                self.logger.debug(f"Response:\n{response}")
+            return is_proved, response
+        self.driver.run(opr)
 
 
 class Manager:
-    def __init__(self, addr):
+    def __init__(self, addr, log_file=None):
         """
         Initialize the TCP server manager.
         
         Args:
             addr: String in format "host:port" for the server to bind to
+            log_file: Optional path to log file. If provided, logs will be written to this file.
         """
         self.host, port_str = addr.split(':')
         self.port = int(port_str)
         self.socket = None
         self.running = False
-        self.clients = []
+        self.clients = {}
+        self.log_file = log_file
+        
+        # Configure logging
         self.logger = logging.getLogger(__name__)
+        if log_file:
+            file_handler = logging.FileHandler(log_file)
+            #file_handler.setLevel(logging.DEBUG)
+            formatter = logging.Formatter(
+                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            )
+            file_handler.setFormatter(formatter)
+            
+            # Add handler to logger
+            self.logger.addHandler(file_handler)
+        else:
+            stream_handler = logging.StreamHandler(sys.stderr)
+            #stream_handler.setLevel(logging.DEBUG)
+            color_formatter = ColorFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            stream_handler.setFormatter(color_formatter)
+            self.logger.addHandler(stream_handler)
+        self.logger.setLevel(logging.DEBUG)
+        
+    def handle_client(self, client_socket, client_addr):
+        """Handle a client connection."""
+        #try:
+        agent = Agent(client_socket, self.logger)
+        self.clients[client_addr] = agent
+        agent.run()
+        #except Exception as e:
+        #    self.logger.error(f"Error handling client: {e}")
+        #finally:
+        #    try:
+        #        client_socket.close()
+        #    except:
+        #        pass
+        #    if client_addr in self.clients:
+        #        del self.clients[client_addr]
+                
+    def stop_server(self):
+        """Stop the TCP server."""
+        self.running = False
+        if self.socket:
+            try:
+                self.socket.close()
+            except:
+                pass
+        self.logger.info("Server stopped")
         
     def start_server(self):
         """Start the TCP server and begin accepting connections."""
@@ -48,6 +171,7 @@ class Manager:
             self.running = True
             
             self.logger.info(f"TCP Server started on {self.host}:{self.port}")
+            print('OK')
             
             while self.running:
                 try:
@@ -68,119 +192,24 @@ class Manager:
                         
         except Exception as e:
             self.logger.error(f"Failed to start server: {e}")
-            
-    def handle_client(self, client_socket, client_addr):
-        """Handle individual client connections."""
-        self.clients.append(client_socket)
-        
-        try:
-            while self.running:
-                # Receive data from client
-                data = client_socket.recv(4096)
-                if not data:
-                    break
-                    
-                try:
-                    # Unpack msgpack data
-                    message = mp.unpackb(data, raw=False)
-                    self.logger.info(f"Received from {client_addr}: {message}")
-                    
-                    # Process the message
-                    response = self.process_message(message)
-                    
-                    # Send response back to client
-                    if response:
-                        packed_response = mp.packb(response)
-                        client_socket.send(packed_response)
-                        
-                except mp.exceptions.ExtraData:
-                    self.logger.error("Invalid msgpack data received")
-                except Exception as e:
-                    self.logger.error(f"Error processing message: {e}")
-                    
-        except Exception as e:
-            self.logger.error(f"Error handling client {client_addr}: {e}")
-        finally:
-            self.clients.remove(client_socket)
-            client_socket.close()
-            self.logger.info(f"Client {client_addr} disconnected")
-            
-    def process_message(self, message):
-        """
-        Process incoming messages and return appropriate responses.
-        
-        Args:
-            message: Unpacked message from client
-            
-        Returns:
-            Response to send back to client
-        """
-        # Basic message processing - can be extended based on requirements
-        if isinstance(message, dict):
-            command = message.get('command')
-            
-            if command == 'ping':
-                return {'status': 'pong', 'version': Agent.VERSION}
-            elif command == 'info':
-                return {
-                    'status': 'ok',
-                    'server_info': {
-                        'version': Agent.VERSION,
-                        'host': self.host,
-                        'port': self.port,
-                        'connected_clients': len(self.clients)
-                    }
-                }
-            elif command == 'repl':
-                # Handle REPL commands if needed
-                repl_command = message.get('data')
-                if repl_command:
-                    # Process with IsaREPL - this would need to be implemented
-                    # based on your IsaREPL module's interface
-                    return {'status': 'repl_response', 'data': f"Processed: {repl_command}"}
-            else:
-                return {'status': 'error', 'message': f'Unknown command: {command}'}
-        else:
-            return {'status': 'error', 'message': 'Invalid message format'}
-            
-    def broadcast_message(self, message):
-        """Broadcast a message to all connected clients."""
-        packed_message = mp.packb(message)
-        disconnected_clients = []
-        
-        for client in self.clients:
-            try:
-                client.send(packed_message)
-            except socket.error:
-                disconnected_clients.append(client)
-                
-        # Remove disconnected clients
-        for client in disconnected_clients:
-            if client in self.clients:
-                self.clients.remove(client)
-                client.close()
-                
-    def stop_server(self):
-        """Stop the TCP server and close all connections."""
-        self.running = False
-        
-        # Close all client connections
-        for client in self.clients:
-            client.close()
-        self.clients.clear()
-        
-        # Close server socket
-        if self.socket:
-            self.socket.close()
-            
-        self.logger.info("TCP Server stopped")
 
 # Example usage
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+    import sys
+
+    if len(sys.argv) > 1:
+        addr = sys.argv[1]
+    else:
+        addr = 'localhost:2357'
     
+    # Check for log file argument
+    log_file = None
+    if len(sys.argv) > 2:
+        log_file = sys.argv[2]
+
     # Create and start the server
-    server = Manager('localhost:8080')
+    server = Manager(addr, log_file)
     
     try:
         server.start_server()

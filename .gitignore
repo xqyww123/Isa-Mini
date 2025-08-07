@@ -23,3 +23,5 @@ IsaMini.egg-info
 dist
 /Agent/secret.sh
 /doc/Docs/.obsidian
+__pycache__
+.vscode
