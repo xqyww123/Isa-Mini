@@ -22,14 +22,16 @@ type icmd = (term, thm, Facts.ref * Token.src list) command
 val check_command : Proof.context -> xcmd -> icmd
 
 val interpret' : icmd -> Minilang.state -> (unit -> string list) option * Minilang.state
+val interpret'' : xcmd -> Minilang.state -> (unit -> string list) option * Minilang.state
+val replay_proof : xcmd list -> Minilang.state -> Minilang.state
 
 type opr_records = {
     accumulative: xcmd list,
     effective: xcmd list
   }
-type state = (Minilang.state * opr_records) * (Minilang.state * opr_records) Inttab.table
-
-val interpret : xcmd -> state -> (unit -> string list) * state
+type state = (Minilang.state * opr_records)
+           * (Minilang.state * opr_records) Inttab.table
+           * Minilang.message list Unsynchronized.ref
 
 val step_of : state -> int
 val context_of : state -> Proof.context
@@ -41,7 +43,8 @@ val init : context_state -> state
 val conclude : Proof.context -> state -> thm
 
 val proof_of : state -> xcmd list
-val replay_proof : xcmd list -> Minilang.state -> Minilang.state
+
+val interpret : xcmd -> state -> (unit -> string list) * state
 
 end
 
@@ -72,7 +75,10 @@ type opr_records = {
     accumulative: xcmd list,
     effective: xcmd list
   }
-type state = (Minilang.state * opr_records) * (Minilang.state * opr_records) Inttab.table
+
+type state = (Minilang.state * opr_records)
+           * (Minilang.state * opr_records) Inttab.table
+           * Minilang.message list Unsynchronized.ref
 
 val string_of_term = REPL.trim_makrup oo Syntax.string_of_term
 val string_of_thm  = REPL.trim_makrup oo Thm.string_of_thm
@@ -94,7 +100,8 @@ fun read_thms ctxt src =
   end
 
 fun read_terms_w_var ctxt terms =
-  let val terms' = Syntax.read_terms ctxt terms
+  let val ctxt = Proof_Context.set_mode Proof_Context.mode_pattern ctxt
+      val terms' = Syntax.read_terms ctxt terms
       val ctxt' = fold Proof_Context.augment terms' ctxt
    in Variable.export_terms ctxt' ctxt terms'
   end
@@ -131,6 +138,22 @@ fun check_command ctxt (RETRIEVE (patterns, neg_pats, names)) =
   | check_command _ (ROLLBACK i) = ROLLBACK i
 end
 
+fun find_def ctxt name =
+  let fun mkname suffix [th] =
+               [(Facts.Named ((name ^ suffix, Position.none), NONE), th)]
+        | mkname suffix ths  = map_index (fn (i,th) =>
+                (Facts.Named ((name ^ "(" ^ string_of_int i ^ ")" ^ suffix, Position.none), NONE), th)) ths
+   in case Proof_Context.lookup_fact ctxt (name ^ ".simps")
+   of SOME facts => SOME (mkname ".simps" (#thms facts))
+    | NONE => (
+      case Proof_Context.lookup_fact ctxt (name ^ "_def")
+   of SOME facts => SOME (mkname "_def" (#thms facts))
+    | NONE => NONE )
+  end
+
+fun find_def_const ctxt (Const (name, _)) = find_def ctxt name
+  | find_def_const _ _ = NONE
+
 fun interpret' (RETRIEVE (patterns, neg_pats, names)) (s:Minilang.state) =
       let open Find_Theorems
           val ctxt = Minilang.context_of s
@@ -139,26 +162,42 @@ fun interpret' (RETRIEVE (patterns, neg_pats, names)) (s:Minilang.state) =
             @ map (fn tm => (false, Pattern tm)) neg_pats
             @ map (fn tm => (true , Name tm)) names
           val (SOME num, thms) = Find_Theorems.find_theorems ctxt NONE QUERY_RET_LIMIT true criteria
+
+          fun augment_def const =
+              case find_def_const ctxt const
+                of SOME defs => (num + length defs, defs @ thms)
+                 | NONE => (num, thms)
+          val (num, thms) =
+              case (patterns, neg_pats, names)
+                of ([tm], _, _) => augment_def tm
+                 | _ => (num, thms)
+
+          fun print_iv [Facts.Single i] = "(" ^ string_of_int i ^ ")"
+            | print_iv _ = ""
+          fun print_name ((name,_), NONE) = name
+            | print_name ((name,_), SOME iv) = name ^ print_iv iv
+            
           fun print () =
-            let
-             in (if num > length thms
+                (if num > length thms
                  then [string_of_int num, " facts matches. The frist ", string_of_int (length thms),
                        " facts are retrieved:\n"]
                  else ["Retrieved ", string_of_int num, " facts:\n"])
-              @ map (fn (_,th) => "- " ^ string_of_thm ctxt th ^ "\n") thms
-            end
+              @ map (fn (Facts.Named named, th) =>
+                            "- " ^ print_name named ^ ": " ^ string_of_thm ctxt th ^ "\n"
+                      | (Facts.Fact tm, _) =>
+                            "- \<open>" ^ REPL.trim_makrup tm ^ "\<close>" ) thms
        in (SOME print, s)
       end
-  | interpret' (SIMPLIFY simp_thms) s =
+  | interpret' (SIMPLIFY simp_thms) s = (
       (NONE, Minilang.SIMP'' (map (pair true) simp_thms) s)
+      handle Minilang.OPR_FAIL (PROOF_FAIL, _) =>
+        raise Minilang.OPR_FAIL (PROOF_FAIL,
+            "Cannot further simplify the goal. You should either apply other operation (e.g., ATP)\
+            \ or supply more simplification rules if you believe you should apply SIMPLIFY.") )
   | interpret' (UNFOLD origin_consts) s =
       let val ctxt = Minilang.context_of s
           val consts = map (Syntax.read_term ctxt) origin_consts
-          val defs = map (
-                fn Const(name, _) => Proof_Context.lookup_fact ctxt name
-                                  |> Option.map #thms
-                 | _ => NONE
-              ) consts
+          val defs = map (Option.map (map snd) o find_def_const ctxt) consts
           val not_found = map_filter (fn (NONE, tm) => SOME tm
                                        | _ => NONE
                                      ) (defs ~~ origin_consts)
@@ -169,10 +208,10 @@ fun interpret' (RETRIEVE (patterns, neg_pats, names)) (s:Minilang.state) =
                case not_found
                  of [x] => error (String.concat [
                             "The definition of ", x, " is not found.\n\
-                            \You may use RETRIEVE command to look for the definition and apply SIMP to unfold."])
+                            \You may use RETRIEVE command to look for the definition and apply SIMPIFY to unfold."])
                   |  _  => error (String.concat [
                             "The definitions of ", String.concatWith ", " not_found, " are not found.\n\
-                            \You may use RETRIEVE command to look for the definitions and apply SIMP to unfold."]))
+                            \You may use RETRIEVE command to look for the definitions and apply SIMPIFY to unfold."]))
        in (print, Minilang.UNFOLD (flat (map_filter I defs)) s)
       end
   | interpret' (WITNESS terms) s = (NONE, Minilang.CHOOSE terms s)
@@ -202,48 +241,17 @@ fun interpret' (RETRIEVE (patterns, neg_pats, names)) (s:Minilang.state) =
       end
   | interpret' (ROLLBACK _) _ =
       error "Cannot rollback in interpret'"
-      
 
-fun success_print (RETRIEVE _) = (fn () => [])
-  | success_print (SIMPLIFY _) = (fn () => ["Operation SIMPLIFY succeeds.\n"])
-  | success_print (UNFOLD   _) = (fn () => ["Operation UNFOLD succeeds.\n"])
-  | success_print (WITNESS  _) = (fn () => ["Operation WITNESS succeeds.\n"])
-  | success_print (RULE     _) = (fn () => ["Operation RULE succeeds.\n"])
-  | success_print (CASE_SPLIT _) = (fn () => ["Operation CASE_SPLIT succeeds.\n"])
-  | success_print (INDUCT   _) = (fn () => ["Operation INDUCT succeeds.\n"])
-  | success_print (ATP      _) = (fn () => ["Operation ATP succeeds.\n"])
-  | success_print (BRANCH   _) = (fn () => ["Operation BRANCH succeeds.\n"])
-  | success_print (HAVE     _) = (fn () => ["Operation HAVE succeeds.\n"])
-  | success_print (OBTAIN   _) = (fn () => ["Operation OBTAIN succeeds.\n"])
-  | success_print (ROLLBACK _) = (fn () => ["Operation ROLLBACK succeeds.\n"])
+fun interpret'' xcmd s =
+  let val ctxt = Minilang.context_of s
+      val icmd = check_command ctxt xcmd
+   in interpret' icmd s
+  end
 
-fun interpret (ROLLBACK i) ((_, {accumulative, ...}), history) =
-     (case Inttab.lookup history i
-        of SOME (s', {effective, ...}) =>
-              ( success_print (ROLLBACK i),
-                ((s', { accumulative = ROLLBACK i :: accumulative,
-                        effective = effective }),
-                 history) )
-         | NONE =>
-              error (String.concat
-                  ["The proof has not yet reached step ", string_of_int i,
-                   "; cannot rollback to step ", string_of_int i]))
-  | interpret xcmd ((s, {accumulative, effective}), history) =
-     let val i = Inttab.size history
-         val ctxt = Minilang.context_of s
-         val cmd = check_command ctxt xcmd
-         val (p, s') = interpret' cmd s
-         val p = case p of SOME p => p | NONE => success_print cmd
-         val records' = {
-              accumulative = xcmd :: accumulative,
-              effective = xcmd :: effective
-           }
-         val state' = (s', records')
-      in (p, (state', Inttab.update_new (i, state') history))
-     end
+val replay_proof = fold (snd oo interpret'')
 
-fun step_of (_, history) = Inttab.size history
-fun context_of ((s,_), _) = Minilang.context_of s
+fun step_of (_, history, _) = Inttab.size history
+fun context_of ((s,_), _, _) = Minilang.context_of s
 
 fun print_goal' step s =
   if Minilang.is_finished s
@@ -258,13 +266,16 @@ fun print_goal' step s =
    :: (if step = 0
        then "This is the proof goal you need to prove.\n"
        else "Now you need to prove the following subgoal.\n" )
-   :: "TYPE VARIABLES:\n"
+   :: "TYPE VARIABLES:"
+   :: (if null tfrees then " empty" else "") :: "\n"
    :: maps (fn (name, sort) =>
         ["- ", name, " : ", String.concatWith ", " sort, "\n"] ) tfrees
-    @ "VARIABLES:\n"
+    @ "VARIABLES:"
+   :: (if null frees then " empty" else "") :: "\n"
    :: maps (fn (name, ty) =>
         ["- ", name, " : ", string_of_typ ctxt ty, "\n"] ) frees
-    @ "LOCAL FACTS:\n"
+    @ "LOCAL FACTS:"
+   :: (if null facts then " empty" else "") :: "\n"
    :: maps (
         fn (name, [tm]) =>
             ["- ", name, ": ", string_of_term ctxt tm, "\n"]
@@ -276,25 +287,87 @@ fun print_goal' step s =
   end
 
 fun print_goal s = print_goal' (step_of s - 1) (#1 (#1 s))
-fun is_finished ((s,_), _) = Minilang.is_finished s
+fun is_finished ((s,_), _, _) = Minilang.is_finished s
 
 fun init (ctxt, sequent) =
-  let val s = (Minilang.INIT ctxt sequent, {accumulative=[], effective=[]})
-   in (s, Inttab.update_new (0, s) Inttab.empty)
+  let val ctxt = ctxt
+            |> Config.put Minilang.transparent_intro true
+            |> Config.put Minilang.high_auto_mode true
+      val s = (Minilang.INIT ctxt sequent, {accumulative=[], effective=[]})
+      val msgs = Unsynchronized.ref []
+      fun reporter msg = msgs := msg :: !msgs
+   in Minilang.set_reporter reporter
+    ; (s, Inttab.update_new (0, s) Inttab.empty, msgs)
   end
 
-fun conclude initial_ctxt ((s,_),_) = Minilang.conclude initial_ctxt s
+fun conclude initial_ctxt ((s,_),_,_) = Minilang.conclude initial_ctxt s
 
-fun proof_of ((_, {effective, ...}), _) = effective
+fun proof_of ((_, {effective, ...}),_,_) = effective
 
-val replay_proof =
-  let fun replay xcmd s =
-        let val ctxt = Minilang.context_of s
-            val icmd = check_command ctxt xcmd
-         in interpret' icmd s
-         |> snd
-        end
-   in fold replay
-  end
+fun success_print (RETRIEVE _) = (fn () => [])
+  | success_print (SIMPLIFY _) = (fn () => ["Operation SIMPLIFY succeeds.\n"])
+  | success_print (UNFOLD   _) = (fn () => ["Operation UNFOLD succeeds.\n"])
+  | success_print (WITNESS  _) = (fn () => ["Operation WITNESS succeeds.\n"])
+  | success_print (RULE     _) = (fn () => ["Operation RULE succeeds.\n"])
+  | success_print (CASE_SPLIT _) = (fn () => ["Operation CASE_SPLIT succeeds.\n"])
+  | success_print (INDUCT   _) = (fn () => ["Operation INDUCT succeeds.\n"])
+  | success_print (ATP      _) = (fn () => ["Operation ATP succeeds.\n"])
+  | success_print (BRANCH   _) = (fn () => ["Operation BRANCH succeeds.\n"])
+  | success_print (HAVE     _) = (fn () => ["Operation HAVE succeeds.\n"])
+  | success_print (OBTAIN   _) = (fn () => ["Operation OBTAIN succeeds.\n"])
+  | success_print (ROLLBACK i) = (fn () =>
+      ["Succefully rollback to step " ^ string_of_int i ^ ".\n"])
+
+fun interpret (ROLLBACK i) ((_, {accumulative, ...}), history, msgs) =
+     (case Inttab.lookup history i
+        of SOME (s', {effective, ...}) =>
+              ( success_print (ROLLBACK i),
+                ((s', { accumulative = ROLLBACK i :: accumulative,
+                        effective = effective }),
+                 history,
+                 msgs) )
+         | NONE =>
+              error (String.concat
+                  ["The proof has not yet reached step ", string_of_int i,
+                   "; cannot rollback to step ", string_of_int i]))
+  | interpret (xcmd as RETRIEVE _) (s, history, msgs) =
+     let val (SOME p, _) = interpret'' xcmd (#1 s)
+      in (p, (s, history, msgs))
+     end
+  | interpret xcmd ((s, {accumulative, effective}), history, msgs) =
+     let val i = Inttab.size history
+         val ctxt = Minilang.context_of s
+         val (p, s') = interpret'' xcmd s
+
+         val records' = {
+              accumulative = xcmd :: accumulative,
+              effective = xcmd :: effective
+           }
+         val state' = (s', records')
+
+         val the_msgs = !msgs
+         val _ = msgs := []
+
+         val state' = (state', Inttab.update_new (i, state') history, msgs)
+
+         fun print () =
+            let val p = case p of SOME p => p | NONE => success_print xcmd
+                val ret = p ()
+                fun prt_msg (Minilang.Goals (SOME goals)) =
+                      if length goals <= 1
+                      then []
+                      else "The operation derives " :: string_of_int (length goals)
+                        :: " subgoals:\n"
+                        :: maps (fn goal => ["- " ^ string_of_term ctxt goal ^ "\n"] ) goals
+                         @ ["\n"]
+                  | prt_msg _ = []
+                val msg_ret = maps prt_msg the_msgs
+             in ret
+              @ "\n" :: msg_ret
+              @ print_goal state'
+            end
+
+      in (print, state')
+     end
 
 end

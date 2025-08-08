@@ -16,3 +16,7 @@ session Minilang_REPL in REPL = Minilang +
     Isa_REPL
   theories
     Minilang_Top
+
+session Minilang_Agent in Agent = Minilang +
+  sessions
+    Isa_REPL

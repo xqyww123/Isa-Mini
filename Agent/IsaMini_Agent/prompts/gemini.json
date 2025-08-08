@@ -1,6 +1,6 @@
 [{
     "name": "ATP",
-    "description": "Apply Automated Theorem Provers (e.g., SMT solvers) to prove a simple goal.",
+    "description": "Apply Automated Theorem Provers to prove a simple goal.",
     "parameters": {
         "type": "object",
         "properties": {
@@ -9,7 +9,8 @@
 				"items": {"type": "string"},
                 "description": "additional lemmas that can be helpful for proving the goal"
             }
-        }
+        },
+        "required": []
     }
 }, {
     "name": "RETRIEVE",
@@ -188,6 +189,7 @@
                 "type": "integer",
                 "description": "the step number that you expect to rollback"
             }
-        }
+        },
+        "required": ["step"]
     }
 }]

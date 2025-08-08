@@ -21,7 +21,7 @@ val unpacker =
      | "SIMPLIFY" => apfst SIMPLIFY o unpackList unpackString
      | "UNFOLD"   => apfst UNFOLD   o unpackList unpackString
      | "WITNESS"  => apfst WITNESS  o unpackList unpackString
-     | "RULE"     => apfst UNFOLD   o unpackList unpackString
+     | "RULE"     => apfst RULE     o unpackList unpackString
      | "CASE_SPLIT" => apfst CASE_SPLIT o unpackPair (unpackString, unpackOption unpackString)
      | "INDUCT"   => apfst INDUCT   o unpackTuple3 (
                         unpackString,

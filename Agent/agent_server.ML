@@ -36,38 +36,25 @@ fun REPL {driver, step_limit} cin cout proof_state =
                          in cin := cin'
                           ; ret
                         end
-      val msgs = Unsynchronized.ref []
+
       val continue = Unsynchronized.ref true
 
       val step = Unsynchronized.ref 0
       exception Step_Limit_Exceed
-
-      fun reporter msg = msgs := msg :: !msgs
 
       fun iteration s =
         let val cmd = read unpacker
             val _ = step := !step + 1
             val _ = if !step > step_limit then raise Step_Limit_Exceed else ()
 
-            val ctxt = context_of s
             val (printer, s') = interpret cmd s
             val ret = printer ()
 
-            fun prt (Minilang.Goals (SOME goals)) =
-                  if length goals <= 1
-                  then []
-                  else "The operation derives " :: string_of_int (length goals) :: " subgoals:\n"
-                    :: maps (fn goal => ["- " ^ Syntax.string_of_term ctxt goal ^ "\n"] ) goals
-                     @ ["\n"]
-              | prt _ = []
-            val msg_ret = maps prt (!msgs)
-            val _ = msgs := []
-
-            val ret = ret @ "\n" :: msg_ret @ print_goal s'
             val finished = is_finished s'
             val status = if finished then 1 else 0
          in REPL_Server.output cout (packPair (packInt, packString))
                                     (status, String.concat ret)
+          ; BinIO.StreamIO.flushOut cout
           ; continue := not finished
           ; s'
         end
@@ -85,8 +72,7 @@ fun REPL {driver, step_limit} cin cout proof_state =
                          ^ ", but " ^ version ^ "is given.")
       val initial_printing = String.concat (print_goal init_state)
 
-   in Minilang.set_reporter reporter
-    ; REPL_Server.output cout
+   in REPL_Server.output cout
             (packPair (packString, packString))
             (driver, initial_printing)
     ; BinIO.StreamIO.flushOut cout
@@ -102,7 +88,7 @@ fun REPL {driver, step_limit} cin cout proof_state =
               ; BinIO.StreamIO.flushOut cout)
           | Minilang.OPR_FAIL (typ, msg) =>
               let val typs = case typ of Minilang.INVALID_OPR => "Invalid operation: "
-                                       | Minilang.PROOF_FAIL  => "Operation fails: "
+                                       | Minilang.PROOF_FAIL  => ""
                in REPL_Server.output_err cout (typs ^ msg)
                 ; BinIO.StreamIO.flushOut cout
               end

@@ -51,30 +51,37 @@ class Agent:
         self.driver = driver.proof_chat(driver_name)(banner)
     
     def run(self):
+        def ascii(s):
+            if s is None:
+                return None
+            else:
+                return REPL.Client.ascii_of_unicode(s)
+        def ascii_lst(lst):
+            return [REPL.Client.ascii_of_unicode(item) for item in lst]
         def pack(name, args):
             match name:
                 case 'ATP':
-                    return args.get('lemmas', [])
+                    return ascii_lst(args.get('lemmas', []))
                 case 'RETRIEVE':
-                    return (args.get('patterns', []), args.get('negative patterns', []), args.get('names', []))
+                    return (ascii_lst(args.get('patterns', [])), ascii_lst(args.get('negative patterns', [])), args.get('names', []))
                 case 'SIMPLIFY':
-                    return args.get('rules', [])
+                    return ascii_lst(args.get('rules', []))
                 case 'UNFOLD':
-                    return args.get('targets', [])
+                    return ascii_lst(args.get('targets', []))
                 case 'WITNESS':
-                    return args.get('witnesses', [])
+                    return ascii_lst(args.get('witnesses', []))
                 case 'RULE':
-                    return args.get('rule', None) or []
+                    return ascii_lst(args.get('rule', None) or [])
                 case 'CASE_SPLIT':
-                    return (args.get('target', ''), args.get('rule', None))
+                    return (ascii(args.get('target', '')), ascii(args.get('rule', None)))
                 case 'INDUCT':
-                    return (args.get('target', ''), args.get('arbitrary', []), args.get('rule', None))
+                    return (ascii(args.get('target', '')), ascii_lst(args.get('arbitrary', [])), ascii(args.get('rule', None)))
                 case 'BRANCH':
-                    return args.get('cases', [])
+                    return ascii_lst(args.get('cases', []))
                 case 'HAVE':
-                    return args.get('subgoals', [])
+                    return ascii_lst(args.get('subgoals', []))
                 case 'OBTAIN':
-                    return (args.get('variables', []), args.get('conditions', []))
+                    return (ascii_lst(args.get('variables', [])), ascii_lst(args.get('conditions', [])))
                 case 'ROLLBACK':
                     return args.get('step', 0)
                 case _:
@@ -117,6 +124,7 @@ class Manager:
         
         # Configure logging
         self.logger = logging.getLogger(__name__)
+        self.logger.propagate = False  # Prevent duplicate logging to root logger
         if log_file:
             file_handler = logging.FileHandler(log_file)
             #file_handler.setLevel(logging.DEBUG)
@@ -137,19 +145,19 @@ class Manager:
         
     def handle_client(self, client_socket, client_addr):
         """Handle a client connection."""
-        #try:
-        agent = Agent(client_socket, self.logger)
-        self.clients[client_addr] = agent
-        agent.run()
-        #except Exception as e:
-        #    self.logger.error(f"Error handling client: {e}")
-        #finally:
-        #    try:
-        #        client_socket.close()
-        #    except:
-        #        pass
-        #    if client_addr in self.clients:
-        #        del self.clients[client_addr]
+        try:
+            agent = Agent(client_socket, self.logger)
+            self.clients[client_addr] = agent
+            agent.run()
+        except Exception as e:
+            self.logger.error(f"Error handling client: {e}")
+        finally:
+            try:
+                client_socket.close()
+            except:
+                pass
+            if client_addr in self.clients:
+                del self.clients[client_addr]
                 
     def stop_server(self):
         """Stop the TCP server."""

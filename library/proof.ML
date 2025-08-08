@@ -28,6 +28,7 @@ val working_mode : string Config.T
 val mini_single_cmd_timeout : int Config.T
 val typ_parsing_mode : string Config.T
 val install_relaxed_typ_parsing : Context.generic -> Context.generic
+val high_auto_mode : bool Config.T
 val transparent_intro : bool Config.T
     (*If enabled, no INTRO command is required. All premises and universal variables in proof goals
       will be introduced (i.e., moved into the meta) transparently:
@@ -60,8 +61,8 @@ datatype intros_mode = ALL_SUBGOALS | SINGLE_GOAL
 val INTRO : intros_mode -> opt_var_names -> operation
 val INTRO_CMD : command
 
-val apply : context_tactic -> Time.time option -> stack -> stack
-val apply_method : thm list -> Method.method -> Time.time option -> stack -> stack
+val apply : string -> context_tactic -> Time.time option -> stack -> stack
+val apply_method : string -> thm list -> Method.method -> Time.time option -> stack -> stack
 val APPLY   : Time.time option -> thm list -> Method.text -> operation
 val APPLY'' : Time.time option -> fact list -> Method.text -> operation
 val APPLY_CMD : command
@@ -406,6 +407,7 @@ fun atomize_tree ctxt (PROP (items, goal)) = PROP (items, Object_Logic.atomize_t
   | atomize_tree ctxt (BUNDL (items, goal)) = BUNDL (items, map (atomize_tree ctxt) goal)
   | atomize_tree ctxt (BLOCK tree) = BLOCK (atomize_tree ctxt tree)
 
+(* fun fake_intro_ctxt ctxt *)
 
 val context_of_leading_goal =
   let fun collect V F (PROP  ((V',F'),term)) = ((V @ V', F @ F'), term)
@@ -968,25 +970,25 @@ fun TRANSPARENT_INTRO' (origin as (ctxt, HHF (st, _) :: _)) =
   | TRANSPARENT_INTRO' _ = raise BROKEN_INVARIANT
 
 
-fun raw_apply report tac timeout (ctxt, HHF (st, facts) :: L) =
+fun raw_apply msg report tac timeout (ctxt, HHF (st, facts) :: L) =
     ( case (case timeout
               of SOME time => Timeout.apply time (Seq.pull o tac) (ctxt, st)
                | NONE      => Seq.pull (tac (ctxt, st)) )
-        of NONE => raise OPR_FAIL (PROOF_FAIL, "Fail to apply the tactic")
+        of NONE => raise OPR_FAIL (PROOF_FAIL, msg)
          | SOME (Seq.Result (ctxt', st'), _) =>
             let val new_goals = Thm.prems_of st'
              in report (Goals (SOME new_goals))
               ; (ctxt', HHF (protect_goals st', facts) :: L)
             end
          | SOME (Seq.Error E, _) => raise OPR_FAIL (PROOF_FAIL, E ()) )
-  | raw_apply _ _ _ _ = raise BROKEN_INVARIANT
+  | raw_apply _ _ _ _ _ = raise BROKEN_INVARIANT
 
-fun apply' report tac timeout s = maintain (raw_apply report tac timeout s)
+fun apply' msg report tac timeout s = maintain (raw_apply msg report tac timeout s)
 
-fun apply tac time s = apply' (get_reporter()) tac time s
+fun apply msg tac time s = apply' msg (get_reporter()) tac time s
       handle Timeout.TIMEOUT _ => raise OPR_FAIL (PROOF_FAIL, "Timeout")
 
-fun apply_method using meth timeout s = apply (meth using) timeout s
+fun apply_method msg using meth timeout s = apply msg (meth using) timeout s
 
 
 fun record_history name (s,his,ID) = (s, Symtab.update (name,s) his,ID)
@@ -1033,7 +1035,8 @@ val mini_single_cmd_timeout = Attrib.setup_config_int \<^binding>\<open>mini_sin
 
 fun gen_APPLY prep_thms timeout using text =
       OPR (fn SK as (ctxt, _) =>
-        apply_method (prep_thms ctxt using) (Method.evaluate text ctxt) timeout SK)
+        apply_method "Fail to apply the tactic"
+                     (prep_thms ctxt using) (Method.evaluate text ctxt) timeout SK)
 val APPLY   = gen_APPLY (K I)
 val APPLY'' = gen_APPLY Attrib.eval_thms
 
@@ -1119,7 +1122,8 @@ fun NEED_STANDARD (ctxt, HHF (st, _) :: _) = Phi_Sledgehammer_Solver.need_standa
 
 fun TRY_STANDARD SK =
   if NEED_STANDARD SK
-  then apply' (K ()) (CONTEXT_TACTIC (Classical.standard_tac (#1 SK) [])) NONE SK
+  then apply' "Fail to apply the tactic"
+              (K ()) (CONTEXT_TACTIC (Classical.standard_tac (#1 SK) [])) NONE SK
   else SK
 
 val INTRO = timed_OPR 2 oo INTRO'
@@ -1247,13 +1251,18 @@ fun SIMP' _ _ (ctxt, []) = (ctxt, [])
       val ctxt = apply_WITH with_lems ctxt
       val time = Config.get ctxt crush_timeout
               |> Time.fromSeconds
+      val reporter = get_reporter ()
+      val msg = "Cannot further simplify the goal. You should either apply other operation or \
+                \supply more simplification rules."
    in
-   (( raw_apply (K ()) (CONTEXT_TACTIC (Clasimp.auto_tac ctxt)) (SOME time) s
+   (( raw_apply msg reporter
+                (CONTEXT_TACTIC (CHANGED (Clasimp.auto_tac ctxt))) (SOME time) s
       handle Timeout.TIMEOUT _ => 
-      raw_apply (K ()) (CONTEXT_TACTIC (Clasimp.clarsimp_tac ctxt 1)) (SOME time) s)
+      raw_apply msg reporter
+                (CONTEXT_TACTIC (CHANGED (Clasimp.clarsimp_tac ctxt 1))) (SOME time) s)
       handle OPR_FAIL E =>
                 (case s of (_, HHF (st, _) :: _) =>
-                                if need_intro st orelse NEED_STANDARD SK0
+                                if (*need_intro st orelse*) NEED_STANDARD SK0
                                 then s
                                 else raise OPR_FAIL E
                          | _ => raise OPR_FAIL E )
@@ -1313,7 +1322,8 @@ fun make_case term =
 
 
 fun CASES' diff ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, items00) :: _)) =
-  apply' (get_reporter()) tac NONE SK
+  apply' "Fail to apply the case-split operation."
+         (get_reporter()) tac NONE SK
     |> (fn (ctxt, SK as HHF (rule, items0) :: REMAIN_SK) =>
    let val cases0 = Proof_Context.dest_cases (SOME ctxt0) ctxt
                 |> filter (fn (_, Rule_Cases.Case {binds,...}) =>
@@ -1601,7 +1611,7 @@ fun CASE_SPLIT'' (args, vars, raw_facts) s =
 
 fun RULE' [] raw_facts (SK as (ctxt, _)) =
     let val facts = Attrib.eval_thms ctxt raw_facts
-     in apply' (get_reporter())
+     in apply' "Fail to apply the rule." (get_reporter())
                (CONTEXT_TACTIC (Classical.standard_tac (#1 SK) facts)) NONE SK
     end
  (* if NEED_STANDARD SK

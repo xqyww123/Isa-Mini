@@ -7,4 +7,8 @@ ML_file "agent_packer.ML"
 ML_file "agent_server.ML"
 ML_file "tactic.ML"
 
+method_setup agent = \<open>
+  Scan.succeed (K MiniLang_Agent.method)
+\<close>
+
 end

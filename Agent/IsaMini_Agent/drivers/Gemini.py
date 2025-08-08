@@ -10,7 +10,8 @@ class Proof_Chat(driver.ProofChat):
 
         tool_config = types.ToolConfig(
             function_calling_config=types.FunctionCallingConfig(
-                mode="ANY"
+                #mode="ANY"
+                mode="AUTO"
             )
         )
 
