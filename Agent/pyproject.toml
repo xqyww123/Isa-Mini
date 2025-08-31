@@ -22,15 +22,3 @@ dependencies = ["msgpack"]
 
 [tool.setuptools.packages.find]
 include = ["Agent", "Agent.*"]
-
-# Include data files in the package
-[tool.setuptools.package-data]
-Agent = [
-    "data/*",
-    "config/*", 
-    "templates/*",
-    "*.json",
-    "*.txt",
-    "*.yml",
-    "*.yaml"
-]
