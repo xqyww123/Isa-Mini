@@ -8,10 +8,17 @@ class Proof_Chat(driver.ProofChat):
     def __init__(self, initial_state_printing):
         self.client = genai.Client()
 
-        tool_config = types.ToolConfig(
+        self.tool_config2 = types.ToolConfig(
             function_calling_config=types.FunctionCallingConfig(
-                #mode="ANY"
-                mode="AUTO"
+                mode="NONE"
+                #mode="AUTO"
+            )
+        )
+
+        self.tool_config = types.ToolConfig(
+            function_calling_config=types.FunctionCallingConfig(
+                mode="ANY"
+                #mode="AUTO"
             )
         )
 
@@ -24,24 +31,39 @@ class Proof_Chat(driver.ProofChat):
             system_prompt = f.read()
 
         tools = types.Tool(function_declarations=self.functions[:3])
-        config = types.GenerateContentConfig(
+        self.config = types.GenerateContentConfig(
                     tools=[tools],
-                    tool_config=tool_config,
+                    tool_config=self.tool_config,
                     temperature=0.1,
-                    #system_instruction = system_prompt
+                    system_instruction = system_prompt
+                )
+        self.config2 = types.GenerateContentConfig(
+                    tools=[tools],
+                    tool_config=self.tool_config2,
+                    temperature=0.1,
+                    system_instruction = system_prompt
                 )
 
-        self.config = config
         self.contents = [
             #types.Content(
             #    role="system", parts=[types.Part(text=system_prompt)]
             #),
             types.Content(
-                role="user", parts=[types.Part(text=system_prompt + "\n" + initial_state_printing)]
+                role="user", parts=[types.Part(text=initial_state_printing + "\n You should first draft an informal plan.")]
             )
         ]
 
     def run(self, opr):
+        response = self.client.models.generate_content(
+            model="gemini-2.5-flash",
+            config=self.config2,
+            contents=self.contents)
+        text = response.candidates[0].content.parts[0].text
+        print(text)
+        self.contents.append(response.candidates[0].content)
+        self.contents.append(types.Content(
+                role="user", parts=[types.Part(text="Now let us implement the plan using the operations.")]
+            ))
         is_proved = False
         while not is_proved:
             response = self.client.models.generate_content(

@@ -103,7 +103,7 @@ fun read_terms_w_var ctxt terms =
   let val ctxt = Proof_Context.set_mode Proof_Context.mode_pattern ctxt
       val terms' = Syntax.read_terms ctxt terms
       val ctxt' = fold Proof_Context.augment terms' ctxt
-   in Variable.export_terms ctxt' ctxt terms'
+   in Variable.export_terms ctxt' (Proof_Context.init_global (Proof_Context.theory_of ctxt)) terms'
   end
 
 local fun chk_single _ _ [x] = x
@@ -157,6 +157,10 @@ fun find_def_const ctxt (Const (name, _)) = find_def ctxt name
 fun interpret' (RETRIEVE (patterns, neg_pats, names)) (s:Minilang.state) =
       let open Find_Theorems
           val ctxt = Minilang.context_of s
+          val _ = if null patterns andalso null neg_pats andalso null names
+                  then error ("You must specifiy at least one pattern or one sub-name used to retrieve the facts")
+                  else ()
+
           val criteria =
               map (fn tm => (true , Pattern tm)) patterns
             @ map (fn tm => (false, Pattern tm)) neg_pats
@@ -195,7 +199,10 @@ fun interpret' (RETRIEVE (patterns, neg_pats, names)) (s:Minilang.state) =
             "Cannot further simplify the goal. You should either apply other operation (e.g., ATP)\
             \ or supply more simplification rules if you believe you should apply SIMPLIFY.") )
   | interpret' (UNFOLD origin_consts) s =
-      let val ctxt = Minilang.context_of s
+      let val _ = if null origin_consts
+                  then error "You must specify at least one target to unfold"
+                  else ()
+          val ctxt = Minilang.context_of s
           val consts = map (Syntax.read_term ctxt) origin_consts
           val defs = map (Option.map (map snd) o find_def_const ctxt) consts
           val not_found = map_filter (fn (NONE, tm) => SOME tm
@@ -259,7 +266,7 @@ fun print_goal' step s =
   else let
       val ctxt = Minilang.context_of s
       val ((frees, facts), goal) = Minilang.print_state s
-                               |> Minilang.atomize_tree ctxt
+                            (* |> Minilang.atomize_tree ctxt *)
                                |> Minilang.context_of_leading_goal
       val tfrees = fold (Term.add_tfreesT o snd) frees []
    in "### STEP " :: string_of_int step :: "\n"

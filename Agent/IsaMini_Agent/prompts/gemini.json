@@ -1,6 +1,6 @@
 [{
     "name": "ATP",
-    "description": "Apply Automated Theorem Provers to prove a simple goal.",
+    "description": "Apply powerful Automated Theorem Provers to prove a goal.",
     "parameters": {
         "type": "object",
         "properties": {

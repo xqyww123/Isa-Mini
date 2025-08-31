@@ -893,6 +893,16 @@ fun strip_meta_hhf term =
         | strip (V,P) X = (rev V, rev P, X)
    in strip ([],[]) term end
 
+fun quantifier_bindings ctxt st =
+         Thm.prop_of st
+      |> Logic.dest_implies |> fst
+      |> strip_meta_hhf
+      |> #1
+      |> (fn L => fold_map (fn (name, ty) => fn ctxt =>
+                      Name.variant name ctxt |> apfst (rpair ty)
+                  ) L (Variable.names_of ctxt))
+      |> #1
+
 fun INTRO'' F mode bs (origin as (ctxt, HHF (st0, items) :: L)) =
     if Thm.no_prems st0 then origin
     else if need_intro st0
@@ -901,13 +911,7 @@ fun INTRO'' F mode bs (origin as (ctxt, HHF (st0, items) :: L)) =
                               [(false, Thms.allI), (false, Thms.impI)] 1)
                      |> Seq.hd
 
-               val default_binds = Thm.prop_of st
-                                |> Logic.dest_implies |> fst
-                                |> strip_meta_hhf
-                                |> #1 |> map #1
-                                |> (fn L => fold_map Name.variant L
-                                                  (Variable.names_of ctxt))
-                                |> #1
+               val default_binds = quantifier_bindings ctxt st |> map fst
                val binds = case bs
                              of NONE => default_binds
                               | SOME bs'0 =>
@@ -1009,7 +1013,8 @@ fun OPR_ID (f : int -> stack -> stack) ((S,TAB,ID) : state) : state
   = (f ID S, TAB, ID+1)
 
 fun timed_OPR t f s
-  = Timeout.apply (Time.fromSeconds t) (OPR f) s
+  = (* Timeout.apply (Time.fromSeconds t) (OPR f) s *)
+    OPR f s
     handle Timeout.TIMEOUT _ => raise OPR_FAIL (PROOF_FAIL, "Timeout")
          | Exn.Interrupt_Breakdown => raise OPR_FAIL (PROOF_FAIL, "Timeout")
 

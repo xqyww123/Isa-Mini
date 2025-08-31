@@ -530,11 +530,10 @@ GOAL: prefix xs (ys @ zs @ [a]) = (prefix xs ys ∨ (∃us. xs = ys @ us ∧ pre
 ```
 
 ### ATP
-`ATP` applies Automated Theorem Provers (ATPs) to prove the goal. However, the capability of the ATPs is limited and cannot handle difficult problems.
+`ATP` applies Automated Theorem Provers (ATPs) to prove the goal. However, the capability of the ATPs is limited and cannot handle difficult problems. This difficulty refers to the computational complexity or reasoning depth needed to solve the problem, rather than the syntactic length of the goal terms. Many long goals involving complicated terms can be effectively proven.
 
-You can apply `ATP` any time you think the goal is simple, direct or trivial.
-
-Typically you should first reduce or decompose a proof goal using other operations into simpler subgoals, and then apply `ATP` to conclude these goals. However, you can always try `ATP` when you have no idea.
+`ATP` is the last step to prove a goal. You should apply `ATP` if and only if you think the goal is simple enough to be handled by ATPs.
+Typically you should reduce or decompose a proof goal using other operations into simpler subgoals, and finally apply `ATP` to conclude these goals.
 
 Example:
 ```
