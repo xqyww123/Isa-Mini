@@ -1,0 +1,4 @@
+langchain
+langchain-google-genai
+python-dotenv
+-e ../../Isa-REPL
