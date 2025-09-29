@@ -133,7 +133,7 @@ fun check_command ctxt (RETRIEVE (patterns, neg_pats, names)) =
       end
   | check_command _ (ATP facts) = ATP (map read_fact facts)
   | check_command _ (BRANCH brs) = BRANCH brs
-  | check_command ctxt (HAVE goals) = HAVE (Syntax.read_terms ctxt goals)
+  | check_command ctxt (HAVE goals) = HAVE (Syntax.read_props ctxt goals)
   | check_command _ (OBTAIN vc) = OBTAIN vc
   | check_command _ (ROLLBACK i) = ROLLBACK i
 end
