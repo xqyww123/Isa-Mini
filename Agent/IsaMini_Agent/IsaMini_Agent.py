@@ -54,34 +54,34 @@ class Agent:
         def ascii(s):
             if s is None:
                 return None
-            else:
+            elif isinstance(s, str):
                 return REPL.Client.ascii_of_unicode(s)
-        def ascii_lst(lst):
-            return [REPL.Client.ascii_of_unicode(item) for item in lst]
+            elif isinstance(s, list):
+                return [ascii(x) for x in s]
         def pack(name, args):
             match name:
                 case 'ATP':
-                    return ascii_lst(args.get('lemmas', []))
+                    return ascii(args.get('lemmas', []))
                 case 'RETRIEVE':
-                    return (ascii_lst(args.get('patterns', [])), ascii_lst(args.get('negative patterns', [])), args.get('names', []))
+                    return (ascii(args.get('patterns', [])), ascii(args.get('negative patterns', [])), args.get('names', []))
                 case 'SIMPLIFY':
-                    return ascii_lst(args.get('rules', []))
+                    return ascii(args.get('rules', []))
                 case 'UNFOLD':
-                    return ascii_lst(args.get('targets', []))
+                    return ascii(args.get('targets', []))
                 case 'WITNESS':
-                    return ascii_lst(args.get('witnesses', []))
+                    return ascii(args.get('witnesses', []))
                 case 'RULE':
-                    return ascii_lst(args.get('rule', None) or [])
+                    return ascii(args.get('rule', None) or [])
                 case 'CASE_SPLIT':
                     return (ascii(args.get('target', '')), ascii(args.get('rule', None)))
                 case 'INDUCT':
-                    return (ascii(args.get('target', '')), ascii_lst(args.get('arbitrary', [])), ascii(args.get('rule', None)))
+                    return (ascii(args.get('target', '')), ascii(args.get('arbitrary', [])), ascii(args.get('rule', None)))
                 case 'BRANCH':
-                    return ascii_lst(args.get('cases', []))
+                    return ascii(args.get('cases', []))
                 case 'HAVE':
-                    return ascii_lst(args.get('subgoals', []))
+                    return ascii(args.get('subgoals', []))
                 case 'OBTAIN':
-                    return (ascii_lst(args.get('variables', [])), ascii_lst(args.get('conditions', [])))
+                    return (ascii(args.get('variables', [])), ascii(args.get('conditions', [])))
                 case 'ROLLBACK':
                     return args.get('step', 0)
                 case _:
