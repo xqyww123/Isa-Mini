@@ -36,6 +36,7 @@ val transparent_intro : bool Config.T
          facts / variables.
       2. MiniLang determines the appropriate time to introduce the premises and the variables.
          This time is the moment before command HAVE and CONSIDER happen.*)
+val mini_use_improved_SH : bool Config.T
 
 val chk_working_mode : string -> unit
 
@@ -2083,6 +2084,7 @@ exception SH_PRF of string
 exception REPLACE_CMD of string * string
 
 val enable_cache_by_step = Config.declare_bool ("enable_cache_by_step", \<^here>) (K true)
+val mini_use_improved_SH = Config.declare_bool ("mini_use_improved_SH", \<^here>) (K true)
 
 fun HAMMER_i override step_id (ctxt, HHF (s,facts) :: S) =
   let val (_, _, ID_BASE) = IPS_Data.get ctxt
@@ -2090,7 +2092,8 @@ fun HAMMER_i override step_id (ctxt, HHF (s,facts) :: S) =
       val ID' = if Config.get ctxt enable_cache_by_step
                 then SOME ID
                 else NONE
-      val (prf, s') = Phi_Sledgehammer_Solver.auto true override ID' ctxt s
+      val improved_SH = Config.get ctxt mini_use_improved_SH
+      val (prf, s') = Phi_Sledgehammer_Solver.auto improved_SH override ID' ctxt s
                       handle ERROR E => raise OPR_FAIL (PROOF_FAIL, E)
    in get_reporter () (Internal (SH_PRF prf))
     ; (ctxt, HHF (s', facts) :: S)

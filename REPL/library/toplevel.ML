@@ -198,11 +198,20 @@ fun REPL_App (cin, cout) =
       val (hasty, END_mode, SH_params) =
               read (unpackTuple3 (unpackBool, unpackString, unpackOption unpackString))
       val _ = Minilang.chk_working_mode END_mode
+      val params' = the_default "" SH_params
+            |> String.tokens (fn #"," => true | _ => false)
+            |> map (fn s => case String.tokens (fn #"=" => true | _ => false) s
+                              of [k,v] => (Symbol.trim_blanks k, Symbol.trim_blanks v)
+                               | _ => error ("Invalid auto_sledgehammer_params : " ^ s))
       val ps = Toplevel.proof_of is
             |> Proof.map_context (
                   Config.put Printer.show_markup false
                #> Config.put Phi_Sledgehammer_Solver.hasty_mode hasty
                #> Config.put Minilang.working_mode END_mode
+               #> ( case AList.lookup (op =) params' "mini_use_improved_SH"
+                      of SOME "true"  => Config.put Minilang.mini_use_improved_SH true
+                       | SOME "false" => Config.put Minilang.mini_use_improved_SH false
+                       | _ => I )
                #> Config.put Phi_Sledgehammer_Solver.sledgehammer_params (the_default "" SH_params))
       val ms = Minilang.INIT' ps
       val s  = ((ms,[]), Symtab.empty)
