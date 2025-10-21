@@ -1,3 +1,4 @@
+import os
 import driver
 from google import genai
 from google.genai import types
@@ -6,7 +7,7 @@ import json
 
 class Proof_Chat(driver.ProofChat):
     def __init__(self, initial_state_printing):
-        self.client = genai.Client()
+        self.client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
         self.tool_config2 = types.ToolConfig(
             function_calling_config=types.FunctionCallingConfig(
@@ -30,7 +31,7 @@ class Proof_Chat(driver.ProofChat):
         with open(system_prompt, 'r') as f:
             system_prompt = f.read()
 
-        tools = types.Tool(function_declarations=self.functions[:3])
+        tools = types.Tool(function_declarations=self.functions)
         self.config = types.GenerateContentConfig(
                     tools=[tools],
                     tool_config=self.tool_config,
