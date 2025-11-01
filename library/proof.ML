@@ -412,6 +412,7 @@ fun atomize_tree ctxt (PROP (items, goal)) = PROP (items, Object_Logic.atomize_t
 
 val context_of_leading_goal =
   let fun collect V F (PROP  ((V',F'),term)) = ((V @ V', F @ F'), term)
+        | collect V F (BUNDL ((V',F'),[]))   = ((V @ V', F @ F'), \<^prop>\<open>True\<close>)
         | collect V F (BUNDL ((V',F'),chil)) = collect (V @ V') (F @ F') (hd chil)
         | collect V F (BLOCK tree) = collect V F tree
    in collect [] []

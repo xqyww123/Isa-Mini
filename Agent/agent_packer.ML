@@ -29,6 +29,8 @@ val unpacker =
                         unpackOption unpackString
                      )
      | "ATP"      => apfst ATP      o unpackList unpackString
+     | "NEXT"     => apfst ATP      o unpackList unpackString
+     | "END"      => apfst ATP      o unpackList unpackString
      | "BRANCH"   => apfst BRANCH   o unpackList unpackString
      | "HAVE"     => apfst HAVE     o unpackList unpackString
      | "OBTAIN"   => apfst OBTAIN   o unpackPair (unpackList unpackString, unpackList unpackString)

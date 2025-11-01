@@ -60,6 +60,10 @@ class Agent:
             return [REPL.Client.ascii_of_unicode(item) for item in lst]
         def pack(name, args):
             match name:
+                case 'END':
+                    return ascii_lst(args.get('lemmas', []))
+                case 'NEXT':
+                    return ascii_lst(args.get('lemmas', []))
                 case 'ATP':
                     return ascii_lst(args.get('lemmas', []))
                 case 'RETRIEVE':

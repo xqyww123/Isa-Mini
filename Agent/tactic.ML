@@ -27,7 +27,7 @@ fun method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
   if is_dummy sequent
   then NONE
   else let val cfg = cfg_of ctxt
-      val state' = run_agent cfg (ctxt, sequent)
+      val state' = Runtime.exn_trace (fn () => run_agent cfg (ctxt, sequent))
       val sequent' = conclude ctxt state'
    in SOME ((Seq.Result (ctxt, sequent')), Seq.empty)
   end)
