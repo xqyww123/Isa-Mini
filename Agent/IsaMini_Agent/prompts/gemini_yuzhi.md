@@ -486,7 +486,7 @@ GOAL: ∃u v. u * x + v * y = gcd x y
 
 {
 	"name": "BRANCH",
-	"arguments": {"cases": [["x ≥ 0" "y ≥ 0"], ["x ≥ 0" "y ≤ 0"], ["x ≤ 0" "y ≥ 0"], ["x ≤ 0" "y ≤ 0"]]}
+	"arguments": {"cases": ["x ≥ 0 ∧ y ≥ 0", "x ≥ 0 ∧ y ≤ 0", "x ≤ 0 ∧ y ≥ 0", "x ≤ 0 ∧ y ≤ 0"]}
 }
 This calling splits the proof into four cases:
 1. x ≥ 0 ∧ y ≥ 0

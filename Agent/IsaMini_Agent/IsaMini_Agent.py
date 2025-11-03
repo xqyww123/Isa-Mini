@@ -81,7 +81,7 @@ class Agent:
                 case 'INDUCT':
                     return (ascii(args.get('target', '')), ascii_lst(args.get('arbitrary', [])), ascii(args.get('rule', None)))
                 case 'BRANCH':
-                    return [ascii_lst(case_lst) for case_lst in args.get('cases', [])]
+                    return ascii_lst(args.get('cases', []))
                 case 'HAVE':
                     return ascii_lst(args.get('subgoals', []))
                 case 'OBTAIN':

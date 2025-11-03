@@ -137,12 +137,8 @@
         "properties": {
             "cases": {
 				"type": "array",
-				"items": {
-					"type": "array",
-					"items": {"type": "string"},
-	                "description": "conditions in each case"
-				},
-                "description": "The cases that the proof goal is split into. Each case can consist of more than one conditions."
+				"items": { "type": "string" },
+                "description": "The cases that the proof goal is split into."
             }
         }
     }
