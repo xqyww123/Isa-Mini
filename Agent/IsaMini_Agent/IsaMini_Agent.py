@@ -85,7 +85,12 @@ class Agent:
                 case 'HAVE':
                     return ascii_lst(args.get('subgoals', []))
                 case 'OBTAIN':
-                    return (ascii_lst(args.get('variables', [])), ascii_lst(args.get('conditions', [])))
+                    def get_var(var):
+                        name = ascii(var['name'])
+                        typ  = ascii(var.get('type', None))
+                        return (name, typ)
+                    vars = [get_var(v) for v in args.get('variables', [])]
+                    return (vars, ascii_lst(args.get('conditions', [])))
                 case 'ROLLBACK':
                     return args.get('step', 0)
                 case _:

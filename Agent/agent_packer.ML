@@ -33,7 +33,9 @@ val unpacker =
      | "END"      => apfst ATP      o unpackList unpackString
      | "BRANCH"   => apfst BRANCH   o unpackList unpackString
      | "HAVE"     => apfst HAVE     o unpackList unpackString
-     | "OBTAIN"   => apfst OBTAIN   o unpackPair (unpackList unpackString, unpackList unpackString)
+     | "OBTAIN"   => apfst OBTAIN   o unpackPair (
+                          unpackList (unpackPair (unpackString, unpackOption unpackString)),
+                          unpackList unpackString)
      | "ROLLBACK" => apfst ROLLBACK o unpackInt
      | cmd => error("Unknown operation " ^ cmd)
   ) #> apfst snd

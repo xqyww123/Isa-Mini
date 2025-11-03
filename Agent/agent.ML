@@ -13,7 +13,7 @@ datatype ('term, 'thm, 'fact) command =
   | ATP      of 'fact list (*add lemmas*)
   | BRANCH   of string list
   | HAVE     of 'term list
-  | OBTAIN   of string list (*vars*) * string list (*constraints*)
+  | OBTAIN   of (string * string option) list (*vars*) * string list (*constraints*)
   | ROLLBACK of int
 
 type xcmd = (string, string, string) command
@@ -65,7 +65,7 @@ datatype ('term, 'thm, 'fact) command =
   | ATP      of 'fact list (*add lemmas*)
   | BRANCH   of string list
   | HAVE     of 'term list
-  | OBTAIN   of string list (*vars*) * string list (*constraints*)
+  | OBTAIN   of (string * string option) list (*vars*) * string list (*constraints*)
   | ROLLBACK of int
 
 type xcmd = (string, string, string) command
@@ -242,7 +242,7 @@ fun interpret' (RETRIEVE (patterns, neg_pats, names)) (s:Minilang.state) =
   | interpret' (HAVE goals) s =
       (NONE, Minilang.HAVE'' [] [] (map (fn goal => (Binding.empty_atts, [(goal, [])])) goals) s)
   | interpret' (OBTAIN (vars,constraints)) s =
-      let val arg = [(map (fn v => (Binding.name v, NONE, NoSyn)) vars,
+      let val arg = [(map (fn (v,T) => (Binding.name v, T, NoSyn)) vars,
                      ([], [], map (fn goal => (Binding.empty_atts, [(goal, [])])) constraints))]
        in (NONE, Minilang.CONSIDER arg s)
       end

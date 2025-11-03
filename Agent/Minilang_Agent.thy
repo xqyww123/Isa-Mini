@@ -14,9 +14,15 @@ method_setup agent = \<open>
 \<close>
 
 declare [[agent_driver=EchoDebugger]]
-    
+
+(*
+lemma "\<exists>k. 0 < k"
+  by agent*)
+
+
 lemma "(1::nat) + 1 = 2"
   by agent
+
 (*
 lemma "(1::nat) + 1 = 2"
   by agent

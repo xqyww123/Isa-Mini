@@ -667,7 +667,7 @@ GOAL: Discrete.sqrt (n²) = n
 ### OBTAIN
 `OBTAIN` extracts witnesses from existential statements and introduces fresh variables to bind them. This enables the proof step "let x be such that P(x)" once you've established "there exists x such that P(x)". 
 
-For example, once you show `∃j k. m = j * n + k`, `OBTAIN` introduces two fresh local variables `j, k` and one local fact `m = j * n + k`. The function calling for this example is `{"name": "OBTAIN", "arguments": {"variables": ["j","k"], "conditions": ["m = j * n + k"]}}`
+For example, once you show `∃j k. m = j * n + k`, `OBTAIN` introduces two fresh local variables `j, k` and one local fact `m = j * n + k`. The function calling for this example is `{"name": "OBTAIN", "arguments": {"variables": [{"name": "j", "type": "int"}, {"name: "k", "type": "int"}], "conditions": ["m = j * n + k"]}}`
 
 Example:
 ```
@@ -682,7 +682,7 @@ GOAL: prefix (rev xs) (rev ys)
 
 function calling {
 	"name": "OBTAIN",
-	"arguments": {"variables": ["zs"], "conditions": ["ys = zs @ xs"]}
+	"arguments": {"variables": [{"name": "zs", "type": "'a list"}], "conditions": ["ys = zs @ xs"]}
 }
 The calling yields two subgoals.
 

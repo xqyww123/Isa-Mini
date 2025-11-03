@@ -165,8 +165,15 @@
         "properties": {
             "variables": {
 				"type": "array",
-				"items": { "type": "string" },
-                "description": "variable names"
+				"items": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string" },
+                        "type": { "type": "string" }
+                    },
+                    "required": ["name"]
+                },
+                "description": "variable names and types"
             },
             "conditions": {
 				"type": "array",
