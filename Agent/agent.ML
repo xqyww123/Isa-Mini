@@ -242,8 +242,8 @@ fun interpret' (RETRIEVE (patterns, neg_pats, names)) (s:Minilang.state) =
   | interpret' (HAVE goals) s =
       (NONE, Minilang.HAVE'' [] [] (map (fn goal => (Binding.empty_atts, [(goal, [])])) goals) s)
   | interpret' (OBTAIN (vars,constraints)) s =
-      let val arg = [([], (map (fn v => (Binding.name v, NONE, NoSyn)) vars, [],
-                           map (fn goal => (Binding.empty_atts, [(goal, [])])) constraints))]
+      let val arg = [(map (fn v => (Binding.name v, NONE, NoSyn)) vars,
+                     ([], [], map (fn goal => (Binding.empty_atts, [(goal, [])])) constraints))]
        in (NONE, Minilang.CONSIDER arg s)
       end
   | interpret' (ROLLBACK _) _ =
