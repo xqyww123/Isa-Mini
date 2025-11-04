@@ -35,25 +35,46 @@ fun method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
 *)
 fun method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
   if is_dummy sequent then NONE
-  else let val cfg = cfg_of ctxt
-         val drv = #driver cfg
-         val n_runs =  Config.get ctxt parallel_runs
-         val drivers = List.tabulate (n_runs, fn _ => drv)
-         fun attempt drv = let
-            val cfg' = { driver = drv, step_limit = #step_limit cfg }
-            val state' = Runtime.exn_trace (fn () => run_agent cfg' (ctxt, sequent))
-            val sequent' = conclude ctxt state'
-          in
-            if Thm.nprems_of sequent' = 0 then SOME sequent' else NONE
-          end
-          handle exn as Exn.EXCEPTIONS [ERROR _] => if Exn.is_interrupt exn then Exn.reraise exn else NONE
-
-         val winner =
-          (case drivers of
-              [] => NONE
-            | [d] => attempt d
-            | ds => Par_List.get_some attempt ds)
-    in Option.map(fn sequent' => (Seq.Result (ctxt, sequent'), Seq.empty)) winner
-  end)
+  else let
+    exception Prf_Search_Fail
+    fun evaluator time prf_str (ctxt, sequent) =
+      let val prf = deserialize prf_str
+       in SOME (ctxt, run (SOME time) prf (ctxt, sequent))
+       handle Minilang.OPR_FAIL _ => NONE
+      end
+    fun search_proof _ =
+       let val cfg = cfg_of ctxt
+           val drv = #driver cfg
+           val n_runs =  Config.get ctxt parallel_runs
+           val drivers = List.tabulate (n_runs, fn _ => drv)
+           fun attempt drv = let
+              val cfg' = { driver = drv, step_limit = #step_limit cfg }
+              val state' = Runtime.exn_trace (fn () => run_agent cfg' (ctxt, sequent))
+              val sequent' = conclude ctxt state'
+            in
+              if Thm.nprems_of sequent' = 0
+              then SOME (serialize (effective_cmds state'),
+                         sequent')
+              else NONE
+            end
+            handle exn as Exn.EXCEPTIONS [ERROR _] => if Exn.is_interrupt exn then Exn.reraise exn else NONE
+  
+           val start = Timing.start ()
+           val winner =
+            (case drivers of
+                [] => NONE
+              | [d] => attempt d
+              | ds => Par_List.get_some attempt ds)
+           val time = Timing.result start
+        in case winner
+             of SOME (prf, th) => ((#cpu time, prf), (ctxt, th))
+              | NONE => raise Prf_Search_Fail
+      end
+     in let
+      val (_, state') = Phi_Cache_DB.try_cached_proof_by_hash
+                    evaluator search_proof (ctxt, sequent)
+       in SOME (Seq.Result state', Seq.empty)
+      end handle Prf_Search_Fail => NONE
+   end )
 
 end

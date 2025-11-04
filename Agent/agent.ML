@@ -41,10 +41,12 @@ val print_goal  : state -> string list
 val is_finished : state -> bool
 val init : context_state -> state
 val conclude : Proof.context -> state -> thm
+val effective_cmds : state -> xcmd list
 
 val proof_of : state -> xcmd list
 
 val interpret : xcmd -> state -> (unit -> string list) * state
+val run : Time.time option -> xcmd list -> context_state -> thm
 
 end
 
@@ -308,6 +310,7 @@ fun init (ctxt, sequent) =
   end
 
 fun conclude initial_ctxt ((s,_),_,_) = Minilang.conclude initial_ctxt s
+fun effective_cmds ((_,{effective,...}),_,_) = rev effective
 
 fun proof_of ((_, {effective, ...}),_,_) = effective
 
@@ -376,5 +379,15 @@ fun interpret (ROLLBACK i) ((_, {accumulative, ...}), history, msgs) =
 
       in (print, state')
      end
+
+fun run time cmds state =
+  let val may_time_out =
+        case time
+          of SOME t => Timeout.apply t
+           | NONE => I
+      val s' = may_time_out (fold (fn cmd => snd o interpret cmd) cmds o init) state
+   in conclude (fst state) s'
+  end
+
 
 end

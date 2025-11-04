@@ -6,14 +6,14 @@ import os
 import json
 
 #ECHO = [("ATP", {})]
-#ECHO = [
-#    ("OBTAIN", {'variables': [{'name': 'k'}], 'conditions': ['False']}),
-#    ("ATP", {})
-#]
 ECHO = [
-    ("OBTAIN", {'variables': [{'name': 'k', 'type': 'int'}], 'conditions': ['k > 0']}),
+    ("OBTAIN", {'variables': [{'name': 'k'}], 'conditions': ['k > 0']}),
     ("ATP", {})
 ]
+#ECHO = [
+#    ("OBTAIN", {'variables': [{'name': 'k', 'type': 'int'}], 'conditions': ['k > 0']}),
+#    ("ATP", {})
+#]
 #ECHO = [("SIMPLIFY", {}), ("END", {})]
 #ECHO = [
 #    ("BRANCH", {'cases': ['a mod 3 = 0', 'a mod 3 = 1', 'a mod 3 = 2']}),
