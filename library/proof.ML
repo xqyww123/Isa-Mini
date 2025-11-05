@@ -1921,7 +1921,7 @@ fun CONSIDER'i raw_dnf (ctxt0, HHF (st0, items0) :: S) =
       val goal = goal0
               |> Thm.cterm_of params_ctxt
               |> Goal.init
-              |> singleton (Variable.export params_ctxt ctxt0)
+              (* |> singleton (Variable.export params_ctxt ctxt0) *)
       val goal_binds = map (#2 o #4) conj_clauses
               |> foldl1 (AList.merge (op =) (op aconv))
       val ctxt_rule = params_ctxt

@@ -59,10 +59,10 @@ fun REPL {driver, step_limit} cin cout proof_state =
           ; s'
         end
 
-      val proof_state = proof_state
+      val proof_state = proof_state (*
             |> apfst (
                    Config.put Printer.show_markup false
-                #> Config.put Printer.show_type_emphasis false)
+                #> Config.put Printer.show_type_emphasis false) *)
       val init_state = MiniLang_Agent.init proof_state
       val state = Unsynchronized.ref init_state
 
@@ -112,9 +112,9 @@ fun REPL_App cfg (cin, cout) =
               read (unpackPair (unpackBool, unpackOption unpackString))
       val ps = Toplevel.proof_of is
             |> Proof.map_context (
-                  Config.put Printer.show_markup false
+                  (* Config.put Printer.show_markup false
             (* #> Config.put Phi_Sledgehammer_Solver.hasty_mode hasty *)
-               #> Config.put Phi_Sledgehammer_Solver.sledgehammer_params (the_default "" SH_params))
+               #> *) Config.put Phi_Sledgehammer_Solver.sledgehammer_params (the_default "" SH_params))
        in REPL_Server.output cout packString "0.3.5"
         ; BinIO.StreamIO.flushOut cout
         ; REPL cfg cin cout (Proof.context_of ps, #goal (Proof.simple_goal ps))

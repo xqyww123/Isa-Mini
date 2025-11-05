@@ -82,9 +82,10 @@ type state = (Minilang.state * opr_records)
            * (Minilang.state * opr_records) Inttab.table
            * Minilang.message list Unsynchronized.ref
 
-val string_of_term = REPL.trim_makrup oo Syntax.string_of_term
-val string_of_thm  = REPL.trim_makrup oo Thm.string_of_thm
-val string_of_typ  = REPL.trim_makrup oo Syntax.string_of_typ
+val printing_cfg = {all_typ=false, bv_typ=true, constant_typ=false, free_typ=false, num_typ=true, sorting=false}
+val string_of_term = REPL.print_term printing_cfg
+fun string_of_thm ctxt th = string_of_term ctxt (Thm.prop_of th)
+val string_of_typ  = REPL.print_typ printing_cfg
 
 val keywords = Thy_Header.get_keywords @{theory Pure}
 fun read_fact src =

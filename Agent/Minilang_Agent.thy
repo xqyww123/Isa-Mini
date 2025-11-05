@@ -11,15 +11,10 @@ method_setup agent = \<open>
   Scan.succeed (K MiniLang_Agent.method)
 \<close>
 
-(*declare [[agent_driver=EchoDebugger]] *)
-
-(*
-lemma "\<exists>k. 0 < k"
-  by agent*)
-  
-     
+declare [[agent_driver=EchoDebugger, enable_proof_cache=false]]
+             
 lemma "(1::nat) + 1 = 2"
-  by  agent
+  by agent
 
 (*
 lemma "(1::nat) + 1 = 2"
