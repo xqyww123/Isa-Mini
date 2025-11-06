@@ -4,7 +4,7 @@ begin
  
 
 declare [[agent_driver=EchoDebugger, enable_proof_cache=false]]
-     
+
 lemma "4 \<le> n \<Longrightarrow> n\<^sup>2 \<le> fact n"
   by agent
 

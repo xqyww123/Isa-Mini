@@ -8,7 +8,8 @@ type budget = {
   }
 
 type cfg = {
-      auto_end : bool
+      auto_end : bool,
+      gussing_num_typ : bool
   }
 
 val default_cfg : cfg
@@ -52,7 +53,7 @@ val context_of : state -> Proof.context
 val print_goal' : int -> Minilang.state -> string list
 val print_goal  : state -> string list
 val is_finished : state -> bool
-val init : context_state -> state
+val init : cfg -> context_state -> state
 val conclude : Proof.context -> state -> thm
 val effective_cmds : state -> xcmd list
 
@@ -80,11 +81,13 @@ type budget = {
   }
 
 type cfg = {
-      auto_end : bool
+      auto_end : bool,
+      gussing_num_typ : bool
   }
 
 val default_cfg = {
-      auto_end = true
+      auto_end = true,
+      gussing_num_typ = true
   }
 
 type driver = string
@@ -355,10 +358,12 @@ fun print_goal' step s =
 fun print_goal s = print_goal' (step_of s - 1) (#1 (#1 s))
 fun is_finished ((s,_), _, _) = Minilang.is_finished s
 
-fun init (ctxt, sequent) =
-  let val ctxt = ctxt
+fun init cfg (ctxt, sequent) =
+  let val default_num_typ = Minilang_Helper.guess_default_num_typ (Thm.prop_of sequent)
+      val ctxt = ctxt
             |> Config.put Minilang.transparent_intro true
             |> Config.put Minilang.high_auto_mode true
+            |> Context.proof_map (Default_Num_Typ.set default_num_typ)
             (* |> Config.put Minilang.auto_end_mode true *)
       val s = (Minilang.INIT ctxt sequent, {accumulative=[], effective=[]})
       val msgs = Unsynchronized.ref []
@@ -443,13 +448,14 @@ fun run (cfg, budget) cmds state =
         case #total_timeout budget
           of SOME t => Timeout.apply t
            | NONE => I
-      val s' = may_time_out (fold (fn cmd => snd o interpret (cfg, budget) cmd) cmds o init) state
+      val s' = may_time_out (fold (fn cmd => snd o interpret (cfg, budget) cmd) cmds o init cfg) state
    in conclude (fst state) s'
   end
 
 
 val _ = register_driver "Gemini" {
-            auto_end = true
+            auto_end = true,
+            gussing_num_typ = false
         }
 
 end
