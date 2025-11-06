@@ -185,7 +185,7 @@ fun REPL cout cin msgs init_state =
   end
 
 
-fun REPL_App (cin, cout) =
+fun REPL_App (cin, cout, top_state) =
   let open MessagePackBinIO.Unpack MessagePackBinIO.Pack
       fun read packer = let val (ret, cin') = doUnpack packer (!cin)
                          in cin := cin'
@@ -227,6 +227,7 @@ fun REPL_App (cin, cout) =
     else (
       REPL_Server.output_err cout "Not in a proof"
     ; BinIO.StreamIO.flushOut cout )
+    ; top_state
   end
 
 

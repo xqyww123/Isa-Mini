@@ -3,7 +3,7 @@ include MINILANG_AGENT
 
 type cfg = {
      driver : string,
-     step_limit : int
+     budget : budget
   }
 
 val REPL : cfg
@@ -25,12 +25,12 @@ open MiniLang_Agent
 
 type cfg = {
      driver : string,
-     step_limit : int
+     budget : budget
   }
 
 val VERSION = "0.1"
 
-fun REPL {driver, step_limit} cin cout proof_state =
+fun REPL {driver, budget} cin cout proof_state =
   let open MessagePackBinIO.Unpack MessagePackBinIO.Pack
       fun read packer = let val (ret, cin') = doUnpack packer (!cin)
                          in cin := cin'
@@ -45,9 +45,11 @@ fun REPL {driver, step_limit} cin cout proof_state =
       fun iteration s =
         let val cmd = read unpacker
             val _ = step := !step + 1
-            val _ = if !step > step_limit then raise Step_Limit_Exceed else ()
+            val _ = if #step_limit budget <> ~1 andalso !step > #step_limit budget
+                    then raise Step_Limit_Exceed
+                    else ()
 
-            val (printer, s') = interpret cmd s
+            val (printer, s') = interpret budget cmd s
             val ret = printer ()
 
             val finished = is_finished s'
@@ -98,7 +100,7 @@ fun REPL {driver, step_limit} cin cout proof_state =
     ; !state
   end
 
-fun REPL_App cfg (cin, cout) =
+fun REPL_App cfg (cin, cout, toplevel) =
   let open MessagePackBinIO.Unpack MessagePackBinIO.Pack
       fun read packer = let val (ret, cin') = doUnpack packer (!cin)
                          in cin := cin'
@@ -125,8 +127,8 @@ fun REPL_App cfg (cin, cout) =
     else (
       REPL_Server.output_err cout "Not in a proof"
     ; BinIO.StreamIO.flushOut cout )
+    ; toplevel
   end
-
 
 fun launch_manager log_file =
   let open Posix.Process
@@ -200,5 +202,7 @@ fun run_agent cfg proof_state =
       val cin = Unsynchronized.ref cin
    in REPL cfg cin cout proof_state
   end
+
+
 
 end

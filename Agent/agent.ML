@@ -1,5 +1,12 @@
 signature MINILANG_AGENT = sig
 
+type budget = {
+      QUERY_RET_LIMIT: int option,
+      parallel_runs: int,
+      total_timeout: Time.time option,
+      step_limit: int
+  }
+
 datatype ('term, 'thm, 'fact) command =
     RETRIEVE of 'term list (*patterns*)
               * 'term list (*negative patterns*)
@@ -21,9 +28,9 @@ type icmd = (term, thm, Facts.ref * Token.src list) command
 
 val check_command : Proof.context -> xcmd -> icmd
 
-val interpret' : icmd -> Minilang.state -> (unit -> string list) option * Minilang.state
-val interpret'' : xcmd -> Minilang.state -> (unit -> string list) option * Minilang.state
-val replay_proof : xcmd list -> Minilang.state -> Minilang.state
+val interpret' : budget -> icmd -> Minilang.state -> (unit -> string list) option * Minilang.state
+val interpret'' : budget -> xcmd -> Minilang.state -> (unit -> string list) option * Minilang.state
+val replay_proof : budget -> xcmd list -> Minilang.state -> Minilang.state
 
 type opr_records = {
     accumulative: xcmd list,
@@ -45,14 +52,19 @@ val effective_cmds : state -> xcmd list
 
 val proof_of : state -> xcmd list
 
-val interpret : xcmd -> state -> (unit -> string list) * state
-val run : Time.time option -> xcmd list -> context_state -> thm
+val interpret : budget -> xcmd -> state -> (unit -> string list) * state
+val run : budget -> xcmd list -> context_state -> thm
 
 end
 
 structure MiniLang_Agent : MINILANG_AGENT = struct
 
-val QUERY_RET_LIMIT = SOME 20
+type budget = {
+      QUERY_RET_LIMIT: int option,
+      parallel_runs: int,
+      total_timeout: Time.time option,
+      step_limit: int
+  }
 
 datatype ('term, 'thm, 'fact) command =
     RETRIEVE of 'term list (*patterns*)
@@ -157,7 +169,7 @@ fun find_def ctxt name =
 fun find_def_const ctxt (Const (name, _)) = find_def ctxt name
   | find_def_const _ _ = NONE
 
-fun interpret' (RETRIEVE (patterns, neg_pats, names)) (s:Minilang.state) =
+fun interpret' budget (RETRIEVE (patterns, neg_pats, names)) (s:Minilang.state) =
       let open Find_Theorems
           val ctxt = Minilang.context_of s
           val _ = if null patterns andalso null neg_pats andalso null names
@@ -168,7 +180,8 @@ fun interpret' (RETRIEVE (patterns, neg_pats, names)) (s:Minilang.state) =
               map (fn tm => (true , Pattern tm)) patterns
             @ map (fn tm => (false, Pattern tm)) neg_pats
             @ map (fn tm => (true , Name tm)) names
-          val (SOME num, thms) = Find_Theorems.find_theorems ctxt NONE QUERY_RET_LIMIT true criteria
+          val (SOME num, thms) =
+                  Find_Theorems.find_theorems ctxt NONE (#QUERY_RET_LIMIT budget) true criteria
 
           fun augment_def const =
               case find_def_const ctxt const
@@ -195,13 +208,13 @@ fun interpret' (RETRIEVE (patterns, neg_pats, names)) (s:Minilang.state) =
                             "- \<open>" ^ REPL.trim_makrup tm ^ "\<close>" ) thms
        in (SOME print, s)
       end
-  | interpret' (SIMPLIFY simp_thms) s = (
+  | interpret' cfg (SIMPLIFY simp_thms) s = (
       (NONE, Minilang.SIMP'' (map (pair true) simp_thms) s)
       handle Minilang.OPR_FAIL (PROOF_FAIL, _) =>
         raise Minilang.OPR_FAIL (PROOF_FAIL,
             "Cannot further simplify the goal. You should either apply other operation (e.g., ATP)\
             \ or supply more simplification rules if you believe you should apply SIMPLIFY.") )
-  | interpret' (UNFOLD origin_consts) s =
+  | interpret' cfg (UNFOLD origin_consts) s =
       let val _ = if null origin_consts
                   then error "You must specify at least one target to unfold"
                   else ()
@@ -224,11 +237,11 @@ fun interpret' (RETRIEVE (patterns, neg_pats, names)) (s:Minilang.state) =
                             \You may use RETRIEVE command to look for the definitions and apply SIMPIFY to unfold."]))
        in (print, Minilang.UNFOLD (flat (map_filter I defs)) s)
       end
-  | interpret' (WITNESS terms) s = (NONE, Minilang.CHOOSE terms s)
-  | interpret' (RULE thms) s = (NONE, Minilang.RULE thms [] s)
-  | interpret' (CASE_SPLIT (target, rule)) s =
+  | interpret' cfg (WITNESS terms) s = (NONE, Minilang.CHOOSE terms s)
+  | interpret' cfg (RULE thms) s = (NONE, Minilang.RULE thms [] s)
+  | interpret' cfg (CASE_SPLIT (target, rule)) s =
       (NONE, Minilang.CASE_SPLIT (false, ([[SOME target]], rule)) NONE [] s)
-  | interpret' (INDUCT (target, arbitrary, rule)) s =
+  | interpret' cfg (INDUCT (target, arbitrary, rule)) s =
       let val ctxt = Minilang.context_of s
           val vs = map (fn Free nt => nt
                          | x => error ("The `arbitrary` argument must be variables, but (" ^
@@ -236,29 +249,29 @@ fun interpret' (RETRIEVE (patterns, neg_pats, names)) (s:Minilang.state) =
        in (NONE, Minilang.INDUCT
               (false, ([[SOME (NONE, (target, false))]], (([vs], []), Option.map single rule))) NONE [] s)
       end
-  | interpret' (ATP lemmas) s =
+  | interpret' cfg (ATP lemmas) s =
       (NONE, Minilang.END_or_NXT NONE {add=lemmas,del=[],only=false} s)
-  | interpret' (BRANCH branches) s =
+  | interpret' cfg (BRANCH branches) s =
       let val brs = map (fn br => ([], ([], [], [(Binding.empty_atts, [(br, [])])]))) branches
        in (NONE, Minilang.CONSIDER brs s)
       end
-  | interpret' (HAVE goals) s =
+  | interpret' cfg (HAVE goals) s =
       (NONE, Minilang.HAVE'' [] [] (map (fn goal => (Binding.empty_atts, [(goal, [])])) goals) s)
-  | interpret' (OBTAIN (vars,constraints)) s =
+  | interpret' cfg (OBTAIN (vars,constraints)) s =
       let val arg = [(map (fn (v,T) => (Binding.name v, T, NoSyn)) vars,
                      ([], [], map (fn goal => (Binding.empty_atts, [(goal, [])])) constraints))]
        in (NONE, Minilang.CONSIDER arg s)
       end
-  | interpret' (ROLLBACK _) _ =
+  | interpret' cfg (ROLLBACK _) _ =
       error "Cannot rollback in interpret'"
 
-fun interpret'' xcmd s =
+fun interpret'' cfg xcmd s =
   let val ctxt = Minilang.context_of s
       val icmd = check_command ctxt xcmd
-   in interpret' icmd s
+   in interpret' cfg icmd s
   end
 
-val replay_proof = fold (snd oo interpret'')
+fun replay_proof cfg = fold (snd oo interpret'' cfg)
 
 fun step_of (_, history, _) = Inttab.size history
 fun context_of ((s,_), _, _) = Minilang.context_of s
@@ -329,7 +342,7 @@ fun success_print (RETRIEVE _) = (fn () => [])
   | success_print (ROLLBACK i) = (fn () =>
       ["Succefully rollback to step " ^ string_of_int i ^ ".\n"])
 
-fun interpret (ROLLBACK i) ((_, {accumulative, ...}), history, msgs) =
+fun interpret cfg (ROLLBACK i) ((_, {accumulative, ...}), history, msgs) =
      (case Inttab.lookup history i
         of SOME (s', {effective, ...}) =>
               ( success_print (ROLLBACK i),
@@ -341,14 +354,14 @@ fun interpret (ROLLBACK i) ((_, {accumulative, ...}), history, msgs) =
               error (String.concat
                   ["The proof has not yet reached step ", string_of_int i,
                    "; cannot rollback to step ", string_of_int i]))
-  | interpret (xcmd as RETRIEVE _) (s, history, msgs) =
-     let val (SOME p, _) = interpret'' xcmd (#1 s)
+  | interpret cfg (xcmd as RETRIEVE _) (s, history, msgs) =
+     let val (SOME p, _) = interpret'' cfg xcmd (#1 s)
       in (p, (s, history, msgs))
      end
-  | interpret xcmd ((s, {accumulative, effective}), history, msgs) =
+  | interpret cfg xcmd ((s, {accumulative, effective}), history, msgs) =
      let val i = Inttab.size history
          val ctxt = Minilang.context_of s
-         val (p, s') = interpret'' xcmd s
+         val (p, s') = interpret'' cfg xcmd s
 
          val records' = {
               accumulative = xcmd :: accumulative,
@@ -381,12 +394,12 @@ fun interpret (ROLLBACK i) ((_, {accumulative, ...}), history, msgs) =
       in (print, state')
      end
 
-fun run time cmds state =
+fun run cfg cmds state =
   let val may_time_out =
-        case time
+        case #total_timeout cfg
           of SOME t => Timeout.apply t
            | NONE => I
-      val s' = may_time_out (fold (fn cmd => snd o interpret cmd) cmds o init) state
+      val s' = may_time_out (fold (fn cmd => snd o interpret cfg cmd) cmds o init) state
    in conclude (fst state) s'
   end
 
