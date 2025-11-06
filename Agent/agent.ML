@@ -7,6 +7,12 @@ type budget = {
       step_limit: int
   }
 
+type cfg = {
+      auto_end : bool
+  }
+
+val default_cfg : cfg
+
 datatype ('term, 'thm, 'fact) command =
     RETRIEVE of 'term list (*patterns*)
               * 'term list (*negative patterns*)
@@ -28,9 +34,9 @@ type icmd = (term, thm, Facts.ref * Token.src list) command
 
 val check_command : Proof.context -> xcmd -> icmd
 
-val interpret' : budget -> icmd -> Minilang.state -> (unit -> string list) option * Minilang.state
-val interpret'' : budget -> xcmd -> Minilang.state -> (unit -> string list) option * Minilang.state
-val replay_proof : budget -> xcmd list -> Minilang.state -> Minilang.state
+val interpret' : cfg * budget -> icmd -> Minilang.state -> (unit -> string list) option * Minilang.state
+val interpret'' : cfg * budget -> xcmd -> Minilang.state -> (unit -> string list) option * Minilang.state
+val replay_proof : cfg * budget -> xcmd list -> Minilang.state -> Minilang.state
 
 type opr_records = {
     accumulative: xcmd list,
@@ -52,19 +58,46 @@ val effective_cmds : state -> xcmd list
 
 val proof_of : state -> xcmd list
 
-val interpret : budget -> xcmd -> state -> (unit -> string list) * state
-val run : budget -> xcmd list -> context_state -> thm
+val interpret : cfg * budget -> xcmd -> state -> (unit -> string list) * state
+val run : cfg * budget -> xcmd list -> context_state -> thm
+
+(* Driver *)
+
+type driver = string
+val register_driver : string -> cfg -> unit
+val cfg_of_driver : driver -> cfg
 
 end
 
 structure MiniLang_Agent : MINILANG_AGENT = struct
 
+(* ready_to_finish *)
 type budget = {
       QUERY_RET_LIMIT: int option,
       parallel_runs: int,
       total_timeout: Time.time option,
       step_limit: int
   }
+
+type cfg = {
+      auto_end : bool
+  }
+
+val default_cfg = {
+      auto_end = true
+  }
+
+type driver = string
+
+val driver_cfg = Synchronized.var "driver_cfg" Symtab.empty
+               : cfg Symtab.table Synchronized.var
+
+fun register_driver name cfg =
+  Synchronized.change driver_cfg (Symtab.update_new (name, cfg))
+
+fun cfg_of_driver driver =
+      Symtab.lookup (Synchronized.value driver_cfg) driver
+        |> the_default default_cfg
 
 datatype ('term, 'thm, 'fact) command =
     RETRIEVE of 'term list (*patterns*)
@@ -169,7 +202,7 @@ fun find_def ctxt name =
 fun find_def_const ctxt (Const (name, _)) = find_def ctxt name
   | find_def_const _ _ = NONE
 
-fun interpret' budget (RETRIEVE (patterns, neg_pats, names)) (s:Minilang.state) =
+fun interpret' cfg (RETRIEVE (patterns, neg_pats, names)) (s:Minilang.state) =
       let open Find_Theorems
           val ctxt = Minilang.context_of s
           val _ = if null patterns andalso null neg_pats andalso null names
@@ -181,7 +214,8 @@ fun interpret' budget (RETRIEVE (patterns, neg_pats, names)) (s:Minilang.state) 
             @ map (fn tm => (false, Pattern tm)) neg_pats
             @ map (fn tm => (true , Name tm)) names
           val (SOME num, thms) =
-                  Find_Theorems.find_theorems ctxt NONE (#QUERY_RET_LIMIT budget) true criteria
+                  Find_Theorems.find_theorems ctxt NONE (#QUERY_RET_LIMIT (snd cfg))
+                                              true criteria
 
           fun augment_def const =
               case find_def_const ctxt const
@@ -205,7 +239,7 @@ fun interpret' budget (RETRIEVE (patterns, neg_pats, names)) (s:Minilang.state) 
               @ map (fn (Facts.Named named, th) =>
                             "- " ^ print_name named ^ ": " ^ string_of_thm ctxt th ^ "\n"
                       | (Facts.Fact tm, _) =>
-                            "- \<open>" ^ REPL.trim_makrup tm ^ "\<close>" ) thms
+                            "- \<open>" ^ REPL.trim_makrup tm ^ "\<close>\n" ) thms
        in (SOME print, s)
       end
   | interpret' cfg (SIMPLIFY simp_thms) s = (
@@ -213,7 +247,7 @@ fun interpret' budget (RETRIEVE (patterns, neg_pats, names)) (s:Minilang.state) 
       handle Minilang.OPR_FAIL (PROOF_FAIL, _) =>
         raise Minilang.OPR_FAIL (PROOF_FAIL,
             "Cannot further simplify the goal. You should either apply other operation (e.g., ATP)\
-            \ or supply more simplification rules if you believe you should apply SIMPLIFY.") )
+            \ or supply more simplification rules if you believe you should apply SIMPLIFY.\n") )
   | interpret' cfg (UNFOLD origin_consts) s =
       let val _ = if null origin_consts
                   then error "You must specify at least one target to unfold"
@@ -231,10 +265,10 @@ fun interpret' budget (RETRIEVE (patterns, neg_pats, names)) (s:Minilang.state) 
                case not_found
                  of [x] => error (String.concat [
                             "The definition of ", x, " is not found.\n\
-                            \You may use RETRIEVE command to look for the definition and apply SIMPIFY to unfold."])
+                            \You may use RETRIEVE command to look for the definition and apply SIMPIFY to unfold.\n"])
                   |  _  => error (String.concat [
                             "The definitions of ", String.concatWith ", " not_found, " are not found.\n\
-                            \You may use RETRIEVE command to look for the definitions and apply SIMPIFY to unfold."]))
+                            \You may use RETRIEVE command to look for the definitions and apply SIMPIFY to unfold.\n"]))
        in (print, Minilang.UNFOLD (flat (map_filter I defs)) s)
       end
   | interpret' cfg (WITNESS terms) s = (NONE, Minilang.CHOOSE terms s)
@@ -265,10 +299,19 @@ fun interpret' budget (RETRIEVE (patterns, neg_pats, names)) (s:Minilang.state) 
   | interpret' cfg (ROLLBACK _) _ =
       error "Cannot rollback in interpret'"
 
+val join_output = join_options (fn (f,g) => fn () => f () @ "\n" :: g ())
+
 fun interpret'' cfg xcmd s =
   let val ctxt = Minilang.context_of s
       val icmd = check_command ctxt xcmd
-   in interpret' cfg icmd s
+      val (output, s') = interpret' cfg icmd s
+      val (output, s') =
+            if Minilang.ready_to_finish s'
+            then let val (output', s'') = interpret' cfg (ATP []) s'
+                  in (join_output (output, output'), s'')
+                 end
+            else (output, s')
+   in (output, s')
   end
 
 fun replay_proof cfg = fold (snd oo interpret'' cfg)
@@ -316,6 +359,7 @@ fun init (ctxt, sequent) =
   let val ctxt = ctxt
             |> Config.put Minilang.transparent_intro true
             |> Config.put Minilang.high_auto_mode true
+            (* |> Config.put Minilang.auto_end_mode true *)
       val s = (Minilang.INIT ctxt sequent, {accumulative=[], effective=[]})
       val msgs = Unsynchronized.ref []
       fun reporter msg = msgs := msg :: !msgs
@@ -394,14 +438,18 @@ fun interpret cfg (ROLLBACK i) ((_, {accumulative, ...}), history, msgs) =
       in (print, state')
      end
 
-fun run cfg cmds state =
+fun run (cfg, budget) cmds state =
   let val may_time_out =
-        case #total_timeout cfg
+        case #total_timeout budget
           of SOME t => Timeout.apply t
            | NONE => I
-      val s' = may_time_out (fold (fn cmd => snd o interpret cfg cmd) cmds o init) state
+      val s' = may_time_out (fold (fn cmd => snd o interpret (cfg, budget) cmd) cmds o init) state
    in conclude (fst state) s'
   end
 
+
+val _ = register_driver "Gemini" {
+            auto_end = true
+        }
 
 end

@@ -3,8 +3,8 @@ include MINILANG_AGENT
 
 val unpacker : xcmd MessagePackBinIO.Unpack.unpacker
 
-val serialize : xcmd list -> string
-val deserialize : string -> xcmd list
+val serialize : driver * xcmd list -> string
+val deserialize : string -> driver * xcmd list
 
 end
 
@@ -95,15 +95,17 @@ structure ML_Bytes = MiniLang_Agent_Pack(BytesIO)
 
 val unpacker = ML_BinIO.unpacker
 
-fun serialize cmds =
+fun serialize cfg_cmds =
   let val buf = BytesIO.mkOutstream ()
-   in ML_Bytes.MP.Pack.packList ML_Bytes.packer cmds buf
+      open ML_Bytes.MP.Pack
+   in packPair (packString, packList ML_Bytes.packer) cfg_cmds buf
     ; BytesIO.toString buf
   end
 
 fun deserialize str =
   let val buf = BytesIO.fromString str
-   in ML_Bytes.MP.Unpack.unpackList ML_Bytes.unpacker buf
+      open ML_Bytes.MP.Unpack
+   in unpackPair (unpackString, unpackList ML_Bytes.unpacker) buf
    |> fst
   end
 

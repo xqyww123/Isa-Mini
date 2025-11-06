@@ -38,7 +38,7 @@ val unpackBudget = unpackTuple4
 val unpackCfg = unpackPair (unpackString, unpackBudget)
         #> apfst (fn (driver, b) => ({
               driver = driver, budget = b
-           } : cfg))
+           } : top_cfg))
 end
 
 fun is_dummy th =
@@ -52,14 +52,15 @@ fun apply' cfg (ctxt, sequent) =
   let
     exception Prf_Search_Fail
     fun evaluator time prf_str (ctxt, sequent) =
-      let val prf = deserialize prf_str
+      let val (drv,prf) = deserialize prf_str
+          val cfg = cfg_of_driver drv
           val budget = {
                     QUERY_RET_LIMIT = NONE,
                     parallel_runs = 1,
                     total_timeout = SOME time,
                     step_limit = ~1
                 }
-       in SOME (ctxt, run budget prf (ctxt, sequent))
+       in SOME (ctxt, run (cfg,budget) prf (ctxt, sequent))
        handle Minilang.OPR_FAIL _ => NONE
       end
     fun search_proof _ =
@@ -72,7 +73,7 @@ fun apply' cfg (ctxt, sequent) =
               val sequent' = conclude ctxt state'
             in
               if Thm.nprems_of sequent' = 0
-              then SOME (serialize (effective_cmds state'),
+              then SOME (serialize (drv, effective_cmds state'),
                          sequent')
               else NONE
             end

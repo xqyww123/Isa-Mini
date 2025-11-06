@@ -46,6 +46,7 @@ val INIT : Proof.context -> thm -> state
 val INIT': Proof.state -> state
 val conclude : Proof.context -> state -> thm
 val is_finished : state -> bool
+val ready_to_finish : state -> bool
 
 (*Thread local*)
 datatype message = New_Items of items
@@ -2740,6 +2741,11 @@ fun parse_cmds toks =
 fun stack_is_finished (_, [HHF (st', _)]) = no_goal' st'
   | stack_is_finished _ = false
 fun is_finished (SK,_,_) = stack_is_finished SK
+
+fun stack_is_ready_to_finish (_, HHF (st, _) :: _) = Thm.no_prems st
+  | stack_is_ready_to_finish _ = raise BROKEN_INVARIANT
+fun ready_to_finish (SK,_,_) = stack_is_ready_to_finish SK
+
 
 fun conclude initial_ctxt ((ctxt', S  as [HHF (st',_)]),_,_) =
       let val st'' = singleton (Proof_Context.export ctxt' initial_ctxt) st'

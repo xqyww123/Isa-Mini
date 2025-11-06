@@ -5,11 +5,17 @@ from google.genai import types
 import os
 import json
 
-#ECHO = [("ATP", {})]
 ECHO = [
-    ("OBTAIN", {'variables': [{'name': 'k'}], 'conditions': ['k > 0']}),
-    ("ATP", {})
+    ("INDUCT", {'target': 'n'}),
+    ("SIMPLIFY", {}),
+    ("HAVE", {'subgoals': ['Suc n ≤ n²']})
 ]
+
+#ECHO = [("ATP", {})]
+# ECHO = [
+#     ("OBTAIN", {'variables': [{'name': 'k'}], 'conditions': ['k > 0']}),
+#     ("ATP", {})
+# ]
 #ECHO = [
 #    ("OBTAIN", {'variables': [{'name': 'k', 'type': 'int'}], 'conditions': ['k > 0']}),
 #    ("ATP", {})

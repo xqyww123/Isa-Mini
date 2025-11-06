@@ -16,6 +16,7 @@ Visit our [Example Gallery](https://docs.google.com/presentation/d/14VY5HkMRmOhR
 - **State Management**: Support for restore historical proof states.
 - **Bidirectional Portal**: That also eases Isabelle to call AI agents in future.
 	- A shell script that successfully proves a goal, also produces an Isabelle tactic script able to reproduce the proof without using the shell.
+
 ## Motivation
 
 Isabelle/HOL has evolved into a sophisticated system with numerous features optimized for human interaction. While powerful, many of these features—such as the human-readable Isar language—are unnecessary overhead when working with AI agents. This shell aims to:
@@ -81,14 +82,14 @@ Our language is more concise because we use Sledgehammer to automatically genera
 
 Clients just need to start up our shell, and send the above text through the standard input pipeline (`stdin`), and that is all required to prove lemmas using our shell. If the proof works, our shell shall return an Isabelle script allowing anyone to reproduce the proof.
 
-## Schedule (Planned)
+## Schedule (Finished)
 
 | Due Date         | Phase                       |
 | ---------------- | --------------------------- |
 | Week 1, November | ✅ Proposal Draft Release      |
 | Week 4, November | ✅ Design Specification Freeze |
 | Week 2, January  | ✅ The language is almost done. [Example Gallery](https://docs.google.com/presentation/d/14VY5HkMRmOhRkKBvmISymKtNg5e650EZgzt-KajqMRI/edit?usp=sharing) |
-| Week 4, January  | ⏳ Translating AFP to this lang. |
+| Week 4, January  | ✅ Translating AFP to this lang (We have ~260K proofs translated from AFP!). |
 
 ## Design Specification (Draft)
 

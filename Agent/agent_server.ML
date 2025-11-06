@@ -1,20 +1,20 @@
 signature MINILANG_AGENT = sig
 include MINILANG_AGENT
 
-type cfg = {
+type top_cfg = {
      driver : string,
      budget : budget
   }
 
-val REPL : cfg
+val REPL : top_cfg
         -> BinIO.StreamIO.instream Unsynchronized.ref
         -> BinIO.StreamIO.outstream
         -> context_state
         -> state
 
-val REPL_App : cfg -> REPL_Server.App
+val REPL_App : top_cfg -> REPL_Server.App
 
-val run_agent : cfg
+val run_agent : top_cfg
              -> context_state
              -> MiniLang_Agent.state
 
@@ -23,7 +23,7 @@ end
 structure MiniLang_Agent : MINILANG_AGENT = struct
 open MiniLang_Agent
 
-type cfg = {
+type top_cfg = {
      driver : string,
      budget : budget
   }
@@ -37,6 +37,8 @@ fun REPL {driver, budget} cin cout proof_state =
                           ; ret
                         end
 
+      val cfg = cfg_of_driver driver
+
       val continue = Unsynchronized.ref true
 
       val step = Unsynchronized.ref 0
@@ -49,7 +51,7 @@ fun REPL {driver, budget} cin cout proof_state =
                     then raise Step_Limit_Exceed
                     else ()
 
-            val (printer, s') = interpret budget cmd s
+            val (printer, s') = interpret (cfg, budget) cmd s
             val ret = printer ()
 
             val finished = is_finished s'

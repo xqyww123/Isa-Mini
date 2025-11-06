@@ -1,11 +1,11 @@
 theory Minilang_Agent_Test
   imports Minilang_Agent
 begin
-
+ 
 
 declare [[agent_driver=EchoDebugger, enable_proof_cache=false]]
-
-lemma "(1::nat) + 1 = 2"
+     
+lemma "4 \<le> n \<Longrightarrow> n\<^sup>2 \<le> fact n"
   by agent
 
 (*
