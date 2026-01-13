@@ -2744,7 +2744,7 @@ fun is_finished (SK,_,_) = stack_is_finished SK
 
 fun stack_is_ready_to_finish (_, HHF (st, _) :: _) = Thm.no_prems st
   | stack_is_ready_to_finish _ = raise BROKEN_INVARIANT
-fun ready_to_finish (SK,_,_) = stack_is_ready_to_finish SK
+fun ready_to_finish (s as (SK,_,_)) = stack_is_ready_to_finish SK andalso not (is_finished s)
 
 
 fun conclude initial_ctxt ((ctxt', S  as [HHF (st',_)]),_,_) =

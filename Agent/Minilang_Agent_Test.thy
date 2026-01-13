@@ -4,9 +4,12 @@ begin
  
 
 declare [[agent_driver=EchoDebugger, enable_proof_cache=false]]
-
-lemma "4 \<le> n \<Longrightarrow> n\<^sup>2 \<le> fact n"
+  
+lemma t1: "(1::nat) > 0"
+(*  by (min_script \<open>END\<close>) *)
   by agent
+lemma "4 \<le> n \<Longrightarrow> n\<^sup>2 \<le> fact n"
+  by agen
 
 (*
 lemma "(1::nat) + 1 = 2"

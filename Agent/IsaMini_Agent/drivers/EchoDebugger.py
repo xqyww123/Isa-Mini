@@ -6,8 +6,11 @@ import os
 import json
 
 ECHO = [
-    ("HAVE", {'subgoals': ['1 + 1 = 2']})
+    ("ATP", {})
 ]
+# ECHO = [
+#     ("HAVE", {'subgoals': ['1 + 1 = 2']})
+# ]
 # ECHO = [
 #     ("INDUCT", {'target': 'n'}),
 #     ("SIMPLIFY", {}),
