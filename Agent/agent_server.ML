@@ -30,6 +30,11 @@ type top_cfg = {
 
 val VERSION = "0.1"
 
+val agent_cfg = {
+      auto_end = true,
+      gussing_num_typ = true
+  }
+
 fun REPL {driver, budget} cin cout proof_state =
   let open MessagePackBinIO.Unpack MessagePackBinIO.Pack
       fun read packer = let val (ret, cin') = doUnpack packer (!cin)
@@ -67,7 +72,7 @@ fun REPL {driver, budget} cin cout proof_state =
             |> apfst (
                    Config.put Printer.show_markup false
                 #> Config.put Printer.show_type_emphasis false) *)
-      val init_state = MiniLang_Agent.init proof_state
+      val init_state = MiniLang_Agent.init agent_cfg proof_state
       val state = Unsynchronized.ref init_state
 
       val version = read unpackString
