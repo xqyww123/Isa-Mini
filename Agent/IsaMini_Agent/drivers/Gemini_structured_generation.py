@@ -273,7 +273,6 @@ ToolCall = Annotated[
     Field(discriminator="name"),
 ]
 
-
 class ToolChoice(BaseModel):
     """
     A model that forces the selection of exactly one tool call
@@ -295,12 +294,11 @@ class ToolChoice(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-
 class Proof_Chat(driver.ProofChat):
     def __init__(self, initial_state_printing: str):
         self.client = genai.Client()
 
-        system_prompt_path = Path(__file__).parent.joinpath("prompts/gemini_xiaokun.md")
+        system_prompt_path = Path(__file__).parent.parent.joinpath("prompts/gemini_xiaokun.md")
         system_prompt = system_prompt_path.read_text()
 
         common_config = {
