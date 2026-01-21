@@ -1,6 +1,10 @@
 from pydantic import BaseModel, ConfigDict, Field, field_validator, TypeAdapter
 from typing import List, Optional, Literal, Union, Annotated
 
+class Variable(BaseModel):
+    name: str = Field()
+    type: str = Field(default="")
+
 class Statement(BaseModel):
     english: str = Field(
         description="the natural language statement in English"
@@ -8,17 +12,33 @@ class Statement(BaseModel):
     isabelle: str = Field(
         description="the formal statement in Isabelle/HOL"
     )
+    for_any: List[Variable | str] = Field(
+        default=[],
+        description="variables that the statement is universally quantified over"
+    )
 
 class Fact(BaseModel):
     english: str = Field(
         description="the natural language description of the fact"
     )
-    refer_by: Literal["name", "expression"] = Field(
-        description="whether the fact is referred to by its name or its expression"
+    isabelle_expression: str = Field(
+        description="the Isabelle/HOL expression of the fact"
     )
-    value: str = Field(
-        description="The name or the expression. For expression, wildcard '_' may be used and any fact matching the pattern will be used."
+    for_any: List[Variable | str] = Field(
+        default=[],
+        description="variables that the fact is universally quantified over"
     )
+    # refer_by: Literal["name", "expression"] = Field(
+    #     description="whether the fact is referred to by its name or its expression"
+    # )
+    # value: str = Field(
+    #     description="The name or the expression. For expression, wildcard '_' may be used and any fact matching the pattern will be used."
+    # )
+
+# import json
+# print(json.dumps(TypeAdapter(Fact).json_schema(), indent=2))
+# exit(0)
+
 
 class ATP(BaseModel):
     lemmas: List[Fact] = Field(default=[])
@@ -122,6 +142,9 @@ class Witness(BaseModel):
             "description": "provide witnesses to reduce existential proof goals. You still need to prove the goal instantiated with the witnesses later."
         },
     )
+    next_step: "Declarative_Operations" | Literal["yield and await proof state", "finished"]  = Field(
+        description="the next proof operation to perform. You may yield the generation and await proof state update from user"
+    )
 
 class Inference_Rule(BaseModel):
     operation: Literal["inference_rule"] = Field()
@@ -136,6 +159,9 @@ class Inference_Rule(BaseModel):
             "description": "prove using a specific inference rule, e.g., contradiction, or proving equality by antisymmetry."
         },
     )
+    next_step: Literal["yield and await proof state", "finished"]  = Field(
+        description="You must yield the generation and await proof state update from user"
+    )
 
 class Branch(BaseModel):
     operation: Literal["branch"] = Field()
@@ -148,6 +174,9 @@ class Branch(BaseModel):
         json_schema_extra={
             "description": "split the proof goal into cases"
         },
+    )
+    next_step: Literal["yield and await proof state", "finished"]  = Field(
+        description="You must yield the generation and await proof state update from user"
     )
 
 
@@ -163,10 +192,9 @@ class Have(BaseModel):
             "description": "introduce a subgoal"
         },
     )
-
-class Variable(BaseModel):
-    name: str = Field()
-    type: str = Field(default="")
+    next_step: "Declarative_Operations" | Literal["yield and await proof state", "finished"]  = Field(
+        description="the next proof operation to perform. You may yield the generation and await proof state update from user"
+    )
 
 class Obtain(BaseModel):
     operation: Literal["obtain"] = Field()
@@ -180,6 +208,9 @@ class Obtain(BaseModel):
         json_schema_extra={
             "description": "introduce variables satisfying the given constraints"
         },
+    )
+    next_step: "Declarative_Operations" | Literal["yield and await proof state", "finished"]  = Field(
+        description="the next proof operation to perform. You may yield the generation and await proof state update from user"
     )
 
 
@@ -241,18 +272,17 @@ class Suffices_to_Show(BaseModel):
     )
 
 Declarative_Operations = Annotated[
-    Union[ Have
-         , Obtain
-         , Branch
-         , Case_Analysis
-         , Induction
-         , Rewrite
-         , Simplify
-         , Unfold
-         , Witness
-         , Inference_Rule
-         , Suffices_to_Show
-         ],
+      Have
+    | Obtain
+    | Branch
+    | Case_Analysis
+    | Induction
+    | Rewrite
+    | Simplify
+    | Unfold
+    | Witness
+    | Inference_Rule
+    | Suffices_to_Show,
     Field(discriminator="operation"),
 ]
 

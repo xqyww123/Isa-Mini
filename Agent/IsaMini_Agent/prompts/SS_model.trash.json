@@ -1,0 +1,24 @@
+    /*"Simplify": {
+      "additionalProperties": false,
+      "description": "Call the system simplifier to rewrite proof goals",
+      "properties": {
+        "operation": {
+          "const": "simplify",
+          "type": "string"
+        },
+        "thought": { "$ref": "#/$defs/Thought" },
+        "lemmas": {
+          "description": "additional equations and lemmas helpful for the simplification",
+          "items": {
+            "$ref": "#/$defs/Fact"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "operation",
+        "thought"
+      ],
+      "title": "Simplify",
+      "type": "object"
+    },*/
