@@ -1,0 +1,1 @@
+使用 next_step 的 linked list, 以允许 LLM 随时中断生成并要求交互，要求proof state 信息

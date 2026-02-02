@@ -1,0 +1,683 @@
+{
+    "$defs": {
+        "ATPParams": {
+            "additionalProperties": false,
+            "description": "Arguments for the ATP tool",
+            "properties": {
+                "lemmas": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "additional lemmas that can be helpful for proving the goal",
+                    "title": "Lemmas"
+                }
+            },
+            "title": "ATPParams",
+            "type": "object"
+        },
+        "ATPTool": {
+            "description": "Apply powerful Automated Theorem Provers to prove a goal.",
+            "properties": {
+                "name": {
+                    "const": "ATP",
+                    "default": "ATP",
+                    "title": "Name",
+                    "type": "string"
+                },
+                "arguments": {
+                    "$ref": "#/$defs/ATPParams"
+                }
+            },
+            "required": [
+                "arguments"
+            ],
+            "title": "ATPTool",
+            "type": "object"
+        },
+        "BRANCHParams": {
+            "additionalProperties": false,
+            "description": "Arguments for the BRANCH tool",
+            "properties": {
+                "cases": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "The cases that the proof goal is split into.",
+                    "title": "Cases"
+                }
+            },
+            "title": "BRANCHParams",
+            "type": "object"
+        },
+        "BRANCHTool": {
+            "description": "Conduct case-by-case discussion and split the proof goal into cases",
+            "properties": {
+                "name": {
+                    "const": "BRANCH",
+                    "default": "BRANCH",
+                    "title": "Name",
+                    "type": "string"
+                },
+                "arguments": {
+                    "$ref": "#/$defs/BRANCHParams"
+                }
+            },
+            "required": [
+                "arguments"
+            ],
+            "title": "BRANCHTool",
+            "type": "object"
+        },
+        "CASESPLITParams": {
+            "additionalProperties": false,
+            "description": "Arguments for the CASE_SPLIT tool",
+            "properties": {
+                "target": {
+                    "description": "target term of the case analysis",
+                    "title": "Target",
+                    "type": "string"
+                },
+                "rule": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "optional case-split rule indicating non-standard case-split behavior",
+                    "title": "Rule"
+                }
+            },
+            "required": [
+                "target"
+            ],
+            "title": "CASESPLITParams",
+            "type": "object"
+        },
+        "CASESPLITTool": {
+            "description": "Apply structural case analysis over a given term.",
+            "properties": {
+                "name": {
+                    "const": "CASE_SPLIT",
+                    "default": "CASE_SPLIT",
+                    "title": "Name",
+                    "type": "string"
+                },
+                "arguments": {
+                    "$ref": "#/$defs/CASESPLITParams"
+                }
+            },
+            "required": [
+                "arguments"
+            ],
+            "title": "CASESPLITTool",
+            "type": "object"
+        },
+        "HAVEParams": {
+            "additionalProperties": false,
+            "description": "Arguments for the HAVE tool",
+            "properties": {
+                "subgoals": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "Array of subgoal propositions",
+                    "items": {
+                        "description": "the expression of each subgoal proposition"
+                    },
+                    "title": "Subgoals"
+                }
+            },
+            "title": "HAVEParams",
+            "type": "object"
+        },
+        "HAVETool": {
+            "description": "Introduce subgoals",
+            "properties": {
+                "name": {
+                    "const": "HAVE",
+                    "default": "HAVE",
+                    "title": "Name",
+                    "type": "string"
+                },
+                "arguments": {
+                    "$ref": "#/$defs/HAVEParams"
+                }
+            },
+            "required": [
+                "arguments"
+            ],
+            "title": "HAVETool",
+            "type": "object"
+        },
+        "INDUCTParams": {
+            "additionalProperties": false,
+            "description": "Arguments for the INDUCT tool",
+            "properties": {
+                "target": {
+                    "description": "target term of the induction",
+                    "title": "Target",
+                    "type": "string"
+                },
+                "arbitrary": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "variables to be re-quantified universally in each induction subgoal, allowing them to take different values in different inductive cases, rather than being fixed to a single value throughout the entire induction",
+                    "title": "Arbitrary"
+                },
+                "rule": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "optional induction rule indicating how the induction should work",
+                    "title": "Rule"
+                }
+            },
+            "required": [
+                "target"
+            ],
+            "title": "INDUCTParams",
+            "type": "object"
+        },
+        "INDUCTTool": {
+            "description": "Apply induction over a given term.",
+            "properties": {
+                "name": {
+                    "const": "INDUCT",
+                    "default": "INDUCT",
+                    "title": "Name",
+                    "type": "string"
+                },
+                "arguments": {
+                    "$ref": "#/$defs/INDUCTParams"
+                }
+            },
+            "required": [
+                "arguments"
+            ],
+            "title": "INDUCTTool",
+            "type": "object"
+        },
+        "OBTAINParams": {
+            "additionalProperties": false,
+            "description": "Arguments for the OBTAIN tool",
+            "properties": {
+                "variables": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "$ref": "#/$defs/OBTAINVariable"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "variable names and types",
+                    "title": "Variables"
+                },
+                "conditions": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "constraints of the variables",
+                    "title": "Conditions"
+                }
+            },
+            "title": "OBTAINParams",
+            "type": "object"
+        },
+        "OBTAINTool": {
+            "description": "Extract witnesses from existential statements, e.g., let x be such that P(x)",
+            "properties": {
+                "name": {
+                    "const": "OBTAIN",
+                    "default": "OBTAIN",
+                    "title": "Name",
+                    "type": "string"
+                },
+                "arguments": {
+                    "$ref": "#/$defs/OBTAINParams"
+                }
+            },
+            "required": [
+                "arguments"
+            ],
+            "title": "OBTAINTool",
+            "type": "object"
+        },
+        "OBTAINVariable": {
+            "description": "A variable to be obtained, with its name and optional type.",
+            "properties": {
+                "name": {
+                    "description": "The name of the variable",
+                    "title": "Name",
+                    "type": "string"
+                },
+                "type": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "The type of the variable",
+                    "title": "Type"
+                }
+            },
+            "required": [
+                "name"
+            ],
+            "title": "OBTAINVariable",
+            "type": "object"
+        },
+        "RETRIEVEParams": {
+            "additionalProperties": false,
+            "description": "Arguments for the RETRIEVE tool",
+            "properties": {
+                "patterns": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "patterns that the target facts should match",
+                    "title": "Patterns"
+                },
+                "negative patterns": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "negative patterns that the target facts should NOT match",
+                    "title": "Negative Patterns"
+                },
+                "names": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "substrings that the names of the target facts should contain",
+                    "title": "Names"
+                }
+            },
+            "title": "RETRIEVEParams",
+            "type": "object"
+        },
+        "RETRIEVETool": {
+            "description": "Retrieves facts from the system knowledge-base",
+            "properties": {
+                "name": {
+                    "const": "RETRIEVE",
+                    "default": "RETRIEVE",
+                    "title": "Name",
+                    "type": "string"
+                },
+                "arguments": {
+                    "$ref": "#/$defs/RETRIEVEParams"
+                }
+            },
+            "required": [
+                "arguments"
+            ],
+            "title": "RETRIEVETool",
+            "type": "object"
+        },
+        "ROLLBACKParams": {
+            "additionalProperties": false,
+            "description": "Arguments for the ROLLBACK tool",
+            "properties": {
+                "step": {
+                    "description": "the step number that you expect to rollback",
+                    "title": "Step",
+                    "type": "integer"
+                }
+            },
+            "required": [
+                "step"
+            ],
+            "title": "ROLLBACKParams",
+            "type": "object"
+        },
+        "ROLLBACKTool": {
+            "description": "Rollback to a previous step",
+            "properties": {
+                "name": {
+                    "const": "ROLLBACK",
+                    "default": "ROLLBACK",
+                    "title": "Name",
+                    "type": "string"
+                },
+                "arguments": {
+                    "$ref": "#/$defs/ROLLBACKParams"
+                }
+            },
+            "required": [
+                "arguments"
+            ],
+            "title": "ROLLBACKTool",
+            "type": "object"
+        },
+        "RULEParams": {
+            "additionalProperties": false,
+            "description": "Arguments for the RULE tool",
+            "properties": {
+                "rule": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "The reasoning rule to apply. If omitted, the default rule will be taken.",
+                    "title": "Rule"
+                }
+            },
+            "title": "RULEParams",
+            "type": "object"
+        },
+        "RULETool": {
+            "description": "Reduce the proof goal by applying a reasoning rule",
+            "properties": {
+                "name": {
+                    "const": "RULE",
+                    "default": "RULE",
+                    "title": "Name",
+                    "type": "string"
+                },
+                "arguments": {
+                    "$ref": "#/$defs/RULEParams"
+                }
+            },
+            "required": [
+                "arguments"
+            ],
+            "title": "RULETool",
+            "type": "object"
+        },
+        "SIMPLIFYParams": {
+            "additionalProperties": false,
+            "description": "Arguments for the SIMPLIFY tool",
+            "properties": {
+                "rules": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "Additional simplification rules to use",
+                    "title": "Rules"
+                }
+            },
+            "title": "SIMPLIFYParams",
+            "type": "object"
+        },
+        "SIMPLIFYTool": {
+            "description": "Simplify the proof goal",
+            "properties": {
+                "name": {
+                    "const": "SIMPLIFY",
+                    "default": "SIMPLIFY",
+                    "title": "Name",
+                    "type": "string"
+                },
+                "arguments": {
+                    "$ref": "#/$defs/SIMPLIFYParams"
+                }
+            },
+            "required": [
+                "arguments"
+            ],
+            "title": "SIMPLIFYTool",
+            "type": "object"
+        },
+        "UNFOLDParams": {
+            "additionalProperties": false,
+            "description": "Arguments for the UNFOLD tool",
+            "properties": {
+                "targets": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "The target constants to unfold",
+                    "title": "Targets"
+                }
+            },
+            "title": "UNFOLDParams",
+            "type": "object"
+        },
+        "UNFOLDTool": {
+            "description": "Unfolding definitions.",
+            "properties": {
+                "name": {
+                    "const": "UNFOLD",
+                    "default": "UNFOLD",
+                    "title": "Name",
+                    "type": "string"
+                },
+                "arguments": {
+                    "$ref": "#/$defs/UNFOLDParams"
+                }
+            },
+            "required": [
+                "arguments"
+            ],
+            "title": "UNFOLDTool",
+            "type": "object"
+        },
+        "WITNESSParams": {
+            "additionalProperties": false,
+            "description": "Arguments for the WITNESS tool",
+            "properties": {
+                "witnesses": {
+                    "description": "Terms of witnesses to instantiate. The number of the terms must be smaller than the number of the leading existential quantifications in the goal.",
+                    "items": {
+                        "type": "string"
+                    },
+                    "title": "Witnesses",
+                    "type": "array"
+                }
+            },
+            "required": [
+                "witnesses"
+            ],
+            "title": "WITNESSParams",
+            "type": "object"
+        },
+        "WITNESSTool": {
+            "description": "Instantiate witnesses of existential quantifications in the proof goal.",
+            "properties": {
+                "name": {
+                    "const": "WITNESS",
+                    "default": "WITNESS",
+                    "title": "Name",
+                    "type": "string"
+                },
+                "arguments": {
+                    "$ref": "#/$defs/WITNESSParams"
+                }
+            },
+            "required": [
+                "arguments"
+            ],
+            "title": "WITNESSTool",
+            "type": "object"
+        }
+    },
+    "additionalProperties": false,
+    "description": "A model that forces the selection of exactly one tool call\nfrom the available list of tools.",
+    "properties": {
+        "thought": {
+            "description": "A brief, step-by-step reasoning or thought process that justifies the chosen tool call.",
+            "title": "Thought",
+            "type": "string"
+        },
+        "tool_call": {
+            "description": "The tool call to be executed",
+            "discriminator": {
+                "mapping": {
+                    "ATP": "#/$defs/ATPTool",
+                    "BRANCH": "#/$defs/BRANCHTool",
+                    "CASE_SPLIT": "#/$defs/CASESPLITTool",
+                    "HAVE": "#/$defs/HAVETool",
+                    "INDUCT": "#/$defs/INDUCTTool",
+                    "OBTAIN": "#/$defs/OBTAINTool",
+                    "RETRIEVE": "#/$defs/RETRIEVETool",
+                    "ROLLBACK": "#/$defs/ROLLBACKTool",
+                    "RULE": "#/$defs/RULETool",
+                    "SIMPLIFY": "#/$defs/SIMPLIFYTool",
+                    "UNFOLD": "#/$defs/UNFOLDTool",
+                    "WITNESS": "#/$defs/WITNESSTool"
+                },
+                "propertyName": "name"
+            },
+            "oneOf": [
+                {
+                    "$ref": "#/$defs/ATPTool"
+                },
+                {
+                    "$ref": "#/$defs/RETRIEVETool"
+                },
+                {
+                    "$ref": "#/$defs/SIMPLIFYTool"
+                },
+                {
+                    "$ref": "#/$defs/UNFOLDTool"
+                },
+                {
+                    "$ref": "#/$defs/WITNESSTool"
+                },
+                {
+                    "$ref": "#/$defs/RULETool"
+                },
+                {
+                    "$ref": "#/$defs/CASESPLITTool"
+                },
+                {
+                    "$ref": "#/$defs/INDUCTTool"
+                },
+                {
+                    "$ref": "#/$defs/BRANCHTool"
+                },
+                {
+                    "$ref": "#/$defs/HAVETool"
+                },
+                {
+                    "$ref": "#/$defs/OBTAINTool"
+                },
+                {
+                    "$ref": "#/$defs/ROLLBACKTool"
+                }
+            ],
+            "title": "Tool Call"
+        }
+    },
+    "required": [
+        "thought",
+        "tool_call"
+    ],
+    "title": "ToolChoice",
+    "type": "object"
+}

@@ -4,7 +4,7 @@ Based on your proof sketch above, formalize it into the JSON format specified in
 
 ### Hints
 - Formalize "Inference Rule Application" into operation `InferenceRule`
-- Formalize "Intermediate statements" into operation `Have`
+- Formalize "Intermediate Statements" into operation `Have`
 - Formalize "Case Analysis" into operation `CaseAnalysis` for structural analysis of terms (like lists, trees) or operation `Branch` for case split of propositions (like $x < 0, x = 0, x > 0$).
 - Formalize "Induction" into operation `Induction`
 - Formalize "Rewriting" into operation `Rewrite` if provided with specific equations or operation `Unfold` for unfolding specific constants.

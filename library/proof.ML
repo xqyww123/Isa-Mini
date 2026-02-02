@@ -133,6 +133,9 @@ val NXT : opt_var_names -> Sledgehammer.fact_override -> operation
 val NXT_CMD : command
 val END_or_NXT : opt_var_names -> Sledgehammer.fact_override -> operation
 
+val END_or_NXT_by_SORRY : opt_var_names -> state -> state
+val END_or_NXT_by_SORRY_CMD : command
+
 val LET   : (term list * term) list -> operation
 val LET'' : (string list * string) list -> operation
 val LET_CMD : command
@@ -1016,8 +1019,7 @@ fun OPR_ID (f : int -> stack -> stack) ((S,TAB,ID) : state) : state
   = (f ID S, TAB, ID+1)
 
 fun timed_OPR t f s
-  = (* Timeout.apply (Time.fromSeconds t) (OPR f) s *)
-    OPR f s
+  = Timeout.apply (Time.fromSeconds t) (OPR f) s
     handle Timeout.TIMEOUT _ => raise OPR_FAIL (PROOF_FAIL, "Timeout")
          | Exn.Interrupt_Breakdown => raise OPR_FAIL (PROOF_FAIL, "Timeout")
 
@@ -2177,10 +2179,8 @@ fun NXT' param SH_override ID (origin as stack as (_, HHF (st, _) :: _)) =
   end
   | NXT' _ _ _ _ = raise BROKEN_INVARIANT
 
-fun END_or_NXT' param SH_override ID stack =
-  let val ID_BASE = string_of_int ID
-      val (ctxt, SK'1) = HAMMER_i SH_override ID_BASE stack
-                      |> conclude_SK
+fun gen_END_or_NXT' param F stack =
+  let val (ctxt, SK'1) = conclude_SK (F stack)
       val st' = case SK'1 of HHF (st', _) :: _ => st'
                            | _ => raise BROKEN_INVARIANT
    in if no_goal' st'
@@ -2199,6 +2199,10 @@ fun END_or_NXT' param SH_override ID stack =
     else report_goal (ctxt, SK'1)
   end
 
+fun END_or_NXT' param SH_override ID =
+  let val ID_BASE = string_of_int ID
+   in gen_END_or_NXT' param (HAMMER_i SH_override ID_BASE)
+  end
 
 fun END SH_override = OPR_ID (END' NO_PARAM SH_override 0)
 fun NXT param SH_override = OPR_ID (NXT' (CASE_NAME param) SH_override)
@@ -2212,6 +2216,19 @@ fun type_of_end' [] = NONE
   | type_of_end' (MAGIC _ :: L) = type_of_end' L
 
 val type_of_end = type_of_end' o #2 o #1
+
+(** SORRY **)
+
+fun SORRY_i (ctxt, HHF (s,facts) :: S) =
+    let val s' = rule_by_tactic ctxt (Skip_Proof.cheat_tac ctxt 1) s
+     in (ctxt, HHF (s', facts) :: S)
+     |> maintain
+    end
+  | SORRY_i _ = raise BROKEN_INVARIANT
+
+fun END_or_NXT'_by_SORRY param = gen_END_or_NXT' param SORRY_i
+fun END_or_NXT_by_SORRY param = OPR (END_or_NXT'_by_SORRY (CASE_NAME param))
+val END_or_NXT_by_SORRY_CMD = OPT_VARS >> (fn x => END_or_NXT_by_SORRY x)
 
 (** LET **)
 
@@ -2643,7 +2660,8 @@ val CMDS = Symtab.make [
       ("OPEN_MODULE", OPEN_MODULE_CMD),
       ("DEFINE",  DEFINE_CMD),
       ("CONFIG",  CONFIG_CMD),
-      ("STEP"  ,  STEP_CMD)
+      ("STEP"  ,  STEP_CMD),
+      ("SORRY" ,  END_or_NXT_by_SORRY_CMD)
     ]
 
 val keywords = let open Keyword
@@ -2685,6 +2703,7 @@ val keywords = let open Keyword
            (("END",   \<^here>), command_spec (thy_end, [])),
            (("end",   \<^here>), command_spec (thy_end, [])),
            (("NEXT",  \<^here>), command_spec (thy_end, [])),
+           (("SORRY", \<^here>), command_spec (thy_end, [])),
            (("CONSIDER",\<^here>),command_spec (prf_asm_goal, [])),
            (("HAVE",  \<^here>), command_spec (prf_goal, [])),
            (("CASE_SPLIT",  \<^here>), command_spec (prf_goal, [])),

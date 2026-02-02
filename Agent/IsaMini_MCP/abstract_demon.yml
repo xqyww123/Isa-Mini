@@ -1,0 +1,220 @@
+proof goal:
+  variables:
+    - x: real
+    - y: int
+  hypotheses:
+    - hyp1: aaaa term
+    - hyp2: bbbb term
+  conclusion: some term
+proof:
+  Empty proof! Call command edit {"target step": "root", "proof operation": ....} to provide.
+
+proof goal:
+  variables:
+    - x: real
+    - y: int
+  hypotheses:
+    - aaaa term
+    - bbbb term
+  conclusion: some term
+proof:
+  - step id: step1
+    ...
+  - step id: step2
+    ...
+
+variables:
+  - x: real
+proof goals:
+  - goal index: 1
+    variables:
+      - y: int
+    hypotheses:
+      - aaaa term
+      - bbbb term
+    conclusion: some term
+  - goal index: 2
+    variables:
+      - z: int
+    hypotheses:
+      - aaaa term
+      - bbbb term
+    conclusion: some term
+proof:
+  - notice: No lemmas are declared, but you can declare them by calling command edit {"target step": "lemma_declarations", "proof operation": <some operation>} to declare a lemma.
+  - step id: proof_of_goal1
+    pending proof goal: ...
+    Error: Unfinished Proof! Call command edit {"target step": "proof_of_goal_1", "proof operation": ....} to provide.
+  - step id: proof_of_goal2
+    pending proof goal: ...
+    Error: Unfinished Proof! Call command edit {"target step": "proof_of_goal_2", "proof operation": ....} to provide.
+
+#After call edit {"step id": "prove_goal_1", "proof": {"operation": "have", "statement": "n³ - n = n(n² - 1)"}}
+
+proof:
+  - step id: proof_of_goal1
+    variables:
+      - n: int
+    hypotheses:
+      - aaaa term
+      - bbbb term
+    proof:
+    - step id: goal1.1
+      thought: To prove that 6 divides n³ - n for all positive integers n, we begin by factoring the expression. Notice that n³ - n can be rewritten as n(n² - 1)
+      operation: have
+      statement:
+        english: n³ - n equals n(n² - 1)
+        isabelle: n³ - n = n(n² - 1)
+      notice: This statement is nontrivial! You must provide a proof for this statement.
+      proof:
+        - step id: goal1.1.1
+          Error: Unfinished Proof! Call command edit {"target step": "step1.1", "proof operation": <some operation>} to fill in <some operation> here.
+          pending proof goal:
+            variables:
+              - n: int
+            hypotheses:
+              - aaaa term
+              - bbbb term
+            target conclusion: some term
+    - step id: goal1.2
+      Error: Unfinished Proof! Call command edit {"target step": "step1.2", "proof operation": <some operation>} to fill in <some operation> here.
+      pending proof goal:
+        variables:
+          - z: int
+        hypotheses:
+          - aaaa term
+        target conclusion: some term
+  - step id: proof_of_goal2
+    Error: Unfinished Proof! Call command edit {"target step": "proof_of_goal_2", "proof operation": ....} to provide.
+    proof goal: ...
+
+proof:
+  - step id: proof_of_goal1
+    - step id: goal1.1
+      thought: To prove that 6 divides n³ - n for all positive integers n, we begin by factoring the expression. Notice that n³ - n can be rewritten as n(n² - 1)
+      operation: have
+      statement:
+        english: n³ - n equals n(n² - 1)
+        isabelle: n³ - n = n(n² - 1)
+      notice: This statement is nontrivial! You must provide a proof for this statement.
+      proof:
+        - step id: goal1.1.1
+          thought: ...
+          operation: ...
+          ...
+        - step id: goal1.1.2
+          thought: ...
+          operation: ...
+          ...
+        - step id: goal1.1.3
+          Error: Unfinished Proof! Call command edit {"target step": "step1.1", "proof operation": <some operation>} to fill in <some operation> here.
+          pending proof goal: ...
+    - step id: goal1.2
+      Error: Unfinished Proof! Call command edit {"target step": "step1.2", "proof operation": <some operation>} to fill in <some operation> here.
+  - step id: proof_of_goal2
+    Error: Unfinished Proof! Call command edit {"target step": "proof_of_goal_2", "proof operation": ....} to provide.
+
+proof:
+  - step id: proof_of_goal1
+    - step id: goal1.1
+      thought: To prove that 6 divides n³ - n for all positive integers n, we begin by factoring the expression. Notice that n³ - n can be rewritten as n(n² - 1)
+      operation: have
+      statement:
+        english: n³ - n equals n(n² - 1)
+        isabelle: n³ - n = n(n² - 1)
+      proof:
+        - step id: goal1.1.1
+          thought: ...
+          operation: ...
+          ...
+        - step id: goal1.1.2
+          thought: ...
+          operation: ...
+          ...
+        - step id: goal1.1.3
+          operation: Obvious
+          thought: The proof goal obviously holds.
+    - step id: goal1.2
+      #Empty proof! Call command edit {"target step": "step1.2", "proof operation": <some operation>} to fill in <some operation> here.
+  - step id: proof_of_goal_2
+    #Empty proof! Call command edit {"target step": "proof_of_goal_2", "proof operation": ....} to provide.
+
+proof:
+  - step id: proof_of_goal1
+    - step id: goal1.1
+      thought: To prove that 6 divides n³ - n for all positive integers n, we begin by factoring the expression. Notice that n³ - n can be rewritten as n(n² - 1)
+      operation: have
+      statement:
+        english: n³ - n equals n(n² - 1)
+        isabelle: n³ - n = n(n² - 1)
+      proof:
+        - step id: goal1.1.1
+          thought: ...
+          operation: ...
+          ...
+          Error: Fail to apply the proof operation/to prove the statement.
+                 You must provide a proof for this statement.
+                 Call command edit {"target step": "step1.1.1", "proof operation": <some operation>} to fix this node.
+          Error messages: ...
+        - step id: goal1.1.2
+          thought: ...
+          operation: ...
+          ...
+        - step id: goal1.1.3
+          operation: Obvious
+          thought: The proof goal obviously holds.
+    - step id: goal1.2
+      thought: ...
+      operation: branch
+      cases:
+        - step id: goal1.2.case1
+          case: expression
+          Error: Unfinished Proof! Call command edit {"target step": "goal1.2.case1", "proof operation": <some operation>} to fill in <some operation> here.
+          pending proof goal: ...
+        - step id: goal1.2.case2
+          thought: ...
+          operation: ...
+  - step id: proof_of_goal_2
+    Error: Unfinished proof! Call command edit {"target step": "proof_of_goal_2", "proof operation": ....} to provide.
+
+
+# Possible commands:
+# edit:
+#   fill a proof operation into the target step, which must be empty
+#   insert a step before the target step
+#   modify the arguments of the target step
+#   delete the target step and all its sub-steps
+#   delete the target step, all its sub-steps, and all steps after the target step
+# {action: fill | insert | modify | delete | delete_all_after, target step: ..., proof operation: {title, ...}}
+
+# if you delete a prove_goal_1, all the sub-steps will be deleted but prove_goal_1 itself will preverse and be empty.
+
+Error! The proof goal does not obviously hold. Provide more detailed proofs!
+
+This statement is declared and proven automatically. You can continue your proof construction.
+This statement is declared but is nontrivial to be proven. You need to provide a proof for it.
+
+
+Error(s) exist in ./proof.yml. You must fix them.
+
+Congratulations! All subgoals are proven. You have completed the proof construction.
+
+
+Overview:
+
+step1: line xx, proven, abstract...
+  step1.1: line yy, proven, abstract.
+  step1.2: line zz, unproven, abstract.
+step2
+step3
+
+step1
+step2
+step2A
+step2B1
+step2B2A
+step2B2
+step2B
+step3
+
+goal1-1.1

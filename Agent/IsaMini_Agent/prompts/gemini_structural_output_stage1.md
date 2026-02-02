@@ -8,6 +8,8 @@ Given a formal Isabelle/HOL statement, produce an English proof sketch.
 
 Use hierarchical bullets for proof structure.
 
+Clarify any facts or lemmas used in your proof.
+
 Organize your proof into the following types of steps:
 1. **Inference Rule Application** — Apply a specific inference rule (like contradiction, antisymmetry, biconditional introduction) to proceed with the proof.
 2. **Intermediate statements** — Progressively introduce intermediate claims that build toward the final goal. Common scenarios:

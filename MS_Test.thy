@@ -17,16 +17,21 @@ lemma \<open>rev (rev l) = l\<close>
 lemma  
   \<open> \<And>a. A \<and> B \<Longrightarrow> \<forall>x. P x \<Longrightarrow> P a \<and> A\<close>
   by (min_script \<open>END\<close>)
-            
-lemma        
+               
+lemma         
   \<open> \<And>a. A \<and> B \<Longrightarrow> \<forall>x. P x \<Longrightarrow> P a \<and> A\<close>
   by (min_script \<open>
     INTRO
     HAVE A and "A" "P x" and A if "B" for x
-      NEXT
-      NEXT
-      NEXT
+      
+      SORRY
+      
+      SORRY
+      
+      SORRY
+      PRINT
     END
+    PRINT
     END
 \<close>)
 
