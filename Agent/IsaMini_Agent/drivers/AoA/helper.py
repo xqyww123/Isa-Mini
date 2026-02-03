@@ -86,3 +86,12 @@ def cat_segs_into_id(segs: list[int]) -> str:
             # Odd index: alpha segment
             result.append(num_to_alpha(seg))
     return ''.join(result)
+
+def incr_id_minor(id : str) -> str:
+    segs = split_id_into_segs(id)
+    segs[-1] += 1
+    return cat_segs_into_id(segs)
+
+def incr_id_major(id : str) -> str:
+    segs = split_id_into_segs(id)
+    return cat_segs_into_id([segs[0] + 1])

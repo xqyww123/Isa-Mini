@@ -1,5 +1,5 @@
 from time import time
-from helper import split_id_into_segs, cat_segs_into_id
+from helper import split_id_into_segs, cat_segs_into_id, incr_id_major, incr_id_minor
 from typing import Any, NamedTuple, Sequence, TypedDict, Callable, TextIO, cast
 from Isabelle_RPC_Host import Connection, IsabelleError
 from enum import Enum
@@ -253,19 +253,25 @@ class Minilang_State:
         return self.execute(Minilang_Operation.SKIP(), assign_to)
 
 ### Errors
+type timedelta = float # in seconds
+type failure_reason = str | None # a list of lines
+        # None means internal error
+        # [] means to suppress the error message printing
 
 class OprError(Exception):
     pass
 class CannotInsert_EvaluationFailedInPlace(OprError):
-    def __init__(self, reason : 'failure_reason'):
+    def __init__(self, reason : failure_reason):
         self.reason = reason
+class CannotAppend(OprError):
+    def __init__(self, target : 'Node', reason : failure_reason):
+        self.reason = reason
+        self.target = target
+    def __str__(self) -> str:
+        return f"Cannot append on node {self.target.id} because {self.reason}"
 class InternalError(Exception):
     pass
 
-type timedelta = float # in seconds
-type failure_reason = list[str] | None # a list of lines
-        # None means internal error
-        # [] means to suppress the error message printing
 class EvaluationStatus(NamedTuple):
     class Status(Enum):
         SUCCESS = "success"
@@ -276,18 +282,17 @@ class EvaluationStatus(NamedTuple):
     reason: failure_reason
 
     @staticmethod
-    def success(time: timedelta, reason: list[str] | None = None) -> 'EvaluationStatus':
+    def success(time: timedelta, reason: failure_reason = None) -> 'EvaluationStatus':
         return EvaluationStatus(EvaluationStatus.Status.SUCCESS, time, reason)
     @staticmethod
-    def failure(time: timedelta, reason: list[str] | None) -> 'EvaluationStatus':
+    def failure(time: timedelta, reason: failure_reason) -> 'EvaluationStatus':
         return EvaluationStatus(EvaluationStatus.Status.FAILURE, time, reason)
 EVALUATION_CACNCELLED = EvaluationStatus(EvaluationStatus.Status.CANCELLED, 0.0, None)
 EVALUATION_NOT_YET = EvaluationStatus.failure(0.0, None)
 
 ### The Abstract Model
 
-PRESERVED_NAMES = set(["global"])
-
+type gen_node = Callable[[NodeConfig], 'Node']
 
 # abstract base class
 class NodeConfig(NamedTuple):
@@ -341,7 +346,7 @@ class Node:
             raise InternalError("Don't know how to refresh a node and all its after nodes when the node's parent is none")
         else:
             self.parent._refresh_all_children_after(self)
-    def insert_before(self, gen_node: Callable[[NodeConfig], 'Node']) -> None:
+    def insert_before(self, gen_node: gen_node) -> None:
         if self.parent is None:
             raise InternalError("Don't know how to refresh a node and all its after nodes when the node's parent is none")
         else:
@@ -352,6 +357,8 @@ class Node:
                 return node
             node = self.parent._insert_before_child(self, my_gen_node)
             node.refresh_all_after_me()
+    def append(self, gen_node: gen_node) -> None:
+        raise NotImplementedError("`append` must be implemented by subclass")
 
 # abstract base class
 class Leaf(Node):
@@ -371,7 +378,9 @@ class Leaf(Node):
             self.ml_state.execute(self.the_operation(), self.resulting_state())
             self.status = EvaluationStatus.success(time() - now)
         except IsabelleError as err:
-            self.status = EvaluationStatus.failure(time() - now, err.messages)
+            self.status = EvaluationStatus.failure(time() - now, ''.join(err.errors))
+    def append(self, gen_node: gen_node) -> None:
+        raise CannotAppend(self, "It is not a goal or subgoal")
 
 
 # abstract base class
@@ -521,14 +530,23 @@ class StdBlock(NonLeaf_Node):
         raise NotImplementedError("`_print_header` must be implemented by subclass")
     def _title_of_children(self) -> str | None:
         return "proof"
+    def _local_step_of_next_proof_step(self) -> local_step:
+        if self.sub_nodes:
+            return incr_id_minor(self.sub_nodes[-1].local_step)
+        else:
+            return "1"
+    def _id_of_openning_prf_to_fill(self) -> step:
+        return f"{self.id}.{self._local_step_of_next_proof_step()}"
     def print(self, ident: int, file: TextIO):
         ident = super().print(ident, file)
         self._print_header(ident, file)
         status = self.status
         if status.status == EvaluationStatus.Status.FAILURE:
-            match status.reason:
-                case None:
-                    raise InternalError("A failure reason is not provided")
+            reason = status.reason
+            if reason is None:
+                raise InternalError("A failure reason is not provided")
+            lines = reason.strip().split("\n")
+            match lines:
                 case []:
                     pass
                 case [line]:
@@ -563,7 +581,7 @@ class StdBlock(NonLeaf_Node):
                 case []:
                     pass
                 case [goal]:
-                    print_pending_goal(goal, self.id, ident, file)
+                    print_pending_goal(goal, self._id_of_openning_prf_to_fill(), ident, file)
                 case _:
                     raise InternalError("The open goals of StdBlock should not exceed one. "
                         "To express multiple goals, you should use a StdBlock whose children are GoalNodes. See Rule as an example.")
@@ -613,12 +631,12 @@ class GoalNode(StdBlock):
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
         raise InternalError("A GoalNode doesn't have a beginning operation")
     def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
-        return ["Fail to prove the goal because one of the following proof steps fails."]
+        return "Fail to prove the goal because one of the following proof steps fails."
     def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
         if self.sub_nodes:
-            return ["The goal is nontrivial. Detailed proofs are required to prove it."]
+            return "The goal is nontrivial. Detailed proofs are required to prove it."
         else:
-            return ["Each of the following proof steps above is valid, but the goal doesn't trivially follow from these steps. Please provide more detailed proof steps."]
+            return "Each of the following proof steps above is valid, but the goal doesn't trivially follow from these steps. Please provide more detailed proof steps."
     def _print_header(self, ident: int, file: TextIO):
         if self.show_goal:
             print_goal(self.goal, ident, file)
@@ -648,14 +666,14 @@ class Have(StdBlock):
     def beginning_opr(self) -> Minilang_Operation | None:
         return Minilang_Operation.HAVE(self.statement['isabelle'])
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
-        return ["Fail to claim the intermediate subgoal because:"] + err.messages
+        return f"Fail to claim the intermediate subgoal because: {"\n".join(err.errors)}"
     def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
-        return ["Fail to prove this statement because one of the following proof steps fails."]
+        return "Fail to prove this statement because one of the following proof steps fails."
     def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
         if self.sub_nodes:
-            return ["The statement is nontrivial. Detailed proofs are required to establish this statement."]
+            return "The statement is nontrivial. Detailed proofs are required to establish this statement."
         else:
-            return ["Each of the following proof steps above is valid, but the target statement doesn't trivially follow from these steps. Please provide more detailed proof steps."]
+            return "Each of the following proof steps above is valid, but the target statement doesn't trivially follow from these steps. Please provide more detailed proof steps."
 
 #### Obtain
 
@@ -672,14 +690,14 @@ class Obtain(StdBlock):
     def beginning_opr(self) -> Minilang_Operation | None:
         return Minilang_Operation.OBTAIN(self.variables, [c["isabelle"] for c in self.constraints])
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
-        return ["Fail to claim the existential subgoal because:"] + err.messages
+        return f"Fail to claim the existential subgoal because: {"\n".join(err.errors)}"
     def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
-        return ["Fail to prove the existence of such variables because one of the following proof steps fails."]
+        return "Fail to prove the existence of such variables because one of the following proof steps fails."
     def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
         if self.sub_nodes:
-            return ["The statement is nontrivial. Detailed proofs are required to establish this statement."]
+            return "The statement is nontrivial. Detailed proofs are required to establish this statement."
         else:
-            return ["Each of the following proof steps above is valid, but the target statement doesn't trivially follow from these steps. Please provide more detailed proof steps."]
+            return "Each of the following proof steps above is valid, but the target statement doesn't trivially follow from these steps. Please provide more detailed proof steps."
 
 class GlobalEnv(StdBlock):
     def __init__(self, config: NodeConfig):
@@ -695,7 +713,7 @@ class GlobalEnv(StdBlock):
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
         raise InternalError("A GlobalEnv doesn't have a beginning operation")
     def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
-        return [] # This suppresses the error message printing on GlobalEnv
+        return "" # This suppresses the error message printing on GlobalEnv
     def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
         raise InternalError("A GlobalEnv doesn't have an ending operation")
     def _print_header(self, ident: int, file: TextIO):
@@ -716,7 +734,10 @@ class Root(StdBlock):
         ml_state = ml_state0
         is_single_goal = len(self.goals) == 1
         for i, goal in enumerate(self.goals):
-            self.sub_nodes.append(GoalNode(NodeConfig(f"$goal{i}", ml_state, self), goal, is_single_goal, False))
+            goal_id = f"goal{i}"
+            goal_node = GoalNode(NodeConfig(goal_id, ml_state, self), goal, is_single_goal, False)
+            goal_node.id = goal_id
+            self.sub_nodes.append(goal_node)
             (_, ml_state) = ml_state.sorry(None, None)
         self.final_ml_state = ml_state
     def resulting_state(self) -> Minilang_State:
