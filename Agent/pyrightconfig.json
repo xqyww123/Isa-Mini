@@ -1,6 +1,8 @@
 {
+  "typeCheckingMode": "strict",
   "extraPaths": [
     "./IsaMini_Agent",
     "."
   ],
+  "reportInconsistentReturnType": "warning"
 } 

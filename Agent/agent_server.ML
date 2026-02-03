@@ -227,9 +227,10 @@ val AoA_timeout = Time.fromSeconds 10
 fun AoA_cmd (cfg:cfg) (states:states Unsynchronized.ref) : (goals, MiniLang_Agent.xcmd list) command =
   let val s0 = chk_initial_state (!states)
       val ctxt = Minilang.context_of s0
+      val s0_ptree = Minilang.print_state s0
    in {
       name = "IsaMini.AoA",
-      arg_schema = goals_packer ctxt,
+      arg_schema = (fn goals => packPair (goals_packer ctxt, minilang_tree_packer ctxt) (goals, s0_ptree)),
       ret_schema = unpackList MiniLang_Agent.xcmd_unpacker,
       timeout = SOME AoA_timeout,
       callback = SOME (callback cfg states)
