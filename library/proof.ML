@@ -11,11 +11,12 @@ type items = variables * local_facts
 type fact = Facts.ref * Token.src list
 
 val context_of  : state -> Proof.context
+val leading_proof_sequent_of : state -> thm
 val equiv_proof_state : state * state -> bool
 val num_goals   : state -> int
 val map_context : (Proof.context -> Proof.context) -> state -> state
 
-datatype fail_reason = INVALID_OPR | PROOF_FAIL
+datatype fail_reason = INVALID_OPR | PROOF_FAIL | TERMLANG
 exception OPR_FAIL of fail_reason * string
 
 type with_clause = (bool (*with or without*) * string (*name*) * thm) list
@@ -23,7 +24,7 @@ type opt_var_names = string option list option
 
 (* options *)
 
-val atomize_goals : bool Config.T
+val atomize_goals_in_printing : bool Config.T
 val working_mode : string Config.T
 val mini_single_cmd_timeout : int Config.T
 val typ_parsing_mode : string Config.T
@@ -37,6 +38,8 @@ val transparent_intro : bool Config.T
       2. MiniLang determines the appropriate time to introduce the premises and the variables.
          This time is the moment before command HAVE and CONSIDER happen.*)
 val mini_use_improved_SH : bool Config.T
+val strict_end: bool Config.T
+    (*If enabled, the NEXT and END will not apply SH but require the proof goals are all solved*)
 
 val chk_working_mode : string -> unit
 
@@ -211,10 +214,11 @@ fun assm_name i = assm_N ^ string_of_int i
 
 (* options *)
 
-val atomize_goals = Attrib.setup_config_bool \<^binding>\<open>min_shell_atomize_goals\<close> (K true)
+val atomize_goals_in_printing = Attrib.setup_config_bool \<^binding>\<open>min_shell_atomize_goals\<close> (K true)
 val working_mode = Attrib.setup_config_string \<^binding>\<open>working_mode\<close> (K "RELAXED")
 val transparent_intro = Attrib.setup_config_bool \<^binding>\<open>transparent_intro\<close> (K false)
 val high_auto_mode = Attrib.setup_config_bool \<^binding>\<open>high_auto_mode\<close> (K false)
+val strict_end = Config.declare_bool ("Minilang.strict_end", \<^here>) (K false)
 
 fun chk_working_mode mode =
       if member (op =) ["RELAXED", "COMPLETE_NEXT", "STRICT"] mode 
@@ -264,6 +268,7 @@ type operation = state -> state
 type command = operation parser
 
 fun context_of (((ctxt,_), _, _) : state) = ctxt
+fun leading_proof_sequent_of (((_, HHF (seq, _) :: _), _, _) : state) = seq
 (*only checks state sequent*)
 fun equiv_proof_state ( ((ctxt, HHF (st, _) :: _), _, _) , ((_, HHF (st', _) :: _), _, _) )
       = Thm.equiv_thm (Proof_Context.theory_of ctxt) (st, st')
@@ -271,7 +276,7 @@ fun map_context F ((ctxt,SK), his, ID) = ((F ctxt,SK), his, ID)
 
 exception BROKEN_INVARIANT
 
-datatype fail_reason = INVALID_OPR | PROOF_FAIL
+datatype fail_reason = INVALID_OPR | PROOF_FAIL | TERMLANG
 exception OPR_FAIL of fail_reason * string
 
 (* Helpers *)
@@ -466,6 +471,15 @@ fun read_with ctxt with_lems =
 fun apply_WITH with_lems =
   fold (fn (flag, name, thm) =>
     Context.proof_map (Phi_Sledgehammer_Solver.with_rule flag name thm)) with_lems
+
+fun stack_is_finished (_, [HHF (st', _)]) = no_goal' st'
+  | stack_is_finished _ = false
+fun is_finished (SK,_,_) = stack_is_finished SK
+
+fun stack_is_ready_to_finish (_, HHF (st, _) :: _) = Thm.no_prems st
+  | stack_is_ready_to_finish _ = raise BROKEN_INVARIANT
+fun ready_to_finish (s as (SK,_,_)) = stack_is_ready_to_finish SK andalso not (is_finished s)
+
 
 (** REPORTER **)
 
@@ -2124,9 +2138,16 @@ val HAMMER_CMD = orverride_parser >> HAMMER
 
 (** END **)
 
+fun chk_block_end (stack as (ctxt, _)) =
+      if Config.get ctxt strict_end andalso not (stack_is_finished stack)
+      then raise OPR_FAIL (PROOF_FAIL,
+              "Cannot close the proof block because the goal is unsolved yet")
+      else ()
+
 fun END' param SH_override jj ID (stack as (_, HHF _ :: _)) =
   let val ID_BASE = if jj = 0 then string_of_int ID 
                     else string_of_int ID ^ "+" ^ string_of_int jj
+      val _ = chk_block_end stack
       val (ctxt, SK'1) = HAMMER_i SH_override ID_BASE stack
                       |> conclude_SK
       val st' = case SK'1 of HHF (st', _) :: _ => st'
@@ -2136,7 +2157,8 @@ fun END' param SH_override jj ID (stack as (_, HHF _ :: _)) =
       of HHF s :: ENDBLK T' :: SK' =>
         ( get_reporter () (Internal (REPLACE_CMD ("END", "END")))
         ; if T' = T_END then maintain (ctxt, HHF s :: SK')
-          else if member (op =) ["COMPLETE_NEXT", "RELAXED"]
+          else if not (Config.get ctxt strict_end) andalso
+                  member (op =) ["COMPLETE_NEXT", "RELAXED"]
                                 (Config.get ctxt working_mode)
           then maintain (ctxt, HHF s :: SK')
             |> END' param SH_override (jj+1) ID
@@ -2155,6 +2177,7 @@ fun END' param SH_override jj ID (stack as (_, HHF _ :: _)) =
 
 fun NXT' param SH_override ID (origin as stack as (_, HHF (st, _) :: _)) =
   let val ID_BASE = string_of_int ID
+      val _ = chk_block_end stack
       val (ctxt, SK'1) = HAMMER_i SH_override ID_BASE stack
                       |> conclude_SK
       val st' = case SK'1 of HHF (st', _) :: _ => st'
@@ -2199,9 +2222,10 @@ fun gen_END_or_NXT' param F stack =
     else report_goal (ctxt, SK'1)
   end
 
-fun END_or_NXT' param SH_override ID =
+fun END_or_NXT' param SH_override ID stack =
   let val ID_BASE = string_of_int ID
-   in gen_END_or_NXT' param (HAMMER_i SH_override ID_BASE)
+   in chk_block_end stack
+    ; gen_END_or_NXT' param (HAMMER_i SH_override ID_BASE) stack
   end
 
 fun END SH_override = OPR_ID (END' NO_PARAM SH_override 0)
@@ -2392,7 +2416,8 @@ fun pretty_tree0 _ (BUNDL (_,[])) =
   end
 
 fun pretty_tree ctxt tree = tree
-      |> (Config.get ctxt atomize_goals orelse Config.get ctxt transparent_intro) ? atomize_tree ctxt
+      |> (Config.get ctxt atomize_goals_in_printing orelse
+          Config.get ctxt transparent_intro) ? atomize_tree ctxt
       |> pretty_tree0 ctxt
 
 (* fun pretty_tree (POPL ) *)
@@ -2756,15 +2781,6 @@ fun parse_cmds toks =
                        | NONE => error ("Bad Command " ^ Token.content_of h) )
    in fold I cmds
   end
-
-fun stack_is_finished (_, [HHF (st', _)]) = no_goal' st'
-  | stack_is_finished _ = false
-fun is_finished (SK,_,_) = stack_is_finished SK
-
-fun stack_is_ready_to_finish (_, HHF (st, _) :: _) = Thm.no_prems st
-  | stack_is_ready_to_finish _ = raise BROKEN_INVARIANT
-fun ready_to_finish (s as (SK,_,_)) = stack_is_ready_to_finish SK andalso not (is_finished s)
-
 
 fun conclude initial_ctxt ((ctxt', S  as [HHF (st',_)]),_,_) =
       let val st'' = singleton (Proof_Context.export ctxt' initial_ctxt) st'

@@ -9,13 +9,19 @@ ML_file "agent.ML"
 (* ML_file "model_AoA.ML" *)
 ML_file "agent_packer.ML"
 ML_file "agent_server.ML"
-(* ML_file "agent_server.old.ML"
+(* ML_file "tactic.ML.old"
+ML_file "agent_server.old.ML"
 ML_file "tactic.ML.old" *)
-
-method_setup agent = \<open>
-  Scan.succeed (K MiniLang_Agent.method)
-\<close>
-
+ 
+method_setup AgentAoA = \<open>
+  Scan.succeed (K MiniLang_Agent_AoA.method)
+\<close> 
+(*
+theorem sqrt2_not_rational:
+    "sqrt 2 \<notin> \<rat>"
+  by (AgentAoA)
+*)
+(*
 lemma A and B and C
     apply (insert)
   apply (tactic \<open>Skip_Proof.cheat_tac \<^context> 1\<close>)
@@ -41,5 +47,6 @@ proof -
               (Proof_Context.facts_of \<^context>)\<close>
 
 end
+*)
 
 end

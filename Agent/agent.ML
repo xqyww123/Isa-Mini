@@ -20,10 +20,14 @@ datatype ('term, 'thm, 'fact) command =
   | CASE_SPLIT of 'term (*target*) * 'thm option (*rule*)
   | INDUCT   of 'term (*target*) * 'term list (*arbitrary*) * 'thm option (*rule*)
   | NEXT_OR_END of 'fact list (*add lemmas*) * Minilang.opt_var_names
+  | NEXT     of 'fact list (*add lemmas*) * Minilang.opt_var_names
+  | END      of 'fact list (*add lemmas*)
   | BRANCH   of string list
   | HAVE     of 'term list
   | OBTAIN   of (string * string option) list (*vars*) * string list (*constraints*)
   | SORRY    of Minilang.opt_var_names
+  | HAMMER   of 'fact list (*add lemmas*)
+  | SKIP
 
 type xcmd = (string, string, string) command
 type icmd = (term, thm, Facts.ref * Token.src list) command
@@ -31,6 +35,8 @@ type icmd = (term, thm, Facts.ref * Token.src list) command
 val check_command : Proof.context -> xcmd -> icmd
 val interpret_i : cfg * budget -> icmd -> Minilang.state -> Minilang.state
 val interpret : cfg * budget -> xcmd -> Minilang.state -> Minilang.state
+
+val default_cfg : cfg * budget
 
 end
 
@@ -48,6 +54,16 @@ type cfg = {
       gussing_num_typ : bool
   }
 
+val default_cfg : (cfg * budget) = ({
+      drafting = true,
+      gussing_num_typ = true
+    }, {
+      QUERY_RET_LIMIT = SOME 30,
+      parallel_runs = 1,
+      total_timeout = SOME (Time.fromSeconds 600),
+      step_limit = 30
+    })
+
 datatype ('term, 'thm, 'fact) command =
     SIMPLIFY of 'fact list (*simp rules*)
   | UNFOLD   of string list
@@ -56,10 +72,14 @@ datatype ('term, 'thm, 'fact) command =
   | CASE_SPLIT of 'term (*target*) * 'thm option (*rule*)
   | INDUCT   of 'term (*target*) * 'term list (*arbitrary*) * 'thm option (*rule*)
   | NEXT_OR_END of 'fact list (*add lemmas*) * Minilang.opt_var_names
+  | NEXT     of 'fact list (*add lemmas*) * Minilang.opt_var_names
+  | END      of 'fact list (*add lemmas*)
   | BRANCH   of string list
   | HAVE     of 'term list
   | OBTAIN   of (string * string option) list (*vars*) * string list (*constraints*)
   | SORRY    of Minilang.opt_var_names
+  | HAMMER   of 'fact list (*add lemmas*)
+  | SKIP
 
 type xcmd = (string, string, string) command
 type icmd = (term, thm, Facts.ref * Token.src list) command
@@ -111,6 +131,10 @@ fun interpret_i _ (SIMPLIFY simp_thms) s =
       end
   | interpret_i _ (NEXT_OR_END (lemmas, vars)) s =
       Minilang.END_or_NXT vars {add=lemmas,del=[],only=false} s
+  | interpret_i _ (NEXT (lemmas, vars)) s =
+      Minilang.NXT vars {add=lemmas,del=[],only=false} s
+  | interpret_i _ (END lemmas) s =
+      Minilang.END {add=lemmas,del=[],only=false} s
   | interpret_i _ (BRANCH branches) s =
       let val brs = map (fn br => ([], ([], [], [(Binding.empty_atts, [(br, [])])]))) branches
        in Minilang.CONSIDER brs s
@@ -126,6 +150,9 @@ fun interpret_i _ (SIMPLIFY simp_thms) s =
       let
        in Minilang.END_or_NXT_by_SORRY vars s
       end
+  | interpret_i _ (HAMMER lemmas) s =
+      Minilang.HAMMER {add=lemmas,del=[],only=false} s
+  | interpret_i _ SKIP s = s
 
 local 
 val keywords = Thy_Header.get_keywords @{theory Pure}
@@ -149,25 +176,33 @@ fun chk_single _ _ [x] = x
         ^ String.concat (map (fn th => "- " ^ string_of_thm ctxt th ^ "\n") lst)
         ^ "You may select the i-th rule by using \"" ^ the rule ^ "(i)\".")
 in
-fun check_command _ (SIMPLIFY facts) = SIMPLIFY (map read_fact facts)
-  | check_command _ (RULE facts) = RULE (map read_fact facts)
-  | check_command _ (UNFOLD consts) = UNFOLD consts
-  | check_command ctxt (WITNESS terms) = WITNESS (Syntax.read_terms ctxt terms)
-  | check_command ctxt (CASE_SPLIT (target, rule)) =
+fun check_command_i _ (SIMPLIFY facts) = SIMPLIFY (map read_fact facts)
+  | check_command_i _ (RULE facts) = RULE (map read_fact facts)
+  | check_command_i _ (UNFOLD consts) = UNFOLD consts
+  | check_command_i ctxt (WITNESS terms) = WITNESS (Syntax.read_terms ctxt terms)
+  | check_command_i ctxt (CASE_SPLIT (target, rule)) =
       let val rule' = Option.map (chk_single ctxt rule o read_thms ctxt) rule
           val target' = Syntax.read_term ctxt target
        in CASE_SPLIT (target', rule')
       end
-  | check_command ctxt (INDUCT (target, arbitrary, rule)) =
+  | check_command_i ctxt (INDUCT (target, arbitrary, rule)) =
       let val (target' :: arbitrary') = Syntax.read_terms ctxt (target :: arbitrary)
           val rule' = Option.map (chk_single ctxt rule o read_thms ctxt) rule
        in INDUCT (target', arbitrary', rule')
       end
-  | check_command _ (NEXT_OR_END (facts, vars)) = NEXT_OR_END (map read_fact facts, vars)
-  | check_command _ (BRANCH brs) = BRANCH brs
-  | check_command ctxt (HAVE goals) = HAVE (Syntax.read_props ctxt goals)
-  | check_command _ (OBTAIN vc) = OBTAIN vc
-  | check_command _ (SORRY vars) = SORRY vars
+  | check_command_i _ (NEXT_OR_END (facts, vars)) = NEXT_OR_END (map read_fact facts, vars)
+  | check_command_i _ (NEXT (facts, vars)) = NEXT (map read_fact facts, vars)
+  | check_command_i _ (END facts) = END (map read_fact facts)
+  | check_command_i _ (HAMMER facts) = HAMMER (map read_fact facts)
+  | check_command_i _ (BRANCH brs) = BRANCH brs
+  | check_command_i ctxt (HAVE goals) = HAVE (Syntax.read_props ctxt goals)
+  | check_command_i _ (OBTAIN vc) = OBTAIN vc
+  | check_command_i _ (SORRY vars) = SORRY vars
+  | check_command_i _ SKIP = SKIP
+
+fun check_command ctxt x = check_command_i ctxt x
+    handle ERROR msg => raise Minilang.OPR_FAIL (Minilang.TERMLANG, msg)
+
 end
 
 fun interpret cfg xcmd state =

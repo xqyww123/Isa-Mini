@@ -25,18 +25,21 @@ cd contrib/Isa-REPL
 ```
 
 2. Launch the Agent Server
-```
-# assume the current working directory is at the MLML directory.
-python3 ./contrib/Isa-Mini/Agent/IsaMini_Agent/IsaMini_Agent.py
-```
+Launch VS Code or Cursor, open the folder [./contrib/Isa-Mini](.).
+Click `Run Python Debugger Using Launch Config`, then select `AoA Agent`.
+
+For more information, see [../.vscode/launch.json](../.vscode/launch.json).
+
+The entry point is [./debug_launcher.py](./debug_launcher.py) and [./IsaMini_Agent_AoA/toplevel.py](./IsaMini_Agent_AoA/toplevel.py).
 
 3. Run the agent over a proof goal
 ```
 # assume the current working directory is at the MLML directory.
 ./tools/agent_run.py <<Driver>> <<File:line:column>>
 
-# example:
+# examples:
 ./tools/agent_run.py Gemini ./contrib/Isa-Mini/Agent/Test/Test001.thy:6:1
+./tools/agent_run.py Gemini ./contrib/Isa-Mini/Agent/Test/Test_sqrt2.thy:6:1
 ```
 You can see logs from the Agent Server's stdout.
 

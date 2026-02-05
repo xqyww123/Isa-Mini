@@ -1,0 +1,429 @@
+{
+  "$defs": {
+    "Branch": {
+      "additionalProperties": false,
+      "title": "Branch",
+      "description": "Split the proof goal into cases",
+      "properties": {
+        "operation": {
+          "const": "Branch",
+          "type": "string"
+        },
+        "thought": { "$ref": "#/$defs/Thought" },
+        "cases": {
+          "items": { "$ref": "#/$defs/Statement" },
+          "type": "array"
+        }
+      },
+      "required": [
+        "operation",
+        "thought",
+        "cases"
+      ],
+      "type": "object"
+    },
+    "CaseAnalysis": {
+      "additionalProperties": false,
+      "title": "CaseAnalysis",
+      "description": "Structural case analysis on the value of a target term",
+      "properties": {
+        "operation": {
+          "const": "CaseAnalysis",
+          "type": "string"
+        },
+        "thought": { "$ref": "#/$defs/Thought" },
+        "target_isabelle_term": { "type": "string" }
+      },
+      "required": [
+        "operation",
+        "thought",
+        "target_isabelle_term"
+      ],
+      "type": "object"
+    },
+    "Fact": {
+      "title": "Fact",
+      "additionalProperties": false,
+      "properties": {
+        "english": {
+          "description": "natural language description of the fact",
+          "type": "string"
+        },
+        "isabelle_expression": {
+          "description": "Isabelle/HOL expression of the fact",
+          "type": "string"
+        },
+        "for_any": {
+          "default": [],
+          "description": "variables that the fact is universally quantified over",
+          "items": {
+            "anyOf": [
+              { "$ref": "#/$defs/Variable" },
+              { "type": "string" }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "english",
+        "isabelle_expression"
+      ],
+      "type": "object"
+    },
+    "Have": {
+      "additionalProperties": false,
+      "title": "Have",
+      "description": "Introduce a subgoal",
+      "properties": {
+        "operation": {
+          "const": "Have",
+          "type": "string"
+        },
+        "thought": { "$ref": "#/$defs/Thought" },
+        "statement": { "$ref": "#/$defs/Statement" }
+      },
+      "required": [
+        "operation",
+        "thought",
+        "statement"
+      ],
+      "type": "object"
+    },
+    "Induction": {
+      "additionalProperties": false,
+      "title": "Induction",
+      "description": "Apply induction over the target Isabelle/HOL term",
+      "properties": {
+        "operation": {
+          "const": "induction",
+          "type": "string"
+        },
+        "thought": { "$ref": "#/$defs/Thought" },
+        "target_isabelle_term": { "type": "string" },
+        "rule": {
+          "description": "How the induction should work",
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [ "default", "reversely" ]
+            },
+            {
+              "type": "object",
+              "description": "Induct increasingly from an optional lower bound to an optional upper bound",
+              "properties": {
+                "rule": {
+                  "type": "string",
+                  "const": "increase"
+                },
+                "from": {
+                  "type": "string",
+                  "description": "lower bound. Omit if no bound (negative infinity)"
+                },
+                "to": {
+                  "type": "string",
+                  "description": "upper bound. Omit if no bound (positive infinity)"
+                },
+                "required": [
+                  "rule"
+                ]
+              }
+            },
+            {
+              "type": "object",
+              "description": "Induct decreasingly from an optional upper bound to an optional lower bound",
+              "properties": {
+                "rule": {
+                  "type": "string",
+                  "const": "decrease"
+                },
+                "from": {
+                  "type": "string",
+                  "description": "upper bound. Omit if no bound (positive infinity)"
+                },
+                "to": {
+                  "type": "string",
+                  "description": "lower bound. Omit if no bound (negative infinity)"
+                },
+                "required": [
+                  "rule"
+                ]
+              }
+            },
+            {
+              "type": "string",
+              "description": "Any other rule described in English"
+            }
+          ],
+          "default": "default"
+        },
+        "variables": {
+          "description": "List all variables in the proof goal and indicate whether their values vary or are fixed throughout the induction",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "varying": { "type": "boolean" }
+            },
+            "required": [ "name", "varying" ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "operation",
+        "thought",
+        "target_isabelle_term",
+        "variables"
+      ],
+      "type": "object"
+    },
+    "InferenceRule": {
+      "title": "InferenceRule",
+      "additionalProperties": false,
+      "description": "Prove using a specific inference rule, e.g., contradiction, or proving equality by antisymmetry.",
+      "properties": {
+        "operation": {
+          "const": "InferenceRule",
+          "type": "string"
+        },
+        "thought": { "$ref": "#/$defs/Thought" },
+        "rule": { "$ref": "#/$defs/Fact" }
+      },
+      "required": [
+        "operation",
+        "thought",
+        "rule"
+      ],
+      "type": "object"
+    },
+    "Obtain": {
+      "additionalProperties": false,
+      "title": "Obtain",
+      "description": "Introduce variables satisfying the given constraints",
+      "properties": {
+        "operation": {
+          "const": "obtain",
+          "type": "string"
+        },
+        "thought": { "$ref": "#/$defs/Thought" },
+        "variables": {
+          "description": "The variables to introduce. Cannot overlap existing variables",
+          "items": { "$ref": "#/$defs/Variable" },
+          "type": "array"
+        },
+        "constraints": {
+          "items": {
+            "$ref": "#/$defs/Statement"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "operation",
+        "thought",
+        "variables",
+        "constraints"
+      ],
+      "type": "object"
+    },
+    "Rewrite": {
+      "additionalProperties": false,
+      "description": "Rewrite proof goals using equations",
+      "properties": {
+        "operation": {
+          "const": "rewrite",
+          "type": "string"
+        },
+        "thought": { "$ref": "#/$defs/Thought" },
+        "equations": {
+          "description": "equations to use, which might be conditioned",
+          "items": { "$ref": "#/$defs/Fact" },
+          "type": "array"
+        },
+        "lemmas": {
+          "description": "lemmas for solving the conditions",
+          "items": { "$ref": "#/$defs/Fact" },
+          "type": "array"
+        }
+      },
+      "required": [
+        "operation",
+        "thought",
+        "equations"
+      ],
+      "title": "Rewrite",
+      "type": "object"
+    },
+    "Statement": {
+      "title": "Statement",
+      "properties": {
+        "english": {
+          "description": "the natural language statement in English",
+          "type": "string"
+        },
+        "isabelle": {
+          "description": "the formal statement in Isabelle/HOL",
+          "type": "string"
+        }
+      },
+      "required": [
+        "english",
+        "isabelle"
+      ],
+      "type": "object",
+      "additionalProperties": false
+    },
+    "Suffices_to_Show": {
+      "additionalProperties": false,
+      "description": "to establish the current goal, it suffices to show a stronger or equivalent statement",
+      "properties": {
+        "operation": {
+          "const": "suffices_to_show",
+          "title": "Operation",
+          "type": "string"
+        },
+        "thought": {
+          "description": "a brief thought that justifies the chosen operation",
+          "title": "Thought",
+          "type": "string"
+        },
+        "statement": {
+          "$ref": "#/$defs/Statement"
+        }
+      },
+      "required": [
+        "operation",
+        "thought",
+        "statement"
+      ],
+      "title": "Suffices to Show",
+      "type": "object"
+    },
+    "Unfold": {
+      "additionalProperties": false,
+      "description": "unfold definitions",
+      "properties": {
+        "operation": {
+          "const": "unfold",
+          "title": "Operation",
+          "type": "string"
+        },
+        "thought": {
+          "description": "a brief thought that justifies the chosen operation",
+          "title": "Thought",
+          "type": "string"
+        },
+        "targets": {
+          "description": "the target Isabelle/HOL terms to unfold",
+          "items": {
+            "type": "string"
+          },
+          "title": "Targets",
+          "type": "array"
+        }
+      },
+      "required": [
+        "operation",
+        "thought",
+        "targets"
+      ],
+      "title": "Unfold",
+      "type": "object"
+    },
+    "Variable": {
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "Variable",
+      "type": "object"
+    },
+    "Witness": {
+      "additionalProperties": false,
+      "description": "provide witnesses to reduce existential proof goals. You still need to prove the goal instantiated with the witnesses later.",
+      "properties": {
+        "operation": {
+          "const": "witness",
+          "title": "Operation",
+          "type": "string"
+        },
+        "thought": {
+          "description": "a brief thought that justifies the chosen operation",
+          "title": "Thought",
+          "type": "string"
+        },
+        "witnesses": {
+          "description": "Isabelle/HOL expressions of the witness terms",
+          "items": { "type": "string" },
+          "title": "Witnesses",
+          "type": "array"
+        }
+      },
+      "required": [
+        "operation",
+        "thought",
+        "witnesses"
+      ],
+      "title": "Witness",
+      "type": "object"
+    },
+    "Operation": {
+      "anyOf": [
+        { "$ref": "#/$defs/Have" },
+        { "$ref": "#/$defs/Obtain" },
+        { "$ref": "#/$defs/Branch" },
+        { "$ref": "#/$defs/CaseAnalysis" },
+        { "$ref": "#/$defs/Induction" },
+        { "$ref": "#/$defs/Rewrite" },
+        { "$ref": "#/$defs/Unfold" },
+        { "$ref": "#/$defs/Witness" },
+        { "$ref": "#/$defs/InferenceRule" },
+        { "$ref": "#/$defs/Suffices_to_Show" }
+      ]
+    },
+    "Thought": {
+      "description": "A brief thought that justifies the chosen operation",
+      "type": "string"
+    }
+  },
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": [
+        "fill",
+        "insert_before",
+        "amend",
+        "delete",
+        "delete_all_after"
+      ],
+      "description": "fill: fill a proof operation into a blank; insert_before: insert a step before the target step; amend: modify the arguments of the target step; delete: delete the target step and all its sub-steps, delete_all_after: delete the target step, all its sub-steps, and all steps after it"
+    },
+    "target_step": {
+      "type": "string",
+      "description": "id of the target step"
+    },
+    "title": {
+      "type": "string",
+      "description": "title of the proof operation"
+    },
+    "proof_operation": { "$ref": "#/$defs/Operation" },
+    "required": [
+      "action",
+      "target_step",
+      "title",
+      "proof_operation"
+    ],
+    "additionalProperties": false
+  }
+}

@@ -47,8 +47,8 @@ val unpacker =
                         unpackOption unpackString
                      )
      | "ATP"      => apfst (NEXT_OR_END o rpair NONE) o unpackList unpackString
-     | "NEXT"     => apfst NEXT_OR_END o unpackPair (unpackList unpackString, unpack_opt_var_names)
-     | "END"      => apfst (NEXT_OR_END o rpair NONE) o unpackList unpackString
+     | "NEXT"     => apfst NEXT o unpackPair (unpackList unpackString, unpack_opt_var_names)
+     | "END"      => apfst END o unpackList unpackString
      | "NEXT_or_END" => apfst NEXT_OR_END o unpackPair (unpackList unpackString, unpack_opt_var_names)
      | "SORRY"    => apfst SORRY    o unpack_opt_var_names
      | "BRANCH"   => apfst BRANCH   o unpackList unpackString
@@ -56,6 +56,8 @@ val unpacker =
      | "OBTAIN"   => apfst OBTAIN   o unpackPair (
                           unpackList (unpackPair (unpackString, unpackOption unpackString)),
                           unpackList unpackString)
+     | "SKIP"     => apfst (K SKIP) o unpackUnit
+     | "HAMMER"   => apfst HAMMER o unpackList unpackString
   (* | "ROLLBACK" => apfst ROLLBACK o unpackInt *)
      | cmd => error("Unknown operation " ^ cmd)
   ) #> apfst snd
@@ -70,8 +72,7 @@ fun (* packer (RETRIEVE data) =
       packPair (packString, packList packString)
         ("WITNESS", data)
   | packer (RULE data) =
-      packPair (packString, packList packString)
-        ("RULE", data)
+      packPair (packString, packList packString) ("RULE", data)
   | packer (CASE_SPLIT data) =
       packPair (packString, packPair (packString, packOption packString))
         ("CASE_SPLIT", data)
@@ -81,6 +82,10 @@ fun (* packer (RETRIEVE data) =
   | packer (NEXT_OR_END data) =
       packPair (packString, packPair (packList packString, pack_opt_var_names))
         ("NEXT_or_END", data)
+  | packer (NEXT data) =
+      packPair (packString, packPair (packList packString, pack_opt_var_names))
+        ("NEXT", data)
+  | packer (END data) = packPair (packString, packList packString) ("END", data)
   | packer (BRANCH data) =
       packPair (packString, packList packString)
         ("BRANCH", data)
@@ -95,6 +100,8 @@ fun (* packer (RETRIEVE data) =
   | packer (SORRY vars) =
       packPair (packString, pack_opt_var_names)
         ("SORRY", vars)
+  | packer (HAMMER facts) = packPair (packString, packList packString) ("HAMMER", facts)
+  | packer SKIP = packPair (packString, packUnit) ("SKIP", ())
 (* | packer (ROLLBACK data) = packPair (packString, packInt) ("ROLLBACK", data) *)
 
 end

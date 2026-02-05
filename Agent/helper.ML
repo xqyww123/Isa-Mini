@@ -1,6 +1,7 @@
 signature MINILANG_HELPER = sig
 
 val guess_default_num_typ : term -> typ option
+val implode_with : 'a -> 'a list list -> 'a list
 
 end
 
@@ -14,5 +15,9 @@ fun guess_default_num_typ prop =
   else if exists_type (exists_subtype (fn Type (\<^type_name>\<open>nat\<close>, _) => true | _ => false)) prop
   then SOME \<^typ>\<open>nat\<close>
   else SOME \<^typ>\<open>int\<close>
+
+fun implode_with sep [] = []
+  | implode_with sep [x] = x
+  | implode_with sep (xs :: lss) = xs @ sep :: implode_with sep lss
 
 end

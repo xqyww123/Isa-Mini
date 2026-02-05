@@ -3,11 +3,11 @@ requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "IsaMini_Agent"
+name = "IsaMini_Agent_AoA"
 version = "0.1.0"
-description = "Isabelle Proof Agent over Minilang"
+description = "Isabelle Proof Agent over Minilang, All over Abstraction"
 readme = "README.md"
-license = "LGPL-2.1-or-later"
+license = "AGPL-3.0-or-later"
 authors = [
     { name="Qiyuan Xu", email="xqyww123@gmail.com" },
 ]
@@ -15,17 +15,16 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
-dependencies = ["msgpack"]
+dependencies = ["msgpack", "Isabelle_RPC_Host]
 
 [project.urls]
 "Homepage" = "https://github.com/xqyww123/Isa-Mini"
 
 [tool.setuptools.packages.find]
-include = ["IsaMini_Agent", "IsaMini_Agent.*"]
+include = ["IsaMini_Agent_AoA", "IsaMini_Agent_AoA.*"]
 
 # Include data files in the package
 [tool.setuptools.package-data]
-IsaMini_Agent = [
-    "prompts/*.md",
-    "prompts/*.json",
+IsaMini_Agent_AoA = [
+    "tools/*.json"
 ]

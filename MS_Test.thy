@@ -120,18 +120,15 @@ lemma
 
 
 
-  
+   
   theorem sqrt2_not_rational:
     "sqrt 2 \<notin> \<rat>"
   by (min_script \<open>
-    CRUSH
+    RULE
+    INTRO
     CONSIDER m n :: nat where "\<bar>sqrt 2\<bar> = m / n" and "coprime m n" END
     HAVE "m^2 = (sqrt 2)^2 * n^2" END
-    HAVE "m^2 = 2 * n^2" 
-      HAVE "True"
-PRINT   END
- END
-    
+    HAVE "m^2 = 2 * n^2"  END
     HAVE "2 dvd m^2" END
     HAVE "2 dvd m" END
     HAVE "2 dvd n"
@@ -140,8 +137,8 @@ PRINT   END
       HAVE "2 dvd n^2" END
       HAVE "2 dvd n" END
     END
-    HAVE "2 dvd gcd m n" END
-    HAVE "2 dvd 1" END WITH \<open>coprime m n\<close>
+    HAVE A: "2 dvd gcd m n" END
+    HAVE "2 dvd 1" END WITH \<open>coprime m n\<close> A
     END \<close>)
 
 
