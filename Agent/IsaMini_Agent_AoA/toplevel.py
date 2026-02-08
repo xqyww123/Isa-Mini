@@ -42,6 +42,7 @@ def IsaMini_AoA(data, connection: Connection):
     root.fill("3.1", Obvious.gen({"thought": "Oviously the statement holds.", "facts": []}))
     print_header("Have")
     root.print(0, sys.stdout)
+    # omit ...
     connection.write((0, None))
     if root.is_proof_finished():
         return ([x.pack() for x in root.assemble()], root.final_ml_state.name)

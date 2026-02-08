@@ -60,7 +60,7 @@ class Goal(NamedTuple):
 class Goals(NamedTuple):
     context: Context
     goals: list[Goal]
-    
+
     @classmethod
     def unpack(cls, data) -> 'Goals':
         (context, goals) = data
@@ -888,7 +888,7 @@ class GoalNode(StdBlock):
             return "Each of the following proof steps above is valid, but the goal doesn't trivially follow from these steps. Please provide more detailed proof steps."
     def _print_header(self, ident: int, file: TextIO):
         if self.show_goal:
-            print_goal(self.goal, ident, False, file)
+            print_goal(self.goal, ident, True, file)
     def _print_step_id(self, ident: int, file: TextIO) -> int:
         if self.is_single_goal:
             return ident
@@ -923,6 +923,8 @@ class Obvious(Leaf):
             return Obvious.new(config, arg)
         return mk
     def print(self, ident: int, file: TextIO) -> int:
+        self._print_step_id(ident, file)
+        ident += 1
         self._print_thought(ident, file)
         print_indent(ident, file)
         file.write("operation: Obvious\n")
@@ -938,6 +940,8 @@ class Obvious(Leaf):
     def the_operation(self) -> Minilang_Operation:
         return Minilang_Operation.HAMMER(self.fact_refs)
 
+
+#### So
 
 #### Have
 
@@ -1231,3 +1235,18 @@ class Root(GoalContainer, StdBlock):
 
 
 #class 
+
+
+# Root
+#  0: GlobalEnv
+#  1...n: GoalNode
+#     proofs
+#      0: Obtain
+#         proofs...
+#           Obvious
+#      1. SIMP / REWRITE / RULE
+#       P <--> Q
+#          GoalNodes
+#          1. GoalNode: P --> Q
+#             proofs...
+#          2. GoalNode: Q --> P
