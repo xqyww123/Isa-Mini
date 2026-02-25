@@ -1,1 +1,0 @@
-from Isabelle_RPC_Host import Connection

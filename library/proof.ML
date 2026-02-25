@@ -20,7 +20,8 @@ datatype fail_reason = INVALID_OPR | PROOF_FAIL | TERMLANG
 exception OPR_FAIL of fail_reason * string
 
 type with_clause = (bool (*with or without*) * string (*name*) * thm) list
-type opt_var_names = string option list option
+type opt_var_names  = string option list option
+type opt_prem_names = string option list option
 
 (* options *)
 
@@ -40,6 +41,7 @@ val transparent_intro : bool Config.T
 val mini_use_improved_SH : bool Config.T
 val strict_end: bool Config.T
     (*If enabled, the NEXT and END will not apply SH but require the proof goals are all solved*)
+val counter_mode : string Config.T
 
 val chk_working_mode : string -> unit
 
@@ -63,8 +65,9 @@ val empty_items : items
 val cat_items : items -> items -> items
 
 datatype intros_mode = ALL_SUBGOALS | SINGLE_GOAL
-val INTRO : intros_mode -> opt_var_names -> operation
+val INTRO : intros_mode -> opt_var_names -> opt_prem_names -> operation
 val INTRO_CMD : command
+val TRANSPARENT_INTRO : operation
 
 val apply : string -> context_tactic -> Time.time option -> stack -> stack
 val apply_method : string -> thm list -> Method.method -> Time.time option -> stack -> stack
@@ -219,6 +222,7 @@ val working_mode = Attrib.setup_config_string \<^binding>\<open>working_mode\<cl
 val transparent_intro = Attrib.setup_config_bool \<^binding>\<open>transparent_intro\<close> (K false)
 val high_auto_mode = Attrib.setup_config_bool \<^binding>\<open>high_auto_mode\<close> (K false)
 val strict_end = Config.declare_bool ("Minilang.strict_end", \<^here>) (K false)
+val counter_mode = Config.declare_string ("Minilang.counter_mode", \<^here>) (K "consecutive")
 
 fun chk_working_mode mode =
       if member (op =) ["RELAXED", "COMPLETE_NEXT", "STRICT"] mode 
@@ -253,7 +257,8 @@ datatype frame = HHF   of thm (*a local_facts bundle node, represented as a Here
                         * param
                | ENDBLK of endblk_type
 
-type opt_var_names = string option list option
+type opt_var_names  = string option list option
+type opt_prem_names = string option list option
 exception NO_PARAM
 exception CASE_NAME of opt_var_names
 
@@ -507,24 +512,102 @@ fun report_goal (ctxt, SK) = (
 
 (** Basic Operations **)
 
+datatype counter =
+    Consecutive_Counter of int
+      (*Consecutive_Counter ensures sequential numbering across Minilang commands--each item's
+        number is determined by its position. When a new item is inserted in the middle, it takes
+        the number corresponding to that position, and all subsequent items are incremented by one*)
+  | Unique_Counter of int Synchronized.var
+      (*Unique_Counter ensures every item (including those that once existed) has a unique,
+        immutable number. Numbers are never reassigned or changed. New items always receive the
+        highest number, even when inserted in the middle.*)
+  | No_Counter
+      (*No_Counter disables automatic counter functionality. All bindings must be explicitly provided.
+        Any attempt to auto-increment (delta > 0) will raise an error.*)
+
 structure IPS_Data = Proof_Data (
-  type T = ( int    (*counter for fixed premise*)
-           * int    (*facts counter*)
+  type T = ( counter (*counter for fixed premise*)
+           * counter (*facts counter*)
            * string (*hash used for caching proof*) )
-  val init = K (0,0,"")
+  val init = K (Consecutive_Counter 0, Consecutive_Counter 0, "")
 )
+val _ = Counter.make()
 
 fun incr_premise_counter delta ctxt =
   let val (ii,jj,ID) = IPS_Data.get ctxt
-   in (ii, IPS_Data.put (ii+delta,jj,ID) ctxt)
+   in case ii of
+        Consecutive_Counter n =>
+          (n, IPS_Data.put (Consecutive_Counter (n+delta), jj, ID) ctxt)
+      | Unique_Counter var =>
+          let val start = Synchronized.change_result var (fn i => (i, i + delta))
+           in (start, IPS_Data.put (ii, jj, ID) ctxt)
+          end
+      | No_Counter =>
+          if delta = 0 then (0, ctxt)
+          else raise OPR_FAIL (INVALID_OPR, "No_Counter: all premise bindings must be explicitly provided")
   end
 
 fun incr_fact_counter delta ctxt =
   let val (ii,jj,ID) = IPS_Data.get ctxt
-   in (jj, IPS_Data.put (ii,jj+delta,ID) ctxt)
+   in case jj of
+        Consecutive_Counter n =>
+          (n, IPS_Data.put (ii, Consecutive_Counter (n+delta), ID) ctxt)
+      | Unique_Counter var =>
+          let val start = Synchronized.change_result var (fn i => (i, i + delta))
+           in (start, IPS_Data.put (ii, jj, ID) ctxt)
+          end
+      | No_Counter =>
+          if delta = 0 then (0, ctxt)
+          else raise OPR_FAIL (INVALID_OPR, "No_Counter: all fact bindings must be explicitly provided")
   end
 
-fun get_fact_counter ctxt = #2 (IPS_Data.get ctxt)
+fun get_premise_counter ctxt =
+  case #1 (IPS_Data.get ctxt) of
+    Consecutive_Counter n => n
+  | Unique_Counter var => Synchronized.value var
+  | No_Counter => 0
+
+fun get_fact_counter ctxt =
+  case #2 (IPS_Data.get ctxt) of
+    Consecutive_Counter n => n
+  | Unique_Counter var => Synchronized.value var
+  | No_Counter => 0
+
+fun map_premise_counter f ctxt =
+  let val (ii,jj,ID) = IPS_Data.get ctxt
+   in case ii of
+        Consecutive_Counter n =>
+          let val (result, n') = f n
+           in (result, IPS_Data.put (Consecutive_Counter n', jj, ID) ctxt)
+          end
+      | Unique_Counter var =>
+          let val result = Synchronized.change_result var (fn n => let val (r, n') = f n in (r, n') end)
+           in (result, ctxt)
+          end
+      | No_Counter =>
+          let val (result, n') = f 0
+           in if n' = 0 then (result, ctxt)
+              else raise OPR_FAIL (INVALID_OPR, "No_Counter: premise counter cannot be modified")
+          end
+  end
+
+fun map_fact_counter f ctxt =
+  let val (ii,jj,ID) = IPS_Data.get ctxt
+   in case jj of
+        Consecutive_Counter n =>
+          let val (result, n') = f n
+           in (result, IPS_Data.put (ii, Consecutive_Counter n', ID) ctxt)
+          end
+      | Unique_Counter var =>
+          let val result = Synchronized.change_result var (fn n => let val (r, n') = f n in (r, n') end)
+           in (result, ctxt)
+          end
+      | No_Counter =>
+          let val (result, n') = f 0
+           in if n' = 0 then (result, ctxt)
+              else raise OPR_FAIL (INVALID_OPR, "No_Counter: fact counter cannot be modified")
+          end
+  end
 
 
 fun beta_eta_contract th =
@@ -913,6 +996,18 @@ fun strip_meta_hhf term =
         | strip (V,P) X = (rev V, rev P, X)
    in strip ([],[]) term end
 
+fun strip_meta_and_hol_hhf term =
+  let fun strip (V,P) (Const("Pure.imp", _) $ H $ B) = strip (V,H::P) B
+        | strip (V,P) (Const(\<^const_name>\<open>HOL.implies\<close>, _) $ H $ B) = strip (V,H::P) B
+        | strip (V,P) (Const("Pure.all", _) $ Abs (a, T, B)) = strip ((a,T)::V,P) B
+        | strip (V,P) (Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs (a, T, B)) = strip ((a,T)::V,P) B
+        | strip (V,P) (\<^Const>\<open>Pure.all ty\<close> $ X) =
+            strip (V,P) (\<^Const>\<open>Pure.all ty\<close> $ Abs ("_", ty, Term.incr_boundvars 1 X $ Bound 0))
+        | strip (V,P) (\<^Const>\<open>HOL.All ty\<close> $ X) =
+            strip (V,P) (\<^Const>\<open>HOL.All ty\<close> $ Abs ("_", ty, Term.incr_boundvars 1 X $ Bound 0))
+        | strip (V,P) X = (rev V, rev P, X)
+   in strip ([],[]) term end
+
 fun quantifier_bindings ctxt st =
          Thm.prop_of st
       |> Logic.dest_implies |> fst
@@ -923,6 +1018,18 @@ fun quantifier_bindings ctxt st =
                   ) L (Variable.names_of ctxt))
       |> #1
 
+(* INTRO'' performs introduction rules (allI and impI) on the current goal.
+   Parameters:
+   - F: Processing function that handles the focused subgoal.
+        Takes (st, foc) where st is the theorem state and foc contains focus information,
+        returns (st'', (items', ctxt')) with the updated state, new proof items, and context.
+   - mode: Introduction mode controlling how subgoals are processed:
+        * ALL_SUBGOALS: recursively apply INTRO'' to all resulting subgoals
+        * SINGLE_GOAL: only process the current goal
+   - bs: Optional list of variable bindings (string list option).
+        If SOME bindings, uses the provided names for introduced quantified variables.
+        If NONE, uses default variable names from the goal.
+*)
 fun INTRO'' F mode bs (origin as (ctxt, HHF (st0, items) :: L)) =
     if Thm.no_prems st0 then origin
     else if need_intro st0
@@ -973,23 +1080,45 @@ fun INTRO'' F mode bs (origin as (ctxt, HHF (st0, items) :: L)) =
       else (ctxt, HHF (st0, items) :: L)
   | INTRO'' _ _ _ _ = raise BROKEN_INVARIANT
 
-val INTRO' = INTRO'' (fn (st, foc) =>
-  let val (i,ctxt) = #context foc
-                  |> incr_premise_counter (length (#prems foc))
-   in ctxt
-   |> Proof_Context.note_thmss "" (map_index (fn (d,th) =>
-        ((Binding.name (assm_name (i+d)), []), [([th], [])])
-      ) (#prems foc))
-   |> apfst (map ( apsnd (map Thm.prop_of)
-                #> apfst simp_name )
-          #> pair (#params foc |> map ( apsnd Thm.typ_of_cterm )))
-   |> pair st
-  end )
+fun INTRO' mode bs premise_names =
+  let val _ = if mode = ALL_SUBGOALS andalso is_some premise_names
+              then raise OPR_FAIL (INVALID_OPR, "premise_names must be NONE in ALL_SUBGOALS mode")
+              else ()
+      val F = fn (st, foc) =>
+        let val num_prems = length (#prems foc)
+            val _ = case premise_names
+                      of SOME names =>
+                          if length names <> num_prems
+                          then raise OPR_FAIL (INVALID_OPR, "bad premise binding number")
+                          else ()
+                       | NONE => ()
+            val (bindings, ctxt) = map_premise_counter (fn counter_val =>
+                  fold_map (fn (d, th) => fn current_counter =>
+                    let val (name, next_counter) =
+                          case premise_names of
+                            SOME names =>
+                              (case nth names d of
+                                 SOME n => (n, current_counter)
+                               | NONE => (assm_name current_counter, current_counter + 1))
+                          | NONE => (assm_name current_counter, current_counter + 1)
+                     in (((Binding.name name, []), [([th], [])]), next_counter)
+                    end
+                  ) (map_index I (#prems foc)) counter_val
+                ) (#context foc)
+         in ctxt
+         |> Proof_Context.note_thmss "" bindings
+         |> apfst (map ( apsnd (map Thm.prop_of)
+                      #> apfst simp_name )
+                #> pair (#params foc |> map ( apsnd Thm.typ_of_cterm )))
+         |> pair st
+        end
+   in INTRO'' F mode bs
+  end
 
 fun TRANSPARENT_INTRO' (origin as (ctxt, HHF (st, _) :: _)) =
       if Config.get ctxt transparent_intro andalso
          has_prems_universal_vars (fst (Logic.dest_implies (Thm.prop_of st)))
-      then INTRO' SINGLE_GOAL NONE origin
+      then INTRO' SINGLE_GOAL NONE NONE origin
       else origin
   | TRANSPARENT_INTRO' _ = raise BROKEN_INVARIANT
 
@@ -1042,8 +1171,10 @@ fun CONTEXTUAL_CMD (parser : Proof.context -> command)
   = ((fn (s:state) => fst (parser (#1 (#1 s)) toks) s), [])
 
 
-val VARS_KWD = (Parse.$$$ "VARS" || Parse.$$$ "vars")
-val OPT_VARS = Scan.option (VARS_KWD |-- Parse.and_list (Scan.repeat1 (Parse.maybe Parse.name)) >> flat)
+val VARS_KWD  = (Parse.$$$ "VARS" || Parse.$$$ "vars")
+val PREMS_KWD = (Parse.$$$ "PREMISES" || Parse.$$$ "premises")
+val OPT_VARS  = Scan.option (VARS_KWD  |-- Parse.and_list (Scan.repeat1 (Parse.maybe Parse.name)) >> flat)
+val OPT_PREMS = Scan.option (PREMS_KWD |-- Parse.and_list (Scan.repeat1 (Parse.maybe Parse.name)) >> flat)
 val VARS = VARS_KWD |-- Parse.and_list (Scan.repeat1 Parse.binding) >> flat
 val IN = (Parse.$$$ "IN" || Parse.$$$ "in")
 
@@ -1150,11 +1281,12 @@ fun TRY_STANDARD SK =
               (K ()) (CONTEXT_TACTIC (Classical.standard_tac (#1 SK) [])) NONE SK
   else SK
 
-val INTRO = timed_OPR 2 oo INTRO'
-val INTRO_CMD = OPT_VARS >> (timed_OPR 2 o INTRO' SINGLE_GOAL)
-val INTRO_ALL_CMD = OPT_VARS >> (timed_OPR 2 o INTRO' ALL_SUBGOALS)
-val TRANSPARENT_INTRO = OPR TRANSPARENT_INTRO'
-
+val INTRO = timed_OPR 2 ooo INTRO'
+val INTRO_CMD = (OPT_VARS -- OPT_PREMS)
+        >> (timed_OPR 2 o uncurry (INTRO' SINGLE_GOAL))
+val INTRO_ALL_CMD = (OPT_VARS -- OPT_PREMS)
+        >> (timed_OPR 2 o uncurry (INTRO' ALL_SUBGOALS))
+val TRANSPARENT_INTRO = OPR_NO_INCR TRANSPARENT_INTRO'
 
 local
 (*
@@ -1238,7 +1370,16 @@ end
 
 fun init_ctxt c st = c
   |> IPS_Data.put (
-        (0, 0, Hasher.term (Thm.prop_of st))
+        let val mode = Config.get c counter_mode
+            val (premise_ctr, fact_ctr) =
+              case mode of
+                "consecutive" => (Consecutive_Counter 0, Consecutive_Counter 0)
+              | "unique" => (Unique_Counter (Synchronized.var "premise_counter" 0),
+                             Unique_Counter (Synchronized.var "fact_counter" 0))
+              | "none" => (No_Counter, No_Counter)
+              | _ => error ("Invalid counter_mode: " ^ mode ^ ". Must be one of: consecutive, unique, none")
+         in (premise_ctr, fact_ctr, Hasher.term (Thm.prop_of st))
+        end
       )
   |> Context.proof_map (
         Syntax_Phases.term_check ~10000 "minlang-flexible-typ" typ_parsing
@@ -1296,7 +1437,7 @@ fun SIMP' _ _ (ctxt, []) = (ctxt, [])
 
 fun CRUSH' prep_with (vars, raw_with_lems) SK0 =
      SIMP' prep_with raw_with_lems SK0
-  |> SKIP_SUCCESS (INTRO' ALL_SUBGOALS vars)
+  |> SKIP_SUCCESS (INTRO' ALL_SUBGOALS vars NONE)
   |> report_goal
 
 
@@ -1700,16 +1841,17 @@ val RULE_CMD = let open Parse
 (*
 fun HAVE'' _ _ _ (ctxt, []) = (ctxt, [])
   | HAVE'' AP raw_name expr (ctxt, HHF (G,items) :: S) =
-      let val SOME (_, jj, _) = IPS_Data.get ctxt
-          val name = Option.map (fn (name, raw_attrs) =>
-                        (Binding.name name,
-                         raw_attrs |> map ( Attrib.check_src ctxt
-                                         #> Attrib.attribute ctxt ) ) ) raw_name
-                  |> (fn SOME some => some
-                       | NONE => let val b = Binding.name ("fact" ^ string_of_int (!jj))
-                                     val _ = (jj := !jj + 1)
-                                  in (b, [])
-                                 end)
+      let val (name, ctxt) = case raw_name of
+                SOME (name, raw_attrs) =>
+                  ((Binding.name name,
+                    raw_attrs |> map ( Attrib.check_src ctxt
+                                    #> Attrib.attribute ctxt )), ctxt)
+              | NONE =>
+                  let val jj_val = get_fact_counter ctxt
+                      val b = Binding.name ("fact" ^ string_of_int jj_val)
+                      val (_, ctxt') = map_fact_counter (fn n => ((), n + 1)) ctxt
+                   in ((b, []), ctxt')
+                  end
           val goal_term = Syntax.read_prop ctxt expr
           val goal = Goal.init (Thm.cterm_of ctxt goal_term)
           fun CB ctxt' (st',(*items'*) _,S, _) =
@@ -1852,13 +1994,12 @@ fun CONSIDER'i raw_dnf (ctxt0, HHF (st0, items0) :: S) =
                        |> map (apsnd (map ( Attrib.check_src ctxt
                                          #> Attrib.attribute ctxt )))
 
-            val (ii,jj,ID) = IPS_Data.get ctxt
-            val (binders, nn) =
+            val (binders, ctxt) = map_fact_counter (fn jj_val =>
                   fold_map (fn (B,AT) => fn N =>
                       if Binding.is_empty B
                       then ((Binding.name ("fact" ^ string_of_int N), AT), N+1)
-                      else ((B,AT),N)) binders jj
-            val ctxt = IPS_Data.put (ii,nn,ID) ctxt
+                      else ((B,AT),N)) binders jj_val
+                ) ctxt
       
             val ({vars, propss, binds, result_binds, ...}, params_ctxt) =
                     Proof_Context.read_stmt (raw_decls @ raw_fixes) (raw_prems @ raw_props) ctxt
@@ -2416,8 +2557,7 @@ fun pretty_tree0 _ (BUNDL (_,[])) =
   end
 
 fun pretty_tree ctxt tree = tree
-      |> (Config.get ctxt atomize_goals_in_printing orelse
-          Config.get ctxt transparent_intro) ? atomize_tree ctxt
+      |> (Config.get ctxt atomize_goals_in_printing orelse Config.get ctxt transparent_intro) ? atomize_tree ctxt
       |> pretty_tree0 ctxt
 
 (* fun pretty_tree (POPL ) *)
@@ -2721,6 +2861,7 @@ val keywords = let open Keyword
            (("WITHOUT",\<^here>),quasi_command_spec),
            (("IN",    \<^here>), quasi_command_spec),
            (("VARS",  \<^here>), quasi_command_spec),
+           (("PREMISES", \<^here>), quasi_command_spec),
            (("infix",  \<^here>), quasi_command_spec),
            (("infixr", \<^here>), quasi_command_spec),
            (("infixl", \<^here>), quasi_command_spec),

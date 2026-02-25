@@ -218,3 +218,8 @@ step2B
 step3
 
 goal1-1.1
+
+
+Ideal mechanism of rule/fact retrieval:
+  - Map each rule and its usage into an embedding space.
+  - Retrieve facts/rules according to an English usage.

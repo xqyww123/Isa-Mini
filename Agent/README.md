@@ -35,11 +35,11 @@ The entry point is [./debug_launcher.py](./debug_launcher.py) and [./IsaMini_Age
 3. Run the agent over a proof goal
 ```
 # assume the current working directory is at the MLML directory.
-./tools/agent_run.py <<Driver>> <<File:line:column>>
+./tools/agent_run.py <<File:line:column>>
 
 # examples:
-./tools/agent_run.py Gemini ./contrib/Isa-Mini/Agent/Test/Test001.thy:6:1
-./tools/agent_run.py Gemini ./contrib/Isa-Mini/Agent/Test/Test_sqrt2.thy:6:1
+./tools/agent_run.py ./contrib/Isa-Mini/Agent/Test/Test001.thy:6:1
+./tools/agent_run.py ./contrib/Isa-Mini/Agent/Test/Test_sqrt2.thy:6:1
 ```
 You can see logs from the Agent Server's stdout.
 

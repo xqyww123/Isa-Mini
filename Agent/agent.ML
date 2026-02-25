@@ -31,10 +31,17 @@ datatype ('term, 'thm, 'fact) command =
 
 type xcmd = (string, string, string) command
 type icmd = (term, thm, Facts.ref * Token.src list) command
+type var_names = {internal_name: string, external_name: string} list
+type prem_names = {internal_term: term, external_name: string} list
+type counters = {
+    prem_counter: int Synchronized.var,
+    fact_counter: int Synchronized.var
+  }
+type config = cfg * budget * counters
 
 val check_command : Proof.context -> xcmd -> icmd
-val interpret_i : cfg * budget -> icmd -> Minilang.state -> Minilang.state
-val interpret : cfg * budget -> xcmd -> Minilang.state -> Minilang.state
+val interpret_i : config -> icmd * opt_var_names * opt_prem_names -> Minilang.state -> Minilang.state
+val interpret : config -> xcmd * opt_var_names * opt_prem_names -> Minilang.state -> Minilang.state
 
 val default_cfg : cfg * budget
 
@@ -63,6 +70,15 @@ val default_cfg : (cfg * budget) = ({
       total_timeout = SOME (Time.fromSeconds 600),
       step_limit = 30
     })
+
+type var_names = {internal_name: string, external_name: string} list
+type prem_names = {internal_name: string, external_name: string} list
+
+type counters = {
+    prem_counter: int Synchronized.var,
+    fact_counter: int Synchronized.var
+  }
+type config = cfg * budget * counters
 
 datatype ('term, 'thm, 'fact) command =
     SIMPLIFY of 'fact list (*simp rules*)
@@ -102,6 +118,11 @@ fun find_def ctxt name =
 
 fun find_def_const ctxt (Const (name, _)) = find_def ctxt name
   | find_def_const _ _ = NONE
+
+fun AUTO_INTRO (counters:counters)
+               (opt_var_names: var_names option, opt_prem_names: prem_names option)
+               (s:Minilang.state)
+  = ...
 
 fun interpret_i _ (SIMPLIFY simp_thms) s =
       Minilang.SIMP'' (map (pair true) simp_thms) s

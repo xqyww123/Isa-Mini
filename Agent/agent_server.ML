@@ -2,6 +2,9 @@
 
 signature MINILANG_AGENT_AoA = sig
 
+type driver = string
+val default_driver: driver
+
 type state_id = string
 type states = Minilang.state Symtab.table
 
@@ -10,7 +13,7 @@ datatype acmd = Proof_Opr of {from: state_id, to: state_id, opr: MiniLang_Agent.
                                , criterions: (bool * string Find_Theorems.criterion) list list}
               | Exit
 
-val AoA_RPC : MiniLang_Agent.cfg * MiniLang_Agent.budget
+val AoA_RPC : driver * (MiniLang_Agent.cfg * MiniLang_Agent.budget)
            -> Proof.context * thm
            -> MiniLang_Agent.xcmd list * thm (*acomplished proof sequent*)
 
@@ -19,6 +22,9 @@ val method : thm list -> context_state -> context_state Seq.result Seq.seq
 end
 
 structure MiniLang_Agent_AoA : MINILANG_AGENT_AoA = struct
+
+type driver = string
+val default_driver = "ClaudeCode"
 
 type state_id = string
 type states = Minilang.state Symtab.table
@@ -311,13 +317,15 @@ fun callback (cfg:cfg) (states:states Unsynchronized.ref) (conn:connection) =
   end
 
 val AoA_timeout = Time.fromSeconds 10
-fun AoA_cmd (cfg:cfg) (states:states Unsynchronized.ref) : (goals, MiniLang_Agent.xcmd list * string option) command =
+fun AoA_cmd (cfg:cfg) (states:states Unsynchronized.ref) : (goals * driver, MiniLang_Agent.xcmd list * string option) command =
   let val s0 = chk_initial_state (!states)
       val ctxt = Minilang.context_of s0
       val s0_ptree = Minilang.print_state s0
    in {
       name = "IsaMini.AoA",
-      arg_schema = (fn goals => packPair (goals_packer ctxt, minilang_tree_packer ctxt) (goals, s0_ptree)),
+      arg_schema = (fn (goals, driver) =>
+          packTuple3 (goals_packer ctxt, minilang_tree_packer ctxt, packString)
+                     (goals, s0_ptree, driver)),
       ret_schema = unpackPair (unpackList MiniLang_Agent.xcmd_unpacker, unpackOption unpackString),
       timeout = NONE (*SOME AoA_timeout*),
       callback = SOME (callback cfg states)
@@ -326,13 +334,14 @@ fun AoA_cmd (cfg:cfg) (states:states Unsynchronized.ref) : (goals, MiniLang_Agen
 
 end
 
-fun AoA_RPC (cfg:cfg) (ctxt, sequent) =
+fun AoA_RPC (driver, cfg:cfg) (ctxt, sequent) =
   let val top_goals = top_goals_of (ctxt, sequent)
       val s0 = Minilang.INIT ctxt sequent
             |> Minilang.map_context ( Config.put Minilang.strict_end true
-                                   #> Config.put Minilang.transparent_intro true)
+                                   #> Config.put Minilang.counter_mode "none" )
       val state = Unsynchronized.ref (Symtab.make [("$init", s0)])
-      val (xcmds, s1o) = Remote_Procedure_Calling.call_command (AoA_cmd cfg state) top_goals
+      val (xcmds, s1o) =
+            Remote_Procedure_Calling.call_command (AoA_cmd cfg state) (top_goals, driver)
    in case s1o
    of SOME s1 => (
    case Symtab.lookup (!state) s1
@@ -375,12 +384,12 @@ fun AoA_REPL_App (cin, cout, toplevel) =
                           ; ret
                         end
 
-      val cfg = read (unpackPair (unpackCfg, unpackBudget))
+      val (driver, cfg) = read (unpackPair (unpackString, unpackPair (unpackCfg, unpackBudget)))
       val transition = Toplevel.empty
             |> Toplevel.proof (
                   Proof.refine_primitive (fn ctxt => fn sequent =>
                     \<^try>\<open>
-                    let val (time, (_, seq)) = Timing.timing (AoA_RPC cfg) (ctxt, sequent)
+                    let val (time, (_, seq)) = Timing.timing (AoA_RPC (driver, cfg)) (ctxt, sequent)
                      in REPL_Server.output cout (packTuple3 (packBool, packInt, packInt))
                              ( true,
                                Time.toMilliseconds (#elapsed time),
@@ -420,7 +429,7 @@ fun is_dummy th =
 
 fun method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
   if is_dummy sequent then NONE
-  else AoA_RPC MiniLang_Agent.default_cfg (ctxt, sequent)
+  else AoA_RPC (default_driver, MiniLang_Agent.default_cfg) (ctxt, sequent)
     |> (fn (_, sequent') => SOME (Seq.Result (ctxt, sequent'), Seq.empty)) )
 
 
