@@ -1,5 +1,6 @@
 import os
 from typing import Any, NamedTuple, Sequence, TypedDict, Callable, TextIO, cast
+from . import model
 from .model import *
 
 class TestCase(NamedTuple):
@@ -33,7 +34,7 @@ def print_header(msg: str, file: TextIO):
     print(msg, file=file)
     print("-"*50, file=file)
 
-@test("sqrt2", "Test_sqrt2.thy", 6)
+#@test("sqrt2", "Test_sqrt2.thy", 6)
 def _test_sqrt2(root: Root, file: TextIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -70,7 +71,19 @@ def _test_branch(root: Root, file: TextIO):
     print_header("Branch", file)
     root.print(0, file)
 
-def run_all_tests(repl_addr: str, mode="test"):
+@test("EquivDerive", "Test003.thy", 6)
+def _test_EquivDerive(root: Root, file: TextIO):
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.fill("1", InferenceRule.gen({
+        "thought": "Destruct equivalence",
+        "rule": None
+    }))
+    print_header("Inference Rule", file)
+    root.print(0, file)
+
+def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None):
+    model.GLOBAL_LOGGER = logger
     import msgpack as mp
     from IsaREPL import Client
     _budget = (

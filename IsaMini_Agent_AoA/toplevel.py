@@ -12,7 +12,7 @@ def IsaMini_AoA(data: tuple[Any, Any, str], connection: Connection):
     (goals, ptree, driver) = data
     goals = Goals.unpack(goals)
     ptree = unpack_MLPT(ptree)
-    root = Root.new((goals, ptree), connection)
+    root = Root((goals, ptree), connection)
     if driver.startswith("test."):
         # Run specific test associated with the driver
         test_name = driver[len("test."):]

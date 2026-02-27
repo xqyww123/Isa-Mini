@@ -248,6 +248,17 @@ fun minilang_message_packer ctxt =
    in packList pack o filter (fn Minilang.Internal _ => false | _ => true)
   end
 
+fun bindings_packer ctxt =
+  let open MessagePackBinIO.Pack
+      fun pack_var_name {internal_name, external_name, typ_pretty} =
+            packTuple3 (packString, packString, packString) (internal_name, external_name, typ_pretty)
+      fun pack_prem_name {internal_term, external_name, pretty} =
+            packTuple3 (REPL_Serialize.pack_raw_term, packString, packString)
+                       (internal_term, external_name, pretty)
+   in fn (var_names, prem_names) =>
+        packPair (packList pack_var_name, packList pack_prem_name) (var_names, prem_names)
+  end
+
 local open Facts Minilang_Helper in
 fun interval_to_string (FromTo (i,j)) = [string_of_int i, "-", string_of_int j]
   | interval_to_string (From i) = [string_of_int i, "-"]
@@ -264,6 +275,11 @@ fun callback (cfg:cfg) (states:states Unsynchronized.ref) (conn:connection) =
   let exception EXIT
       exception ERR of string list
       val messages = Unsynchronized.ref []
+      (* Global counters - persist across RPC calls *)
+      val counters = {
+        prem_counter = Synchronized.var "prem_counter" 0,
+        fact_counter = Synchronized.var "fact_counter" 0
+      } : MiniLang_Agent.counters
       fun listen_report msg =
             messages := msg :: !messages
       fun clean_report () =
@@ -280,11 +296,13 @@ fun callback (cfg:cfg) (states:states Unsynchronized.ref) (conn:connection) =
                            of SOME s => s
                             | NONE => raise ERR ["beginning_state_not_found"]
                 val ctxt = Minilang.context_of s0
-                val s1 = MiniLang_Agent.interpret cfg opr s0
+                val (cfg', budget) = cfg
+                val full_config = (cfg', budget, counters) : MiniLang_Agent.config
+                val (bindings1, s1) = MiniLang_Agent.interpret full_config opr s0
                 val msgs = clean_report ()
              in states := Symtab.update (to, s1) (!states)
-              ; write conn (packPair (minilang_message_packer ctxt, minilang_tree_packer ctxt))
-                           (msgs, Minilang.print_state s1)
+              ; write conn (packTuple3 (minilang_message_packer ctxt, minilang_tree_packer ctxt, bindings_packer ctxt))
+                           (msgs, Minilang.print_state s1, bindings1)
             end handle Minilang.OPR_FAIL (Minilang.PROOF_FAIL, msg) =>
                 write_error' conn packUnit
                   {message=[String.concat ["Proof failure: ", REPL.trim_makrup msg]], errobj=()}

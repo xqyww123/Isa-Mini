@@ -4,16 +4,21 @@ from typing import Any, NamedTuple, Sequence, TypedDict, Callable, TextIO, cast
 from Isabelle_RPC_Host import Connection, IsabelleError
 from enum import Enum
 from IsaREPL import Client as IsaREPL
+import logging
+from io import StringIO
 
 type varname = str
 type varname_spec = varname | None # underscore '_' is represented as None
 type typ = str
 type term = str
+type lambda_term = Any
 type step = str
 type local_step = str
 type Vars = dict[varname, typ]
 type Hyps = dict[varname, term]
 type FactRef = str # i.e., the (full) name
+
+GLOBAL_LOGGER : logging.Logger | None = None
 
 class Explicit_Var(TypedDict):
     name: varname
@@ -197,6 +202,18 @@ class CannotFill_BadNode(CannotFill):
         self.id = id
     def __str__(self) -> str:
         return f"Cannot fill a node with id {self.id}"
+class CannotRename(OprError):
+    pass
+class CannotRename_NotFound(CannotRename):
+    def __init__(self, old_name: str, new_name: str):
+        self.old_name = old_name
+        self.new_name = new_name
+class CannotRename_VariableNotFound(CannotRename_NotFound):
+    def __str__(self) -> str:
+        return f"Cannot rename. The variable {self.old_name} is not found"
+class CannotRename_FactNotFound(CannotRename_NotFound):
+    def __str__(self) -> str:
+        return f"Cannot rename. The fact {self.old_name} is not found"
 
 class EvaluationStatus(NamedTuple):
     class Status(Enum):
@@ -328,6 +345,20 @@ def unpack_MLPT(data) -> ML_ProofTree:
         case _:
             raise Exception(f"BUG bad MLPT kind: {kind}")
 
+### Bindings
+
+class VariableBinding(NamedTuple):
+    internal_varname: varname
+    external_varname: varname
+    type: typ
+
+class FactBinding(NamedTuple):
+    expr: lambda_term  # internal_term
+    name: str          # external_name
+    pretty: str        # pretty
+
+type Bindings = tuple[list[VariableBinding], list[FactBinding]]
+
 ### Search Facts by Patterns
 
 class Search_Criterion:
@@ -401,48 +432,72 @@ class Minilang_Operation(NamedTuple):
     def pack(self):
         return (self.command, self.arg)
 
+    def __str__(self) -> str:
+        return f"{self.command}({self.arg})"
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
     @staticmethod
-    def SORRY(varnames : list[varname_spec] | None):
-        return Minilang_Operation("SORRY", varnames)
+    def SORRY(varnames : list[varname_spec] | None, bindings: Bindings) -> 'Minilang_Operation':
+        return Minilang_Operation("SORRY", (varnames, bindings))
     @staticmethod
-    def NEXT(varnames : list[varname_spec] | None):
-        return Minilang_Operation("NEXT", ([], varnames))
+    def NEXT(varnames : list[varname_spec] | None, bindings: Bindings) -> 'Minilang_Operation':
+        return Minilang_Operation("NEXT", ([], varnames, bindings))
     @staticmethod
-    def END():
+    def END() -> 'Minilang_Operation':
         return Minilang_Operation("END", [])
     @staticmethod
-    def HAVE(statement: term):
+    def HAVE(statement: term) -> 'Minilang_Operation':
         return Minilang_Operation("HAVE", [IsaREPL.ascii_of_unicode(statement)])
     @staticmethod
-    def OBTAIN(variables: list[Explicit_Var], constraints: list[term]):
+    def OBTAIN(variables: list[Explicit_Var], constraints: list[term]) -> 'Minilang_Operation':
         vars = [(v["name"], IsaREPL.ascii_of_unicode(v["type"]) if "type" in v else None) for v in variables]
         return Minilang_Operation("OBTAIN", (vars, [IsaREPL.ascii_of_unicode(c) for c in constraints]))
     @staticmethod
-    def SKIP():
-        return Minilang_Operation("SKIP", None)
-    @staticmethod
-    def RULE(rule_ref: FactRef | None) -> 'Minilang_Operation':
-        return Minilang_Operation("RULE", [rule_ref] if rule_ref is not None else [])
+    def RULE(rule_ref: FactRef | None, bindings: Bindings) -> 'Minilang_Operation':
+        return Minilang_Operation("RULE", ([rule_ref] if rule_ref is not None else [], bindings))
     @staticmethod
     def HAMMER(fact_refs: list[FactRef]) -> 'Minilang_Operation':
         return Minilang_Operation("HAMMER", fact_refs)
     @staticmethod
+    def INTRO(bindings: Bindings, single_goal: bool = True) -> 'Minilang_Operation':
+        return Minilang_Operation("INTRO", (single_goal, bindings))
+    @staticmethod
+    def SIMPLIFY(fact_refs: list[FactRef], bindings: Bindings) -> 'Minilang_Operation':
+        return Minilang_Operation("SIMPLIFY", (fact_refs, bindings))
+    @staticmethod
+    def UNFOLD(consts: list[str], bindings: Bindings) -> 'Minilang_Operation':
+        return Minilang_Operation("UNFOLD", (consts, bindings))
+    @staticmethod
+    def WITNESS(terms: list[term], bindings: Bindings) -> 'Minilang_Operation':
+        return Minilang_Operation("WITNESS", (terms, bindings))
+    @staticmethod
     def BRANCH(cases: list[term]) -> 'Minilang_Operation':
         return Minilang_Operation("BRANCH", cases)
+    @staticmethod
+    def SKIP() -> 'Minilang_Operation':
+        return Minilang_Operation("SKIP", None)
 
 type Extended_Minilang_Operation = Minilang_Operation | list[Minilang_Operation]
+
 
 class Minilang_State:
     def __init__(self, connection: Connection, name: str, prooftree : ML_ProofTree | None):
         self.connection = connection
         self.name = name
         self.prooftree = prooftree
+        self.messages : list[Message] = [] # the messages received during executing the operation that assigns to this state
+        self.fixed_vars: list[VariableBinding] = []
+        self.fixed_facts: list[FactBinding] = []
     def initialized(self) -> bool:
         return self.prooftree is not None
     def __str__(self) -> str:
         return f"Minilang_State({self.name})"
     def __repr__(self) -> str:
         return self.__str__()
+    def bindings_of(self) -> Bindings:
+        return (self.fixed_vars, self.fixed_facts)
     state_counter = 0
     @classmethod
     def assign_name(cls) -> str:
@@ -453,28 +508,70 @@ class Minilang_State:
         if isinstance(connection, Minilang_State):
             connection = connection.connection
         return Minilang_State(connection, cls.assign_name(), None)
-    def execute(self, opr: Extended_Minilang_Operation, assign_to: 'Minilang_State | None') -> tuple[list[Message], 'Minilang_State']:
+    def execute(self, opr: Extended_Minilang_Operation, assign_to: 'Minilang_State | None') -> 'Minilang_State':
         if assign_to is None:
             assign_to = Minilang_State(self.connection, type(self).assign_name(), None)
         if isinstance(opr, Minilang_Operation):
             dest_name = assign_to.name
             self.connection.write((1, (self.name, dest_name, (opr.command, opr.arg))))
+            if GLOBAL_LOGGER is not None:
+                GLOBAL_LOGGER.debug(
+                    "Minilang_State.execute(from=%s, to=%s, command=%s)",
+                    self.name,
+                    dest_name,
+                    opr,
+                )
             try:
-                (msgs, tree) = self.connection.read()
+                (msgs, tree, bindings) = self.connection.read()
+                if GLOBAL_LOGGER is not None:
+                    GLOBAL_LOGGER.debug("Minilang_State.execute: success")
             except IsabelleError as err:
+                if GLOBAL_LOGGER is not None:
+                    GLOBAL_LOGGER.debug(
+                        "Minilang_State.execute: Error! %s",
+                        err,
+                    )
                 if err.errors == ["beginning_state_not_found"]:
                     raise InternalError("The beginning state of the execution is not initialized!")
                 raise
             msgs = [unpack_message(msg) for msg in msgs]
             assign_to.prooftree = unpack_MLPT(tree)
+            assign_to.messages = msgs
+
+            # Update fixed_vars and fixed_facts from bindings
+            (var_names, prem_names) = bindings
+            assign_to.fixed_vars = [
+                VariableBinding(
+                    internal_varname=v[0],  # internal_name
+                    external_varname=v[1],  # external_name
+                    type=IsaREPL.pretty_unicode(v[2])  # typ
+                ) for v in var_names
+            ]
+            assign_to.fixed_facts = [
+                FactBinding(
+                    expr=p[0],  # internal_term
+                    name=p[1],  # external_name
+                    pretty=IsaREPL.pretty_unicode(p[2])  # pretty
+                ) for p in prem_names
+            ]
         else:
             raise NotImplementedError("Here we should implement the execution of a list of Minilang operations")
             #msgs = opr(self, assign_to)
-        return (msgs, assign_to)
-    def sorry(self, varnames: list[varname_spec] | None, assign_to: 'Minilang_State | None') -> tuple[list[Message], 'Minilang_State']:
-        return self.execute(Minilang_Operation.SORRY(varnames), assign_to)
-    def skip(self, assign_to: 'Minilang_State | None') -> tuple[list[Message], 'Minilang_State']:
+        return assign_to
+    def sorry(self, varnames: list[varname_spec] | None, assign_to: 'Minilang_State | None') -> 'Minilang_State':
+        if assign_to is None:
+            bindings = ([],[])
+        else:
+            bindings = assign_to.bindings_of()
+        return self.execute(Minilang_Operation.SORRY(varnames, bindings), assign_to)
+    def skip(self, assign_to: 'Minilang_State | None') -> 'Minilang_State':
         return self.execute(Minilang_Operation.SKIP(), assign_to)
+    def clone(self, assign_to: 'Minilang_State | None') -> 'Minilang_State':
+        ret = self.execute(Minilang_Operation.SKIP(), assign_to)
+        ret.messages = self.messages
+        ret.fixed_vars = self.fixed_vars
+        ret.fixed_facts = self.fixed_facts
+        return ret
     def search_fact(self, dnf_criterions: list[list[Search_Criterion]]) -> FactRef:
         self.connection.write((2, (self.name, dnf_criterions)))
         fact_ref_and_props = self.connection.read()
@@ -511,19 +608,13 @@ class Node:
         """
         self.local_step = config.local_step # immutable
         self.thought = thought
-        self.ml_state = config.ml_state
+        self.ml_state = config.ml_state # the pointer of self.ml_state is immutable
         self.parent = config.parent
         if self.parent is not None and self.parent.id:
             self.id = f"{self.parent.id}.{self.local_step}"
         else:
             self.id : step = self.local_step
         self.status : EvaluationStatus = EVALUATION_NOT_YET
-        self.messages : list[Message] = []
-    @classmethod
-    def new(cls, *args):
-        node = cls(*args)
-        node._refresh_me_alone()
-        return node
     def _print_step_id(self, ident: int, file: TextIO) -> int:
         print_indent(ident, file)
         file.write(f"- step id: {self.id}\n")
@@ -578,12 +669,10 @@ class Node:
         if self.parent is None:
             raise InternalError("Don't know how to refresh a node and all its after nodes when the node's parent is none")
         else:
-            def my_gen_node(config: NodeConfig) -> 'Node':
-                node = gen_node(config)
-                if node.status.status == EvaluationStatus.Status.FAILURE:
-                    raise CannotInsert_EvaluationFailedInPlace(self, node, node.status.reason)
-                return node
-            node = self.parent._insert_before_child(self, my_gen_node)
+            node = self.parent._insert_before_child(self, gen_node)
+            node._refresh_me_alone()
+            if node.status.status == EvaluationStatus.Status.FAILURE:
+                raise CannotInsert_EvaluationFailedInPlace(self, node, node.status.reason)
             node.refresh_all_after_me()
     def append(self, gen_node: gen_node) -> None:
         raise NotImplementedError("`append` must be implemented by subclass")
@@ -608,6 +697,51 @@ class Node:
     def _id_of_openning_prf_to_fill(self) -> step | None:
         return None
 
+    def _fixed_vars(self) -> list[VariableBinding]:
+        return self.resulting_state().fixed_vars
+    def _fixed_facts(self) -> list[FactBinding]:
+        return self.resulting_state().fixed_facts
+    def _rename_var(self, old_name: varname, new_name: varname) -> None:
+        vars = self._fixed_vars()
+        found = False
+        for i, var in enumerate(vars):
+            if var.external_varname == old_name:
+                vars[i] = VariableBinding(
+                    internal_varname=var.internal_varname,
+                    external_varname=new_name,
+                    type=var.type,
+                )
+                found = True
+        if not found:
+            raise CannotRename_VariableNotFound(old_name, new_name)
+    def _rename_fact(self, old_name: str, new_name: str) -> None:
+        facts = self._fixed_facts()
+        found = False
+        for i, fact in enumerate(facts):
+            if fact.name == old_name:
+                facts[i] = FactBinding(
+                    expr=fact.expr,
+                    name=new_name,
+                    pretty=fact.pretty,
+                )
+                found = True
+        if not found:
+            raise CannotRename_FactNotFound(old_name, new_name)
+    def _print_fixed_vars_and_facts(self, ident: int, file: TextIO) -> None:
+        fixed_vars = self._fixed_vars()
+        fixed_facts = self._fixed_facts()
+        if fixed_vars:
+            print_indent(ident, file)
+            file.write(f"variables:\n")
+            for var in fixed_vars:
+                print_indent(ident+1, file)
+                file.write(f"{var.external_varname}: {var.type}\n")
+        if fixed_facts:
+            print_indent(ident, file)
+            file.write(f"facts:\n")
+            for fact in fixed_facts:
+                print_indent(ident+1, file)
+                file.write(f"{fact.name}: {fact.pretty}\n")
 
 
 
@@ -625,7 +759,7 @@ class Leaf(Node):
     def _refresh_me_alone(self) -> None:
         now = time()
         try:
-            self.messages, _ = self.ml_state.execute(self.the_operation(), self.resulting_state())
+            self.ml_state.execute(self.the_operation(), self.resulting_state())
             self.status = EvaluationStatus.success(time() - now)
         except IsabelleError as err:
             self.status = EvaluationStatus.failure(time() - now, ''.join(err.errors))
@@ -675,11 +809,10 @@ class NonLeaf_Node(Node):
                         new_id = cat_segs_into_id(segs)
                     else:
                         new_id = cat_segs_into_id(prev_id + [1])
-                node = gen_node(NodeConfig(new_id, child.ml_state, self))
+                node = gen_node(NodeConfig(new_id, child.ml_state.clone(None), self))
                 for x in self.sub_nodes:
                     if x is node:
                         raise InternalError("The target node to insert is already in my children")
-                child.ml_state = Minilang_State.assign(child.ml_state)
                 self.sub_nodes.insert(i, node)
                 return node
         raise InternalError("Cannot find the target to insert-before in my children")
@@ -690,7 +823,9 @@ class NonLeaf_Node(Node):
             if child is node:
                 if i < len(self.sub_nodes) - 1:
                     return self.sub_nodes[i+1].ml_state
-        return self._resulting_state_of_all_children()
+                else:
+                    return self._resulting_state_of_all_children()
+        raise InternalError("The target node is not my children")
     def _locate_node(self, ids: Sequence[local_step], id: step, pos: int = 0) -> 'Node':
         if pos == len(ids):
             return self
@@ -757,8 +892,7 @@ class StdBlock(NonLeaf_Node):
 
     def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> tuple[bool, failure_reason]:
         try:
-            msgs, _ = self.ml_state.execute(begin_opr, self._state_after_beginning())
-            self.messages.extend(msgs)
+            self.ml_state.execute(begin_opr, self._state_after_beginning())
             return (True, None)
         except IsabelleError as err:
             return (False, self._beginning_opr_err_msgs(err))
@@ -785,15 +919,14 @@ class StdBlock(NonLeaf_Node):
             ending_opr = self.ending_opr()
             if ending_opr is not None:
                 if not self.sub_nodes and begin_opr is None:
-                    self.ml_state.skip(self._state_before_ending_)
+                    self.ml_state.clone(self._state_before_ending_)
                 try:
-                    msgs, _ = self._state_before_ending_.execute(ending_opr, self.resulting_state())
-                    self.messages.extend(msgs)
+                    self._state_before_ending_.execute(ending_opr, self.resulting_state())
                 except IsabelleError as err:
                     reason = self._ending_opr_err_msgs(err)
                     can_continue = False
             if can_continue and begin_opr is None and ending_opr is None and not self.sub_nodes:
-                self.ml_state.skip(self.resulting_state())
+                self.ml_state.clone(self.resulting_state())
         if can_continue:
             self._body_subnodes_succeeded = True
             self.status = EvaluationStatus.success(time() - now)
@@ -805,7 +938,7 @@ class StdBlock(NonLeaf_Node):
             self._body_subnodes_succeeded = False
             self.status = EvaluationStatus.failure(time() - now, reason)
     def _print_header(self, ident: int, file: TextIO) -> None:
-        raise NotImplementedError("`_print_header` must be implemented by subclass")
+        self._print_fixed_vars_and_facts(ident, file)
     def _title_of_children(self, ident: int) -> tuple[str | None, int]:
         return ("proof", ident+1)
     def _local_step_of_next_proof_step(self) -> local_step:
@@ -862,18 +995,38 @@ class StdBlock(NonLeaf_Node):
                         raise InternalError("The open goals of StdBlock should not exceed one. "
                         "To express multiple goals, you should use a StdBlock whose children are GoalNodes. See Rule as an example.")
         return ident
+    def print_string(self, ident: int) -> str:
+        buffer = StringIO()
+        self.print(ident, buffer)
+        return buffer.getvalue()
     def append(self, gen_node: gen_node) -> None:
         if not self.has_ending_opr():
             raise InternalError("The node doesn't have an ending operation. Don't know how to append a node to it.")
         local_step = self._local_step_of_next_proof_step()
-        (_, ml_state) = self._state_before_ending_.skip(None)
+
+        # Choose the starting state for the new node
+        if self.sub_nodes:
+            # Has children: start after the last child
+            ml_state = self._resulting_state_of_all_children().clone(None)
+        else:
+            # No children: start after begin_opr (if any) or from ml_state (if no begin_opr)
+            if self.beginning_opr() is not None:
+                ml_state = self._resulting_state_of_all_children().clone(None)
+            else:
+                ml_state = self.ml_state
+
         config = NodeConfig(local_step, ml_state, self)
         node = gen_node(config)
+        self.sub_nodes.append(node)
+        node._refresh_me_alone()
         if node.status.status == EvaluationStatus.Status.FAILURE:
             raise CannotAppend(node, node.status.reason)
-        self.sub_nodes.append(node)
     def is_proof_finished(self) -> bool:
         return self._body_subnodes_succeeded and super().is_proof_finished()
+    def _fixed_vars(self) -> list[VariableBinding]:
+        return self._state_after_beginning().fixed_vars
+    def _fixed_facts(self) -> list[FactBinding]:
+        return self._state_after_beginning().fixed_facts
 
 
 #abstract base class
@@ -884,7 +1037,7 @@ class GoalContainer(NonLeaf_Node):
         for i, c in enumerate(self.sub_nodes):
             if c is child:
                 if i < len(self.sub_nodes) - 1:
-                    return Minilang_Operation.NEXT(None)
+                    return Minilang_Operation.NEXT(None, self.sub_nodes[i+1].ml_state.bindings_of())
                 else:
                     return Minilang_Operation.END()
         raise InternalError("The given argument is not a child of this node")
@@ -896,7 +1049,7 @@ class GoalNode(StdBlock):
     is a GoalNode corresponding to one of the subgoals, and the children of each
     GoalNode are the proof steps for its corresponding subgoal.
     """
-    def __init__(self, config: NodeConfig, goal: Goal, is_single_goal: bool, show_goal: bool):
+    def __init__(self, config: NodeConfig, is_single_goal: bool, show_goal: bool):
         # """
         # goal_index: starting from 0
         # """
@@ -906,11 +1059,14 @@ class GoalNode(StdBlock):
         #     id = f"proof of goal{goal_index}"
         super().__init__(config, "", [])
         # self.id = id
-        self.goal = goal
         self.is_single_goal = is_single_goal
         self.show_goal = show_goal
         self._allow_multi_goal = True
         # self.goal_index = goal_index
+    def goal(self) -> Goal:
+        if self.ml_state.prooftree is None:
+            raise InternalError("The prooftree of the state is not initialized, meaning the node is not refreshed")
+        return self.ml_state.prooftree.top_goal()
     def beginning_opr(self) -> None:
         return None
     def ending_opr(self) -> Minilang_Operation | None:
@@ -931,8 +1087,9 @@ class GoalNode(StdBlock):
         else:
             return "Each of the following proof steps above is valid, but the goal doesn't trivially follow from these steps. Please provide more detailed proof steps."
     def _print_header(self, ident: int, file: TextIO):
+        self._print_fixed_vars_and_facts(ident, file)
         if self.show_goal:
-            print_goal(self.goal, ident, True, file)
+            print_goal(self.goal(), ident, True, file)
     def _print_step_id(self, ident: int, file: TextIO) -> int:
         if self.is_single_goal:
             return ident
@@ -959,9 +1116,9 @@ class SubgoalMaker(GoalContainer, StdBlock):
             else:
                 self.sub_nodes = []
                 ml_state = s0
-                for i, goal in enumerate(goals):
-                    self.sub_nodes.append(GoalNode(NodeConfig(str(i+1), ml_state, self), goal, False, True))
-                    (_, ml_state) = ml_state.sorry(None, None)
+                for i in range(len(goals)):
+                    self.sub_nodes.append(GoalNode(NodeConfig(str(i+1), ml_state, self), False, True))
+                    ml_state = ml_state.sorry(None, None)
             return (True, None)
         else:
             return (False, reason)
@@ -979,7 +1136,7 @@ class SubgoalMaker_NoTailEnder(SubgoalMaker):
         for i, c in enumerate(self.sub_nodes):
             if c is child:
                 if i < len(self.sub_nodes) - 1:
-                    return Minilang_Operation.NEXT(None)
+                    return Minilang_Operation.NEXT(None, self.sub_nodes[i+1].ml_state.bindings_of())
                 else:
                     return None
         raise InternalError("The given argument is not a child of this node")
@@ -1016,7 +1173,7 @@ class Obvious(Leaf):
     @staticmethod
     def gen(arg : Obvious_ToolArg) -> gen_node:
         def mk(config: NodeConfig) -> 'Obvious':
-            return Obvious.new(config, arg)
+            return Obvious(config, arg)
         return mk
     def print(self, ident: int, file: TextIO) -> int:
         self._print_step_id(ident, file)
@@ -1048,12 +1205,12 @@ class Have(StdBlock):
     @staticmethod
     def gen(arg : Have_ToolArg) -> gen_node:
         def mk(config: NodeConfig) -> 'Have':
-            return Have.new(config, arg)
+            return Have(config, arg)
         return mk
     def _print_header(self, ident: int, file: TextIO):
+        self._print_thought(ident, file)
         print_indent(ident, file)
         file.write("operation: Have\n")
-        self._print_thought(ident, file)
         print_indent(ident, file)
         file.write(f"statement:\n")
         print_indent(ident+1, file)
@@ -1087,12 +1244,12 @@ class Obtain(StdBlock):
     @staticmethod
     def gen(arg : Obtain_ToolArg) -> gen_node:
         def mk(config: NodeConfig) -> 'Obtain':
-            return Obtain.new(config, arg)
+            return Obtain(config, arg)
         return mk
     def _print_header(self, ident: int, file: TextIO):
-        print_indent(ident, file)
-        file.write("operation: obtain\n")
         self._print_thought(ident, file)
+        print_indent(ident, file)
+        file.write("operation: Obtain\n")
         print_indent(ident, file)
         file.write(f"variables:\n")
         for v in self.variables:
@@ -1146,15 +1303,16 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
     @staticmethod
     def gen(arg : InferenceRule_ToolArg) -> gen_node:
         def mk(config: NodeConfig) -> 'InferenceRule':
-            return InferenceRule.new(config, arg)
+            return InferenceRule(config, arg)
         return mk
     def _print_header(self, ident: int, file: TextIO):
-        print_indent(ident, file)
-        file.write("operation: setting inference rule\n")
         self._print_thought(ident, file)
+        print_indent(ident, file)
+        file.write("operation: Proof by inference rule\n")
         print_indent(ident, file)
         file.write(f"rule: {self.rule_ref if self.rule_ref is not None else 'default'}\n")
         if len(self.sub_nodes) <= 1:
+            self._print_fixed_vars_and_facts(ident, file)
             s0 = self._state_after_beginning()
             if s0.prooftree is None:
                 raise InternalError("The prooftree of the state after beginning is not initialized, meaning the node is not refreshed")
@@ -1163,7 +1321,7 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
             file.write("derived goal:\n")
             print_goal(goal, ident+1, False, file)
     def beginning_opr(self) -> Minilang_Operation:
-        return Minilang_Operation.RULE(self.rule_ref)
+        return Minilang_Operation.RULE(self.rule_ref, (self._fixed_vars(), self._fixed_facts()))
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
         return f"Fail to apply the inference rule because: {"\n".join(err.errors)}"
     def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
@@ -1193,7 +1351,7 @@ class Branch(SubgoalMaker_NoTailEnder):
     @staticmethod
     def gen(arg : Branch_ToolArg) -> gen_node:
         def mk(config: NodeConfig) -> 'Branch':
-            return Branch.new(config, arg)
+            return Branch(config, arg)
         return mk
     def _title_of_children(self, ident: int) -> tuple[str | None, int]:
         return ('cases', ident+1)
@@ -1248,18 +1406,19 @@ class Root(GoalContainer, StdBlock):
         ml_state0 = Minilang_State(connection, '$init', ptree)
         super().__init__(NodeConfig("$root", ml_state0, None), "", [])
         self.sub_nodes.append(GlobalEnv(NodeConfig("global", ml_state0, self)))
-        _, ml_state = ml_state0.skip(None)
+        ml_state = ml_state0.skip(None)
         is_single_goal = len(self.goals) == 1
         for i, goal in enumerate(self.goals):
             if is_single_goal:
                 goal_id = ""
             else:
                 goal_id = f"goal{i+1}"
-            goal_node = GoalNode(NodeConfig(goal_id, ml_state, self), goal, is_single_goal, True)
+            goal_node = GoalNode(NodeConfig(goal_id, ml_state, self), is_single_goal, True)
             goal_node.id = goal_id
             self.sub_nodes.append(goal_node)
-            (_, ml_state) = ml_state.sorry(None, None)
+            ml_state = ml_state.sorry(None, None)
         self.final_ml_state = ml_state
+        self._refresh_me_alone()
     def resulting_state(self) -> Minilang_State:
         return self.final_ml_state
     def _print_step_id(self, ident: int, file: TextIO) -> int:
@@ -1293,8 +1452,6 @@ class Root(GoalContainer, StdBlock):
                     file.write(f"- goal index: {i+1}\n")
                     self.sub_nodes[i+1].print(ident+2, file)
         return ident
-    def refresh_goals(self):
-        pass
     def _locate_node(self, ids: Sequence[local_step], id: step, pos: int = 0) -> 'Node':
         if pos != 0:
             raise InternalError("pos should be 0 when locating a node in a Root")

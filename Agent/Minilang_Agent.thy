@@ -17,9 +17,6 @@ method_setup AgentAoA = \<open>
   Scan.succeed (K MiniLang_Agent_AoA.method)
 \<close> 
 
-lemma "(x::int) * x \<ge> 0"
-  apply (min_script \<open>CONSIDER "x > 0" | "x < 0" | "x = 0" SORRY\<close>)
-
 (*
 theorem sqrt2_not_rational:
     "sqrt 2 \<notin> \<rat>"

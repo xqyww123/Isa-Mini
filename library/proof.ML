@@ -69,6 +69,10 @@ val INTRO : intros_mode -> opt_var_names -> opt_prem_names -> operation
 val INTRO_CMD : command
 val TRANSPARENT_INTRO : operation
 
+(* Helper functions for INTRO *)
+val need_intro : thm -> bool
+val strip_meta_and_hol_hhf : term -> (string * typ) list * term list * term
+
 val apply : string -> context_tactic -> Time.time option -> stack -> stack
 val apply_method : string -> thm list -> Method.method -> Time.time option -> stack -> stack
 val APPLY   : Time.time option -> thm list -> Method.text -> operation
