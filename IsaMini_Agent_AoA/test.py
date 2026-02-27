@@ -80,6 +80,11 @@ def _test_EquivDerive(root: Root, file: TextIO):
         "rule": None
     }))
     print_header("Inference Rule", file)
+    root.fill("2", InferenceRule.gen({
+        "thought": "Destruct equivalence",
+        "rule": None
+    }))
+    print_header("Inference Rule", file)
     root.print(0, file)
 
 def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None):

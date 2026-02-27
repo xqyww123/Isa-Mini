@@ -251,12 +251,12 @@ class New_Item_Msg(Message):
         return cls(Context.unpack(data))
 
 class Goals_Msg(Message):
-    def __init__(self, goals : list[Goal] | None) -> None:
+    def __init__(self) -> None:
         super().__init__()
-        self.goals = goals
     @classmethod
     def unpack(cls, data) -> 'Goals_Msg':
-        return cls([Goal.unpack(goal) for goal in data] if data is not None else None)
+        # ML side now sends unit () for Goals message
+        return cls()
 
 class Consider_Case_Msg(Message):
     def __init__(self, case: str) -> None:
@@ -1399,16 +1399,17 @@ class GlobalEnv(StdBlock):
         return ident
 
 class Root(GoalContainer, StdBlock):
-    def __init__(self, goals_and_ptree: tuple[Goals, ML_ProofTree], connection: Connection):
-        (goals, ptree) = goals_and_ptree
-        self.context = goals.context
-        self.goals = goals.goals
+    def __init__(self, context_and_ptree: tuple[Context, ML_ProofTree], connection: Connection):
+        (context, ptree) = context_and_ptree
+        self.context = context
         ml_state0 = Minilang_State(connection, '$init', ptree)
         super().__init__(NodeConfig("$root", ml_state0, None), "", [])
         self.sub_nodes.append(GlobalEnv(NodeConfig("global", ml_state0, self)))
         ml_state = ml_state0.skip(None)
-        is_single_goal = len(self.goals) == 1
-        for i, goal in enumerate(self.goals):
+        # Get number of goals from prooftree
+        self.num_goals = len(ml_state.prooftree.top_goals())
+        is_single_goal = self.num_goals == 1
+        for i in range(self.num_goals):
             if is_single_goal:
                 goal_id = ""
             else:
@@ -1436,10 +1437,8 @@ class Root(GoalContainer, StdBlock):
     def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
         raise InternalError("A Root doesn't have an ending operation")
     def print(self, ident: int, file: TextIO) -> int:
-        match len(self.goals):
+        match self.num_goals:
             case 1:
-                print_vars({**self.context.vars, **self.goals[0].context.vars}, ident, file)
-                print_hyps({**self.context.hyps, **self.goals[0].context.hyps}, ident, file)
                 self.sub_nodes[0].print(ident, file)
                 self.sub_nodes[1].print(ident, file)
             case _:
@@ -1447,7 +1446,7 @@ class Root(GoalContainer, StdBlock):
                 print_hyps(self.context.hyps, ident, file)
                 self.sub_nodes[0].print(ident, file)
                 file.write("proof goals:\n")
-                for i, goal in enumerate(self.goals):
+                for i in range(self.num_goals):
                     print_indent(ident+1, file)
                     file.write(f"- goal index: {i+1}\n")
                     self.sub_nodes[i+1].print(ident+2, file)
@@ -1456,14 +1455,14 @@ class Root(GoalContainer, StdBlock):
         if pos != 0:
             raise InternalError("pos should be 0 when locating a node in a Root")
         if not ids:
-            if len(self.goals) == 1:
+            if self.num_goals == 1:
                 return self.sub_nodes[1]
             else:
                 raise InternalError(f"Bad id, {id}")
         if ids[0] == "global":
             return self.sub_nodes[0]._locate_node(ids, id, 1)
         else:
-            if len(self.goals) <= 1:
+            if self.num_goals <= 1:
                 return self.sub_nodes[1]._locate_node(ids, id, 0)
             else:
                 for node in self.sub_nodes:

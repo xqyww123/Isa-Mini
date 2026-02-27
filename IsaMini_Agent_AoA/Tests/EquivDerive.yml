@@ -1,0 +1,41 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - Q: 'c::type ⇒ 'a::type ⇒ bool
+  - P: 'b::type ⇒ 'a::type ⇒ bool
+conclusion: ∀a. (∀b. P b a) = (∀c. Q c a)
+proof: empty!
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+pending proof goal:
+  variables:
+    - Q: 'c::type ⇒ 'a::type ⇒ bool
+    - P: 'b::type ⇒ 'a::type ⇒ bool
+  conclusion: ∀a. (∀b. P b a) = (∀c. Q c a)
+--------------------------------------------------
+Inference Rule
+--------------------------------------------------
+variables:
+  - Q: 'c::type ⇒ 'a::type ⇒ bool
+  - P: 'b::type ⇒ 'a::type ⇒ bool
+conclusion: ∀a. (∀b. P b a) = (∀c. Q c a)
+proof:
+  - step id: 1
+    thought: Destruct equivalence
+    operation: Proof by inference rule
+    rule: default
+    variables:
+      a: 'a
+    derived goal:
+      variables:
+        - Q: 'c::type ⇒ 'a::type ⇒ bool
+        - P: 'b::type ⇒ 'a::type ⇒ bool
+        - a: 'a::type
+      conclusion: (∀b. P b a__) = (∀c. Q c a__)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  variables:
+    - Q: 'c::type ⇒ 'a::type ⇒ bool
+    - P: 'b::type ⇒ 'a::type ⇒ bool
+    - a: 'a::type
+  conclusion: (∀b. P b a__) = (∀c. Q c a__)

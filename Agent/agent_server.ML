@@ -4,6 +4,7 @@ signature MINILANG_AGENT_AoA = sig
 
 type driver = string
 val default_driver: driver
+val agent_aoa_driver: string Config.T
 
 type state_id = string
 type states = Minilang.state Symtab.table
@@ -25,6 +26,9 @@ structure MiniLang_Agent_AoA : MINILANG_AGENT_AoA = struct
 
 type driver = string
 val default_driver = "ClaudeCode"
+
+(* Config for driver selection *)
+val agent_aoa_driver = Attrib.setup_config_string \<^binding>\<open>agent_AoA_driver\<close> (K default_driver)
 
 type state_id = string
 type states = Minilang.state Symtab.table
@@ -49,17 +53,6 @@ fun chk_initial_state (states:states) =
      | NONE => error "Not an initial state"
   else error "Not an initial state"
 
-fun strip_HHF (vs, hs) (Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs (name, typ, X))
-      = strip_HHF ((name,typ)::vs, hs) X
-  | strip_HHF (vs, hs) (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ H $ X)
-      = strip_HHF (vs, H :: hs) X
-  | strip_HHF (vs, hs) (Const(\<^const_name>\<open>Trueprop\<close>, _) $ X) = strip_HHF (vs, hs) X
-  | strip_HHF (vs, hs) (Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs (name, typ, X))
-      = strip_HHF ((name,typ)::vs, hs) X
-  | strip_HHF (vs, hs) (Const(\<^const_name>\<open>HOL.implies\<close>, _) $ H $ X)
-      = strip_HHF (vs, H :: hs) X
-  | strip_HHF (vs, hs) X = (rev vs, rev hs, X)
-
 fun general_vars_of (Abs (name,typ,X)) rets = general_vars_of X (insert (op =) (name,typ) rets)
   | general_vars_of (A $ B) rets = general_vars_of B (general_vars_of A rets)
   | general_vars_of (Free (name,typ)) rets = insert (op =) (name,typ) rets
@@ -67,20 +60,17 @@ fun general_vars_of (Abs (name,typ,X)) rets = general_vars_of X (insert (op =) (
   | general_vars_of (Var ((name,i),typ)) rets = insert (op =) (name^"."^string_of_int i,typ) rets
   | general_vars_of _ rets = rets
 
+(*
 fun goals_of_term (seen_vars:(string * typ) list) (hhf:term) : goal =
-      let val (vs,hs,cl) = strip_HHF ([],[]) hhf
+      let val (vs,hs,cl) = Minilang.strip_meta_and_hol_hhf hhf
        in {context = {vars = filter_out (member (op =) seen_vars) vs,
                       hyps = map (pair "" o single) hs},
            goal=cl}
       end
+*)
 
-fun goals_of (seen_vars:(string * typ) list) (goal_sequent:thm) : goal list =
-  Thm.prems_of goal_sequent
-    |> map (goals_of_term seen_vars)
-
-fun top_goals_of (ctxt, goal_sequent) : goals =
-  let (* val global_assms = Assumption.local_assms_of context (Local_Theory.target_of context) *)
-      val local_facts = Facts.dest_static false
+fun global_context_of (ctxt, goal_sequent) : context =
+  let val local_facts = Facts.dest_static false
                             [(Proof_Context.facts_of (Local_Theory.target_of ctxt))]
                             (Proof_Context.facts_of ctxt)
                      |> filter (fn ("local.this", _) => false | _ => true)
@@ -102,16 +92,9 @@ fun top_goals_of (ctxt, goal_sequent) : goals =
                                 end
                             | (_, []) => NONE
                             | x => SOME x)
-         (* |> maps (fn (name, [x]) => [(name, x)]
-                      | (name, xs) => map_index (fn (i,x) =>
-                          (String.concat [name, "(", string_of_int i, ")"], x)) xs) *)
       val vs = general_vars_of (Thm.prop_of goal_sequent) []
-      (* val (vars, _) = Variable.constraints_of context *)
-      
-   in {context = {vars=vs, hyps=local_facts},
-       goals = goals_of vs goal_sequent}
+   in {vars=vs, hyps=local_facts}
   end
-
 
 fun string_of_term ctxt =
     let val ctxt' = ctxt
@@ -172,13 +155,6 @@ fun goal_packer ctxt =
         packPair (context_packer, packString o SOT) (context,goal)
   end
 
-fun goals_packer ctxt =
-  let val goal_packer = goal_packer ctxt
-      val context_packer = context_packer ctxt
-   in fn {context,goals}:goals =>
-        packPair (context_packer, packList goal_packer) (context,goals)
-  end
-
 local open Find_Theorems in
 fun pack_criterion (Name s) = packPair (packInt, packString) (0, s)
   | pack_criterion Intro  = packPair (packInt, packUnit) (1, ())
@@ -236,12 +212,13 @@ fun minilang_tree_packer ctxt =
 
 fun minilang_message_packer ctxt =
   let val minilang_items_packer = minilang_items_packer ctxt
-      val goal_packer = goal_packer ctxt
       fun pack (Minilang.New_Items items) =
             packPair (packInt, minilang_items_packer) (0, items)
-        | pack (Minilang.Goals goals) =
+        | pack (Minilang.Goals _) =
+            packPair (packInt, packUnit) (1, ())
+     (* | pack (Minilang.Goals goals) =
             packPair (packInt, packOption (packList goal_packer))
-                     (1, Option.map (map (goals_of_term [])) goals)
+                     (1, Option.map (map (goals_of_term [])) goals) *)
         | pack (Minilang.Consider_Case kase) =
             packPair (packInt, packString) (2, kase)
         | pack (Minilang.Internal _) = error "BUG #adli"
@@ -295,13 +272,13 @@ fun callback (cfg:cfg) (states:states Unsynchronized.ref) (conn:connection) =
             let val s0 = case Symtab.lookup (!states) from
                            of SOME s => s
                             | NONE => raise ERR ["beginning_state_not_found"]
-                val ctxt = Minilang.context_of s0
                 val (cfg', budget) = cfg
                 val full_config = (cfg', budget, counters) : MiniLang_Agent.config
                 val (bindings1, s1) = MiniLang_Agent.interpret full_config opr s0
+                val ctxt' = Minilang.context_of s1
                 val msgs = clean_report ()
              in states := Symtab.update (to, s1) (!states)
-              ; write conn (packTuple3 (minilang_message_packer ctxt, minilang_tree_packer ctxt, bindings_packer ctxt))
+              ; write conn (packTuple3 (minilang_message_packer ctxt', minilang_tree_packer ctxt', bindings_packer ctxt'))
                            (msgs, Minilang.print_state s1, bindings1)
             end handle Minilang.OPR_FAIL (Minilang.PROOF_FAIL, msg) =>
                 write_error' conn packUnit
@@ -335,15 +312,15 @@ fun callback (cfg:cfg) (states:states Unsynchronized.ref) (conn:connection) =
   end
 
 val AoA_timeout = Time.fromSeconds 10
-fun AoA_cmd (cfg:cfg) (states:states Unsynchronized.ref) : (goals * driver, MiniLang_Agent.xcmd list * string option) command =
+fun AoA_cmd (cfg:cfg) (states:states Unsynchronized.ref) : (context * driver, MiniLang_Agent.xcmd list * string option) command =
   let val s0 = chk_initial_state (!states)
       val ctxt = Minilang.context_of s0
       val s0_ptree = Minilang.print_state s0
    in {
       name = "IsaMini.AoA",
-      arg_schema = (fn (goals, driver) =>
-          packTuple3 (goals_packer ctxt, minilang_tree_packer ctxt, packString)
-                     (goals, s0_ptree, driver)),
+      arg_schema = (fn (global_context, driver) =>
+          packTuple3 (context_packer ctxt, minilang_tree_packer ctxt, packString)
+                     (global_context, s0_ptree, driver)),
       ret_schema = unpackPair (unpackList MiniLang_Agent.xcmd_unpacker, unpackOption unpackString),
       timeout = NONE (*SOME AoA_timeout*),
       callback = SOME (callback cfg states)
@@ -353,13 +330,13 @@ fun AoA_cmd (cfg:cfg) (states:states Unsynchronized.ref) : (goals * driver, Mini
 end
 
 fun AoA_RPC (driver, cfg:cfg) (ctxt, sequent) =
-  let val top_goals = top_goals_of (ctxt, sequent)
+  let val global_context = global_context_of (ctxt, sequent)
       val s0 = Minilang.INIT ctxt sequent
             |> Minilang.map_context ( Config.put Minilang.strict_end true
                                    #> Config.put Minilang.counter_mode "none" )
       val state = Unsynchronized.ref (Symtab.make [("$init", s0)])
       val (xcmds, s1o) =
-            Remote_Procedure_Calling.call_command (AoA_cmd cfg state) (top_goals, driver)
+            Remote_Procedure_Calling.call_command (AoA_cmd cfg state) (global_context, driver)
    in case s1o
    of SOME s1 => (
    case Symtab.lookup (!state) s1
@@ -447,8 +424,10 @@ fun is_dummy th =
 
 fun method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
   if is_dummy sequent then NONE
-  else AoA_RPC (default_driver, MiniLang_Agent.default_cfg) (ctxt, sequent)
-    |> (fn (_, sequent') => SOME (Seq.Result (ctxt, sequent'), Seq.empty)) )
+  else let val driver = Config.get ctxt agent_aoa_driver
+        in AoA_RPC (driver, MiniLang_Agent.default_cfg) (ctxt, sequent)
+           |> (fn (_, sequent') => SOME (Seq.Result (ctxt, sequent'), Seq.empty))
+       end )
 
 
 end

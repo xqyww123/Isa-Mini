@@ -1,6 +1,6 @@
 from re import I
 from Isabelle_RPC_Host import isabelle_remote_procedure, Connection
-from .model import Goals, Root, Minilang_Operation, unpack_MLPT, InferenceRule, Obtain, Obvious, Have
+from .model import *
 from typing import Any
 import sys
 
@@ -9,10 +9,10 @@ class TestFailed(Exception):
 
 @isabelle_remote_procedure("IsaMini.AoA")
 def IsaMini_AoA(data: tuple[Any, Any, str], connection: Connection):
-    (goals, ptree, driver) = data
-    goals = Goals.unpack(goals)
+    (global_context, ptree, driver) = data
+    global_context = Context.unpack(global_context)
     ptree = unpack_MLPT(ptree)
-    root = Root((goals, ptree), connection)
+    root = Root((global_context, ptree), connection)
     if driver.startswith("test."):
         # Run specific test associated with the driver
         test_name = driver[len("test."):]

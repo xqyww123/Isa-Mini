@@ -15,7 +15,7 @@ ML_file "tactic.ML.old" *)
 
 method_setup AgentAoA = \<open>
   Scan.succeed (K MiniLang_Agent_AoA.method)
-\<close> 
+\<close>
 
 (*
 theorem sqrt2_not_rational:

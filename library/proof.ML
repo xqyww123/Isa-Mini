@@ -65,7 +65,7 @@ val empty_items : items
 val cat_items : items -> items -> items
 
 datatype intros_mode = ALL_SUBGOALS | SINGLE_GOAL
-val INTRO : intros_mode -> opt_var_names -> opt_prem_names -> operation
+val INTRO : intros_mode -> opt_var_names -> opt_prem_names -> state -> items * state
 val INTRO_CMD : command
 val TRANSPARENT_INTRO : operation
 
@@ -1009,6 +1009,7 @@ fun strip_meta_and_hol_hhf term =
             strip (V,P) (\<^Const>\<open>Pure.all ty\<close> $ Abs ("_", ty, Term.incr_boundvars 1 X $ Bound 0))
         | strip (V,P) (\<^Const>\<open>HOL.All ty\<close> $ X) =
             strip (V,P) (\<^Const>\<open>HOL.All ty\<close> $ Abs ("_", ty, Term.incr_boundvars 1 X $ Bound 0))
+        | strip (V,P) (\<^Const>\<open>Trueprop\<close> $ X) = strip (V,P) X
         | strip (V,P) X = (rev V, rev P, X)
    in strip ([],[]) term end
 
@@ -1035,7 +1036,7 @@ fun quantifier_bindings ctxt st =
         If NONE, uses default variable names from the goal.
 *)
 fun INTRO'' F mode bs (origin as (ctxt, HHF (st0, items) :: L)) =
-    if Thm.no_prems st0 then origin
+    if Thm.no_prems st0 then (empty_items, origin)
     else if need_intro st0
       then let val st = st0
                      |> Seq.REPEAT (Thm.biresolution NONE true
@@ -1059,7 +1060,7 @@ fun INTRO'' F mode bs (origin as (ctxt, HHF (st0, items) :: L)) =
                val (st'', (items', ctxt')) = F (st', foc)
                val _ = get_reporter () (New_Items items')
                fun PRT _ t =
-                    let 
+                    let
                      in case print_stack [(HHF (st0, items))]
                      of BUNDL (items, goals) =>
                         BUNDL (items, t :: tl goals)
@@ -1074,17 +1075,18 @@ fun INTRO'' F mode bs (origin as (ctxt, HHF (st0, items) :: L)) =
                         |> Seq.hd
                         |> conclude_goal,
                       ([],[])) :: S)
-                 |> mode = ALL_SUBGOALS ? INTRO'' F mode bs
+                 |> mode = ALL_SUBGOALS ? (#2 o INTRO'' F mode bs)
                 end
                  | CB _ _ = raise BROKEN_INVARIANT
-            in if num_goals_of' st0 > 1
-            then (ctxt', HHF (st'', items') :: ENDBLK T_NXT :: MAGIC (CB,PRT,CASE_NAME NONE) :: L)
-            else (ctxt', HHF (st'', items') :: MAGIC (CB,PRT,CASE_NAME NONE) :: L)
+               val result_state = if num_goals_of' st0 > 1
+                                  then (ctxt', HHF (st'', items') :: ENDBLK T_NXT :: MAGIC (CB,PRT,CASE_NAME NONE) :: L)
+                                  else (ctxt', HHF (st'', items') :: MAGIC (CB,PRT,CASE_NAME NONE) :: L)
+            in (items', result_state)
            end
-      else (ctxt, HHF (st0, items) :: L)
+      else (empty_items, origin)
   | INTRO'' _ _ _ _ = raise BROKEN_INVARIANT
 
-fun INTRO' mode bs premise_names =
+fun INTRO' mode bs premise_names s =
   let val _ = if mode = ALL_SUBGOALS andalso is_some premise_names
               then raise OPR_FAIL (INVALID_OPR, "premise_names must be NONE in ALL_SUBGOALS mode")
               else ()
@@ -1116,13 +1118,13 @@ fun INTRO' mode bs premise_names =
                 #> pair (#params foc |> map ( apsnd Thm.typ_of_cterm )))
          |> pair st
         end
-   in INTRO'' F mode bs
+   in INTRO'' F mode bs s
   end
 
 fun TRANSPARENT_INTRO' (origin as (ctxt, HHF (st, _) :: _)) =
       if Config.get ctxt transparent_intro andalso
          has_prems_universal_vars (fst (Logic.dest_implies (Thm.prop_of st)))
-      then INTRO' SINGLE_GOAL NONE NONE origin
+      then #2 (INTRO' SINGLE_GOAL NONE NONE origin)
       else origin
   | TRANSPARENT_INTRO' _ = raise BROKEN_INVARIANT
 
@@ -1165,8 +1167,19 @@ fun OPR (f : stack -> stack) ((S,TAB,ID) : state) : state
 fun OPR_ID (f : int -> stack -> stack) ((S,TAB,ID) : state) : state
   = (f ID S, TAB, ID+1)
 
+(* OPR_with_ret: for operations that return ('a, stack) *)
+fun OPR_with_ret (f : stack -> 'a * stack) ((S,TAB,ID) : state) : 'a * state
+  = let val (ret, S') = f S
+     in (ret, (S', TAB, ID+1))
+    end
+
 fun timed_OPR t f s
   = Timeout.apply (Time.fromSeconds t) (OPR f) s
+    handle Timeout.TIMEOUT _ => raise OPR_FAIL (PROOF_FAIL, "Timeout")
+         | Exn.Interrupt_Breakdown => raise OPR_FAIL (PROOF_FAIL, "Timeout")
+
+fun timed_OPR_with_ret t f s
+  = Timeout.apply (Time.fromSeconds t) (OPR_with_ret f) s
     handle Timeout.TIMEOUT _ => raise OPR_FAIL (PROOF_FAIL, "Timeout")
          | Exn.Interrupt_Breakdown => raise OPR_FAIL (PROOF_FAIL, "Timeout")
 
@@ -1285,11 +1298,11 @@ fun TRY_STANDARD SK =
               (K ()) (CONTEXT_TACTIC (Classical.standard_tac (#1 SK) [])) NONE SK
   else SK
 
-val INTRO = timed_OPR 2 ooo INTRO'
+val INTRO = timed_OPR_with_ret 2 ooo INTRO'
 val INTRO_CMD = (OPT_VARS -- OPT_PREMS)
-        >> (timed_OPR 2 o uncurry (INTRO' SINGLE_GOAL))
+        >> (fn args => fn s => #2 (timed_OPR_with_ret 2 (uncurry (INTRO' SINGLE_GOAL) args) s))
 val INTRO_ALL_CMD = (OPT_VARS -- OPT_PREMS)
-        >> (timed_OPR 2 o uncurry (INTRO' ALL_SUBGOALS))
+        >> (fn args => fn s => #2 (timed_OPR_with_ret 2 (uncurry (INTRO' ALL_SUBGOALS) args) s))
 val TRANSPARENT_INTRO = OPR_NO_INCR TRANSPARENT_INTRO'
 
 local
@@ -1441,7 +1454,7 @@ fun SIMP' _ _ (ctxt, []) = (ctxt, [])
 
 fun CRUSH' prep_with (vars, raw_with_lems) SK0 =
      SIMP' prep_with raw_with_lems SK0
-  |> SKIP_SUCCESS (INTRO' ALL_SUBGOALS vars NONE)
+  |> SKIP_SUCCESS (#2 o INTRO' ALL_SUBGOALS vars NONE)
   |> report_goal
 
 

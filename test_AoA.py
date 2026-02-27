@@ -20,10 +20,12 @@ logger = Isabelle_RPC_Host.mk_logger_(rpc_addr, None)
 
 def run_tests():
     # 等待服务端完成绑定
-    time.sleep(1)
     run_all_tests(args.repl_addr, logger=logger)
 
+def run_server():
+    Isabelle_RPC_Host.launch_server_(rpc_addr, logger, debugging=True)
 
-test_thread = threading.Thread(target=run_tests, daemon=True)
+test_thread = threading.Thread(target=run_server, daemon=True)
 test_thread.start()
-Isabelle_RPC_Host.launch_server_(rpc_addr, logger, debugging=True)
+time.sleep(1)
+run_tests()

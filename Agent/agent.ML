@@ -110,6 +110,10 @@ datatype ('term, 'thm, 'fact) command =
 type xcmd = (string, string, string) command
 type icmd = (term, thm, Facts.ref * Token.src list) command
 
+(* Pretty printing configuration *)
+val printing_cfg = {all_typ=false, bv_typ=true, constant_typ=false, free_typ=false, num_typ=true,
+                    sorting=false, show_sort_P=NONE, show_type_P=NONE}
+
 val string_of_term = Syntax.string_of_term
 fun string_of_thm ctxt th = string_of_term ctxt (Thm.prop_of th)
 
@@ -154,83 +158,102 @@ fun AUTO_INTRO (counters:counters) (bindings: bindings) (s:Minilang.state)
         val (var_bindings, ctxt_with_vars) =
           case opt_var_names of
             NONE =>
-              (* Use internal names after variant_fixes *)
-              fold_map (fn (name, ty) => fn ctx =>
-                let val (names', ctx') = Variable.variant_fixes [name] ctx
-                    val actual_name = hd names'
-                    val typ_pretty = REPL.trim_makrup (Syntax.string_of_typ ctx' ty)
-                in ({internal_name = name, external_name = actual_name, typ_pretty = typ_pretty}, ctx')
-                end
-              ) vars ctxt
+              (* Use Name.variant to avoid Skolem constants, then add_fixes to register *)
+              let val (bindings_raw, _) =
+                    fold_map (fn (name, ty) => fn name_ctx =>
+                      let val (actual_name, name_ctx') = Name.variant name name_ctx
+                       in ((name, actual_name, ty), name_ctx')
+                      end) vars (Variable.names_of ctxt)
+                  val names = map #2 bindings_raw
+                  val (_, ctxt') = Variable.add_fixes names ctxt
+                  val bindings = map (fn (internal_name, external_name, ty) =>
+                                       {internal_name = internal_name,
+                                        external_name = external_name,
+                                        typ_pretty = REPL.trim_makrup (Syntax.string_of_typ ctxt' ty)})
+                                     bindings_raw
+               in (bindings, ctxt')
+              end
           | SOME provided_var_names =>
               let
                 (* Try to match each quantified variable with provided names *)
-                fun match_var (var_name, var_ty) ctx =
-                  case find_first (fn {internal_name, ...} => internal_name = var_name) provided_var_names of
-                    SOME {external_name, ...} =>
-                      (* Found match: add the name to context to avoid future conflicts *)
-                      let val (names', ctx') = Variable.add_fixes [external_name] ctx
-                          val actual_name = hd names'
-                          val typ_pretty = REPL.trim_makrup (Syntax.string_of_typ ctx' var_ty)
-                      in ({internal_name = var_name, external_name = actual_name, typ_pretty = typ_pretty}, ctx')
-                      end
-                  | NONE =>
-                      (* Use internal name with variant_fixes *)
-                      let val (names', ctx') = Variable.variant_fixes [var_name] ctx
-                          val actual_name = hd names'
-                          val typ_pretty = REPL.trim_makrup (Syntax.string_of_typ ctx' var_ty)
-                      in ({internal_name = var_name, external_name = actual_name, typ_pretty = typ_pretty}, ctx')
-                      end
+                val (bindings_raw, _) =
+                  fold_map (fn (var_name, var_ty) => fn name_ctx =>
+                    case find_first (fn {internal_name, ...} => internal_name = var_name) provided_var_names of
+                      SOME {external_name, ...} =>
+                        (* Found match: use Name.variant to avoid conflicts *)
+                        let val (actual_name, name_ctx') = Name.variant external_name name_ctx
+                         in ((var_name, actual_name, var_ty), name_ctx')
+                        end
+                    | NONE =>
+                        (* Use internal name with Name.variant *)
+                        let val (actual_name, name_ctx') = Name.variant var_name name_ctx
+                         in ((var_name, actual_name, var_ty), name_ctx')
+                        end
+                  ) vars (Variable.names_of ctxt)
+                val names = map #2 bindings_raw
+                val (_, ctxt') = Variable.add_fixes names ctxt
+                val bindings = map (fn (internal_name, external_name, ty) =>
+                                     {internal_name = internal_name,
+                                      external_name = external_name,
+                                      typ_pretty = REPL.trim_makrup (Syntax.string_of_typ ctxt' ty)})
+                                   bindings_raw
               in
-                fold_map match_var vars ctxt
+                (bindings, ctxt')
               end
 
         (* Convert var_bindings to opt_var_names for Minilang.INTRO *)
         val minilang_var_names = SOME (map (SOME o #external_name) var_bindings)
 
-        (* Step 4: Process premise names *)
+        (* Step 4: Generate premise names for Minilang.INTRO *)
         val prem_counter = #prem_counter counters
-        val (prem_bindings, _) =
+        val (prem_names_for_intro, _) =
           case opt_prem_names of
             NONE =>
-              (* Auto-generate names using counter: premise0, premise1, ... *)
-              fold_map (fn prem_term => fn counter_val =>
+              (* Auto-generate names using counter *)
+              fold_map (fn _ => fn counter_val =>
                 let val name = "premise" ^ string_of_int counter_val
-                    val pretty = REPL.trim_makrup (string_of_term ctxt_with_vars prem_term)
-                in ({internal_term = prem_term, external_name = name, pretty = pretty}, counter_val + 1)
+                 in (SOME name, counter_val + 1)
                 end
               ) prems (Synchronized.value prem_counter)
-              |> (fn (bindings, final_counter) =>
-                   (Synchronized.change prem_counter (K final_counter); (bindings, ())))
+              |> (fn (names, final_counter) =>
+                   (Synchronized.change prem_counter (K final_counter); (names, ())))
           | SOME provided_prem_names =>
-              let
-                (* Try to match each premise with provided names by term equality *)
-                fun match_prem prem_term counter_val =
-                  let val pretty = REPL.trim_makrup (string_of_term ctxt_with_vars prem_term)
-                   in case find_first (fn {internal_term, ...} =>
-                                         internal_term aconv prem_term) provided_prem_names of
-                        SOME {external_name, ...} => ({internal_term = prem_term, external_name = external_name, pretty = pretty}, counter_val)
-                      | NONE =>
-                          (* Auto-generate name *)
-                          let val name = "premise" ^ string_of_int counter_val
-                          in ({internal_term = prem_term, external_name = name, pretty = pretty}, counter_val + 1)
-                          end
-                  end
-              in
-                fold_map match_prem prems (Synchronized.value prem_counter)
-                |> (fn (bindings, final_counter) =>
-                     (Synchronized.change prem_counter (K final_counter); (bindings, ())))
-              end
+              (* Match provided names with premises by term equality *)
+              (map (fn prem_term =>
+                case find_first (fn {internal_term, ...} => internal_term aconv prem_term) provided_prem_names of
+                  SOME {external_name, ...} => SOME external_name
+                | NONE =>
+                    let val counter_val = Synchronized.value prem_counter
+                        val name = "premise" ^ string_of_int counter_val
+                        val _ = Synchronized.change prem_counter (fn c => c + 1)
+                     in SOME name
+                    end
+              ) prems, ())
 
-        (* Convert prem_bindings to opt_prem_names for Minilang.INTRO *)
-        val minilang_prem_names = SOME (map (SOME o #external_name) prem_bindings)
+        (* Step 5: Call INTRO with SINGLE_GOAL mode and get the items it fixed *)
+        val ((params', facts'), s') = Minilang.INTRO Minilang.SINGLE_GOAL minilang_var_names (SOME prem_names_for_intro) s
 
-        (* Step 5: Call INTRO' with SINGLE_GOAL mode *)
-        val s' = Minilang.INTRO Minilang.SINGLE_GOAL minilang_var_names minilang_prem_names s
+        (* Step 6: Extract context from the new state *)
+        val ctxt' = Minilang.context_of s'
 
-        (* Step 6: Return results *)
+        (* Step 7: Build var_bindings and prem_bindings with pretty printing from new context *)
+        val var_bindings_final = map2 (fn {internal_name, external_name, ...} => fn (_, ty) =>
+                                         {internal_name = internal_name,
+                                          external_name = external_name,
+                                          typ_pretty = REPL.trim_makrup (REPL_Serialize.print_typ printing_cfg ctxt' ty)})
+                                       var_bindings params'
+
+        val prem_bindings_final = map2 (fn prem_term => fn (name, props) =>
+                                         {internal_term = prem_term,
+                                          external_name = name,
+                                          pretty = case props of
+                                                     [p] => REPL.trim_makrup (REPL_Serialize.print_term printing_cfg ctxt' p)
+                                                   | _ => ""})
+                                       prems facts'
+
+        (* Step 8: Return results *)
       in
-        ((var_bindings, prem_bindings), s')
+        ((var_bindings_final, prem_bindings_final), s')
       end
   end
 
