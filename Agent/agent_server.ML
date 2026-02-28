@@ -92,7 +92,7 @@ fun global_context_of (ctxt, goal_sequent) : context =
                                 end
                             | (_, []) => NONE
                             | x => SOME x)
-      val vs = general_vars_of (Thm.prop_of goal_sequent) []
+      val vs = Term.add_frees (Thm.prop_of goal_sequent) []
    in {vars=vs, hyps=local_facts}
   end
 

@@ -1,6 +1,6 @@
 from time import time
 from .helper import split_id_into_segs, cat_segs_into_id, incr_id_major, incr_id_minor
-from typing import Any, NamedTuple, Sequence, TypedDict, Callable, TextIO, cast
+from typing import Any, Iterable, NamedTuple, Sequence, TypedDict, Callable, TextIO, cast
 from Isabelle_RPC_Host import Connection, IsabelleError
 from enum import Enum
 from IsaREPL import Client as IsaREPL
@@ -101,25 +101,27 @@ def print_multiline_kv(ident: int, file: TextIO, key: str, val: str):
                 file.write(line)
                 file.write("\n")
 
-def print_vars(vars: Vars, ident: int, file):
-    if vars:
+def print_vars(vars: Vars, ident: int, file, suppressed: 'list[VariableBinding]'):
+    visible_vars = [(name, typ) for name, typ in vars.items() if not any(var.external_varname == name for var in suppressed)]
+    if visible_vars:
         print_indent(ident, file)
         file.write("variables:\n")
-        for (name, type) in vars.items():
+        for name, type in visible_vars:
             print_indent(ident+1, file)
             file.write(f"- {name}: {type}\n")
 
-def print_hyps(hyps: Hyps, ident: int, file):
-    if hyps:
+def print_hyps(hyps: Hyps, ident: int, file, suppressed: 'list[FactBinding]'):
+    visible_hyps = [(name, term) for name, term in hyps.items() if not any(fact.name == name for fact in suppressed)]
+    if visible_hyps:
         print_indent(ident, file)
         file.write("premises:\n")
-        for (name, term) in hyps.items():
+        for name, term in visible_hyps:
             print_indent(ident+1, file)
             file.write(f"- {name}: {term}\n")
 
-def print_goal(goal: Goal, ident: int, show_header: bool, file):
-    print_vars(goal.context.vars, ident, file)
-    print_hyps(goal.context.hyps, ident, file)
+def print_goal(goal: Goal, ident: int, show_header: bool, file, suppressed: 'Bindings'):
+    print_vars(goal.context.vars, ident, file, suppressed[0])
+    print_hyps(goal.context.hyps, ident, file, suppressed[1])
     print_indent(ident, file)
     if goal.context.vars or goal.context.hyps:
         file.write(f"goal: {goal.conclusion}\n")
@@ -129,13 +131,13 @@ def print_goal(goal: Goal, ident: int, show_header: bool, file):
         file.write(goal.conclusion)
         file.write("\n")
 
-def print_pending_goal(goal: Goal, step: step, ident: int, file : TextIO):
+def print_pending_goal(goal: Goal, step: step, ident: int, file : TextIO, suppressed: 'Bindings'):
     print_indent(ident, file)
     file.write(f"Error: Unfinished Proof! Call command `edit` with action `fill` and target step `{step}`"
         " to provide the proof for the following goal.\n")
     print_indent(ident, file)
     file.write("pending proof goal:\n")
-    print_goal(goal, ident+1, False, file)
+    print_goal(goal, ident+1, False, file, suppressed)
 
 ## Errors
 type timedelta = float # in seconds
@@ -358,6 +360,20 @@ class FactBinding(NamedTuple):
     pretty: str        # pretty
 
 type Bindings = tuple[list[VariableBinding], list[FactBinding]]
+
+def add_var_to_set(var: VariableBinding, ret: list[VariableBinding]) -> list[VariableBinding]:
+    for v in ret:
+        if v.external_varname == var.external_varname:
+            return ret
+    ret.append(var)
+    return ret
+
+def add_fact_to_set(fact: FactBinding, ret: list[FactBinding]) -> list[FactBinding]:
+    for f in ret:
+        if f.name == fact.name:
+            return ret
+    ret.append(fact)
+    return ret
 
 ### Search Facts by Patterns
 
@@ -602,6 +618,7 @@ class NodeConfig(NamedTuple):
     parent: 'NonLeaf_Node | None'
 
 class Node:
+    parent: 'NonLeaf_Node | None'
     def __init__(self, config: NodeConfig, thought: str):
         """
         ml_state: the state before executing the Node. This field is mutable!!
@@ -697,12 +714,40 @@ class Node:
     def _id_of_openning_prf_to_fill(self) -> step | None:
         return None
 
-    def _fixed_vars(self) -> list[VariableBinding]:
-        return self.resulting_state().fixed_vars
-    def _fixed_facts(self) -> list[FactBinding]:
-        return self.resulting_state().fixed_facts
+    def _fixed_vars_after_me(self, ret: list[VariableBinding] | None = None) -> list[VariableBinding]:
+        if ret is None:
+            ret = []
+        for var in self.resulting_state().fixed_vars:
+            add_var_to_set(var, ret)
+        return ret
+    def _fixed_vars_at_me(self, ret: list[VariableBinding] | None = None) -> list[VariableBinding]:
+        return self._fixed_vars_after_me(ret)
+    def _fixed_facts_after_me(self, ret: list[FactBinding] | None = None) -> list[FactBinding]:
+        if ret is None:
+            ret = []
+        for fact in self.resulting_state().fixed_facts:
+            add_fact_to_set(fact, ret)
+        return ret
+    def _fixed_facts_at_me(self, ret: list[FactBinding] | None = None) -> list[FactBinding]:
+        return self._fixed_facts_after_me(ret)
+    def _all_fixed_vars_before_me(self, ret: list[VariableBinding] | None = None) -> list[VariableBinding]:
+        if ret is None:
+            ret = []
+        if self.parent is not None:
+            self.parent._all_fixed_vars_before_a_child(self, ret)
+        return ret
+    def _all_fixed_facts_before_me(self, ret: list[FactBinding] | None = None) -> list[FactBinding]:
+        if ret is None:
+            ret = []
+        if self.parent is not None:
+            self.parent._all_fixed_facts_before_a_child(self, ret)
+        return ret
+    def _ctxt_printing_to_supress(self) -> 'Bindings':
+        vars = self._all_fixed_vars_before_me()
+        hyps = self._all_fixed_facts_before_me()
+        return vars, hyps
     def _rename_var(self, old_name: varname, new_name: varname) -> None:
-        vars = self._fixed_vars()
+        vars = self._fixed_vars_at_me()
         found = False
         for i, var in enumerate(vars):
             if var.external_varname == old_name:
@@ -715,7 +760,7 @@ class Node:
         if not found:
             raise CannotRename_VariableNotFound(old_name, new_name)
     def _rename_fact(self, old_name: str, new_name: str) -> None:
-        facts = self._fixed_facts()
+        facts = self._fixed_facts_at_me()
         found = False
         for i, fact in enumerate(facts):
             if fact.name == old_name:
@@ -728,8 +773,8 @@ class Node:
         if not found:
             raise CannotRename_FactNotFound(old_name, new_name)
     def _print_fixed_vars_and_facts(self, ident: int, file: TextIO) -> None:
-        fixed_vars = self._fixed_vars()
-        fixed_facts = self._fixed_facts()
+        fixed_vars = self._fixed_vars_at_me()
+        fixed_facts = self._fixed_facts_at_me()
         if fixed_vars:
             print_indent(ident, file)
             file.write(f"variables:\n")
@@ -842,7 +887,23 @@ class NonLeaf_Node(Node):
             if not child.is_proof_finished():
                 return False
         return self.status.status == EvaluationStatus.Status.SUCCESS
-
+    def _all_fixed_vars_before_a_child(self, child: Node, ret: list[VariableBinding]) -> list[VariableBinding]:
+        self._all_fixed_vars_before_me(ret)
+        self._fixed_vars_at_me(ret)
+        for c in self.sub_nodes:
+            if c is child:
+                return ret
+            else:
+                c._fixed_vars_after_me(ret)
+        raise InternalError("The target node is not my children")
+    def _all_fixed_facts_before_a_child(self, child: Node, ret: list[FactBinding]) -> list[FactBinding]:
+        self._all_fixed_facts_before_me(ret)
+        for c in self.sub_nodes:
+            if c is child:
+                return ret
+            else:
+                c._fixed_facts_after_me(ret)
+        raise InternalError("The target node is not my children")
 
 
 # abstract base class
@@ -992,13 +1053,13 @@ class StdBlock(NonLeaf_Node):
                 case [goal]:
                     to_fill = self._id_of_openning_prf_to_fill()
                     if to_fill is not None:
-                        print_pending_goal(goal, to_fill, ident, file)
+                        print_pending_goal(goal, to_fill, ident, file, self._ctxt_printing_to_supress())
                 case _:
                     to_fill = self._id_of_openning_prf_to_fill()
                     if to_fill is not None:
                         if self._allow_multi_goal:
                             goal = goals[0]
-                            print_pending_goal(goal, to_fill, ident, file)
+                            print_pending_goal(goal, to_fill, ident, file, self._ctxt_printing_to_supress())
                         else:
                             raise InternalError("The open goals of StdBlock should not exceed one. "
                             "To express multiple goals, you should use a StdBlock whose children are GoalNodes. See Rule as an example.")
@@ -1020,10 +1081,18 @@ class StdBlock(NonLeaf_Node):
             raise CannotAppend(node, node.status.reason)
     def is_proof_finished(self) -> bool:
         return self._body_subnodes_succeeded and super().is_proof_finished()
-    def _fixed_vars(self) -> list[VariableBinding]:
-        return self._state_after_beginning().fixed_vars
-    def _fixed_facts(self) -> list[FactBinding]:
-        return self._state_after_beginning().fixed_facts
+    def _fixed_vars_at_me(self, ret: list[VariableBinding] | None = None) -> list[VariableBinding]:
+        if ret is None:
+            ret = []
+        for var in self._state_after_beginning().fixed_vars:
+            add_var_to_set(var, ret)
+        return ret
+    def _fixed_facts_at_me(self, ret: list[FactBinding] | None = None) -> list[FactBinding]:
+        if ret is None:
+            ret = []
+        for fact in self._state_after_beginning().fixed_facts:
+            add_fact_to_set(fact, ret)
+        return ret
 
 
 #abstract base class
@@ -1086,12 +1155,20 @@ class GoalNode(StdBlock):
     def _print_header(self, ident: int, file: TextIO):
         #self._print_fixed_vars_and_facts(ident, file)
         if self.show_goal:
-            print_goal(self.goal(), ident, True, file)
+            print_goal(self.goal(), ident, True, file, self._ctxt_printing_to_supress())
     def _print_step_id(self, ident: int, file: TextIO) -> int:
         if self.is_single_goal:
             return ident
         else:
             return super()._print_step_id(ident, file)
+    def _fixed_vars_after_me(self, ret: list[VariableBinding] | None = None) -> list[VariableBinding]:
+        if ret is None:
+            ret = []
+        return ret
+    def _fixed_facts_after_me(self, ret: list[FactBinding] | None = None) -> list[FactBinding]:
+        if ret is None:
+            ret = []
+        return ret
 
 #abstract base class
 class SubgoalMaker(GoalContainer, StdBlock):
@@ -1106,16 +1183,15 @@ class SubgoalMaker(GoalContainer, StdBlock):
             if s0.prooftree is None:
                 raise InternalError("The prooftree of the state after beginning is not initialized, meaning the node is not refreshed")
             goals = s0.prooftree.top_goals()
-            parent = self.parent
-            if not isinstance(parent, NonLeaf_Node):
-                raise InternalError("The parent of a SubgoalMaker should be a NonLeaf_Node")
             if len(goals) == len(self.sub_nodes):
                 pass
             elif len(goals) <= 1:
                 self.sub_nodes = []
-                parent.show_incomplete_proof_need_fill = True
+                if self.parent is not None:
+                    self.parent.show_incomplete_proof_need_fill = True
             else:
-                parent.show_incomplete_proof_need_fill = False
+                if self.parent is not None:
+                    self.parent.show_incomplete_proof_need_fill = False
                 self.sub_nodes = []
                 ml_state = s0.clone(None)
                 for i in range(len(goals)):
@@ -1124,6 +1200,20 @@ class SubgoalMaker(GoalContainer, StdBlock):
             return (True, None)
         else:
             return (False, reason)
+    def _fixed_vars_at_me(self, ret: list[VariableBinding] | None = None) -> list[VariableBinding]:
+        if self.sub_nodes:
+            if ret is None:
+                ret = []
+            return ret
+        else:
+            return super()._fixed_vars_at_me(ret)
+    def _fixed_facts_at_me(self, ret: list[FactBinding] | None = None) -> list[FactBinding]:
+        if self.sub_nodes:
+            if ret is None:
+                ret = []
+            return ret
+        else:
+            return super()._fixed_facts_at_me(ret)
 
 class SubgoalMaker_NoTailEnder(SubgoalMaker):
     def _child_has_ending_opr(self, child : Node) -> bool:
@@ -1322,9 +1412,9 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
             goal = s0.prooftree.top_goal()
             print_indent(ident, file)
             file.write("derived goal:\n")
-            print_goal(goal, ident+1, False, file)
+            print_goal(goal, ident+1, False, file, self._ctxt_printing_to_supress())
     def beginning_opr(self) -> Minilang_Operation:
-        return Minilang_Operation.RULE(self.rule_ref, (self._fixed_vars(), self._fixed_facts()))
+        return Minilang_Operation.RULE(self.rule_ref, (self._fixed_vars_at_me(), self._fixed_facts_at_me()))
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
         return f"Fail to apply the inference rule.{"".join(["\n"+e for e in err.errors])}"
     def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
@@ -1444,13 +1534,13 @@ class Root(GoalContainer, StdBlock):
     def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
         raise InternalError("A Root doesn't have an ending operation")
     def print(self, ident: int, file: TextIO) -> int:
+        print_vars(self.context.vars, ident, file, [])
+        print_hyps(self.context.hyps, ident, file, [])
         match self.num_goals:
             case 1:
                 self.sub_nodes[0].print(ident, file)
                 self.sub_nodes[1].print(ident, file)
             case _:
-                print_vars(self.context.vars, ident, file)
-                print_hyps(self.context.hyps, ident, file)
                 self.sub_nodes[0].print(ident, file)
                 file.write("proof goals:\n")
                 for i in range(self.num_goals):
@@ -1476,6 +1566,18 @@ class Root(GoalContainer, StdBlock):
                     if node.local_step == ids[0]:
                         return node._locate_node(ids, id, 1)
                 raise NodeNotFound(id)
+    def _fixed_vars_at_me(self, ret: list[VariableBinding] | None = None) -> list[VariableBinding]:
+        if ret is None:
+            ret = []
+        for name, typ in self.context.vars.items():
+            add_var_to_set(VariableBinding(name, name, typ), ret)
+        return ret
+    def _fixed_facts_at_me(self, ret: list[FactBinding] | None = None) -> list[FactBinding]:
+        if ret is None:
+            ret = []
+        for name, pretty in self.context.hyps.items():
+            add_fact_to_set(FactBinding(None, name, pretty), ret)
+        return ret
     # def _locate_node(self, ids: Sequence[local_step], id: step, pos: int = 0) -> 'Node':
     #     local_step = ids[pos]
     #     for child in self.sub_nodes:
