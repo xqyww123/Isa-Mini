@@ -42,10 +42,10 @@ class Context(NamedTuple):
 
     @classmethod
     def unpack(cls, data) -> 'Context':
-        (vars, hyp) = data
+        (vars, raw_hyp) = data
         vars = {IsaREPL.pretty_unicode(k): IsaREPL.pretty_unicode(v) for k, v in vars.items()}
         hyp = {}
-        for k, vs in hyp.items():
+        for k, vs in raw_hyp.items():
             if len(vs) == 1:
                 hyp[IsaREPL.pretty_unicode(k)] = IsaREPL.pretty_unicode(vs[0])
             else:
@@ -112,7 +112,7 @@ def print_vars(vars: Vars, ident: int, file):
 def print_hyps(hyps: Hyps, ident: int, file):
     if hyps:
         print_indent(ident, file)
-        file.write("hypotheses:\n")
+        file.write("premises:\n")
         for (name, term) in hyps.items():
             print_indent(ident+1, file)
             file.write(f"- {name}: {term}\n")
@@ -122,7 +122,7 @@ def print_goal(goal: Goal, ident: int, show_header: bool, file):
     print_hyps(goal.context.hyps, ident, file)
     print_indent(ident, file)
     if goal.context.vars or goal.context.hyps:
-        file.write(f"conclusion: {goal.conclusion}\n")
+        file.write(f"goal: {goal.conclusion}\n")
     else:
         if show_header:
             file.write("goal: ")
@@ -171,13 +171,13 @@ class CannotInsert_EvaluationFailedInPlace(OprError):
         self.insert_into = insert_into
         self.target = target
     def __str__(self) -> str:
-        return f"Cannot insert before the node {self.insert_into.id} because {self.reason}"
+        return f"Cannot insert before the node {self.insert_into.id}:\n{self.reason}"
 class CannotAppend(OprError):
     def __init__(self, target : 'Node', reason : failure_reason):
         self.reason = reason
         self.target = target
     def __str__(self) -> str:
-        return f"Cannot append on node {self.target.id} because {self.reason}"
+        return f"Cannot append on node {self.target.id}:\n{self.reason}"
 class FactNotFound(OprError):
     def __init__(self, criterions: list[list['Search_Criterion']]):
         self.criterions = criterions
@@ -735,13 +735,13 @@ class Node:
             file.write(f"variables:\n")
             for var in fixed_vars:
                 print_indent(ident+1, file)
-                file.write(f"{var.external_varname}: {var.type}\n")
+                file.write(f"- {var.external_varname}: {var.type}\n")
         if fixed_facts:
             print_indent(ident, file)
             file.write(f"facts:\n")
             for fact in fixed_facts:
                 print_indent(ident+1, file)
-                file.write(f"{fact.name}: {fact.pretty}\n")
+                file.write(f"- {fact.name}: {fact.pretty}\n")
 
 
 
@@ -769,9 +769,12 @@ class Leaf(Node):
 
 # abstract base class
 class NonLeaf_Node(Node):
+    show_incomplete_proof_need_fill: bool  # set by subclasses; used when child is SubgoalMaker
+
     def __init__(self, config: NodeConfig, thought: str, sub_nodes: list['Node']):
         super().__init__(config, thought)
         self.sub_nodes = sub_nodes
+        self.show_incomplete_proof_need_fill = True  # default; StdBlock and others may override
     def _refresh_all_children_after(self, after: 'Node') -> None:
         """
         refreshing the status of all the nodes excluding and after the `after`
@@ -850,6 +853,7 @@ class StdBlock(NonLeaf_Node):
         self._state_before_ending_ = Minilang_State.assign(config.ml_state)
         self._body_subnodes_succeeded = False
         self._allow_multi_goal = False
+        self.show_incomplete_proof_need_fill = True
     def beginning_opr(self) -> Minilang_Operation | None:
         raise NotImplementedError("`beginning_opr` must be implemented by subclass")
     def ending_opr(self) -> Minilang_Operation | None:
@@ -948,10 +952,13 @@ class StdBlock(NonLeaf_Node):
         else:
             return "1"
     def _id_of_openning_prf_to_fill(self) -> step | None:
-        if self.id:
-            return f"{self.id}.{self._local_step_of_next_proof_step()}"
+        if self.show_incomplete_proof_need_fill:
+            if self.id:
+                return f"{self.id}.{self._local_step_of_next_proof_step()}"
+            else:
+                return self._local_step_of_next_proof_step()
         else:
-            return self._local_step_of_next_proof_step()
+            return None
     def print(self, ident: int, file: TextIO):
         ident = super().print(ident, file)
         self._print_header(ident, file)
@@ -973,7 +980,7 @@ class StdBlock(NonLeaf_Node):
                 print_indent(ident, file)
                 file.write(title)
                 file.write(": empty!\n")
-        if self.has_ending_opr():
+        if self.show_incomplete_proof_need_fill:
             ptree = self._state_before_ending_.prooftree
             if ptree is None:
                 raise InternalError("The state before ending is not initialized, meaning the node is not refreshed, "
@@ -987,14 +994,14 @@ class StdBlock(NonLeaf_Node):
                     if to_fill is not None:
                         print_pending_goal(goal, to_fill, ident, file)
                 case _:
-                    if self._allow_multi_goal:
-                        goal = goals[0]
-                        to_fill = self._id_of_openning_prf_to_fill()
-                        if to_fill is not None:
+                    to_fill = self._id_of_openning_prf_to_fill()
+                    if to_fill is not None:
+                        if self._allow_multi_goal:
+                            goal = goals[0]
                             print_pending_goal(goal, to_fill, ident, file)
-                    else:
-                        raise InternalError("The open goals of StdBlock should not exceed one. "
-                        "To express multiple goals, you should use a StdBlock whose children are GoalNodes. See Rule as an example.")
+                        else:
+                            raise InternalError("The open goals of StdBlock should not exceed one. "
+                            "To express multiple goals, you should use a StdBlock whose children are GoalNodes. See Rule as an example.")
         return ident
     def print_string(self, ident: int) -> str:
         buffer = StringIO()
@@ -1077,7 +1084,7 @@ class GoalNode(StdBlock):
         else:
             return "Each of the following proof steps above is valid, but the goal doesn't trivially follow from these steps. Please provide more detailed proof steps."
     def _print_header(self, ident: int, file: TextIO):
-        self._print_fixed_vars_and_facts(ident, file)
+        #self._print_fixed_vars_and_facts(ident, file)
         if self.show_goal:
             print_goal(self.goal(), ident, True, file)
     def _print_step_id(self, ident: int, file: TextIO) -> int:
@@ -1099,11 +1106,16 @@ class SubgoalMaker(GoalContainer, StdBlock):
             if s0.prooftree is None:
                 raise InternalError("The prooftree of the state after beginning is not initialized, meaning the node is not refreshed")
             goals = s0.prooftree.top_goals()
+            parent = self.parent
+            if not isinstance(parent, NonLeaf_Node):
+                raise InternalError("The parent of a SubgoalMaker should be a NonLeaf_Node")
             if len(goals) == len(self.sub_nodes):
                 pass
             elif len(goals) <= 1:
                 self.sub_nodes = []
+                parent.show_incomplete_proof_need_fill = True
             else:
+                parent.show_incomplete_proof_need_fill = False
                 self.sub_nodes = []
                 ml_state = s0.clone(None)
                 for i in range(len(goals)):
@@ -1290,6 +1302,7 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
         super().__init__(config, arg["thought"], [])
         self.rule = arg["rule"]
         self.rule_ref = self.ml_state.fetch_rule_fact(self.rule) if self.rule is not None else None
+        self.show_incomplete_proof_need_fill = False
     @staticmethod
     def gen(arg : InferenceRule_ToolArg) -> gen_node:
         def mk(config: NodeConfig) -> 'InferenceRule':
@@ -1313,7 +1326,7 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
     def beginning_opr(self) -> Minilang_Operation:
         return Minilang_Operation.RULE(self.rule_ref, (self._fixed_vars(), self._fixed_facts()))
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
-        return f"Fail to apply the inference rule because: {"\n".join(err.errors)}"
+        return f"Fail to apply the inference rule.{"".join(["\n"+e for e in err.errors])}"
     def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
         return f"Subgoal {child.id} fails to be proven."
     def has_ending_opr(self) -> bool:
@@ -1371,22 +1384,24 @@ class GlobalEnv(StdBlock):
         super().__init__(config, "", [])
     def beginning_opr(self) -> None:
         return None
-    def ending_opr(self) -> None:
-        return None
+    def ending_opr(self) -> Minilang_Operation:
+        return Minilang_Operation.INTRO(self.resulting_state().bindings_of(), single_goal=True)
     def has_ending_opr(self) -> bool:
-        return False
+        return True
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
         raise InternalError("A GlobalEnv doesn't have a beginning operation")
     def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
         return "" # This suppresses the error message printing on GlobalEnv
     def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
-        raise InternalError("A GlobalEnv doesn't have an ending operation")
+        raise InternalError("Internal Bug: Failed to apply INTRO on the proof goal")
     def _print_header(self, ident: int, file: TextIO):
         pass
     def _title_of_children(self, ident: int) -> tuple[str | None, int]:
         return (None, ident-1)
     def _print_step_id(self, ident: int, file: TextIO) -> int:
         return ident
+    def _id_of_openning_prf_to_fill(self) -> step | None:
+        return None
 
 class Root(GoalContainer, StdBlock):
     def __init__(self, context_and_ptree: tuple[Context, ML_ProofTree], connection: Connection):
@@ -1397,6 +1412,8 @@ class Root(GoalContainer, StdBlock):
         self.sub_nodes.append(GlobalEnv(NodeConfig("global", ml_state0, self)))
         ml_state = ml_state0.skip(None)
         # Get number of goals from prooftree
+        if ml_state.prooftree is None:
+            raise ValueError("Root: ml_state.prooftree is None, cannot get top_goals")
         self.num_goals = len(ml_state.prooftree.top_goals())
         is_single_goal = self.num_goals == 1
         for i in range(self.num_goals):

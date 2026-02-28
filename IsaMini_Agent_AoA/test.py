@@ -74,12 +74,13 @@ def _test_branch(root: Root, file: TextIO):
 @test("EquivDerive", "Test003.thy", 6)
 def _test_EquivDerive(root: Root, file: TextIO):
     print_header("Initial YAML", file)
-    root.print(0, file)
+    #root.print(0, file)
     root.fill("1", InferenceRule.gen({
         "thought": "Destruct equivalence",
         "rule": None
     }))
     print_header("Inference Rule", file)
+    root.print(0, file)
     root.fill("2", InferenceRule.gen({
         "thought": "Destruct equivalence",
         "rule": None
