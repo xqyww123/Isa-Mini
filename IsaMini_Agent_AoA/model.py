@@ -862,21 +862,22 @@ class StdBlock(NonLeaf_Node):
         raise NotImplementedError("`_child_refresh_failure_err_msgs` must be implemented by subclass")
     def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
         raise NotImplementedError("`_ending_opr_err_msgs` must be implemented by subclass")
-    def _state_before_ending(self) -> Minilang_State:
-        if self.has_ending_opr():
-            return self._state_before_ending_
-        else:
-            raise InternalError("The node doesn't have an ending operation, but the method `_state_before_ending` is called")
+    # def _state_before_ending(self) -> Minilang_State:
+    #     return self._state_before_ending_
+    #     #if self.has_ending_opr():
+    #     #else:
+    #     #    raise InternalError("The node doesn't have an ending operation, but the method `_state_before_ending` is called")
     def _resulting_state_of_all_children(self) -> Minilang_State:
-        if self.has_ending_opr():
-            return self._state_before_ending()
-        else:
-            return self.resulting_state()
+        return self._state_before_ending_
+        # if self.has_ending_opr():
+        #     return self._state_before_ending()
+        # else:
+        #     return self.resulting_state()
     def _state_after_beginning(self) -> Minilang_State:
         if self.sub_nodes:
             return self.sub_nodes[0].ml_state
         else:
-            return self._resulting_state_of_all_children()
+            return self._state_before_ending_
     def assemble(self, output: list[Minilang_Operation] | None = None) -> list[Minilang_Operation]: 
         if output is None:
             output = []
@@ -915,18 +916,18 @@ class StdBlock(NonLeaf_Node):
                     reason = self._child_refresh_failure_err_msgs(child)
             else:
                 child.status = EVALUATION_CACNCELLED
+        if not self.sub_nodes and begin_opr is None:
+            self.ml_state.clone(self._state_before_ending_)
         if can_continue:
             ending_opr = self.ending_opr()
-            if ending_opr is not None:
-                if not self.sub_nodes and begin_opr is None:
-                    self.ml_state.clone(self._state_before_ending_)
+            if ending_opr is None:
+                self._state_before_ending_.clone(self.resulting_state())
+            else:
                 try:
                     self._state_before_ending_.execute(ending_opr, self.resulting_state())
                 except IsabelleError as err:
                     reason = self._ending_opr_err_msgs(err)
                     can_continue = False
-            if can_continue and begin_opr is None and ending_opr is None and not self.sub_nodes:
-                self.ml_state.clone(self.resulting_state())
         if can_continue:
             self._body_subnodes_succeeded = True
             self.status = EvaluationStatus.success(time() - now)
@@ -973,7 +974,7 @@ class StdBlock(NonLeaf_Node):
                 file.write(title)
                 file.write(": empty!\n")
         if self.has_ending_opr():
-            ptree = self._state_before_ending().prooftree
+            ptree = self._state_before_ending_.prooftree
             if ptree is None:
                 raise InternalError("The state before ending is not initialized, meaning the node is not refreshed, "
                 "meaning the convention that all nodes should be freshed is broken.")
@@ -1003,18 +1004,7 @@ class StdBlock(NonLeaf_Node):
         if not self.has_ending_opr():
             raise InternalError("The node doesn't have an ending operation. Don't know how to append a node to it.")
         local_step = self._local_step_of_next_proof_step()
-
-        # Choose the starting state for the new node
-        if self.sub_nodes:
-            # Has children: start after the last child
-            ml_state = self._resulting_state_of_all_children().clone(None)
-        else:
-            # No children: start after begin_opr (if any) or from ml_state (if no begin_opr)
-            if self.beginning_opr() is not None:
-                ml_state = self._resulting_state_of_all_children().clone(None)
-            else:
-                ml_state = self.ml_state
-
+        ml_state = self._state_before_ending_.clone(None)
         config = NodeConfig(local_step, ml_state, self)
         node = gen_node(config)
         self.sub_nodes.append(node)
@@ -1115,7 +1105,7 @@ class SubgoalMaker(GoalContainer, StdBlock):
                 self.sub_nodes = []
             else:
                 self.sub_nodes = []
-                ml_state = s0
+                ml_state = s0.clone(None)
                 for i in range(len(goals)):
                     self.sub_nodes.append(GoalNode(NodeConfig(str(i+1), ml_state, self), False, True))
                     ml_state = ml_state.sorry(None, None)
