@@ -1005,6 +1005,29 @@ class StdBlock(NonLeaf_Node):
             self.status = EvaluationStatus.failure(time() - now, reason)
     def _print_header(self, ident: int, file: TextIO) -> None:
         self._print_fixed_vars_and_facts(ident, file)
+    def _print_footer(self, ident: int, file: TextIO) -> None:
+        if self.show_incomplete_proof_need_fill:
+            ptree = self._state_before_ending_.prooftree
+            if ptree is None:
+                raise InternalError("The state before ending is not initialized, meaning the node is not refreshed, "
+                "meaning the convention that all nodes should be freshed is broken.")
+            goals = ptree.top_goals()
+            match goals:
+                case []:
+                    pass
+                case [goal]:
+                    to_fill = self._id_of_openning_prf_to_fill()
+                    if to_fill is not None:
+                        print_pending_goal(goal, to_fill, ident, file, self._ctxt_printing_to_supress())
+                case _:
+                    to_fill = self._id_of_openning_prf_to_fill()
+                    if to_fill is not None:
+                        if self._allow_multi_goal:
+                            goal = goals[0]
+                            print_pending_goal(goal, to_fill, ident, file, self._ctxt_printing_to_supress())
+                        else:
+                            raise InternalError("The open goals of StdBlock should not exceed one. "
+                            "To express multiple goals, you should use a StdBlock whose children are GoalNodes. See Rule as an example.")
     def _title_of_children(self, ident: int) -> tuple[str | None, int]:
         return ("proof", ident+1)
     def _local_step_of_next_proof_step(self) -> local_step:
@@ -1041,28 +1064,7 @@ class StdBlock(NonLeaf_Node):
                 print_indent(ident, file)
                 file.write(title)
                 file.write(": empty!\n")
-        if self.show_incomplete_proof_need_fill:
-            ptree = self._state_before_ending_.prooftree
-            if ptree is None:
-                raise InternalError("The state before ending is not initialized, meaning the node is not refreshed, "
-                "meaning the convention that all nodes should be freshed is broken.")
-            goals = ptree.top_goals()
-            match goals:
-                case []:
-                    pass
-                case [goal]:
-                    to_fill = self._id_of_openning_prf_to_fill()
-                    if to_fill is not None:
-                        print_pending_goal(goal, to_fill, ident, file, self._ctxt_printing_to_supress())
-                case _:
-                    to_fill = self._id_of_openning_prf_to_fill()
-                    if to_fill is not None:
-                        if self._allow_multi_goal:
-                            goal = goals[0]
-                            print_pending_goal(goal, to_fill, ident, file, self._ctxt_printing_to_supress())
-                        else:
-                            raise InternalError("The open goals of StdBlock should not exceed one. "
-                            "To express multiple goals, you should use a StdBlock whose children are GoalNodes. See Rule as an example.")
+        self._print_footer(ident, file)
         return ident
     def print_string(self, ident: int) -> str:
         buffer = StringIO()
@@ -1130,11 +1132,12 @@ class GoalNode(StdBlock):
         self._allow_multi_goal = True
         # self.goal_index = goal_index
     def goal(self) -> Goal:
-        if self.ml_state.prooftree is None:
+        ptree = self._state_after_beginning().prooftree
+        if ptree is None:
             raise InternalError("The prooftree of the state is not initialized, meaning the node is not refreshed")
-        return self.ml_state.prooftree.top_goal()
-    def beginning_opr(self) -> None:
-        return None
+        return ptree.top_goal()
+    def beginning_opr(self) -> Minilang_Operation:
+        return Minilang_Operation.INTRO(self._state_after_beginning().bindings_of(), single_goal=True)
     def ending_opr(self) -> Minilang_Operation | None:
         if not isinstance(self.parent, GoalContainer):
             raise InternalError("The parent of a GoalNode is not a GoalContainer")
@@ -1474,10 +1477,10 @@ class GlobalEnv(StdBlock):
         super().__init__(config, "", [])
     def beginning_opr(self) -> None:
         return None
-    def ending_opr(self) -> Minilang_Operation:
-        return Minilang_Operation.INTRO(self.resulting_state().bindings_of(), single_goal=True)
+    def ending_opr(self) -> Minilang_Operation | None:
+        return None
     def has_ending_opr(self) -> bool:
-        return True
+        return False
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
         raise InternalError("A GlobalEnv doesn't have a beginning operation")
     def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
@@ -1492,6 +1495,9 @@ class GlobalEnv(StdBlock):
         return ident
     def _id_of_openning_prf_to_fill(self) -> step | None:
         return None
+    def _print_footer(self, ident: int, file: TextIO) -> None:
+        print_indent(ident, file)
+        file.write("You could add global declarations here.\n")
 
 class Root(GoalContainer, StdBlock):
     def __init__(self, context_and_ptree: tuple[Context, ML_ProofTree], connection: Connection):
