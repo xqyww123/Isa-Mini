@@ -12,6 +12,8 @@ type states = Minilang.state Symtab.table
 datatype acmd = Proof_Opr of {from: state_id, to: state_id, opr: MiniLang_Agent.xcmd}
               | Lookup_Fact of { state: state_id
                                , criterions: (bool * string Find_Theorems.criterion) list list}
+              | Compute_Bindings of {state: state_id, var_names: string list, fact_names: string list}
+              | Need_Intro of {state: state_id}
               | Exit
 
 val AoA_RPC : driver * (MiniLang_Agent.cfg * MiniLang_Agent.budget)
@@ -37,6 +39,8 @@ type cfg = MiniLang_Agent.cfg * MiniLang_Agent.budget
 datatype acmd = Proof_Opr of {from: state_id, to: state_id, opr: MiniLang_Agent.xcmd}
               | Lookup_Fact of { state: state_id
                                , criterions: (bool * string Find_Theorems.criterion) list list}
+              | Compute_Bindings of {state: state_id, var_names: string list, fact_names: string list}
+              | Need_Intro of {state: state_id}
               | Exit
 
 type context = {
@@ -185,6 +189,11 @@ val acmd_unpacker =
      | 2 => unpackPair (unpackString, unpackList (unpackList (unpackPair (unpackBool, unpack_criterion))))
          #> apfst (fn (state, criterions) =>
             Lookup_Fact {state=state, criterions=criterions})
+     | 3 => unpackTuple3 (unpackString, unpackList unpackString, unpackList unpackString)
+         #> apfst (fn (state, var_names, fact_names) =>
+            Compute_Bindings {state=state, var_names=var_names, fact_names=fact_names})
+     | 4 => unpackString
+         #> apfst (fn state => Need_Intro {state=state})
      | _ => raise Unpack)
 
 fun acmd_packer (Proof_Opr {from, to, opr}) =
@@ -193,6 +202,11 @@ fun acmd_packer (Proof_Opr {from, to, opr}) =
   | acmd_packer (Lookup_Fact {state, criterions}) =
       packPair (packInt, packPair (packString, packList (packList (packPair (packBool, pack_criterion)))))
                (2, (state, criterions))
+  | acmd_packer (Compute_Bindings {state, var_names, fact_names}) =
+      packPair (packInt, packTuple3 (packString, packList packString, packList packString))
+               (3, (state, var_names, fact_names))
+  | acmd_packer (Need_Intro {state}) =
+      packPair (packInt, packString) (4, state)
   | acmd_packer Exit =
       packPair (packInt, packUnit) (0, ())
 
@@ -221,19 +235,18 @@ fun minilang_message_packer ctxt =
                      (1, Option.map (map (goals_of_term [])) goals) *)
         | pack (Minilang.Consider_Case kase) =
             packPair (packInt, packString) (2, kase)
-        | pack (Minilang.Internal _) = error "BUG #adli"
-   in packList pack o filter (fn Minilang.Internal _ => false | _ => true)
-  end
-
-fun bindings_packer ctxt =
-  let open MessagePackBinIO.Pack
-      fun pack_var_name {internal_name, external_name, typ_pretty} =
-            packTuple3 (packString, packString, packString) (internal_name, external_name, typ_pretty)
-      fun pack_prem_name {internal_term, external_name, pretty} =
-            packTuple3 (REPL_Serialize.pack_raw_term, packString, packString)
-                       (internal_term, external_name, pretty)
-   in fn (var_names, prem_names) =>
-        packPair (packList pack_var_name, packList pack_prem_name) (var_names, prem_names)
+        | pack (Minilang.Internal exn) =
+            (case exn of
+               MiniLang_Agent.INTRO_BINDINGS {missing, auto_introduced, final} =>
+                 packPair (packInt, packTuple3 (
+                   MiniLang_Agent.pack_bindings,
+                   MiniLang_Agent.pack_bindings,
+                   MiniLang_Agent.pack_bindings
+                 )) (3, (missing, auto_introduced, final))
+             | _ => error "BUG #adli: unexpected Internal message")
+   in packList pack o filter (fn Minilang.Internal (MiniLang_Agent.INTRO_BINDINGS _) => true
+                                 | Minilang.Internal _ => false
+                                 | _ => true)
   end
 
 local open Facts Minilang_Helper in
@@ -274,12 +287,12 @@ fun callback (cfg:cfg) (states:states Unsynchronized.ref) (conn:connection) =
                             | NONE => raise ERR ["beginning_state_not_found"]
                 val (cfg', budget) = cfg
                 val full_config = (cfg', budget, counters) : MiniLang_Agent.config
-                val (bindings1, s1) = MiniLang_Agent.interpret full_config opr s0
+                val s1 = MiniLang_Agent.interpret full_config opr s0
                 val ctxt' = Minilang.context_of s1
                 val msgs = clean_report ()
              in states := Symtab.update (to, s1) (!states)
-              ; write conn (packTuple3 (minilang_message_packer ctxt', minilang_tree_packer ctxt', bindings_packer ctxt'))
-                           (msgs, Minilang.print_state s1, bindings1)
+              ; write conn (packPair (minilang_message_packer ctxt', minilang_tree_packer ctxt'))
+                           (msgs, Minilang.print_state s1)
             end handle Minilang.OPR_FAIL (Minilang.PROOF_FAIL, msg) =>
                 write_error' conn packUnit
                   {message=[String.concat ["Proof failure: ", REPL.trim_makrup msg]], errobj=()}
@@ -306,6 +319,23 @@ fun callback (cfg:cfg) (states:states Unsynchronized.ref) (conn:connection) =
                  |> distinct (Thm.equiv_thm (Proof_Context.theory_of ctxt) o apply2 snd)
                 val SOT  = string_of_term ctxt
              in write conn (packList (packPair (pack_FactRef, packString o SOT o Thm.prop_of))) rets
+            end
+         | Compute_Bindings {state, var_names, fact_names} => (
+            let val s0 = case Symtab.lookup (!states) state
+                           of SOME s => s
+                            | NONE => raise ERR ["beginning_state_not_found"]
+                val bindings = MiniLang_Agent.compute_bindings s0 var_names fact_names
+             in write conn MiniLang_Agent.pack_bindings bindings
+            end handle Minilang.OPR_FAIL (Minilang.INVALID_OPR, msg) =>
+                write_error' conn packUnit
+                  {message=[String.concat ["Bad operation: ", REPL.trim_makrup msg]], errobj=()}
+           )
+         | Need_Intro {state} =>
+            let val s0 = case Symtab.lookup (!states) state
+                           of SOME s => s
+                            | NONE => raise ERR ["beginning_state_not_found"]
+                val result = MiniLang_Agent.check_need_intro s0
+             in write conn packBool result
             end
     ) handle EXIT => ()
            | ERR msgs => write_error' conn packUnit {message=msgs, errobj=()}

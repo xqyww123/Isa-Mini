@@ -75,10 +75,17 @@ def _test_branch(root: Root, file: TextIO):
 def _test_EquivDerive(root: Root, file: TextIO):
     print_header("Initial YAML", file)
     #root.print(0, file)
-    root.fill("1", InferenceRule.gen({
+    root.fill("1", Intro.gen({
+        "thought": "Destruct equivalence",
+        "variable_bindings": ["AAA"],
+        "fact_bindings": []
+    }))
+    root.fill("2", InferenceRule.gen({
         "thought": "Destruct equivalence",
         "rule": None
     }))
+    import sys
+    file = sys.stdout
     print_header("Inference Rule", file)
     root.print(0, file)
     root.fill("2", InferenceRule.gen({

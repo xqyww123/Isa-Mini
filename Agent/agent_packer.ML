@@ -4,6 +4,8 @@ include MINILANG_AGENT
 val xcmd_packer : xcmd MessagePackBinIO.Pack.packer
 val xcmd_unpacker : xcmd MessagePackBinIO.Unpack.unpacker
 
+val pack_bindings : bindings MessagePackBinIO.Pack.packer
+
 (*
 val serialize : driver * xcmd list -> string
 val deserialize : string -> driver * xcmd list
@@ -103,59 +105,57 @@ val pack_bindings =
 
 val unpacker =
   unpackPair_dep unpackString (
-    fn "SIMPLIFY" => apfst SIMPLIFY o unpackPair (unpackList unpackString, unpack_bindings)
-     | "UNFOLD"   => apfst UNFOLD   o unpackPair (unpackList unpackString, unpack_bindings)
-     | "WITNESS"  => apfst WITNESS  o unpackPair (unpackList unpackString, unpack_bindings)
-     | "RULE"     => apfst RULE     o unpackPair (unpackList unpackString, unpack_bindings)
-     | "CASE_SPLIT" => apfst CASE_SPLIT o unpackTuple4 (
+    fn "SIMPLIFY" => apfst SIMPLIFY o unpackList unpackString
+     | "UNFOLD"   => apfst UNFOLD   o unpackList unpackString
+     | "WITNESS"  => apfst WITNESS  o unpackList unpackString
+     | "RULE"     => apfst RULE     o unpackList unpackString
+     | "CASE_SPLIT" => apfst CASE_SPLIT o unpackTuple3 (
                         unpackString,
                         unpack_opt_var_names,
-                        unpackOption unpackString,
-                        unpack_bindings
+                        unpackOption unpackString
                      )
-     | "INDUCT"   => apfst INDUCT   o unpackTuple5 (
+     | "INDUCT"   => apfst INDUCT   o unpackTuple4 (
                         unpackString,
                         unpack_opt_var_names,
                         unpackList unpackString,
-                        unpackOption unpackString,
-                        unpack_bindings
+                        unpackOption unpackString
                      )
-     | "ATP"      => apfst (fn (facts, vars, bindings) => NEXT_OR_END (facts, vars, bindings))
-                      o unpackTuple3 (unpackList unpackString, unpack_opt_var_names, unpack_bindings)
-     | "NEXT"     => apfst NEXT o unpackTuple3 (unpackList unpackString, unpack_opt_var_names, unpack_bindings)
+     | "ATP"      => apfst (fn (facts, vars) => NEXT_OR_END (facts, vars))
+                      o unpackPair (unpackList unpackString, unpack_opt_var_names)
+     | "NEXT"     => apfst NEXT o unpackPair (unpackList unpackString, unpack_opt_var_names)
      | "END"      => apfst END o unpackList unpackString
-     | "NEXT_or_END" => apfst NEXT_OR_END o unpackTuple3 (unpackList unpackString, unpack_opt_var_names, unpack_bindings)
-     | "SORRY"    => apfst SORRY o unpackPair (unpack_opt_var_names, unpack_bindings)
+     | "NEXT_or_END" => apfst NEXT_OR_END o unpackPair (unpackList unpackString, unpack_opt_var_names)
+     | "SORRY"    => apfst SORRY o unpack_opt_var_names
      | "BRANCH"   => apfst BRANCH   o unpackList unpackString
      | "HAVE"     => apfst HAVE     o unpackList unpackString
      | "OBTAIN"   => apfst OBTAIN   o unpackPair (
                           unpackList (unpackPair (unpackString, unpackOption unpackString)),
                           unpackList unpackString)
      | "HAMMER"   => apfst HAMMER o unpackList unpackString
-     | "INTRO"    => apfst INTRO o unpackPair (unpackBool, unpack_bindings)
+     | "INTRO"    => apfst INTRO o unpackOption unpack_bindings
      | "SKIP"     => apfst (K SKIP) o unpackUnit
      | cmd => error("Unknown operation " ^ cmd)
   ) #> apfst snd
 
 fun packer (SIMPLIFY data) =
-      packPair (packString, packPair (packList packString, pack_bindings)) ("SIMPLIFY", data)
+      packPair (packString, packList packString) ("SIMPLIFY", data)
   | packer (UNFOLD data) =
-      packPair (packString, packPair (packList packString, pack_bindings)) ("UNFOLD", data)
+      packPair (packString, packList packString) ("UNFOLD", data)
   | packer (WITNESS data) =
-      packPair (packString, packPair (packList packString, pack_bindings)) ("WITNESS", data)
+      packPair (packString, packList packString) ("WITNESS", data)
   | packer (RULE data) =
-      packPair (packString, packPair (packList packString, pack_bindings)) ("RULE", data)
+      packPair (packString, packList packString) ("RULE", data)
   | packer (CASE_SPLIT data) =
-      packPair (packString, packTuple4 (packString, pack_opt_var_names, packOption packString, pack_bindings))
+      packPair (packString, packTuple3 (packString, pack_opt_var_names, packOption packString))
         ("CASE_SPLIT", data)
   | packer (INDUCT data) =
-      packPair (packString, packTuple5 (packString, pack_opt_var_names, packList packString, packOption packString, pack_bindings))
+      packPair (packString, packTuple4 (packString, pack_opt_var_names, packList packString, packOption packString))
         ("INDUCT", data)
   | packer (NEXT_OR_END data) =
-      packPair (packString, packTuple3 (packList packString, pack_opt_var_names, pack_bindings))
+      packPair (packString, packPair (packList packString, pack_opt_var_names))
         ("NEXT_or_END", data)
   | packer (NEXT data) =
-      packPair (packString, packTuple3 (packList packString, pack_opt_var_names, pack_bindings))
+      packPair (packString, packPair (packList packString, pack_opt_var_names))
         ("NEXT", data)
   | packer (END data) = packPair (packString, packList packString) ("END", data)
   | packer (BRANCH data) =
@@ -168,10 +168,10 @@ fun packer (SIMPLIFY data) =
           packList packString))
         ("OBTAIN", data)
   | packer (SORRY data) =
-      packPair (packString, packPair (pack_opt_var_names, pack_bindings))
+      packPair (packString, pack_opt_var_names)
         ("SORRY", data)
   | packer (HAMMER data) = packPair (packString, packList packString) ("HAMMER", data)
-  | packer (INTRO data) = packPair (packString, packPair (packBool, pack_bindings)) ("INTRO", data)
+  | packer (INTRO data) = packPair (packString, packOption pack_bindings) ("INTRO", data)
   | packer SKIP = packPair (packString, packUnit) ("SKIP", ())
 (* | packer (ROLLBACK data) = packPair (packString, packInt) ("ROLLBACK", data) *)
 
@@ -187,6 +187,7 @@ structure ML_Bytes = MiniLang_Agent_Pack(BytesIO)
 
 val xcmd_packer = ML_BinIO.packer
 val xcmd_unpacker = ML_BinIO.unpacker
+val pack_bindings = ML_BinIO.pack_bindings
 
 (*
 fun serialize cfg_cmds =

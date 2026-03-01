@@ -29,10 +29,10 @@ class Fact(NamedTuple):
     isabelle_expression: term
     for_any: list[Explicit_Var]
 
-    def print(self, ident: int, file: TextIO):
-        print_indent(ident, file)
+    def print(self, indent: int, file: TextIO):
+        print_indent(indent, file)
         file.write(f"- english: {self.english}\n")
-        print_indent(ident, file)
+        print_indent(indent, file)
         file.write(f"  isabelle: {self.isabelle_expression}\n")
 
 
@@ -80,49 +80,53 @@ class Goals(NamedTuple):
     def __str__(self) -> str:
         return f"{self.context} ⊢ {self.goals}"
 
-def print_indent(ident: int, file):
-    for _ in range(ident):
+def print_indent(indent: int, file):
+    for _ in range(indent):
         file.write("  ")
 
-def print_multiline_kv(ident: int, file: TextIO, key: str, val: str):
+def print_multiline_kv(indent: int, file: TextIO, key: str, val: str):
     lines = val.strip().split("\n")
     match lines:
         case [line]:
-            print_indent(ident, file)
+            print_indent(indent, file)
             file.write(key)
             file.write(": ")
             file.write(f"{line}\n")
         case lines:
-            print_indent(ident, file)
+            print_indent(indent, file)
             file.write(key)
             file.write(": |\n")
             for line in lines:
-                print_indent(ident+1, file)
+                print_indent(indent+1, file)
                 file.write(line)
                 file.write("\n")
 
-def print_vars(vars: Vars, ident: int, file, suppressed: 'list[VariableBinding]'):
-    visible_vars = [(name, typ) for name, typ in vars.items() if not any(var.external_varname == name for var in suppressed)]
-    if visible_vars:
-        print_indent(ident, file)
-        file.write("variables:\n")
-        for name, type in visible_vars:
-            print_indent(ident+1, file)
+def print_vars(vars: Vars, indent: int, file, suppressed: 'list[VariableBinding]', banner='variables'):
+    if any(not any(name == s.external_varname for s in suppressed) for name in vars):
+        print_indent(indent, file)
+        file.write(banner)
+        file.write(":\n")
+        for name, type in vars.items():
+            if any(name == s.external_varname for s in suppressed):
+                continue
+            print_indent(indent+1, file)
             file.write(f"- {name}: {type}\n")
 
-def print_hyps(hyps: Hyps, ident: int, file, suppressed: 'list[FactBinding]'):
-    visible_hyps = [(name, term) for name, term in hyps.items() if not any(fact.name == name for fact in suppressed)]
-    if visible_hyps:
-        print_indent(ident, file)
-        file.write("premises:\n")
-        for name, term in visible_hyps:
-            print_indent(ident+1, file)
+def print_hyps(hyps: Hyps, indent: int, file, suppressed: 'list[FactBinding]', banner='premises'):
+    if any(not any(name == s.name for s in suppressed) for name in hyps):
+        print_indent(indent, file)
+        file.write(banner)
+        file.write(":\n")
+        for name, term in hyps.items():
+            if any(name == s.name for s in suppressed):
+                continue
+            print_indent(indent+1, file)
             file.write(f"- {name}: {term}\n")
 
-def print_goal(goal: Goal, ident: int, show_header: bool, file, suppressed: 'Bindings'):
-    print_vars(goal.context.vars, ident, file, suppressed[0])
-    print_hyps(goal.context.hyps, ident, file, suppressed[1])
-    print_indent(ident, file)
+def print_goal(goal: Goal, indent: int, show_header: bool, file, suppressed: 'Bindings'):
+    print_vars(goal.context.vars, indent, file, suppressed[0])
+    print_hyps(goal.context.hyps, indent, file, suppressed[1])
+    print_indent(indent, file)
     if goal.context.vars or goal.context.hyps:
         file.write(f"goal: {goal.conclusion}\n")
     else:
@@ -131,13 +135,13 @@ def print_goal(goal: Goal, ident: int, show_header: bool, file, suppressed: 'Bin
         file.write(goal.conclusion)
         file.write("\n")
 
-def print_pending_goal(goal: Goal, step: step, ident: int, file : TextIO, suppressed: 'Bindings'):
-    print_indent(ident, file)
+def print_pending_goal(goal: Goal, step: step, indent: int, file : TextIO, suppressed: 'Bindings'):
+    print_indent(indent, file)
     file.write(f"Error: Unfinished Proof! Call command `edit` with action `fill` and target step `{step}`"
         " to provide the proof for the following goal.\n")
-    print_indent(ident, file)
+    print_indent(indent, file)
     file.write("pending proof goal:\n")
-    print_goal(goal, ident+1, False, file, suppressed)
+    print_goal(goal, indent+1, False, file, suppressed)
 
 ## Errors
 type timedelta = float # in seconds
@@ -145,7 +149,7 @@ type failure_reason = str | None
         # None means internal error
         # "" means to suppress the error message printing
 
-def print_failure_reason(ident: int, file: TextIO, reason: failure_reason):
+def print_failure_reason(indent: int, file: TextIO, reason: failure_reason):
     if reason is None:
         raise InternalError("A failure reason is not provided")
     lines = reason.strip().split("\n")
@@ -153,14 +157,14 @@ def print_failure_reason(ident: int, file: TextIO, reason: failure_reason):
         case []:
             pass
         case [line]:
-            print_indent(ident, file)
+            print_indent(indent, file)
             file.write("Error: ")
             file.write(f"{line}\n")
         case lines:
-            print_indent(ident, file)
+            print_indent(indent, file)
             file.write("Error: |\n")
             for line in lines:
-                print_indent(ident+1, file)
+                print_indent(indent+1, file)
                 file.write(line)
                 file.write("\n")
 
@@ -238,6 +242,56 @@ EVALUATION_NOT_YET = EvaluationStatus.failure(0.0, None)
 
 ## Minilang Runtime
 
+### Bindings
+
+class VariableBinding(NamedTuple):
+    internal_varname: varname
+    external_varname: varname
+    type: typ
+
+class FactBinding(NamedTuple):
+    expr: lambda_term  # internal_term
+    name: str          # external_name
+    pretty: str        # pretty
+
+type Bindings = tuple[list[VariableBinding], list[FactBinding]]
+
+def print_var_bindings(var_bindings: list[VariableBinding], indent: int, file: TextIO, banner='variables'):
+    if var_bindings:
+        print_indent(indent, file)
+        file.write(banner)
+        file.write(":\n")
+        for vb in var_bindings:
+            print_indent(indent + 1, file)
+            if vb.external_varname == vb.internal_varname:
+                file.write(f"- {vb.external_varname}: {vb.type}\n")
+            else:
+                file.write(f"- {vb.external_varname}: {vb.type}    (renamed from \"{vb.internal_varname}\")\n")
+
+def print_fact_bindings(fact_bindings: list[FactBinding], indent: int, file: TextIO, banner='facts'):
+    if fact_bindings:
+        print_indent(indent, file)
+        file.write(banner)
+        file.write(":\n")
+        for fb in fact_bindings:
+            print_indent(indent + 1, file)
+            file.write(f"- {fb.name}: {fb.pretty}\n")
+
+def add_var_to_set(var: VariableBinding, ret: list[VariableBinding]) -> list[VariableBinding]:
+    for v in ret:
+        if v.external_varname == var.external_varname:
+            return ret
+    ret.append(var)
+    return ret
+
+def add_fact_to_set(fact: FactBinding, ret: list[FactBinding]) -> list[FactBinding]:
+    for f in ret:
+        if f.name == fact.name:
+            return ret
+    ret.append(fact)
+    return ret
+
+
 ### Minilang Messages
 
 class Message:
@@ -267,6 +321,41 @@ class Consider_Case_Msg(Message):
     def unpack(cls, data) -> 'Consider_Case_Msg':
         return cls(data)
 
+class Intro_Bindings_Msg(Message):
+    def __init__(self, missing: 'Bindings', auto_introduced: 'Bindings', final: 'Bindings') -> None:
+        super().__init__()
+        self.missing = missing
+        self.auto_introduced = auto_introduced
+        self.final = final
+
+    @classmethod
+    def unpack(cls, data) -> 'Intro_Bindings_Msg':
+        (missing, auto_introduced, final) = data
+        return cls(
+            cls._unpack_bindings(missing),
+            cls._unpack_bindings(auto_introduced),
+            cls._unpack_bindings(final)
+        )
+
+    @staticmethod
+    def _unpack_bindings(data):
+        (var_names, prem_names) = data
+        var_bindings = [
+            VariableBinding(
+                internal_varname=v[0],
+                external_varname=v[1],
+                type=IsaREPL.pretty_unicode(v[2])
+            ) for v in var_names
+        ]
+        fact_bindings = [
+            FactBinding(
+                expr=p[0],
+                name=p[1],
+                pretty=IsaREPL.pretty_unicode(p[2])
+            ) for p in prem_names
+        ]
+        return (var_bindings, fact_bindings)
+
 def unpack_message(data) -> Message:
     (kind, x) = data
     match kind:
@@ -276,6 +365,8 @@ def unpack_message(data) -> Message:
             return Goals_Msg.unpack(x)
         case 2:
             return Consider_Case_Msg.unpack(x)
+        case 3:
+            return Intro_Bindings_Msg.unpack(x)
         case _:
             raise Exception(f"BUG bad message kind: {kind}")
 
@@ -346,34 +437,6 @@ def unpack_MLPT(data) -> ML_ProofTree:
             return MLPT_Block(unpack_MLPT(x))
         case _:
             raise Exception(f"BUG bad MLPT kind: {kind}")
-
-### Bindings
-
-class VariableBinding(NamedTuple):
-    internal_varname: varname
-    external_varname: varname
-    type: typ
-
-class FactBinding(NamedTuple):
-    expr: lambda_term  # internal_term
-    name: str          # external_name
-    pretty: str        # pretty
-
-type Bindings = tuple[list[VariableBinding], list[FactBinding]]
-
-def add_var_to_set(var: VariableBinding, ret: list[VariableBinding]) -> list[VariableBinding]:
-    for v in ret:
-        if v.external_varname == var.external_varname:
-            return ret
-    ret.append(var)
-    return ret
-
-def add_fact_to_set(fact: FactBinding, ret: list[FactBinding]) -> list[FactBinding]:
-    for f in ret:
-        if f.name == fact.name:
-            return ret
-    ret.append(fact)
-    return ret
 
 ### Search Facts by Patterns
 
@@ -455,11 +518,11 @@ class Minilang_Operation(NamedTuple):
         return self.__str__()
 
     @staticmethod
-    def SORRY(varnames : list[varname_spec] | None, bindings: Bindings) -> 'Minilang_Operation':
-        return Minilang_Operation("SORRY", (varnames, bindings))
+    def SORRY(varnames : list[varname_spec] | None) -> 'Minilang_Operation':
+        return Minilang_Operation("SORRY", varnames)
     @staticmethod
-    def NEXT(varnames : list[varname_spec] | None, bindings: Bindings) -> 'Minilang_Operation':
-        return Minilang_Operation("NEXT", ([], varnames, bindings))
+    def NEXT(varnames : list[varname_spec] | None) -> 'Minilang_Operation':
+        return Minilang_Operation("NEXT", ([], varnames))
     @staticmethod
     def END() -> 'Minilang_Operation':
         return Minilang_Operation("END", [])
@@ -471,23 +534,23 @@ class Minilang_Operation(NamedTuple):
         vars = [(v["name"], IsaREPL.ascii_of_unicode(v["type"]) if "type" in v else None) for v in variables]
         return Minilang_Operation("OBTAIN", (vars, [IsaREPL.ascii_of_unicode(c) for c in constraints]))
     @staticmethod
-    def RULE(rule_ref: FactRef | None, bindings: Bindings) -> 'Minilang_Operation':
-        return Minilang_Operation("RULE", ([rule_ref] if rule_ref is not None else [], bindings))
+    def RULE(rule_ref: FactRef | None) -> 'Minilang_Operation':
+        return Minilang_Operation("RULE", [rule_ref] if rule_ref is not None else [])
     @staticmethod
     def HAMMER(fact_refs: list[FactRef]) -> 'Minilang_Operation':
         return Minilang_Operation("HAMMER", fact_refs)
     @staticmethod
-    def INTRO(bindings: Bindings, single_goal: bool = True) -> 'Minilang_Operation':
-        return Minilang_Operation("INTRO", (single_goal, bindings))
+    def INTRO(bindings: Bindings | None) -> 'Minilang_Operation':
+        return Minilang_Operation("INTRO", bindings)
     @staticmethod
-    def SIMPLIFY(fact_refs: list[FactRef], bindings: Bindings) -> 'Minilang_Operation':
-        return Minilang_Operation("SIMPLIFY", (fact_refs, bindings))
+    def SIMPLIFY(fact_refs: list[FactRef]) -> 'Minilang_Operation':
+        return Minilang_Operation("SIMPLIFY", fact_refs)
     @staticmethod
-    def UNFOLD(consts: list[str], bindings: Bindings) -> 'Minilang_Operation':
-        return Minilang_Operation("UNFOLD", (consts, bindings))
+    def UNFOLD(consts: list[str]) -> 'Minilang_Operation':
+        return Minilang_Operation("UNFOLD", consts)
     @staticmethod
-    def WITNESS(terms: list[term], bindings: Bindings) -> 'Minilang_Operation':
-        return Minilang_Operation("WITNESS", (terms, bindings))
+    def WITNESS(terms: list[term]) -> 'Minilang_Operation':
+        return Minilang_Operation("WITNESS", terms)
     @staticmethod
     def BRANCH(cases: list[term]) -> 'Minilang_Operation':
         return Minilang_Operation("BRANCH", cases)
@@ -504,16 +567,12 @@ class Minilang_State:
         self.name = name
         self.prooftree = prooftree
         self.messages : list[Message] = [] # the messages received during executing the operation that assigns to this state
-        self.fixed_vars: list[VariableBinding] = []
-        self.fixed_facts: list[FactBinding] = []
     def initialized(self) -> bool:
         return self.prooftree is not None
     def __str__(self) -> str:
         return f"Minilang_State({self.name})"
     def __repr__(self) -> str:
         return self.__str__()
-    def bindings_of(self) -> Bindings:
-        return (self.fixed_vars, self.fixed_facts)
     state_counter = 0
     @classmethod
     def assign_name(cls) -> str:
@@ -538,7 +597,7 @@ class Minilang_State:
                     opr,
                 )
             try:
-                (msgs, tree, bindings) = self.connection.read()
+                (msgs, tree) = self.connection.read()
                 if GLOBAL_LOGGER is not None:
                     GLOBAL_LOGGER.debug("Minilang_State.execute: success")
             except IsabelleError as err:
@@ -553,40 +612,17 @@ class Minilang_State:
             msgs = [unpack_message(msg) for msg in msgs]
             assign_to.prooftree = unpack_MLPT(tree)
             assign_to.messages = msgs
-
-            # Update fixed_vars and fixed_facts from bindings
-            (var_names, prem_names) = bindings
-            assign_to.fixed_vars = [
-                VariableBinding(
-                    internal_varname=v[0],  # internal_name
-                    external_varname=v[1],  # external_name
-                    type=IsaREPL.pretty_unicode(v[2])  # typ
-                ) for v in var_names
-            ]
-            assign_to.fixed_facts = [
-                FactBinding(
-                    expr=p[0],  # internal_term
-                    name=p[1],  # external_name
-                    pretty=IsaREPL.pretty_unicode(p[2])  # pretty
-                ) for p in prem_names
-            ]
         else:
             raise NotImplementedError("Here we should implement the execution of a list of Minilang operations")
             #msgs = opr(self, assign_to)
         return assign_to
     def sorry(self, varnames: list[varname_spec] | None, assign_to: 'Minilang_State | None') -> 'Minilang_State':
-        if assign_to is None:
-            bindings = ([],[])
-        else:
-            bindings = assign_to.bindings_of()
-        return self.execute(Minilang_Operation.SORRY(varnames, bindings), assign_to)
+        return self.execute(Minilang_Operation.SORRY(varnames), assign_to)
     def skip(self, assign_to: 'Minilang_State | None') -> 'Minilang_State':
         return self.execute(Minilang_Operation.SKIP(), assign_to)
     def clone(self, assign_to: 'Minilang_State | None') -> 'Minilang_State':
         ret = self.execute(Minilang_Operation.SKIP(), assign_to)
         ret.messages = self.messages
-        ret.fixed_vars = self.fixed_vars
-        ret.fixed_facts = self.fixed_facts
         return ret
     def search_fact(self, dnf_criterions: list[list[Search_Criterion]]) -> FactRef:
         self.connection.write((2, (self.name, dnf_criterions)))
@@ -607,9 +643,28 @@ class Minilang_State:
             , Criterion_XPattern(True, rule.isabelle_expression, rule.for_any)]
         ])
         return rule_ref
+    def compute_bindings(self, var_names: list[str], fact_names: list[str]) -> Bindings:
+        """
+        Compute bindings for the leading proof goal by binding provided names in order.
+        var_names[i] is bound to the i-th quantified variable in the goal.
+        fact_names[j] is bound to the j-th premise in the goal.
+        Raises IsabelleError if the lengths don't match the goal structure.
+        """
+        self.connection.write((3, (self.name, var_names, fact_names)))
+        bindings_data = self.connection.read()
+        return Intro_Bindings_Msg._unpack_bindings(bindings_data)
+    def need_intro(self) -> bool:
+        """
+        Check if the leading proof goal needs INTRO (i.e., has quantified variables or premises).
+        Returns True if the goal has quantifiers or premises that need to be introduced.
+        """
+        self.connection.write((4, self.name))
+        result = self.connection.read()
+        return result
 ### The Abstract Model
 
 type gen_node = Callable[[NodeConfig], 'Node']
+type printer = Callable[[int, TextIO], int]
 
 # abstract base class
 class NodeConfig(NamedTuple):
@@ -632,25 +687,51 @@ class Node:
         else:
             self.id : step = self.local_step
         self.status : EvaluationStatus = EVALUATION_NOT_YET
-    def _print_step_id(self, ident: int, file: TextIO) -> int:
-        print_indent(ident, file)
+        self.warnings : list[str | printer] = []
+    def _print_step_id(self, indent: int, file: TextIO) -> int:
+        print_indent(indent, file)
         file.write(f"- step id: {self.id}\n")
-        return ident + 1
-    def print(self, ident: int, file : TextIO) -> int:
-        return self._print_step_id(ident, file)
-    def _print_thought(self, ident: int, file: TextIO) -> None:
+        return indent + 1
+    def print(self, indent: int, file : TextIO) -> int:
+        return self._print_step_id(indent, file)
+    def _print_warnings(self, indent: int, file: TextIO) -> None:
+        match self.warnings:
+            case []:
+                pass
+            case _:
+                print_indent(indent, file)
+                file.write(f"notice:\n")
+                for warning in self.warnings:
+                    match warning:
+                        case str():
+                            if '\n' in warning:
+                                for i, line in enumerate(warning.splitlines()):
+                                    if i == 0:
+                                        print_indent(indent+1, file)
+                                        file.write(f"- ")
+                                    else:
+                                        print_indent(indent+2, file)
+                                    file.write(f"{line}\n")
+                            else:
+                                print_indent(indent+1, file)
+                                file.write(f"- {warning}\n")
+                        case Callable():
+                            warning(indent+1, file)
+                        case _:
+                            raise InternalError(f"Unknown warning type: {type(warning)}")
+    def _print_thought(self, indent: int, file: TextIO) -> None:
         lines = self.thought.strip().split("\n")
         match lines:
             case []:
                 pass
             case [line]:
-                print_indent(ident, file)
+                print_indent(indent, file)
                 file.write(f"thought: {line}\n")
             case _:
-                print_indent(ident, file)
+                print_indent(indent, file)
                 file.write(f"thought: |\n")
                 for line in lines:
-                    print_indent(ident+1, file)
+                    print_indent(indent+1, file)
                     file.write(line)
                     file.write("\n")
     def resulting_state(self) -> Minilang_State:
@@ -671,9 +752,8 @@ class Node:
         """
         must update self.status
         Convention: Any node must be up to date after calling any public Node method
-        Convention: any __init__ must refresh the Minilang state
         """
-        raise NotImplementedError("`_refresh_me_alone` must be implemented by subclass")
+        self.warnings.clear()
     def refresh_all_after_me(self) -> None:
         """
         refreshing the status of all the nodes excluding and after the `self`
@@ -714,78 +794,44 @@ class Node:
     def _id_of_openning_prf_to_fill(self) -> step | None:
         return None
 
-    def _fixed_vars_after_me(self, ret: list[VariableBinding] | None = None) -> list[VariableBinding]:
-        if ret is None:
-            ret = []
-        for var in self.resulting_state().fixed_vars:
-            add_var_to_set(var, ret)
+    def _fixed_vars_after_me(self, ret: list[VariableBinding]) -> list[VariableBinding]:
         return ret
-    def _fixed_vars_at_me(self, ret: list[VariableBinding] | None = None) -> list[VariableBinding]:
-        return self._fixed_vars_after_me(ret)
-    def _fixed_facts_after_me(self, ret: list[FactBinding] | None = None) -> list[FactBinding]:
-        if ret is None:
-            ret = []
-        for fact in self.resulting_state().fixed_facts:
-            add_fact_to_set(fact, ret)
+    def _fixed_vars_at_me(self, ret: list[VariableBinding]) -> list[VariableBinding]:
         return ret
-    def _fixed_facts_at_me(self, ret: list[FactBinding] | None = None) -> list[FactBinding]:
-        return self._fixed_facts_after_me(ret)
-    def _all_fixed_vars_before_me(self, ret: list[VariableBinding] | None = None) -> list[VariableBinding]:
-        if ret is None:
-            ret = []
+    def _fixed_facts_after_me(self, ret: list[FactBinding]) -> list[FactBinding]:
+        return ret
+    def _fixed_facts_at_me(self, ret: list[FactBinding]) -> list[FactBinding]:
+        return ret
+    def _all_fixed_vars_before_me(self, ret: list[VariableBinding]) -> list[VariableBinding]:
         if self.parent is not None:
             self.parent._all_fixed_vars_before_a_child(self, ret)
         return ret
-    def _all_fixed_facts_before_me(self, ret: list[FactBinding] | None = None) -> list[FactBinding]:
-        if ret is None:
-            ret = []
+    def _all_fixed_facts_before_me(self, ret: list[FactBinding]) -> list[FactBinding]:
         if self.parent is not None:
             self.parent._all_fixed_facts_before_a_child(self, ret)
         return ret
     def _ctxt_printing_to_supress(self) -> 'Bindings':
-        vars = self._all_fixed_vars_before_me()
-        hyps = self._all_fixed_facts_before_me()
+        vars = self._all_fixed_vars_before_me([])
+        hyps = self._all_fixed_facts_before_me([])
         return vars, hyps
     def _rename_var(self, old_name: varname, new_name: varname) -> None:
-        vars = self._fixed_vars_at_me()
-        found = False
-        for i, var in enumerate(vars):
-            if var.external_varname == old_name:
-                vars[i] = VariableBinding(
-                    internal_varname=var.internal_varname,
-                    external_varname=new_name,
-                    type=var.type,
-                )
-                found = True
-        if not found:
-            raise CannotRename_VariableNotFound(old_name, new_name)
+        raise CannotRename_VariableNotFound(old_name, new_name)
     def _rename_fact(self, old_name: str, new_name: str) -> None:
-        facts = self._fixed_facts_at_me()
-        found = False
-        for i, fact in enumerate(facts):
-            if fact.name == old_name:
-                facts[i] = FactBinding(
-                    expr=fact.expr,
-                    name=new_name,
-                    pretty=fact.pretty,
-                )
-                found = True
-        if not found:
-            raise CannotRename_FactNotFound(old_name, new_name)
-    def _print_fixed_vars_and_facts(self, ident: int, file: TextIO) -> None:
-        fixed_vars = self._fixed_vars_at_me()
-        fixed_facts = self._fixed_facts_at_me()
+        raise CannotRename_FactNotFound(old_name, new_name)
+    def _print_fixed_vars_and_facts(self, indent: int, file: TextIO) -> None:
+        fixed_vars = self._fixed_vars_at_me([])
+        fixed_facts = self._fixed_facts_at_me([])
         if fixed_vars:
-            print_indent(ident, file)
+            print_indent(indent, file)
             file.write(f"variables:\n")
             for var in fixed_vars:
-                print_indent(ident+1, file)
+                print_indent(indent+1, file)
                 file.write(f"- {var.external_varname}: {var.type}\n")
         if fixed_facts:
-            print_indent(ident, file)
+            print_indent(indent, file)
             file.write(f"facts:\n")
             for fact in fixed_facts:
-                print_indent(ident+1, file)
+                print_indent(indent+1, file)
                 file.write(f"- {fact.name}: {fact.pretty}\n")
 
 
@@ -803,6 +849,7 @@ class Leaf(Node):
         return output
     def _refresh_me_alone(self) -> None:
         now = time()
+        super()._refresh_me_alone()
         try:
             self.ml_state.execute(self.the_operation(), self.resulting_state())
             self.status = EvaluationStatus.success(time() - now)
@@ -963,6 +1010,7 @@ class StdBlock(NonLeaf_Node):
         except IsabelleError as err:
             return (False, self._beginning_opr_err_msgs(err))
     def _refresh_me_alone(self):
+        super()._refresh_me_alone()
         begin_opr = self.beginning_opr()
         now = time()
         reason : failure_reason = None
@@ -1003,9 +1051,9 @@ class StdBlock(NonLeaf_Node):
         else:
             self._body_subnodes_succeeded = False
             self.status = EvaluationStatus.failure(time() - now, reason)
-    def _print_header(self, ident: int, file: TextIO) -> None:
-        self._print_fixed_vars_and_facts(ident, file)
-    def _print_footer(self, ident: int, file: TextIO) -> None:
+    def _print_header(self, indent: int, file: TextIO) -> None:
+        raise NotImplementedError("`_print_header` must be implemented by subclass")
+    def _print_footer(self, indent: int, file: TextIO) -> None:
         if self.show_incomplete_proof_need_fill:
             ptree = self._state_before_ending_.prooftree
             if ptree is None:
@@ -1018,18 +1066,18 @@ class StdBlock(NonLeaf_Node):
                 case [goal]:
                     to_fill = self._id_of_openning_prf_to_fill()
                     if to_fill is not None:
-                        print_pending_goal(goal, to_fill, ident, file, self._ctxt_printing_to_supress())
+                        print_pending_goal(goal, to_fill, indent, file, self._ctxt_printing_to_supress())
                 case _:
                     to_fill = self._id_of_openning_prf_to_fill()
                     if to_fill is not None:
                         if self._allow_multi_goal:
                             goal = goals[0]
-                            print_pending_goal(goal, to_fill, ident, file, self._ctxt_printing_to_supress())
+                            print_pending_goal(goal, to_fill, indent, file, self._ctxt_printing_to_supress())
                         else:
                             raise InternalError("The open goals of StdBlock should not exceed one. "
                             "To express multiple goals, you should use a StdBlock whose children are GoalNodes. See Rule as an example.")
-    def _title_of_children(self, ident: int) -> tuple[str | None, int]:
-        return ("proof", ident+1)
+    def _title_of_children(self, indent: int) -> tuple[str | None, int]:
+        return ("proof", indent+1)
     def _local_step_of_next_proof_step(self) -> local_step:
         if self.sub_nodes:
             return incr_id_major(self.sub_nodes[-1].local_step)
@@ -1043,32 +1091,32 @@ class StdBlock(NonLeaf_Node):
                 return self._local_step_of_next_proof_step()
         else:
             return None
-    def print(self, ident: int, file: TextIO):
-        ident = super().print(ident, file)
-        self._print_header(ident, file)
+    def print(self, indent: int, file: TextIO):
+        indent = super().print(indent, file)
+        self._print_header(indent, file)
         status = self.status
         if status.status == EvaluationStatus.Status.FAILURE:
-            print_failure_reason(ident, file, status.reason)
-        title, child_ident = self._title_of_children(ident)
+            print_failure_reason(indent, file, status.reason)
+        title, child_indent = self._title_of_children(indent)
         if title is None:
             for step in self.sub_nodes:
-                step.print(child_ident, file)
+                step.print(child_indent, file)
         else:
             if self.sub_nodes:
-                print_indent(ident, file)
+                print_indent(indent, file)
                 file.write(title)
                 file.write(":\n")
                 for step in self.sub_nodes:
-                    step.print(child_ident, file)
+                    step.print(child_indent, file)
             else:
-                print_indent(ident, file)
+                print_indent(indent, file)
                 file.write(title)
                 file.write(": empty!\n")
-        self._print_footer(ident, file)
-        return ident
-    def print_string(self, ident: int) -> str:
+        self._print_footer(indent, file)
+        return indent
+    def print_string(self, indent: int) -> str:
         buffer = StringIO()
-        self.print(ident, buffer)
+        self.print(indent, buffer)
         return buffer.getvalue()
     def append(self, gen_node: gen_node) -> None:
         if not self.has_ending_opr():
@@ -1083,18 +1131,6 @@ class StdBlock(NonLeaf_Node):
             raise CannotAppend(node, node.status.reason)
     def is_proof_finished(self) -> bool:
         return self._body_subnodes_succeeded and super().is_proof_finished()
-    def _fixed_vars_at_me(self, ret: list[VariableBinding] | None = None) -> list[VariableBinding]:
-        if ret is None:
-            ret = []
-        for var in self._state_after_beginning().fixed_vars:
-            add_var_to_set(var, ret)
-        return ret
-    def _fixed_facts_at_me(self, ret: list[FactBinding] | None = None) -> list[FactBinding]:
-        if ret is None:
-            ret = []
-        for fact in self._state_after_beginning().fixed_facts:
-            add_fact_to_set(fact, ret)
-        return ret
 
 
 #abstract base class
@@ -1105,7 +1141,7 @@ class GoalContainer(NonLeaf_Node):
         for i, c in enumerate(self.sub_nodes):
             if c is child:
                 if i < len(self.sub_nodes) - 1:
-                    return Minilang_Operation.NEXT(None, self.sub_nodes[i+1].ml_state.bindings_of())
+                    return Minilang_Operation.NEXT(None)
                 else:
                     return Minilang_Operation.END()
         raise InternalError("The given argument is not a child of this node")
@@ -1136,8 +1172,8 @@ class GoalNode(StdBlock):
         if ptree is None:
             raise InternalError("The prooftree of the state is not initialized, meaning the node is not refreshed")
         return ptree.top_goal()
-    def beginning_opr(self) -> Minilang_Operation:
-        return Minilang_Operation.INTRO(self._state_after_beginning().bindings_of(), single_goal=True)
+    def beginning_opr(self) -> None:
+        return None
     def ending_opr(self) -> Minilang_Operation | None:
         if not isinstance(self.parent, GoalContainer):
             raise InternalError("The parent of a GoalNode is not a GoalContainer")
@@ -1155,23 +1191,14 @@ class GoalNode(StdBlock):
             return "The goal is nontrivial. Detailed proofs are required to prove it."
         else:
             return "Each of the following proof steps above is valid, but the goal doesn't trivially follow from these steps. Please provide more detailed proof steps."
-    def _print_header(self, ident: int, file: TextIO):
-        #self._print_fixed_vars_and_facts(ident, file)
+    def _print_header(self, indent: int, file: TextIO):
         if self.show_goal:
-            print_goal(self.goal(), ident, True, file, self._ctxt_printing_to_supress())
-    def _print_step_id(self, ident: int, file: TextIO) -> int:
+            print_goal(self.goal(), indent, True, file, self._ctxt_printing_to_supress())
+    def _print_step_id(self, indent: int, file: TextIO) -> int:
         if self.is_single_goal:
-            return ident
+            return indent
         else:
-            return super()._print_step_id(ident, file)
-    def _fixed_vars_after_me(self, ret: list[VariableBinding] | None = None) -> list[VariableBinding]:
-        if ret is None:
-            ret = []
-        return ret
-    def _fixed_facts_after_me(self, ret: list[FactBinding] | None = None) -> list[FactBinding]:
-        if ret is None:
-            ret = []
-        return ret
+            return super()._print_step_id(indent, file)
 
 #abstract base class
 class SubgoalMaker(GoalContainer, StdBlock):
@@ -1203,20 +1230,11 @@ class SubgoalMaker(GoalContainer, StdBlock):
             return (True, None)
         else:
             return (False, reason)
-    def _fixed_vars_at_me(self, ret: list[VariableBinding] | None = None) -> list[VariableBinding]:
+    def _id_of_openning_prf_to_fill(self) -> step | None:
         if self.sub_nodes:
-            if ret is None:
-                ret = []
-            return ret
+            return super()._id_of_openning_prf_to_fill()
         else:
-            return super()._fixed_vars_at_me(ret)
-    def _fixed_facts_at_me(self, ret: list[FactBinding] | None = None) -> list[FactBinding]:
-        if self.sub_nodes:
-            if ret is None:
-                ret = []
-            return ret
-        else:
-            return super()._fixed_facts_at_me(ret)
+            return None
 
 class SubgoalMaker_NoTailEnder(SubgoalMaker):
     def _child_has_ending_opr(self, child : Node) -> bool:
@@ -1231,7 +1249,7 @@ class SubgoalMaker_NoTailEnder(SubgoalMaker):
         for i, c in enumerate(self.sub_nodes):
             if c is child:
                 if i < len(self.sub_nodes) - 1:
-                    return Minilang_Operation.NEXT(None, self.sub_nodes[i+1].ml_state.bindings_of())
+                    return Minilang_Operation.NEXT(None)
                 else:
                     return None
         raise InternalError("The given argument is not a child of this node")
@@ -1245,10 +1263,10 @@ class Statement(TypedDict):
     english: str
     isabelle: str
 
-def print_statement(self: Statement, ident: int, file: TextIO):
-    print_indent(ident, file)
+def print_statement(self: Statement, indent: int, file: TextIO):
+    print_indent(indent, file)
     file.write(f"- english: {self["english"]}\n")
-    print_indent(ident, file)
+    print_indent(indent, file)
     file.write(f"  isabelle: {self["isabelle"]}\n")
 
 #### Obvious
@@ -1270,18 +1288,18 @@ class Obvious(Leaf):
         def mk(config: NodeConfig) -> 'Obvious':
             return Obvious(config, arg)
         return mk
-    def print(self, ident: int, file: TextIO) -> int:
-        self._print_step_id(ident, file)
-        ident += 1
-        self._print_thought(ident, file)
-        print_indent(ident, file)
+    def print(self, indent: int, file: TextIO) -> int:
+        indent = super().print(indent, file)
+        self._print_thought(indent, file)
+        print_indent(indent, file)
         file.write("operation: Obvious\n")
         if self.facts:
-            print_indent(ident, file)
+            print_indent(indent, file)
             file.write(f"with facts:\n")
             for fact in self.facts:
-                fact.print(ident+1, file)
-        return ident
+                fact.print(indent+1, file)
+        self._print_warnings(indent, file)
+        return indent
     def the_operation(self) -> Minilang_Operation:
         return Minilang_Operation.HAMMER(self.fact_refs)
 
@@ -1302,16 +1320,17 @@ class Have(StdBlock):
         def mk(config: NodeConfig) -> 'Have':
             return Have(config, arg)
         return mk
-    def _print_header(self, ident: int, file: TextIO):
-        self._print_thought(ident, file)
-        print_indent(ident, file)
+    def _print_header(self, indent: int, file: TextIO):
+        self._print_thought(indent, file)
+        print_indent(indent, file)
         file.write("operation: Have\n")
-        print_indent(ident, file)
+        print_indent(indent, file)
         file.write(f"statement:\n")
-        print_indent(ident+1, file)
+        print_indent(indent+1, file)
         file.write(f"english: {self.statement['english']}\n")
-        print_indent(ident+1, file)
+        print_indent(indent+1, file)
         file.write(f"isabelle: {self.statement['isabelle']}\n")
+        self._print_warnings(indent, file)
     def beginning_opr(self) -> Minilang_Operation | None:
         return Minilang_Operation.HAVE(self.statement['isabelle'])
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
@@ -1341,14 +1360,14 @@ class Obtain(StdBlock):
         def mk(config: NodeConfig) -> 'Obtain':
             return Obtain(config, arg)
         return mk
-    def _print_header(self, ident: int, file: TextIO):
-        self._print_thought(ident, file)
-        print_indent(ident, file)
+    def _print_header(self, indent: int, file: TextIO):
+        self._print_thought(indent, file)
+        print_indent(indent, file)
         file.write("operation: Obtain\n")
-        print_indent(ident, file)
+        print_indent(indent, file)
         file.write(f"variables:\n")
         for v in self.variables:
-            print_indent(ident+1, file)
+            print_indent(indent+1, file)
             if v['type'] is not None:
                 file.write(f"- {v['name']}: {v['type']}\n")
             else:
@@ -1357,20 +1376,21 @@ class Obtain(StdBlock):
             case []:
                 pass
             case [constraint]:
-                print_indent(ident, file)
+                print_indent(indent, file)
                 file.write(f"constraint:\n")
-                print_indent(ident+1, file)
+                print_indent(indent+1, file)
                 file.write(f"english: {constraint['english']}\n")
-                print_indent(ident+1, file)
+                print_indent(indent+1, file)
                 file.write(f"isabelle: {constraint['isabelle']}\n")
             case _:
-                print_indent(ident, file)
+                print_indent(indent, file)
                 file.write(f"constraints:\n")
                 for constraint in self.constraints:
-                    print_indent(ident+1, file)
+                    print_indent(indent+1, file)
                     file.write(f"- english: {constraint['english']}\n")
-                    print_indent(ident+1, file)
+                    print_indent(indent+1, file)
                     file.write(f"  isabelle: {constraint['isabelle']}\n")
+        self._print_warnings(indent, file)
     def beginning_opr(self) -> Minilang_Operation | None:
         return Minilang_Operation.OBTAIN(self.variables, [c["isabelle"] for c in self.constraints])
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
@@ -1382,6 +1402,107 @@ class Obtain(StdBlock):
             return "The statement is nontrivial. Detailed proofs are required to establish this statement."
         else:
             return "Each of the following proof steps above is valid, but the target statement doesn't trivially follow from these steps. Please provide more detailed proof steps."
+
+#### INTRO
+
+class Intro_ToolArg(TypedDict):
+    thought: str
+    variable_bindings: list[varname]
+    fact_bindings: list[varname]
+
+class Intro(SubgoalMaker_NoTailEnder):
+    def __init__(self, config: NodeConfig, thought: str, bindings: Bindings | None):
+        super().__init__(config, thought, [])
+        self.bindings = bindings
+        self.running_time = 0
+    @staticmethod
+    def gen(arg: Intro_ToolArg) -> gen_node:
+        def mk(config: NodeConfig) -> 'Intro':
+            bindings = config.ml_state.compute_bindings(arg["variable_bindings"], arg["fact_bindings"])
+            return Intro(config, arg["thought"], bindings)
+        return mk
+    def _print_header(self, indent: int, file: TextIO):
+        self._print_thought(indent, file)
+        print_indent(indent, file)
+        file.write("operation: Intro\n")
+        if self.bindings is not None:
+            print_var_bindings(self.bindings[0], indent, file, "fixing variables")
+            print_fact_bindings(self.bindings[1], indent, file, "assuming premises")
+        self._print_warnings(indent, file)
+    def beginning_opr(self) -> Minilang_Operation:
+        return Minilang_Operation.INTRO(self.bindings)
+    def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
+        return f"Fail to introduce the variables and premises because: {"\n".join(err.errors)}"
+    def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
+        return f"Subgoal {child.id} fails to be proven."
+    def has_ending_opr(self) -> bool:
+        return False
+    def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
+        raise InternalError("An Intro doesn't have an ending operation")
+    def ending_opr(self) -> Minilang_Operation | None:
+        return None
+    def _title_of_children(self, indent: int) -> tuple[str | None, int]:
+        if len(self.sub_nodes) <= 1:
+            return (None, indent-1)
+        else:
+            return ("goals", indent+1)
+    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> tuple[bool, failure_reason]:
+        (success, reason) = super()._refresh_the_beginning_opr(begin_opr)
+        if success:
+            self.running_time += 1
+            messages = self._state_after_beginning().messages
+            intro_bindings_msgs = [m for m in messages if isinstance(m, Intro_Bindings_Msg)]
+            match intro_bindings_msgs:
+                case [intro_bindings_msg]:
+                    pass
+                case _:
+                    raise InternalError(
+                        f"Expected exactly one Intro_Bindings_Msg in Intro's messages, got {len(intro_bindings_msgs)}"
+                    )
+            self.bindings = intro_bindings_msg.final
+            if self.running_time >= 2:
+                if intro_bindings_msg.missing[0]:
+                    vars = [
+                        v.external_varname if i == len(intro_bindings_msg.missing[0]) - 1 else "and " + v.external_varname
+                        for i, v in enumerate(intro_bindings_msg.missing[0])
+                    ]
+                    vstr = ", ".join(vars) if len(vars) > 2 else " ".join(vars)
+                    vstr = "variable " + vstr if len(vars) == 1 else "variables " + vstr
+                    self.warnings.append(f"The proof goal has changed. Tracking of {vstr} has been lost.")
+                if intro_bindings_msg.auto_introduced[0]:
+                    def print(indent: int, file: TextIO) -> int:
+                        print_indent(indent, file)
+                        file.write(f"- The proof goal has changed and new universally quantified variables occur:\n")
+                        for binding in intro_bindings_msg.auto_introduced[0]:
+                            print_indent(indent+1, file)
+                            if binding.external_varname == binding.internal_varname:
+                                file.write(f"- {binding.external_varname}")
+                            else:
+                                file.write(f"- {binding.internal_varname}, renamed to {binding.external_varname} to prevent name conflicts")
+                        return indent
+                    self.warnings.append(print)
+                if intro_bindings_msg.missing[1]:
+                    vars = [
+                        v.name if i == len(intro_bindings_msg.missing[1]) - 1 else "and " + v.name
+                        for i, v in enumerate(intro_bindings_msg.missing[1])
+                    ]
+                    vstr = ", ".join(vars) if len(vars) > 2 else " ".join(vars)
+                    vstr = "premise " + vstr if len(vars) == 1 else "premises " + vstr
+                    self.warnings.append(f"The proof goal has changed. Tracking of {vstr} has been lost.")
+                if intro_bindings_msg.auto_introduced[1]:
+                    def print(indent: int, file: TextIO) -> int:
+                        print_indent(indent, file)
+                        file.write(f"- The proof goal has changed and new premises occur:\n")
+                        for binding in intro_bindings_msg.auto_introduced[1]:
+                            print_indent(indent+1, file)
+                            file.write(f"- {binding.name}\n")
+                        return indent
+                    self.warnings.append(print)
+        return (success, reason)
+    def _fixed_vars_at_me(self, ret: list[VariableBinding]) -> list[VariableBinding]:
+        xxxx
+
+
 
 #### InferenceRule
 
@@ -1401,23 +1522,23 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
         def mk(config: NodeConfig) -> 'InferenceRule':
             return InferenceRule(config, arg)
         return mk
-    def _print_header(self, ident: int, file: TextIO):
-        self._print_thought(ident, file)
-        print_indent(ident, file)
+    def _print_header(self, indent: int, file: TextIO):
+        self._print_thought(indent, file)
+        print_indent(indent, file)
         file.write("operation: Proof by inference rule\n")
-        print_indent(ident, file)
+        print_indent(indent, file)
         file.write(f"rule: {self.rule_ref if self.rule_ref is not None else 'default'}\n")
+        self._print_warnings(indent, file)
         if len(self.sub_nodes) <= 1:
-            self._print_fixed_vars_and_facts(ident, file)
             s0 = self._state_after_beginning()
             if s0.prooftree is None:
                 raise InternalError("The prooftree of the state after beginning is not initialized, meaning the node is not refreshed")
             goal = s0.prooftree.top_goal()
-            print_indent(ident, file)
+            print_indent(indent, file)
             file.write("derived goal:\n")
-            print_goal(goal, ident+1, False, file, self._ctxt_printing_to_supress())
+            print_goal(goal, indent+1, False, file, self._ctxt_printing_to_supress())
     def beginning_opr(self) -> Minilang_Operation:
-        return Minilang_Operation.RULE(self.rule_ref, (self._fixed_vars_at_me(), self._fixed_facts_at_me()))
+        return Minilang_Operation.RULE(self.rule_ref)
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
         return f"Fail to apply the inference rule.{"".join(["\n"+e for e in err.errors])}"
     def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
@@ -1428,11 +1549,11 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
         raise InternalError("An InferenceRule doesn't have an ending operation")
     def ending_opr(self) -> Minilang_Operation | None:
         return None
-    def _title_of_children(self, ident: int) -> tuple[str | None, int]:
+    def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         if len(self.sub_nodes) <= 1:
-            return (None, ident-1)
+            return (None, indent-1)
         else:
-            return ("derived subgoals", ident+1)
+            return ("derived subgoals", indent+1)
 
 ### Branch
 
@@ -1449,12 +1570,13 @@ class Branch(SubgoalMaker_NoTailEnder):
         def mk(config: NodeConfig) -> 'Branch':
             return Branch(config, arg)
         return mk
-    def _title_of_children(self, ident: int) -> tuple[str | None, int]:
-        return ('cases', ident+1)
-    def _print_header(self, ident: int, file: TextIO):
-        print_indent(ident, file)
+    def _title_of_children(self, indent: int) -> tuple[str | None, int]:
+        return ('cases', indent+1)
+    def _print_header(self, indent: int, file: TextIO):
+        print_indent(indent, file)
         file.write("operation: Branch\n")
-        self._print_thought(ident, file)
+        self._print_thought(indent, file)
+        self._print_warnings(indent, file)
     def beginning_opr(self) -> Minilang_Operation:
         return Minilang_Operation.BRANCH([case['isabelle'] for case in self.cases])
     def ending_opr(self):
@@ -1487,16 +1609,16 @@ class GlobalEnv(StdBlock):
         return "" # This suppresses the error message printing on GlobalEnv
     def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
         raise InternalError("Internal Bug: Failed to apply INTRO on the proof goal")
-    def _print_header(self, ident: int, file: TextIO):
+    def _print_header(self, indent: int, file: TextIO):
         pass
-    def _title_of_children(self, ident: int) -> tuple[str | None, int]:
-        return (None, ident-1)
-    def _print_step_id(self, ident: int, file: TextIO) -> int:
-        return ident
+    def _title_of_children(self, indent: int) -> tuple[str | None, int]:
+        return (None, indent-1)
+    def _print_step_id(self, indent: int, file: TextIO) -> int:
+        return indent
     def _id_of_openning_prf_to_fill(self) -> step | None:
         return None
-    def _print_footer(self, ident: int, file: TextIO) -> None:
-        print_indent(ident, file)
+    def _print_footer(self, indent: int, file: TextIO) -> None:
+        print_indent(indent, file)
         file.write("You could add global declarations here.\n")
 
 class Root(GoalContainer, StdBlock):
@@ -1525,8 +1647,8 @@ class Root(GoalContainer, StdBlock):
         self._refresh_me_alone()
     def resulting_state(self) -> Minilang_State:
         return self.final_ml_state
-    def _print_step_id(self, ident: int, file: TextIO) -> int:
-        return ident
+    def _print_step_id(self, indent: int, file: TextIO) -> int:
+        return indent
     def beginning_opr(self) -> Minilang_Operation | None:
         return None
     def ending_opr(self) -> Minilang_Operation | None:
@@ -1539,21 +1661,22 @@ class Root(GoalContainer, StdBlock):
         return "" # This suppresses the error message printing on Root
     def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
         raise InternalError("A Root doesn't have an ending operation")
-    def print(self, ident: int, file: TextIO) -> int:
-        print_vars(self.context.vars, ident, file, [])
-        print_hyps(self.context.hyps, ident, file, [])
+    def print(self, indent: int, file: TextIO) -> int:
+        print_vars(self.context.vars, indent, file, [])
+        print_hyps(self.context.hyps, indent, file, [])
         match self.num_goals:
             case 1:
-                self.sub_nodes[0].print(ident, file)
-                self.sub_nodes[1].print(ident, file)
+                self.sub_nodes[0].print(indent, file)
+                self.sub_nodes[1].print(indent, file)
             case _:
-                self.sub_nodes[0].print(ident, file)
+                self.sub_nodes[0].print(indent, file)
                 file.write("proof goals:\n")
                 for i in range(self.num_goals):
-                    print_indent(ident+1, file)
+                    print_indent(indent+1, file)
                     file.write(f"- goal index: {i+1}\n")
-                    self.sub_nodes[i+1].print(ident+2, file)
-        return ident
+                    self.sub_nodes[i+1].print(indent+2, file)
+        self._print_warnings(indent, file)
+        return indent
     def _locate_node(self, ids: Sequence[local_step], id: step, pos: int = 0) -> 'Node':
         if pos != 0:
             raise InternalError("pos should be 0 when locating a node in a Root")
@@ -1572,15 +1695,11 @@ class Root(GoalContainer, StdBlock):
                     if node.local_step == ids[0]:
                         return node._locate_node(ids, id, 1)
                 raise NodeNotFound(id)
-    def _fixed_vars_at_me(self, ret: list[VariableBinding] | None = None) -> list[VariableBinding]:
-        if ret is None:
-            ret = []
+    def _fixed_vars_at_me(self, ret: list[VariableBinding]) -> list[VariableBinding]:
         for name, typ in self.context.vars.items():
             add_var_to_set(VariableBinding(name, name, typ), ret)
         return ret
-    def _fixed_facts_at_me(self, ret: list[FactBinding] | None = None) -> list[FactBinding]:
-        if ret is None:
-            ret = []
+    def _fixed_facts_at_me(self, ret: list[FactBinding]) -> list[FactBinding]:
         for name, pretty in self.context.hyps.items():
             add_fact_to_set(FactBinding(None, name, pretty), ret)
         return ret

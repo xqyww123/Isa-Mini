@@ -1026,7 +1026,8 @@ fun quantifier_bindings ctxt st =
 (* INTRO'' performs introduction rules (allI and impI) on the current goal.
    Parameters:
    - F: Processing function that handles the focused subgoal.
-        Takes (st, foc) where st is the theorem state and foc contains focus information,
+        Takes binds (string list) and (st, foc) where binds are the actual variable names used,
+        st is the theorem state and foc contains focus information,
         returns (st'', (items', ctxt')) with the updated state, new proof items, and context.
    - mode: Introduction mode controlling how subgoals are processed:
         * ALL_SUBGOALS: recursively apply INTRO'' to all resulting subgoals
@@ -1057,7 +1058,7 @@ fun INTRO'' F mode bs (origin as (ctxt, HHF (st0, items) :: L)) =
                                         raise OPR_FAIL (INVALID_OPR, "Incorrect number of VARS")
                                   end
                val (foc, st') = Subgoal.focus_prems ctxt 1 (SOME (map Binding.name binds)) st
-               val (st'', (items', ctxt')) = F (st', foc)
+               val (st'', (items', ctxt')) = F binds (st', foc)
                val _ = get_reporter () (New_Items items')
                fun PRT _ t =
                     let
@@ -1090,7 +1091,7 @@ fun INTRO' mode bs premise_names s =
   let val _ = if mode = ALL_SUBGOALS andalso is_some premise_names
               then raise OPR_FAIL (INVALID_OPR, "premise_names must be NONE in ALL_SUBGOALS mode")
               else ()
-      val F = fn (st, foc) =>
+      val F = fn binds => fn (st, foc) =>
         let val num_prems = length (#prems foc)
             val _ = case premise_names
                       of SOME names =>
@@ -1115,7 +1116,7 @@ fun INTRO' mode bs premise_names s =
          |> Proof_Context.note_thmss "" bindings
          |> apfst (map ( apsnd (map Thm.prop_of)
                       #> apfst simp_name )
-                #> pair (#params foc |> map ( apsnd Thm.typ_of_cterm )))
+                #> pair (map2 (fn bind => fn (_, cterm) => (bind, Thm.typ_of_cterm cterm)) binds (#params foc)))
          |> pair st
         end
    in INTRO'' F mode bs s
