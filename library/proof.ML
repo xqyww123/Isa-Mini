@@ -42,6 +42,8 @@ val mini_use_improved_SH : bool Config.T
 val strict_end: bool Config.T
     (*If enabled, the NEXT and END will not apply SH but require the proof goals are all solved*)
 val counter_mode : string Config.T
+val INTRO_split_conj : bool Config.T
+val INTRO_mk_block : bool Config.T
 
 val chk_working_mode : string -> unit
 
@@ -227,6 +229,8 @@ val transparent_intro = Attrib.setup_config_bool \<^binding>\<open>transparent_i
 val high_auto_mode = Attrib.setup_config_bool \<^binding>\<open>high_auto_mode\<close> (K false)
 val strict_end = Config.declare_bool ("Minilang.strict_end", \<^here>) (K false)
 val counter_mode = Config.declare_string ("Minilang.counter_mode", \<^here>) (K "consecutive")
+val INTRO_split_conj = Config.declare_bool ("Minilang.INTRO_split_conj", \<^here>) (K false)
+val INTRO_mk_block   = Config.declare_bool ("Minilang.INTRO_mk_block", \<^here>) (K false)
 
 fun chk_working_mode mode =
       if member (op =) ["RELAXED", "COMPLETE_NEXT", "STRICT"] mode 
@@ -1023,6 +1027,22 @@ fun quantifier_bindings ctxt st =
                   ) L (Variable.names_of ctxt))
       |> #1
 
+val conjI = @{thm conjI}
+val asm_rl = @{thm asm_rl}
+fun split_conjs sequent =
+  let fun chk_conj_num ret (Const(\<^const_name>\<open>Trueprop\<close>, _) $ X) = chk_conj_num ret X
+        | chk_conj_num ret (Const(\<^const_name>\<open>HOL.conj\<close>, _) $ _ $ B) = chk_conj_num (ret + 1) B
+        | chk_conj_num ret (Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs (_, _, X)) = chk_conj_num ret X
+        | chk_conj_num ret (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ X) = chk_conj_num ret X
+        | chk_conj_num ret _ = ret
+      val num = chk_conj_num 1 (Thm.major_prem_of sequent)
+      fun mk_rule num =
+        if num <= 2 then @{thm conjI} else mk_rule (num - 1) RSN (2, @{thm conjI})
+   in if num <= 1
+   then sequent
+   else mk_rule num RS sequent
+  end
+
 (* INTRO'' performs introduction rules (allI and impI) on the current goal.
    Parameters:
    - F: Processing function that handles the focused subgoal.
@@ -1058,15 +1078,19 @@ fun INTRO'' F mode bs (origin as (ctxt, HHF (st0, items) :: L)) =
                                         raise OPR_FAIL (INVALID_OPR, "Incorrect number of VARS")
                                   end
                val (foc, st') = Subgoal.focus_prems ctxt 1 (SOME (map Binding.name binds)) st
-               val (st'', (items', ctxt')) = F binds (st', foc)
+               val (st''m, (items', ctxt')) = F binds (st', foc)
                val _ = get_reporter () (New_Items items')
-               fun PRT _ t =
-                    let
+               val mode_split_conj = Config.get ctxt INTRO_split_conj
+               val mode_mk_block = Config.get ctxt INTRO_mk_block
+               val st'' = st''m
+                    |> mode_split_conj ? split_conjs
+               fun PRT _ t0 =
+                    let val t = if mode_mk_block then BLOCK t0 else t0
                      in case print_stack [(HHF (st0, items))]
                      of BUNDL (items, goals) =>
-                        BUNDL (items, t :: tl goals)
-                      | PROP  (items, _) => t
-                          |> prepend_print items
+                          BUNDL (items, t :: tl goals)
+                      | PROP  (items, _) =>
+                          prepend_print items t
                       | _ => raise BROKEN_INVARIANT
                     end
                fun CB ctxt'' (st'',_,S, CASE_NAME bs) =

@@ -84,6 +84,16 @@ def _test_EquivDerive(root: Root, file: TextIO):
         "thought": "Destruct equivalence",
         "rule": None
     }))
+    # root.fill("2.1.1", Intro.gen({
+    #     "thought": "Destruct equivalence",
+    #     "variable_bindings": ["c"],
+    #     "fact_bindings": ["premiseXX"]
+    # }))
+    # root.fill("2.2.1", Intro.gen({
+    #     "thought": "Destruct equivalence",
+    #     "variable_bindings": ["Xasd"],
+    #     "fact_bindings": ["premiseYY"]
+    # }))
     import sys
     file = sys.stdout
     print_header("Inference Rule", file)

@@ -1,8 +1,12 @@
 theory Test003
-  imports Main
+  imports Minilang_Agent.Minilang_Agent
 begin
 
+declare [[agent_AoA_driver="test.EquivDerive"]]
+
 lemma t2: "\<forall>a. (\<forall>b. P b a) = (\<forall>c. Q c a)"
-  sorry
+  by  AgentAoA
+ 
+
 
 end

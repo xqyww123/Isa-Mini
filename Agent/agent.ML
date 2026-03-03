@@ -60,6 +60,10 @@ exception INTRO_BINDINGS of {
 val compute_bindings : Minilang.state -> string list -> string list -> bindings
 val check_need_intro : Minilang.state -> bool
 
+val string_of_term : Proof.context -> term -> string
+val string_of_type : Proof.context -> typ -> string
+val string_of_type_full_sort : Proof.context -> typ -> string
+
 end
 
 structure MiniLang_Agent : MINILANG_AGENT = struct
@@ -129,7 +133,43 @@ type icmd = (term, thm, Facts.ref * Token.src list) command
 val printing_cfg = {all_typ=false, bv_typ=true, constant_typ=false, free_typ=false, num_typ=true,
                     sorting=false, show_sort_P=NONE, show_type_P=NONE}
 
-val string_of_term = Syntax.string_of_term
+fun string_of_term ctxt =
+    let val ctxt' = ctxt
+              |> Config.put Printer.show_types false
+              |> Config.put Printer.show_sorts false
+              |> Config.put Printer.show_markup false
+              |> Config.put Printer.show_structs false
+              |> Config.put Printer.show_question_marks true
+              |> Config.put Printer.show_brackets false
+     in Object_Logic.atomize_term ctxt'
+     #> Syntax.string_of_term ctxt'
+     #> REPL.trim_makrup
+    end
+
+fun string_of_type ctxt =
+    let val ctxt' = ctxt
+              |> Config.put Printer.show_types false
+              |> Config.put Printer.show_sorts false
+              |> Config.put Printer.show_markup false
+              |> Config.put Printer.show_structs false
+              |> Config.put Printer.show_question_marks true
+              |> Config.put Printer.show_brackets false
+     in Syntax.string_of_typ ctxt'
+     #> REPL.trim_makrup
+    end
+
+fun string_of_type_full_sort ctxt =
+    let val ctxt' = ctxt
+              |> Config.put Printer.show_types true
+              |> Config.put Printer.show_sorts true
+              |> Config.put Printer.show_markup false
+              |> Config.put Printer.show_structs false
+              |> Config.put Printer.show_question_marks true
+              |> Config.put Printer.show_brackets false
+     in Syntax.string_of_typ ctxt'
+     #> REPL.trim_makrup
+    end
+
 fun string_of_thm ctxt th = string_of_term ctxt (Thm.prop_of th)
 
 fun find_def ctxt name =

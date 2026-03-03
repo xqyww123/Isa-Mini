@@ -100,31 +100,6 @@ fun global_context_of (ctxt, goal_sequent) : context =
    in {vars=vs, hyps=local_facts}
   end
 
-fun string_of_term ctxt =
-    let val ctxt' = ctxt
-              |> Config.put Printer.show_types false
-              |> Config.put Printer.show_sorts false
-              |> Config.put Printer.show_markup false
-              |> Config.put Printer.show_structs false
-              |> Config.put Printer.show_question_marks true
-              |> Config.put Printer.show_brackets false
-     in Object_Logic.atomize_term ctxt'
-     #> Syntax.string_of_term ctxt'
-     #> REPL.trim_makrup
-    end
-
-fun string_of_type_full_sort ctxt =
-    let val ctxt' = ctxt
-              |> Config.put Printer.show_types true
-              |> Config.put Printer.show_sorts true
-              |> Config.put Printer.show_markup false
-              |> Config.put Printer.show_structs false
-              |> Config.put Printer.show_question_marks true
-              |> Config.put Printer.show_brackets false
-     in Syntax.string_of_typ ctxt'
-     #> REPL.trim_makrup
-    end
-
 local open Find_Theorems in
 fun map_criterion _ (Name s) = Name s
   | map_criterion _ Intro = Intro
@@ -137,15 +112,15 @@ fun check_criterion ctxt =
   let val ctxt' = Proof_Context.set_mode Proof_Context.mode_pattern ctxt
    in map_criterion (Syntax.read_term ctxt')
   end
-fun uncheck_criterion ctxt = map_criterion (string_of_term ctxt)
+fun uncheck_criterion ctxt = map_criterion (MiniLang_Agent.string_of_term ctxt)
 end
 
 local open MessagePackBinIO.Pack MessagePackBinIO.Unpack Remote_Procedure_Calling
 in
 
 fun context_packer ctxt =
-  let val SOT  = string_of_term ctxt
-      val SOTT = string_of_type_full_sort ctxt
+  let val SOT  = MiniLang_Agent.string_of_term ctxt
+      val SOTT = MiniLang_Agent.string_of_type ctxt
    in fn {vars, hyps}:context =>
         packPair (packPairList (packString, packString o SOTT),
                   packPairList (packString, packList packString o map SOT))
@@ -153,7 +128,7 @@ fun context_packer ctxt =
   end
 
 fun goal_packer ctxt =
-  let val SOT  = string_of_term ctxt
+  let val SOT  = MiniLang_Agent.string_of_term ctxt
       val context_packer = context_packer ctxt
    in fn {context,goal}:goal =>
         packPair (context_packer, packString o SOT) (context,goal)
@@ -213,7 +188,7 @@ fun acmd_packer (Proof_Opr {from, to, opr}) =
 fun minilang_items_packer ctxt =
       context_packer ctxt o (fn (items:Minilang.items) => {vars = #1 items, hyps = #2 items})
 fun minilang_tree_packer ctxt =
-  let val term_packer = packString o string_of_term ctxt
+  let val term_packer = packString o MiniLang_Agent.string_of_term ctxt
       val item_packer = minilang_items_packer ctxt
       fun pack (Minilang.PROP (items, goal)) =
             packPair (packInt, packPair (item_packer, term_packer)) (0, (items, goal))
@@ -317,7 +292,7 @@ fun callback (cfg:cfg) (states:states Unsynchronized.ref) (conn:connection) =
                               (map (apsnd check_criterion) criterion)
                        |> snd) criterions
                  |> distinct (Thm.equiv_thm (Proof_Context.theory_of ctxt) o apply2 snd)
-                val SOT  = string_of_term ctxt
+                val SOT  = MiniLang_Agent.string_of_term ctxt
              in write conn (packList (packPair (pack_FactRef, packString o SOT o Thm.prop_of))) rets
             end
          | Compute_Bindings {state, var_names, fact_names} => (
@@ -363,7 +338,9 @@ fun AoA_RPC (driver, cfg:cfg) (ctxt, sequent) =
   let val global_context = global_context_of (ctxt, sequent)
       val s0 = Minilang.INIT ctxt sequent
             |> Minilang.map_context ( Config.put Minilang.strict_end true
-                                   #> Config.put Minilang.counter_mode "none" )
+                                   #> Config.put Minilang.counter_mode "none"
+                                   #> Config.put Minilang.INTRO_split_conj true
+                                   #> Config.put Minilang.INTRO_mk_block true)
       val state = Unsynchronized.ref (Symtab.make [("$init", s0)])
       val (xcmds, s1o) =
             Remote_Procedure_Calling.call_command (AoA_cmd cfg state) (global_context, driver)
