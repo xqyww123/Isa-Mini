@@ -35,6 +35,7 @@ val rule_of_ind : Context.generic -> Token.T list -> thm list option
 val case_synt' : (bool * (term option list list * thm option)) context_parser
 val case_synt : Context.generic -> (bool * (term option list list * thm option)) parser
 
+val simp_fact_name' : string -> string
 val simp_fact_name : Proof.context -> string -> string
 
 val implode_with' : 'a -> 'a list list -> 'a list -> 'a list
@@ -309,8 +310,10 @@ val case_synt' =
 
 fun case_synt ctxt toks = case case_synt' (ctxt, toks) of (x, (_, toks)) => (x,toks)
 
-
-end
+fun simp_fact_name' name =
+  if String.isPrefix "local." name
+  then String.substring (name, 6, size name - 6)
+  else name
 
 fun simp_fact_name ctxt name =
   if String.isPrefix "local." name
@@ -323,6 +326,8 @@ fun simp_fact_name ctxt name =
      else name
   end
   else name
+
+end
 
 
 

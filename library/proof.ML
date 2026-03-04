@@ -847,12 +847,6 @@ fun need_intro st =
          | _ => false
   end
 
-fun simp_name name =
-  if String.isPrefix "local." name
-  then String.substring (name, 6, size name - 6)
-  else name
-
-
 (* Hacks *)
 
 fun remove_typ str =
@@ -1083,7 +1077,7 @@ fun INTRO'' F mode bs (origin as (ctxt, HHF (st0, items) :: L)) =
                val mode_split_conj = Config.get ctxt INTRO_split_conj
                val mode_mk_block = Config.get ctxt INTRO_mk_block
                val st'' = st''m
-                    |> mode_split_conj ? split_conjs
+                    |> mode_split_conj ? (protect_goals o split_conjs)
                fun PRT _ t0 =
                     let val t = if mode_mk_block then BLOCK t0 else t0
                      in case print_stack [(HHF (st0, items))]
@@ -1139,7 +1133,7 @@ fun INTRO' mode bs premise_names s =
          in ctxt
          |> Proof_Context.note_thmss "" bindings
          |> apfst (map ( apsnd (map Thm.prop_of)
-                      #> apfst simp_name )
+                      #> apfst simp_fact_name' )
                 #> pair (map2 (fn bind => fn (_, cterm) => (bind, Thm.typ_of_cterm cterm)) binds (#params foc)))
          |> pair st
         end
@@ -1259,7 +1253,7 @@ fun UNFOLD_FACT' prep_thms raw_defs fact_names (ctxt, SK as HHF (st, items) :: S
       val fact_names = if member (op =) fact_names "*"
                        then context_of_leading_goal (print_stack SK)
                          |> #1 |> #2
-                         |> map (#1 #> simp_name)
+                         |> map (#1 #> simp_fact_name')
                        else fact_names
       val facts = map ( Proof_Context.get_thms ctxt
                      #> map ( Local_Defs.unfold ctxt defs ) ) fact_names
@@ -1323,7 +1317,7 @@ fun TRY_STANDARD SK =
               (K ()) (CONTEXT_TACTIC (Classical.standard_tac (#1 SK) [])) NONE SK
   else SK
 
-val INTRO = timed_OPR_with_ret 2 ooo INTRO'
+val INTRO = timed_OPR_with_ret 20000 ooo INTRO'
 val INTRO_CMD = (OPT_VARS -- OPT_PREMS)
         >> (fn args => fn s => #2 (timed_OPR_with_ret 2 (uncurry (INTRO' SINGLE_GOAL) args) s))
 val INTRO_ALL_CMD = (OPT_VARS -- OPT_PREMS)
@@ -1669,7 +1663,7 @@ fun CASES' diff ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, items0
             |> Proof_Context.note_thmss "" (ADDITIONAL_NOTES ctxt tagged @ notes)
            end )
          |> (fn (thms0, ctxt) =>
-        let val thms = map (apfst simp_name) thms0
+        let val thms = map (apfst simp_fact_name') thms0
             val goalx =
               if Config.get ctxt high_auto_mode
               then let
@@ -1685,7 +1679,7 @@ fun CASES' diff ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, items0
                end
               else goalx
             val items' = ( map (apfst Binding.name_of) fixes,
-                           map (apfst simp_name o apsnd (map Thm.prop_of)) thms )
+                           map (apfst simp_fact_name' o apsnd (map Thm.prop_of)) thms )
             val report = get_reporter ()
             fun PRT _ T = case siblings
                             of [_] => cat_tree T (print_stack [HHF (st00, items00)])
@@ -1909,7 +1903,7 @@ fun HAVE'' _ _ _ (ctxt, []) = (ctxt, [])
 val HAVE' = HAVE'' (fn (ctxt,name,items,st,S,lem) =>
   let val lems = elim_conjs ctxt lem
       val ((name,lems), ctxt'') = Proof_Context.note_thms "" (name, [(lems,[])]) ctxt
-   in (ctxt'', HHF (st, cat_items ([], [(name, map Thm.prop_of lems)]) items) :: S)
+   in (ctxt'', HHF (st, cat_items ([], [(simp_fact_name ctxt'' name, map Thm.prop_of lems)]) items) :: S)
   end)
 
 val HAVE = OPR oo HAVE'
@@ -1935,7 +1929,7 @@ fun gen_HAVE' mkG shows (ctxt0, HHF (st,items) :: S) =
                         |> unflat (map snd shows)
                 val (lems, ctxt02) = Proof_Context.note_thmss "" (binds ~~ map (fn x => [(x, [])]) lems) ctxt0
                 val ctxt03 = Proof_Context.auto_bind_facts (maps (map Thm.prop_of o snd) lems) ctxt02
-                val items' = ([], map (apsnd (map Thm.prop_of)) lems)
+                val items' = ([], map (apfst (simp_fact_name ctxt02) o apsnd (map Thm.prop_of)) lems)
                 val (itemss, ctxt04) = fold_map extend_calc (maps snd lems) ctxt03
              in get_reporter () (New_Items items')
               ; (ctxt04, HHF (st, cat_items ([], flat itemss) (cat_items items' items)) :: S)
@@ -1949,7 +1943,7 @@ fun gen_HAVE' mkG shows (ctxt0, HHF (st,items) :: S) =
                   |> map (Skip_Proof.make_thm thy01)
                   |> unflat (map snd shows)
           val (fakes, _) = Proof_Context.note_thmss "" (binds ~~ map (fn x => [(x, [])]) preruns) ctxt0
-          val items' = ([], map (apsnd (map Thm.prop_of)) fakes)
+          val items' = ([], map (apfst (simp_fact_name ctxt0) o apsnd (map Thm.prop_of)) fakes)
 
           fun PRT _ t = BUNDL (items, [BLOCK t, print_stack [HHF (st, items')]])
        in (ctxt01, HHF (goal, ([],[])) :: ENDBLK T_END :: MAGIC (CB, PRT, NO_PARAM) :: S)
@@ -2159,7 +2153,7 @@ fun CONSIDER'i raw_dnf (ctxt0, HHF (st0, items0) :: S) =
                 val lems'' = binders ~~ map (map (fn X => ([X],[]))) (unflat raw_props lems')
                 val (new_facts, ctxt'3) = Proof_Context.note_thmss "" lems'' ctxt''
                 val items_delt = (map (apsnd Term.fastype_of o snd) decls,
-                                  map (apsnd (map Thm.prop_of)) new_facts)
+                                  map (apfst (simp_fact_name ctxt'3) o apsnd (map Thm.prop_of)) new_facts)
                 val items'3 = items_delt
                            |> null remain_clauses ? (fn X => cat_items X items0)
              in get_reporter () (New_Items items_delt)
@@ -2530,7 +2524,7 @@ fun pretty_top_state ctxt tree =
       val prt_term= Syntax.pretty_term ctxt o (atom_goals ? Object_Logic.atomize_term ctxt)
       fun prt_bundle (vars, facts, term) =
         let val prems = Logic.strip_imp_prems term
-            val name = str o simp_name
+            val name = str o simp_fact_name'
             val tails =
                  (if null vars   then [] else [keyword1 "fixed variables"])
                 @ map (fn (N,T) => item [str N, brk 1, str "::", brk 1, prt_typ  T]) vars
@@ -2565,7 +2559,7 @@ fun pretty_tree0 _ (BUNDL (_,[])) =
         then strip_prems_universal_vars ctxt
         else fn tm => (ctxt, ([],[]), tm)
 
-      val name = str o simp_name
+      val name = str o simp_fact_name'
       fun pretty_items (vars0, facts0) =
         let val facts = filter_out (exists (contains_outdated_fixes ctxt) o snd) facts0
             val vars  = filter_out (fixes_is_outdated ctxt o fst) vars0
@@ -2752,7 +2746,7 @@ fun OPEN_MODULE' interp expr (lthy, HHF (st, items) :: SK) =
             val facts = Proof_Context.facts_of ctxt'';
             val local_facts =
               Facts.dest_static false [Proof_Context.facts_of lthy] facts
-                |> map (apsnd (map Thm.prop_of))
+                |> map (apfst (simp_fact_name ctxt'') o apsnd (map Thm.prop_of))
             val local_facts = if length local_facts > 16 then [] else local_facts
                   (*Trim off facts if too many*)
             val items' = ([],local_facts)

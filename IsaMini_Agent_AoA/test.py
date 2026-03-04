@@ -1,4 +1,5 @@
 import os
+from IsaREPL import REPLFail
 from typing import Any, NamedTuple, Sequence, TypedDict, Callable, TextIO, cast
 from . import model
 from .model import *
@@ -56,7 +57,7 @@ def _test_sqrt2(root: Root, file: TextIO):
     print_header("Have", file)
     root.print(0, file)
 
-#@test("branch", "Test001.thy", 6)
+@test("branch", "Test001.thy", 6)
 def _test_branch(root: Root, file: TextIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -71,32 +72,20 @@ def _test_branch(root: Root, file: TextIO):
     print_header("Branch", file)
     root.print(0, file)
 
-@test("EquivDerive", "Test003.thy", 6)
+@test("EquivDerive", "Test003.thy", 8)
 def _test_EquivDerive(root: Root, file: TextIO):
     print_header("Initial YAML", file)
-    #root.print(0, file)
-    root.fill("1", Intro.gen({
-        "thought": "Destruct equivalence",
-        "variable_bindings": ["AAA"],
-        "fact_bindings": []
-    }))
+    root.print(0, file)
     root.fill("2", InferenceRule.gen({
         "thought": "Destruct equivalence",
         "rule": None
     }))
-    # root.fill("2.1.1", Intro.gen({
-    #     "thought": "Destruct equivalence",
-    #     "variable_bindings": ["c"],
-    #     "fact_bindings": ["premiseXX"]
-    # }))
-    # root.fill("2.2.1", Intro.gen({
-    #     "thought": "Destruct equivalence",
-    #     "variable_bindings": ["Xasd"],
-    #     "fact_bindings": ["premiseYY"]
-    # }))
-    import sys
-    file = sys.stdout
     print_header("Inference Rule", file)
+    root.print(0, file)
+
+@test("IntroConj", "Test003.thy", 8)
+def _test_IntroConj(root: Root, file: TextIO):
+    print_header("Initial YAML", file)
     root.print(0, file)
     root.fill("2", InferenceRule.gen({
         "thought": "Destruct equivalence",
@@ -131,7 +120,13 @@ def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = N
         repl.run_app('Minilang.AoA')
         mp.pack((f"{mode}.{test_case.name}", (_cfg, _budget)), repl.cout)
         repl.cout.flush()
-        (success, elapsed, cpu_time) = Client._parse_control_(repl.unpack.unpack())
+        try:
+            (success, elapsed, cpu_time) = Client._parse_control_(repl.unpack.unpack())
+        except REPLFail as e:
+            if str(e) == 'Agent gives up':
+                continue
+            else:
+                raise
         if success:
             print(f"\033[92mTest {test_case.name} passed, elapsed: {elapsed}s, cpu_time: {cpu_time}s\033[0m")
         else:

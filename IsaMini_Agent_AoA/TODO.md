@@ -1,25 +1,5 @@
---------------------------------------------------
-Initial YAML
---------------------------------------------------
-variables:
-  - Q: 'c ⇒ 'a ⇒ bool
-  - P: 'b ⇒ 'a ⇒ bool
-  - R: 'a ⇒ bool
-You could add global declarations here.
-goal: ∀a. R a ⟶ (∀b. P b a) = (∀c. Q c a)
-proof:
-  - step id: 1
-    operation: Intro
-    fixing variables:
-      - a: 'a
-    assuming premises:
-      - premise0: R a
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
-pending proof goal:
-  (∀b. P b a) = (∀c. Q c a)
---------------------------------------------------
-Inference Rule
---------------------------------------------------
+1.
+```
 variables:
   - Q: 'c ⇒ 'a ⇒ bool
   - P: 'b ⇒ 'a ⇒ bool
@@ -36,7 +16,7 @@ proof:
   - step id: 2
     thought: Destruct equivalence
     operation: Proof by inference rule
-    rule: default
+    rule: default # 这里最好能替换成具体所使用的 rule
     derived subgoals:
       - goal id: 2.1
         goal: (∀b. P b a) ⟶ (∀c. Q c a)
@@ -49,7 +29,7 @@ proof:
               - premise1: ∀b. P b a
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1.2` to provide the proof for the following goal.
         pending proof goal:
-          Q c a
+          goal: Q c a
       - goal id: 2.2
         goal: (∀c. Q c a) ⟶ (∀b. P b a)
         proof:
@@ -61,4 +41,6 @@ proof:
               - premise2: ∀c. Q c a
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.2.2` to provide the proof for the following goal.
         pending proof goal:
-          P b a
+          goal: P b a
+```
+

@@ -127,7 +127,8 @@ def print_goal(goal: Goal, indent: int, show_header: bool, file, suppressed: Con
     print_vars(goal.context.vars, indent, file, suppressed.vars)
     print_hyps(goal.context.hyps, indent, file, suppressed.hyps)
     print_indent(indent, file)
-    if goal.context.vars or goal.context.hyps:
+    if any(name not in suppressed.vars for name in goal.context.vars) or\
+        any(name not in suppressed.hyps for name in goal.context.hyps):
         file.write(f"goal: {goal.conclusion}\n")
     else:
         if show_header:
@@ -681,6 +682,7 @@ class Minilang_State:
 ### The Abstract Model
 
 type gen_node = Callable[[NodeConfig], 'Node']
+type may_gen_node = Callable[[NodeConfig], 'Node | None']
 type printer = Callable[[int, TextIO], int]
 
 class Warning(NamedTuple):
@@ -712,9 +714,10 @@ class Node:
             self.id : step = self.local_step
         self.status : EvaluationStatus = EVALUATION_NOT_YET
         self.warnings : list[Warning] = []
+        self._kind : str = "step"
     def _print_step_id(self, indent: int, file: TextIO) -> int:
         print_indent(indent, file)
-        file.write(f"- step id: {self.id}\n")
+        file.write(f"- {self._kind} id: {self.id}\n")
         return indent + 1
     def print(self, indent: int, file : TextIO) -> int:
         return self._print_step_id(indent, file)
@@ -745,7 +748,7 @@ class Node:
                         case _:
                             raise InternalError(f"Unknown warning type: {type(warning)}")
     def _print_thought(self, indent: int, file: TextIO) -> None:
-        lines = self.thought.strip().split("\n")
+        lines = self.thought.strip().splitlines()
         match lines:
             case []:
                 pass
@@ -797,7 +800,7 @@ class Node:
             if node.status.status == EvaluationStatus.Status.FAILURE:
                 raise CannotInsert_EvaluationFailed(self, node.status.reason)
             node.refresh_all_after_me()
-    def append(self, gen_node: gen_node) -> None:
+    def append(self, gen_node: may_gen_node) -> None:
         raise NotImplementedError("`append` must be implemented by subclass")
     def _locate_node(self, ids: Sequence[local_step], id: step, pos: int = 0) -> 'Node':
         if pos == len(ids):
@@ -869,6 +872,8 @@ class Node:
                 node.print(indent+1, file)
             return indent
         self.warnings.append(Warning(position, printer))
+    def _append_all_open_ends(self, gen_node: may_gen_node) -> None:
+        raise NotImplementedError("`_append_all_open_ends` must be implemented by subclass")
 
 
 
@@ -891,13 +896,16 @@ class Leaf(Node):
             self.status = EvaluationStatus.success(time() - now)
         except IsabelleError as err:
             self.status = EvaluationStatus.failure(time() - now, ''.join(err.errors))
-    def append(self, gen_node: gen_node) -> None:
+    def append(self, gen_node: may_gen_node) -> None:
         raise CannotAppend(self, "It is not a goal or a proof block")
+    def _append_all_open_ends(self, gen_node: may_gen_node) -> None:
+        raise InternalError("Don't know how to append all open ends of this node")
 
 
 # abstract base class
 class NonLeaf_Node(Node):
     _closed_by: Node | None # Some proof operation (e.g. Branch) may close a block, preventing all later appending to this block.
+    sub_nodes: list['Node']
 
     def __init__(self, config: NodeConfig, thought: str, sub_nodes: list['Node']):
         super().__init__(config, thought)
@@ -1108,6 +1116,8 @@ class StdBlock(NonLeaf_Node):
     def _ctxt_of_filling(self) -> Context:
         vars = self._all_fixed_vars_before_me({})
         hyps = self._all_fixed_facts_before_me({})
+        self._fixed_vars_at_me(vars)
+        self._fixed_facts_at_me(hyps)
         for child in self.sub_nodes:
             child._fixed_vars_after_me(vars)
             child._fixed_facts_after_me(hyps)
@@ -1180,24 +1190,28 @@ class StdBlock(NonLeaf_Node):
         buffer = StringIO()
         self.print(indent, buffer)
         return buffer.getvalue()
-    def append(self, gen_node: gen_node) -> None:
+    def append(self, gen_node: may_gen_node) -> None:
         if not self.opening():
             raise CannotAppend_BlockClosed(self, self._closed_by)
         local_step = self._local_step_of_next_proof_step()
         ml_state = self._state_before_ending_.clone(None)
         config = NodeConfig(local_step, ml_state, self)
         node = gen_node(config)
+        if node is None:
+            return None
         self.sub_nodes.append(node)
         node._refresh_me_alone(True)
         if node.status.status == EvaluationStatus.Status.FAILURE:
             raise CannotAppend(node, node.status.reason)
-        ml_state = node.resulting_state()
-        if ml_state.need_intro():
-            auto_intro = Intro(NodeConfig(local_step, ml_state, self), "", None)
-            self.sub_nodes.append(auto_intro)
-            auto_intro._refresh_me_alone(True)
-            if auto_intro.status.status == EvaluationStatus.Status.FAILURE:
-                raise InternalError("Failed to auto-introduce variables")
+        if self.opening():
+            def my_gen_node(config: NodeConfig) -> Node | None:
+                if config.ml_state.need_intro():
+                    return Intro(config, "", None)
+                else:
+                    return None
+            ml_state = node.resulting_state()
+            if ml_state.need_intro():
+                self.append(my_gen_node)
     def is_proof_finished(self) -> bool:
         return self._body_subnodes_succeeded and super().is_proof_finished()
 
@@ -1235,9 +1249,10 @@ class GoalNode(StdBlock):
         self.is_single_goal = is_single_goal
         self.show_goal = show_goal
         self._allow_multi_goal = True
+        self._kind = "goal"
         # self.goal_index = goal_index
     def goal(self) -> Goal:
-        ptree = self._state_after_beginning().prooftree
+        ptree = self.ml_state.prooftree
         if ptree is None:
             raise InternalError("The prooftree of the state is not initialized, meaning the node is not refreshed")
         return ptree.top_goal()
@@ -1261,6 +1276,7 @@ class GoalNode(StdBlock):
         else:
             return "Each of the following proof steps above is valid, but the goal doesn't trivially follow from these steps. Please provide more detailed proof steps."
     def _print_header(self, indent: int, file: TextIO):
+        self._print_thought(indent, file)
         if self.show_goal:
             print_goal(self.goal(), indent, True, file, self._ctxt_beofre_me())
     def _print_step_id(self, indent: int, file: TextIO) -> int:
@@ -1268,9 +1284,26 @@ class GoalNode(StdBlock):
             return indent
         else:
             return super()._print_step_id(indent, file)
+    def _refresh_me_alone(self, first_time: bool):
+        if first_time and not self.sub_nodes and self.ml_state.need_intro():
+            local_step = self._local_step_of_next_proof_step()
+            ml_state = self.ml_state.clone(None)
+            config = NodeConfig(local_step, ml_state, self)
+            intro = Intro(config, "", None)
+            self.sub_nodes.append(intro)
+        return super()._refresh_me_alone(first_time)
+    def _fixed_vars_at_me(self, ret: Vars) -> Vars:
+        goal = self.goal()
+        ret.update(goal.context.vars)
+        return ret
+    def _fixed_facts_at_me(self, ret: Hyps) -> Hyps:
+        goal = self.goal()
+        ret.update(goal.context.hyps)
+        return ret
 
 #abstract base class
 class SubgoalMaker(GoalContainer, StdBlock):
+    _initial_goal_index : int = 1
     def beginning_opr(self) -> Minilang_Operation:
         raise NotImplementedError("`beginning_opr` must be implemented by subclass")
     def has_ending_opr(self) -> bool:
@@ -1296,13 +1329,17 @@ class SubgoalMaker(GoalContainer, StdBlock):
                     self.sub_nodes = []
                     ml_state = s0.clone(None)
                     for i in range(len(goals)):
-                        self.sub_nodes.append(GoalNode(NodeConfig(str(i+1), ml_state, self), False, True))
+                        self.sub_nodes.append(GoalNode(NodeConfig(str(i+self._initial_goal_index), ml_state, self), False, True))
                         ml_state = ml_state.sorry(None, None)
             return (True, None)
         else:
             return (False, reason)
     def _id_of_openning_prf_to_fill(self) -> step | None:
         return None
+    def _append_all_open_ends(self, gen_node: may_gen_node) -> None:
+        for child in self.sub_nodes:
+            child.append(gen_node)
+         
 
 class SubgoalMaker_NoTailEnder(SubgoalMaker):
     def _child_has_ending_opr(self, child : Node) -> bool:
@@ -1652,6 +1689,7 @@ class Branch(SubgoalMaker_NoTailEnder):
     def __init__(self, config: NodeConfig, arg: Branch_ToolArg):
         super().__init__(config, arg["thought"], [])
         self.cases = arg["cases"]
+        self._initial_goal_index = 0
     @staticmethod
     def gen(arg : Branch_ToolArg) -> gen_node:
         def mk(config: NodeConfig) -> 'Branch':
@@ -1674,6 +1712,12 @@ class Branch(SubgoalMaker_NoTailEnder):
         return f"Subgoal {child.id} fails to be proven."
     def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
         raise InternalError("A Branch doesn't have an ending operation")
+    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> tuple[bool, failure_reason]:
+        (success, reason) = super()._refresh_the_beginning_opr(begin_opr, first_time)
+        if success:
+            if not self.sub_nodes[0].thought:
+                self.sub_nodes[0].thought = "We first show exhaustiveness of the case split"
+        return (success, reason)
     
 
 
