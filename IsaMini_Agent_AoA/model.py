@@ -1,6 +1,6 @@
 from time import time
 from .helper import split_id_into_segs, cat_segs_into_id, incr_id_major, incr_id_minor
-from typing import Any, Iterable, NamedTuple, Sequence, TypedDict, Callable, TextIO, cast
+from typing import Any, Iterable, NamedTuple, Sequence, TypedDict, Callable, TextIO, cast, Type
 from Isabelle_RPC_Host import Connection, IsabelleError
 from enum import Enum
 from IsaREPL import Client as IsaREPL
@@ -17,8 +17,6 @@ type local_step = str
 type Vars = dict[varname, typ]
 type Hyps = dict[varname, term]
 type FactRef = str # i.e., the (full) name
-
-GLOBAL_LOGGER : logging.Logger | None = None
 
 class Explicit_Var(TypedDict):
     name: varname
@@ -84,18 +82,14 @@ def print_indent(indent: int, file):
     for _ in range(indent):
         file.write("  ")
 
-def print_multiline_kv(indent: int, file: TextIO, key: str, val: str):
-    lines = val.strip().split("\n")
+def print_paragraph(indent: int, file: TextIO, para: str):
+    lines = para.strip().split("\n")
     match lines:
         case [line]:
-            print_indent(indent, file)
-            file.write(key)
-            file.write(": ")
+            file.write(" ")
             file.write(f"{line}\n")
         case lines:
-            print_indent(indent, file)
-            file.write(key)
-            file.write(": |\n")
+            file.write(" |\n")
             for line in lines:
                 print_indent(indent+1, file)
                 file.write(line)
@@ -150,27 +144,9 @@ type failure_reason = str | None
         # None means internal error
         # "" means to suppress the error message printing
 
-def print_failure_reason(indent: int, file: TextIO, reason: failure_reason):
-    if reason is None:
-        raise InternalError("A failure reason is not provided")
-    lines = reason.strip().split("\n")
-    match lines:
-        case []:
-            pass
-        case [line]:
-            print_indent(indent, file)
-            file.write("Error: ")
-            file.write(f"{line}\n")
-        case lines:
-            print_indent(indent, file)
-            file.write("Error: |\n")
-            for line in lines:
-                print_indent(indent+1, file)
-                file.write(line)
-                file.write("\n")
-
-
-class OprError(Exception):
+class AoA_Error(Exception):
+    pass
+class OprError(AoA_Error):
     pass
 
 class CannotInsert(OprError):
@@ -238,6 +214,7 @@ class CannotRename_VariableNotFound(CannotRename_NotFound):
 class CannotRename_FactNotFound(CannotRename_NotFound):
     def __str__(self) -> str:
         return f"Cannot rename. The fact {self.old_name} is not found"
+
 
 class EvaluationStatus(NamedTuple):
     class Status(Enum):
@@ -591,7 +568,7 @@ class Minilang_State:
         return f"Minilang_State({self.name})"
     def __repr__(self) -> str:
         return self.__str__()
-    state_counter = 0
+    state_counter : int = 0
     @classmethod
     def assign_name(cls) -> str:
         cls.state_counter += 1
@@ -607,23 +584,20 @@ class Minilang_State:
         if isinstance(opr, Minilang_Operation):
             dest_name = assign_to.name
             self.connection.write((1, (self.name, dest_name, (opr.command, opr.arg))))
-            if GLOBAL_LOGGER is not None:
-                GLOBAL_LOGGER.debug(
-                    "Minilang_State.execute(from=%s, to=%s, command=%s)",
-                    self.name,
-                    dest_name,
-                    opr,
-                )
+            the_session().debug_info(
+                "Minilang_State.execute(from=%s, to=%s, command=%s)",
+                self.name,
+                dest_name,
+                opr,
+            )
             try:
                 (msgs, tree) = self.connection.read()
-                if GLOBAL_LOGGER is not None:
-                    GLOBAL_LOGGER.debug("Minilang_State.execute: success")
+                the_session().debug_info("Minilang_State.execute: success")
             except IsabelleError as err:
-                if GLOBAL_LOGGER is not None:
-                    GLOBAL_LOGGER.debug(
-                        "Minilang_State.execute: Error! %s",
-                        err,
-                    )
+                the_session().debug_info(
+                    "Minilang_State.execute: Error! %s",
+                    err,
+                )
                 if err.errors == ["beginning_state_not_found"]:
                     raise InternalError("The beginning state of the execution is not initialized!")
                 raise
@@ -715,20 +689,58 @@ class Node:
         self.status : EvaluationStatus = EVALUATION_NOT_YET
         self.warnings : list[Warning] = []
         self._kind : str = "step"
+        self.age = the_session().age
     def _print_step_id(self, indent: int, file: TextIO) -> int:
         print_indent(indent, file)
         file.write(f"- {self._kind} id: {self.id}\n")
         return indent + 1
     def print(self, indent: int, file : TextIO) -> int:
         return self._print_step_id(indent, file)
-    def _print_warnings(self, indent: int, file: TextIO, positions: list[Warning.Position]) -> None:
+    def display_operation(self) -> str:
+        return type(self).__name__
+    def quickview_header(self, indent: int, file: TextIO) -> int:
+        print_indent(indent, file)
+        file.write(f"- {self._kind} {self.id}: {self.display_operation()}\n")
+        self._print_evaluation_status_quickview(indent+1, file)
+        return indent + 1
+    def quickview(self, indent: int, file: TextIO) -> int:
+        return self.quickview_header(indent, file)
+    def _print_evaluation_status(self, indent: int, file: TextIO) -> None:
+        match self.status.status:
+            case EvaluationStatus.Status.SUCCESS:
+                pass
+            case EvaluationStatus.Status.FAILURE:
+                print_indent(indent, file)
+                file.write("Error:")
+                reason = self.status.reason
+                if reason is None:
+                    raise InternalError("The reason cannot be None when the status is failure")
+                print_paragraph(indent, file, reason)
+            case EvaluationStatus.Status.CANCELLED:
+                print_indent(indent, file)
+                file.write("Error: the evaluation is cancelled due to failures in preceding nodes")
+    def _print_evaluation_status_quickview(self, indent: int, file: TextIO) -> None:
+        match self.status.status:
+            case EvaluationStatus.Status.SUCCESS:
+                pass
+            case EvaluationStatus.Status.FAILURE:
+                print_indent(indent, file)
+                file.write("evaluation failed")
+            case EvaluationStatus.Status.CANCELLED:
+                print_indent(indent, file)
+                file.write("evaluation cancelled")
+    def _print_warnings(self, indent: int, file: TextIO, positions: list[Warning.Position], show_at: bool = False) -> None:
         warnings = [warning for warning in self.warnings if warning.position in positions]
         match warnings:
             case []:
                 pass
             case _:
                 print_indent(indent, file)
-                file.write(f"notice:\n")
+                file.write("notice")
+                if show_at:
+                    file.write(" at ")
+                    file.write(self.id)
+                file.write(f":\n")
                 for warning in warnings:
                     match warning.printer:
                         case str():
@@ -747,6 +759,8 @@ class Node:
                             warning.printer(indent+1, file)
                         case _:
                             raise InternalError(f"Unknown warning type: {type(warning)}")
+    def _print_all_warnings(self, file: TextIO) -> None:
+        self._print_warnings(0, file, list(Warning.Position), show_at=True)
     def _print_thought(self, indent: int, file: TextIO) -> None:
         lines = self.thought.strip().splitlines()
         match lines:
@@ -800,7 +814,7 @@ class Node:
             if node.status.status == EvaluationStatus.Status.FAILURE:
                 raise CannotInsert_EvaluationFailed(self, node.status.reason)
             node.refresh_all_after_me()
-    def append(self, gen_node: may_gen_node) -> None:
+    def append(self, gen_node: may_gen_node) -> 'Node | None':
         raise NotImplementedError("`append` must be implemented by subclass")
     def _locate_node(self, ids: Sequence[local_step], id: step, pos: int = 0) -> 'Node':
         if pos == len(ids):
@@ -809,9 +823,10 @@ class Node:
     def locate_node(self, id: step) -> 'Node':
         parts = id.split('.')
         return self._locate_node(parts, id)
-    def is_proof_finished(self) -> bool:
-        return self.status.status == EvaluationStatus.Status.SUCCESS
-    def fill(self, id: step, gen_node: gen_node) -> None:
+    def unfinished_nodes(self, ret: set['Node']) -> None:
+        if self.status.status != EvaluationStatus.Status.SUCCESS:
+            ret.add(self)
+    def fill(self, id: step, gen_node: gen_node) -> 'Node':
         ids = id.split('.')
         node = self._locate_node(ids[:-1], id, 0)
         to_fill = node._id_of_openning_prf_to_fill()
@@ -819,7 +834,10 @@ class Node:
             raise CannotFill_NodeNotFound(id)
         if to_fill != id:
             raise CannotFill_BadNode(id)
-        node.append(gen_node)
+        ret = node.append(gen_node)
+        if ret is None:
+            raise InternalError("Don't know how to fill a node when the node's append method returns None")
+        return ret
     def _id_of_openning_prf_to_fill(self) -> step | None:
         return None
 
@@ -875,8 +893,6 @@ class Node:
     def _append_all_open_ends(self, gen_node: may_gen_node) -> None:
         raise NotImplementedError("`_append_all_open_ends` must be implemented by subclass")
 
-
-
 # abstract base class
 class Leaf(Node):
     def __init__(self, config: NodeConfig, thought: str):
@@ -896,11 +912,10 @@ class Leaf(Node):
             self.status = EvaluationStatus.success(time() - now)
         except IsabelleError as err:
             self.status = EvaluationStatus.failure(time() - now, ''.join(err.errors))
-    def append(self, gen_node: may_gen_node) -> None:
+    def append(self, gen_node: may_gen_node) -> 'Node | None':
         raise CannotAppend(self, "It is not a goal or a proof block")
     def _append_all_open_ends(self, gen_node: may_gen_node) -> None:
         raise InternalError("Don't know how to append all open ends of this node")
-
 
 # abstract base class
 class NonLeaf_Node(Node):
@@ -991,11 +1006,6 @@ class NonLeaf_Node(Node):
             if child.local_step == local_step:
                 return child._locate_node(ids, id, pos + 1)
         raise NodeNotFound(id)
-    def is_proof_finished(self) -> bool:
-        for child in self.sub_nodes:
-            if not child.is_proof_finished():
-                return False
-        return self.status.status == EvaluationStatus.Status.SUCCESS
     def _all_fixed_vars_before_a_child(self, child: Node, ret: Vars) -> Vars:
         self._all_fixed_vars_before_me(ret)
         self._fixed_vars_at_me(ret)
@@ -1014,6 +1024,21 @@ class NonLeaf_Node(Node):
             else:
                 c._fixed_facts_after_me(ret)
         raise InternalError("The target node is not my children")
+    def unfinished_nodes(self, ret: set['Node']) -> None:
+        super().unfinished_nodes(ret)
+        for child in self.sub_nodes:
+            child.unfinished_nodes(ret)
+    def _print_all_warnings(self, file: TextIO) -> None:
+        self._print_warnings(0, file, [Warning.Position.HEADER], show_at=True)
+        for child in self.sub_nodes:
+            child._print_all_warnings(file)
+        self._print_warnings(0, file, [Warning.Position.FOOTER], show_at=True)
+    def quickview(self, indent: int, file: TextIO) -> int:
+        indent = super().quickview(indent, file)
+        for child in self.sub_nodes:
+            child.quickview(indent, file)
+        return indent
+
 
 
 # abstract base class
@@ -1148,6 +1173,19 @@ class StdBlock(NonLeaf_Node):
                         else:
                             raise InternalError("The open goals of StdBlock should not exceed one. "
                             "To express multiple goals, you should use a StdBlock whose children are GoalNodes. See Rule as an example.")
+    def is_proof_finished(self) -> bool:
+        unfinished_nodes = set()
+        self.unfinished_nodes(unfinished_nodes)
+        return len(unfinished_nodes) == 0
+    def unfinished_nodes(self, ret: set['Node']) -> None:
+        super().unfinished_nodes(ret)
+        if self.opening():
+            ptree = self._state_before_ending_.prooftree
+            if ptree is None:
+                raise InternalError("The state before ending is not initialized, meaning the node is not refreshed, "
+                "meaning the convention that all nodes should be freshed is broken.")
+            if ptree.top_goals():
+                ret.add(self)
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         return ("proof", indent+1)
     def _local_step_of_next_proof_step(self) -> local_step:
@@ -1166,9 +1204,6 @@ class StdBlock(NonLeaf_Node):
     def print(self, indent: int, file: TextIO):
         indent = super().print(indent, file)
         self._print_header(indent, file)
-        status = self.status
-        if status.status == EvaluationStatus.Status.FAILURE:
-            print_failure_reason(indent, file, status.reason)
         title, child_indent = self._title_of_children(indent)
         if title is None:
             for step in self.sub_nodes:
@@ -1183,14 +1218,29 @@ class StdBlock(NonLeaf_Node):
             else:
                 print_indent(indent, file)
                 file.write(title)
-                file.write(": empty!\n")
+                file.write(": empty\n")
         self._print_footer(indent, file)
+        return indent
+    def quickview(self, indent: int, file: TextIO) -> int:
+        indent = super().quickview(indent, file)
+        if self.opening():
+            ptree = self._state_before_ending_.prooftree
+            if ptree is None:
+                raise InternalError("The state before ending is not initialized, meaning the node is not refreshed, "
+                "meaning the convention that all nodes should be freshed is broken.")
+            if ptree.top_goals() and self._id_of_openning_prf_to_fill() is not None:
+                print_indent(indent, file)
+                file.write("Error: Unfinished Proof\n")
         return indent
     def print_string(self, indent: int) -> str:
         buffer = StringIO()
         self.print(indent, buffer)
         return buffer.getvalue()
-    def append(self, gen_node: may_gen_node) -> None:
+    def quickview_string(self, indent: int) -> str:
+        buffer = StringIO()
+        self.quickview(indent, buffer)
+        return buffer.getvalue()
+    def append(self, gen_node: may_gen_node) -> 'Node | None':
         if not self.opening():
             raise CannotAppend_BlockClosed(self, self._closed_by)
         local_step = self._local_step_of_next_proof_step()
@@ -1212,8 +1262,7 @@ class StdBlock(NonLeaf_Node):
             ml_state = node.resulting_state()
             if ml_state.need_intro():
                 self.append(my_gen_node)
-    def is_proof_finished(self) -> bool:
-        return self._body_subnodes_succeeded and super().is_proof_finished()
+        return node
 
 
 #abstract base class
@@ -1279,6 +1328,8 @@ class GoalNode(StdBlock):
         self._print_thought(indent, file)
         if self.show_goal:
             print_goal(self.goal(), indent, True, file, self._ctxt_beofre_me())
+        self._print_evaluation_status(indent, file)
+        self._print_warnings(indent, file, [Warning.Position.HEADER])
     def _print_step_id(self, indent: int, file: TextIO) -> int:
         if self.is_single_goal:
             return indent
@@ -1300,10 +1351,19 @@ class GoalNode(StdBlock):
         goal = self.goal()
         ret.update(goal.context.hyps)
         return ret
+    def quickview_header(self, indent: int, file: TextIO) -> int:
+        if self.is_single_goal:
+            return indent
+        else:
+            print_indent(indent, file)
+            file.write(f"- {self._kind} {self.id}\n")
+            return indent + 1
 
 #abstract base class
 class SubgoalMaker(GoalContainer, StdBlock):
-    _initial_goal_index : int = 1
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._initial_goal_index : int = 1
     def beginning_opr(self) -> Minilang_Operation:
         raise NotImplementedError("`beginning_opr` must be implemented by subclass")
     def has_ending_opr(self) -> bool:
@@ -1364,6 +1424,25 @@ class SubgoalMaker_NoTailEnder(SubgoalMaker):
 
 #### Arguments of Concrete Operations
 
+### Operation registry for tool calls
+
+class OperationMeta(NamedTuple):
+    toolarg_typed_dict: type[Any]
+    gen_func: Callable[[Any], gen_node]
+
+OPERATION_REGISTRY: dict[str, OperationMeta] = {}
+
+def proof_operation(operation: str, toolarg_typed_dict: type[Any]):
+    """
+    Class decorator to register a tool operation and its ToolArg TypedDict.
+    The operation name is given explicitly by `operation`, and the class must
+    define a staticmethod `gen(arg: ToolArg) -> gen_node`.
+    """
+    def decorator(cls: type[Any]):
+        OPERATION_REGISTRY[operation] = OperationMeta(toolarg_typed_dict, cls.gen)  # type: ignore[attr-defined]
+        return cls
+    return decorator
+
 class Statement(TypedDict):
     english: str
     isabelle: str
@@ -1380,6 +1459,7 @@ class Obvious_ToolArg(TypedDict):
     thought: str
     facts: list[Fact]
 
+@proof_operation("Obvious", Obvious_ToolArg)
 class Obvious(Leaf):
     def __init__(self, config: NodeConfig, arg : Obvious_ToolArg):
         super().__init__(config, arg["thought"])
@@ -1403,7 +1483,8 @@ class Obvious(Leaf):
             file.write(f"with facts:\n")
             for fact in self.facts:
                 fact.print(indent+1, file)
-        self._print_warnings(indent, file, [Warning.Position.HEADER])
+        self._print_evaluation_status(indent, file)
+        self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
         return indent
     def the_operation(self) -> Minilang_Operation:
         return Minilang_Operation.HAMMER(self.fact_refs)
@@ -1416,6 +1497,8 @@ class Obvious(Leaf):
 class Have_ToolArg(TypedDict):
     thought: str
     statement: Statement
+
+@proof_operation("Have", Have_ToolArg)
 class Have(StdBlock):
     def __init__(self, config: NodeConfig, arg : Have_ToolArg):
         super().__init__(config, arg["thought"], [])
@@ -1435,6 +1518,7 @@ class Have(StdBlock):
         file.write(f"english: {self.statement['english']}\n")
         print_indent(indent+1, file)
         file.write(f"isabelle: {self.statement['isabelle']}\n")
+        self._print_evaluation_status(indent, file)
         self._print_warnings(indent, file, [Warning.Position.HEADER])
     def beginning_opr(self) -> Minilang_Operation | None:
         return Minilang_Operation.HAVE(self.statement['isabelle'])
@@ -1455,6 +1539,7 @@ class Obtain_ToolArg(TypedDict):
     variables: list[Explicit_Var]
     constraints: list[Statement]
 
+@proof_operation("Obtain", Obtain_ToolArg)
 class Obtain(StdBlock):
     def __init__(self, config: NodeConfig, arg : Obtain_ToolArg):
         super().__init__(config, arg["thought"], [])
@@ -1495,6 +1580,7 @@ class Obtain(StdBlock):
                     file.write(f"- english: {constraint['english']}\n")
                     print_indent(indent+1, file)
                     file.write(f"  isabelle: {constraint['isabelle']}\n")
+        self._print_evaluation_status(indent, file)
         self._print_warnings(indent, file, [Warning.Position.HEADER])
     def beginning_opr(self) -> Minilang_Operation | None:
         return Minilang_Operation.OBTAIN(self.variables, [c["isabelle"] for c in self.constraints])
@@ -1515,6 +1601,7 @@ class Intro_ToolArg(TypedDict):
     variable_bindings: list[varname]
     fact_bindings: list[varname]
 
+@proof_operation("Intro", Intro_ToolArg)
 class Intro(SubgoalMaker_NoTailEnder):
     def __init__(self, config: NodeConfig, thought: str, bindings: Bindings | None):
         super().__init__(config, thought, [])
@@ -1533,6 +1620,7 @@ class Intro(SubgoalMaker_NoTailEnder):
         if self.bindings is not None:
             print_var_bindings(self.bindings[0], indent, file, "fixing variables")
             print_fact_bindings(self.bindings[1], indent, file, "assuming premises")
+        self._print_evaluation_status(indent, file)
         self._print_warnings(indent, file, [Warning.Position.HEADER])
     def beginning_opr(self) -> Minilang_Operation:
         return Minilang_Operation.INTRO(self.bindings)
@@ -1635,6 +1723,7 @@ class InferenceRule_ToolArg(TypedDict):
     rule: Fact | None
     # TODO: write some skills telling the agent how to associate common operations (e.g., proof by contradiction, proof by cases, etc.) with the inference rules
 
+@proof_operation("InferenceRule", InferenceRule_ToolArg)
 class InferenceRule(SubgoalMaker_NoTailEnder):
     def __init__(self, config: NodeConfig, arg : InferenceRule_ToolArg):
         super().__init__(config, arg["thought"], [])
@@ -1646,12 +1735,15 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
         def mk(config: NodeConfig) -> 'InferenceRule':
             return InferenceRule(config, arg)
         return mk
+    def display_operation(self) -> str:
+        return "Inference Rule"
     def _print_header(self, indent: int, file: TextIO):
         self._print_thought(indent, file)
         print_indent(indent, file)
-        file.write("operation: Proof by inference rule\n")
+        file.write("operation: Inference Rule\n")
         print_indent(indent, file)
         file.write(f"rule: {self.rule_ref if self.rule_ref is not None else 'default'}\n")
+        self._print_evaluation_status(indent, file)
         self._print_warnings(indent, file, [Warning.Position.HEADER])
         if len(self.sub_nodes) <= 1:
             s0 = self._state_after_beginning()
@@ -1685,6 +1777,7 @@ class Branch_ToolArg(TypedDict):
     thought: str
     cases: list[Statement]
 
+@proof_operation("Branch", Branch_ToolArg)
 class Branch(SubgoalMaker_NoTailEnder):
     def __init__(self, config: NodeConfig, arg: Branch_ToolArg):
         super().__init__(config, arg["thought"], [])
@@ -1698,9 +1791,10 @@ class Branch(SubgoalMaker_NoTailEnder):
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         return ('cases', indent+1)
     def _print_header(self, indent: int, file: TextIO):
+        self._print_thought(indent, file)
         print_indent(indent, file)
         file.write("operation: Branch\n")
-        self._print_thought(indent, file)
+        self._print_evaluation_status(indent, file)
         self._print_warnings(indent, file, [Warning.Position.HEADER])
     def beginning_opr(self) -> Minilang_Operation:
         return Minilang_Operation.BRANCH([case['isabelle'] for case in self.cases])
@@ -1718,7 +1812,6 @@ class Branch(SubgoalMaker_NoTailEnder):
             if not self.sub_nodes[0].thought:
                 self.sub_nodes[0].thought = "We first show exhaustiveness of the case split"
         return (success, reason)
-    
 
 
 ### Top Root
@@ -1728,6 +1821,7 @@ class GlobalEnv(StdBlock):
         if not isinstance(config.parent, Root):
             raise InternalError("The parent of a GlobalEnv must be a Root")
         super().__init__(config, "", [])
+        self.id="$global"
     def beginning_opr(self) -> None:
         return None
     def ending_opr(self) -> Minilang_Operation | None:
@@ -1750,7 +1844,7 @@ class GlobalEnv(StdBlock):
         return None
     def _print_footer(self, indent: int, file: TextIO) -> None:
         print_indent(indent, file)
-        file.write("You could add global declarations here.\n")
+        file.write(f"You could add global declarations by calling command `edit` with action `fill` and target step `{self.id}.{len(self.sub_nodes)+1}`\n")
 
 class Root(GoalContainer, StdBlock):
     def __init__(self, context_and_ptree: tuple[Context, ML_ProofTree], connection: Connection):
@@ -1758,7 +1852,8 @@ class Root(GoalContainer, StdBlock):
         self.context = context
         ml_state0 = Minilang_State(connection, '$init', ptree)
         super().__init__(NodeConfig("$root", ml_state0, None), "", [])
-        self.sub_nodes.append(GlobalEnv(NodeConfig("global", ml_state0, self)))
+        self.global_env = GlobalEnv(NodeConfig("global", ml_state0, self))
+        self.sub_nodes.append(self.global_env)
         ml_state = ml_state0.skip(None)
         # Get number of goals from prooftree
         if ml_state.prooftree is None:
@@ -1795,19 +1890,38 @@ class Root(GoalContainer, StdBlock):
     def print(self, indent: int, file: TextIO) -> int:
         print_vars(self.context.vars, indent, file, {})
         print_hyps(self.context.hyps, indent, file, {})
+        self._print_evaluation_status(indent, file)
+        self._print_warnings(indent, file, [Warning.Position.HEADER])
+        self.sub_nodes[0].print(indent, file)
         match self.num_goals:
             case 1:
-                self.sub_nodes[0].print(indent, file)
                 self.sub_nodes[1].print(indent, file)
             case _:
-                self.sub_nodes[0].print(indent, file)
                 file.write("proof goals:\n")
                 for i in range(self.num_goals):
                     print_indent(indent+1, file)
                     file.write(f"- goal index: {i+1}\n")
                     self.sub_nodes[i+1].print(indent+2, file)
-        self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
+        self._print_warnings(indent, file, [Warning.Position.FOOTER])
         return indent
+    def quickview(self, indent: int, file: TextIO) -> int:
+        if self.global_env.sub_nodes:
+            self.global_env.quickview(indent, file)
+        match self.num_goals:
+            case 1:
+                if self.global_env.sub_nodes:
+                    file.write("proof:\n")
+                    self.sub_nodes[1].quickview(indent+1, file)
+                else:
+                    self.sub_nodes[1].quickview(indent, file)
+            case _:
+                file.write("goals:\n")
+                for i in range(self.num_goals):
+                    print_indent(indent+1, file)
+                    file.write(f"- goal index: {i+1}\n")
+                    self.sub_nodes[i+1].quickview(indent+2, file)
+        return indent
+
     def _locate_node(self, ids: Sequence[local_step], id: step, pos: int = 0) -> 'Node':
         if pos != 0:
             raise InternalError("pos should be 0 when locating a node in a Root")
@@ -1832,21 +1946,8 @@ class Root(GoalContainer, StdBlock):
     def _fixed_facts_at_me(self, ret: Hyps) -> Hyps:
         ret.update(self.context.hyps)
         return ret
-    # def _locate_node(self, ids: Sequence[local_step], id: step, pos: int = 0) -> 'Node':
-    #     local_step = ids[pos]
-    #     for child in self.sub_nodes:
-    #         if child.local_step == local_step:
-    #             return child._locate_node(ids, id, pos+1)
-    #     raise NodeNotFound(id)
-    # def _child_has_ending_opr(self, child : Node) -> bool:
-    #     return False
-    # def _ending_opr_of_child(self, child : Node) -> Minilang_Operation | None:
-    #     return None
 
-
-
-#class 
-
+# class Hierarchy
 
 # Root
 #  0: GlobalEnv
@@ -1861,3 +1962,95 @@ class Root(GoalContainer, StdBlock):
 #          1. GoalNode: P --> Q
 #             proofs...
 #          2. GoalNode: Q --> P
+
+### Gen Node
+type ToolCall_arg = dict[str, Any]
+class ArgumentError(AoA_Error):
+    def __init__(self, arg: ToolCall_arg, reason: str):
+        self.arg = arg
+        self.reason = reason
+    def __str__(self) -> str:
+        return f"Bad Argument\n{self.reason}"
+class ArgumentError_UnknownProofOperation(ArgumentError):
+    def __init__(self, arg: ToolCall_arg):
+        super().__init__(arg,
+            f"Unknown proof operation {arg["operation"]}. " +
+            f"Available operations: {list(OPERATION_REGISTRY.keys())}"
+        )
+
+class ArgumentError_MissingRequiredKeys(ArgumentError):
+    def __init__(self, arg: ToolCall_arg, operation: str, missing: list[str]):
+        joined = ", ".join(sorted(missing))
+        super().__init__(
+            arg,
+            f"Missing required field(s) for operation {operation}: {joined}",
+        )
+
+def _check_tool_arg_keys(toolarg_typed_dict: type, data: ToolCall_arg, operation: str) -> None:
+    """
+    Ensure that `data` contains all required keys defined by the TypedDict `toolarg_typed_dict`.
+    Raises ArgumentError if any required key is missing.
+    """
+    required_keys = getattr(
+        toolarg_typed_dict,
+        "__required_keys__",
+        set(getattr(toolarg_typed_dict, "__annotations__", {}).keys()),
+    )
+    missing = [k for k in required_keys if k not in data]
+    if missing:
+        raise ArgumentError_MissingRequiredKeys(data, operation, missing)
+
+def Parse_Node(data: ToolCall_arg) -> gen_node:
+    operation = data.get("operation")
+    if operation is None:
+        raise ArgumentError_MissingRequiredKeys(data, "<tool call>", ["operation"])
+    meta = OPERATION_REGISTRY.get(operation)
+    if meta is None:
+        raise ArgumentError_UnknownProofOperation(data)
+    toolarg_typed_dict, gen_func = meta
+    _check_tool_arg_keys(toolarg_typed_dict, data, operation)
+    return gen_func(cast(Any, data))
+
+## Session
+
+import threading, tempfile, os
+
+class LocalSession(threading.local):
+    session: 'Session'
+_local_store = LocalSession()
+
+def the_session() -> 'Session':
+    return _local_store.session
+
+# abstract base class for a session
+class Session:
+    root: Root
+    age: int
+    logger: logging.Logger | None
+
+    # class variables
+    Driver: dict[str, Type['Session']] = {}
+
+    def __init__(self, logger: logging.Logger | None = None):
+        if hasattr(_local_store, 'session'):
+            raise InternalError("The session has already been set in this thread.")
+        else:
+            _local_store.session = self
+        self.age = 0
+        self.logger = logger
+
+    def initialize(self, root: Root):
+        if hasattr(self, 'root'):
+            raise InternalError("The 'root' field has already been assigned.")
+        self.root = root
+    def debug_info(self, msg: str, *args, **kwargs):
+        if self.logger is not None:
+            self.logger.debug(msg, *args, **kwargs)
+    def run(self):
+        raise NotImplementedError("`run` must be implemented by subclass")
+
+def agent_driver(name : str):
+    def decorator(cls : Type[Session]) -> Type[Session]:
+        Session.Driver[name] = cls
+        return cls
+    return decorator

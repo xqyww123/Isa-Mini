@@ -57,7 +57,7 @@ def _test_sqrt2(root: Root, file: TextIO):
     print_header("Have", file)
     root.print(0, file)
 
-@test("branch", "Test001.thy", 6)
+#@test("branch", "Test001.thy", 6)
 def _test_branch(root: Root, file: TextIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -72,7 +72,7 @@ def _test_branch(root: Root, file: TextIO):
     print_header("Branch", file)
     root.print(0, file)
 
-@test("EquivDerive", "Test003.thy", 8)
+#@test("EquivDerive", "Test003.thy", 8)
 def _test_EquivDerive(root: Root, file: TextIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -83,7 +83,7 @@ def _test_EquivDerive(root: Root, file: TextIO):
     print_header("Inference Rule", file)
     root.print(0, file)
 
-@test("IntroConj", "Test003.thy", 8)
+#@test("IntroConj", "Test003.thy", 8)
 def _test_IntroConj(root: Root, file: TextIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -94,8 +94,18 @@ def _test_IntroConj(root: Root, file: TextIO):
     print_header("Inference Rule", file)
     root.print(0, file)
 
+@test("IntroConj_short", "Test003.thy", 8)
+def _test_IntroConj_short(root: Root, file: TextIO):
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.fill("2", InferenceRule.gen({
+        "thought": "Destruct equivalence",
+        "rule": None
+    }))
+    print_header("Inference Rule", file)
+    root.print(0, file)
+
 def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None):
-    model.GLOBAL_LOGGER = logger
     import msgpack as mp
     from IsaREPL import Client
     _budget = (

@@ -52,18 +52,18 @@
         "isabelle_expression": {
           "description": "Isabelle/HOL expression of the fact",
           "type": "string"
-        },
-        "for_any": {
-          "default": [],
-          "description": "variables that the fact is universally quantified over",
-          "items": {
-            "anyOf": [
-              { "$ref": "#/$defs/Variable" },
-              { "type": "string" }
-            ]
-          },
-          "type": "array"
         }
+        // "for_any": {
+        //   "default": [],
+        //   "description": "variables that the fact is universally quantified over",
+        //   "items": {
+        //     "anyOf": [
+        //       { "$ref": "#/$defs/Variable" },
+        //       { "type": "string" }
+        //     ]
+        //   },
+        //   "type": "array"
+        // }
       },
       "required": [
         "english",
@@ -123,11 +123,11 @@
                 "to": {
                   "type": "string",
                   "description": "upper bound. Omit if no bound (positive infinity)"
-                },
-                "required": [
-                  "rule"
-                ]
-              }
+                }
+              },
+              "required": [
+                "rule"
+              ]
             },
             {
               "type": "object",
@@ -144,11 +144,11 @@
                 "to": {
                   "type": "string",
                   "description": "lower bound. Omit if no bound (negative infinity)"
-                },
-                "required": [
-                  "rule"
-                ]
-              }
+                }
+              },
+              "required": [
+                "rule"
+              ]
             },
             {
               "type": "string",
@@ -413,17 +413,12 @@
       "type": "string",
       "description": "id of the target step"
     },
-    "title": {
-      "type": "string",
-      "description": "title of the proof operation"
-    },
-    "proof_operation": { "$ref": "#/$defs/Operation" },
-    "required": [
-      "action",
-      "target_step",
-      "title",
-      "proof_operation"
-    ],
-    "additionalProperties": false
-  }
+    "proof_operation": { "$ref": "#/$defs/Operation" }
+  },
+  "required": [
+    "action",
+    "target_step",
+    "proof_operation"
+  ],
+  "additionalProperties": false
 }
