@@ -142,10 +142,13 @@ def _test_Induction(root: Root, file: MyIO):
     root.print(0, file)
     root.fill("1.Cons.1", Obvious.gen({
         "thought": "Obviously the statement holds.",
-        "facts": ["Cons.IH"]
+        "facts": [{"refer_by": "name", "name": "Cons.IH"}]
     }))
     print_header("Obvious", file)
     root.print(0, file)
+    unfinished_nodes = set()
+    root.unfinished_nodes(unfinished_nodes)
+    file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
 
 def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None):
     import msgpack as mp

@@ -24,16 +24,33 @@ class Explicit_Var(TypedDict):
     name: varname
     type: str | None
 
-class Fact(NamedTuple):
+class FactByExpr(TypedDict):
+    refer_by: Literal["expr"]
     english: str
     isabelle_expression: term
     for_any: list[Explicit_Var]
 
-    def print(self, indent: int, file: MyIO):
-        print_indent(indent, file)
-        file.write(f"- english: {self.english}\n")
-        print_indent(indent, file)
-        file.write(f"  isabelle: {self.isabelle_expression}\n")
+def print_fact_by_expr(fact: FactByExpr, indent: int, file: MyIO):
+    print_indent(indent, file)
+    file.write(f"- english: {fact["english"]}\n")
+    print_indent(indent, file)
+    file.write(f"  isabelle: {fact["isabelle_expression"]}\n")
+
+class FactByName(TypedDict):
+    refer_by: Literal["name"]
+    name: str
+
+def print_fact_by_name(fact: FactByName, indent: int, file: MyIO):
+    print_indent(indent, file)
+    file.write(f"- {fact["name"]}\n")
+
+type Fact = FactByExpr | FactByName
+
+def print_fact(fact: Fact, indent: int, file: MyIO):
+    if fact["refer_by"] == "name":
+        print_fact_by_name(cast(FactByName, fact), indent, file)
+    else:
+        print_fact_by_expr(cast(FactByExpr, fact), indent, file)
 
 
 class Context(NamedTuple):
@@ -202,10 +219,17 @@ class CannotAppend_BlockClosed(CannotAppend):
         super().__init__(target, msg)
 
 class FactNotFound(OprError):
+    pass
+class FactNotFound_BySearch(FactNotFound):
     def __init__(self, criterions: list[list['Search_Criterion']]):
         self.criterions = criterions
     def __str__(self) -> str:
         return f"No fact found for the following criteria: {self.criterions}"
+class FactNotFound_ByName(FactNotFound):
+    def __init__(self, name: str):
+        self.name = name
+    def __str__(self) -> str:
+        return f"No fact found with name {self.name}"
 
 class InternalError(OprError):
     pass
@@ -700,13 +724,19 @@ class Minilang_State:
             case _:
                 raise NotImplementedError("Here we should list all the options and ask the LLM to choose which one does it mean")
     def fetch_rule_fact(self, rule: Fact) -> FactRef:
-        rule_ref = self.search_fact([
-            [ Criterion_Intro(True)
-            , Criterion_XPattern(True, rule.isabelle_expression, rule.for_any)],
-            [ Criterion_Elim(True)
-            , Criterion_XPattern(True, rule.isabelle_expression, rule.for_any)]
-        ])
-        return rule_ref
+        if rule["refer_by"] == "expr":
+            rule_ref = self.search_fact([
+                [ Criterion_Intro(True)
+                , Criterion_XPattern(True, rule["isabelle_expression"], rule["for_any"])],
+                [ Criterion_Elim(True)
+                , Criterion_XPattern(True, rule["isabelle_expression"], rule["for_any"])]
+            ])
+            return rule_ref
+        else:
+            rule_ref = self.retrieve_fact(rule["name"])
+            if rule_ref is None:
+                raise FactNotFound_ByName(rule["name"])
+            return rule_ref
     def compute_bindings(self, var_names: list[str], fact_names: list[str]) -> Bindings:
         """
         Compute bindings for the leading proof goal by binding provided names in order.
@@ -723,6 +753,15 @@ class Minilang_State:
         Returns True if the goal has quantifiers or premises that need to be introduced.
         """
         self.connection.write((4, self.name))
+        result = self.connection.read()
+        return result
+    def retrieve_fact(self, name: str) -> str | None:
+        """
+        Retrieve the full name of a fact by its short name.
+        Uses Facts.intern to get the complete fact reference.
+        Returns the full name if the fact exists, None otherwise.
+        """
+        self.connection.write((5, (self.name, name)))
         result = self.connection.read()
         return result
 ### The Abstract Model
@@ -1532,6 +1571,8 @@ class SubgoalMaker(GoalContainer, StdBlock):
     def _append_all_open_ends(self, gen_node: may_gen_node) -> None:
         for child in self.sub_nodes:
             child.append(gen_node)
+    def opening(self) -> bool:
+        return False
          
 
 class SubgoalMaker_NoTailEnder(SubgoalMaker):
@@ -1667,10 +1708,7 @@ class Obvious(Leaf):
     def __init__(self, config: NodeConfig, arg : Obvious_ToolArg):
         super().__init__(config, arg["thought"])
         self.facts = arg["facts"]
-        self.fact_refs = [
-            self.ml_state.search_fact([
-                [Criterion_XPattern(True, fact.isabelle_expression, fact.for_any)]
-            ]) for fact in self.facts]
+        self.fact_refs = [self.ml_state.fetch_rule_fact(fact) for fact in self.facts]
     @staticmethod
     def gen(arg : Obvious_ToolArg) -> gen_node:
         def mk(config: NodeConfig) -> 'Obvious':
@@ -1685,7 +1723,7 @@ class Obvious(Leaf):
             print_indent(indent, file)
             file.write(f"with facts:\n")
             for fact in self.facts:
-                fact.print(indent+1, file)
+                print_fact(fact, indent+1, file)
         self._print_evaluation_status(indent, file)
         self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
         return indent
@@ -2196,6 +2234,9 @@ class GlobalEnv(StdBlock):
     def _print_footer(self, indent: int, file: MyIO) -> None:
         print_indent(indent, file)
         file.write(f"You could add global declarations by calling command `edit` with action `fill` and target step `{self.id}.{len(self.sub_nodes)+1}`\n")
+    def unfinished_nodes(self, ret: set['Node']) -> None:
+        for child in self.sub_nodes:
+            child.unfinished_nodes(ret)
 
 class Root(GoalContainer, StdBlock):
     def __init__(self, context_and_ptree: tuple[Context, ML_ProofTree], connection: Connection):

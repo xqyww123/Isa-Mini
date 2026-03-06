@@ -41,10 +41,27 @@
       ],
       "type": "object"
     },
-    "Fact": {
-      "title": "Fact",
+    "FactByName": {
+      "title": "FactByName",
       "additionalProperties": false,
       "properties": {
+        "refer_by": {
+          "type": "string",
+          "const": "name"
+        },
+        "name": { "type": "string" }
+      },
+      "required": [ "refer_by", "name" ],
+      "type": "object"
+    },
+    "FactByExpr": {
+      "title": "FactByExpr",
+      "additionalProperties": false,
+      "properties": {
+        "refer_by": {
+          "type": "string",
+          "const": "expr"
+        },
         "english": {
           "description": "natural language description of the fact",
           "type": "string"
@@ -66,8 +83,38 @@
         // }
       },
       "required": [
+        "refer_by",
         "english",
         "isabelle_expression"
+      ],
+      "type": "object"
+    },
+    "Fact": {
+      "anyOf": [
+        { "$ref": "#/$defs/FactByName" },
+        { "$ref": "#/$defs/FactByExpr" }
+      ]
+    },
+    "Obvious": {
+      "additionalProperties": false,
+      "title": "Obvious",
+      "description": "the goal holds trivially",
+      "properties": {
+        "operation": {
+          "const": "Obvious",
+          "type": "string"
+        },
+        "thought": {"$ref": "#/$defs/Thought" },
+        "facts": {
+          "description": "helpful facts for proving the goal",
+          "items": { "$ref": "#/$defs/Fact" },
+          "type": "array"
+        }
+      },
+      "required": [
+        "operation",
+        "thought",
+        "facts"
       ],
       "type": "object"
     },
@@ -96,7 +143,7 @@
       "description": "Apply induction over the target Isabelle/HOL term",
       "properties": {
         "operation": {
-          "const": "induction",
+          "const": "Induction",
           "type": "string"
         },
         "thought": { "$ref": "#/$defs/Thought" },
@@ -358,6 +405,7 @@
     },
     "Operation": {
       "anyOf": [
+        { "$ref": "#/$defs/Obvious" }
         { "$ref": "#/$defs/Have" },
         { "$ref": "#/$defs/Obtain" },
         { "$ref": "#/$defs/Branch" },

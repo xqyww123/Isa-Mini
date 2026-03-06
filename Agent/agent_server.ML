@@ -12,6 +12,7 @@ type states = Minilang.state Symtab.table
 datatype acmd = Proof_Opr of {from: state_id, to: state_id, opr: MiniLang_Agent.xcmd}
               | Lookup_Fact of { state: state_id
                                , criterions: (bool * string Find_Theorems.criterion) list list}
+              | Retrieve_Fact of { state: state_id, name: xstring }
               | Compute_Bindings of {state: state_id, var_names: string list, fact_names: string list}
               | Need_Intro of {state: state_id}
               | Exit
@@ -39,6 +40,7 @@ type cfg = MiniLang_Agent.cfg * MiniLang_Agent.budget
 datatype acmd = Proof_Opr of {from: state_id, to: state_id, opr: MiniLang_Agent.xcmd}
               | Lookup_Fact of { state: state_id
                                , criterions: (bool * string Find_Theorems.criterion) list list}
+              | Retrieve_Fact of { state: state_id, name: xstring }
               | Compute_Bindings of {state: state_id, var_names: string list, fact_names: string list}
               | Need_Intro of {state: state_id}
               | Exit
@@ -169,6 +171,8 @@ val acmd_unpacker =
             Compute_Bindings {state=state, var_names=var_names, fact_names=fact_names})
      | 4 => unpackString
          #> apfst (fn state => Need_Intro {state=state})
+     | 5 => unpackPair (unpackString, unpackString)
+         #> apfst (fn (state, name) => Retrieve_Fact {state=state, name=name})
      | _ => raise Unpack)
 
 fun acmd_packer (Proof_Opr {from, to, opr}) =
@@ -182,6 +186,8 @@ fun acmd_packer (Proof_Opr {from, to, opr}) =
                (3, (state, var_names, fact_names))
   | acmd_packer (Need_Intro {state}) =
       packPair (packInt, packString) (4, state)
+  | acmd_packer (Retrieve_Fact {state, name}) =
+      packPair (packInt, packPair (packString, packString)) (5, (state, name))
   | acmd_packer Exit =
       packPair (packInt, packUnit) (0, ())
 
@@ -294,6 +300,19 @@ fun callback (cfg:cfg) (states:states Unsynchronized.ref) (conn:connection) =
                  |> distinct (Thm.equiv_thm (Proof_Context.theory_of ctxt) o apply2 snd)
                 val SOT  = MiniLang_Agent.string_of_term ctxt
              in write conn (packList (packPair (pack_FactRef, packString o SOT o Thm.prop_of))) rets
+            end
+         | Retrieve_Fact {state, name} =>
+            let val s0 = case Symtab.lookup (!states) state
+                           of SOME s => s
+                            | NONE => raise ERR ["beginning_state_not_found"]
+                val ctxt = Minilang.context_of s0
+                val facts = Proof_Context.facts_of ctxt
+                val full_name = Facts.intern facts name
+                (* Check if the fact actually exists *)
+                val result = case Facts.lookup (Context.Proof ctxt) facts full_name
+                               of SOME _ => SOME full_name
+                                | NONE => NONE
+             in write conn (packOption packString) result
             end
          | Compute_Bindings {state, var_names, fact_names} => (
             let val s0 = case Symtab.lookup (!states) state
