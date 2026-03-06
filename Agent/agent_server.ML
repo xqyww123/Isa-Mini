@@ -208,8 +208,8 @@ fun minilang_message_packer ctxt =
      (* | pack (Minilang.Goals goals) =
             packPair (packInt, packOption (packList goal_packer))
                      (1, Option.map (map (goals_of_term [])) goals) *)
-        | pack (Minilang.Consider_Case kase) =
-            packPair (packInt, packString) (2, kase)
+        | pack (Minilang.Consider_Case (kase, items)) =
+            packPair (packInt, packPair (packString, minilang_items_packer)) (2, (kase, items))
         | pack (Minilang.Internal exn) =
             (case exn of
                MiniLang_Agent.INTRO_BINDINGS {missing, auto_introduced, final} =>

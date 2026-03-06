@@ -4,6 +4,7 @@ from .model import *
 from typing import Any
 from . import driver_claude_code
 import sys
+import io
 
 class TestFailed(Exception):
     pass
@@ -23,12 +24,10 @@ def IsaMini_AoA(data: tuple[Any, Any, str], connection: Connection):
         root = Root((global_context, ptree), connection)
         test_name = driver[len("test."):]
         from .test import TESTS
-        import io
-        import os
         if test_name in TESTS:
             buffer = io.StringIO()
             case = TESTS[test_name]
-            case.opr(root, buffer)
+            case.opr(root, MyIO(buffer))
             correct_yaml = case.expected_yaml()
             if correct_yaml != "":
                 if buffer.getvalue() != correct_yaml:

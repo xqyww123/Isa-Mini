@@ -22,13 +22,13 @@
       ],
       "type": "object"
     },
-    "CaseAnalysis": {
+    "CaseSplit": {
       "additionalProperties": false,
-      "title": "CaseAnalysis",
+      "title": "CaseSplit",
       "description": "Structural case analysis on the value of a target term",
       "properties": {
         "operation": {
-          "const": "CaseAnalysis",
+          "const": "CaseSplit",
           "type": "string"
         },
         "thought": { "$ref": "#/$defs/Thought" },
@@ -110,40 +110,19 @@
             },
             {
               "type": "object",
-              "description": "Induct increasingly from an optional lower bound to an optional upper bound",
+              "description": "perform ascending or descending induction from an optional start to an optional end",
               "properties": {
                 "rule": {
                   "type": "string",
-                  "const": "increase"
+                  "enum": [ "ascending", "descending" ]
                 },
-                "from": {
+                "start": {
                   "type": "string",
-                  "description": "lower bound. Omit if no bound (negative infinity)"
+                  "description": "lower bound if ascending, or upper bound if descending. Omit to indicate no bound (negative or positive infinity)"
                 },
-                "to": {
+                "end": {
                   "type": "string",
-                  "description": "upper bound. Omit if no bound (positive infinity)"
-                }
-              },
-              "required": [
-                "rule"
-              ]
-            },
-            {
-              "type": "object",
-              "description": "Induct decreasingly from an optional upper bound to an optional lower bound",
-              "properties": {
-                "rule": {
-                  "type": "string",
-                  "const": "decrease"
-                },
-                "from": {
-                  "type": "string",
-                  "description": "upper bound. Omit if no bound (positive infinity)"
-                },
-                "to": {
-                  "type": "string",
-                  "description": "lower bound. Omit if no bound (negative infinity)"
+                  "description": "upper bound if ascending, or lower bound if descending. Omit to indicate no bound (positive or negative infinity)"
                 }
               },
               "required": [
@@ -158,12 +137,12 @@
           "default": "default"
         },
         "variables": {
-          "description": "List all variables in the proof goal and indicate whether their values vary or are fixed throughout the induction",
+          "description": "for each variable in the context, indicate whether it is fixed or generalized (universally quantified) across the induction",
           "items": {
             "type": "object",
             "properties": {
               "name": { "type": "string" },
-              "varying": { "type": "boolean" }
+              "status": { "type": "string", "enum": [ "fixed", "generalized" ] }
             },
             "required": [ "name", "varying" ]
           },
@@ -382,7 +361,7 @@
         { "$ref": "#/$defs/Have" },
         { "$ref": "#/$defs/Obtain" },
         { "$ref": "#/$defs/Branch" },
-        { "$ref": "#/$defs/CaseAnalysis" },
+        { "$ref": "#/$defs/CaseSplit" },
         { "$ref": "#/$defs/Induction" },
         { "$ref": "#/$defs/Rewrite" },
         { "$ref": "#/$defs/Unfold" },

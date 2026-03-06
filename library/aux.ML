@@ -1,6 +1,8 @@
 signature MINILANG_AUX = sig
 include MINILANG_AUX
 
+val variant_name : string -> Name.context -> string * Name.context
+val variant_name_list : string list -> string list -> string list
 val variant_factname : Proof.context -> string -> string
 
 val induction_tac:
@@ -69,14 +71,69 @@ fun trim_markup msg =
 
 (** Aux Isar Commands **)
 
-fun variant_factname ctxt =
-  let val facts = Proof_Context.facts_of ctxt
-      fun bump name =
-        if Facts.defined facts name
-        then bump (Symbol.bump_string name)
-        else name
-   in bump
-  end
+local
+  (* Split name into base and numeric suffix *)
+  fun split_numeric_suffix name =
+    let
+      val len = String.size name
+
+      (* Find the start position of trailing digits by scanning backwards *)
+      val i = Unsynchronized.ref (len - 1)
+      val () = while !i >= 0 andalso Char.isDigit (String.sub (name, !i)) do
+        i := !i - 1
+      val digit_start = !i + 1
+    in
+      if digit_start = len  (* no trailing digits *)
+      then (name, NONE)
+      else
+        let
+          val base = String.substring (name, 0, digit_start)
+          val num_str = String.substring (name, digit_start, len - digit_start)
+        in
+          case Int.fromString num_str of
+            SOME num => (base, SOME num)
+          | NONE => (name, NONE)  (* shouldn't happen *)
+        end
+    end
+
+  (* Core scaffold: accepts a predicate to check if a name is used *)
+  fun variant_with_predicate is_used name =
+    if name = "" then ""
+    else
+      let
+        fun bump x =
+          if is_used x
+          then
+            let
+              val (base, num_opt) = split_numeric_suffix x
+              val next_num = case num_opt of NONE => 1 | SOME n => n + 1
+              val next_name = base ^ Int.toString next_num
+            in
+              bump next_name
+            end
+          else x
+      in
+        bump name
+      end
+in
+  (* Public interface 1: variant using Name.context *)
+  fun variant_name name name_ctxt =
+    let
+      val result = variant_with_predicate (Name.is_declared name_ctxt) name
+      val name_ctxt' = if result = "" then name_ctxt
+                       else Name.declare result name_ctxt
+    in
+      (result, name_ctxt')
+    end
+
+  (* Public interface 2: batch variant using Name.context *)
+  fun variant_name_list used names =
+    #1 (Name.make_context used |> fold_map variant_name names)
+
+  (* Public interface 3: variant for fact names using Proof.context *)
+  fun variant_factname ctxt name =
+    variant_with_predicate (Facts.defined (Proof_Context.facts_of ctxt)) name
+end
 
 
 val ind_hypsN = "IH";

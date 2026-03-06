@@ -58,7 +58,7 @@ val ready_to_finish : state -> bool
 (*Thread local*)
 datatype message = New_Items of items
                  | Goals     of term list option
-                 | Consider_Case of string
+                 | Consider_Case of string * items
                  | Internal of exn
 val set_reporter : (message (*new items*) -> unit) -> unit
 val get_reporter : unit -> (message (*new items*) -> unit)
@@ -498,7 +498,7 @@ fun ready_to_finish (s as (SK,_,_)) = stack_is_ready_to_finish SK andalso not (i
 
 datatype message = New_Items of items
                  | Goals     of term list option
-                 | Consider_Case of string
+                 | Consider_Case of string * items
                  | Internal of exn
 val reporter = Thread_Data.var () : (message -> unit) Thread_Data.var
 val default_reporter = K ()
@@ -1017,7 +1017,7 @@ fun quantifier_bindings ctxt st =
       |> strip_meta_hhf
       |> #1
       |> (fn L => fold_map (fn (name, ty) => fn ctxt =>
-                      Name.variant name ctxt |> apfst (rpair ty)
+                      variant_name name ctxt |> apfst (rpair ty)
                   ) L (Variable.names_of ctxt))
       |> #1
 
@@ -1510,7 +1510,7 @@ fun powerful_MP ctxt rule thA0 =
 
 fun make_case term =
   let val (vars, prems, concl) = strip_meta_hhf term
-      val vars' = Name.variant_list [] (map fst vars) ~~ map snd vars
+      val vars' = variant_name_list [] (map fst vars) ~~ map snd vars
       val fixes = map (apfst Binding.name) vars
       val assms = map_index (fn (i, tm) =>
                     ("prem" ^ string_of_int i, [fold_rev Term.abs vars' tm])) prems
@@ -1547,7 +1547,7 @@ fun CASES' diff ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, items0
                 end
                else error "BUG REWLK"
        val used_qualifiers = quanlifiers_of (print_stack SK)
-       val cases = Name.variant_list used_qualifiers (map #1 cases)
+       val cases = variant_name_list used_qualifiers (map #1 cases)
                 ~~ map #2 cases
 
        fun is_case x t =
@@ -1610,9 +1610,9 @@ fun CASES' diff ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, items0
                                   val name = if Name.is_internal name then Name.dest_internal name
                                                                       else name
                                   (*val (name, names) = if name = ""
-                                                      then Name.variant "case" names
+                                                      then variant_name "case" names
                                                       else (name, names)*)
-                                  (*val (name, names) = Name.variant name names*)
+                                  (*val (name, names) = variant_name name names*)
                                in ((Binding.name name,T), names)
                               end ) fixes (Variable.names_of ctxt)
                               |> #1 ),
@@ -1686,7 +1686,7 @@ fun CASES' diff ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, items0
                              | _ => cat_tree (BUNDL (empty_items, T :: tl siblings))
                                              (print_stack [HHF (st00, items00)])
          in report (New_Items items')
-          ; report (Consider_Case (Binding.name_of binding))
+          ; report (Consider_Case (Binding.name_of binding, items'))
           ; if null remaining_cases
          then (ctxt, ( HHF (goalx, items')
                  :: MAGIC (CB false rule' remaining_cases (tl siblings), PRT, NO_PARAM)

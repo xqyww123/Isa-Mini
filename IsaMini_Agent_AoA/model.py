@@ -1,6 +1,6 @@
 from time import time
-from .helper import split_id_into_segs, cat_segs_into_id, incr_id_major, incr_id_minor
-from typing import Any, Iterable, NamedTuple, Sequence, TypedDict, Callable, TextIO, cast, Type
+from .helper import split_id_into_segs, cat_segs_into_id, incr_id_major, incr_id_minor, MyIO
+from typing import Any, Iterable, NamedTuple, Sequence, TypedDict, Callable, cast, Type, Literal
 from Isabelle_RPC_Host import Connection, IsabelleError
 from enum import Enum
 from IsaREPL import Client as IsaREPL
@@ -14,6 +14,8 @@ type term = str
 type lambda_term = Any
 type step = str
 type local_step = str
+type Var = tuple[varname, typ]
+type Hyp = tuple[varname, term]
 type Vars = dict[varname, typ]
 type Hyps = dict[varname, term]
 type FactRef = str # i.e., the (full) name
@@ -27,7 +29,7 @@ class Fact(NamedTuple):
     isabelle_expression: term
     for_any: list[Explicit_Var]
 
-    def print(self, indent: int, file: TextIO):
+    def print(self, indent: int, file: MyIO):
         print_indent(indent, file)
         file.write(f"- english: {self.english}\n")
         print_indent(indent, file)
@@ -82,7 +84,7 @@ def print_indent(indent: int, file):
     for _ in range(indent):
         file.write("  ")
 
-def print_paragraph(indent: int, file: TextIO, para: str):
+def print_paragraph(indent: int, file: MyIO, para: str):
     lines = para.strip().split("\n")
     match lines:
         case [line]:
@@ -95,31 +97,35 @@ def print_paragraph(indent: int, file: TextIO, para: str):
                 file.write(line)
                 file.write("\n")
 
-def print_vars(vars: Vars, indent: int, file, suppressed: Vars, banner='variables'):
-    if any(name not in suppressed for name in vars):
-        print_indent(indent, file)
-        file.write(banner)
-        file.write(":\n")
-        for name, type in vars.items():
-            if name in suppressed:
-                continue
-            print_indent(indent+1, file)
-            file.write(f"- {name}: {type}\n")
+def print_vars(vars: Iterable[tuple[varname, typ]], indent: int, file, suppressed: Vars, banner='variables'):
+    printed_banner = False
+    for name, type in vars:
+        if name in suppressed:
+            continue
+        if not printed_banner:
+            print_indent(indent, file)
+            file.write(banner)
+            file.write(":\n")
+            printed_banner = True
+        print_indent(indent+1, file)
+        file.write(f"- {name}: {type}\n")
 
-def print_hyps(hyps: Hyps, indent: int, file, suppressed: Hyps, banner='premises'):
-    if any(name not in suppressed for name in hyps):
-        print_indent(indent, file)
-        file.write(banner)
-        file.write(":\n")
-        for name, term in hyps.items():
-            if name in suppressed:
-                continue
-            print_indent(indent+1, file)
-            file.write(f"- {name}: {term}\n")
+def print_hyps(hyps: Iterable[tuple[str, term]], indent: int, file, suppressed: Hyps, banner='premises'):
+    printed_banner = False
+    for name, term in hyps:
+        if name in suppressed:
+            continue
+        if not printed_banner:
+            print_indent(indent, file)
+            file.write(banner)
+            file.write(":\n")
+            printed_banner = True
+        print_indent(indent+1, file)
+        file.write(f"- {name}: {term}\n")
 
 def print_goal(goal: Goal, indent: int, show_header: bool, file, suppressed: Context):
-    print_vars(goal.context.vars, indent, file, suppressed.vars)
-    print_hyps(goal.context.hyps, indent, file, suppressed.hyps)
+    print_vars(goal.context.vars.items(), indent, file, suppressed.vars)
+    print_hyps(goal.context.hyps.items(), indent, file, suppressed.hyps)
     print_indent(indent, file)
     if any(name not in suppressed.vars for name in goal.context.vars) or\
         any(name not in suppressed.hyps for name in goal.context.hyps):
@@ -130,13 +136,32 @@ def print_goal(goal: Goal, indent: int, show_header: bool, file, suppressed: Con
         file.write(goal.conclusion)
         file.write("\n")
 
-def print_pending_goal(goal: Goal, step: step, indent: int, file : TextIO, suppressed: Context):
+def print_pending_goal(goal: Goal, step: step, indent: int, file : MyIO, suppressed: Context):
     print_indent(indent, file)
     file.write(f"Error: Unfinished Proof! Call command `edit` with action `fill` and target step `{step}`"
         " to provide the proof for the following goal.\n")
     print_indent(indent, file)
     file.write("pending proof goal:\n")
     print_goal(goal, indent+1, False, file, suppressed)
+
+def string_of_and_list(l: list[Any]) -> str:
+    match l:
+        case []:
+            return ""
+        case [a]:
+            return str(a)
+        case [a, b]:
+            return f"{a} and {b}"
+        case [*rest, last]:
+            return ", ".join(str(x) for x in rest) + f", and {last}"
+        case _:
+            raise ValueError(f"Impossible")
+def titled_string_of_and_list(l: list[Any], singular: str, plural: str) -> str:
+    if len(l) == 1:
+        return f"{singular} {l[0]}"
+    else:
+        return f"{plural} {string_of_and_list(l)}"
+
 
 ## Errors
 type timedelta = float # in seconds
@@ -215,6 +240,44 @@ class CannotRename_FactNotFound(CannotRename_NotFound):
     def __str__(self) -> str:
         return f"Cannot rename. The fact {self.old_name} is not found"
 
+type ToolCall_arg = dict[str, Any]
+class ArgumentError(AoA_Error):
+    def __init__(self, arg: ToolCall_arg, reason: str):
+        self.arg = arg
+        self.reason = reason
+    def __str__(self) -> str:
+        return f"Bad Argument\n{self.reason}"
+class ArgumentError_UnknownProofOperation(ArgumentError):
+    def __init__(self, arg: ToolCall_arg):
+        super().__init__(arg,
+            f"Unknown proof operation {arg["operation"]}. " +
+            f"Available operations: {list(OPERATION_REGISTRY.keys())}"
+        )
+
+class ArgumentError_MissingRequiredKeys(ArgumentError):
+    def __init__(self, arg: ToolCall_arg, operation: str, missing: list[str]):
+        joined = ", ".join(sorted(missing))
+        super().__init__(
+            arg,
+            f"Missing required field(s) for operation {operation}: {joined}",
+        )
+
+def _check_tool_arg_keys(toolarg_typed_dict: type, data: ToolCall_arg, operation: str) -> None:
+    """
+    Ensure that `data` contains all required keys defined by the TypedDict `toolarg_typed_dict`.
+    Raises ArgumentError if any required key is missing.
+    """
+    required_keys = getattr(
+        toolarg_typed_dict,
+        "__required_keys__",
+        set(getattr(toolarg_typed_dict, "__annotations__", {}).keys()),
+    )
+    missing = [k for k in required_keys if k not in data]
+    if missing:
+        raise ArgumentError_MissingRequiredKeys(data, operation, missing)
+
+## Minilang Runtime
+### Evaluation Status
 
 class EvaluationStatus(NamedTuple):
     class Status(Enum):
@@ -234,9 +297,6 @@ class EvaluationStatus(NamedTuple):
 EVALUATION_CACNCELLED = EvaluationStatus(EvaluationStatus.Status.CANCELLED, 0.0, None)
 EVALUATION_NOT_YET = EvaluationStatus.failure(0.0, None)
 
-
-## Minilang Runtime
-
 ### Bindings
 
 class VariableBinding(NamedTuple):
@@ -251,7 +311,7 @@ class FactBinding(NamedTuple):
 
 type Bindings = tuple[list[VariableBinding], list[FactBinding]]
 
-def print_var_bindings(var_bindings: list[VariableBinding], indent: int, file: TextIO, banner='variables'):
+def print_var_bindings(var_bindings: list[VariableBinding], indent: int, file: MyIO, banner='variables'):
     if var_bindings:
         print_indent(indent, file)
         file.write(banner)
@@ -263,7 +323,7 @@ def print_var_bindings(var_bindings: list[VariableBinding], indent: int, file: T
             else:
                 file.write(f"- {vb.external_varname}: {vb.type}    (renamed from \"{vb.internal_varname}\")\n")
 
-def print_fact_bindings(fact_bindings: list[FactBinding], indent: int, file: TextIO, banner='facts'):
+def print_fact_bindings(fact_bindings: list[FactBinding], indent: int, file: MyIO, banner='facts'):
     if fact_bindings:
         print_indent(indent, file)
         file.write(banner)
@@ -310,11 +370,17 @@ class Goals_Msg(Message):
         return cls()
 
 class Consider_Case_Msg(Message):
-    def __init__(self, case: str) -> None:
+    def __init__(self, case: str, vars: list[Var], hyps: list[Hyp]) -> None:
         self.case = case
+        self.vars = vars
+        self.hyps = hyps
     @classmethod
     def unpack(cls, data) -> 'Consider_Case_Msg':
-        return cls(data)
+        (case, items_data) = data
+        context = Context.unpack(items_data)
+        vars = list(context.vars.items())
+        hyps = list(context.hyps.items())
+        return cls(case, vars, hyps)
 
 class Intro_Bindings_Msg(Message):
     def __init__(self, missing: 'Bindings', auto_introduced: 'Bindings', final: 'Bindings') -> None:
@@ -550,6 +616,12 @@ class Minilang_Operation(NamedTuple):
     def BRANCH(cases: list[term]) -> 'Minilang_Operation':
         return Minilang_Operation("BRANCH", cases)
     @staticmethod
+    def CASE_SPLIT(target: term, vars: list[varname_spec] | None, rule: FactRef | None) -> 'Minilang_Operation':
+        return Minilang_Operation("CASE_SPLIT", (IsaREPL.ascii_of_unicode(target), vars, rule))
+    @staticmethod
+    def INDUCT(target: term, vars: list[varname_spec] | None, arbitrary: list[varname], rule: FactRef | None) -> 'Minilang_Operation':
+        return Minilang_Operation("INDUCT", (IsaREPL.ascii_of_unicode(target), vars, [IsaREPL.ascii_of_unicode(t) for t in arbitrary], rule))
+    @staticmethod
     def SKIP() -> 'Minilang_Operation':
         return Minilang_Operation("SKIP", None)
 
@@ -657,7 +729,7 @@ class Minilang_State:
 
 type gen_node = Callable[[NodeConfig], 'Node']
 type may_gen_node = Callable[[NodeConfig], 'Node | None']
-type printer = Callable[[int, TextIO], int]
+type printer = Callable[[int, MyIO], int]
 
 class Warning(NamedTuple):
     class Position(Enum):
@@ -674,6 +746,9 @@ class NodeConfig(NamedTuple):
 
 class Node:
     parent: 'NonLeaf_Node | None'
+    id: 'step'
+    line: int
+
     def __init__(self, config: NodeConfig, thought: str):
         """
         ml_state: the state before executing the Node. This field is mutable!!
@@ -685,27 +760,35 @@ class Node:
         if self.parent is not None and self.parent.id:
             self.id = f"{self.parent.id}.{self.local_step}"
         else:
-            self.id : step = self.local_step
+            self.id = self.local_step
         self.status : EvaluationStatus = EVALUATION_NOT_YET
         self.warnings : list[Warning] = []
         self._kind : str = "step"
         self.age = the_session().age
-    def _print_step_id(self, indent: int, file: TextIO) -> int:
+        self.line = 0
+    def _reset_local_step(self, new_local_step: str) -> None:
+        self.local_step = new_local_step
+        if self.parent is not None and self.parent.id:
+            self.id = f"{self.parent.id}.{self.local_step}"
+        else:
+            self.id = self.local_step
+    def _print_step_id(self, indent: int, file: MyIO) -> int:
+        self.line = file.current_line()
         print_indent(indent, file)
         file.write(f"- {self._kind} id: {self.id}\n")
         return indent + 1
-    def print(self, indent: int, file : TextIO) -> int:
+    def print(self, indent: int, file : MyIO) -> int:
         return self._print_step_id(indent, file)
     def display_operation(self) -> str:
         return type(self).__name__
-    def quickview_header(self, indent: int, file: TextIO) -> int:
+    def quickview_header(self, indent: int, file: MyIO) -> int:
         print_indent(indent, file)
-        file.write(f"- {self._kind} {self.id}: {self.display_operation()}\n")
+        file.write(f"- {self._kind} {self.id}: {self.display_operation()}, line {self.line}\n")
         self._print_evaluation_status_quickview(indent+1, file)
         return indent + 1
-    def quickview(self, indent: int, file: TextIO) -> int:
+    def quickview(self, indent: int, file: MyIO) -> int:
         return self.quickview_header(indent, file)
-    def _print_evaluation_status(self, indent: int, file: TextIO) -> None:
+    def _print_evaluation_status(self, indent: int, file: MyIO) -> None:
         match self.status.status:
             case EvaluationStatus.Status.SUCCESS:
                 pass
@@ -719,7 +802,7 @@ class Node:
             case EvaluationStatus.Status.CANCELLED:
                 print_indent(indent, file)
                 file.write("Error: the evaluation is cancelled due to failures in preceding nodes")
-    def _print_evaluation_status_quickview(self, indent: int, file: TextIO) -> None:
+    def _print_evaluation_status_quickview(self, indent: int, file: MyIO) -> None:
         match self.status.status:
             case EvaluationStatus.Status.SUCCESS:
                 pass
@@ -729,7 +812,7 @@ class Node:
             case EvaluationStatus.Status.CANCELLED:
                 print_indent(indent, file)
                 file.write("evaluation cancelled")
-    def _print_warnings(self, indent: int, file: TextIO, positions: list[Warning.Position], show_at: bool = False) -> None:
+    def _print_warnings(self, indent: int, file: MyIO, positions: list[Warning.Position], show_at: bool = False) -> None:
         warnings = [warning for warning in self.warnings if warning.position in positions]
         match warnings:
             case []:
@@ -759,9 +842,9 @@ class Node:
                             warning.printer(indent+1, file)
                         case _:
                             raise InternalError(f"Unknown warning type: {type(warning)}")
-    def _print_all_warnings(self, file: TextIO) -> None:
+    def _print_all_warnings(self, file: MyIO) -> None:
         self._print_warnings(0, file, list(Warning.Position), show_at=True)
-    def _print_thought(self, indent: int, file: TextIO) -> None:
+    def _print_thought(self, indent: int, file: MyIO) -> None:
         lines = self.thought.strip().splitlines()
         match lines:
             case []:
@@ -861,11 +944,23 @@ class Node:
         vars = self._all_fixed_vars_before_me({})
         hyps = self._all_fixed_facts_before_me({})
         return Context(vars, hyps)
-    def _rename_var(self, old_name: varname, new_name: varname) -> None:
-        raise CannotRename_VariableNotFound(old_name, new_name)
-    def _rename_fact(self, old_name: str, new_name: str) -> None:
-        raise CannotRename_FactNotFound(old_name, new_name)
-    def _print_fixed_vars_and_facts(self, indent: int, file: TextIO) -> None:
+    def _rename_var(self, old_name: varname, new_name: varname) -> 'Node | None':
+        """
+        Return the modified node if the variable is found and renamed, None otherwise.
+        """
+        return None
+    def _rename_fact(self, old_name: str, new_name: str) -> 'Node | None':
+        """
+        Return the modified node if the fact is found and renamed, None otherwise.
+        """
+        return None
+    def rename_var(self, old_name: varname, new_name: varname) -> None:
+        if self._rename_var(old_name, new_name) is None:
+            raise CannotRename_VariableNotFound(old_name, new_name)
+    def rename_fact(self, old_name: str, new_name: str) -> None:
+        if self._rename_fact(old_name, new_name) is None:
+            raise CannotRename_FactNotFound(old_name, new_name)
+    def _print_fixed_vars_and_facts(self, indent: int, file: MyIO) -> None:
         fixed_vars = self._fixed_vars_at_me({})
         fixed_facts = self._fixed_facts_at_me({})
         if fixed_vars:
@@ -881,7 +976,7 @@ class Node:
                 print_indent(indent+1, file)
                 file.write(f"- {name}: {term}\n")
     def _warn_discarded_nodes(self, discarded_nodes: list['Node'], msg: str, position: Warning.Position) -> None:
-        def printer(indent: int, file: TextIO) -> int:
+        def printer(indent: int, file: MyIO) -> int:
             print_indent(indent, file)
             file.write('- ')
             file.write(msg)
@@ -1028,16 +1123,26 @@ class NonLeaf_Node(Node):
         super().unfinished_nodes(ret)
         for child in self.sub_nodes:
             child.unfinished_nodes(ret)
-    def _print_all_warnings(self, file: TextIO) -> None:
+    def _print_all_warnings(self, file: MyIO) -> None:
         self._print_warnings(0, file, [Warning.Position.HEADER], show_at=True)
         for child in self.sub_nodes:
             child._print_all_warnings(file)
         self._print_warnings(0, file, [Warning.Position.FOOTER], show_at=True)
-    def quickview(self, indent: int, file: TextIO) -> int:
+    def quickview(self, indent: int, file: MyIO) -> int:
         indent = super().quickview(indent, file)
         for child in self.sub_nodes:
             child.quickview(indent, file)
         return indent
+    def _rename_var(self, old_name: varname, new_name: varname) -> 'Node | None':
+        for child in self.sub_nodes:
+            if (result := child._rename_var(old_name, new_name)) is not None:
+                return result
+        return None
+    def _rename_fact(self, old_name: str, new_name: str) -> 'Node | None':
+        for child in self.sub_nodes:
+            if (result := child._rename_fact(old_name, new_name)) is not None:
+                return result
+        return None
 
 
 
@@ -1147,9 +1252,9 @@ class StdBlock(NonLeaf_Node):
             child._fixed_vars_after_me(vars)
             child._fixed_facts_after_me(hyps)
         return Context(vars, hyps)
-    def _print_header(self, indent: int, file: TextIO) -> None:
+    def _print_header(self, indent: int, file: MyIO) -> None:
         raise NotImplementedError("`_print_header` must be implemented by subclass")
-    def _print_footer(self, indent: int, file: TextIO) -> None:
+    def _print_footer(self, indent: int, file: MyIO) -> None:
         self._print_warnings(indent, file, [Warning.Position.FOOTER])
         if self.opening():
             ptree = self._state_before_ending_.prooftree
@@ -1201,7 +1306,7 @@ class StdBlock(NonLeaf_Node):
                 return self._local_step_of_next_proof_step()
         else:
             return None
-    def print(self, indent: int, file: TextIO):
+    def print(self, indent: int, file: MyIO):
         indent = super().print(indent, file)
         self._print_header(indent, file)
         title, child_indent = self._title_of_children(indent)
@@ -1221,7 +1326,7 @@ class StdBlock(NonLeaf_Node):
                 file.write(": empty\n")
         self._print_footer(indent, file)
         return indent
-    def quickview(self, indent: int, file: TextIO) -> int:
+    def quickview(self, indent: int, file: MyIO) -> int:
         indent = super().quickview(indent, file)
         if self.opening():
             ptree = self._state_before_ending_.prooftree
@@ -1234,11 +1339,11 @@ class StdBlock(NonLeaf_Node):
         return indent
     def print_string(self, indent: int) -> str:
         buffer = StringIO()
-        self.print(indent, buffer)
+        self.print(indent, MyIO(buffer))
         return buffer.getvalue()
     def quickview_string(self, indent: int) -> str:
         buffer = StringIO()
-        self.quickview(indent, buffer)
+        self.quickview(indent, MyIO(buffer))
         return buffer.getvalue()
     def append(self, gen_node: may_gen_node) -> 'Node | None':
         if not self.opening():
@@ -1285,6 +1390,9 @@ class GoalNode(StdBlock):
     is a GoalNode corresponding to one of the subgoals, and the children of each
     GoalNode are the proof steps for its corresponding subgoal.
     """
+    case_vars: list[Var] | None
+    case_hyps: list[Hyp] | None
+
     def __init__(self, config: NodeConfig, is_single_goal: bool, show_goal: bool):
         # """
         # goal_index: starting from 0
@@ -1299,6 +1407,8 @@ class GoalNode(StdBlock):
         self.show_goal = show_goal
         self._allow_multi_goal = True
         self._kind = "goal"
+        self.case_vars = None
+        self.case_hyps = None
         # self.goal_index = goal_index
     def goal(self) -> Goal:
         ptree = self.ml_state.prooftree
@@ -1324,18 +1434,33 @@ class GoalNode(StdBlock):
             return "The goal is nontrivial. Detailed proofs are required to prove it."
         else:
             return "Each of the following proof steps above is valid, but the goal doesn't trivially follow from these steps. Please provide more detailed proof steps."
-    def _print_header(self, indent: int, file: TextIO):
+    def _print_header(self, indent: int, file: MyIO):
         self._print_thought(indent, file)
         if self.show_goal:
-            print_goal(self.goal(), indent, True, file, self._ctxt_beofre_me())
+            goal = self.goal()
+            if self.case_vars or self.case_hyps:
+                merged_vars = {v[0]: v[1] for v in (self.case_vars or [])} | goal.context.vars
+                merged_hyps = {h[0]: h[1] for h in (self.case_hyps or [])} | goal.context.hyps
+                goal = Goal(Context(merged_vars, merged_hyps), goal.conclusion)
+            print_goal(goal, indent, True, file, self._ctxt_beofre_me())
         self._print_evaluation_status(indent, file)
         self._print_warnings(indent, file, [Warning.Position.HEADER])
-    def _print_step_id(self, indent: int, file: TextIO) -> int:
+    def _print_step_id(self, indent: int, file: MyIO) -> int:
         if self.is_single_goal:
             return indent
         else:
             return super()._print_step_id(indent, file)
     def _refresh_me_alone(self, first_time: bool):
+        consider_case_msgs = [m for m in self.ml_state.messages if isinstance(m, Consider_Case_Msg)]
+        match consider_case_msgs:
+            case []:
+                pass
+            case [consider_case_msg]:
+                self._reset_local_step(consider_case_msg.case)
+                self.case_vars = consider_case_msg.vars
+                self.case_hyps = consider_case_msg.hyps
+            case _:
+                raise InternalError(f"Expected exactly one Consider_Case_Msg in Case's messages, got {len(consider_case_msgs)}")
         if first_time and not self.sub_nodes and self.ml_state.need_intro():
             local_step = self._local_step_of_next_proof_step()
             ml_state = self.ml_state.clone(None)
@@ -1351,12 +1476,12 @@ class GoalNode(StdBlock):
         goal = self.goal()
         ret.update(goal.context.hyps)
         return ret
-    def quickview_header(self, indent: int, file: TextIO) -> int:
+    def quickview_header(self, indent: int, file: MyIO) -> int:
         if self.is_single_goal:
             return indent
         else:
             print_indent(indent, file)
-            file.write(f"- {self._kind} {self.id}\n")
+            file.write(f"- {self._kind} {self.id}, line {self.line}\n")
             return indent + 1
 
 #abstract base class
@@ -1368,6 +1493,12 @@ class SubgoalMaker(GoalContainer, StdBlock):
         raise NotImplementedError("`beginning_opr` must be implemented by subclass")
     def has_ending_opr(self) -> bool:
         return True
+    def _case_vars_of_child(self, child_ind: int) -> list[varname_spec] | None:
+        return None
+    def _new_goal_node(self, goal_index: int, ml_state: Minilang_State) -> GoalNode:
+        return GoalNode(NodeConfig(str(goal_index+self._initial_goal_index), ml_state, self), False, True)
+    def _on_regenerating_goals(self, goals: list[Goal]) -> None:
+        pass
     def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> tuple[bool, failure_reason]:
         (success, reason) = super()._refresh_the_beginning_opr(begin_opr, first_time)
         if success:
@@ -1379,6 +1510,7 @@ class SubgoalMaker(GoalContainer, StdBlock):
             if not first_time and len(goals) == len(self.sub_nodes):
                 pass
             else:
+                self._on_regenerating_goals(goals)
                 if len(goals) <= 1:
                     self.sub_nodes = []
                     if self.parent is not None:
@@ -1389,7 +1521,8 @@ class SubgoalMaker(GoalContainer, StdBlock):
                     self.sub_nodes = []
                     ml_state = s0.clone(None)
                     for i in range(len(goals)):
-                        self.sub_nodes.append(GoalNode(NodeConfig(str(i+self._initial_goal_index), ml_state, self), False, True))
+                        new_node = self._new_goal_node(i, ml_state)
+                        self.sub_nodes.append(new_node)
                         ml_state = ml_state.sorry(None, None)
             return (True, None)
         else:
@@ -1414,10 +1547,80 @@ class SubgoalMaker_NoTailEnder(SubgoalMaker):
         for i, c in enumerate(self.sub_nodes):
             if c is child:
                 if i < len(self.sub_nodes) - 1:
-                    return Minilang_Operation.NEXT(None)
+                    return Minilang_Operation.NEXT(self._case_vars_of_child(i+1))
                 else:
                     return None
         raise InternalError("The given argument is not a child of this node")
+
+class CaseSplit_Like(SubgoalMaker_NoTailEnder):
+    case_vars: list[Var] | None
+    case_hyps: list[Hyp] | None
+    case_name: str | None
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.case_vars = None
+        self.case_hyps = None
+    def _case_vars_of_child(self, child_ind: int) -> list[varname_spec] | None:
+        if self.sub_nodes:
+            node = self.sub_nodes[child_ind]
+            if not isinstance(node, GoalNode):
+                raise InternalError("The child of a CaseSplit_Like is not a GoalNode")
+            return [v[0] for v in node.case_vars] if node.case_vars is not None else None
+        else:
+            if child_ind == 0:
+                return [v[0] for v in self.case_vars] if self.case_vars is not None else None
+            else:
+                raise InternalError("The child index is out of range")
+    def _rename_var(self, old_name: varname, new_name: varname) -> 'Node | None':
+        if self.sub_nodes:
+            return super()._rename_var(old_name, new_name)
+        else:
+            if self.case_vars is not None:
+                for i, v in enumerate(self.case_vars):
+                    if v[0] == old_name:
+                        self.case_vars[i] = (new_name, v[1])
+                        return self
+            return None
+    def _print_header(self, indent: int, file: MyIO) -> None:
+        if self.case_vars is not None:
+            print_vars(self.case_vars, indent, file, {}, "fixing variables")
+        if self.case_hyps is not None:
+            print_hyps(self.case_hyps, indent, file, {}, "assuming premises")
+    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> tuple[bool, failure_reason]:
+        (success, reason) = super()._refresh_the_beginning_opr(begin_opr, first_time)
+        if success and not self.sub_nodes:
+            # The case for nonempty self.sub_nodes is handled in _new_goal_node
+            s = self._state_after_beginning()
+            consider_case_msgs = [m for m in s.messages if isinstance(m, Consider_Case_Msg)]
+            match consider_case_msgs:
+                case [consider_case_msg]:
+                    pass
+                case _:
+                    raise InternalError(f"Expected exactly one Consider_Case_Msg in Case's messages, got {len(consider_case_msgs)}")
+            self.case_name = consider_case_msg.case
+            self.case_vars = consider_case_msg.vars
+            self.case_hyps = consider_case_msg.hyps
+        return (success, reason)
+    # def _new_goal_node(self, goal_index: int, ml_state: Minilang_State) -> GoalNode:
+    #     node = super()._new_goal_node(goal_index, ml_state)
+    #     consider_case_msgs = [m for m in ml_state.messages if isinstance(m, Consider_Case_Msg)]
+    #     match consider_case_msgs:
+    #         case [consider_case_msg]:
+    #             pass
+    #         case _:
+    #             raise InternalError(f"Expected exactly one Consider_Case_Msg in Case's messages, got {len(consider_case_msgs)}")
+    #     node.local_step = consider_case_msg.case
+    #     node.case_vars = consider_case_msg.vars
+    #     node.case_hyps = consider_case_msg.hyps
+    #     return node
+    def _on_regenerating_goals(self, goals: list[Goal]) -> None:
+        self.case_name = None
+        self.case_vars = None
+        self.case_hyps = None
+    
+
+
+
 
 
 ### Concrete Models
@@ -1447,7 +1650,7 @@ class Statement(TypedDict):
     english: str
     isabelle: str
 
-def print_statement(self: Statement, indent: int, file: TextIO):
+def print_statement(self: Statement, indent: int, file: MyIO):
     print_indent(indent, file)
     file.write(f"- english: {self["english"]}\n")
     print_indent(indent, file)
@@ -1473,7 +1676,7 @@ class Obvious(Leaf):
         def mk(config: NodeConfig) -> 'Obvious':
             return Obvious(config, arg)
         return mk
-    def print(self, indent: int, file: TextIO) -> int:
+    def print(self, indent: int, file: MyIO) -> int:
         indent = super().print(indent, file)
         self._print_thought(indent, file)
         print_indent(indent, file)
@@ -1508,7 +1711,7 @@ class Have(StdBlock):
         def mk(config: NodeConfig) -> 'Have':
             return Have(config, arg)
         return mk
-    def _print_header(self, indent: int, file: TextIO):
+    def _print_header(self, indent: int, file: MyIO):
         self._print_thought(indent, file)
         print_indent(indent, file)
         file.write("operation: Have\n")
@@ -1550,7 +1753,7 @@ class Obtain(StdBlock):
         def mk(config: NodeConfig) -> 'Obtain':
             return Obtain(config, arg)
         return mk
-    def _print_header(self, indent: int, file: TextIO):
+    def _print_header(self, indent: int, file: MyIO):
         self._print_thought(indent, file)
         print_indent(indent, file)
         file.write("operation: Obtain\n")
@@ -1613,7 +1816,7 @@ class Intro(SubgoalMaker_NoTailEnder):
             bindings = config.ml_state.compute_bindings(arg["variable_bindings"], arg["fact_bindings"])
             return Intro(config, arg["thought"], bindings)
         return mk
-    def _print_header(self, indent: int, file: TextIO):
+    def _print_header(self, indent: int, file: MyIO):
         self._print_thought(indent, file)
         print_indent(indent, file)
         file.write("operation: Intro\n")
@@ -1664,7 +1867,7 @@ class Intro(SubgoalMaker_NoTailEnder):
                     self.warnings.append(Warning(Warning.Position.HEADER,
                         f"The proof goal has changed. Tracking of {vstr} has been lost."))
                 if intro_bindings_msg.auto_introduced[0]:
-                    def print(indent: int, file: TextIO) -> int:
+                    def print(indent: int, file: MyIO) -> int:
                         print_indent(indent, file)
                         file.write(f"- The proof goal has changed and new universally quantified variables occur:\n")
                         for binding in intro_bindings_msg.auto_introduced[0]:
@@ -1685,7 +1888,7 @@ class Intro(SubgoalMaker_NoTailEnder):
                     self.warnings.append(Warning(Warning.Position.HEADER,
                         f"The proof goal has changed. Tracking of {vstr} has been lost."))
                 if intro_bindings_msg.auto_introduced[1]:
-                    def print(indent: int, file: TextIO) -> int:
+                    def print(indent: int, file: MyIO) -> int:
                         print_indent(indent, file)
                         file.write(f"- The proof goal has changed and new premises occur:\n")
                         for binding in intro_bindings_msg.auto_introduced[1]:
@@ -1714,6 +1917,20 @@ class Intro(SubgoalMaker_NoTailEnder):
             return ret
         else:
             return self._fixed_facts_at_me(ret)
+    def _rename_var(self, old_name: varname, new_name: varname) -> 'Node | None':
+        if self.bindings is not None:
+            for i, var in enumerate(self.bindings[0]):
+                if var.external_varname == old_name:
+                    self.bindings[0][i] = VariableBinding(var.internal_varname, new_name, var.type)
+                    return self
+        return super()._rename_var(old_name, new_name)
+    def _rename_fact(self, old_name: str, new_name: str) -> 'Node | None':
+        if self.bindings is not None:
+            for i, fact in enumerate(self.bindings[1]):
+                if fact.name == old_name:
+                    self.bindings[1][i] = FactBinding(fact.expr, new_name, fact.pretty)
+                    return self
+        return super()._rename_fact(old_name, new_name)
 
 
 #### InferenceRule
@@ -1737,7 +1954,7 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
         return mk
     def display_operation(self) -> str:
         return "Inference Rule"
-    def _print_header(self, indent: int, file: TextIO):
+    def _print_header(self, indent: int, file: MyIO):
         self._print_thought(indent, file)
         print_indent(indent, file)
         file.write("operation: Inference Rule\n")
@@ -1790,7 +2007,7 @@ class Branch(SubgoalMaker_NoTailEnder):
         return mk
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         return ('cases', indent+1)
-    def _print_header(self, indent: int, file: TextIO):
+    def _print_header(self, indent: int, file: MyIO):
         self._print_thought(indent, file)
         print_indent(indent, file)
         file.write("operation: Branch\n")
@@ -1813,6 +2030,140 @@ class Branch(SubgoalMaker_NoTailEnder):
                 self.sub_nodes[0].thought = "We first show exhaustiveness of the case split"
         return (success, reason)
 
+### CaseSplit
+
+class CaseSplit_ToolArg(TypedDict):
+    thought: str
+    target_isabelle_term: str
+
+@proof_operation("CaseSplit", CaseSplit_ToolArg)
+class CaseSplit(CaseSplit_Like):
+    def __init__(self, config: NodeConfig, arg: CaseSplit_ToolArg):
+        super().__init__(config, arg["thought"], [])
+        self.target_isabelle_term = arg["target_isabelle_term"]
+    @staticmethod
+    def gen(arg : CaseSplit_ToolArg) -> gen_node:
+        def mk(config: NodeConfig) -> 'CaseSplit':
+            return CaseSplit(config, arg)
+        return mk
+    def _title_of_children(self, indent: int) -> tuple[str | None, int]:
+        return ('cases', indent+1)
+    def _print_header(self, indent: int, file: MyIO):
+        self._print_thought(indent, file)
+        print_indent(indent, file)
+        file.write("operation: CaseSplit\n")
+        print_indent(indent, file)
+        file.write(f"target term: {self.target_isabelle_term}\n")
+        super()._print_header(indent, file)
+        self._print_evaluation_status(indent, file)
+        self._print_warnings(indent, file, [Warning.Position.HEADER])
+    def beginning_opr(self) -> Minilang_Operation:
+        return Minilang_Operation.CASE_SPLIT(
+            self.target_isabelle_term,
+            cast(list[varname_spec] | None, self._case_vars_of_child(0)),
+            None)
+    def ending_opr(self):
+        return None
+    def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
+        return f"Case analysis failed because: {"\n".join(err.errors)}"
+    def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
+        return f"Subgoal {child.id} fails to be proven."
+    def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
+        raise InternalError("A Branch doesn't have an ending operation")
+
+### Induction
+
+type Induction_Rule = str | dict[str, Any]
+class Induction_ToolArg_Variable(TypedDict):
+    name: str
+    status: Literal["fixed", "generalized"]
+class Induction_ToolArg(TypedDict):
+    thought: str
+    target_isabelle_term: str
+    rule: Induction_Rule
+    variables: list[Induction_ToolArg_Variable]
+
+class Induction_ArgumentError_MissingVars(ArgumentError):
+    def __init__(self, arg: Induction_ToolArg, missing: list[varname]):
+        msg = (
+            "In the argument `variables`, you should additionally indicate whether the "
+            f"{titled_string_of_and_list(missing, 'variable', 'variables')} is fixed or generalized."
+        )
+        super().__init__(cast(ToolCall_arg, arg), msg)
+        self.missing = missing
+
+@proof_operation("Induction", Induction_ToolArg)
+class Induction(CaseSplit_Like):
+    # TODO: processing the rule
+    def __init__(self, config: NodeConfig, arg: Induction_ToolArg):
+        super().__init__(config, arg["thought"], [])
+        self.arg = arg
+        self.target_isabelle_term = arg["target_isabelle_term"]
+        self.rule = arg["rule"]
+        self.variables = arg["variables"]
+    @staticmethod
+    def gen(arg : Induction_ToolArg) -> gen_node:
+        def mk(config: NodeConfig) -> 'Induction':
+            return Induction(config, arg)
+        return mk
+    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> tuple[bool, failure_reason]:
+        success, reason = super()._refresh_the_beginning_opr(begin_opr, first_time)
+        if success:
+            vars = self._all_fixed_vars_before_me({})
+            new_var_names = [v for v in vars if v not in [var["name"] for var in self.variables]]
+            if new_var_names:
+                if first_time:
+                    raise Induction_ArgumentError_MissingVars(self.arg, new_var_names)
+                else:
+                    msg = (
+                        f"The {titled_string_of_and_list(new_var_names, 'variable', 'variables')} are not classified "
+                        "as fixed or generalized; fixed is assumed. "
+                        "Change this by calling the `edit` tool with action `amend` and target step `{self.id}`"
+                    )
+                    self.warnings.append(Warning(Warning.Position.HEADER, msg))
+            not_used_vars = [var["name"] for var in self.variables if var["name"] not in vars]
+            if not_used_vars:
+                msg = (
+                    f"This induction operation specifies unused "
+                    f"{titled_string_of_and_list(not_used_vars, 'variable', 'variables')} "
+                    "; they are removed."
+                )
+                self.warnings.append(Warning(Warning.Position.HEADER, msg))
+            if not_used_vars:
+                self.variables[:] = [var for var in self.variables if var["name"] not in not_used_vars]
+            if new_var_names:
+                self.variables.extend({"name": v, "status": "fixed"} for v in new_var_names)
+        return success, reason
+    def _title_of_children(self, indent: int) -> tuple[str | None, int]:
+        return ('cases', indent+1)
+    def _print_header(self, indent: int, file: MyIO):
+        self._print_thought(indent, file)
+        print_indent(indent, file)
+        file.write("operation: Induction\n")
+        print_indent(indent, file)
+        file.write(f"target term: {self.target_isabelle_term}\n")
+        # print_indent(indent, file)
+        # file.write(f"rule: {self.rule}\n")
+        if any(var["status"] == "generalized" for var in self.variables):
+            print_indent(indent, file)
+            file.write(f"generalized variables: {string_of_and_list([var["name"] for var in self.variables if var["status"] == "generalized"])}\n")
+        super()._print_header(indent, file)
+        self._print_evaluation_status(indent, file)
+        self._print_warnings(indent, file, [Warning.Position.HEADER])
+    def beginning_opr(self) -> Minilang_Operation:
+        return Minilang_Operation.INDUCT(
+            self.target_isabelle_term,
+            cast(list[varname_spec] | None, self._case_vars_of_child(0)),
+            [var["name"] for var in self.variables if var["status"] == "generalized"],
+            None)
+    def ending_opr(self):
+        return None
+    def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
+        return f"Induction failed because: {"\n".join(err.errors)}"
+    def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
+        return f"Subgoal {child.id} fails to be proven."
+    def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
+        raise InternalError("A Branch doesn't have an ending operation")
 
 ### Top Root
 
@@ -1834,15 +2185,15 @@ class GlobalEnv(StdBlock):
         return "" # This suppresses the error message printing on GlobalEnv
     def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
         raise InternalError("Internal Bug: Failed to apply INTRO on the proof goal")
-    def _print_header(self, indent: int, file: TextIO):
+    def _print_header(self, indent: int, file: MyIO):
         pass
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         return (None, indent-1)
-    def _print_step_id(self, indent: int, file: TextIO) -> int:
+    def _print_step_id(self, indent: int, file: MyIO) -> int:
         return indent
     def _id_of_openning_prf_to_fill(self) -> step | None:
         return None
-    def _print_footer(self, indent: int, file: TextIO) -> None:
+    def _print_footer(self, indent: int, file: MyIO) -> None:
         print_indent(indent, file)
         file.write(f"You could add global declarations by calling command `edit` with action `fill` and target step `{self.id}.{len(self.sub_nodes)+1}`\n")
 
@@ -1873,7 +2224,7 @@ class Root(GoalContainer, StdBlock):
         self._refresh_me_alone(True)
     def resulting_state(self) -> Minilang_State:
         return self.final_ml_state
-    def _print_step_id(self, indent: int, file: TextIO) -> int:
+    def _print_step_id(self, indent: int, file: MyIO) -> int:
         return indent
     def beginning_opr(self) -> Minilang_Operation | None:
         return None
@@ -1887,9 +2238,9 @@ class Root(GoalContainer, StdBlock):
         return "" # This suppresses the error message printing on Root
     def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
         raise InternalError("A Root doesn't have an ending operation")
-    def print(self, indent: int, file: TextIO) -> int:
-        print_vars(self.context.vars, indent, file, {})
-        print_hyps(self.context.hyps, indent, file, {})
+    def print(self, indent: int, file: MyIO) -> int:
+        print_vars(self.context.vars.items(), indent, file, {})
+        print_hyps(self.context.hyps.items(), indent, file, {})
         self._print_evaluation_status(indent, file)
         self._print_warnings(indent, file, [Warning.Position.HEADER])
         self.sub_nodes[0].print(indent, file)
@@ -1904,7 +2255,7 @@ class Root(GoalContainer, StdBlock):
                     self.sub_nodes[i+1].print(indent+2, file)
         self._print_warnings(indent, file, [Warning.Position.FOOTER])
         return indent
-    def quickview(self, indent: int, file: TextIO) -> int:
+    def quickview(self, indent: int, file: MyIO) -> int:
         if self.global_env.sub_nodes:
             self.global_env.quickview(indent, file)
         match self.num_goals:
@@ -1964,42 +2315,6 @@ class Root(GoalContainer, StdBlock):
 #          2. GoalNode: Q --> P
 
 ### Gen Node
-type ToolCall_arg = dict[str, Any]
-class ArgumentError(AoA_Error):
-    def __init__(self, arg: ToolCall_arg, reason: str):
-        self.arg = arg
-        self.reason = reason
-    def __str__(self) -> str:
-        return f"Bad Argument\n{self.reason}"
-class ArgumentError_UnknownProofOperation(ArgumentError):
-    def __init__(self, arg: ToolCall_arg):
-        super().__init__(arg,
-            f"Unknown proof operation {arg["operation"]}. " +
-            f"Available operations: {list(OPERATION_REGISTRY.keys())}"
-        )
-
-class ArgumentError_MissingRequiredKeys(ArgumentError):
-    def __init__(self, arg: ToolCall_arg, operation: str, missing: list[str]):
-        joined = ", ".join(sorted(missing))
-        super().__init__(
-            arg,
-            f"Missing required field(s) for operation {operation}: {joined}",
-        )
-
-def _check_tool_arg_keys(toolarg_typed_dict: type, data: ToolCall_arg, operation: str) -> None:
-    """
-    Ensure that `data` contains all required keys defined by the TypedDict `toolarg_typed_dict`.
-    Raises ArgumentError if any required key is missing.
-    """
-    required_keys = getattr(
-        toolarg_typed_dict,
-        "__required_keys__",
-        set(getattr(toolarg_typed_dict, "__annotations__", {}).keys()),
-    )
-    missing = [k for k in required_keys if k not in data]
-    if missing:
-        raise ArgumentError_MissingRequiredKeys(data, operation, missing)
-
 def Parse_Node(data: ToolCall_arg) -> gen_node:
     operation = data.get("operation")
     if operation is None:
@@ -2032,10 +2347,9 @@ class Session:
     Driver: dict[str, Type['Session']] = {}
 
     def __init__(self, logger: logging.Logger | None = None):
-        if hasattr(_local_store, 'session'):
-            raise InternalError("The session has already been set in this thread.")
-        else:
-            _local_store.session = self
+        # if hasattr(_local_store, 'session'):
+        #     raise InternalError("The session has already been set in this thread.")
+        _local_store.session = self
         self.age = 0
         self.logger = logger
 

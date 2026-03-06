@@ -6,7 +6,7 @@ from .model import *
 
 class TestCase(NamedTuple):
     name: str
-    opr: Callable[[Root, TextIO], None]
+    opr: Callable[[Root, MyIO], None]
     file: str
     line: int
 
@@ -25,18 +25,18 @@ class TestCase(NamedTuple):
 
 TESTS : dict[str, TestCase] = {}
 def test(name: str, file: str, line: int):
-    def decorator(func: Callable[[Root, TextIO], None]):
+    def decorator(func: Callable[[Root, MyIO], None]):
         TESTS[name] = TestCase(name, func, file, line)
         return func
     return decorator
 
-def print_header(msg: str, file: TextIO):
+def print_header(msg: str, file: MyIO):
     print("-"*50, file=file)
     print(msg, file=file)
     print("-"*50, file=file)
 
 #@test("sqrt2", "Test_sqrt2.thy", 6)
-def _test_sqrt2(root: Root, file: TextIO):
+def _test_sqrt2(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     #goal = root.locate_node("goal1") # the same as root.sub_nodes[1]
@@ -58,7 +58,7 @@ def _test_sqrt2(root: Root, file: TextIO):
     root.print(0, file)
 
 #@test("branch", "Test001.thy", 6)
-def _test_branch(root: Root, file: TextIO):
+def _test_branch(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     root.fill("1", Branch.gen({
@@ -73,7 +73,7 @@ def _test_branch(root: Root, file: TextIO):
     root.print(0, file)
 
 #@test("EquivDerive", "Test003.thy", 8)
-def _test_EquivDerive(root: Root, file: TextIO):
+def _test_EquivDerive(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     root.fill("2", InferenceRule.gen({
@@ -84,7 +84,7 @@ def _test_EquivDerive(root: Root, file: TextIO):
     root.print(0, file)
 
 #@test("IntroConj", "Test003.thy", 8)
-def _test_IntroConj(root: Root, file: TextIO):
+def _test_IntroConj(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     root.fill("2", InferenceRule.gen({
@@ -94,8 +94,8 @@ def _test_IntroConj(root: Root, file: TextIO):
     print_header("Inference Rule", file)
     root.print(0, file)
 
-@test("IntroConj_short", "Test003.thy", 8)
-def _test_IntroConj_short(root: Root, file: TextIO):
+#@test("IntroConj_short", "Test003.thy", 8)
+def _test_IntroConj_short(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     root.fill("2", InferenceRule.gen({
@@ -103,6 +103,48 @@ def _test_IntroConj_short(root: Root, file: TextIO):
         "rule": None
     }))
     print_header("Inference Rule", file)
+    root.print(0, file)
+
+@test("CaseSplit", "Test006.thy", 9)
+def _test_CaseSplit(root: Root, file: MyIO):
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.fill("1", CaseSplit.gen({
+        "thought": "Case split",
+        "target_isabelle_term": r"l"
+    }))
+    print_header("Case Split", file)
+    root.print(0, file)
+    root.fill("1.Nil.1", CaseSplit.gen({
+        "thought": "Case split",
+        "target_isabelle_term": r"l"
+    }))
+    print_header("Case Split", file)
+    root.print(0, file)
+
+@test("Induction", "Test006.thy", 9)
+def _test_Induction(root: Root, file: MyIO):
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.fill("1", Induction.gen({
+        "thought": "some thought about Induction",
+        "target_isabelle_term": r"l",
+        "variables": [{"name": "l", "status": "fixed"}],
+        "rule": None
+    }))
+    print_header("Induction", file)
+    root.print(0, file)
+    root.fill("1.Nil.1", Obvious.gen({
+        "thought": "Obviously the statement holds.",
+        "facts": []
+    }))
+    print_header("Obvious", file)
+    root.print(0, file)
+    root.fill("1.Cons.1", Obvious.gen({
+        "thought": "Obviously the statement holds.",
+        "facts": ["Cons.IH"]
+    }))
+    print_header("Obvious", file)
     root.print(0, file)
 
 def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None):

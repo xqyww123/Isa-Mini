@@ -6,6 +6,7 @@ All user-facing messages, error messages, and prompt texts are defined here.
 from typing import Any
 from .model import Node, Root
 from io import StringIO
+from .helper import MyIO
 
 # ============================================================================
 # MCP Tool Descriptions
@@ -20,7 +21,7 @@ EDIT_TOOL_DESCRIPTION = "Edit the proof.yaml file"
 
 def filled_step_message(step: str, root: Root, node: Node) -> str:
     """Message returned when a step is successfully filled."""
-    file = StringIO()
+    file = MyIO(StringIO())
     file.write(f"Filled step {step}:\n")
     node.print(1, file)
     file.write("Outline:\n")

@@ -38,5 +38,4 @@ attribute_setup "where" = \<open>let
             uncurry (Minilang_Aux.xwhere (Context.proof_of context)) args))
  end \<close> "positional instantiation of theorem"
 
-
 end

@@ -95,3 +95,114 @@ def incr_id_minor(id : str) -> str:
 def incr_id_major(id : str) -> str:
     segs = split_id_into_segs(id)
     return cat_segs_into_id([segs[0] + 1])
+
+
+from typing import TextIO, Optional
+import io
+
+
+class MyIO:
+    """
+    A wrapper around TextIO that automatically tracks the current line number.
+
+    Line Numbering Semantics:
+    - The line counter starts at 1 (first line)
+    - Each newline character ('\\n') moves the write head to the NEXT line
+    - current_line() returns the line number where the write head is positioned
+    - Writing text without a newline keeps the write head on the same line
+
+    This wrapper delegates all operations to the underlying TextIO object
+    while maintaining the line count.
+
+    Example usage:
+        with open('output.txt', 'w') as f:
+            wrapper = MyIO(f)
+            print(wrapper.current_line())     # prints: 1 (initial position)
+
+            wrapper.write("First line\\n")    # writes to line 1, moves to line 2
+            print(wrapper.current_line())     # prints: 2
+
+            wrapper.write("Second line\\n")   # writes to line 2, moves to line 3
+            print(wrapper.current_line())     # prints: 3
+
+            wrapper.write("Third line")       # writes to line 3, stays on line 3
+            print(wrapper.current_line())     # prints: 3
+
+            wrapper.write("\\nFourth line\\n") # moves to line 4, writes, moves to line 5
+            print(wrapper.current_line())     # prints: 5
+    """
+
+    def __init__(self, wrapped: TextIO, initial_line: int = 1):
+        """
+        Initialize the wrapper.
+
+        Args:
+            wrapped: The underlying TextIO object to wrap
+            initial_line: The starting line number (default: 1)
+        """
+        self._wrapped = wrapped
+        self._line_number = initial_line
+
+    def write(self, s: str) -> int:
+        """
+        Write string to the underlying stream and update line counter.
+
+        Args:
+            s: The string to write
+
+        Returns:
+            The number of characters written
+        """
+        # Count newlines in the string
+        newline_count = s.count('\n')
+        self._line_number += newline_count
+
+        # Delegate to the wrapped object
+        return self._wrapped.write(s)
+
+    def writelines(self, lines: list[str]) -> None:
+        """
+        Write a list of strings to the underlying stream.
+
+        Args:
+            lines: List of strings to write
+        """
+        for line in lines:
+            self.write(line)
+
+    def current_line(self) -> int:
+        """
+        Get the current line number (where the write head is positioned).
+
+        The line number represents which line the next character will be written to.
+        After writing "text\\n", the write head moves to the next line, so
+        current_line() will return the line number AFTER the newline.
+
+        Returns:
+            The current line number (1-indexed)
+        """
+        return self._line_number
+
+    def reset_line_counter(self, line: int = 1) -> None:
+        """
+        Reset the line counter to a specific value.
+
+        Args:
+            line: The line number to reset to (default: 1)
+        """
+        self._line_number = line
+
+    # Delegate all other methods to the wrapped object
+    def __getattr__(self, name):
+        """Delegate any undefined methods to the wrapped TextIO object."""
+        return getattr(self._wrapped, name)
+
+    def __enter__(self):
+        """Support context manager protocol."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Support context manager protocol."""
+        if hasattr(self._wrapped, '__exit__'):
+            return self._wrapped.__exit__(exc_type, exc_val, exc_tb)
+        return False
