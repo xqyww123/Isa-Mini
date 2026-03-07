@@ -151,6 +151,38 @@ def _test_Induction(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
 
+@test("Suffices", "Test_Suffices.thy", 7)
+def _test_Suffices(root: Root, file: MyIO):
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    # Use "it suffices to show" that x*x + 1 > 0
+    root.fill("1", Suffices.gen({
+        "thought": "It suffices to show a stronger statement",
+        "statement": {
+            "english": "x squared plus 1 is greater than 0",
+            "isabelle": "x * x + 1 > 0"
+        }
+    }))
+    print_header("After Suffices", file)
+    root.print(0, file)
+    # Now we need to prove: (x * x + 1 > 0) --> (x * x >= 0)
+    root.fill("1.1", Obvious.gen({
+        "thought": "The implication is obvious",
+        "facts": []
+    }))
+    print_header("After proving implication", file)
+    root.print(0, file)
+    # Now we need to prove: x * x + 1 > 0
+    root.fill("2", Obvious.gen({
+        "thought": "This is obviously true",
+        "facts": []
+    }))
+    print_header("After proving suffices goal", file)
+    root.print(0, file)
+    unfinished_nodes = set()
+    root.unfinished_nodes(unfinished_nodes)
+    file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+
 def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None):
     import msgpack as mp
     from IsaREPL import Client

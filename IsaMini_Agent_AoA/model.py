@@ -406,12 +406,13 @@ class New_Item_Msg(Message):
         return cls(Context.unpack(data))
 
 class Goals_Msg(Message):
-    def __init__(self) -> None:
+    def __init__(self, goals: list[str]) -> None:
         super().__init__()
+        self.goals = goals  # List of pretty-printed goal strings (empty list if no goals)
     @classmethod
     def unpack(cls, data) -> 'Goals_Msg':
-        # ML side now sends unit () for Goals message
-        return cls()
+        # data is List String - empty list means no goals
+        return cls(data)
 
 class Consider_Case_Msg(Message):
     def __init__(self, case: str, vars: list[Var], hyps: list[Hyp]) -> None:
@@ -635,6 +636,9 @@ class Minilang_Operation(NamedTuple):
     def HAVE(statement: term) -> 'Minilang_Operation':
         return Minilang_Operation("HAVE", [IsaREPL.ascii_of_unicode(statement)])
     @staticmethod
+    def SUFFICES(statement: term) -> 'Minilang_Operation':
+        return Minilang_Operation("SUFFICES", IsaREPL.ascii_of_unicode(statement))
+    @staticmethod
     def OBTAIN(variables: list[Explicit_Var], constraints: list[term]) -> 'Minilang_Operation':
         vars = [(v["name"], IsaREPL.ascii_of_unicode(v["type"]) if "type" in v else None) for v in variables]
         return Minilang_Operation("OBTAIN", (vars, [IsaREPL.ascii_of_unicode(c) for c in constraints]))
@@ -808,6 +812,19 @@ class Minilang_State:
                 raise InternalError_UnparsedTerm(term_str, e.errors[1])
             else:
                 raise
+
+    def schematic_variables_of(self) -> Vars:
+        """
+        Get all schematic variables from the leading proof goal.
+        Returns a dict of {varname: type} where varnames are formatted as ?name.idx.
+        """
+        self.connection.write((7, self.name))
+        try:
+            vars_list = self.connection.read()
+            return dict(vars_list)
+        except IsabelleError as e:
+            raise
+
 ### The Abstract Model
 
 type gen_node = Callable[[NodeConfig], 'Node']
@@ -1827,9 +1844,52 @@ class Have(StdBlock):
         return "Fail to prove this statement because one of the following proof steps fails."
     def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
         if self.sub_nodes:
-            return "The statement is nontrivial. Detailed proofs are required to establish this statement."
-        else:
             return "Each of the following proof steps above is valid, but the target statement doesn't trivially follow from these steps. Please provide more detailed proof steps."
+        else:
+            return "The statement is nontrivial. Detailed proofs are required to establish this statement."
+
+#### Suffices
+
+class Suffices_ToolArg(TypedDict):
+    thought: str
+    statement: Statement
+
+@proof_operation("Suffices", Suffices_ToolArg)
+class Suffices(StdBlock):
+    def __init__(self, config: NodeConfig, arg : Suffices_ToolArg):
+        super().__init__(config, arg["thought"], [])
+        self.statement = arg["statement"]
+    @staticmethod
+    def gen(arg : Suffices_ToolArg) -> gen_node:
+        def mk(config: NodeConfig) -> 'Suffices':
+            return Suffices(config, arg)
+        return mk
+    def _print_header(self, indent: int, file: MyIO):
+        self._print_thought(indent, file)
+        print_indent(indent, file)
+        file.write("operation: Suffices\n")
+        print_indent(indent, file)
+        file.write(f"statement:\n")
+        print_indent(indent+1, file)
+        file.write(f"english: {self.statement['english']}\n")
+        print_indent(indent+1, file)
+        file.write(f"isabelle: {self.statement['isabelle']}\n")
+        self._print_evaluation_status(indent, file)
+        self._print_warnings(indent, file, [Warning.Position.HEADER])
+        if not self.sub_nodes:
+            print_indent(indent, file)
+            file.write(f"notice: Need to show the provided statement implies the goal\n")
+    def beginning_opr(self) -> Minilang_Operation | None:
+        return Minilang_Operation.SUFFICES(self.statement['isabelle'])
+    def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
+        return f"Fail to apply 'it suffices to show' because: {"\n".join(err.errors)}"
+    def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
+        return "Fail to prove the implication (sufficient condition implies goal) because one of the following proof steps fails."
+    def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
+        if self.sub_nodes:
+            return "Each of the following proof steps above is valid, but the implication doesn't trivially follow from these steps. Please provide more detailed proof steps."
+        else:
+            return "The implication is nontrivial. Detailed proofs are required to establish that the sufficient condition implies the goal."
 
 #### Obtain
 

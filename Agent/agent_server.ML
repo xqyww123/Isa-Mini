@@ -17,6 +17,7 @@ datatype acmd = Proof_Opr of {from: state_id, to: state_id, opr: MiniLang_Agent.
               | Compute_Bindings of {state: state_id, var_names: string list, fact_names: string list}
               | Need_Intro of {state: state_id}
               | Check_Term of {state: state_id, term: string}
+              | Schematic_Variables_Of of {state: state_id}
               | Exit
 
 val AoA_RPC : driver * (MiniLang_Agent.cfg * MiniLang_Agent.budget) * string
@@ -46,6 +47,7 @@ datatype acmd = Proof_Opr of {from: state_id, to: state_id, opr: MiniLang_Agent.
               | Compute_Bindings of {state: state_id, var_names: string list, fact_names: string list}
               | Need_Intro of {state: state_id}
               | Check_Term of {state: state_id, term: string}
+              | Schematic_Variables_Of of {state: state_id}
               | Exit
 
 type context = {
@@ -178,6 +180,8 @@ val acmd_unpacker =
          #> apfst (fn (state, name) => Retrieve_Fact {state=state, name=name})
      | 6 => unpackPair (unpackString, unpackString)
          #> apfst (fn (state, term) => Check_Term {state=state, term=term})
+     | 7 => unpackString
+         #> apfst (fn state => Schematic_Variables_Of {state=state})
      | _ => raise Unpack)
 
 fun acmd_packer (Proof_Opr {from, to, opr}) =
@@ -195,6 +199,8 @@ fun acmd_packer (Proof_Opr {from, to, opr}) =
       packPair (packInt, packPair (packString, packString)) (5, (state, name))
   | acmd_packer (Check_Term {state, term}) =
       packPair (packInt, packPair (packString, packString)) (6, (state, term))
+  | acmd_packer (Schematic_Variables_Of {state}) =
+      packPair (packInt, packString) (7, state)
   | acmd_packer Exit =
       packPair (packInt, packUnit) (0, ())
 
@@ -214,13 +220,12 @@ fun minilang_tree_packer ctxt =
 
 fun minilang_message_packer ctxt =
   let val minilang_items_packer = minilang_items_packer ctxt
+      val string_of_term = MiniLang_Agent.string_of_term ctxt
       fun pack (Minilang.New_Items items) =
             packPair (packInt, minilang_items_packer) (0, items)
-        | pack (Minilang.Goals _) =
-            packPair (packInt, packUnit) (1, ())
-     (* | pack (Minilang.Goals goals) =
-            packPair (packInt, packOption (packList goal_packer))
-                     (1, Option.map (map (goals_of_term [])) goals) *)
+        | pack (Minilang.Goals goals) =
+            packPair (packInt, packList packString)
+                     (1, map string_of_term goals)
         | pack (Minilang.Consider_Case (kase, items)) =
             packPair (packInt, packPair (packString, minilang_items_packer)) (2, (kase, items))
         | pack (Minilang.Internal exn) =
@@ -361,6 +366,19 @@ fun callback (cfg:cfg) (states:states Unsynchronized.ref) (conn:connection) =
                 write_error' conn packUnit {message=["Unparsed", msg], errobj=()}
               | TYPE (msg, _, _) =>
                 write_error' conn packUnit {message=["Unparsed", msg], errobj=()}
+           )
+         | Schematic_Variables_Of {state} => (
+            let val s0 = case Symtab.lookup (!states) state
+                           of SOME s => s
+                            | NONE => raise ERR ["beginning_state_not_found"]
+                val vars = Minilang.schematic_vars_of_leading_goal s0
+                val ctxt = Minilang.context_of s0
+                val vars_with_pretty = map (fn (name_idx, ty) =>
+                        (Term.string_of_vname name_idx, Syntax.string_of_typ ctxt ty))
+                      vars
+             in write conn (packList (packPair (packString, packString))) vars_with_pretty
+            end handle ERROR msg =>
+                write_error' conn packUnit {message=["Error", msg], errobj=()}
            )
     ) handle EXIT => ()
            | ERR msgs => write_error' conn packUnit {message=msgs, errobj=()}

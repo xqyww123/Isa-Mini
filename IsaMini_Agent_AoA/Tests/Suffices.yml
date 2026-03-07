@@ -1,0 +1,76 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: int
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: 0 ≤ x * x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+pending proof goal:
+  0 ≤ x * x
+--------------------------------------------------
+After Suffices
+--------------------------------------------------
+variables:
+  - x: int
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: 0 ≤ x * x
+proof:
+  - step id: 1
+    thought: It suffices to show a stronger statement
+    operation: Suffices
+    statement:
+      english: x squared plus 1 is greater than 0
+      isabelle: x * x + 1 > 0
+    notice: Need to show the provided statement implies the goal
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      0 < x * x + 1 ⟶ 0 ≤ x * x
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  0 < x * x + 1
+--------------------------------------------------
+After proving implication
+--------------------------------------------------
+variables:
+  - x: int
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: 0 ≤ x * x
+proof:
+  - step id: 1
+    thought: It suffices to show a stronger statement
+    operation: Suffices
+    statement:
+      english: x squared plus 1 is greater than 0
+      isabelle: x * x + 1 > 0
+    proof:
+      - step id: 1.1
+        thought: The implication is obvious
+        operation: Obvious
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  0 < x * x + 1
+--------------------------------------------------
+After proving suffices goal
+--------------------------------------------------
+variables:
+  - x: int
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: 0 ≤ x * x
+proof:
+  - step id: 1
+    thought: It suffices to show a stronger statement
+    operation: Suffices
+    statement:
+      english: x squared plus 1 is greater than 0
+      isabelle: x * x + 1 > 0
+    proof:
+      - step id: 1.1
+        thought: The implication is obvious
+        operation: Obvious
+  - step id: 2
+    thought: This is obviously true
+    operation: Obvious
+Unfinished nodes: 0

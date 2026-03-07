@@ -351,7 +351,6 @@
         "thought",
         "statement"
       ],
-      "title": "Suffices to Show",
       "type": "object"
     },
     "Unfold": {

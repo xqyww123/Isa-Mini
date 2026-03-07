@@ -35,15 +35,12 @@ lemma
     END
 \<close>)
 
-lemma  
-  \<open> \<And>a y. A \<and> B \<Longrightarrow> \<forall>x. P x \<Longrightarrow> P a \<and> A\<close>
-  by (min_script \<open>
-    INTRO CRUSH
-    HAVE A END
-    HAMMER
-    NEXT
-    END
-\<close>)
+  lemma \<open>A \<and> B\<close> if A and B
+    apply (min_script \<open>
+      SUFFICES "A \<and> A \<and> B" END
+      END
+    \<close>)
+    oops
 
 lemma  
   \<open> \<And>a. A \<and> B \<Longrightarrow> \<forall>x. P x \<Longrightarrow> P a \<and> B\<close>

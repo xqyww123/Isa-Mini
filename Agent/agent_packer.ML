@@ -128,6 +128,7 @@ val unpacker =
      | "SORRY"    => apfst SORRY o unpack_opt_var_names
      | "BRANCH"   => apfst BRANCH   o unpackList unpackString
      | "HAVE"     => apfst HAVE     o unpackList unpackString
+     | "SUFFICES" => apfst SUFFICES o unpackString
      | "OBTAIN"   => apfst OBTAIN   o unpackPair (
                           unpackList (unpackPair (unpackString, unpackOption unpackString)),
                           unpackList unpackString)
@@ -162,6 +163,8 @@ fun packer (SIMPLIFY data) =
       packPair (packString, packList packString) ("BRANCH", data)
   | packer (HAVE data) =
       packPair (packString, packList packString) ("HAVE", data)
+  | packer (SUFFICES data) =
+      packPair (packString, packString) ("SUFFICES", data)
   | packer (OBTAIN data) =
       packPair (packString, packPair (
           packList (packPair (packString, packOption packString)),

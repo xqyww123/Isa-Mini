@@ -30,6 +30,7 @@ datatype ('term, 'thm, 'fact) command =
   | END      of 'fact list (*add lemmas*)
   | BRANCH   of string list
   | HAVE     of 'term list
+  | SUFFICES of 'term 
   | OBTAIN   of (string * string option) list (*vars*) * string list (*constraints*)
   | SORRY    of Minilang.opt_var_names
   | HAMMER   of 'fact list (*with facts*)
@@ -120,6 +121,7 @@ datatype ('term, 'thm, 'fact) command =
   | END      of 'fact list (*add lemmas*)
   | BRANCH   of string list
   | HAVE     of 'term list
+  | SUFFICES of 'term
   | OBTAIN   of (string * string option) list (*vars*) * string list (*constraints*)
   | SORRY    of Minilang.opt_var_names
   | HAMMER   of 'fact list (*with facts*)
@@ -433,6 +435,8 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
         end
     | HAVE goals =>
         Minilang.HAVE'' [] [] (map (fn goal => (Binding.empty_atts, [(goal, [])])) goals) s
+    | SUFFICES goal =>
+        Minilang.SUFFICES'' goal s
     | OBTAIN (vars, constraints) =>
         let val arg = [(map (fn (v,T) => (Binding.name v, T, NoSyn)) vars,
                        ([], [], map (fn goal => (Binding.empty_atts, [(goal, [])])) constraints))]
@@ -487,6 +491,7 @@ fun check_command_i _ (SIMPLIFY facts) = SIMPLIFY (map read_fact facts)
   | check_command_i _ (END facts) = END (map read_fact facts)
   | check_command_i _ (BRANCH brs) = BRANCH brs
   | check_command_i ctxt (HAVE goals) = HAVE (Syntax.read_props ctxt goals)
+  | check_command_i ctxt (SUFFICES goal) = SUFFICES (Syntax.read_prop ctxt goal)
   | check_command_i _ (OBTAIN vc) = OBTAIN vc
   | check_command_i _ (SORRY vars) = SORRY vars
   | check_command_i _ (HAMMER facts) = HAMMER (map read_fact facts)

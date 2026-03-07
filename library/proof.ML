@@ -15,6 +15,7 @@ val leading_proof_sequent_of : state -> thm
 val equiv_proof_state : state * state -> bool
 val num_goals   : state -> int
 val map_context : (Proof.context -> Proof.context) -> state -> state
+val schematic_vars_of_leading_goal : state -> (indexname * typ) list
 
 datatype fail_reason = INVALID_OPR | PROOF_FAIL | TERMLANG
 exception OPR_FAIL of fail_reason * string
@@ -57,7 +58,7 @@ val ready_to_finish : state -> bool
 
 (*Thread local*)
 datatype message = New_Items of items
-                 | Goals     of term list option
+                 | Goals     of term list
                  | Consider_Case of string * items
                  | Internal of exn
 val set_reporter : (message (*new items*) -> unit) -> unit
@@ -118,6 +119,14 @@ val HAVE'' : (binding * typ option * mixfix) list
         -> (Attrib.binding * (term * term list) list) list
         -> operation
 val HAVE_CMD : command
+
+val SUFFICES : string -> operation
+val SUFFICES'' : term -> operation
+val SUFFICES_CMD : command
+
+val INST_VAR : (indexname * string) list -> operation
+val INST_VAR'' : (indexname * term) list -> operation
+val INST_VAR_CMD : command
 
 val CONSIDER : (
                (binding * string option * mixfix) list
@@ -372,6 +381,21 @@ val goals_of =
   end
 val goals_of' = goals_of o Thm.prop_of
 
+(* Extract all schematic variables from the leading proof goal *)
+fun schematic_vars_of_leading_goal ((_, HHF (st, _) :: _), _, _) =
+  let
+    (* Get the first goal from the HHF sequent *)
+    val goals = goals_of' st
+    val goal = case goals of
+                 [] => \<^prop>\<open>True\<close>  (* No goals, return True *)
+               | (g :: _) => g
+
+    (* Collect all Vars from the goal term using Term.add_vars *)
+    val vars = Term.add_vars goal []
+   in vars |> distinct (op =)
+  end
+  | schematic_vars_of_leading_goal _ = raise BROKEN_INVARIANT
+
 fun concl_of (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ (Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ X)) = concl_of X
   | concl_of (Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ X) = concl_of X
   | concl_of (Const(\<^const_name>\<open>Pure.prop\<close>, _) $ X) = X
@@ -497,7 +521,7 @@ fun ready_to_finish (s as (SK,_,_)) = stack_is_ready_to_finish SK andalso not (i
 (** REPORTER **)
 
 datatype message = New_Items of items
-                 | Goals     of term list option
+                 | Goals     of term list
                  | Consider_Case of string * items
                  | Internal of exn
 val reporter = Thread_Data.var () : (message -> unit) Thread_Data.var
@@ -513,8 +537,8 @@ fun get_reporter () =
 fun report_goal (ctxt, SK) = (
           (case SK of HHF (st, _) :: _ =>
              (case try Logic.dest_implies (Thm.prop_of st)
-                of SOME (goal, _) => get_reporter () (Goals (SOME [goal]))
-                 | NONE => get_reporter () (Goals (SOME [])))
+                of SOME (goal, _) => get_reporter () (Goals [goal])
+                 | NONE => get_reporter () (Goals []))
               | _ => raise BROKEN_INVARIANT )
           ; (ctxt, SK) )
 
@@ -1155,7 +1179,7 @@ fun raw_apply msg report tac timeout (ctxt, HHF (st, facts) :: L) =
         of NONE => raise OPR_FAIL (PROOF_FAIL, msg)
          | SOME (Seq.Result (ctxt', st'), _) =>
             let val new_goals = Thm.prems_of st'
-             in report (Goals (SOME new_goals))
+             in report (Goals new_goals)
               ; (ctxt', HHF (protect_goals st', facts) :: L)
             end
          | SOME (Seq.Error E, _) => raise OPR_FAIL (PROOF_FAIL, E ()) )
@@ -1317,7 +1341,7 @@ fun TRY_STANDARD SK =
               (K ()) (CONTEXT_TACTIC (Classical.standard_tac (#1 SK) [])) NONE SK
   else SK
 
-val INTRO = timed_OPR_with_ret 20000 ooo INTRO'
+val INTRO = timed_OPR_with_ret 5 ooo INTRO'
 val INTRO_CMD = (OPT_VARS -- OPT_PREMS)
         >> (fn args => fn s => #2 (timed_OPR_with_ret 2 (uncurry (INTRO' SINGLE_GOAL) args) s))
 val INTRO_ALL_CMD = (OPT_VARS -- OPT_PREMS)
@@ -1857,7 +1881,7 @@ fun RULE' [] raw_facts (SK as (ctxt, _)) =
      |> Seq.pull
      |> (fn SOME (st', _) =>
               let val new_goals = Thm.prems_of st'
-               in get_reporter () (Goals (SOME new_goals))
+               in get_reporter () (Goals new_goals)
                 ; (ctxt, HHF (protect_goals st', items) :: SK)
               end 
           | NONE => raise OPR_FAIL (PROOF_FAIL, "Fail to apply the rules" ))
@@ -1978,6 +2002,176 @@ val HAVE_CMD =
      >> (fn ((shows, assumes), fixes) =>
           tolerate_typ (HAVE fixes assumes shows)
                        (fn s => HAVE fixes (remove_typ_ass assumes) (remove_typ_ass shows) s) )
+
+(** SUFFICES **)
+
+(* Check if a term contains schematic variables *)
+fun has_schematic_vars tm =
+  let fun check (Var _) = true
+        | check (Abs (_, _, body)) = check body
+        | check (f $ x) = check f orelse check x
+        | check _ = false
+   in check tm
+  end
+
+(* Apply a "suffices" rule to transform a goal using P --> G *)
+fun apply_suffices_rule st impl_lem ctxt =
+  let
+    (* impl_lem is: ⊢ P --> G *)
+    (* We want to apply it backward to st, replacing goal G with P *)
+
+    (* Strategy: Use mp rule in backward direction
+       The mp rule is: [| ?P --> ?Q; ?P |] ==> Q
+       We instantiate this with our P and G, then resolve with impl_lem
+       to get P ==> G, which we apply backward to replace G with P *)
+
+    val prop = Thm.prop_of impl_lem
+    val (prop_P, prop_G) = case prop of
+        Const(\<^const_name>\<open>Trueprop\<close>, _) $ (Const(\<^const_name>\<open>HOL.implies\<close>, _) $ P $ G)
+          => (P, G)
+      | _ => raise OPR_FAIL (INVALID_OPR, "Expected HOL implication P --> G")
+
+    (* Get the mp theorem: [| ?P --> ?Q; ?P |] ==> ?Q *)
+    val mp_thm = @{thm mp}
+
+    (* Extract the Var structure from mp theorem *)
+    val mp_prems = Logic.strip_imp_prems (Thm.prop_of mp_thm)
+    val prem1_imp = HOLogic.dest_Trueprop (hd mp_prems)
+    val (P_term, Q_term) = HOLogic.dest_imp prem1_imp
+    val ((P_name, P_idx), P_typ) = Term.dest_Var P_term
+    val ((Q_name, Q_idx), Q_typ) = Term.dest_Var Q_term
+
+    (* Instantiate mp_thm with our specific P and G *)
+    val inst = Thm.instantiate
+                 (TVars.empty,
+                  Vars.make [(((P_name, P_idx), P_typ), Thm.cterm_of ctxt prop_P),
+                             (((Q_name, Q_idx), Q_typ), Thm.cterm_of ctxt prop_G)])
+                 mp_thm
+
+    (* Resolve impl_lem with instantiated mp to get: P ==> G *)
+    val resolved = impl_lem RS inst
+
+    (* Apply this backward to replace goal G with P *)
+    val result = Thm.biresolution (SOME ctxt) false [(false, resolved)] 1 st
+              |> Seq.pull
+
+   in case result of
+        SOME (st', _) => protect_goals st'
+      | NONE => raise OPR_FAIL (INVALID_OPR,
+                  "Failed to apply suffices rule - goal might not match")
+  end
+
+fun SUFFICES' prep_prop raw_prop (ctxt0, HHF (st0, items0) :: S) =
+  let
+    (* Extract the current goal *)
+    val goals = goals_of' st0
+    val goal_G = case goals of
+                   [] => raise OPR_FAIL (INVALID_OPR, "SUFFICES requires at least one goal")
+                 | (G :: _) => Logic.strip_assums_concl G
+
+    (* Check for schematic variables in goal *)
+    val _ = if has_schematic_vars goal_G
+            then raise OPR_FAIL (INVALID_OPR,
+                   "SUFFICES does not support goals with schematic variables")
+            else ()
+
+    (* Parse the sufficient condition P *)
+    val prop_P_raw = prep_prop ctxt0 raw_prop
+    val prop_P = case prop_P_raw of
+                   Const(\<^const_name>\<open>Trueprop\<close>, _) $ P => P
+                 | P => P
+
+    (* Create HOL implication: P --> G (where G is atomized if needed) *)
+    val goal_G_atom = case goal_G of
+                        Const(\<^const_name>\<open>Trueprop\<close>, _) $ G => G
+                      | G => G
+    val impl_term = HOLogic.mk_imp (prop_P, goal_G_atom)
+                 |> HOLogic.mk_Trueprop
+    val impl_goal = Thm.cterm_of ctxt0 impl_term
+                 |> Goal.init
+                 |> init_goal ctxt0
+
+    (* Callback when P --> G is proven *)
+    fun CB ctxt' (impl_thm, _, SK', _) =
+      let
+        (* Extract the proven lemma: P --> G *)
+        val impl_lem = Goal.conclude impl_thm
+                    |> finalize_goal ctxt'
+                    |> singleton (Proof_Context.export ctxt' ctxt0)
+
+        (* Apply the implication backward to replace G with P *)
+        val new_st = apply_suffices_rule st0 impl_lem ctxt0
+
+      in (ctxt0, HHF (new_st, items0) :: SK')
+      end
+
+    fun PRT _ t = BUNDL (items0, [BLOCK t, print_stack [HHF (st0, empty_items)]])
+
+    (* Report the new goal P --> G explicitly *)
+    val _ = get_reporter () (Goals [impl_term])
+
+  in (ctxt0, HHF (impl_goal, ([],[]))
+          :: ENDBLK T_END
+          :: MAGIC (CB, PRT, NO_PARAM)
+          :: S)
+  end
+  | SUFFICES' _ _ _ = raise BROKEN_INVARIANT
+
+fun gen_SUFFICES prep_prop raw_prop =
+  timed_OPR 8 (TRANSPARENT_INTRO' #> SUFFICES' prep_prop raw_prop)
+
+val SUFFICES   = gen_SUFFICES Syntax.read_prop
+val SUFFICES'' = gen_SUFFICES (K I)
+
+val SUFFICES_CMD = Parse.prop >> SUFFICES
+
+(** INST_VAR **)
+
+fun INST_VAR' prep_term insts (ctxt, HHF (st, items) :: SK) =
+  let
+    (* Parse all instantiation terms *)
+    val insts_terms = map (fn (idx, raw) => (idx, prep_term ctxt raw)) insts
+
+    (* Build the instantiation for Thm.instantiate *)
+    (* Each instantiation needs: ((indexname, typ), cterm) *)
+    val schematic_vars = Term.add_vars (Thm.prop_of st) []
+
+    (* Create a lookup table for variable types *)
+    val var_types = map (fn ((name, idx), typ) => ((name, idx), typ)) schematic_vars
+                 |> AList.lookup (op =)
+
+    (* Build the Vars table for instantiation *)
+    val inst_pairs = map (fn (idx, t) =>
+          case var_types idx of
+            SOME typ =>
+              let val cterm = Thm.cterm_of ctxt t
+               in ((idx, typ), cterm)
+              end
+          | NONE => raise OPR_FAIL (INVALID_OPR,
+                      "Variable " ^ Term.string_of_vname idx ^
+                      " not found in goal")
+        ) insts_terms
+
+    val inst = (TVars.empty, Vars.make inst_pairs)
+
+    (* Apply the instantiation *)
+    val st' = Thm.instantiate inst st
+
+   in (ctxt, HHF (st', items) :: SK)
+  end
+  | INST_VAR' _ _ _ = raise BROKEN_INVARIANT
+
+fun gen_INST_VAR prep_term insts = timed_OPR 8 (INST_VAR' prep_term insts)
+
+val INST_VAR   = gen_INST_VAR Syntax.read_term
+val INST_VAR'' = gen_INST_VAR (K I)
+
+(* Parser for INST_VAR_CMD *)
+val INST_VAR_CMD =
+  let
+    val single_inst = Args.var --| Args.$$$ "=" -- Parse.term
+   in Parse.and_list1 single_inst >> INST_VAR
+  end
 
 (** CONSIDER **)
 
@@ -2111,7 +2305,7 @@ fun CONSIDER'i raw_dnf (ctxt0, HHF (st0, items0) :: S) =
       val goal0= map (#1 o #4) conj_clauses
               |> foldr1 (fn (A,B) => \<^Const>\<open>disj\<close> $ A $ B)
               |> (fn X => HOLogic.Trueprop $ X) 
-      val _ = get_reporter () (Goals (SOME [goal0]))
+      val _ = get_reporter () (Goals [goal0])
       val goal = goal0
               |> Thm.cterm_of params_ctxt
               |> Goal.init
@@ -2842,6 +3036,8 @@ val CMDS = Symtab.make [
       ("NEXT",    NXT_CMD),
       ("CONSIDER",CONSIDER_CMD),
       ("HAVE",    HAVE_CMD),
+      ("SUFFICES",SUFFICES_CMD),
+      ("INST_VAR",INST_VAR_CMD),
       ("CASE_SPLIT", CASE_SPLIT_CMD),
       ("INDUCT",  INDUCT_CMD),
       ("SIMP" ,   SIMP_CMD),
@@ -2908,6 +3104,8 @@ val keywords = let open Keyword
            (("SORRY", \<^here>), command_spec (thy_end, [])),
            (("CONSIDER",\<^here>),command_spec (prf_asm_goal, [])),
            (("HAVE",  \<^here>), command_spec (prf_goal, [])),
+           (("SUFFICES",\<^here>), command_spec (prf_goal, [])),
+           (("INST_VAR",\<^here>), command_spec (prf_decl, [])),
            (("CASE_SPLIT",  \<^here>), command_spec (prf_goal, [])),
            (("INDUCT",\<^here>), command_spec (prf_goal, [])),
            (("CRUSH", \<^here>), command_spec (prf_goal, [])),
