@@ -42,6 +42,9 @@ async def _edit_tool(args: dict[str, Any]) -> dict[str, Any]:
         raise InternalError(f"Expected ClaudeCode session, got {type(session)}")
     session : ClaudeCode = cast(ClaudeCode, session)
 
+    # Log tool call
+    session.log_tool_call("mcp__proof__edit", args)
+
     step = args["target_step"]
     try:
         match args["action"]:
@@ -50,8 +53,6 @@ async def _edit_tool(args: dict[str, Any]) -> dict[str, Any]:
                 node = session.root.fill(step, gen_node)
                 session.refresh_YAML()  # type: ignore[attr-defined]
                 response = P.filled_step_message(step, session.root, node)
-                session.debug_info(f"[EDIT RESPONSE] {response}")
-                return _mk_ret(response)
             case "insert_before":
                 raise NotImplementedError(P.NOT_IMPLEMENTED_INSERT_BEFORE)
             case "amend":
@@ -62,9 +63,12 @@ async def _edit_tool(args: dict[str, Any]) -> dict[str, Any]:
                 raise NotImplementedError(P.NOT_IMPLEMENTED_DELETE_ALL_AFTER)
             case _:
                 raise ArgumentError(args, P.invalid_action_error(args['action']))
+        session.log_tool_response("mcp__proof__edit", response)
+        session.log_proof_tree_snapshot(f"after_fill_step_{step}")
+        return _mk_ret(response)
     except AoA_Error as e:
         error_msg = str(e)
-        session.debug_info(f"[AoA ERROR] {error_msg}")
+        session.log_tool_response("mcp__proof__edit", f"ERROR: {error_msg}")
         return _mk_ret(error_msg)
 
 @agent_driver("ClaudeCode")
@@ -269,18 +273,18 @@ class ClaudeCode(Session):
                         for block in content:
                             text = getattr(block, "text", None)
                             if isinstance(text, str) and text:
-                                self.debug_info(f"[MODEL] {text}")
+                                self.log_model_output(text)
                             thinking = getattr(block, "thinking", None)
                             if isinstance(thinking, str) and thinking:
-                                self.debug_info(f"[THINKING] {thinking}")
+                                self.log_model_thinking(thinking)
                 unfinished_nodes = set()
                 self.root.unfinished_nodes(unfinished_nodes)
                 if unfinished_nodes:
                     retry_prompt = P.RETRY_PROMPT(unfinished_nodes)
-                    self.debug_info(f"[RETRY] Unfinished nodes: {[node.id for node in unfinished_nodes]}")
-                    self.debug_info(f"[RETRY] Prompt: {retry_prompt}")
+                    self.log_retry(unfinished_nodes, retry_prompt)
                     await client.query(retry_prompt)
                 else:
+                    self.log_proof()
                     return
 
     def refresh_YAML(self):

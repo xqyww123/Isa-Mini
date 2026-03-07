@@ -5,6 +5,7 @@ signature MINILANG_AGENT_AoA = sig
 type driver = string
 val default_driver: driver
 val agent_aoa_driver: string Config.T
+val AoA_log_dir: string Config.T
 
 type state_id = string
 type states = Minilang.state Symtab.table
@@ -18,7 +19,7 @@ datatype acmd = Proof_Opr of {from: state_id, to: state_id, opr: MiniLang_Agent.
               | Check_Term of {state: state_id, term: string}
               | Exit
 
-val AoA_RPC : driver * (MiniLang_Agent.cfg * MiniLang_Agent.budget)
+val AoA_RPC : driver * (MiniLang_Agent.cfg * MiniLang_Agent.budget) * string
            -> Proof.context * thm
            -> MiniLang_Agent.xcmd list * thm (*acomplished proof sequent*)
 
@@ -365,16 +366,34 @@ fun callback (cfg:cfg) (states:states Unsynchronized.ref) (conn:connection) =
            | ERR msgs => write_error' conn packUnit {message=msgs, errobj=()}
   end
 
+val AoA_log_dir = Attrib.setup_config_string \<^binding>\<open>AoA_log_dir\<close>
+      (fn _ =>
+        let val user_home = getenv "ISABELLE_HOME_USER"
+        in if user_home = "" then ""
+           else user_home ^ "/log/AoA"
+        end);
+
+fun make_invocation_id () =
+  let val ms = Time.toMilliseconds (Time.now ())
+      val ser = serial ()
+      val hex_ms = Int.fmt StringCvt.HEX ms
+      val hex_ser = Int.fmt StringCvt.HEX ser
+      val hex_ms_last9 = String.substring (hex_ms, Int.max (0, String.size hex_ms - 9), Int.min (9, String.size hex_ms))
+   in String.concat [hex_ms_last9, "_", hex_ser]
+  end
+
 val AoA_timeout = Time.fromSeconds 10
-fun AoA_cmd (cfg:cfg) (states:states Unsynchronized.ref) : (context * driver, MiniLang_Agent.xcmd list * string option) command =
+fun AoA_cmd (cfg:cfg) (states:states Unsynchronized.ref) : (context * driver * string, MiniLang_Agent.xcmd list * string option) command =
   let val s0 = chk_initial_state (!states)
       val ctxt = Minilang.context_of s0
       val s0_ptree = Minilang.print_state s0
    in {
       name = "IsaMini.AoA",
-      arg_schema = (fn (global_context, driver) =>
-          packTuple3 (context_packer ctxt, minilang_tree_packer ctxt, packString)
-                     (global_context, s0_ptree, driver)),
+      arg_schema = (fn (global_context, driver, invocation_id) =>
+          let val log_dir = Config.get ctxt AoA_log_dir
+          in packTuple5 (context_packer ctxt, minilang_tree_packer ctxt, packString, packString, packString)
+                        (global_context, s0_ptree, driver, log_dir, invocation_id)
+          end),
       ret_schema = unpackPair (unpackList MiniLang_Agent.xcmd_unpacker, unpackOption unpackString),
       timeout = NONE (*SOME AoA_timeout*),
       callback = SOME (callback cfg states)
@@ -383,7 +402,7 @@ fun AoA_cmd (cfg:cfg) (states:states Unsynchronized.ref) : (context * driver, Mi
 
 end
 
-fun AoA_RPC (driver, cfg:cfg) (ctxt, sequent) =
+fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt, sequent) =
   let val global_context = global_context_of (ctxt, sequent)
       val s0 = Minilang.INIT ctxt sequent
             |> Minilang.map_context ( Config.put Minilang.strict_end true
@@ -392,7 +411,7 @@ fun AoA_RPC (driver, cfg:cfg) (ctxt, sequent) =
                                    #> Config.put Minilang.INTRO_mk_block true)
       val state = Unsynchronized.ref (Symtab.make [("$init", s0)])
       val (xcmds, s1o) =
-            Remote_Procedure_Calling.call_command (AoA_cmd cfg state) (global_context, driver)
+            Remote_Procedure_Calling.call_command (AoA_cmd cfg state) (global_context, driver, invocation_id)
    in case s1o
    of SOME s1 => (
    case Symtab.lookup (!state) s1
@@ -435,32 +454,45 @@ fun AoA_REPL_App (cin, cout, toplevel) =
                           ; ret
                         end
 
-      val (driver, cfg) = read (unpackPair (unpackString, unpackPair (unpackCfg, unpackBudget)))
+      val (invocation_id, driver, cfg) =
+            read (unpackTuple3 (unpackString, unpackString, unpackPair (unpackCfg, unpackBudget)))
       val transition = Toplevel.empty
             |> Toplevel.proof (
                   Proof.refine_primitive (fn ctxt => fn sequent =>
-                    \<^try>\<open>
-                    let val (time, (_, seq)) = Timing.timing (AoA_RPC (driver, cfg)) (ctxt, sequent)
-                     in REPL_Server.output cout (packTuple3 (packBool, packInt, packInt))
-                             ( true,
-                               Time.toMilliseconds (#elapsed time),
-                               Time.toMilliseconds (#cpu time)
-                             )
-                      ; BinIO.StreamIO.flushOut cout
-                      ; seq
-                    end
-                    catch E as Minilang.OPR_FAIL (typ, msg) =>
-                        let val typs = case typ of Minilang.INVALID_OPR => "INVALID_OPR : "
-                                                 | Minilang.PROOF_FAIL  => "PROOF FAIL : "
-                         in REPL_Server.output_err cout (typs ^ msg)
+                    let val start_time = Timing.start ()
+                     in \<^try>\<open>
+                        let val (_, seq) = AoA_RPC (driver, cfg, invocation_id) (ctxt, sequent)
+                            val time = Timing.result start_time
+                         in REPL_Server.output cout (packTuple3 (packBool, packInt, packInt))
+                                 ( true,
+                                   Time.toMilliseconds (#elapsed time),
+                                   Time.toMilliseconds (#cpu time)
+                                 )
                           ; BinIO.StreamIO.flushOut cout
-                          ; raise E
+                          ; seq
                         end
-                      | E => (
-                            REPL_Server.output_err cout (Runtime.exn_message E)
-                          ; BinIO.StreamIO.flushOut cout
-                          ; raise E )\<close>
-                    )
+                        catch E as Minilang.OPR_FAIL (typ, msg) =>
+                            let val typs = case typ of Minilang.INVALID_OPR => "INVALID_OPR : "
+                                                     | Minilang.PROOF_FAIL  => "PROOF FAIL : "
+                             in REPL_Server.output_err cout (typs ^ msg)
+                              ; BinIO.StreamIO.flushOut cout
+                              ; raise E
+                            end
+                          | Remote_Procedure_Calling.Remote_Calling_Failure {message, ...} =>
+                            let val time = Timing.result start_time
+                             in REPL_Server.output cout (packTuple3 (packBool, packInt, packInt))
+                                   ( false,
+                                     Time.toMilliseconds (#elapsed time),
+                                     Time.toMilliseconds (#cpu time)
+                                   )
+                              ; BinIO.StreamIO.flushOut cout
+                              ; sequent
+                            end
+                          | E => (
+                                REPL_Server.output_err cout (Runtime.exn_message E)
+                              ; BinIO.StreamIO.flushOut cout
+                              ; raise E )\<close>
+                    end)
                   )
       val (_, toplevel') = Toplevel.command_errors false transition toplevel
    in the_default toplevel toplevel'
@@ -481,7 +513,12 @@ fun is_dummy th =
 fun method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
   if is_dummy sequent then NONE
   else let val driver = Config.get ctxt agent_aoa_driver
-        in AoA_RPC (driver, MiniLang_Agent.default_cfg) (ctxt, sequent)
+           val invocation_id = make_invocation_id ()
+           val log_dir = Config.get ctxt AoA_log_dir
+           val log_path = if log_dir = "" then "(no logging)"
+                          else log_dir ^ "/" ^ invocation_id
+           val _ = writeln ("Agent-of-Agents (driver: " ^ driver ^ ", logs: " ^ log_path ^ ")")
+        in AoA_RPC (driver, MiniLang_Agent.default_cfg, invocation_id) (ctxt, sequent)
            |> (fn (_, sequent') => SOME (Seq.Result (ctxt, sequent'), Seq.empty))
        end )
 

@@ -10,7 +10,7 @@ Error: Unfinished Proof! Call command `edit` with action `fill` and target step 
 pending proof goal:
   rev (rev l) = l
 --------------------------------------------------
-Case Split
+Induction
 --------------------------------------------------
 variables:
   - l: 'a list
@@ -18,31 +18,28 @@ You could add global declarations by calling command `edit` with action `fill` a
 goal: rev (rev l) = l
 proof:
   - step id: 1
-    thought: Case split
-    operation: CaseSplit
+    thought: some thought about Induction
+    operation: Induction
     target term: l
     cases:
       - goal id: 1.Nil
-        premises:
-          - Nil.prem0: l = []
-        goal: rev (rev l) = l
+        goal: rev (rev []) = []
         proof: empty
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Nil.1` to provide the proof for the following goal.
         pending proof goal:
-          rev (rev l) = l
+          rev (rev []) = []
       - goal id: 1.Cons
         variables:
           - a: 'a
-          - list: 'a list
         premises:
-          - Cons.prem0: l = a # list
-        goal: rev (rev l) = l
+          - Cons.IH: rev (rev l) = l
+        goal: rev (rev (a # l)) = a # l
         proof: empty
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Cons.1` to provide the proof for the following goal.
         pending proof goal:
-          rev (rev l) = l
+          rev (rev (a # l)) = a # l
 --------------------------------------------------
-Case Split
+Obvious
 --------------------------------------------------
 variables:
   - l: 'a list
@@ -50,47 +47,55 @@ You could add global declarations by calling command `edit` with action `fill` a
 goal: rev (rev l) = l
 proof:
   - step id: 1
-    thought: Case split
-    operation: CaseSplit
+    thought: some thought about Induction
+    operation: Induction
     target term: l
     cases:
       - goal id: 1.Nil
-        premises:
-          - Nil.prem0: l = []
-        goal: rev (rev l) = l
+        goal: rev (rev []) = []
         proof:
           - step id: 1.Nil.1
-            thought: Case split
-            operation: CaseSplit
-            target term: l
-            cases:
-              - goal id: 1.Nil.1.Nil1
-                premises:
-                  - Nil1.prem0: l = []
-                goal: rev (rev l) = l
-                proof: empty
-                Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Nil.1.Nil1.1` to provide the proof for the following goal.
-                pending proof goal:
-                  rev (rev l) = l
-              - goal id: 1.Nil.1.Cons
-                variables:
-                  - a: 'a
-                  - list: 'a list
-                premises:
-                  - Cons.prem0: l = a # list
-                goal: rev (rev l) = l
-                proof: empty
-                Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Nil.1.Cons.1` to provide the proof for the following goal.
-                pending proof goal:
-                  rev (rev l) = l
+            thought: Obviously the statement holds.
+            operation: Obvious
       - goal id: 1.Cons
         variables:
           - a: 'a
-          - list: 'a list
         premises:
-          - Cons.prem0: l = a # list
-        goal: rev (rev l) = l
+          - Cons.IH: rev (rev l) = l
+        goal: rev (rev (a # l)) = a # l
         proof: empty
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Cons.1` to provide the proof for the following goal.
         pending proof goal:
-          rev (rev l) = l
+          rev (rev (a # l)) = a # l
+--------------------------------------------------
+Obvious
+--------------------------------------------------
+variables:
+  - l: 'a list
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: rev (rev l) = l
+proof:
+  - step id: 1
+    thought: some thought about Induction
+    operation: Induction
+    target term: l
+    cases:
+      - goal id: 1.Nil
+        goal: rev (rev []) = []
+        proof:
+          - step id: 1.Nil.1
+            thought: Obviously the statement holds.
+            operation: Obvious
+      - goal id: 1.Cons
+        variables:
+          - a: 'a
+        premises:
+          - Cons.IH: rev (rev l) = l
+        goal: rev (rev (a # l)) = a # l
+        proof:
+          - step id: 1.Cons.1
+            thought: Obviously the statement holds.
+            operation: Obvious
+            with facts:
+              - Cons.IH
+Unfinished nodes: 0

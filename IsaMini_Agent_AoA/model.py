@@ -1,10 +1,13 @@
 from time import time
+from datetime import datetime
+from pathlib import Path
 from .helper import split_id_into_segs, cat_segs_into_id, incr_id_major, incr_id_minor, MyIO
 from typing import Any, Iterable, NamedTuple, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired
 from Isabelle_RPC_Host import Connection, IsabelleError
 from enum import Enum
 from IsaREPL import Client as IsaREPL
 import logging
+import yaml
 from io import StringIO
 
 type varname = str
@@ -697,19 +700,23 @@ class Minilang_State:
         if isinstance(opr, Minilang_Operation):
             dest_name = assign_to.name
             self.connection.write((1, (self.name, dest_name, (opr.command, opr.arg))))
-            the_session().debug_info(
-                "Minilang_State.execute(from=%s, to=%s, command=%s)",
-                self.name,
-                dest_name,
-                opr,
+            # Log proof operation
+            the_session().log_proof_operation(
+                step="execute",
+                operation=opr.command,
+                details={
+                    "from_state": self.name,
+                    "to_state": dest_name,
+                    "operation": str(opr),
+                }
             )
             try:
                 (msgs, tree) = self.connection.read()
-                the_session().debug_info("Minilang_State.execute: success")
             except IsabelleError as err:
-                the_session().debug_info(
-                    "Minilang_State.execute: Error! %s",
-                    err,
+                the_session().log_proof_operation_error(
+                    error_message=str(err),
+                    errors=err.errors,
+                    operation=str(opr)
                 )
                 if err.errors == ["beginning_state_not_found"]:
                     raise InternalError("The beginning state of the execution is not initialized!")
@@ -2441,21 +2448,129 @@ _local_store = LocalSession()
 def the_session() -> 'Session':
     return _local_store.session
 
+
+# Custom string representer for literal block style on multiline strings
+def _str_representer(dumper, data):
+    """
+    Custom YAML string representer that uses literal block style (|)
+    for multiline strings and regular style for single-line strings.
+    """
+    if '\n' in data:
+        return dumper.represent_scalar('tag:yaml.org,2002:str', data, style='|')
+    return dumper.represent_scalar('tag:yaml.org,2002:str', data)
+
+# Register the custom representer
+yaml.add_representer(str, _str_representer)
+
 # abstract base class for a session
 class Session:
     root: Root
     age: int
     logger: logging.Logger | None
+    log_dir: Path | None
+    interaction_log_path: Path | None
+    proofs_log_path: Path | None
+    proof_oprs_log_path: Path | None
+    interaction_log_file: Any | None  # File handle for interaction.yaml
+    proofs_log_file: Any | None       # File handle for proofs.yaml
+    proof_oprs_log_file: Any | None   # File handle for proof_oprs.yaml
 
     # class variables
     Driver: dict[str, Type['Session']] = {}
 
-    def __init__(self, logger: logging.Logger | None = None):
+    def __init__(self, logger: logging.Logger | None = None, log_dir: str | Path = ""):
         # if hasattr(_local_store, 'session'):
         #     raise InternalError("The session has already been set in this thread.")
         _local_store.session = self
         self.age = 0
         self.logger = logger
+        self.log_dir = None
+        self.interaction_log_path = None
+        self.proofs_log_path = None
+        self.proof_oprs_log_path = None
+        self.interaction_log_file = None
+        self.proofs_log_file = None
+        self.proof_oprs_log_file = None
+        if log_dir != "":
+            self._setup_log_directory(log_dir)
+
+    def _setup_log_directory(self, log_dir: str | Path):
+        """
+        Set up the log directory and create log files.
+
+        Args:
+            log_dir: Path to the logging directory
+
+        Raises:
+            InternalError: If directory cannot be created or is not writable
+        """
+        import os
+        from datetime import datetime
+
+        self.log_dir = Path(log_dir)
+
+        # If directory exists and is non-empty, rename it before creating a new one
+        if self.log_dir.exists() and any(self.log_dir.iterdir()):
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            old_dir_name = f"{self.log_dir.name}.old_{timestamp}"
+            old_dir_path = self.log_dir.parent / old_dir_name
+            try:
+                self.log_dir.rename(old_dir_path)
+                if self.logger:
+                    self.logger.info(f"Renamed existing log directory to {old_dir_path}")
+            except Exception as e:
+                raise InternalError(f"Failed to rename existing log directory {self.log_dir}: {e}")
+
+        # Create directory if it doesn't exist
+        try:
+            self.log_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            raise InternalError(f"Failed to create log directory {self.log_dir}: {e}")
+
+        # Check read and write permissions
+        if not os.access(self.log_dir, os.R_OK | os.W_OK):
+            raise InternalError(f"Log directory {self.log_dir} is not readable and writable")
+
+        # Set up log file paths and open files
+        self.interaction_log_path = self.log_dir / "interaction.yaml"
+        self.proofs_log_path = self.log_dir / "proofs.yaml"
+        self.proof_oprs_log_path = self.log_dir / "proof_oprs.yaml"
+
+        # Open log files in append mode, keep them open
+        self.interaction_log_file = open(self.interaction_log_path, 'a', encoding='utf-8')
+        self.proofs_log_file = open(self.proofs_log_path, 'a', encoding='utf-8')
+        self.proof_oprs_log_file = open(self.proof_oprs_log_path, 'a', encoding='utf-8')
+
+        # Write initial session start markers
+        session_start = {
+            "event": "SESSION_START",
+            "timestamp": datetime.now().isoformat(),
+        }
+        self._append_yaml(self.interaction_log_file, session_start)
+        self._append_yaml(self.proofs_log_file, session_start)
+        self._append_yaml(self.proof_oprs_log_file, session_start)
+
+    def _append_yaml(self, file_handle: Any, data: dict[str, Any]):
+        """
+        Append a YAML document to an open file using multi-document format.
+
+        Args:
+            file_handle: Open file handle
+            data: Dictionary to append as a YAML document
+        """
+        # Get current position to check if file is empty
+        current_pos = file_handle.tell()
+        if current_pos > 0:
+            file_handle.write('\n---\n')
+        else:
+            file_handle.write('---\n')
+        yaml.dump(data, file_handle,
+                  default_flow_style=False,
+                  allow_unicode=True,
+                  sort_keys=False,  # Preserve field insertion order
+                  width=120,        # Wider lines for readability
+                  indent=2)         # Standard indentation
+        file_handle.flush()  # Ensure data is written immediately
 
     def __enter__(self) -> 'Session':
         """Enter the runtime context for this session."""
@@ -2469,6 +2584,25 @@ class Session:
 
     def close(self):
         """Clean up the session and release resources."""
+        # Write session end markers and close log files
+        if self.log_dir is not None:
+            session_end = {
+                "event": "SESSION_END",
+                "timestamp": datetime.now().isoformat(),
+            }
+            if self.interaction_log_file is not None:
+                self._append_yaml(self.interaction_log_file, session_end)
+                self.interaction_log_file.close()
+                self.interaction_log_file = None
+            if self.proofs_log_file is not None:
+                self._append_yaml(self.proofs_log_file, session_end)
+                self.proofs_log_file.close()
+                self.proofs_log_file = None
+            if self.proof_oprs_log_file is not None:
+                self._append_yaml(self.proof_oprs_log_file, session_end)
+                self.proof_oprs_log_file.close()
+                self.proof_oprs_log_file = None
+
         # Clean up the thread-local session reference
         if hasattr(_local_store, 'session') and _local_store.session is self:
             delattr(_local_store, 'session')
@@ -2477,7 +2611,103 @@ class Session:
         if hasattr(self, 'root'):
             raise InternalError("The 'root' field has already been assigned.")
         self.root = root
+
+    def _log(self, log_file_handle: Any, event_type: str, debug_messages: Callable[[], list[str]] | None, **data):
+        """
+        Internal method to log events to YAML and debug logger.
+
+        Args:
+            log_file_handle: Open file handle for the log file
+            event_type: Type of event (e.g., "MODEL_OUTPUT", "PROOF_OPERATION")
+            debug_messages: Callable that returns list of debug messages (only called if logger is not None)
+            **data: Additional data fields for the YAML log entry
+        """
+        if log_file_handle is not None:
+            log_entry = {
+                "event": event_type,
+                "timestamp": datetime.now().isoformat(),
+                **data
+            }
+            self._append_yaml(log_file_handle, log_entry)
+        if self.logger is not None and debug_messages is not None:
+            for msg in debug_messages():
+                self.logger.debug(msg)
+
+    # Model interaction logging methods
+    def log_model_output(self, text: str):
+        """Log model text output to interaction.yaml."""
+        self._log(self.interaction_log_file, "MODEL_OUTPUT",
+                  lambda: [f"[MODEL] {text}"], text=text)
+
+    def log_model_thinking(self, thinking: str):
+        """Log model thinking output to interaction.yaml."""
+        self._log(self.interaction_log_file, "MODEL_THINKING",
+                  lambda: [f"[THINKING] {thinking}"], thinking=thinking)
+
+    def log_tool_call(self, tool_name: str, tool_input: dict[str, Any]):
+        """Log tool call to interaction.yaml."""
+        self._log(self.interaction_log_file, "TOOL_CALL",
+                  lambda: [f"[TOOL_CALL] {tool_name}: {tool_input}"],
+                  tool_name=tool_name, tool_input=tool_input)
+
+    def log_tool_response(self, tool_name: str, response: str):
+        """Log tool response to interaction.yaml."""
+        self._log(self.interaction_log_file, "TOOL_RESPONSE",
+                  lambda: [f"[TOOL_RESPONSE] {tool_name}: {response}"],
+                  tool_name=tool_name, response=response)
+
+    def log_retry(self, unfinished_nodes: set[Any], retry_prompt: str):
+        """Log retry attempt to interaction.yaml."""
+        node_ids = [str(node.id) for node in unfinished_nodes]
+        self._log(self.interaction_log_file, "RETRY",
+                  lambda: [f"[RETRY] Unfinished nodes: {[node.id for node in unfinished_nodes]}",
+                           f"[RETRY] Prompt: {retry_prompt}"],
+                  unfinished_nodes=node_ids,
+                  retry_prompt=retry_prompt)
+
+    # Proof tree logging methods
+    def log_proof_operation(self, step: str, operation: str, details: dict[str, Any]):
+        """Log proof operation to proof_oprs.yaml."""
+        self._log(self.proof_oprs_log_file, "PROOF_OPERATION",
+                  lambda: [f"[PROOF_OP] Step {step}: {operation} - {details}"],
+                  step=step, operation=operation, details=details)
+
+    def log_proof_tree_snapshot(self, snapshot_type: str):
+        """Log proof tree snapshot to proofs.yaml."""
+        tree_yaml = self.root.print_string(0)
+        self._log(self.proofs_log_file, "PROOF_TREE_SNAPSHOT", None,
+                  snapshot_type=snapshot_type, tree_yaml=tree_yaml)
+
+    def log_proof(self):
+        """
+        Log the current proof tree to proof.yaml in the log directory.
+        """
+        if self.log_dir is not None:
+            proof_yaml_path = self.log_dir / "proof.yaml"
+            try:
+                with open(proof_yaml_path, 'w', encoding='utf-8') as f:
+                    self.root.print(0, MyIO(f))
+                if self.logger is not None:
+                    self.logger.debug(f"[PROOF] Written to {proof_yaml_path}")
+            except Exception as e:
+                if self.logger is not None:
+                    self.logger.error(f"Failed to write proof to {proof_yaml_path}: {e}")
+
+    def log_proof_operation_error(self, error_message: str, **extra_data):
+        """
+        Log a proof operation error to proof_oprs.yaml.
+
+        Args:
+            error_message: Error message or description
+            **extra_data: Additional error-related data (e.g., errors list, operation details)
+        """
+        self._log(self.proof_oprs_log_file, "OPERATION_ERROR",
+                  lambda: [f"[PROOF_OP_ERROR] {error_message}"],
+                  error_message=error_message,
+                  **extra_data)
+
     def debug_info(self, msg: str, *args, **kwargs):
+        """Legacy debug logging method. Prefer using log_error for errors."""
         if self.logger is not None:
             self.logger.debug(msg, *args, **kwargs)
     def run(self):

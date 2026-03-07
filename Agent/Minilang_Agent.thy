@@ -17,6 +17,7 @@ method_setup AgentAoA = \<open>
   Scan.succeed (K MiniLang_Agent_AoA.method)
 \<close>
 
+
 (*
 theorem sqrt2_not_rational:
     "sqrt 2 \<notin> \<rat>"

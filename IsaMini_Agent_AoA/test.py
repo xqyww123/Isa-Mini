@@ -1,4 +1,5 @@
 import os
+import time
 from IsaREPL import REPLFail
 from typing import Any, NamedTuple, Sequence, TypedDict, Callable, TextIO, cast
 from . import model
@@ -57,7 +58,7 @@ def _test_sqrt2(root: Root, file: MyIO):
     print_header("Have", file)
     root.print(0, file)
 
-#@test("branch", "Test001.thy", 6)
+@test("branch", "Test001.thy", 6)
 def _test_branch(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -72,7 +73,7 @@ def _test_branch(root: Root, file: MyIO):
     print_header("Branch", file)
     root.print(0, file)
 
-#@test("EquivDerive", "Test003.thy", 8)
+@test("EquivDerive", "Test003.thy", 8)
 def _test_EquivDerive(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -83,7 +84,7 @@ def _test_EquivDerive(root: Root, file: MyIO):
     print_header("Inference Rule", file)
     root.print(0, file)
 
-#@test("IntroConj", "Test003.thy", 8)
+@test("IntroConj", "Test003.thy", 8)
 def _test_IntroConj(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -94,7 +95,7 @@ def _test_IntroConj(root: Root, file: MyIO):
     print_header("Inference Rule", file)
     root.print(0, file)
 
-#@test("IntroConj_short", "Test003.thy", 8)
+@test("IntroConj_short", "Test003.thy", 8)
 def _test_IntroConj_short(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -173,7 +174,8 @@ def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = N
         abs_file_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "Tests", test_case.file))
         repl.file(abs_file_path, test_case.line, 0, cache_position=False, use_cache=False)
         repl.run_app('Minilang.AoA')
-        mp.pack((f"{mode}.{test_case.name}", (_cfg, _budget)), repl.cout)
+        invocation_id = f"{mode}.{test_case.name}"
+        mp.pack((invocation_id, f"{mode}.{test_case.name}", (_cfg, _budget)), repl.cout)
         repl.cout.flush()
         try:
             (success, elapsed, cpu_time) = Client._parse_control_(repl.unpack.unpack())
@@ -183,6 +185,6 @@ def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = N
             else:
                 raise
         if success:
-            print(f"\033[92mTest {test_case.name} passed, elapsed: {elapsed}s, cpu_time: {cpu_time}s\033[0m")
+            print(f"\033[92mTest {test_case.name} passed, elapsed: {elapsed}ms, cpu_time: {cpu_time}ms\033[0m")
         else:
-            print(f"\033[91mTest {test_case.name} failed, elapsed: {elapsed}s, cpu_time: {cpu_time}s\033[0m")
+            print(f"\033[91mTest {test_case.name} failed, elapsed: {elapsed}ms, cpu_time: {cpu_time}ms\033[0m")
