@@ -3,6 +3,7 @@ import jsoncomment
 import asyncio
 import os
 import tempfile
+import shutil
 from .model import *
 from . import prompts as P
 from claude_agent_sdk import tool, create_sdk_mcp_server, ClaudeAgentOptions, ClaudeSDKClient, HookMatcher
@@ -39,14 +40,18 @@ async def _edit_tool(args: dict[str, Any]) -> dict[str, Any]:
     session = the_session()
     if not isinstance(session, ClaudeCode):
         raise InternalError(f"Expected ClaudeCode session, got {type(session)}")
+    session : ClaudeCode = cast(ClaudeCode, session)
 
     step = args["target_step"]
     try:
         match args["action"]:
             case "fill":
-                gen_node = Parse_Node(args)
+                gen_node = Parse_Node(args["proof_operation"])
                 node = session.root.fill(step, gen_node)
-                return _mk_ret(P.filled_step_message(step, session.root, node))
+                session.refresh_YAML()  # type: ignore[attr-defined]
+                response = P.filled_step_message(step, session.root, node)
+                session.debug_info(f"[EDIT RESPONSE] {response}")
+                return _mk_ret(response)
             case "insert_before":
                 raise NotImplementedError(P.NOT_IMPLEMENTED_INSERT_BEFORE)
             case "amend":
@@ -58,7 +63,9 @@ async def _edit_tool(args: dict[str, Any]) -> dict[str, Any]:
             case _:
                 raise ArgumentError(args, P.invalid_action_error(args['action']))
     except AoA_Error as e:
-        return _mk_ret(str(e))
+        error_msg = str(e)
+        session.debug_info(f"[AoA ERROR] {error_msg}")
+        return _mk_ret(error_msg)
 
 @agent_driver("ClaudeCode")
 class ClaudeCode(Session):
@@ -117,9 +124,21 @@ class ClaudeCode(Session):
     def initialize(self, root: Root):
         super().initialize(root)
         with open(self.YAML_path, "w", encoding="utf-8") as f:
-            root.print(0, f)
+            root.print(0, MyIO(f))
+
     def run(self):
         asyncio.run(self._run())
+
+    def close(self):
+        """Clean up the session and remove the temporary directory."""
+        super().close()
+        # Remove the temporary working directory
+        if hasattr(self, 'working_dir') and os.path.exists(self.working_dir):
+            try:
+                shutil.rmtree(self.working_dir)
+                self.debug_info(f"[CLEANUP] Removed temporary directory: {self.working_dir}")
+            except Exception as e:
+                self.debug_info(f"[CLEANUP] Failed to remove temporary directory {self.working_dir}: {e}")
 
     def _get_tool_not_allowed_reason(self, tool: str, tool_input: dict) -> str:
         """Generate detailed rejection reason for tools not in whitelist."""
@@ -263,3 +282,7 @@ class ClaudeCode(Session):
                     await client.query(retry_prompt)
                 else:
                     return
+
+    def refresh_YAML(self):
+        with open(self.YAML_path, 'w') as f:
+            self.root.print(0, MyIO(f))

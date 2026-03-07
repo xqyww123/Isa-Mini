@@ -15,6 +15,7 @@ datatype acmd = Proof_Opr of {from: state_id, to: state_id, opr: MiniLang_Agent.
               | Retrieve_Fact of { state: state_id, name: xstring }
               | Compute_Bindings of {state: state_id, var_names: string list, fact_names: string list}
               | Need_Intro of {state: state_id}
+              | Check_Term of {state: state_id, term: string}
               | Exit
 
 val AoA_RPC : driver * (MiniLang_Agent.cfg * MiniLang_Agent.budget)
@@ -43,6 +44,7 @@ datatype acmd = Proof_Opr of {from: state_id, to: state_id, opr: MiniLang_Agent.
               | Retrieve_Fact of { state: state_id, name: xstring }
               | Compute_Bindings of {state: state_id, var_names: string list, fact_names: string list}
               | Need_Intro of {state: state_id}
+              | Check_Term of {state: state_id, term: string}
               | Exit
 
 type context = {
@@ -173,6 +175,8 @@ val acmd_unpacker =
          #> apfst (fn state => Need_Intro {state=state})
      | 5 => unpackPair (unpackString, unpackString)
          #> apfst (fn (state, name) => Retrieve_Fact {state=state, name=name})
+     | 6 => unpackPair (unpackString, unpackString)
+         #> apfst (fn (state, term) => Check_Term {state=state, term=term})
      | _ => raise Unpack)
 
 fun acmd_packer (Proof_Opr {from, to, opr}) =
@@ -188,6 +192,8 @@ fun acmd_packer (Proof_Opr {from, to, opr}) =
       packPair (packInt, packString) (4, state)
   | acmd_packer (Retrieve_Fact {state, name}) =
       packPair (packInt, packPair (packString, packString)) (5, (state, name))
+  | acmd_packer (Check_Term {state, term}) =
+      packPair (packInt, packPair (packString, packString)) (6, (state, term))
   | acmd_packer Exit =
       packPair (packInt, packUnit) (0, ())
 
@@ -331,6 +337,30 @@ fun callback (cfg:cfg) (states:states Unsynchronized.ref) (conn:connection) =
                 val result = MiniLang_Agent.check_need_intro s0
              in write conn packBool result
             end
+         | Check_Term {state, term} => (
+            let val s0 = case Symtab.lookup (!states) state
+                           of SOME s => s
+                            | NONE => raise ERR ["beginning_state_not_found"]
+                val ctxt = Minilang.context_of s0
+                val parsed_term = Syntax.read_term ctxt term
+                val term_type = Term.type_of parsed_term
+                val type_string = Syntax.string_of_typ ctxt term_type
+                val frees = Term.add_frees parsed_term []
+                    |> map (fn (name, ty) => (name, Syntax.string_of_typ ctxt ty))
+                val vars = Term.add_vars parsed_term []
+                    |> map (fn (name_idx, ty) =>
+                            (Term.string_of_vname name_idx, Syntax.string_of_typ ctxt ty))
+             in write conn (packTuple3 (packString,
+                                        packList (packPair (packString, packString)),
+                                        packList (packPair (packString, packString))))
+                          (type_string, frees, vars)
+            end handle ERROR msg =>
+                write_error' conn packUnit {message=["Unparsed", msg], errobj=()}
+              | TERM (msg, _) =>
+                write_error' conn packUnit {message=["Unparsed", msg], errobj=()}
+              | TYPE (msg, _, _) =>
+                write_error' conn packUnit {message=["Unparsed", msg], errobj=()}
+           )
     ) handle EXIT => ()
            | ERR msgs => write_error' conn packUnit {message=msgs, errobj=()}
   end

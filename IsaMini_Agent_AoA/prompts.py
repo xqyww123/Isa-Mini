@@ -22,7 +22,7 @@ EDIT_TOOL_DESCRIPTION = "Edit the proof.yaml file"
 def filled_step_message(step: str, root: Root, node: Node) -> str:
     """Message returned when a step is successfully filled."""
     file = MyIO(StringIO())
-    file.write(f"Filled step {step}:\n")
+    file.write(f"Successfully filled step {step}:\n")
     node.print(1, file)
     file.write("Outline:\n")
     root.quickview(1, file)

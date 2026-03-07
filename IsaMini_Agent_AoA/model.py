@@ -1,6 +1,6 @@
 from time import time
 from .helper import split_id_into_segs, cat_segs_into_id, incr_id_major, incr_id_minor, MyIO
-from typing import Any, Iterable, NamedTuple, Sequence, TypedDict, Callable, cast, Type, Literal
+from typing import Any, Iterable, NamedTuple, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired
 from Isabelle_RPC_Host import Connection, IsabelleError
 from enum import Enum
 from IsaREPL import Client as IsaREPL
@@ -233,6 +233,13 @@ class FactNotFound_ByName(FactNotFound):
 
 class InternalError(OprError):
     pass
+class InternalError_UnparsedTerm(InternalError):
+    def __init__(self, term: str, reason: str):
+        self.term = term
+        self.reason = reason
+    def __str__(self) -> str:
+        return f"Syntax error in term `{self.term}`\n{self.reason}"
+
 class NodeNotFound(OprError):
     def __init__(self, id: step):
         self.id = id
@@ -285,6 +292,16 @@ class ArgumentError_MissingRequiredKeys(ArgumentError):
             arg,
             f"Missing required field(s) for operation {operation}: {joined}",
         )
+class ArgumentError_UnparsedTerm(ArgumentError):
+    def __init__(self, arg: ToolCall_arg, term: str, reason: str):
+        super().__init__(arg, f"Syntax error in term `{term}`\n{reason}")
+
+    @staticmethod
+    def from_internal_error(arg: ToolCall_arg, internal_error: InternalError_UnparsedTerm) -> 'ArgumentError_UnparsedTerm':
+        """
+        Convert an InternalError_UnparsedTerm to an ArgumentError_UnparsedTerm.
+        """
+        return ArgumentError_UnparsedTerm(arg, internal_error.term, internal_error.reason)
 
 def _check_tool_arg_keys(toolarg_typed_dict: type, data: ToolCall_arg, operation: str) -> None:
     """
@@ -764,6 +781,26 @@ class Minilang_State:
         self.connection.write((5, (self.name, name)))
         result = self.connection.read()
         return result
+    def check_term(self, term_str: str) -> tuple[typ, Vars, Vars]:
+        """
+        Parse and check a term string using Syntax.read_term.
+        Returns a tuple of (term_type, frees, vars) where:
+        - term_type: pretty-printed type of the term
+        - frees: dict of {name: type} for free variables
+        - vars: dict of {name: type} for schematic variables (names formatted as ?name.idx)
+        Raises InternalError_UnparsedTerm if parsing fails.
+        """
+        self.connection.write((6, (self.name, term_str)))
+        try:
+            term_type, frees_list, vars_list = self.connection.read()
+            frees = dict(frees_list)
+            vars = dict(vars_list)
+            return (term_type, frees, vars)
+        except IsabelleError as e:
+            if len(e.errors) >= 2 and e.errors[0] == "Unparsed":
+                raise InternalError_UnparsedTerm(term_str, e.errors[1])
+            else:
+                raise
 ### The Abstract Model
 
 type gen_node = Callable[[NodeConfig], 'Node']
@@ -932,9 +969,13 @@ class Node:
             raise InternalError("Don't know how to refresh a node and all its after nodes when the node's parent is none")
         else:
             node = self.parent._insert_before_child(self, gen_node)
-            node._refresh_me_alone(True)
-            if node.status.status == EvaluationStatus.Status.FAILURE:
-                raise CannotInsert_EvaluationFailed(self, node.status.reason)
+            try:
+                node._refresh_me_alone(True)
+                if node.status.status == EvaluationStatus.Status.FAILURE:
+                    raise CannotInsert_EvaluationFailed(self, node.status.reason)
+            except AoA_Error:
+                self.parent._remove_child(node)
+                raise
             node.refresh_all_after_me()
     def append(self, gen_node: may_gen_node) -> 'Node | None':
         raise NotImplementedError("`append` must be implemented by subclass")
@@ -1122,6 +1163,12 @@ class NonLeaf_Node(Node):
                 self.sub_nodes.insert(i, node)
                 return node
         raise InternalError("Cannot find the target to insert-before in my children")
+    def _remove_child(self, child: Node) -> None:
+        for i, c in enumerate(self.sub_nodes):
+            if c is child:
+                self.sub_nodes.pop(i)
+                return
+        raise InternalError("The target node is not my children")
     def _resulting_state_of_all_children(self):
         raise NotImplementedError("`_resulting_state_of_all_children` must be implemented by sub-classes")
     def _resulting_state_of_child(self, node: Node) -> Minilang_State:
@@ -1394,9 +1441,13 @@ class StdBlock(NonLeaf_Node):
         if node is None:
             return None
         self.sub_nodes.append(node)
-        node._refresh_me_alone(True)
-        if node.status.status == EvaluationStatus.Status.FAILURE:
-            raise CannotAppend(node, node.status.reason)
+        try:
+            node._refresh_me_alone(True)
+            if node.status.status == EvaluationStatus.Status.FAILURE:
+                raise CannotAppend(node, node.status.reason)
+        except AoA_Error:
+            self.sub_nodes.pop()
+            raise
         if self.opening():
             def my_gen_node(config: NodeConfig) -> Node | None:
                 if config.ml_state.need_intro():
@@ -2118,7 +2169,7 @@ class Induction_ToolArg_Variable(TypedDict):
 class Induction_ToolArg(TypedDict):
     thought: str
     target_isabelle_term: str
-    rule: Induction_Rule
+    rule: NotRequired[Induction_Rule]  # default: 'default'
     variables: list[Induction_ToolArg_Variable]
 
 class Induction_ArgumentError_MissingVars(ArgumentError):
@@ -2137,7 +2188,7 @@ class Induction(CaseSplit_Like):
         super().__init__(config, arg["thought"], [])
         self.arg = arg
         self.target_isabelle_term = arg["target_isabelle_term"]
-        self.rule = arg["rule"]
+        self.rule = arg.get("rule", "default")
         self.variables = arg["variables"]
     @staticmethod
     def gen(arg : Induction_ToolArg) -> gen_node:
@@ -2145,9 +2196,21 @@ class Induction(CaseSplit_Like):
             return Induction(config, arg)
         return mk
     def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> tuple[bool, failure_reason]:
+        if first_time:
+            try:
+                _, frees, _ = self.ml_state.check_term(self.target_isabelle_term)
+            except InternalError_UnparsedTerm as e:
+                raise ArgumentError_UnparsedTerm.from_internal_error(cast(ToolCall_arg, self.arg), e)
+            # Remove free variables appearing in target_isabelle_term from variables list
+            self.variables[:] = [var for var in self.variables if var["name"] not in frees]
         success, reason = super()._refresh_the_beginning_opr(begin_opr, first_time)
         if success:
             vars = self._all_fixed_vars_before_me({})
+            _, frees, _ = self.ml_state.check_term(self.target_isabelle_term)
+            # Remove free variables appearing in target_isabelle_term from vars
+            for v in frees:
+                if v in vars:
+                    del vars[v]
             new_var_names = [v for v in vars if v not in [var["name"] for var in self.variables]]
             if new_var_names:
                 if first_time:
@@ -2394,6 +2457,22 @@ class Session:
         self.age = 0
         self.logger = logger
 
+    def __enter__(self) -> 'Session':
+        """Enter the runtime context for this session."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Exit the runtime context and clean up the session."""
+        self.close()
+        # Don't suppress exceptions
+        return False
+
+    def close(self):
+        """Clean up the session and release resources."""
+        # Clean up the thread-local session reference
+        if hasattr(_local_store, 'session') and _local_store.session is self:
+            delattr(_local_store, 'session')
+
     def initialize(self, root: Root):
         if hasattr(self, 'root'):
             raise InternalError("The 'root' field has already been assigned.")
@@ -2403,6 +2482,7 @@ class Session:
             self.logger.debug(msg, *args, **kwargs)
     def run(self):
         raise NotImplementedError("`run` must be implemented by subclass")
+
 
 def agent_driver(name : str):
     def decorator(cls : Type[Session]) -> Type[Session]:
