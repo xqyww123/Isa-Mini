@@ -62,16 +62,10 @@ class Context(NamedTuple):
 
     @classmethod
     def unpack(cls, data) -> 'Context':
-        (vars, raw_hyp) = data
+        (vars, hyps) = data
         vars = {IsaREPL.pretty_unicode(k): IsaREPL.pretty_unicode(v) for k, v in vars.items()}
-        hyp = {}
-        for k, vs in raw_hyp.items():
-            if len(vs) == 1:
-                hyp[IsaREPL.pretty_unicode(k)] = IsaREPL.pretty_unicode(vs[0])
-            else:
-                for i, v in enumerate(vs):
-                    hyp[f"{IsaREPL.pretty_unicode(k)}({i+1})"] = IsaREPL.pretty_unicode(v)
-        return cls(vars, hyp)
+        hyps = {IsaREPL.pretty_unicode(k): IsaREPL.pretty_unicode(v) for k, v in hyps.items()}
+        return cls(vars, hyps)
     def __str__(self) -> str:
         return f"{self.vars}, {self.hyps}"
 
@@ -298,6 +292,14 @@ class ArgumentError_MissingRequiredKeys(ArgumentError):
 class ArgumentError_UnparsedTerm(ArgumentError):
     def __init__(self, arg: ToolCall_arg, term: str, reason: str):
         super().__init__(arg, f"Syntax error in term `{term}`\n{reason}")
+
+class ArgumentError_RewriteNoTargets(ArgumentError):
+    def __init__(self, arg: ToolCall_arg):
+        super().__init__(
+            arg,
+            "Rewrite operation must target at least one of: the goal or some premises. " +
+            "Set 'rewrite goal' to true or provide at least one premise name in 'rewrite premises'."
+        )
 
     @staticmethod
     def from_internal_error(arg: ToolCall_arg, internal_error: InternalError_UnparsedTerm) -> 'ArgumentError_UnparsedTerm':
@@ -652,8 +654,8 @@ class Minilang_Operation(NamedTuple):
     def INTRO(bindings: Bindings | None) -> 'Minilang_Operation':
         return Minilang_Operation("INTRO", bindings)
     @staticmethod
-    def SIMPLIFY(fact_refs: list[FactRef]) -> 'Minilang_Operation':
-        return Minilang_Operation("SIMPLIFY", fact_refs)
+    def SIMPLIFY(fact_refs: list[FactRef], use_system_simps: bool, premise_names: list[str], simplify_goal: bool, bindings: list[tuple[str, str]] | None) -> 'Minilang_Operation':
+        return Minilang_Operation("SIMPLIFY", (fact_refs, use_system_simps, premise_names, simplify_goal, bindings))
     @staticmethod
     def UNFOLD(consts: list[str]) -> 'Minilang_Operation':
         return Minilang_Operation("UNFOLD", consts)
@@ -1804,6 +1806,152 @@ class Obvious(Leaf):
         return indent
     def the_operation(self) -> Minilang_Operation:
         return Minilang_Operation.HAMMER(self.fact_refs)
+
+
+#### Rewrite
+
+Rewrite_ToolArg = TypedDict('Rewrite_ToolArg', {
+    'thought': str,
+    'using': list[Fact],
+    'use system simplifiers': bool,
+    'rewrite goal': bool,
+    'rewrite premises': list[str]
+})
+
+@proof_operation("Rewrite", Rewrite_ToolArg)
+class Rewrite(SubgoalMaker_NoTailEnder):
+    def __init__(self, config: NodeConfig, arg: Rewrite_ToolArg):
+        super().__init__(config, arg["thought"], [])
+        self.using = arg["using"]
+        self.use_system_simplifiers = arg["use system simplifiers"]
+        self.rewrite_goal = arg["rewrite goal"]
+        self.rewrite_premises = arg["rewrite premises"]
+
+        # Validate that at least one target is specified
+        if not self.rewrite_goal and not self.rewrite_premises:
+            raise ArgumentError_RewriteNoTargets(cast(ToolCall_arg, arg))
+
+        self.fact_refs = [self.ml_state.fetch_rule_fact(fact) for fact in self.using]
+        self.premise_bindings: list[FactBinding] | None = None
+        self.running_time = 0
+
+    @staticmethod
+    def gen(arg: Rewrite_ToolArg) -> gen_node:
+        def mk(config: NodeConfig) -> 'Rewrite':
+            return Rewrite(config, arg)
+        return mk
+
+    def _print_header(self, indent: int, file: MyIO):
+        self._print_thought(indent, file)
+        print_indent(indent, file)
+        file.write("operation: Rewrite\n")
+        if self.using or self.use_system_simplifiers:
+            print_indent(indent, file)
+            file.write(f"using:\n")
+            for fact in self.using:
+                print_fact(fact, indent+1, file)
+            if self.use_system_simplifiers:
+                print_indent(indent+1, file)
+                file.write("- system simplifiers\n")
+        print_indent(indent, file)
+        file.write("targets:\n")
+        if self.rewrite_goal:
+            print_indent(indent+1, file)
+            file.write("- the goal\n")
+        if self.rewrite_premises:
+            for premise in self.rewrite_premises:
+                print_indent(indent+1, file)
+                file.write(f"- {premise}\n")
+        if self.premise_bindings is not None:
+            print_fact_bindings(self.premise_bindings, indent, file, "premises")
+        self._print_evaluation_status(indent, file)
+        self._print_warnings(indent, file, [Warning.Position.HEADER])
+
+    def beginning_opr(self) -> Minilang_Operation:
+        bindings = [(fb.name, fb.expr) for fb in self.premise_bindings] if self.premise_bindings is not None else None
+        return Minilang_Operation.SIMPLIFY(
+            self.fact_refs,
+            self.use_system_simplifiers,
+            self.rewrite_premises,
+            self.rewrite_goal,
+            bindings
+        )
+
+    def _beginning_opr_err_msgs(self, err: IsabelleError) -> failure_reason:
+        return f"Fail to rewrite because: {"\n".join(err.errors)}"
+
+    def _child_refresh_failure_err_msgs(self, child: Node) -> failure_reason:
+        return f"Subgoal {child.id} fails to be proven."
+
+    def has_ending_opr(self) -> bool:
+        return False
+
+    def _ending_opr_err_msgs(self, err: IsabelleError) -> failure_reason:
+        raise InternalError("A Rewrite doesn't have an ending operation")
+
+    def ending_opr(self) -> Minilang_Operation | None:
+        return None
+
+    def _title_of_children(self, indent: int) -> tuple[str | None, int]:
+        if len(self.sub_nodes) <= 1:
+            return (None, indent-1)
+        else:
+            return ("goals", indent+1)
+
+    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> tuple[bool, failure_reason]:
+        (success, reason) = super()._refresh_the_beginning_opr(begin_opr, first_time)
+        if success:
+            self.running_time += 1
+            messages = self._state_after_beginning().messages
+            intro_bindings_msgs = [m for m in messages if isinstance(m, Intro_Bindings_Msg)]
+            match intro_bindings_msgs:
+                case [intro_bindings_msg]:
+                    pass
+                case _:
+                    raise InternalError(
+                        f"Expected exactly one Intro_Bindings_Msg in Rewrite's messages, got {len(intro_bindings_msgs)}"
+                    )
+            self.premise_bindings = intro_bindings_msg.final[1]
+            if self.running_time >= 2:
+                if intro_bindings_msg.missing[1]:
+                    premises = [
+                        p.name if i == len(intro_bindings_msg.missing[1]) - 1 else "and " + p.name
+                        for i, p in enumerate(intro_bindings_msg.missing[1])
+                    ]
+                    pstr = ", ".join(premises) if len(premises) > 2 else " ".join(premises)
+                    pstr = "premise " + pstr if len(premises) == 1 else "premises " + pstr
+                    self.warnings.append(Warning(Warning.Position.HEADER,
+                        f"The proof goal has changed. Tracking of {pstr} has been lost."))
+                if intro_bindings_msg.auto_introduced[1]:
+                    def print_warning(indent: int, file: MyIO) -> int:
+                        print_indent(indent, file)
+                        file.write(f"- The proof goal has changed and new premises occur:\n")
+                        for binding in intro_bindings_msg.auto_introduced[1]:
+                            print_indent(indent+1, file)
+                            file.write(f"- {binding.name}\n")
+                        return indent
+                    self.warnings.append(Warning(Warning.Position.HEADER, print_warning))
+        return (success, reason)
+
+    def _fixed_facts_at_me(self, ret: Hyps) -> Hyps:
+        if self.premise_bindings is not None:
+            for fact in self.premise_bindings:
+                ret[fact.name] = fact.pretty
+        return ret
+
+    def _fixed_facts_after_me(self, ret: Hyps) -> Hyps:
+        if self.sub_nodes:
+            return ret
+        else:
+            return self._fixed_facts_at_me(ret)
+
+    def _rename_fact(self, old_name: str, new_name: str) -> 'Node | None':
+        if self.premise_bindings is not None:
+            for i, fact in enumerate(self.premise_bindings):
+                if fact.name == old_name:
+                    self.premise_bindings[i] = FactBinding(fact.expr, new_name, fact.pretty)
+                    return self
+        return super()._rename_fact(old_name, new_name)
 
 
 #### So

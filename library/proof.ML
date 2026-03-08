@@ -6,7 +6,7 @@ type operation = state -> state
 type command = operation parser
 
 type variables = (string * typ) list
-type local_facts = (string * term list) list
+type local_facts = (string * term) list
 type items = variables * local_facts
 type fact = Facts.ref * Token.src list
 
@@ -66,6 +66,7 @@ val get_reporter : unit -> (message (*new items*) -> unit)
 
 val empty_items : items
 val cat_items : items -> items -> items
+val get_local_facts : state -> local_facts
 
 datatype intros_mode = ALL_SUBGOALS | SINGLE_GOAL
 val INTRO : intros_mode -> opt_var_names -> opt_prem_names -> state -> items * state
@@ -88,6 +89,10 @@ val CRUSH_CMD : command
 val SIMP : with_clause -> operation
 val SIMP'' : (bool * (Facts.ref * Token.src list)) list -> operation
 val SIMP_CMD : command
+
+val SIMPLIFY_GOAL_AND_PREMISES : thm list -> bool -> string list -> bool -> (term -> string) option -> operation
+val SIMPLIFY_GOAL_AND_PREMISES'' : fact list -> bool -> string list -> bool -> operation
+val SIMPLIFY_CMD : command
 
 val UNFOLD : thm list -> operation
 val UNFOLD_CMD : command
@@ -248,7 +253,7 @@ fun chk_working_mode mode =
 
 
 type variables = (string * typ) list
-type local_facts = (string * term list) list
+type local_facts = (string * term) list
 type items = variables * local_facts
 type fact = Facts.ref * Token.src list
 type has_introduced = bool
@@ -295,6 +300,11 @@ fun leading_proof_sequent_of (((_, HHF (seq, _) :: _), _, _) : state) = seq
 fun equiv_proof_state ( ((ctxt, HHF (st, _) :: _), _, _) , ((_, HHF (st', _) :: _), _, _) )
       = Thm.equiv_thm (Proof_Context.theory_of ctxt) (st, st')
 fun map_context F ((ctxt,SK), his, ID) = ((F ctxt,SK), his, ID)
+
+fun get_local_facts (((_, SK), _, _): state) : local_facts =
+  case SK of
+      (HHF (_, (_, facts)) :: _) => facts
+    | _ => []
 
 exception BROKEN_INVARIANT
 
@@ -959,7 +969,7 @@ fun extend_calc thm ctxt =
    |> Proof_Context.note_thmss ""
        ( map (fn (s,th) => ((Binding.name s, []), [([th], [])]) ) new_facts )
    |> snd
-   |> pair (map (apsnd (single o Thm.prop_of)) new_facts)
+   |> pair (map (apsnd (single o Thm.prop_of)) new_facts |> flatten_facts)
   end
 
 (* transparent introduciton helpers *)
@@ -983,9 +993,9 @@ fun strip_prems_universal_vars ctxt =
           ; "fact" ^ string_of_int (i + base)
         end
       fun dest (vs,hs) (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ A $ X)
-            = dest (vs, (assign_name (), [A]) :: hs) X
+            = dest (vs, (assign_name (), A) :: hs) X
         | dest (vs,hs) (Const(\<^const_name>\<open>HOL.implies\<close>, _) $ A $ X)
-            = dest (vs, (assign_name (), [HOLogic.mk_Trueprop A]) :: hs) X
+            = dest (vs, (assign_name (), HOLogic.mk_Trueprop A) :: hs) X
         | dest (vs,hs) (Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs (name, ty, X))
             = dest ((name,ty) :: vs, hs) X
         | dest (vs,hs) (Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs (name, ty, X))
@@ -1147,17 +1157,19 @@ fun INTRO' mode bs premise_names s =
                           case premise_names of
                             SOME names =>
                               (case nth names d of
-                                 SOME n => (n, current_counter)
+                                 SOME n => (n, current_counter)  (* Use provided name, including "" for skip *)
                                | NONE => (assm_name current_counter, current_counter + 1))
                           | NONE => (assm_name current_counter, current_counter + 1)
                      in (((Binding.name name, []), [([th], [])]), next_counter)
                     end
                   ) (map_index I (#prems foc)) counter_val
                 ) (#context foc)
+            (* Filter out bindings with empty names *)
+            val bindings_filtered = filter (fn ((b, _), _) => Binding.name_of b <> "") bindings
          in ctxt
-         |> Proof_Context.note_thmss "" bindings
-         |> apfst (map ( apsnd (map Thm.prop_of)
-                      #> apfst simp_fact_name' )
+         |> Proof_Context.note_thmss "" bindings_filtered
+         |> apfst (map (apsnd (map Thm.prop_of))
+                #> flatten_facts
                 #> pair (map2 (fn bind => fn (_, cterm) => (bind, Thm.typ_of_cterm cterm)) binds (#params foc)))
          |> pair st
         end
@@ -1285,7 +1297,7 @@ fun UNFOLD_FACT' prep_thms raw_defs fact_names (ctxt, SK as HHF (st, items) :: S
    |> Proof_Context.note_thmss "" ( map (rpair [] o Binding.name) fact_names
                                       ~~ map (single o rpair []) facts)
    |-> (fn new_facts =>
-     rpair (HHF (st, cat_items ([], map (apsnd (map Thm.prop_of)) new_facts) items) :: S))
+     rpair (HHF (st, cat_items ([], map (apsnd (map Thm.prop_of)) new_facts |> flatten_facts) items) :: S))
   end
   | UNFOLD_FACT' _ _ _ _ = raise BROKEN_INVARIANT
 
@@ -1455,6 +1467,8 @@ fun INIT c st =
       val local_facts =
         Facts.dest_static false [facts'] facts
           |> map (apsnd (map Thm.prop_of))
+          |> flatten_facts
+          |> filter_redundant_facts
 
       val (vars, _) = Variable.constraints_of c
       val vars' = Vartab.fold (fn ((N,~1),T) => (fn L => (N,T) :: L)
@@ -1508,6 +1522,172 @@ val CRUSH  = OPR o (CRUSH' (K I))
 val SIMP_CMD  = with_parser >> SIMP''
 val CRUSH_CMD = ( OPT_VARS -- with_parser )
              >> (OPR o CRUSH' read_with)
+
+(** SIMPLIFY_GOAL_AND_PREMISES' **)
+
+(* Helper conversions for wrapping/unwrapping NO_SIMP protection on goal conclusions *)
+local
+  open Conv
+  val NO_SIMP_def_sym = @{thm NO_SIMP_def[symmetric]}
+  val NO_SIMP_def = @{thm NO_SIMP_def}
+
+  (* Recursively traverse goal structure (⋀x. ... ⟹ ... ⟹ conclusion) to reach the conclusion *)
+  fun traverse_to_conclusion transform ctxt' ctm =
+    case Thm.term_of ctm of
+      Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs _ =>
+        arg_conv (abs_conv (traverse_to_conclusion transform o snd) ctxt') ctm
+    | Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ _ =>
+        arg_conv (traverse_to_conclusion transform ctxt') ctm
+    | Const(\<^const_name>\<open>Pure.prop\<close>, _) $ _ =>
+        arg_conv (traverse_to_conclusion transform ctxt') ctm
+    | Const(\<^const_name>\<open>Trueprop\<close>, _) $ _ =>
+        arg_conv (traverse_to_conclusion transform ctxt') ctm
+    | _ => transform ctm
+
+in
+  (* Wrap goal conclusion with NO_SIMP to protect it during simplification *)
+  fun wrap_goal_conclusion_NO_SIMP ctxt =
+    traverse_to_conclusion (rewr_conv NO_SIMP_def_sym) ctxt
+
+  (* Unwrap NO_SIMP from goal conclusion after simplification *)
+  fun unwrap_goal_conclusion_NO_SIMP ctxt =
+    let fun unwrap ctm =
+          case Thm.term_of ctm of
+            Const(\<^const_name>\<open>NO_SIMP\<close>, _) $ _ =>
+              (rewr_conv NO_SIMP_def then_conv unwrap) ctm
+          | _ => all_conv ctm
+    in traverse_to_conclusion unwrap ctxt end
+end
+
+(* Main operation function *)
+fun SIMPLIFY_GOAL_AND_PREMISES'
+    (simp_facts: thm list)
+    (use_system_simps: bool)
+    (premise_names: string list)
+    (simplify_goal: bool)
+    (naming_fn_opt: (term -> string) option)
+    (origin as (ctxt, HHF (st0, items) :: S)) =
+  let
+    (* 1. Retrieve premises by name from context *)
+    val prem_thms =
+      flat (map (fn name =>
+        Proof_Context.get_thms ctxt name
+        handle ERROR msg =>
+          raise OPR_FAIL (INVALID_OPR, "Premise fact '" ^ name ^ "' not found: " ^ msg))
+      premise_names)
+
+    (* Store original premise terms for comparison *)
+    val orig_prem_terms = map Thm.prop_of prem_thms
+    val orig_goal_prems = Logic.strip_imp_prems (Thm.prop_of st0)
+
+    (* 2. Insert premises into the goal *)
+    val st_with_prems =
+      case SINGLE (Method.insert_tac ctxt prem_thms 1) st0 of
+        SOME st' => st'
+      | NONE => raise OPR_FAIL (PROOF_FAIL, "Failed to insert premises into goal")
+
+    (* 3. Protect goal conclusion with NO_SIMP if not simplifying it *)
+    val st_protected =
+      if simplify_goal then st_with_prems
+      else Conv.gconv_rule (wrap_goal_conclusion_NO_SIMP ctxt) 1 st_with_prems
+
+    (* 4. Setup simplifier context *)
+    val simp_ctxt = (
+      if use_system_simps
+      then ctxt addsimps (
+        @{thms BNF_Fixpoint_Base.conj_imp_eq_imp_imp Basic_BNF_LFPs.ex_neg_all_pos} @ simp_facts)
+      else Simplifier.clear_simpset ctxt addsimps (
+        @{thms BNF_Fixpoint_Base.conj_imp_eq_imp_imp} @ simp_facts)
+      ) |> Simplifier.add_cong @{thm NO_SIMP_cong}
+
+    (* 5. Apply simplification using conversion *)
+    val st_simplified =
+      Conv.gconv_rule (Simplifier.rewrite simp_ctxt) 1 st_protected
+
+    (* 6. Protect goal conclusion to prevent INTRO's allI/impI from affecting it *)
+    val st_protected_for_intro =
+      Conv.gconv_rule (wrap_goal_conclusion_NO_SIMP ctxt) 1 st_simplified
+
+    (* 7. Extract premises from the first subgoal *)
+    val (_, prems_after_intro, _) = strip_meta_hhf (fst (Logic.dest_implies (Thm.prop_of st_protected_for_intro)))
+
+    (* 8. Helper: check if a premise is unchanged *)
+    fun is_unchanged prem_term =
+      exists (fn orig => Term.aconv (orig, prem_term)) orig_prem_terms
+      orelse exists (fn orig => Term.aconv (orig, prem_term)) orig_goal_prems
+
+    (* 9. Generate premise names: SOME "" for unchanged, SOME name for changed *)
+    val (premise_names_for_intro, ctxt_with_counter) =
+      case naming_fn_opt of
+        SOME naming_fn =>
+          let val names = map (fn prem_term =>
+                if is_unchanged prem_term
+                then SOME ""  (* Unchanged - skip *)
+                else SOME (naming_fn prem_term)  (* Changed - use naming_fn *)
+              ) prems_after_intro
+          in (names, ctxt)
+          end
+      | NONE =>
+          map_premise_counter (fn counter_val =>
+            fold_map (fn prem_term => fn current_counter =>
+              if is_unchanged prem_term
+              then (SOME "", current_counter)  (* Unchanged *)
+              else (SOME (assm_name current_counter), current_counter + 1)  (* Changed *)
+            ) prems_after_intro counter_val
+          ) ctxt
+
+    (* 10. Call INTRO' with the generated premise names (empty strings will be skipped) *)
+    val (ctxt_after_intro, HHF (st_after_intro, items_after_intro) :: S_after_intro) =
+      #2 (INTRO' SINGLE_GOAL NONE (SOME premise_names_for_intro)
+                 (ctxt_with_counter, HHF (st_protected_for_intro, items) :: S))
+
+    (* 11. Unwrap NO_SIMP from the goal conclusion *)
+    (* We always wrap once at line 1627 to protect from INTRO *)
+    (* If simplify_goal=false, we wrapped twice (once at line 1611, once at line 1627) *)
+    val _ = tracing ("Before unwrap: " ^ @{make_string} (Thm.prop_of st_after_intro))
+    val st_final = Conv.gconv_rule (unwrap_goal_conclusion_NO_SIMP ctxt_after_intro) 1 st_after_intro
+    val _ = tracing ("After unwrap: " ^ @{make_string} (Thm.prop_of st_final))
+  in
+    (ctxt_after_intro, HHF (st_final, items_after_intro) :: S_after_intro)
+  end
+  | SIMPLIFY_GOAL_AND_PREMISES' _ _ _ _ _ _ = raise BROKEN_INVARIANT
+
+(* Wrapper that uses premise counter for automatic naming *)
+fun SIMPLIFY_GOAL_AND_PREMISES
+    simp_facts
+    use_system_simps
+    premise_names
+    simplify_goal
+    naming_fn_opt =
+  OPR (report_goal o SIMPLIFY_GOAL_AND_PREMISES' simp_facts use_system_simps premise_names simplify_goal naming_fn_opt)
+
+(* Wrapper that parses fact references and uses premise counter *)
+fun SIMPLIFY_GOAL_AND_PREMISES''
+    raw_simp_facts
+    use_system_simps
+    premise_names
+    simplify_goal =
+  OPR (fn (ctxt, SK) =>
+    let val simp_facts = maps (Attrib.eval_thms ctxt o single) raw_simp_facts
+     in SIMPLIFY_GOAL_AND_PREMISES' simp_facts use_system_simps premise_names simplify_goal NONE (ctxt, SK)
+        |> report_goal
+    end)
+
+(* Command parser for SIMPLIFY operation *)
+val SIMPLIFY_CMD =
+  let
+    val PREMS_CLAUSE = PREMS_KWD |-- Parse.and_list (Scan.repeat1 Parse.name) >> flat
+    val WITH_CLAUSE_ONLY = Scan.optional (Parse.$$$ "WITH" |-- Scan.repeat Parse.thm) []
+
+    val parser = PREMS_CLAUSE -- WITH_CLAUSE_ONLY
+  in
+    parser >> (fn (premise_names, raw_simp_facts) =>
+      SIMPLIFY_GOAL_AND_PREMISES''
+        raw_simp_facts
+        true           (* use_system_simps *)
+        premise_names
+        false)          (* simplify_goal *)
+  end
 
 (** INDUCT & CASE **)
 
@@ -1589,7 +1769,7 @@ fun CASES' diff ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, items0
           We need a preplay to get the shape of the goals.*)
        val siblings = map (fn (_, kase as Rule_Cases.Case {fixes, binds, ...}) =>
               let val (asms, ctxt) = Proof_Context.apply_case kase ctxt
-               in PROP ((map (apfst Binding.name_of) fixes, asms), goal_term_of ctxt binds)
+               in PROP ((map (apfst Binding.name_of) fixes, flatten_facts asms), goal_term_of ctxt binds)
               end
             ) cases
 
@@ -1703,7 +1883,8 @@ fun CASES' diff ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, items0
                end
               else goalx
             val items' = ( map (apfst Binding.name_of) fixes,
-                           map (apfst simp_fact_name' o apsnd (map Thm.prop_of)) thms )
+                           map (apsnd (map Thm.prop_of)) thms
+                             |> flatten_facts )
             val report = get_reporter ()
             fun PRT _ T = case siblings
                             of [_] => cat_tree T (print_stack [HHF (st00, items00)])
@@ -1927,7 +2108,8 @@ fun HAVE'' _ _ _ (ctxt, []) = (ctxt, [])
 val HAVE' = HAVE'' (fn (ctxt,name,items,st,S,lem) =>
   let val lems = elim_conjs ctxt lem
       val ((name,lems), ctxt'') = Proof_Context.note_thms "" (name, [(lems,[])]) ctxt
-   in (ctxt'', HHF (st, cat_items ([], [(simp_fact_name ctxt'' name, map Thm.prop_of lems)]) items) :: S)
+      val flattened_facts = flatten_facts [(name, map Thm.prop_of lems)]
+   in (ctxt'', HHF (st, cat_items ([], flattened_facts) items) :: S)
   end)
 
 val HAVE = OPR oo HAVE'
@@ -1953,7 +2135,7 @@ fun gen_HAVE' mkG shows (ctxt0, HHF (st,items) :: S) =
                         |> unflat (map snd shows)
                 val (lems, ctxt02) = Proof_Context.note_thmss "" (binds ~~ map (fn x => [(x, [])]) lems) ctxt0
                 val ctxt03 = Proof_Context.auto_bind_facts (maps (map Thm.prop_of o snd) lems) ctxt02
-                val items' = ([], map (apfst (simp_fact_name ctxt02) o apsnd (map Thm.prop_of)) lems)
+                val items' = ([], lems |> map (apsnd (map Thm.prop_of)) |> flatten_facts)
                 val (itemss, ctxt04) = fold_map extend_calc (maps snd lems) ctxt03
              in get_reporter () (New_Items items')
               ; (ctxt04, HHF (st, cat_items ([], flat itemss) (cat_items items' items)) :: S)
@@ -1967,7 +2149,7 @@ fun gen_HAVE' mkG shows (ctxt0, HHF (st,items) :: S) =
                   |> map (Skip_Proof.make_thm thy01)
                   |> unflat (map snd shows)
           val (fakes, _) = Proof_Context.note_thmss "" (binds ~~ map (fn x => [(x, [])]) preruns) ctxt0
-          val items' = ([], map (apfst (simp_fact_name ctxt0) o apsnd (map Thm.prop_of)) fakes)
+          val items' = ([], fakes |> map (apsnd (map Thm.prop_of)) |> flatten_facts)
 
           fun PRT _ t = BUNDL (items, [BLOCK t, print_stack [HHF (st, items')]])
        in (ctxt01, HHF (goal, ([],[])) :: ENDBLK T_END :: MAGIC (CB, PRT, NO_PARAM) :: S)
@@ -2318,8 +2500,8 @@ fun CONSIDER'i raw_dnf (ctxt0, HHF (st0, items0) :: S) =
       val subgoals = map (fn (_, _, (decls, fixes, AS, raw_props, _, binders), _) =>
               print_stack [HHF (st0, (  map (apsnd Term.fastype_of o snd) decls
                                       @ map (apsnd Term.fastype_of) fixes,
-                                     map (Binding.name_of o fst) binders ~~
-                                        (unflat raw_props (map Thm.term_of AS)) ))] ) conj_clauses
+                                     flatten_facts (map (Binding.name_of o fst) binders ~~
+                                        (unflat raw_props (map Thm.term_of AS))) ))] ) conj_clauses
       fun PRT0 sgs _ t = BUNDL (items0, (case conj_clauses of [_] => BLOCK t | _ => t) :: sgs)
       fun CB _ _ [] _  _ = raise BROKEN_INVARIANT
         | CB initial sgs
@@ -2347,7 +2529,7 @@ fun CONSIDER'i raw_dnf (ctxt0, HHF (st0, items0) :: S) =
                 val lems'' = binders ~~ map (map (fn X => ([X],[]))) (unflat raw_props lems')
                 val (new_facts, ctxt'3) = Proof_Context.note_thmss "" lems'' ctxt''
                 val items_delt = (map (apsnd Term.fastype_of o snd) decls,
-                                  map (apfst (simp_fact_name ctxt'3) o apsnd (map Thm.prop_of)) new_facts)
+                                  new_facts |> map (apsnd (map Thm.prop_of)) |> flatten_facts)
                 val items'3 = items_delt
                            |> null remain_clauses ? (fn X => cat_items X items0)
              in get_reporter () (New_Items items_delt)
@@ -2755,15 +2937,12 @@ fun pretty_tree0 _ (BUNDL (_,[])) =
 
       val name = str o simp_fact_name'
       fun pretty_items (vars0, facts0) =
-        let val facts = filter_out (exists (contains_outdated_fixes ctxt) o snd) facts0
+        let val facts = filter_out (contains_outdated_fixes ctxt o snd) facts0
             val vars  = filter_out (fixes_is_outdated ctxt o fst) vars0
          in (if null vars  then [] else [keyword1 "variables"])
           @ map (fn (N,T)   => item [str N, brk 1, str "::", brk 1, prt_typ  T]) vars
           @ (if null facts then [] else [keyword1 "facts"])
-          @ map (fn (N,[])  => item [name N, brk 1, str ":", brk 1, str "<empty>"]
-                  | (N,[T]) => item [name N, brk 1, str ":", brk 1, prt_term T]
-                  | (N,TS)  => item [name N, brk 1, str ":", brk 1, chunks (map prt_term TS)]
-                ) facts
+          @ map (fn (N,T) => item [name N, brk 1, str ":", brk 1, prt_term T]) facts
         end
       fun pretty prefix (PROP (items, term)) =
           let val (ctxt, items', term) = prt_prop term
@@ -2940,7 +3119,8 @@ fun OPEN_MODULE' interp expr (lthy, HHF (st, items) :: SK) =
             val facts = Proof_Context.facts_of ctxt'';
             val local_facts =
               Facts.dest_static false [Proof_Context.facts_of lthy] facts
-                |> map (apfst (simp_fact_name ctxt'') o apsnd (map Thm.prop_of))
+                |> map (apsnd (map Thm.prop_of))
+                |> flatten_facts
             val local_facts = if length local_facts > 16 then [] else local_facts
                   (*Trim off facts if too many*)
             val items' = ([],local_facts)
@@ -3042,6 +3222,7 @@ val CMDS = Symtab.make [
       ("INDUCT",  INDUCT_CMD),
       ("SIMP" ,   SIMP_CMD),
       ("CRUSH",   CRUSH_CMD),
+      ("SIMPLIFY", SIMPLIFY_CMD),
       ("INTRO",   INTRO_CMD),
       ("ALL_INTRO",INTRO_ALL_CMD),
       ("HAMMER",  HAMMER_CMD),
@@ -3110,6 +3291,7 @@ val keywords = let open Keyword
            (("INDUCT",\<^here>), command_spec (prf_goal, [])),
            (("CRUSH", \<^here>), command_spec (prf_goal, [])),
            (("SIMP" , \<^here>), command_spec (prf_goal, [])),
+           (("SIMPLIFY", \<^here>), command_spec (prf_goal, [])),
            (("INTRO", \<^here>), command_spec (prf_goal, [])),
            (("ALL_INTRO", \<^here>), command_spec (prf_goal, [])),
            (("HAMMER",\<^here>), command_spec (prf_goal, [])),

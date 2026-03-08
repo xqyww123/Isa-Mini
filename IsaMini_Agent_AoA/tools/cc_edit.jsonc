@@ -295,14 +295,15 @@
     },
     "Rewrite": {
       "additionalProperties": false,
-      "description": "rewrite goals and premises using equations and established facts",
+      "description": "rewrite goals and premises using equations, established facts, and system simplifiers",
       "properties": {
         "operation": {
-          "const": "rewrite",
+          "const": "Rewrite",
           "type": "string"
         },
         "thought": { "$ref": "#/$defs/Thought" },
-        "equations_and_facts": {
+        "using": {
+          "description": "equations and facts to use for rewriting",
           "items": { "$ref": "#/$defs/Fact" },
           "type": "array"
         },
@@ -323,7 +324,7 @@
       "required": [
         "operation",
         "thought",
-        "equations",
+        "using",
         "use system simplifiers",
         "rewrite goal",
         "rewrite premises"

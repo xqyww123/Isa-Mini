@@ -6,6 +6,10 @@ begin
 
 declare [[ML_debugger, ML_exception_trace, ML_exception_debugger]]
 
+definition \<open>NO_SIMP (X::'a::{}) \<equiv> X\<close>
+
+lemma NO_SIMP_cong[cong]: \<open>NO_SIMP (X::'a::{}) \<equiv> NO_SIMP X\<close> .
+
 ML_file \<open>./library/aux.ML\<close>
 ML_file \<open>./library/proof.ML\<close>
 
@@ -37,5 +41,11 @@ attribute_setup "where" = \<open>let
         Thm.rule_attribute [] (fn context =>
             uncurry (Minilang_Aux.xwhere (Context.proof_of context)) args))
  end \<close> "positional instantiation of theorem"
+
+ML \<open>
+let val facts = Proof_Context.facts_of \<^context>
+    val full_name = Facts.intern facts "exIaaa"
+ in Facts.lookup (Context.Proof \<^context>) facts full_name
+end\<close>
 
 end

@@ -40,6 +40,10 @@ val case_synt : Context.generic -> (bool * (term option list list * thm option))
 val simp_fact_name' : string -> string
 val simp_fact_name : Proof.context -> string -> string
 
+val flatten_facts : (string * term list) list -> (string * term) list
+val base_name : string -> string
+val filter_redundant_facts : (string * term) list -> (string * term) list
+
 val implode_with' : 'a -> 'a list list -> 'a list -> 'a list
 val implode_with : 'a -> 'a list list -> 'a list
 
@@ -383,6 +387,56 @@ fun simp_fact_name ctxt name =
      else name
   end
   else name
+
+(* Flatten facts: convert (string * term list) list to (string * term) list with indexing *)
+(* Also applies simp_fact_name' to strip "local." prefix from all names *)
+fun flatten_facts (facts: (string * term list) list) : (string * term) list =
+  maps (fn (name, terms) =>
+    let val simp_name = simp_fact_name' name
+    in case terms of
+      [single_term] => [(simp_name, single_term)]
+    | _ => map_index (fn (i, term) =>
+            (String.concat [simp_name, "(", string_of_int (i + 1), ")"], term)) terms
+    end
+  ) facts
+
+(* Extract base name from indexed name like "that(1)" -> "that" *)
+fun base_name name =
+  case String.tokens (fn c => c = #"(") name of
+    [base, _] => base
+  | _ => name
+
+(* Filter out redundant "that" and "assms" entries that just alias other facts *)
+(* Works on flattened (string * term) list with indexed names *)
+fun filter_redundant_facts (local_facts: (string * term) list) : (string * term) list =
+  let
+    (* Collect all terms NOT from "that" *)
+    val other_than_that =
+      local_facts
+        |> filter (fn (name, _) => base_name name <> "that")
+        |> map #2
+        |> distinct (op aconv)
+
+    (* Collect all terms NOT from "that" or "assms" *)
+    val other_than_that_assms =
+      local_facts
+        |> filter (fn (name, _) =>
+            let val base = base_name name
+            in base <> "that" andalso base <> "assms" end)
+        |> map #2
+        |> distinct (op aconv)
+  in
+    local_facts
+      |> filter (fn (name, term) =>
+          let val base = base_name name
+          in
+            if base = "that"
+            then not (member (op aconv) other_than_that term)
+            else if base = "assms"
+            then not (member (op aconv) other_than_that_assms term)
+            else true
+          end)
+  end
 
 end
 

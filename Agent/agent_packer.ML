@@ -105,7 +105,13 @@ val pack_bindings =
 
 val unpacker =
   unpackPair_dep unpackString (
-    fn "SIMPLIFY" => apfst SIMPLIFY o unpackList unpackString
+    fn "SIMPLIFY" => apfst SIMPLIFY o unpackTuple5 (
+                        unpackList unpackString,
+                        unpackBool,
+                        unpackList unpackString,
+                        unpackBool,
+                        unpackOption (unpackList (unpackPair (unpackString, unpackString)))
+                     )
      | "UNFOLD"   => apfst UNFOLD   o unpackList unpackString
      | "WITNESS"  => apfst WITNESS  o unpackList unpackString
      | "RULE"     => apfst RULE     o unpackList unpackString
@@ -139,7 +145,13 @@ val unpacker =
   ) #> apfst snd
 
 fun packer (SIMPLIFY data) =
-      packPair (packString, packList packString) ("SIMPLIFY", data)
+      packPair (packString, packTuple5 (
+                  packList packString,
+                  packBool,
+                  packList packString,
+                  packBool,
+                  packOption (packList (packPair (packString, packString)))
+                )) ("SIMPLIFY", data)
   | packer (UNFOLD data) =
       packPair (packString, packList packString) ("UNFOLD", data)
   | packer (WITNESS data) =

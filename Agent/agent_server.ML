@@ -52,7 +52,7 @@ datatype acmd = Proof_Opr of {from: state_id, to: state_id, opr: MiniLang_Agent.
 
 type context = {
     vars: (string * typ) list,
-    hyps: (string * term list) list
+    hyps: (string * term) list
   }
 type goal = {context: context, goal: term}
 type goals = {context: context, goals: goal list}
@@ -81,30 +81,15 @@ fun goals_of_term (seen_vars:(string * typ) list) (hhf:term) : goal =
 *)
 
 fun global_context_of (ctxt, goal_sequent) : context =
-  let val local_facts = Facts.dest_static false
+  let val flattened_hyps = Facts.dest_static false
                             [(Proof_Context.facts_of (Local_Theory.target_of ctxt))]
                             (Proof_Context.facts_of ctxt)
                      |> filter (fn ("local.this", _) => false | _ => true)
-                     |> map (apfst (fn s =>
-                          if String.isPrefix "local." s
-                          then String.substring (s, 6, size s - 6)
-                          else s ) o
-                          apsnd (map Thm.prop_of))
-      val other_than_that = fold (fn (name, facts) =>
-                                if name = "that"
-                                then I
-                                else fold (insert (op aconv)) facts) local_facts []
-      val local_facts = local_facts
-            |> map_filter (fn ("that", facts) =>
-                                let val facts' = subtract (op aconv) other_than_that facts
-                                 in if null facts'
-                                  then NONE
-                                  else SOME ("that", facts')
-                                end
-                            | (_, []) => NONE
-                            | x => SOME x)
+                     |> map (apsnd (map Thm.prop_of))
+                     |> Minilang_Aux.flatten_facts
+                     |> Minilang_Aux.filter_redundant_facts
       val vs = Term.add_frees (Thm.prop_of goal_sequent) []
-   in {vars=vs, hyps=local_facts}
+   in {vars=vs, hyps=flattened_hyps}
   end
 
 local open Find_Theorems in
@@ -130,7 +115,7 @@ fun context_packer ctxt =
       val SOTT = MiniLang_Agent.string_of_type ctxt
    in fn {vars, hyps}:context =>
         packPair (packPairList (packString, packString o SOTT),
-                  packPairList (packString, packList packString o map SOT))
+                  packPairList (packString, packString o SOT))
                  (vars, hyps)
   end
 
@@ -205,7 +190,11 @@ fun acmd_packer (Proof_Opr {from, to, opr}) =
       packPair (packInt, packUnit) (0, ())
 
 fun minilang_items_packer ctxt =
-      context_packer ctxt o (fn (items:Minilang.items) => {vars = #1 items, hyps = #2 items})
+      context_packer ctxt o (fn (items:Minilang.items) =>
+        let val (vars, local_facts) = items
+            (* local_facts is already flattened as (string * term) list *)
+         in {vars = vars, hyps = local_facts}
+        end)
 fun minilang_tree_packer ctxt =
   let val term_packer = packString o MiniLang_Agent.string_of_term ctxt
       val item_packer = minilang_items_packer ctxt

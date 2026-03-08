@@ -183,6 +183,34 @@ def _test_Suffices(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
 
+@test("Rewrite", "Test_Rewrite.thy", 9)
+def _test_Rewrite(root: Root, file: MyIO):
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    # Use Rewrite to simplify the premises h1 and h2
+    root.fill("1", Rewrite.gen({
+        "thought": "Rewrite the premises to simplify the equations",
+        "using": [{"refer_by": "name", "name": "h1"}],
+        "use system simplifiers": True,
+        "rewrite goal": False,
+        "rewrite premises": ["h2"]
+    }))
+    print_header("After Rewrite", file)
+    root.print(0, file)
+    # Now the premises should be simplified and the goal should be obvious
+    root.fill("2", Obvious.gen({
+        "thought": "After rewriting, the conclusion is obvious from the simplified premises",
+        "facts": [
+            {"refer_by": "name", "name": "h1"},
+            {"refer_by": "name", "name": "h2"}
+        ]
+    }))
+    print_header("After Obvious", file)
+    root.print(0, file)
+    unfinished_nodes = set()
+    root.unfinished_nodes(unfinished_nodes)
+    file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+
 def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None):
     import msgpack as mp
     from IsaREPL import Client

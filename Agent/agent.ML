@@ -17,8 +17,7 @@ type prem_name = {internal_term: term, external_name: string, pretty: string}
 type bindings = var_name list * prem_name list
 
 datatype ('term, 'thm, 'fact) command =
-    SIMPLIFY of 'fact list (*simp rules*)
-  | UNFOLD   of string list
+    UNFOLD   of string list
   | WITNESS  of 'term list
   | RULE     of 'fact list
   | CASE_SPLIT of 'term (*target*) * Minilang.opt_var_names
@@ -30,11 +29,14 @@ datatype ('term, 'thm, 'fact) command =
   | END      of 'fact list (*add lemmas*)
   | BRANCH   of string list
   | HAVE     of 'term list
-  | SUFFICES of 'term 
+  | SUFFICES of 'term
   | OBTAIN   of (string * string option) list (*vars*) * string list (*constraints*)
   | SORRY    of Minilang.opt_var_names
   | HAMMER   of 'fact list (*with facts*)
   | INTRO    of bindings option
+  | SIMPLIFY of 'fact list (*simp facts*) * bool (*use_system_simps*)
+              * string list (*premise_names*) * bool (*simplify_goal*)
+              * (string (*name*) * 'term (*expression*)) list option
   | SKIP
 
 type xcmd = (string, string, string) command
@@ -108,8 +110,7 @@ type counters = {
 type config = cfg * budget * counters
 
 datatype ('term, 'thm, 'fact) command =
-    SIMPLIFY of 'fact list (*simp rules*)
-  | UNFOLD   of string list
+    UNFOLD   of string list
   | WITNESS  of 'term list
   | RULE     of 'fact list
   | CASE_SPLIT of 'term (*target*) * Minilang.opt_var_names
@@ -126,6 +127,9 @@ datatype ('term, 'thm, 'fact) command =
   | SORRY    of Minilang.opt_var_names
   | HAMMER   of 'fact list (*with facts*)
   | INTRO    of bindings option
+  | SIMPLIFY of 'fact list (*simp facts*) * bool (*use_system_simps*)
+              * string list (*premise_names*) * bool (*simplify_goal*)
+              * (string (*name*) * 'term (*expression*)) list option
   | SKIP
 
 type xcmd = (string, string, string) command
@@ -283,12 +287,10 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (s:Minilang.s
                                           typ_pretty = REPL.trim_makrup (REPL_Serialize.print_typ printing_cfg ctxt' ty)})
                                        var_bindings params'
 
-        val prem_bindings_final = map2 (fn prem_term => fn (name, props) =>
+        val prem_bindings_final = map2 (fn prem_term => fn (name, prop) =>
                                          {internal_term = prem_term,
                                           external_name = name,
-                                          pretty = case props of
-                                                     [p] => REPL.trim_makrup (REPL_Serialize.print_term printing_cfg ctxt' p)
-                                                   | _ => ""})
+                                          pretty = REPL.trim_makrup (REPL_Serialize.print_term printing_cfg ctxt' prop)})
                                        prems facts'
 
         (* Step 8: Compute missing bindings (provided but not used in goal) *)
@@ -396,10 +398,99 @@ fun check_need_intro (s:Minilang.state) : bool =
    in Minilang.need_intro st
   end
 
+fun AUTO_SIMPLIFY
+    (counters: counters)
+    (simp_thms: thm list)
+    (use_system_simps: bool)
+    (premise_names: string list)
+    (simplify_goal: bool)
+    (user_bindings_opt: (string * term) list option)
+    (s: Minilang.state)
+    : Minilang.state =
+  let
+    val ctxt = Minilang.context_of s
+    val prem_counter = #prem_counter counters
+    val user_bindings = case user_bindings_opt of SOME ub => ub | NONE => []
+    val report_bindings = is_some user_bindings_opt
+
+    (* Track matched bindings during naming function execution *)
+    val matched_bindings_ref = Unsynchronized.ref []
+
+    (* Naming function: match with user bindings or auto-generate using our counter *)
+    fun naming_fn prem_term =
+      case find_first (fn (_, binding_term) => binding_term aconv prem_term) user_bindings of
+        SOME (name, _) =>
+          (matched_bindings_ref := prem_term :: !matched_bindings_ref; name)
+      | NONE =>
+          (* Atomically get and increment counter - guarded modification *)
+          let val counter = Synchronized.change_result prem_counter (fn n => (n, n + 1))
+              val name = "premise" ^ string_of_int counter
+          in name
+          end
+
+    (* Execute SIMPLIFY with naming function - call operation *)
+    val s' = (Minilang.SIMPLIFY_GOAL_AND_PREMISES
+               simp_thms use_system_simps premise_names simplify_goal
+               (SOME naming_fn)) s
+
+    (* Always build and report bindings *)
+    val _ =
+      let
+        val ctxt' = Minilang.context_of s'
+        val matched_terms = !matched_bindings_ref
+
+        (* Extract bound facts from new state *)
+        val bound_facts = Minilang.get_local_facts s'
+
+        (* Build final premise bindings with pretty-printing *)
+        (* Note: names are already simplified by flatten_facts *)
+        val prem_bindings_final =
+          map (fn (name, prem_term) =>
+            {internal_term = prem_term,
+             external_name = name,
+             pretty = REPL.trim_makrup (REPL_Serialize.print_term printing_cfg ctxt' prem_term)}
+          ) bound_facts
+
+        (* Compute missing: provided bindings not matched (only if user provided bindings) *)
+        val missing_prems =
+          if is_some user_bindings_opt then
+            map (fn (name, binding_term) =>
+              {internal_term = binding_term,
+               external_name = name,
+               pretty = REPL.trim_makrup (REPL_Serialize.print_term printing_cfg ctxt' binding_term)})
+            (filter (fn (_, binding_term) =>
+               not (exists (fn t => t aconv binding_term) matched_terms)) user_bindings)
+          else
+            []
+
+        (* Compute auto-introduced: final bindings not in matched list (only if user provided bindings) *)
+        val auto_prems =
+          if is_some user_bindings_opt then
+            filter (fn {internal_term, ...} =>
+              not (exists (fn t => t aconv internal_term) matched_terms))
+            prem_bindings_final
+          else
+            []
+
+        (* Always report via INTRO_BINDINGS exception *)
+        val _ = Minilang.get_reporter () (Minilang.Internal (INTRO_BINDINGS {
+          missing = ([], missing_prems),
+          auto_introduced = ([], auto_prems),
+          final = ([], prem_bindings_final)
+        }))
+      in () end
+  in
+    s'
+  end
+
 fun interpret_i (config as (cfg, budget, counters)) cmd s =
   case cmd of
-      SIMPLIFY simp_thms =>
-        Minilang.SIMP'' (map (pair true) simp_thms) s
+      SIMPLIFY (simp_facts, use_system_simps, premise_names, simplify_goal, user_bindings_opt) =>
+        let val ctxt = Minilang.context_of s
+            val simp_thms = maps (Attrib.eval_thms ctxt o single) simp_facts
+         in AUTO_SIMPLIFY counters simp_thms use_system_simps premise_names
+                          simplify_goal user_bindings_opt s
+        end
     | UNFOLD origin_consts =>
         let val _ = if null origin_consts
                     then error "You must specify at least one target to unfold"
@@ -472,7 +563,10 @@ fun chk_single _ _ [x] = x
         ^ String.concat (map (fn th => "- " ^ string_of_thm ctxt th ^ "\n") lst)
         ^ "You may select the i-th rule by using \"" ^ the rule ^ "(i)\".")
 in
-fun check_command_i _ (SIMPLIFY facts) = SIMPLIFY (map read_fact facts)
+fun check_command_i ctxt (SIMPLIFY (facts, use_sys, prems, simp_goal, bindings_opt)) =
+      let val bindings_opt' = Option.map (map (fn (name, expr) => (name, Syntax.read_term ctxt expr))) bindings_opt
+       in SIMPLIFY (map read_fact facts, use_sys, prems, simp_goal, bindings_opt')
+      end
   | check_command_i _ (RULE facts) = RULE (map read_fact facts)
   | check_command_i _ (UNFOLD consts) = UNFOLD consts
   | check_command_i ctxt (WITNESS terms) = WITNESS (Syntax.read_terms ctxt terms)
