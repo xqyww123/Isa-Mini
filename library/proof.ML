@@ -875,6 +875,7 @@ fun need_intro st =
         | need' (Const(\<^const_name>\<open>Trueprop\<close>, _) $ X) = need' X
         | need' (Const(\<^const_name>\<open>HOL.All\<close>, _) $ _) = true
         | need' (Const(\<^const_name>\<open>HOL.implies\<close>, _) $ _ $ _) = true
+        | need' (Const(\<^const_name>\<open>HOL.conj\<close>, _) $ _ $ _) = true
         | need' _ = false
    in case Thm.prop_of st
         of (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ G $ _) => need' G
@@ -1089,7 +1090,7 @@ fun INTRO'' F mode bs (origin as (ctxt, HHF (st0, items) :: L)) =
     else if need_intro st0
       then let val st = st0
                      |> Seq.REPEAT (Thm.biresolution NONE true
-                              [(false, Thms.allI), (false, Thms.impI)] 1)
+                              [(false, Thms.allI), (false, Thms.impI), (false, Thms.conjI)] 1)
                      |> Seq.hd
 
                val default_binds = quantifier_bindings ctxt st |> map fst

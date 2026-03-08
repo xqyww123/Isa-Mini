@@ -1837,9 +1837,9 @@ Rewrite_ToolArg = TypedDict('Rewrite_ToolArg', {
 })
 
 @proof_operation("Rewrite", Rewrite_ToolArg)
-class Rewrite(SubgoalMaker_NoTailEnder):
+class Rewrite(Leaf):
     def __init__(self, config: NodeConfig, arg: Rewrite_ToolArg):
-        super().__init__(config, arg["thought"], [])
+        super().__init__(config, arg["thought"])
         self.using = arg["using"]
         self.use_system_simplifiers = arg["use system simplifiers"]
         self.rewrite_goal = arg["rewrite goal"]
@@ -1859,7 +1859,8 @@ class Rewrite(SubgoalMaker_NoTailEnder):
             return Rewrite(config, arg)
         return mk
 
-    def _print_header(self, indent: int, file: MyIO):
+    def print(self, indent: int, file: MyIO) -> int:
+        indent = super().print(indent, file)
         self._print_thought(indent, file)
         print_indent(indent, file)
         file.write("operation: Rewrite\n")
@@ -1884,7 +1885,8 @@ class Rewrite(SubgoalMaker_NoTailEnder):
             print_var_bindings(self.bindings[0], indent, file, "fixing variables")
             print_fact_bindings(self.bindings[1], indent, file, "resulting premises")
         self._print_evaluation_status(indent, file)
-        self._print_warnings(indent, file, [Warning.Position.HEADER])
+        self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
+        return indent
 
     def _fixed_vars_at_me(self, ret: Vars) -> Vars:
         if self.bindings is not None:
@@ -1899,18 +1901,12 @@ class Rewrite(SubgoalMaker_NoTailEnder):
         return ret
 
     def _fixed_vars_after_me(self, ret: Vars) -> Vars:
-        if self.sub_nodes:
-            return ret
-        else:
-            return self._fixed_vars_at_me(ret)
+        return self._fixed_vars_at_me(ret)
 
     def _fixed_facts_after_me(self, ret: Hyps) -> Hyps:
-        if self.sub_nodes:
-            return ret
-        else:
-            return self._fixed_facts_at_me(ret)
+        return self._fixed_facts_at_me(ret)
 
-    def beginning_opr(self) -> Minilang_Operation:
+    def the_operation(self) -> Minilang_Operation:
         bindings = None
         if self.bindings is not None:
             var_bindings = [(vb.internal_varname, vb.external_varname, vb.type) for vb in self.bindings[0]]
@@ -1924,32 +1920,14 @@ class Rewrite(SubgoalMaker_NoTailEnder):
             bindings
         )
 
-    def _beginning_opr_err_msgs(self, err: IsabelleError) -> failure_reason:
-        return f"Fail to rewrite because: {"\n".join(err.errors)}"
+    def _refresh_me_alone(self, first_time: bool) -> None:
+        # Execute the operation via parent Leaf implementation
+        super()._refresh_me_alone(first_time)
 
-    def _child_refresh_failure_err_msgs(self, child: Node) -> failure_reason:
-        return f"Subgoal {child.id} fails to be proven."
-
-    def has_ending_opr(self) -> bool:
-        return False
-
-    def _ending_opr_err_msgs(self, err: IsabelleError) -> failure_reason:
-        raise InternalError("A Rewrite doesn't have an ending operation")
-
-    def ending_opr(self) -> Minilang_Operation | None:
-        return None
-
-    def _title_of_children(self, indent: int) -> tuple[str | None, int]:
-        if len(self.sub_nodes) <= 1:
-            return (None, indent-1)
-        else:
-            return ("goals", indent+1)
-
-    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> tuple[bool, failure_reason]:
-        (success, reason) = super()._refresh_the_beginning_opr(begin_opr, first_time)
-        if success:
+        # If operation succeeded, extract bindings and track changes
+        if self.status.success:
             self.running_time += 1
-            messages = self._state_after_beginning().messages
+            messages = self.resulting_state().messages
             intro_bindings_msgs = [m for m in messages if isinstance(m, Intro_Bindings_Msg)]
             match intro_bindings_msgs:
                 case [intro_bindings_msg]:
@@ -1959,6 +1937,8 @@ class Rewrite(SubgoalMaker_NoTailEnder):
                         f"Expected exactly one Intro_Bindings_Msg in Rewrite's messages, got {len(intro_bindings_msgs)}"
                     )
             self.bindings = intro_bindings_msg.final
+
+            # Only warn about changes on subsequent runs (not first time)
             if self.running_time >= 2:
                 missing_vars, missing_facts = intro_bindings_msg.missing
                 auto_vars, auto_facts = intro_bindings_msg.auto_introduced
@@ -1998,7 +1978,6 @@ class Rewrite(SubgoalMaker_NoTailEnder):
                             file.write(f"- {binding.name}\n")
                         return indent
                     self.warnings.append(Warning(Warning.Position.HEADER, print_fact_warning))
-        return (success, reason)
 
     def _rename_var(self, old_name: varname, new_name: varname) -> 'Node | None':
         if self.bindings is not None:
