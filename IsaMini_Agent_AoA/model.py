@@ -293,6 +293,13 @@ class ArgumentError_UnparsedTerm(ArgumentError):
     def __init__(self, arg: ToolCall_arg, term: str, reason: str):
         super().__init__(arg, f"Syntax error in term `{term}`\n{reason}")
 
+    @staticmethod
+    def from_internal_error(arg: ToolCall_arg, internal_error: InternalError_UnparsedTerm) -> 'ArgumentError_UnparsedTerm':
+        """
+        Convert an InternalError_UnparsedTerm to an ArgumentError_UnparsedTerm.
+        """
+        return ArgumentError_UnparsedTerm(arg, internal_error.term, internal_error.reason)
+
 class ArgumentError_RewriteNoTargets(ArgumentError):
     def __init__(self, arg: ToolCall_arg):
         super().__init__(
@@ -654,7 +661,7 @@ class Minilang_Operation(NamedTuple):
     def INTRO(bindings: Bindings | None) -> 'Minilang_Operation':
         return Minilang_Operation("INTRO", bindings)
     @staticmethod
-    def SIMPLIFY(fact_refs: list[FactRef], use_system_simps: bool, premise_names: list[str], simplify_goal: bool, bindings: list[tuple[str, str]] | None) -> 'Minilang_Operation':
+    def SIMPLIFY(fact_refs: list[FactRef], use_system_simps: bool, premise_names: list[str], simplify_goal: bool, bindings: tuple[list[tuple[str, str, str]], list[tuple[lambda_term, str, str]]] | None) -> 'Minilang_Operation':
         return Minilang_Operation("SIMPLIFY", (fact_refs, use_system_simps, premise_names, simplify_goal, bindings))
     @staticmethod
     def UNFOLD(consts: list[str]) -> 'Minilang_Operation':
@@ -927,23 +934,20 @@ class Node:
                     file.write(self.id)
                 file.write(f":\n")
                 for warning in warnings:
-                    match warning.printer:
-                        case str():
-                            if '\n' in warning:
-                                for i, line in enumerate(warning.printer.splitlines()):
-                                    if i == 0:
-                                        print_indent(indent+1, file)
-                                        file.write(f"- ")
-                                    else:
-                                        print_indent(indent+2, file)
-                                    file.write(f"{line}\n")
-                            else:
-                                print_indent(indent+1, file)
-                                file.write(f"- {warning}\n")
-                        case Callable():
-                            warning.printer(indent+1, file)
-                        case _:
-                            raise InternalError(f"Unknown warning type: {type(warning)}")
+                    if isinstance(warning.printer, str):
+                        if '\n' in warning.printer:
+                            for i, line in enumerate(warning.printer.splitlines()):
+                                if i == 0:
+                                    print_indent(indent+1, file)
+                                    file.write(f"- ")
+                                else:
+                                    print_indent(indent+2, file)
+                                file.write(f"{line}\n")
+                        else:
+                            print_indent(indent+1, file)
+                            file.write(f"- {warning.printer}\n")
+                    else:
+                        warning.printer(indent+1, file)
     def _print_all_warnings(self, file: MyIO) -> None:
         self._print_warnings(0, file, list(Warning.Position), show_at=True)
     def _print_thought(self, indent: int, file: MyIO) -> None:
@@ -1061,11 +1065,19 @@ class Node:
         """
         return None
     def rename_var(self, old_name: varname, new_name: varname) -> None:
-        if self._rename_var(old_name, new_name) is None:
+        ret = self._rename_var(old_name, new_name)
+        if ret is None:
             raise CannotRename_VariableNotFound(old_name, new_name)
+        else:
+            ret._refresh_me_alone(False)
+            ret.refresh_all_after_me()
     def rename_fact(self, old_name: str, new_name: str) -> None:
-        if self._rename_fact(old_name, new_name) is None:
+        ret = self._rename_fact(old_name, new_name)
+        if ret is None:
             raise CannotRename_FactNotFound(old_name, new_name)
+        else:
+            ret._refresh_me_alone(False)
+            ret.refresh_all_after_me()
     def _print_fixed_vars_and_facts(self, indent: int, file: MyIO) -> None:
         fixed_vars = self._fixed_vars_at_me({})
         fixed_facts = self._fixed_facts_at_me({})
@@ -1145,7 +1157,7 @@ class NonLeaf_Node(Node):
                     )
                 return
         raise InternalError("The target node is not my children")
-    def _refresh_all_children_after(self, after: 'Node') -> None:
+    def _refresh_all_children_after(self, after: 'Node', can_continue_i: bool = True) -> None:
         """
         refreshing the status of all the nodes excluding and after the `after`
         """
@@ -1153,7 +1165,7 @@ class NonLeaf_Node(Node):
         for child in self.sub_nodes: 
             if can_continue is None:
                 if child is after:
-                    can_continue = True
+                    can_continue = can_continue_i
             else:
                 if can_continue:
                     child._refresh_me_alone(False)
@@ -1162,6 +1174,9 @@ class NonLeaf_Node(Node):
                     child.status = EVALUATION_CACNCELLED
         if can_continue is None:
             raise InternalError("Cannot find the target to refresh in my children")
+        elif can_continue:
+            if self.parent is not None:
+                self.parent._refresh_all_children_after(self, can_continue)
     def _insert_before_child(self, before: 'Node', gen_node: Callable[[NodeConfig], 'Node']) -> 'Node':
         """
         invalidates the status of all nodes including and after the `before`
@@ -1498,6 +1513,9 @@ class GoalContainer(NonLeaf_Node):
                 else:
                     return Minilang_Operation.END()
         raise InternalError("The given argument is not a child of this node")
+    def _refresh_all_children_after(self, after: 'Node', can_continue_i: bool = True) -> None:
+        # Each subgoal in AoA is independent, so we don't need to refresh the children after the current node.
+        return None
 
 class GoalNode(StdBlock):
     """
@@ -1832,7 +1850,7 @@ class Rewrite(SubgoalMaker_NoTailEnder):
             raise ArgumentError_RewriteNoTargets(cast(ToolCall_arg, arg))
 
         self.fact_refs = [self.ml_state.fetch_rule_fact(fact) for fact in self.using]
-        self.premise_bindings: list[FactBinding] | None = None
+        self.bindings: Bindings | None = None
         self.running_time = 0
 
     @staticmethod
@@ -1862,13 +1880,42 @@ class Rewrite(SubgoalMaker_NoTailEnder):
             for premise in self.rewrite_premises:
                 print_indent(indent+1, file)
                 file.write(f"- {premise}\n")
-        if self.premise_bindings is not None:
-            print_fact_bindings(self.premise_bindings, indent, file, "premises")
+        if self.bindings is not None:
+            print_var_bindings(self.bindings[0], indent, file, "fixing variables")
+            print_fact_bindings(self.bindings[1], indent, file, "resulting premises")
         self._print_evaluation_status(indent, file)
         self._print_warnings(indent, file, [Warning.Position.HEADER])
 
+    def _fixed_vars_at_me(self, ret: Vars) -> Vars:
+        if self.bindings is not None:
+            for var in self.bindings[0]:
+                ret[var.external_varname] = var.type
+        return ret
+
+    def _fixed_facts_at_me(self, ret: Hyps) -> Hyps:
+        if self.bindings is not None:
+            for fact in self.bindings[1]:
+                ret[fact.name] = fact.pretty
+        return ret
+
+    def _fixed_vars_after_me(self, ret: Vars) -> Vars:
+        if self.sub_nodes:
+            return ret
+        else:
+            return self._fixed_vars_at_me(ret)
+
+    def _fixed_facts_after_me(self, ret: Hyps) -> Hyps:
+        if self.sub_nodes:
+            return ret
+        else:
+            return self._fixed_facts_at_me(ret)
+
     def beginning_opr(self) -> Minilang_Operation:
-        bindings = [(fb.name, fb.expr) for fb in self.premise_bindings] if self.premise_bindings is not None else None
+        bindings = None
+        if self.bindings is not None:
+            var_bindings = [(vb.internal_varname, vb.external_varname, vb.type) for vb in self.bindings[0]]
+            fact_bindings = [(fb.expr, fb.name, fb.pretty) for fb in self.bindings[1]]
+            bindings = (var_bindings, fact_bindings)
         return Minilang_Operation.SIMPLIFY(
             self.fact_refs,
             self.use_system_simplifiers,
@@ -1911,45 +1958,61 @@ class Rewrite(SubgoalMaker_NoTailEnder):
                     raise InternalError(
                         f"Expected exactly one Intro_Bindings_Msg in Rewrite's messages, got {len(intro_bindings_msgs)}"
                     )
-            self.premise_bindings = intro_bindings_msg.final[1]
+            self.bindings = intro_bindings_msg.final
             if self.running_time >= 2:
-                if intro_bindings_msg.missing[1]:
-                    premises = [
-                        p.name if i == len(intro_bindings_msg.missing[1]) - 1 else "and " + p.name
-                        for i, p in enumerate(intro_bindings_msg.missing[1])
-                    ]
-                    pstr = ", ".join(premises) if len(premises) > 2 else " ".join(premises)
-                    pstr = "premise " + pstr if len(premises) == 1 else "premises " + pstr
+                missing_vars, missing_facts = intro_bindings_msg.missing
+                auto_vars, auto_facts = intro_bindings_msg.auto_introduced
+
+                # Warn about missing variables
+                if missing_vars:
+                    varnames = [v.external_varname for v in missing_vars]
+                    vstr = titled_string_of_and_list(varnames, "variable", "variables")
                     self.warnings.append(Warning(Warning.Position.HEADER,
-                        f"The proof goal has changed. Tracking of {pstr} has been lost."))
-                if intro_bindings_msg.auto_introduced[1]:
-                    def print_warning(indent: int, file: MyIO) -> int:
+                        f"The proof goal has changed. Tracking of the {vstr} has been lost."))
+
+                # Warn about missing premises
+                if missing_facts:
+                    premises = [p.name for p in missing_facts]
+                    pstr = titled_string_of_and_list(premises, "premise", "premises")
+                    self.warnings.append(Warning(Warning.Position.HEADER,
+                        f"The proof goal has changed. Tracking of the {pstr} has been lost."))
+
+                # Warn about auto-introduced variables
+                if auto_vars:
+                    def print_var_warning(indent: int, file: MyIO) -> int:
+                        print_indent(indent, file)
+                        file.write(f"- The proof goal has changed and new variables occur:\n")
+                        for binding in auto_vars:
+                            print_indent(indent+1, file)
+                            file.write(f"- {binding.external_varname}: {binding.type}\n")
+                        return indent
+                    self.warnings.append(Warning(Warning.Position.HEADER, print_var_warning))
+
+                # Warn about auto-introduced premises
+                if auto_facts:
+                    def print_fact_warning(indent: int, file: MyIO) -> int:
                         print_indent(indent, file)
                         file.write(f"- The proof goal has changed and new premises occur:\n")
-                        for binding in intro_bindings_msg.auto_introduced[1]:
+                        for binding in auto_facts:
                             print_indent(indent+1, file)
                             file.write(f"- {binding.name}\n")
                         return indent
-                    self.warnings.append(Warning(Warning.Position.HEADER, print_warning))
+                    self.warnings.append(Warning(Warning.Position.HEADER, print_fact_warning))
         return (success, reason)
 
-    def _fixed_facts_at_me(self, ret: Hyps) -> Hyps:
-        if self.premise_bindings is not None:
-            for fact in self.premise_bindings:
-                ret[fact.name] = fact.pretty
-        return ret
-
-    def _fixed_facts_after_me(self, ret: Hyps) -> Hyps:
-        if self.sub_nodes:
-            return ret
-        else:
-            return self._fixed_facts_at_me(ret)
+    def _rename_var(self, old_name: varname, new_name: varname) -> 'Node | None':
+        if self.bindings is not None:
+            for i, var in enumerate(self.bindings[0]):
+                if var.external_varname == old_name:
+                    self.bindings[0][i] = VariableBinding(var.internal_varname, new_name, var.type)
+                    return self
+        return super()._rename_var(old_name, new_name)
 
     def _rename_fact(self, old_name: str, new_name: str) -> 'Node | None':
-        if self.premise_bindings is not None:
-            for i, fact in enumerate(self.premise_bindings):
+        if self.bindings is not None:
+            for i, fact in enumerate(self.bindings[1]):
                 if fact.name == old_name:
-                    self.premise_bindings[i] = FactBinding(fact.expr, new_name, fact.pretty)
+                    self.bindings[1][i] = FactBinding(fact.expr, new_name, fact.pretty)
                     return self
         return super()._rename_fact(old_name, new_name)
 
@@ -2162,14 +2225,10 @@ class Intro(SubgoalMaker_NoTailEnder):
             self.bindings = intro_bindings_msg.final
             if self.running_time >= 2:
                 if intro_bindings_msg.missing[0]:
-                    vars = [
-                        v.external_varname if i == len(intro_bindings_msg.missing[0]) - 1 else "and " + v.external_varname
-                        for i, v in enumerate(intro_bindings_msg.missing[0])
-                    ]
-                    vstr = ", ".join(vars) if len(vars) > 2 else " ".join(vars)
-                    vstr = "variable " + vstr if len(vars) == 1 else "variables " + vstr
+                    varnames = [v.external_varname for v in intro_bindings_msg.missing[0]]
+                    vstr = titled_string_of_and_list(varnames, "variable", "variables")
                     self.warnings.append(Warning(Warning.Position.HEADER,
-                        f"The proof goal has changed. Tracking of {vstr} has been lost."))
+                        f"The proof goal has changed. Tracking of the {vstr} has been lost."))
                 if intro_bindings_msg.auto_introduced[0]:
                     def print(indent: int, file: MyIO) -> int:
                         print_indent(indent, file)
@@ -2183,14 +2242,10 @@ class Intro(SubgoalMaker_NoTailEnder):
                         return indent
                     self.warnings.append(Warning(Warning.Position.HEADER, print))
                 if intro_bindings_msg.missing[1]:
-                    vars = [
-                        v.name if i == len(intro_bindings_msg.missing[1]) - 1 else "and " + v.name
-                        for i, v in enumerate(intro_bindings_msg.missing[1])
-                    ]
-                    vstr = ", ".join(vars) if len(vars) > 2 else " ".join(vars)
-                    vstr = "premise " + vstr if len(vars) == 1 else "premises " + vstr
+                    premises = [v.name for v in intro_bindings_msg.missing[1]]
+                    pstr = titled_string_of_and_list(premises, "premise", "premises")
                     self.warnings.append(Warning(Warning.Position.HEADER,
-                        f"The proof goal has changed. Tracking of {vstr} has been lost."))
+                        f"The proof goal has changed. Tracking of the {pstr} has been lost."))
                 if intro_bindings_msg.auto_introduced[1]:
                     def print(indent: int, file: MyIO) -> int:
                         print_indent(indent, file)

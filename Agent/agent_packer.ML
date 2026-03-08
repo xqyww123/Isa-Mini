@@ -110,7 +110,7 @@ val unpacker =
                         unpackBool,
                         unpackList unpackString,
                         unpackBool,
-                        unpackOption (unpackList (unpackPair (unpackString, unpackString)))
+                        unpackOption unpack_bindings
                      )
      | "UNFOLD"   => apfst UNFOLD   o unpackList unpackString
      | "WITNESS"  => apfst WITNESS  o unpackList unpackString
@@ -150,7 +150,7 @@ fun packer (SIMPLIFY data) =
                   packBool,
                   packList packString,
                   packBool,
-                  packOption (packList (packPair (packString, packString)))
+                  packOption pack_bindings
                 )) ("SIMPLIFY", data)
   | packer (UNFOLD data) =
       packPair (packString, packList packString) ("UNFOLD", data)

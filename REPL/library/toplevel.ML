@@ -26,7 +26,7 @@ fun pack_typ ctxt ty = packString (trim_markup (Syntax.string_of_typ  ctxt ty))
 fun pack_term ctxt tm = packString (trim_markup (Syntax.string_of_term ctxt tm))
 fun pack_items ctxt =
   let val pack_variables = packPairList (packString, pack_typ ctxt)
-      val pack_facts     = packPairList (packString, packList (pack_term ctxt))
+      val pack_facts     = packPairList (packString, pack_term ctxt)
    in packPair (pack_variables, pack_facts)
   end
 fun pack_tree ctxt =
@@ -60,7 +60,7 @@ fun RE cout msgs src s =
 
             fun handle_msg (Minilang.New_Items items') =
                   items := Minilang.cat_items items' (!items)
-              | handle_msg (Minilang.Consider_Case name) =
+              | handle_msg (Minilang.Consider_Case (name, _)) =
                   consider_case := SOME name
               | handle_msg (Minilang.Internal (Minilang.REPLACE_CMD cmd)) =
                   code := cmd :: !code

@@ -90,7 +90,7 @@ val SIMP : with_clause -> operation
 val SIMP'' : (bool * (Facts.ref * Token.src list)) list -> operation
 val SIMP_CMD : command
 
-val SIMPLIFY_GOAL_AND_PREMISES : thm list -> bool -> string list -> bool -> (term -> string) option -> operation
+val SIMPLIFY_GOAL_AND_PREMISES : thm list -> bool -> string list -> bool -> (term list -> string list) option -> ((string * typ) list -> string list) option -> state -> items * state
 val SIMPLIFY_GOAL_AND_PREMISES'' : fact list -> bool -> string list -> bool -> operation
 val SIMPLIFY_CMD : command
 
@@ -1143,7 +1143,7 @@ fun INTRO' mode bs premise_names s =
   let val _ = if mode = ALL_SUBGOALS andalso is_some premise_names
               then raise OPR_FAIL (INVALID_OPR, "premise_names must be NONE in ALL_SUBGOALS mode")
               else ()
-      val F = fn binds => fn (st, foc) =>
+      fun F binds (st, foc) =
         let val num_prems = length (#prems foc)
             val _ = case premise_names
                       of SOME names =>
@@ -1565,7 +1565,8 @@ fun SIMPLIFY_GOAL_AND_PREMISES'
     (use_system_simps: bool)
     (premise_names: string list)
     (simplify_goal: bool)
-    (naming_fn_opt: (term -> string) option)
+    (naming_fn_opt: (term list -> string list) option)
+    (naming_vars_fn_opt: ((string * typ) list -> string list) option)
     (origin as (ctxt, HHF (st0, items) :: S)) =
   let
     (* 1. Retrieve premises by name from context *)
@@ -1594,15 +1595,13 @@ fun SIMPLIFY_GOAL_AND_PREMISES'
     (* 4. Setup simplifier context *)
     val simp_ctxt = (
       if use_system_simps
-      then ctxt addsimps (
-        @{thms BNF_Fixpoint_Base.conj_imp_eq_imp_imp Basic_BNF_LFPs.ex_neg_all_pos} @ simp_facts)
-      else Simplifier.clear_simpset ctxt addsimps (
-        @{thms BNF_Fixpoint_Base.conj_imp_eq_imp_imp} @ simp_facts)
+      then ctxt addsimps simp_facts
+      else Simplifier.clear_simpset ctxt addsimps simp_facts
       ) |> Simplifier.add_cong @{thm NO_SIMP_cong}
 
     (* 5. Apply simplification using conversion *)
     val st_simplified =
-      Conv.gconv_rule (Simplifier.rewrite simp_ctxt) 1 st_protected
+      Clasimp.clarsimp_tac simp_ctxt 1 st_protected |> Seq.hd
 
     (* 6. Protect goal conclusion to prevent INTRO's allI/impI from affecting it *)
     val st_protected_for_intro =
@@ -1620,11 +1619,12 @@ fun SIMPLIFY_GOAL_AND_PREMISES'
     val (premise_names_for_intro, ctxt_with_counter) =
       case naming_fn_opt of
         SOME naming_fn =>
-          let val names = map (fn prem_term =>
-                if is_unchanged prem_term
-                then SOME ""  (* Unchanged - skip *)
-                else SOME (naming_fn prem_term)  (* Changed - use naming_fn *)
-              ) prems_after_intro
+          let
+            (* Use burrow_options to process only changed premises *)
+            val names = prems_after_intro
+              |> map (fn prem_term => if is_unchanged prem_term then NONE else SOME prem_term)
+              |> burrow_options naming_fn
+              |> map (fn NONE => SOME "" | SOME name => SOME name)
           in (names, ctxt)
           end
       | NONE =>
@@ -1636,21 +1636,31 @@ fun SIMPLIFY_GOAL_AND_PREMISES'
             ) prems_after_intro counter_val
           ) ctxt
 
-    (* 10. Call INTRO' with the generated premise names (empty strings will be skipped) *)
-    val (ctxt_after_intro, HHF (st_after_intro, items_after_intro) :: S_after_intro) =
-      #2 (INTRO' SINGLE_GOAL NONE (SOME premise_names_for_intro)
-                 (ctxt_with_counter, HHF (st_protected_for_intro, items) :: S))
+    (* 10. Generate variable names if naming_vars_fn_opt is provided *)
+    val (vars_after_intro, _, _) = strip_meta_hhf (fst (Logic.dest_implies (Thm.prop_of st_protected_for_intro)))
+    val var_names_for_intro =
+      case naming_vars_fn_opt of
+        SOME naming_vars_fn =>
+          let val names = naming_vars_fn vars_after_intro  (* Call once with all variables *)
+          in SOME (map SOME names)
+          end
+      | NONE => NONE
 
-    (* 11. Unwrap NO_SIMP from the goal conclusion *)
-    (* We always wrap once at line 1627 to protect from INTRO *)
-    (* If simplify_goal=false, we wrapped twice (once at line 1611, once at line 1627) *)
+    (* 11. Call INTRO' with the generated premise names and variable names *)
+    val (items_from_intro, (ctxt_after_intro, HHF (st_after_intro, items_after_intro) :: S_after_intro)) =
+      INTRO' SINGLE_GOAL var_names_for_intro (SOME premise_names_for_intro)
+             (ctxt_with_counter, HHF (st_protected_for_intro, items) :: S)
+
+    (* 12. Unwrap NO_SIMP from the goal conclusion *)
+    (* We always wrap once to protect from INTRO *)
+    (* If simplify_goal=false, we wrapped twice *)
     val _ = tracing ("Before unwrap: " ^ @{make_string} (Thm.prop_of st_after_intro))
     val st_final = Conv.gconv_rule (unwrap_goal_conclusion_NO_SIMP ctxt_after_intro) 1 st_after_intro
     val _ = tracing ("After unwrap: " ^ @{make_string} (Thm.prop_of st_final))
   in
-    (ctxt_after_intro, HHF (st_final, items_after_intro) :: S_after_intro)
+    (items_from_intro, (ctxt_after_intro, HHF (st_final, items_after_intro) :: S_after_intro))
   end
-  | SIMPLIFY_GOAL_AND_PREMISES' _ _ _ _ _ _ = raise BROKEN_INVARIANT
+  | SIMPLIFY_GOAL_AND_PREMISES' _ _ _ _ _ _ _ = raise BROKEN_INVARIANT
 
 (* Wrapper that uses premise counter for automatic naming *)
 fun SIMPLIFY_GOAL_AND_PREMISES
@@ -1658,8 +1668,13 @@ fun SIMPLIFY_GOAL_AND_PREMISES
     use_system_simps
     premise_names
     simplify_goal
-    naming_fn_opt =
-  OPR (report_goal o SIMPLIFY_GOAL_AND_PREMISES' simp_facts use_system_simps premise_names simplify_goal naming_fn_opt)
+    naming_fn_opt
+    naming_vars_fn_opt =
+  OPR_with_ret (fn s =>
+    let val (items, s') = SIMPLIFY_GOAL_AND_PREMISES' simp_facts use_system_simps premise_names simplify_goal naming_fn_opt naming_vars_fn_opt s
+        val _ = report_goal s'
+     in (items, s')
+    end)
 
 (* Wrapper that parses fact references and uses premise counter *)
 fun SIMPLIFY_GOAL_AND_PREMISES''
@@ -1669,8 +1684,9 @@ fun SIMPLIFY_GOAL_AND_PREMISES''
     simplify_goal =
   OPR (fn (ctxt, SK) =>
     let val simp_facts = maps (Attrib.eval_thms ctxt o single) raw_simp_facts
-     in SIMPLIFY_GOAL_AND_PREMISES' simp_facts use_system_simps premise_names simplify_goal NONE (ctxt, SK)
-        |> report_goal
+        val (_, s') = SIMPLIFY_GOAL_AND_PREMISES' simp_facts use_system_simps premise_names simplify_goal NONE NONE (ctxt, SK)
+        val _ = report_goal s'
+     in s'
     end)
 
 (* Command parser for SIMPLIFY operation *)
