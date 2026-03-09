@@ -8,8 +8,8 @@ declare [[agent_AoA_driver="test.Rewrite2"]]
 lemma rewrite_test:
   assumes h1: "y = x + 0"
       and h2: "\<exists>aAa. z = y * 1 + aAa"
-  shows "x = z \<and> PP \<and> (\<forall>x. AA x)"
-  by    Age ntAoA 
+  shows "x = z \<and> PP z \<and> (\<forall>x. AA z x)"
+  by      AgentAoA 
 
 
 end

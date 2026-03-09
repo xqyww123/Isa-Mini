@@ -200,6 +200,11 @@ class CannotInsert_EvaluationFailed(CannotInsert):
         if reason is not None:
             reason_str = f"{reason_str}\n{reason}"
         super().__init__(insert_into, reason_str)
+class CannotInsert_NodeNotFound(CannotInsert):
+    def __init__(self, id: step):
+        self.id = id
+    def __str__(self) -> str:
+        return f"Cannot insert before the node {self.id} because it is not found"
 
 class CannotAppend(OprError):
     def __init__(self, target : 'Node', reason : failure_reason):
@@ -994,7 +999,7 @@ class Node:
             raise InternalError("Don't know how to refresh a node and all its after nodes when the node's parent is none")
         else:
             self.parent._refresh_all_children_after(self)
-    def insert_before(self, gen_node: gen_node) -> None:
+    def insert_before_me(self, gen_node: gen_node) -> 'Node':
         if self.parent is None:
             raise InternalError("Don't know how to refresh a node and all its after nodes when the node's parent is none")
         else:
@@ -1007,6 +1012,13 @@ class Node:
                 self.parent._remove_child(node)
                 raise
             node.refresh_all_after_me()
+            return node
+    def insert_before(self, step: step, gen_node: gen_node) -> 'Node':
+        try:
+            node = self.locate_node(step)
+            return node.insert_before_me(gen_node)
+        except NodeNotFound:
+            raise CannotInsert_NodeNotFound(step)
     def append(self, gen_node: may_gen_node) -> 'Node | None':
         raise NotImplementedError("`append` must be implemented by subclass")
     def _locate_node(self, ids: Sequence[local_step], id: step, pos: int = 0) -> 'Node':
@@ -1853,6 +1865,12 @@ class Rewrite(Leaf):
         self.bindings: Bindings | None = None
         self.running_time = 0
 
+        # Store the goal before operation if rewrite_goal is True
+        if self.rewrite_goal and config.ml_state.prooftree is not None:
+            self.goal_before: term | None = config.ml_state.prooftree.top_goal().conclusion
+        else:
+            self.goal_before = None
+
     @staticmethod
     def gen(arg: Rewrite_ToolArg) -> gen_node:
         def mk(config: NodeConfig) -> 'Rewrite':
@@ -1884,6 +1902,18 @@ class Rewrite(Leaf):
         if self.bindings is not None:
             print_var_bindings(self.bindings[0], indent, file, "fixing variables")
             print_fact_bindings(self.bindings[1], indent, file, "resulting premises")
+
+        # Print modified goal if it changed
+        if self.goal_before is not None and self.status.success:
+            result_state = self.resulting_state()
+            if result_state.prooftree is not None:
+                goal_after = result_state.prooftree.top_goal().conclusion
+                if self.goal_before != goal_after:
+                    print_indent(indent, file)
+                    file.write("resulting goal:\n")
+                    print_indent(indent+1, file)
+                    file.write(f"{goal_after}\n")
+
         self._print_evaluation_status(indent, file)
         self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
         return indent
@@ -2215,9 +2245,9 @@ class Intro(SubgoalMaker_NoTailEnder):
                         for binding in intro_bindings_msg.auto_introduced[0]:
                             print_indent(indent+1, file)
                             if binding.external_varname == binding.internal_varname:
-                                file.write(f"- {binding.external_varname}")
+                                file.write(f"- {binding.external_varname}\n")
                             else:
-                                file.write(f"- {binding.internal_varname}, renamed to {binding.external_varname} to prevent name conflicts")
+                                file.write(f"- {binding.internal_varname}, renamed to {binding.external_varname} to prevent name conflicts\n")
                         return indent
                     self.warnings.append(Warning(Warning.Position.HEADER, print))
                 if intro_bindings_msg.missing[1]:

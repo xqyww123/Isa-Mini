@@ -67,6 +67,11 @@ val string_of_term : Proof.context -> term -> string
 val string_of_type : Proof.context -> typ -> string
 val string_of_type_full_sort : Proof.context -> typ -> string
 
+val read_term : Proof.context -> string -> term
+val read_terms : Proof.context -> string list -> term list
+val read_prop : Proof.context -> string -> term
+val read_props : Proof.context -> string list -> term list
+
 end
 
 structure MiniLang_Agent : MINILANG_AGENT = struct
@@ -148,6 +153,7 @@ fun string_of_term ctxt =
               |> Config.put Printer.show_question_marks true
               |> Config.put Printer.show_brackets false
      in Object_Logic.atomize_term ctxt'
+     #> Minilang.deconflict_bound_names ctxt'
      #> Syntax.string_of_term ctxt'
      #> REPL.trim_makrup
     end
@@ -177,6 +183,24 @@ fun string_of_type_full_sort ctxt =
     end
 
 fun string_of_thm ctxt th = string_of_term ctxt (Thm.prop_of th)
+
+(* Customized read functions with bound name deconfliction *)
+
+fun read_term ctxt s =
+  Syntax.read_term ctxt s
+  |> Minilang.deconflict_bound_names ctxt
+
+fun read_terms ctxt ss =
+  Syntax.read_terms ctxt ss
+  |> map (Minilang.deconflict_bound_names ctxt)
+
+fun read_prop ctxt s =
+  Syntax.read_prop ctxt s
+  |> Minilang.deconflict_bound_names ctxt
+
+fun read_props ctxt ss =
+  Syntax.read_props ctxt ss
+  |> map (Minilang.deconflict_bound_names ctxt)
 
 fun find_def ctxt name =
   let fun mkname suffix [th] =
@@ -213,7 +237,9 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (s:Minilang.s
     else
       let
         (* Step 2: Extract quantified variables and premises from goal *)
-        val goal_term = Thm.prop_of st |> Logic.dest_implies |> fst
+        val goal_term = Thm.prop_of st
+                    |> Logic.dest_implies |> fst
+                    |> Minilang.deconflict_bound_names ctxt
         val (vars, prems, _) = Minilang.strip_meta_and_hol_hhf goal_term
 
         (* Step 3: Process variables - try to match with provided names, auto-generate if not found *)
@@ -225,12 +251,12 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (s:Minilang.s
                 case find_first (fn {internal_name = pn, ...} => pn = internal_name) provided_var_names of
                   SOME {external_name, ...} =>
                     (* Matched: use provided external name *)
-                    let val (actual_name, name_ctx') = Name.variant external_name name_ctx
+                    let val (actual_name, name_ctx') = Minilang_Aux.variant_name external_name name_ctx
                      in (((internal_name, actual_name, var_ty), SOME external_name), name_ctx')
                     end
                 | NONE =>
                     (* Not matched: auto-generate using internal name *)
-                    let val (actual_name, name_ctx') = Name.variant internal_name name_ctx
+                    let val (actual_name, name_ctx') = Minilang_Aux.variant_name internal_name name_ctx
                      in (((internal_name, actual_name, var_ty), NONE), name_ctx')
                     end
               ) vars (Variable.names_of ctxt)
@@ -344,6 +370,7 @@ fun compute_bindings (s:Minilang.state) (var_names: string list) (fact_names: st
       let
         (* Extract quantified variables and premises from goal *)
         val goal_term = Thm.prop_of st |> Logic.dest_implies |> fst
+                     |> Minilang.deconflict_bound_names ctxt
         val (vars, prems, _) = Minilang.strip_meta_and_hol_hhf goal_term
 
         (* Check length constraints *)
@@ -431,13 +458,13 @@ fun AUTO_SIMPLIFY
         val (names, _) = fold_map (fn (var_name, var_ty) => fn name_ctx =>
           case find_first (fn {internal_name, ...} => internal_name = var_name) provided_var_names of
             SOME {external_name, ...} =>
-              let val (actual_name, name_ctx') = Name.variant external_name name_ctx
+              let val (actual_name, name_ctx') = Minilang_Aux.variant_name external_name name_ctx
                   val _ = matched_var_names_ref := var_name :: !matched_var_names_ref
               in (actual_name, name_ctx')
               end
           | NONE =>
               (* Auto-generate using internal name with deconfliction *)
-              let val (actual_name, name_ctx') = Name.variant var_name name_ctx
+              let val (actual_name, name_ctx') = Minilang_Aux.variant_name var_name name_ctx
               in (actual_name, name_ctx')
               end
         ) vars (Variable.names_of ctxt)
@@ -550,7 +577,7 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
                     then error "You must specify at least one target to unfold"
                     else ()
             val ctxt = Minilang.context_of s
-            val consts = map (Syntax.read_term ctxt) origin_consts
+            val consts = map (read_term ctxt) origin_consts
             val defs = map (Option.map (map snd) o find_def_const ctxt) consts
         in Minilang.UNFOLD (flat (map_filter I defs)) s
         end
@@ -621,14 +648,14 @@ fun check_command_i ctxt (SIMPLIFY (facts, use_sys, prems, simp_goal, bindings_o
       SIMPLIFY (map read_fact facts, use_sys, prems, simp_goal, bindings_opt)
   | check_command_i _ (RULE facts) = RULE (map read_fact facts)
   | check_command_i _ (UNFOLD consts) = UNFOLD consts
-  | check_command_i ctxt (WITNESS terms) = WITNESS (Syntax.read_terms ctxt terms)
+  | check_command_i ctxt (WITNESS terms) = WITNESS (read_terms ctxt terms)
   | check_command_i ctxt (CASE_SPLIT (target, vars, rule)) =
       let val rule' = Option.map (chk_single ctxt rule o read_thms ctxt) rule
-          val target' = Syntax.read_term ctxt target
+          val target' = read_term ctxt target
        in CASE_SPLIT (target', vars, rule')
       end
   | check_command_i ctxt (INDUCT (target, vars, arbitrary, rule)) =
-      let val (target' :: arbitrary') = Syntax.read_terms ctxt (target :: arbitrary)
+      let val (target' :: arbitrary') = read_terms ctxt (target :: arbitrary)
           val rule' = Option.map (chk_single ctxt rule o read_thms ctxt) rule
        in INDUCT (target', vars, arbitrary', rule')
       end
@@ -636,8 +663,8 @@ fun check_command_i ctxt (SIMPLIFY (facts, use_sys, prems, simp_goal, bindings_o
   | check_command_i _ (NEXT (facts, vars)) = NEXT (map read_fact facts, vars)
   | check_command_i _ (END facts) = END (map read_fact facts)
   | check_command_i _ (BRANCH brs) = BRANCH brs
-  | check_command_i ctxt (HAVE goals) = HAVE (Syntax.read_props ctxt goals)
-  | check_command_i ctxt (SUFFICES goal) = SUFFICES (Syntax.read_prop ctxt goal)
+  | check_command_i ctxt (HAVE goals) = HAVE (read_props ctxt goals)
+  | check_command_i ctxt (SUFFICES goal) = SUFFICES (read_prop ctxt goal)
   | check_command_i _ (OBTAIN vc) = OBTAIN vc
   | check_command_i _ (SORRY vars) = SORRY vars
   | check_command_i _ (HAMMER facts) = HAMMER (map read_fact facts)

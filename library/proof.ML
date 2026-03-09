@@ -45,8 +45,14 @@ val strict_end: bool Config.T
 val counter_mode : string Config.T
 val INTRO_split_conj : bool Config.T
 val INTRO_mk_block : bool Config.T
+val auto_deconflict_bound : bool Config.T
 
 val chk_working_mode : string -> unit
+
+(* Bound name deconfliction *)
+
+val deconflict_bound_names : Proof.context -> term -> term
+val deconflict_bound_names_thm : Proof.context -> thm -> thm
 
 (* Operations *)
 
@@ -90,7 +96,10 @@ val SIMP : with_clause -> operation
 val SIMP'' : (bool * (Facts.ref * Token.src list)) list -> operation
 val SIMP_CMD : command
 
-val SIMPLIFY_GOAL_AND_PREMISES : thm list -> bool -> string list -> bool -> (term list -> string list) option -> ((string * typ) list -> string list) option -> state -> items * state
+val SIMPLIFY_GOAL_AND_PREMISES : thm list -> bool -> string list -> bool
+        -> (term list -> string list) option
+        -> ((string * typ) list -> string list) option
+        -> state -> items * state
 val SIMPLIFY_GOAL_AND_PREMISES'' : fact list -> bool -> string list -> bool -> operation
 val SIMPLIFY_CMD : command
 
@@ -245,11 +254,55 @@ val strict_end = Config.declare_bool ("Minilang.strict_end", \<^here>) (K false)
 val counter_mode = Config.declare_string ("Minilang.counter_mode", \<^here>) (K "consecutive")
 val INTRO_split_conj = Config.declare_bool ("Minilang.INTRO_split_conj", \<^here>) (K false)
 val INTRO_mk_block   = Config.declare_bool ("Minilang.INTRO_mk_block", \<^here>) (K false)
+val auto_deconflict_bound = Config.declare_bool ("Minilang.auto_deconflict_bound", \<^here>) (K false)
 
 fun chk_working_mode mode =
-      if member (op =) ["RELAXED", "COMPLETE_NEXT", "STRICT"] mode 
+      if member (op =) ["RELAXED", "COMPLETE_NEXT", "STRICT"] mode
       then ()
       else error "working_mode must be either STRICT, RELAXED or COMPLETE_NEXT"
+
+(* Deconflict bound variable names in a term to avoid shadowing.
+   Always uses Variable.names_of ctxt as base to avoid conflicts with context names.
+*)
+fun deconflict_bound_names' ctxt term =
+  let
+    val free_names = Term.add_free_names term []
+    val initial_name_ctx = fold Name.declare free_names (Variable.names_of ctxt)
+
+    fun deconflict name_ctx (Abs (name, ty, body)) =
+          let val (name', name_ctx') = variant_name name name_ctx
+              val body' = deconflict name_ctx' body
+           in case (name' = name, body')
+           of (true , NONE) => NONE
+            | (true , SOME body) => SOME (Abs (name', ty, body))
+            | (false, NONE) => SOME (Abs (name', ty, body))
+            | (false, SOME body) => SOME (Abs (name', ty, body))
+          end
+      | deconflict name_ctx (f $ x) =
+          let val f' = deconflict name_ctx f
+              val x' = deconflict name_ctx x
+           in case (f', x')
+                of (SOME f, NONE) => SOME (f $ x)
+                 | (SOME f, SOME x) => SOME (f $ x)
+                 | (NONE, SOME x) => SOME (f $ x)
+                 | (NONE, NONE) => NONE
+          end
+      | deconflict _ _ = NONE
+   in deconflict initial_name_ctx term
+  end
+
+fun deconflict_bound_names ctxt term =
+  case deconflict_bound_names' ctxt term
+    of SOME ret => ret
+     | NONE => term
+
+(* Apply bound name deconfliction to theorem *)
+fun deconflict_bound_names_thm ctxt thm =
+  let val prop = Thm.prop_of thm
+   in case deconflict_bound_names' ctxt prop
+        of SOME prop' => Thm.renamed_prop prop' thm
+         | NONE => thm
+  end
 
 
 type variables = (string * typ) list
@@ -1090,7 +1143,7 @@ fun INTRO'' F mode bs (origin as (ctxt, HHF (st0, items) :: L)) =
     else if need_intro st0
       then let val st = st0
                      |> Seq.REPEAT (Thm.biresolution NONE true
-                              [(false, Thms.allI), (false, Thms.impI), (false, Thms.conjI)] 1)
+                              [(false, Thms.allI), (false, Thms.impI)] 1)
                      |> Seq.hd
 
                val default_binds = quantifier_bindings ctxt st |> map fst
@@ -1354,7 +1407,7 @@ fun TRY_STANDARD SK =
               (K ()) (CONTEXT_TACTIC (Classical.standard_tac (#1 SK) [])) NONE SK
   else SK
 
-val INTRO = timed_OPR_with_ret 5 ooo INTRO'
+val INTRO = timed_OPR_with_ret 5000 ooo INTRO'
 val INTRO_CMD = (OPT_VARS -- OPT_PREMS)
         >> (fn args => fn s => #2 (timed_OPR_with_ret 2 (uncurry (INTRO' SINGLE_GOAL) args) s))
 val INTRO_ALL_CMD = (OPT_VARS -- OPT_PREMS)
@@ -1461,7 +1514,10 @@ fun init_ctxt c st = c
 val install_relaxed_typ_parsing = Syntax_Phases.term_check ~10000 "minlang-flexible-typ" typ_parsing
 
 fun INIT c st =
-  let val facts = Proof_Context.facts_of c
+  let val st0 = if Config.get c auto_deconflict_bound
+                then deconflict_bound_names_thm c st
+                else st
+      val facts = Proof_Context.facts_of c
       val facts' = if can Local_Theory.assert c
                    then Proof_Context.facts_of (Local_Theory.target_of c)
                    else Global_Theory.facts_of (Proof_Context.theory_of c)
@@ -1474,8 +1530,8 @@ fun INIT c st =
       val (vars, _) = Variable.constraints_of c
       val vars' = Vartab.fold (fn ((N,~1),T) => (fn L => (N,T) :: L)
                                 | _ => I) vars []
-      val st' = init_goal c st
-   in ((init_ctxt c st, [HHF (st', (vars',local_facts)), ENDBLK T_END]), Symtab.empty, 0)
+      val st' = init_goal c st0
+   in ((init_ctxt c st0, [HHF (st', (vars',local_facts)), ENDBLK T_END]), Symtab.empty, 0)
   end
 
 fun INIT'  st = INIT (Proof.context_of st) (#goal (Proof.simple_goal st))
@@ -1603,6 +1659,7 @@ fun SIMPLIFY_GOAL_AND_PREMISES'
     (* 5. Apply simplification using conversion *)
     val st_simplified =
       Clasimp.clarsimp_tac simp_ctxt 1 st_protected |> Seq.hd
+      |> Config.get ctxt auto_deconflict_bound ? deconflict_bound_names_thm ctxt
 
     (* 6. Protect goal conclusion to prevent INTRO's allI/impI from affecting it *)
     val st_protected_for_intro =
@@ -2075,13 +2132,14 @@ fun RULE' [] raw_facts (SK as (ctxt, _)) =
           |> transpose []
      in st
      |> Thm.biresolution NONE false rules 1
-     |> Seq.map Thm.solve_constraints
+     |> Seq.map ( Thm.solve_constraints
+               #> Config.get ctxt auto_deconflict_bound ? deconflict_bound_names_thm ctxt)
      |> Seq.pull
      |> (fn SOME (st', _) =>
               let val new_goals = Thm.prems_of st'
                in get_reporter () (Goals new_goals)
                 ; (ctxt, HHF (protect_goals st', items) :: SK)
-              end 
+              end
           | NONE => raise OPR_FAIL (PROOF_FAIL, "Fail to apply the rules" ))
      |> maintain
     end

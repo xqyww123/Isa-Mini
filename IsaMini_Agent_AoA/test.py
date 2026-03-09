@@ -207,7 +207,7 @@ def _test_Rewrite1(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     # Use Rewrite to simplify the premises h1 and h2
-    root.fill("1.1.1", Rewrite.gen({
+    root.insert_before("1", Rewrite.gen({
         "thought": "Rewrite the premises to simplify the equations",
         "using": [{"refer_by": "name", "name": "h1"}],
         "use system simplifiers": True,

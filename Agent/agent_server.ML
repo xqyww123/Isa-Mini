@@ -102,7 +102,7 @@ fun map_criterion _ (Name s) = Name s
   | map_criterion F (Pattern pat) = Pattern (F pat)
 fun check_criterion ctxt =
   let val ctxt' = Proof_Context.set_mode Proof_Context.mode_pattern ctxt
-   in map_criterion (Syntax.read_term ctxt')
+   in map_criterion (MiniLang_Agent.read_term ctxt')
   end
 fun uncheck_criterion ctxt = map_criterion (MiniLang_Agent.string_of_term ctxt)
 end
@@ -337,14 +337,15 @@ fun callback (cfg:cfg) (states:states Unsynchronized.ref) (conn:connection) =
                            of SOME s => s
                             | NONE => raise ERR ["beginning_state_not_found"]
                 val ctxt = Minilang.context_of s0
-                val parsed_term = Syntax.read_term ctxt term
+                val string_of_type = MiniLang_Agent.string_of_type ctxt
+                val parsed_term = MiniLang_Agent.read_term ctxt term
                 val term_type = Term.type_of parsed_term
-                val type_string = Syntax.string_of_typ ctxt term_type
+                val type_string = string_of_type term_type
                 val frees = Term.add_frees parsed_term []
-                    |> map (fn (name, ty) => (name, Syntax.string_of_typ ctxt ty))
+                    |> map (fn (name, ty) => (name, string_of_type ty))
                 val vars = Term.add_vars parsed_term []
                     |> map (fn (name_idx, ty) =>
-                            (Term.string_of_vname name_idx, Syntax.string_of_typ ctxt ty))
+                            (Term.string_of_vname name_idx, string_of_type ty))
              in write conn (packTuple3 (packString,
                                         packList (packPair (packString, packString)),
                                         packList (packPair (packString, packString))))
@@ -362,8 +363,9 @@ fun callback (cfg:cfg) (states:states Unsynchronized.ref) (conn:connection) =
                             | NONE => raise ERR ["beginning_state_not_found"]
                 val vars = Minilang.schematic_vars_of_leading_goal s0
                 val ctxt = Minilang.context_of s0
+                val string_of_type = MiniLang_Agent.string_of_type ctxt
                 val vars_with_pretty = map (fn (name_idx, ty) =>
-                        (Term.string_of_vname name_idx, Syntax.string_of_typ ctxt ty))
+                        (Term.string_of_vname name_idx, string_of_type ty))
                       vars
              in write conn (packList (packPair (packString, packString))) vars_with_pretty
             end handle ERROR msg =>
@@ -409,13 +411,15 @@ fun AoA_cmd (cfg:cfg) (states:states Unsynchronized.ref) : (context * driver * s
 
 end
 
-fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt, sequent) =
-  let val global_context = global_context_of (ctxt, sequent)
+fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
+  let val ctxt = ctxt0
+            |> Config.put Minilang.strict_end true
+            |> Config.put Minilang.counter_mode "none"
+            |> Config.put Minilang.INTRO_split_conj true
+            |> Config.put Minilang.INTRO_mk_block true
+         (* |> Config.put Minilang.auto_deconflict_bound true *)
+      val global_context = global_context_of (ctxt, sequent)
       val s0 = Minilang.INIT ctxt sequent
-            |> Minilang.map_context ( Config.put Minilang.strict_end true
-                                   #> Config.put Minilang.counter_mode "none"
-                                   #> Config.put Minilang.INTRO_split_conj true
-                                   #> Config.put Minilang.INTRO_mk_block true)
       val state = Unsynchronized.ref (Symtab.make [("$init", s0)])
       val (xcmds, s1o) =
             Remote_Procedure_Calling.call_command (AoA_cmd cfg state) (global_context, driver, invocation_id)
