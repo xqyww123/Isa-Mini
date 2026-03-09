@@ -121,19 +121,21 @@
     "Have": {
       "additionalProperties": false,
       "title": "Have",
-      "description": "introduce a subgoal",
+      "description": "prove a lemma",
       "properties": {
         "operation": {
           "const": "Have",
           "type": "string"
         },
         "thought": { "$ref": "#/$defs/Thought" },
-        "statement": { "$ref": "#/$defs/Statement" }
+        "statement": { "$ref": "#/$defs/Statement" },
+        "name": { "type": "string", "description": "binding of the lemma" }
       },
       "required": [
         "operation",
         "thought",
-        "statement"
+        "statement",
+        "name"
       ],
       "type": "object"
     },

@@ -273,6 +273,28 @@ class CannotRename_FactNotFound(CannotRename_NotFound):
     def __str__(self) -> str:
         return f"Cannot rename. The fact {self.old_name} is not found"
 
+class CannotDelete(OprError):
+    pass
+class CannotDelete_NodeNotFound(CannotDelete):
+    def __init__(self, id: step):
+        self.id = id
+    def __str__(self) -> str:
+        return f"Cannot delete {self.id} because the node is not found"
+class CannotDelete_Root(CannotDelete):
+    def __str__(self) -> str:
+        return f"Cannot delete the root node"
+
+class CannotAmend(OprError):
+    pass
+class CannotAmend_NodeNotFound(CannotAmend):
+    def __init__(self, id: step):
+        self.id = id
+    def __str__(self) -> str:
+        return f"Cannot amend the node {self.id} because the node is not found"
+class CannotAmend_Root(CannotAmend):
+    def __str__(self) -> str:
+        return f"Cannot amend the root node"
+
 type ToolCall_arg = dict[str, Any]
 class ArgumentError(AoA_Error):
     def __init__(self, arg: ToolCall_arg, reason: str):
@@ -659,8 +681,8 @@ class Minilang_Operation(NamedTuple):
     def END() -> 'Minilang_Operation':
         return Minilang_Operation("END", [])
     @staticmethod
-    def HAVE(statement: term) -> 'Minilang_Operation':
-        return Minilang_Operation("HAVE", [IsaREPL.ascii_of_unicode(statement)])
+    def HAVE(name: str, statement: term) -> 'Minilang_Operation':
+        return Minilang_Operation("HAVE", (name, IsaREPL.ascii_of_unicode(statement)))
     @staticmethod
     def SUFFICES(statement: term) -> 'Minilang_Operation':
         return Minilang_Operation("SUFFICES", IsaREPL.ascii_of_unicode(statement))
@@ -1007,7 +1029,7 @@ class Node:
         first_time: if True, the node is being refreshed for the first time since its creation.
         """
         pass
-    def refresh_all_after_me(self) -> None:
+    def _refresh_all_after_me(self) -> None:
         """
         refreshing the status of all the nodes excluding and after the `self`
         """
@@ -1027,7 +1049,7 @@ class Node:
             except AoA_Error:
                 self.parent._remove_child(node)
                 raise
-            node.refresh_all_after_me()
+            node._refresh_all_after_me()
             return node
     def insert_before(self, step: step, gen_node: gen_node) -> 'Node':
         try:
@@ -1104,14 +1126,14 @@ class Node:
             raise CannotRename_VariableNotFound(old_name, new_name)
         else:
             ret._refresh_me_alone(False)
-            ret.refresh_all_after_me()
+            ret._refresh_all_after_me()
     def rename_fact(self, old_name: str, new_name: str) -> None:
         ret = self._rename_fact(old_name, new_name)
         if ret is None:
             raise CannotRename_FactNotFound(old_name, new_name)
         else:
             ret._refresh_me_alone(False)
-            ret.refresh_all_after_me()
+            ret._refresh_all_after_me()
     def _print_fixed_vars_and_facts(self, indent: int, file: MyIO) -> None:
         fixed_vars = self._fixed_vars_at_me({})
         fixed_facts = self._fixed_facts_at_me({})
@@ -1143,6 +1165,47 @@ class Node:
         self.warnings.clear()
     def reset(self) -> None:
         self._on_reset()
+    def delete_me(self) -> None:
+        if self.parent is not None:
+            self.parent._delete_child(self)
+        else:
+            raise CannotDelete_Root()
+    def delete(self, id: step) -> None:
+        try:
+            node = self.locate_node(id)
+        except NodeNotFound:
+            raise CannotDelete_NodeNotFound(id)
+        node.delete_me()
+    def delete_me_and_all_after(self) -> None:
+        if self.parent is not None:
+            self.parent._delete_child_and_all_after(self)
+        else:
+            raise CannotDelete_Root()
+    def _delete_child_and_all_after(self, child: 'Node') -> None:
+        for i, c in enumerate(self.sub_nodes):
+            if c is child:
+                self.sub_nodes = self.sub_nodes[:i]
+                if i == 0:
+                    self._refresh_me_alone(False)
+                else:
+                    pri = self.sub_nodes[i-1]
+                    pri._refresh_me_alone(False)
+                    pri._refresh_all_after_me()
+                return
+        raise InternalError("The target node is not my children")
+    def amend_me(self, gen_node: gen_node) -> 'Node':
+        if self.parent is not None:
+            return self.parent._amend_child(self, gen_node)
+        else:
+            raise CannotAmend_Root()
+    def _amend_from(self, old: 'Node') -> None:
+        return None
+    def amend(self, id: step, gen_node: gen_node) -> 'Node':
+        try:
+            node = self.locate_node(id)
+            return node.amend_me(gen_node)
+        except NodeNotFound:
+            raise CannotAmend_NodeNotFound(id)
 
 # abstract base class
 class Leaf(Node):
@@ -1195,26 +1258,34 @@ class NonLeaf_Node(Node):
                     )
                 return
         raise InternalError("The target node is not my children")
-    def _refresh_all_children_after(self, after: 'Node', can_continue_i: bool = True) -> None:
+    def _refresh_footer(self) -> failure_reason:
+        return None
+    def _refresh_all_children_after(self, after: 'Node | Literal["end"]', can_continue_i: bool = True) -> None:
         """
         refreshing the status of all the nodes excluding and after the `after`
         """
         can_continue : bool | None = None
-        for child in self.sub_nodes: 
-            if can_continue is None:
-                if child is after:
-                    can_continue = can_continue_i
-            else:
-                if can_continue:
-                    child._refresh_me_alone(False)
-                    can_continue = child.status.status == EvaluationStatus.Status.SUCCESS
+        if after == "end":
+            can_continue = True
+        else:
+            for child in self.sub_nodes: 
+                if can_continue is None:
+                    if child is after:
+                        can_continue = can_continue_i
                 else:
-                    child.status = EVALUATION_CACNCELLED
+                    if can_continue:
+                        child._refresh_me_alone(False)
+                        can_continue = child.status.status == EvaluationStatus.Status.SUCCESS
+                    else:
+                        child.status = EVALUATION_CACNCELLED
         if can_continue is None:
             raise InternalError("Cannot find the target to refresh in my children")
-        elif can_continue:
-            if self.parent is not None:
-                self.parent._refresh_all_children_after(self, can_continue)
+        else:
+            if can_continue:
+                can_continue = self._refresh_footer() is None
+            if can_continue:
+                if self.parent is not None:
+                    self.parent._refresh_all_children_after(self, can_continue)
     def _insert_before_child(self, before: 'Node', gen_node: Callable[[NodeConfig], 'Node']) -> 'Node':
         """
         invalidates the status of all nodes including and after the `before`
@@ -1312,6 +1383,36 @@ class NonLeaf_Node(Node):
         super().reset()
         for child in self.sub_nodes:
             child.reset()
+    def _delete_child(self, child: Node) -> None:
+        for i, c in enumerate(self.sub_nodes):
+            if c is child:
+                self.sub_nodes.pop(i)
+                if i == 0:
+                    self._refresh_me_alone(False)
+                else:
+                    pri = self.sub_nodes[i-1]
+                    pri._refresh_me_alone(False)
+                    pri._refresh_all_after_me()
+                return
+        raise InternalError("The target node is not my children")
+    def _amend_child(self, child: 'Node', gen_node: gen_node) -> 'Node':
+        for i, c in enumerate(self.sub_nodes):
+            if c is child:
+                new_node = gen_node(NodeConfig(child.id, child.ml_state.clone(None), self))
+                self.sub_nodes[i] = new_node
+                new_node._amend_from(child)
+                new_node._refresh_me_alone(False)
+                new_node._refresh_all_after_me()
+                return new_node
+        raise InternalError("The target node is not my children")
+    def _amend_from(self, old: 'Node') -> None:
+        super()._amend_from(old)
+        self.sub_nodes[:] = old.sub_nodes
+        old.sub_nodes.clear()
+        for child in self.sub_nodes:
+            child.parent = self
+
+
 
 
 
@@ -1370,6 +1471,20 @@ class StdBlock(NonLeaf_Node):
             return (True, None)
         except IsabelleError as err:
             return (False, self._beginning_opr_err_msgs(err))
+    def _refresh_footer(self) -> failure_reason:
+        ending_opr = self.ending_opr()
+        if ending_opr is None:
+            self._state_before_ending_.clone(self.resulting_state())
+        else:
+            try:
+                self._state_before_ending_.execute(ending_opr, self.resulting_state())
+            except IsabelleError as err:
+                reason = self._ending_opr_err_msgs(err)
+                if reason is None:
+                    return "Unknown error in the ending operation"
+                else:
+                    return reason
+        return None
     def _refresh_me_alone(self, first_time: bool):
         super()._refresh_me_alone(first_time)
         begin_opr = self.beginning_opr()
@@ -1382,6 +1497,8 @@ class StdBlock(NonLeaf_Node):
             if not ret:
                 head_succeeded = False
                 can_continue = False
+        else:
+            self.ml_state.clone(self._state_after_beginning())
         for child in self.sub_nodes:
             if can_continue:
                 child._refresh_me_alone(first_time)
@@ -1390,18 +1507,11 @@ class StdBlock(NonLeaf_Node):
                     reason = self._child_refresh_failure_err_msgs(child)
             else:
                 child.status = EVALUATION_CACNCELLED
-        if not self.sub_nodes and begin_opr is None:
-            self.ml_state.clone(self._state_before_ending_)
         if can_continue:
-            ending_opr = self.ending_opr()
-            if ending_opr is None:
-                self._state_before_ending_.clone(self.resulting_state())
-            else:
-                try:
-                    self._state_before_ending_.execute(ending_opr, self.resulting_state())
-                except IsabelleError as err:
-                    reason = self._ending_opr_err_msgs(err)
-                    can_continue = False
+            reason2 = self._refresh_footer()
+            if reason2 is not None:
+                can_continue = False
+                reason = reason2
         if can_continue:
             self._body_subnodes_succeeded = True
             self.status = EvaluationStatus.success(time() - now)
@@ -1428,25 +1538,26 @@ class StdBlock(NonLeaf_Node):
         if self.opening():
             ptree = self._state_before_ending_.prooftree
             if ptree is None:
-                raise InternalError("The state before ending is not initialized, meaning the node is not refreshed, "
-                "meaning the convention that all nodes should be freshed is broken.")
-            goals = ptree.top_goals()
-            match goals:
-                case []:
-                    pass
-                case [goal]:
-                    to_fill = self._id_of_openning_prf_to_fill()
-                    if to_fill is not None:
-                        print_pending_goal(goal, to_fill, indent, file, self._ctxt_of_filling())
-                case _:
-                    to_fill = self._id_of_openning_prf_to_fill()
-                    if to_fill is not None:
-                        if self._allow_multi_goal:
-                            goal = goals[0]
+                print_indent(indent, file)
+                file.write("Error: Evaluation suspended due to failures in the operations above\n")
+            else:
+                goals = ptree.top_goals()
+                match goals:
+                    case []:
+                        pass
+                    case [goal]:
+                        to_fill = self._id_of_openning_prf_to_fill()
+                        if to_fill is not None:
                             print_pending_goal(goal, to_fill, indent, file, self._ctxt_of_filling())
-                        else:
-                            raise InternalError("The open goals of StdBlock should not exceed one. "
-                            "To express multiple goals, you should use a StdBlock whose children are GoalNodes. See Rule as an example.")
+                    case _:
+                        to_fill = self._id_of_openning_prf_to_fill()
+                        if to_fill is not None:
+                            if self._allow_multi_goal:
+                                goal = goals[0]
+                                print_pending_goal(goal, to_fill, indent, file, self._ctxt_of_filling())
+                            else:
+                                raise InternalError("The open goals of StdBlock should not exceed one. "
+                                "To express multiple goals, you should use a StdBlock whose children are GoalNodes. See Rule as an example.")
     def is_proof_finished(self) -> bool:
         unfinished_nodes = set()
         self.unfinished_nodes(unfinished_nodes)
@@ -1455,10 +1566,7 @@ class StdBlock(NonLeaf_Node):
         super().unfinished_nodes(ret)
         if self.opening():
             ptree = self._state_before_ending_.prooftree
-            if ptree is None:
-                raise InternalError("The state before ending is not initialized, meaning the node is not refreshed, "
-                "meaning the convention that all nodes should be freshed is broken.")
-            if ptree.top_goals():
+            if ptree is None or ptree.top_goals():
                 ret.add(self)
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         return ("proof", indent+1)
@@ -1555,7 +1663,7 @@ class GoalContainer(NonLeaf_Node):
                 else:
                     return Minilang_Operation.END()
         raise InternalError("The given argument is not a child of this node")
-    def _refresh_all_children_after(self, after: 'Node', can_continue_i: bool = True) -> None:
+    def _refresh_all_children_after(self, after: 'Node | Literal["end"]', can_continue_i: bool = True) -> None:
         # Each subgoal in AoA is independent, so we don't need to refresh the children after the current node.
         return None
 
@@ -2052,12 +2160,14 @@ class Rewrite(Leaf):
 class Have_ToolArg(TypedDict):
     thought: str
     statement: Statement
+    name: str
 
 @proof_operation("Have", Have_ToolArg)
 class Have(StdBlock):
     def __init__(self, config: NodeConfig, arg : Have_ToolArg):
         super().__init__(config, arg["thought"], [])
         self.statement = arg["statement"]
+        self.name = arg["name"]
     @staticmethod
     def gen(arg : Have_ToolArg) -> gen_node:
         def mk(config: NodeConfig) -> 'Have':
@@ -2073,10 +2183,12 @@ class Have(StdBlock):
         file.write(f"english: {self.statement['english']}\n")
         print_indent(indent+1, file)
         file.write(f"isabelle: {self.statement['isabelle']}\n")
+        print_indent(indent, file)
+        file.write(f"name: {self.name}\n")
         self._print_evaluation_status(indent, file)
         self._print_warnings(indent, file, [Warning.Position.HEADER])
     def beginning_opr(self) -> Minilang_Operation | None:
-        return Minilang_Operation.HAVE(self.statement['isabelle'])
+        return Minilang_Operation.HAVE(self.name, self.statement['isabelle'])
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
         return f"Fail to claim the intermediate subgoal because: {"\n".join(err.errors)}"
     def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
@@ -2086,6 +2198,9 @@ class Have(StdBlock):
             return "Each of the following proof steps above is valid, but the target statement doesn't trivially follow from these steps. Please provide more detailed proof steps."
         else:
             return "The statement is nontrivial. Detailed proofs are required to establish this statement."
+    def _fixed_facts_after_me(self, ret: Hyps) -> Hyps:
+        ret[self.name] = self.statement['isabelle']
+        return ret
 
 #### Suffices
 

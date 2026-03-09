@@ -103,6 +103,8 @@ val SIMPLIFY_GOAL_AND_PREMISES : thm list -> bool -> string list -> bool
 val SIMPLIFY_GOAL_AND_PREMISES'' : fact list -> bool -> string list -> bool -> operation
 val SIMPLIFY_CMD : command
 
+val potential_defs_of_const : Proof.context -> string -> thm list
+
 val UNFOLD : thm list -> operation
 val UNFOLD_CMD : command
 
@@ -1330,6 +1332,107 @@ val APPLY_CMD = (Method.parse -- Scan.optional WITH_CLAUSE [])
 
 (** UNFOLD **)
 
+(** definition retrieval **)
+
+(* Retrieve all potential definitions of a constant by trying multiple naming suffixes
+   and searching for definitional equations with all possible arities *)
+fun potential_defs_of_const ctxt const_name =
+  let
+    val thy = Proof_Context.theory_of ctxt
+    val base_name = Long_Name.base_name const_name
+    val const_type_opt = try (Sign.the_const_type thy) const_name
+
+    (* Standard definition suffixes to try *)
+    val suffixes = ["_def", "_def2", "_alt", "_alt_def", "_altdef",
+                    "_del_alt", "_alt_def2", ".simps"]
+
+    (* Normalize theorem by eliminating universal quantifiers and implications *)
+    fun normalize_thm thm =
+      let
+        fun strip_concl (@{const Trueprop} $ t) = t
+          | strip_concl t = t
+        val concl = strip_concl (Thm.concl_of thm)
+      in
+        case concl of
+          Const (@{const_name HOL.All}, _) $ _ =>
+            normalize_thm (thm RS @{thm spec})
+        | Const (@{const_name HOL.implies}, _) $ _ $ _ =>
+            normalize_thm (thm RS @{thm mp})
+        | _ => thm
+      end
+      handle THM _ => thm
+
+    (* Verify that equation appears in conclusion with const as LHS head *)
+    fun is_definitional_eq thm =
+      let
+        fun check_lhs (Const (@{const_name HOL.eq}, _) $ lhs $ _) =
+              (case Term.head_of lhs of Const (c, _) => c = const_name | _ => false)
+          | check_lhs (Const (@{const_name Pure.eq}, _) $ lhs $ _) =
+              (case Term.head_of lhs of Const (c, _) => c = const_name | _ => false)
+          | check_lhs (@{const Trueprop} $ t) = check_lhs t
+          | check_lhs (Const (@{const_name HOL.All}, _) $ Abs (_, _, body)) = check_lhs body
+          | check_lhs (Const (@{const_name HOL.implies}, _) $ _ $ consequent) = check_lhs consequent
+          | check_lhs _ = false
+      in
+        check_lhs (Thm.concl_of thm)
+      end
+
+    fun try_suffix suffix =
+      (try (Proof_Context.get_thms ctxt) (base_name ^ suffix))
+      |> the_default []
+
+    val named_defs = maps try_suffix suffixes
+
+    (* Search with Find_Theorems for all arities *)
+    val search_results =
+      case const_type_opt of
+        SOME const_type =>
+          let
+            val (arg_types, result_type) = Term.strip_type const_type
+            val max_arity = length arg_types
+
+            (* Construct term pattern for n arguments *)
+            fun make_pattern n_args =
+              let
+                val used_arg_types = take n_args arg_types
+                val arg_vars = map_index
+                  (fn (i, arg_ty) => Var (("x", i), arg_ty))
+                  used_arg_types
+                val const_term = Const (const_name, const_type)
+                val lhs = Term.list_comb (const_term, arg_vars)
+
+                val remaining_types = drop n_args arg_types
+                val rhs_type =
+                  if null remaining_types then result_type
+                  else remaining_types ---> result_type
+
+                val rhs = Var (("rhs", 0), rhs_type)
+              in
+                HOLogic.mk_eq (lhs, rhs)
+              end
+
+            (* Search for each arity 0 to max_arity *)
+            fun search_with_arity n =
+              let
+                val pattern = make_pattern n
+                val criterion = [(true, Find_Theorems.Pattern pattern)]
+                val (_, results) =
+                  Find_Theorems.find_theorems ctxt NONE NONE true criterion
+              in
+                map (fn (_, thm) => thm) results
+              end
+              handle ERROR _ => []
+          in
+            maps search_with_arity (0 upto max_arity)
+          end
+      | NONE => []
+
+    val all_defs = filter is_definitional_eq (named_defs @ search_results)
+    val normalized_defs = map normalize_thm all_defs
+  in
+    distinct Thm.eq_thm_prop normalized_defs
+  end
+
 fun UNFOLD' prep_thms raw_defs (ctxt, HHF (st, items) :: S) =
   let val defs = prep_thms ctxt raw_defs
       val st' = Local_Defs.unfold_goals ctxt defs st
@@ -1712,9 +1815,7 @@ fun SIMPLIFY_GOAL_AND_PREMISES'
     (* 12. Unwrap NO_SIMP from the goal conclusion *)
     (* We always wrap once to protect from INTRO *)
     (* If simplify_goal=false, we wrapped twice *)
-    val _ = tracing ("Before unwrap: " ^ @{make_string} (Thm.prop_of st_after_intro))
     val st_final = Conv.gconv_rule (unwrap_goal_conclusion_NO_SIMP ctxt_after_intro) 1 st_after_intro
-    val _ = tracing ("After unwrap: " ^ @{make_string} (Thm.prop_of st_final))
   in
     (items_from_intro, (ctxt_after_intro, HHF (st_final, items_after_intro) :: S_after_intro))
   end

@@ -1,0 +1,161 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - z: int
+  - x: int
+premises:
+  - h1: y = x + 0
+  - h2: z = y * 1
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+variables:
+  - y: int
+goal: x = z
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+pending proof goal:
+  x = z
+--------------------------------------------------
+After Have
+--------------------------------------------------
+variables:
+  - z: int
+  - x: int
+premises:
+  - h1: y = x + 0
+  - h2: z = y * 1
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+variables:
+  - y: int
+goal: x = z
+proof:
+  - step id: 1
+    thought: I don't know
+    operation: Have
+    statement:
+      english: x squared plus 1 is greater than 0
+      isabelle: x = y
+    name: lem1
+    proof:
+      - step id: 1.1
+        thought: Obviously the statement holds.
+        operation: Obvious
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  x = z
+--------------------------------------------------
+After Rewrite
+--------------------------------------------------
+variables:
+  - z: int
+  - x: int
+premises:
+  - h1: y = x + 0
+  - h2: z = y * 1
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+variables:
+  - y: int
+goal: x = z
+proof:
+  - step id: 1
+    thought: I don't know
+    operation: Have
+    statement:
+      english: x squared plus 1 is greater than 0
+      isabelle: x = y
+    name: lem1
+    proof:
+      - step id: 1.1
+        thought: Obviously the statement holds.
+        operation: Obvious
+  - step id: 2
+    thought: Rewrite the premises to simplify the equations
+    operation: Rewrite
+    using:
+      - lem1
+    targets:
+      - the goal
+    goal changes into:
+      y = z
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  y = z
+--------------------------------------------------
+After Amend Have
+--------------------------------------------------
+variables:
+  - z: int
+  - x: int
+premises:
+  - h1: y = x + 0
+  - h2: z = y * 1
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+variables:
+  - y: int
+goal: x = z
+proof:
+  - step id: 1
+    thought: I don't know!!!
+    operation: Have
+    statement:
+      english: x squared plus 1 is greater than 0
+      isabelle: x = y * 1
+    name: lem1
+    proof:
+      - step id: 1.1
+        thought: Obviously the statement holds.
+        operation: Obvious
+  - step id: 2
+    thought: Rewrite the premises to simplify the equations
+    operation: Rewrite
+    using:
+      - lem1
+    targets:
+      - the goal
+    goal changes into:
+      y * 1 = z
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  y * 1 = z
+--------------------------------------------------
+After Amend Have
+--------------------------------------------------
+variables:
+  - z: int
+  - x: int
+premises:
+  - h1: y = x + 0
+  - h2: z = y * 1
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+variables:
+  - y: int
+goal: x = z
+proof:
+  - step id: 1
+    thought: I don't know!!!
+    operation: Have
+    statement:
+      english: x squared plus 1 is greater than 0
+      isabelle: x = y * 2
+    name: lem1
+    proof:
+      - step id: 1.1
+        thought: Obviously the statement holds.
+        operation: Obvious
+        Error: |
+          Failed to prove the proof goal automatically:
+            x = y * 2
+          The proof is non-trivial and you must provide a detailed proof.
+    Error: Evaluation suspended due to failures in the operations above
+  - step id: 2
+    thought: Rewrite the premises to simplify the equations
+    operation: Rewrite
+    using:
+      - lem1
+    targets:
+      - the goal
+    goal changes into:
+      y * 2 = z
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  y * 2 = z

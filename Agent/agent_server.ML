@@ -18,6 +18,7 @@ datatype acmd = Proof_Opr of {from: state_id, to: state_id, opr: MiniLang_Agent.
               | Need_Intro of {state: state_id}
               | Check_Term of {state: state_id, term: string}
               | Schematic_Variables_Of of {state: state_id}
+              | Potential_Defs_Of of {state: state_id, term: string}
               | Exit
 
 val AoA_RPC : driver * (MiniLang_Agent.cfg * MiniLang_Agent.budget) * string
@@ -48,6 +49,7 @@ datatype acmd = Proof_Opr of {from: state_id, to: state_id, opr: MiniLang_Agent.
               | Need_Intro of {state: state_id}
               | Check_Term of {state: state_id, term: string}
               | Schematic_Variables_Of of {state: state_id}
+              | Potential_Defs_Of of {state: state_id, term: string}
               | Exit
 
 type context = {
@@ -277,13 +279,13 @@ fun callback (cfg:cfg) (states:states Unsynchronized.ref) (conn:connection) =
                            (msgs, Minilang.print_state s1)
             end handle Minilang.OPR_FAIL (Minilang.PROOF_FAIL, msg) =>
                 write_error' conn packUnit
-                  {message=[String.concat ["Proof failure: ", REPL.trim_makrup msg]], errobj=()}
+                  {message=[REPL.trim_makrup msg], errobj=()}
               | Minilang.OPR_FAIL (Minilang.INVALID_OPR, msg) =>
                 write_error' conn packUnit
-                  {message=[String.concat ["Bad proof operation: ", REPL.trim_makrup msg]], errobj=()}
+                  {message=[String.concat ["Bad proof operation.\n", REPL.trim_makrup msg]], errobj=()}
               | Minilang.OPR_FAIL (Minilang.TERMLANG, msg) =>
                 write_error' conn packUnit
-                  {message=[String.concat ["Syntax Error in Term Language: ", REPL.trim_makrup msg]], errobj=()}
+                  {message=[String.concat ["Syntax Error in Term Language.\n", REPL.trim_makrup msg]], errobj=()}
            )
          | Lookup_Fact {state, criterions} =>
             let val s0 = case Symtab.lookup (!states) state
@@ -371,6 +373,26 @@ fun callback (cfg:cfg) (states:states Unsynchronized.ref) (conn:connection) =
             end handle ERROR msg =>
                 write_error' conn packUnit {message=["Error", msg], errobj=()}
            )
+         | Potential_Defs_Of {state, term} => (
+            let val s0 = case Symtab.lookup (!states) state
+                           of SOME s => s
+                            | NONE => raise ERR ["beginning_state_not_found"]
+                val ctxt = Minilang.context_of s0
+                val parsed_term = MiniLang_Agent.read_term ctxt term
+                val const_name = case Term.head_of parsed_term of
+                                   Const (name, _) => name
+                                 | _ => raise ERR ["term_head_not_const"]
+                val defs = Minilang.potential_defs_of_const ctxt const_name
+                val SOT = MiniLang_Agent.string_of_term ctxt
+                val defs_as_strings = map (SOT o Thm.prop_of) defs
+             in write conn (packList packString) defs_as_strings
+            end handle ERROR msg =>
+                write_error' conn packUnit {message=["Error", msg], errobj=()}
+              | TERM (msg, _) =>
+                write_error' conn packUnit {message=["Error", msg], errobj=()}
+              | TYPE (msg, _, _) =>
+                write_error' conn packUnit {message=["Error", msg], errobj=()}
+           )
     ) handle EXIT => ()
            | ERR msgs => write_error' conn packUnit {message=msgs, errobj=()}
   end
@@ -417,7 +439,8 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
             |> Config.put Minilang.counter_mode "none"
             |> Config.put Minilang.INTRO_split_conj true
             |> Config.put Minilang.INTRO_mk_block true
-         (* |> Config.put Minilang.auto_deconflict_bound true *)
+            |> Config.put Minilang.auto_deconflict_bound true
+            |> Config.put Printer.show_markup false
       val global_context = global_context_of (ctxt, sequent)
       val s0 = Minilang.INIT ctxt sequent
       val state = Unsynchronized.ref (Symtab.make [("$init", s0)])

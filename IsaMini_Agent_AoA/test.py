@@ -53,7 +53,7 @@ def _test_sqrt2(root: Root, file: MyIO):
     root.fill("2.1", Obvious.gen({"thought": "Obviously the statement holds.", "facts": []}))
     print_header("Obvious", file)
     root.print(0, file)
-    root.fill("3", Have.gen({"thought": "I don't know", "statement": {"english": "some fancy explanation", "isabelle": "m^2 = (sqrt 2)^2 * n^2"}}))
+    root.fill("3", Have.gen({"thought": "I don't know", "statement": {"english": "some fancy explanation", "isabelle": "m^2 = (sqrt 2)^2 * n^2"}, "name": "helper_lemma"}))
     root.fill("3.1", Obvious.gen({"thought": "Obviously the statement holds.", "facts": []}))
     print_header("Have", file)
     root.print(0, file)
@@ -203,7 +203,7 @@ def _test_Rewrite1(root: Root, file: MyIO):
     root.print(0, file)
 
 @test("Rewrite2", "Test_Rewrite2.thy", 9)
-def _test_Rewrite1(root: Root, file: MyIO):
+def _test_Rewrite2(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     # Use Rewrite to simplify the premises h1 and h2
@@ -219,6 +219,58 @@ def _test_Rewrite1(root: Root, file: MyIO):
     root.rename_fact("premise0", "my_premise")
     root.rename_var("aAa", "yyy")
     print_header("After Rename Fact", file)
+    root.print(0, file)
+    root.delete("0A")
+    print_header("After Remove the Rewrite", file)
+    root.print(0, file)
+
+@test("Rewrite3", "Test_Rewrite3.thy", 9)
+def _test_Rewrite3(root: Root, file: MyIO):
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    # Use Rewrite to simplify the premises h1 and h2
+    root.fill("1", Have.gen({
+        "thought": "I don't know",
+        "statement": {
+            "english": "x squared plus 1 is greater than 0",
+            "isabelle": "x = y"
+        },
+        "name": "lem1"
+    }))
+    root.fill("1.1", Obvious.gen({
+        "thought": "Obviously the statement holds.",
+        "facts": []
+    }))
+    print_header("After Have", file)
+    root.print(0, file)
+    root.fill("2", Rewrite.gen({
+        "thought": "Rewrite the premises to simplify the equations",
+        "using": [{"refer_by": "name", "name": "lem1"}],
+        "use system simplifiers": False,
+        "rewrite goal": True,
+        "rewrite premises": []
+    }))
+    print_header("After Rewrite", file)
+    root.print(0, file)
+    root.amend("1", Have.gen({
+        "thought": "I don't know!!!",
+        "statement": {
+            "english": "x squared plus 1 is greater than 0",
+            "isabelle": "x = y * 1"
+        },
+        "name": "lem1"
+    }))
+    print_header("After Amend Have", file)
+    root.print(0, file)
+    root.amend("1", Have.gen({
+        "thought": "I don't know!!!",
+        "statement": {
+            "english": "x squared plus 1 is greater than 0",
+            "isabelle": "x = y * 2"
+        },
+        "name": "lem1"
+    }))
+    print_header("After Amend Have", file)
     root.print(0, file)
 
 def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None):

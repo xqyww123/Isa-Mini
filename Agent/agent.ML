@@ -28,7 +28,7 @@ datatype ('term, 'thm, 'fact) command =
   | NEXT     of 'fact list (*add lemmas*) * Minilang.opt_var_names
   | END      of 'fact list (*add lemmas*)
   | BRANCH   of string list
-  | HAVE     of 'term list
+  | HAVE     of string (*name*) * 'term (*statement*)
   | SUFFICES of 'term
   | OBTAIN   of (string * string option) list (*vars*) * string list (*constraints*)
   | SORRY    of Minilang.opt_var_names
@@ -126,7 +126,7 @@ datatype ('term, 'thm, 'fact) command =
   | NEXT     of 'fact list (*add lemmas*) * Minilang.opt_var_names
   | END      of 'fact list (*add lemmas*)
   | BRANCH   of string list
-  | HAVE     of 'term list
+  | HAVE     of string (*name*) * 'term (*statement*)
   | SUFFICES of 'term
   | OBTAIN   of (string * string option) list (*vars*) * string list (*constraints*)
   | SORRY    of Minilang.opt_var_names
@@ -222,7 +222,7 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (s:Minilang.s
   : bindings * Minilang.state =
   let
     val ctxt = Minilang.context_of s
-              |> Config.put Printer.show_markup false
+            |> Config.put Printer.show_markup false
     val st = Minilang.leading_proof_sequent_of s
 
     (* Extract provided bindings, use empty lists if NONE *)
@@ -605,8 +605,8 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
         let val brs = map (fn br => ([], ([], [], [(Binding.empty_atts, [(br, [])])]))) branches
         in Minilang.CONSIDER brs s
         end
-    | HAVE goals =>
-        Minilang.HAVE'' [] [] (map (fn goal => (Binding.empty_atts, [(goal, [])])) goals) s
+    | HAVE (name, goal) =>
+        Minilang.HAVE'' [] [] [((Binding.name name, []), [(goal, [])])] s
     | SUFFICES goal =>
         Minilang.SUFFICES'' goal s
     | OBTAIN (vars, constraints) =>
@@ -616,8 +616,20 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
         end
     | SORRY vars =>
         Minilang.END_or_NXT_by_SORRY vars s
-    | HAMMER facts =>
+    | HAMMER facts => (
         Minilang.HAMMER {add=facts,del=[],only=false} s
+        handle Minilang.OPR_FAIL (Minilang.PROOF_FAIL, _) =>
+          let
+            val ctxt = Minilang.context_of s
+            val st = Minilang.leading_proof_sequent_of s
+                  |> Thm.prop_of
+                  |> Logic.dest_implies |> fst
+            val goal_str = string_of_term ctxt st
+            val msg = "Failed to prove the proof goal automatically:\n  " ^ goal_str ^
+                      "\nThe proof is non-trivial and you must provide a detailed proof."
+          in
+            raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL, msg)
+          end)
     | INTRO opt_bindings =>
         #2 (AUTO_INTRO counters opt_bindings s)
     | SKIP => s
@@ -663,7 +675,7 @@ fun check_command_i ctxt (SIMPLIFY (facts, use_sys, prems, simp_goal, bindings_o
   | check_command_i _ (NEXT (facts, vars)) = NEXT (map read_fact facts, vars)
   | check_command_i _ (END facts) = END (map read_fact facts)
   | check_command_i _ (BRANCH brs) = BRANCH brs
-  | check_command_i ctxt (HAVE goals) = HAVE (read_props ctxt goals)
+  | check_command_i ctxt (HAVE (name, goal)) = HAVE (name, read_prop ctxt goal)
   | check_command_i ctxt (SUFFICES goal) = SUFFICES (read_prop ctxt goal)
   | check_command_i _ (OBTAIN vc) = OBTAIN vc
   | check_command_i _ (SORRY vars) = SORRY vars

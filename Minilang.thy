@@ -13,6 +13,13 @@ lemma NO_SIMP_cong[cong]: \<open>NO_SIMP (X::'a::{}) \<equiv> NO_SIMP X\<close> 
 ML_file \<open>./library/aux.ML\<close>
 ML_file \<open>./library/proof.ML\<close>
 
+notepad begin
+  assume A: \<open>\<forall>x y. P x \<longrightarrow> Q y\<close>
+  thm A[THEN spec, THEN spec, THEN mp]
+  thm spec
+  thm impI
+end
+
 attribute_setup OF = \<open>Attrib.thms >> (fn Bs =>
       Thm.rule_attribute Bs (fn ctxt => Minilang_Aux.xOF (Context.proof_of ctxt) Bs))\<close>
 
