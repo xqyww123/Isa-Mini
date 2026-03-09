@@ -514,6 +514,10 @@ class MLPT_Goal(ML_ProofTree):
         return [self.goal]
     def __str__(self) -> str:
         return str(self.goal)
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, MLPT_Goal):
+            return False
+        return self.goal == other.goal
 
 class MLPT_Bundle(ML_ProofTree):
     def __init__(self, context : Context, subs : list[ML_ProofTree]):
@@ -533,6 +537,10 @@ class MLPT_Bundle(ML_ProofTree):
             return left.top_goals()
     def __str__(self) -> str:
         return f"({self.context} ⊢ {self.subs})"
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, MLPT_Bundle):
+            return False
+        return self.context == other.context and self.subs == other.subs
 
 class MLPT_Block(ML_ProofTree):
     def __init__(self, sub : ML_ProofTree):
@@ -545,6 +553,10 @@ class MLPT_Block(ML_ProofTree):
         return self.sub.top_goals()
     def __str__(self) -> str:
         return f"{{{self.sub}}}"
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, MLPT_Block):
+            return False
+        return self.sub == other.sub
 
 def unpack_MLPT(data) -> ML_ProofTree:
     (kind, x) = data
@@ -698,6 +710,10 @@ class Minilang_State:
         self.messages : list[Message] = [] # the messages received during executing the operation that assigns to this state
     def initialized(self) -> bool:
         return self.prooftree is not None
+    def prooftree_of(self) -> ML_ProofTree:
+        if self.prooftree is None:
+            raise InternalError("Prooftree is not initialized")
+        return self.prooftree
     def __str__(self) -> str:
         return f"Minilang_State({self.name})"
     def __repr__(self) -> str:
@@ -990,7 +1006,7 @@ class Node:
         Convention: Any node must be up to date after calling any public Node method
         first_time: if True, the node is being refreshed for the first time since its creation.
         """
-        self.warnings.clear()
+        pass
     def refresh_all_after_me(self) -> None:
         """
         refreshing the status of all the nodes excluding and after the `self`
@@ -1062,9 +1078,15 @@ class Node:
         if self.parent is not None:
             self.parent._all_fixed_facts_before_a_child(self, ret)
         return ret
-    def _ctxt_beofre_me(self) -> Context:
+    def _ctxt_before_me(self) -> Context:
         vars = self._all_fixed_vars_before_me({})
         hyps = self._all_fixed_facts_before_me({})
+        return Context(vars, hyps)
+    def _ctxt_at_me(self) -> Context:
+        vars = self._all_fixed_vars_before_me({})
+        self._fixed_vars_at_me(vars)
+        hyps = self._all_fixed_facts_before_me({})
+        self._fixed_facts_at_me(hyps)
         return Context(vars, hyps)
     def _rename_var(self, old_name: varname, new_name: varname) -> 'Node | None':
         """
@@ -1117,6 +1139,10 @@ class Node:
         self.warnings.append(Warning(position, printer))
     def _append_all_open_ends(self, gen_node: may_gen_node) -> None:
         raise NotImplementedError("`_append_all_open_ends` must be implemented by subclass")
+    def _on_reset(self) -> None:
+        self.warnings.clear()
+    def reset(self) -> None:
+        self._on_reset()
 
 # abstract base class
 class Leaf(Node):
@@ -1282,6 +1308,10 @@ class NonLeaf_Node(Node):
             if (result := child._rename_fact(old_name, new_name)) is not None:
                 return result
         return None
+    def reset(self) -> None:
+        super().reset()
+        for child in self.sub_nodes:
+            child.reset()
 
 
 
@@ -1588,7 +1618,7 @@ class GoalNode(StdBlock):
                 merged_vars = {v[0]: v[1] for v in (self.case_vars or [])} | goal.context.vars
                 merged_hyps = {h[0]: h[1] for h in (self.case_hyps or [])} | goal.context.hyps
                 goal = Goal(Context(merged_vars, merged_hyps), goal.conclusion)
-            print_goal(goal, indent, True, file, self._ctxt_beofre_me())
+            print_goal(goal, indent, True, file, self._ctxt_before_me())
         self._print_evaluation_status(indent, file)
         self._print_warnings(indent, file, [Warning.Position.HEADER])
     def _print_step_id(self, indent: int, file: MyIO) -> int:
@@ -1865,12 +1895,6 @@ class Rewrite(Leaf):
         self.bindings: Bindings | None = None
         self.running_time = 0
 
-        # Store the goal before operation if rewrite_goal is True
-        if self.rewrite_goal and config.ml_state.prooftree is not None:
-            self.goal_before: term | None = config.ml_state.prooftree.top_goal().conclusion
-        else:
-            self.goal_before = None
-
     @staticmethod
     def gen(arg: Rewrite_ToolArg) -> gen_node:
         def mk(config: NodeConfig) -> 'Rewrite':
@@ -1903,16 +1927,11 @@ class Rewrite(Leaf):
             print_var_bindings(self.bindings[0], indent, file, "fixing variables")
             print_fact_bindings(self.bindings[1], indent, file, "resulting premises")
 
-        # Print modified goal if it changed
-        if self.goal_before is not None and self.status.success:
-            result_state = self.resulting_state()
-            if result_state.prooftree is not None:
-                goal_after = result_state.prooftree.top_goal().conclusion
-                if self.goal_before != goal_after:
-                    print_indent(indent, file)
-                    file.write("resulting goal:\n")
-                    print_indent(indent+1, file)
-                    file.write(f"{goal_after}\n")
+        if self.resulting_state().prooftree_of().top_goal().conclusion != self.ml_state.prooftree_of().top_goal().conclusion:
+            prooftree = self.resulting_state().prooftree_of()
+            print_indent(indent, file)
+            file.write("goal changes into:\n")
+            print_goal(prooftree.top_goal(), indent+1, False, file, self._ctxt_at_me())
 
         self._print_evaluation_status(indent, file)
         self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
@@ -2337,7 +2356,7 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
             goal = s0.prooftree.top_goal()
             print_indent(indent, file)
             file.write("derived goal:\n")
-            print_goal(goal, indent+1, False, file, self._ctxt_beofre_me())
+            print_goal(goal, indent+1, False, file, self._ctxt_before_me())
     def beginning_opr(self) -> Minilang_Operation:
         return Minilang_Operation.RULE(self.rule_ref)
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
