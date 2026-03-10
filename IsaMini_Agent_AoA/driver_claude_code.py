@@ -15,8 +15,8 @@ from claude_agent_sdk.types import (
 )
 from io import StringIO
 
-
-def _mk_ret(str: str) -> dict[str, Any]:
+type ToolCall_ret = dict[str, Any]
+def _mk_ret(str: str) -> ToolCall_ret:
     return {"content": [ {"type": "text", "text": str} ] }
 
 # Load schema for edit tool
@@ -25,31 +25,26 @@ _cc_edit_path = os.path.join(os.path.dirname(_current_file), "tools", "cc_edit.j
 with open(_cc_edit_path, "r", encoding="utf-8") as _f:
     _cc_edit_schema = jsoncomment.JsonComment().load(_f)
 
-# Simple test tool with minimal schema for debugging
-@tool("test_hello", "A simple test tool to verify MCP server works", {"name": {"type": "string"}})
-async def _test_tool(args: dict[str, Any]) -> dict[str, Any]:
-    """Simple test tool to verify MCP server is discoverable."""
-    name = args.get("name", "World")
-    return {"content": [{"type": "text", "text": f"Hello, {name}! MCP server is working!"}]}
+# Load schema for answer tool
+_cc_answer_path = os.path.join(os.path.dirname(_current_file), "tools", "cc_answer.jsonc")
+with open(_cc_answer_path, "r", encoding="utf-8") as _f:
+    _cc_answer_schema = jsoncomment.JsonComment().load(_f)
 
-@tool("edit", "Edit the proof.yaml file", input_schema=_cc_edit_schema)
-async def _edit_tool(args: dict[str, Any]) -> dict[str, Any]:
-    """Edit the proof.yaml file based on provided content."""
-    # Get the current session instance
-    from .model import the_session
-    session = the_session()
-    if not isinstance(session, ClaudeCode):
-        raise InternalError(f"Expected ClaudeCode session, got {type(session)}")
-    session : ClaudeCode = cast(ClaudeCode, session)
+def _execute_proof_action(
+    session: 'ClaudeCode',
+    action: str,
+    step: str,
+    gen_node: gen_node,
+    tool_name: str,
+    log_prefix: str
+) -> str:
+    """Execute a proof action with complete error handling."""
+    if not callable(gen_node):
+        raise TypeError(f"gen_node must be callable, got {type(gen_node)}")
 
-    # Log tool call
-    session.log_tool_call("mcp__proof__edit", args)
-
-    step = args["target_step"]
     try:
-        match args["action"]:
+        match action:
             case "fill":
-                gen_node = Parse_Node(args["proof_operation"])
                 node = session.root.fill(step, gen_node)
                 session.refresh_YAML()  # type: ignore[attr-defined]
                 response = P.filled_step_message(step, session.root, node)
@@ -62,14 +57,91 @@ async def _edit_tool(args: dict[str, Any]) -> dict[str, Any]:
             case "delete_all_after":
                 raise NotImplementedError(P.NOT_IMPLEMENTED_DELETE_ALL_AFTER)
             case _:
-                raise ArgumentError(args, P.invalid_action_error(args['action']))
-        session.log_tool_response("mcp__proof__edit", response)
-        session.log_proof_tree_snapshot(f"after_fill_step_{step}")
-        return _mk_ret(response)
+                raise ArgumentError({"action": action}, P.invalid_action_error(action))
+
+        session.log_tool_response(tool_name, response)
+        session.log_proof_tree_snapshot(f"{log_prefix}_step_{step}")
+        return response
+
+    except RaiseInteraction as e:
+        buffer = StringIO()
+        e.interaction.prompt(0, MyIO(buffer))
+        session.interaction = e.interaction
+        session.suspended_opr = (action, step)  # type: ignore[attr-defined]
+        return buffer.getvalue()
+
     except AoA_Error as e:
         error_msg = str(e)
-        session.log_tool_response("mcp__proof__edit", f"ERROR: {error_msg}")
+        session.log_tool_response(tool_name, f"ERROR: {error_msg}")
+        return error_msg
+
+# Simple test tool with minimal schema for debugging
+@tool("test_hello", "A simple test tool to verify MCP server works", {"name": {"type": "string"}})
+async def _test_tool(args: ToolCall_arg) -> ToolCall_ret:
+    """Simple test tool to verify MCP server is discoverable."""
+    name = args.get("name", "World")
+    return {"content": [{"type": "text", "text": f"Hello, {name}! MCP server is working!"}]}
+
+@tool("edit", "Edit the proof.yaml file", input_schema=_cc_edit_schema)
+async def _edit_tool(args: ToolCall_arg) -> ToolCall_ret:
+    """Edit the proof.yaml file based on provided content."""
+    # Get the current session instance
+    from .model import the_session
+    session = the_session()
+    if not isinstance(session, ClaudeCode):
+        raise InternalError(f"Expected ClaudeCode session, got {type(session)}")
+    session : ClaudeCode = cast(ClaudeCode, session)
+
+    # Log tool call
+    session.log_tool_call("mcp__proof__edit", args)
+
+    step = args["target_step"]
+    gen_node = Parse_Node(args["proof_operation"])
+
+    response = _execute_proof_action(
+        session, args["action"], step, gen_node,
+        "mcp__proof__edit", "after_fill"
+    )
+    return _mk_ret(response)
+
+@tool("answer", "Answer a pending interaction question with a choice index", input_schema=_cc_answer_schema)
+async def _answer_tool(args: ToolCall_arg) -> ToolCall_ret:
+    """Answer a pending interaction with the selected index."""
+    from .model import the_session
+    session = the_session()
+    if not isinstance(session, ClaudeCode):
+        raise InternalError(f"Expected ClaudeCode session, got {type(session)}")
+    session : ClaudeCode = cast(ClaudeCode, session)
+
+    # Log tool call
+    session.log_tool_call("mcp__proof__answer", args)
+
+    # Check if there's a pending interaction
+    if session.interaction is None:
+        error_msg = "No pending interaction to answer"
+        session.log_tool_response("mcp__proof__answer", f"ERROR: {error_msg}")
         return _mk_ret(error_msg)
+
+    # Call interaction.answer with the index
+    gen_node = session.interaction.answer(args["index"])
+
+    # Resume the suspended operation
+    suspended = session.suspended_opr  # type: ignore[attr-defined]
+    if suspended is None:
+        raise InternalError("No suspended operation found despite having an interaction")
+
+    action, step = suspended
+
+    # Clear interaction state BEFORE executing (allows nested interactions)
+    session.interaction = None
+    session.suspended_opr = None
+
+    response = _execute_proof_action(
+        session, action, step, gen_node,
+        "mcp__proof__answer", "after_answer"
+    )
+
+    return _mk_ret(response)
 
 @agent_driver("ClaudeCode")
 class ClaudeCode(Session):
@@ -90,6 +162,7 @@ class ClaudeCode(Session):
         'MCPSearch',
         'mcp__proof__test_hello',
         'mcp__proof__edit',
+        'mcp__proof__answer',
         'ToolSearch'
     ]
     TOOL_TO_CALL = [
@@ -110,7 +183,7 @@ class ClaudeCode(Session):
         if not os.access(self.working_dir, os.R_OK | os.W_OK):
             raise InternalError(f"The working directory {self.working_dir} is not readable and writable. Please ensure the temporary directory is writable.")
         self.YAML_path = os.path.join(self.working_dir, "proof.yaml")
-        self.mcp = create_sdk_mcp_server("proof", tools=[_edit_tool])
+        self.mcp = create_sdk_mcp_server("proof", tools=[_edit_tool, _answer_tool])
         self.options = ClaudeAgentOptions(
             cwd=self.working_dir,
             permission_mode="default",
@@ -123,6 +196,7 @@ class ClaudeCode(Session):
                 ]
             },
         )
+        self.suspended_opr: tuple[str, str] | None = None
     #@tool("edit", "Edit the proof.yaml file", input_schema={"arg": str})
 
     def initialize(self, root: Root):
@@ -184,7 +258,32 @@ class ClaudeCode(Session):
                 },
             }
 
-        # 2. For file tools, check path restrictions
+        # 2. Check proof MCP tool interaction state
+        if tool.startswith("mcp__proof__"):
+            if self.interaction is not None:
+                # There's a pending interaction - only allow answer tool
+                if tool != "mcp__proof__answer":
+                    return {
+                        "continue_": False,
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": "There is a pending interaction that must be answered first. Use the mcp__proof__answer tool to respond.",
+                        },
+                    }
+            else:
+                # No pending interaction - reject answer tool
+                if tool == "mcp__proof__answer":
+                    return {
+                        "continue_": False,
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": "No pending interaction to answer. The answer tool can only be used when there is an active interaction.",
+                        },
+                    }
+
+        # 3. For file tools, check path restrictions
         if tool in ['Read', 'Grep', 'Write', 'Edit']:
             # Get target file path
             target_path = None
@@ -245,7 +344,7 @@ class ClaudeCode(Session):
                         },
                     }
 
-        # 3. Passed all checks, allow execution
+        # 4. Passed all checks, allow execution
         return { }
 
     async def _list_tools(self, client):

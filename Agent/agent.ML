@@ -17,7 +17,7 @@ type prem_name = {internal_term: term, external_name: string, pretty: string}
 type bindings = var_name list * prem_name list
 
 datatype ('term, 'thm, 'fact) command =
-    UNFOLD   of string list
+    UNFOLD   of 'fact list
   | WITNESS  of 'term list
   | RULE     of 'fact list
   | CASE_SPLIT of 'term (*target*) * Minilang.opt_var_names
@@ -48,7 +48,7 @@ type counters = {
   }
 type config = cfg * budget * counters
 
-val check_command : Proof.context -> xcmd -> icmd
+val check_command : Minilang.state -> xcmd -> icmd
 val interpret_i : config -> icmd -> Minilang.state -> Minilang.state
 val interpret : config -> xcmd -> Minilang.state -> Minilang.state
 
@@ -69,6 +69,7 @@ val string_of_type_full_sort : Proof.context -> typ -> string
 
 val read_term : Proof.context -> string -> term
 val read_terms : Proof.context -> string list -> term list
+val read_terms_with_type : Proof.context -> (typ * string) list -> term list
 val read_prop : Proof.context -> string -> term
 val read_props : Proof.context -> string list -> term list
 
@@ -115,7 +116,7 @@ type counters = {
 type config = cfg * budget * counters
 
 datatype ('term, 'thm, 'fact) command =
-    UNFOLD   of string list
+    UNFOLD   of 'fact list
   | WITNESS  of 'term list
   | RULE     of 'fact list
   | CASE_SPLIT of 'term (*target*) * Minilang.opt_var_names
@@ -194,6 +195,12 @@ fun read_terms ctxt ss =
   Syntax.read_terms ctxt ss
   |> map (Minilang.deconflict_bound_names ctxt)
 
+fun read_terms_with_type ctxt ss =
+  map (fn (typ, raw_tm) =>
+      Const ("_type_constraint_", typ --> typ)
+        $ Syntax.parse_term ctxt raw_tm) ss
+  |> Syntax.check_terms ctxt
+
 fun read_prop ctxt s =
   Syntax.read_prop ctxt s
   |> Minilang.deconflict_bound_names ctxt
@@ -202,21 +209,26 @@ fun read_props ctxt ss =
   Syntax.read_props ctxt ss
   |> map (Minilang.deconflict_bound_names ctxt)
 
-fun find_def ctxt name =
-  let fun mkname suffix [th] =
-               [(Facts.Named ((name ^ suffix, Position.none), NONE), th)]
-        | mkname suffix ths  = map_index (fn (i,th) =>
-                (Facts.Named ((name ^ "(" ^ string_of_int i ^ ")" ^ suffix, Position.none), NONE), th)) ths
-   in case Proof_Context.lookup_fact ctxt (name ^ ".simps")
-   of SOME facts => SOME (mkname ".simps" (#thms facts))
-    | NONE => (
-      case Proof_Context.lookup_fact ctxt (name ^ "_def")
-   of SOME facts => SOME (mkname "_def" (#thms facts))
-    | NONE => NONE )
+(* Extract types of leading existential quantifiers from a goal *)
+fun extract_leading_ex_types goal =
+  let
+    fun strip_ex (Const(\<^const_name>\<open>Trueprop\<close>, _) $ t) = strip_ex t
+      | strip_ex (Const(\<^const_name>\<open>Ex\<close>, Type(_, [T, _])) $ Abs (_, var_T, body)) =
+          var_T :: strip_ex body
+      | strip_ex (Const(\<^const_name>\<open>Ex1\<close>, Type(_, [T, _])) $ Abs (_, var_T, body)) =
+          var_T :: strip_ex body
+      | strip_ex (Const(\<^const_name>\<open>Set.Bex\<close>, _) $ _ $ Abs (_, var_T, body)) =
+          var_T :: strip_ex body
+      | strip_ex _ = []
+  in strip_ex goal
   end
 
-fun find_def_const ctxt (Const (name, _)) = find_def ctxt name
-  | find_def_const _ _ = NONE
+(* Extract types from the leading goal of a state *)
+fun get_witness_types s =
+  let val st = Minilang.leading_proof_sequent_of s
+      val goal = Thm.major_prem_of st
+   in extract_leading_ex_types goal
+  end
 
 fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (s:Minilang.state)
   : bindings * Minilang.state =
@@ -572,14 +584,13 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
          in AUTO_SIMPLIFY counters simp_thms use_system_simps premise_names
                           simplify_goal user_bindings_opt s
         end
-    | UNFOLD origin_consts =>
-        let val _ = if null origin_consts
-                    then error "You must specify at least one target to unfold"
+    | UNFOLD facts =>
+        let val _ = if null facts
+                    then error "You must specify at least one theorem to unfold"
                     else ()
             val ctxt = Minilang.context_of s
-            val consts = map (read_term ctxt) origin_consts
-            val defs = map (Option.map (map snd) o find_def_const ctxt) consts
-        in Minilang.UNFOLD (flat (map_filter I defs)) s
+            val defs = Attrib.eval_thms ctxt facts
+        in Minilang.UNFOLD defs s
         end
     | WITNESS terms =>
         Minilang.CHOOSE terms s
@@ -656,18 +667,48 @@ fun chk_single _ _ [x] = x
         ^ String.concat (map (fn th => "- " ^ string_of_thm ctxt th ^ "\n") lst)
         ^ "You may select the i-th rule by using \"" ^ the rule ^ "(i)\".")
 in
-fun check_command_i ctxt (SIMPLIFY (facts, use_sys, prems, simp_goal, bindings_opt)) =
+fun check_command_i s (SIMPLIFY (facts, use_sys, prems, simp_goal, bindings_opt)) =
       SIMPLIFY (map read_fact facts, use_sys, prems, simp_goal, bindings_opt)
   | check_command_i _ (RULE facts) = RULE (map read_fact facts)
-  | check_command_i _ (UNFOLD consts) = UNFOLD consts
-  | check_command_i ctxt (WITNESS terms) = WITNESS (read_terms ctxt terms)
-  | check_command_i ctxt (CASE_SPLIT (target, vars, rule)) =
-      let val rule' = Option.map (chk_single ctxt rule o read_thms ctxt) rule
+  | check_command_i _ (UNFOLD facts) = UNFOLD (map read_fact facts)
+  | check_command_i s (WITNESS terms) =
+      let val ctxt = Minilang.context_of s
+          val typs = get_witness_types s
+          val num_typs = length typs
+          val num_terms = length terms
+          val _ = if num_typs = num_terms then ()
+                  else
+                    let val msg =
+                          if num_typs = 0 andalso num_terms = 1 then
+                            "The proof goal is not led by an existential quantification"
+                          else if num_typs = 0 then
+                            "The proof goal is not led by existential quantifications"
+                          else
+                            String.concat [
+                              "Insufficient existential quantifications: the goal has ",
+                              string_of_int num_typs,
+                              " leading existential quantifier",
+                              if num_typs = 1 then "" else "s",
+                              " but ",
+                              string_of_int num_terms,
+                              " witness term",
+                              if num_terms = 1 then " was" else "s were",
+                              " provided"
+                            ]
+                     in raise Minilang.OPR_FAIL (Minilang.INVALID_OPR, msg)
+                    end
+          val typed_terms = ListPair.zip (typs, terms)
+       in WITNESS (read_terms_with_type ctxt typed_terms)
+      end
+  | check_command_i s (CASE_SPLIT (target, vars, rule)) =
+      let val ctxt = Minilang.context_of s
+          val rule' = Option.map (chk_single ctxt rule o read_thms ctxt) rule
           val target' = read_term ctxt target
        in CASE_SPLIT (target', vars, rule')
       end
-  | check_command_i ctxt (INDUCT (target, vars, arbitrary, rule)) =
-      let val (target' :: arbitrary') = read_terms ctxt (target :: arbitrary)
+  | check_command_i s (INDUCT (target, vars, arbitrary, rule)) =
+      let val ctxt = Minilang.context_of s
+          val (target' :: arbitrary') = read_terms ctxt (target :: arbitrary)
           val rule' = Option.map (chk_single ctxt rule o read_thms ctxt) rule
        in INDUCT (target', vars, arbitrary', rule')
       end
@@ -675,21 +716,27 @@ fun check_command_i ctxt (SIMPLIFY (facts, use_sys, prems, simp_goal, bindings_o
   | check_command_i _ (NEXT (facts, vars)) = NEXT (map read_fact facts, vars)
   | check_command_i _ (END facts) = END (map read_fact facts)
   | check_command_i _ (BRANCH brs) = BRANCH brs
-  | check_command_i ctxt (HAVE (name, goal)) = HAVE (name, read_prop ctxt goal)
-  | check_command_i ctxt (SUFFICES goal) = SUFFICES (read_prop ctxt goal)
+  | check_command_i s (HAVE (name, goal)) =
+      let val ctxt = Minilang.context_of s
+       in HAVE (name, read_prop ctxt goal)
+      end
+  | check_command_i s (SUFFICES goal) =
+      let val ctxt = Minilang.context_of s
+       in SUFFICES (read_prop ctxt goal)
+      end
   | check_command_i _ (OBTAIN vc) = OBTAIN vc
   | check_command_i _ (SORRY vars) = SORRY vars
   | check_command_i _ (HAMMER facts) = HAMMER (map read_fact facts)
   | check_command_i _ (INTRO opt_bindings) = INTRO opt_bindings
   | check_command_i _ SKIP = SKIP
 
-fun check_command ctxt x = check_command_i ctxt x
+fun check_command s x = check_command_i s x
     handle ERROR msg => raise Minilang.OPR_FAIL (Minilang.TERMLANG, msg)
 
 end
 
 fun interpret cfg xcmd state =
-  let val icmd = check_command (Minilang.context_of state) xcmd
+  let val icmd = check_command state xcmd
    in interpret_i cfg icmd state
   end
 

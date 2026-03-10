@@ -3053,8 +3053,8 @@ fun read_term ctxt (raw_term, vs) =
    in singleton (Variable.export_terms ctxt' ctxt) term
   end
 
-val CHOOSE = timed_OPR 5 o CHOOSE' (K I)
-val CHOOSE'' = timed_OPR 5 o CHOOSE' (map o read_term)
+val CHOOSE = timed_OPR 50000 o CHOOSE' (K I)
+val CHOOSE'' = timed_OPR 50000 o CHOOSE' (map o read_term)
 val CHOOSE_CMD = Parse.and_list (Scan.repeat1 (Parse.term -- Scan.optional (VARS_KWD |-- Parse.vars) [])) >> (CHOOSE'' o flat)
 
 (** PRINT **)

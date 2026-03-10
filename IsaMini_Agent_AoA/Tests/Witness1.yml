@@ -1,0 +1,36 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: ∃x. x = 5
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+pending proof goal:
+  ∃x. x = 5
+--------------------------------------------------
+After Witness
+--------------------------------------------------
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: ∃x. x = 5
+proof:
+  - step id: 1
+    thought: Provide 5 as witness for the existential
+    operation: Witness
+    witness: 5
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  5 = 5
+--------------------------------------------------
+After Obvious
+--------------------------------------------------
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: ∃x. x = 5
+proof:
+  - step id: 1
+    thought: Provide 5 as witness for the existential
+    operation: Witness
+    witness: 5
+  - step id: 2
+    thought: Obviously 5 equals 5
+    operation: Obvious
+Unfinished nodes: 0

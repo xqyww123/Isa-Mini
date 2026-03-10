@@ -1,0 +1,79 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - z: 'a
+  - x: 'a
+premises:
+  - h1: y = x + (0::'a)
+  - h2: ∃aAa. z = y * (1::'a) + aAa
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+variables:
+  - y: 'a
+goal: x = z
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+pending proof goal:
+  x = z
+--------------------------------------------------
+After Rewrite
+--------------------------------------------------
+variables:
+  - z: 'a
+  - x: 'a
+premises:
+  - h1: y = x + (0::'a)
+  - h2: ∃aAa. z = y * (1::'a) + aAa
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+variables:
+  - y: 'a
+goal: x = z
+proof:
+  - step id: 1
+    thought: Rewrite the premises to simplify the equations
+    operation: Rewrite
+    using:
+      - h1
+      - system simplifiers
+    targets:
+      - h2
+    fixing variables:
+      - aAa: 'a
+    resulting premises:
+      - premise0: z = (x + (0::'a)) * (1::'a) + aAa
+    goal changes into:
+      x = (x + (0::'a)) * (1::'a) + aAa
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  x = (x + (0::'a)) * (1::'a) + aAa
+--------------------------------------------------
+After Rename Fact
+--------------------------------------------------
+variables:
+  - z: 'a
+  - x: 'a
+premises:
+  - h1: y = x + (0::'a)
+  - h2: ∃aAa. z = y * (1::'a) + aAa
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+variables:
+  - y: 'a
+goal: x = z
+proof:
+  - step id: 1
+    thought: Rewrite the premises to simplify the equations
+    operation: Rewrite
+    using:
+      - h1
+      - system simplifiers
+    targets:
+      - h2
+    fixing variables:
+      - yyy: 'a    (renamed from "aAa")
+    resulting premises:
+      - my_premise: z = (x + (0::'a)) * (1::'a) + yyy
+    goal changes into:
+      x = (x + (0::'a)) * (1::'a) + yyy
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  x = (x + (0::'a)) * (1::'a) + yyy

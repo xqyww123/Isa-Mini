@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "index": {
+      "type": "integer",
+      "description": "The index of the selected option"
+    }
+  },
+  "required": ["index"]
+}

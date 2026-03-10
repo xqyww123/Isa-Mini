@@ -17,8 +17,8 @@ lemma \<open>rev (rev l) = l\<close>
 lemma  
   \<open> \<And>a. A \<and> B \<Longrightarrow> \<forall>x. P x \<Longrightarrow> P a \<and> A\<close>
   by (min_script \<open>END\<close>)
-  
-lemma \<open>\<And>y. \<forall>x. A x \<Longrightarrow> B y\<close> if x: "C"
+    
+lemma \<open>\<And>y. \<forall>x. A x \<Longrightarrow> B y \<and> C\<close> if x: "C"
 apply (min_script \<open>
     SIMPLIFY PREMISES x
   \<close>)
@@ -32,8 +32,6 @@ lemma
 \<close>)
  
 
-  term \<open>( x y. A \<Longrightarrow> B \<Longrightarrow> C) \<Longrightarrow> (\<And>z. D \<Longrightarrow> E) \<Longrightarrow> F\<close>
-ML \<open>all_tac\<close>
 term "Pure.prop"
 
 lemma         

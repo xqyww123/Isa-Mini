@@ -242,6 +242,16 @@ class InternalError_UnparsedTerm(InternalError):
     def __str__(self) -> str:
         return f"Syntax error in term `{self.term}`\n{self.reason}"
 
+class GenNode_Error(InternalError):
+    """
+    Raised during gen_node construction when node cannot be created.
+    Should be caught by append/insert methods and converted to Cannot* errors.
+    """
+    def __init__(self, reason: str):
+        self.reason = reason
+    def __str__(self) -> str:
+        return self.reason
+
 class NodeNotFound(OprError):
     def __init__(self, id: step):
         self.id = id
@@ -703,8 +713,8 @@ class Minilang_Operation(NamedTuple):
     def SIMPLIFY(fact_refs: list[FactRef], use_system_simps: bool, premise_names: list[str], simplify_goal: bool, bindings: tuple[list[tuple[str, str, str]], list[tuple[lambda_term, str, str]]] | None) -> 'Minilang_Operation':
         return Minilang_Operation("SIMPLIFY", (fact_refs, use_system_simps, premise_names, simplify_goal, bindings))
     @staticmethod
-    def UNFOLD(consts: list[str]) -> 'Minilang_Operation':
-        return Minilang_Operation("UNFOLD", consts)
+    def UNFOLD(fact_refs: list[FactRef]) -> 'Minilang_Operation':
+        return Minilang_Operation("UNFOLD", fact_refs)
     @staticmethod
     def WITNESS(terms: list[term]) -> 'Minilang_Operation':
         return Minilang_Operation("WITNESS", terms)
@@ -876,6 +886,15 @@ class Minilang_State:
             return dict(vars_list)
         except IsabelleError as e:
             raise
+
+    def potential_defs_of(self, term: str) -> list[str]:
+        """
+        Get potential definitions for a term via Potential_Defs_Of RPC.
+        Returns list of definition theorem propositions as strings.
+        """
+        self.connection.write((8, (self.name, term)))
+        result = self.connection.read()
+        return result
 
 ### The Abstract Model
 
@@ -1306,7 +1325,10 @@ class NonLeaf_Node(Node):
                         new_id = cat_segs_into_id(segs)
                     else:
                         new_id = cat_segs_into_id(prev_id + [1])
-                node = gen_node(NodeConfig(new_id, child.ml_state.clone(None), self))
+                try:
+                    node = gen_node(NodeConfig(new_id, child.ml_state.clone(None), self))
+                except GenNode_Error as e:
+                    raise CannotInsert(self, before, str(e))
                 for x in self.sub_nodes:
                     if x is node:
                         raise InternalError("The target node to insert is already in my children")
@@ -1398,7 +1420,10 @@ class NonLeaf_Node(Node):
     def _amend_child(self, child: 'Node', gen_node: gen_node) -> 'Node':
         for i, c in enumerate(self.sub_nodes):
             if c is child:
-                new_node = gen_node(NodeConfig(child.id, child.ml_state.clone(None), self))
+                try:
+                    new_node = gen_node(NodeConfig(child.id, child.ml_state.clone(None), self))
+                except GenNode_Error as e:
+                    raise CannotAmend(self, child, str(e))
                 self.sub_nodes[i] = new_node
                 new_node._amend_from(child)
                 new_node._refresh_me_alone(False)
@@ -1628,7 +1653,10 @@ class StdBlock(NonLeaf_Node):
         local_step = self._local_step_of_next_proof_step()
         ml_state = self._state_before_ending_.clone(None)
         config = NodeConfig(local_step, ml_state, self)
-        node = gen_node(config)
+        try:
+            node = gen_node(config)
+        except GenNode_Error as e:
+            raise CannotAppend(self, str(e))
         if node is None:
             return None
         self.sub_nodes.append(node)
@@ -1905,13 +1933,19 @@ class CaseSplit_Like(SubgoalMaker_NoTailEnder):
         self.case_hyps = None
     
 
+### Interaction
 
+# abstract base class
+type answer = int
+class Interaction:
+    def prompt(self, indent: int, file: MyIO) -> None:
+        raise NotImplementedError("`prompt` must be implemented by subclass")
+    def answer(self, answer: answer) -> gen_node:
+        raise NotImplementedError("`answer` must be implemented by subclass")
 
-
-
-### Concrete Models
-
-#### Arguments of Concrete Operations
+class RaiseInteraction(Exception):
+    def __init__(self, interaction: Interaction):
+        self.interaction = interaction
 
 ### Operation registry for tool calls
 
@@ -1928,7 +1962,10 @@ def proof_operation(operation: str, toolarg_typed_dict: type[Any]):
     define a staticmethod `gen(arg: ToolArg) -> gen_node`.
     """
     def decorator(cls: type[Any]):
-        OPERATION_REGISTRY[operation] = OperationMeta(toolarg_typed_dict, cls.gen)  # type: ignore[attr-defined]
+        if hasattr(cls, "interactive_gen"):
+            OPERATION_REGISTRY[operation] = OperationMeta(toolarg_typed_dict, cls.interactive_gen)  # type: ignore[attr-defined]
+        else:
+            OPERATION_REGISTRY[operation] = OperationMeta(toolarg_typed_dict, cls.gen)  # type: ignore[attr-defined]
         return cls
     return decorator
 
@@ -1941,6 +1978,8 @@ def print_statement(self: Statement, indent: int, file: MyIO):
     file.write(f"- english: {self["english"]}\n")
     print_indent(indent, file)
     file.write(f"  isabelle: {self["isabelle"]}\n")
+
+### Concrete Models
 
 #### Obvious
 
@@ -1974,6 +2013,170 @@ class Obvious(Leaf):
         return indent
     def the_operation(self) -> Minilang_Operation:
         return Minilang_Operation.HAMMER(self.fact_refs)
+
+
+#### Witness
+
+class Witness_ToolArg(TypedDict):
+    thought: str
+    witness: str
+
+@proof_operation("Witness", Witness_ToolArg)
+class Witness(Leaf):
+    def __init__(self, config: NodeConfig, arg: Witness_ToolArg):
+        super().__init__(config, arg["thought"])
+        self.witness = arg["witness"]
+
+    @staticmethod
+    def gen(arg: Witness_ToolArg) -> gen_node:
+        def mk(config: NodeConfig) -> 'Witness':
+            return Witness(config, arg)
+        return mk
+
+    def print(self, indent: int, file: MyIO) -> int:
+        indent = super().print(indent, file)
+        self._print_thought(indent, file)
+        print_indent(indent, file)
+        file.write("operation: Witness\n")
+        print_indent(indent, file)
+        file.write(f"witness: {self.witness}\n")
+        self._print_evaluation_status(indent, file)
+        self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
+        return indent
+
+    def the_operation(self) -> Minilang_Operation:
+        return Minilang_Operation.WITNESS([self.witness])
+
+
+#### Unfold
+
+class Interaction_ChooseDef(Interaction):
+    def __init__(self, constant: str, candidate_defs: list[term], kontinue: Callable[[answer], gen_node]):
+        self.constant = constant
+        self.candidate_defs = candidate_defs
+        self.kontinue = kontinue
+    def prompt(self, indent: int, file: MyIO) -> None:
+        print_indent(indent, file)
+        file.write(f"Constant {self.constant} is associated with multiple definitions:\n")
+        for i, def_ in enumerate(self.candidate_defs):
+            print_indent(indent+1, file)
+            file.write(f"- {i}: {def_}\n")
+        file.write("Which one to use in the unfolding? Call the `answer` tool to answer or cancel the operation.")
+    def answer(self, answer: answer) -> gen_node:
+        return self.kontinue(answer)
+
+
+class Unfold_ToolArg(TypedDict):
+    thought: str
+    targets: list[str]  # Isabelle/HOL terms to unfold
+
+class Unfold_ToolArg_internal(TypedDict):
+    thought: str
+    targets: list[str]  # Isabelle/HOL terms to unfold
+    fact_refs: list[FactRef]
+
+
+@proof_operation("Unfold", Unfold_ToolArg)
+class Unfold(Leaf):
+    def __init__(self, config: NodeConfig, arg: Unfold_ToolArg_internal):
+        """
+        Initialize with already-resolved fact references.
+        This is called after interactive_gen completes.
+        """
+        super().__init__(config, arg["thought"])
+        self.targets = arg["targets"]
+        self.fact_refs = arg["fact_refs"]
+
+    @staticmethod
+    def gen(arg: Unfold_ToolArg) -> gen_node:
+        """
+        Simple non-interactive generation.
+        Assumes standard _def naming convention.
+        """
+        def mk(config: NodeConfig) -> 'Unfold':
+            # Use simple naming convention: target + "_def"
+            fact_refs = [target + "_def" for target in arg["targets"]]
+            arg_internal: Unfold_ToolArg_internal = {
+                "thought": arg["thought"],
+                "targets": arg["targets"],
+                "fact_refs": fact_refs
+            }
+            return Unfold(config, arg_internal)
+        return mk
+
+    @staticmethod
+    def interactive_gen(arg: Unfold_ToolArg) -> gen_node:
+        """
+        Interactive generation that queries RPC for potential definitions.
+        Raises Interaction_ChooseDef if multiple definitions exist.
+        Currently supports only single target.
+        """
+        if len(arg["targets"]) != 1:
+            raise ValueError("Interactive unfold currently supports only single target")
+
+        target = arg["targets"][0]
+
+        def mk(config: NodeConfig) -> 'Unfold':
+            ml_state = config.ml_state
+
+            # Query potential definitions via RPC
+            defs = ml_state.potential_defs_of(target)
+
+            if len(defs) == 0:
+                raise GenNode_Error(f"No definitions found for: {target}")
+
+            elif len(defs) == 1:
+                # Single definition - use it
+                fact_ref = target + "_def"
+                arg_internal: Unfold_ToolArg_internal = {
+                    "thought": arg["thought"],
+                    "targets": arg["targets"],
+                    "fact_refs": [fact_ref]
+                }
+                return Unfold(config, arg_internal)
+
+            else:
+                # Multiple definitions - need interaction
+                def kontinue(answer: Interaction_ChooseDef.Answer) -> gen_node:
+                    selected_index = answer["index"]
+                    selected_def = defs[selected_index]
+                    # Convert selected def to FactRef
+                    # For now, use simplified naming
+                    fact_ref = target + "_def"
+
+                    def final_mk(cfg: NodeConfig) -> 'Unfold':
+                        arg_internal: Unfold_ToolArg_internal = {
+                            "thought": arg["thought"],
+                            "targets": arg["targets"],
+                            "fact_refs": [fact_ref]
+                        }
+                        return Unfold(cfg, arg_internal)
+
+                    return final_mk
+
+                raise RaiseInteraction(
+                    Interaction_ChooseDef(target, defs, kontinue)
+                )
+
+        return mk
+
+    def print(self, indent: int, file: MyIO) -> int:
+        indent = super().print(indent, file)
+        self._print_thought(indent, file)
+        print_indent(indent, file)
+        file.write("operation: Unfold\n")
+        if self.targets:
+            print_indent(indent, file)
+            file.write("targets:\n")
+            for target in self.targets:
+                print_indent(indent+1, file)
+                file.write(f"- {target}\n")
+        self._print_evaluation_status(indent, file)
+        self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
+        return indent
+
+    def the_operation(self) -> Minilang_Operation:
+        return Minilang_Operation.UNFOLD(self.fact_refs)
 
 
 #### Rewrite
@@ -2152,8 +2355,6 @@ class Rewrite(Leaf):
                     return self
         return super()._rename_fact(old_name, new_name)
 
-
-#### So
 
 #### Have
 
@@ -2845,7 +3046,7 @@ def Parse_Node(data: ToolCall_arg) -> gen_node:
 
 ## Session
 
-import threading, tempfile, os
+import threading
 
 class LocalSession(threading.local):
     session: 'Session'
@@ -2880,6 +3081,7 @@ class Session:
     interaction_log_file: Any | None  # File handle for interaction.yaml
     proofs_log_file: Any | None       # File handle for proofs.yaml
     proof_oprs_log_file: Any | None   # File handle for proof_oprs.yaml
+    interaction: Interaction | None
 
     # class variables
     Driver: dict[str, Type['Session']] = {}
@@ -2897,6 +3099,7 @@ class Session:
         self.interaction_log_file = None
         self.proofs_log_file = None
         self.proof_oprs_log_file = None
+        self.interaction = None
         if log_dir != "":
             self._setup_log_directory(log_dir)
 

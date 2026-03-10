@@ -169,6 +169,8 @@ val acmd_unpacker =
          #> apfst (fn (state, term) => Check_Term {state=state, term=term})
      | 7 => unpackString
          #> apfst (fn state => Schematic_Variables_Of {state=state})
+     | 8 => unpackPair (unpackString, unpackString)
+         #> apfst (fn (state, term) => Potential_Defs_Of {state=state, term=term})
      | _ => raise Unpack)
 
 fun acmd_packer (Proof_Opr {from, to, opr}) =
@@ -188,6 +190,8 @@ fun acmd_packer (Proof_Opr {from, to, opr}) =
       packPair (packInt, packPair (packString, packString)) (6, (state, term))
   | acmd_packer (Schematic_Variables_Of {state}) =
       packPair (packInt, packString) (7, state)
+  | acmd_packer (Potential_Defs_Of {state, term}) =
+      packPair (packInt, packPair (packString, packString)) (8, (state, term))
   | acmd_packer Exit =
       packPair (packInt, packUnit) (0, ())
 

@@ -273,6 +273,81 @@ def _test_Rewrite3(root: Root, file: MyIO):
     print_header("After Amend Have", file)
     root.print(0, file)
 
+@test("Witness1", "Test_Witness.thy", 8)
+def _test_Witness1(root: Root, file: MyIO):
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Use Witness to provide a witness for the existential goal
+    root.fill("1", Witness.gen({
+        "thought": "Provide 5 as witness for the existential",
+        "witness": "5"
+    }))
+    print_header("After Witness", file)
+    root.print(0, file)
+
+    # Prove the remaining goal (5 = 5) using Obvious
+    root.fill("2", Obvious.gen({
+        "thought": "Obviously 5 equals 5",
+        "facts": []
+    }))
+    print_header("After Obvious", file)
+    root.print(0, file)
+
+    unfinished_nodes = set()
+    root.unfinished_nodes(unfinished_nodes)
+    file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+
+@test("Witness2", "Test_Witness2.thy", 8)
+def _test_Witness2(root: Root, file: MyIO):
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    try:
+    # Use Witness to provide a witness (1) for the existential with property
+        root.fill("1", Witness.gen({
+            "thought": "Provide 1 as witness, which is positive",
+            "witness": "1"
+        }))
+    except CannotAppend as e:
+        file.write(f"Error: {e}\n")
+        return
+    file.write(f"The excepted eception not happen")
+    return
+
+@test("Witness3", "Test_Witness3.thy", 8)
+def _test_Witness3(root: Root, file: MyIO):
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Use Witness to provide first witness (3) for x
+    root.fill("1", Witness.gen({
+        "thought": "Provide 3 as witness for x",
+        "witness": "3"
+    }))
+    print_header("After First Witness", file)
+    root.print(0, file)
+
+    # Use Witness to provide second witness (7) for y
+    root.fill("1.1", Witness.gen({
+        "thought": "Provide 7 as witness for y, since 3 + 7 = 10",
+        "witness": "7"
+    }))
+    print_header("After Second Witness", file)
+    root.print(0, file)
+
+    # Prove the remaining goal (3 + 7 = 10) using Obvious
+    root.fill("1.1.1", Obvious.gen({
+        "thought": "Obviously 3 + 7 equals 10",
+        "facts": []
+    }))
+    print_header("After Obvious", file)
+    root.print(0, file)
+
+    unfinished_nodes = set()
+    root.unfinished_nodes(unfinished_nodes)
+    file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+
 def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None):
     import msgpack as mp
     from IsaREPL import Client
