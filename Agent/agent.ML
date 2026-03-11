@@ -155,8 +155,7 @@ fun string_of_term ctxt =
               |> Config.put Printer.show_brackets false
      in Object_Logic.atomize_term ctxt'
      #> Minilang.deconflict_bound_names ctxt'
-     #> Syntax.string_of_term ctxt'
-     #> REPL.trim_makrup
+     #> REPL_Serialize.print_term printing_cfg ctxt'
     end
 
 fun string_of_type ctxt =
@@ -167,8 +166,7 @@ fun string_of_type ctxt =
               |> Config.put Printer.show_structs false
               |> Config.put Printer.show_question_marks true
               |> Config.put Printer.show_brackets false
-     in Syntax.string_of_typ ctxt'
-     #> REPL.trim_makrup
+     in REPL_Serialize.print_typ printing_cfg ctxt'
     end
 
 fun string_of_type_full_sort ctxt =
@@ -613,7 +611,13 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
     | END lemmas =>
         Minilang.END {add=lemmas,del=[],only=false} s
     | BRANCH branches =>
-        let val brs = map (fn br => ([], ([], [], [(Binding.empty_atts, [(br, [])])]))) branches
+        let val prem_ctr = #prem_counter counters
+            val counter_start = Synchronized.value prem_ctr
+            val (brs, final_counter) = fold_map (fn br => fn ctr =>
+                  let val name = "premise" ^ string_of_int ctr
+                  in (([], ([], [], [((Binding.name name, []), [(br, [])])])), ctr + 1)
+                  end) branches counter_start
+            val _ = Synchronized.change prem_ctr (K final_counter)
         in Minilang.CONSIDER brs s
         end
     | HAVE (name, goal) =>

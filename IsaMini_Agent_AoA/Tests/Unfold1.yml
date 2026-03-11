@@ -2,35 +2,44 @@
 Initial YAML
 --------------------------------------------------
 You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
-goal: ∃(x :: nat). x = (5 :: nat)
+goal: Test_Unfold1.XXX (1 :: int) (2 :: int) = (3 :: int)
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
 pending proof goal:
-  ∃(x :: nat). x = (5 :: nat)
+  Test_Unfold1.XXX (1 :: int) (2 :: int) = (3 :: int)
 --------------------------------------------------
-After Witness
+After Unfold
 --------------------------------------------------
 You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
-goal: ∃(x :: nat). x = (5 :: nat)
+goal: Test_Unfold1.XXX (1 :: int) (2 :: int) = (3 :: int)
 proof:
   - step id: 1
-    thought: Provide 5 as witness for the existential
-    operation: Witness
-    witness: 5
+    thought: Unfold the goal
+    operation: Unfold
+    targets:
+      - XXX
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
-  (5 :: nat) = (5 :: nat)
+  (1 :: int) + (2 :: int) = (3 :: int)
 --------------------------------------------------
-After Obvious
+Interaction Prompt
+--------------------------------------------------
+Multiple definitions found for XXX:
+  - 0: Test_Unfold1.XXX ?a ?b = ?a + ?b
+  - 1: Test_Unfold1.XXX ?a ?b = ?b + ?a
+Select definition(s) to use in unfolding. Call the `answer` tool with indexes or cancel the operation.
+--------------------------------------------------
+After Answer
 --------------------------------------------------
 You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
-goal: ∃(x :: nat). x = (5 :: nat)
+goal: Test_Unfold1.XXX (1 :: int) (2 :: int) = (3 :: int)
 proof:
   - step id: 1
-    thought: Provide 5 as witness for the existential
-    operation: Witness
-    witness: 5
-  - step id: 2
-    thought: Obviously 5 equals 5
-    operation: Obvious
-Unfinished nodes: 0
+    thought: Unfold the goal
+    operation: Unfold
+    targets:
+      - XXX
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  (2 :: int) + (1 :: int) = (3 :: int)
+Unfinished nodes: 1

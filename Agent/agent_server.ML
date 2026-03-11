@@ -10,17 +10,6 @@ val AoA_log_dir: string Config.T
 type state_id = string
 type states = Minilang.state Symtab.table
 
-datatype acmd = Proof_Opr of {from: state_id, to: state_id, opr: MiniLang_Agent.xcmd}
-              | Lookup_Fact of { state: state_id
-                               , criterions: (bool * string Find_Theorems.criterion) list list}
-              | Retrieve_Fact of { state: state_id, name: xstring }
-              | Compute_Bindings of {state: state_id, var_names: string list, fact_names: string list}
-              | Need_Intro of {state: state_id}
-              | Check_Term of {state: state_id, term: string}
-              | Schematic_Variables_Of of {state: state_id}
-              | Potential_Defs_Of of {state: state_id, term: string}
-              | Exit
-
 val AoA_RPC : driver * (MiniLang_Agent.cfg * MiniLang_Agent.budget) * string
            -> Proof.context * thm
            -> MiniLang_Agent.xcmd list * thm (*acomplished proof sequent*)
@@ -40,17 +29,6 @@ val agent_aoa_driver = Attrib.setup_config_string \<^binding>\<open>agent_AoA_dr
 type state_id = string
 type states = Minilang.state Symtab.table
 type cfg = MiniLang_Agent.cfg * MiniLang_Agent.budget
-
-datatype acmd = Proof_Opr of {from: state_id, to: state_id, opr: MiniLang_Agent.xcmd}
-              | Lookup_Fact of { state: state_id
-                               , criterions: (bool * string Find_Theorems.criterion) list list}
-              | Retrieve_Fact of { state: state_id, name: xstring }
-              | Compute_Bindings of {state: state_id, var_names: string list, fact_names: string list}
-              | Need_Intro of {state: state_id}
-              | Check_Term of {state: state_id, term: string}
-              | Schematic_Variables_Of of {state: state_id}
-              | Potential_Defs_Of of {state: state_id, term: string}
-              | Exit
 
 type context = {
     vars: (string * typ) list,
@@ -149,52 +127,6 @@ val unpack_criterion =
   )
 end
 
-val acmd_unpacker =
-  unpackPair_dep' unpackInt (
-    fn 1 => unpackTuple3 (unpackString, unpackString, MiniLang_Agent.xcmd_unpacker)
-         #> apfst (fn (f,t,opr) => Proof_Opr {from=f, to=t, opr=opr})
-     | 0 => unpackUnit
-         #> apfst (K Exit)
-     | 2 => unpackPair (unpackString, unpackList (unpackList (unpackPair (unpackBool, unpack_criterion))))
-         #> apfst (fn (state, criterions) =>
-            Lookup_Fact {state=state, criterions=criterions})
-     | 3 => unpackTuple3 (unpackString, unpackList unpackString, unpackList unpackString)
-         #> apfst (fn (state, var_names, fact_names) =>
-            Compute_Bindings {state=state, var_names=var_names, fact_names=fact_names})
-     | 4 => unpackString
-         #> apfst (fn state => Need_Intro {state=state})
-     | 5 => unpackPair (unpackString, unpackString)
-         #> apfst (fn (state, name) => Retrieve_Fact {state=state, name=name})
-     | 6 => unpackPair (unpackString, unpackString)
-         #> apfst (fn (state, term) => Check_Term {state=state, term=term})
-     | 7 => unpackString
-         #> apfst (fn state => Schematic_Variables_Of {state=state})
-     | 8 => unpackPair (unpackString, unpackString)
-         #> apfst (fn (state, term) => Potential_Defs_Of {state=state, term=term})
-     | _ => raise Unpack)
-
-fun acmd_packer (Proof_Opr {from, to, opr}) =
-      packPair (packInt, packTuple3 (packString, packString, MiniLang_Agent.xcmd_packer))
-               (1, (from,to,opr))
-  | acmd_packer (Lookup_Fact {state, criterions}) =
-      packPair (packInt, packPair (packString, packList (packList (packPair (packBool, pack_criterion)))))
-               (2, (state, criterions))
-  | acmd_packer (Compute_Bindings {state, var_names, fact_names}) =
-      packPair (packInt, packTuple3 (packString, packList packString, packList packString))
-               (3, (state, var_names, fact_names))
-  | acmd_packer (Need_Intro {state}) =
-      packPair (packInt, packString) (4, state)
-  | acmd_packer (Retrieve_Fact {state, name}) =
-      packPair (packInt, packPair (packString, packString)) (5, (state, name))
-  | acmd_packer (Check_Term {state, term}) =
-      packPair (packInt, packPair (packString, packString)) (6, (state, term))
-  | acmd_packer (Schematic_Variables_Of {state}) =
-      packPair (packInt, packString) (7, state)
-  | acmd_packer (Potential_Defs_Of {state, term}) =
-      packPair (packInt, packPair (packString, packString)) (8, (state, term))
-  | acmd_packer Exit =
-      packPair (packInt, packUnit) (0, ())
-
 fun minilang_items_packer ctxt =
       context_packer ctxt o (fn (items:Minilang.items) =>
         let val (vars, local_facts) = items
@@ -249,158 +181,6 @@ fun FactRef_to_string (Named ((name, _), NONE)) = name
 val pack_FactRef = packString o FactRef_to_string
 end
 
-fun callback (cfg:cfg) (states:states Unsynchronized.ref) (conn:connection) =
-  let exception EXIT
-      exception ERR of string list
-      val messages = Unsynchronized.ref []
-      (* Global counters - persist across RPC calls *)
-      val counters = {
-        prem_counter = Synchronized.var "prem_counter" 0,
-        fact_counter = Synchronized.var "fact_counter" 0
-      } : MiniLang_Agent.counters
-      fun listen_report msg =
-            messages := msg :: !messages
-      fun clean_report () =
-            let val ret = rev (!messages)
-             in messages := []
-              ; ret
-            end
-   in Minilang.set_reporter listen_report
-    ;(while true do
-      case read conn acmd_unpacker
-        of Exit => raise EXIT
-         | Proof_Opr {from, to, opr} => (
-            let val s0 = case Symtab.lookup (!states) from
-                           of SOME s => s
-                            | NONE => raise ERR ["beginning_state_not_found"]
-                val (cfg', budget) = cfg
-                val full_config = (cfg', budget, counters) : MiniLang_Agent.config
-                val s1 = MiniLang_Agent.interpret full_config opr s0
-                val ctxt' = Minilang.context_of s1
-                val msgs = clean_report ()
-             in states := Symtab.update (to, s1) (!states)
-              ; write conn (packPair (minilang_message_packer ctxt', minilang_tree_packer ctxt'))
-                           (msgs, Minilang.print_state s1)
-            end handle Minilang.OPR_FAIL (Minilang.PROOF_FAIL, msg) =>
-                write_error' conn packUnit
-                  {message=[REPL.trim_makrup msg], errobj=()}
-              | Minilang.OPR_FAIL (Minilang.INVALID_OPR, msg) =>
-                write_error' conn packUnit
-                  {message=[String.concat ["Bad proof operation.\n", REPL.trim_makrup msg]], errobj=()}
-              | Minilang.OPR_FAIL (Minilang.TERMLANG, msg) =>
-                write_error' conn packUnit
-                  {message=[String.concat ["Syntax Error in Term Language.\n", REPL.trim_makrup msg]], errobj=()}
-           )
-         | Lookup_Fact {state, criterions} =>
-            let val s0 = case Symtab.lookup (!states) state
-                           of SOME s => s
-                            | NONE => raise ERR ["beginning_state_not_found"]
-                val ctxt = Minilang.context_of s0
-                val check_criterion = check_criterion ctxt
-                val rets =
-                    maps (fn criterion =>
-                          Find_Theorems.find_theorems ctxt
-                              (SOME (Minilang.leading_proof_sequent_of s0))
-                              (SOME 31) false
-                              (map (apsnd check_criterion) criterion)
-                       |> snd) criterions
-                 |> distinct (Thm.equiv_thm (Proof_Context.theory_of ctxt) o apply2 snd)
-                val SOT  = MiniLang_Agent.string_of_term ctxt
-             in write conn (packList (packPair (pack_FactRef, packString o SOT o Thm.prop_of))) rets
-            end
-         | Retrieve_Fact {state, name} =>
-            let val s0 = case Symtab.lookup (!states) state
-                           of SOME s => s
-                            | NONE => raise ERR ["beginning_state_not_found"]
-                val ctxt = Minilang.context_of s0
-                val facts = Proof_Context.facts_of ctxt
-                val full_name = Facts.intern facts name
-                (* Check if the fact actually exists *)
-                val result = case Facts.lookup (Context.Proof ctxt) facts full_name
-                               of SOME _ => SOME full_name
-                                | NONE => NONE
-             in write conn (packOption packString) result
-            end
-         | Compute_Bindings {state, var_names, fact_names} => (
-            let val s0 = case Symtab.lookup (!states) state
-                           of SOME s => s
-                            | NONE => raise ERR ["beginning_state_not_found"]
-                val bindings = MiniLang_Agent.compute_bindings s0 var_names fact_names
-             in write conn MiniLang_Agent.pack_bindings bindings
-            end handle Minilang.OPR_FAIL (Minilang.INVALID_OPR, msg) =>
-                write_error' conn packUnit
-                  {message=[String.concat ["Bad operation: ", REPL.trim_makrup msg]], errobj=()}
-           )
-         | Need_Intro {state} =>
-            let val s0 = case Symtab.lookup (!states) state
-                           of SOME s => s
-                            | NONE => raise ERR ["beginning_state_not_found"]
-                val result = MiniLang_Agent.check_need_intro s0
-             in write conn packBool result
-            end
-         | Check_Term {state, term} => (
-            let val s0 = case Symtab.lookup (!states) state
-                           of SOME s => s
-                            | NONE => raise ERR ["beginning_state_not_found"]
-                val ctxt = Minilang.context_of s0
-                val string_of_type = MiniLang_Agent.string_of_type ctxt
-                val parsed_term = MiniLang_Agent.read_term ctxt term
-                val term_type = Term.type_of parsed_term
-                val type_string = string_of_type term_type
-                val frees = Term.add_frees parsed_term []
-                    |> map (fn (name, ty) => (name, string_of_type ty))
-                val vars = Term.add_vars parsed_term []
-                    |> map (fn (name_idx, ty) =>
-                            (Term.string_of_vname name_idx, string_of_type ty))
-             in write conn (packTuple3 (packString,
-                                        packList (packPair (packString, packString)),
-                                        packList (packPair (packString, packString))))
-                          (type_string, frees, vars)
-            end handle ERROR msg =>
-                write_error' conn packUnit {message=["Unparsed", msg], errobj=()}
-              | TERM (msg, _) =>
-                write_error' conn packUnit {message=["Unparsed", msg], errobj=()}
-              | TYPE (msg, _, _) =>
-                write_error' conn packUnit {message=["Unparsed", msg], errobj=()}
-           )
-         | Schematic_Variables_Of {state} => (
-            let val s0 = case Symtab.lookup (!states) state
-                           of SOME s => s
-                            | NONE => raise ERR ["beginning_state_not_found"]
-                val vars = Minilang.schematic_vars_of_leading_goal s0
-                val ctxt = Minilang.context_of s0
-                val string_of_type = MiniLang_Agent.string_of_type ctxt
-                val vars_with_pretty = map (fn (name_idx, ty) =>
-                        (Term.string_of_vname name_idx, string_of_type ty))
-                      vars
-             in write conn (packList (packPair (packString, packString))) vars_with_pretty
-            end handle ERROR msg =>
-                write_error' conn packUnit {message=["Error", msg], errobj=()}
-           )
-         | Potential_Defs_Of {state, term} => (
-            let val s0 = case Symtab.lookup (!states) state
-                           of SOME s => s
-                            | NONE => raise ERR ["beginning_state_not_found"]
-                val ctxt = Minilang.context_of s0
-                val parsed_term = MiniLang_Agent.read_term ctxt term
-                val const_name = case Term.head_of parsed_term of
-                                   Const (name, _) => name
-                                 | _ => raise ERR ["term_head_not_const"]
-                val defs = Minilang.potential_defs_of_const ctxt const_name
-                val SOT = MiniLang_Agent.string_of_term ctxt
-                val defs_as_pairs = map (fn (name, thm) => (name, SOT (Thm.prop_of thm))) defs
-             in write conn (packList (packPair (packString, packString))) defs_as_pairs
-            end handle ERROR msg =>
-                write_error' conn packUnit {message=["Error", msg], errobj=()}
-              | TERM (msg, _) =>
-                write_error' conn packUnit {message=["Error", msg], errobj=()}
-              | TYPE (msg, _, _) =>
-                write_error' conn packUnit {message=["Error", msg], errobj=()}
-           )
-    ) handle EXIT => ()
-           | ERR msgs => write_error' conn packUnit {message=msgs, errobj=()}
-  end
-
 val AoA_log_dir = Attrib.setup_config_string \<^binding>\<open>AoA_log_dir\<close>
       (fn _ =>
         let val user_home = getenv "ISABELLE_HOME_USER"
@@ -417,39 +197,216 @@ fun make_invocation_id () =
    in String.concat [hex_ms_last9, "_", hex_ser]
   end
 
-val AoA_timeout = Time.fromSeconds 10
-fun AoA_cmd (cfg:cfg) (states:states Unsynchronized.ref) : (context * driver * string, MiniLang_Agent.xcmd list * string option) command =
-  let val s0 = chk_initial_state (!states)
-      val ctxt = Minilang.context_of s0
-      val s0_ptree = Minilang.print_state s0
-   in {
-      name = "IsaMini.AoA",
-      arg_schema = (fn (global_context, driver, invocation_id) =>
-          let val log_dir = Config.get ctxt AoA_log_dir
-          in packTuple5 (context_packer ctxt, minilang_tree_packer ctxt, packString, packString, packString)
-                        (global_context, s0_ptree, driver, log_dir, invocation_id)
-          end),
-      ret_schema = unpackPair (unpackList MiniLang_Agent.xcmd_unpacker, unpackOption unpackString),
-      timeout = NONE (*SOME AoA_timeout*),
-      callback = SOME (callback cfg states)
-  }
-  end
-
 end
 
 fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
-  let val ctxt = ctxt0
+  let open MessagePackBinIO.Pack MessagePackBinIO.Unpack Remote_Procedure_Calling
+
+      (* Shared state for all callbacks *)
+      val counters = {
+        prem_counter = Synchronized.var "prem_counter" 0,
+        fact_counter = Synchronized.var "fact_counter" 0
+      } : MiniLang_Agent.counters
+      val messages = Unsynchronized.ref []
+      fun listen_report msg = messages := msg :: !messages
+      fun clean_report () =
+        let val ret = rev (!messages)
+         in messages := []; ret end
+
+      (* Configure context *)
+      val ctxt = ctxt0
             |> Config.put Minilang.strict_end true
             |> Config.put Minilang.counter_mode "none"
             |> Config.put Minilang.INTRO_split_conj true
             |> Config.put Minilang.INTRO_mk_block true
             |> Config.put Minilang.auto_deconflict_bound true
             |> Config.put Printer.show_markup false
+
       val global_context = global_context_of (ctxt, sequent)
       val s0 = Minilang.INIT ctxt sequent
       val state = Unsynchronized.ref (Symtab.make [("$init", s0)])
+
+      (* Helper: Get state from table *)
+      fun get_state state_id =
+        case Symtab.lookup (!state) state_id of
+          SOME s => s
+        | NONE => error "beginning_state_not_found"
+
+      (* Local callback definitions - all share state, counters, messages via closure *)
+
+      fun proof_opr_callback () = {
+        name = "IsaMini.proof_opr",
+        arg_schema = unpackTuple3 (unpackString, unpackString, MiniLang_Agent.xcmd_unpacker),
+        ret_schema = (fn (ctxt, msgs, tree) =>
+          packPair (minilang_message_packer ctxt, minilang_tree_packer ctxt) (msgs, tree)),
+        function = (fn (from, to, opr) =>
+          let val _ = Minilang.set_reporter listen_report
+              val s0 = get_state from
+              val (cfg', budget) = cfg
+              val full_config = (cfg', budget, counters) : MiniLang_Agent.config
+              val s1 = MiniLang_Agent.interpret full_config opr s0
+              val ctxt' = Minilang.context_of s1
+              val msgs = clean_report ()
+              val _ = state := Symtab.update (to, s1) (!state)
+           in (ctxt', msgs, Minilang.print_state s1)
+          end handle Minilang.OPR_FAIL (Minilang.PROOF_FAIL, msg) =>
+              error (REPL.trim_makrup msg)
+            | Minilang.OPR_FAIL (Minilang.INVALID_OPR, msg) =>
+              error (String.concat ["Bad proof operation.\n", REPL.trim_makrup msg])
+            | Minilang.OPR_FAIL (Minilang.TERMLANG, msg) =>
+              error (String.concat ["Syntax Error in Term Language.\n", REPL.trim_makrup msg])),
+        timeout = SOME (Time.fromSeconds 600)
+      }
+
+      fun lookup_fact_callback () = {
+        name = "IsaMini.lookup_fact",
+        arg_schema = unpackPair (unpackString, unpackList (unpackList (unpackPair (unpackBool, unpack_criterion)))),
+        ret_schema = (fn (ctxt, rets) =>
+          let val SOT = MiniLang_Agent.string_of_term ctxt
+           in packList (packPair (pack_FactRef, packString o SOT o Thm.prop_of)) rets
+          end),
+        function = (fn (state_id, criterions) =>
+          let val s0 = get_state state_id
+              val ctxt = Minilang.context_of s0
+              val check_criterion = check_criterion ctxt
+              val rets =
+                  maps (fn criterion =>
+                        Find_Theorems.find_theorems ctxt
+                            (SOME (Minilang.leading_proof_sequent_of s0))
+                            (SOME 31) false
+                            (map (apsnd check_criterion) criterion)
+                     |> snd) criterions
+               |> distinct (Thm.equiv_thm (Proof_Context.theory_of ctxt) o apply2 snd)
+           in (ctxt, rets)
+          end),
+        timeout = SOME (Time.fromSeconds 30)
+      }
+
+      fun retrieve_fact_callback () = {
+        name = "IsaMini.retrieve_fact",
+        arg_schema = unpackPair (unpackString, unpackString),
+        ret_schema = packOption packString,
+        function = (fn (state_id, name) =>
+          let val s0 = get_state state_id
+              val ctxt = Minilang.context_of s0
+              val facts = Proof_Context.facts_of ctxt
+              val full_name = Facts.intern facts name
+           in case Facts.lookup (Context.Proof ctxt) facts full_name of
+                SOME _ => SOME full_name
+              | NONE => NONE
+          end),
+        timeout = NONE
+      }
+
+      fun compute_bindings_callback () = {
+        name = "IsaMini.compute_bindings",
+        arg_schema = unpackTuple3 (unpackString, unpackList unpackString, unpackList unpackString),
+        ret_schema = MiniLang_Agent.pack_bindings,
+        function = (fn (state_id, var_names, fact_names) =>
+          let val s0 = get_state state_id
+           in MiniLang_Agent.compute_bindings s0 var_names fact_names
+          end handle Minilang.OPR_FAIL (Minilang.INVALID_OPR, msg) =>
+              error (String.concat ["Bad operation: ", REPL.trim_makrup msg])),
+        timeout = NONE
+      }
+
+      fun need_intro_callback () = {
+        name = "IsaMini.need_intro",
+        arg_schema = unpackString,
+        ret_schema = packBool,
+        function = (fn state_id =>
+          let val s0 = get_state state_id
+           in MiniLang_Agent.check_need_intro s0
+          end),
+        timeout = NONE
+      }
+
+      fun check_term_callback () = {
+        name = "IsaMini.check_term",
+        arg_schema = unpackPair (unpackString, unpackString),
+        ret_schema = packTuple3 (packString,
+                                 packList (packPair (packString, packString)),
+                                 packList (packPair (packString, packString))),
+        function = (fn (state_id, term) =>
+          let val s0 = get_state state_id
+              val ctxt = Minilang.context_of s0
+              val string_of_type = MiniLang_Agent.string_of_type ctxt
+              val parsed_term = MiniLang_Agent.read_term ctxt term
+              val term_type = Term.type_of parsed_term
+              val type_string = string_of_type term_type
+              val frees = Term.add_frees parsed_term []
+                  |> map (fn (name, ty) => (name, string_of_type ty))
+              val vars = Term.add_vars parsed_term []
+                  |> map (fn (name_idx, ty) =>
+                          (Term.string_of_vname name_idx, string_of_type ty))
+           in (type_string, frees, vars)
+          end handle ERROR msg => error (String.concat ["Unparsed: ", msg])
+            | TERM (msg, _) => error (String.concat ["Unparsed: ", msg])
+            | TYPE (msg, _, _) => error (String.concat ["Unparsed: ", msg])),
+        timeout = NONE
+      }
+
+      fun schematic_vars_callback () = {
+        name = "IsaMini.schematic_variables_of",
+        arg_schema = unpackString,
+        ret_schema = packList (packPair (packString, packString)),
+        function = (fn state_id =>
+          let val s0 = get_state state_id
+              val vars = Minilang.schematic_vars_of_leading_goal s0
+              val ctxt = Minilang.context_of s0
+              val string_of_type = MiniLang_Agent.string_of_type ctxt
+           in map (fn (name_idx, ty) =>
+                    (Term.string_of_vname name_idx, string_of_type ty))
+                  vars
+          end handle ERROR msg => error (String.concat ["Error: ", msg])),
+        timeout = NONE
+      }
+
+      fun potential_defs_callback () = {
+        name = "IsaMini.potential_defs_of",
+        arg_schema = unpackPair (unpackString, unpackString),
+        ret_schema = packList (packPair (packString, packString)),
+        function = (fn (state_id, term) =>
+          let val s0 = get_state state_id
+              val ctxt = Minilang.context_of s0
+              val parsed_term = MiniLang_Agent.read_term ctxt term
+              val const_name = case Term.head_of parsed_term of
+                                 Const (name, _) => name
+                               | _ => error "term_head_not_const"
+              val defs = Minilang.potential_defs_of_const ctxt const_name
+              val SOT = MiniLang_Agent.string_of_term ctxt
+           in map (fn (name, thm) => (name, SOT (Thm.prop_of thm))) defs
+          end handle ERROR msg => error (String.concat ["Error: ", msg])
+            | TERM (msg, _) => error (String.concat ["Error: ", msg])
+            | TYPE (msg, _, _) => error (String.concat ["Error: ", msg])),
+        timeout = NONE
+      }
+
+      (* Build AoA command with local callbacks *)
+      val s0_ptree = Minilang.print_state s0
+      val aoa_cmd = {
+        name = "IsaMini.AoA",
+        arg_schema = (fn (global_context, driver, invocation_id) =>
+            let val log_dir = Config.get ctxt AoA_log_dir
+            in packTuple5 (context_packer ctxt, minilang_tree_packer ctxt, packString, packString, packString)
+                          (global_context, s0_ptree, driver, log_dir, invocation_id)
+            end),
+        ret_schema = unpackPair (unpackList MiniLang_Agent.xcmd_unpacker, unpackOption unpackString),
+        timeout = NONE,
+        callback = [
+          mk_callback (proof_opr_callback ()),
+          mk_callback (lookup_fact_callback ()),
+          mk_callback (retrieve_fact_callback ()),
+          mk_callback (compute_bindings_callback ()),
+          mk_callback (need_intro_callback ()),
+          mk_callback (check_term_callback ()),
+          mk_callback (schematic_vars_callback ()),
+          mk_callback (potential_defs_callback ())
+        ]
+      }
+
       val (xcmds, s1o) =
-            Remote_Procedure_Calling.call_command (AoA_cmd cfg state) (global_context, driver, invocation_id)
+            call_command aoa_cmd (global_context, driver, invocation_id)
    in case s1o
    of SOME s1 => (
    case Symtab.lookup (!state) s1
@@ -501,8 +458,8 @@ fun AoA_REPL_App (cin, cout, toplevel) =
                      in \<^try>\<open>
                         let val (_, seq) = AoA_RPC (driver, cfg, invocation_id) (ctxt, sequent)
                             val time = Timing.result start_time
-                         in REPL_Server.output cout (packTuple3 (packBool, packInt, packInt))
-                                 ( true,
+                         in REPL_Server.output cout (packTuple3 (packString, packInt, packInt))
+                                 ( "success",
                                    Time.toMilliseconds (#elapsed time),
                                    Time.toMilliseconds (#cpu time)
                                  )
@@ -518,14 +475,28 @@ fun AoA_REPL_App (cin, cout, toplevel) =
                             end
                           | Remote_Procedure_Calling.Remote_Calling_Failure {message, ...} =>
                             let val time = Timing.result start_time
-                             in REPL_Server.output cout (packTuple3 (packBool, packInt, packInt))
-                                   ( false,
+                             in REPL_Server.output cout (packTuple3 (packString, packInt, packInt))
+                                   ( "remote_error",
                                      Time.toMilliseconds (#elapsed time),
                                      Time.toMilliseconds (#cpu time)
                                    )
                               ; BinIO.StreamIO.flushOut cout
                               ; sequent
                             end
+                          | ERROR msg =>
+                            if msg = "Agent gives up"
+                            then let val time = Timing.result start_time
+                                  in REPL_Server.output cout (packTuple3 (packString, packInt, packInt))
+                                        ( "agent_gives_up",
+                                          Time.toMilliseconds (#elapsed time),
+                                          Time.toMilliseconds (#cpu time)
+                                        )
+                                   ; BinIO.StreamIO.flushOut cout
+                                   ; sequent
+                                 end
+                            else ( REPL_Server.output_err cout msg
+                                 ; BinIO.StreamIO.flushOut cout
+                                 ; raise (ERROR msg) )
                           | E => (
                                 REPL_Server.output_err cout (Runtime.exn_message E)
                               ; BinIO.StreamIO.flushOut cout

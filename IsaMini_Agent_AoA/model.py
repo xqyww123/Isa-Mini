@@ -772,7 +772,6 @@ class Minilang_State:
             assign_to = Minilang_State(self.connection, type(self).assign_name(), None)
         if isinstance(opr, Minilang_Operation):
             dest_name = assign_to.name
-            self.connection.write((1, (self.name, dest_name, (opr.command, opr.arg))))
             # Log proof operation
             the_session().log_proof_operation(
                 step="execute",
@@ -784,7 +783,8 @@ class Minilang_State:
                 }
             )
             try:
-                (msgs, tree) = self.connection.read()
+                (msgs, tree) = self.connection.callback("IsaMini.proof_opr",
+                                                        (self.name, dest_name, (opr.command, opr.arg)))
             except IsabelleError as err:
                 the_session().log_proof_operation_error(
                     error_message=str(err),
@@ -810,8 +810,8 @@ class Minilang_State:
         ret.messages = self.messages
         return ret
     def search_fact(self, dnf_criterions: list[list[Search_Criterion]]) -> FactRef:
-        self.connection.write((2, (self.name, dnf_criterions)))
-        fact_ref_and_props = self.connection.read()
+        fact_ref_and_props = self.connection.callback("IsaMini.lookup_fact",
+                                                       (self.name, dnf_criterions))
         match fact_ref_and_props:
             case []:
                 raise FactNotFound(dnf_criterions)
@@ -841,16 +841,15 @@ class Minilang_State:
         fact_names[j] is bound to the j-th premise in the goal.
         Raises IsabelleError if the lengths don't match the goal structure.
         """
-        self.connection.write((3, (self.name, var_names, fact_names)))
-        bindings_data = self.connection.read()
+        bindings_data = self.connection.callback("IsaMini.compute_bindings",
+                                                  (self.name, var_names, fact_names))
         return Intro_Bindings_Msg._unpack_bindings(bindings_data)
     def need_intro(self) -> bool:
         """
         Check if the leading proof goal needs INTRO (i.e., has quantified variables or premises).
         Returns True if the goal has quantifiers or premises that need to be introduced.
         """
-        self.connection.write((4, self.name))
-        result = self.connection.read()
+        result = self.connection.callback("IsaMini.need_intro", self.name)
         return result
     def retrieve_fact(self, name: str) -> str | None:
         """
@@ -858,8 +857,7 @@ class Minilang_State:
         Uses Facts.intern to get the complete fact reference.
         Returns the full name if the fact exists, None otherwise.
         """
-        self.connection.write((5, (self.name, name)))
-        result = self.connection.read()
+        result = self.connection.callback("IsaMini.retrieve_fact", (self.name, name))
         return result
     def check_term(self, term_str: str) -> tuple[typ, Vars, Vars]:
         """
@@ -870,9 +868,9 @@ class Minilang_State:
         - vars: dict of {name: type} for schematic variables (names formatted as ?name.idx)
         Raises InternalError_UnparsedTerm if parsing fails.
         """
-        self.connection.write((6, (self.name, term_str)))
         try:
-            term_type, frees_list, vars_list = self.connection.read()
+            term_type, frees_list, vars_list = self.connection.callback("IsaMini.check_term",
+                                                                         (self.name, term_str))
             frees = dict(frees_list)
             vars = dict(vars_list)
             return (term_type, frees, vars)
@@ -887,9 +885,8 @@ class Minilang_State:
         Get all schematic variables from the leading proof goal.
         Returns a dict of {varname: type} where varnames are formatted as ?name.idx.
         """
-        self.connection.write((7, self.name))
         try:
-            vars_list = self.connection.read()
+            vars_list = self.connection.callback("IsaMini.schematic_variables_of", self.name)
             return dict(vars_list)
         except IsabelleError as e:
             raise
@@ -901,8 +898,7 @@ class Minilang_State:
         - name: theorem binding/reference name
         - proposition: theorem proposition as string
         """
-        self.connection.write((8, (self.name, term)))
-        result = self.connection.read()
+        result = self.connection.callback("IsaMini.potential_defs_of", (self.name, term))
         return result
 
 ### The Abstract Model

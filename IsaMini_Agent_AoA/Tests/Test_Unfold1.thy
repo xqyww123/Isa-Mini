@@ -4,7 +4,7 @@ begin
 
 declare [[agent_AoA_driver="test.Unfold1"]]
 
-definition "XXX (a::int) b = (a + b)"
+definition XXX where "XXX (a::int) b = (a + b)"
 
 lemma XXX_alt: "XXX a b = b + a"
   unfolding XXX_def

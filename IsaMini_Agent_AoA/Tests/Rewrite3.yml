@@ -5,8 +5,8 @@ variables:
   - z: int
   - x: int
 premises:
-  - h1: y = x + 0
-  - h2: z = y * 1
+  - h1: y = x + (0 :: int)
+  - h2: z = y * (1 :: int)
 You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
 variables:
   - y: int
@@ -22,8 +22,8 @@ variables:
   - z: int
   - x: int
 premises:
-  - h1: y = x + 0
-  - h2: z = y * 1
+  - h1: y = x + (0 :: int)
+  - h2: z = y * (1 :: int)
 You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
 variables:
   - y: int
@@ -50,8 +50,8 @@ variables:
   - z: int
   - x: int
 premises:
-  - h1: y = x + 0
-  - h2: z = y * 1
+  - h1: y = x + (0 :: int)
+  - h2: z = y * (1 :: int)
 You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
 variables:
   - y: int
@@ -87,8 +87,8 @@ variables:
   - z: int
   - x: int
 premises:
-  - h1: y = x + 0
-  - h2: z = y * 1
+  - h1: y = x + (0 :: int)
+  - h2: z = y * (1 :: int)
 You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
 variables:
   - y: int
@@ -113,10 +113,10 @@ proof:
     targets:
       - the goal
     goal changes into:
-      y * 1 = z
+      y * (1 :: int) = z
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
-  y * 1 = z
+  y * (1 :: int) = z
 --------------------------------------------------
 After Amend Have
 --------------------------------------------------
@@ -124,8 +124,8 @@ variables:
   - z: int
   - x: int
 premises:
-  - h1: y = x + 0
-  - h2: z = y * 1
+  - h1: y = x + (0 :: int)
+  - h2: z = y * (1 :: int)
 You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
 variables:
   - y: int
@@ -144,7 +144,7 @@ proof:
         operation: Obvious
         Error: |
           Failed to prove the proof goal automatically:
-            x = y * 2
+            x = y * (2 :: int)
           The proof is non-trivial and you must provide a detailed proof.
     Error: Evaluation suspended due to failures in the operations above
   - step id: 2
@@ -155,7 +155,7 @@ proof:
     targets:
       - the goal
     goal changes into:
-      y * 2 = z
+      y * (2 :: int) = z
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
-  y * 2 = z
+  y * (2 :: int) = z

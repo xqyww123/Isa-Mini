@@ -1,0 +1,192 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - AA: 'a ⇒ 'b ⇒ bool
+  - PP: 'a ⇒ bool
+  - z: 'a
+  - x: 'a
+premises:
+  - h1: y = x + (0 :: 'a)
+  - h2: ∃(aAa :: 'a). z = y * (1 :: 'a) + aAa
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+variables:
+  - y: 'a
+goal: x = z ∧ PP z ∧ (∀(x1 :: 'b). AA z x1)
+proof:
+  - step id: 1
+    operation: Intro
+    goals:
+      - goal id: 1.1
+        goal: x = z
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1` to provide the proof for the following goal.
+        pending proof goal:
+          x = z
+      - goal id: 1.2
+        goal: PP z
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.1` to provide the proof for the following goal.
+        pending proof goal:
+          PP z
+      - goal id: 1.3
+        goal: ∀(x1 :: 'b). AA z x1
+        proof:
+          - step id: 1.3.1
+            operation: Intro
+            fixing variables:
+              - x1: 'b
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.3.2` to provide the proof for the following goal.
+        pending proof goal:
+          AA z x1
+--------------------------------------------------
+After Rewrite
+--------------------------------------------------
+variables:
+  - AA: 'a ⇒ 'b ⇒ bool
+  - PP: 'a ⇒ bool
+  - z: 'a
+  - x: 'a
+premises:
+  - h1: y = x + (0 :: 'a)
+  - h2: ∃(aAa :: 'a). z = y * (1 :: 'a) + aAa
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+variables:
+  - y: 'a
+goal: x = z ∧ PP z ∧ (∀(x1 :: 'b). AA z x1)
+proof:
+  - step id: 0A
+    thought: Rewrite the premises to simplify the equations
+    operation: Rewrite
+    using:
+      - h1
+      - system simplifiers
+    targets:
+      - h2
+    fixing variables:
+      - aAa: 'a
+    resulting premises:
+      - premise0: z = (x + (0 :: 'a)) * (1 :: 'a) + aAa
+    goal changes into:
+      x = (x + (0 :: 'a)) * (1 :: 'a) + aAa ∧ PP ((x + (0 :: 'a)) * (1 :: 'a) + aAa) ∧ (∀(x1 :: 'b). AA ((x + (0 :: 'a)) * (1 :: 'a) + aAa) x1)
+  - step id: 1
+    operation: Intro
+    goals:
+      - goal id: 1.1
+        goal: x = (x + (0 :: 'a)) * (1 :: 'a) + aAa
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1` to provide the proof for the following goal.
+        pending proof goal:
+          x = (x + (0 :: 'a)) * (1 :: 'a) + aAa
+      - goal id: 1.2
+        goal: PP ((x + (0 :: 'a)) * (1 :: 'a) + aAa)
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.1` to provide the proof for the following goal.
+        pending proof goal:
+          PP ((x + (0 :: 'a)) * (1 :: 'a) + aAa)
+      - goal id: 1.3
+        goal: ∀(x1 :: 'b). AA ((x + (0 :: 'a)) * (1 :: 'a) + aAa) x1
+        proof:
+          - step id: 1.3.1
+            operation: Intro
+            fixing variables:
+              - x1: 'b
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.3.2` to provide the proof for the following goal.
+        pending proof goal:
+          AA ((x + (0 :: 'a)) * (1 :: 'a) + aAa) x1
+--------------------------------------------------
+After Rename Fact
+--------------------------------------------------
+variables:
+  - AA: 'a ⇒ 'b ⇒ bool
+  - PP: 'a ⇒ bool
+  - z: 'a
+  - x: 'a
+premises:
+  - h1: y = x + (0 :: 'a)
+  - h2: ∃(aAa :: 'a). z = y * (1 :: 'a) + aAa
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+variables:
+  - y: 'a
+goal: x = z ∧ PP z ∧ (∀(x1 :: 'b). AA z x1)
+proof:
+  - step id: 0A
+    thought: Rewrite the premises to simplify the equations
+    operation: Rewrite
+    using:
+      - h1
+      - system simplifiers
+    targets:
+      - h2
+    fixing variables:
+      - yyy: 'a    (renamed from "aAa")
+    resulting premises:
+      - my_premise: z = (x + (0 :: 'a)) * (1 :: 'a) + yyy
+    goal changes into:
+      x = (x + (0 :: 'a)) * (1 :: 'a) + yyy ∧ PP ((x + (0 :: 'a)) * (1 :: 'a) + yyy) ∧ (∀(x1 :: 'b). AA ((x + (0 :: 'a)) * (1 :: 'a) + yyy) x1)
+  - step id: 1
+    operation: Intro
+    goals:
+      - goal id: 1.1
+        goal: x = (x + (0 :: 'a)) * (1 :: 'a) + yyy
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1` to provide the proof for the following goal.
+        pending proof goal:
+          x = (x + (0 :: 'a)) * (1 :: 'a) + yyy
+      - goal id: 1.2
+        goal: PP ((x + (0 :: 'a)) * (1 :: 'a) + yyy)
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.1` to provide the proof for the following goal.
+        pending proof goal:
+          PP ((x + (0 :: 'a)) * (1 :: 'a) + yyy)
+      - goal id: 1.3
+        goal: ∀(x1 :: 'b). AA ((x + (0 :: 'a)) * (1 :: 'a) + yyy) x1
+        proof:
+          - step id: 1.3.1
+            operation: Intro
+            fixing variables:
+              - x1: 'b
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.3.2` to provide the proof for the following goal.
+        pending proof goal:
+          AA ((x + (0 :: 'a)) * (1 :: 'a) + yyy) x1
+--------------------------------------------------
+After Remove the Rewrite
+--------------------------------------------------
+variables:
+  - AA: 'a ⇒ 'b ⇒ bool
+  - PP: 'a ⇒ bool
+  - z: 'a
+  - x: 'a
+premises:
+  - h1: y = x + (0 :: 'a)
+  - h2: ∃(aAa :: 'a). z = y * (1 :: 'a) + aAa
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+variables:
+  - y: 'a
+goal: x = z ∧ PP z ∧ (∀(x1 :: 'b). AA z x1)
+proof:
+  - step id: 1
+    operation: Intro
+    goals:
+      - goal id: 1.1
+        goal: x = z
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1` to provide the proof for the following goal.
+        pending proof goal:
+          x = z
+      - goal id: 1.2
+        goal: PP z
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.1` to provide the proof for the following goal.
+        pending proof goal:
+          PP z
+      - goal id: 1.3
+        goal: ∀(x1 :: 'b). AA z x1
+        proof:
+          - step id: 1.3.1
+            operation: Intro
+            fixing variables:
+              - x1: 'b
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.3.2` to provide the proof for the following goal.
+        pending proof goal:
+          AA z x1

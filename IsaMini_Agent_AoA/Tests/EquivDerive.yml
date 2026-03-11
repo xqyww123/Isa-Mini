@@ -6,7 +6,7 @@ variables:
   - P: 'b ⇒ 'a ⇒ bool
   - R: 'a ⇒ bool
 You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
-goal: ∀a. R a ⟶ (∀b. P b a) = (∀c. Q c a)
+goal: ∀(a :: 'a). R a ⟶ (∀(b :: 'b). P b a) = (∀(c :: 'c). Q c a)
 proof:
   - step id: 1
     operation: Intro
@@ -16,7 +16,7 @@ proof:
       - premise0: R a
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
-  (∀b. P b a) = (∀c. Q c a)
+  (∀(b :: 'b). P b a) = (∀(c :: 'c). Q c a)
 --------------------------------------------------
 Inference Rule
 --------------------------------------------------
@@ -25,7 +25,7 @@ variables:
   - P: 'b ⇒ 'a ⇒ bool
   - R: 'a ⇒ bool
 You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
-goal: ∀a. R a ⟶ (∀b. P b a) = (∀c. Q c a)
+goal: ∀(a :: 'a). R a ⟶ (∀(b :: 'b). P b a) = (∀(c :: 'c). Q c a)
 proof:
   - step id: 1
     operation: Intro
@@ -39,26 +39,26 @@ proof:
     rule: default
     derived subgoals:
       - goal id: 2.1
-        goal: (∀b. P b a) ⟶ (∀c. Q c a)
+        goal: (∀(b :: 'b). P b a) ⟶ (∀(c :: 'c). Q c a)
         proof:
           - step id: 2.1.1
             operation: Intro
             fixing variables:
               - c: 'c
             assuming premises:
-              - premise1: ∀b. P b a
+              - premise1: ∀(b :: 'b). P b a
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1.2` to provide the proof for the following goal.
         pending proof goal:
           Q c a
       - goal id: 2.2
-        goal: (∀c. Q c a) ⟶ (∀b. P b a)
+        goal: (∀(c :: 'c). Q c a) ⟶ (∀(b :: 'b). P b a)
         proof:
           - step id: 2.2.1
             operation: Intro
             fixing variables:
               - b: 'b
             assuming premises:
-              - premise2: ∀c. Q c a
+              - premise2: ∀(c :: 'c). Q c a
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.2.2` to provide the proof for the following goal.
         pending proof goal:
           P b a

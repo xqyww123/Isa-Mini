@@ -58,7 +58,7 @@ def _test_sqrt2(root: Root, file: MyIO):
     print_header("Have", file)
     root.print(0, file)
 
-@test("branch", "Test001.thy", 6)
+@test("Branch1", "Test_Branch.thy", 8)
 def _test_branch(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -151,7 +151,7 @@ def _test_Induction(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
 
-@test("Suffices", "Test_Suffices.thy", 7)
+@test("Suffices", "Test_Suffices.thy", 9)
 def _test_Suffices(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -183,7 +183,7 @@ def _test_Suffices(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
 
-@test("Rewrite1", "Test_Rewrite.thy", 9)
+@test("Rewrite1", "Test_Rewrite.thy", 12)
 def _test_Rewrite1(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -202,7 +202,7 @@ def _test_Rewrite1(root: Root, file: MyIO):
     print_header("After Rename Fact", file)
     root.print(0, file)
 
-@test("Rewrite2", "Test_Rewrite2.thy", 9)
+@test("Rewrite2", "Test_Rewrite2.thy", 12)
 def _test_Rewrite2(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -224,7 +224,7 @@ def _test_Rewrite2(root: Root, file: MyIO):
     print_header("After Remove the Rewrite", file)
     root.print(0, file)
 
-@test("Rewrite3", "Test_Rewrite3.thy", 9)
+@test("Rewrite3", "Test_Rewrite3.thy", 13)
 def _test_Rewrite3(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -273,7 +273,7 @@ def _test_Rewrite3(root: Root, file: MyIO):
     print_header("After Amend Have", file)
     root.print(0, file)
 
-@test("Witness1", "Test_Witness.thy", 8)
+@test("Witness1", "Test_Witness.thy", 9)
 def _test_Witness1(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -361,6 +361,7 @@ def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = N
     repl.load_theory(['Minilang_Agent.Minilang_Agent'])
     repl.record_state("init")
     case_num = len(TESTS)
+    passed = 0
     for i, test_case in enumerate(TESTS.values()):
         repl.rollback('init')
         print(f"Running test [{i+1}/{case_num}] {test_case.name}")
@@ -371,13 +372,13 @@ def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = N
         mp.pack((invocation_id, f"{mode}.{test_case.name}", (_cfg, _budget)), repl.cout)
         repl.cout.flush()
         try:
-            (success, elapsed, cpu_time) = Client._parse_control_(repl.unpack.unpack())
+            (status, elapsed, cpu_time) = Client._parse_control_(repl.unpack.unpack())
         except REPLFail as e:
-            if str(e) == 'Agent gives up':
-                continue
-            else:
-                raise
-        if success:
-            print(f"\033[92mTest {test_case.name} passed, elapsed: {elapsed}ms, cpu_time: {cpu_time}ms\033[0m")
+            print(f"\033[91mTest {test_case.name} error: {e}\033[0m")
+            continue
+        if status == "success" or status == "agent_gives_up":
+            passed += 1
+            print(f"\033[92mTest {test_case.name} passed (status={status}), elapsed: {elapsed}ms, cpu_time: {cpu_time}ms\033[0m")
         else:
-            print(f"\033[91mTest {test_case.name} failed, elapsed: {elapsed}ms, cpu_time: {cpu_time}ms\033[0m")
+            print(f"\033[91mTest {test_case.name} failed (status={status}), elapsed: {elapsed}ms, cpu_time: {cpu_time}ms\033[0m")
+    print(f"\n{passed}/{case_num} tests passed")

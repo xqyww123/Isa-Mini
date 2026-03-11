@@ -89,7 +89,6 @@ def IsaMini_AoA(data: tuple[Any, Any, str, str, str], connection: Connection):
             session.initialize(root)
             session.run()
 
-    connection.write((0, None))
     if root.is_proof_finished():
         return ([x.pack() for x in root.assemble()], root.final_ml_state.name)
     else:

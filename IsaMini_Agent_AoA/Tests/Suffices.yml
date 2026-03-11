@@ -4,18 +4,18 @@ Initial YAML
 variables:
   - x: int
 You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
-goal: 0 ≤ x * x
+goal: (0 :: int) ≤ x * x
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
 pending proof goal:
-  0 ≤ x * x
+  (0 :: int) ≤ x * x
 --------------------------------------------------
 After Suffices
 --------------------------------------------------
 variables:
   - x: int
 You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
-goal: 0 ≤ x * x
+goal: (0 :: int) ≤ x * x
 proof:
   - step id: 1
     thought: It suffices to show a stronger statement
@@ -27,17 +27,17 @@ proof:
     proof: empty
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
     pending proof goal:
-      0 < x * x + 1 ⟶ 0 ≤ x * x
+      (0 :: int) < x * x + (1 :: int) ⟶ (0 :: int) ≤ x * x
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
-  0 < x * x + 1
+  (0 :: int) < x * x + (1 :: int)
 --------------------------------------------------
 After proving implication
 --------------------------------------------------
 variables:
   - x: int
 You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
-goal: 0 ≤ x * x
+goal: (0 :: int) ≤ x * x
 proof:
   - step id: 1
     thought: It suffices to show a stronger statement
@@ -51,14 +51,14 @@ proof:
         operation: Obvious
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
-  0 < x * x + 1
+  (0 :: int) < x * x + (1 :: int)
 --------------------------------------------------
 After proving suffices goal
 --------------------------------------------------
 variables:
   - x: int
 You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
-goal: 0 ≤ x * x
+goal: (0 :: int) ≤ x * x
 proof:
   - step id: 1
     thought: It suffices to show a stronger statement
