@@ -704,9 +704,9 @@ class Minilang_Operation(NamedTuple):
     def SUFFICES(statement: term) -> 'Minilang_Operation':
         return Minilang_Operation("SUFFICES", IsaREPL.ascii_of_unicode(statement))
     @staticmethod
-    def OBTAIN(variables: list[Explicit_Var], constraints: list[term]) -> 'Minilang_Operation':
+    def OBTAIN(variables: list[Explicit_Var], constraints: list[tuple[str | None, term]]) -> 'Minilang_Operation':
         vars = [(v["name"], IsaREPL.ascii_of_unicode(v["type"]) if "type" in v else None) for v in variables]
-        return Minilang_Operation("OBTAIN", (vars, [IsaREPL.ascii_of_unicode(c) for c in constraints]))
+        return Minilang_Operation("OBTAIN", (vars, [(n, IsaREPL.ascii_of_unicode(c)) for n, c in constraints]))
     @staticmethod
     def RULE(rule_ref: FactRef | None) -> 'Minilang_Operation':
         return Minilang_Operation("RULE", [rule_ref] if rule_ref is not None else [])
@@ -726,8 +726,8 @@ class Minilang_Operation(NamedTuple):
     def WITNESS(terms: list[term]) -> 'Minilang_Operation':
         return Minilang_Operation("WITNESS", terms)
     @staticmethod
-    def BRANCH(cases: list[term]) -> 'Minilang_Operation':
-        return Minilang_Operation("BRANCH", cases)
+    def BRANCH(cases: list[tuple[str | None, term]]) -> 'Minilang_Operation':
+        return Minilang_Operation("BRANCH", [(n, IsaREPL.ascii_of_unicode(t)) for n, t in cases])
     @staticmethod
     def CASE_SPLIT(target: term, vars: list[varname_spec] | None, rule: FactRef | None) -> 'Minilang_Operation':
         return Minilang_Operation("CASE_SPLIT", (IsaREPL.ascii_of_unicode(target), vars, rule))
@@ -1984,6 +1984,11 @@ class Statement(TypedDict):
     english: str
     isabelle: str
 
+class NamedStatement(TypedDict):
+    english: str
+    isabelle: str
+    name: NotRequired[str]
+
 def print_statement(self: Statement, indent: int, file: MyIO):
     print_indent(indent, file)
     file.write(f"- english: {self["english"]}\n")
@@ -2480,7 +2485,7 @@ class Suffices(StdBlock):
 class Obtain_ToolArg(TypedDict):
     thought: str
     variables: list[Explicit_Var]
-    constraints: list[Statement]
+    constraints: list[NamedStatement]
 
 @proof_operation("Obtain", Obtain_ToolArg)
 class Obtain(StdBlock):
@@ -2511,6 +2516,9 @@ class Obtain(StdBlock):
             case [constraint]:
                 print_indent(indent, file)
                 file.write(f"constraint:\n")
+                if "name" in constraint:
+                    print_indent(indent+1, file)
+                    file.write(f"name: {constraint['name']}\n")
                 print_indent(indent+1, file)
                 file.write(f"english: {constraint['english']}\n")
                 print_indent(indent+1, file)
@@ -2520,13 +2528,18 @@ class Obtain(StdBlock):
                 file.write(f"constraints:\n")
                 for constraint in self.constraints:
                     print_indent(indent+1, file)
-                    file.write(f"- english: {constraint['english']}\n")
+                    if "name" in constraint:
+                        file.write(f"- name: {constraint['name']}\n")
+                        print_indent(indent+1, file)
+                        file.write(f"  english: {constraint['english']}\n")
+                    else:
+                        file.write(f"- english: {constraint['english']}\n")
                     print_indent(indent+1, file)
                     file.write(f"  isabelle: {constraint['isabelle']}\n")
         self._print_evaluation_status(indent, file)
         self._print_warnings(indent, file, [Warning.Position.HEADER])
     def beginning_opr(self) -> Minilang_Operation | None:
-        return Minilang_Operation.OBTAIN(self.variables, [c["isabelle"] for c in self.constraints])
+        return Minilang_Operation.OBTAIN(self.variables, [(c.get("name"), c["isabelle"]) for c in self.constraints])
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
         return f"Fail to claim the existential subgoal because: {"\n".join(err.errors)}"
     def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
@@ -2724,7 +2737,7 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
 
 class Branch_ToolArg(TypedDict):
     thought: str
-    cases: list[Statement]
+    cases: list[NamedStatement]
 
 @proof_operation("Branch", Branch_ToolArg)
 class Branch(SubgoalMaker_NoTailEnder):
@@ -2746,7 +2759,7 @@ class Branch(SubgoalMaker_NoTailEnder):
         self._print_evaluation_status(indent, file)
         self._print_warnings(indent, file, [Warning.Position.HEADER])
     def beginning_opr(self) -> Minilang_Operation:
-        return Minilang_Operation.BRANCH([case['isabelle'] for case in self.cases])
+        return Minilang_Operation.BRANCH([(case.get("name"), case['isabelle']) for case in self.cases])
     def ending_opr(self):
         return None
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:

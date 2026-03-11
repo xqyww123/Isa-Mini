@@ -132,12 +132,12 @@ val unpacker =
      | "END"      => apfst END o unpackList unpackString
      | "NEXT_or_END" => apfst NEXT_OR_END o unpackPair (unpackList unpackString, unpack_opt_var_names)
      | "SORRY"    => apfst SORRY o unpack_opt_var_names
-     | "BRANCH"   => apfst BRANCH   o unpackList unpackString
+     | "BRANCH"   => apfst BRANCH   o unpackList (unpackPair (unpackOption unpackString, unpackString))
      | "HAVE"     => apfst HAVE     o unpackPair (unpackString, unpackString)
      | "SUFFICES" => apfst SUFFICES o unpackString
      | "OBTAIN"   => apfst OBTAIN   o unpackPair (
                           unpackList (unpackPair (unpackString, unpackOption unpackString)),
-                          unpackList unpackString)
+                          unpackList (unpackPair (unpackOption unpackString, unpackString)))
      | "HAMMER"   => apfst HAMMER o unpackList unpackString
      | "INTRO"    => apfst INTRO o unpackOption unpack_bindings
      | "SKIP"     => apfst (K SKIP) o unpackUnit
@@ -172,7 +172,7 @@ fun packer (SIMPLIFY data) =
         ("NEXT", data)
   | packer (END data) = packPair (packString, packList packString) ("END", data)
   | packer (BRANCH data) =
-      packPair (packString, packList packString) ("BRANCH", data)
+      packPair (packString, packList (packPair (packOption packString, packString))) ("BRANCH", data)
   | packer (HAVE data) =
       packPair (packString, packPair (packString, packString)) ("HAVE", data)
   | packer (SUFFICES data) =
@@ -180,7 +180,7 @@ fun packer (SIMPLIFY data) =
   | packer (OBTAIN data) =
       packPair (packString, packPair (
           packList (packPair (packString, packOption packString)),
-          packList packString))
+          packList (packPair (packOption packString, packString))))
         ("OBTAIN", data)
   | packer (SORRY data) =
       packPair (packString, pack_opt_var_names)

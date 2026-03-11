@@ -40,6 +40,26 @@
       "type": "object",
       "additionalProperties": false
     },
+    "NamedStatement": {
+      "title": "NamedStatement",
+      "properties": {
+        "english": {
+          "type": "string",
+          "description": "the natural language statement in English"
+        },
+        "isabelle": {
+          "type": "string",
+          "description": "the formal statement in Isabelle/HOL"
+        },
+        "name": {
+          "type": "string",
+          "description": "optional binding name for this fact"
+        }
+      },
+      "required": ["english", "isabelle"],
+      "type": "object",
+      "additionalProperties": false
+    },
     "FactByName": {
       "title": "FactByName",
       "additionalProperties": false,
@@ -156,7 +176,7 @@
         },
         "constraints": {
           "type": "array",
-          "items": { "$ref": "#/$defs/Statement" }
+          "items": { "$ref": "#/$defs/NamedStatement" }
         }
       },
       "required": [
@@ -178,7 +198,7 @@
         },
         "thought": { "$ref": "#/$defs/Thought" },
         "cases": {
-          "items": { "$ref": "#/$defs/Statement" },
+          "items": { "$ref": "#/$defs/NamedStatement" },
           "type": "array"
         }
       },

@@ -27,10 +27,10 @@ datatype ('term, 'thm, 'fact) command =
   | NEXT_OR_END of 'fact list (*add lemmas*) * Minilang.opt_var_names
   | NEXT     of 'fact list (*add lemmas*) * Minilang.opt_var_names
   | END      of 'fact list (*add lemmas*)
-  | BRANCH   of string list
+  | BRANCH   of (string option * string) list
   | HAVE     of string (*name*) * 'term (*statement*)
   | SUFFICES of 'term
-  | OBTAIN   of (string * string option) list (*vars*) * string list (*constraints*)
+  | OBTAIN   of (string * string option) list (*vars*) * (string option * string) list (*constraints*)
   | SORRY    of Minilang.opt_var_names
   | HAMMER   of 'fact list (*with facts*)
   | INTRO    of bindings option
@@ -126,10 +126,10 @@ datatype ('term, 'thm, 'fact) command =
   | NEXT_OR_END of 'fact list (*add lemmas*) * Minilang.opt_var_names
   | NEXT     of 'fact list (*add lemmas*) * Minilang.opt_var_names
   | END      of 'fact list (*add lemmas*)
-  | BRANCH   of string list
+  | BRANCH   of (string option * string) list
   | HAVE     of string (*name*) * 'term (*statement*)
   | SUFFICES of 'term
-  | OBTAIN   of (string * string option) list (*vars*) * string list (*constraints*)
+  | OBTAIN   of (string * string option) list (*vars*) * (string option * string) list (*constraints*)
   | SORRY    of Minilang.opt_var_names
   | HAMMER   of 'fact list (*with facts*)
   | INTRO    of bindings option
@@ -613,9 +613,11 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
     | BRANCH branches =>
         let val prem_ctr = #prem_counter counters
             val counter_start = Synchronized.value prem_ctr
-            val (brs, final_counter) = fold_map (fn br => fn ctr =>
-                  let val name = "premise" ^ string_of_int ctr
-                  in (([], ([], [], [((Binding.name name, []), [(br, [])])])), ctr + 1)
+            val (brs, final_counter) = fold_map (fn (name_opt, br) => fn ctr =>
+                  let val (name, ctr') = case name_opt of
+                          SOME n => (n, ctr)
+                        | NONE => ("premise" ^ string_of_int ctr, ctr + 1)
+                  in (([], ([], [], [((Binding.name name, []), [(br, [])])])), ctr')
                   end) branches counter_start
             val _ = Synchronized.change prem_ctr (K final_counter)
         in Minilang.CONSIDER brs s
@@ -625,8 +627,17 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
     | SUFFICES goal =>
         Minilang.SUFFICES'' goal s
     | OBTAIN (vars, constraints) =>
-        let val arg = [(map (fn (v,T) => (Binding.name v, T, NoSyn)) vars,
-                       ([], [], map (fn goal => (Binding.empty_atts, [(goal, [])])) constraints))]
+        let val prem_ctr = #prem_counter counters
+            val counter_start = Synchronized.value prem_ctr
+            val (named_constraints, final_counter) = fold_map (fn (name_opt, goal) => fn ctr =>
+                  let val (name, ctr') = case name_opt of
+                          SOME n => (n, ctr)
+                        | NONE => ("premise" ^ string_of_int ctr, ctr + 1)
+                  in (((Binding.name name, []), [(goal, [])]), ctr')
+                  end) constraints counter_start
+            val _ = Synchronized.change prem_ctr (K final_counter)
+            val arg = [(map (fn (v,T) => (Binding.name v, T, NoSyn)) vars,
+                       ([], [], named_constraints))]
         in Minilang.CONSIDER arg s
         end
     | SORRY vars =>
@@ -719,7 +730,7 @@ fun check_command_i s (SIMPLIFY (facts, use_sys, prems, simp_goal, bindings_opt)
   | check_command_i _ (NEXT_OR_END (facts, vars)) = NEXT_OR_END (map read_fact facts, vars)
   | check_command_i _ (NEXT (facts, vars)) = NEXT (map read_fact facts, vars)
   | check_command_i _ (END facts) = END (map read_fact facts)
-  | check_command_i _ (BRANCH brs) = BRANCH brs
+  | check_command_i _ (BRANCH brs) = BRANCH brs (*name_opt * string passthrough*)
   | check_command_i s (HAVE (name, goal)) =
       let val ctxt = Minilang.context_of s
        in HAVE (name, read_prop ctxt goal)
@@ -728,7 +739,7 @@ fun check_command_i s (SIMPLIFY (facts, use_sys, prems, simp_goal, bindings_opt)
       let val ctxt = Minilang.context_of s
        in SUFFICES (read_prop ctxt goal)
       end
-  | check_command_i _ (OBTAIN vc) = OBTAIN vc
+  | check_command_i _ (OBTAIN vc) = OBTAIN vc (*name_opt * string passthrough*)
   | check_command_i _ (SORRY vars) = SORRY vars
   | check_command_i _ (HAMMER facts) = HAMMER (map read_fact facts)
   | check_command_i _ (INTRO opt_bindings) = INTRO opt_bindings
