@@ -2,7 +2,7 @@ from time import time
 from datetime import datetime
 from pathlib import Path
 from .helper import split_id_into_segs, cat_segs_into_id, incr_id_major, incr_id_minor, MyIO
-from typing import Any, Iterable, NamedTuple, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired
+from typing import Any, Iterable, NamedTuple, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired, Annotated
 from Isabelle_RPC_Host import Connection, IsabelleError
 from enum import Enum
 from IsaREPL import Client as IsaREPL
@@ -257,6 +257,13 @@ class NodeNotFound(OprError):
         self.id = id
     def __str__(self) -> str:
         return f"Step with id {self.id} is not found"
+
+class InvalidAnswer(OprError):
+    """Raised when user provides an invalid answer to an interaction."""
+    def __init__(self, reason: str):
+        self.reason = reason
+    def __str__(self) -> str:
+        return f"Invalid answer: {self.reason}"
 
 class CannotFill(OprError):
     pass
@@ -887,10 +894,12 @@ class Minilang_State:
         except IsabelleError as e:
             raise
 
-    def potential_defs_of(self, term: str) -> list[str]:
+    def potential_defs_of(self, term: str) -> list[tuple[str, str]]:
         """
         Get potential definitions for a term via Potential_Defs_Of RPC.
-        Returns list of definition theorem propositions as strings.
+        Returns list of (name, proposition) pairs where:
+        - name: theorem binding/reference name
+        - proposition: theorem proposition as string
         """
         self.connection.write((8, (self.name, term)))
         result = self.connection.read()
@@ -1936,7 +1945,13 @@ class CaseSplit_Like(SubgoalMaker_NoTailEnder):
 ### Interaction
 
 # abstract base class
-type answer = int
+# Invariant: list is sorted and all elements are distinct
+type answer = Annotated[list[int], "sorted and all elements are distinct"]
+
+def normalize_answer(indexes: list[int]) -> answer:
+    """Ensure answer satisfies invariant: sorted and all elements are distinct."""
+    return sorted(set(indexes))
+
 class Interaction:
     def prompt(self, indent: int, file: MyIO) -> None:
         raise NotImplementedError("`prompt` must be implemented by subclass")
@@ -2051,17 +2066,26 @@ class Witness(Leaf):
 #### Unfold
 
 class Interaction_ChooseDef(Interaction):
-    def __init__(self, constant: str, candidate_defs: list[term], kontinue: Callable[[answer], gen_node]):
-        self.constant = constant
+    def __init__(self, constants: list[str], candidate_defs: list[tuple[str, str, str]], kontinue: Callable[[answer], gen_node]):
+        """
+        Args:
+            constants: List of constants being unfolded
+            candidate_defs: List of (constant, fact_name, proposition) tuples
+            kontinue: Callback accepting list of selected indexes
+        """
+        self.constants = constants
         self.candidate_defs = candidate_defs
         self.kontinue = kontinue
     def prompt(self, indent: int, file: MyIO) -> None:
         print_indent(indent, file)
-        file.write(f"Constant {self.constant} is associated with multiple definitions:\n")
-        for i, def_ in enumerate(self.candidate_defs):
+        if len(self.constants) == 1:
+            file.write(f"Multiple definitions found for {self.constants[0]}:\n")
+        else:
+            file.write(f"Multiple definitions found for constants {', '.join(self.constants)}:\n")
+        for i, (_, _, proposition) in enumerate(self.candidate_defs):
             print_indent(indent+1, file)
-            file.write(f"- {i}: {def_}\n")
-        file.write("Which one to use in the unfolding? Call the `answer` tool to answer or cancel the operation.")
+            file.write(f"- {i}: {proposition}\n")
+        file.write("Select definition(s) to use in unfolding. Call the `answer` tool with indexes or cancel the operation.\n")
     def answer(self, answer: answer) -> gen_node:
         return self.kontinue(answer)
 
@@ -2109,53 +2133,62 @@ class Unfold(Leaf):
         """
         Interactive generation that queries RPC for potential definitions.
         Raises Interaction_ChooseDef if multiple definitions exist.
-        Currently supports only single target.
+        Supports multiple targets.
         """
-        if len(arg["targets"]) != 1:
-            raise ValueError("Interactive unfold currently supports only single target")
-
-        target = arg["targets"][0]
+        targets = arg["targets"]
 
         def mk(config: NodeConfig) -> 'Unfold':
             ml_state = config.ml_state
 
-            # Query potential definitions via RPC
-            defs = ml_state.potential_defs_of(target)
+            # Query potential definitions for all targets via RPC
+            # Build flat list of (constant, fact_name, proposition) tuples
+            all_defs: list[tuple[str, str, str]] = []
+            for target in targets:
+                # Returns list of (name, proposition) pairs
+                defs = ml_state.potential_defs_of(target)
+                for fact_name, proposition in defs:
+                    all_defs.append((target, fact_name, proposition))
 
-            if len(defs) == 0:
-                raise GenNode_Error(f"No definitions found for: {target}")
+            if len(all_defs) == 0:
+                raise GenNode_Error(f"No definitions found for: {', '.join(targets)}")
 
-            elif len(defs) == 1:
-                # Single definition - use it
-                fact_ref = target + "_def"
+            elif len(all_defs) == 1:
+                # Single definition - use it automatically
+                _, fact_name, _ = all_defs[0]
                 arg_internal: Unfold_ToolArg_internal = {
                     "thought": arg["thought"],
                     "targets": arg["targets"],
-                    "fact_refs": [fact_ref]
+                    "fact_refs": [fact_name]
                 }
                 return Unfold(config, arg_internal)
 
             else:
                 # Multiple definitions - need interaction
-                def kontinue(answer: Interaction_ChooseDef.Answer) -> gen_node:
-                    selected_index = answer["index"]
-                    selected_def = defs[selected_index]
-                    # Convert selected def to FactRef
-                    # For now, use simplified naming
-                    fact_ref = target + "_def"
+                def kontinue(selected_indexes: answer) -> gen_node:
+                    # Invariant: selected_indexes is already sorted with distinct elements
+                    # Validate all indexes are in valid range
+                    for idx in selected_indexes:
+                        if not isinstance(idx, int):
+                            raise InvalidAnswer(f"Expected integer indexes, got {type(idx).__name__}")
+                        if idx < 0 or idx >= len(all_defs):
+                            raise InvalidAnswer(f"Index {idx} out of range [0, {len(all_defs)-1}]")
+
+                    # Map selected indexes to fact names
+                    fact_refs = [all_defs[idx][1] for idx in selected_indexes]
 
                     def final_mk(cfg: NodeConfig) -> 'Unfold':
                         arg_internal: Unfold_ToolArg_internal = {
                             "thought": arg["thought"],
                             "targets": arg["targets"],
-                            "fact_refs": [fact_ref]
+                            "fact_refs": fact_refs
                         }
                         return Unfold(cfg, arg_internal)
 
                     return final_mk
 
+                # Create interaction with flat list
                 raise RaiseInteraction(
-                    Interaction_ChooseDef(target, defs, kontinue)
+                    Interaction_ChooseDef(targets, all_defs, kontinue)
                 )
 
         return mk

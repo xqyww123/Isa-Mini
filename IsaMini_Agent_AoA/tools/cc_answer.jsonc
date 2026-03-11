@@ -1,10 +1,13 @@
 {
   "type": "object",
   "properties": {
-    "index": {
-      "type": "integer",
-      "description": "The index of the selected option"
+    "indexes": {
+      "type": "array",
+      "items": {
+        "type": "integer"
+      },
+      "description": "The indexes of the selected options (can be empty for no selection)"
     }
   },
-  "required": ["index"]
+  "required": ["indexes"]
 }

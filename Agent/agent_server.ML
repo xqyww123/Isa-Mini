@@ -388,8 +388,8 @@ fun callback (cfg:cfg) (states:states Unsynchronized.ref) (conn:connection) =
                                  | _ => raise ERR ["term_head_not_const"]
                 val defs = Minilang.potential_defs_of_const ctxt const_name
                 val SOT = MiniLang_Agent.string_of_term ctxt
-                val defs_as_strings = map (SOT o Thm.prop_of) defs
-             in write conn (packList packString) defs_as_strings
+                val defs_as_pairs = map (fn (name, thm) => (name, SOT (Thm.prop_of thm))) defs
+             in write conn (packList (packPair (packString, packString))) defs_as_pairs
             end handle ERROR msg =>
                 write_error' conn packUnit {message=["Error", msg], errobj=()}
               | TERM (msg, _) =>

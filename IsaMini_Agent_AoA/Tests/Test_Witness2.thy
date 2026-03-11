@@ -5,6 +5,6 @@ begin
 declare [[agent_AoA_driver="test.Witness2"]]
 
 lemma t2: "P = Q" for P :: bool
-  by  AgentAoA
+  by   AgentAoA
 
 end

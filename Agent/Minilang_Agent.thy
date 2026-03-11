@@ -16,7 +16,48 @@ ML_file "tactic.ML.old" *)
 method_setup AgentAoA = \<open>
   Scan.succeed (K MiniLang_Agent_AoA.method)
 \<close>
-ML \<open>Term.dummyT\<close>
+
+lemma x: "2 = 1 + (1::nat)" by auto
+ML \<open>BNF_Util.meta_mp\<close>
+ML \<open>Thm.derivation_id (Thm.transfer @{theory} BNF_Util.meta_mp)\<close>
+
+
+ML \<open>
+fun print_const_location thy const_name =
+    let
+      val space = Consts.space_of (Sign.consts_of thy);
+      val entry = Name_Space.the_entry space const_name;
+      val pos = #pos entry;
+      val thy_name = #theory_long_name entry;
+    in
+      "Constant " ^ quote const_name ^
+      " defined in theory " ^ thy_name ^
+      REPL.trim_makrup (Position.here_strs pos |> fst)  (* Handles both file and ID positions *)
+    end
+\<close>
+
+
+ML \<open>
+let val facts = Proof_Context.facts_of \<^context>
+    val full_name = Facts.intern facts "exIaaa"
+ in Facts.lookup (Context.Proof \<^context>) facts full_name
+end\<close>
+
+consts XXX :: int
+
+
+ML \<open>print_const_location @{theory} \<^const_name>\<open>NO_SIMP\<close>\<close>
+
+term Nil
+ML \<open>
+local
+  val consts = Sign.consts_of @{theory};  (* Get consts from theory *)
+  val space = Consts.space_of consts;  (* Get name space *)
+  val entry = Name_Space.the_entry space \<^const_name>\<open>NO_SIMP\<close>  (* Get entry *)
+in val pos = #pos entry |> Position.file_of
+end
+\<close>
+
 
 (*
 theorem sqrt2_not_rational:

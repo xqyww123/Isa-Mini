@@ -49,10 +49,6 @@ attribute_setup "where" = \<open>let
             uncurry (Minilang_Aux.xwhere (Context.proof_of context)) args))
  end \<close> "positional instantiation of theorem"
 
-ML \<open>
-let val facts = Proof_Context.facts_of \<^context>
-    val full_name = Facts.intern facts "exIaaa"
- in Facts.lookup (Context.Proof \<^context>) facts full_name
-end\<close>
+
 
 end

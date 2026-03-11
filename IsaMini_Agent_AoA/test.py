@@ -315,34 +315,30 @@ def _test_Witness2(root: Root, file: MyIO):
     file.write(f"The excepted eception not happen")
     return
 
-@test("Witness3", "Test_Witness3.thy", 8)
-def _test_Witness3(root: Root, file: MyIO):
+@test("Unfold1", "Test_Unfold1.thy", 15)
+def _test_Witness1(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
 
-    # Use Witness to provide first witness (3) for x
-    root.fill("1", Witness.gen({
-        "thought": "Provide 3 as witness for x",
-        "witness": "3"
+    # Use Witness to provide a witness for the existential goal
+    root.fill("1", Unfold.gen({
+        "thought": "Unfold the goal",
+        "targets": ["XXX"],
+        "fact_refs": ["XXX_def"]
     }))
-    print_header("After First Witness", file)
+    print_header("After Unfold", file)
     root.print(0, file)
-
-    # Use Witness to provide second witness (7) for y
-    root.fill("1.1", Witness.gen({
-        "thought": "Provide 7 as witness for y, since 3 + 7 = 10",
-        "witness": "7"
-    }))
-    print_header("After Second Witness", file)
-    root.print(0, file)
-
-    # Prove the remaining goal (3 + 7 = 10) using Obvious
-    root.fill("1.1.1", Obvious.gen({
-        "thought": "Obviously 3 + 7 equals 10",
-        "facts": []
-    }))
-    print_header("After Obvious", file)
-    root.print(0, file)
+    try:
+        root.amend("1", Unfold.interactive_gen({
+            "thought": "Unfold the goal",
+            "targets": ["XXX"],
+        }))
+    except RaiseInteraction as e:
+        print_header("Interaction Prompt", file)
+        e.interaction.prompt(0, file)
+        root.amend("1", e.interaction.answer([1]))
+        print_header("After Answer", file)
+        root.print(0, file)
 
     unfinished_nodes = set()
     root.unfinished_nodes(unfinished_nodes)

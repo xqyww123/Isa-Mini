@@ -30,6 +30,11 @@ _cc_answer_path = os.path.join(os.path.dirname(_current_file), "tools", "cc_answ
 with open(_cc_answer_path, "r", encoding="utf-8") as _f:
     _cc_answer_schema = jsoncomment.JsonComment().load(_f)
 
+# Load schema for cancel tool
+_cc_cancel_path = os.path.join(os.path.dirname(_current_file), "tools", "cc_cancel.jsonc")
+with open(_cc_cancel_path, "r", encoding="utf-8") as _f:
+    _cc_cancel_schema = jsoncomment.JsonComment().load(_f)
+
 def _execute_proof_action(
     session: 'ClaudeCode',
     action: str,
@@ -104,9 +109,9 @@ async def _edit_tool(args: ToolCall_arg) -> ToolCall_ret:
     )
     return _mk_ret(response)
 
-@tool("answer", "Answer a pending interaction question with a choice index", input_schema=_cc_answer_schema)
+@tool("answer", "Answer a pending interaction question with choice indexes", input_schema=_cc_answer_schema)
 async def _answer_tool(args: ToolCall_arg) -> ToolCall_ret:
-    """Answer a pending interaction with the selected index."""
+    """Answer a pending interaction with the selected indexes."""
     from .model import the_session
     session = the_session()
     if not isinstance(session, ClaudeCode):
@@ -122,8 +127,11 @@ async def _answer_tool(args: ToolCall_arg) -> ToolCall_ret:
         session.log_tool_response("mcp__proof__answer", f"ERROR: {error_msg}")
         return _mk_ret(error_msg)
 
-    # Call interaction.answer with the index
-    gen_node = session.interaction.answer(args["index"])
+    # Normalize indexes to satisfy invariant: sorted and all elements distinct
+    normalized_indexes = normalize_answer(args["indexes"])
+
+    # Call interaction.answer with the normalized indexes
+    gen_node = session.interaction.answer(normalized_indexes)
 
     # Resume the suspended operation
     suspended = session.suspended_opr  # type: ignore[attr-defined]
@@ -134,13 +142,37 @@ async def _answer_tool(args: ToolCall_arg) -> ToolCall_ret:
 
     # Clear interaction state BEFORE executing (allows nested interactions)
     session.interaction = None
-    session.suspended_opr = None
+    session.suspended_opr = None  # type: ignore[attr-defined]
 
     response = _execute_proof_action(
         session, action, step, gen_node,
         "mcp__proof__answer", "after_answer"
     )
 
+    return _mk_ret(response)
+
+@tool("cancel", "Cancel the pending interaction and abort the current operation", input_schema=_cc_cancel_schema)
+async def _cancel_tool(args: ToolCall_arg) -> ToolCall_ret:
+    """Cancel a pending interaction."""
+    from .model import the_session
+    session = the_session()
+    if not isinstance(session, ClaudeCode):
+        raise InternalError(f"Expected ClaudeCode session, got {type(session)}")
+    session : ClaudeCode = cast(ClaudeCode, session)
+
+    session.log_tool_call("mcp__proof__cancel", args)
+
+    if session.interaction is None:
+        error_msg = "No pending interaction to cancel"
+        session.log_tool_response("mcp__proof__cancel", f"ERROR: {error_msg}")
+        return _mk_ret(error_msg)
+
+    # Clear interaction state
+    session.interaction = None
+    session.suspended_opr = None  # type: ignore[attr-defined]
+
+    response = "Interaction cancelled. The pending operation has been aborted."
+    session.log_tool_response("mcp__proof__cancel", response)
     return _mk_ret(response)
 
 @agent_driver("ClaudeCode")
@@ -163,6 +195,7 @@ class ClaudeCode(Session):
         'mcp__proof__test_hello',
         'mcp__proof__edit',
         'mcp__proof__answer',
+        'mcp__proof__cancel',
         'ToolSearch'
     ]
     TOOL_TO_CALL = [
@@ -183,7 +216,7 @@ class ClaudeCode(Session):
         if not os.access(self.working_dir, os.R_OK | os.W_OK):
             raise InternalError(f"The working directory {self.working_dir} is not readable and writable. Please ensure the temporary directory is writable.")
         self.YAML_path = os.path.join(self.working_dir, "proof.yaml")
-        self.mcp = create_sdk_mcp_server("proof", tools=[_edit_tool, _answer_tool])
+        self.mcp = create_sdk_mcp_server("proof", tools=[_edit_tool, _answer_tool, _cancel_tool])
         self.options = ClaudeAgentOptions(
             cwd=self.working_dir,
             permission_mode="default",
@@ -261,25 +294,25 @@ class ClaudeCode(Session):
         # 2. Check proof MCP tool interaction state
         if tool.startswith("mcp__proof__"):
             if self.interaction is not None:
-                # There's a pending interaction - only allow answer tool
-                if tool != "mcp__proof__answer":
+                # There's a pending interaction - only allow answer and cancel tools
+                if tool not in ("mcp__proof__answer", "mcp__proof__cancel"):
                     return {
                         "continue_": False,
                         "hookSpecificOutput": {
                             "hookEventName": "PreToolUse",
                             "permissionDecision": "deny",
-                            "permissionDecisionReason": "There is a pending interaction that must be answered first. Use the mcp__proof__answer tool to respond.",
+                            "permissionDecisionReason": "There is a pending interaction that must be answered or cancelled first. Use the mcp__proof__answer or mcp__proof__cancel tool.",
                         },
                     }
             else:
-                # No pending interaction - reject answer tool
-                if tool == "mcp__proof__answer":
+                # No pending interaction - reject answer and cancel tools
+                if tool in ("mcp__proof__answer", "mcp__proof__cancel"):
                     return {
                         "continue_": False,
                         "hookSpecificOutput": {
                             "hookEventName": "PreToolUse",
                             "permissionDecision": "deny",
-                            "permissionDecisionReason": "No pending interaction to answer. The answer tool can only be used when there is an active interaction.",
+                            "permissionDecisionReason": "No pending interaction. The answer and cancel tools can only be used when there is an active interaction.",
                         },
                     }
 

@@ -103,7 +103,7 @@ val SIMPLIFY_GOAL_AND_PREMISES : thm list -> bool -> string list -> bool
 val SIMPLIFY_GOAL_AND_PREMISES'' : fact list -> bool -> string list -> bool -> operation
 val SIMPLIFY_CMD : command
 
-val potential_defs_of_const : Proof.context -> string -> thm list
+val potential_defs_of_const : Proof.context -> string -> (string * thm) list
 
 val UNFOLD : thm list -> operation
 val UNFOLD_CMD : command
@@ -1378,8 +1378,12 @@ fun potential_defs_of_const ctxt const_name =
       end
 
     fun try_suffix suffix =
-      (try (Proof_Context.get_thms ctxt) (base_name ^ suffix))
-      |> the_default []
+      let
+        val name = base_name ^ suffix
+        val thms = (try (Proof_Context.get_thms ctxt) name) |> the_default []
+      in
+        map (fn thm => (name, thm)) thms
+      end
 
     val named_defs = maps try_suffix suffixes
 
@@ -1419,7 +1423,7 @@ fun potential_defs_of_const ctxt const_name =
                 val (_, results) =
                   Find_Theorems.find_theorems ctxt NONE NONE true criterion
               in
-                map (fn (_, thm) => thm) results
+                map (fn (fact_ref, thm) => (Facts.string_of_ref fact_ref, thm)) results
               end
               handle ERROR _ => []
           in
@@ -1427,10 +1431,10 @@ fun potential_defs_of_const ctxt const_name =
           end
       | NONE => []
 
-    val all_defs = filter is_definitional_eq (named_defs @ search_results)
-    val normalized_defs = map normalize_thm all_defs
+    val all_defs = filter (fn (_, thm) => is_definitional_eq thm) (named_defs @ search_results)
+    val normalized_defs = map (fn (name, thm) => (name, normalize_thm thm)) all_defs
   in
-    distinct Thm.eq_thm_prop normalized_defs
+    distinct (Thm.eq_thm_prop o apply2 snd) normalized_defs
   end
 
 fun UNFOLD' prep_thms raw_defs (ctxt, HHF (st, items) :: S) =
