@@ -14,6 +14,7 @@ from claude_agent_sdk.types import (
     PreToolUseHookInput,
 )
 from io import StringIO
+import Isabelle_Semantic_Embedding
 
 type ToolCall_ret = dict[str, Any]
 def _mk_ret(str: str) -> ToolCall_ret:

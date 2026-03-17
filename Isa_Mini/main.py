@@ -6,7 +6,6 @@ import readline
 import rich
 from rich.console import Console
 
-import IsaREPL
 from Isa_Mini import Mini
 import re
 import json
