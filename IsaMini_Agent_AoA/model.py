@@ -891,14 +891,12 @@ class Minilang_State:
         except IsabelleError as e:
             raise
 
-    def potential_defs_of(self, term: str) -> list[tuple[str, str]]:
+    def potential_defs_of(self, terms: list[str]) -> list[tuple[str, str]]:
         """
-        Get potential definitions for a term via Potential_Defs_Of RPC.
-        Returns list of (name, proposition) pairs where:
-        - name: theorem binding/reference name
-        - proposition: theorem proposition as string
+        Get potential definitions for terms via Potential_Defs_Of RPC.
+        Returns list of (fact_name, proposition) pairs, deduplicated by proposition.
         """
-        result = self.connection.callback("IsaMini.potential_defs_of", (self.name, term))
+        result = self.connection.callback("IsaMini.potential_defs_of", (self.name, terms))
         return result
 
 ### The Abstract Model
@@ -2067,11 +2065,11 @@ class Witness(Leaf):
 #### Unfold
 
 class Interaction_ChooseDef(Interaction):
-    def __init__(self, constants: list[str], candidate_defs: list[tuple[str, str, str]], kontinue: Callable[[answer], gen_node]):
+    def __init__(self, constants: list[str], candidate_defs: list[tuple[str, str]], kontinue: Callable[[answer], gen_node]):
         """
         Args:
             constants: List of constants being unfolded
-            candidate_defs: List of (constant, fact_name, proposition) tuples
+            candidate_defs: List of (fact_name, proposition) pairs
             kontinue: Callback accepting list of selected indexes
         """
         self.constants = constants
@@ -2083,7 +2081,7 @@ class Interaction_ChooseDef(Interaction):
             file.write(f"Multiple definitions found for {self.constants[0]}:\n")
         else:
             file.write(f"Multiple definitions found for constants {', '.join(self.constants)}:\n")
-        for i, (_, _, proposition) in enumerate(self.candidate_defs):
+        for i, (_, proposition) in enumerate(self.candidate_defs):
             print_indent(indent+1, file)
             file.write(f"- {i}: {proposition}\n")
         file.write("Select definition(s) to use in unfolding. Call the `answer` tool with indexes or cancel the operation.\n")
@@ -2142,20 +2140,15 @@ class Unfold(Leaf):
             ml_state = config.ml_state
 
             # Query potential definitions for all targets via RPC
-            # Build flat list of (constant, fact_name, proposition) tuples
-            all_defs: list[tuple[str, str, str]] = []
-            for target in targets:
-                # Returns list of (name, proposition) pairs
-                defs = ml_state.potential_defs_of(target)
-                for fact_name, proposition in defs:
-                    all_defs.append((target, fact_name, proposition))
+            # Returns list of (fact_name, proposition) pairs, deduplicated
+            all_defs = ml_state.potential_defs_of(targets)
 
             if len(all_defs) == 0:
                 raise GenNode_Error(f"No definitions found for: {', '.join(targets)}")
 
             elif len(all_defs) == 1:
                 # Single definition - use it automatically
-                _, fact_name, _ = all_defs[0]
+                fact_name, _ = all_defs[0]
                 arg_internal: Unfold_ToolArg_internal = {
                     "thought": arg["thought"],
                     "targets": arg["targets"],
@@ -2175,7 +2168,7 @@ class Unfold(Leaf):
                             raise InvalidAnswer(f"Index {idx} out of range [0, {len(all_defs)-1}]")
 
                     # Map selected indexes to fact names
-                    fact_refs = [all_defs[idx][1] for idx in selected_indexes]
+                    fact_refs = [all_defs[idx][0] for idx in selected_indexes]
 
                     def final_mk(cfg: NodeConfig) -> 'Unfold':
                         arg_internal: Unfold_ToolArg_internal = {

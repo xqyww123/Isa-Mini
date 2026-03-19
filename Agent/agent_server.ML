@@ -364,18 +364,24 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
 
       fun potential_defs_callback () = {
         name = "IsaMini.potential_defs_of",
-        arg_schema = unpackPair (unpackString, unpackString),
+        arg_schema = unpackPair (unpackString, unpackList unpackString),
         ret_schema = packList (packPair (packString, packString)),
-        function = (fn (state_id, term) =>
+        function = (fn (state_id, terms) =>
           let val s0 = get_state state_id
               val ctxt = Minilang.context_of s0
-              val parsed_term = MiniLang_Agent.read_term ctxt term
-              val const_name = case Term.head_of parsed_term of
-                                 Const (name, _) => name
-                               | _ => error "term_head_not_const"
-              val defs = Minilang.potential_defs_of_const ctxt const_name
               val SOT = MiniLang_Agent.string_of_term ctxt
-           in map (fn (name, thm) => (name, SOT (Thm.prop_of thm))) defs
+              val results = List.concat (map (fn term =>
+                let val parsed_term = MiniLang_Agent.read_term ctxt term
+                    val const_name = case Term.head_of parsed_term of
+                                       Const (name, _) => name
+                                     | _ => error "term_head_not_const"
+                    val defs = Minilang.potential_defs_of_const ctxt const_name
+                 in map (fn (name, thm) => (name, SOT (Thm.prop_of thm))) defs
+                end) terms)
+              val (_, deduped) = fold (fn (pair as (_, prop)) => fn (seen, acc) =>
+                if member (op =) seen prop then (seen, acc)
+                else (prop :: seen, acc @ [pair])) results ([], [])
+           in deduped
           end handle ERROR msg => error (String.concat ["Error: ", msg])
             | TERM (msg, _) => error (String.concat ["Error: ", msg])
             | TYPE (msg, _, _) => error (String.concat ["Error: ", msg])),
