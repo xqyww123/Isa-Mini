@@ -306,7 +306,13 @@
         },
         "thought": { "$ref": "#/$defs/Thought" },
         // TODO: add common rules like proof by contradiction, proving equality by antisymmetry, etc.
-        "rule": { "$ref": "#/$defs/Fact" }
+        "rule": {
+          "anyOf": [
+            { "type": "string", "enum": [ "proof by contradiction", "proving equality by antisymmetry" ] },
+            { "$ref": "#/$defs/FactByName" },
+            { "$ref": "#/$defs/FactByExpr" }
+          ]
+        }
       },
       "required": [
         "operation",

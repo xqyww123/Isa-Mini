@@ -4,6 +4,7 @@ All user-facing messages, error messages, and prompt texts are defined here.
 """
 
 from typing import Any
+from . import model
 from .model import Node, Root
 from io import StringIO
 from .helper import MyIO
@@ -23,8 +24,23 @@ def filled_step_message(step: str, root: Root, node: Node) -> str:
     """Message returned when a step is successfully filled."""
     file = MyIO(StringIO())
     file.write(f"Successfully filled step {step}:\n")
-    node.print(1, file)
-    file.write("Outline:\n")
+    node.print(1, file, update_line=False)
+    parent = node.parent
+    if parent is not None:
+        goal_and_to_file = parent.should_I_show_pending_goal()
+        goal_id = parent.id_of_goal()
+        if goal_and_to_file is not None:
+            goal, step_to_fill = goal_and_to_file
+            if goal_id is None:
+                file.write(f"Pending goal:\n")
+            else:
+                file.write(f"Pending goal of {goal_id}:\n")
+            model.print_goal(goal, 1, False, file, parent._ctxt_of_filling())
+            file.write(f"Call command `edit` with action `fill` and target step `{step_to_fill}`"
+                " to provide the proof.\n")
+        elif goal_id is not None:
+            file.write(f"All proof goals of {goal_id} are completed.\n")
+    file.write("Overall outline:\n")
     root.quickview(1, file)
     root._print_all_warnings(file)
     return file.getvalue()

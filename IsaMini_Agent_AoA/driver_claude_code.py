@@ -74,6 +74,7 @@ def _execute_proof_action(
         e.interaction.prompt(0, MyIO(buffer))
         session.interaction = e.interaction
         session.suspended_opr = (action, step)  # type: ignore[attr-defined]
+        session.log_interaction(tool_name, buffer.getvalue())
         return buffer.getvalue()
 
     except AoA_Error as e:
@@ -81,12 +82,12 @@ def _execute_proof_action(
         session.log_tool_response(tool_name, f"ERROR: {error_msg}")
         return error_msg
 
-# Simple test tool with minimal schema for debugging
-@tool("test_hello", "A simple test tool to verify MCP server works", {"name": {"type": "string"}})
-async def _test_tool(args: ToolCall_arg) -> ToolCall_ret:
-    """Simple test tool to verify MCP server is discoverable."""
-    name = args.get("name", "World")
-    return {"content": [{"type": "text", "text": f"Hello, {name}! MCP server is working!"}]}
+# # Simple test tool with minimal schema for debugging
+# @tool("test_hello", "A simple test tool to verify MCP server works", {"name": {"type": "string"}})
+# async def _test_tool(args: ToolCall_arg) -> ToolCall_ret:
+#     """Simple test tool to verify MCP server is discoverable."""
+#     name = args.get("name", "World")
+#     return {"content": [{"type": "text", "text": f"Hello, {name}! MCP server is working!"}]}
 
 @tool("edit", "Edit the proof.yaml file", input_schema=_cc_edit_schema)
 async def _edit_tool(args: ToolCall_arg) -> ToolCall_ret:
@@ -110,7 +111,7 @@ async def _edit_tool(args: ToolCall_arg) -> ToolCall_ret:
     )
     return _mk_ret(response)
 
-@tool("answer", "Answer a pending interaction question with choice indexes", input_schema=_cc_answer_schema)
+@tool("answer", "Answer a pending question", input_schema=_cc_answer_schema)
 async def _answer_tool(args: ToolCall_arg) -> ToolCall_ret:
     """Answer a pending interaction with the selected indexes."""
     from .model import the_session
@@ -193,7 +194,6 @@ class ClaudeCode(Session):
         'WebSearch',
         'ExitPlanMode',
         'MCPSearch',
-        'mcp__proof__test_hello',
         'mcp__proof__edit',
         'mcp__proof__answer',
         'mcp__proof__cancel',
@@ -236,7 +236,7 @@ class ClaudeCode(Session):
     def initialize(self, root: Root):
         super().initialize(root)
         with open(self.YAML_path, "w", encoding="utf-8") as f:
-            root.print(0, MyIO(f))
+            root.print(0, MyIO(f), update_line=True)
 
     def run(self):
         asyncio.run(self._run())
@@ -422,4 +422,4 @@ class ClaudeCode(Session):
 
     def refresh_YAML(self):
         with open(self.YAML_path, 'w') as f:
-            self.root.print(0, MyIO(f))
+            self.root.print(0, MyIO(f), update_line=True)

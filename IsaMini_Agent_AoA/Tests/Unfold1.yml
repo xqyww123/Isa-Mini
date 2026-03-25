@@ -27,7 +27,7 @@ Interaction Prompt
 Multiple definitions found for XXX:
   - 0: Test_Unfold1.XXX ?a ?b = ?a + ?b
   - 1: Test_Unfold1.XXX ?a ?b = ?b + ?a
-Select definition(s) to use in unfolding. Call the `answer` tool with indexes or cancel the operation.
+Select definition(s) to use in unfolding. Call the `answer` tool with indexes or call the `cancel` tool to cancel the operation.
 --------------------------------------------------
 After Answer
 --------------------------------------------------

@@ -4,30 +4,77 @@ from IsaREPL import REPLFail
 from typing import Any, NamedTuple, Sequence, TypedDict, Callable, TextIO, cast
 from . import model
 from .model import *
+from abc import ABC, abstractmethod
+import io
+import tempfile
+import subprocess
+import sys
 
-class TestCase(NamedTuple):
-    name: str
-    opr: Callable[[Root, MyIO], None]
-    file: str
-    line: int
+class TestFailed(Exception):
+    pass
 
-    def expected_yaml(self) -> str:
-        correct_yaml_path = os.path.join(os.path.dirname(__file__), 'Tests', self.name + '.yml')
-        if os.path.isfile(correct_yaml_path):
-            with open(correct_yaml_path, 'r') as f:
-                return f.read()
+class TestCase(ABC):
+    def __init__(self, name : str, file: str, line: int):
+        self.name = name
+        self.file = file
+        self.line = line
+    @abstractmethod
+    def run(self, connection: Connection, log_dir: str, global_context: Context, ptree: ML_ProofTree) -> Root:
+        raise NotImplementedError("Subclass must implement run method")
+    
+class ModelTestCase(TestCase):
+    def __init__(self, name : str, file: str, line: int, opr: Callable[[Root, MyIO], None]):
+        super().__init__(name, file, line)
+        self.opr = opr
+    def run(self, connection: Connection, log_dir: str, global_context: Context, ptree: ML_ProofTree) -> Root:
+        def show_colored_diff(actual: str, expected_path: str, test_name: str):
+            """Write actual to a temp file and display colored diff against expected."""
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.actual.yaml', delete=False) as actual_file:
+                actual_file.write(actual)
+                actual_path = actual_file.name
+            try:
+                diff_result = subprocess.run(
+                    ['diff', '--color=always', '-u', expected_path, actual_path],
+                    capture_output=True,
+                    text=True
+                )
+                print(f"\n=== Diff for test '{test_name}' ===", file=sys.stderr)
+                print(diff_result.stdout, file=sys.stderr)
+                if diff_result.stderr:
+                    print(diff_result.stderr, file=sys.stderr)
+            finally:
+                os.unlink(actual_path)
+        with Session(connection.server.logger, log_dir) as session:
+            root = Root((global_context, ptree), connection)
+            session.initialize(root)
+            buffer = io.StringIO()
+            self.opr(root, MyIO(buffer))
+            correct_yaml_path = self.correct_yaml_path()
+            if correct_yaml_path is not None:
+                with open(correct_yaml_path, 'r') as f:
+                    if buffer.getvalue() != f.read():
+                        show_colored_diff(buffer.getvalue(), correct_yaml_path, self.name)
+                        raise TestFailed(f"Test Faild on '{self.name}'")
+            else:
+                self.write_expected_yaml(buffer.getvalue())
+        return root
+
+    def correct_yaml_path(self) -> str | None:
+        path = os.path.join(os.path.dirname(__file__), 'Tests', self.name + '.yml')
+        if os.path.isfile(path):
+            return path
         else:
-            return ""
+            return None
+
     def write_expected_yaml(self, yaml: str):
         correct_yaml_path = os.path.join(os.path.dirname(__file__), 'Tests', self.name + '.yml')
         with open(correct_yaml_path, 'w') as f:
             f.write(yaml)
-    
 
 TESTS : dict[str, TestCase] = {}
-def test(name: str, file: str, line: int):
+def model_test(name: str, file: str, line: int):
     def decorator(func: Callable[[Root, MyIO], None]):
-        TESTS[name] = TestCase(name, func, file, line)
+        TESTS[name] = ModelTestCase(name, file, line, func)
         return func
     return decorator
 
@@ -58,7 +105,7 @@ def _test_sqrt2(root: Root, file: MyIO):
     print_header("Have", file)
     root.print(0, file)
 
-@test("Branch1", "Test_Branch.thy", 8)
+@model_test("Branch1", "Test_Branch.thy", 8)
 def _test_branch(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -73,7 +120,7 @@ def _test_branch(root: Root, file: MyIO):
     print_header("Branch", file)
     root.print(0, file)
 
-@test("EquivDerive", "Test003.thy", 8)
+@model_test("EquivDerive", "Test003.thy", 8)
 def _test_EquivDerive(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -84,7 +131,7 @@ def _test_EquivDerive(root: Root, file: MyIO):
     print_header("Inference Rule", file)
     root.print(0, file)
 
-@test("IntroConj", "Test003.thy", 8)
+@model_test("IntroConj", "Test003.thy", 8)
 def _test_IntroConj(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -95,7 +142,7 @@ def _test_IntroConj(root: Root, file: MyIO):
     print_header("Inference Rule", file)
     root.print(0, file)
 
-@test("IntroConj_short", "Test003.thy", 8)
+@model_test("IntroConj_short", "Test003.thy", 8)
 def _test_IntroConj_short(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -106,7 +153,7 @@ def _test_IntroConj_short(root: Root, file: MyIO):
     print_header("Inference Rule", file)
     root.print(0, file)
 
-@test("CaseSplit", "Test006.thy", 9)
+@model_test("CaseSplit", "Test006.thy", 9)
 def _test_CaseSplit(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -123,7 +170,7 @@ def _test_CaseSplit(root: Root, file: MyIO):
     print_header("Case Split", file)
     root.print(0, file)
 
-@test("Induction", "Test006.thy", 9)
+@model_test("Induction", "Test006.thy", 9)
 def _test_Induction(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -151,7 +198,7 @@ def _test_Induction(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
 
-@test("Suffices", "Test_Suffices.thy", 9)
+@model_test("Suffices", "Test_Suffices.thy", 9)
 def _test_Suffices(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -183,7 +230,7 @@ def _test_Suffices(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
 
-@test("Rewrite1", "Test_Rewrite.thy", 12)
+@model_test("Rewrite1", "Test_Rewrite.thy", 12)
 def _test_Rewrite1(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -202,7 +249,7 @@ def _test_Rewrite1(root: Root, file: MyIO):
     print_header("After Rename Fact", file)
     root.print(0, file)
 
-@test("Rewrite2", "Test_Rewrite2.thy", 12)
+@model_test("Rewrite2", "Test_Rewrite2.thy", 12)
 def _test_Rewrite2(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -224,7 +271,7 @@ def _test_Rewrite2(root: Root, file: MyIO):
     print_header("After Remove the Rewrite", file)
     root.print(0, file)
 
-@test("Rewrite3", "Test_Rewrite3.thy", 13)
+@model_test("Rewrite3", "Test_Rewrite3.thy", 13)
 def _test_Rewrite3(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -273,7 +320,7 @@ def _test_Rewrite3(root: Root, file: MyIO):
     print_header("After Amend Have", file)
     root.print(0, file)
 
-@test("Witness1", "Test_Witness.thy", 9)
+@model_test("Witness1", "Test_Witness.thy", 9)
 def _test_Witness1(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -298,7 +345,7 @@ def _test_Witness1(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
 
-@test("Witness2", "Test_Witness2.thy", 8)
+@model_test("Witness2", "Test_Witness2.thy", 8)
 def _test_Witness2(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -315,8 +362,8 @@ def _test_Witness2(root: Root, file: MyIO):
     file.write(f"The excepted eception not happen")
     return
 
-@test("Unfold1", "Test_Unfold1.thy", 15)
-def _test_Witness1(root: Root, file: MyIO):
+@model_test("Unfold1", "Test_Unfold1.thy", 15)
+def _test_Unfold1(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
 
@@ -343,6 +390,24 @@ def _test_Witness1(root: Root, file: MyIO):
     unfinished_nodes = set()
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+
+@model_test("ReferFactByExpr", "Test001.thy", 8)
+def _test_ReferFactByExpr(root: Root, file: MyIO):
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    fullname = root.ml_state.fetch_rule_fact({"refer_by": "name", "name": "notI"})
+    file.write(f"Fullname of notI: {fullname}\n")
+    fullname = root.ml_state.fetch_rule_fact({
+        "refer_by": "expr",
+        "english": "If P implies False, then P is not true",
+        "isabelle_expression": "(?P ⟹ False) ⟹ ¬ ?P",
+        "for_any": [{"name": "?P", "type": "bool"}]
+    })
+    file.write(f"Fullname of (?P ⟹ False) ⟹ ¬ ?P: {fullname}\n")
+    return
+
+# class TestCase_Interactive_Unfold:
+#     pass
 
 def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None):
     import msgpack as mp
