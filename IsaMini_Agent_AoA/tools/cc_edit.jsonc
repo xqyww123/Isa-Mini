@@ -12,7 +12,8 @@
         },
         "type": {
           "title": "Type",
-          "type": "string"
+          "type": "string",
+          "description": "An Isabelle type expression. Leave empty (\"\") if unsure"
         }
       },
       "required": [
@@ -26,11 +27,11 @@
       "properties": {
         "english": {
           "type": "string",
-          "description": "the natural language statement in English"
+          "description": "the statement in English"
         },
         "isabelle": {
           "type": "string",
-          "description": "the formal statement in Isabelle/HOL"
+          "description": "the corresponding Isabelle/HOL statement"
         }
       },
       "required": [
@@ -45,15 +46,15 @@
       "properties": {
         "english": {
           "type": "string",
-          "description": "the natural language statement in English"
+          "description": "the statement in English"
         },
         "isabelle": {
           "type": "string",
-          "description": "the formal statement in Isabelle/HOL"
+          "description": "the corresponding Isabelle/HOL statement"
         },
         "name": {
           "type": "string",
-          "description": "optional binding name for this fact"
+          "description": "optional binding name"
         }
       },
       "required": ["english", "isabelle"],
@@ -68,25 +69,24 @@
           "type": "string",
           "const": "name"
         },
-        "name": { "type": "string" }
+        "name": { 
+          "type": "string",
+          "description": "the exact name of the fact in Isabelle/HOL. If unsure, use FactByStatement instead"
+        }
       },
       "required": [ "refer_by", "name" ],
       "type": "object"
     },
-    "FactByExpr": {
-      "title": "FactByExpr",
+    "FactByStatement": {
+      "title": "FactByStatement",
       "additionalProperties": false,
       "properties": {
         "refer_by": {
           "type": "string",
-          "const": "expr"
+          "const": "statement"
         },
-        "english": {
-          "description": "natural language description of the fact",
-          "type": "string"
-        },
-        "isabelle_expression": {
-          "description": "Isabelle/HOL expression of the fact",
+        "statement": {
+          "description": "the statement of the fact in English",
           "type": "string"
         }
         // "for_any": {
@@ -103,15 +103,14 @@
       },
       "required": [
         "refer_by",
-        "english",
-        "isabelle_expression"
+        "statement"
       ],
       "type": "object"
     },
     "Fact": {
       "anyOf": [
         { "$ref": "#/$defs/FactByName" },
-        { "$ref": "#/$defs/FactByExpr" }
+        { "$ref": "#/$defs/FactByStatement" }
       ]
     },
 
@@ -306,13 +305,7 @@
         },
         "thought": { "$ref": "#/$defs/Thought" },
         // TODO: add common rules like proof by contradiction, proving equality by antisymmetry, etc.
-        "rule": {
-          "anyOf": [
-            { "type": "string", "enum": [ "proof by contradiction", "proving equality by antisymmetry" ] },
-            { "$ref": "#/$defs/FactByName" },
-            { "$ref": "#/$defs/FactByExpr" }
-          ]
-        }
+        "rule": {"$ref": "#/$defs/Fact" }
       },
       "required": [
         "operation",

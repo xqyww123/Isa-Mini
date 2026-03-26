@@ -155,7 +155,7 @@ fun string_of_term ctxt =
               |> Config.put Printer.show_brackets false
      in Object_Logic.atomize_term ctxt'
      #> Minilang.deconflict_bound_names ctxt'
-     #> REPL_Serialize.print_term printing_cfg ctxt'
+     #> RPC_Pretty.print_term printing_cfg ctxt'
     end
 
 fun string_of_type ctxt =
@@ -166,7 +166,7 @@ fun string_of_type ctxt =
               |> Config.put Printer.show_structs false
               |> Config.put Printer.show_question_marks true
               |> Config.put Printer.show_brackets false
-     in REPL_Serialize.print_typ printing_cfg ctxt'
+     in RPC_Pretty.print_typ printing_cfg ctxt'
     end
 
 fun string_of_type_full_sort ctxt =

@@ -391,19 +391,13 @@ def _test_Unfold1(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
 
-@model_test("ReferFactByExpr", "Test001.thy", 8)
-def _test_ReferFactByExpr(root: Root, file: MyIO):
+@model_test("ReferFactByStatement", "Test001.thy", 8)
+def _test_ReferFactByStatement(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     fullname = root.ml_state.fetch_rule_fact({"refer_by": "name", "name": "notI"})
     file.write(f"Fullname of notI: {fullname}\n")
-    fullname = root.ml_state.fetch_rule_fact({
-        "refer_by": "expr",
-        "english": "If P implies False, then P is not true",
-        "isabelle_expression": "(?P ⟹ False) ⟹ ¬ ?P",
-        "for_any": [{"name": "?P", "type": "bool"}]
-    })
-    file.write(f"Fullname of (?P ⟹ False) ⟹ ¬ ?P: {fullname}\n")
+    # FactByStatement search is not yet implemented; just test FactByName for now
     return
 
 # class TestCase_Interactive_Unfold:

@@ -15,6 +15,7 @@ from claude_agent_sdk.types import (
 )
 from io import StringIO
 import Isabelle_Semantic_Embedding
+from Isabelle_Semantic_Embedding.semantics import mk_query_by_name_tool, mk_query_by_position_tool
 
 type ToolCall_ret = dict[str, Any]
 def _mk_ret(str: str) -> ToolCall_ret:
@@ -197,6 +198,8 @@ class ClaudeCode(Session):
         'mcp__proof__edit',
         'mcp__proof__answer',
         'mcp__proof__cancel',
+        'mcp__proof__query_by_name',
+        'mcp__proof__query_by_position',
         'ToolSearch'
     ]
     TOOL_TO_CALL = [
@@ -205,7 +208,9 @@ class ClaudeCode(Session):
         'Skill',
         'Read',
         'Grep',
-        'mcp__proof__edit'
+        'mcp__proof__edit',
+        'mcp__proof__query_by_name',
+        'mcp__proof__query_by_position',
     ]
 
     working_dir: str
@@ -217,11 +222,23 @@ class ClaudeCode(Session):
         if not os.access(self.working_dir, os.R_OK | os.W_OK):
             raise InternalError(f"The working directory {self.working_dir} is not readable and writable. Please ensure the temporary directory is writable.")
         self.YAML_path = os.path.join(self.working_dir, "proof.yaml")
-        self.mcp = create_sdk_mcp_server("proof", tools=[_edit_tool, _answer_tool, _cancel_tool])
+        self.suspended_opr: tuple[str, str] | None = None
+
+    def initialize(self, root: Root):
+        super().initialize(root)
+        with open(self.YAML_path, "w", encoding="utf-8") as f:
+            root.print(0, MyIO(f), update_line=True)
+        # Build MCP tools — semantic query tools need the Isabelle connection
+        connection = root.ml_state.connection
+        tools = [
+            _edit_tool, _answer_tool, _cancel_tool,
+            mk_query_by_name_tool(connection, []),
+            mk_query_by_position_tool(connection, []),
+        ]
+        self.mcp = create_sdk_mcp_server("proof", tools=tools)
         self.options = ClaudeAgentOptions(
             cwd=self.working_dir,
             permission_mode="default",
-            # Include ToolSearch and basic tools needed for MCP discovery
             allowed_tools=self.TOOL_WHITELIST,
             mcp_servers={"proof": self.mcp},
             hooks={
@@ -230,13 +247,6 @@ class ClaudeCode(Session):
                 ]
             },
         )
-        self.suspended_opr: tuple[str, str] | None = None
-    #@tool("edit", "Edit the proof.yaml file", input_schema={"arg": str})
-
-    def initialize(self, root: Root):
-        super().initialize(root)
-        with open(self.YAML_path, "w", encoding="utf-8") as f:
-            root.print(0, MyIO(f), update_line=True)
 
     def run(self):
         asyncio.run(self._run())

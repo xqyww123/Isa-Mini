@@ -4,6 +4,8 @@ from pathlib import Path
 from .helper import split_id_into_segs, cat_segs_into_id, incr_id_major, incr_id_minor, MyIO
 from typing import Any, Iterable, NamedTuple, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired, Annotated
 from Isabelle_RPC_Host import Connection, IsabelleError, pretty_unicode, ascii_of_unicode
+from Isabelle_RPC_Host.universal_key import EntityKind, universal_key
+from Isabelle_Semantic_Embedding.semantics import Semantic_Vector_Store, SemanticRecord
 from abc import ABC, abstractmethod
 from enum import Enum
 import logging
@@ -21,23 +23,18 @@ type Var = tuple[varname, typ]
 type Hyp = tuple[varname, term]
 type Vars = dict[varname, typ]
 type Hyps = dict[varname, term]
-type FactRef = str # i.e., the (full) name
 
 class Explicit_Var(TypedDict):
     name: varname
     type: str | None
 
-class FactByExpr(TypedDict):
-    refer_by: Literal["expr"]
-    english: str
-    isabelle_expression: term
-    for_any: list[Explicit_Var]
+class FactByStatement(TypedDict):
+    refer_by: Literal["statement"]
+    statement: str
 
-def print_fact_by_expr(fact: FactByExpr, indent: int, file: MyIO):
+def print_fact_by_statement(fact: FactByStatement, indent: int, file: MyIO):
     print_indent(indent, file)
-    file.write(f"- english: {fact["english"]}\n")
-    print_indent(indent, file)
-    file.write(f"  isabelle: {fact["isabelle_expression"]}\n")
+    file.write(f"- statement: {fact["statement"]}\n")
 
 class FactByName(TypedDict):
     refer_by: Literal["name"]
@@ -47,14 +44,19 @@ def print_fact_by_name(fact: FactByName, indent: int, file: MyIO):
     print_indent(indent, file)
     file.write(f"- {fact["name"]}\n")
 
-type Fact = FactByExpr | FactByName
+type Fact = FactByStatement | FactByName
 
 def print_fact(fact: Fact, indent: int, file: MyIO):
     if fact["refer_by"] == "name":
         print_fact_by_name(cast(FactByName, fact), indent, file)
     else:
-        print_fact_by_expr(cast(FactByExpr, fact), indent, file)
+        print_fact_by_statement(cast(FactByStatement, fact), indent, file)
 
+#type FactRef = str # i.e., the (full) name
+class FactRef(NamedTuple):
+    full_name: str
+    fact: Fact
+    expression: term
 
 class Context(NamedTuple):
     vars: Vars
@@ -103,7 +105,8 @@ def print_paragraph(indent: int, file: MyIO, para: str):
     match lines:
         case [line]:
             file.write(" ")
-            file.write(f"{line}\n")
+            file.write(line)
+            file.write("\n")
         case lines:
             file.write(" |\n")
             for line in lines:
@@ -675,6 +678,7 @@ class Criterion_XPattern(Search_Criterion):
         # TODO: implement the for_any
         #return (self.positive, (7, (self.pattern, self.for_any)))
 
+
 ### Minilang Runtime
 
 class Minilang_Operation(NamedTuple):
@@ -811,31 +815,33 @@ class Minilang_State:
         ret = self.execute(Minilang_Operation.SKIP(), assign_to)
         ret.messages = self.messages
         return ret
-    def search_fact(self, dnf_criterions: list[list[Search_Criterion]]) -> FactRef:
-        fact_ref_and_props = self.connection.callback("IsaMini.lookup_fact",
-                                                       (self.name, dnf_criterions))
-        match fact_ref_and_props:
-            case []:
-                raise FactNotFound(dnf_criterions)
-            case [single]:
-                ref, _ = single
-                return ref
-            case _:
-                raise NotImplementedError("Here we should list all the options and ask the LLM to choose which one does it mean")
+    # def search_fact(self, dnf_criterions: list[list[Search_Criterion]]) -> FactRef:
+    #     fact_ref_and_props = self.connection.callback("IsaMini.lookup_fact",
+    #                                                    (self.name, dnf_criterions))
+    #     match fact_ref_and_props:
+    #         case []:
+    #             raise FactNotFound(dnf_criterions)
+    #         case [single]:
+    #             ref, _ = single
+    #             return ref
+    #         case _:
+    #             raise NotImplementedError("Here we should list all the options and ask the LLM to choose which one does it mean")
     def fetch_rule_fact(self, rule: Fact) -> FactRef:
-        if rule["refer_by"] == "expr":
-            rule_ref = self.search_fact([
-                [ Criterion_Intro(True)
-                , Criterion_XPattern(True, rule["isabelle_expression"], rule["for_any"])],
-                [ Criterion_Elim(True)
-                , Criterion_XPattern(True, rule["isabelle_expression"], rule["for_any"])]
-            ])
-            return rule_ref
+        if rule["refer_by"] == "statement":
+            raise NotImplementedError("Search by English statement is not yet implemented")
         else:
-            rule_ref = self.retrieve_fact(rule["name"])
-            if rule_ref is None:
+            full_name = self.retrieve_fact(rule["name"])
+            if full_name is None:
                 raise FactNotFound_ByName(rule["name"])
-            return rule_ref
+            return FactRef(full_name=full_name, fact=rule, expression="")
+    def semantic_knn(self, query_str: str, k: int,
+                     kinds: list[EntityKind],
+                     domain: list[universal_key] | None = None,
+                     ) -> list[tuple[float, SemanticRecord]]:
+        """Search k nearest entities by semantic similarity.
+        Uses the Semantic_Vector_Store attached to the connection."""
+        store: Semantic_Vector_Store = self.connection.semantic_vector_store()  # type: ignore
+        return store.lookup(query_str, k, kinds, domain)
     def compute_bindings(self, var_names: list[str], fact_names: list[str]) -> Bindings:
         """
         Compute bindings for the leading proof goal by binding provided names in order.
@@ -900,6 +906,65 @@ class Minilang_State:
         """
         result = self.connection.callback("IsaMini.potential_defs_of", (self.name, terms))
         return result
+
+### Interaction
+
+# abstract base class
+# Invariant: list is sorted and all elements are distinct
+type answer = Annotated[list[int], "sorted and all elements are distinct"]
+
+def normalize_answer(indexes: list[int]) -> answer:
+    """Ensure answer satisfies invariant: sorted and all elements are distinct."""
+    return sorted(set(indexes))
+
+class Interaction:
+    fork_temp: bool = False
+    def prompt(self, indent: int, file: MyIO) -> None:
+        raise NotImplementedError("`prompt` must be implemented by subclass")
+    def answer(self, answer: answer) -> 'gen_node':
+        raise NotImplementedError("`answer` must be implemented by subclass")
+
+class RaiseInteraction(Exception):
+    def __init__(self, interaction: Interaction):
+        self.interaction = interaction
+
+#### Fact Retrieval
+
+class Interaction_RetrieveFact(Interaction):
+    INITIAL_K = 10
+    FINAL_K = 40
+    def __init__(self, state: Minilang_State,
+            query: str, kinds: list[EntityKind], domain: list[universal_key] | None,
+            kontinue: Callable[[FactRef], 'gen_node']):
+        """
+        Args:
+            query: The English statement to retrieve
+            condidate_facts: List of candidate facts
+            kontinue: Callback accepting list of selected indexes
+        """
+        self.query = query
+        self.state = state
+        self.kontinue = kontinue
+        self.k = self.INITIAL_K
+        self.kinds = kinds
+        self.domain = domain
+        self.condidate_facts = state.semantic_knn(query, self.k, self.kinds, self.domain)
+    def _fetch_facts(self) -> list[FactRef]:
+        candidates = self.state.semantic_knn(self.query, self.k, self.kinds, self.domain)
+        return 
+    def prompt(self, indent: int, file: MyIO) -> None:
+        print_indent(indent, file)
+        file.write("Regarding the statement:")
+        print_paragraph(indent, file, self.query)
+        file.write("\n")
+        file.write("we find the following Isabelle theorems from the system library:\n")
+        for i, fact in enumerate(self.condidate_facts):
+            print_indent(indent+1, file)
+            file.write(f"{i}. {fact.full_name}: {fact.expression}\n")
+        file.write("Does any of these express your intent? Call `mcp__proof__answer` with the index if yes, or with an empty array to see more candidates.\n")
+    def answer(self, answer: answer) -> 'gen_node':
+        return self.kontinue(answer)
+
 
 ### The Abstract Model
 
@@ -1957,26 +2022,6 @@ class CaseSplit_Like(SubgoalMaker_NoTailEnder):
         self.case_vars = None
         self.case_hyps = None
     
-
-### Interaction
-
-# abstract base class
-# Invariant: list is sorted and all elements are distinct
-type answer = Annotated[list[int], "sorted and all elements are distinct"]
-
-def normalize_answer(indexes: list[int]) -> answer:
-    """Ensure answer satisfies invariant: sorted and all elements are distinct."""
-    return sorted(set(indexes))
-
-class Interaction:
-    def prompt(self, indent: int, file: MyIO) -> None:
-        raise NotImplementedError("`prompt` must be implemented by subclass")
-    def answer(self, answer: answer) -> gen_node:
-        raise NotImplementedError("`answer` must be implemented by subclass")
-
-class RaiseInteraction(Exception):
-    def __init__(self, interaction: Interaction):
-        self.interaction = interaction
 
 ### Operation registry for tool calls
 
