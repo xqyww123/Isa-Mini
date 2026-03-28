@@ -1,12 +1,14 @@
 from typing import Any, cast
 import jsoncomment
 import asyncio
+import contextvars
 import os
 import tempfile
 import shutil
 from .model import *
 from . import prompts as P
-from claude_agent_sdk import tool, create_sdk_mcp_server, ClaudeAgentOptions, ClaudeSDKClient, HookMatcher
+from claude_agent_sdk import tool, create_sdk_mcp_server, ClaudeAgentOptions, ClaudeSDKClient, HookMatcher, ResultMessage
+from claude_agent_sdk import query as sdk_query
 from claude_agent_sdk.types import (
     HookInput,
     HookContext,
@@ -32,12 +34,49 @@ _cc_answer_path = os.path.join(os.path.dirname(_current_file), "tools", "cc_answ
 with open(_cc_answer_path, "r", encoding="utf-8") as _f:
     _cc_answer_schema = jsoncomment.JsonComment().load(_f)
 
-# Load schema for cancel tool
-_cc_cancel_path = os.path.join(os.path.dirname(_current_file), "tools", "cc_cancel.jsonc")
-with open(_cc_cancel_path, "r", encoding="utf-8") as _f:
-    _cc_cancel_schema = jsoncomment.JsonComment().load(_f)
 
-def _execute_proof_action(
+class _Prompt(NamedTuple):
+    """A prompt string to return to the LLM."""
+    text: str
+
+class _Result(NamedTuple):
+    """A resolved result (gen_node or Any)."""
+    value: Any
+
+async def _handle_raise_interaction(
+    session: 'ClaudeCode',
+    e: RaiseInteraction,
+    tool_name: str,
+) -> '_Prompt | _Result':
+    """Dispatch a RaiseInteraction. Returns _Prompt (for LLM) or _Result (all done)."""
+    wi = Working_Interactions(
+        interactions=e.interactions,
+        results=[None] * len(e.interactions),
+        result_set=[False] * len(e.interactions),
+        kontinuation=e.kontinuation,
+    )
+    session.working_interactions.append(wi)
+
+    # 1. Launch forking interactions as background tasks (don't await yet)
+    forking = [(i, inter) for i, inter in enumerate(e.interactions) if inter.forking]
+    if forking:
+        session._launch_forks(forking, wi)  # type: ignore[attr-defined]
+
+    # 2. Find first unfinished non-forking interaction
+    for i, inter in enumerate(wi.interactions):
+        if wi.result_set[i] is False:
+            buffer = StringIO()
+            inter.prompt(0, MyIO(buffer))
+            session.log_interaction(tool_name, buffer.getvalue())
+            return _Prompt(buffer.getvalue())
+
+    # 3. All non-forking done — await forks and call continuation
+    result = await wi.run_continuation()
+    session.working_interactions.pop()
+    return _Result(result)
+
+
+async def _execute_proof_action(
     session: 'ClaudeCode',
     action: str,
     step: str,
@@ -71,12 +110,24 @@ def _execute_proof_action(
         return response
 
     except RaiseInteraction as e:
-        buffer = StringIO()
-        e.interaction.prompt(0, MyIO(buffer))
-        session.interaction = e.interaction
-        session.suspended_opr = (action, step)  # type: ignore[attr-defined]
-        session.log_interaction(tool_name, buffer.getvalue())
-        return buffer.getvalue()
+        # Wrap the continuation: after it returns a gen_node, recurse into _execute_proof_action
+        original_kont = e.kontinuation
+        async def wrapped_kont(results: list[Any]) -> Any:
+            gn = await original_kont(results)
+            assert callable(gn), \
+                "Continuation from _execute_proof_action must return gen_node (callable)"
+            return await _execute_proof_action(
+                session, action, step, gn, tool_name, log_prefix)
+        wrapped_e = RaiseInteraction(e.interactions, wrapped_kont)
+        result = await _handle_raise_interaction(session, wrapped_e, tool_name)
+        if isinstance(result, _Prompt):
+            return result.text
+        return result.value # type: ignore[arg-type]
+
+    except AoA_Cancel as e:
+        error_msg = f"The edit action is cancelled because:\n{e}"
+        session.log_tool_response(tool_name, error_msg)
+        return error_msg
 
     except AoA_Error as e:
         error_msg = str(e)
@@ -106,7 +157,7 @@ async def _edit_tool(args: ToolCall_arg) -> ToolCall_ret:
     step = args["target_step"]
     gen_node = Parse_Node(args["proof_operation"])
 
-    response = _execute_proof_action(
+    response = await _execute_proof_action(
         session, args["action"], step, gen_node,
         "mcp__proof__edit", "after_fill"
     )
@@ -124,59 +175,56 @@ async def _answer_tool(args: ToolCall_arg) -> ToolCall_ret:
     # Log tool call
     session.log_tool_call("mcp__proof__answer", args)
 
-    # Check if there's a pending interaction
-    if session.interaction is None:
+    if not session.working_interactions:
+        error_msg = "No pending interaction to answer"
+        session.log_tool_response("mcp__proof__answer", f"ERROR: {error_msg}")
+        return _mk_ret(error_msg)
+    wi = session.working_interactions[-1]  # stack top
+
+    # Find the current (first unfinished non-forking) interaction
+    current_idx = None
+    for i, inter in enumerate(wi.interactions):
+        if wi.result_set[i] is False and not inter.forking:
+            current_idx = i
+            break
+
+    if current_idx is None:
         error_msg = "No pending interaction to answer"
         session.log_tool_response("mcp__proof__answer", f"ERROR: {error_msg}")
         return _mk_ret(error_msg)
 
-    # Normalize indexes to satisfy invariant: sorted and all elements distinct
+    current_inter = wi.interactions[current_idx]
     normalized_indexes = normalize_answer(args["indexes"])
 
-    # Call interaction.answer with the normalized indexes
-    gen_node = session.interaction.answer(normalized_indexes)
-
-    # Resume the suspended operation
-    suspended = session.suspended_opr  # type: ignore[attr-defined]
-    if suspended is None:
-        raise InternalError("No suspended operation found despite having an interaction")
-
-    action, step = suspended
-
-    # Clear interaction state BEFORE executing (allows nested interactions)
-    session.interaction = None
-    session.suspended_opr = None  # type: ignore[attr-defined]
-
-    response = _execute_proof_action(
-        session, action, step, gen_node,
-        "mcp__proof__answer", "after_answer"
-    )
-
-    return _mk_ret(response)
-
-@tool("cancel", "Cancel the pending interaction and abort the current operation", input_schema=_cc_cancel_schema)
-async def _cancel_tool(args: ToolCall_arg) -> ToolCall_ret:
-    """Cancel a pending interaction."""
-    from .model import the_session
-    session = the_session()
-    if not isinstance(session, ClaudeCode):
-        raise InternalError(f"Expected ClaudeCode session, got {type(session)}")
-    session : ClaudeCode = cast(ClaudeCode, session)
-
-    session.log_tool_call("mcp__proof__cancel", args)
-
-    if session.interaction is None:
-        error_msg = "No pending interaction to cancel"
-        session.log_tool_response("mcp__proof__cancel", f"ERROR: {error_msg}")
+    # Process the answer
+    try:
+        result = current_inter.answer(normalized_indexes)
+    except Interaction_BadAnswer as e:
+        error_msg = str(e)
+        session.log_tool_response("mcp__proof__answer", f"BAD ANSWER: {error_msg}")
         return _mk_ret(error_msg)
+    except RaiseInteraction as e:
+        r = await _handle_raise_interaction(session, e, "mcp__proof__answer")
+        if isinstance(r, _Prompt):
+            return _mk_ret(r.text)
+        result = r.value
 
-    # Clear interaction state
-    session.interaction = None
-    session.suspended_opr = None  # type: ignore[attr-defined]
+    # Store the result
+    wi.results[current_idx] = result
+    wi.result_set[current_idx] = True
 
-    response = "Interaction cancelled. The pending operation has been aborted."
-    session.log_tool_response("mcp__proof__cancel", response)
-    return _mk_ret(response)
+    # Find next unfinished non-forking interaction
+    for i, inter in enumerate(wi.interactions):
+        if wi.result_set[i] is False and not inter.forking:
+            buffer = StringIO()
+            inter.prompt(0, MyIO(buffer))
+            session.log_interaction("mcp__proof__answer", buffer.getvalue())
+            return _mk_ret(buffer.getvalue())
+
+    # All non-forking done — await forks and call continuation
+    final = await wi.run_continuation()
+    session.working_interactions.pop()
+    return _mk_ret(str(final))
 
 @agent_driver("ClaudeCode")
 class ClaudeCode(Session):
@@ -197,11 +245,11 @@ class ClaudeCode(Session):
         'MCPSearch',
         'mcp__proof__edit',
         'mcp__proof__answer',
-        'mcp__proof__cancel',
         'mcp__proof__query_by_name',
         'mcp__proof__query_by_position',
         'ToolSearch'
     ]
+    FORK_WHITELIST = [t for t in TOOL_WHITELIST if t != 'mcp__proof__edit']
     TOOL_TO_CALL = [
         'TaskCreate',
         'Agent',
@@ -214,6 +262,10 @@ class ClaudeCode(Session):
     ]
 
     working_dir: str
+    _fork_counter: int
+    _fork_name: str
+    _fork_index: int | None
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Create a fresh, empty temporary working directory for each session
@@ -222,7 +274,39 @@ class ClaudeCode(Session):
         if not os.access(self.working_dir, os.R_OK | os.W_OK):
             raise InternalError(f"The working directory {self.working_dir} is not readable and writable. Please ensure the temporary directory is writable.")
         self.YAML_path = os.path.join(self.working_dir, "proof.yaml")
-        self.suspended_opr: tuple[str, str] | None = None
+        self._session_id: str | None = None
+        self._fork_counter = 0
+        self._fork_name = "main"
+        self._fork_index = None
+
+    @classmethod
+    def _make_fork(cls, parent: 'ClaudeCode', name: str | None = None) -> 'ClaudeCode':
+        """Create a fork subsession sharing parent's state.
+        Must be called from a different contextvars context than the parent."""
+        from .model import _session_var
+        try:
+            current = _session_var.get()
+        except LookupError:
+            current = None
+        if current is not None:
+            raise InternalError(
+                "_make_fork must be called in a fresh context "
+                "(use loop.create_task with context=contextvars.copy_context())")
+        fork = object.__new__(cls)
+        parent._fork_counter += 1  # type: ignore[attr-defined]
+        Session.__init__(fork, parent=parent)
+        if name is not None:
+            fork._fork_name = f"{parent._fork_name}.{name}"  # type: ignore[attr-defined]
+        else:
+            fork._fork_name = f"{parent._fork_name}.fork_{parent._fork_counter}"  # type: ignore[attr-defined]
+        fork.root = parent.root
+        fork.working_dir = parent.working_dir  # type: ignore[attr-defined]
+        fork.YAML_path = parent.YAML_path  # type: ignore[attr-defined]
+        fork.mcp = parent.mcp  # type: ignore[attr-defined]
+        fork._session_id = None
+        fork._fork_counter = 0
+        fork._fork_index = None
+        return fork
 
     def initialize(self, root: Root):
         super().initialize(root)
@@ -231,7 +315,7 @@ class ClaudeCode(Session):
         # Build MCP tools — semantic query tools need the Isabelle connection
         connection = root.ml_state.connection
         tools = [
-            _edit_tool, _answer_tool, _cancel_tool,
+            _edit_tool, _answer_tool,
             mk_query_by_name_tool(connection, []),
             mk_query_by_position_tool(connection, []),
         ]
@@ -249,7 +333,20 @@ class ClaudeCode(Session):
         )
 
     def run(self):
-        asyncio.run(self._run())
+        asyncio.run(self._run_with_retry())
+
+    async def _run_with_retry(self):
+        import time
+        while True:
+            try:
+                await self._run()
+                return
+            except self._ReachLimitError:
+                self.debug_info("[RUN] Usage limit reached, waiting 20min to retry")
+                time.sleep(1200)
+            except self._RateLimitError:
+                self.debug_info("[RUN] API rate limit, waiting 2s to retry")
+                time.sleep(2)
 
     def close(self):
         """Clean up the session and remove the temporary directory."""
@@ -291,6 +388,9 @@ class ClaudeCode(Session):
         tool_input = pre_tool_input.get("tool_input") or {}
         cwd = pre_tool_input.get("cwd") or str(self.working_dir)
 
+        # Record session_id for forking
+        self._session_id = pre_tool_input.get("session_id") or self._session_id
+
         # 1. Check if tool is in whitelist
         if tool not in self.TOOL_WHITELIST:
             return {
@@ -304,26 +404,26 @@ class ClaudeCode(Session):
 
         # 2. Check proof MCP tool interaction state
         if tool.startswith("mcp__proof__"):
-            if self.interaction is not None:
-                # There's a pending interaction - only allow answer and cancel tools
-                if tool not in ("mcp__proof__answer", "mcp__proof__cancel"):
+            if self.working_interactions:
+                # There's a pending interaction - only allow answer tool
+                if tool != "mcp__proof__answer":
                     return {
                         "continue_": False,
                         "hookSpecificOutput": {
                             "hookEventName": "PreToolUse",
                             "permissionDecision": "deny",
-                            "permissionDecisionReason": "There is a pending interaction that must be answered or cancelled first. Use the mcp__proof__answer or mcp__proof__cancel tool.",
+                            "permissionDecisionReason": "There is a pending interaction that must be answered first. Use the mcp__proof__answer tool.",
                         },
                     }
             else:
-                # No pending interaction - reject answer and cancel tools
-                if tool in ("mcp__proof__answer", "mcp__proof__cancel"):
+                # No pending interaction - reject answer tool
+                if tool == "mcp__proof__answer":
                     return {
                         "continue_": False,
                         "hookSpecificOutput": {
                             "hookEventName": "PreToolUse",
                             "permissionDecision": "deny",
-                            "permissionDecisionReason": "No pending interaction. The answer and cancel tools can only be used when there is an active interaction.",
+                            "permissionDecisionReason": "No pending interaction. The answer tool can only be used when there is an active interaction.",
                         },
                     }
 
@@ -402,11 +502,19 @@ class ClaudeCode(Session):
                     if isinstance(text, str) and text:
                         self.debug_info(f"[TOOLS LIST] {text}")
 
+    class _ReachLimitError(Exception):
+        pass
+    class _RateLimitError(Exception):
+        pass
+
+    def _check_error_text(self, text: str) -> None:
+        if text.startswith("You've hit your limit"):
+            raise self._ReachLimitError()
+        if "Rate limit" in text:
+            raise self._RateLimitError()
+
     async def _run(self):
         async with ClaudeSDKClient(options=self.options) as client:
-            # First, list all available tools to verify MCP tools are discoverable
-            #await self._list_tools(client)
-
             await client.query(P.INITIAL_PROMPT)
             while True:
                 # Stream model outputs and log them in debug mode
@@ -416,6 +524,7 @@ class ClaudeCode(Session):
                         for block in content:
                             text = getattr(block, "text", None)
                             if isinstance(text, str) and text:
+                                self._check_error_text(text)
                                 self.log_model_output(text)
                             thinking = getattr(block, "thinking", None)
                             if isinstance(thinking, str) and thinking:
@@ -430,6 +539,67 @@ class ClaudeCode(Session):
                     self.log_proof()
                     return
 
+    def _launch_forks(self, forking: list[tuple[int, Interaction]],
+                      wi: Working_Interactions) -> None:
+        """Launch forking interactions as background tasks. Results stored via fork_kont."""
+        async def run_one(idx: int, interaction: Interaction) -> None:
+            fork = ClaudeCode._make_fork(self) # type: ignore[attr-defined]
+            fork._fork_index = idx
+            # Fork gets its own single-interaction Working_Interactions.
+            # The continuation stores the result back into the parent's wi.
+            async def fork_kont(results: list[Any]) -> Any:
+                result = results[0]
+                wi.results[idx] = result
+                wi.result_set[idx] = True
+                return result
+            fork.working_interactions.append(Working_Interactions(
+                interactions=[interaction],
+                results=[None],
+                result_set=[False],
+                kontinuation=fork_kont,
+            ))
+            fork_options = ClaudeAgentOptions(
+                resume=self._session_id,
+                fork_session=True,
+                cwd=self.working_dir,
+                permission_mode="default",
+                allowed_tools=self.FORK_WHITELIST,
+                mcp_servers={"proof": self.mcp},
+                hooks={
+                    "PreToolUse": [
+                        HookMatcher(matcher="*", hooks=[fork.permission_control]),
+                    ]
+                },
+            )
+            buffer = StringIO()
+            interaction.prompt(0, MyIO(buffer))
+            tag = f"[{fork._fork_name}]"
+            async for message in sdk_query(
+                prompt=buffer.getvalue(),
+                options=fork_options,
+            ):
+                content = getattr(message, "content", None)
+                if isinstance(content, list):
+                    for block in content:
+                        text = getattr(block, "text", None)
+                        if isinstance(text, str) and text:
+                            self._check_error_text(text)
+                            fork.log_model_output(f"{tag} {text}")
+                        thinking = getattr(block, "thinking", None)
+                        if isinstance(thinking, str) and thinking:
+                            fork.log_model_thinking(f"{tag} {thinking}")
+                if isinstance(message, ResultMessage):
+                    fork.debug_info(f"{tag} completed: subtype={message.subtype}")
+            fork.close()
+
+        loop = asyncio.get_running_loop()
+        for idx, inter in forking:
+            ctx = contextvars.copy_context()
+            task = loop.create_task(run_one(idx, inter), context=ctx)
+            wi.result_set[idx] = task
+
     def refresh_YAML(self):
         with open(self.YAML_path, 'w') as f:
             self.root.print(0, MyIO(f), update_line=True)
+
+

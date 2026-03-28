@@ -2,7 +2,7 @@ from time import time
 from datetime import datetime
 from pathlib import Path
 from .helper import split_id_into_segs, cat_segs_into_id, incr_id_major, incr_id_minor, MyIO
-from typing import Any, Iterable, NamedTuple, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired, Annotated
+from typing import Any, Awaitable, Iterable, NamedTuple, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired, Annotated
 from Isabelle_RPC_Host import Connection, IsabelleError, pretty_unicode, ascii_of_unicode
 from Isabelle_RPC_Host.universal_key import EntityKind, universal_key
 from Isabelle_Semantic_Embedding.semantics import Semantic_Vector_Store, SemanticRecord
@@ -32,31 +32,32 @@ class FactByStatement(TypedDict):
     refer_by: Literal["statement"]
     statement: str
 
-def print_fact_by_statement(fact: FactByStatement, indent: int, file: MyIO):
-    print_indent(indent, file)
-    file.write(f"- statement: {fact["statement"]}\n")
-
 class FactByName(TypedDict):
     refer_by: Literal["name"]
     name: str
 
-def print_fact_by_name(fact: FactByName, indent: int, file: MyIO):
-    print_indent(indent, file)
-    file.write(f"- {fact["name"]}\n")
-
 type Fact = FactByStatement | FactByName
-
-def print_fact(fact: Fact, indent: int, file: MyIO):
-    if fact["refer_by"] == "name":
-        print_fact_by_name(cast(FactByName, fact), indent, file)
-    else:
-        print_fact_by_statement(cast(FactByStatement, fact), indent, file)
 
 #type FactRef = str # i.e., the (full) name
 class FactRef(NamedTuple):
     full_name: str
+    short_name: str
     fact: Fact
     expression: term
+
+    def pack(self) -> str:
+        """Pack for RPC — just the full name."""
+        return self.full_name
+
+def print_FactRef(ref: FactRef, indent: int, file: MyIO) -> None:
+    print_indent(indent, file)
+    if ref.expression:
+        file.write(f"- {ref.short_name}: {ref.expression}\n")
+    else:
+        file.write(f"- {ref.short_name}\n")
+    if ref.fact["refer_by"] == "statement":
+        print_indent(indent + 1, file)
+        file.write(f"{cast(FactByStatement, ref.fact)['statement']}\n")
 
 class Context(NamedTuple):
     vars: Vars
@@ -190,6 +191,11 @@ type failure_reason = str | None
 
 class AoA_Error(Exception):
     pass
+
+class AoA_Cancel(AoA_Error):
+    """Raised to cancel a proof edit action."""
+    pass
+
 class OprError(AoA_Error):
     pass
 
@@ -715,19 +721,19 @@ class Minilang_Operation(NamedTuple):
         return Minilang_Operation("OBTAIN", (vars, [(n, ascii_of_unicode(c)) for n, c in constraints]))
     @staticmethod
     def RULE(rule_ref: FactRef | None) -> 'Minilang_Operation':
-        return Minilang_Operation("RULE", [rule_ref] if rule_ref is not None else [])
+        return Minilang_Operation("RULE", [rule_ref.pack()] if rule_ref is not None else [])
     @staticmethod
     def HAMMER(fact_refs: list[FactRef]) -> 'Minilang_Operation':
-        return Minilang_Operation("HAMMER", fact_refs)
+        return Minilang_Operation("HAMMER", [r.pack() for r in fact_refs])
     @staticmethod
     def INTRO(bindings: Bindings | None) -> 'Minilang_Operation':
         return Minilang_Operation("INTRO", bindings)
     @staticmethod
     def SIMPLIFY(fact_refs: list[FactRef], use_system_simps: bool, premise_names: list[str], simplify_goal: bool, bindings: tuple[list[tuple[str, str, str]], list[tuple[lambda_term, str, str]]] | None) -> 'Minilang_Operation':
-        return Minilang_Operation("SIMPLIFY", (fact_refs, use_system_simps, premise_names, simplify_goal, bindings))
+        return Minilang_Operation("SIMPLIFY", ([r.pack() for r in fact_refs], use_system_simps, premise_names, simplify_goal, bindings))
     @staticmethod
     def UNFOLD(fact_refs: list[FactRef]) -> 'Minilang_Operation':
-        return Minilang_Operation("UNFOLD", fact_refs)
+        return Minilang_Operation("UNFOLD", [r.pack() for r in fact_refs])
     @staticmethod
     def WITNESS(terms: list[term]) -> 'Minilang_Operation':
         return Minilang_Operation("WITNESS", terms)
@@ -739,7 +745,7 @@ class Minilang_Operation(NamedTuple):
         return Minilang_Operation("CASE_SPLIT", (ascii_of_unicode(target), vars, rule))
     @staticmethod
     def INDUCT(target: term, vars: list[varname_spec] | None, arbitrary: list[varname], rule: FactRef | None) -> 'Minilang_Operation':
-        return Minilang_Operation("INDUCT", (ascii_of_unicode(target), vars, [ascii_of_unicode(t) for t in arbitrary], rule))
+        return Minilang_Operation("INDUCT", (ascii_of_unicode(target), vars, [ascii_of_unicode(t) for t in arbitrary], rule.pack() if rule is not None else None))
     @staticmethod
     def SKIP() -> 'Minilang_Operation':
         return Minilang_Operation("SKIP", None)
@@ -826,17 +832,24 @@ class Minilang_State:
     #             return ref
     #         case _:
     #             raise NotImplementedError("Here we should list all the options and ask the LLM to choose which one does it mean")
-    def fetch_rule_fact(self, rule: Fact) -> FactRef:
+    def fetch_rule_fact(self, rule: Fact) -> 'FactRef | Interaction_RetrieveFact':
         if rule["refer_by"] == "statement":
-            raise NotImplementedError("Search by English statement is not yet implemented")
+            stmt = " ".join(cast(FactByStatement, rule)["statement"].split())
+            return Interaction_RetrieveFact(
+                state=self,
+                query=stmt,
+                kinds=[EntityKind.THEOREM],
+            )
         else:
-            full_name = self.retrieve_fact(rule["name"])
-            if full_name is None:
+            result = self.retrieve_fact(rule["name"])
+            if result is None:
                 raise FactNotFound_ByName(rule["name"])
-            return FactRef(full_name=full_name, fact=rule, expression="")
+            full_name, short_name = result
+            return FactRef(full_name=full_name, short_name=short_name,
+                           fact=rule, expression="")
     def semantic_knn(self, query_str: str, k: int,
                      kinds: list[EntityKind],
-                     domain: list[universal_key] | None = None,
+                     domain: Semantic_Vector_Store.Domain | None = None,
                      ) -> list[tuple[float, SemanticRecord]]:
         """Search k nearest entities by semantic similarity.
         Uses the Semantic_Vector_Store attached to the connection."""
@@ -859,14 +872,13 @@ class Minilang_State:
         """
         result = self.connection.callback("IsaMini.need_intro", self.name)
         return result
-    def retrieve_fact(self, name: str) -> str | None:
+    def retrieve_fact(self, name: str) -> tuple[str, str] | None:
         """
-        Retrieve the full name of a fact by its short name.
-        Uses Facts.intern to get the complete fact reference.
-        Returns the full name if the fact exists, None otherwise.
+        Retrieve a fact by its short or full name.
+        Returns (full_name, short_name) if the fact exists, None otherwise.
         """
         result = self.connection.callback("IsaMini.retrieve_fact", (self.name, name))
-        return result
+        return tuple(result) if result is not None else None
     def check_term(self, term_str: str) -> tuple[typ, Vars, Vars]:
         """
         Parse and check a term string using Syntax.read_term.
@@ -899,13 +911,16 @@ class Minilang_State:
         except IsabelleError as e:
             raise
 
-    def potential_defs_of(self, terms: list[str]) -> list[tuple[str, str]]:
+    def potential_defs_of(self, terms: list[str]) -> list[FactRef]:
         """
         Get potential definitions for terms via Potential_Defs_Of RPC.
-        Returns list of (fact_name, proposition) pairs, deduplicated by proposition.
+        Returns list of FactRef, deduplicated by proposition.
         """
         result = self.connection.callback("IsaMini.potential_defs_of", (self.name, terms))
-        return result
+        return [FactRef(full_name=full_name,
+                        short_name=short_name,
+                        fact=FactByName(refer_by="name", name=short_name),
+                        expression=prop) for full_name, short_name, prop in result]
 
 ### Interaction
 
@@ -918,52 +933,126 @@ def normalize_answer(indexes: list[int]) -> answer:
     return sorted(set(indexes))
 
 class Interaction:
-    fork_temp: bool = False
+    forking: bool = False
     def prompt(self, indent: int, file: MyIO) -> None:
         raise NotImplementedError("`prompt` must be implemented by subclass")
-    def answer(self, answer: answer) -> 'gen_node':
+    def answer(self, answer: answer) -> Any:
         raise NotImplementedError("`answer` must be implemented by subclass")
 
+type AsyncKontinuation = Callable[[list[Any]], Awaitable[Any]]
+
 class RaiseInteraction(Exception):
-    def __init__(self, interaction: Interaction):
-        self.interaction = interaction
+    def __init__(self, interactions: list[Interaction],
+                 kontinuation: AsyncKontinuation):
+        self.interactions = interactions
+        self.kontinuation = kontinuation
+
+class Working_Interactions(NamedTuple):
+    interactions: list[Interaction]
+    results: list[Any]
+    result_set: list[bool | Awaitable[Any]]  # False=pending, True=done, Awaitable=in-flight
+    kontinuation: AsyncKontinuation
+
+    async def run_continuation(self) -> Any:
+        """Await any in-flight results, then call the continuation."""
+        for i, flag in enumerate(self.result_set):
+            if isinstance(flag, bool):
+                if not flag:
+                    raise InternalError(f"Interaction {i} not resolved before calling continuation")
+            else:
+                # Awaitable — wait for it
+                await flag
+                if not self.result_set[i] is True:
+                    raise InternalError(f"Forked interaction {i} did not store its result")
+        return await self.kontinuation(self.results)
+
+class Interaction_BadAnswer(Exception):
+    """Raised when an answer to an interaction is invalid. The interaction remains active."""
+    pass
 
 #### Fact Retrieval
 
 class Interaction_RetrieveFact(Interaction):
+    forking = True
     INITIAL_K = 10
     FINAL_K = 40
+
     def __init__(self, state: Minilang_State,
-            query: str, kinds: list[EntityKind], domain: list[universal_key] | None,
-            kontinue: Callable[[FactRef], 'gen_node']):
-        """
-        Args:
-            query: The English statement to retrieve
-            condidate_facts: List of candidate facts
-            kontinue: Callback accepting list of selected indexes
-        """
+            query: str, kinds: list[EntityKind],
+            domain: 'Semantic_Vector_Store.Domain | None' = None):
         self.query = query
         self.state = state
-        self.kontinue = kontinue
         self.k = self.INITIAL_K
         self.kinds = kinds
         self.domain = domain
-        self.condidate_facts = state.semantic_knn(query, self.k, self.kinds, self.domain)
+        self.candidate_facts = self._fetch_facts()
+
     def _fetch_facts(self) -> list[FactRef]:
-        candidates = self.state.semantic_knn(self.query, self.k, self.kinds, self.domain)
-        return 
+        # Get local contextual thm keys from the leading subgoal
+        local_keys: list[universal_key] = self.state.connection.callback(
+            "IsaMini.contextual_thms", self.state.name)
+        local_keys = [bytes(k) for k in local_keys]
+        # Search with domain = context entities + local keys
+        domain = Semantic_Vector_Store.ContextExtended(local_keys)
+        candidates = self.state.semantic_knn(self.query, self.k, self.kinds, domain)
+        if not candidates:
+            return []
+        # Get short names and pretty-printed expressions for the found facts
+        names = [rec.name for _, rec in candidates]
+        infos: list[tuple[str, str] | None] = self.state.connection.callback(
+            "IsaMini.expr_of_fact", (self.state.name, names))
+        # Assemble into FactRef list
+        results: list[FactRef] = []
+        for (score, rec), info in zip(candidates, infos):
+            if info is not None:
+                short_name, expr = info
+            else:
+                short_name, expr = rec.name, ""
+            results.append(FactRef(
+                full_name=rec.name,
+                short_name=short_name,
+                fact=FactByName(refer_by="name", name=short_name),
+                expression=expr))
+        return results
+
     def prompt(self, indent: int, file: MyIO) -> None:
         print_indent(indent, file)
         file.write("Regarding the statement:")
         print_paragraph(indent, file, self.query)
         file.write("\n")
-        file.write("we find the following Isabelle theorems from the system library:\n")
-        for i, fact in enumerate(self.condidate_facts):
+        if not self.candidate_facts:
+            raise InternalError("Interaction_RetrieveFact.prompt called with no candidates")
+        file.write("We find the following Isabelle theorems from the library:\n")
+        for i, fact in enumerate(self.candidate_facts):
             print_indent(indent+1, file)
             file.write(f"{i}. {fact.full_name}: {fact.expression}\n")
-        file.write("Does any of these express your intent? Call `mcp__proof__answer` with the index if yes, or with an empty array to see more candidates.\n")
-    def answer(self, answer: answer) -> 'gen_node':
-        return self.kontinue(answer)
+        if self.k >= self.FINAL_K:
+            file.write("Call `mcp__proof__answer` with the index if any matches, "
+                       "or with an empty array to give up.\n")
+        else:
+            file.write("Call `mcp__proof__answer` with the index if any matches, "
+                       "or with an empty array to see more candidates.\n")
+
+    def answer(self, answer: answer) -> FactRef:
+        if not answer:
+            if self.k < self.FINAL_K:
+                # Expand search and re-prompt
+                self.k = self.FINAL_K
+                self.candidate_facts = self._fetch_facts()
+                async def identity(results: list[Any]) -> Any:
+                    return results[0]
+                raise RaiseInteraction([self], identity)
+            else:
+                raise AoA_Cancel(
+                    f'No matching fact found for "{self.query}". '
+                    f'You may need to prove this as a lemma first.')
+        if len(answer) > 1:
+            raise Interaction_BadAnswer("Please select exactly one fact.")
+        idx = answer[0]
+        if idx < 0 or idx >= len(self.candidate_facts):
+            raise Interaction_BadAnswer(
+                f"Index {idx} out of range (0–{len(self.candidate_facts) - 1}).")
+        return self.candidate_facts[idx]
 
 
 ### The Abstract Model
@@ -2068,27 +2157,66 @@ class Obvious_ToolArg(TypedDict):
     thought: str
     facts: list[Fact]
 
+class Obvious_InternalToolArg(NamedTuple):
+    thought: str
+    facts: list[FactRef]
+
 @proof_operation("Obvious", Obvious_ToolArg)
 class Obvious(Leaf):
-    def __init__(self, config: NodeConfig, arg : Obvious_ToolArg):
-        super().__init__(config, arg["thought"])
-        self.facts = arg["facts"]
-        self.fact_refs = [self.ml_state.fetch_rule_fact(fact) for fact in self.facts]
+    def __init__(self, config: NodeConfig, arg: Obvious_InternalToolArg):
+        super().__init__(config, arg.thought)
+        self.fact_refs = arg.facts
+
     @staticmethod
-    def gen(arg : Obvious_ToolArg) -> gen_node:
+    def gen(arg: Obvious_InternalToolArg) -> gen_node:
         def mk(config: NodeConfig) -> 'Obvious':
             return Obvious(config, arg)
+        return mk
+
+    @staticmethod
+    def interactive_gen(arg: Obvious_ToolArg) -> gen_node:
+        def mk(config: NodeConfig) -> 'Obvious':
+            ml_state = config.ml_state
+            facts = arg["facts"]
+            resolved: list[FactRef] = []
+            interactions: list[Interaction] = []
+            resolve_indices: list[int] = []
+
+            for fact in facts:
+                result = ml_state.fetch_rule_fact(fact)
+                if isinstance(result, FactRef):
+                    resolved.append(result)
+                else:
+                    resolve_indices.append(len(resolved))
+                    resolved.append(None)  # type: ignore
+                    interactions.append(result)
+
+            def mk_internal() -> Obvious_InternalToolArg:
+                return Obvious_InternalToolArg(
+                    thought=arg["thought"],
+                    facts=resolved,
+                )
+
+            if not interactions:
+                return Obvious(config, mk_internal())
+
+            async def kontinue(results: list[Any]) -> gen_node:
+                for i, idx in enumerate(resolve_indices):
+                    resolved[idx] = results[i]
+                return Obvious.gen(mk_internal())
+
+            raise RaiseInteraction(interactions, kontinue)
         return mk
     def print(self, indent: int, file: MyIO, update_line: bool = False) -> int:
         indent = super().print(indent, file, update_line)
         self._print_thought(indent, file)
         print_indent(indent, file)
         file.write("operation: Obvious\n")
-        if self.facts:
+        if self.fact_refs:
             print_indent(indent, file)
             file.write(f"with facts:\n")
-            for fact in self.facts:
-                print_fact(fact, indent+1, file)
+            for ref in self.fact_refs:
+                print_FactRef(ref, indent+1, file)
         self._print_evaluation_status(indent, file)
         self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
         return indent
@@ -2132,28 +2260,35 @@ class Witness(Leaf):
 #### Unfold
 
 class Interaction_ChooseDef(Interaction):
-    def __init__(self, constants: list[str], candidate_defs: list[tuple[str, str]], kontinue: Callable[[answer], gen_node]):
+    def __init__(self, constants: list[str], candidate_defs: list[FactRef]):
         """
         Args:
             constants: List of constants being unfolded
-            candidate_defs: List of (fact_name, proposition) pairs
-            kontinue: Callback accepting list of selected indexes
+            candidate_defs: List of FactRef for candidate definitions
         """
         self.constants = constants
         self.candidate_defs = candidate_defs
-        self.kontinue = kontinue
     def prompt(self, indent: int, file: MyIO) -> None:
         print_indent(indent, file)
         if len(self.constants) == 1:
             file.write(f"Multiple definitions found for {self.constants[0]}:\n")
         else:
             file.write(f"Multiple definitions found for constants {', '.join(self.constants)}:\n")
-        for i, (_, proposition) in enumerate(self.candidate_defs):
+        for i, ref in enumerate(self.candidate_defs):
             print_indent(indent+1, file)
-            file.write(f"{i}. {proposition}\n")
-        file.write("Select definition(s) to use in unfolding. Call the `answer` tool with indexes or call the `cancel` tool to cancel the operation.\n")
-    def answer(self, answer: answer) -> gen_node:
-        return self.kontinue(answer)
+            file.write(f"{i}. {ref.full_name}: {ref.expression}\n")
+        file.write("Select definition(s) to use in unfolding. Call `mcp__proof__answer` with the indexes, or with an empty array to skip.\n")
+    def answer(self, answer: answer) -> list[FactRef]:
+        """Returns selected FactRefs, or raises AoA_Cancel if empty."""
+        if not answer:
+            raise AoA_Cancel(
+                f"No definitions selected for {', '.join(self.constants)}. "
+                f"Unfolding cancelled.")
+        for idx in answer:
+            if idx < 0 or idx >= len(self.candidate_defs):
+                raise Interaction_BadAnswer(
+                    f"Index {idx} out of range (0–{len(self.candidate_defs) - 1}).")
+        return [self.candidate_defs[idx] for idx in answer]
 
 
 class Unfold_ToolArg(TypedDict):
@@ -2178,20 +2313,10 @@ class Unfold(Leaf):
         self.fact_refs = arg["fact_refs"]
 
     @staticmethod
-    def gen(arg: Unfold_ToolArg) -> gen_node:
-        """
-        Simple non-interactive generation.
-        Assumes standard _def naming convention.
-        """
+    def gen(arg: Unfold_ToolArg_internal) -> gen_node:
+        """Simple non-interactive generation with pre-resolved fact refs."""
         def mk(config: NodeConfig) -> 'Unfold':
-            # Use simple naming convention: target + "_def"
-            fact_refs = [target + "_def" for target in arg["targets"]]
-            arg_internal: Unfold_ToolArg_internal = {
-                "thought": arg["thought"],
-                "targets": arg["targets"],
-                "fact_refs": fact_refs
-            }
-            return Unfold(config, arg_internal)
+            return Unfold(config, arg)
         return mk
 
     @staticmethod
@@ -2207,7 +2332,6 @@ class Unfold(Leaf):
             ml_state = config.ml_state
 
             # Query potential definitions for all targets via RPC
-            # Returns list of (fact_name, proposition) pairs, deduplicated
             all_defs = ml_state.potential_defs_of(targets)
 
             if len(all_defs) == 0:
@@ -2215,41 +2339,29 @@ class Unfold(Leaf):
 
             elif len(all_defs) == 1:
                 # Single definition - use it automatically
-                fact_name, _ = all_defs[0]
                 arg_internal: Unfold_ToolArg_internal = {
                     "thought": arg["thought"],
                     "targets": arg["targets"],
-                    "fact_refs": [fact_name]
+                    "fact_refs": [all_defs[0]]
                 }
                 return Unfold(config, arg_internal)
 
             else:
                 # Multiple definitions - need interaction
-                def kontinue(selected_indexes: answer) -> gen_node:
-                    # Invariant: selected_indexes is already sorted with distinct elements
-                    # Validate all indexes are in valid range
-                    for idx in selected_indexes:
-                        if not isinstance(idx, int):
-                            raise InvalidAnswer(f"Expected integer indexes, got {type(idx).__name__}")
-                        if idx < 0 or idx >= len(all_defs):
-                            raise InvalidAnswer(f"Index {idx} out of range [0, {len(all_defs)-1}]")
-
-                    # Map selected indexes to fact names
-                    fact_refs = [all_defs[idx][0] for idx in selected_indexes]
-
+                async def kontinue(results: list[Any]) -> gen_node:
+                    selected: list[FactRef] = results[0]
                     def final_mk(cfg: NodeConfig) -> 'Unfold':
                         arg_internal: Unfold_ToolArg_internal = {
                             "thought": arg["thought"],
                             "targets": arg["targets"],
-                            "fact_refs": fact_refs
+                            "fact_refs": selected
                         }
                         return Unfold(cfg, arg_internal)
-
                     return final_mk
 
-                # Create interaction with flat list
                 raise RaiseInteraction(
-                    Interaction_ChooseDef(targets, all_defs, kontinue)
+                    [Interaction_ChooseDef(targets, all_defs)],
+                    kontinue
                 )
 
         return mk
@@ -2283,27 +2395,77 @@ Rewrite_ToolArg = TypedDict('Rewrite_ToolArg', {
     'rewrite premises': list[str]
 })
 
+class Rewrite_InternalToolArg(NamedTuple):
+    thought: str
+    use_system_simplifiers: bool
+    rewrite_goal: bool
+    rewrite_premises: list[str]
+    using: list[FactRef]
+
 @proof_operation("Rewrite", Rewrite_ToolArg)
 class Rewrite(Leaf):
-    def __init__(self, config: NodeConfig, arg: Rewrite_ToolArg):
-        super().__init__(config, arg["thought"])
-        self.using = arg["using"]
-        self.use_system_simplifiers = arg["use system simplifiers"]
-        self.rewrite_goal = arg["rewrite goal"]
-        self.rewrite_premises = arg["rewrite premises"]
+    def __init__(self, config: NodeConfig, arg: Rewrite_InternalToolArg):
+        super().__init__(config, arg.thought)
+        self.use_system_simplifiers = arg.use_system_simplifiers
+        self.rewrite_goal = arg.rewrite_goal
+        self.rewrite_premises = arg.rewrite_premises
 
         # Validate that at least one target is specified
         if not self.rewrite_goal and not self.rewrite_premises:
-            raise ArgumentError_RewriteNoTargets(cast(ToolCall_arg, arg))
+            raise ArgumentError_RewriteNoTargets({
+                "rewrite goal": self.rewrite_goal,
+                "rewrite premises": self.rewrite_premises})
 
-        self.fact_refs = [self.ml_state.fetch_rule_fact(fact) for fact in self.using]
+        self.using = arg.using
         self.bindings: Bindings | None = None
         self.running_time = 0
 
     @staticmethod
-    def gen(arg: Rewrite_ToolArg) -> gen_node:
+    def gen(arg: Rewrite_InternalToolArg) -> gen_node:
+        """Non-interactive generation with pre-resolved fact refs."""
         def mk(config: NodeConfig) -> 'Rewrite':
             return Rewrite(config, arg)
+        return mk
+
+    @staticmethod
+    def interactive_gen(arg: Rewrite_ToolArg) -> gen_node:
+        """Interactive generation. Resolves FactByStatement via Interaction_RetrieveFact."""
+        def mk(config: NodeConfig) -> 'Rewrite':
+            ml_state = config.ml_state
+            facts = arg["using"]
+            resolved: list[FactRef] = []
+            interactions: list[Interaction] = []
+            resolve_indices: list[int] = []  # which positions need interaction
+
+            for fact in facts:
+                result = ml_state.fetch_rule_fact(fact)
+                if isinstance(result, FactRef):
+                    resolved.append(result)
+                else:
+                    # Interaction_RetrieveFact
+                    resolve_indices.append(len(resolved))
+                    resolved.append(None)  # type: ignore — placeholder
+                    interactions.append(result)
+
+            def mk_internal() -> Rewrite_InternalToolArg:
+                return Rewrite_InternalToolArg(
+                    thought=arg["thought"],
+                    use_system_simplifiers=arg["use system simplifiers"],
+                    rewrite_goal=arg["rewrite goal"],
+                    rewrite_premises=arg["rewrite premises"],
+                    using=resolved,
+                )
+
+            if not interactions:
+                return Rewrite(config, mk_internal())
+
+            # Some need interaction
+            async def kontinue(results: list[Any]) -> gen_node:
+                for i, idx in enumerate(resolve_indices):
+                    resolved[idx] = results[i]
+                return Rewrite.gen(mk_internal())
+
+            raise RaiseInteraction(interactions, kontinue)
         return mk
 
     def print(self, indent: int, file: MyIO, update_line: bool = False) -> int:
@@ -2314,8 +2476,8 @@ class Rewrite(Leaf):
         if self.using or self.use_system_simplifiers:
             print_indent(indent, file)
             file.write(f"using:\n")
-            for fact in self.using:
-                print_fact(fact, indent+1, file)
+            for ref in self.using:
+                print_FactRef(ref, indent+1, file)
             if self.use_system_simplifiers:
                 print_indent(indent+1, file)
                 file.write("- system simplifiers\n")
@@ -2367,7 +2529,7 @@ class Rewrite(Leaf):
             fact_bindings = [(fb.expr, fb.name, fb.pretty) for fb in self.bindings[1]]
             bindings = (var_bindings, fact_bindings)
         return Minilang_Operation.SIMPLIFY(
-            self.fact_refs,
+            self.using,
             self.use_system_simplifiers,
             self.rewrite_premises,
             self.rewrite_goal,
@@ -2745,17 +2907,47 @@ class InferenceRule_ToolArg(TypedDict):
     rule: Fact | None
     # TODO: write some skills telling the agent how to associate common operations (e.g., proof by contradiction, proof by cases, etc.) with the inference rules
 
+class InferenceRule_InternalToolArg(NamedTuple):
+    thought: str
+    rule: Fact | None
+    rule_ref: FactRef | None
+
 @proof_operation("InferenceRule", InferenceRule_ToolArg)
 class InferenceRule(SubgoalMaker_NoTailEnder):
-    def __init__(self, config: NodeConfig, arg : InferenceRule_ToolArg):
-        super().__init__(config, arg["thought"], [])
-        self.rule = arg["rule"]
-        self.rule_ref = self.ml_state.fetch_rule_fact(self.rule) if self.rule is not None else None
+    def __init__(self, config: NodeConfig, arg: InferenceRule_InternalToolArg):
+        super().__init__(config, arg.thought, [])
+        self.rule = arg.rule
+        self.rule_ref = arg.rule_ref
         self._opening = False
+
     @staticmethod
-    def gen(arg : InferenceRule_ToolArg) -> gen_node:
+    def gen(arg: InferenceRule_InternalToolArg) -> gen_node:
         def mk(config: NodeConfig) -> 'InferenceRule':
             return InferenceRule(config, arg)
+        return mk
+
+    @staticmethod
+    def interactive_gen(arg: InferenceRule_ToolArg) -> gen_node:
+        def mk(config: NodeConfig) -> 'InferenceRule':
+            rule = arg["rule"]
+            if rule is None:
+                internal = InferenceRule_InternalToolArg(
+                    thought=arg["thought"], rule=None, rule_ref=None)
+                return InferenceRule(config, internal)
+
+            ml_state = config.ml_state
+            result = ml_state.fetch_rule_fact(rule)
+            if isinstance(result, FactRef):
+                internal = InferenceRule_InternalToolArg(
+                    thought=arg["thought"], rule=rule, rule_ref=result)
+                return InferenceRule(config, internal)
+
+            # Needs interaction
+            async def kontinue(results: list[Any]) -> gen_node:
+                return InferenceRule.gen(InferenceRule_InternalToolArg(
+                    thought=arg["thought"], rule=rule, rule_ref=results[0]))
+
+            raise RaiseInteraction([result], kontinue)
         return mk
     def display_operation(self) -> str:
         return "Inference Rule"
@@ -2764,7 +2956,11 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
         print_indent(indent, file)
         file.write("operation: Inference Rule\n")
         print_indent(indent, file)
-        file.write(f"rule: {self.rule_ref if self.rule_ref is not None else 'default'}\n")
+        if self.rule_ref is not None:
+            file.write("rule:\n")
+            print_FactRef(self.rule_ref, indent+1, file)
+        else:
+            file.write("rule: default\n")
         self._print_evaluation_status(indent, file)
         self._print_warnings(indent, file, [Warning.Position.HEADER])
         if len(self.sub_nodes) <= 1:
@@ -3159,14 +3355,12 @@ def Parse_Node(data: ToolCall_arg) -> gen_node:
 
 ## Session
 
-import threading
+import contextvars
 
-class LocalSession(threading.local):
-    session: 'Session'
-_local_store = LocalSession()
+_session_var: contextvars.ContextVar['Session'] = contextvars.ContextVar('_session_var')
 
 def the_session() -> 'Session':
-    return _local_store.session
+    return _session_var.get()
 
 
 # Custom string representer for literal block style on multiline strings
@@ -3194,31 +3388,47 @@ class Session:
     interaction_log_file: Any | None  # File handle for interaction.yaml
     proofs_log_file: Any | None       # File handle for proofs.yaml
     proof_oprs_log_file: Any | None   # File handle for proof_oprs.yaml
-    interaction: Interaction | None
 
     # class variables
     Driver: dict[str, Type['Session']] = {}
 
-    def __init__(self, logger: logging.Logger | None = None, log_dir: str | Path = ""):
+    def __init__(self, logger: logging.Logger | None = None, log_dir: str | Path = "",
+                 parent: 'Session | None' = None):
         """
         Args:
             logger: Python logger for runtime debug messages to the server log stream.
             log_dir: Directory for persistent session logs (interaction.yaml, proofs.yaml,
                 proof_oprs.yaml). Empty string disables file logging.
+            parent: Parent session for subsessions. None means this is a major session.
         """
-        _local_store.session = self
+        self.parent = parent
+        _session_var.set(self)
         self.age = 0
-        self.logger = logger
-        self.log_dir = None
-        self.interaction_log_path = None
-        self.proofs_log_path = None
-        self.proof_oprs_log_path = None
-        self.interaction_log_file = None
-        self.proofs_log_file = None
-        self.proof_oprs_log_file = None
-        self.interaction = None
-        if log_dir != "":
-            self._setup_log_directory(log_dir)
+        self.logger = logger or (parent.logger if parent else None)
+        self.working_interactions: list[Working_Interactions] = []
+        if parent is not None:
+            # Subsessions share parent's log files
+            self.log_dir = parent.log_dir
+            self.interaction_log_path = parent.interaction_log_path
+            self.proofs_log_path = parent.proofs_log_path
+            self.proof_oprs_log_path = parent.proof_oprs_log_path
+            self.interaction_log_file = parent.interaction_log_file
+            self.proofs_log_file = parent.proofs_log_file
+            self.proof_oprs_log_file = parent.proof_oprs_log_file
+        else:
+            self.log_dir = None
+            self.interaction_log_path = None
+            self.proofs_log_path = None
+            self.proof_oprs_log_path = None
+            self.interaction_log_file = None
+            self.proofs_log_file = None
+            self.proof_oprs_log_file = None
+            if log_dir != "":
+                self._setup_log_directory(log_dir)
+
+    @property
+    def is_major(self) -> bool:
+        return self.parent is None
 
     def _setup_log_directory(self, log_dir: str | Path):
         """
@@ -3309,8 +3519,11 @@ class Session:
         return False
 
     def close(self):
-        """Clean up the session and release resources."""
-        # Write session end markers and close log files
+        """Clean up the session and release resources.
+        Subsessions do not close shared log files — only major sessions do."""
+        if not self.is_major:
+            return
+        # Major session: write end markers and close log files
         if self.log_dir is not None:
             session_end = {
                 "event": "SESSION_END",
@@ -3329,9 +3542,12 @@ class Session:
                 self.proof_oprs_log_file.close()
                 self.proof_oprs_log_file = None
 
-        # Clean up the thread-local session reference
-        if hasattr(_local_store, 'session') and _local_store.session is self:
-            delattr(_local_store, 'session')
+        # Clean up the context session reference
+        try:
+            if _session_var.get() is self:
+                _session_var.set(None)  # type: ignore
+        except LookupError:
+            pass
 
     def initialize(self, root: Root):
         if hasattr(self, 'root'):

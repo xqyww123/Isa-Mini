@@ -234,7 +234,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
 
       (* Local callback definitions - all share state, counters, messages via closure *)
 
-      fun proof_opr_callback () = {
+      val proof_opr_callback = {
         name = "IsaMini.proof_opr",
         arg_schema = unpackTuple3 (unpackString, unpackString, MiniLang_Agent.xcmd_unpacker),
         ret_schema = (fn (ctxt, msgs, tree) =>
@@ -258,7 +258,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         timeout = SOME (Time.fromSeconds 600)
       }
 
-      fun lookup_fact_callback () = {
+      val lookup_fact_callback = {
         name = "IsaMini.lookup_fact",
         arg_schema = unpackPair (unpackString, unpackList (unpackList (unpackPair (unpackBool, unpack_criterion)))),
         ret_schema = (fn (ctxt, rets) =>
@@ -282,23 +282,23 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         timeout = SOME (Time.fromSeconds 30)
       }
 
-      fun retrieve_fact_callback () = {
+      val retrieve_fact_callback = {
         name = "IsaMini.retrieve_fact",
         arg_schema = unpackPair (unpackString, unpackString),
-        ret_schema = packOption packString,
+        ret_schema = packOption (packPair (packString, packString)),
         function = (fn (state_id, name) =>
           let val s0 = get_state state_id
               val ctxt = Minilang.context_of s0
               val facts = Proof_Context.facts_of ctxt
               val full_name = Facts.intern facts name
            in case Facts.lookup (Context.Proof ctxt) facts full_name of
-                SOME _ => SOME full_name
+                SOME _ => SOME (full_name, Facts.extern ctxt facts full_name)
               | NONE => NONE
           end),
         timeout = NONE
       }
 
-      fun compute_bindings_callback () = {
+      val compute_bindings_callback = {
         name = "IsaMini.compute_bindings",
         arg_schema = unpackTuple3 (unpackString, unpackList unpackString, unpackList unpackString),
         ret_schema = MiniLang_Agent.pack_bindings,
@@ -310,7 +310,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         timeout = NONE
       }
 
-      fun need_intro_callback () = {
+      val need_intro_callback = {
         name = "IsaMini.need_intro",
         arg_schema = unpackString,
         ret_schema = packBool,
@@ -321,7 +321,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         timeout = NONE
       }
 
-      fun check_term_callback () = {
+      val check_term_callback = {
         name = "IsaMini.check_term",
         arg_schema = unpackPair (unpackString, unpackString),
         ret_schema = packTuple3 (packString,
@@ -346,7 +346,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         timeout = NONE
       }
 
-      fun schematic_vars_callback () = {
+      val schematic_vars_callback = {
         name = "IsaMini.schematic_variables_of",
         arg_schema = unpackString,
         ret_schema = packList (packPair (packString, packString)),
@@ -362,29 +362,70 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         timeout = NONE
       }
 
-      fun potential_defs_callback () = {
+      val potential_defs_callback = {
         name = "IsaMini.potential_defs_of",
         arg_schema = unpackPair (unpackString, unpackList unpackString),
-        ret_schema = packList (packPair (packString, packString)),
+        ret_schema = packList (packTuple3 (packString, packString, packString)),
         function = (fn (state_id, terms) =>
           let val s0 = get_state state_id
               val ctxt = Minilang.context_of s0
               val SOT = MiniLang_Agent.string_of_term ctxt
+              val facts = Proof_Context.facts_of ctxt
               val results = List.concat (map (fn term =>
                 let val parsed_term = MiniLang_Agent.read_term ctxt term
                     val const_name = case Term.head_of parsed_term of
                                        Const (name, _) => name
                                      | _ => error "term_head_not_const"
                     val defs = Minilang.potential_defs_of_const ctxt const_name
-                 in map (fn (name, thm) => (name, SOT (Thm.prop_of thm))) defs
+                 in map (fn (name, thm) =>
+                      (name, Facts.extern ctxt facts name, SOT (Thm.prop_of thm))) defs
                 end) terms)
-              val (_, deduped) = fold (fn (pair as (_, prop)) => fn (seen, acc) =>
+              val (_, deduped) = fold (fn (triple as (_, _, prop)) => fn (seen, acc) =>
                 if member (op =) seen prop then (seen, acc)
-                else (prop :: seen, acc @ [pair])) results ([], [])
+                else (prop :: seen, acc @ [triple])) results ([], [])
            in deduped
           end handle ERROR msg => error (String.concat ["Error: ", msg])
             | TERM (msg, _) => error (String.concat ["Error: ", msg])
             | TYPE (msg, _, _) => error (String.concat ["Error: ", msg])),
+        timeout = NONE
+      }
+
+      val thm_cache = Universal_Key.new_thm_uk_cache ()
+
+      val contextual_thms_callback = {
+        name = "IsaMini.contextual_thms",
+        arg_schema = unpackString,
+        ret_schema = packList Universal_Key.pack_universal_key,
+        function = (fn state_id =>
+          let val s = get_state state_id
+              val context = Context.Proof (Minilang.context_of s)
+              val tree = Minilang.print_state s
+              val ((_, facts), _) = Minilang.context_of_leading_goal tree
+              val entities = map (Universal_Key.Named_Theorem o fst) facts
+              val keys = map (Universal_Key.key_of (SOME thm_cache) context) entities
+              val _ = Semantic_Store.interpret_entities context entities
+              val _ = Semantic_Store.embed_entities context entities
+          in keys end),
+        timeout = NONE
+      }
+
+      val expr_of_fact_callback = {
+        name = "IsaMini.expr_of_fact",
+        arg_schema = unpackPair (unpackString, unpackList unpackString),
+        ret_schema = packList (packOption (packPair (packString, packString))),
+        function = (fn (state_id, names) =>
+          let val s0 = get_state state_id
+              val ctxt = Minilang.context_of s0
+              val SOT = MiniLang_Agent.string_of_term ctxt
+              val facts = Proof_Context.facts_of ctxt
+          in map (fn name =>
+              (case Proof_Context.get_thms ctxt name of
+                 thms =>
+                   let val short = Facts.extern ctxt facts name
+                       val expr = String.concatWith "\n" (map (SOT o Thm.prop_of) thms)
+                   in SOME (short, expr) end)
+              handle ERROR _ => NONE) names
+          end),
         timeout = NONE
       }
 
@@ -400,14 +441,16 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         ret_schema = unpackPair (unpackList MiniLang_Agent.xcmd_unpacker, unpackOption unpackString),
         timeout = NONE,
         callback = [
-          mk_callback (proof_opr_callback ()),
-          mk_callback (lookup_fact_callback ()),
-          mk_callback (retrieve_fact_callback ()),
-          mk_callback (compute_bindings_callback ()),
-          mk_callback (need_intro_callback ()),
-          mk_callback (check_term_callback ()),
-          mk_callback (schematic_vars_callback ()),
-          mk_callback (potential_defs_callback ())
+          mk_callback proof_opr_callback,
+          mk_callback lookup_fact_callback,
+          mk_callback retrieve_fact_callback,
+          mk_callback compute_bindings_callback,
+          mk_callback need_intro_callback,
+          mk_callback check_term_callback,
+          mk_callback schematic_vars_callback,
+          mk_callback potential_defs_callback,
+          mk_callback contextual_thms_callback,
+          mk_callback expr_of_fact_callback
         ]
       }
 
