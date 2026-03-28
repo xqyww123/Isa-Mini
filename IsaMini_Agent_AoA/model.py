@@ -43,7 +43,7 @@ class FactRef(NamedTuple):
     full_name: str
     short_name: str
     fact: Fact
-    expression: term
+    expression: list[term]  # pretty-printed propositions (one per thm)
 
     def pack(self) -> str:
         """Pack for RPC — just the full name."""
@@ -51,8 +51,13 @@ class FactRef(NamedTuple):
 
 def print_FactRef(ref: FactRef, indent: int, file: MyIO) -> None:
     print_indent(indent, file)
-    if ref.expression:
-        file.write(f"- {ref.short_name}: {ref.expression}\n")
+    if len(ref.expression) == 1:
+        file.write(f"- {ref.short_name}: {ref.expression[0]}\n")
+    elif len(ref.expression) > 1:
+        file.write(f"- {ref.short_name}:\n")
+        for expr in ref.expression:
+            print_indent(indent + 1, file)
+            file.write(f"  {expr}\n")
     else:
         file.write(f"- {ref.short_name}\n")
     if ref.fact["refer_by"] == "statement":
@@ -832,29 +837,55 @@ class Minilang_State:
     #             return ref
     #         case _:
     #             raise NotImplementedError("Here we should list all the options and ask the LLM to choose which one does it mean")
-    def fetch_rule_fact(self, rule: Fact) -> 'FactRef | Interaction_RetrieveFact':
-        if rule["refer_by"] == "statement":
-            stmt = " ".join(cast(FactByStatement, rule)["statement"].split())
-            return Interaction_RetrieveFact(
-                state=self,
-                query=stmt,
-                kinds=[EntityKind.THEOREM],
-            )
-        else:
-            result = self.retrieve_fact(rule["name"])
-            if result is None:
-                raise FactNotFound_ByName(rule["name"])
-            full_name, short_name = result
-            return FactRef(full_name=full_name, short_name=short_name,
-                           fact=rule, expression="")
-    def semantic_knn(self, query_str: str, k: int,
-                     kinds: list[EntityKind],
-                     domain: Semantic_Vector_Store.Domain | None = None,
-                     ) -> list[tuple[float, SemanticRecord]]:
+    def fetch_facts(self, facts: list[Fact], tolerate: bool = False
+                    ) -> 'list[FactRef | Interaction_RetrieveFact | None]':
+        """Resolve a list of facts. FactByName are batched into one RPC call.
+        Returns FactRef for resolved facts, Interaction_RetrieveFact for statements,
+        or None for unfound facts when tolerate=True."""
+        out: list[FactRef | Interaction_RetrieveFact | None] = [None] * len(facts)
+        # Collect FactByName indices for batch lookup
+        name_indices: list[int] = []
+        name_queries: list[str] = []
+        for i, fact in enumerate(facts):
+            if fact["refer_by"] == "statement":
+                stmt = " ".join(cast(FactByStatement, fact)["statement"].split())
+                out[i] = Interaction_RetrieveFact(
+                    state=self, query=stmt, kinds=[EntityKind.THEOREM])
+            else:
+                name_indices.append(i)
+                name_queries.append(fact["name"])
+        # Batch resolve all FactByName
+        if name_queries:
+            results = self.retrieve_facts(name_queries)
+            for idx, result in zip(name_indices, results):
+                fact = facts[idx]
+                if result is None:
+                    if not tolerate:
+                        raise FactNotFound_ByName(fact["name"])  # type: ignore
+                    # tolerate: leave as None, warn
+                    msg = f"Fact \"{fact['name']}\" not found, skipped."  # type: ignore
+                    session = the_session()
+                    session.warnings.append(msg)
+                    session.warn_AoA_opr(msg)
+                else:
+                    full_name, short_name, exprs = result
+                    out[idx] = FactRef(full_name=full_name, short_name=short_name,
+                                       fact=fact, expression=exprs)
+        return out
+    def semantic_knn(self, query: str, k: int,
+                     kinds: list[EntityKind]) -> list[tuple[float, SemanticRecord]]:
         """Search k nearest entities by semantic similarity.
-        Uses the Semantic_Vector_Store attached to the connection."""
+        For TheoremK, extends the domain with local contextual thm keys."""
+        # Build domain
+        if EntityKind.THEOREM in kinds:
+            local_keys: list[universal_key] = self.connection.callback(
+                "IsaMini.contextual_thms", self.name)
+            local_keys = [bytes(k_) for k_ in local_keys]
+            domain: Semantic_Vector_Store.Domain = Semantic_Vector_Store.ContextExtended(local_keys)
+        else:
+            domain = Semantic_Vector_Store.ContextAll
         store: Semantic_Vector_Store = self.connection.semantic_vector_store()  # type: ignore
-        return store.lookup(query_str, k, kinds, domain)
+        return store.lookup(query, k, kinds, domain)
     def compute_bindings(self, var_names: list[str], fact_names: list[str]) -> Bindings:
         """
         Compute bindings for the leading proof goal by binding provided names in order.
@@ -872,13 +903,22 @@ class Minilang_State:
         """
         result = self.connection.callback("IsaMini.need_intro", self.name)
         return result
-    def retrieve_fact(self, name: str) -> tuple[str, str] | None:
+    def retrieve_facts(self, names: list[str]) -> list[tuple[str, str, list[str]] | None]:
         """
-        Retrieve a fact by its short or full name.
-        Returns (full_name, short_name) if the fact exists, None otherwise.
+        Retrieve facts by their short or full names (batch).
+        Returns list of (full_name, short_name, expressions) or None per name.
         """
-        result = self.connection.callback("IsaMini.retrieve_fact", (self.name, name))
-        return tuple(result) if result is not None else None
+        results = self.connection.callback("IsaMini.retrieve_fact", (self.name, names))
+        out: list[tuple[str, str, list[str]] | None] = [None] * len(results)
+        for i, r in enumerate(results):
+            if r is not None:
+                full_name, short_name, exprs = r
+                out[i] = (full_name, short_name, list(exprs))
+        return out
+
+    def retrieve_fact(self, name: str) -> tuple[str, str, list[str]] | None:
+        """Retrieve a single fact. Convenience wrapper around retrieve_facts."""
+        return self.retrieve_facts([name])[0]
     def check_term(self, term_str: str) -> tuple[typ, Vars, Vars]:
         """
         Parse and check a term string using Syntax.read_term.
@@ -920,7 +960,7 @@ class Minilang_State:
         return [FactRef(full_name=full_name,
                         short_name=short_name,
                         fact=FactByName(refer_by="name", name=short_name),
-                        expression=prop) for full_name, short_name, prop in result]
+                        expression=[prop]) for full_name, short_name, prop in result]
 
 ### Interaction
 
@@ -978,41 +1018,32 @@ class Interaction_RetrieveFact(Interaction):
     FINAL_K = 40
 
     def __init__(self, state: Minilang_State,
-            query: str, kinds: list[EntityKind],
-            domain: 'Semantic_Vector_Store.Domain | None' = None):
+            query: str, kinds: list[EntityKind]):
         self.query = query
         self.state = state
         self.k = self.INITIAL_K
         self.kinds = kinds
-        self.domain = domain
         self.candidate_facts = self._fetch_facts()
 
     def _fetch_facts(self) -> list[FactRef]:
-        # Get local contextual thm keys from the leading subgoal
-        local_keys: list[universal_key] = self.state.connection.callback(
-            "IsaMini.contextual_thms", self.state.name)
-        local_keys = [bytes(k) for k in local_keys]
-        # Search with domain = context entities + local keys
-        domain = Semantic_Vector_Store.ContextExtended(local_keys)
-        candidates = self.state.semantic_knn(self.query, self.k, self.kinds, domain)
+        import logging
+        _log = logging.getLogger(__name__)
+        candidates = self.state.semantic_knn(self.query, self.k, self.kinds)
         if not candidates:
             return []
-        # Get short names and pretty-printed expressions for the found facts
         names = [rec.name for _, rec in candidates]
-        infos: list[tuple[str, str] | None] = self.state.connection.callback(
-            "IsaMini.expr_of_fact", (self.state.name, names))
-        # Assemble into FactRef list
+        infos = self.state.retrieve_facts(names)
         results: list[FactRef] = []
         for (score, rec), info in zip(candidates, infos):
-            if info is not None:
-                short_name, expr = info
-            else:
-                short_name, expr = rec.name, ""
+            if info is None:
+                _log.warning("Fact %r not found in proof context, skipping", rec.name)
+                continue
+            full_name, short_name, exprs = info
             results.append(FactRef(
-                full_name=rec.name,
+                full_name=full_name,
                 short_name=short_name,
                 fact=FactByName(refer_by="name", name=short_name),
-                expression=expr))
+                expression=exprs))
         return results
 
     def prompt(self, indent: int, file: MyIO) -> None:
@@ -2151,6 +2182,27 @@ def print_statement(self: Statement, indent: int, file: MyIO):
 
 ### Concrete Models
 
+def _split_fetched(fetched: list['FactRef | Interaction_RetrieveFact | None'],
+                   filter_none: bool = False
+    ) -> tuple[list[FactRef], list[Interaction], list[int]]:
+    """Split fetch_facts results into resolved refs, interactions, and placeholder indices.
+    If filter_none=True, None entries are silently skipped."""
+    resolved: list[FactRef] = []
+    interactions: list[Interaction] = []
+    resolve_indices: list[int] = []
+    for item in fetched:
+        if item is None:
+            if filter_none:
+                continue
+            raise InternalError("Unexpected None in _split_fetched (use filter_none=True to skip)")
+        elif isinstance(item, FactRef):
+            resolved.append(item)
+        else:
+            resolve_indices.append(len(resolved))
+            resolved.append(None)  # type: ignore — placeholder
+            interactions.append(item)
+    return resolved, interactions, resolve_indices
+
 #### Obvious
 
 class Obvious_ToolArg(TypedDict):
@@ -2158,13 +2210,12 @@ class Obvious_ToolArg(TypedDict):
     facts: list[Fact]
 
 class Obvious_InternalToolArg(NamedTuple):
-    thought: str
     facts: list[FactRef]
 
 @proof_operation("Obvious", Obvious_ToolArg)
 class Obvious(Leaf):
     def __init__(self, config: NodeConfig, arg: Obvious_InternalToolArg):
-        super().__init__(config, arg.thought)
+        super().__init__(config, "")
         self.fact_refs = arg.facts
 
     @staticmethod
@@ -2177,25 +2228,11 @@ class Obvious(Leaf):
     def interactive_gen(arg: Obvious_ToolArg) -> gen_node:
         def mk(config: NodeConfig) -> 'Obvious':
             ml_state = config.ml_state
-            facts = arg["facts"]
-            resolved: list[FactRef] = []
-            interactions: list[Interaction] = []
-            resolve_indices: list[int] = []
-
-            for fact in facts:
-                result = ml_state.fetch_rule_fact(fact)
-                if isinstance(result, FactRef):
-                    resolved.append(result)
-                else:
-                    resolve_indices.append(len(resolved))
-                    resolved.append(None)  # type: ignore
-                    interactions.append(result)
+            fetched = ml_state.fetch_facts(arg["facts"], tolerate=True)
+            resolved, interactions, resolve_indices = _split_fetched(fetched, filter_none=True)
 
             def mk_internal() -> Obvious_InternalToolArg:
-                return Obvious_InternalToolArg(
-                    thought=arg["thought"],
-                    facts=resolved,
-                )
+                return Obvious_InternalToolArg(facts=resolved)
 
             if not interactions:
                 return Obvious(config, mk_internal())
@@ -2209,8 +2246,6 @@ class Obvious(Leaf):
         return mk
     def print(self, indent: int, file: MyIO, update_line: bool = False) -> int:
         indent = super().print(indent, file, update_line)
-        self._print_thought(indent, file)
-        print_indent(indent, file)
         file.write("operation: Obvious\n")
         if self.fact_refs:
             print_indent(indent, file)
@@ -2432,20 +2467,8 @@ class Rewrite(Leaf):
         """Interactive generation. Resolves FactByStatement via Interaction_RetrieveFact."""
         def mk(config: NodeConfig) -> 'Rewrite':
             ml_state = config.ml_state
-            facts = arg["using"]
-            resolved: list[FactRef] = []
-            interactions: list[Interaction] = []
-            resolve_indices: list[int] = []  # which positions need interaction
-
-            for fact in facts:
-                result = ml_state.fetch_rule_fact(fact)
-                if isinstance(result, FactRef):
-                    resolved.append(result)
-                else:
-                    # Interaction_RetrieveFact
-                    resolve_indices.append(len(resolved))
-                    resolved.append(None)  # type: ignore — placeholder
-                    interactions.append(result)
+            fetched = ml_state.fetch_facts(arg["using"], tolerate=True)
+            resolved, interactions, resolve_indices = _split_fetched(fetched, filter_none=True)
 
             def mk_internal() -> Rewrite_InternalToolArg:
                 return Rewrite_InternalToolArg(
@@ -2459,7 +2482,6 @@ class Rewrite(Leaf):
             if not interactions:
                 return Rewrite(config, mk_internal())
 
-            # Some need interaction
             async def kontinue(results: list[Any]) -> gen_node:
                 for i, idx in enumerate(resolve_indices):
                     resolved[idx] = results[i]
@@ -2936,7 +2958,8 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
                 return InferenceRule(config, internal)
 
             ml_state = config.ml_state
-            result = ml_state.fetch_rule_fact(rule)
+            fetched = ml_state.fetch_facts([rule])
+            result = fetched[0]
             if isinstance(result, FactRef):
                 internal = InferenceRule_InternalToolArg(
                     thought=arg["thought"], rule=rule, rule_ref=result)
@@ -2947,7 +2970,7 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
                 return InferenceRule.gen(InferenceRule_InternalToolArg(
                     thought=arg["thought"], rule=rule, rule_ref=results[0]))
 
-            raise RaiseInteraction([result], kontinue)
+            raise RaiseInteraction([result], kontinue) # type: ignore
         return mk
     def display_operation(self) -> str:
         return "Inference Rule"
@@ -3406,6 +3429,10 @@ class Session:
         self.age = 0
         self.logger = logger or (parent.logger if parent else None)
         self.working_interactions: list[Working_Interactions] = []
+        self.warnings: list[str] = []
+        self.total_cost_usd: float = 0.0
+        self.total_input_tokens: int = 0
+        self.total_output_tokens: int = 0
         if parent is not None:
             # Subsessions share parent's log files
             self.log_dir = parent.log_dir
@@ -3598,6 +3625,16 @@ class Session:
                   lambda: [f"[TOOL_RESPONSE] {tool_name}: {response}"],
                   tool_name=tool_name, response=response)
 
+    def log_AoA_opr(self, message: str):
+        """Log an AoA operation message to interaction.yaml."""
+        self._log(self.interaction_log_file, "AOA_OPR",
+                  lambda: [f"[AOA] {message}"], message=message)
+
+    def warn_AoA_opr(self, message: str):
+        """Log an AoA warning to interaction.yaml."""
+        self._log(self.interaction_log_file, "AOA_WARNING",
+                  lambda: [f"[AOA_WARN] {message}"], message=message)
+
     def log_interaction(self, tool_name: str, prompt: str):
         """Log interaction prompt to interaction.yaml."""
         self._log(self.interaction_log_file, "INTERACTION",
@@ -3626,10 +3663,17 @@ class Session:
         self._log(self.proofs_log_file, "PROOF_TREE_SNAPSHOT", None,
                   snapshot_type=snapshot_type, tree_yaml=tree_yaml)
 
+    def _log_cost(self) -> None:
+        self.log_AoA_opr(
+            f"total: input={self.total_input_tokens} "
+            f"output={self.total_output_tokens} tokens, "
+            f"cost=${self.total_cost_usd:.4f}")
+
     def log_proof(self):
         """
-        Log the current proof tree to proof.yaml in the log directory.
+        Log the current proof tree and cost summary to the log directory.
         """
+        self._log_cost()
         if self.log_dir is not None:
             proof_yaml_path = self.log_dir / "proof.yaml"
             try:

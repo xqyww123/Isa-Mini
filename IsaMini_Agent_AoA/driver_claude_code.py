@@ -56,6 +56,10 @@ async def _handle_raise_interaction(
         kontinuation=e.kontinuation,
     )
     session.working_interactions.append(wi)
+    n_forking = sum(1 for inter in e.interactions if inter.forking)
+    n_inline = len(e.interactions) - n_forking
+    session.log_interaction(tool_name,
+        f"{len(e.interactions)} interactions ({n_forking} forking, {n_inline} inline)")
 
     # 1. Launch forking interactions as background tasks (don't await yet)
     forking = [(i, inter) for i, inter in enumerate(e.interactions) if inter.forking]
@@ -71,6 +75,7 @@ async def _handle_raise_interaction(
             return _Prompt(buffer.getvalue())
 
     # 3. All non-forking done — await forks and call continuation
+    session.log_interaction("continuation", "all interactions resolved")
     result = await wi.run_continuation()
     session.working_interactions.pop()
     return _Result(result)
@@ -93,7 +98,7 @@ async def _execute_proof_action(
             case "fill":
                 node = session.root.fill(step, gen_node)
                 session.refresh_YAML()  # type: ignore[attr-defined]
-                response = P.filled_step_message(step, session.root, node)
+                response = P.filled_step_message(step, session.root, node, session)
             case "insert_before":
                 raise NotImplementedError(P.NOT_IMPLEMENTED_INSERT_BEFORE)
             case "amend":
@@ -155,7 +160,12 @@ async def _edit_tool(args: ToolCall_arg) -> ToolCall_ret:
     session.log_tool_call("mcp__proof__edit", args)
 
     step = args["target_step"]
-    gen_node = Parse_Node(args["proof_operation"])
+    try:
+        gen_node = Parse_Node(args["proof_operation"])
+    except AoA_Error as e:
+        error_msg = str(e)
+        session.log_tool_response("mcp__proof__edit", f"ERROR: {error_msg}")
+        return _mk_ret(error_msg)
 
     response = await _execute_proof_action(
         session, args["action"], step, gen_node,
@@ -212,6 +222,9 @@ async def _answer_tool(args: ToolCall_arg) -> ToolCall_ret:
     # Store the result
     wi.results[current_idx] = result
     wi.result_set[current_idx] = True
+    n_done = sum(1 for f in wi.result_set if f is True)
+    session.log_interaction("mcp__proof__answer",
+        f"answered interaction {current_idx} ({n_done}/{len(wi.interactions)} done)")
 
     # Find next unfinished non-forking interaction
     for i, inter in enumerate(wi.interactions):
@@ -222,9 +235,67 @@ async def _answer_tool(args: ToolCall_arg) -> ToolCall_ret:
             return _mk_ret(buffer.getvalue())
 
     # All non-forking done — await forks and call continuation
+    session.log_interaction("continuation", "all interactions resolved")
     final = await wi.run_continuation()
     session.working_interactions.pop()
     return _mk_ret(str(final))
+
+_semantic_search_schema = {
+    "type": "object",
+    "properties": {
+        "query": {
+            "type": "string",
+            "description": "English description of the entity to search for.",
+        },
+        "kinds": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "enum": ["constant", "lemma", "type", "typeclass", "locale",
+                         "introduction rule", "elimination rule"],
+            },
+            "description": "Entity kinds to search. Use [\"lemma\"] for theorems.",
+        },
+        "k": {
+            "type": "integer",
+            "description": "Number of results to return.",
+            "default": 10,
+        },
+    },
+    "required": ["query", "kinds"],
+    "additionalProperties": False,
+}
+
+@tool("semantic_search",
+      "Search for Isabelle entities by English description using semantic similarity.",
+      input_schema=_semantic_search_schema)
+async def _semantic_search_tool(args: ToolCall_arg) -> ToolCall_ret:
+    from .model import the_session
+    session = the_session()
+    if not isinstance(session, ClaudeCode):
+        raise InternalError(f"Expected ClaudeCode session, got {type(session)}")
+
+    session.log_tool_call("mcp__proof__semantic_search", args)
+
+    query = args["query"]
+    k = args.get("k", 10)
+    try:
+        kinds = [EntityKind.from_label(label) for label in args["kinds"]]
+    except KeyError as e:
+        return _mk_ret(f"Invalid entity kind: {e}")
+
+    ml_state = session.root.ml_state
+    results = ml_state.semantic_knn(query, k, kinds)
+
+    if not results:
+        return _mk_ret("No matching entities found.")
+
+    lines: list[str] = []
+    for score, rec in results:
+        lines.append(f"- {rec.pretty_print}")
+        if rec.interpretation:
+            lines.append(f"  {rec.interpretation}")
+    return _mk_ret("\n".join(lines))
 
 @agent_driver("ClaudeCode")
 class ClaudeCode(Session):
@@ -247,6 +318,7 @@ class ClaudeCode(Session):
         'mcp__proof__answer',
         'mcp__proof__query_by_name',
         'mcp__proof__query_by_position',
+        'mcp__proof__semantic_search',
         'ToolSearch'
     ]
     FORK_WHITELIST = [t for t in TOOL_WHITELIST if t != 'mcp__proof__edit']
@@ -259,6 +331,7 @@ class ClaudeCode(Session):
         'mcp__proof__edit',
         'mcp__proof__query_by_name',
         'mcp__proof__query_by_position',
+        'mcp__proof__semantic_search',
     ]
 
     working_dir: str
@@ -315,7 +388,7 @@ class ClaudeCode(Session):
         # Build MCP tools — semantic query tools need the Isabelle connection
         connection = root.ml_state.connection
         tools = [
-            _edit_tool, _answer_tool,
+            _edit_tool, _answer_tool, _semantic_search_tool,
             mk_query_by_name_tool(connection, []),
             mk_query_by_position_tool(connection, []),
         ]
@@ -342,10 +415,10 @@ class ClaudeCode(Session):
                 await self._run()
                 return
             except self._ReachLimitError:
-                self.debug_info("[RUN] Usage limit reached, waiting 20min to retry")
+                self.warn_AoA_opr("Usage limit reached, waiting 20min to retry")
                 time.sleep(1200)
             except self._RateLimitError:
-                self.debug_info("[RUN] API rate limit, waiting 2s to retry")
+                self.warn_AoA_opr("API rate limit, waiting 2s to retry")
                 time.sleep(2)
 
     def close(self):
@@ -529,6 +602,8 @@ class ClaudeCode(Session):
                             thinking = getattr(block, "thinking", None)
                             if isinstance(thinking, str) and thinking:
                                 self.log_model_thinking(thinking)
+                    if isinstance(message, ResultMessage):
+                        self._accumulate_cost(message)
                 unfinished_nodes = set()
                 self.root.unfinished_nodes(unfinished_nodes)
                 if unfinished_nodes:
@@ -538,6 +613,14 @@ class ClaudeCode(Session):
                 else:
                     self.log_proof()
                     return
+
+    def _accumulate_cost(self, message: ResultMessage) -> None:
+        if message.total_cost_usd:
+            self.total_cost_usd += message.total_cost_usd
+        if message.usage:
+            self.total_input_tokens += message.usage.get("input_tokens", 0)
+            self.total_output_tokens += message.usage.get("output_tokens", 0)
+
 
     def _launch_forks(self, forking: list[tuple[int, Interaction]],
                       wi: Working_Interactions) -> None:
@@ -589,10 +672,12 @@ class ClaudeCode(Session):
                         if isinstance(thinking, str) and thinking:
                             fork.log_model_thinking(f"{tag} {thinking}")
                 if isinstance(message, ResultMessage):
-                    fork.debug_info(f"{tag} completed: subtype={message.subtype}")
+                    self._accumulate_cost(message)
+                    fork.log_interaction("fork", f"{tag} completed: subtype={message.subtype}")
             fork.close()
 
         loop = asyncio.get_running_loop()
+        self.log_interaction("fork", f"launching {len(forking)} forking interactions")
         for idx, inter in forking:
             ctx = contextvars.copy_context()
             task = loop.create_task(run_one(idx, inter), context=ctx)

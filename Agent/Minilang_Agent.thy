@@ -1,6 +1,6 @@
 theory Minilang_Agent
   imports Minilang.Minilang Isa_REPL.Isa_REPL Complex_Main Automation_Base.Automation_Base
-          Isabelle_RPC.Remote_Procedure_Calling
+          Isabelle_RPC.Remote_Procedure_Calling Semantic_Embedding.Semantic_Embedding
 begin
 
 ML_file "helper.ML"
@@ -16,6 +16,24 @@ ML_file "tactic.ML.old" *)
 method_setup AgentAoA = \<open>
   Scan.succeed (K MiniLang_Agent_AoA.method)
 \<close>
+
+(*
+locale A = fixes x :: bool assumes x: x
+begin
+
+lemma A: \<open>x \<and> x\<close> using x by auto
+
+thm x
+ML \<open>Thm.derivation_id @{thm A}\<close>
+
+end
+
+ML \<open>Thm.derivation_id @{thm A.A}\<close>
+
+
+
+
+
 
 lemma x: "2 = 1 + (1::nat)" by auto
 ML \<open>BNF_Util.meta_mp\<close>
@@ -57,7 +75,7 @@ local
 in val pos = #pos entry |> Position.file_of
 end
 \<close>
-
+*)
 
 (*
 theorem sqrt2_not_rational:

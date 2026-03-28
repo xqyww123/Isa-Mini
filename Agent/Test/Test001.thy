@@ -3,6 +3,6 @@ theory Test001
 begin
 
 lemma t1: "(1::nat) > 0"
-  sorry
+  by agent
 
 end

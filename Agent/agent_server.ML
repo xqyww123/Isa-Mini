@@ -284,16 +284,23 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
 
       val retrieve_fact_callback = {
         name = "IsaMini.retrieve_fact",
-        arg_schema = unpackPair (unpackString, unpackString),
-        ret_schema = packOption (packPair (packString, packString)),
-        function = (fn (state_id, name) =>
+        arg_schema = unpackPair (unpackString, unpackList unpackString),
+        ret_schema = packList (packOption (packTuple3 (packString, packString, packList packString))),
+        function = (fn (state_id, names) =>
           let val s0 = get_state state_id
               val ctxt = Minilang.context_of s0
+              val thy = Proof_Context.theory_of ctxt
+              val SOT = MiniLang_Agent.string_of_term ctxt
               val facts = Proof_Context.facts_of ctxt
-              val full_name = Facts.intern facts name
-           in case Facts.lookup (Context.Proof ctxt) facts full_name of
-                SOME _ => SOME (full_name, Facts.extern ctxt facts full_name)
-              | NONE => NONE
+          in map (fn name =>
+              let val full_name = Facts.intern facts name
+              in case Facts.lookup (Context.Proof ctxt) facts full_name of
+                   SOME {thms, ...} =>
+                     SOME (full_name,
+                           Facts.extern ctxt facts full_name,
+                           map (SOT o Thm.prop_of o Thm.transfer thy) thms)
+                 | NONE => NONE
+              end) names
           end),
         timeout = NONE
       }
@@ -409,26 +416,6 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         timeout = NONE
       }
 
-      val expr_of_fact_callback = {
-        name = "IsaMini.expr_of_fact",
-        arg_schema = unpackPair (unpackString, unpackList unpackString),
-        ret_schema = packList (packOption (packPair (packString, packString))),
-        function = (fn (state_id, names) =>
-          let val s0 = get_state state_id
-              val ctxt = Minilang.context_of s0
-              val SOT = MiniLang_Agent.string_of_term ctxt
-              val facts = Proof_Context.facts_of ctxt
-          in map (fn name =>
-              (case Proof_Context.get_thms ctxt name of
-                 thms =>
-                   let val short = Facts.extern ctxt facts name
-                       val expr = String.concatWith "\n" (map (SOT o Thm.prop_of) thms)
-                   in SOME (short, expr) end)
-              handle ERROR _ => NONE) names
-          end),
-        timeout = NONE
-      }
-
       (* Build AoA command with local callbacks *)
       val s0_ptree = Minilang.print_state s0
       val aoa_cmd = {
@@ -438,7 +425,9 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
             in packTuple5 (context_packer ctxt, minilang_tree_packer ctxt, packString, packString, packString)
                           (global_context, s0_ptree, driver, log_dir, invocation_id)
             end),
-        ret_schema = unpackPair (unpackList MiniLang_Agent.xcmd_unpacker, unpackOption unpackString),
+        ret_schema = unpackTuple3 (unpackList MiniLang_Agent.xcmd_unpacker,
+                                   unpackOption unpackString,
+                                   unpackTuple3 (unpackInt, unpackInt, unpackReal)),
         timeout = NONE,
         callback = [
           mk_callback proof_opr_callback,
@@ -450,12 +439,17 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
           mk_callback schematic_vars_callback,
           mk_callback potential_defs_callback,
           mk_callback contextual_thms_callback,
-          mk_callback expr_of_fact_callback
+          Universal_Key.make_universal_key_callback' (SOME thm_cache) (Context.Proof ctxt),
+          Config.make_config_lookup_callback (Context.Proof ctxt)
         ]
       }
 
-      val (xcmds, s1o) =
+      val (xcmds, s1o, (input_tokens, output_tokens, cost_usd)) =
             call_command aoa_cmd (global_context, driver, invocation_id)
+      val _ = writeln (String.concat [
+        "[AoA] input=", Int.toString input_tokens,
+        " output=", Int.toString output_tokens,
+        " cost=$", Real.fmt (StringCvt.FIX (SOME 4)) cost_usd])
    in case s1o
    of SOME s1 => (
    case Symtab.lookup (!state) s1

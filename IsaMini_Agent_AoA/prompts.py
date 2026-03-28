@@ -20,12 +20,18 @@ EDIT_TOOL_DESCRIPTION = "Edit the proof.yaml file"
 # Edit Action Response Messages
 # ============================================================================
 
-def filled_step_message(step: str, root: Root, node: Node) -> str:
+def filled_step_message(step: str, root: Root, node: Node, session: 'model.Session') -> str:
     """Message returned when a step is successfully filled."""
     file = MyIO(StringIO())
     file.write(f"Successfully filled step {step}:\n")
     node.print(1, file, update_line=False)
+    # Print any auto-generated nodes after the filled node (e.g., Intro)
     parent = node.parent
+    if parent is not None:
+        siblings = parent.sub_nodes
+        idx = next((i for i, n in enumerate(siblings) if n is node), -1)
+        for sibling in siblings[idx + 1:]:
+            sibling.print(1, file, update_line=False)
     if parent is not None:
         goal_and_to_file = parent.should_I_show_pending_goal()
         goal_id = parent.id_of_goal()
@@ -40,9 +46,19 @@ def filled_step_message(step: str, root: Root, node: Node) -> str:
                 " to provide the proof.\n")
         elif goal_id is not None:
             file.write(f"All proof goals of {goal_id} are completed.\n")
+    # Print and reset session warnings
+    if session.warnings:
+        file.write("Warnings:\n")
+        for w in session.warnings:
+            file.write(f"  - {w}\n")
+        session.warnings.clear()
     file.write("Overall outline:\n")
     root.quickview(1, file)
     root._print_all_warnings(file)
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    if not unfinished:
+        file.write("Congratulations! All goals are proven. Terminate immediately without output!\n")
     return file.getvalue()
 
 # ============================================================================

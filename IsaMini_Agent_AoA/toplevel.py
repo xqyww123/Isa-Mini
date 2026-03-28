@@ -47,10 +47,11 @@ def IsaMini_AoA(data: tuple[Any, Any, str, str, str], connection: Connection):
             session.initialize(root)
             session.run()
 
+    cost = (session.total_input_tokens, session.total_output_tokens, session.total_cost_usd)
     if root.is_proof_finished():
-        return ([x.pack() for x in root.assemble()], root.final_ml_state.name)
+        return ([x.pack() for x in root.assemble()], root.final_ml_state.name, cost)
     else:
-        return ([x.pack() for x in root.assemble()], None)
+        return ([x.pack() for x in root.assemble()], None, cost)
     # Finally, we return the constructed proof
 
 

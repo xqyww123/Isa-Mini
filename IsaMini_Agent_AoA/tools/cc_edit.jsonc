@@ -123,7 +123,6 @@
           "const": "Obvious",
           "type": "string"
         },
-        "thought": {"$ref": "#/$defs/Thought" },
         "facts": {
           "description": "helpful facts for proving the goal",
           "items": { "$ref": "#/$defs/Fact" },
@@ -132,7 +131,6 @@
       },
       "required": [
         "operation",
-        "thought",
         "facts"
       ],
       "type": "object"
@@ -164,7 +162,7 @@
       "description": "introduce variables satisfying given constraints",
       "properties": {
         "operation": {
-          "const": "obtain",
+          "const": "Obtain",
           "type": "string"
         },
         "thought": { "$ref": "#/$defs/Thought" },
