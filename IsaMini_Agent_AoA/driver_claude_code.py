@@ -141,11 +141,6 @@ async def _execute_proof_action(
             return result.text
         return result.value # type: ignore[arg-type]
 
-    except AoA_Cancel as e:
-        error_msg = f"The edit action is cancelled because:\n{e}"
-        session.log_tool_response(tool_name, error_msg)
-        return error_msg
-
     except AoA_Error as e:
         error_msg = str(e)
         session.log_tool_response(tool_name, f"ERROR: {error_msg}")
@@ -207,10 +202,6 @@ async def _delete_tool(args: ToolCall_arg) -> ToolCall_ret:
             session.root.delete(steps)
             session.refresh_YAML()  # type: ignore[attr-defined]
             response = await P.deleted_steps_message(steps, session.root, session)
-        except AoA_Cancel as e:
-            error_msg = f"The delete action is cancelled because:\n{e}"
-            session.log_tool_response("mcp__proof__delete", error_msg)
-            return _mk_ret(error_msg)
         except AoA_Error as e:
             error_msg = str(e)
             session.log_tool_response("mcp__proof__delete", f"ERROR: {error_msg}")

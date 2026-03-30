@@ -361,7 +361,7 @@ async def _test_Unfold1(root: Root, file: MyIO):
     root.fill("1", Unfold.gen(Unfold_ToolArg_internal(
         thought="Unfold the goal",
         targets=["XXX"],
-        fact_refs=[FactRef("XXX_def", "XXX_def", {"refer_by": "name", "name": "XXX_def"}, ["Fake"])]
+        fact_refs=[IsabelleFact_Presented("XXX_def", "XXX_def", {"refer_by": "name", "name": "XXX_def"}, ["Fake"])]
     )))
     print_header("After Unfold", file)
     root.print(0, file)

@@ -24,14 +24,14 @@ async def filled_step_message(step: str, root: Root, node: Node, session: 'model
     """Message returned when a step is successfully filled."""
     file = MyIO(StringIO())
     file.write(f"Successfully filled step {step}:\n")
-    node.print(1, file, update_line=False)
+    node.print(1, file, update_line=False, show_warnings=True)
     # Print any auto-generated nodes after the filled node (e.g., Intro)
     parent = node.parent
     if parent is not None:
         siblings = parent.sub_nodes
         idx = next((i for i, n in enumerate(siblings) if n is node), -1)
         for sibling in siblings[idx + 1:]:
-            sibling.print(1, file, update_line=False)
+            sibling.print(1, file, update_line=False, show_warnings=True)
     if parent is not None:
         goal_and_to_file = parent.should_I_show_pending_goal()
         goal_id = parent.id_of_goal()
@@ -60,6 +60,7 @@ async def filled_step_message(step: str, root: Root, node: Node, session: 'model
     if not unfinished:
         file.write("Congratulations! All goals are proven.\n")
         await session.interrupt()
+    root.reset()
     return file.getvalue()
 
 # ============================================================================
@@ -73,7 +74,7 @@ async def inserted_before_step_message(step: str, root: Root, node: Node, sessio
     """Message returned when a step is successfully inserted before another."""
     file = MyIO(StringIO())
     file.write(f"Successfully inserted step {node.id} before step {step}:\n")
-    node.print(1, file, update_line=False)
+    node.print(1, file, update_line=False, show_warnings=True)
     if session.warnings:
         file.write("Warnings:\n")
         for w in session.warnings:
@@ -88,6 +89,7 @@ async def inserted_before_step_message(step: str, root: Root, node: Node, sessio
     if not unfinished:
         file.write("Congratulations! All goals are proven.\n")
         await session.interrupt()
+    root.reset()
     return file.getvalue()
 NOT_IMPLEMENTED_AMEND = "amend is not implemented"
 
@@ -96,7 +98,7 @@ async def amended_step_message(step: str, root: Root, node: Node, session: 'mode
     """Message returned when a step is successfully amended."""
     file = MyIO(StringIO())
     file.write(f"Successfully amended step {step}:\n")
-    node.print(1, file, update_line=False)
+    node.print(1, file, update_line=False, show_warnings=True)
     parent = node.parent
     if parent is not None:
         siblings = parent.sub_nodes
@@ -106,7 +108,7 @@ async def amended_step_message(step: str, root: Root, node: Node, session: 'mode
         # otherwise too many subsequent nodes would be printed.
         if remaining <= 2:
             for sibling in siblings[idx + 1:]:
-                sibling.print(1, file, update_line=False)
+                sibling.print(1, file, update_line=False, show_warnings=True)
             goal_and_to_file = parent.should_I_show_pending_goal()
             goal_id = parent.id_of_goal()
             if goal_and_to_file is not None:
@@ -134,6 +136,7 @@ async def amended_step_message(step: str, root: Root, node: Node, session: 'mode
     if not unfinished:
         file.write("Congratulations! All goals are proven.\n")
         await session.interrupt()
+    root.reset()
     return file.getvalue()
 async def deleted_steps_message(steps: list[str], root: Root, session: 'model.Session') -> str:
     """Message returned when steps are successfully deleted."""

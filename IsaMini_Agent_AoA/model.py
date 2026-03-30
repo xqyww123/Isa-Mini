@@ -38,31 +38,62 @@ class FactByName(TypedDict):
 
 type Fact = FactByStatement | FactByName
 
-#type FactRef = str # i.e., the (full) name
-class FactRef(NamedTuple):
-    full_name: str
-    short_name: str
-    fact: Fact
-    expression: list[term]  # pretty-printed propositions (one per thm)
+class FailureReason(NamedTuple):
+    """A human-readable failure reason, used in Interaction.answer() returns
+    and Leaf.the_operation() returns."""
+    reason: str
 
+class IsabelleFact(ABC):
+    """Abstract base class for facts referenced in proof operations."""
+    @abstractmethod
+    def name(self) -> str: ...
+    @abstractmethod
+    def print(self, indent: int, file: MyIO) -> None: ...
+    @abstractmethod
+    def pack(self) -> Any:
+        """Pack for RPC. Returns the packed form, or FailureReason on error."""
+        ...
+
+class IsabelleFact_Presented(IsabelleFact):
+    """A resolved fact with full information from Isabelle."""
+    __slots__ = ('full_name', 'short_name', 'fact', 'expression')
+    def __init__(self, full_name: str, short_name: str, fact: Fact, expression: list[term]):
+        self.full_name = full_name
+        self.short_name = short_name
+        self.fact = fact
+        self.expression = expression
+    def name(self) -> str:
+        return self.short_name
+    def print(self, indent: int, file: MyIO) -> None:
+        print_indent(indent, file)
+        if len(self.expression) == 1:
+            file.write(f"- {self.short_name}: {self.expression[0]}\n")
+        elif len(self.expression) > 1:
+            file.write(f"- {self.short_name}:\n")
+            for expr in self.expression:
+                print_indent(indent + 1, file)
+                file.write(f"  {expr}\n")
+        else:
+            file.write(f"- {self.short_name}\n")
     def pack(self) -> str:
-        """Pack for RPC — just the full name."""
         return self.full_name
 
-def print_FactRef(ref: FactRef, indent: int, file: MyIO) -> None:
-    print_indent(indent, file)
-    if len(ref.expression) == 1:
-        file.write(f"- {ref.short_name}: {ref.expression[0]}\n")
-    elif len(ref.expression) > 1:
-        file.write(f"- {ref.short_name}:\n")
-        for expr in ref.expression:
-            print_indent(indent + 1, file)
-            file.write(f"  {expr}\n")
-    else:
-        file.write(f"- {ref.short_name}\n")
-    if ref.fact["refer_by"] == "statement":
-        print_indent(indent + 1, file)
-        file.write(f"{cast(FactByStatement, ref.fact)['statement']}\n")
+class IsabelleFact_Unfound(IsabelleFact):
+    """A fact that could not be found in the Isabelle context."""
+    __slots__ = ('fact',)
+    def __init__(self, fact: Fact):
+        self.fact = fact
+    def name(self) -> str:
+        if self.fact["refer_by"] == "name":
+            return cast(FactByName, self.fact)["name"]
+        return cast(FactByStatement, self.fact)["statement"]
+    def print(self, indent: int, file: MyIO) -> None:
+        print_indent(indent, file)
+        file.write(f"- Error: fact \"{self.name()}\" not found\n")
+    def pack(self) -> Any:
+        raise InternalError(f"Attempting to pack an unfound fact \"{self.name()}\". "
+                            "Unfound facts should be filtered out before packing.")
+
 
 class Context(NamedTuple):
     vars: Vars
@@ -190,16 +221,10 @@ def titled_string_of_and_list(l: list[Any], singular: str, plural: str) -> str:
 
 ## Errors
 type timedelta = float # in seconds
-type failure_reason = str | None
-        # None means internal error
-        # "" means to suppress the error message printing
 
 class AoA_Error(Exception):
     pass
 
-class AoA_Cancel(AoA_Error):
-    """Raised to cancel a proof edit action."""
-    pass
 
 class OprError(AoA_Error):
     pass
@@ -210,12 +235,6 @@ class CannotInsert(OprError):
         self.insert_into = insert_into
     def __str__(self) -> str:
         return f"Cannot insert before the node {self.insert_into.id}.\n{self.reason}"
-class CannotInsert_EvaluationFailed(CannotInsert):
-    def __init__(self, insert_into: 'Node', reason : failure_reason):
-        reason_str = "Proof operation failed."
-        if reason is not None:
-            reason_str = f"{reason_str}\n{reason}"
-        super().__init__(insert_into, reason_str)
 class CannotInsert_NodeNotFound(CannotInsert):
     def __init__(self, id: step):
         self.id = id
@@ -223,7 +242,7 @@ class CannotInsert_NodeNotFound(CannotInsert):
         return f"Cannot insert before the node {self.id} because it is not found"
 
 class CannotAppend(OprError):
-    def __init__(self, target : 'Node', reason : failure_reason):
+    def __init__(self, target : 'Node', reason : str):
         self.reason = reason
         self.target = target
     def __str__(self) -> str:
@@ -360,37 +379,6 @@ class ArgumentError_UnparsedTerm(ArgumentError):
         """
         return ArgumentError_UnparsedTerm(arg, internal_error.term, internal_error.reason)
 
-class ArgumentError_RewriteNoTargets(ArgumentError):
-    def __init__(self, arg: ToolCall_arg):
-        super().__init__(
-            arg,
-            "Rewrite operation must target at least one of: the goal or some premises. " +
-            "Set 'rewrite goal' to true or provide at least one premise name in 'rewrite premises'."
-        )
-class ArgumentError_UnfoldNoTargets(ArgumentError):
-    def __init__(self, arg: ToolCall_arg):
-        super().__init__(arg,
-            "Unfold operation must specify at least one target.")
-class ArgumentError_UnfoldNoFactRefs(ArgumentError):
-    def __init__(self, arg: ToolCall_arg):
-        super().__init__(arg,
-            "Unfold operation must specify at least one fact reference.")
-class ArgumentError_ObtainNoVariables(ArgumentError):
-    def __init__(self, arg: ToolCall_arg):
-        super().__init__(arg,
-            "Obtain operation must specify at least one variable.")
-class ArgumentError_BranchNoCases(ArgumentError):
-    def __init__(self, arg: ToolCall_arg):
-        super().__init__(arg,
-            "Branch operation must specify at least one case.")
-
-    @staticmethod
-    def from_internal_error(arg: ToolCall_arg, internal_error: InternalError_UnparsedTerm) -> 'ArgumentError_UnparsedTerm':
-        """
-        Convert an InternalError_UnparsedTerm to an ArgumentError_UnparsedTerm.
-        """
-        return ArgumentError_UnparsedTerm(arg, internal_error.term, internal_error.reason)
-
 def _check_tool_arg_keys(toolarg_typed_dict: type, data: ToolCall_arg, operation: str) -> None:
     """
     Ensure that `data` contains all required keys defined by the TypedDict `toolarg_typed_dict`.
@@ -415,16 +403,16 @@ class EvaluationStatus(NamedTuple):
         FAILURE = "failure"
     status: Status
     time: timedelta
-    reason: failure_reason
+    reason: 'FailureReason | None'
 
     @staticmethod
-    def success(time: timedelta, reason: failure_reason = None) -> 'EvaluationStatus':
+    def success(time: timedelta, reason: 'FailureReason | None' = None) -> 'EvaluationStatus':
         return EvaluationStatus(EvaluationStatus.Status.SUCCESS, time, reason)
     @staticmethod
-    def failure(time: timedelta, reason: failure_reason) -> 'EvaluationStatus':
+    def failure(time: timedelta, reason: 'FailureReason') -> 'EvaluationStatus':
         return EvaluationStatus(EvaluationStatus.Status.FAILURE, time, reason)
 EVALUATION_CACNCELLED = EvaluationStatus(EvaluationStatus.Status.CANCELLED, 0.0, None)
-EVALUATION_NOT_YET = EvaluationStatus.failure(0.0, None)
+EVALUATION_NOT_YET = EvaluationStatus.failure(0.0, FailureReason("Not yet evaluated"))
 
 ### Bindings
 
@@ -741,19 +729,19 @@ class Minilang_Operation(NamedTuple):
         vars = [(v["name"], ascii_of_unicode(v["type"]) if "type" in v else None) for v in variables]
         return Minilang_Operation("OBTAIN", (vars, [(n, ascii_of_unicode(c)) for n, c in constraints]))
     @staticmethod
-    def RULE(rule_ref: FactRef | None) -> 'Minilang_Operation':
+    def RULE(rule_ref: 'IsabelleFact | None') -> 'Minilang_Operation':
         return Minilang_Operation("RULE", [rule_ref.pack()] if rule_ref is not None else [])
     @staticmethod
-    def HAMMER(fact_refs: list[FactRef]) -> 'Minilang_Operation':
+    def HAMMER(fact_refs: 'list[IsabelleFact]') -> 'Minilang_Operation':
         return Minilang_Operation("HAMMER", [r.pack() for r in fact_refs])
     @staticmethod
     def INTRO(bindings: Bindings | None) -> 'Minilang_Operation':
         return Minilang_Operation("INTRO", bindings)
     @staticmethod
-    def SIMPLIFY(fact_refs: list[FactRef], use_system_simps: bool, premise_names: list[str], simplify_goal: bool, bindings: tuple[list[tuple[str, str, str]], list[tuple[lambda_term, str, str]]] | None) -> 'Minilang_Operation':
+    def SIMPLIFY(fact_refs: 'list[IsabelleFact]', use_system_simps: bool, premise_names: list[str], simplify_goal: bool, bindings: tuple[list[tuple[str, str, str]], list[tuple[lambda_term, str, str]]] | None) -> 'Minilang_Operation':
         return Minilang_Operation("SIMPLIFY", ([r.pack() for r in fact_refs], use_system_simps, premise_names, simplify_goal, bindings))
     @staticmethod
-    def UNFOLD(fact_refs: list[FactRef]) -> 'Minilang_Operation':
+    def UNFOLD(fact_refs: 'list[IsabelleFact]') -> 'Minilang_Operation':
         return Minilang_Operation("UNFOLD", [r.pack() for r in fact_refs])
     @staticmethod
     def WITNESS(terms: list[term]) -> 'Minilang_Operation':
@@ -762,10 +750,10 @@ class Minilang_Operation(NamedTuple):
     def BRANCH(cases: list[tuple[str | None, term]]) -> 'Minilang_Operation':
         return Minilang_Operation("BRANCH", [(n, ascii_of_unicode(t)) for n, t in cases])
     @staticmethod
-    def CASE_SPLIT(target: term, vars: list[varname_spec] | None, rule: FactRef | None) -> 'Minilang_Operation':
+    def CASE_SPLIT(target: term, vars: list[varname_spec] | None, rule: 'IsabelleFact | None') -> 'Minilang_Operation':
         return Minilang_Operation("CASE_SPLIT", (ascii_of_unicode(target), vars, rule))
     @staticmethod
-    def INDUCT(target: term, vars: list[varname_spec] | None, arbitrary: list[varname], rule: FactRef | None) -> 'Minilang_Operation':
+    def INDUCT(target: term, vars: list[varname_spec] | None, arbitrary: list[varname], rule: 'IsabelleFact | None') -> 'Minilang_Operation':
         return Minilang_Operation("INDUCT", (ascii_of_unicode(target), vars, [ascii_of_unicode(t) for t in arbitrary], rule.pack() if rule is not None else None))
     @staticmethod
     def SKIP() -> 'Minilang_Operation':
@@ -853,12 +841,12 @@ class Minilang_State:
     #             return ref
     #         case _:
     #             raise NotImplementedError("Here we should list all the options and ask the LLM to choose which one does it mean")
-    def fetch_facts(self, facts: list[Fact], tolerate: bool = False
-                    ) -> 'list[FactRef | Interaction_RetrieveFact | None]':
+    def fetch_facts(self, facts: list[Fact]
+                    ) -> 'list[IsabelleFact | Interaction_RetrieveFact]':
         """Resolve a list of facts. FactByName are batched into one RPC call.
-        Returns FactRef for resolved facts, Interaction_RetrieveFact for statements,
-        or None for unfound facts when tolerate=True."""
-        out: list[FactRef | Interaction_RetrieveFact | None] = [None] * len(facts)
+        Returns IsabelleFact_Presented for resolved facts, Interaction_RetrieveFact
+        for statements needing interaction, or IsabelleFact_Unfound for unfound facts."""
+        out: list[IsabelleFact | Interaction_RetrieveFact] = [None] * len(facts)  # type: ignore
         # Collect FactByName indices for batch lookup
         name_indices: list[int] = []
         name_queries: list[str] = []
@@ -876,17 +864,12 @@ class Minilang_State:
             for idx, result in zip(name_indices, results):
                 fact = facts[idx]
                 if result is None:
-                    if not tolerate:
-                        raise FactNotFound_ByName(fact["name"])  # type: ignore
-                    # tolerate: leave as None, warn
-                    msg = f"Fact \"{fact['name']}\" not found, skipped."  # type: ignore
-                    session = the_session()
-                    session.warnings.append(msg)
-                    session.warn_AoA_opr(msg)
+                    out[idx] = IsabelleFact_Unfound(fact)
                 else:
                     full_name, short_name, exprs = result
-                    out[idx] = FactRef(full_name=full_name, short_name=short_name,
-                                       fact=fact, expression=exprs)
+                    out[idx] = IsabelleFact_Presented(
+                        full_name=full_name, short_name=short_name,
+                        fact=fact, expression=exprs)
         return out
     def semantic_knn(self, query: str, k: int,
                      kinds: list[EntityKind]) -> list[tuple[float, SemanticRecord]]:
@@ -967,13 +950,13 @@ class Minilang_State:
         except IsabelleError as e:
             raise
 
-    def potential_defs_of(self, terms: list[str]) -> list[FactRef]:
+    def potential_defs_of(self, terms: list[str]) -> list[IsabelleFact_Presented]:
         """
         Get potential definitions for terms via Potential_Defs_Of RPC.
-        Returns list of FactRef, deduplicated by proposition.
+        Returns list of IsabelleFact_Presented, deduplicated by proposition.
         """
         result = self.connection.callback("IsaMini.potential_defs_of", (self.name, terms))
-        return [FactRef(full_name=full_name,
+        return [IsabelleFact_Presented(full_name=full_name,
                         short_name=short_name,
                         fact=FactByName(refer_by="name", name=short_name),
                         expression=[prop]) for full_name, short_name, prop in result]
@@ -1041,7 +1024,7 @@ class Interaction_RetrieveFact(Interaction):
         self.kinds = kinds
         self.candidate_facts = self._fetch_facts()
 
-    def _fetch_facts(self) -> list[FactRef]:
+    def _fetch_facts(self) -> list[IsabelleFact_Presented]:
         import logging
         _log = logging.getLogger(__name__)
         candidates = self.state.semantic_knn(self.query, self.k, self.kinds)
@@ -1049,13 +1032,13 @@ class Interaction_RetrieveFact(Interaction):
             return []
         names = [rec.name for _, rec in candidates]
         infos = self.state.retrieve_facts(names)
-        results: list[FactRef] = []
+        results: list[IsabelleFact_Presented] = []
         for (score, rec), info in zip(candidates, infos):
             if info is None:
                 _log.warning("Fact %r not found in proof context, skipping", rec.name)
                 continue
             full_name, short_name, exprs = info
-            results.append(FactRef(
+            results.append(IsabelleFact_Presented(
                 full_name=full_name,
                 short_name=short_name,
                 fact=FactByName(refer_by="name", name=short_name),
@@ -1080,7 +1063,7 @@ class Interaction_RetrieveFact(Interaction):
             file.write("Call `mcp__proof__answer` with the index if any matches, "
                        "or with an empty array to see more candidates.\n")
 
-    def answer(self, answer: answer) -> FactRef:
+    def answer(self, answer: answer) -> IsabelleFact:
         if not answer:
             if self.k < self.FINAL_K:
                 # Expand search and re-prompt
@@ -1090,9 +1073,8 @@ class Interaction_RetrieveFact(Interaction):
                     return results[0]
                 raise RaiseInteraction([self], identity)
             else:
-                raise AoA_Cancel(
-                    f'No matching fact found for "{self.query}". '
-                    f'You may need to prove this as a lemma first.')
+                return IsabelleFact_Unfound(
+                    FactByStatement(refer_by="statement", statement=self.query))
         if len(answer) > 1:
             raise Interaction_BadAnswer("Please select exactly one fact.")
         idx = answer[0]
@@ -1160,7 +1142,7 @@ class Node(ABC):
         print_indent(indent, file)
         file.write(f"- {self._kind} id: {self.id}\n")
         return indent + 1
-    def print(self, indent: int, file : MyIO, update_line: bool = False) -> int:
+    def print(self, indent: int, file : MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         return self._print_step_id(indent, file, update_line)
     def quickview_title(self) -> str:
         return type(self).__name__
@@ -1186,9 +1168,8 @@ class Node(ABC):
                 print_indent(indent, file)
                 file.write("Error:")
                 reason = self.status.reason
-                if reason is None:
-                    raise InternalError("The reason cannot be None when the status is failure")
-                print_paragraph(indent, file, reason)
+                assert reason is not None
+                print_paragraph(indent, file, reason.reason)
             case EvaluationStatus.Status.CANCELLED:
                 print_indent(indent, file)
                 file.write("Error: the evaluation is cancelled due to failures in preceding nodes")
@@ -1281,13 +1262,7 @@ class Node(ABC):
             raise InternalError("Don't know how to refresh a node and all its after nodes when the node's parent is none")
         else:
             node = self.parent._insert_before_child(self, gen_node)
-            try:
-                node._refresh_me_alone(True)
-                if node.status.status == EvaluationStatus.Status.FAILURE:
-                    raise CannotInsert_EvaluationFailed(self, node.status.reason)
-            except AoA_Error:
-                self.parent._remove_child(node)
-                raise
+            node._refresh_me_alone(True)
             node._refresh_all_after_me()
             return node
     def insert_before(self, step: step, gen_node: gen_node) -> 'Node':
@@ -1461,21 +1436,28 @@ class Leaf(Node):
     def __init__(self, config: NodeConfig, thought: str):
         super().__init__(config, thought)
     @abstractmethod
-    def the_operation(self) -> Minilang_Operation:
+    def the_operation(self) -> 'Minilang_Operation | FailureReason':
         ...
     def assemble(self, output: list[Minilang_Operation] | None = None) -> list[Minilang_Operation]:
         if output is None:
             output = []
-        output.append(self.the_operation())
+        op = self.the_operation()
+        if isinstance(op, FailureReason):
+            raise InternalError(f"Cannot assemble a node with failed operation: {op.reason}")
+        output.append(op)
         return output
     def _refresh_me_alone(self, first_time: bool) -> None:
         now = time()
         super()._refresh_me_alone(first_time)
+        op = self.the_operation()
+        if isinstance(op, FailureReason):
+            self.status = EvaluationStatus.failure(time() - now, op)
+            return
         try:
-            self.ml_state.execute(self.the_operation(), self.resulting_state())
+            self.ml_state.execute(op, self.resulting_state())
             self.status = EvaluationStatus.success(time() - now)
         except IsabelleError as err:
-            self.status = EvaluationStatus.failure(time() - now, ''.join(err.errors))
+            self.status = EvaluationStatus.failure(time() - now, FailureReason(''.join(err.errors)))
     def append(self, gen_node: may_gen_node) -> 'Node | None':
         raise CannotAppend(self, "It is not a goal or a proof block")
 
@@ -1505,7 +1487,7 @@ class NonLeaf_Node(Node):
                     )
                 return
         raise InternalError("The target node is not my children")
-    def _refresh_footer(self) -> failure_reason:
+    def _refresh_footer(self) -> FailureReason | None:
         return None
     def _refresh_all_children_after(self, after: 'Node | Literal["end"]', can_continue_i: bool = True) -> None:
         """
@@ -1660,7 +1642,7 @@ class NonLeaf_Node(Node):
                 new_node._refresh_all_after_me()
                 return new_node
         raise InternalError("The target node is not my children")
-    def _amend_from(self, old: 'Node') -> None:
+    def _amend_from(self, old: 'NonLeaf_Node') -> None:  # type: ignore[override]
         super()._amend_from(old)
         self.sub_nodes[:] = old.sub_nodes
         old.sub_nodes.clear()
@@ -1681,20 +1663,20 @@ class StdBlock(NonLeaf_Node):
         self._allow_multi_goal = False
         self.open_pending_proof_line: int | None = None
     @abstractmethod
-    def beginning_opr(self) -> Minilang_Operation | None:
+    def beginning_opr(self) -> 'Minilang_Operation | FailureReason | None':
         ...
     def ending_opr(self) -> Minilang_Operation | None:
         return Minilang_Operation.END()
     def has_ending_opr(self) -> bool:
         return self.ending_opr() is not None
     @abstractmethod
-    def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
+    def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         ...
     @abstractmethod
-    def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
+    def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
         ...
     @abstractmethod
-    def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
+    def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         ...
     # def _state_before_ending(self) -> Minilang_State:
     #     return self._state_before_ending_
@@ -1712,10 +1694,12 @@ class StdBlock(NonLeaf_Node):
             return self.sub_nodes[0].ml_state
         else:
             return self._state_before_ending_
-    def assemble(self, output: list[Minilang_Operation] | None = None) -> list[Minilang_Operation]: 
+    def assemble(self, output: list[Minilang_Operation] | None = None) -> list[Minilang_Operation]:
         if output is None:
             output = []
         opr = self.beginning_opr()
+        if isinstance(opr, FailureReason):
+            raise InternalError(f"Cannot assemble a node with failed beginning operation: {opr.reason}")
         if opr is not None:
             output.append(opr)
         for child in self.sub_nodes:
@@ -1725,13 +1709,13 @@ class StdBlock(NonLeaf_Node):
             output.append(opr)
         return output
 
-    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> tuple[bool, failure_reason]:
+    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> 'FailureReason | None':
         try:
             self.ml_state.execute(begin_opr, self._state_after_beginning())
-            return (True, None)
+            return None
         except IsabelleError as err:
-            return (False, self._beginning_opr_err_msgs(err))
-    def _refresh_footer(self) -> failure_reason:
+            return self._beginning_opr_err_msgs(err)
+    def _refresh_footer(self) -> FailureReason | None:
         ending_opr = self.ending_opr()
         if ending_opr is None:
             self._state_before_ending_.clone(self.resulting_state())
@@ -1739,21 +1723,21 @@ class StdBlock(NonLeaf_Node):
             try:
                 self._state_before_ending_.execute(ending_opr, self.resulting_state())
             except IsabelleError as err:
-                reason = self._ending_opr_err_msgs(err)
-                if reason is None:
-                    return "Unknown error in the ending operation"
-                else:
-                    return reason
+                return self._ending_opr_err_msgs(err)
         return None
     def _refresh_me_alone(self, first_time: bool):
         begin_opr = self.beginning_opr()
         now = time()
-        reason : failure_reason = None
+        reason: FailureReason | None = None
         head_succeeded = True
-        can_continue : bool = True
-        if begin_opr is not None:
-            ret, reason = self._refresh_the_beginning_opr(begin_opr, first_time)
-            if not ret:
+        can_continue: bool = True
+        if isinstance(begin_opr, FailureReason):
+            head_succeeded = False
+            can_continue = False
+            reason = begin_opr
+        elif begin_opr is not None:
+            reason = self._refresh_the_beginning_opr(begin_opr, first_time)
+            if reason is not None:
                 head_succeeded = False
                 can_continue = False
         else:
@@ -1768,10 +1752,9 @@ class StdBlock(NonLeaf_Node):
             else:
                 child.status = EVALUATION_CACNCELLED
         if can_continue:
-            reason2 = self._refresh_footer()
-            if reason2 is not None:
+            reason = self._refresh_footer()
+            if reason is not None:
                 can_continue = False
-                reason = reason2
         if can_continue:
             self._body_subnodes_succeeded = True
             self.status = EvaluationStatus.success(time() - now)
@@ -1781,6 +1764,7 @@ class StdBlock(NonLeaf_Node):
             self.status = EvaluationStatus.success(time() - now, reason)
         else:
             self._body_subnodes_succeeded = False
+            assert reason is not None
             self.status = EvaluationStatus.failure(time() - now, reason)
     def _ctxt_of_filling(self) -> Context:
         vars = self._all_fixed_vars_before_me({})
@@ -1792,7 +1776,7 @@ class StdBlock(NonLeaf_Node):
             child._fixed_facts_after_me(hyps)
         return Context(vars, hyps)
     @abstractmethod
-    def _print_header(self, indent: int, file: MyIO) -> None:
+    def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False) -> None:
         ...
     def should_I_show_pending_goal(self) -> tuple[Goal, step] | None:
         ptree = self._state_before_ending_.prooftree
@@ -1808,8 +1792,8 @@ class StdBlock(NonLeaf_Node):
             raise InternalError("The open goals of StdBlock should not exceed one. "
             "To express multiple goals, you should use a StdBlock whose children are GoalNodes. See Rule as an example.")
         return (goals[0], to_fill)
-    def _print_footer(self, indent: int, file: MyIO) -> None:
-        self._print_warnings(indent, file, [Warning.Position.FOOTER])
+    def _print_footer(self, indent: int, file: MyIO, show_warnings: bool = False) -> None:
+        if show_warnings: self._print_warnings(indent, file, [Warning.Position.FOOTER])
         if self.opening():
             ptree = self._state_before_ending_.prooftree
             if ptree is None:
@@ -1848,25 +1832,25 @@ class StdBlock(NonLeaf_Node):
                 return self._local_step_of_next_proof_step()
         else:
             return None
-    def print(self, indent: int, file: MyIO, update_line: bool = False):
-        indent = super().print(indent, file, update_line)
-        self._print_header(indent, file)
+    def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False):
+        indent = super().print(indent, file, update_line, show_warnings=show_warnings)
+        self._print_header(indent, file, show_warnings=show_warnings)
         title, child_indent = self._title_of_children(indent)
         if title is None:
             for step in self.sub_nodes:
-                step.print(child_indent, file, update_line)
+                step.print(child_indent, file, update_line, show_warnings=show_warnings)
         else:
             if self.sub_nodes:
                 print_indent(indent, file)
                 file.write(title)
                 file.write(":\n")
                 for step in self.sub_nodes:
-                    step.print(child_indent, file, update_line)
+                    step.print(child_indent, file, update_line, show_warnings=show_warnings)
             else:
                 print_indent(indent, file)
                 file.write(title)
                 file.write(": empty\n")
-        self._print_footer(indent, file)
+        self._print_footer(indent, file, show_warnings=show_warnings)
         return indent
     def quickview(self, indent: int, file: MyIO) -> int:
         indent = super().quickview(indent, file)
@@ -1903,13 +1887,7 @@ class StdBlock(NonLeaf_Node):
         if node is None:
             return None
         self.sub_nodes.append(node)
-        try:
-            node._refresh_me_alone(True)
-            if node.status.status == EvaluationStatus.Status.FAILURE:
-                raise CannotAppend(node, node.status.reason)
-        except AoA_Error:
-            self.sub_nodes.pop()
-            raise
+        node._refresh_me_alone(True)
         if self.opening():
             def my_gen_node(config: NodeConfig) -> Node | None:
                 if config.ml_state.need_intro():
@@ -1987,16 +1965,16 @@ class GoalNode(StdBlock):
         if not isinstance(self.parent, GoalContainer):
             raise InternalError("The parent of a GoalNode is not a GoalContainer")
         return self.parent._child_has_ending_opr(self)
-    def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
+    def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         raise InternalError("A GoalNode doesn't have a beginning operation")
-    def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
-        return "Fail to prove the goal because one of the following proof steps fails."
-    def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
+    def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
+        return FailureReason("Fail to prove the goal because one of the following proof steps fails.")
+    def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         if self.sub_nodes:
-            return "The goal is nontrivial. Detailed proofs are required to prove it."
+            return FailureReason("The goal is nontrivial. Detailed proofs are required to prove it.")
         else:
-            return "Each of the following proof steps above is valid, but the goal doesn't trivially follow from these steps. Please provide more detailed proof steps."
-    def _print_header(self, indent: int, file: MyIO):
+            return FailureReason("Each of the following proof steps above is valid, but the goal doesn't trivially follow from these steps. Please provide more detailed proof steps.")
+    def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         self._print_thought(indent, file)
         if self.show_goal:
             goal = self.goal()
@@ -2006,7 +1984,7 @@ class GoalNode(StdBlock):
                 goal = Goal(Context(merged_vars, merged_hyps), goal.conclusion)
             print_goal(goal, indent, True, file, self._ctxt_before_me())
         self._print_evaluation_status(indent, file)
-        self._print_warnings(indent, file, [Warning.Position.HEADER])
+        if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
     def _print_step_id(self, indent: int, file: MyIO, update_line: bool = False) -> int:
         if update_line:
             self.line = file.current_line()
@@ -2057,7 +2035,7 @@ class SubgoalMaker(GoalContainer, StdBlock):
         super().__init__(*args, **kwargs)
         self._initial_goal_index : int = 1
     @abstractmethod
-    def beginning_opr(self) -> Minilang_Operation:
+    def beginning_opr(self) -> 'Minilang_Operation | FailureReason':
         ...
     def has_ending_opr(self) -> bool:
         return True
@@ -2067,38 +2045,37 @@ class SubgoalMaker(GoalContainer, StdBlock):
         return GoalNode(NodeConfig(str(goal_index+self._initial_goal_index), ml_state, self), False, True)
     def _on_regenerating_goals(self, goals: list[Goal]) -> None:
         pass
-    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> tuple[bool, failure_reason]:
+    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> 'FailureReason | None':
         is_init = self.age == self.session.age
         old_n_subnodes = len(self.sub_nodes)
-        (success, reason) = super()._refresh_the_beginning_opr(begin_opr, first_time)
-        if success:
-            s0 = self._state_after_beginning()
-            if s0.prooftree is None:
-                raise InternalError("The prooftree of the state after beginning is not initialized, meaning the node is not refreshed")
-            goals = s0.prooftree.top_goals()
-            # TODO: try to reuse the existing subnodes instead of discarding them.
-            if not first_time and len(goals) == len(self.sub_nodes):
-                pass
-            else:
-                self._on_regenerating_goals(goals)
-                if len(goals) <= 1:
-                    self.sub_nodes = []
-                    if self.parent is not None:
-                        self.parent._open()
-                else:
-                    if self.parent is not None:
-                        self.parent._close_by(self)
-                    self.sub_nodes = []
-                    ml_state = s0.clone(None)
-                    for i in range(len(goals)):
-                        new_node = self._new_goal_node(i, ml_state)
-                        self.sub_nodes.append(new_node)
-                        ml_state = ml_state.sorry(None, None)
-            if not is_init and len(self.sub_nodes) != old_n_subnodes:
-                self.changed = True
-            return (True, None)
+        fail = super()._refresh_the_beginning_opr(begin_opr, first_time)
+        if fail is not None:
+            return fail
+        s0 = self._state_after_beginning()
+        if s0.prooftree is None:
+            raise InternalError("The prooftree of the state after beginning is not initialized, meaning the node is not refreshed")
+        goals = s0.prooftree.top_goals()
+        # TODO: try to reuse the existing subnodes instead of discarding them.
+        if not first_time and len(goals) == len(self.sub_nodes):
+            pass
         else:
-            return (False, reason)
+            self._on_regenerating_goals(goals)
+            if len(goals) <= 1:
+                self.sub_nodes = []
+                if self.parent is not None:
+                    self.parent._open()
+            else:
+                if self.parent is not None:
+                    self.parent._close_by(self)
+                self.sub_nodes = []
+                ml_state = s0.clone(None)
+                for i in range(len(goals)):
+                    new_node = self._new_goal_node(i, ml_state)
+                    self.sub_nodes.append(new_node)
+                    ml_state = ml_state.sorry(None, None)
+        if not is_init and len(self.sub_nodes) != old_n_subnodes:
+            self.changed = True
+        return None
     def _id_of_openning_prf_to_fill(self) -> step | None:
         return None
     def opening(self) -> bool:
@@ -2152,16 +2129,16 @@ class CaseSplit_Like(SubgoalMaker_NoTailEnder):
                         self.case_vars[i] = (new_name, v[1])
                         return self
             return None
-    def _print_header(self, indent: int, file: MyIO) -> None:
+    def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False) -> None:
         if self.case_vars is not None:
             print_vars(self.case_vars, indent, file, {}, "fixing variables")
         if self.case_hyps is not None:
             print_hyps(self.case_hyps, indent, file, {}, "assuming premises")
-    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> tuple[bool, failure_reason]:
+    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> 'FailureReason | None':
         is_init = self.age == self.session.age
         old_case = (self.case_vars, self.case_hyps)
-        (success, reason) = super()._refresh_the_beginning_opr(begin_opr, first_time)
-        if success and not self.sub_nodes:
+        fail = super()._refresh_the_beginning_opr(begin_opr, first_time)
+        if fail is None and not self.sub_nodes:
             # The case for nonempty self.sub_nodes is handled in _new_goal_node
             s = self._state_after_beginning()
             consider_case_msgs = [m for m in s.messages if isinstance(m, Consider_Case_Msg)]
@@ -2175,7 +2152,7 @@ class CaseSplit_Like(SubgoalMaker_NoTailEnder):
             self.case_hyps = consider_case_msg.hyps
         if not is_init and (self.case_vars, self.case_hyps) != old_case:
             self.changed = True
-        return (success, reason)
+        return fail
     # def _new_goal_node(self, goal_index: int, ml_state: Minilang_State) -> GoalNode:
     #     node = super()._new_goal_node(goal_index, ml_state)
     #     consider_case_msgs = [m for m in ml_state.messages if isinstance(m, Consider_Case_Msg)]
@@ -2233,24 +2210,31 @@ def print_statement(self: Statement, indent: int, file: MyIO):
 
 ### Concrete Models
 
-def _split_fetched(fetched: list['FactRef | Interaction_RetrieveFact | None'],
-                   filter_none: bool = False
-    ) -> tuple[list[FactRef], list[Interaction], list[int]]:
-    """Split fetch_facts results into resolved refs, interactions, and placeholder indices.
-    If filter_none=True, None entries are silently skipped."""
-    resolved: list[FactRef] = []
+def _filter_unfound(facts: list[IsabelleFact]) -> tuple[list[IsabelleFact], list[str]]:
+    """Filter out IsabelleFact_Unfound from a list.
+    Returns (kept_facts, warning_strings)."""
+    kept: list[IsabelleFact] = []
+    warnings: list[str] = []
+    for f in facts:
+        if isinstance(f, IsabelleFact_Unfound):
+            warnings.append(f"Fact \"{f.name()}\" not found, skipped.")
+        else:
+            kept.append(f)
+    return kept, warnings
+
+def _split_fetched(fetched: 'list[IsabelleFact | Interaction_RetrieveFact]'
+    ) -> 'tuple[list[IsabelleFact], list[Interaction], list[int]]':
+    """Split fetch_facts results into resolved facts, interactions, and placeholder indices.
+    IsabelleFact (including Unfound) goes to resolved; Interaction goes to interactions."""
+    resolved: list[IsabelleFact] = []
     interactions: list[Interaction] = []
     resolve_indices: list[int] = []
     for item in fetched:
-        if item is None:
-            if filter_none:
-                continue
-            raise InternalError("Unexpected None in _split_fetched (use filter_none=True to skip)")
-        elif isinstance(item, FactRef):
+        if isinstance(item, IsabelleFact):
             resolved.append(item)
         else:
             resolve_indices.append(len(resolved))
-            resolved.append(None)  # type: ignore — placeholder
+            resolved.append(None)  # type: ignore — placeholder for interaction result
             interactions.append(item)
     return resolved, interactions, resolve_indices
 
@@ -2260,7 +2244,7 @@ class Obvious_ToolArg(TypedDict):
     facts: list[Fact]
 
 class Obvious_InternalToolArg(NamedTuple):
-    facts: list[FactRef]
+    facts: list[IsabelleFact]
 
 @proof_operation("Obvious", Obvious_ToolArg)
 class Obvious(Leaf):
@@ -2278,35 +2262,39 @@ class Obvious(Leaf):
     def interactive_gen(arg: Obvious_ToolArg) -> gen_node:
         def mk(config: NodeConfig) -> 'Obvious':
             ml_state = config.ml_state
-            fetched = ml_state.fetch_facts(arg["facts"], tolerate=True)
-            resolved, interactions, resolve_indices = _split_fetched(fetched, filter_none=True)
+            fetched = ml_state.fetch_facts(arg["facts"])
+            resolved, interactions, resolve_indices = _split_fetched(fetched)
 
-            def mk_internal() -> Obvious_InternalToolArg:
-                return Obvious_InternalToolArg(facts=resolved)
+            def mk_node(config: NodeConfig) -> 'Obvious':
+                facts, warnings = _filter_unfound(resolved)
+                node = Obvious(config, Obvious_InternalToolArg(facts=facts))
+                for w in warnings:
+                    node.warnings.append(Warning(Warning.Position.FOOTER, w))
+                return node
 
             if not interactions:
-                return Obvious(config, mk_internal())
+                return mk_node(config)
 
             async def kontinue(results: list[Any]) -> gen_node:
                 for i, idx in enumerate(resolve_indices):
                     resolved[idx] = results[i]
-                return Obvious.gen(mk_internal())
+                return mk_node
 
             raise RaiseInteraction(interactions, kontinue)
         return mk
-    def print(self, indent: int, file: MyIO, update_line: bool = False) -> int:
-        indent = super().print(indent, file, update_line)
+    def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
+        indent = super().print(indent, file, update_line, show_warnings=show_warnings)
         print_indent(indent, file)
         file.write("operation: Obvious\n")
         if self.fact_refs:
             print_indent(indent, file)
             file.write(f"with facts:\n")
             for ref in self.fact_refs:
-                print_FactRef(ref, indent+1, file)
+                ref.print(indent+1, file)
         self._print_evaluation_status(indent, file)
-        self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
+        if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
         return indent
-    def the_operation(self) -> Minilang_Operation:
+    def the_operation(self) -> 'Minilang_Operation | FailureReason':
         return Minilang_Operation.HAMMER(self.fact_refs)
 
 
@@ -2329,15 +2317,15 @@ class Witness(Leaf):
             return Witness(config, arg)
         return mk
 
-    def print(self, indent: int, file: MyIO, update_line: bool = False) -> int:
-        indent = super().print(indent, file, update_line)
+    def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
+        indent = super().print(indent, file, update_line, show_warnings=show_warnings)
         self._print_thought(indent, file)
         print_indent(indent, file)
         file.write("operation: Witness\n")
         print_indent(indent, file)
         file.write(f"witness: {self.witness}\n")
         self._print_evaluation_status(indent, file)
-        self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
+        if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
         return indent
 
     def the_operation(self) -> Minilang_Operation:
@@ -2347,11 +2335,11 @@ class Witness(Leaf):
 #### Unfold
 
 class Interaction_ChooseDef(Interaction):
-    def __init__(self, constants: list[str], candidate_defs: list[FactRef]):
+    def __init__(self, constants: list[str], candidate_defs: list[IsabelleFact_Presented]):
         """
         Args:
             constants: List of constants being unfolded
-            candidate_defs: List of FactRef for candidate definitions
+            candidate_defs: List of candidate definitions
         """
         self.constants = constants
         self.candidate_defs = candidate_defs
@@ -2365,12 +2353,9 @@ class Interaction_ChooseDef(Interaction):
             print_indent(indent+1, file)
             file.write(f"{i}. {ref.full_name}: {ref.expression}\n")
         file.write("Select definition(s) to use in unfolding. Call `mcp__proof__answer` with the indexes, or with an empty array to skip.\n")
-    def answer(self, answer: answer) -> list[FactRef]:
-        """Returns selected FactRefs, or raises AoA_Cancel if empty."""
+    def answer(self, answer: answer) -> list[IsabelleFact]:
         if not answer:
-            raise AoA_Cancel(
-                f"No definitions selected for {', '.join(self.constants)}. "
-                f"Unfolding cancelled.")
+            return []
         for idx in answer:
             if idx < 0 or idx >= len(self.candidate_defs):
                 raise Interaction_BadAnswer(
@@ -2385,7 +2370,7 @@ class Unfold_ToolArg(TypedDict):
 class Unfold_ToolArg_internal(TypedDict):
     thought: str
     targets: list[str]  # Isabelle/HOL terms to unfold
-    fact_refs: list[FactRef]
+    fact_refs: list[IsabelleFact]
 
 
 @proof_operation("Unfold", Unfold_ToolArg)
@@ -2398,10 +2383,6 @@ class Unfold(Leaf):
         super().__init__(config, arg["thought"])
         self.targets = arg["targets"]
         self.fact_refs = arg["fact_refs"]
-        if not self.targets:
-            raise ArgumentError_UnfoldNoTargets(cast(ToolCall_arg, arg))
-        if not self.fact_refs:
-            raise ArgumentError_UnfoldNoFactRefs(cast(ToolCall_arg, arg))
     def quickview_title(self) -> str:
         return f"Unfold {', '.join(self.targets)}"
     @staticmethod
@@ -2441,7 +2422,7 @@ class Unfold(Leaf):
             else:
                 # Multiple definitions - need interaction
                 async def kontinue(results: list[Any]) -> gen_node:
-                    selected: list[FactRef] = results[0]
+                    selected: list[IsabelleFact] = results[0]
                     def final_mk(cfg: NodeConfig) -> 'Unfold':
                         arg_internal: Unfold_ToolArg_internal = {
                             "thought": arg["thought"],
@@ -2458,8 +2439,8 @@ class Unfold(Leaf):
 
         return mk
 
-    def print(self, indent: int, file: MyIO, update_line: bool = False) -> int:
-        indent = super().print(indent, file, update_line)
+    def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
+        indent = super().print(indent, file, update_line, show_warnings=show_warnings)
         self._print_thought(indent, file)
         print_indent(indent, file)
         file.write("operation: Unfold\n")
@@ -2470,10 +2451,17 @@ class Unfold(Leaf):
                 print_indent(indent+1, file)
                 file.write(f"- {target}\n")
         self._print_evaluation_status(indent, file)
-        self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
+        if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
         return indent
 
-    def the_operation(self) -> Minilang_Operation:
+    def the_operation(self) -> 'Minilang_Operation | FailureReason':
+        if not self.targets:
+            return FailureReason("Unfold operation must specify at least one target.")
+        if not self.fact_refs:
+            return FailureReason("Unfold operation must specify at least one fact reference.")
+        unfound = [f for f in self.fact_refs if isinstance(f, IsabelleFact_Unfound)]
+        if unfound:
+            return FailureReason("\n".join(f"Fact \"{f.name()}\" not found" for f in unfound))
         return Minilang_Operation.UNFOLD(self.fact_refs)
 
 
@@ -2492,7 +2480,7 @@ class Rewrite_InternalToolArg(NamedTuple):
     use_system_simplifiers: bool
     rewrite_goal: bool
     rewrite_premises: list[str]
-    using: list[FactRef]
+    using: list[IsabelleFact]
 
 @proof_operation("Rewrite", Rewrite_ToolArg)
 class Rewrite(Leaf):
@@ -2501,13 +2489,6 @@ class Rewrite(Leaf):
         self.use_system_simplifiers = arg.use_system_simplifiers
         self.rewrite_goal = arg.rewrite_goal
         self.rewrite_premises = arg.rewrite_premises
-
-        # Validate that at least one target is specified
-        if not self.rewrite_goal and not self.rewrite_premises:
-            raise ArgumentError_RewriteNoTargets({
-                "rewrite goal": self.rewrite_goal,
-                "rewrite premises": self.rewrite_premises})
-
         self.using = arg.using
         self.bindings: Bindings | None = None
         self.running_time = 0
@@ -2529,8 +2510,8 @@ class Rewrite(Leaf):
         """Interactive generation. Resolves FactByStatement via Interaction_RetrieveFact."""
         def mk(config: NodeConfig) -> 'Rewrite':
             ml_state = config.ml_state
-            fetched = ml_state.fetch_facts(arg["using"], tolerate=True)
-            resolved, interactions, resolve_indices = _split_fetched(fetched, filter_none=True)
+            fetched = ml_state.fetch_facts(arg["using"])
+            resolved, interactions, resolve_indices = _split_fetched(fetched)
 
             def mk_internal() -> Rewrite_InternalToolArg:
                 return Rewrite_InternalToolArg(
@@ -2552,8 +2533,8 @@ class Rewrite(Leaf):
             raise RaiseInteraction(interactions, kontinue)
         return mk
 
-    def print(self, indent: int, file: MyIO, update_line: bool = False) -> int:
-        indent = super().print(indent, file, update_line)
+    def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
+        indent = super().print(indent, file, update_line, show_warnings=show_warnings)
         self._print_thought(indent, file)
         print_indent(indent, file)
         file.write("operation: Rewrite\n")
@@ -2561,7 +2542,7 @@ class Rewrite(Leaf):
             print_indent(indent, file)
             file.write(f"using:\n")
             for ref in self.using:
-                print_FactRef(ref, indent+1, file)
+                ref.print(indent+1, file)
             if self.use_system_simplifiers:
                 print_indent(indent+1, file)
                 file.write("- system simplifiers\n")
@@ -2585,7 +2566,7 @@ class Rewrite(Leaf):
             print_goal(prooftree.top_goal(), indent+1, False, file, self._ctxt_at_me())
 
         self._print_evaluation_status(indent, file)
-        self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
+        if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
         return indent
 
     def _fixed_vars_at_me(self, ret: Vars) -> Vars:
@@ -2606,7 +2587,14 @@ class Rewrite(Leaf):
     def _fixed_facts_after_me(self, ret: Hyps) -> Hyps:
         return self._fixed_facts_at_me(ret)
 
-    def the_operation(self) -> Minilang_Operation:
+    def the_operation(self) -> 'Minilang_Operation | FailureReason':
+        if not self.rewrite_goal and not self.rewrite_premises:
+            return FailureReason(
+                "Rewrite operation must target at least one of: the goal or some premises. "
+                "Set 'rewrite goal' to true or provide at least one premise name in 'rewrite premises'.")
+        unfound = [f for f in self.using if isinstance(f, IsabelleFact_Unfound)]
+        if unfound:
+            return FailureReason("\n".join(f"Fact \"{f.name()}\" not found" for f in unfound))
         bindings = None
         if self.bindings is not None:
             var_bindings = [(vb.internal_varname, vb.external_varname, vb.type) for vb in self.bindings[0]]
@@ -2728,7 +2716,7 @@ class Have(StdBlock):
         return mk
     def quickview_title(self) -> str:
         return f"Have {self.name}"
-    def _print_header(self, indent: int, file: MyIO):
+    def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         self._print_thought(indent, file)
         print_indent(indent, file)
         file.write("operation: Have\n")
@@ -2741,18 +2729,18 @@ class Have(StdBlock):
         print_indent(indent, file)
         file.write(f"name: {self.name}\n")
         self._print_evaluation_status(indent, file)
-        self._print_warnings(indent, file, [Warning.Position.HEADER])
+        if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
     def beginning_opr(self) -> Minilang_Operation | None:
         return Minilang_Operation.HAVE(self.name, self.statement['isabelle'])
-    def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
-        return f"Fail to claim the intermediate subgoal because: {"\n".join(err.errors)}"
-    def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
-        return "Fail to prove this statement because one of the following proof steps fails."
-    def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
+    def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
+        return FailureReason(f"Fail to claim the intermediate subgoal because: {"\n".join(err.errors)}")
+    def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
+        return FailureReason("Fail to prove this statement because one of the following proof steps fails.")
+    def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         if self.sub_nodes:
-            return "Each of the following proof steps above is valid, but the target statement doesn't trivially follow from these steps. Please provide more detailed proof steps."
+            return FailureReason("Each of the following proof steps above is valid, but the target statement doesn't trivially follow from these steps. Please provide more detailed proof steps.")
         else:
-            return "The statement is nontrivial. Detailed proofs are required to establish this statement."
+            return FailureReason("The statement is nontrivial. Detailed proofs are required to establish this statement.")
     def _fixed_facts_after_me(self, ret: Hyps) -> Hyps:
         ret[self.name] = self.statement['isabelle']
         return ret
@@ -2773,7 +2761,7 @@ class Suffices(StdBlock):
         def mk(config: NodeConfig) -> 'Suffices':
             return Suffices(config, arg)
         return mk
-    def _print_header(self, indent: int, file: MyIO):
+    def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         self._print_thought(indent, file)
         print_indent(indent, file)
         file.write("operation: Suffices\n")
@@ -2784,21 +2772,21 @@ class Suffices(StdBlock):
         print_indent(indent+1, file)
         file.write(f"isabelle: {self.statement['isabelle']}\n")
         self._print_evaluation_status(indent, file)
-        self._print_warnings(indent, file, [Warning.Position.HEADER])
+        if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
         if not self.sub_nodes:
             print_indent(indent, file)
             file.write(f"notice: Need to show the provided statement implies the goal\n")
     def beginning_opr(self) -> Minilang_Operation | None:
         return Minilang_Operation.SUFFICES(self.statement['isabelle'])
-    def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
-        return f"Fail to apply 'it suffices to show' because: {"\n".join(err.errors)}"
-    def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
-        return "Fail to prove the implication (sufficient condition implies goal) because one of the following proof steps fails."
-    def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
+    def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
+        return FailureReason(f"Fail to apply 'it suffices to show' because: {"\n".join(err.errors)}")
+    def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
+        return FailureReason("Fail to prove the implication (sufficient condition implies goal) because one of the following proof steps fails.")
+    def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         if self.sub_nodes:
-            return "Each of the following proof steps above is valid, but the implication doesn't trivially follow from these steps. Please provide more detailed proof steps."
+            return FailureReason("Each of the following proof steps above is valid, but the implication doesn't trivially follow from these steps. Please provide more detailed proof steps.")
         else:
-            return "The implication is nontrivial. Detailed proofs are required to establish that the sufficient condition implies the goal."
+            return FailureReason("The implication is nontrivial. Detailed proofs are required to establish that the sufficient condition implies the goal.")
 
 #### Obtain
 
@@ -2813,8 +2801,6 @@ class Obtain(StdBlock):
         super().__init__(config, arg["thought"], [])
         self.variables = arg["variables"]
         self.constraints = arg["constraints"]
-        if not self.variables:
-            raise ArgumentError_ObtainNoVariables(cast(ToolCall_arg, arg))
     @staticmethod
     def gen(arg : Obtain_ToolArg) -> gen_node:
         def mk(config: NodeConfig) -> 'Obtain':
@@ -2823,7 +2809,7 @@ class Obtain(StdBlock):
     def quickview_title(self) -> str:
         names = ", ".join(v["name"] for v in self.variables)
         return f"Obtain {names}"
-    def _print_header(self, indent: int, file: MyIO):
+    def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         self._print_thought(indent, file)
         print_indent(indent, file)
         file.write("operation: Obtain\n")
@@ -2862,18 +2848,20 @@ class Obtain(StdBlock):
                     print_indent(indent+1, file)
                     file.write(f"  isabelle: {constraint['isabelle']}\n")
         self._print_evaluation_status(indent, file)
-        self._print_warnings(indent, file, [Warning.Position.HEADER])
-    def beginning_opr(self) -> Minilang_Operation | None:
+        if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
+    def beginning_opr(self) -> 'Minilang_Operation | FailureReason | None':
+        if not self.variables:
+            return FailureReason("Must specify at least one variable to obtain.")
         return Minilang_Operation.OBTAIN(self.variables, [(c.get("name"), c["isabelle"]) for c in self.constraints])
-    def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
-        return f"Fail to claim the existential subgoal because: {"\n".join(err.errors)}"
-    def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
-        return "Fail to prove the existence of such variables because one of the following proof steps fails."
-    def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
+    def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
+        return FailureReason(f"Fail to claim the existential subgoal because: {"\n".join(err.errors)}")
+    def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
+        return FailureReason("Fail to prove the existence of such variables because one of the following proof steps fails.")
+    def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         if self.sub_nodes:
-            return "The statement is nontrivial. Detailed proofs are required to establish this statement."
+            return FailureReason("The statement is nontrivial. Detailed proofs are required to establish this statement.")
         else:
-            return "Each of the following proof steps above is valid, but the target statement doesn't trivially follow from these steps. Please provide more detailed proof steps."
+            return FailureReason("Each of the following proof steps above is valid, but the target statement doesn't trivially follow from these steps. Please provide more detailed proof steps.")
 
 #### INTRO
 
@@ -2894,7 +2882,7 @@ class Intro(SubgoalMaker_NoTailEnder):
             bindings = config.ml_state.compute_bindings(arg["variable_bindings"], arg["fact_bindings"])
             return Intro(config, arg["thought"], bindings)
         return mk
-    def _print_header(self, indent: int, file: MyIO):
+    def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         self._print_thought(indent, file)
         print_indent(indent, file)
         file.write("operation: Intro\n")
@@ -2902,16 +2890,16 @@ class Intro(SubgoalMaker_NoTailEnder):
             print_var_bindings(self.bindings[0], indent, file, "fixing variables")
             print_fact_bindings(self.bindings[1], indent, file, "assuming premises")
         self._print_evaluation_status(indent, file)
-        self._print_warnings(indent, file, [Warning.Position.HEADER])
+        if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
     def beginning_opr(self) -> Minilang_Operation:
         return Minilang_Operation.INTRO(self.bindings)
-    def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
-        return f"Fail to introduce the variables and premises because: {"\n".join(err.errors)}"
-    def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
-        return f"Subgoal {child.id} fails to be proven."
+    def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
+        return FailureReason(f"Fail to introduce the variables and premises because: {"\n".join(err.errors)}")
+    def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
+        return FailureReason(f"Subgoal {child.id} fails to be proven.")
     def has_ending_opr(self) -> bool:
         return False
-    def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
+    def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         raise InternalError("An Intro doesn't have an ending operation")
     def ending_opr(self) -> Minilang_Operation | None:
         return None
@@ -2920,11 +2908,11 @@ class Intro(SubgoalMaker_NoTailEnder):
             return (None, indent-1)
         else:
             return ("goals", indent+1)
-    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> tuple[bool, failure_reason]:
+    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> 'FailureReason | None':
         is_init = self.age == self.session.age
         old_bindings = self.bindings
-        (success, reason) = super()._refresh_the_beginning_opr(begin_opr, first_time)
-        if success:
+        fail = super()._refresh_the_beginning_opr(begin_opr, first_time)
+        if fail is None:
             self.running_time += 1
             messages = self._state_after_beginning().messages
             intro_bindings_msgs = [m for m in messages if isinstance(m, Intro_Bindings_Msg)]
@@ -2970,7 +2958,7 @@ class Intro(SubgoalMaker_NoTailEnder):
                     self.warnings.append(Warning(Warning.Position.HEADER, print))
         if not is_init and self.bindings != old_bindings:
             self.changed = True
-        return (success, reason)
+        return fail
     def _fixed_vars_at_me(self, ret: Vars) -> Vars:
         if self.bindings is not None:
             for var in self.bindings[0]:
@@ -3017,7 +3005,7 @@ class InferenceRule_ToolArg(TypedDict):
 class InferenceRule_InternalToolArg(NamedTuple):
     thought: str
     rule: Fact | None
-    rule_ref: FactRef | None
+    rule_ref: IsabelleFact | None
 
 @proof_operation("InferenceRule", InferenceRule_ToolArg)
 class InferenceRule(SubgoalMaker_NoTailEnder):
@@ -3045,7 +3033,7 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
             ml_state = config.ml_state
             fetched = ml_state.fetch_facts([rule])
             result = fetched[0]
-            if isinstance(result, FactRef):
+            if isinstance(result, IsabelleFact):
                 internal = InferenceRule_InternalToolArg(
                     thought=arg["thought"], rule=rule, rule_ref=result)
                 return InferenceRule(config, internal)
@@ -3059,20 +3047,20 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
         return mk
     def quickview_title(self) -> str:
         if self.rule_ref is not None:
-            return f"Inference Rule {self.rule_ref.short_name}"
+            return f"Inference Rule {self.rule_ref.name()}"
         return "Inference Rule"
-    def _print_header(self, indent: int, file: MyIO):
+    def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         self._print_thought(indent, file)
         print_indent(indent, file)
         file.write("operation: Inference Rule\n")
         print_indent(indent, file)
         if self.rule_ref is not None:
             file.write("rule:\n")
-            print_FactRef(self.rule_ref, indent+1, file)
+            self.rule_ref.print(indent+1, file)
         else:
             file.write("rule: default\n")
         self._print_evaluation_status(indent, file)
-        self._print_warnings(indent, file, [Warning.Position.HEADER])
+        if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
         if len(self.sub_nodes) <= 1:
             s0 = self._state_after_beginning()
             if s0.prooftree is None:
@@ -3081,15 +3069,17 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
             print_indent(indent, file)
             file.write("derived goal:\n")
             print_goal(goal, indent+1, False, file, self._ctxt_before_me())
-    def beginning_opr(self) -> Minilang_Operation:
+    def beginning_opr(self) -> 'Minilang_Operation | FailureReason':
+        if isinstance(self.rule_ref, IsabelleFact_Unfound):
+            return FailureReason(f"Inference rule fact \"{self.rule_ref.name()}\" not found")
         return Minilang_Operation.RULE(self.rule_ref)
-    def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
-        return f"Fail to apply the inference rule.{"".join(["\n"+e for e in err.errors])}"
-    def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
-        return f"Subgoal {child.id} fails to be proven."
+    def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
+        return FailureReason(f"Fail to apply the inference rule.{"".join(["\n"+e for e in err.errors])}")
+    def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
+        return FailureReason(f"Subgoal {child.id} fails to be proven.")
     def has_ending_opr(self) -> bool:
         return False
-    def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
+    def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         raise InternalError("An InferenceRule doesn't have an ending operation")
     def ending_opr(self) -> Minilang_Operation | None:
         return None
@@ -3110,8 +3100,6 @@ class Branch(SubgoalMaker_NoTailEnder):
     def __init__(self, config: NodeConfig, arg: Branch_ToolArg):
         super().__init__(config, arg["thought"], [])
         self.cases = arg["cases"]
-        if not self.cases:
-            raise ArgumentError_BranchNoCases(cast(ToolCall_arg, arg))
         self._initial_goal_index = 0
     @staticmethod
     def gen(arg : Branch_ToolArg) -> gen_node:
@@ -3120,28 +3108,30 @@ class Branch(SubgoalMaker_NoTailEnder):
         return mk
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         return ('cases', indent+1)
-    def _print_header(self, indent: int, file: MyIO):
+    def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         self._print_thought(indent, file)
         print_indent(indent, file)
         file.write("operation: Branch\n")
         self._print_evaluation_status(indent, file)
-        self._print_warnings(indent, file, [Warning.Position.HEADER])
-    def beginning_opr(self) -> Minilang_Operation:
+        if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
+    def beginning_opr(self) -> 'Minilang_Operation | FailureReason':
+        if not self.cases:
+            return FailureReason("Must specify at least one branching case.")
         return Minilang_Operation.BRANCH([(case.get("name"), case['isabelle']) for case in self.cases])
     def ending_opr(self):
         return None
-    def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
-        return f"Fail to anlysis the proof goal by cases because: {"\n".join(err.errors)}"
-    def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
-        return f"Subgoal {child.id} fails to be proven."
-    def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
+    def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
+        return FailureReason(f"Fail to anlysis the proof goal by cases because: {"\n".join(err.errors)}")
+    def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
+        return FailureReason(f"Subgoal {child.id} fails to be proven.")
+    def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         raise InternalError("A Branch doesn't have an ending operation")
-    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> tuple[bool, failure_reason]:
-        (success, reason) = super()._refresh_the_beginning_opr(begin_opr, first_time)
-        if success:
+    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> 'FailureReason | None':
+        fail = super()._refresh_the_beginning_opr(begin_opr, first_time)
+        if fail is None:
             if not self.sub_nodes[0].thought:
                 self.sub_nodes[0].thought = "We first show exhaustiveness of the case split"
-        return (success, reason)
+        return fail
 
 ### CaseSplit
 
@@ -3163,7 +3153,7 @@ class CaseSplit(CaseSplit_Like):
         return mk
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         return ('cases', indent+1)
-    def _print_header(self, indent: int, file: MyIO):
+    def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         self._print_thought(indent, file)
         print_indent(indent, file)
         file.write("operation: CaseSplit\n")
@@ -3171,7 +3161,7 @@ class CaseSplit(CaseSplit_Like):
         file.write(f"target term: {self.target_isabelle_term}\n")
         super()._print_header(indent, file)
         self._print_evaluation_status(indent, file)
-        self._print_warnings(indent, file, [Warning.Position.HEADER])
+        if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
     def beginning_opr(self) -> Minilang_Operation:
         return Minilang_Operation.CASE_SPLIT(
             self.target_isabelle_term,
@@ -3179,11 +3169,11 @@ class CaseSplit(CaseSplit_Like):
             None)
     def ending_opr(self):
         return None
-    def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
-        return f"Case analysis failed because: {"\n".join(err.errors)}"
-    def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
-        return f"Subgoal {child.id} fails to be proven."
-    def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
+    def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
+        return FailureReason(f"Case analysis failed because: {"\n".join(err.errors)}")
+    def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
+        return FailureReason(f"Subgoal {child.id} fails to be proven.")
+    def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         raise InternalError("A Branch doesn't have an ending operation")
 
 ### Induction
@@ -3197,15 +3187,6 @@ class Induction_ToolArg(TypedDict):
     target_isabelle_term: str
     rule: NotRequired[Induction_Rule]  # default: 'default'
     variables: list[Induction_ToolArg_Variable]
-
-class Induction_ArgumentError_MissingVars(ArgumentError):
-    def __init__(self, arg: Induction_ToolArg, missing: list[varname]):
-        msg = (
-            "In the argument `variables`, you should additionally indicate whether the "
-            f"{titled_string_of_and_list(missing, 'variable', 'variables')} is fixed or generalized."
-        )
-        super().__init__(cast(ToolCall_arg, arg), msg)
-        self.missing = missing
 
 @proof_operation("Induction", Induction_ToolArg)
 class Induction(CaseSplit_Like):
@@ -3223,18 +3204,19 @@ class Induction(CaseSplit_Like):
         def mk(config: NodeConfig) -> 'Induction':
             return Induction(config, arg)
         return mk
-    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> tuple[bool, failure_reason]:
+    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> 'FailureReason | None':
         is_init = self.age == self.session.age
         old_variables = list(self.variables)
         if first_time:
             try:
                 _, frees, _ = self.ml_state.check_term(self.target_isabelle_term)
             except InternalError_UnparsedTerm as e:
-                raise ArgumentError_UnparsedTerm.from_internal_error(cast(ToolCall_arg, self.arg), e)
+                return FailureReason(
+                    f"Syntax error in induction target `{e.term}`: {e.reason}")
             # Remove free variables appearing in target_isabelle_term from variables list
             self.variables[:] = [var for var in self.variables if var["name"] not in frees]
-        success, reason = super()._refresh_the_beginning_opr(begin_opr, first_time)
-        if success:
+        fail = super()._refresh_the_beginning_opr(begin_opr, first_time)
+        if fail is None:
             vars = self._all_fixed_vars_before_me({})
             _, frees, _ = self.ml_state.check_term(self.target_isabelle_term)
             # Remove free variables appearing in target_isabelle_term from vars
@@ -3244,7 +3226,11 @@ class Induction(CaseSplit_Like):
             new_var_names = [v for v in vars if v not in [var["name"] for var in self.variables]]
             if new_var_names:
                 if first_time:
-                    raise Induction_ArgumentError_MissingVars(self.arg, new_var_names)
+                    return FailureReason(
+                        f"The {titled_string_of_and_list(new_var_names, 'variable', 'variables')} "
+                        f"appear in the induction context but are not classified in the 'variables' argument. "
+                        f"You should indicate whether each is 'arbitrary' (generalized during induction) or "
+                        f"'fixed' (held constant).")
                 else:
                     msg = (
                         f"The {titled_string_of_and_list(new_var_names, 'variable', 'variables')} are not classified "
@@ -3266,10 +3252,10 @@ class Induction(CaseSplit_Like):
                 self.variables.extend({"name": v, "status": "fixed"} for v in new_var_names)
         if not is_init and self.variables != old_variables:
             self.changed = True
-        return success, reason
+        return fail
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         return ('cases', indent+1)
-    def _print_header(self, indent: int, file: MyIO):
+    def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         self._print_thought(indent, file)
         print_indent(indent, file)
         file.write("operation: Induction\n")
@@ -3282,7 +3268,7 @@ class Induction(CaseSplit_Like):
             file.write(f"generalized variables: {string_of_and_list([var["name"] for var in self.variables if var["status"] == "generalized"])}\n")
         super()._print_header(indent, file)
         self._print_evaluation_status(indent, file)
-        self._print_warnings(indent, file, [Warning.Position.HEADER])
+        if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
     def beginning_opr(self) -> Minilang_Operation:
         return Minilang_Operation.INDUCT(
             self.target_isabelle_term,
@@ -3291,11 +3277,11 @@ class Induction(CaseSplit_Like):
             None)
     def ending_opr(self):
         return None
-    def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
-        return f"Induction failed because: {"\n".join(err.errors)}"
-    def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
-        return f"Subgoal {child.id} fails to be proven."
-    def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
+    def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
+        return FailureReason(f"Induction failed because: {"\n".join(err.errors)}")
+    def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
+        return FailureReason(f"Subgoal {child.id} fails to be proven.")
+    def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         raise InternalError("A Branch doesn't have an ending operation")
 
 ### Top Root
@@ -3314,13 +3300,13 @@ class GlobalEnv(StdBlock):
         return None
     def has_ending_opr(self) -> bool:
         return False
-    def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
+    def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         raise InternalError("A GlobalEnv doesn't have a beginning operation")
-    def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
-        return "" # This suppresses the error message printing on GlobalEnv
-    def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
+    def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
+        return FailureReason("") # This suppresses the error message printing on GlobalEnv
+    def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         raise InternalError("Internal Bug: Failed to apply INTRO on the proof goal")
-    def _print_header(self, indent: int, file: MyIO):
+    def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         pass
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         return (None, indent-1)
@@ -3330,7 +3316,7 @@ class GlobalEnv(StdBlock):
         return indent
     def _id_of_openning_prf_to_fill(self) -> step | None:
         return None
-    def _print_footer(self, indent: int, file: MyIO) -> None:
+    def _print_footer(self, indent: int, file: MyIO, show_warnings: bool = False) -> None:
         print_indent(indent, file)
         file.write(f"You could add global declarations by calling command `edit` with action `fill` and target step `{self.id}.{len(self.sub_nodes)+1}`\n")
     def unfinished_nodes(self, ret: set['Node']) -> None:
@@ -3377,28 +3363,28 @@ class Root(GoalContainer, StdBlock):
         return None
     def has_ending_opr(self) -> bool:
         return False
-    def _beginning_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
+    def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         raise InternalError("A Root doesn't have a beginning operation")
-    def _child_refresh_failure_err_msgs(self, child : Node) -> failure_reason:
-        return "" # This suppresses the error message printing on Root
-    def _ending_opr_err_msgs(self, err : IsabelleError) -> failure_reason:
+    def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
+        return FailureReason("") # This suppresses the error message printing on Root
+    def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         raise InternalError("A Root doesn't have an ending operation")
-    def print(self, indent: int, file: MyIO, update_line: bool = False) -> int:
+    def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         print_vars(self.context.vars.items(), indent, file, {})
         print_hyps(self.context.hyps.items(), indent, file, {})
         self._print_evaluation_status(indent, file)
-        self._print_warnings(indent, file, [Warning.Position.HEADER])
-        self.sub_nodes[0].print(indent, file, update_line)
+        if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
+        self.sub_nodes[0].print(indent, file, update_line, show_warnings=show_warnings)
         match self.num_goals:
             case 1:
-                self.sub_nodes[1].print(indent, file, update_line)
+                self.sub_nodes[1].print(indent, file, update_line, show_warnings=show_warnings)
             case _:
                 file.write("proof goals:\n")
                 for i in range(self.num_goals):
                     print_indent(indent+1, file)
                     file.write(f"- goal index: {i+1}\n")
-                    self.sub_nodes[i+1].print(indent+2, file, update_line)
-        self._print_warnings(indent, file, [Warning.Position.FOOTER])
+                    self.sub_nodes[i+1].print(indent+2, file, update_line, show_warnings=show_warnings)
+        if show_warnings: self._print_warnings(indent, file, [Warning.Position.FOOTER])
         return indent
     def quickview(self, indent: int, file: MyIO) -> int:
         if self.global_env.sub_nodes:
@@ -3443,7 +3429,7 @@ class Root(GoalContainer, StdBlock):
         ret.update(self.context.hyps)
         return ret
     
-    def _print_header(self, indent: int, file: MyIO):
+    def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         raise InternalError("Depreciated")
 
 # class Hierarchy
