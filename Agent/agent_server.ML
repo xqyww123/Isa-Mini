@@ -254,7 +254,12 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
             | Minilang.OPR_FAIL (Minilang.INVALID_OPR, msg) =>
               error (String.concat ["Bad proof operation.\n", REPL.trim_makrup msg])
             | Minilang.OPR_FAIL (Minilang.TERMLANG, msg) =>
-              error (String.concat ["Syntax Error in Term Language.\n", REPL.trim_makrup msg])),
+              error (String.concat ["Syntax Error in Term Language.\n", REPL.trim_makrup msg])
+            | MiniLang_Agent.FACT_IN_TIME_FAIL prop =>
+              error (String.concat [
+                "The following indicated fact is non-trivial, you must prove it manually:\n",
+                REPL.trim_makrup (MiniLang_Agent.string_of_term (Minilang.context_of s0) prop)])
+            | ERROR msg => error (REPL.trim_makrup msg)),
         timeout = SOME (Time.fromSeconds 600)
       }
 
@@ -310,6 +315,25 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                      end
                  | NONE => NONE
               end) names
+          end),
+        timeout = NONE
+      }
+
+      val retrieve_constant_callback = {
+        name = "IsaMini.retrieve_constant",
+        arg_schema = unpackPair (unpackString, unpackList unpackString),
+        ret_schema = packList (packOption (packPair (packString, packString))),
+        function = (fn (state_id, names) =>
+          let val s0 = get_state state_id
+              val ctxt = Minilang.context_of s0
+              val const_space = Proof_Context.const_space ctxt
+              val consts = Proof_Context.consts_of ctxt
+              val SOT = MiniLang_Agent.string_of_type ctxt
+          in map (fn name =>
+              (let val short = Name_Space.extern ctxt const_space name
+                   val T = Consts.the_constraint consts name
+               in SOME (short, SOT T) end)
+              handle ERROR _ => NONE) names
           end),
         timeout = NONE
       }
@@ -446,6 +470,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
           mk_callback proof_opr_callback,
           mk_callback lookup_fact_callback,
           mk_callback retrieve_fact_callback,
+          mk_callback retrieve_constant_callback,
           mk_callback compute_bindings_callback,
           mk_callback need_intro_callback,
           mk_callback check_term_callback,

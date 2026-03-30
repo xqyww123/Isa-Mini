@@ -1,0 +1,59 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - n: nat
+  - x: real
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: (0 :: real) < x ⟶ ln (x ^ n) = real n * ln x
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: (0 :: real) < x
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  ln (x ^ n) = real n * ln x
+  fetch_facts[0]: IsabelleFact_Presented
+  fetch_facts[1]: IsabelleFact_Unfound
+  fetch_facts[2]: Interaction_RetrieveFact
+RaiseInteraction raised with 1 interaction(s)
+  interaction[0]: Interaction_RetrieveFact
+    query: 8 = 2^3
+    candidates: 10
+    ProveInTime answer: IsabelleFact_ProveInTime
+    statement: (9::nat) = 2^3
+    pack: (1, '(9::nat) = 2^3')
+Filled node: Obvious, id=2
+  - step id: 2
+    operation: Obvious
+    with facts:
+      - (9::nat) = 2^3
+      - log_nat_power: (0 :: real) < ?x ⟶ log ?b (?x ^ ?n) = real ?n * log ?b ?x
+    Error: |
+      The following indicated fact is non-trivial, you must prove it manually:
+      (9 :: nat) = (2 :: nat) ^ (3 :: nat)
+--------------------------------------------------
+After fill
+--------------------------------------------------
+variables:
+  - n: nat
+  - x: real
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: (0 :: real) < x ⟶ ln (x ^ n) = real n * ln x
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: (0 :: real) < x
+  - step id: 2
+    operation: Obvious
+    with facts:
+      - (9::nat) = 2^3
+      - log_nat_power: (0 :: real) < ?x ⟶ log ?b (?x ^ ?n) = real ?n * log ?b ?x
+    Error: |
+      The following indicated fact is non-trivial, you must prove it manually:
+      (9 :: nat) = (2 :: nat) ^ (3 :: nat)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  ln (x ^ n) = real n * ln x

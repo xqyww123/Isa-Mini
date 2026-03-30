@@ -2846,7 +2846,7 @@ fun HAMMER_i override step_id (ctxt, HHF (s,facts) :: S) =
       val improved_SH = Config.get ctxt mini_use_improved_SH
       val override = if improved_SH then override
                      else Sledgehammer_Fact.no_fact_override
-      val (prf, s') = Phi_Sledgehammer_Solver.auto improved_SH override ID' ctxt s
+      val (prf, s') = Phi_Sledgehammer_Solver.auto improved_SH override ID' NONE ctxt s
                       handle ERROR E => raise OPR_FAIL (PROOF_FAIL, E)
    in get_reporter () (Internal (SH_PRF prf))
     ; (ctxt, HHF (s', facts) :: S)

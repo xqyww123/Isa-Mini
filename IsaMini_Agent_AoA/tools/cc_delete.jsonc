@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "properties": {
+    "target_steps": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "List of step IDs to delete"
+    }
+  },
+  "required": ["target_steps"],
+  "additionalProperties": false
+}

@@ -1,13 +1,19 @@
 {
   "type": "object",
   "properties": {
-    "indexes": {
-      "type": "array",
-      "items": {
-        "type": "integer"
-      },
-      "description": "The indexes of the selected options (can be empty for no selection)"
+    "answer": {
+      "description": "Either an array of selected indexes, or a free-form text answer",
+      "anyOf": [
+        {
+          "type": "array",
+          "items": { "type": "integer" }
+        },
+        {
+          "type": "string"
+        }
+      ]
     }
   },
-  "required": ["indexes"]
+  "required": ["answer"],
+  "additionalProperties": false
 }

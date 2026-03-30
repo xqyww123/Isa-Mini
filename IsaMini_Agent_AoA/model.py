@@ -75,8 +75,21 @@ class IsabelleFact_Presented(IsabelleFact):
                 file.write(f"  {expr}\n")
         else:
             file.write(f"- {self.short_name}\n")
-    def pack(self) -> str:
-        return self.full_name
+    def pack(self) -> tuple[int, str]:
+        return (0, self.full_name)
+
+class IsabelleFact_ProveInTime(IsabelleFact):
+    """A fact to be proven just-in-time by Isabelle."""
+    __slots__ = ('statement',)
+    def __init__(self, statement: str):
+        self.statement = statement
+    def name(self) -> str:
+        return self.statement
+    def print(self, indent: int, file: MyIO) -> None:
+        print_indent(indent, file)
+        file.write(f"- {self.statement}\n")
+    def pack(self) -> tuple[int, str]:
+        return (1, self.statement)
 
 class IsabelleFact_Unfound(IsabelleFact):
     """A fact that could not be found in the Isabelle context."""
@@ -860,7 +873,7 @@ class Minilang_State:
                 name_queries.append(fact["name"])
         # Batch resolve all FactByName
         if name_queries:
-            results = self.retrieve_facts(name_queries)
+            results = self._retrieve_facts_expr(name_queries)
             for idx, result in zip(name_indices, results):
                 fact = facts[idx]
                 if result is None:
@@ -884,7 +897,9 @@ class Minilang_State:
         else:
             domain = Semantic_Vector_Store.ContextAll
         store: Semantic_Vector_Store = self.connection.semantic_vector_store()  # type: ignore
-        return store.lookup(query, k, kinds, domain)
+        results = store.lookup(query, k, kinds, domain)
+        return [(score, rec._replace(name=ascii_of_unicode(rec.name)))
+                for score, rec in results]
     def compute_bindings(self, var_names: list[str], fact_names: list[str]) -> Bindings:
         """
         Compute bindings for the leading proof goal by binding provided names in order.
@@ -902,22 +917,25 @@ class Minilang_State:
         """
         result = self.connection.callback("IsaMini.need_intro", self.name)
         return result
-    def retrieve_facts(self, names: list[str]) -> list[tuple[str, str, list[str]] | None]:
+    def _retrieve_facts_expr(self, names: list[str]) -> list[tuple[str, str, list[str]] | None]:
         """
         Retrieve facts by their short or full names (batch).
-        Returns list of (full_name, short_name, expressions) or None per name.
+        Returns list of (full_name, short_name, pretty_unicode_expressions) or None per name.
         """
         results = self.connection.callback("IsaMini.retrieve_fact", (self.name, names))
         out: list[tuple[str, str, list[str]] | None] = [None] * len(results)
         for i, r in enumerate(results):
             if r is not None:
                 full_name, short_name, exprs = r
-                out[i] = (full_name, short_name, list(exprs))
+                out[i] = (full_name, pretty_unicode(short_name),
+                          [pretty_unicode(e) for e in exprs])
         return out
-
-    def retrieve_fact(self, name: str) -> tuple[str, str, list[str]] | None:
-        """Retrieve a single fact. Convenience wrapper around retrieve_facts."""
-        return self.retrieve_facts([name])[0]
+    def _retrieve_constants_types(self, names: list[str]) -> list[tuple[str, str] | None]:
+        """Retrieve constants by fully qualified names (batch).
+        Returns list of (short_name, pretty_unicode_type) or None per name."""
+        results = self.connection.callback("IsaMini.retrieve_constant", (self.name, names))
+        return [(pretty_unicode(r[0]), pretty_unicode(r[1])) if r is not None else None
+                for r in results]
     def check_term(self, term_str: str) -> tuple[typ, Vars, Vars]:
         """
         Parse and check a term string using Syntax.read_term.
@@ -964,12 +982,14 @@ class Minilang_State:
 ### Interaction
 
 # abstract base class
-# Invariant: list is sorted and all elements are distinct
-type answer = Annotated[list[int], "sorted and all elements are distinct"]
+type answer = Annotated[list[int], "sorted and all elements are distinct"] | str
 
-def normalize_answer(indexes: list[int]) -> answer:
-    """Ensure answer satisfies invariant: sorted and all elements are distinct."""
-    return sorted(set(indexes))
+def normalize_answer(raw: Any) -> answer:
+    """Normalize the answer value.
+    Returns sorted distinct int list for index answers, or str for text answers."""
+    if isinstance(raw, str):
+        return raw
+    return sorted(set(raw))
 
 class Interaction:
     forking: bool = False
@@ -1014,7 +1034,7 @@ class Interaction_BadAnswer(Exception):
 class Interaction_RetrieveFact(Interaction):
     forking = True
     INITIAL_K = 10
-    FINAL_K = 10
+    FINAL_K = 40
 
     def __init__(self, state: Minilang_State,
             query: str, kinds: list[EntityKind]):
@@ -1023,6 +1043,7 @@ class Interaction_RetrieveFact(Interaction):
         self.k = self.INITIAL_K
         self.kinds = kinds
         self.candidate_facts = self._fetch_facts()
+        self.relevant_constants = self._fetch_constants()
 
     def _fetch_facts(self) -> list[IsabelleFact_Presented]:
         import logging
@@ -1031,7 +1052,7 @@ class Interaction_RetrieveFact(Interaction):
         if not candidates:
             return []
         names = [rec.name for _, rec in candidates]
-        infos = self.state.retrieve_facts(names)
+        infos = self.state._retrieve_facts_expr(names)
         results: list[IsabelleFact_Presented] = []
         for (score, rec), info in zip(candidates, infos):
             if info is None:
@@ -1045,25 +1066,60 @@ class Interaction_RetrieveFact(Interaction):
                 expression=exprs))
         return results
 
+    def _fetch_constants(self) -> list[tuple[str, str, str]]:
+        """Fetch relevant constants via semantic search.
+        Returns list of (short_name, type, interpretation) triples."""
+        candidates = self.state.semantic_knn(self.query, 10, [EntityKind.CONSTANT])
+        candidates = [(score, rec) for score, rec in candidates if score >= 0.5] # \
+                   # + [(score, rec) for score, rec in candidates if 0.4 <= score < 0.5][:5]
+        if not candidates:
+            return []
+        full_names = [rec.name for _, rec in candidates]
+        infos = self.state._retrieve_constants_types(full_names)
+        results: list[tuple[str, str, str]] = []
+        for (_, rec), info in zip(candidates, infos):
+            if info is None:
+                continue
+            short_name, typ = info
+            results.append((short_name, typ, rec.interpretation))
+        return results
+
     def prompt(self, indent: int, file: MyIO) -> None:
         print_indent(indent, file)
-        file.write("Regarding the statement:")
+        file.write("You are looking for a theorem establishing:")
         print_paragraph(indent, file, self.query)
         file.write("\n")
+        # Show relevant constants
+        if self.relevant_constants:
+            file.write("Relevant constants in scope:\n")
+            for short_name, typ, interp in self.relevant_constants:
+                print_indent(indent+1, file)
+                file.write(f"- {short_name}: {typ}\n")
+                print_indent(indent+2, file)
+                file.write(f"{interp}\n")
+            file.write("\n")
+        # Show candidate theorems
         if not self.candidate_facts:
             raise InternalError("Interaction_RetrieveFact.prompt called with no candidates")
-        file.write("We find the following Isabelle theorems from the library:\n")
+        file.write("Similar theorems from the library:\n")
         for i, fact in enumerate(self.candidate_facts):
             print_indent(indent+1, file)
             file.write(f"{i}. {fact.full_name}: {fact.expression}\n")
+        # Instructions
+        file.write("\nIf a theorem above states what you need, answer with its index.\n")
+        file.write("If the statement is trivially provable, answer with the formal Isabelle "
+                   "statement as text. "
+                   "IMPORTANT: all numeric literals MUST be type-annotated, "
+                   "e.g., `(2::nat)` not `2`.\n")
         if self.k >= self.FINAL_K:
-            file.write("Call `mcp__proof__answer` with the index if any matches. "
-                       "If not found, answer an empty array and prove it by yourself.\n")
+            file.write("If no theorem matches and the statement is non-trivial, "
+                       "answer empty to prove it yourself later.\n")
         else:
-            file.write("Call `mcp__proof__answer` with the index if any matches, "
-                       "or with an empty array to see more candidates.\n")
+            file.write("If no theorem matches, answer empty to see more candidates.\n")
 
     def answer(self, answer: answer) -> IsabelleFact:
+        if isinstance(answer, str) and answer:
+            return IsabelleFact_ProveInTime(answer)
         if not answer:
             if self.k < self.FINAL_K:
                 # Expand search and re-prompt
@@ -2354,6 +2410,8 @@ class Interaction_ChooseDef(Interaction):
             file.write(f"{i}. {ref.full_name}: {ref.expression}\n")
         file.write("Select definition(s) to use in unfolding. Call `mcp__proof__answer` with the indexes, or with an empty array to skip.\n")
     def answer(self, answer: answer) -> list[IsabelleFact]:
+        if isinstance(answer, str):
+            raise Interaction_BadAnswer("This interaction expects index selection, not text.")
         if not answer:
             return []
         for idx in answer:

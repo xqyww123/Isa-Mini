@@ -519,9 +519,17 @@ async def _test_RetrieveFact(root: Root, file: MyIO):
     Reproduces 'Unknown ancestor theory ""' bug."""
     print_header("Initial YAML", file)
     root.print(0, file)
-    # 1. Retrieve a fact by name — this works fine
-    result = root.ml_state.retrieve_facts(["log_nat_power"])
-    file.write(f"log_nat_power: {result}\n")
+    # 1. Test fetch_facts with various fact types
+    fetched = root.ml_state.fetch_facts([
+        {"refer_by": "name", "name": "log_nat_power"},       # known fact → IsabelleFact_Presented
+        {"refer_by": "name", "name": "nonexistent_lemma"},    # unknown fact → IsabelleFact_Unfound
+        {"refer_by": "statement", "statement": "8 = 2^3"},   # statement → Interaction_RetrieveFact
+    ])
+    for i, f in enumerate(fetched):
+        file.write(f"  fetch_facts[{i}]: {type(f).__name__}\n")
+    assert isinstance(fetched[0], IsabelleFact_Presented)
+    assert isinstance(fetched[1], IsabelleFact_Unfound)
+    assert isinstance(fetched[2], Interaction_RetrieveFact)
     # 2. Test Obvious with both a FactByStatement and a FactByName.
     #    The FactByStatement triggers Interaction_RetrieveFact which calls
     #    semantic_knn → entities_of → retrieve_facts internally.
@@ -535,11 +543,79 @@ async def _test_RetrieveFact(root: Root, file: MyIO):
         }))
     except RaiseInteraction as e:
         file.write(f"RaiseInteraction raised with {len(e.interactions)} interaction(s)\n")
+        results: list[Any] = [None] * len(e.interactions)
         for i, inter in enumerate(e.interactions):
             file.write(f"  interaction[{i}]: {type(inter).__name__}\n")
             if isinstance(inter, Interaction_RetrieveFact):
                 file.write(f"    query: {inter.query}\n")
                 file.write(f"    candidates: {len(inter.candidate_facts)}\n")
+                # Answer with a ProveInTime statement
+                result = inter.answer("(8::nat) = 2^3")
+                file.write(f"    ProveInTime answer: {type(result).__name__}\n")
+                assert isinstance(result, IsabelleFact_ProveInTime)
+                file.write(f"    statement: {result.statement}\n")
+                file.write(f"    pack: {result.pack()}\n")
+                results[i] = result
+        # Invoke the continuation to get a gen_node, then fill
+        gen = await e.kontinuation(results)
+        root.session.age += 1
+        node = root.fill("2", gen)
+        file.write(f"Filled node: {type(node).__name__}, id={node.id}\n")
+        node.print(1, file, show_warnings=True)
+    print_header("After fill", file)
+    root.print(0, file)
+    return
+
+@model_test("RetrieveFact2", "Test_RetrieveFact.thy", 8)
+async def _test_RetrieveFact2(root: Root, file: MyIO):
+    """Test retrieve_facts and FactByStatement interaction.
+    Reproduces 'Unknown ancestor theory ""' bug."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    # 1. Test fetch_facts with various fact types
+    fetched = root.ml_state.fetch_facts([
+        {"refer_by": "name", "name": "log_nat_power"},       # known fact → IsabelleFact_Presented
+        {"refer_by": "name", "name": "nonexistent_lemma"},    # unknown fact → IsabelleFact_Unfound
+        {"refer_by": "statement", "statement": "8 = 2^3"},   # statement → Interaction_RetrieveFact
+    ])
+    for i, f in enumerate(fetched):
+        file.write(f"  fetch_facts[{i}]: {type(f).__name__}\n")
+    assert isinstance(fetched[0], IsabelleFact_Presented)
+    assert isinstance(fetched[1], IsabelleFact_Unfound)
+    assert isinstance(fetched[2], Interaction_RetrieveFact)
+    # 2. Test Obvious with both a FactByStatement and a FactByName.
+    #    The FactByStatement triggers Interaction_RetrieveFact which calls
+    #    semantic_knn → entities_of → retrieve_facts internally.
+    root.session.age += 1
+    try:
+        root.fill("2", Obvious.interactive_gen({
+            "facts": [
+                {"refer_by": "statement", "statement": "8 = 2^3"},
+                {"refer_by": "name", "name": "log_nat_power"},
+            ]
+        }))
+    except RaiseInteraction as e:
+        file.write(f"RaiseInteraction raised with {len(e.interactions)} interaction(s)\n")
+        results: list[Any] = [None] * len(e.interactions)
+        for i, inter in enumerate(e.interactions):
+            file.write(f"  interaction[{i}]: {type(inter).__name__}\n")
+            if isinstance(inter, Interaction_RetrieveFact):
+                file.write(f"    query: {inter.query}\n")
+                file.write(f"    candidates: {len(inter.candidate_facts)}\n")
+                # Answer with a ProveInTime statement
+                result = inter.answer("(9::nat) = 2^3")
+                file.write(f"    ProveInTime answer: {type(result).__name__}\n")
+                assert isinstance(result, IsabelleFact_ProveInTime)
+                file.write(f"    statement: {result.statement}\n")
+                file.write(f"    pack: {result.pack()}\n")
+                results[i] = result
+        # Invoke the continuation to get a gen_node, then fill
+        gen = await e.kontinuation(results)
+        root.session.age += 1
+        node = root.fill("2", gen)
+        file.write(f"Filled node: {type(node).__name__}, id={node.id}\n")
+        node.print(1, file, show_warnings=True)
+    print_header("After fill", file)
     root.print(0, file)
     return
 

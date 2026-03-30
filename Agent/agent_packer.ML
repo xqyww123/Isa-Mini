@@ -103,18 +103,28 @@ val unpack_bindings =
 val pack_bindings =
   packPair (packList pack_var_name, packList pack_prem_name)
 
+fun pack_extended_fact (FactByName name) =
+      packPair (packInt, packString) (0, name)
+  | pack_extended_fact (FactInTime stmt) =
+      packPair (packInt, packString) (1, stmt)
+
+val unpack_extended_fact =
+  unpackPair_dep' unpackInt (fn 0 => unpackString >> FactByName
+                              | 1 => unpackString >> FactInTime
+                              | n => error ("Unknown extended_fact tag: " ^ Int.toString n))
+
 val unpacker =
   unpackPair_dep unpackString (
     fn "SIMPLIFY" => apfst SIMPLIFY o unpackTuple5 (
-                        unpackList unpackString,
+                        unpackList unpack_extended_fact,
                         unpackBool,
                         unpackList unpackString,
                         unpackBool,
                         unpackOption unpack_bindings
                      )
-     | "UNFOLD"   => apfst UNFOLD   o unpackList unpackString
+     | "UNFOLD"   => apfst UNFOLD   o unpackList unpack_extended_fact
      | "WITNESS"  => apfst WITNESS  o unpackList unpackString
-     | "RULE"     => apfst RULE     o unpackList unpackString
+     | "RULE"     => apfst RULE     o unpackList unpack_extended_fact
      | "CASE_SPLIT" => apfst CASE_SPLIT o unpackTuple3 (
                         unpackString,
                         unpack_opt_var_names,
@@ -127,10 +137,10 @@ val unpacker =
                         unpackOption unpackString
                      )
      | "ATP"      => apfst (fn (facts, vars) => NEXT_OR_END (facts, vars))
-                      o unpackPair (unpackList unpackString, unpack_opt_var_names)
-     | "NEXT"     => apfst NEXT o unpackPair (unpackList unpackString, unpack_opt_var_names)
-     | "END"      => apfst END o unpackList unpackString
-     | "NEXT_or_END" => apfst NEXT_OR_END o unpackPair (unpackList unpackString, unpack_opt_var_names)
+                      o unpackPair (unpackList unpack_extended_fact, unpack_opt_var_names)
+     | "NEXT"     => apfst NEXT o unpackPair (unpackList unpack_extended_fact, unpack_opt_var_names)
+     | "END"      => apfst END o unpackList unpack_extended_fact
+     | "NEXT_or_END" => apfst NEXT_OR_END o unpackPair (unpackList unpack_extended_fact, unpack_opt_var_names)
      | "SORRY"    => apfst SORRY o unpack_opt_var_names
      | "BRANCH"   => apfst BRANCH   o unpackList (unpackPair (unpackOption unpackString, unpackString))
      | "HAVE"     => apfst HAVE     o unpackPair (unpackString, unpackString)
@@ -138,7 +148,7 @@ val unpacker =
      | "OBTAIN"   => apfst OBTAIN   o unpackPair (
                           unpackList (unpackPair (unpackString, unpackOption unpackString)),
                           unpackList (unpackPair (unpackOption unpackString, unpackString)))
-     | "HAMMER"   => apfst HAMMER o unpackList unpackString
+     | "HAMMER"   => apfst HAMMER o unpackList unpack_extended_fact
      | "INTRO"    => apfst INTRO o unpackOption unpack_bindings
      | "SKIP"     => apfst (K SKIP) o unpackUnit
      | cmd => error("Unknown operation " ^ cmd)
@@ -146,18 +156,18 @@ val unpacker =
 
 fun packer (SIMPLIFY data) =
       packPair (packString, packTuple5 (
-                  packList packString,
+                  packList pack_extended_fact,
                   packBool,
                   packList packString,
                   packBool,
                   packOption pack_bindings
                 )) ("SIMPLIFY", data)
   | packer (UNFOLD data) =
-      packPair (packString, packList packString) ("UNFOLD", data)
+      packPair (packString, packList pack_extended_fact) ("UNFOLD", data)
   | packer (WITNESS data) =
       packPair (packString, packList packString) ("WITNESS", data)
   | packer (RULE data) =
-      packPair (packString, packList packString) ("RULE", data)
+      packPair (packString, packList pack_extended_fact) ("RULE", data)
   | packer (CASE_SPLIT data) =
       packPair (packString, packTuple3 (packString, pack_opt_var_names, packOption packString))
         ("CASE_SPLIT", data)
@@ -165,12 +175,12 @@ fun packer (SIMPLIFY data) =
       packPair (packString, packTuple4 (packString, pack_opt_var_names, packList packString, packOption packString))
         ("INDUCT", data)
   | packer (NEXT_OR_END data) =
-      packPair (packString, packPair (packList packString, pack_opt_var_names))
+      packPair (packString, packPair (packList pack_extended_fact, pack_opt_var_names))
         ("NEXT_or_END", data)
   | packer (NEXT data) =
-      packPair (packString, packPair (packList packString, pack_opt_var_names))
+      packPair (packString, packPair (packList pack_extended_fact, pack_opt_var_names))
         ("NEXT", data)
-  | packer (END data) = packPair (packString, packList packString) ("END", data)
+  | packer (END data) = packPair (packString, packList pack_extended_fact) ("END", data)
   | packer (BRANCH data) =
       packPair (packString, packList (packPair (packOption packString, packString))) ("BRANCH", data)
   | packer (HAVE data) =
@@ -185,7 +195,7 @@ fun packer (SIMPLIFY data) =
   | packer (SORRY data) =
       packPair (packString, pack_opt_var_names)
         ("SORRY", data)
-  | packer (HAMMER data) = packPair (packString, packList packString) ("HAMMER", data)
+  | packer (HAMMER data) = packPair (packString, packList pack_extended_fact) ("HAMMER", data)
   | packer (INTRO data) = packPair (packString, packOption pack_bindings) ("INTRO", data)
   | packer SKIP = packPair (packString, packUnit) ("SKIP", ())
 (* | packer (ROLLBACK data) = packPair (packString, packInt) ("ROLLBACK", data) *)

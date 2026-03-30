@@ -1,0 +1,41 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - n: nat
+  - x: real
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: (0 :: real) < x ⟶ ln (x ^ n) = real n * ln x
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: (0 :: real) < x
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  ln (x ^ n) = real n * ln x
+  fetch_facts[0]: IsabelleFact_Presented
+  fetch_facts[1]: IsabelleFact_Unfound
+  fetch_facts[2]: Interaction_RetrieveFact
+RaiseInteraction raised with 1 interaction(s)
+  interaction[0]: Interaction_RetrieveFact
+    query: 8 = 2^3
+    candidates: 10
+    ProveInTime answer: IsabelleFact_ProveInTime
+    statement: (8::nat) = 2^3
+    pack: (1, '(8::nat) = 2^3')
+    Empty string answer: IsabelleFact_Unfound
+    Empty list answer: IsabelleFact_Unfound
+variables:
+  - n: nat
+  - x: real
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: (0 :: real) < x ⟶ ln (x ^ n) = real n * ln x
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: (0 :: real) < x
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  ln (x ^ n) = real n * ln x

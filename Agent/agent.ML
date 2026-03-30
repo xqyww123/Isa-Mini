@@ -16,25 +16,29 @@ type var_name = {internal_name: string, external_name: string, typ_pretty: strin
 type prem_name = {internal_term: term, external_name: string, pretty: string}
 type bindings = var_name list * prem_name list
 
+datatype ('term, 'fact) extended_fact =
+    FactByName of 'fact
+  | FactInTime of 'term (*statement to prove on-the-fly*)
+
 datatype ('term, 'thm, 'fact) command =
-    UNFOLD   of 'fact list
+    UNFOLD   of ('term, 'fact) extended_fact list
   | WITNESS  of 'term list
-  | RULE     of 'fact list
+  | RULE     of ('term, 'fact) extended_fact list
   | CASE_SPLIT of 'term (*target*) * Minilang.opt_var_names
                 * 'thm option (*rule*)
   | INDUCT   of 'term (*target*) * Minilang.opt_var_names
               * 'term list (*arbitrary*) * 'thm option (*rule*)
-  | NEXT_OR_END of 'fact list (*add lemmas*) * Minilang.opt_var_names
-  | NEXT     of 'fact list (*add lemmas*) * Minilang.opt_var_names
-  | END      of 'fact list (*add lemmas*)
+  | NEXT_OR_END of ('term, 'fact) extended_fact list (*add lemmas*) * Minilang.opt_var_names
+  | NEXT     of ('term, 'fact) extended_fact list (*add lemmas*) * Minilang.opt_var_names
+  | END      of ('term, 'fact) extended_fact list (*add lemmas*)
   | BRANCH   of (string option * string) list
   | HAVE     of string (*name*) * 'term (*statement*)
   | SUFFICES of 'term
   | OBTAIN   of (string * string option) list (*vars*) * (string option * string) list (*constraints*)
   | SORRY    of Minilang.opt_var_names
-  | HAMMER   of 'fact list (*with facts*)
+  | HAMMER   of ('term, 'fact) extended_fact list (*with facts*)
   | INTRO    of bindings option
-  | SIMPLIFY of 'fact list (*simp facts*) * bool (*use_system_simps*)
+  | SIMPLIFY of ('term, 'fact) extended_fact list (*simp facts*) * bool (*use_system_simps*)
               * string list (*premise_names*) * bool (*simplify_goal*)
               * bindings option
   | SKIP
@@ -54,6 +58,7 @@ val interpret : config -> xcmd -> Minilang.state -> Minilang.state
 
 val default_cfg : cfg * budget
 
+exception FACT_IN_TIME_FAIL of term
 exception INTRO_BINDINGS of {
     missing: bindings,
     auto_introduced: bindings,
@@ -115,25 +120,29 @@ type counters = {
   }
 type config = cfg * budget * counters
 
+datatype ('term, 'fact) extended_fact =
+    FactByName of 'fact
+  | FactInTime of 'term
+
 datatype ('term, 'thm, 'fact) command =
-    UNFOLD   of 'fact list
+    UNFOLD   of ('term, 'fact) extended_fact list
   | WITNESS  of 'term list
-  | RULE     of 'fact list
+  | RULE     of ('term, 'fact) extended_fact list
   | CASE_SPLIT of 'term (*target*) * Minilang.opt_var_names
                 * 'thm option (*rule*)
   | INDUCT   of 'term (*target*) * Minilang.opt_var_names
               * 'term list (*arbitrary*) * 'thm option (*rule*)
-  | NEXT_OR_END of 'fact list (*add lemmas*) * Minilang.opt_var_names
-  | NEXT     of 'fact list (*add lemmas*) * Minilang.opt_var_names
-  | END      of 'fact list (*add lemmas*)
+  | NEXT_OR_END of ('term, 'fact) extended_fact list (*add lemmas*) * Minilang.opt_var_names
+  | NEXT     of ('term, 'fact) extended_fact list (*add lemmas*) * Minilang.opt_var_names
+  | END      of ('term, 'fact) extended_fact list (*add lemmas*)
   | BRANCH   of (string option * string) list
   | HAVE     of string (*name*) * 'term (*statement*)
   | SUFFICES of 'term
   | OBTAIN   of (string * string option) list (*vars*) * (string option * string) list (*constraints*)
   | SORRY    of Minilang.opt_var_names
-  | HAMMER   of 'fact list (*with facts*)
+  | HAMMER   of ('term, 'fact) extended_fact list (*with facts*)
   | INTRO    of bindings option
-  | SIMPLIFY of 'fact list (*simp facts*) * bool (*use_system_simps*)
+  | SIMPLIFY of ('term, 'fact) extended_fact list (*simp facts*) * bool (*use_system_simps*)
               * string list (*premise_names*) * bool (*simplify_goal*)
               * bindings option
   | SKIP
@@ -574,11 +583,56 @@ fun AUTO_SIMPLIFY
     s'
   end
 
+exception FACT_IN_TIME_FAIL of term
+
+(* Resolve FactInTime: prove the statement, register in context, return FactByName.
+   FactByName passes through unchanged. Threads updated context via fold. *)
+fun pre_resolve_fact (FactByName fref) ctxt = (fref, ctxt)
+  | pre_resolve_fact (FactInTime prop) ctxt =
+      let val goal = Goal.init (Thm.cterm_of ctxt prop)
+          val (_, proved) = Phi_Sledgehammer_Solver.auto true
+                              Sledgehammer_Fact.no_fact_override NONE (SOME (Time.fromSeconds 10)) ctxt goal
+                            handle ERROR _ => raise FACT_IN_TIME_FAIL prop
+          val thm = Goal.finish ctxt proved
+          val fact_name = "proven_in_time___"
+          val ((_, _), ctxt') = Proof_Context.note_thms ""
+                ((Binding.name fact_name, []), [([thm], [])]) ctxt
+      in ((Facts.Named ((fact_name, Position.none), NONE), []), ctxt') end
+
+fun pre_resolve_facts ctxt facts =
+  fold_map pre_resolve_fact facts ctxt
+
+(* Resolve extended facts to a flat thm list (for SIMPLIFY, UNFOLD) *)
+fun resolve_to_thms ctxt facts =
+  let val (refs, ctxt') = pre_resolve_facts ctxt facts
+  in maps (Attrib.eval_thms ctxt' o single) refs
+  end
+
+(* Resolve extended facts to fact refs, threading context (for RULE, HAMMER, END, NXT) *)
+fun resolve_to_refs ctxt facts = pre_resolve_facts ctxt facts
+
+fun resolve_to_override ctxt facts =
+  let val (refs, ctxt') = resolve_to_refs ctxt facts
+  in (ctxt', {add = refs, del = [], only = false}) end
+
+(* Resolve extended facts and update Minilang state's context *)
+fun with_resolved_refs s facts f =
+  let val ctxt = Minilang.context_of s
+      val (refs, ctxt') = resolve_to_refs ctxt facts
+      val s' = Minilang.map_context (K ctxt') s
+  in f s' refs end
+
+fun with_resolved_override s facts f =
+  let val ctxt = Minilang.context_of s
+      val (ctxt', ovr) = resolve_to_override ctxt facts
+      val s' = Minilang.map_context (K ctxt') s
+  in f s' ovr end
+
 fun interpret_i (config as (cfg, budget, counters)) cmd s =
   case cmd of
       SIMPLIFY (simp_facts, use_system_simps, premise_names, simplify_goal, user_bindings_opt) =>
         let val ctxt = Minilang.context_of s
-            val simp_thms = maps (Attrib.eval_thms ctxt o single) simp_facts
+            val simp_thms = resolve_to_thms ctxt simp_facts
          in AUTO_SIMPLIFY counters simp_thms use_system_simps premise_names
                           simplify_goal user_bindings_opt s
         end
@@ -587,13 +641,14 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
                     then error "You must specify at least one theorem to unfold"
                     else ()
             val ctxt = Minilang.context_of s
-            val defs = Attrib.eval_thms ctxt facts
+            val defs = resolve_to_thms ctxt facts
         in Minilang.UNFOLD defs s
         end
     | WITNESS terms =>
         Minilang.CHOOSE terms s
-    | RULE thms =>
-        Minilang.RULE thms [] s
+    | RULE facts =>
+        with_resolved_refs s facts (fn s' => fn refs =>
+          Minilang.RULE refs [] s')
     | CASE_SPLIT (target, vars, rule) =>
         Minilang.CASE_SPLIT (false, ([[SOME target]], rule)) vars [] s
     | INDUCT (target, vars, arbitrary, rule) =>
@@ -605,11 +660,14 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
                     (false, ([[SOME (NONE, (target, false))]], (([vs], []), Option.map single rule))) vars [] s
         end
     | NEXT_OR_END (lemmas, vars) =>
-        Minilang.END_or_NXT vars {add=lemmas,del=[],only=false} s
+        with_resolved_override s lemmas (fn s' => fn ovr =>
+          Minilang.END_or_NXT vars ovr s')
     | NEXT (lemmas, vars) =>
-        Minilang.NXT vars {add=lemmas,del=[],only=false} s
+        with_resolved_override s lemmas (fn s' => fn ovr =>
+          Minilang.NXT vars ovr s')
     | END lemmas =>
-        Minilang.END {add=lemmas,del=[],only=false} s
+        with_resolved_override s lemmas (fn s' => fn ovr =>
+          Minilang.END ovr s')
     | BRANCH branches =>
         let val prem_ctr = #prem_counter counters
             val counter_start = Synchronized.value prem_ctr
@@ -643,7 +701,8 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
     | SORRY vars =>
         Minilang.END_or_NXT_by_SORRY vars s
     | HAMMER facts => (
-        Minilang.HAMMER {add=facts,del=[],only=false} s
+        with_resolved_override s facts (fn s' => fn ovr =>
+          Minilang.HAMMER ovr s')
         handle Minilang.OPR_FAIL (Minilang.PROOF_FAIL, _) =>
           let
             val ctxt = Minilang.context_of s
@@ -681,11 +740,20 @@ fun chk_single _ _ [x] = x
         ^ "\" refers to the following facts:\n"
         ^ String.concat (map (fn th => "- " ^ string_of_thm ctxt th ^ "\n") lst)
         ^ "You may select the i-th rule by using \"" ^ the rule ^ "(i)\".")
+
+fun check_extended_fact ctxt (FactByName name) = FactByName (read_fact name)
+  | check_extended_fact ctxt (FactInTime stmt) = FactInTime (read_prop ctxt stmt)
+
 in
 fun check_command_i s (SIMPLIFY (facts, use_sys, prems, simp_goal, bindings_opt)) =
-      SIMPLIFY (map read_fact facts, use_sys, prems, simp_goal, bindings_opt)
-  | check_command_i _ (RULE facts) = RULE (map read_fact facts)
-  | check_command_i _ (UNFOLD facts) = UNFOLD (map read_fact facts)
+      let val ctxt = Minilang.context_of s
+      in SIMPLIFY (map (check_extended_fact ctxt) facts, use_sys, prems, simp_goal, bindings_opt) end
+  | check_command_i s (RULE facts) =
+      let val ctxt = Minilang.context_of s
+      in RULE (map (check_extended_fact ctxt) facts) end
+  | check_command_i s (UNFOLD facts) =
+      let val ctxt = Minilang.context_of s
+      in UNFOLD (map (check_extended_fact ctxt) facts) end
   | check_command_i s (WITNESS terms) =
       let val ctxt = Minilang.context_of s
           val typs = get_witness_types s
@@ -727,9 +795,15 @@ fun check_command_i s (SIMPLIFY (facts, use_sys, prems, simp_goal, bindings_opt)
           val rule' = Option.map (chk_single ctxt rule o read_thms ctxt) rule
        in INDUCT (target', vars, arbitrary', rule')
       end
-  | check_command_i _ (NEXT_OR_END (facts, vars)) = NEXT_OR_END (map read_fact facts, vars)
-  | check_command_i _ (NEXT (facts, vars)) = NEXT (map read_fact facts, vars)
-  | check_command_i _ (END facts) = END (map read_fact facts)
+  | check_command_i s (NEXT_OR_END (facts, vars)) =
+      let val ctxt = Minilang.context_of s
+      in NEXT_OR_END (map (check_extended_fact ctxt) facts, vars) end
+  | check_command_i s (NEXT (facts, vars)) =
+      let val ctxt = Minilang.context_of s
+      in NEXT (map (check_extended_fact ctxt) facts, vars) end
+  | check_command_i s (END facts) =
+      let val ctxt = Minilang.context_of s
+      in END (map (check_extended_fact ctxt) facts) end
   | check_command_i _ (BRANCH brs) = BRANCH brs (*name_opt * string passthrough*)
   | check_command_i s (HAVE (name, goal)) =
       let val ctxt = Minilang.context_of s
@@ -741,7 +815,9 @@ fun check_command_i s (SIMPLIFY (facts, use_sys, prems, simp_goal, bindings_opt)
       end
   | check_command_i _ (OBTAIN vc) = OBTAIN vc (*name_opt * string passthrough*)
   | check_command_i _ (SORRY vars) = SORRY vars
-  | check_command_i _ (HAMMER facts) = HAMMER (map read_fact facts)
+  | check_command_i s (HAMMER facts) =
+      let val ctxt = Minilang.context_of s
+      in HAMMER (map (check_extended_fact ctxt) facts) end
   | check_command_i _ (INTRO opt_bindings) = INTRO opt_bindings
   | check_command_i _ SKIP = SKIP
 

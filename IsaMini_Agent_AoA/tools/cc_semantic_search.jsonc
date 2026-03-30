@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "English description of the entity to search for."
+    },
+    "kinds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["constant", "lemma", "type", "typeclass", "locale",
+                 "introduction rule", "elimination rule"]
+      },
+      "description": "Entity kinds to search. Use [\"lemma\"] for theorems."
+    },
+    "k": {
+      "type": "integer",
+      "description": "Number of results to return.",
+      "default": 10
+    }
+  },
+  "required": ["query", "kinds"],
+  "additionalProperties": false
+}

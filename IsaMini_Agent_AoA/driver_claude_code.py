@@ -246,11 +246,11 @@ async def _answer_tool(args: ToolCall_arg) -> ToolCall_ret:
             return _mk_ret(error_msg)
 
         current_inter = wi.interactions[current_idx]
-        normalized_indexes = normalize_answer(args["indexes"])
+        normalized = normalize_answer(args["answer"])
 
         # Process the answer
         try:
-            result = current_inter.answer(normalized_indexes)
+            result = current_inter.answer(normalized)
         except Interaction_BadAnswer as e:
             error_msg = str(e)
             session.log_tool_response("mcp__proof__answer", f"BAD ANSWER: {error_msg}")
