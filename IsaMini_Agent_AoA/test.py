@@ -1,7 +1,9 @@
+import asyncio
+import inspect
 import os
 import time
 from IsaREPL import REPLFail
-from typing import Any, NamedTuple, Sequence, TypedDict, Callable, TextIO, cast
+from typing import Any, Awaitable, Coroutine, NamedTuple, Sequence, TypedDict, Callable, TextIO, Union, cast
 from . import model
 from .model import *
 from abc import ABC, abstractmethod
@@ -22,8 +24,10 @@ class TestCase(ABC):
     def run(self, connection: Connection, log_dir: str, global_context: Context, ptree: ML_ProofTree) -> Root:
         raise NotImplementedError("Subclass must implement run method")
     
+type _TestOpr = Callable[[Root, MyIO], Union[None, Awaitable[None]]]
+
 class ModelTestCase(TestCase):
-    def __init__(self, name : str, file: str, line: int, opr: Callable[[Root, MyIO], None]):
+    def __init__(self, name : str, file: str, line: int, opr: _TestOpr):
         super().__init__(name, file, line)
         self.opr = opr
     def run(self, connection: Connection, log_dir: str, global_context: Context, ptree: ML_ProofTree) -> Root:
@@ -45,10 +49,12 @@ class ModelTestCase(TestCase):
             finally:
                 os.unlink(actual_path)
         with Session(connection.server.logger, log_dir) as session:
-            root = Root((global_context, ptree), connection)
+            root = Root((global_context, ptree), connection, session)
             session.initialize(root)
             buffer = io.StringIO()
-            self.opr(root, MyIO(buffer))
+            result = self.opr(root, MyIO(buffer))
+            if inspect.iscoroutine(result):
+                asyncio.run(result)
             correct_yaml_path = self.correct_yaml_path()
             if correct_yaml_path is not None:
                 with open(correct_yaml_path, 'r') as f:
@@ -73,7 +79,7 @@ class ModelTestCase(TestCase):
 
 TESTS : dict[str, TestCase] = {}
 def model_test(name: str, file: str, line: int):
-    def decorator(func: Callable[[Root, MyIO], None]):
+    def decorator(func: _TestOpr):
         TESTS[name] = ModelTestCase(name, file, line, func)
         return func
     return decorator
@@ -89,7 +95,7 @@ def _test_sqrt2(root: Root, file: MyIO):
     root.print(0, file)
     #goal = root.locate_node("goal1") # the same as root.sub_nodes[1]
     goal = root.sub_nodes[1]
-    goal.append(InferenceRule.gen({"thought": "Proof by contradiction", "rule": None}))
+    goal.append(InferenceRule.interactive_gen({"thought": "Proof by contradiction", "rule": None}))
     print_header("Setting the inference rule", file)
     root.print(0, file)
     goal.append(Obtain.gen({"thought": "I don't know", "variables": [{"name": "m", "type": "nat"}, {"name": "n", "type": "nat"}],
@@ -97,11 +103,11 @@ def _test_sqrt2(root: Root, file: MyIO):
     print_header("Obtain m n", file)
     root.print(0, file)
     #node = root.locate_node("2.1") # not appear
-    root.fill("2.1", Obvious.gen({"thought": "Obviously the statement holds.", "facts": []}))
+    root.fill("2.1", Obvious.interactive_gen({"facts": []}))
     print_header("Obvious", file)
     root.print(0, file)
     root.fill("3", Have.gen({"thought": "I don't know", "statement": {"english": "some fancy explanation", "isabelle": "m^2 = (sqrt 2)^2 * n^2"}, "name": "helper_lemma"}))
-    root.fill("3.1", Obvious.gen({"thought": "Obviously the statement holds.", "facts": []}))
+    root.fill("3.1", Obvious.interactive_gen({"facts": []}))
     print_header("Have", file)
     root.print(0, file)
 
@@ -124,7 +130,7 @@ def _test_branch(root: Root, file: MyIO):
 def _test_EquivDerive(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
-    root.fill("2", InferenceRule.gen({
+    root.fill("2", InferenceRule.interactive_gen({
         "thought": "Destruct equivalence",
         "rule": None
     }))
@@ -135,7 +141,7 @@ def _test_EquivDerive(root: Root, file: MyIO):
 def _test_IntroConj(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
-    root.fill("2", InferenceRule.gen({
+    root.fill("2", InferenceRule.interactive_gen({
         "thought": "Destruct equivalence",
         "rule": None
     }))
@@ -146,7 +152,7 @@ def _test_IntroConj(root: Root, file: MyIO):
 def _test_IntroConj_short(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
-    root.fill("2", InferenceRule.gen({
+    root.fill("2", InferenceRule.interactive_gen({
         "thought": "Destruct equivalence",
         "rule": None
     }))
@@ -182,14 +188,10 @@ def _test_Induction(root: Root, file: MyIO):
     }))
     print_header("Induction", file)
     root.print(0, file)
-    root.fill("1.Nil.1", Obvious.gen({
-        "thought": "Obviously the statement holds.",
-        "facts": []
-    }))
+    root.fill("1.Nil.1", Obvious.interactive_gen({"facts": []}))
     print_header("Obvious", file)
     root.print(0, file)
-    root.fill("1.Cons.1", Obvious.gen({
-        "thought": "Obviously the statement holds.",
+    root.fill("1.Cons.1", Obvious.interactive_gen({
         "facts": [{"refer_by": "name", "name": "Cons.IH"}]
     }))
     print_header("Obvious", file)
@@ -213,17 +215,11 @@ def _test_Suffices(root: Root, file: MyIO):
     print_header("After Suffices", file)
     root.print(0, file)
     # Now we need to prove: (x * x + 1 > 0) --> (x * x >= 0)
-    root.fill("1.1", Obvious.gen({
-        "thought": "The implication is obvious",
-        "facts": []
-    }))
+    root.fill("1.1", Obvious.interactive_gen({"facts": []}))
     print_header("After proving implication", file)
     root.print(0, file)
     # Now we need to prove: x * x + 1 > 0
-    root.fill("2", Obvious.gen({
-        "thought": "This is obviously true",
-        "facts": []
-    }))
+    root.fill("2", Obvious.interactive_gen({"facts": []}))
     print_header("After proving suffices goal", file)
     root.print(0, file)
     unfinished_nodes = set()
@@ -235,7 +231,7 @@ def _test_Rewrite1(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     # Use Rewrite to simplify the premises h1 and h2
-    root.fill("1", Rewrite.gen({
+    root.fill("1", Rewrite.interactive_gen({
         "thought": "Rewrite the premises to simplify the equations",
         "using": [{"refer_by": "name", "name": "h1"}],
         "use system simplifiers": True,
@@ -254,7 +250,7 @@ def _test_Rewrite2(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     # Use Rewrite to simplify the premises h1 and h2
-    root.insert_before("1", Rewrite.gen({
+    root.insert_before("1", Rewrite.interactive_gen({
         "thought": "Rewrite the premises to simplify the equations",
         "using": [{"refer_by": "name", "name": "h1"}],
         "use system simplifiers": True,
@@ -267,7 +263,7 @@ def _test_Rewrite2(root: Root, file: MyIO):
     root.rename_var("aAa", "yyy")
     print_header("After Rename Fact", file)
     root.print(0, file)
-    root.delete("0A")
+    root.delete(["0A"])
     print_header("After Remove the Rewrite", file)
     root.print(0, file)
 
@@ -284,13 +280,10 @@ def _test_Rewrite3(root: Root, file: MyIO):
         },
         "name": "lem1"
     }))
-    root.fill("1.1", Obvious.gen({
-        "thought": "Obviously the statement holds.",
-        "facts": []
-    }))
+    root.fill("1.1", Obvious.interactive_gen({"facts": []}))
     print_header("After Have", file)
     root.print(0, file)
-    root.fill("2", Rewrite.gen({
+    root.fill("2", Rewrite.interactive_gen({
         "thought": "Rewrite the premises to simplify the equations",
         "using": [{"refer_by": "name", "name": "lem1"}],
         "use system simplifiers": False,
@@ -334,10 +327,7 @@ def _test_Witness1(root: Root, file: MyIO):
     root.print(0, file)
 
     # Prove the remaining goal (5 = 5) using Obvious
-    root.fill("2", Obvious.gen({
-        "thought": "Obviously 5 equals 5",
-        "facts": []
-    }))
+    root.fill("2", Obvious.interactive_gen({"facts": []}))
     print_header("After Obvious", file)
     root.print(0, file)
 
@@ -363,16 +353,16 @@ def _test_Witness2(root: Root, file: MyIO):
     return
 
 @model_test("Unfold1", "Test_Unfold1.thy", 15)
-def _test_Unfold1(root: Root, file: MyIO):
+async def _test_Unfold1(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
 
     # Use Witness to provide a witness for the existential goal
-    root.fill("1", Unfold.gen({
-        "thought": "Unfold the goal",
-        "targets": ["XXX"],
-        "fact_refs": ["XXX_def"]
-    }))
+    root.fill("1", Unfold.gen(Unfold_ToolArg_internal(
+        thought="Unfold the goal",
+        targets=["XXX"],
+        fact_refs=[FactRef("XXX_def", "XXX_def", {"refer_by": "name", "name": "XXX_def"}, ["Fake"])]
+    )))
     print_header("After Unfold", file)
     root.print(0, file)
     try:
@@ -382,8 +372,10 @@ def _test_Unfold1(root: Root, file: MyIO):
         }))
     except RaiseInteraction as e:
         print_header("Interaction Prompt", file)
-        e.interaction.prompt(0, file)
-        root.amend("1", e.interaction.answer([1]))
+        assert len(e.interactions) == 1
+        e.interactions[0].prompt(0, file)
+        gen_node = await e.kontinuation([inter.answer([1]) for inter in e.interactions])
+        root.amend("1", gen_node)
         print_header("After Answer", file)
         root.print(0, file)
 
@@ -391,13 +383,164 @@ def _test_Unfold1(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
 
-@model_test("ReferFactByStatement", "Test001.thy", 8)
+@model_test("Delete1", "Test_Delete1.thy", 13)
+def _test_Delete1(root: Root, file: MyIO):
+    """Test deleting a single step."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    root.fill("1", Have.gen({
+        "thought": "helper",
+        "statement": {"english": "x equals y plus 0", "isabelle": "x = y"},
+        "name": "lem1"
+    }))
+    root.session.age += 1
+    root.fill("1.1", Obvious.interactive_gen({"facts": []}))
+    root.session.age += 1
+    root.fill("2", Rewrite.interactive_gen({
+        "thought": "rewrite",
+        "using": [{"refer_by": "name", "name": "lem1"}],
+        "use system simplifiers": False,
+        "rewrite goal": True,
+        "rewrite premises": []
+    }))
+    print_header("After building 3 steps", file)
+    root.print(0, file, update_line=False)
+    buffer = io.StringIO()
+    root.print(0, MyIO(buffer), update_line=True)
+    print_header("Overview", file)
+    root.quickview(0, file)
+    root.reset_changed()
+    # Delete the middle step (Have + its substep)
+    root.session.age += 1
+    root.delete(["1"])
+    print_header("After deleting step 1 (Have)", file)
+    root.print(0, file)
+    print_header("Overview", file)
+    root.quickview(0, file)
+    root.reset_changed()
+    # Insert a Have before step 2
+    root.session.age += 1
+    root.insert_before("2", Have.gen({
+        "thought": "re-add helper",
+        "statement": {"english": "x equals y plus 0", "isabelle": "x = y + 0"},
+        "name": "lem1"
+    }))
+    print_header("After inserting Have before step 2", file)
+    root.print(0, file)
+    buffer = io.StringIO()
+    root.print(0, MyIO(buffer), update_line=True)
+    print_header("Overview", file)
+    root.quickview(0, file)
+    root.reset_changed()
+
+# @model_test("Delete2", "Test_Delete2.thy", 13)
+# def _test_Delete2(root: Root, file: MyIO):
+#     """Test deleting multiple steps at once."""
+#     print_header("Initial YAML", file)
+#     root.print(0, file)
+#     root.session.age += 1
+#     root.fill("1", Have.gen({
+#         "thought": "helper",
+#         "statement": {"english": "x equals y", "isabelle": "x = y"},
+#         "name": "lem1"
+#     }))
+#     root.session.age += 1
+#     root.fill("1.1", Obvious.interactive_gen({"facts": []}))
+#     root.session.age += 1
+#     root.fill("2", Have.gen({
+#         "thought": "helper2",
+#         "statement": {"english": "y equals z", "isabelle": "y = z"},
+#         "name": "lem2"
+#     }))
+#     root.session.age += 1
+#     root.fill("2.1", Obvious.interactive_gen({"facts": []}))
+#     root.session.age += 1
+#     root.fill("3", Obvious.interactive_gen({"facts": []}))
+#     print_header("After building 5 steps", file)
+#     root.print(0, file)
+#     buffer = io.StringIO()
+#     root.print(0, MyIO(buffer), update_line=True)
+#     print_header("Overview", file)
+#     root.quickview(0, file)
+#     root.reset_changed()
+#     # Delete two steps at once
+#     root.session.age += 1
+#     root.delete(["1", "2"])
+#     print_header("After deleting steps 1 and 2", file)
+#     root.print(0, file)
+#     print_header("Overview", file)
+#     root.quickview(0, file)
+#     root.reset_changed()
+# 
+# @model_test("Delete3", "Test_Delete3.thy", 13)
+# def _test_Delete3(root: Root, file: MyIO):
+#     """Test deleting with duplicate IDs (deduplication)."""
+#     print_header("Initial YAML", file)
+#     root.print(0, file)
+#     root.session.age += 1
+#     root.fill("1", Have.gen({
+#         "thought": "helper",
+#         "statement": {"english": "x equals y", "isabelle": "x = y"},
+#         "name": "lem1"
+#     }))
+#     root.session.age += 1
+#     root.fill("1.1", Obvious.interactive_gen({"facts": []}))
+#     root.session.age += 1
+#     root.fill("2", Obvious.interactive_gen({"facts": []}))
+#     print_header("After building steps", file)
+#     root.print(0, file)
+#     buffer = io.StringIO()
+#     root.print(0, MyIO(buffer), update_line=True)
+#     print_header("Overview", file)
+#     root.quickview(0, file)
+#     root.reset_changed()
+#     # Delete with duplicate ID — should deduplicate and not error
+#     root.session.age += 1
+#     root.delete(["1", "1"])
+#     print_header("After deleting step 1 (with duplicate)", file)
+#     root.print(0, file)
+#     print_header("Overview", file)
+#     root.quickview(0, file)
+#     root.reset_changed()
+
+@model_test("ReferFactByStatement", "Test001.thy", 6)
 def _test_ReferFactByStatement(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
-    fullname = root.ml_state.fetch_rule_fact({"refer_by": "name", "name": "notI"})
+    fullname = root.ml_state.fetch_facts([{"refer_by": "name", "name": "notI"}])
     file.write(f"Fullname of notI: {fullname}\n")
     # FactByStatement search is not yet implemented; just test FactByName for now
+    return
+
+@model_test("RetrieveFact", "Test_RetrieveFact.thy", 8)
+async def _test_RetrieveFact(root: Root, file: MyIO):
+    """Test retrieve_facts and FactByStatement interaction.
+    Reproduces 'Unknown ancestor theory ""' bug."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    # 1. Retrieve a fact by name — this works fine
+    result = root.ml_state.retrieve_facts(["log_nat_power"])
+    file.write(f"log_nat_power: {result}\n")
+    # 2. Test Obvious with both a FactByStatement and a FactByName.
+    #    The FactByStatement triggers Interaction_RetrieveFact which calls
+    #    semantic_knn → entities_of → retrieve_facts internally.
+    root.session.age += 1
+    try:
+        root.fill("2", Obvious.interactive_gen({
+            "facts": [
+                {"refer_by": "statement", "statement": "8 = 2^3"},
+                {"refer_by": "name", "name": "log_nat_power"},
+            ]
+        }))
+    except RaiseInteraction as e:
+        file.write(f"RaiseInteraction raised with {len(e.interactions)} interaction(s)\n")
+        for i, inter in enumerate(e.interactions):
+            file.write(f"  interaction[{i}]: {type(inter).__name__}\n")
+            if isinstance(inter, Interaction_RetrieveFact):
+                file.write(f"    query: {inter.query}\n")
+                file.write(f"    candidates: {len(inter.candidate_facts)}\n")
+    root.print(0, file)
     return
 
 # class TestCase_Interactive_Unfold:
@@ -428,7 +571,7 @@ def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = N
         repl.file(abs_file_path, test_case.line, 0, cache_position=False, use_cache=False)
         repl.run_app('Minilang.AoA')
         invocation_id = f"{mode}.{test_case.name}"
-        mp.pack((invocation_id, f"{mode}.{test_case.name}", (_cfg, _budget)), repl.cout)
+        mp.pack((invocation_id, f"{mode}.{test_case.name}", (_cfg, _budget), None), repl.cout)
         repl.cout.flush()
         try:
             (status, elapsed, cpu_time) = Client._parse_control_(repl.unpack.unpack())

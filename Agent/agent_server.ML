@@ -292,13 +292,22 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
               val thy = Proof_Context.theory_of ctxt
               val SOT = MiniLang_Agent.string_of_term ctxt
               val facts = Proof_Context.facts_of ctxt
+              fun select_thms thms idx_opt = case idx_opt of
+                    NONE => thms
+                  | SOME i => if i >= 1 andalso i <= length thms
+                              then [nth thms (i - 1)]
+                              else []
           in map (fn name =>
-              let val full_name = Facts.intern facts name
+              let val (base_name, idx_opt) = Theory_Structure.parse_thm_name name
+                  val full_name = Facts.intern facts base_name
               in case Facts.lookup (Context.Proof ctxt) facts full_name of
                    SOME {thms, ...} =>
-                     SOME (full_name,
-                           Facts.extern ctxt facts full_name,
-                           map (SOT o Thm.prop_of o Thm.transfer thy) thms)
+                     let val thms' = select_thms thms idx_opt
+                     in if null thms' then NONE
+                        else SOME (full_name,
+                                   Facts.extern ctxt facts full_name,
+                                   map (SOT o Thm.prop_of o Thm.transfer thy) thms')
+                     end
                  | NONE => NONE
               end) names
           end),
@@ -410,14 +419,16 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
               val ((_, facts), _) = Minilang.context_of_leading_goal tree
               val entities = map (Universal_Key.Named_Theorem o fst) facts
               val keys = map (Universal_Key.key_of (SOME thm_cache) context) entities
-              val _ = Semantic_Store.interpret_entities context entities
-              val _ = Semantic_Store.embed_entities context entities
+           (* val _ = Semantic_Store.interpret_entities context entities
+              val _ = Semantic_Store.embed_entities context entities *)
           in keys end),
         timeout = NONE
       }
 
       (* Build AoA command with local callbacks *)
       val s0_ptree = Minilang.print_state s0
+      val {is_infra_const, is_infra_thm, is_infra_type, is_infra_class, is_infra_locale} =
+            Infra_Filter.gen_infra_filters (Context.Proof ctxt)
       val aoa_cmd = {
         name = "IsaMini.AoA",
         arg_schema = (fn (global_context, driver, invocation_id) =>
@@ -427,7 +438,9 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
             end),
         ret_schema = unpackTuple3 (unpackList MiniLang_Agent.xcmd_unpacker,
                                    unpackOption unpackString,
-                                   unpackTuple3 (unpackInt, unpackInt, unpackReal)),
+                                   (fn src => let val ((i,cw,cr,o_,c), src') =
+                                      unpackTuple5 (unpackInt,unpackInt,unpackInt,unpackInt,unpackReal) src
+                                    in ({input=i,cache_write=cw,cache_read=cr,output=o_,cost=c}, src') end)),
         timeout = NONE,
         callback = [
           mk_callback proof_opr_callback,
@@ -440,16 +453,30 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
           mk_callback potential_defs_callback,
           mk_callback contextual_thms_callback,
           Universal_Key.make_universal_key_callback' (SOME thm_cache) (Context.Proof ctxt),
-          Config.make_config_lookup_callback (Context.Proof ctxt)
+          Config.make_config_lookup_callback (Context.Proof ctxt),
+          Context_Callbacks.make_constants_callback (SOME (not o is_infra_const)) (Context.Proof ctxt),
+          Context_Callbacks.make_theorems_callback (SOME (not o is_infra_thm)) (Context.Proof ctxt),
+          Context_Callbacks.make_types_callback (SOME (not o is_infra_type)) (Context.Proof ctxt),
+          Context_Callbacks.make_classes_callback (SOME (not o is_infra_class)) (Context.Proof ctxt),
+          Context_Callbacks.make_locales_callback (SOME (not o is_infra_locale)) (Context.Proof ctxt),
+          Semantic_Store.make_introduction_rules_callback (SOME (not o is_infra_thm)) (Context.Proof ctxt),
+          Semantic_Store.make_elimination_rules_callback (SOME (not o is_infra_thm)) (Context.Proof ctxt),
+          Context_Callbacks.make_theory_long_name_callback (Context.Proof ctxt),
+          Semantic_Store.make_interpret_theory_callback (Context.Proof ctxt)
         ]
       }
 
-      val (xcmds, s1o, (input_tokens, output_tokens, cost_usd)) =
+      val timer = Timer.startRealTimer ()
+      val (xcmds, s1o, {input, cache_write, cache_read, output, cost}) =
             call_command aoa_cmd (global_context, driver, invocation_id)
+      val elapsed = Timer.checkRealTimer timer
       val _ = writeln (String.concat [
-        "[AoA] input=", Int.toString input_tokens,
-        " output=", Int.toString output_tokens,
-        " cost=$", Real.fmt (StringCvt.FIX (SOME 4)) cost_usd])
+        "[AoA] input=", Int.toString input,
+        " cache_write=", Int.toString cache_write,
+        " cache_read=", Int.toString cache_read,
+        " output=", Int.toString output,
+        " cost=$", Real.fmt (StringCvt.FIX (SOME 4)) cost,
+        " time=", Time.toString elapsed, "s"])
    in case s1o
    of SOME s1 => (
    case Symtab.lookup (!state) s1
@@ -492,12 +519,16 @@ fun AoA_REPL_App (cin, cout, toplevel) =
                           ; ret
                         end
 
-      val (invocation_id, driver, cfg) =
-            read (unpackTuple3 (unpackString, unpackString, unpackPair (unpackCfg, unpackBudget)))
+      val (invocation_id, driver, cfg, log_dir_override) =
+            read (unpackTuple4 (unpackString, unpackString,
+                    unpackPair (unpackCfg, unpackBudget), unpackOption unpackString))
       val transition = Toplevel.empty
             |> Toplevel.proof (
                   Proof.refine_primitive (fn ctxt => fn sequent =>
-                    let val start_time = Timing.start ()
+                    let val ctxt = case log_dir_override
+                                    of SOME dir => Config.put AoA_log_dir dir ctxt
+                                     | NONE => ctxt
+                        val start_time = Timing.start ()
                      in \<^try>\<open>
                         let val (_, seq) = AoA_RPC (driver, cfg, invocation_id) (ctxt, sequent)
                             val time = Timing.result start_time

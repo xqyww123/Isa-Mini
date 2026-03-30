@@ -444,11 +444,9 @@
       "enum": [
         "fill",
         "insert_before",
-        "amend",
-        "delete",
-        "delete_all_after"
+        "amend"
       ],
-      "description": "fill: fill a proof operation into a blank; insert_before: insert a step before the target step; amend: modify the arguments of the target step; delete: delete the target step and all its sub-steps, delete_all_after: delete the target step, all its sub-steps, and all steps after it"
+      "description": "fill: fill a proof operation into a blank; insert_before: insert a step before the target step; amend: modify the arguments of the target step"
     },
     "target_step": {
       "type": "string",

@@ -33,7 +33,7 @@ proof:
     thought: Rewrite the premises to simplify the equations
     operation: Rewrite
     using:
-      - h1
+      - h1: y = x + (0 :: 'a)
       - system simplifiers
     targets:
       - h2
@@ -64,7 +64,7 @@ proof:
     thought: Rewrite the premises to simplify the equations
     operation: Rewrite
     using:
-      - h1
+      - h1: y = x + (0 :: 'a)
       - system simplifiers
     targets:
       - h2

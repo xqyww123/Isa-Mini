@@ -3,6 +3,8 @@ theory Test_Sqrt2
 begin
 
 lemma \<open>sqrt(2) \<notin> \<rat>\<close>
-  by   AgentAoA
+  by      AgentAoA
+
+thm Groebner_Basis.bool_simps(27)
 
 end

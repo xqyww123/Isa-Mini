@@ -55,7 +55,6 @@ proof:
         goal: rev (rev []) = []
         proof:
           - step id: 1.Nil.1
-            thought: Obviously the statement holds.
             operation: Obvious
       - goal id: 1.Cons
         variables:
@@ -84,7 +83,6 @@ proof:
         goal: rev (rev []) = []
         proof:
           - step id: 1.Nil.1
-            thought: Obviously the statement holds.
             operation: Obvious
       - goal id: 1.Cons
         variables:
@@ -94,8 +92,7 @@ proof:
         goal: rev (rev (a # l)) = a # l
         proof:
           - step id: 1.Cons.1
-            thought: Obviously the statement holds.
             operation: Obvious
             with facts:
-              - Cons.IH
+              - Cons.IH: rev (rev l) = l
 Unfinished nodes: 0

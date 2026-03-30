@@ -31,6 +31,5 @@ proof:
     operation: Witness
     witness: 5
   - step id: 2
-    thought: Obviously 5 equals 5
     operation: Obvious
 Unfinished nodes: 0

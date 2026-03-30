@@ -38,16 +38,21 @@ def IsaMini_AoA(data: tuple[Any, Any, str, str, str], connection: Connection):
             raise ValueError(f"Test Not Found on '{test_name}'")
         case = TESTS[test_name]
         root = case.run(connection, actual_log_path, global_context, ptree)
+        cost = (0, 0, 0, 0, 0.0)
     else:
         drv = Session.Driver.get(driver)
         if drv is None:
             raise UnknownDriver(driver)
         with drv(connection.server.logger, actual_log_path) as session:
-            root = Root((global_context, ptree), connection)
+            root = Root((global_context, ptree), connection, session)
             session.initialize(root)
             session.run()
+            cost = (session.total_input_tokens,
+                    session.total_cache_creation_input_tokens,
+                    session.total_cache_read_input_tokens,
+                    session.total_output_tokens,
+                    session.total_cost_usd)
 
-    cost = (session.total_input_tokens, session.total_output_tokens, session.total_cost_usd)
     if root.is_proof_finished():
         return ([x.pack() for x in root.assemble()], root.final_ml_state.name, cost)
     else:

@@ -47,7 +47,6 @@ proof:
       isabelle: x * x + 1 > 0
     proof:
       - step id: 1.1
-        thought: The implication is obvious
         operation: Obvious
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
@@ -68,9 +67,7 @@ proof:
       isabelle: x * x + 1 > 0
     proof:
       - step id: 1.1
-        thought: The implication is obvious
         operation: Obvious
   - step id: 2
-    thought: This is obviously true
     operation: Obvious
 Unfinished nodes: 0

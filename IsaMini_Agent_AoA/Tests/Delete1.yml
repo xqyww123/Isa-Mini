@@ -16,7 +16,7 @@ Error: Unfinished Proof! Call command `edit` with action `fill` and target step 
 pending proof goal:
   x = z
 --------------------------------------------------
-After Have
+After building 3 steps
 --------------------------------------------------
 variables:
   - z: int
@@ -30,44 +30,17 @@ variables:
 goal: x = z
 proof:
   - step id: 1
-    thought: I don't know
+    thought: helper
     operation: Have
     statement:
-      english: x squared plus 1 is greater than 0
-      isabelle: x = y
-    name: lem1
-    proof:
-      - step id: 1.1
-        operation: Obvious
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
-pending proof goal:
-  x = z
---------------------------------------------------
-After Rewrite
---------------------------------------------------
-variables:
-  - z: int
-  - x: int
-premises:
-  - h1: y = x + (0 :: int)
-  - h2: z = y * (1 :: int)
-You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
-variables:
-  - y: int
-goal: x = z
-proof:
-  - step id: 1
-    thought: I don't know
-    operation: Have
-    statement:
-      english: x squared plus 1 is greater than 0
+      english: x equals y plus 0
       isabelle: x = y
     name: lem1
     proof:
       - step id: 1.1
         operation: Obvious
   - step id: 2
-    thought: Rewrite the premises to simplify the equations
+    thought: rewrite
     operation: Rewrite
     using:
       - lem1: x = y
@@ -79,7 +52,50 @@ Error: Unfinished Proof! Call command `edit` with action `fill` and target step 
 pending proof goal:
   y = z
 --------------------------------------------------
-After Amend Have
+Overview
+--------------------------------------------------
+- step 1: Have lem1 (line 12)
+  - step 1.1: Obvious (line 20)
+- step 2: Rewrite goal (line 22)
+Error: Unfinished Proof (line 31)
+--------------------------------------------------
+After deleting step 1 (Have)
+--------------------------------------------------
+variables:
+  - z: int
+  - x: int
+premises:
+  - h1: y = x + (0 :: int)
+  - h2: z = y * (1 :: int)
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+variables:
+  - y: int
+goal: x = z
+proof:
+  - step id: 2
+    thought: rewrite
+    operation: Rewrite
+    using:
+      - lem1: x = y
+    targets:
+      - the goal
+    goal changes into:
+      premises:
+        - lem1: x = y
+      goal: y = z
+    Error: Undefined fact: "local.lem1"
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  premises:
+    - lem1: x = y
+  goal: y = z
+--------------------------------------------------
+Overview
+--------------------------------------------------
+- step 2: Rewrite goal (failed, line 22)
+Error: Unfinished Proof (line 87)
+--------------------------------------------------
+After inserting Have before step 2
 --------------------------------------------------
 variables:
   - z: int
@@ -93,65 +109,32 @@ variables:
 goal: x = z
 proof:
   - step id: 1
-    thought: I don't know!!!
+    thought: re-add helper
     operation: Have
     statement:
-      english: x squared plus 1 is greater than 0
-      isabelle: x = y * 1
+      english: x equals y plus 0
+      isabelle: x = y + 0
     name: lem1
-    proof:
-      - step id: 1.1
-        operation: Obvious
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      x = y + (0 :: int)
   - step id: 2
-    thought: Rewrite the premises to simplify the equations
+    thought: rewrite
     operation: Rewrite
     using:
       - lem1: x = y
     targets:
       - the goal
     goal changes into:
-      y * (1 :: int) = z
+      y + (0 :: int) = z
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
-  y * (1 :: int) = z
+  y + (0 :: int) = z
 --------------------------------------------------
-After Amend Have
+Overview
 --------------------------------------------------
-variables:
-  - z: int
-  - x: int
-premises:
-  - h1: y = x + (0 :: int)
-  - h2: z = y * (1 :: int)
-You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
-variables:
-  - y: int
-goal: x = z
-proof:
-  - step id: 1
-    thought: I don't know!!!
-    operation: Have
-    statement:
-      english: x squared plus 1 is greater than 0
-      isabelle: x = y * 2
-    name: lem1
-    proof:
-      - step id: 1.1
-        operation: Obvious
-        Error: |
-          Failed to prove the proof goal automatically:
-            x = y * (2 :: int)
-          The proof is non-trivial and you must provide a detailed proof.
-    Error: Evaluation suspended due to failures in the operations above
-  - step id: 2
-    thought: Rewrite the premises to simplify the equations
-    operation: Rewrite
-    using:
-      - lem1: x = y
-    targets:
-      - the goal
-    goal changes into:
-      y * (2 :: int) = z
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
-pending proof goal:
-  y * (2 :: int) = z
+- step 1: Have lem1 (line 12)
+  Error: Unfinished Proof (line 20)
+- step 2: Rewrite goal (changed, line 23)
+Error: Unfinished Proof (line 32)

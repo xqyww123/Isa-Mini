@@ -367,6 +367,22 @@ class ArgumentError_RewriteNoTargets(ArgumentError):
             "Rewrite operation must target at least one of: the goal or some premises. " +
             "Set 'rewrite goal' to true or provide at least one premise name in 'rewrite premises'."
         )
+class ArgumentError_UnfoldNoTargets(ArgumentError):
+    def __init__(self, arg: ToolCall_arg):
+        super().__init__(arg,
+            "Unfold operation must specify at least one target.")
+class ArgumentError_UnfoldNoFactRefs(ArgumentError):
+    def __init__(self, arg: ToolCall_arg):
+        super().__init__(arg,
+            "Unfold operation must specify at least one fact reference.")
+class ArgumentError_ObtainNoVariables(ArgumentError):
+    def __init__(self, arg: ToolCall_arg):
+        super().__init__(arg,
+            "Obtain operation must specify at least one variable.")
+class ArgumentError_BranchNoCases(ArgumentError):
+    def __init__(self, arg: ToolCall_arg):
+        super().__init__(arg,
+            "Branch operation must specify at least one case.")
 
     @staticmethod
     def from_internal_error(arg: ToolCall_arg, internal_error: InternalError_UnparsedTerm) -> 'ArgumentError_UnparsedTerm':
@@ -1015,7 +1031,7 @@ class Interaction_BadAnswer(Exception):
 class Interaction_RetrieveFact(Interaction):
     forking = True
     INITIAL_K = 10
-    FINAL_K = 40
+    FINAL_K = 10
 
     def __init__(self, state: Minilang_State,
             query: str, kinds: list[EntityKind]):
@@ -1058,8 +1074,8 @@ class Interaction_RetrieveFact(Interaction):
             print_indent(indent+1, file)
             file.write(f"{i}. {fact.full_name}: {fact.expression}\n")
         if self.k >= self.FINAL_K:
-            file.write("Call `mcp__proof__answer` with the index if any matches, "
-                       "or with an empty array to give up.\n")
+            file.write("Call `mcp__proof__answer` with the index if any matches. "
+                       "If not found, answer an empty array and prove it by yourself.\n")
         else:
             file.write("Call `mcp__proof__answer` with the index if any matches, "
                        "or with an empty array to see more candidates.\n")
@@ -1120,12 +1136,15 @@ class Node(ABC):
         self.parent = config.parent
         if self.parent is not None and self.parent.id:
             self.id = f"{self.parent.id}.{self.local_step}"
+            self.session = self.parent.session
         else:
             self.id = self.local_step
+            self.session = the_session()
         self.status : EvaluationStatus = EVALUATION_NOT_YET
         self.warnings : list[Warning] = []
+        self.changed : bool = False
         self._kind : str = "step"
-        self.age = the_session().age
+        self.age = self.session.age
         self.line = 0
     def id_of_goal(self) -> step | None:
         return self.id
@@ -1143,12 +1162,19 @@ class Node(ABC):
         return indent + 1
     def print(self, indent: int, file : MyIO, update_line: bool = False) -> int:
         return self._print_step_id(indent, file, update_line)
-    def display_operation(self) -> str:
+    def quickview_title(self) -> str:
         return type(self).__name__
     def quickview_header(self, indent: int, file: MyIO) -> int:
         print_indent(indent, file)
-        file.write(f"- {self._kind} {self.id}: {self.display_operation()} (line {self.line})\n")
-        self._print_evaluation_status_quickview(indent+1, file)
+        changed_mark = "changed, " if self.changed else ""
+        match self.status.status:
+            case EvaluationStatus.Status.FAILURE:
+                status_mark = "failed, "
+            case EvaluationStatus.Status.CANCELLED:
+                status_mark = "pending, "
+            case _:
+                status_mark = ""
+        file.write(f"- {self._kind} {self.id}: {self.quickview_title()} ({changed_mark}{status_mark}line {self.line})\n")
         return indent + 1
     def quickview(self, indent: int, file: MyIO) -> int:
         return self.quickview_header(indent, file)
@@ -1241,7 +1267,7 @@ class Node(ABC):
         Convention: Any node must be up to date after calling any public Node method
         first_time: if True, the node is being refreshed for the first time since its creation.
         """
-        pass
+        self.age = self.session.age
     def _refresh_all_after_me(self) -> None:
         """
         refreshing the status of all the nodes excluding and after the `self`
@@ -1377,34 +1403,46 @@ class Node(ABC):
         self.warnings.clear()
     def reset(self) -> None:
         self._on_reset()
-    def delete_me(self) -> None:
-        if self.parent is not None:
-            self.parent._delete_child(self)
-        else:
+    def reset_changed(self) -> None:
+        self.changed = False
+    def _delete_me(self) -> 'Node':
+        """Delete this node and return the refresh point (predecessor sibling or parent)."""
+        if self.parent is None:
             raise CannotDelete_Root()
-    def delete(self, id: step) -> None:
-        try:
-            node = self.locate_node(id)
-        except NodeNotFound:
-            raise CannotDelete_NodeNotFound(id)
-        node.delete_me()
-    def delete_me_and_all_after(self) -> None:
-        if self.parent is not None:
-            self.parent._delete_child_and_all_after(self)
-        else:
-            raise CannotDelete_Root()
-    def _delete_child_and_all_after(self, child: 'Node') -> None:
-        for i, c in enumerate(self.sub_nodes):
-            if c is child:
-                self.sub_nodes = self.sub_nodes[:i]
-                if i == 0:
-                    self._refresh_me_alone(False)
-                else:
-                    pri = self.sub_nodes[i-1]
-                    pri._refresh_me_alone(False)
-                    pri._refresh_all_after_me()
-                return
-        raise InternalError("The target node is not my children")
+        parent = self.parent
+        idx = next(i for i, c in enumerate(parent.sub_nodes) if c is self)
+        refresh_point = parent.sub_nodes[idx - 1] if idx > 0 else parent
+        parent._delete_child(self)
+        return refresh_point
+    def delete(self, ids: list[step]) -> None:
+        self.session.age += 1
+        # Locate all, deduplicate
+        nodes: list['Node'] = []
+        seen: set[str] = set()
+        for id in ids:
+            try:
+                node = self.locate_node(id)
+            except NodeNotFound:
+                raise CannotDelete_NodeNotFound(id)
+            if node.id not in seen:
+                seen.add(node.id)
+                nodes.append(node)
+        # Delete all, collect refresh points
+        deleted_ids = seen
+        refresh_points: list['Node'] = []
+        for node in nodes:
+            rp = node._delete_me()
+            refresh_points.append(rp)
+        # Filter out refresh points that were themselves deleted
+        refresh_points = [rp for rp in refresh_points if rp.id not in deleted_ids]
+        # Sort by line for efficient ordering (harmless if line uninitialized)
+        refresh_points.sort(key=lambda n: n.line)
+        # Refresh each point, skip if already refreshed this session age
+        for rp in refresh_points:
+            if rp.age < self.session.age:
+                rp._refresh_me_alone(False)
+                if rp.parent is not None:
+                    rp._refresh_all_after_me()
     def amend_me(self, gen_node: gen_node) -> 'Node':
         if self.parent is not None:
             return self.parent._amend_child(self, gen_node)
@@ -1503,8 +1541,11 @@ class NonLeaf_Node(Node):
             if child is before:
                 if i == 0:
                     segs = split_id_into_segs(child.local_step)
-                    segs[-1] -= 1
-                    segs.append(1)
+                    if segs[-1] > 1:
+                        segs[-1] -= 1
+                    else:
+                        segs[-1] -= 1
+                        segs.append(1)
                     new_id = cat_segs_into_id(segs)
                 else:
                     prev_id = split_id_into_segs(self.sub_nodes[i-1].local_step)
@@ -1596,16 +1637,14 @@ class NonLeaf_Node(Node):
         super().reset()
         for child in self.sub_nodes:
             child.reset()
+    def reset_changed(self) -> None:
+        super().reset_changed()
+        for child in self.sub_nodes:
+            child.reset_changed()
     def _delete_child(self, child: Node) -> None:
         for i, c in enumerate(self.sub_nodes):
             if c is child:
                 self.sub_nodes.pop(i)
-                if i == 0:
-                    self._refresh_me_alone(False)
-                else:
-                    pri = self.sub_nodes[i-1]
-                    pri._refresh_me_alone(False)
-                    pri._refresh_all_after_me()
                 return
         raise InternalError("The target node is not my children")
     def _amend_child(self, child: 'Node', gen_node: gen_node) -> 'Node':
@@ -1707,7 +1746,6 @@ class StdBlock(NonLeaf_Node):
                     return reason
         return None
     def _refresh_me_alone(self, first_time: bool):
-        super()._refresh_me_alone(first_time)
         begin_opr = self.beginning_opr()
         now = time()
         reason : failure_reason = None
@@ -1720,6 +1758,7 @@ class StdBlock(NonLeaf_Node):
                 can_continue = False
         else:
             self.ml_state.clone(self._state_after_beginning())
+        super()._refresh_me_alone(first_time)
         for child in self.sub_nodes:
             if can_continue:
                 child._refresh_me_alone(first_time)
@@ -1976,6 +2015,8 @@ class GoalNode(StdBlock):
         else:
             return super()._print_step_id(indent, file, update_line)
     def _refresh_me_alone(self, first_time: bool):
+        is_init = self.age == self.session.age
+        old_case = (self.case_vars, self.case_hyps)
         consider_case_msgs = [m for m in self.ml_state.messages if isinstance(m, Consider_Case_Msg)]
         match consider_case_msgs:
             case []:
@@ -1986,6 +2027,8 @@ class GoalNode(StdBlock):
                 self.case_hyps = consider_case_msg.hyps
             case _:
                 raise InternalError(f"Expected exactly one Consider_Case_Msg in Case's messages, got {len(consider_case_msgs)}")
+        if not is_init and (self.case_vars, self.case_hyps) != old_case:
+            self.changed = True
         if first_time and not self.sub_nodes and self.ml_state.need_intro():
             local_step = self._local_step_of_next_proof_step()
             ml_state = self.ml_state.clone(None)
@@ -2025,6 +2068,8 @@ class SubgoalMaker(GoalContainer, StdBlock):
     def _on_regenerating_goals(self, goals: list[Goal]) -> None:
         pass
     def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> tuple[bool, failure_reason]:
+        is_init = self.age == self.session.age
+        old_n_subnodes = len(self.sub_nodes)
         (success, reason) = super()._refresh_the_beginning_opr(begin_opr, first_time)
         if success:
             s0 = self._state_after_beginning()
@@ -2049,6 +2094,8 @@ class SubgoalMaker(GoalContainer, StdBlock):
                         new_node = self._new_goal_node(i, ml_state)
                         self.sub_nodes.append(new_node)
                         ml_state = ml_state.sorry(None, None)
+            if not is_init and len(self.sub_nodes) != old_n_subnodes:
+                self.changed = True
             return (True, None)
         else:
             return (False, reason)
@@ -2056,7 +2103,7 @@ class SubgoalMaker(GoalContainer, StdBlock):
         return None
     def opening(self) -> bool:
         return False
-         
+
 
 class SubgoalMaker_NoTailEnder(SubgoalMaker):
     def _child_has_ending_opr(self, child : Node) -> bool:
@@ -2111,6 +2158,8 @@ class CaseSplit_Like(SubgoalMaker_NoTailEnder):
         if self.case_hyps is not None:
             print_hyps(self.case_hyps, indent, file, {}, "assuming premises")
     def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> tuple[bool, failure_reason]:
+        is_init = self.age == self.session.age
+        old_case = (self.case_vars, self.case_hyps)
         (success, reason) = super()._refresh_the_beginning_opr(begin_opr, first_time)
         if success and not self.sub_nodes:
             # The case for nonempty self.sub_nodes is handled in _new_goal_node
@@ -2124,6 +2173,8 @@ class CaseSplit_Like(SubgoalMaker_NoTailEnder):
             self.case_name = consider_case_msg.case
             self.case_vars = consider_case_msg.vars
             self.case_hyps = consider_case_msg.hyps
+        if not is_init and (self.case_vars, self.case_hyps) != old_case:
+            self.changed = True
         return (success, reason)
     # def _new_goal_node(self, goal_index: int, ml_state: Minilang_State) -> GoalNode:
     #     node = super()._new_goal_node(goal_index, ml_state)
@@ -2206,7 +2257,6 @@ def _split_fetched(fetched: list['FactRef | Interaction_RetrieveFact | None'],
 #### Obvious
 
 class Obvious_ToolArg(TypedDict):
-    thought: str
     facts: list[Fact]
 
 class Obvious_InternalToolArg(NamedTuple):
@@ -2246,6 +2296,7 @@ class Obvious(Leaf):
         return mk
     def print(self, indent: int, file: MyIO, update_line: bool = False) -> int:
         indent = super().print(indent, file, update_line)
+        print_indent(indent, file)
         file.write("operation: Obvious\n")
         if self.fact_refs:
             print_indent(indent, file)
@@ -2270,7 +2321,8 @@ class Witness(Leaf):
     def __init__(self, config: NodeConfig, arg: Witness_ToolArg):
         super().__init__(config, arg["thought"])
         self.witness = arg["witness"]
-
+    def quickview_title(self) -> str:
+        return f"Witness {self.witness}"
     @staticmethod
     def gen(arg: Witness_ToolArg) -> gen_node:
         def mk(config: NodeConfig) -> 'Witness':
@@ -2346,7 +2398,12 @@ class Unfold(Leaf):
         super().__init__(config, arg["thought"])
         self.targets = arg["targets"]
         self.fact_refs = arg["fact_refs"]
-
+        if not self.targets:
+            raise ArgumentError_UnfoldNoTargets(cast(ToolCall_arg, arg))
+        if not self.fact_refs:
+            raise ArgumentError_UnfoldNoFactRefs(cast(ToolCall_arg, arg))
+    def quickview_title(self) -> str:
+        return f"Unfold {', '.join(self.targets)}"
     @staticmethod
     def gen(arg: Unfold_ToolArg_internal) -> gen_node:
         """Simple non-interactive generation with pre-resolved fact refs."""
@@ -2454,7 +2511,12 @@ class Rewrite(Leaf):
         self.using = arg.using
         self.bindings: Bindings | None = None
         self.running_time = 0
-
+    def quickview_title(self) -> str:
+        targets: list[str] = []
+        if self.rewrite_goal:
+            targets.append("goal")
+        targets.extend(self.rewrite_premises)
+        return f"Rewrite {', '.join(targets)}"
     @staticmethod
     def gen(arg: Rewrite_InternalToolArg) -> gen_node:
         """Non-interactive generation with pre-resolved fact refs."""
@@ -2559,6 +2621,10 @@ class Rewrite(Leaf):
         )
 
     def _refresh_me_alone(self, first_time: bool) -> None:
+        is_init = self.age == self.session.age
+        old_bindings = self.bindings
+        old_conclusion = (self.resulting_state().prooftree_of().top_goal().conclusion
+                          if self.rewrite_goal and self.status.success else None)
         # Execute the operation via parent Leaf implementation
         super()._refresh_me_alone(first_time)
 
@@ -2617,6 +2683,14 @@ class Rewrite(Leaf):
                         return indent
                     self.warnings.append(Warning(Warning.Position.HEADER, print_fact_warning))
 
+        if not is_init:
+            if self.bindings != old_bindings:
+                self.changed = True
+            if self.rewrite_goal and self.status.success:
+                new_conclusion = self.resulting_state().prooftree_of().top_goal().conclusion
+                if new_conclusion != old_conclusion:
+                    self.changed = True
+
     def _rename_var(self, old_name: varname, new_name: varname) -> 'Node | None':
         if self.bindings is not None:
             for i, var in enumerate(self.bindings[0]):
@@ -2652,6 +2726,8 @@ class Have(StdBlock):
         def mk(config: NodeConfig) -> 'Have':
             return Have(config, arg)
         return mk
+    def quickview_title(self) -> str:
+        return f"Have {self.name}"
     def _print_header(self, indent: int, file: MyIO):
         self._print_thought(indent, file)
         print_indent(indent, file)
@@ -2737,11 +2813,16 @@ class Obtain(StdBlock):
         super().__init__(config, arg["thought"], [])
         self.variables = arg["variables"]
         self.constraints = arg["constraints"]
+        if not self.variables:
+            raise ArgumentError_ObtainNoVariables(cast(ToolCall_arg, arg))
     @staticmethod
     def gen(arg : Obtain_ToolArg) -> gen_node:
         def mk(config: NodeConfig) -> 'Obtain':
             return Obtain(config, arg)
         return mk
+    def quickview_title(self) -> str:
+        names = ", ".join(v["name"] for v in self.variables)
+        return f"Obtain {names}"
     def _print_header(self, indent: int, file: MyIO):
         self._print_thought(indent, file)
         print_indent(indent, file)
@@ -2840,6 +2921,8 @@ class Intro(SubgoalMaker_NoTailEnder):
         else:
             return ("goals", indent+1)
     def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> tuple[bool, failure_reason]:
+        is_init = self.age == self.session.age
+        old_bindings = self.bindings
         (success, reason) = super()._refresh_the_beginning_opr(begin_opr, first_time)
         if success:
             self.running_time += 1
@@ -2885,6 +2968,8 @@ class Intro(SubgoalMaker_NoTailEnder):
                             file.write(f"- {binding.name}\n")
                         return indent
                     self.warnings.append(Warning(Warning.Position.HEADER, print))
+        if not is_init and self.bindings != old_bindings:
+            self.changed = True
         return (success, reason)
     def _fixed_vars_at_me(self, ret: Vars) -> Vars:
         if self.bindings is not None:
@@ -2972,7 +3057,9 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
 
             raise RaiseInteraction([result], kontinue) # type: ignore
         return mk
-    def display_operation(self) -> str:
+    def quickview_title(self) -> str:
+        if self.rule_ref is not None:
+            return f"Inference Rule {self.rule_ref.short_name}"
         return "Inference Rule"
     def _print_header(self, indent: int, file: MyIO):
         self._print_thought(indent, file)
@@ -3023,6 +3110,8 @@ class Branch(SubgoalMaker_NoTailEnder):
     def __init__(self, config: NodeConfig, arg: Branch_ToolArg):
         super().__init__(config, arg["thought"], [])
         self.cases = arg["cases"]
+        if not self.cases:
+            raise ArgumentError_BranchNoCases(cast(ToolCall_arg, arg))
         self._initial_goal_index = 0
     @staticmethod
     def gen(arg : Branch_ToolArg) -> gen_node:
@@ -3065,6 +3154,8 @@ class CaseSplit(CaseSplit_Like):
     def __init__(self, config: NodeConfig, arg: CaseSplit_ToolArg):
         super().__init__(config, arg["thought"], [])
         self.target_isabelle_term = arg["target_isabelle_term"]
+    def quickview_title(self) -> str:
+        return f"CaseSplit {self.target_isabelle_term}"
     @staticmethod
     def gen(arg : CaseSplit_ToolArg) -> gen_node:
         def mk(config: NodeConfig) -> 'CaseSplit':
@@ -3125,12 +3216,16 @@ class Induction(CaseSplit_Like):
         self.target_isabelle_term = arg["target_isabelle_term"]
         self.rule = arg.get("rule", "default")
         self.variables = arg["variables"]
+    def quickview_title(self) -> str:
+        return f"Induction {self.target_isabelle_term}"
     @staticmethod
     def gen(arg : Induction_ToolArg) -> gen_node:
         def mk(config: NodeConfig) -> 'Induction':
             return Induction(config, arg)
         return mk
     def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> tuple[bool, failure_reason]:
+        is_init = self.age == self.session.age
+        old_variables = list(self.variables)
         if first_time:
             try:
                 _, frees, _ = self.ml_state.check_term(self.target_isabelle_term)
@@ -3169,6 +3264,8 @@ class Induction(CaseSplit_Like):
                 self.variables[:] = [var for var in self.variables if var["name"] not in not_used_vars]
             if new_var_names:
                 self.variables.extend({"name": v, "status": "fixed"} for v in new_var_names)
+        if not is_init and self.variables != old_variables:
+            self.changed = True
         return success, reason
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         return ('cases', indent+1)
@@ -3241,11 +3338,12 @@ class GlobalEnv(StdBlock):
             child.unfinished_nodes(ret)
 
 class Root(GoalContainer, StdBlock):
-    def __init__(self, context_and_ptree: tuple[Context, ML_ProofTree], connection: Connection):
+    def __init__(self, context_and_ptree: tuple[Context, ML_ProofTree], connection: Connection, session: 'Session'):
         (context, ptree) = context_and_ptree
         self.context = context
         ml_state0 = Minilang_State(connection, '$init', ptree)
         super().__init__(NodeConfig("$root", ml_state0, None), "", [])
+        self.session = session
         self.global_env = GlobalEnv(NodeConfig("global", ml_state0, self))
         self.sub_nodes.append(self.global_env)
         ml_state = ml_state0.skip(None)
@@ -3433,6 +3531,8 @@ class Session:
         self.total_cost_usd: float = 0.0
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0
+        self.total_cache_creation_input_tokens: int = 0
+        self.total_cache_read_input_tokens: int = 0
         if parent is not None:
             # Subsessions share parent's log files
             self.log_dir = parent.log_dir
@@ -3666,6 +3766,8 @@ class Session:
     def _log_cost(self) -> None:
         self.log_AoA_opr(
             f"total: input={self.total_input_tokens} "
+            f"cache_write={self.total_cache_creation_input_tokens} "
+            f"cache_read={self.total_cache_read_input_tokens} "
             f"output={self.total_output_tokens} tokens, "
             f"cost=${self.total_cost_usd:.4f}")
 
@@ -3698,12 +3800,16 @@ class Session:
                   error_message=error_message,
                   **extra_data)
 
-    def debug_info(self, msg: str, *args, **kwargs):
-        """Legacy debug logging method. Prefer using log_error for errors."""
-        if self.logger is not None:
-            self.logger.debug(msg, *args, **kwargs)
+    def debug_info(self, msg: str):
+        """Log debug information to interaction log and logger."""
+        self._log(self.interaction_log_file, "DEBUG",
+                  lambda: [f"[DEBUG] {msg}"], message=msg)
     def run(self):
         raise NotImplementedError("`run` must be implemented by subclass")
+
+    async def interrupt(self):
+        """Interrupt the agent's processing immediately."""
+        raise NotImplementedError("`interrupt` must be implemented by subclass")
 
 
 def agent_driver(name : str):
