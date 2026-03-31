@@ -891,15 +891,19 @@ class Minilang_State:
                         full_name=full_name, short_name=short_name,
                         fact=fact, expression=exprs)
         return out
-    def semantic_knn(self, query: str, k: int,
+    def semantic_knn(self, query: str | None, k: int,
                      kinds: list[EntityKind],
                      term_patterns: list[str] = [],
                      type_patterns: list[str] = [],
-                     theories_include: list[str] = []) -> list[tuple[float, SemanticRecord]]:
+                     theories_include: list[str] = []
+                     ) -> tuple[list[tuple[float, SemanticRecord]], list[str]]:
         """Search k nearest entities by semantic similarity.
+        If query is None, returns pattern-filtered entities without semantic ranking.
         For TheoremK, extends the domain with local contextual thm keys.
         Pattern/theory filters (empty = no restriction) are forwarded to
-        the entity enumeration callbacks for ML-side filtering."""
+        the entity enumeration callbacks for ML-side filtering.
+        Returns (results, warnings) where warnings include notices about
+        undeclared free variables in term patterns."""
         # Build domain
         if EntityKind.THEOREM in kinds:
             local_keys: list[universal_key] = self.connection.callback(
@@ -909,12 +913,27 @@ class Minilang_State:
         else:
             domain = Semantic_Vector_Store.ContextAll
         store: Semantic_Vector_Store = self.connection.semantic_vector_store()  # type: ignore
-        results = store.lookup(query, k, kinds, domain,
-                               term_patterns=term_patterns,
-                               type_patterns=type_patterns,
-                               theories_include=theories_include)
-        return [(score, rec._replace(name=ascii_of_unicode(rec.name)))
-                for score, rec in results]
+        if query is not None:
+            results, warnings = store.lookup(query, k, kinds, domain,
+                                   term_patterns=term_patterns,
+                                   type_patterns=type_patterns,
+                                   theories_include=theories_include)
+            return [(score, rec._replace(name=ascii_of_unicode(rec.name)))
+                    for score, rec in results], warnings
+        else:
+            # Pattern-only search: get filtered entities, look up records, no ranking
+            from Isabelle_RPC_Host.context import entities_of
+            from Semantic_Embedding.Isabelle_Semantic_Embedding.semantics import Semantic_DB
+            candidates, warnings = entities_of(self.connection, kinds,
+                                     term_patterns=term_patterns,
+                                     type_patterns=type_patterns,
+                                     theories_include=theories_include)
+            results = []
+            for uk in candidates[:k]:
+                rec = Semantic_DB[uk]
+                if rec is not None:
+                    results.append((0.0, rec._replace(name=ascii_of_unicode(rec.name))))
+            return results, warnings
     def compute_bindings(self, var_names: list[str], fact_names: list[str]) -> Bindings:
         """
         Compute bindings for the leading proof goal by binding provided names in order.
@@ -1072,7 +1091,7 @@ class Interaction_RetrieveFact(Interaction):
     def _fetch_facts(self) -> list[IsabelleFact_Presented]:
         import logging
         _log = logging.getLogger(__name__)
-        candidates = self.state.semantic_knn(self.query, self.k, self.kinds)
+        candidates, _ = self.state.semantic_knn(self.query, self.k, self.kinds)
         if not candidates:
             return []
         names = [rec.name for _, rec in candidates]
@@ -1093,7 +1112,7 @@ class Interaction_RetrieveFact(Interaction):
     def _fetch_constants(self) -> list[tuple[str, str, str]]:
         """Fetch relevant constants via semantic search.
         Returns list of (short_name, type, interpretation) triples."""
-        candidates = self.state.semantic_knn(self.query, 10, [EntityKind.CONSTANT])
+        candidates, _ = self.state.semantic_knn(self.query, 10, [EntityKind.CONSTANT])
         candidates = [(score, rec) for score, rec in candidates if score >= 0.5] # \
                    # + [(score, rec) for score, rec in candidates if 0.4 <= score < 0.5][:5]
         if not candidates:
@@ -1206,6 +1225,7 @@ class Node(ABC):
         self.warnings : list[Warning] = []
         self.changed : bool = False
         self._kind : str = "step"
+        self._first_time = True
         self.age = self.session.age
         self.line = 0
     def id_of_goal(self) -> step | None:
@@ -1322,13 +1342,13 @@ class Node(ABC):
         Assembling all the abstract tree model into the final sequence of Minilang operations
         """
         ...
-    def _refresh_me_alone(self, first_time: bool) -> None:
+    def _refresh_me_alone(self) -> None:
         """
         must update self.status
         Convention: Any node must be up to date after calling any public Node method
-        first_time: if True, the node is being refreshed for the first time since its creation.
         """
         self.age = self.session.age
+        self._first_time = False
     def _refresh_all_after_me(self) -> None:
         """
         refreshing the status of all the nodes excluding and after the `self`
@@ -1342,7 +1362,7 @@ class Node(ABC):
             raise InternalError("Don't know how to refresh a node and all its after nodes when the node's parent is none")
         else:
             node = self.parent._insert_before_child(self, gen_node)
-            node._refresh_me_alone(True)
+            node._refresh_me_alone()
             node._refresh_all_after_me()
             return node
     def insert_before(self, step: step, gen_node: gen_node) -> 'Node':
@@ -1420,14 +1440,14 @@ class Node(ABC):
         if ret is None:
             raise CannotRename_VariableNotFound(old_name, new_name)
         else:
-            ret._refresh_me_alone(False)
+            ret._refresh_me_alone()
             ret._refresh_all_after_me()
     def rename_fact(self, old_name: str, new_name: str) -> None:
         ret = self._rename_fact(old_name, new_name)
         if ret is None:
             raise CannotRename_FactNotFound(old_name, new_name)
         else:
-            ret._refresh_me_alone(False)
+            ret._refresh_me_alone()
             ret._refresh_all_after_me()
     def _print_fixed_vars_and_facts(self, indent: int, file: MyIO) -> None:
         fixed_vars = self._fixed_vars_at_me({})
@@ -1498,7 +1518,7 @@ class Node(ABC):
         # Refresh each point, skip if already refreshed this session age
         for rp in refresh_points:
             if rp.age < self.session.age:
-                rp._refresh_me_alone(False)
+                rp._refresh_me_alone()
                 if rp.parent is not None:
                     rp._refresh_all_after_me()
         return not_found
@@ -1508,7 +1528,7 @@ class Node(ABC):
         else:
             raise CannotAmend_Root()
     def _amend_from(self, old: 'Node') -> None:
-        return None
+        self._first_time = False
     def amend(self, id: step, gen_node: gen_node) -> 'Node':
         try:
             node = self.locate_node(id)
@@ -1530,9 +1550,9 @@ class Leaf(Node):
             raise InternalError(f"Cannot assemble a node with failed operation: {op.reason}")
         output.append(op)
         return output
-    def _refresh_me_alone(self, first_time: bool) -> None:
+    def _refresh_me_alone(self) -> None:
         now = time()
-        super()._refresh_me_alone(first_time)
+        super()._refresh_me_alone()
         op = self.the_operation()
         if isinstance(op, FailureReason):
             self.status = EvaluationStatus.Failure(time() - now, op)
@@ -1587,7 +1607,7 @@ class NonLeaf_Node(Node):
                         can_continue = can_continue_i
                 else:
                     if can_continue:
-                        child._refresh_me_alone(False)
+                        child._refresh_me_alone()
                         can_continue = child.status.status == EvaluationStatus.Status.SUCCESS
                     else:
                         child.status = EVALUATION_CACNCELLED
@@ -1722,7 +1742,7 @@ class NonLeaf_Node(Node):
                     raise CannotAmend(self, child, str(e))
                 self.sub_nodes[i] = new_node
                 new_node._amend_from(child)
-                new_node._refresh_me_alone(False)
+                new_node._refresh_me_alone()
                 new_node._refresh_all_after_me()
                 return new_node
         raise InternalError("The target node is not my children")
@@ -1793,7 +1813,7 @@ class StdBlock(NonLeaf_Node):
             output.append(opr)
         return output
 
-    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> 'FailureReason | None':
+    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
         try:
             self.ml_state.execute(begin_opr, self._state_after_beginning())
             return None
@@ -1809,7 +1829,7 @@ class StdBlock(NonLeaf_Node):
             except IsabelleError as err:
                 return self._ending_opr_err_msgs(err)
         return None
-    def _refresh_me_alone(self, first_time: bool):
+    def _refresh_me_alone(self):
         begin_opr = self.beginning_opr()
         now = time()
         reason: FailureReason | None = None
@@ -1820,16 +1840,16 @@ class StdBlock(NonLeaf_Node):
             can_continue = False
             reason = begin_opr
         elif begin_opr is not None:
-            reason = self._refresh_the_beginning_opr(begin_opr, first_time)
+            reason = self._refresh_the_beginning_opr(begin_opr)
             if reason is not None:
                 head_succeeded = False
                 can_continue = False
         else:
             self.ml_state.clone(self._state_after_beginning())
-        super()._refresh_me_alone(first_time)
+        super()._refresh_me_alone()
         for child in self.sub_nodes:
             if can_continue:
-                child._refresh_me_alone(first_time)
+                child._refresh_me_alone()
                 can_continue = child.status.status == EvaluationStatus.Status.SUCCESS
                 if not can_continue:
                     reason = self._child_refresh_failure_err_msgs(child)
@@ -1971,7 +1991,7 @@ class StdBlock(NonLeaf_Node):
         if node is None:
             return None
         self.sub_nodes.append(node)
-        node._refresh_me_alone(True)
+        node._refresh_me_alone()
         if self.opening():
             def my_gen_node(config: NodeConfig) -> Node | None:
                 if config.ml_state.need_intro():
@@ -2076,7 +2096,7 @@ class GoalNode(StdBlock):
             return indent
         else:
             return super()._print_step_id(indent, file, update_line)
-    def _refresh_me_alone(self, first_time: bool):
+    def _refresh_me_alone(self):
         is_init = self.age == self.session.age
         old_case = (self.case_vars, self.case_hyps)
         consider_case_msgs = [m for m in self.ml_state.messages if isinstance(m, Consider_Case_Msg)]
@@ -2091,13 +2111,13 @@ class GoalNode(StdBlock):
                 raise InternalError(f"Expected exactly one Consider_Case_Msg in Case's messages, got {len(consider_case_msgs)}")
         if not is_init and (self.case_vars, self.case_hyps) != old_case:
             self.changed = True
-        if first_time and not self.sub_nodes and self.ml_state.need_intro():
+        if self._first_time and not self.sub_nodes and self.ml_state.need_intro():
             local_step = self._local_step_of_next_proof_step()
             ml_state = self.ml_state.clone(None)
             config = NodeConfig(local_step, ml_state, self)
             intro = Intro(config, "", None)
             self.sub_nodes.append(intro)
-        return super()._refresh_me_alone(first_time)
+        return super()._refresh_me_alone()
     def _fixed_vars_at_me(self, ret: Vars) -> Vars:
         goal = self.goal()
         ret.update(goal.context.vars)
@@ -2129,10 +2149,10 @@ class SubgoalMaker(GoalContainer, StdBlock):
         return GoalNode(NodeConfig(str(goal_index+self._initial_goal_index), ml_state, self), False, True)
     def _on_regenerating_goals(self, goals: list[Goal]) -> None:
         pass
-    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> 'FailureReason | None':
+    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
         is_init = self.age == self.session.age
         old_n_subnodes = len(self.sub_nodes)
-        fail = super()._refresh_the_beginning_opr(begin_opr, first_time)
+        fail = super()._refresh_the_beginning_opr(begin_opr)
         if fail is not None:
             return fail
         s0 = self._state_after_beginning()
@@ -2140,7 +2160,7 @@ class SubgoalMaker(GoalContainer, StdBlock):
             raise InternalError("The prooftree of the state after beginning is not initialized, meaning the node is not refreshed")
         goals = s0.prooftree.top_goals()
         # TODO: try to reuse the existing subnodes instead of discarding them.
-        if not first_time and len(goals) == len(self.sub_nodes):
+        if not self._first_time and len(goals) == len(self.sub_nodes):
             pass
         else:
             self._on_regenerating_goals(goals)
@@ -2218,10 +2238,10 @@ class CaseSplit_Like(SubgoalMaker_NoTailEnder):
             print_vars(self.case_vars, indent, file, {}, "fixing variables")
         if self.case_hyps is not None:
             print_hyps(self.case_hyps, indent, file, {}, "assuming premises")
-    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> 'FailureReason | None':
+    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
         is_init = self.age == self.session.age
         old_case = (self.case_vars, self.case_hyps)
-        fail = super()._refresh_the_beginning_opr(begin_opr, first_time)
+        fail = super()._refresh_the_beginning_opr(begin_opr)
         if fail is None and not self.sub_nodes:
             # The case for nonempty self.sub_nodes is handled in _new_goal_node
             s = self._state_after_beginning()
@@ -2723,13 +2743,13 @@ class Rewrite(Leaf):
             bindings
         )
 
-    def _refresh_me_alone(self, first_time: bool) -> None:
+    def _refresh_me_alone(self) -> None:
         is_init = self.age == self.session.age
         old_bindings = self.bindings
         old_goal = (self.resulting_state().prooftree_of().top_goal()
                     if self.status.status == EvaluationStatus.Status.SUCCESS else None)
         # Execute the operation via parent Leaf implementation
-        super()._refresh_me_alone(first_time)
+        super()._refresh_me_alone()
 
         # If operation succeeded, extract bindings and track changes
         if self.status.status == EvaluationStatus.Status.SUCCESS:
@@ -2855,11 +2875,11 @@ class Have(StdBlock):
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
     def beginning_opr(self) -> Minilang_Operation | None:
         return Minilang_Operation.HAVE(self.name, self.statement['isabelle'])
-    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> 'FailureReason | None':
-        fail = super()._refresh_the_beginning_opr(begin_opr, first_time)
+    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
+        fail = super()._refresh_the_beginning_opr(begin_opr)
         if fail is not None:
             return fail
-        if first_time and not self.sub_nodes and self._state_after_beginning().need_intro():
+        if self._first_time and not self.sub_nodes and self._state_after_beginning().need_intro():
             local_step = self._local_step_of_next_proof_step()
             ml_state = self._state_after_beginning().clone(None)
             config = NodeConfig(local_step, ml_state, self)
@@ -3044,12 +3064,12 @@ class Intro(SubgoalMaker_NoTailEnder):
             return (None, indent-1)
         else:
             return ("goals", indent+1)
-    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> 'FailureReason | None':
+    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
         is_init = self.age == self.session.age
         old_bindings = self.bindings
         s = self._state_after_beginning()
         old_goals = s.prooftree.top_goals() if s.prooftree is not None else None
-        fail = super()._refresh_the_beginning_opr(begin_opr, first_time)
+        fail = super()._refresh_the_beginning_opr(begin_opr)
         if fail is None:
             self.running_time += 1
             messages = self._state_after_beginning().messages
@@ -3275,8 +3295,8 @@ class Branch(SubgoalMaker_NoTailEnder):
         return FailureReason(f"Subgoal {child.id} fails to be proven.")
     def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         raise InternalError("A Branch doesn't have an ending operation")
-    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> 'FailureReason | None':
-        fail = super()._refresh_the_beginning_opr(begin_opr, first_time)
+    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
+        fail = super()._refresh_the_beginning_opr(begin_opr)
         if fail is None:
             if not self.sub_nodes[0].thought:
                 self.sub_nodes[0].thought = "We first show exhaustiveness of the case split"
@@ -3353,10 +3373,10 @@ class Induction(CaseSplit_Like):
         def mk(config: NodeConfig) -> 'Induction':
             return Induction(config, arg)
         return mk
-    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> 'FailureReason | None':
+    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
         is_init = self.age == self.session.age
         old_variables = list(self.variables)
-        if first_time:
+        if self._first_time:
             try:
                 _, frees, _ = self.ml_state.check_term(self.target_isabelle_term)
             except InternalError_UnparsedTerm as e:
@@ -3364,7 +3384,7 @@ class Induction(CaseSplit_Like):
                     f"Syntax error in induction target `{e.term}`: {e.reason}")
             # Remove free variables appearing in target_isabelle_term from variables list
             self.variables[:] = [var for var in self.variables if var["name"] not in frees]
-        fail = super()._refresh_the_beginning_opr(begin_opr, first_time)
+        fail = super()._refresh_the_beginning_opr(begin_opr)
         if fail is None:
             vars = self._all_fixed_vars_before_me({})
             _, frees, _ = self.ml_state.check_term(self.target_isabelle_term)
@@ -3374,7 +3394,7 @@ class Induction(CaseSplit_Like):
                     del vars[v]
             new_var_names = [v for v in vars if v not in [var["name"] for var in self.variables]]
             if new_var_names:
-                if first_time:
+                if self._first_time:
                     return FailureReason(
                         f"The {titled_string_of_and_list(new_var_names, 'variable', 'variables')} "
                         f"appear in the induction context but are not classified in the 'variables' argument. "
@@ -3497,7 +3517,7 @@ class Root(GoalContainer, StdBlock):
             self.sub_nodes.append(goal_node)
             ml_state = ml_state.sorry(None, None)
         self.final_ml_state = ml_state
-        self._refresh_me_alone(True)
+        self._refresh_me_alone()
     def id_of_goal(self) -> step | None:
         return None
     def resulting_state(self) -> Minilang_State:

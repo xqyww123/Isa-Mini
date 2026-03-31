@@ -1,0 +1,51 @@
+Baseline (no patterns): 5 results, 0 warnings
+  0.772 lemma Transcendental.log_powr: ?x ≠ 0 ⟹ log ?b (?x powr ?y) = ?y * log ?b ?x
+  0.766 lemma Transcendental.log_base_powr: ?a ≠ 0 ⟹ log (?a powr ?b) ?x = log ?a ?x / ?b
+  0.765 lemma Transcendental.minus_log_eq_powr: ⟦0 < ?b; ?b ≠ 1; 0 < ?x⟧ ⟹ ?y - log ?b ?x = log ?b (?b powr ?y / ?x)
+  0.764 lemma Transcendental.log_of_power_eq: ⟦real ?m = ?b ^ ?n; 1 < ?b⟧ ⟹ real ?n = log ?b (real ?m)
+  0.760 lemma Transcendental.log_base_pow: 0 < ?a ⟹ log (?a ^ ?n) ?x = log ?a ?x / real ?n
+With term_patterns=["ln ?x"]: 10 results, 0 warnings
+  0.727 lemma Transcendental.ln_powr: ?x ≠ 0 ⟹ ln (?x powr ?y) = ?y * ln ?x
+  0.716 lemma Transcendental.ln_realpow: 0 < ?x ⟹ ln (?x ^ ?n) = real ?n * ln ?x
+  0.681 lemma Transcendental.log_def: log ?a ?x = ln ?x / ln ?a
+  0.676 lemma Transcendental.ln_powr_bound: ⟦1 ≤ ?x; 0 < ?a⟧ ⟹ ln ?x ≤ ?x powr ?a / ?a
+  0.652 lemma Transcendental.powr_def: ?x powr ?a ≡ if ?x = (0::?'a) then 0::?'a else exp (?a * ln ?x)
+  0.650 lemma Transcendental.ln_powr_bound2: ⟦1 < ?x; 0 < ?a⟧ ⟹ ln ?x powr ?a ≤ ?a powr ?a * ?x
+  0.643 lemma Transcendental.ln_root: ⟦0 < ?n; 0 < ?b⟧ ⟹ ln (root ?n ?b) = ln ?b / real ?n
+  0.643 lemma Transcendental.has_derivative_powr: ⟦(?g has_derivative ?g') (at ?x within ?X); (?f has_derivative ?f') (at ?x within ?X); 0 < ?g ?x; ?x ∈ ?X⟧ ⟹ ((λx. ?g x powr ?f x) has_derivative (λh. ?g ?x powr ?f ?x * (?f' h * ln (?g ?x) + ?g' h * ?f ?x / ?g ?x))) (at ?x within ?X)
+  0.639 lemma Transcendental.log_ln: ln ?x = log (exp 1) ?x
+  0.623 lemma Transcendental.ln_inverse: 0 < ?x ⟹ ln (inverse ?x) = - ln ?x
+With type_patterns=["nat"]: 10 results, 0 warnings
+  0.748 lemma Transcendental.log_of_power_eq: ⟦real ?m = ?b ^ ?n; 1 < ?b⟧ ⟹ real ?n = log ?b (real ?m)
+  0.733 lemma Transcendental.log_nat_power: 0 < ?x ⟹ log ?b (?x ^ ?n) = real ?n * log ?b ?x
+  0.718 lemma Transcendental.log_root: ⟦0 < ?n; 0 < ?a⟧ ⟹ log ?b (root ?n ?a) = log ?b ?a / real ?n
+  0.711 lemma Transcendental.log_base_pow: 0 < ?a ⟹ log (?a ^ ?n) ?x = log ?a ?x / real ?n
+  0.709 lemma Transcendental.ln_realpow: 0 < ?x ⟹ ln (?x ^ ?n) = real ?n * ln ?x
+  0.701 lemma Transcendental.log_pow_cancel: ⟦0 < ?a; ?a ≠ 1⟧ ⟹ log ?a (?a ^ ?b) = real ?b
+  0.699 lemma Transcendental.ln_root: ⟦0 < ?n; 0 < ?b⟧ ⟹ ln (root ?n ?b) = ln ?b / real ?n
+  0.696 lemma Transcendental.log_base_root: ⟦0 < ?n; 0 < ?b⟧ ⟹ log (root ?n ?b) ?x = real ?n * log ?b ?x
+  0.688 lemma Transcendental.le_log_of_power: ⟦?b ^ ?n ≤ ?m; 1 < ?b⟧ ⟹ real ?n ≤ log ?b ?m
+  0.679 lemma Transcendental.less_log_of_power: ⟦?b ^ ?n < ?m; 1 < ?b⟧ ⟹ real ?n < log ?b ?m
+With theories_include=["HOL.Transcendental"]: 10 results, 0 warnings
+  0.765 lemma Transcendental.log_def: log ?a ?x = ln ?x / ln ?a
+  0.748 lemma Transcendental.log_of_power_eq: ⟦real ?m = ?b ^ ?n; 1 < ?b⟧ ⟹ real ?n = log ?b (real ?m)
+  0.744 lemma Transcendental.log_one: log ?a 1 = 0
+  0.733 lemma Transcendental.log_nat_power: 0 < ?x ⟹ log ?b (?x ^ ?n) = real ?n * log ?b ?x
+  0.729 lemma Transcendental.log_inverse: 0 < ?x ⟹ log ?a (inverse ?x) = - log ?a ?x
+  0.728 lemma Transcendental.log_eq_one: ⟦0 < ?a; ?a ≠ 1⟧ ⟹ log ?a ?a = 1
+  0.727 lemma Transcendental.minus_log_eq_powr: ⟦0 < ?b; ?b ≠ 1; 0 < ?x⟧ ⟹ ?y - log ?b ?x = log ?b (?b powr ?y / ?x)
+  0.718 lemma Transcendental.log_root: ⟦0 < ?n; 0 < ?a⟧ ⟹ log ?b (root ?n ?a) = log ?b ?a / real ?n
+  0.714 lemma Transcendental.log_minus_eq_powr: ⟦0 < ?b; ?b ≠ 1; 0 < ?x⟧ ⟹ log ?b ?x - ?y = log ?b (?x * ?b powr - ?y)
+  0.712 lemma Transcendental.ln_inverse: 0 < ?x ⟹ ln (inverse ?x) = - ln ?x
+Constants with type_patterns=["real => real"]: 5 results, 0 warnings
+  0.732 constant Transcendental.log: real ⇒ real ⇒ real
+  0.530 constant Transcendental.powr_real: real ⇒ real ⇒ real
+  0.516 constant NthRoot.root: nat ⇒ real ⇒ real
+  0.516 constant NthRoot.sqrt: real ⇒ real
+  0.470 constant Transcendental.arcsin: real ⇒ real
+Empty patterns: 5 results, 0 warnings
+Invalid theory name error: ['Unknown ancestor theory "Nonexistent_Theory_XYZ"']
+Invalid term pattern error: ['Inner syntax error\x05\x06no_report\x05\n\x05\x06block\x06indent=2\x05at\x05\x06break\x06width=1\x05 \x05\x06\x05\x05\x06block\x06indent=2\x05"\\<rbrakk>\x05\x06break\x06width=1\x05 \x05\x06\x05?\x05\x06break\x06width=1\x05 \x05\x06\x05?\x05\x06break\x06width=1\x05 \x05\x06\x05?\x05\x06break\x06width=1\x05 \x05\x06\x05bad\x05\x06break\x06width=1\x05 \x05\x06\x05syntax"\x05\x06\x05\x05\x06\x05\x05\x06\x05\nFailed to parse term']
+Invalid type pattern error: ['Undefined type name: "not_a_real_type_XYZ"\nFailed to parse type']
+Misspelled pattern: 0 results, 1 warnings
+  Warning: Term pattern "misspeled_ln ?x" contains undeclared free variable: "misspeled_ln". It is likely a misspelled constant.

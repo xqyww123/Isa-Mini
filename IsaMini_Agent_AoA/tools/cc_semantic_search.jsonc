@@ -35,6 +35,6 @@
       "description": "Restrict results to entities defined in these theories (short or fully qualified names). Example: [\"HOL.List\", \"Set\"]. Empty = no restriction."
     }
   },
-  "required": ["query", "kinds"],
+  "required": ["kinds"],
   "additionalProperties": false
 }

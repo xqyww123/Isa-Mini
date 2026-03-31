@@ -303,7 +303,7 @@ async def _semantic_search_tool(args: ToolCall_arg) -> ToolCall_ret:
     session.log_tool_call("mcp__proof__semantic_search", args)
 
     try:
-        query = args["query"]
+        query = args.get("query", None)
         k = args.get("k", 10)
         try:
             kinds = [EntityKind.from_label(label) for label in args["kinds"]]
@@ -315,15 +315,17 @@ async def _semantic_search_tool(args: ToolCall_arg) -> ToolCall_ret:
         theories_include = args.get("theories_include", [])
 
         ml_state = session.root.ml_state
-        results = ml_state.semantic_knn(query, k, kinds,
+        results, warnings = ml_state.semantic_knn(query, k, kinds,
                                         term_patterns=term_patterns,
                                         type_patterns=type_patterns,
                                         theories_include=theories_include)
 
-        if not results:
-            return _mk_ret("No matching entities found.")
-
         lines: list[str] = []
+        for w in warnings:
+            lines.append(f"Warning: {w}")
+        if not results:
+            lines.append("No matching entities found.")
+            return _mk_ret("\n".join(lines))
         for score, rec in results:
             lines.append(f"- {rec.pretty_print}")
             if rec.interpretation:

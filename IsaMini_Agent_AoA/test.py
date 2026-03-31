@@ -966,51 +966,94 @@ def _test_imo_1966_p5(root: Root, file: MyIO):
 
 @model_test("SemanticKNN_patterns", "Test_RetrieveFact.thy", 8)
 def _test_semantic_knn_patterns(root: Root, file: MyIO):
-    """Test semantic_knn with term_patterns, type_patterns, and theories_include."""
+    """Test semantic_knn with term_patterns, type_patterns, theories_include, and warnings."""
     from Isabelle_RPC_Host.universal_key import EntityKind
     ml = root.ml_state
 
     # 1. Baseline: no patterns
-    results_base = ml.semantic_knn("logarithm power", 5, [EntityKind.THEOREM])
-    file.write(f"Baseline (no patterns): {len(results_base)} results\n")
+    results_base, warnings_base = ml.semantic_knn("logarithm power", 5, [EntityKind.THEOREM])
+    file.write(f"Baseline (no patterns): {len(results_base)} results, {len(warnings_base)} warnings\n")
     for score, rec in results_base:
         file.write(f"  {score:.3f} {rec.pretty_print}\n")
+    assert not warnings_base, "Expected no warnings for baseline"
 
     # 2. With term_patterns: restrict to theorems containing "ln"
-    results_term = ml.semantic_knn("logarithm power", 10, [EntityKind.THEOREM],
+    results_term, warnings_term = ml.semantic_knn("logarithm power", 10, [EntityKind.THEOREM],
                                    term_patterns=["ln ?x"])
-    file.write(f"With term_patterns=[\"ln ?x\"]: {len(results_term)} results\n")
+    file.write(f"With term_patterns=[\"ln ?x\"]: {len(results_term)} results, {len(warnings_term)} warnings\n")
     for score, rec in results_term:
         file.write(f"  {score:.3f} {rec.pretty_print}\n")
-    # All results should mention "ln" in their names or expressions
     assert len(results_term) > 0, "Expected at least one result with term pattern 'ln ?x'"
 
     # 3. With type_patterns: restrict to theorems involving nat
-    results_type = ml.semantic_knn("logarithm", 10, [EntityKind.THEOREM],
+    results_type, warnings_type = ml.semantic_knn("logarithm", 10, [EntityKind.THEOREM],
                                    type_patterns=["nat"])
-    file.write(f"With type_patterns=[\"nat\"]: {len(results_type)} results\n")
+    file.write(f"With type_patterns=[\"nat\"]: {len(results_type)} results, {len(warnings_type)} warnings\n")
+    for w in warnings_type:
+        file.write(f"  Warning: {w}\n")
     for score, rec in results_type:
         file.write(f"  {score:.3f} {rec.pretty_print}\n")
 
     # 4. With theories_include
-    results_thy = ml.semantic_knn("logarithm", 10, [EntityKind.THEOREM],
-                                  theories_include=["Ln"])
-    file.write(f"With theories_include=[\"Ln\"]: {len(results_thy)} results\n")
+    results_thy, warnings_thy = ml.semantic_knn("logarithm", 10, [EntityKind.THEOREM],
+                                  theories_include=["HOL.Transcendental"])
+    file.write(f"With theories_include=[\"HOL.Transcendental\"]: {len(results_thy)} results, {len(warnings_thy)} warnings\n")
+    for w in warnings_thy:
+        file.write(f"  Warning: {w}\n")
     for score, rec in results_thy:
         file.write(f"  {score:.3f} {rec.pretty_print}\n")
 
     # 5. Constants with type_patterns
-    results_const = ml.semantic_knn("logarithm", 5, [EntityKind.CONSTANT],
+    results_const, warnings_const = ml.semantic_knn("logarithm", 5, [EntityKind.CONSTANT],
                                     type_patterns=["real \\<Rightarrow> real"])
-    file.write(f"Constants with type_patterns=[\"real => real\"]: {len(results_const)} results\n")
+    file.write(f"Constants with type_patterns=[\"real => real\"]: {len(results_const)} results, {len(warnings_const)} warnings\n")
+    for w in warnings_const:
+        file.write(f"  Warning: {w}\n")
     for score, rec in results_const:
         file.write(f"  {score:.3f} {rec.pretty_print}\n")
 
     # 6. Empty patterns = same as baseline
-    results_empty = ml.semantic_knn("logarithm power", 5, [EntityKind.THEOREM],
+    results_empty, warnings_empty = ml.semantic_knn("logarithm power", 5, [EntityKind.THEOREM],
                                     term_patterns=[], type_patterns=[], theories_include=[])
-    file.write(f"Empty patterns: {len(results_empty)} results\n")
+    file.write(f"Empty patterns: {len(results_empty)} results, {len(warnings_empty)} warnings\n")
     assert len(results_empty) == len(results_base), "Empty patterns should match baseline"
+    assert not warnings_empty, "Expected no warnings for empty patterns"
+
+    # --- Error cases ---
+    from Isabelle_RPC_Host.rpc import IsabelleError
+
+    # 7. Invalid theory name in theories_include
+    try:
+        ml.semantic_knn("logarithm", 5, [EntityKind.THEOREM],
+                        theories_include=["Nonexistent_Theory_XYZ"])
+        assert False, "Expected IsabelleError for invalid theory name"
+    except IsabelleError as e:
+        file.write(f"Invalid theory name error: {e}\n")
+
+    # 8. Invalid term pattern (unparseable)
+    try:
+        ml.semantic_knn("logarithm", 5, [EntityKind.THEOREM],
+                        term_patterns=["\\<lbrakk>\\<rbrakk> ??? bad syntax"])
+        assert False, "Expected IsabelleError for invalid term pattern"
+    except IsabelleError as e:
+        file.write(f"Invalid term pattern error: {e}\n")
+
+    # 9. Invalid type pattern (unparseable)
+    try:
+        ml.semantic_knn("logarithm", 5, [EntityKind.CONSTANT],
+                        type_patterns=["not_a_real_type_XYZ"])
+        assert False, "Expected IsabelleError for invalid type pattern"
+    except IsabelleError as e:
+        file.write(f"Invalid type pattern error: {e}\n")
+
+    # 10. Misspelled constant → warning about undeclared free variable (not error)
+    results_misspell, warnings_misspell = ml.semantic_knn("logarithm", 5, [EntityKind.THEOREM],
+                                       term_patterns=["misspeled_ln ?x"])
+    file.write(f"Misspelled pattern: {len(results_misspell)} results, {len(warnings_misspell)} warnings\n")
+    for w in warnings_misspell:
+        file.write(f"  Warning: {w}\n")
+    assert len(warnings_misspell) > 0, "Expected warning about undeclared free variable"
+    assert "misspeled_ln" in warnings_misspell[0], "Warning should mention the misspelled name"
 
 
 def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None):
