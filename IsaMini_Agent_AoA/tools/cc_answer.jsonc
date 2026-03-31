@@ -1,19 +1,15 @@
 {
   "type": "object",
   "properties": {
-    "answer": {
-      "description": "Either an array of selected indexes, or a free-form text answer",
-      "anyOf": [
-        {
-          "type": "array",
-          "items": { "type": "integer" }
-        },
-        {
-          "type": "string"
-        }
-      ]
+    "indexes": {
+      "type": "array",
+      "items": { "type": "integer" },
+      "description": "Selected indexes from the presented options"
+    },
+    "text": {
+      "type": "string",
+      "description": "A free-form text answer"
     }
   },
-  "required": ["answer"],
   "additionalProperties": false
 }

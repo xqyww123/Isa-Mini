@@ -199,9 +199,12 @@ async def _delete_tool(args: ToolCall_arg) -> ToolCall_ret:
         session.root.session.age += 1
         steps = args["target_steps"]
         try:
-            session.root.delete(steps)
+            not_found = session.root.delete(steps)
             session.refresh_YAML()  # type: ignore[attr-defined]
             response = await P.deleted_steps_message(steps, session.root, session)
+            if not_found:
+                noun = "step" if len(not_found) == 1 else "steps"
+                response += f"\nWarning: {noun} {', '.join(not_found)} not found and skipped."
         except AoA_Error as e:
             error_msg = str(e)
             session.log_tool_response("mcp__proof__delete", f"ERROR: {error_msg}")
@@ -246,7 +249,7 @@ async def _answer_tool(args: ToolCall_arg) -> ToolCall_ret:
             return _mk_ret(error_msg)
 
         current_inter = wi.interactions[current_idx]
-        normalized = normalize_answer(args["answer"])
+        normalized = normalize_answer(args.get("indexes"), args.get("text"))
 
         # Process the answer
         try:
@@ -289,7 +292,7 @@ async def _answer_tool(args: ToolCall_arg) -> ToolCall_ret:
         raise
 
 @tool("semantic_search",
-      "Search for Isabelle entities by English description using semantic similarity.",
+      "Search for Isabelle entities by English description. MUST wrap formulas in backticks (like `ln 1`)",
       input_schema=_cc_semantic_search_schema)
 async def _semantic_search_tool(args: ToolCall_arg) -> ToolCall_ret:
     from .model import the_session
@@ -359,7 +362,7 @@ class ClaudeCode(Session):
         'mcp__proof__delete',
         'mcp__proof__query_by_name',
         'mcp__proof__query_by_position',
-        'mcp__proof__semantic_search',
+        #'mcp__proof__semantic_search',
     ]
 
     working_dir: str
@@ -417,7 +420,7 @@ class ClaudeCode(Session):
         # Build MCP tools — semantic query tools need the Isabelle connection
         connection = root.ml_state.connection
         tools = [
-            _edit_tool, _delete_tool, _answer_tool, _semantic_search_tool,
+            _edit_tool, _delete_tool, _answer_tool, # _semantic_search_tool,
             mk_query_by_name_tool(connection, []),
             mk_query_by_position_tool(connection, []),
         ]

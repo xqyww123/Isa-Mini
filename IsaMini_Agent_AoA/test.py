@@ -619,6 +619,234 @@ async def _test_RetrieveFact2(root: Root, file: MyIO):
     root.print(0, file)
     return
 
+@model_test("Obvious_partial_solve", "Test_aime_1998_p3.thy", 16)
+def _test_Obvious_partial_solve(root: Root, file: MyIO):
+    """Reproduces HAMMER partially solving a goal, leaving subgoals that cause
+    an unexpected Intro node to be auto-appended."""
+    # Step 1: Have h2: log 2 8 = 3
+    root.session.age += 1
+    root.fill("1", Have.gen({
+        "thought": "log_2(8) = 3",
+        "name": "h2",
+        "statement": {
+            "english": "log base 2 of 8 equals 3",
+            "isabelle": "log (2::real) (8::real) = (3::real)"
+        }
+    }))
+    # Step 1.1: Obvious with log_pow_cancel
+    root.session.age += 1
+    root.fill("1.1", Obvious.interactive_gen({"facts": [{"refer_by": "name", "name": "log_pow_cancel"}]}))
+    # Step 2: Have h3: log 8 x = log 2 x / 3
+    root.session.age += 1
+    root.fill("2", Have.gen({
+        "thought": "change of base",
+        "name": "h3",
+        "statement": {
+            "english": "log base 8 of x equals log base 2 of x divided by 3",
+            "isabelle": "log (8::real) x = log (2::real) x / (3::real)"
+        }
+    }))
+    # Step 2.1: Obvious with log_base_change and h2
+    root.session.age += 1
+    root.fill("2.1", Obvious.interactive_gen({"facts": [
+        {"refer_by": "name", "name": "log_base_change"},
+        {"refer_by": "name", "name": "h2"}
+    ]}))
+    # Step 3: Have h4: log 8 (log 2 x) = log 2 (log 2 x) / 3
+    root.session.age += 1
+    root.fill("3", Have.gen({
+        "thought": "change of base again",
+        "name": "h4",
+        "statement": {
+            "english": "log base 8 of (log base 2 of x) equals log base 2 of (log base 2 of x) divided by 3",
+            "isabelle": "log (8::real) (log (2::real) x) = log (2::real) (log (2::real) x) / (3::real)"
+        }
+    }))
+    print_header("Before step 3.1", file)
+    root.print(0, file)
+    # Step 3.1: Obvious with log_base_change + h2 → HAMMER partially solves,
+    # leaving subgoals that trigger an unexpected Intro at step 3.2
+    root.session.age += 1
+    root.fill("3.1", Obvious.interactive_gen({"facts": [
+        {"refer_by": "name", "name": "log_base_change"},
+        {"refer_by": "name", "name": "h2"}
+    ]}))
+    print_header("After step 3.1 (unexpected Intro at 3.2)", file)
+    root.print(0, file)
+
+@model_test("Hammer_ProveInTime", "Test_aime_1998_p3.thy", 16)
+def _test_Hammer_ProveInTime(root: Root, file: MyIO):
+    """Reproduces OutOfData error when HAMMER uses a ProveInTime fact."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    # Step 1: Have h_log8
+    root.session.age += 1
+    root.fill("1", Have.gen({
+        "thought": "log base 8 of x equals log base 2 of x divided by 3",
+        "name": "h_log8",
+        "statement": {
+            "english": "log base 8 of x equals (log base 2 of x) / 3",
+            "isabelle": "log (8::real) x = log (2::real) x / 3"
+        }
+    }))
+    print_header("After Have h_log8", file)
+    root.print(0, file)
+    # Step 1.1: Obvious with a ProveInTime fact, a library fact, and a local premise
+    # Resolve the by-name facts first, then combine with the ProveInTime
+    ml_state = root.locate_node("1").resulting_state()
+    fetched = ml_state.fetch_facts([
+        {"refer_by": "name", "name": "log_base_pow"},
+        {"refer_by": "name", "name": "h0"},
+    ])
+    facts: list[IsabelleFact] = [
+        IsabelleFact_ProveInTime("(8::real) = (2::real) ^ (3::nat)"),
+    ] + [f for f in fetched if isinstance(f, IsabelleFact_Presented)]
+    root.session.age += 1
+    root.fill("1.1", Obvious.gen(Obvious_InternalToolArg(facts=facts)))
+    print_header("After Obvious with ProveInTime", file)
+    root.print(0, file)
+
+@model_test("Simplify_stuck", "Test_aime_1998_p3.thy", 16)
+def _test_Simplify_stuck(root: Root, file: MyIO):
+    """Reproduces stuck SIMPLIFY when rewriting with local + library facts inside a Have block."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    root.fill("1", Have.gen({
+        "thought": "Since 8 = 2^3, log base 8 of x equals log base 2 of x divided by 3",
+        "name": "h2",
+        "statement": {
+            "english": "log base 8 of x equals log base 2 of x divided by 3",
+            "isabelle": "log (8::real) x = log (2::real) x / 3"
+        }
+    }))
+    print_header("After Have h2", file)
+    root.print(0, file)
+    root.session.age += 1
+    root.fill("1.1", Have.gen({
+        "thought": "First establish that 8 = 2^3 as reals",
+        "name": "h8",
+        "statement": {
+            "english": "8 equals 2 to the power 3",
+            "isabelle": "(8::real) = (2::real) ^ 3"
+        }
+    }))
+    root.session.age += 1
+    root.fill("1.1.1", Obvious.interactive_gen({"facts": []}))
+    print_header("After proving h8", file)
+    root.print(0, file)
+    root.session.age += 1
+    root.fill("1.2", Rewrite.interactive_gen({
+        "thought": "Rewrite 8 as 2^3 in the goal using h8, then apply log_base_pow",
+        "using": [
+            {"refer_by": "name", "name": "h8"},
+            {"refer_by": "name", "name": "log_base_pow"}
+        ],
+        "use system simplifiers": True,
+        "rewrite goal": True,
+        "rewrite premises": []
+    }))
+    print_header("After Rewrite", file)
+    root.print(0, file)
+
+@model_test("Simplify_no_intro_bindings", "Test_aime_1998_p3.thy", 9)
+def _test_Simplify_no_intro_bindings(root: Root, file: MyIO):
+    """Reproduces 'Expected exactly one Intro_Bindings_Msg, got 0' when Rewrite
+    references a local fact (h8eq) that is out of scope."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    # Step 1: Have h2
+    root.session.age += 1
+    root.fill("1", Have.gen({
+        "thought": "log base 8 of x equals log base 2 of x divided by 3",
+        "name": "h2",
+        "statement": {
+            "english": "log base 8 of x equals log base 2 of x divided by 3",
+            "isabelle": "log (8::real) x = log 2 x / 3"
+        }
+    }))
+    # Step 1.1: Have h8eq (inside h2's proof)
+    root.session.age += 1
+    root.fill("1.1", Have.gen({
+        "thought": "First establish that 8 = 2^3 as reals",
+        "name": "h8eq",
+        "statement": {
+            "english": "8 equals 2 to the power 3",
+            "isabelle": "(8::real) = 2 ^ 3"
+        }
+    }))
+    # Step 1.1.1: Obvious (proves h8eq)
+    root.session.age += 1
+    root.fill("1.1.1", Obvious.interactive_gen({"facts": []}))
+    # Step 1.2: Rewrite using h8eq + log_base_pow (triggers timeout fallback)
+    root.session.age += 1
+    root.fill("1.2", Rewrite.interactive_gen({
+        "thought": "Rewrite 8 as 2^3 using h8eq, then apply log_base_pow",
+        "using": [
+            {"refer_by": "name", "name": "h8eq"},
+            {"refer_by": "name", "name": "log_base_pow"}
+        ],
+        "use system simplifiers": True,
+        "rewrite goal": True,
+        "rewrite premises": []
+    }))
+    # Step 1.3: Obvious (closes h2's remaining goal)
+    root.session.age += 1
+    root.fill("1.3", Obvious.interactive_gen({"facts": []}))
+    print_header("After completing h2", file)
+    root.print(0, file)
+    # Step 2: Have h3
+    root.session.age += 1
+    root.fill("2", Have.gen({
+        "thought": "Rewrite h1 using h2",
+        "name": "h3",
+        "statement": {
+            "english": "log base 2 of (log base 2 of x divided by 3) equals log base 2 of (log base 2 of x) divided by 3",
+            "isabelle": "log (2::real) (log 2 x / 3) = log 2 (log 2 x) / 3"
+        }
+    }))
+    # Step 2.1: Have h2b (inside h3's proof)
+    root.session.age += 1
+    root.fill("2.1", Have.gen({
+        "thought": "log 8 (log 2 x) = log 2 (log 2 x) / 3 by the same log_base_pow argument",
+        "name": "h2b",
+        "statement": {
+            "english": "log base 8 of (log base 2 of x) equals log base 2 of (log base 2 of x) divided by 3",
+            "isabelle": "log (8::real) (log 2 x) = log 2 (log 2 x) / 3"
+        }
+    }))
+    # Step 2.1.1: Rewrite using h8eq + log_base_pow with no system simplifiers
+    # h8eq is OUT OF SCOPE here (it was local to step 1's proof)
+    # This triggers: Expected exactly one Intro_Bindings_Msg, got 0
+    root.session.age += 1
+    root.fill("2.1.1", Rewrite.interactive_gen({
+        "thought": "Rewrite 8 as 2^3 using h8eq and apply log_base_pow",
+        "using": [
+            {"refer_by": "name", "name": "h8eq"},
+            {"refer_by": "name", "name": "log_base_pow"}
+        ],
+        "use system simplifiers": False,
+        "rewrite goal": True,
+        "rewrite premises": []
+    }))
+    print_header("After step 2.1.1", file)
+    root.print(0, file)
+
+@model_test("Have1", "Test_Have1.thy", 9)
+async def _test_Have1(root: Root, file: MyIO):
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    root.fill("1", Have.gen({
+        "thought": "helper",
+        "statement": {"english": "x equals x plus 0", "isabelle": r"x + x \<ge> 0 \<Longrightarrow> x = x + 0"},
+        "name": "lem1"
+    }))
+    print_header("After Have", file)
+    root.print(0, file)
+    root.session.age += 1
+    root.fill("1.1", Obvious.interactive_gen({"facts": []}))
+
 # class TestCase_Interactive_Unfold:
 #     pass
 

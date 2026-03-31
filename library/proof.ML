@@ -99,6 +99,7 @@ val SIMP_CMD : command
 val SIMPLIFY_GOAL_AND_PREMISES : thm list -> bool -> string list -> bool
         -> (term list -> string list) option
         -> ((string * typ) list -> string list) option
+        -> Time.time option
         -> state -> items * state
 val SIMPLIFY_GOAL_AND_PREMISES'' : fact list -> bool -> string list -> bool -> operation
 val SIMPLIFY_CMD : command
@@ -1731,6 +1732,7 @@ fun SIMPLIFY_GOAL_AND_PREMISES'
     (simplify_goal: bool)
     (naming_fn_opt: (term list -> string list) option)
     (naming_vars_fn_opt: ((string * typ) list -> string list) option)
+    (timeout: Time.time option)
     (origin as (ctxt, HHF (st0, items) :: S)) =
   let
     (* 1. Retrieve premises by name from context *)
@@ -1764,9 +1766,14 @@ fun SIMPLIFY_GOAL_AND_PREMISES'
       ) |> Simplifier.add_cong @{thm NO_SIMP_cong}
 
     (* 5. Apply simplification using conversion *)
-    val st_simplified =
+    (* TODO: clarsimp_tac always succeeds (even with no progress).
+       Consider wrapping with CHANGED_PROP to raise OPR_FAIL when nothing changes. *)
+    fun do_clarsimp () =
       Clasimp.clarsimp_tac simp_ctxt 1 st_protected |> Seq.hd
       |> Config.get ctxt auto_deconflict_bound ? deconflict_bound_names_thm ctxt
+    val st_simplified =
+      case timeout of SOME t => Timeout.apply t do_clarsimp ()
+                    | NONE => do_clarsimp ()
 
     (* 6. Protect goal conclusion to prevent INTRO's allI/impI from affecting it *)
     val st_protected_for_intro =
@@ -1823,7 +1830,7 @@ fun SIMPLIFY_GOAL_AND_PREMISES'
   in
     (items_from_intro, (ctxt_after_intro, HHF (st_final, items_after_intro) :: S_after_intro))
   end
-  | SIMPLIFY_GOAL_AND_PREMISES' _ _ _ _ _ _ _ = raise BROKEN_INVARIANT
+  | SIMPLIFY_GOAL_AND_PREMISES' _ _ _ _ _ _ _ _ = raise BROKEN_INVARIANT
 
 (* Wrapper that uses premise counter for automatic naming *)
 fun SIMPLIFY_GOAL_AND_PREMISES
@@ -1832,9 +1839,10 @@ fun SIMPLIFY_GOAL_AND_PREMISES
     premise_names
     simplify_goal
     naming_fn_opt
-    naming_vars_fn_opt =
+    naming_vars_fn_opt
+    timeout =
   OPR_with_ret (fn s =>
-    let val (items, s') = SIMPLIFY_GOAL_AND_PREMISES' simp_facts use_system_simps premise_names simplify_goal naming_fn_opt naming_vars_fn_opt s
+    let val (items, s') = SIMPLIFY_GOAL_AND_PREMISES' simp_facts use_system_simps premise_names simplify_goal naming_fn_opt naming_vars_fn_opt timeout s
         val _ = report_goal s'
      in (items, s')
     end)
@@ -1847,7 +1855,7 @@ fun SIMPLIFY_GOAL_AND_PREMISES''
     simplify_goal =
   OPR (fn (ctxt, SK) =>
     let val simp_facts = maps (Attrib.eval_thms ctxt o single) raw_simp_facts
-        val (_, s') = SIMPLIFY_GOAL_AND_PREMISES' simp_facts use_system_simps premise_names simplify_goal NONE NONE (ctxt, SK)
+        val (_, s') = SIMPLIFY_GOAL_AND_PREMISES' simp_facts use_system_simps premise_names simplify_goal NONE NONE NONE (ctxt, SK)
         val _ = report_goal s'
      in s'
     end)

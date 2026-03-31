@@ -64,6 +64,7 @@ exception INTRO_BINDINGS of {
     auto_introduced: bindings,
     final: bindings
   }
+exception SIMPLIFY_FALLBACK_NOSYS
 
 val compute_bindings : Minilang.state -> string list -> string list -> bindings
 val check_need_intro : Minilang.state -> bool
@@ -113,6 +114,7 @@ exception INTRO_BINDINGS of {
     auto_introduced: bindings,
     final: bindings
   }
+exception SIMPLIFY_FALLBACK_NOSYS
 
 type counters = {
     prem_counter: int Synchronized.var,
@@ -515,9 +517,21 @@ fun AUTO_SIMPLIFY
         end)
 
     (* Execute SIMPLIFY with both naming functions - call operation *)
-    val ((params', facts'), s') = (Minilang.SIMPLIFY_GOAL_AND_PREMISES
-                                    simp_thms use_system_simps premise_names simplify_goal
-                                    (SOME naming_prems_fn) (SOME naming_vars_fn)) s
+    val simplify_timeout = SOME (Time.fromSeconds 3)
+
+    fun do_simplify use_sys =
+      (Minilang.SIMPLIFY_GOAL_AND_PREMISES
+        simp_thms use_sys premise_names simplify_goal
+        (SOME naming_prems_fn) (SOME naming_vars_fn) simplify_timeout) s
+
+    val (((params', facts'), s'), fell_back_nosys) =
+      if use_system_simps
+      then (do_simplify true, false)
+           handle Timeout.TIMEOUT _ => (do_simplify false, true)
+      else (do_simplify false, false)
+      handle Timeout.TIMEOUT _ =>
+        raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL,
+          "Simplification timed out. The rewriting rules may cause an infinite loop.")
 
     (* Always build and report bindings *)
     val _ =
@@ -579,6 +593,11 @@ fun AUTO_SIMPLIFY
           final = (var_bindings_final, prem_bindings_final)
         }))
       in () end
+
+    val _ = if fell_back_nosys
+            then Minilang.get_reporter ()
+                   (Minilang.Internal SIMPLIFY_FALLBACK_NOSYS)
+            else ()
   in
     s'
   end

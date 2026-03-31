@@ -1,0 +1,119 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: real
+premises:
+  - h0: (0 :: real) < x
+  - h1: log (2 :: real) (log (8 :: real) x) = log (8 :: real) (log (2 :: real) x)
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: (log (2 :: real) x)² = (27 :: real)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+pending proof goal:
+  (log (2 :: real) x)² = (27 :: real)
+--------------------------------------------------
+After Have h2
+--------------------------------------------------
+variables:
+  - x: real
+premises:
+  - h0: (0 :: real) < x
+  - h1: log (2 :: real) (log (8 :: real) x) = log (8 :: real) (log (2 :: real) x)
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: (log (2 :: real) x)² = (27 :: real)
+proof:
+  - step id: 1
+    thought: Since 8 = 2^3, log base 8 of x equals log base 2 of x divided by 3
+    operation: Have
+    statement:
+      english: log base 8 of x equals log base 2 of x divided by 3
+      isabelle: log (8::real) x = log (2::real) x / 3
+    name: h2
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      log (8 :: real) x = log (2 :: real) x / (3 :: real)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  (log (2 :: real) x)² = (27 :: real)
+--------------------------------------------------
+After proving h8
+--------------------------------------------------
+variables:
+  - x: real
+premises:
+  - h0: (0 :: real) < x
+  - h1: log (2 :: real) (log (8 :: real) x) = log (8 :: real) (log (2 :: real) x)
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: (log (2 :: real) x)² = (27 :: real)
+proof:
+  - step id: 1
+    thought: Since 8 = 2^3, log base 8 of x equals log base 2 of x divided by 3
+    operation: Have
+    statement:
+      english: log base 8 of x equals log base 2 of x divided by 3
+      isabelle: log (8::real) x = log (2::real) x / 3
+    name: h2
+    proof:
+      - step id: 1.1
+        thought: First establish that 8 = 2^3 as reals
+        operation: Have
+        statement:
+          english: 8 equals 2 to the power 3
+          isabelle: (8::real) = (2::real) ^ 3
+        name: h8
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2` to provide the proof for the following goal.
+    pending proof goal:
+      log (8 :: real) x = log (2 :: real) x / (3 :: real)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  (log (2 :: real) x)² = (27 :: real)
+--------------------------------------------------
+After Rewrite
+--------------------------------------------------
+variables:
+  - x: real
+premises:
+  - h0: (0 :: real) < x
+  - h1: log (2 :: real) (log (8 :: real) x) = log (8 :: real) (log (2 :: real) x)
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: (log (2 :: real) x)² = (27 :: real)
+proof:
+  - step id: 1
+    thought: Since 8 = 2^3, log base 8 of x equals log base 2 of x divided by 3
+    operation: Have
+    statement:
+      english: log base 8 of x equals log base 2 of x divided by 3
+      isabelle: log (8::real) x = log (2::real) x / 3
+    name: h2
+    proof:
+      - step id: 1.1
+        thought: First establish that 8 = 2^3 as reals
+        operation: Have
+        statement:
+          english: 8 equals 2 to the power 3
+          isabelle: (8::real) = (2::real) ^ 3
+        name: h8
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+      - step id: 1.2
+        thought: Rewrite 8 as 2^3 in the goal using h8, then apply log_base_pow
+        operation: Rewrite
+        using:
+          - h8: (8 :: real) = (2 :: real) ^ (3 :: nat)
+          - log_base_pow: (0 :: real) < ?a ⟶ log (?a ^ ?n) ?x = log ?a ?x / real ?n
+        targets:
+          - the goal
+        goal changes into:
+          log (2 :: real) x / real (3 :: nat) = log (2 :: real) x / (3 :: real)
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.3` to provide the proof for the following goal.
+    pending proof goal:
+      log (2 :: real) x / real (3 :: nat) = log (2 :: real) x / (3 :: real)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  (log (2 :: real) x)² = (27 :: real)

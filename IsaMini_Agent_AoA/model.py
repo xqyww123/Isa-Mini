@@ -53,6 +53,8 @@ class IsabelleFact(ABC):
     def pack(self) -> Any:
         """Pack for RPC. Returns the packed form, or FailureReason on error."""
         ...
+    def __repr__(self) -> str:
+        return self.name()
 
 class IsabelleFact_Presented(IsabelleFact):
     """A resolved fact with full information from Isabelle."""
@@ -89,7 +91,7 @@ class IsabelleFact_ProveInTime(IsabelleFact):
         print_indent(indent, file)
         file.write(f"- {self.statement}\n")
     def pack(self) -> tuple[int, str]:
-        return (1, self.statement)
+        return (1, ascii_of_unicode(self.statement))
 
 class IsabelleFact_Unfound(IsabelleFact):
     """A fact that could not be found in the Isabelle context."""
@@ -419,13 +421,13 @@ class EvaluationStatus(NamedTuple):
     reason: 'FailureReason | None'
 
     @staticmethod
-    def success(time: timedelta, reason: 'FailureReason | None' = None) -> 'EvaluationStatus':
+    def Success(time: timedelta, reason: 'FailureReason | None' = None) -> 'EvaluationStatus':
         return EvaluationStatus(EvaluationStatus.Status.SUCCESS, time, reason)
     @staticmethod
-    def failure(time: timedelta, reason: 'FailureReason') -> 'EvaluationStatus':
+    def Failure(time: timedelta, reason: 'FailureReason') -> 'EvaluationStatus':
         return EvaluationStatus(EvaluationStatus.Status.FAILURE, time, reason)
 EVALUATION_CACNCELLED = EvaluationStatus(EvaluationStatus.Status.CANCELLED, 0.0, None)
-EVALUATION_NOT_YET = EvaluationStatus.failure(0.0, FailureReason("Not yet evaluated"))
+EVALUATION_NOT_YET = EvaluationStatus.Failure(0.0, FailureReason("Not yet evaluated"))
 
 ### Bindings
 
@@ -548,19 +550,24 @@ class Intro_Bindings_Msg(Message):
         ]
         return (var_bindings, fact_bindings)
 
+class Simplify_Fallback_Nosys_Msg(Message):
+    """The simplification timed out with system simplifiers and succeeded without them."""
+    pass
+
 def unpack_message(data) -> Message:
-    (kind, x) = data
-    match kind:
-        case 0:
+    match data:
+        case (0, x):
             return New_Item_Msg.unpack(x)
-        case 1:
+        case (1, x):
             return Goals_Msg.unpack(x)
-        case 2:
+        case (2, x):
             return Consider_Case_Msg.unpack(x)
-        case 3:
+        case (3, x):
             return Intro_Bindings_Msg.unpack(x)
+        case 4:
+            return Simplify_Fallback_Nosys_Msg()
         case _:
-            raise Exception(f"BUG bad message kind: {kind}")
+            raise Exception(f"BUG bad message kind: {data}")
 
 ### Minilang Proof Tree
 
@@ -984,12 +991,14 @@ class Minilang_State:
 # abstract base class
 type answer = Annotated[list[int], "sorted and all elements are distinct"] | str
 
-def normalize_answer(raw: Any) -> answer:
-    """Normalize the answer value.
-    Returns sorted distinct int list for index answers, or str for text answers."""
-    if isinstance(raw, str):
-        return raw
-    return sorted(set(raw))
+def normalize_answer(indexes: list[int] | None, text: str | None) -> answer:
+    """Normalize the answer from two optional fields.
+    indexes takes priority; text is used only when indexes is empty or absent."""
+    if indexes:
+        return sorted(set(indexes))
+    if text:
+        return text
+    return []
 
 class Interaction:
     forking: bool = False
@@ -1115,7 +1124,7 @@ class Interaction_RetrieveFact(Interaction):
             file.write("If no theorem matches and the statement is non-trivial, "
                        "answer empty to prove it yourself later.\n")
         else:
-            file.write("If no theorem matches, answer empty to see more candidates.\n")
+            file.write("If no theorem matches, answer with empty to see more candidates.\n")
 
     def answer(self, answer: answer) -> IsabelleFact:
         if isinstance(answer, str) and answer:
@@ -1212,7 +1221,7 @@ class Node(ABC):
                 status_mark = "pending, "
             case _:
                 status_mark = ""
-        file.write(f"- {self._kind} {self.id}: {self.quickview_title()} ({changed_mark}{status_mark}line {self.line})\n")
+        file.write(f"{self._kind} {self.id}: {self.quickview_title()} ({changed_mark}{status_mark}line {self.line})\n")
         return indent + 1
     def quickview(self, indent: int, file: MyIO) -> int:
         return self.quickview_header(indent, file)
@@ -1445,16 +1454,19 @@ class Node(ABC):
         refresh_point = parent.sub_nodes[idx - 1] if idx > 0 else parent
         parent._delete_child(self)
         return refresh_point
-    def delete(self, ids: list[step]) -> None:
+    def delete(self, ids: list[step]) -> list[step]:
+        """Delete nodes by IDs. Returns list of unfound IDs (warnings)."""
         self.session.age += 1
         # Locate all, deduplicate
         nodes: list['Node'] = []
         seen: set[str] = set()
+        not_found: list[step] = []
         for id in ids:
             try:
                 node = self.locate_node(id)
             except NodeNotFound:
-                raise CannotDelete_NodeNotFound(id)
+                not_found.append(id)
+                continue
             if node.id not in seen:
                 seen.add(node.id)
                 nodes.append(node)
@@ -1474,6 +1486,7 @@ class Node(ABC):
                 rp._refresh_me_alone(False)
                 if rp.parent is not None:
                     rp._refresh_all_after_me()
+        return not_found
     def amend_me(self, gen_node: gen_node) -> 'Node':
         if self.parent is not None:
             return self.parent._amend_child(self, gen_node)
@@ -1507,13 +1520,13 @@ class Leaf(Node):
         super()._refresh_me_alone(first_time)
         op = self.the_operation()
         if isinstance(op, FailureReason):
-            self.status = EvaluationStatus.failure(time() - now, op)
+            self.status = EvaluationStatus.Failure(time() - now, op)
             return
         try:
             self.ml_state.execute(op, self.resulting_state())
-            self.status = EvaluationStatus.success(time() - now)
+            self.status = EvaluationStatus.Success(time() - now)
         except IsabelleError as err:
-            self.status = EvaluationStatus.failure(time() - now, FailureReason(''.join(err.errors)))
+            self.status = EvaluationStatus.Failure(time() - now, FailureReason(''.join(err.errors)))
     def append(self, gen_node: may_gen_node) -> 'Node | None':
         raise CannotAppend(self, "It is not a goal or a proof block")
 
@@ -1813,15 +1826,15 @@ class StdBlock(NonLeaf_Node):
                 can_continue = False
         if can_continue:
             self._body_subnodes_succeeded = True
-            self.status = EvaluationStatus.success(time() - now)
+            self.status = EvaluationStatus.Success(time() - now)
         elif head_succeeded:
             self._body_subnodes_succeeded = False
             self._state_after_beginning().sorry(None, self.resulting_state())
-            self.status = EvaluationStatus.success(time() - now, reason)
+            self.status = EvaluationStatus.Success(time() - now, reason)
         else:
             self._body_subnodes_succeeded = False
             assert reason is not None
-            self.status = EvaluationStatus.failure(time() - now, reason)
+            self.status = EvaluationStatus.Failure(time() - now, reason)
     def _ctxt_of_filling(self) -> Context:
         vars = self._all_fixed_vars_before_me({})
         hyps = self._all_fixed_facts_before_me({})
@@ -1922,9 +1935,9 @@ class StdBlock(NonLeaf_Node):
                 else:
                     file.write("Error: Unfinished Proof\n")
         return indent
-    def print_string(self, indent: int) -> str:
+    def print_string(self, indent: int, show_warnings: bool = True) -> str:
         buffer = StringIO()
-        self.print(indent, MyIO(buffer))
+        self.print(indent, MyIO(buffer), show_warnings=show_warnings)
         return buffer.getvalue()
     def quickview_string(self, indent: int) -> str:
         buffer = StringIO()
@@ -2083,7 +2096,7 @@ class GoalNode(StdBlock):
             return indent
         else:
             print_indent(indent, file)
-            file.write(f"- {self._kind} {self.id} (line {self.line})\n")
+            file.write(f"{self._kind} {self.id} (line {self.line})\n")
             return indent + 1
 
 class SubgoalMaker(GoalContainer, StdBlock):
@@ -2312,6 +2325,7 @@ class Obvious(Leaf):
     def gen(arg: Obvious_InternalToolArg) -> gen_node:
         def mk(config: NodeConfig) -> 'Obvious':
             return Obvious(config, arg)
+        mk._node = Obvious  # type: ignore[attr-defined]
         return mk
 
     @staticmethod
@@ -2327,6 +2341,7 @@ class Obvious(Leaf):
                 for w in warnings:
                     node.warnings.append(Warning(Warning.Position.FOOTER, w))
                 return node
+            mk_node._node = Obvious  # type: ignore[attr-defined]
 
             if not interactions:
                 return mk_node(config)
@@ -2337,6 +2352,7 @@ class Obvious(Leaf):
                 return mk_node
 
             raise RaiseInteraction(interactions, kontinue)
+        mk._node = Obvious  # type: ignore[attr-defined]
         return mk
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
@@ -2408,7 +2424,7 @@ class Interaction_ChooseDef(Interaction):
         for i, ref in enumerate(self.candidate_defs):
             print_indent(indent+1, file)
             file.write(f"{i}. {ref.full_name}: {ref.expression}\n")
-        file.write("Select definition(s) to use in unfolding. Call `mcp__proof__answer` with the indexes, or with an empty array to skip.\n")
+        file.write("Select definition(s) to use in unfolding. Call `mcp__proof__answer` with `indexes`, or leave empty to skip.\n")
     def answer(self, answer: answer) -> list[IsabelleFact]:
         if isinstance(answer, str):
             raise Interaction_BadAnswer("This interaction expects index selection, not text.")
@@ -2624,7 +2640,8 @@ class Rewrite(Leaf):
             print_goal(prooftree.top_goal(), indent+1, False, file, self._ctxt_at_me())
 
         self._print_evaluation_status(indent, file)
-        if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
+        if show_warnings:
+            self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
         return indent
 
     def _fixed_vars_at_me(self, ret: Vars) -> Vars:
@@ -2670,12 +2687,12 @@ class Rewrite(Leaf):
         is_init = self.age == self.session.age
         old_bindings = self.bindings
         old_conclusion = (self.resulting_state().prooftree_of().top_goal().conclusion
-                          if self.rewrite_goal and self.status.success else None)
+                          if self.rewrite_goal and self.status.status == EvaluationStatus.Status.SUCCESS else None)
         # Execute the operation via parent Leaf implementation
         super()._refresh_me_alone(first_time)
 
         # If operation succeeded, extract bindings and track changes
-        if self.status.success:
+        if self.status.status == EvaluationStatus.Status.SUCCESS:
             self.running_time += 1
             messages = self.resulting_state().messages
             intro_bindings_msgs = [m for m in messages if isinstance(m, Intro_Bindings_Msg)]
@@ -2729,10 +2746,17 @@ class Rewrite(Leaf):
                         return indent
                     self.warnings.append(Warning(Warning.Position.HEADER, print_fact_warning))
 
+            # Check for simplify fallback (system simplifiers disabled due to timeout)
+            fallback_msgs = [m for m in messages if isinstance(m, Simplify_Fallback_Nosys_Msg)]
+            if fallback_msgs:
+                self.use_system_simplifiers = False
+                self.warnings.append(Warning(Warning.Position.HEADER,
+                    "System simplifiers caused a timeout and were disabled for this step."))
+
         if not is_init:
             if self.bindings != old_bindings:
                 self.changed = True
-            if self.rewrite_goal and self.status.success:
+            if self.rewrite_goal and self.status.status == EvaluationStatus.Status.SUCCESS:
                 new_conclusion = self.resulting_state().prooftree_of().top_goal().conclusion
                 if new_conclusion != old_conclusion:
                     self.changed = True
@@ -2760,6 +2784,7 @@ class Have_ToolArg(TypedDict):
     thought: str
     statement: Statement
     name: str
+    #proof: list[gen_node]
 
 @proof_operation("Have", Have_ToolArg)
 class Have(StdBlock):
@@ -2790,6 +2815,17 @@ class Have(StdBlock):
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
     def beginning_opr(self) -> Minilang_Operation | None:
         return Minilang_Operation.HAVE(self.name, self.statement['isabelle'])
+    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> 'FailureReason | None':
+        fail = super()._refresh_the_beginning_opr(begin_opr, first_time)
+        if fail is not None:
+            return fail
+        if first_time and not self.sub_nodes and self._state_after_beginning().need_intro():
+            local_step = self._local_step_of_next_proof_step()
+            ml_state = self._state_after_beginning().clone(None)
+            config = NodeConfig(local_step, ml_state, self)
+            intro = Intro(config, "", None)
+            self.sub_nodes.append(intro)
+        return None
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         return FailureReason(f"Fail to claim the intermediate subgoal because: {"\n".join(err.errors)}")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
@@ -2808,6 +2844,7 @@ class Have(StdBlock):
 class Suffices_ToolArg(TypedDict):
     thought: str
     statement: Statement
+    #proof: list[gen_node]
 
 @proof_operation("Suffices", Suffices_ToolArg)
 class Suffices(StdBlock):
@@ -2852,6 +2889,7 @@ class Obtain_ToolArg(TypedDict):
     thought: str
     variables: list[Explicit_Var]
     constraints: list[NamedStatement]
+    #proof: list[gen_node]
 
 @proof_operation("Obtain", Obtain_ToolArg)
 class Obtain(StdBlock):
@@ -3149,6 +3187,12 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
 
 ### Branch
 
+# class Branch_Case_ToolArg(TypedDict):
+#     statement: NamedStatement
+#     proof: list[gen_node]
+# class Branch_ToolArg(TypedDict):
+#     thought: str
+#     cases: list[Branch_Case_ToolArg]
 class Branch_ToolArg(TypedDict):
     thought: str
     cases: list[NamedStatement]

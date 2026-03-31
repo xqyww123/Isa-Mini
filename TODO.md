@@ -30,6 +30,10 @@ auto recognize the usage of rules (intro, elim, or dest)
 
 ### TODO
 
+#### Agent
+
+- SIMPLIFY\_GOAL\_AND\_PREMISES' (`proof.ML`): `clarsimp_tac` always succeeds even with no progress (no `CHANGED_PROP` wrapper). A no-op Rewrite silently succeeds instead of raising `OPR_FAIL`. Consider wrapping with `CHANGED_PROP` to detect and report no-progress cases.
+
 #### Clarification
 
 - goal-directed step-wise calculation

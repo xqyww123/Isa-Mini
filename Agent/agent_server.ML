@@ -163,8 +163,11 @@ fun minilang_message_packer ctxt =
                    MiniLang_Agent.pack_bindings,
                    MiniLang_Agent.pack_bindings
                  )) (3, (missing, auto_introduced, final))
+             | MiniLang_Agent.SIMPLIFY_FALLBACK_NOSYS =>
+                 packInt 4
              | _ => error "BUG #adli: unexpected Internal message")
    in packList pack o filter (fn Minilang.Internal (MiniLang_Agent.INTRO_BINDINGS _) => true
+                                 | Minilang.Internal MiniLang_Agent.SIMPLIFY_FALLBACK_NOSYS => true
                                  | Minilang.Internal _ => false
                                  | _ => true)
   end

@@ -1,0 +1,79 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: real
+premises:
+  - h0: (0 :: real) < x
+  - h1: log (2 :: real) (log (8 :: real) x) = log (8 :: real) (log (2 :: real) x)
+  - valid(1): (0 :: real) < log (8 :: real) x
+  - valid(2): (0 :: real) < log (2 :: real) x
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: (log (2 :: real) x)² = (27 :: real)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+pending proof goal:
+  (log (2 :: real) x)² = (27 :: real)
+--------------------------------------------------
+After Have h_log8
+--------------------------------------------------
+variables:
+  - x: real
+premises:
+  - h0: (0 :: real) < x
+  - h1: log (2 :: real) (log (8 :: real) x) = log (8 :: real) (log (2 :: real) x)
+  - valid(1): (0 :: real) < log (8 :: real) x
+  - valid(2): (0 :: real) < log (2 :: real) x
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: (log (2 :: real) x)² = (27 :: real)
+proof:
+  - step id: 1
+    thought: log base 8 of x equals log base 2 of x divided by 3
+    operation: Have
+    statement:
+      english: log base 8 of x equals (log base 2 of x) / 3
+      isabelle: log (8::real) x = log (2::real) x / 3
+    name: h_log8
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      log (8 :: real) x = log (2 :: real) x / (3 :: real)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  (log (2 :: real) x)² = (27 :: real)
+--------------------------------------------------
+After Obvious with ProveInTime
+--------------------------------------------------
+variables:
+  - x: real
+premises:
+  - h0: (0 :: real) < x
+  - h1: log (2 :: real) (log (8 :: real) x) = log (8 :: real) (log (2 :: real) x)
+  - valid(1): (0 :: real) < log (8 :: real) x
+  - valid(2): (0 :: real) < log (2 :: real) x
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: (log (2 :: real) x)² = (27 :: real)
+proof:
+  - step id: 1
+    thought: log base 8 of x equals log base 2 of x divided by 3
+    operation: Have
+    statement:
+      english: log base 8 of x equals (log base 2 of x) / 3
+      isabelle: log (8::real) x = log (2::real) x / 3
+    name: h_log8
+    proof:
+      - step id: 1.1
+        operation: Obvious
+        with facts:
+          - (8::real) = (2::real) ^ (3::nat)
+          - log_base_pow: (0 :: real) < ?a ⟶ log (?a ^ ?n) ?x = log ?a ?x / real ?n
+          - h0: (0 :: real) < x
+        Error: |
+          The following indicated fact is non-trivial, you must prove it manually:
+          (8 :: real) = (2 :: real) ^ (3 :: nat)
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2` to provide the proof for the following goal.
+    pending proof goal:
+      log (8 :: real) x = log (2 :: real) x / (3 :: real)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  (log (2 :: real) x)² = (27 :: real)
