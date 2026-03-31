@@ -433,6 +433,27 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         timeout = NONE
       }
 
+      val validate_prove_in_time_callback = {
+        name = "IsaMini.validate_prove_in_time",
+        arg_schema = unpackPair (unpackString, unpackList unpackString),
+        ret_schema = packList (packOption packString),
+        function = (fn (state_id, stmts) =>
+          let val s0 = get_state state_id
+              val ctxt = Minilang.context_of s0
+          in map (fn stmt =>
+              (let val prop = MiniLang_Agent.read_prop ctxt stmt
+                   val goal = Goal.init (Thm.cterm_of ctxt prop)
+                   val _ = Phi_Sledgehammer_Solver.auto true
+                             Sledgehammer_Fact.no_fact_override NONE
+                             (SOME (Time.fromSeconds 10)) ctxt goal
+               in NONE end
+               handle ERROR msg => SOME (REPL.trim_makrup msg)
+                    | Timeout.TIMEOUT _ => SOME "Timed out")
+            ) stmts
+          end),
+        timeout = NONE
+      }
+
       val thm_cache = Universal_Key.new_thm_uk_cache ()
 
       val contextual_thms_callback = {
@@ -480,6 +501,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
           mk_callback schematic_vars_callback,
           mk_callback potential_defs_callback,
           mk_callback contextual_thms_callback,
+          mk_callback validate_prove_in_time_callback,
           Universal_Key.make_universal_key_callback' (SOME thm_cache) (Context.Proof ctxt),
           Config.make_config_lookup_callback (Context.Proof ctxt),
           Context_Callbacks.make_constants_callback (SOME (not o is_infra_const)) (Context.Proof ctxt),

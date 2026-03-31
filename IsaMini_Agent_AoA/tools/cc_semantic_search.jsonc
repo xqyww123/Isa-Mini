@@ -18,6 +18,21 @@
       "type": "integer",
       "description": "Number of results to return.",
       "default": 10
+    },
+    "term_patterns": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Isabelle term patterns that the entity must contain as a subterm. Uses higher-order pattern matching with ?-variables. Example: [\"tendsto ?f ?F ?x\"]. ALL patterns must match. Only applies to theorems and intro/elim rules."
+    },
+    "type_patterns": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Isabelle type patterns that the entity's type must contain. Example: [\"_ set\"]. ALL patterns must match. Applies to theorems, intro/elim rules, and constants."
+    },
+    "theories_include": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Restrict results to entities defined in these theories (short or fully qualified names). Example: [\"HOL.List\", \"Set\"]. Empty = no restriction."
     }
   },
   "required": ["query", "kinds"],

@@ -850,6 +850,169 @@ async def _test_Have1(root: Root, file: MyIO):
 # class TestCase_Interactive_Unfold:
 #     pass
 
+@model_test("IMO_1966_p5", "Test_imo_1966_p5.thy", 19)
+def _test_imo_1966_p5(root: Root, file: MyIO):
+    """Test that inserting Have before Intro leaves the Intro unchanged.
+    Reproduces the calling trace where Have nodes are inserted before the Intro step,
+    and the Intro's proof state ($6 → $8) remains identical because unproven Have
+    blocks use SORRY to restore the same enclosing state."""
+    print_header("Initial State", file)
+    root.print(0, file)
+    print_header("Overview", file)
+    root.quickview(0, file)
+    root.reset_changed()
+
+    # 1. Insert Have eq1 before step 1 (Intro)
+    root.session.age += 1
+    root.insert_before("1", Have.gen({
+        "thought": "Since a(2) < a(1), a(3) < a(2), a(4) < a(3), we know a(1) > a(2) > a(3) > a(4). "
+                   "Subtracting h7 from h6, the coefficients factor as (a(1)-a(2))*(-x1+x2+x3+x4)=0. "
+                   "Since a(1)-a(2)>0, we get x1=x2+x3+x4.",
+        "name": "eq1",
+        "statement": {
+            "english": "x(1) equals x(2) + x(3) + x(4)",
+            "isabelle": "x (1::nat) = x (2::nat) + x (3::nat) + x (4::nat)"
+        }
+    }))
+    print_header("After inserting Have eq1 before Intro", file)
+    buffer = io.StringIO()
+    root.print(0, MyIO(buffer), update_line=True)
+    root.print(0, file)
+    print_header("Overview", file)
+    root.quickview(0, file)
+    root.reset_changed()
+
+    # 2. Try Obvious to prove eq1 — fails (non-trivial)
+    root.session.age += 1
+    root.fill("0A.1", Obvious.interactive_gen({
+        "facts": [
+            {"refer_by": "name", "name": "h6"},
+            {"refer_by": "name", "name": "h7"},
+            {"refer_by": "name", "name": "assms(1)"},
+            {"refer_by": "name", "name": "assms(2)"},
+            {"refer_by": "name", "name": "assms(3)"}
+        ]
+    }))
+    print_header("After failed Obvious on eq1", file)
+    buffer = io.StringIO()
+    root.print(0, MyIO(buffer), update_line=True)
+    root.print(0, file)
+    print_header("Overview", file)
+    root.quickview(0, file)
+    root.reset_changed()
+
+    # 3. Delete the failed Obvious step
+    root.session.age += 1
+    root.delete(["0A.1"])
+    print_header("After deleting failed Obvious", file)
+    buffer = io.StringIO()
+    root.print(0, MyIO(buffer), update_line=True)
+    root.print(0, file)
+    print_header("Overview", file)
+    root.quickview(0, file)
+    root.reset_changed()
+
+    # 4. Fill with intermediate Have: a1_gt_a3
+    root.session.age += 1
+    root.fill("0A.1", Have.gen({
+        "thought": "From assms(1) and assms(2), a(1) > a(3), so |a(1) - a(3)| = a(1) - a(3)",
+        "name": "a1_gt_a3",
+        "statement": {
+            "english": "a(1) is greater than a(3)",
+            "isabelle": "a (1::nat) > a (3::nat)"
+        }
+    }))
+    # Prove a1_gt_a3 with Obvious — should succeed
+    root.session.age += 1
+    root.fill("0A.1.1", Obvious.interactive_gen({
+        "facts": [
+            {"refer_by": "name", "name": "assms(1)"},
+            {"refer_by": "name", "name": "assms(2)"}
+        ]
+    }))
+    print_header("After proving a1_gt_a3", file)
+    buffer = io.StringIO()
+    root.print(0, MyIO(buffer), update_line=True)
+    root.print(0, file)
+    print_header("Overview", file)
+    root.quickview(0, file)
+    root.reset_changed()
+
+    # 5. Fill with intermediate Have: a1_gt_a4
+    root.session.age += 1
+    root.fill("0A.2", Have.gen({
+        "thought": "From assms, a(1) > a(2) > a(3) > a(4), so a(1) > a(4)",
+        "name": "a1_gt_a4",
+        "statement": {
+            "english": "a(1) is greater than a(4)",
+            "isabelle": "a (1::nat) > a (4::nat)"
+        }
+    }))
+    # Prove a1_gt_a4 with Obvious — should succeed
+    root.session.age += 1
+    root.fill("0A.2.1", Obvious.interactive_gen({
+        "facts": [
+            {"refer_by": "name", "name": "a1_gt_a3"},
+            {"refer_by": "name", "name": "assms(3)"}
+        ]
+    }))
+    print_header("After proving a1_gt_a4", file)
+    buffer = io.StringIO()
+    root.print(0, MyIO(buffer), update_line=True)
+    root.print(0, file)
+    print_header("Overview", file)
+    root.quickview(0, file)
+    root.reset_changed()
+
+@model_test("SemanticKNN_patterns", "Test_RetrieveFact.thy", 8)
+def _test_semantic_knn_patterns(root: Root, file: MyIO):
+    """Test semantic_knn with term_patterns, type_patterns, and theories_include."""
+    from Isabelle_RPC_Host.universal_key import EntityKind
+    ml = root.ml_state
+
+    # 1. Baseline: no patterns
+    results_base = ml.semantic_knn("logarithm power", 5, [EntityKind.THEOREM])
+    file.write(f"Baseline (no patterns): {len(results_base)} results\n")
+    for score, rec in results_base:
+        file.write(f"  {score:.3f} {rec.pretty_print}\n")
+
+    # 2. With term_patterns: restrict to theorems containing "ln"
+    results_term = ml.semantic_knn("logarithm power", 10, [EntityKind.THEOREM],
+                                   term_patterns=["ln ?x"])
+    file.write(f"With term_patterns=[\"ln ?x\"]: {len(results_term)} results\n")
+    for score, rec in results_term:
+        file.write(f"  {score:.3f} {rec.pretty_print}\n")
+    # All results should mention "ln" in their names or expressions
+    assert len(results_term) > 0, "Expected at least one result with term pattern 'ln ?x'"
+
+    # 3. With type_patterns: restrict to theorems involving nat
+    results_type = ml.semantic_knn("logarithm", 10, [EntityKind.THEOREM],
+                                   type_patterns=["nat"])
+    file.write(f"With type_patterns=[\"nat\"]: {len(results_type)} results\n")
+    for score, rec in results_type:
+        file.write(f"  {score:.3f} {rec.pretty_print}\n")
+
+    # 4. With theories_include
+    results_thy = ml.semantic_knn("logarithm", 10, [EntityKind.THEOREM],
+                                  theories_include=["Ln"])
+    file.write(f"With theories_include=[\"Ln\"]: {len(results_thy)} results\n")
+    for score, rec in results_thy:
+        file.write(f"  {score:.3f} {rec.pretty_print}\n")
+
+    # 5. Constants with type_patterns
+    results_const = ml.semantic_knn("logarithm", 5, [EntityKind.CONSTANT],
+                                    type_patterns=["real \\<Rightarrow> real"])
+    file.write(f"Constants with type_patterns=[\"real => real\"]: {len(results_const)} results\n")
+    for score, rec in results_const:
+        file.write(f"  {score:.3f} {rec.pretty_print}\n")
+
+    # 6. Empty patterns = same as baseline
+    results_empty = ml.semantic_knn("logarithm power", 5, [EntityKind.THEOREM],
+                                    term_patterns=[], type_patterns=[], theories_include=[])
+    file.write(f"Empty patterns: {len(results_empty)} results\n")
+    assert len(results_empty) == len(results_base), "Empty patterns should match baseline"
+
+
 def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None):
     import msgpack as mp
     from IsaREPL import Client

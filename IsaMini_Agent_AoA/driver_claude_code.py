@@ -310,8 +310,15 @@ async def _semantic_search_tool(args: ToolCall_arg) -> ToolCall_ret:
         except KeyError as e:
             return _mk_ret(f"Invalid entity kind: {e}")
 
+        term_patterns = args.get("term_patterns", [])
+        type_patterns = args.get("type_patterns", [])
+        theories_include = args.get("theories_include", [])
+
         ml_state = session.root.ml_state
-        results = ml_state.semantic_knn(query, k, kinds)
+        results = ml_state.semantic_knn(query, k, kinds,
+                                        term_patterns=term_patterns,
+                                        type_patterns=type_patterns,
+                                        theories_include=theories_include)
 
         if not results:
             return _mk_ret("No matching entities found.")

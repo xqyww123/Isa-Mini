@@ -892,9 +892,14 @@ class Minilang_State:
                         fact=fact, expression=exprs)
         return out
     def semantic_knn(self, query: str, k: int,
-                     kinds: list[EntityKind]) -> list[tuple[float, SemanticRecord]]:
+                     kinds: list[EntityKind],
+                     term_patterns: list[str] = [],
+                     type_patterns: list[str] = [],
+                     theories_include: list[str] = []) -> list[tuple[float, SemanticRecord]]:
         """Search k nearest entities by semantic similarity.
-        For TheoremK, extends the domain with local contextual thm keys."""
+        For TheoremK, extends the domain with local contextual thm keys.
+        Pattern/theory filters (empty = no restriction) are forwarded to
+        the entity enumeration callbacks for ML-side filtering."""
         # Build domain
         if EntityKind.THEOREM in kinds:
             local_keys: list[universal_key] = self.connection.callback(
@@ -904,7 +909,10 @@ class Minilang_State:
         else:
             domain = Semantic_Vector_Store.ContextAll
         store: Semantic_Vector_Store = self.connection.semantic_vector_store()  # type: ignore
-        results = store.lookup(query, k, kinds, domain)
+        results = store.lookup(query, k, kinds, domain,
+                               term_patterns=term_patterns,
+                               type_patterns=type_patterns,
+                               theories_include=theories_include)
         return [(score, rec._replace(name=ascii_of_unicode(rec.name)))
                 for score, rec in results]
     def compute_bindings(self, var_names: list[str], fact_names: list[str]) -> Bindings:
@@ -985,6 +993,13 @@ class Minilang_State:
                         short_name=short_name,
                         fact=FactByName(refer_by="name", name=short_name),
                         expression=[prop]) for full_name, short_name, prop in result]
+
+    def validate_prove_in_time(self, statements: list[str]) -> list[str | None]:
+        """Validate prove-in-time statements. Returns None per provable, error string per unprovable."""
+        if not statements:
+            return []
+        return self.connection.callback(
+            "IsaMini.validate_prove_in_time", (self.name, statements))
 
 ### Interaction
 
@@ -2291,6 +2306,29 @@ def _filter_unfound(facts: list[IsabelleFact]) -> tuple[list[IsabelleFact], list
             kept.append(f)
     return kept, warnings
 
+def _filter_unprovable(
+    facts: list[IsabelleFact], ml_state: 'Minilang_State'
+) -> tuple[list[IsabelleFact], list[str]]:
+    """Filter out IsabelleFact_ProveInTime that cannot be proven automatically.
+    Returns (kept_facts, warning_strings)."""
+    pit_indices: list[int] = []
+    pit_statements: list[str] = []
+    for i, f in enumerate(facts):
+        if isinstance(f, IsabelleFact_ProveInTime):
+            pit_indices.append(i)
+            pit_statements.append(ascii_of_unicode(f.statement))
+    if not pit_statements:
+        return facts, []
+    results = ml_state.validate_prove_in_time(pit_statements)
+    drop: set[int] = set()
+    warnings: list[str] = []
+    for idx, result in zip(pit_indices, results):
+        if result is not None:
+            warnings.append(f'Fact "{facts[idx].name()}" is neither a known theorem nor trivially provable. Ignored \u2014 you may prove it manually if needed.')
+            drop.add(idx)
+    kept = [f for i, f in enumerate(facts) if i not in drop]
+    return kept, warnings
+
 def _split_fetched(fetched: 'list[IsabelleFact | Interaction_RetrieveFact]'
     ) -> 'tuple[list[IsabelleFact], list[Interaction], list[int]]':
     """Split fetch_facts results into resolved facts, interactions, and placeholder indices.
@@ -2337,6 +2375,8 @@ class Obvious(Leaf):
 
             def mk_node(config: NodeConfig) -> 'Obvious':
                 facts, warnings = _filter_unfound(resolved)
+                facts, pit_warnings = _filter_unprovable(facts, config.ml_state)
+                warnings.extend(pit_warnings)
                 node = Obvious(config, Obvious_InternalToolArg(facts=facts))
                 for w in warnings:
                     node.warnings.append(Warning(Warning.Position.FOOTER, w))
@@ -2686,8 +2726,8 @@ class Rewrite(Leaf):
     def _refresh_me_alone(self, first_time: bool) -> None:
         is_init = self.age == self.session.age
         old_bindings = self.bindings
-        old_conclusion = (self.resulting_state().prooftree_of().top_goal().conclusion
-                          if self.rewrite_goal and self.status.status == EvaluationStatus.Status.SUCCESS else None)
+        old_goal = (self.resulting_state().prooftree_of().top_goal()
+                    if self.status.status == EvaluationStatus.Status.SUCCESS else None)
         # Execute the operation via parent Leaf implementation
         super()._refresh_me_alone(first_time)
 
@@ -2756,9 +2796,9 @@ class Rewrite(Leaf):
         if not is_init:
             if self.bindings != old_bindings:
                 self.changed = True
-            if self.rewrite_goal and self.status.status == EvaluationStatus.Status.SUCCESS:
-                new_conclusion = self.resulting_state().prooftree_of().top_goal().conclusion
-                if new_conclusion != old_conclusion:
+            if self.status.status == EvaluationStatus.Status.SUCCESS and old_goal is not None:
+                new_goal = self.resulting_state().prooftree_of().top_goal()
+                if new_goal != old_goal:
                     self.changed = True
 
     def _rename_var(self, old_name: varname, new_name: varname) -> 'Node | None':
@@ -3007,6 +3047,8 @@ class Intro(SubgoalMaker_NoTailEnder):
     def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation, first_time: bool) -> 'FailureReason | None':
         is_init = self.age == self.session.age
         old_bindings = self.bindings
+        s = self._state_after_beginning()
+        old_goals = s.prooftree.top_goals() if s.prooftree is not None else None
         fail = super()._refresh_the_beginning_opr(begin_opr, first_time)
         if fail is None:
             self.running_time += 1
@@ -3052,8 +3094,13 @@ class Intro(SubgoalMaker_NoTailEnder):
                             file.write(f"- {binding.name}\n")
                         return indent
                     self.warnings.append(Warning(Warning.Position.HEADER, print))
-        if not is_init and self.bindings != old_bindings:
-            self.changed = True
+        if not is_init:
+            if self.bindings != old_bindings:
+                self.changed = True
+            if fail is None and old_goals is not None:
+                new_goals = self._state_after_beginning().prooftree_of().top_goals()
+                if new_goals != old_goals:
+                    self.changed = True
         return fail
     def _fixed_vars_at_me(self, ret: Vars) -> Vars:
         if self.bindings is not None:
