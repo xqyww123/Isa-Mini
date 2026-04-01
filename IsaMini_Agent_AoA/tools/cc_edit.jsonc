@@ -113,6 +113,9 @@
         { "$ref": "#/$defs/FactByStatement" }
       ]
     },
+    "SubProof": {
+      "enum": ["Obvious", "Given later"]
+    },
 
     "Obvious": {
       "additionalProperties": false,
@@ -146,13 +149,15 @@
         },
         "thought": { "$ref": "#/$defs/Thought" },
         "statement": { "$ref": "#/$defs/Statement" },
-        "name": { "type": "string", "description": "binding of the lemma" }
+        "name": { "type": "string", "description": "binding of the lemma" },
+        "proof": { "$ref": "#/$defs/SubProof" }
       },
       "required": [
         "operation",
         "thought",
         "statement",
-        "name"
+        "name",
+        "proof"
       ],
       "type": "object"
     },
@@ -174,13 +179,15 @@
         "constraints": {
           "type": "array",
           "items": { "$ref": "#/$defs/NamedStatement" }
-        }
+        },
+        "proof": { "$ref": "#/$defs/SubProof" }
       },
       "required": [
         "operation",
         "thought",
         "variables",
-        "constraints"
+        "constraints",
+        "proof"
       ],
       "type": "object"
     },
@@ -195,7 +202,14 @@
         },
         "thought": { "$ref": "#/$defs/Thought" },
         "cases": {
-          "items": { "$ref": "#/$defs/NamedStatement" },
+          "items": {
+            "type": "object",
+            "properties": {
+              "statement": { "$ref": "#/$defs/NamedStatement" },
+              "proof": { "$ref": "#/$defs/SubProof" }
+            },
+            "required": [ "statement", "proof" ]
+          },
           "type": "array"
         }
       },
@@ -216,12 +230,14 @@
           "type": "string"
         },
         "thought": { "$ref": "#/$defs/Thought" },
-        "target_isabelle_term": { "type": "string" }
+        "target_isabelle_term": { "type": "string" },
+        "proof": { "$ref": "#/$defs/SubProof" }
       },
       "required": [
         "operation",
         "thought",
-        "target_isabelle_term"
+        "target_isabelle_term",
+        "proof"
       ],
       "type": "object"
     },
@@ -282,13 +298,15 @@
             "required": [ "name", "status" ]
           },
           "type": "array"
-        }
+        },
+        "proof": { "$ref": "#/$defs/SubProof" }
       },
       "required": [
         "operation",
         "thought",
         "target_isabelle_term",
-        "variables"
+        "variables",
+        "proof"
       ],
       "type": "object"
     },
@@ -364,12 +382,14 @@
         },
         "statement": {
           "$ref": "#/$defs/Statement"
-        }
+        },
+        "proof": { "$ref": "#/$defs/SubProof" }
       },
       "required": [
         "operation",
         "thought",
-        "statement"
+        "statement",
+        "proof"
       ],
       "type": "object"
     },
@@ -421,6 +441,38 @@
       "title": "Witness",
       "type": "object"
     },
+    "Intro": {
+      "additionalProperties": false,
+      "title": "Intro",
+      "description": "introduce universal quantification and premises from the proof goal",
+      "properties": {
+        "operation": {
+          "const": "Intro",
+          "type": "string"
+        },
+        "thought": { "$ref": "#/$defs/Thought" },
+        "variable_bindings": {
+          "description": "names to bind to the universally quantified variables, in order",
+          "items": { "type": "string" },
+          "type": "array"
+        },
+        "fact_bindings": {
+          "description": "names to bind to the premises, in order",
+          "items": { "type": "string" },
+          "type": "array"
+        },
+        "split_conj": {
+          "type": "boolean",
+          "default": false,
+          "description": "whether to split conjunctions in the goal after introduction"
+        }
+      },
+      "required": [
+        "operation",
+        "thought"
+      ],
+      "type": "object"
+    },
     "Operation": {
       "anyOf": [
         { "$ref": "#/$defs/Obvious" },
@@ -433,7 +485,8 @@
         { "$ref": "#/$defs/Unfold" },
         { "$ref": "#/$defs/Witness" },
         { "$ref": "#/$defs/InferenceRule" },
-        { "$ref": "#/$defs/Suffices" }
+        { "$ref": "#/$defs/Suffices" },
+        { "$ref": "#/$defs/Intro" }
       ]
     }
   },

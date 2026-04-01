@@ -4,7 +4,7 @@ theory Minilang
   imports HOL.HOL Auto_Sledgehammer.Auto_Sledgehammer
 begin
 
-declare [[ML_debugger, ML_exception_trace, ML_exception_debugger, ML_print_depth=1000]]
+(* declare [[ML_debugger, ML_exception_trace, ML_exception_debugger, ML_print_depth=1000]] *)
 
 definition \<open>NO_SIMP (X::'a::{}) \<equiv> X\<close>
 

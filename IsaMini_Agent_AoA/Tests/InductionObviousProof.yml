@@ -1,0 +1,39 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - l: 'a list
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: rev (rev l) = l
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+pending proof goal:
+  rev (rev l) = l
+--------------------------------------------------
+After Induction with proof=Obvious
+--------------------------------------------------
+variables:
+  - l: 'a list
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: rev (rev l) = l
+proof:
+  - step id: 1
+    thought: Induction on list l
+    operation: Induction
+    target term: l
+    cases:
+      - goal id: 1.Nil
+        goal: rev (rev []) = []
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+      - goal id: 1.Cons
+        variables:
+          - a: 'a
+        premises:
+          - Cons.IH: rev (rev l) = l
+        goal: rev (rev (a # l)) = a # l
+        proof:
+          - step id: 1.2.1
+            operation: Obvious
+Unfinished nodes: 0

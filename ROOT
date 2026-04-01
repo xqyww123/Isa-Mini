@@ -20,7 +20,7 @@ session Minilang_REPL in REPL = Minilang +
 session Minilang_Agent in Agent = Minilang +
   sessions
     Isa_REPL
-    Automation_Base
     Isabelle_RPC
+    Semantic_Embedding
   theories
     Minilang_Agent

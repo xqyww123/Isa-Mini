@@ -78,6 +78,9 @@ class ModelTestCase(TestCase):
             f.write(yaml)
 
 TESTS : dict[str, TestCase] = {}
+# IMPORTANT: Each @model_test must have its own dedicated .thy file.
+# Never share a .thy file between different test cases.
+# The `line` argument must be the line number of `by AgentAoA` in the .thy file.
 def model_test(name: str, file: str, line: int):
     def decorator(func: _TestOpr):
         TESTS[name] = ModelTestCase(name, file, line, func)
@@ -126,6 +129,42 @@ def _test_branch(root: Root, file: MyIO):
     print_header("Branch", file)
     root.print(0, file)
 
+    # Close the exhaustiveness goal 1.0
+    root.session.age += 1
+    root.fill("1.0.1", Obvious.interactive_gen({"facts": []}))
+    print_header("After Obvious on 1.0.1 (exhaustiveness)", file)
+    root.print(0, file)
+    print_header("Overview after 1.0.1", file)
+    root.quickview(0, file)
+
+    # Close case 1.1 (x > 0)
+    root.session.age += 1
+    root.fill("1.1.1", Obvious.interactive_gen({"facts": []}))
+    print_header("After Obvious on 1.1.1 (x > 0)", file)
+    root.print(0, file)
+    print_header("Overview after 1.1.1", file)
+    root.quickview(0, file)
+
+    # Close case 1.2 (x < 0)
+    root.session.age += 1
+    root.fill("1.2.1", Obvious.interactive_gen({"facts": []}))
+    print_header("After Obvious on 1.2.1 (x < 0)", file)
+    root.print(0, file)
+    print_header("Overview after 1.2.1", file)
+    root.quickview(0, file)
+
+    # Close case 1.3 (x = 0)
+    root.session.age += 1
+    root.fill("1.3.1", Obvious.interactive_gen({"facts": []}))
+    print_header("After Obvious on 1.3.1 (x = 0)", file)
+    root.print(0, file)
+    print_header("Overview after 1.3.1", file)
+    root.quickview(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 @model_test("EquivDerive", "Test003.thy", 8)
 def _test_EquivDerive(root: Root, file: MyIO):
     print_header("Initial YAML", file)
@@ -137,7 +176,7 @@ def _test_EquivDerive(root: Root, file: MyIO):
     print_header("Inference Rule", file)
     root.print(0, file)
 
-@model_test("IntroConj", "Test003.thy", 8)
+@model_test("IntroConj", "Test_IntroConj.thy", 6)
 def _test_IntroConj(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -148,7 +187,7 @@ def _test_IntroConj(root: Root, file: MyIO):
     print_header("Inference Rule", file)
     root.print(0, file)
 
-@model_test("IntroConj_short", "Test003.thy", 8)
+@model_test("IntroConj_short", "Test_IntroConj_short.thy", 6)
 def _test_IntroConj_short(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -176,7 +215,7 @@ def _test_CaseSplit(root: Root, file: MyIO):
     print_header("Case Split", file)
     root.print(0, file)
 
-@model_test("Induction", "Test006.thy", 9)
+@model_test("Induction", "Test_Induction.thy", 8)
 def _test_Induction(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -513,7 +552,7 @@ def _test_ReferFactByStatement(root: Root, file: MyIO):
     # FactByStatement search is not yet implemented; just test FactByName for now
     return
 
-@model_test("RetrieveFact", "Test_RetrieveFact.thy", 8)
+@model_test("RetrieveFact", "Test_RetrieveFact1.thy", 6)
 async def _test_RetrieveFact(root: Root, file: MyIO):
     """Test retrieve_facts and FactByStatement interaction.
     Reproduces 'Unknown ancestor theory ""' bug."""
@@ -566,7 +605,7 @@ async def _test_RetrieveFact(root: Root, file: MyIO):
     root.print(0, file)
     return
 
-@model_test("RetrieveFact2", "Test_RetrieveFact.thy", 8)
+@model_test("RetrieveFact2", "Test_RetrieveFact2.thy", 6)
 async def _test_RetrieveFact2(root: Root, file: MyIO):
     """Test retrieve_facts and FactByStatement interaction.
     Reproduces 'Unknown ancestor theory ""' bug."""
@@ -619,7 +658,7 @@ async def _test_RetrieveFact2(root: Root, file: MyIO):
     root.print(0, file)
     return
 
-@model_test("Obvious_partial_solve", "Test_aime_1998_p3.thy", 16)
+@model_test("Obvious_partial_solve", "Test_Obvious_partial_solve.thy", 11)
 def _test_Obvious_partial_solve(root: Root, file: MyIO):
     """Reproduces HAMMER partially solving a goal, leaving subgoals that cause
     an unexpected Intro node to be auto-appended."""
@@ -674,7 +713,7 @@ def _test_Obvious_partial_solve(root: Root, file: MyIO):
     print_header("After step 3.1 (unexpected Intro at 3.2)", file)
     root.print(0, file)
 
-@model_test("Hammer_ProveInTime", "Test_aime_1998_p3.thy", 16)
+@model_test("Hammer_ProveInTime", "Test_Hammer_ProveInTime.thy", 11)
 def _test_Hammer_ProveInTime(root: Root, file: MyIO):
     """Reproduces OutOfData error when HAMMER uses a ProveInTime fact."""
     print_header("Initial YAML", file)
@@ -706,7 +745,7 @@ def _test_Hammer_ProveInTime(root: Root, file: MyIO):
     print_header("After Obvious with ProveInTime", file)
     root.print(0, file)
 
-@model_test("Simplify_stuck", "Test_aime_1998_p3.thy", 16)
+@model_test("Simplify_stuck", "Test_Simplify_stuck.thy", 11)
 def _test_Simplify_stuck(root: Root, file: MyIO):
     """Reproduces stuck SIMPLIFY when rewriting with local + library facts inside a Have block."""
     print_header("Initial YAML", file)
@@ -749,7 +788,7 @@ def _test_Simplify_stuck(root: Root, file: MyIO):
     print_header("After Rewrite", file)
     root.print(0, file)
 
-@model_test("Simplify_no_intro_bindings", "Test_aime_1998_p3.thy", 9)
+@model_test("Simplify_no_intro_bindings", "Test_Simplify_no_intro_bindings.thy", 11)
 def _test_Simplify_no_intro_bindings(root: Root, file: MyIO):
     """Reproduces 'Expected exactly one Intro_Bindings_Msg, got 0' when Rewrite
     references a local fact (h8eq) that is out of scope."""
@@ -1055,6 +1094,394 @@ def _test_semantic_knn_patterns(root: Root, file: MyIO):
     assert len(warnings_misspell) > 0, "Expected warning about undeclared free variable"
     assert "misspeled_ln" in warnings_misspell[0], "Warning should mention the misspelled name"
 
+
+@model_test("SemanticKNN_lexerr", "Test_SemanticKNN_lexerr.thy", 8)
+def _test_semantic_knn_lexerr(root: Root, file: MyIO):
+    """Reproduce: semantic_knn with term_patterns=['¬ coprime'] raises IsabelleError
+    (inner lexical error) that crashes the driver via os._exit(1).
+    See: agent log 2026-04-01, sqrt(2) irrationality proof attempt."""
+    from Isabelle_RPC_Host.rpc import IsabelleError
+    from Isabelle_RPC_Host.universal_key import EntityKind
+    ml = root.ml_state
+
+    # This is the exact call from the failing agent log:
+    #   mcp__proof__semantic_search: {
+    #     'kinds': ['lemma'],
+    #     'query': 'not coprime if both divisible by 2',
+    #     'term_patterns': ['¬ coprime'], 'k': 5
+    #   }
+    # In driver_claude_code.py:334, IsabelleError is caught by the generic
+    # `except Exception` handler which logs "UNEXPECTED ERROR" and calls os._exit(1),
+    # instead of returning a user-friendly error to the model.
+    try:
+        results, warnings = ml.semantic_knn(
+            "not coprime if both divisible by 2", 5, [EntityKind.THEOREM],
+            term_patterns=["¬ coprime"])
+        assert False, "Expected IsabelleError for invalid term pattern '¬ coprime'"
+    except IsabelleError as e:
+        file.write(f"IsabelleError (expected): {e}\n")
+        error_str = str(e)
+        assert "parse" in error_str.lower() or "lexical" in error_str.lower() or "error" in error_str.lower(), \
+            f"Expected parse/lexical error, got: {error_str}"
+
+
+@model_test("IntroObvious", "Test_IntroObvious.thy", 10)
+def _test_intro_obvious(root: Root, file: MyIO):
+    """Reproduce: Intro splits A ∧ B ∧ C into subgoals, then Obvious
+    on a subgoal may generate infinite 'True' pending goals."""
+    print_header("Initial State", file)
+    root.print(0, file)
+    print_header("Overview", file)
+    root.quickview(0, file)
+
+    # The auto-Intro at step 1 should introduce premises P, Q, R
+    # and split the conjunction P ∧ Q ∧ R into subgoals.
+    # Try Obvious on the first subgoal (1.1.1).
+    root.session.age += 1
+    root.fill("1.1.1", Obvious.interactive_gen({"facts": []}))
+    print_header("After Obvious on 1.1.1", file)
+    root.print(0, file)
+    print_header("Overview after 1.1.1", file)
+    root.quickview(0, file)
+
+    # If the bug exists, a "True" pending goal appears in 1.1,
+    # requiring step 1.1.2 to be filled.
+    root.session.age += 1
+    try:
+        root.fill("1.1.2", Obvious.interactive_gen({"facts": []}))
+        print_header("After Obvious on 1.1.2 (True subgoal appeared)", file)
+        root.print(0, file)
+        print_header("Overview after 1.1.2", file)
+        root.quickview(0, file)
+    except Exception as e:
+        file.write(f"No step 1.1.2 needed (no bug): {type(e).__name__}: {e}\n")
+
+    # If the bug persists, yet another "True" would appear for 1.1.3.
+    root.session.age += 1
+    try:
+        root.fill("1.1.3", Obvious.interactive_gen({"facts": []}))
+        print_header("After Obvious on 1.1.3 (True subgoal appeared again)", file)
+        root.print(0, file)
+        print_header("Overview after 1.1.3", file)
+        root.quickview(0, file)
+    except Exception as e:
+        file.write(f"No step 1.1.3 needed (no bug): {type(e).__name__}: {e}\n")
+
+    # Now try to close the remaining subgoals 1.2 and 1.3.
+    root.session.age += 1
+    try:
+        root.fill("1.2.1", Obvious.interactive_gen({"facts": []}))
+        print_header("After Obvious on 1.2.1", file)
+        root.print(0, file)
+    except Exception as e:
+        file.write(f"Cannot fill 1.2.1: {type(e).__name__}: {e}\n")
+
+    root.session.age += 1
+    try:
+        root.fill("1.3.1", Obvious.interactive_gen({"facts": []}))
+        print_header("After Obvious on 1.3.1", file)
+        root.print(0, file)
+    except Exception as e:
+        file.write(f"Cannot fill 1.3.1: {type(e).__name__}: {e}\n")
+
+    print_header("Final Overview", file)
+    root.quickview(0, file)
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+
+@model_test("DeleteIntro", "Test_DeleteIntro.thy", 10)
+def _test_delete_intro(root: Root, file: MyIO):
+    """Reproduce: deleting the auto-Intro makes the proof appear complete
+    with no 'Error: Unfinished Proof' shown."""
+    print_header("Initial State", file)
+    root.print(0, file)
+    print_header("Overview", file)
+    root.quickview(0, file)
+
+    # Delete the auto-Intro (step 1)
+    root.session.age += 1
+    root.delete(["1"])
+    print_header("After deleting Intro", file)
+    root.print(0, file)
+    print_header("Overview after delete", file)
+    root.quickview(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+
+@model_test("ForeNodeFail", "Test_ForeNodeFail.thy", 13)
+def _test_ForeNodeFail(root: Root, file: MyIO):
+    """Test that nodes after a failed fore node get CANCELLED, not refreshed."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Step 1: Have with a valid statement (succeeds)
+    root.session.age += 1
+    root.fill("1", Have.gen({
+        "thought": "helper",
+        "statement": {"english": "x equals y", "isabelle": "x = y"},
+        "name": "lem1"
+    }))
+    root.fill("1.1", Obvious.interactive_gen({"facts": []}))
+    print_header("After step 1 (Have x=y, should succeed)", file)
+    root.print(0, file)
+
+    # Step 2: Have with INVALID Isabelle syntax (should FAIL)
+    root.session.age += 1
+    root.fill("2", Have.gen({
+        "thought": "intentionally bad step",
+        "statement": {"english": "invalid", "isabelle": "1 1 1"},
+        "name": "bad"
+    }))
+    step2 = root.locate_node("2")
+    file.write(f"Step 2 status: {step2.status.status.value}\n")
+    print_header("After step 2 (invalid Have, should fail)", file)
+    root.print(0, file)
+
+    # Step 3 (fill): Should be CANCELLED because step 2 failed
+    root.session.age += 1
+    root.fill("3", Obvious.interactive_gen({"facts": []}))
+    step3 = root.locate_node("3")
+    file.write(f"Step 3 status (fill after failed): {step3.status.status.value}\n")
+    assert step3.status.status == EvaluationStatus.Status.CANCELLED, \
+        f"fill: Expected CANCELLED but got {step3.status.status.value}"
+    print_header("After step 3 (fill, should be cancelled)", file)
+    root.print(0, file)
+
+    # Insert before step 3: predecessor is step 2 (FAILURE), should be CANCELLED
+    root.session.age += 1
+    inserted = root.insert_before("3", Have.gen({
+        "thought": "inserted step",
+        "statement": {"english": "x equals z", "isabelle": "x = z"},
+        "name": "lem2"
+    }))
+    file.write(f"Inserted step status (insert_before after failed): {inserted.status.status.value}\n")
+    assert inserted.status.status == EvaluationStatus.Status.CANCELLED, \
+        f"insert_before: Expected CANCELLED but got {inserted.status.status.value}"
+    print_header("After insert_before (should be cancelled)", file)
+    root.print(0, file)
+
+    # Amend step 2 to fix it (valid statement)
+    root.session.age += 1
+    root.amend("2", Have.gen({
+        "thought": "fixed step",
+        "statement": {"english": "y equals x", "isabelle": "y = x"},
+        "name": "lem_fixed"
+    }))
+    step2_fixed = root.locate_node("2")
+    file.write(f"Step 2 status after amend (should succeed): {step2_fixed.status.status.value}\n")
+    # After fixing step 2, subsequent steps should be refreshed (no longer CANCELLED)
+    step2A = root.locate_node("2A")
+    step3_after = root.locate_node("3")
+    file.write(f"Inserted step status after amend: {step2A.status.status.value}\n")
+    file.write(f"Step 3 status after amend: {step3_after.status.status.value}\n")
+    print_header("After amend (fix step 2, should refresh all after)", file)
+    root.print(0, file)
+
+
+@model_test("ProveInTime_ParseError", "Test_ProveInTime_ParseError.thy", 6)
+def _test_prove_in_time_parse_error(root: Root, file: MyIO):
+    """Reproduce: Obvious with an IsabelleFact_ProveInTime containing invalid
+    Isabelle syntax (as from a fork answering with bad text) should fail
+    gracefully, not raise an unhandled IsabelleError.
+
+    The bug: validate_prove_in_time raises IsabelleError for unparseable
+    statements inside _filter_unprovable → mk_node, which is not caught
+    by the driver, leaving working_interactions stuck."""
+    print_header("Initial State", file)
+    root.print(0, file)
+
+    # Get an ml_state we can use for validate_prove_in_time
+    ml_state = root.global_env.ml_state
+
+    # --- Test 1: validate_prove_in_time directly with ASCII statement ---
+    stmt_ascii = "if ?a < ?b then abs(?a - ?b) = ?b - ?a"
+    file.write(f"validate_prove_in_time(\"{stmt_ascii}\"):\n")
+    try:
+        results = ml_state.validate_prove_in_time([ascii_of_unicode(stmt_ascii)])
+        file.write(f"  returned: {results}\n")
+    except IsabelleError as e:
+        file.write(f"  UNCAUGHT IsabelleError: {e}\n")
+    except Exception as e:
+        file.write(f"  UNCAUGHT {type(e).__name__}: {e}\n")
+
+    # --- Test 2: validate_prove_in_time with Unicode ¦ (U+00A6) statement ---
+    stmt_unicode = "if ?a < ?b then \u00a6?a - ?b\u00a6 = ?b - ?a"
+    stmt_converted = ascii_of_unicode(stmt_unicode)
+    file.write(f"ascii_of_unicode(\"{stmt_unicode}\") = \"{stmt_converted}\"\n")
+    file.write(f"validate_prove_in_time(\"{stmt_converted}\"):\n")
+    try:
+        results = ml_state.validate_prove_in_time([stmt_converted])
+        file.write(f"  returned: {results}\n")
+    except IsabelleError as e:
+        file.write(f"  UNCAUGHT IsabelleError: {e}\n")
+    except Exception as e:
+        file.write(f"  UNCAUGHT {type(e).__name__}: {e}\n")
+
+    # --- Test 3: _filter_unprovable with bad ProveInTime ---
+    bad_pit = IsabelleFact_ProveInTime(stmt_ascii)
+    file.write(f"_filter_unprovable([ProveInTime(\"{stmt_ascii}\")]): ")
+    try:
+        kept, warnings = _filter_unprovable([bad_pit], ml_state)
+        file.write(f"kept={len(kept)}, warnings={warnings}\n")
+    except IsabelleError as e:
+        file.write(f"UNCAUGHT IsabelleError: {e}\n")
+    except Exception as e:
+        file.write(f"UNCAUGHT {type(e).__name__}: {e}\n")
+
+    # --- Test 4: _filter_unprovable with Unicode ¦ variant ---
+    bad_pit_unicode = IsabelleFact_ProveInTime(stmt_unicode)
+    file.write(f"_filter_unprovable([ProveInTime(unicode ¦ variant)]): ")
+    try:
+        kept, warnings = _filter_unprovable([bad_pit_unicode], ml_state)
+        file.write(f"kept={len(kept)}, warnings={warnings}\n")
+    except IsabelleError as e:
+        file.write(f"UNCAUGHT IsabelleError: {e}\n")
+    except Exception as e:
+        file.write(f"UNCAUGHT {type(e).__name__}: {e}\n")
+
+    # --- Test 5: Obvious.gen() with bad ProveInTime (HAMMER path) ---
+    root.session.age += 1
+    try:
+        root.fill("1", Obvious.gen(Obvious_InternalToolArg(facts=[bad_pit])))
+        file.write("Obvious created (should have failure status)\n")
+        node = root.locate_node("1")
+        file.write(f"Step 1 status: {node.status.status.value}\n")
+    except IsabelleError as e:
+        file.write(f"IsabelleError raised (BUG - should be caught): {e}\n")
+    except Exception as e:
+        file.write(f"Exception raised (BUG - should be caught): {type(e).__name__}: {e}\n")
+
+    print_header("After Obvious with bad ProveInTime", file)
+    root.print(0, file)
+    print_header("Overview", file)
+    root.quickview(0, file)
+
+    # Verify proof tree is still usable
+    root.session.age += 1
+    try:
+        root.fill("1" if root.locate_node("1").status.status != EvaluationStatus.Status.SUCCESS
+                  else "2",
+                  Obvious.interactive_gen({"facts": []}))
+        file.write("Subsequent fill succeeded (tree not stuck)\n")
+    except Exception as e:
+        file.write(f"Subsequent fill: {type(e).__name__}: {e}\n")
+
+    print_header("Final State", file)
+    root.print(0, file)
+
+
+@model_test("ObviousProofFail", "Test_ObviousProofFail.thy", 8)
+def _test_ObviousProofFail(root: Root, file: MyIO):
+    """Test that Have with proof='Obvious' where HAMMER fails doesn't crash quickview."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Have with an easy statement — Obvious should succeed
+    root.session.age += 1
+    root.fill("1", Have.gen({
+        "thought": "trivial identity",
+        "statement": {"english": "x equals x", "isabelle": "x = x"},
+        "name": "lem1",
+        "proof": "Obvious"
+    }))
+    print_header("After Have x=x (Obvious succeeds)", file)
+    root.print(0, file)
+
+    # Have with a hard/false statement — Obvious (HAMMER) should fail
+    root.session.age += 1
+    root.fill("2", Have.gen({
+        "thought": "this is false",
+        "statement": {"english": "x equals x plus one", "isabelle": "x = x + 1"},
+        "name": "bad",
+        "proof": "Obvious"
+    }))
+    print_header("After Have x=x+1 (Obvious fails)", file)
+    root.print(0, file)
+
+    # This quickview should not crash
+    print_header("Overview", file)
+    root.quickview(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+@model_test("HaveObviousProof", "Test_ObviousProof.thy", 8)
+def _test_HaveObviousProof(root: Root, file: MyIO):
+    """Test that Have with proof='Obvious' auto-creates an Obvious sub-node."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Have with proof: "Obvious" — Obvious sub-node should be auto-created
+    root.session.age += 1
+    root.fill("1", Have.gen({
+        "thought": "x times x is non-negative because x times x equals x squared",
+        "statement": {
+            "english": "x times x equals x squared",
+            "isabelle": "x * x = x^2"
+        },
+        "name": "sq",
+        "proof": "Obvious"
+    }))
+    print_header("After Have with proof=Obvious", file)
+    root.print(0, file)
+
+    # The remaining goal should still need a proof
+    root.session.age += 1
+    root.fill("2", Obvious.interactive_gen({"facts": []}))
+    print_header("After closing the remaining goal", file)
+    root.print(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+@model_test("SufficesObviousProof", "Test_SufficesObviousProof.thy", 8)
+def _test_SufficesObviousProof(root: Root, file: MyIO):
+    """Test that Suffices with proof='Obvious' auto-creates an Obvious sub-node."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    root.fill("1", Suffices.gen({
+        "thought": "It suffices to show a stronger statement",
+        "statement": {
+            "english": "x squared plus 1 is greater than 0",
+            "isabelle": "x * x + 1 > 0"
+        },
+        "proof": "Obvious"
+    }))
+    print_header("After Suffices with proof=Obvious", file)
+    root.print(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+@model_test("InductionObviousProof", "Test_ObviousProof_Induction.thy", 8)
+def _test_InductionObviousProof(root: Root, file: MyIO):
+    """Test that Induction with proof='Obvious' auto-creates Obvious in all case GoalNodes."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    root.fill("1", Induction.gen({
+        "thought": "Induction on list l",
+        "target_isabelle_term": "l",
+        "variables": [],
+        "proof": "Obvious"
+    }))
+    print_header("After Induction with proof=Obvious", file)
+    root.print(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
 def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None):
     import msgpack as mp

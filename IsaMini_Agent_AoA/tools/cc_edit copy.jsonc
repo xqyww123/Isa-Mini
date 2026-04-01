@@ -113,6 +113,9 @@
         { "$ref": "#/$defs/FactByStatement" }
       ]
     },
+    "SubProof": {
+      "enum": ["Obvious", "Given later"]
+    },
 
     "Obvious": {
       "additionalProperties": false,
@@ -147,13 +150,14 @@
         "thought": { "$ref": "#/$defs/Thought" },
         "statement": { "$ref": "#/$defs/Statement" },
         "name": { "type": "string", "description": "binding of the lemma" },
-        "proofs": { "$ref": "#/$defs/Proof" }
+        "proof": { "$ref": "#/$defs/SubProof" }
       },
       "required": [
         "operation",
         "thought",
         "statement",
-        "name"
+        "name",
+        "proof"
       ],
       "type": "object"
     },
@@ -176,13 +180,14 @@
           "type": "array",
           "items": { "$ref": "#/$defs/NamedStatement" }
         },
-        "proofs": { "$ref": "#/$defs/Proof" }
+        "proof": { "$ref": "#/$defs/SubProof" }
       },
       "required": [
         "operation",
         "thought",
         "variables",
-        "constraints"
+        "constraints",
+        "proof"
       ],
       "type": "object"
     },
@@ -201,9 +206,9 @@
             "type": "object",
             "properties": {
               "statement": { "$ref": "#/$defs/NamedStatement" },
-              "proof": { "$ref": "#/$defs/Proof" }
+              "proof": { "$ref": "#/$defs/SubProof" }
             },
-            "required": [ "statement" ]
+            "required": [ "statement", "proof" ]
           },
           "type": "array"
         }
@@ -225,12 +230,14 @@
           "type": "string"
         },
         "thought": { "$ref": "#/$defs/Thought" },
-        "target_isabelle_term": { "type": "string" }
+        "target_isabelle_term": { "type": "string" },
+        "proof": { "$ref": "#/$defs/SubProof" }
       },
       "required": [
         "operation",
         "thought",
-        "target_isabelle_term"
+        "target_isabelle_term",
+        "proof"
       ],
       "type": "object"
     },
@@ -291,13 +298,15 @@
             "required": [ "name", "status" ]
           },
           "type": "array"
-        }
+        },
+        "proof": { "$ref": "#/$defs/SubProof" }
       },
       "required": [
         "operation",
         "thought",
         "target_isabelle_term",
-        "variables"
+        "variables",
+        "proof"
       ],
       "type": "object"
     },
@@ -374,12 +383,13 @@
         "statement": {
           "$ref": "#/$defs/Statement"
         },
-        "proof_of_suffice": { "$ref": "#/$defs/Proof" }
+        "proof": { "$ref": "#/$defs/SubProof" }
       },
       "required": [
         "operation",
         "thought",
-        "statement"
+        "statement",
+        "proof"
       ],
       "type": "object"
     },
@@ -431,6 +441,40 @@
       "title": "Witness",
       "type": "object"
     },
+    "Intro": {
+      "additionalProperties": false,
+      "title": "Intro",
+      "description": "introduce universally quantified variables and premises from the proof goal",
+      "properties": {
+        "operation": {
+          "const": "Intro",
+          "type": "string"
+        },
+        "thought": { "$ref": "#/$defs/Thought" },
+        "variable_bindings": {
+          "description": "names to bind to the universally quantified variables, in order",
+          "items": { "type": "string" },
+          "type": "array"
+        },
+        "fact_bindings": {
+          "description": "names to bind to the premises, in order",
+          "items": { "type": "string" },
+          "type": "array"
+        },
+        "split": {
+          "type": "boolean",
+          "default": false,
+          "description": "whether to split conjunctions in the goal after introduction"
+        }
+      },
+      "required": [
+        "operation",
+        "thought",
+        "variable_bindings",
+        "fact_bindings"
+      ],
+      "type": "object"
+    },
     "Operation": {
       "anyOf": [
         { "$ref": "#/$defs/Obvious" },
@@ -443,12 +487,9 @@
         { "$ref": "#/$defs/Unfold" },
         { "$ref": "#/$defs/Witness" },
         { "$ref": "#/$defs/InferenceRule" },
-        { "$ref": "#/$defs/Suffices" }
+        { "$ref": "#/$defs/Suffices" },
+        { "$ref": "#/$defs/Intro" }
       ]
-    },
-    "Proof": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/Operation" }
     }
   },
   "type": "object",
@@ -466,7 +507,10 @@
       "type": "string",
       "description": "id of the target step"
     },
-    "proof": { "$ref": "#/$defs/Proof" }
+    "proof": { 
+      "type": "list",
+      "items": { "$ref": "#/$defs/Operation" }
+    }
   },
   "required": [
     "action",

@@ -80,7 +80,7 @@ val INTRO_CMD : command
 val TRANSPARENT_INTRO : operation
 
 (* Helper functions for INTRO *)
-val need_intro : thm -> bool
+val need_intro : bool -> thm -> bool
 val strip_meta_and_hol_hhf : term -> (string * typ) list * term list * term
 
 val apply : string -> context_tactic -> Time.time option -> stack -> stack
@@ -925,13 +925,13 @@ fun maintain (c,[]) = (c,[])
   | maintain (_, ENDBLK _ :: _) = raise BROKEN_INVARIANT
 
 
-fun need_intro st =
+fun need_intro consider_conj st =
   let fun need' (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ _) = true
         | need' (Const(\<^const_name>\<open>Pure.all\<close>, _) $ _) = true
         | need' (Const(\<^const_name>\<open>Trueprop\<close>, _) $ X) = need' X
         | need' (Const(\<^const_name>\<open>HOL.All\<close>, _) $ _) = true
         | need' (Const(\<^const_name>\<open>HOL.implies\<close>, _) $ _ $ _) = true
-        | need' (Const(\<^const_name>\<open>HOL.conj\<close>, _) $ _ $ _) = true
+        | need' (Const(\<^const_name>\<open>HOL.conj\<close>, _) $ _ $ _) = consider_conj
         | need' _ = false
    in case Thm.prop_of st
         of (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ G $ _) => need' G
@@ -1143,7 +1143,7 @@ fun split_conjs sequent =
 *)
 fun INTRO'' F mode bs (origin as (ctxt, HHF (st0, items) :: L)) =
     if Thm.no_prems st0 then (empty_items, origin)
-    else if need_intro st0
+    else if need_intro false st0
       then let val st = st0
                      |> Seq.REPEAT (Thm.biresolution NONE true
                               [(false, Thms.allI), (false, Thms.impI)] 1)

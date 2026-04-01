@@ -37,7 +37,7 @@ datatype ('term, 'thm, 'fact) command =
   | OBTAIN   of (string * string option) list (*vars*) * (string option * string) list (*constraints*)
   | SORRY    of Minilang.opt_var_names
   | HAMMER   of ('term, 'fact) extended_fact list (*with facts*)
-  | INTRO    of bindings option
+  | INTRO    of bindings option * bool (*split_conj*)
   | SIMPLIFY of ('term, 'fact) extended_fact list (*simp facts*) * bool (*use_system_simps*)
               * string list (*premise_names*) * bool (*simplify_goal*)
               * bindings option
@@ -67,7 +67,7 @@ exception INTRO_BINDINGS of {
 exception SIMPLIFY_FALLBACK_NOSYS
 
 val compute_bindings : Minilang.state -> string list -> string list -> bindings
-val check_need_intro : Minilang.state -> bool
+val check_need_intro : bool -> Minilang.state -> bool
 
 val string_of_term : Proof.context -> term -> string
 val string_of_type : Proof.context -> typ -> string
@@ -143,7 +143,7 @@ datatype ('term, 'thm, 'fact) command =
   | OBTAIN   of (string * string option) list (*vars*) * (string option * string) list (*constraints*)
   | SORRY    of Minilang.opt_var_names
   | HAMMER   of ('term, 'fact) extended_fact list (*with facts*)
-  | INTRO    of bindings option
+  | INTRO    of bindings option * bool (*split_conj*)
   | SIMPLIFY of ('term, 'fact) extended_fact list (*simp facts*) * bool (*use_system_simps*)
               * string list (*premise_names*) * bool (*simplify_goal*)
               * bindings option
@@ -194,28 +194,46 @@ fun string_of_type_full_sort ctxt =
 
 fun string_of_thm ctxt th = string_of_term ctxt (Thm.prop_of th)
 
+(* Unwrap Par_Exn: if all inner exceptions are ERROR, merge into one ERROR.
+   Syntax.read_prop/read_term use Par_List.map_independent internally, which wraps
+   exceptions in Par_Exn via release_all. This prevents handle ERROR from matching. *)
+fun release_par_error exn =
+  (case Par_Exn.dest exn of
+    SOME exns =>
+      let val msgs = map_filter (fn ERROR msg => SOME msg | _ => NONE) exns
+      in if null exns orelse length msgs <> length exns
+         then Exn.reraise exn
+         else error (String.concatWith "\n" msgs)
+      end
+  | NONE => Exn.reraise exn)
+
 (* Customized read functions with bound name deconfliction *)
 
 fun read_term ctxt s =
-  Syntax.read_term ctxt s
+  \<^try>\<open>Syntax.read_term ctxt s
+   catch exn => release_par_error exn\<close>
   |> Minilang.deconflict_bound_names ctxt
 
 fun read_terms ctxt ss =
-  Syntax.read_terms ctxt ss
+  \<^try>\<open>Syntax.read_terms ctxt ss
+   catch exn => release_par_error exn\<close>
   |> map (Minilang.deconflict_bound_names ctxt)
 
 fun read_terms_with_type ctxt ss =
   map (fn (typ, raw_tm) =>
       Const ("_type_constraint_", typ --> typ)
         $ Syntax.parse_term ctxt raw_tm) ss
-  |> Syntax.check_terms ctxt
+  |> (fn ts => \<^try>\<open>Syntax.check_terms ctxt ts
+       catch exn => release_par_error exn\<close>)
 
 fun read_prop ctxt s =
-  Syntax.read_prop ctxt s
+  \<^try>\<open>Syntax.read_prop ctxt s
+   catch exn => release_par_error exn\<close>
   |> Minilang.deconflict_bound_names ctxt
 
 fun read_props ctxt ss =
-  Syntax.read_props ctxt ss
+  \<^try>\<open>Syntax.read_props ctxt ss
+   catch exn => release_par_error exn\<close>
   |> map (Minilang.deconflict_bound_names ctxt)
 
 (* Extract types of leading existential quantifiers from a goal *)
@@ -239,9 +257,10 @@ fun get_witness_types s =
    in extract_leading_ex_types goal
   end
 
-fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (s:Minilang.state)
+fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (split_conj: bool) (s:Minilang.state)
   : bindings * Minilang.state =
   let
+    val s = s |> Minilang.map_context (Config.put Minilang.INTRO_split_conj split_conj)
     val ctxt = Minilang.context_of s
             |> Config.put Printer.show_markup false
     val st = Minilang.leading_proof_sequent_of s
@@ -253,7 +272,7 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (s:Minilang.s
     val report_missing = is_some opt_bindings
   in
     (* Step 1: Check if INTRO is applicable *)
-    if not (Minilang.need_intro st) then
+    if not (Minilang.need_intro split_conj st) then
       (([], []), s)
     else
       let
@@ -385,7 +404,7 @@ fun compute_bindings (s:Minilang.state) (var_names: string list) (fact_names: st
     val st = Minilang.leading_proof_sequent_of s
   in
     (* Check if there's a quantified goal *)
-    if not (Minilang.need_intro st) then
+    if not (Minilang.need_intro false st) then
       ([], [])
     else
       let
@@ -441,9 +460,9 @@ fun compute_bindings (s:Minilang.state) (var_names: string list) (fact_names: st
   end
 
 (* Check if the leading proof goal needs INTRO (i.e., has quantified variables or premises) *)
-fun check_need_intro (s:Minilang.state) : bool =
+fun check_need_intro consider_conj (s:Minilang.state) : bool =
   let val st = Minilang.leading_proof_sequent_of s
-   in Minilang.need_intro st
+   in Minilang.need_intro consider_conj st
   end
 
 fun AUTO_SIMPLIFY
@@ -734,8 +753,8 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
           in
             raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL, msg)
           end)
-    | INTRO opt_bindings =>
-        #2 (AUTO_INTRO counters opt_bindings s)
+    | INTRO (opt_bindings, split_conj) =>
+        #2 (AUTO_INTRO counters opt_bindings split_conj s)
     | SKIP => s
 
 local 

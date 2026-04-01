@@ -149,7 +149,7 @@ val unpacker =
                           unpackList (unpackPair (unpackString, unpackOption unpackString)),
                           unpackList (unpackPair (unpackOption unpackString, unpackString)))
      | "HAMMER"   => apfst HAMMER o unpackList unpack_extended_fact
-     | "INTRO"    => apfst INTRO o unpackOption unpack_bindings
+     | "INTRO"    => apfst INTRO o unpackPair (unpackOption unpack_bindings, unpackBool)
      | "SKIP"     => apfst (K SKIP) o unpackUnit
      | cmd => error("Unknown operation " ^ cmd)
   ) #> apfst snd
@@ -196,7 +196,7 @@ fun packer (SIMPLIFY data) =
       packPair (packString, pack_opt_var_names)
         ("SORRY", data)
   | packer (HAMMER data) = packPair (packString, packList pack_extended_fact) ("HAMMER", data)
-  | packer (INTRO data) = packPair (packString, packOption pack_bindings) ("INTRO", data)
+  | packer (INTRO data) = packPair (packString, packPair (packOption pack_bindings, packBool)) ("INTRO", data)
   | packer SKIP = packPair (packString, packUnit) ("SKIP", ())
 (* | packer (ROLLBACK data) = packPair (packString, packInt) ("ROLLBACK", data) *)
 

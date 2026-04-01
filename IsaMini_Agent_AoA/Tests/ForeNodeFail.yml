@@ -1,0 +1,258 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - z: int
+  - x: int
+premises:
+  - h1: y = x + (0 :: int)
+  - h2: z = y * (1 :: int)
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+variables:
+  - y: int
+goal: x = z
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+pending proof goal:
+  x = z
+--------------------------------------------------
+After step 1 (Have x=y, should succeed)
+--------------------------------------------------
+variables:
+  - z: int
+  - x: int
+premises:
+  - h1: y = x + (0 :: int)
+  - h2: z = y * (1 :: int)
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+variables:
+  - y: int
+goal: x = z
+proof:
+  - step id: 1
+    thought: helper
+    operation: Have
+    statement:
+      english: x equals y
+      isabelle: x = y
+    name: lem1
+    proof:
+      - step id: 1.1
+        operation: Obvious
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  x = z
+Step 2 status: failure
+--------------------------------------------------
+After step 2 (invalid Have, should fail)
+--------------------------------------------------
+variables:
+  - z: int
+  - x: int
+premises:
+  - h1: y = x + (0 :: int)
+  - h2: z = y * (1 :: int)
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+variables:
+  - y: int
+goal: x = z
+proof:
+  - step id: 1
+    thought: helper
+    operation: Have
+    statement:
+      english: x equals y
+      isabelle: x = y
+    name: lem1
+    proof:
+      - step id: 1.1
+        operation: Obvious
+  - step id: 2
+    thought: intentionally bad step
+    operation: Have
+    statement:
+      english: invalid
+      isabelle: 1 1 1
+    name: bad
+    Error: |
+      Fail to claim the intermediate subgoal because: Syntax Error in Term Language.
+      Type unification failed: No type arity fun :: one
+      
+      Type error in application: operator not of function type
+      
+      Operator:  1::??'a :: ??'a
+      Operand:   1::??'b :: ??'b
+      
+      Coercion Inference:
+      
+      Local coercion insertion on the operator failed:
+      No complex coercion from "??'a" to fun
+    proof: empty
+    Error: Evaluation suspended due to failures in the operations above
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  x = z
+Step 3 status (fill after failed): cancelled
+--------------------------------------------------
+After step 3 (fill, should be cancelled)
+--------------------------------------------------
+variables:
+  - z: int
+  - x: int
+premises:
+  - h1: y = x + (0 :: int)
+  - h2: z = y * (1 :: int)
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+variables:
+  - y: int
+goal: x = z
+proof:
+  - step id: 1
+    thought: helper
+    operation: Have
+    statement:
+      english: x equals y
+      isabelle: x = y
+    name: lem1
+    proof:
+      - step id: 1.1
+        operation: Obvious
+  - step id: 2
+    thought: intentionally bad step
+    operation: Have
+    statement:
+      english: invalid
+      isabelle: 1 1 1
+    name: bad
+    Error: |
+      Fail to claim the intermediate subgoal because: Syntax Error in Term Language.
+      Type unification failed: No type arity fun :: one
+      
+      Type error in application: operator not of function type
+      
+      Operator:  1::??'a :: ??'a
+      Operand:   1::??'b :: ??'b
+      
+      Coercion Inference:
+      
+      Local coercion insertion on the operator failed:
+      No complex coercion from "??'a" to fun
+    proof: empty
+    Error: Evaluation suspended due to failures in the operations above
+  - step id: 3
+    operation: Obvious
+    Error: the evaluation is cancelled due to failures in preceding nodesError: Unfinished Proof! Call command `edit` with action `fill` and target step `4` to provide the proof for the following goal.
+pending proof goal:
+  x = z
+Inserted step status (insert_before after failed): cancelled
+--------------------------------------------------
+After insert_before (should be cancelled)
+--------------------------------------------------
+variables:
+  - z: int
+  - x: int
+premises:
+  - h1: y = x + (0 :: int)
+  - h2: z = y * (1 :: int)
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+variables:
+  - y: int
+goal: x = z
+proof:
+  - step id: 1
+    thought: helper
+    operation: Have
+    statement:
+      english: x equals y
+      isabelle: x = y
+    name: lem1
+    proof:
+      - step id: 1.1
+        operation: Obvious
+  - step id: 2
+    thought: intentionally bad step
+    operation: Have
+    statement:
+      english: invalid
+      isabelle: 1 1 1
+    name: bad
+    Error: |
+      Fail to claim the intermediate subgoal because: Syntax Error in Term Language.
+      Type unification failed: No type arity fun :: one
+      
+      Type error in application: operator not of function type
+      
+      Operator:  1::??'a :: ??'a
+      Operand:   1::??'b :: ??'b
+      
+      Coercion Inference:
+      
+      Local coercion insertion on the operator failed:
+      No complex coercion from "??'a" to fun
+    proof: empty
+    Error: Evaluation suspended due to failures in the operations above
+  - step id: 2A
+    thought: inserted step
+    operation: Have
+    statement:
+      english: x equals z
+      isabelle: x = z
+    name: lem2
+    Error: the evaluation is cancelled due to failures in preceding nodes    proof: empty
+    Error: Evaluation suspended due to failures in the operations above
+  - step id: 3
+    operation: Obvious
+    Error: the evaluation is cancelled due to failures in preceding nodesError: Unfinished Proof! Call command `edit` with action `fill` and target step `4` to provide the proof for the following goal.
+pending proof goal:
+  x = z
+Step 2 status after amend (should succeed): success
+Inserted step status after amend: success
+Step 3 status after amend: success
+--------------------------------------------------
+After amend (fix step 2, should refresh all after)
+--------------------------------------------------
+variables:
+  - z: int
+  - x: int
+premises:
+  - h1: y = x + (0 :: int)
+  - h2: z = y * (1 :: int)
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+variables:
+  - y: int
+goal: x = z
+proof:
+  - step id: 1
+    thought: helper
+    operation: Have
+    statement:
+      english: x equals y
+      isabelle: x = y
+    name: lem1
+    proof:
+      - step id: 1.1
+        operation: Obvious
+  - step id: 2
+    thought: fixed step
+    operation: Have
+    statement:
+      english: y equals x
+      isabelle: y = x
+    name: lem_fixed
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
+    pending proof goal:
+      y = x
+  - step id: 2A
+    thought: inserted step
+    operation: Have
+    statement:
+      english: x equals z
+      isabelle: x = z
+    name: lem2
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2A.1` to provide the proof for the following goal.
+    pending proof goal:
+      x = z
+  - step id: 3
+    operation: Obvious

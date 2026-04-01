@@ -1,12 +1,6 @@
-(*
-  Authors: Albert Qiaochu Jiang
-*)
-
-theory Test_aime_1998_p3 imports
+theory Test_Obvious_partial_solve imports
   Complex_Main Minilang_Agent.Minilang_Agent
 begin
-
-(* declare [[agent_AoA_driver="test.Hammer_ProveInTime"]] *)
 
 theorem aime_1988_p3:
   fixes x :: real

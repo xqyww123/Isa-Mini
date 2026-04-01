@@ -1,8 +1,8 @@
 theory Minilang_Agent
-  imports Minilang.Minilang Isa_REPL.Isa_REPL Complex_Main Automation_Base.Automation_Base
+  imports Minilang.Minilang Isa_REPL.Isa_REPL Complex_Main
           Isabelle_RPC.Remote_Procedure_Calling Semantic_Embedding.Semantic_Embedding
 begin
-
+declare [[ML_debugger]]
 ML_file "helper.ML"
 ML_file "agent.ML"
 (* ML_file "agent.old.ML" *)

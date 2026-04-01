@@ -182,7 +182,7 @@ async def _edit_tool(args: ToolCall_arg) -> ToolCall_ret:
         return _mk_ret(response)
     except Exception as e:
         session.log_tool_response("mcp__proof__edit", f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
-        raise
+        os._exit(1)
 
 @tool("delete", "Delete proof steps", input_schema=_cc_delete_schema)
 async def _delete_tool(args: ToolCall_arg) -> ToolCall_ret:
@@ -215,7 +215,7 @@ async def _delete_tool(args: ToolCall_arg) -> ToolCall_ret:
         return _mk_ret(response)
     except Exception as e:
         session.log_tool_response("mcp__proof__delete", f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
-        raise
+        os._exit(1)
 
 @tool("answer", "Answer a pending question", input_schema=_cc_answer_schema)
 async def _answer_tool(args: ToolCall_arg) -> ToolCall_ret:
@@ -289,7 +289,7 @@ async def _answer_tool(args: ToolCall_arg) -> ToolCall_ret:
         return _mk_ret(str(final))
     except Exception as e:
         session.log_tool_response("mcp__proof__answer", f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
-        raise
+        os._exit(1)
 
 @tool("semantic_search",
       "Search for Isabelle entities by English description. MUST wrap formulas in backticks (like `ln 1`)",
@@ -333,7 +333,7 @@ async def _semantic_search_tool(args: ToolCall_arg) -> ToolCall_ret:
         return _mk_ret("\n".join(lines))
     except Exception as e:
         session.log_tool_response("mcp__proof__semantic_search", f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
-        raise
+        os._exit(1)
 
 @agent_driver("ClaudeCode")
 class ClaudeCode(Session):
@@ -429,7 +429,7 @@ class ClaudeCode(Session):
         # Build MCP tools — semantic query tools need the Isabelle connection
         connection = root.ml_state.connection
         tools = [
-            _edit_tool, _delete_tool, _answer_tool, # _semantic_search_tool,
+            _edit_tool, _delete_tool, _answer_tool, _semantic_search_tool,
             mk_query_by_name_tool(connection, []),
             mk_query_by_position_tool(connection, []),
         ]

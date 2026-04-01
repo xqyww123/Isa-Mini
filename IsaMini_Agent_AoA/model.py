@@ -23,6 +23,7 @@ type Var = tuple[varname, typ]
 type Hyp = tuple[varname, term]
 type Vars = dict[varname, typ]
 type Hyps = dict[varname, term]
+type SubProof = Literal["Obvious"] | Literal["Given later"]
 
 class Explicit_Var(TypedDict):
     name: varname
@@ -755,8 +756,8 @@ class Minilang_Operation(NamedTuple):
     def HAMMER(fact_refs: 'list[IsabelleFact]') -> 'Minilang_Operation':
         return Minilang_Operation("HAMMER", [r.pack() for r in fact_refs])
     @staticmethod
-    def INTRO(bindings: Bindings | None) -> 'Minilang_Operation':
-        return Minilang_Operation("INTRO", bindings)
+    def INTRO(bindings: Bindings | None, split: bool) -> 'Minilang_Operation':
+        return Minilang_Operation("INTRO", (bindings, split))
     @staticmethod
     def SIMPLIFY(fact_refs: 'list[IsabelleFact]', use_system_simps: bool, premise_names: list[str], simplify_goal: bool, bindings: tuple[list[tuple[str, str, str]], list[tuple[lambda_term, str, str]]] | None) -> 'Minilang_Operation':
         return Minilang_Operation("SIMPLIFY", ([r.pack() for r in fact_refs], use_system_simps, premise_names, simplify_goal, bindings))
@@ -850,6 +851,13 @@ class Minilang_State:
         ret = self.execute(Minilang_Operation.SKIP(), assign_to)
         ret.messages = self.messages
         return ret
+    def reset(self) -> None:
+        """Remove this state from the Isabelle state table and mark as uninitialized."""
+        try:
+            self.connection.callback("IsaMini.reset_state", self.name)
+        except:
+            pass
+        self.prooftree = None
     # def search_fact(self, dnf_criterions: list[list[Search_Criterion]]) -> FactRef:
     #     fact_ref_and_props = self.connection.callback("IsaMini.lookup_fact",
     #                                                    (self.name, dnf_criterions))
@@ -944,12 +952,12 @@ class Minilang_State:
         bindings_data = self.connection.callback("IsaMini.compute_bindings",
                                                   (self.name, var_names, fact_names))
         return Intro_Bindings_Msg._unpack_bindings(bindings_data)
-    def need_intro(self) -> bool:
+    def need_intro(self, consider_conj: bool) -> bool:
         """
         Check if the leading proof goal needs INTRO (i.e., has quantified variables or premises).
-        Returns True if the goal has quantifiers or premises that need to be introduced.
+        If consider_conj is True, also considers conjunction as needing intro.
         """
-        result = self.connection.callback("IsaMini.need_intro", self.name)
+        result = self.connection.callback("IsaMini.need_intro", (self.name, consider_conj))
         return result
     def _retrieve_facts_expr(self, names: list[str]) -> list[tuple[str, str, list[str]] | None]:
         """
@@ -1285,6 +1293,7 @@ class Node(ABC):
                 file.write("evaluation cancelled")
     def _print_warnings(self, indent: int, file: MyIO, positions: list[Warning.Position], show_at: bool = False) -> None:
         warnings = [warning for warning in self.warnings if warning.position in positions]
+        self.warnings[:] = [warning for warning in self.warnings if warning.position not in positions]
         match warnings:
             case []:
                 pass
@@ -1336,6 +1345,11 @@ class Node(ABC):
         else:
             return self.parent._resulting_state_of_child(self)
 
+    def _cancel(self) -> None:
+        if self.status.status == EvaluationStatus.Status.CANCELLED:
+            return
+        self.status = EVALUATION_CACNCELLED
+        self.resulting_state().reset()
     @abstractmethod
     def assemble(self, output: list[Minilang_Operation] | None = None) -> list[Minilang_Operation]:
         """
@@ -1356,13 +1370,16 @@ class Node(ABC):
         if self.parent is None:
             raise InternalError("Don't know how to refresh a node and all its after nodes when the node's parent is none")
         else:
-            self.parent._refresh_all_children_after(self)
+            self.parent._refresh_all_children_after(self, self.status.status == EvaluationStatus.Status.SUCCESS)
     def insert_before_me(self, gen_node: gen_node) -> 'Node':
         if self.parent is None:
             raise InternalError("Don't know how to refresh a node and all its after nodes when the node's parent is none")
         else:
             node = self.parent._insert_before_child(self, gen_node)
-            node._refresh_me_alone()
+            if self.parent._can_continue_before_child(node):
+                node._refresh_me_alone()
+            else:
+                node._cancel()
             node._refresh_all_after_me()
             return node
     def insert_before(self, step: step, gen_node: gen_node) -> 'Node':
@@ -1593,7 +1610,14 @@ class NonLeaf_Node(Node):
         raise InternalError("The target node is not my children")
     def _refresh_footer(self) -> FailureReason | None:
         return None
-    def _refresh_all_children_after(self, after: 'Node | Literal["end"]', can_continue_i: bool = True) -> None:
+    def _can_continue_before_child(self, child: 'Node') -> bool:
+        for i, c in enumerate(self.sub_nodes):
+            if c is child:
+                if i == 0:
+                    return True
+                return self.sub_nodes[i-1].status.status == EvaluationStatus.Status.SUCCESS
+        raise InternalError("The target node is not my children")
+    def _refresh_all_children_after(self, after: 'Node | Literal["end"]', can_continue_i: bool) -> None:
         """
         refreshing the status of all the nodes excluding and after the `after`
         """
@@ -1610,7 +1634,7 @@ class NonLeaf_Node(Node):
                         child._refresh_me_alone()
                         can_continue = child.status.status == EvaluationStatus.Status.SUCCESS
                     else:
-                        child.status = EVALUATION_CACNCELLED
+                        child._cancel()
         if can_continue is None:
             raise InternalError("Cannot find the target to refresh in my children")
         else:
@@ -1731,6 +1755,8 @@ class NonLeaf_Node(Node):
         for i, c in enumerate(self.sub_nodes):
             if c is child:
                 self.sub_nodes.pop(i)
+                if self._closed_by is child:
+                    self._closed_by = None
                 return
         raise InternalError("The target node is not my children")
     def _amend_child(self, child: 'Node', gen_node: gen_node) -> 'Node':
@@ -1742,7 +1768,10 @@ class NonLeaf_Node(Node):
                     raise CannotAmend(self, child, str(e))
                 self.sub_nodes[i] = new_node
                 new_node._amend_from(child)
-                new_node._refresh_me_alone()
+                if self._can_continue_before_child(new_node):
+                    new_node._refresh_me_alone()
+                else:
+                    new_node._cancel()
                 new_node._refresh_all_after_me()
                 return new_node
         raise InternalError("The target node is not my children")
@@ -1766,6 +1795,13 @@ class StdBlock(NonLeaf_Node):
         self._body_subnodes_succeeded = False
         self._allow_multi_goal = False
         self.open_pending_proof_line: int | None = None
+    def _cancel(self) -> None:
+        if self.status.status == EvaluationStatus.Status.CANCELLED:
+            return
+        super()._cancel()
+        self._state_before_ending_.reset()
+        for child in self.sub_nodes:
+            child._cancel()
     @abstractmethod
     def beginning_opr(self) -> 'Minilang_Operation | FailureReason | None':
         ...
@@ -1847,14 +1883,16 @@ class StdBlock(NonLeaf_Node):
         else:
             self.ml_state.clone(self._state_after_beginning())
         super()._refresh_me_alone()
+        failed_child: Node | None = None
         for child in self.sub_nodes:
             if can_continue:
                 child._refresh_me_alone()
                 can_continue = child.status.status == EvaluationStatus.Status.SUCCESS
                 if not can_continue:
                     reason = self._child_refresh_failure_err_msgs(child)
+                    failed_child = child
             else:
-                child.status = EVALUATION_CACNCELLED
+                child._cancel()
         if can_continue:
             reason = self._refresh_footer()
             if reason is not None:
@@ -1864,6 +1902,10 @@ class StdBlock(NonLeaf_Node):
             self.status = EvaluationStatus.Success(time() - now)
         elif head_succeeded:
             self._body_subnodes_succeeded = False
+            if failed_child is not None:
+                # Populate _state_before_ending_ with the last successful state
+                # (= the failing child's ml_state, which is the state before it ran)
+                failed_child.ml_state.clone(self._state_before_ending_)
             self._state_after_beginning().sorry(None, self.resulting_state())
             self.status = EvaluationStatus.Success(time() - now, reason)
         else:
@@ -1892,6 +1934,8 @@ class StdBlock(NonLeaf_Node):
         to_fill = self._id_of_openning_prf_to_fill()
         if to_fill is None:
             return None
+        if goals[0].conclusion == "True":
+            return None
         if len(goals) > 1 and not self._allow_multi_goal:
             raise InternalError("The open goals of StdBlock should not exceed one. "
             "To express multiple goals, you should use a StdBlock whose children are GoalNodes. See Rule as an example.")
@@ -1902,7 +1946,7 @@ class StdBlock(NonLeaf_Node):
             ptree = self._state_before_ending_.prooftree
             if ptree is None:
                 print_indent(indent, file)
-                file.write("Error: Evaluation suspended due to failures in the operations above\n")
+                file.write("Error: Evaluation cancelled due to failures above\n")
             else:
                 result = self.should_I_show_pending_goal()
                 if result is not None:
@@ -1961,9 +2005,9 @@ class StdBlock(NonLeaf_Node):
         if self.opening():
             ptree = self._state_before_ending_.prooftree
             if ptree is None:
-                raise InternalError("The state before ending is not initialized, meaning the node is not refreshed, "
-                "meaning the convention that all nodes should be freshed is broken.")
-            if ptree.top_goals() and self._id_of_openning_prf_to_fill() is not None:
+                print_indent(indent, file)
+                file.write("Error: Evaluation pending\n")
+            elif ptree.top_goals() and self._id_of_openning_prf_to_fill() is not None:
                 print_indent(indent, file)
                 if self.open_pending_proof_line is not None:
                     file.write(f"Error: Unfinished Proof (line {self.open_pending_proof_line})\n")
@@ -1991,15 +2035,19 @@ class StdBlock(NonLeaf_Node):
         if node is None:
             return None
         self.sub_nodes.append(node)
-        node._refresh_me_alone()
+        if self._can_continue_before_child(node):
+            node._refresh_me_alone()
+        else:
+            node._cancel()
+            return node
         if self.opening():
             def my_gen_node(config: NodeConfig) -> Node | None:
-                if config.ml_state.need_intro():
-                    return Intro(config, "", None)
+                if config.ml_state.need_intro(False):
+                    return Intro(config, "", None, False)
                 else:
                     return None
             ml_state = node.resulting_state()
-            if ml_state.need_intro():
+            if ml_state.need_intro(False):
                 self.append(my_gen_node)
         return node
 
@@ -2015,7 +2063,7 @@ class GoalContainer(NonLeaf_Node):
                 else:
                     return Minilang_Operation.END()
         raise InternalError("The given argument is not a child of this node")
-    def _refresh_all_children_after(self, after: 'Node | Literal["end"]', can_continue_i: bool = True) -> None:
+    def _refresh_all_children_after(self, after: 'Node | Literal["end"]', can_continue_i: bool) -> None:
         # Each subgoal in AoA is independent, so we don't need to refresh the children after the current node.
         return None
 
@@ -2029,7 +2077,7 @@ class GoalNode(StdBlock):
     case_vars: list[Var] | None
     case_hyps: list[Hyp] | None
 
-    def __init__(self, config: NodeConfig, is_single_goal: bool, show_goal: bool):
+    def __init__(self, config: NodeConfig, is_single_goal: bool, show_goal: bool, auto_proof: SubProof | None):
         # """
         # goal_index: starting from 0
         # """
@@ -2046,10 +2094,15 @@ class GoalNode(StdBlock):
         self.case_vars = None
         self.case_hyps = None
         # self.goal_index = goal_index
-    def goal(self) -> Goal:
+        if auto_proof == "Obvious":
+            local_step = self._local_step_of_next_proof_step()
+            ml_state = Minilang_State.assign(self.ml_state)
+            sub_config = NodeConfig(local_step, ml_state, self)
+            self.sub_nodes.append(Obvious(sub_config, Obvious_InternalToolArg(facts=[])))
+    def goal(self) -> Goal | None:
         ptree = self.ml_state.prooftree
         if ptree is None:
-            raise InternalError("The prooftree of the state is not initialized, meaning the node is not refreshed")
+            return None
         return ptree.top_goal()
     def id_of_goal(self) -> step | None:
         if self.is_single_goal:
@@ -2082,11 +2135,15 @@ class GoalNode(StdBlock):
         self._print_thought(indent, file)
         if self.show_goal:
             goal = self.goal()
-            if self.case_vars or self.case_hyps:
-                merged_vars = {v[0]: v[1] for v in (self.case_vars or [])} | goal.context.vars
-                merged_hyps = {h[0]: h[1] for h in (self.case_hyps or [])} | goal.context.hyps
-                goal = Goal(Context(merged_vars, merged_hyps), goal.conclusion)
-            print_goal(goal, indent, True, file, self._ctxt_before_me())
+            if goal is None:
+                print_indent(indent, file)
+                file.write("goal: unknown, evaluation pending\n")
+            else:
+                if self.case_vars or self.case_hyps:
+                    merged_vars = {v[0]: v[1] for v in (self.case_vars or [])} | goal.context.vars
+                    merged_hyps = {h[0]: h[1] for h in (self.case_hyps or [])} | goal.context.hyps
+                    goal = Goal(Context(merged_vars, merged_hyps), goal.conclusion)
+                print_goal(goal, indent, True, file, self._ctxt_before_me())
         self._print_evaluation_status(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
     def _print_step_id(self, indent: int, file: MyIO, update_line: bool = False) -> int:
@@ -2111,20 +2168,22 @@ class GoalNode(StdBlock):
                 raise InternalError(f"Expected exactly one Consider_Case_Msg in Case's messages, got {len(consider_case_msgs)}")
         if not is_init and (self.case_vars, self.case_hyps) != old_case:
             self.changed = True
-        if self._first_time and not self.sub_nodes and self.ml_state.need_intro():
+        if self._first_time and not self.sub_nodes and self.ml_state.need_intro(False):
             local_step = self._local_step_of_next_proof_step()
             ml_state = self.ml_state.clone(None)
             config = NodeConfig(local_step, ml_state, self)
-            intro = Intro(config, "", None)
+            intro = Intro(config, "", None, False)
             self.sub_nodes.append(intro)
         return super()._refresh_me_alone()
     def _fixed_vars_at_me(self, ret: Vars) -> Vars:
         goal = self.goal()
-        ret.update(goal.context.vars)
+        if goal is not None:
+            ret.update(goal.context.vars)
         return ret
     def _fixed_facts_at_me(self, ret: Hyps) -> Hyps:
         goal = self.goal()
-        ret.update(goal.context.hyps)
+        if goal is not None:
+            ret.update(goal.context.hyps)
         return ret
     def quickview_header(self, indent: int, file: MyIO) -> int:
         if self.is_single_goal:
@@ -2146,7 +2205,7 @@ class SubgoalMaker(GoalContainer, StdBlock):
     def _case_vars_of_child(self, child_ind: int) -> list[varname_spec] | None:
         return None
     def _new_goal_node(self, goal_index: int, ml_state: Minilang_State) -> GoalNode:
-        return GoalNode(NodeConfig(str(goal_index+self._initial_goal_index), ml_state, self), False, True)
+        return GoalNode(NodeConfig(str(goal_index+self._initial_goal_index), ml_state, self), False, True, None)
     def _on_regenerating_goals(self, goals: list[Goal]) -> None:
         pass
     def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
@@ -2208,10 +2267,12 @@ class CaseSplit_Like(SubgoalMaker_NoTailEnder):
     case_vars: list[Var] | None
     case_hyps: list[Hyp] | None
     case_name: str | None
-    def __init__(self, *args, **kwargs):
+    _initial_proof: SubProof
+    def __init__(self, *args, _initial_proof: SubProof, **kwargs):
         super().__init__(*args, **kwargs)
         self.case_vars = None
         self.case_hyps = None
+        self._initial_proof = _initial_proof
     def _case_vars_of_child(self, child_ind: int) -> list[varname_spec] | None:
         if self.sub_nodes:
             node = self.sub_nodes[child_ind]
@@ -2223,6 +2284,9 @@ class CaseSplit_Like(SubgoalMaker_NoTailEnder):
                 return [v[0] for v in self.case_vars] if self.case_vars is not None else None
             else:
                 raise InternalError("The child index is out of range")
+    def _new_goal_node(self, goal_index: int, ml_state: Minilang_State) -> GoalNode:
+        return GoalNode(NodeConfig(str(goal_index+self._initial_goal_index), ml_state, self), False, True,
+                        auto_proof=self._initial_proof if self._initial_proof == "Obvious" else None)
     def _rename_var(self, old_name: varname, new_name: varname) -> 'Node | None':
         if self.sub_nodes:
             return super()._rename_var(old_name, new_name)
@@ -2693,7 +2757,8 @@ class Rewrite(Leaf):
             print_var_bindings(self.bindings[0], indent, file, "fixing variables")
             print_fact_bindings(self.bindings[1], indent, file, "resulting premises")
 
-        if self.resulting_state().prooftree_of().top_goal().conclusion != self.ml_state.prooftree_of().top_goal().conclusion:
+        if self.status.status == EvaluationStatus.Status.SUCCESS and \
+                self.resulting_state().prooftree_of().top_goal().conclusion != self.ml_state.prooftree_of().top_goal().conclusion:
             prooftree = self.resulting_state().prooftree_of()
             print_indent(indent, file)
             file.write("goal changes into:\n")
@@ -2844,7 +2909,7 @@ class Have_ToolArg(TypedDict):
     thought: str
     statement: Statement
     name: str
-    #proof: list[gen_node]
+    proof: SubProof
 
 @proof_operation("Have", Have_ToolArg)
 class Have(StdBlock):
@@ -2852,6 +2917,11 @@ class Have(StdBlock):
         super().__init__(config, arg["thought"], [])
         self.statement = arg["statement"]
         self.name = arg["name"]
+        if arg["proof"] == "Obvious":
+            local_step = self._local_step_of_next_proof_step()
+            ml_state = Minilang_State.assign(self.ml_state)
+            sub_config = NodeConfig(local_step, ml_state, self)
+            self.sub_nodes.append(Obvious(sub_config, Obvious_InternalToolArg(facts=[])))
     @staticmethod
     def gen(arg : Have_ToolArg) -> gen_node:
         def mk(config: NodeConfig) -> 'Have':
@@ -2879,11 +2949,11 @@ class Have(StdBlock):
         fail = super()._refresh_the_beginning_opr(begin_opr)
         if fail is not None:
             return fail
-        if self._first_time and not self.sub_nodes and self._state_after_beginning().need_intro():
+        if self._first_time and not self.sub_nodes and self._state_after_beginning().need_intro(False):
             local_step = self._local_step_of_next_proof_step()
             ml_state = self._state_after_beginning().clone(None)
             config = NodeConfig(local_step, ml_state, self)
-            intro = Intro(config, "", None)
+            intro = Intro(config, "", None, False)
             self.sub_nodes.append(intro)
         return None
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
@@ -2904,13 +2974,18 @@ class Have(StdBlock):
 class Suffices_ToolArg(TypedDict):
     thought: str
     statement: Statement
-    #proof: list[gen_node]
+    proof: SubProof
 
 @proof_operation("Suffices", Suffices_ToolArg)
 class Suffices(StdBlock):
     def __init__(self, config: NodeConfig, arg : Suffices_ToolArg):
         super().__init__(config, arg["thought"], [])
         self.statement = arg["statement"]
+        if arg["proof"] == "Obvious":
+            local_step = self._local_step_of_next_proof_step()
+            ml_state = Minilang_State.assign(self.ml_state)
+            sub_config = NodeConfig(local_step, ml_state, self)
+            self.sub_nodes.append(Obvious(sub_config, Obvious_InternalToolArg(facts=[])))
     @staticmethod
     def gen(arg : Suffices_ToolArg) -> gen_node:
         def mk(config: NodeConfig) -> 'Suffices':
@@ -2949,7 +3024,7 @@ class Obtain_ToolArg(TypedDict):
     thought: str
     variables: list[Explicit_Var]
     constraints: list[NamedStatement]
-    #proof: list[gen_node]
+    proof: SubProof
 
 @proof_operation("Obtain", Obtain_ToolArg)
 class Obtain(StdBlock):
@@ -2957,6 +3032,11 @@ class Obtain(StdBlock):
         super().__init__(config, arg["thought"], [])
         self.variables = arg["variables"]
         self.constraints = arg["constraints"]
+        if arg["proof"] == "Obvious":
+            local_step = self._local_step_of_next_proof_step()
+            ml_state = Minilang_State.assign(self.ml_state)
+            sub_config = NodeConfig(local_step, ml_state, self)
+            self.sub_nodes.append(Obvious(sub_config, Obvious_InternalToolArg(facts=[])))
     @staticmethod
     def gen(arg : Obtain_ToolArg) -> gen_node:
         def mk(config: NodeConfig) -> 'Obtain':
@@ -3023,20 +3103,26 @@ class Obtain(StdBlock):
 
 class Intro_ToolArg(TypedDict):
     thought: str
-    variable_bindings: list[varname]
-    fact_bindings: list[varname]
+    variable_bindings: NotRequired[list[varname]]
+    fact_bindings: NotRequired[list[varname]]
+    split_conj: NotRequired[bool]
 
 @proof_operation("Intro", Intro_ToolArg)
 class Intro(SubgoalMaker_NoTailEnder):
-    def __init__(self, config: NodeConfig, thought: str, bindings: Bindings | None):
+    def __init__(self, config: NodeConfig, thought: str, bindings: Bindings | None, split_conj: bool):
         super().__init__(config, thought, [])
         self.bindings = bindings
+        self.split_conj = split_conj
         self.running_time = 0
     @staticmethod
     def gen(arg: Intro_ToolArg) -> gen_node:
         def mk(config: NodeConfig) -> 'Intro':
-            bindings = config.ml_state.compute_bindings(arg["variable_bindings"], arg["fact_bindings"])
-            return Intro(config, arg["thought"], bindings)
+            if "variable_bindings" in arg or "fact_bindings" in arg:
+                bindings = config.ml_state.compute_bindings(
+                    arg.get("variable_bindings", []), arg.get("fact_bindings", []))
+            else:
+                bindings = None
+            return Intro(config, arg["thought"], bindings, arg.get("split_conj", False))
         return mk
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         self._print_thought(indent, file)
@@ -3048,7 +3134,7 @@ class Intro(SubgoalMaker_NoTailEnder):
         self._print_evaluation_status(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
     def beginning_opr(self) -> Minilang_Operation:
-        return Minilang_Operation.INTRO(self.bindings)
+        return Minilang_Operation.INTRO(self.bindings, self.split_conj)
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         return FailureReason(f"Fail to introduce the variables and premises because: {"\n".join(err.errors)}")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
@@ -3226,12 +3312,11 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
         if len(self.sub_nodes) <= 1:
             s0 = self._state_after_beginning()
-            if s0.prooftree is None:
-                raise InternalError("The prooftree of the state after beginning is not initialized, meaning the node is not refreshed")
-            goal = s0.prooftree.top_goal()
-            print_indent(indent, file)
-            file.write("derived goal:\n")
-            print_goal(goal, indent+1, False, file, self._ctxt_before_me())
+            if s0.prooftree is not None:
+                goal = s0.prooftree.top_goal()
+                print_indent(indent, file)
+                file.write("derived goal:\n")
+                print_goal(goal, indent+1, False, file, self._ctxt_before_me())
     def beginning_opr(self) -> 'Minilang_Operation | FailureReason':
         if isinstance(self.rule_ref, IsabelleFact_Unfound):
             return FailureReason(f"Inference rule fact \"{self.rule_ref.name()}\" not found")
@@ -3254,15 +3339,15 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
 
 ### Branch
 
-# class Branch_Case_ToolArg(TypedDict):
-#     statement: NamedStatement
-#     proof: list[gen_node]
-# class Branch_ToolArg(TypedDict):
-#     thought: str
-#     cases: list[Branch_Case_ToolArg]
+class Branch_Case_ToolArg(TypedDict):
+    statement: NamedStatement
+    proof: SubProof
 class Branch_ToolArg(TypedDict):
     thought: str
-    cases: list[NamedStatement]
+    cases: list[Branch_Case_ToolArg]
+#class Branch_ToolArg(TypedDict):
+#    thought: str
+#    cases: list[NamedStatement]
 
 @proof_operation("Branch", Branch_ToolArg)
 class Branch(SubgoalMaker_NoTailEnder):
@@ -3283,10 +3368,19 @@ class Branch(SubgoalMaker_NoTailEnder):
         file.write("operation: Branch\n")
         self._print_evaluation_status(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
+    def _new_goal_node(self, goal_index: int, ml_state: Minilang_State) -> GoalNode:
+        case_index = goal_index - 1  # goal 0 = exhaustiveness, goals 1..N = cases
+        if 0 <= case_index < len(self.cases):
+            proof = self.cases[case_index]["proof"]
+            auto_proof = proof if proof == "Obvious" else None
+        else:
+            auto_proof = None
+        return GoalNode(NodeConfig(str(goal_index+self._initial_goal_index), ml_state, self), False, True,
+                        auto_proof=auto_proof)
     def beginning_opr(self) -> 'Minilang_Operation | FailureReason':
         if not self.cases:
             return FailureReason("Must specify at least one branching case.")
-        return Minilang_Operation.BRANCH([(case.get("name"), case['isabelle']) for case in self.cases])
+        return Minilang_Operation.BRANCH([(case["statement"].get("name"), case["statement"]["isabelle"]) for case in self.cases])
     def ending_opr(self):
         return None
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
@@ -3307,11 +3401,12 @@ class Branch(SubgoalMaker_NoTailEnder):
 class CaseSplit_ToolArg(TypedDict):
     thought: str
     target_isabelle_term: str
+    proof: SubProof
 
 @proof_operation("CaseSplit", CaseSplit_ToolArg)
 class CaseSplit(CaseSplit_Like):
     def __init__(self, config: NodeConfig, arg: CaseSplit_ToolArg):
-        super().__init__(config, arg["thought"], [])
+        super().__init__(config, arg["thought"], [], _initial_proof=arg["proof"])
         self.target_isabelle_term = arg["target_isabelle_term"]
     def quickview_title(self) -> str:
         return f"CaseSplit {self.target_isabelle_term}"
@@ -3356,12 +3451,13 @@ class Induction_ToolArg(TypedDict):
     target_isabelle_term: str
     rule: NotRequired[Induction_Rule]  # default: 'default'
     variables: list[Induction_ToolArg_Variable]
+    proof: SubProof
 
 @proof_operation("Induction", Induction_ToolArg)
 class Induction(CaseSplit_Like):
     # TODO: processing the rule
     def __init__(self, config: NodeConfig, arg: Induction_ToolArg):
-        super().__init__(config, arg["thought"], [])
+        super().__init__(config, arg["thought"], [], _initial_proof=arg["proof"])
         self.arg = arg
         self.target_isabelle_term = arg["target_isabelle_term"]
         self.rule = arg.get("rule", "default")
@@ -3512,7 +3608,7 @@ class Root(GoalContainer, StdBlock):
                 goal_id = ""
             else:
                 goal_id = f"goal{i+1}"
-            goal_node = GoalNode(NodeConfig(goal_id, ml_state, self), is_single_goal, True)
+            goal_node = GoalNode(NodeConfig(goal_id, ml_state, self), is_single_goal, True, None)
             goal_node.id = goal_id
             self.sub_nodes.append(goal_node)
             ml_state = ml_state.sorry(None, None)

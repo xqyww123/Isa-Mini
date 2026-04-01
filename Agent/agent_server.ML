@@ -266,6 +266,15 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         timeout = SOME (Time.fromSeconds 600)
       }
 
+      val reset_state_callback = {
+        name = "IsaMini.reset_state",
+        arg_schema = unpackString,
+        ret_schema = packUnit,
+        function = (fn state_id =>
+          (state := Symtab.delete_safe state_id (!state); ())),
+        timeout = NONE
+      }
+
       val lookup_fact_callback = {
         name = "IsaMini.lookup_fact",
         arg_schema = unpackPair (unpackString, unpackList (unpackList (unpackPair (unpackBool, unpack_criterion)))),
@@ -355,11 +364,11 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
 
       val need_intro_callback = {
         name = "IsaMini.need_intro",
-        arg_schema = unpackString,
+        arg_schema = unpackPair (unpackString, unpackBool),
         ret_schema = packBool,
-        function = (fn state_id =>
+        function = (fn (state_id, consider_conj) =>
           let val s0 = get_state state_id
-           in MiniLang_Agent.check_need_intro s0
+           in MiniLang_Agent.check_need_intro consider_conj s0
           end),
         timeout = NONE
       }
@@ -440,15 +449,16 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         function = (fn (state_id, stmts) =>
           let val s0 = get_state state_id
               val ctxt = Minilang.context_of s0
-          in map (fn stmt =>
-              (let val prop = MiniLang_Agent.read_prop ctxt stmt
+          in map (fn stmt => \<^try>\<open>
+               let val prop = MiniLang_Agent.read_prop ctxt stmt
                    val goal = Goal.init (Thm.cterm_of ctxt prop)
                    val _ = Phi_Sledgehammer_Solver.auto true
                              Sledgehammer_Fact.no_fact_override NONE
                              (SOME (Time.fromSeconds 10)) ctxt goal
                in NONE end
-               handle ERROR msg => SOME (REPL.trim_makrup msg)
-                    | Timeout.TIMEOUT _ => SOME "Timed out")
+               catch ERROR msg => SOME (REPL.trim_makrup msg)
+                   | Timeout.TIMEOUT _ => SOME "Timed out"
+                   | e => raise e\<close>
             ) stmts
           end),
         timeout = NONE
@@ -492,6 +502,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         timeout = NONE,
         callback = [
           mk_callback proof_opr_callback,
+          mk_callback reset_state_callback,
           mk_callback lookup_fact_callback,
           mk_callback retrieve_fact_callback,
           mk_callback retrieve_constant_callback,

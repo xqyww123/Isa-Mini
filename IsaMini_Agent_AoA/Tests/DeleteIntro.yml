@@ -1,0 +1,67 @@
+--------------------------------------------------
+Initial State
+--------------------------------------------------
+variables:
+  - R: bool
+  - Q: bool
+  - P: bool
+premises:
+  - assms(1): P
+  - assms(2): Q
+  - assms(3): R
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: P ∧ Q ∧ R
+proof:
+  - step id: 1
+    operation: Intro
+    goals:
+      - goal id: 1.1
+        goal: P
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1` to provide the proof for the following goal.
+        pending proof goal:
+          P
+      - goal id: 1.2
+        goal: Q
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.1` to provide the proof for the following goal.
+        pending proof goal:
+          Q
+      - goal id: 1.3
+        goal: R
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.3.1` to provide the proof for the following goal.
+        pending proof goal:
+          R
+--------------------------------------------------
+Overview
+--------------------------------------------------
+step 1: Intro (line 0)
+  goal 1.1 (line 0)
+    Error: Unfinished Proof (line 21)
+  goal 1.2 (line 0)
+    Error: Unfinished Proof (line 27)
+  goal 1.3 (line 0)
+    Error: Unfinished Proof (line 33)
+--------------------------------------------------
+After deleting Intro
+--------------------------------------------------
+variables:
+  - R: bool
+  - Q: bool
+  - P: bool
+premises:
+  - assms(1): P
+  - assms(2): Q
+  - assms(3): R
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: P ∧ Q ∧ R
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+pending proof goal:
+  P ∧ Q ∧ R
+--------------------------------------------------
+Overview after delete
+--------------------------------------------------
+Error: Unfinished Proof (line 60)
+Unfinished nodes: 1

@@ -1,0 +1,62 @@
+--------------------------------------------------
+Initial State
+--------------------------------------------------
+variables:
+  - x: int
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: (0 :: int) ≤ x * x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+pending proof goal:
+  (0 :: int) ≤ x * x
+validate_prove_in_time("if ?a < ?b then abs(?a - ?b) = ?b - ?a"):
+  UNCAUGHT IsabelleError: ['Inner syntax error: unexpected end of input\nFailed to parse prop']
+ascii_of_unicode("if ?a < ?b then ¦?a - ?b¦ = ?b - ?a") = "if ?a < ?b then \<bar>?a - ?b\<bar> = ?b - ?a"
+validate_prove_in_time("if ?a < ?b then \<bar>?a - ?b\<bar> = ?b - ?a"):
+  UNCAUGHT IsabelleError: ['Inner syntax error: unexpected end of input\nFailed to parse prop']
+_filter_unprovable([ProveInTime("if ?a < ?b then abs(?a - ?b) = ?b - ?a")]): UNCAUGHT NameError: name '_filter_unprovable' is not defined
+_filter_unprovable([ProveInTime(unicode ¦ variant)]): UNCAUGHT NameError: name '_filter_unprovable' is not defined
+Obvious created (should have failure status)
+Step 1 status: failure
+--------------------------------------------------
+After Obvious with bad ProveInTime
+--------------------------------------------------
+variables:
+  - x: int
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    operation: Obvious
+    with facts:
+      - if ?a < ?b then abs(?a - ?b) = ?b - ?a
+    Error: |
+      Inner syntax error: unexpected end of input
+      Failed to parse prop
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  (0 :: int) ≤ x * x
+--------------------------------------------------
+Overview
+--------------------------------------------------
+step 1: Obvious (failed, line 0)
+Error: Unfinished Proof (line 36)
+Subsequent fill: CannotFill_BadNode: Cannot fill a node with id 1
+--------------------------------------------------
+Final State
+--------------------------------------------------
+variables:
+  - x: int
+You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    operation: Obvious
+    with facts:
+      - if ?a < ?b then abs(?a - ?b) = ?b - ?a
+    Error: |
+      Inner syntax error: unexpected end of input
+      Failed to parse prop
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  (0 :: int) ≤ x * x
