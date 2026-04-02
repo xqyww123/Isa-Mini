@@ -12,7 +12,7 @@
     },
     "query": {
       "type": "string",
-      "description": "English description of the entity to search for.",
+      "description": "English description of the entity to search for. MUST wrap formulas in backticks (like `ln 1`)",
       "default": ""
     },
     "k": {
@@ -36,6 +36,12 @@
       "type": "array",
       "items": { "type": "string" },
       "description": "Constrain results to the given theories (short or full names).",
+      "default": []
+    },
+    "name_contains": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Constrain entities' names to contain all of these substrings (case-insensitive).",
       "default": []
     }
   },

@@ -44,8 +44,34 @@ Constants with type_patterns=["real => real"]: 5 results, 0 warnings
   0.516 constant NthRoot.sqrt: real ⇒ real
   0.470 constant Transcendental.arcsin: real ⇒ real
 Empty patterns: 5 results, 0 warnings
+With name_contains=["ln"]: 10 results
+  0.712 lemma Transcendental.ln_inverse: 0 < ?x ⟹ ln (inverse ?x) = - ln ?x
+  0.709 lemma Transcendental.ln_realpow: 0 < ?x ⟹ ln (?x ^ ?n) = real ?n * ln ?x
+  0.708 lemma Transcendental.log_ln: ln ?x = log (exp 1) ?x
+  0.699 lemma Transcendental.ln_root: ⟦0 < ?n; 0 < ?b⟧ ⟹ ln (root ?n ?b) = ln ?b / real ?n
+  0.683 lemma Transcendental.ln_powr: ?x ≠ 0 ⟹ ln (?x powr ?y) = ?y * ln ?x
+  0.668 lemma Transcendental.ln_div: ⟦0 < ?x; 0 < ?y⟧ ⟹ ln (?x / ?y) = ln ?x - ln ?y
+  0.666 lemma Transcendental.ln_mult: ⟦0 < ?x; 0 < ?y⟧ ⟹ ln (?x * ?y) = ln ?x + ln ?y
+  0.663 lemma Transcendental.ln_powr_bound: ⟦1 ≤ ?x; 0 < ?a⟧ ⟹ ln ?x ≤ ?x powr ?a / ?a
+  0.661 lemma Transcendental.ln_class.ln_one: ln (1::?'a) = (0::?'a)
+  0.659 lemma Transcendental.ln_less_zero: ⟦0 < ?x; ?x < 1⟧ ⟹ ln ?x < 0
+With name_contains=["ln", "real"]: 2 results
+  0.709 lemma Transcendental.ln_realpow: 0 < ?x ⟹ ln (?x ^ ?n) = real ?n * ln ?x
+  0.617 lemma Transcendental.ln_real_def: ln ?x = (THE u. exp u = ?x)
+Constants with name_contains=["ln"]: 1 results
+  0.619 constant Transcendental.ln_class.ln: ?'a::ln ⇒ ?'a::ln
+Pattern-only with limit=3, name_contains=["ln"]: 3 results
+  lemma Order_Relation.lnear_order_on_empty: linear_order_on {} {}
+  lemma Series.norm_summable_ln_series: norm ?z < 1 ⟹ summable (λn. norm (?z ^ n / of_nat n))
+  lemma Transcendental.DERIV_ln: 0 < ?x ⟹ (ln has_real_derivative inverse ?x) (at ?x)
+Pattern-only with limit=1: 1 results
 Invalid theory name error: ['Unknown ancestor theory "Nonexistent_Theory_XYZ"']
-Invalid term pattern error: ['Inner syntax error\x05\x06no_report\x05\n\x05\x06block\x06indent=2\x05at\x05\x06break\x06width=1\x05 \x05\x06\x05\x05\x06block\x06indent=2\x05"\\<rbrakk>\x05\x06break\x06width=1\x05 \x05\x06\x05?\x05\x06break\x06width=1\x05 \x05\x06\x05?\x05\x06break\x06width=1\x05 \x05\x06\x05?\x05\x06break\x06width=1\x05 \x05\x06\x05bad\x05\x06break\x06width=1\x05 \x05\x06\x05syntax"\x05\x06\x05\x05\x06\x05\x05\x06\x05\nFailed to parse term']
-Invalid type pattern error: ['Undefined type name: "not_a_real_type_XYZ"\nFailed to parse type']
+Invalid term pattern: 5 results, 1 warnings
+  Warning: Inner syntax error
+at "? ? ? bad syntax"
+Failed to parse term
+Invalid type pattern: 5 results, 1 warnings
+  Warning: Undefined type name: "not_a_real_type_XYZ"
+Failed to parse type
 Misspelled pattern: 0 results, 1 warnings
   Warning: Term pattern "misspeled_ln ?x" contains undeclared free variable: "misspeled_ln". It is likely a misspelled constant.

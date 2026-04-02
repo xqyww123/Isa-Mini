@@ -1058,6 +1058,54 @@ def _test_semantic_knn_patterns(root: Root, file: MyIO):
     assert len(results_empty) == len(results_base), "Empty patterns should match baseline"
     assert not warnings_empty, "Expected no warnings for empty patterns"
 
+    # 6b. name_contains: single substring
+    results_nc, warnings_nc = ml.semantic_knn("logarithm", 10, [EntityKind.THEOREM],
+                                    name_contains=["ln"])
+    file.write(f"With name_contains=[\"ln\"]: {len(results_nc)} results\n")
+    for score, rec in results_nc:
+        file.write(f"  {score:.3f} {rec.pretty_print}\n")
+        assert "ln" in rec.name.lower(), f"Expected 'ln' in name: {rec.name}"
+    assert len(results_nc) > 0, "Expected at least one result with name containing 'ln'"
+
+    # 6c. name_contains: multiple substrings (conjunction)
+    results_nc2, warnings_nc2 = ml.semantic_knn("logarithm", 10, [EntityKind.THEOREM],
+                                    name_contains=["ln", "real"])
+    file.write(f"With name_contains=[\"ln\", \"real\"]: {len(results_nc2)} results\n")
+    for score, rec in results_nc2:
+        file.write(f"  {score:.3f} {rec.pretty_print}\n")
+        assert "ln" in rec.name.lower() and "real" in rec.name.lower(), \
+            f"Expected both 'ln' and 'real' in name: {rec.name}"
+    assert len(results_nc2) <= len(results_nc), "Conjunction should narrow results"
+
+    # 6d. name_contains with constants
+    results_nc_c, warnings_nc_c = ml.semantic_knn("logarithm", 5, [EntityKind.CONSTANT],
+                                    name_contains=["ln"])
+    file.write(f"Constants with name_contains=[\"ln\"]: {len(results_nc_c)} results\n")
+    for score, rec in results_nc_c:
+        file.write(f"  {score:.3f} {rec.pretty_print}\n")
+        assert "ln" in rec.name.lower(), f"Expected 'ln' in name: {rec.name}"
+
+    # 6e. Empty name_contains = same as baseline
+    results_nc_e, _ = ml.semantic_knn("logarithm power", 5, [EntityKind.THEOREM],
+                                    name_contains=[])
+    assert len(results_nc_e) == len(results_base), "Empty name_contains should match baseline"
+
+    # 6f. Pattern-only search (query=None) with limit
+    results_lim, warnings_lim = ml.semantic_knn(None, 3, [EntityKind.THEOREM],
+                                    name_contains=["ln"])
+    file.write(f"Pattern-only with limit=3, name_contains=[\"ln\"]: {len(results_lim)} results\n")
+    for _, rec in results_lim:
+        file.write(f"  {rec.pretty_print}\n")
+        assert "ln" in rec.name.lower(), f"Expected 'ln' in name: {rec.name}"
+    assert len(results_lim) <= 3, f"Expected at most 3 results, got {len(results_lim)}"
+    assert len(results_lim) > 0, "Expected at least one result"
+
+    # 6g. Pattern-only with limit=1 returns exactly 1
+    results_lim1, _ = ml.semantic_knn(None, 1, [EntityKind.THEOREM],
+                                    name_contains=["ln"])
+    file.write(f"Pattern-only with limit=1: {len(results_lim1)} results\n")
+    assert len(results_lim1) == 1, f"Expected exactly 1 result, got {len(results_lim1)}"
+
     # --- Error cases ---
     from Isabelle_RPC_Host.rpc import IsabelleError
 
@@ -1069,21 +1117,23 @@ def _test_semantic_knn_patterns(root: Root, file: MyIO):
     except IsabelleError as e:
         file.write(f"Invalid theory name error: {e}\n")
 
-    # 8. Invalid term pattern (unparseable)
-    try:
-        ml.semantic_knn("logarithm", 5, [EntityKind.THEOREM],
-                        term_patterns=["\\<lbrakk>\\<rbrakk> ??? bad syntax"])
-        assert False, "Expected IsabelleError for invalid term pattern"
-    except IsabelleError as e:
-        file.write(f"Invalid term pattern error: {e}\n")
+    # 8. Invalid term pattern (unparseable) → warning, not error
+    results_bad_term, warnings_bad_term = ml.semantic_knn("logarithm", 5, [EntityKind.THEOREM],
+                        term_patterns=["1 2 3 ??? bad syntax"])
+    file.write(f"Invalid term pattern: {len(results_bad_term)} results, {len(warnings_bad_term)} warnings\n")
+    for w in warnings_bad_term:
+        file.write(f"  Warning: {w}\n")
+    assert len(warnings_bad_term) > 0, "Expected warning for invalid term pattern"
+    assert '\x05' not in warnings_bad_term[0], "YXML not stripped from warning"
 
-    # 9. Invalid type pattern (unparseable)
-    try:
-        ml.semantic_knn("logarithm", 5, [EntityKind.CONSTANT],
+    # 9. Invalid type pattern (unparseable) → warning, not error
+    results_bad_type, warnings_bad_type = ml.semantic_knn("logarithm", 5, [EntityKind.CONSTANT],
                         type_patterns=["not_a_real_type_XYZ"])
-        assert False, "Expected IsabelleError for invalid type pattern"
-    except IsabelleError as e:
-        file.write(f"Invalid type pattern error: {e}\n")
+    file.write(f"Invalid type pattern: {len(results_bad_type)} results, {len(warnings_bad_type)} warnings\n")
+    for w in warnings_bad_type:
+        file.write(f"  Warning: {w}\n")
+    assert len(warnings_bad_type) > 0, "Expected warning for invalid type pattern"
+    assert '\x05' not in warnings_bad_type[0], "YXML not stripped from warning"
 
     # 10. Misspelled constant → warning about undeclared free variable (not error)
     results_misspell, warnings_misspell = ml.semantic_knn("logarithm", 5, [EntityKind.THEOREM],
@@ -1097,32 +1147,59 @@ def _test_semantic_knn_patterns(root: Root, file: MyIO):
 
 @model_test("SemanticKNN_lexerr", "Test_SemanticKNN_lexerr.thy", 8)
 def _test_semantic_knn_lexerr(root: Root, file: MyIO):
-    """Reproduce: semantic_knn with term_patterns=['¬ coprime'] raises IsabelleError
-    (inner lexical error) that crashes the driver via os._exit(1).
-    See: agent log 2026-04-01, sqrt(2) irrationality proof attempt."""
-    from Isabelle_RPC_Host.rpc import IsabelleError
+    """semantic_knn with invalid unicode term pattern returns warnings, not crash.
+    Reproduces agent log 2026-04-01: term_patterns=['¬ coprime'] caused os._exit(1)."""
     from Isabelle_RPC_Host.universal_key import EntityKind
     ml = root.ml_state
 
-    # This is the exact call from the failing agent log:
-    #   mcp__proof__semantic_search: {
-    #     'kinds': ['lemma'],
-    #     'query': 'not coprime if both divisible by 2',
-    #     'term_patterns': ['¬ coprime'], 'k': 5
-    #   }
-    # In driver_claude_code.py:334, IsabelleError is caught by the generic
-    # `except Exception` handler which logs "UNEXPECTED ERROR" and calls os._exit(1),
-    # instead of returning a user-friendly error to the model.
-    try:
-        results, warnings = ml.semantic_knn(
-            "not coprime if both divisible by 2", 5, [EntityKind.THEOREM],
-            term_patterns=["¬ coprime"])
-        assert False, "Expected IsabelleError for invalid term pattern '¬ coprime'"
-    except IsabelleError as e:
-        file.write(f"IsabelleError (expected): {e}\n")
-        error_str = str(e)
-        assert "parse" in error_str.lower() or "lexical" in error_str.lower() or "error" in error_str.lower(), \
-            f"Expected parse/lexical error, got: {error_str}"
+    # This is the exact call from the failing agent log.
+    # After fix: unicode '¬' is converted to '\\<not>' by ascii_of_unicode,
+    # Isabelle parse error is caught on ML side and returned as a warning.
+    results, warnings = ml.semantic_knn(
+        "not coprime if both divisible by 2", 5, [EntityKind.THEOREM],
+        term_patterns=["¬ coprime"])
+    file.write(f"Results: {len(results)}, Warnings: {warnings}\n")
+    assert len(warnings) > 0, "Expected warning about parse failure"
+    for w in warnings:
+        assert '\x05' not in w and '\x06' not in w, f"YXML not stripped: {w!r}"
+
+
+@model_test("IntroSplitConj", "Test_IntroSplitConj.thy", 10)
+def _test_intro_split_conj(root: Root, file: MyIO):
+    """Test Intro with split_conj=True splits P ∧ Q ∧ R into separate subgoals."""
+    print_header("Initial State", file)
+    root.print(0, file)
+    print_header("Overview", file)
+    root.quickview(0, file)
+
+    # After auto-Intro (step 1) introduces premises P, Q, R,
+    # the remaining goal is P ∧ Q ∧ R.
+    # Apply Intro with split_conj=True to split the conjunction.
+    root.session.age += 1
+    root.fill("1", Intro.gen({
+        "thought": "Split conjunction into separate subgoals",
+        "split_conj": True
+    }))
+    print_header("After Intro split_conj=True", file)
+    root.print(0, file)
+    print_header("Overview after split", file)
+    root.quickview(0, file)
+
+    # Close each subgoal with Obvious
+    for i in range(1, 4):
+        root.session.age += 1
+        try:
+            root.fill(f"1.{i}.1", Obvious.interactive_gen({"facts": []}))
+        except Exception as e:
+            file.write(f"Cannot fill 1.{i}.1: {type(e).__name__}: {e}\n")
+    print_header("After closing subgoals", file)
+    root.print(0, file)
+    print_header("Final overview", file)
+    root.quickview(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
 
 @model_test("IntroObvious", "Test_IntroObvious.thy", 10)

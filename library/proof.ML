@@ -75,7 +75,7 @@ val cat_items : items -> items -> items
 val get_local_facts : state -> local_facts
 
 datatype intros_mode = ALL_SUBGOALS | SINGLE_GOAL
-val INTRO : intros_mode -> opt_var_names -> opt_prem_names -> state -> items * state
+val INTRO : intros_mode -> bool option -> opt_var_names -> opt_prem_names -> state -> items * state
 val INTRO_CMD : command
 val TRANSPARENT_INTRO : operation
 
@@ -1141,9 +1141,10 @@ fun split_conjs sequent =
         If SOME bindings, uses the provided names for introduced quantified variables.
         If NONE, uses default variable names from the goal.
 *)
-fun INTRO'' F mode bs (origin as (ctxt, HHF (st0, items) :: L)) =
-    if Thm.no_prems st0 then (empty_items, origin)
-    else if need_intro false st0
+fun INTRO'' F mode split_conj_opt bs (origin as (ctxt, HHF (st0, items) :: L)) =
+    let val do_split_conj = case split_conj_opt of SOME b => b | NONE => Config.get ctxt INTRO_split_conj
+    in if Thm.no_prems st0 then (empty_items, origin)
+    else if need_intro do_split_conj st0
       then let val st = st0
                      |> Seq.REPEAT (Thm.biresolution NONE true
                               [(false, Thms.allI), (false, Thms.impI)] 1)
@@ -1165,10 +1166,9 @@ fun INTRO'' F mode bs (origin as (ctxt, HHF (st0, items) :: L)) =
                val (foc, st') = Subgoal.focus_prems ctxt 1 (SOME (map Binding.name binds)) st
                val (st''m, (items', ctxt')) = F binds (st', foc)
                val _ = get_reporter () (New_Items items')
-               val mode_split_conj = Config.get ctxt INTRO_split_conj
                val mode_mk_block = Config.get ctxt INTRO_mk_block
                val st'' = st''m
-                    |> mode_split_conj ? (protect_goals o split_conjs)
+                    |> do_split_conj ? (protect_goals o split_conjs)
                fun PRT _ t0 =
                     let val t = if mode_mk_block then BLOCK t0 else t0
                      in case print_stack [(HHF (st0, items))]
@@ -1185,7 +1185,7 @@ fun INTRO'' F mode bs (origin as (ctxt, HHF (st0, items) :: L)) =
                         |> Seq.hd
                         |> conclude_goal,
                       ([],[])) :: S)
-                 |> mode = ALL_SUBGOALS ? (#2 o INTRO'' F mode bs)
+                 |> mode = ALL_SUBGOALS ? (#2 o INTRO'' F mode split_conj_opt bs)
                 end
                  | CB _ _ = raise BROKEN_INVARIANT
                val result_state = if num_goals_of' st0 > 1
@@ -1194,9 +1194,10 @@ fun INTRO'' F mode bs (origin as (ctxt, HHF (st0, items) :: L)) =
             in (items', result_state)
            end
       else (empty_items, origin)
-  | INTRO'' _ _ _ _ = raise BROKEN_INVARIANT
+    end
+  | INTRO'' _ _ _ _ _ = raise BROKEN_INVARIANT
 
-fun INTRO' mode bs premise_names s =
+fun INTRO' mode split_conj_opt bs premise_names s =
   let val _ = if mode = ALL_SUBGOALS andalso is_some premise_names
               then raise OPR_FAIL (INVALID_OPR, "premise_names must be NONE in ALL_SUBGOALS mode")
               else ()
@@ -1230,13 +1231,13 @@ fun INTRO' mode bs premise_names s =
                 #> pair (map2 (fn bind => fn (_, cterm) => (bind, Thm.typ_of_cterm cterm)) binds (#params foc)))
          |> pair st
         end
-   in INTRO'' F mode bs s
+   in INTRO'' F mode split_conj_opt bs s
   end
 
 fun TRANSPARENT_INTRO' (origin as (ctxt, HHF (st, _) :: _)) =
       if Config.get ctxt transparent_intro andalso
          has_prems_universal_vars (fst (Logic.dest_implies (Thm.prop_of st)))
-      then #2 (INTRO' SINGLE_GOAL NONE NONE origin)
+      then #2 (INTRO' SINGLE_GOAL NONE NONE NONE origin)
       else origin
   | TRANSPARENT_INTRO' _ = raise BROKEN_INVARIANT
 
@@ -1515,11 +1516,11 @@ fun TRY_STANDARD SK =
               (K ()) (CONTEXT_TACTIC (Classical.standard_tac (#1 SK) [])) NONE SK
   else SK
 
-val INTRO = timed_OPR_with_ret 5000 ooo INTRO'
+val INTRO = timed_OPR_with_ret 5000 oooo INTRO'
 val INTRO_CMD = (OPT_VARS -- OPT_PREMS)
-        >> (fn args => fn s => #2 (timed_OPR_with_ret 2 (uncurry (INTRO' SINGLE_GOAL) args) s))
+        >> (fn args => fn s => #2 (timed_OPR_with_ret 2 (uncurry (INTRO' SINGLE_GOAL NONE) args) s))
 val INTRO_ALL_CMD = (OPT_VARS -- OPT_PREMS)
-        >> (fn args => fn s => #2 (timed_OPR_with_ret 2 (uncurry (INTRO' ALL_SUBGOALS) args) s))
+        >> (fn args => fn s => #2 (timed_OPR_with_ret 2 (uncurry (INTRO' ALL_SUBGOALS NONE) args) s))
 val TRANSPARENT_INTRO = OPR_NO_INCR TRANSPARENT_INTRO'
 
 local
@@ -1676,7 +1677,7 @@ fun SIMP' _ _ (ctxt, []) = (ctxt, [])
 
 fun CRUSH' prep_with (vars, raw_with_lems) SK0 =
      SIMP' prep_with raw_with_lems SK0
-  |> SKIP_SUCCESS (#2 o INTRO' ALL_SUBGOALS vars NONE)
+  |> SKIP_SUCCESS (#2 o INTRO' ALL_SUBGOALS NONE vars NONE)
   |> report_goal
 
 
@@ -1820,7 +1821,7 @@ fun SIMPLIFY_GOAL_AND_PREMISES'
 
     (* 11. Call INTRO' with the generated premise names and variable names *)
     val (items_from_intro, (ctxt_after_intro, HHF (st_after_intro, items_after_intro) :: S_after_intro)) =
-      INTRO' SINGLE_GOAL var_names_for_intro (SOME premise_names_for_intro)
+      INTRO' SINGLE_GOAL NONE var_names_for_intro (SOME premise_names_for_intro)
              (ctxt_with_counter, HHF (st_protected_for_intro, items) :: S)
 
     (* 12. Unwrap NO_SIMP from the goal conclusion *)

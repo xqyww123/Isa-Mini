@@ -1,1 +1,1 @@
-IsabelleError (expected): ['Inner lexical error\x05\x06no_report\x05\nat "¬ coprime"\x05\x06\x05\nFailed to parse term']
+Results: 5, Warnings: ['Type unification failed: Clash of types "_ \\<Rightarrow> _" and "bool"\n\nType error in application: incompatible operand type\n\nOperator:  Not :: bool \\<Rightarrow> bool\nOperand:   coprime :: ??\'a \\<Rightarrow> ??\'a \\<Rightarrow> bool\n\nCoercion Inference:\n\nLocal coercion insertion on the operand failed:\nNo coercion known for type constructors: "fun" and "bool"']

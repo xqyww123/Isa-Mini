@@ -260,7 +260,6 @@ fun get_witness_types s =
 fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (split_conj: bool) (s:Minilang.state)
   : bindings * Minilang.state =
   let
-    val s = s |> Minilang.map_context (Config.put Minilang.INTRO_split_conj split_conj)
     val ctxt = Minilang.context_of s
             |> Config.put Printer.show_markup false
     val st = Minilang.leading_proof_sequent_of s
@@ -341,7 +340,7 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (split_conj: 
           end
 
         (* Step 5: Call INTRO with SINGLE_GOAL mode and get the items it fixed *)
-        val ((params', facts'), s') = Minilang.INTRO Minilang.SINGLE_GOAL minilang_var_names (SOME prem_names_for_intro) s
+        val ((params', facts'), s') = Minilang.INTRO Minilang.SINGLE_GOAL (SOME split_conj) minilang_var_names (SOME prem_names_for_intro) s
 
         (* Step 6: Extract context from the new state *)
         val ctxt' = Minilang.context_of s'

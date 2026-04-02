@@ -292,7 +292,7 @@ async def _answer_tool(args: ToolCall_arg) -> ToolCall_ret:
         os._exit(1)
 
 @tool("semantic_search",
-      "Search for Isabelle entities by English description. MUST wrap formulas in backticks (like `ln 1`)",
+      "Search for Isabelle entities by English description.",
       input_schema=_cc_semantic_search_schema)
 async def _semantic_search_tool(args: ToolCall_arg) -> ToolCall_ret:
     from .model import the_session
@@ -313,12 +313,15 @@ async def _semantic_search_tool(args: ToolCall_arg) -> ToolCall_ret:
         term_patterns = args.get("term_patterns", [])
         type_patterns = args.get("type_patterns", [])
         theories_include = args.get("theories_include", [])
+        name_contains = args.get("name_contains", [])
 
         ml_state = session.root.ml_state
-        results, warnings = ml_state.semantic_knn(query, k, kinds,
+        fetch_k = max(k, 50)
+        results, warnings = ml_state.semantic_knn(query, fetch_k, kinds,
                                         term_patterns=term_patterns,
                                         type_patterns=type_patterns,
-                                        theories_include=theories_include)
+                                        theories_include=theories_include,
+                                        name_contains=name_contains)
 
         lines: list[str] = []
         for w in warnings:
@@ -326,11 +329,25 @@ async def _semantic_search_tool(args: ToolCall_arg) -> ToolCall_ret:
         if not results:
             lines.append("No matching entities found.")
             return _mk_ret("\n".join(lines))
-        for score, rec in results:
-            lines.append(f"- {rec.pretty_print}")
+        # Check if results are not distinctive enough
+        if len(results) >= 50:
+            n_above_07 = sum(1 for s, _ in results if s > 0.7)
+            n_above_06 = sum(1 for s, _ in results if s > 0.6)
+            last_score = results[-1][0]
+            if last_score > 0.5 or n_above_06 > 20 or n_above_07 > 10:
+                session.log_interaction("mcp__proof__semantic_search",
+                    f"not distinctive: last_score={last_score:.2f}, n_above_06={n_above_06}, n_above_07={n_above_07}")
+                lines.append("Hint: Results not distinctive enough \u2014 too many high-similarity hits. "
+                             "Try narrowing with term_patterns, type_patterns, or theories_include.")
+        for score, rec in results[:k]:
+            lines.append(f"- [{score:.2f}] {rec.pretty_print}")
             if rec.interpretation:
                 lines.append(f"  {rec.interpretation}")
         return _mk_ret("\n".join(lines))
+    except IsabelleError as e:
+        error_msg = "\n".join(e.errors)
+        session.log_tool_response("mcp__proof__semantic_search", f"ERROR: {error_msg}")
+        return _mk_ret(error_msg)
     except Exception as e:
         session.log_tool_response("mcp__proof__semantic_search", f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
         os._exit(1)
@@ -723,22 +740,30 @@ class ClaudeCode(Session):
                 fork_prompt = (buffer.getvalue() +
                     "\n\nForget the previous instructions. "
                     "Your only task is to answer the question above "
-                    "and you MUST terminate immediately once answered.")
+                    "and you MUST use the mcp__proof__answer tool to submit your answer. "
+                    "You MUST terminate immediately once answered.")
                 await fork_client.query(fork_prompt)
-                async for message in fork_client.receive_response():
-                    content = getattr(message, "content", None)
-                    if isinstance(content, list):
-                        for block in content:
-                            text = getattr(block, "text", None)
-                            if isinstance(text, str) and text:
-                                self._check_error_text(text)
-                                fork.log_model_output(f"{tag} {text}")
-                            thinking = getattr(block, "thinking", None)
-                            if isinstance(thinking, str) and thinking:
-                                fork.log_model_thinking(f"{tag} {thinking}")
-                    if isinstance(message, ResultMessage):
-                        self._accumulate_cost(message)
-                        fork.log_interaction("fork", f"{tag} completed: subtype={message.subtype}")
+                while True:
+                    async for message in fork_client.receive_response():
+                        content = getattr(message, "content", None)
+                        if isinstance(content, list):
+                            for block in content:
+                                text = getattr(block, "text", None)
+                                if isinstance(text, str) and text:
+                                    self._check_error_text(text)
+                                    fork.log_model_output(f"{tag} {text}")
+                                thinking = getattr(block, "thinking", None)
+                                if isinstance(thinking, str) and thinking:
+                                    fork.log_model_thinking(f"{tag} {thinking}")
+                        if isinstance(message, ResultMessage):
+                            self._accumulate_cost(message)
+                            fork.log_interaction("fork", f"{tag} completed: subtype={message.subtype}")
+                    if not fork.working_interactions:
+                        break
+                    fork.log_interaction("fork", f"{tag} retrying: interaction not answered")
+                    await fork_client.query(
+                        "You haven't submitted your answer. "
+                        "You MUST call the mcp__proof__answer tool to submit it.")
             fork._client = None
             fork.close()
 

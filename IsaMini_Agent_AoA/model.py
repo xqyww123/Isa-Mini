@@ -903,7 +903,8 @@ class Minilang_State:
                      kinds: list[EntityKind],
                      term_patterns: list[str] = [],
                      type_patterns: list[str] = [],
-                     theories_include: list[str] = []
+                     theories_include: list[str] = [],
+                     name_contains: list[str] = [],
                      ) -> tuple[list[tuple[float, SemanticRecord]], list[str]]:
         """Search k nearest entities by semantic similarity.
         If query is None, returns pattern-filtered entities without semantic ranking.
@@ -912,6 +913,8 @@ class Minilang_State:
         the entity enumeration callbacks for ML-side filtering.
         Returns (results, warnings) where warnings include notices about
         undeclared free variables in term patterns."""
+        term_patterns = [ascii_of_unicode(p) for p in term_patterns]
+        type_patterns = [ascii_of_unicode(p) for p in type_patterns]
         # Build domain
         if EntityKind.THEOREM in kinds:
             local_keys: list[universal_key] = self.connection.callback(
@@ -925,19 +928,22 @@ class Minilang_State:
             results, warnings = store.lookup(query, k, kinds, domain,
                                    term_patterns=term_patterns,
                                    type_patterns=type_patterns,
-                                   theories_include=theories_include)
+                                   theories_include=theories_include,
+                                   name_contains=name_contains)
             return [(score, rec._replace(name=ascii_of_unicode(rec.name)))
                     for score, rec in results], warnings
         else:
             # Pattern-only search: get filtered entities, look up records, no ranking
             from Isabelle_RPC_Host.context import entities_of
-            from Semantic_Embedding.Isabelle_Semantic_Embedding.semantics import Semantic_DB
+            from Isabelle_Semantic_Embedding.semantics import Semantic_DB
             candidates, warnings = entities_of(self.connection, kinds,
                                      term_patterns=term_patterns,
                                      type_patterns=type_patterns,
-                                     theories_include=theories_include)
+                                     theories_include=theories_include,
+                                     name_contains=name_contains,
+                                     limit=k)
             results = []
-            for uk in candidates[:k]:
+            for uk in candidates:
                 rec = Semantic_DB[uk]
                 if rec is not None:
                     results.append((0.0, rec._replace(name=ascii_of_unicode(rec.name))))
@@ -1924,18 +1930,22 @@ class StdBlock(NonLeaf_Node):
     @abstractmethod
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False) -> None:
         ...
-    def should_I_show_pending_goal(self) -> tuple[Goal, step] | None:
+    def has_pending_goal(self) -> bool:
+        """Whether this goal node still has unproven proof obligations.
+        Returns False when prooftree is absent, has no goals,
+        or only has the 'True' artifact from conjunction splitting."""
         ptree = self._state_before_ending_.prooftree
         if ptree is None:
-            return None
+            return False
         goals = ptree.top_goals()
-        if not goals:
+        return bool(goals) and goals[0].conclusion != "True"
+    def should_I_show_pending_goal(self) -> tuple[Goal, step] | None:
+        if not self.has_pending_goal():
             return None
         to_fill = self._id_of_openning_prf_to_fill()
         if to_fill is None:
             return None
-        if goals[0].conclusion == "True":
-            return None
+        goals = self._state_before_ending_.prooftree.top_goals()
         if len(goals) > 1 and not self._allow_multi_goal:
             raise InternalError("The open goals of StdBlock should not exceed one. "
             "To express multiple goals, you should use a StdBlock whose children are GoalNodes. See Rule as an example.")
@@ -1963,7 +1973,7 @@ class StdBlock(NonLeaf_Node):
         super().unfinished_nodes(ret)
         if self.opening():
             ptree = self._state_before_ending_.prooftree
-            if ptree is None or ptree.top_goals():
+            if ptree is None or self.has_pending_goal():
                 ret.add(self)
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         return ("proof", indent+1)
@@ -2007,7 +2017,7 @@ class StdBlock(NonLeaf_Node):
             if ptree is None:
                 print_indent(indent, file)
                 file.write("Error: Evaluation pending\n")
-            elif ptree.top_goals() and self._id_of_openning_prf_to_fill() is not None:
+            elif self.should_I_show_pending_goal() is not None:
                 print_indent(indent, file)
                 if self.open_pending_proof_line is not None:
                     file.write(f"Error: Unfinished Proof (line {self.open_pending_proof_line})\n")
@@ -2525,7 +2535,7 @@ class Witness(Leaf):
         return indent
 
     def the_operation(self) -> Minilang_Operation:
-        return Minilang_Operation.WITNESS([self.witness])
+        return Minilang_Operation.WITNESS([ascii_of_unicode(self.witness)])
 
 
 #### Unfold
@@ -3929,7 +3939,7 @@ class Session:
 
     def initialize(self, root: Root):
         if hasattr(self, 'root'):
-            raise InternalError("The 'root' field has already been assigned.")
+            raise InternalError("The session is already initialized.")
         self.root = root
 
     def _log(self, log_file_handle: Any, event_type: str, debug_messages: Callable[[], list[str]] | None, **data):
