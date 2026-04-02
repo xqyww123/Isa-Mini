@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 import traceback
+import asyncio
 import Isabelle_RPC_Host
 from IsaMini_Agent_AoA.test import run_all_tests
 
@@ -18,9 +19,8 @@ args = parser.parse_args()
 rpc_addr = "127.0.0.1:27182"
 logger = Isabelle_RPC_Host.mk_logger_(rpc_addr, None)
 
-def run_tests():
-    # 等待服务端完成绑定
-    run_all_tests(args.repl_addr, logger=logger)
+async def run_tests():
+    await run_all_tests(args.repl_addr, logger=logger)
 
 def run_server():
     Isabelle_RPC_Host.launch_server_(rpc_addr, logger, debugging=True)
@@ -28,4 +28,4 @@ def run_server():
 test_thread = threading.Thread(target=run_server, daemon=True)
 test_thread.start()
 time.sleep(1)
-run_tests()
+asyncio.run(run_tests())

@@ -1,4 +1,3 @@
-import msgpack as mp
 import IsaREPL as REPL
 
 class Mini:
@@ -8,19 +7,17 @@ class Mini:
 
     VERSION='0.3.5'
 
-    def __run(self):
-        self.repl.run_app("Minilang-REPL")
-        mp.pack((self.hasty, self.mode, self.SH_params), self.repl.cout)
-        self.repl.cout.flush()
-        version = REPL.Client._parse_control_ (self.repl.unpack.unpack())
+    async def __run(self):
+        await self.repl.run_app("Minilang-REPL")
+        await self.repl._write((self.hasty, self.mode, self.SH_params))
+        version = REPL.Client._parse_control_ (await self.repl._feed_and_unpack())
         if version != Mini.VERSION:
             raise Exception(f"Mini: incompatible client version {Mini.VERSION} of Server {version}")
 
-    def __turn_off (self):
+    async def __turn_off (self):
         if self.pos:
-            mp.pack ("\\close", self.repl.cout)
-            self.repl.cout.flush()
-            return REPL.Client._parse_control_ (self.repl.unpack.unpack())
+            await self.repl._write("\\close")
+            return REPL.Client._parse_control_ (await self.repl._feed_and_unpack())
 
     def __init__(self, addr, thy_qualifier, initial_pos = None, ML_base_injection=True, timeout=3600, hasty=False, SH_params=""):
         """
@@ -37,38 +34,48 @@ class Mini:
         instance will start.
         :param ML_base_injection: Internally used only. Please do not change its default value.
         """
-
-        self.repl = REPL.Client(addr, thy_qualifier, timeout)
-        self.repl.set_trace(False)
-        try:
-            self.repl._initialized_mini_
-        except AttributeError:
-            self.repl.load_theory (['Minilang_REPL.Minilang_Top'])
-            if ML_base_injection:
-                self.repl.add_lib (["Minilang.Minilang_Base"])
-            self.repl.run_ML ("Minilang_REPL.Minilang_Top",
-                """REPL_Server.register_app "Minilang-REPL" Minilang_Top.REPL_App""")
-            self.repl._initialized_mini_ = True
-        self.repl.record_state ("mini-init")
-        if initial_pos:
-            self.repl.file(initial_pos[0], initial_pos[1], initial_pos[2], use_cache=True, cache_position=True)
+        self._addr = addr
+        self._thy_qualifier = thy_qualifier
+        self._initial_pos = initial_pos
+        self._ML_base_injection = ML_base_injection
+        self._timeout = timeout
         self.pos = initial_pos
         self.mode = 'RELAXED'
         self.hasty = hasty
         self.SH_params = SH_params
-        if self.pos:
-            self.__run()
+        self.repl: REPL.Client = None  # type: ignore[assignment]  # set in __aenter__
 
-    def close(self):
+    async def __aenter__(self):
+        self.repl = REPL.Client(self._addr, self._thy_qualifier, self._timeout)
+        await self.repl.__aenter__()
+        await self.repl.set_trace(False)
+        if not hasattr(self.repl, '_initialized_mini_'):
+            await self.repl.load_theory (['Minilang_REPL.Minilang_Top'])
+            if self._ML_base_injection:
+                await self.repl.add_lib (["Minilang.Minilang_Base"])
+            await self.repl.run_ML ("Minilang_REPL.Minilang_Top",
+                """REPL_Server.register_app "Minilang-REPL" Minilang_Top.REPL_App""")
+            self.repl._initialized_mini_ = True  # type: ignore[attr-defined]
+        await self.repl.record_state ("mini-init")
+        if self._initial_pos:
+            await self.repl.file(self._initial_pos[0], self._initial_pos[1], self._initial_pos[2], use_cache=True, cache_position=True)
+        if self.pos:
+            await self.__run()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+
+    async def close(self):
         """
         Give up the ongoing proof, clos the Mini instance,
         and turns the REPL session into the usual mode.
         :return: None
         """
-        self.__turn_off()
+        await self.__turn_off()
         self.repl.close()
 
-    def conclude (self):
+    async def conclude (self):
         """
         Closes the Mini instance, and turns the REPL session into the usual mode.
         :return:
@@ -78,43 +85,34 @@ class Mini:
         """
         if not self.pos:
             raise ValueError("Mini: not started yet. Call `move_to` to indicate where to start the proof.")
-        mp.pack ("\\conclude", self.repl.cout)
-        self.repl.cout.flush()
-        return REPL.Client._parse_control_ (self.repl.unpack.unpack())
+        await self.repl._write("\\conclude")
+        return REPL.Client._parse_control_ (await self.repl._feed_and_unpack())
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
-
-    def set_mode(self, mode):
+    async def set_mode(self, mode):
         if not isinstance(mode, str):
             raise TypeError("mode must be a string")
         if mode not in ['STRICT', 'COMPLETE_NEXT', 'RELAXED']:
             raise ValueError("mode must be one of: 'STRICT', 'COMPLETE_NEXT', 'RELAXED'")
         self.mode = mode
         if self.pos:
-            mp.pack("\\END_mode", self.repl.cout)
-            mp.pack(mode, self.repl.cout)
-            self.repl.cout.flush()
-            REPL.Client._parse_control_ (self.repl.unpack.unpack())
+            await self.repl._write("\\END_mode", mode)
+            REPL.Client._parse_control_ (await self.repl._feed_and_unpack())
 
-    def move_to (self, file, line, column=0):
-        self.__turn_off()
-        self.repl.rollback ('mini-init')
-        self.repl.file(file, line, column, use_cache=True, cache_position=True)
+    async def move_to (self, file, line, column=0):
+        await self.__turn_off()
+        await self.repl.rollback ('mini-init')
+        await self.repl.file(file, line, column, use_cache=True, cache_position=True)
         self.pos = (file, line, column)
-        self.__run()
+        await self.__run()
 
-    def set_theory_and_goal(self, src):
-        self.__turn_off()
-        self.repl.rollback('mini-init')
-        self.repl.eval(src)
+    async def set_theory_and_goal(self, src):
+        await self.__turn_off()
+        await self.repl.rollback('mini-init')
+        await self.repl.eval(src)
         self.pos = ("#REPL", 0, 0)
-        self.__run()
+        await self.__run()
 
-    def eval (self, src, timeout=None, timeout_cmd=None):
+    async def eval (self, src, timeout=None, timeout_cmd=None):
         """
         Evaluates the given source Minilang code.
         The given source can contain multiple commands.
@@ -130,31 +128,25 @@ class Mini:
         if timeout_cmd is not None and not isinstance(timeout_cmd, int):
             raise TypeError("timeout_cmd must be an integer or None")
         if timeout is None and timeout_cmd is None:
-            mp.pack (src, self.repl.cout)
+            await self.repl._write(src)
         else:
-            mp.pack ("\\eval", self.repl.cout)
-            mp.pack ((timeout, timeout_cmd, src), self.repl.cout)
-        self.repl.cout.flush()
-        return REPL.Client._parse_control_ (self.repl.unpack.unpack())
-    
-    def record(self, name):
+            await self.repl._write("\\eval", (timeout, timeout_cmd, src))
+        return REPL.Client._parse_control_ (await self.repl._feed_and_unpack())
+
+    async def record(self, name):
         """
         record the current proof state with the given name, so that it can be retrieved later using `rollback` method.
         """
-        mp.pack ("\\stamp", self.repl.cout)
-        mp.pack (name, self.repl.cout)
-        self.repl.cout.flush()
-        return REPL.Client._parse_control_ (self.repl.unpack.unpack())
+        await self.repl._write("\\stamp", name)
+        return REPL.Client._parse_control_ (await self.repl._feed_and_unpack())
 
-    def rollback(self, name):
+    async def rollback(self, name):
         """
         roll back to the proof state recorded with the given name.
         """
-        mp.pack ("\\rollback", self.repl.cout)
-        mp.pack (name, self.repl.cout)
-        self.repl.cout.flush()
-        return REPL.Client._parse_control_ (self.repl.unpack.unpack())
-    
+        await self.repl._write("\\rollback", name)
+        return REPL.Client._parse_control_ (await self.repl._feed_and_unpack())
+
 
     @staticmethod
     def parse_item(data):
@@ -162,7 +154,7 @@ class Mini:
             'vars' : data[0],
             'facts': data[1]
         }
-    
+
     @staticmethod
     def parse_prooftree (data):
         match data[0]:
@@ -195,13 +187,12 @@ class Mini:
             'finished' : status
         }
 
-    def pretty_eval (self, src):
-        ret = self.eval (src)
+    async def pretty_eval (self, src):
+        ret = await self.eval (src)
         return Mini.parse_eval_return (ret)
 
-    def print(self):
+    async def print(self):
         if not self.pos:
             raise ValueError("Mini: not started yet. Call `move_to` to indicate where to start the proof.")
-        mp.pack('\\print', self.repl.cout)
-        self.repl.cout.flush()
-        return REPL.Client._parse_control_(self.repl.unpack.unpack())
+        await self.repl._write('\\print')
+        return REPL.Client._parse_control_(await self.repl._feed_and_unpack())

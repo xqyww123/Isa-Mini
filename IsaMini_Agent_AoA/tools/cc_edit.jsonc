@@ -444,7 +444,7 @@
     "Intro": {
       "additionalProperties": false,
       "title": "Intro",
-      "description": "introduce universal quantification and premises from the proof goal",
+      "description": "introduce universal quantification and premises from the proof goal; can also split conjunctions into subgoals",
       "properties": {
         "operation": {
           "const": "Intro",

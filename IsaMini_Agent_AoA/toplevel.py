@@ -14,7 +14,7 @@ class UnknownDriver(AoA_Error):
         super().__init__(f"Unknown driver: {driver}")
 
 @isabelle_remote_procedure("IsaMini.AoA")
-def IsaMini_AoA(data: tuple[Any, Any, str, str, str], connection: Connection):
+async def IsaMini_AoA(data: tuple[Any, Any, str, str, str], connection: Connection):
     (global_context, ptree, driver, log_dir, invocation_id) = data
 
     # Environment variable AoA_LOG_DIR overrides user-provided log_dir
@@ -37,7 +37,7 @@ def IsaMini_AoA(data: tuple[Any, Any, str, str, str], connection: Connection):
         if test_name not in TESTS:
             raise ValueError(f"Test Not Found on '{test_name}'")
         case = TESTS[test_name]
-        root = case.run(connection, actual_log_path, global_context, ptree)
+        root = await case.run(connection, actual_log_path, global_context, ptree)
         cost = (0, 0, 0, 0, 0.0)
     else:
         drv = Session.Driver.get(driver)
@@ -45,8 +45,8 @@ def IsaMini_AoA(data: tuple[Any, Any, str, str, str], connection: Connection):
             raise UnknownDriver(driver)
         with drv(connection.server.logger, actual_log_path) as session:
             root = Root((global_context, ptree), connection, session)
-            session.initialize(root)
-            session.run()
+            await session.initialize(root)
+            await session.run()
             cost = (session.total_input_tokens,
                     session.total_cache_creation_input_tokens,
                     session.total_cache_read_input_tokens,

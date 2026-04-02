@@ -180,7 +180,7 @@ def print_vars(vars: Iterable[tuple[varname, typ]], indent: int, file, suppresse
         print_indent(indent+1, file)
         file.write(f"- {name}: {type}\n")
 
-def print_hyps(hyps: Iterable[tuple[str, term]], indent: int, file, suppressed: Hyps, banner='premises'):
+def print_hyps(hyps: Iterable[tuple[varname, term]], indent: int, file, suppressed: Hyps, banner='premises'):
     printed_banner = False
     for name, term in hyps:
         if name in suppressed:
@@ -809,7 +809,7 @@ class Minilang_State:
         if isinstance(connection, Minilang_State):
             connection = connection.connection
         return Minilang_State(connection, cls.assign_name(), None)
-    def execute(self, opr: Extended_Minilang_Operation, assign_to: 'Minilang_State | None') -> 'Minilang_State':
+    async def execute(self, opr: Extended_Minilang_Operation, assign_to: 'Minilang_State | None') -> 'Minilang_State':
         if assign_to is None:
             assign_to = Minilang_State(self.connection, type(self).assign_name(), None)
         if isinstance(opr, Minilang_Operation):
@@ -825,7 +825,7 @@ class Minilang_State:
                 }
             )
             try:
-                (msgs, tree) = self.connection.callback("IsaMini.proof_opr",
+                (msgs, tree) = await self.connection.callback("IsaMini.proof_opr",
                                                         (self.name, dest_name, (opr.command, opr.arg)))
             except IsabelleError as err:
                 the_session().log_proof_operation_error(
@@ -843,18 +843,18 @@ class Minilang_State:
             raise NotImplementedError("Here we should implement the execution of a list of Minilang operations")
             #msgs = opr(self, assign_to)
         return assign_to
-    def sorry(self, varnames: list[varname_spec] | None, assign_to: 'Minilang_State | None') -> 'Minilang_State':
-        return self.execute(Minilang_Operation.SORRY(varnames), assign_to)
-    def skip(self, assign_to: 'Minilang_State | None') -> 'Minilang_State':
-        return self.execute(Minilang_Operation.SKIP(), assign_to)
-    def clone(self, assign_to: 'Minilang_State | None') -> 'Minilang_State':
-        ret = self.execute(Minilang_Operation.SKIP(), assign_to)
+    async def sorry(self, varnames: list[varname_spec] | None, assign_to: 'Minilang_State | None') -> 'Minilang_State':
+        return await self.execute(Minilang_Operation.SORRY(varnames), assign_to)
+    async def skip(self, assign_to: 'Minilang_State | None') -> 'Minilang_State':
+        return await self.execute(Minilang_Operation.SKIP(), assign_to)
+    async def clone(self, assign_to: 'Minilang_State | None') -> 'Minilang_State':
+        ret = await self.execute(Minilang_Operation.SKIP(), assign_to)
         ret.messages = self.messages
         return ret
-    def reset(self) -> None:
+    async def reset(self) -> None:
         """Remove this state from the Isabelle state table and mark as uninitialized."""
         try:
-            self.connection.callback("IsaMini.reset_state", self.name)
+            await self.connection.callback("IsaMini.reset_state", self.name)
         except:
             pass
         self.prooftree = None
@@ -869,7 +869,7 @@ class Minilang_State:
     #             return ref
     #         case _:
     #             raise NotImplementedError("Here we should list all the options and ask the LLM to choose which one does it mean")
-    def fetch_facts(self, facts: list[Fact]
+    async def fetch_facts(self, facts: list[Fact]
                     ) -> 'list[IsabelleFact | Interaction_RetrieveFact]':
         """Resolve a list of facts. FactByName are batched into one RPC call.
         Returns IsabelleFact_Presented for resolved facts, Interaction_RetrieveFact
@@ -881,14 +881,14 @@ class Minilang_State:
         for i, fact in enumerate(facts):
             if fact["refer_by"] == "statement":
                 stmt = " ".join(cast(FactByStatement, fact)["statement"].split())
-                out[i] = Interaction_RetrieveFact(
+                out[i] = await Interaction_RetrieveFact.create(
                     state=self, query=stmt, kinds=[EntityKind.THEOREM])
             else:
                 name_indices.append(i)
                 name_queries.append(fact["name"])
         # Batch resolve all FactByName
         if name_queries:
-            results = self._retrieve_facts_expr(name_queries)
+            results = await self._retrieve_facts_expr(name_queries)
             for idx, result in zip(name_indices, results):
                 fact = facts[idx]
                 if result is None:
@@ -899,7 +899,7 @@ class Minilang_State:
                         full_name=full_name, short_name=short_name,
                         fact=fact, expression=exprs)
         return out
-    def semantic_knn(self, query: str | None, k: int,
+    async def semantic_knn(self, query: str | None, k: int,
                      kinds: list[EntityKind],
                      term_patterns: list[str] = [],
                      type_patterns: list[str] = [],
@@ -917,7 +917,7 @@ class Minilang_State:
         type_patterns = [ascii_of_unicode(p) for p in type_patterns]
         # Build domain
         if EntityKind.THEOREM in kinds:
-            local_keys: list[universal_key] = self.connection.callback(
+            local_keys: list[universal_key] = await self.connection.callback(
                 "IsaMini.contextual_thms", self.name)
             local_keys = [bytes(k_) for k_ in local_keys]
             domain: Semantic_Vector_Store.Domain = Semantic_Vector_Store.ContextExtended(local_keys)
@@ -925,7 +925,7 @@ class Minilang_State:
             domain = Semantic_Vector_Store.ContextAll
         store: Semantic_Vector_Store = self.connection.semantic_vector_store()  # type: ignore
         if query is not None:
-            results, warnings = store.lookup(query, k, kinds, domain,
+            results, warnings = await store.lookup(query, k, kinds, domain,
                                    term_patterns=term_patterns,
                                    type_patterns=type_patterns,
                                    theories_include=theories_include,
@@ -936,7 +936,7 @@ class Minilang_State:
             # Pattern-only search: get filtered entities, look up records, no ranking
             from Isabelle_RPC_Host.context import entities_of
             from Isabelle_Semantic_Embedding.semantics import Semantic_DB
-            candidates, warnings = entities_of(self.connection, kinds,
+            candidates, warnings = await entities_of(self.connection, kinds,
                                      term_patterns=term_patterns,
                                      type_patterns=type_patterns,
                                      theories_include=theories_include,
@@ -948,29 +948,29 @@ class Minilang_State:
                 if rec is not None:
                     results.append((0.0, rec._replace(name=ascii_of_unicode(rec.name))))
             return results, warnings
-    def compute_bindings(self, var_names: list[str], fact_names: list[str]) -> Bindings:
+    async def compute_bindings(self, var_names: list[str], fact_names: list[str]) -> Bindings:
         """
         Compute bindings for the leading proof goal by binding provided names in order.
         var_names[i] is bound to the i-th quantified variable in the goal.
         fact_names[j] is bound to the j-th premise in the goal.
         Raises IsabelleError if the lengths don't match the goal structure.
         """
-        bindings_data = self.connection.callback("IsaMini.compute_bindings",
+        bindings_data = await self.connection.callback("IsaMini.compute_bindings",
                                                   (self.name, var_names, fact_names))
         return Intro_Bindings_Msg._unpack_bindings(bindings_data)
-    def need_intro(self, consider_conj: bool) -> bool:
+    async def need_intro(self, consider_conj: bool) -> bool:
         """
         Check if the leading proof goal needs INTRO (i.e., has quantified variables or premises).
         If consider_conj is True, also considers conjunction as needing intro.
         """
-        result = self.connection.callback("IsaMini.need_intro", (self.name, consider_conj))
+        result = await self.connection.callback("IsaMini.need_intro", (self.name, consider_conj))
         return result
-    def _retrieve_facts_expr(self, names: list[str]) -> list[tuple[str, str, list[str]] | None]:
+    async def _retrieve_facts_expr(self, names: list[str]) -> list[tuple[str, str, list[str]] | None]:
         """
         Retrieve facts by their short or full names (batch).
         Returns list of (full_name, short_name, pretty_unicode_expressions) or None per name.
         """
-        results = self.connection.callback("IsaMini.retrieve_fact", (self.name, names))
+        results = await self.connection.callback("IsaMini.retrieve_fact", (self.name, names))
         out: list[tuple[str, str, list[str]] | None] = [None] * len(results)
         for i, r in enumerate(results):
             if r is not None:
@@ -978,13 +978,13 @@ class Minilang_State:
                 out[i] = (full_name, pretty_unicode(short_name),
                           [pretty_unicode(e) for e in exprs])
         return out
-    def _retrieve_constants_types(self, names: list[str]) -> list[tuple[str, str] | None]:
+    async def _retrieve_constants_types(self, names: list[str]) -> list[tuple[str, str] | None]:
         """Retrieve constants by fully qualified names (batch).
         Returns list of (short_name, pretty_unicode_type) or None per name."""
-        results = self.connection.callback("IsaMini.retrieve_constant", (self.name, names))
+        results = await self.connection.callback("IsaMini.retrieve_constant", (self.name, names))
         return [(pretty_unicode(r[0]), pretty_unicode(r[1])) if r is not None else None
                 for r in results]
-    def check_term(self, term_str: str) -> tuple[typ, Vars, Vars]:
+    async def check_term(self, term_str: str) -> tuple[typ, Vars, Vars]:
         """
         Parse and check a term string using Syntax.read_term.
         Returns a tuple of (term_type, frees, vars) where:
@@ -994,7 +994,7 @@ class Minilang_State:
         Raises InternalError_UnparsedTerm if parsing fails.
         """
         try:
-            term_type, frees_list, vars_list = self.connection.callback("IsaMini.check_term",
+            term_type, frees_list, vars_list = await self.connection.callback("IsaMini.check_term",
                                                                          (self.name, term_str))
             frees = dict(frees_list)
             vars = dict(vars_list)
@@ -1005,33 +1005,33 @@ class Minilang_State:
             else:
                 raise
 
-    def schematic_variables_of(self) -> Vars:
+    async def schematic_variables_of(self) -> Vars:
         """
         Get all schematic variables from the leading proof goal.
         Returns a dict of {varname: type} where varnames are formatted as ?name.idx.
         """
         try:
-            vars_list = self.connection.callback("IsaMini.schematic_variables_of", self.name)
+            vars_list = await self.connection.callback("IsaMini.schematic_variables_of", self.name)
             return dict(vars_list)
         except IsabelleError as e:
             raise
 
-    def potential_defs_of(self, terms: list[str]) -> list[IsabelleFact_Presented]:
+    async def potential_defs_of(self, terms: list[str]) -> list[IsabelleFact_Presented]:
         """
         Get potential definitions for terms via Potential_Defs_Of RPC.
         Returns list of IsabelleFact_Presented, deduplicated by proposition.
         """
-        result = self.connection.callback("IsaMini.potential_defs_of", (self.name, terms))
+        result = await self.connection.callback("IsaMini.potential_defs_of", (self.name, terms))
         return [IsabelleFact_Presented(full_name=full_name,
                         short_name=short_name,
                         fact=FactByName(refer_by="name", name=short_name),
                         expression=[prop]) for full_name, short_name, prop in result]
 
-    def validate_prove_in_time(self, statements: list[str]) -> list[str | None]:
+    async def validate_prove_in_time(self, statements: list[str]) -> list[str | None]:
         """Validate prove-in-time statements. Returns None per provable, error string per unprovable."""
         if not statements:
             return []
-        return self.connection.callback(
+        return await self.connection.callback(
             "IsaMini.validate_prove_in_time", (self.name, statements))
 
 ### Interaction
@@ -1052,7 +1052,7 @@ class Interaction:
     forking: bool = False
     def prompt(self, indent: int, file: MyIO) -> None:
         raise NotImplementedError("`prompt` must be implemented by subclass")
-    def answer(self, answer: answer) -> Any:
+    async def answer(self, answer: answer) -> Any:
         raise NotImplementedError("`answer` must be implemented by subclass")
 
 type AsyncKontinuation = Callable[[list[Any]], Awaitable[Any]]
@@ -1094,22 +1094,36 @@ class Interaction_RetrieveFact(Interaction):
     FINAL_K = 40
 
     def __init__(self, state: Minilang_State,
-            query: str, kinds: list[EntityKind]):
+            query: str, kinds: list[EntityKind],
+            candidate_facts: list[IsabelleFact_Presented],
+            relevant_constants: list[tuple[str, str, str]]):
         self.query = query
         self.state = state
         self.k = self.INITIAL_K
         self.kinds = kinds
-        self.candidate_facts = self._fetch_facts()
-        self.relevant_constants = self._fetch_constants()
+        self.candidate_facts = candidate_facts
+        self.relevant_constants = relevant_constants
 
-    def _fetch_facts(self) -> list[IsabelleFact_Presented]:
+    @classmethod
+    async def create(cls, state: Minilang_State,
+            query: str, kinds: list[EntityKind]) -> 'Interaction_RetrieveFact':
+        inst = object.__new__(cls)
+        inst.query = query
+        inst.state = state
+        inst.k = cls.INITIAL_K
+        inst.kinds = kinds
+        inst.candidate_facts = await inst._fetch_facts()
+        inst.relevant_constants = await inst._fetch_constants()
+        return inst
+
+    async def _fetch_facts(self) -> list[IsabelleFact_Presented]:
         import logging
         _log = logging.getLogger(__name__)
-        candidates, _ = self.state.semantic_knn(self.query, self.k, self.kinds)
+        candidates, _ = await self.state.semantic_knn(self.query, self.k, self.kinds)
         if not candidates:
             return []
         names = [rec.name for _, rec in candidates]
-        infos = self.state._retrieve_facts_expr(names)
+        infos = await self.state._retrieve_facts_expr(names)
         results: list[IsabelleFact_Presented] = []
         for (score, rec), info in zip(candidates, infos):
             if info is None:
@@ -1123,16 +1137,16 @@ class Interaction_RetrieveFact(Interaction):
                 expression=exprs))
         return results
 
-    def _fetch_constants(self) -> list[tuple[str, str, str]]:
+    async def _fetch_constants(self) -> list[tuple[str, str, str]]:
         """Fetch relevant constants via semantic search.
         Returns list of (short_name, type, interpretation) triples."""
-        candidates, _ = self.state.semantic_knn(self.query, 10, [EntityKind.CONSTANT])
+        candidates, _ = await self.state.semantic_knn(self.query, 10, [EntityKind.CONSTANT])
         candidates = [(score, rec) for score, rec in candidates if score >= 0.5] # \
                    # + [(score, rec) for score, rec in candidates if 0.4 <= score < 0.5][:5]
         if not candidates:
             return []
         full_names = [rec.name for _, rec in candidates]
-        infos = self.state._retrieve_constants_types(full_names)
+        infos = await self.state._retrieve_constants_types(full_names)
         results: list[tuple[str, str, str]] = []
         for (_, rec), info in zip(candidates, infos):
             if info is None:
@@ -1174,14 +1188,14 @@ class Interaction_RetrieveFact(Interaction):
         else:
             file.write("If no theorem matches, answer with empty to see more candidates.\n")
 
-    def answer(self, answer: answer) -> IsabelleFact:
+    async def answer(self, answer: answer) -> IsabelleFact:
         if isinstance(answer, str) and answer:
             return IsabelleFact_ProveInTime(answer)
         if not answer:
             if self.k < self.FINAL_K:
                 # Expand search and re-prompt
                 self.k = self.FINAL_K
-                self.candidate_facts = self._fetch_facts()
+                self.candidate_facts = await self._fetch_facts()
                 async def identity(results: list[Any]) -> Any:
                     return results[0]
                 raise RaiseInteraction([self], identity)
@@ -1199,8 +1213,9 @@ class Interaction_RetrieveFact(Interaction):
 
 ### The Abstract Model
 
-type gen_node = Callable[[NodeConfig], 'Node']
-type may_gen_node = Callable[[NodeConfig], 'Node | None']
+type gen_node = Callable[[NodeConfig], Awaitable['Node']]
+type may_gen_node = Callable[[NodeConfig], Awaitable['Node | None']]
+
 type printer = Callable[[int, MyIO], int]
 
 class Warning(NamedTuple):
@@ -1351,51 +1366,51 @@ class Node(ABC):
         else:
             return self.parent._resulting_state_of_child(self)
 
-    def _cancel(self) -> None:
+    async def _cancel(self) -> None:
         if self.status.status == EvaluationStatus.Status.CANCELLED:
             return
         self.status = EVALUATION_CACNCELLED
-        self.resulting_state().reset()
+        await self.resulting_state().reset()
     @abstractmethod
     def assemble(self, output: list[Minilang_Operation] | None = None) -> list[Minilang_Operation]:
         """
         Assembling all the abstract tree model into the final sequence of Minilang operations
         """
         ...
-    def _refresh_me_alone(self) -> None:
+    async def _refresh_me_alone(self) -> None:
         """
         must update self.status
         Convention: Any node must be up to date after calling any public Node method
         """
         self.age = self.session.age
         self._first_time = False
-    def _refresh_all_after_me(self) -> None:
+    async def _refresh_all_after_me(self) -> None:
         """
         refreshing the status of all the nodes excluding and after the `self`
         """
         if self.parent is None:
             raise InternalError("Don't know how to refresh a node and all its after nodes when the node's parent is none")
         else:
-            self.parent._refresh_all_children_after(self, self.status.status == EvaluationStatus.Status.SUCCESS)
-    def insert_before_me(self, gen_node: gen_node) -> 'Node':
+            await self.parent._refresh_all_children_after(self, self.status.status == EvaluationStatus.Status.SUCCESS)
+    async def insert_before_me(self, gen_node: gen_node) -> 'Node':
         if self.parent is None:
             raise InternalError("Don't know how to refresh a node and all its after nodes when the node's parent is none")
         else:
-            node = self.parent._insert_before_child(self, gen_node)
+            node = await self.parent._insert_before_child(self, gen_node)
             if self.parent._can_continue_before_child(node):
-                node._refresh_me_alone()
+                await node._refresh_me_alone()
             else:
-                node._cancel()
-            node._refresh_all_after_me()
+                await node._cancel()
+            await node._refresh_all_after_me()
             return node
-    def insert_before(self, step: step, gen_node: gen_node) -> 'Node':
+    async def insert_before(self, step: step, gen_node: gen_node) -> 'Node':
         try:
             node = self.locate_node(step)
-            return node.insert_before_me(gen_node)
+            return await node.insert_before_me(gen_node)
         except NodeNotFound:
             raise CannotInsert_NodeNotFound(step)
     @abstractmethod
-    def append(self, gen_node: may_gen_node) -> 'Node | None':
+    async def append(self, gen_node: may_gen_node) -> 'Node | None':
         ...
     def _locate_node(self, ids: Sequence[local_step], id: step, pos: int = 0) -> 'Node':
         if pos == len(ids):
@@ -1407,7 +1422,7 @@ class Node(ABC):
     def unfinished_nodes(self, ret: set['Node']) -> None:
         if self.status.status != EvaluationStatus.Status.SUCCESS:
             ret.add(self)
-    def fill(self, id: step, gen_node: gen_node) -> 'Node':
+    async def fill(self, id: step, gen_node: gen_node) -> 'Node':
         ids = id.split('.')
         node = self._locate_node(ids[:-1], id, 0)
         to_fill = node._id_of_openning_prf_to_fill()
@@ -1415,7 +1430,7 @@ class Node(ABC):
             raise CannotFill_NodeNotFound(id)
         if to_fill != id:
             raise CannotFill_BadNode(id)
-        ret = node.append(gen_node)
+        ret = await node.append(gen_node)
         if ret is None:
             raise InternalError("Don't know how to fill a node when the node's append method returns None")
         return ret
@@ -1458,20 +1473,20 @@ class Node(ABC):
         Return the modified node if the fact is found and renamed, None otherwise.
         """
         return None
-    def rename_var(self, old_name: varname, new_name: varname) -> None:
+    async def rename_var(self, old_name: varname, new_name: varname) -> None:
         ret = self._rename_var(old_name, new_name)
         if ret is None:
             raise CannotRename_VariableNotFound(old_name, new_name)
         else:
-            ret._refresh_me_alone()
-            ret._refresh_all_after_me()
-    def rename_fact(self, old_name: str, new_name: str) -> None:
+            await ret._refresh_me_alone()
+            await ret._refresh_all_after_me()
+    async def rename_fact(self, old_name: str, new_name: str) -> None:
         ret = self._rename_fact(old_name, new_name)
         if ret is None:
             raise CannotRename_FactNotFound(old_name, new_name)
         else:
-            ret._refresh_me_alone()
-            ret._refresh_all_after_me()
+            await ret._refresh_me_alone()
+            await ret._refresh_all_after_me()
     def _print_fixed_vars_and_facts(self, indent: int, file: MyIO) -> None:
         fixed_vars = self._fixed_vars_at_me({})
         fixed_facts = self._fixed_facts_at_me({})
@@ -1512,7 +1527,7 @@ class Node(ABC):
         refresh_point = parent.sub_nodes[idx - 1] if idx > 0 else parent
         parent._delete_child(self)
         return refresh_point
-    def delete(self, ids: list[step]) -> list[step]:
+    async def delete(self, ids: list[step]) -> list[step]:
         """Delete nodes by IDs. Returns list of unfound IDs (warnings)."""
         self.session.age += 1
         # Locate all, deduplicate
@@ -1541,21 +1556,21 @@ class Node(ABC):
         # Refresh each point, skip if already refreshed this session age
         for rp in refresh_points:
             if rp.age < self.session.age:
-                rp._refresh_me_alone()
+                await rp._refresh_me_alone()
                 if rp.parent is not None:
-                    rp._refresh_all_after_me()
+                    await rp._refresh_all_after_me()
         return not_found
-    def amend_me(self, gen_node: gen_node) -> 'Node':
+    async def amend_me(self, gen_node: gen_node) -> 'Node':
         if self.parent is not None:
-            return self.parent._amend_child(self, gen_node)
+            return await self.parent._amend_child(self, gen_node)
         else:
             raise CannotAmend_Root()
     def _amend_from(self, old: 'Node') -> None:
         self._first_time = False
-    def amend(self, id: step, gen_node: gen_node) -> 'Node':
+    async def amend(self, id: step, gen_node: gen_node) -> 'Node':
         try:
             node = self.locate_node(id)
-            return node.amend_me(gen_node)
+            return await node.amend_me(gen_node)
         except NodeNotFound:
             raise CannotAmend_NodeNotFound(id)
 
@@ -1573,19 +1588,19 @@ class Leaf(Node):
             raise InternalError(f"Cannot assemble a node with failed operation: {op.reason}")
         output.append(op)
         return output
-    def _refresh_me_alone(self) -> None:
+    async def _refresh_me_alone(self) -> None:
         now = time()
-        super()._refresh_me_alone()
+        await super()._refresh_me_alone()
         op = self.the_operation()
         if isinstance(op, FailureReason):
             self.status = EvaluationStatus.Failure(time() - now, op)
             return
         try:
-            self.ml_state.execute(op, self.resulting_state())
+            await self.ml_state.execute(op, self.resulting_state())
             self.status = EvaluationStatus.Success(time() - now)
         except IsabelleError as err:
             self.status = EvaluationStatus.Failure(time() - now, FailureReason(''.join(err.errors)))
-    def append(self, gen_node: may_gen_node) -> 'Node | None':
+    async def append(self, gen_node: may_gen_node) -> 'Node | None':
         raise CannotAppend(self, "It is not a goal or a proof block")
 
 class NonLeaf_Node(Node):
@@ -1614,7 +1629,7 @@ class NonLeaf_Node(Node):
                     )
                 return
         raise InternalError("The target node is not my children")
-    def _refresh_footer(self) -> FailureReason | None:
+    async def _refresh_footer(self) -> FailureReason | None:
         return None
     def _can_continue_before_child(self, child: 'Node') -> bool:
         for i, c in enumerate(self.sub_nodes):
@@ -1623,7 +1638,7 @@ class NonLeaf_Node(Node):
                     return True
                 return self.sub_nodes[i-1].status.status == EvaluationStatus.Status.SUCCESS
         raise InternalError("The target node is not my children")
-    def _refresh_all_children_after(self, after: 'Node | Literal["end"]', can_continue_i: bool) -> None:
+    async def _refresh_all_children_after(self, after: 'Node | Literal["end"]', can_continue_i: bool) -> None:
         """
         refreshing the status of all the nodes excluding and after the `after`
         """
@@ -1631,25 +1646,25 @@ class NonLeaf_Node(Node):
         if after == "end":
             can_continue = True
         else:
-            for child in self.sub_nodes: 
+            for child in self.sub_nodes:
                 if can_continue is None:
                     if child is after:
                         can_continue = can_continue_i
                 else:
                     if can_continue:
-                        child._refresh_me_alone()
+                        await child._refresh_me_alone()
                         can_continue = child.status.status == EvaluationStatus.Status.SUCCESS
                     else:
-                        child._cancel()
+                        await child._cancel()
         if can_continue is None:
             raise InternalError("Cannot find the target to refresh in my children")
         else:
             if can_continue:
-                can_continue = self._refresh_footer() is None
+                can_continue = (await self._refresh_footer()) is None
             if can_continue:
                 if self.parent is not None:
-                    self.parent._refresh_all_children_after(self, can_continue)
-    def _insert_before_child(self, before: 'Node', gen_node: Callable[[NodeConfig], 'Node']) -> 'Node':
+                    await self.parent._refresh_all_children_after(self, can_continue)
+    async def _insert_before_child(self, before: 'Node', gen_node: gen_node) -> 'Node':
         """
         invalidates the status of all nodes including and after the `before`
         """
@@ -1673,7 +1688,7 @@ class NonLeaf_Node(Node):
                     else:
                         new_id = cat_segs_into_id(prev_id + [1])
                 try:
-                    node = gen_node(NodeConfig(new_id, child.ml_state.clone(None), self))
+                    node = await gen_node(NodeConfig(new_id, await child.ml_state.clone(None), self))
                 except GenNode_Error as e:
                     raise CannotInsert(before, str(e))
                 for x in self.sub_nodes:
@@ -1765,20 +1780,20 @@ class NonLeaf_Node(Node):
                     self._closed_by = None
                 return
         raise InternalError("The target node is not my children")
-    def _amend_child(self, child: 'Node', gen_node: gen_node) -> 'Node':
+    async def _amend_child(self, child: 'Node', gen_node: gen_node) -> 'Node':
         for i, c in enumerate(self.sub_nodes):
             if c is child:
                 try:
-                    new_node = gen_node(NodeConfig(child.id, child.ml_state.clone(None), self))
+                    new_node = await gen_node(NodeConfig(child.id, await child.ml_state.clone(None), self))
                 except GenNode_Error as e:
                     raise CannotAmend(self, child, str(e))
                 self.sub_nodes[i] = new_node
                 new_node._amend_from(child)
                 if self._can_continue_before_child(new_node):
-                    new_node._refresh_me_alone()
+                    await new_node._refresh_me_alone()
                 else:
-                    new_node._cancel()
-                new_node._refresh_all_after_me()
+                    await new_node._cancel()
+                await new_node._refresh_all_after_me()
                 return new_node
         raise InternalError("The target node is not my children")
     def _amend_from(self, old: 'NonLeaf_Node') -> None:  # type: ignore[override]
@@ -1801,13 +1816,13 @@ class StdBlock(NonLeaf_Node):
         self._body_subnodes_succeeded = False
         self._allow_multi_goal = False
         self.open_pending_proof_line: int | None = None
-    def _cancel(self) -> None:
+    async def _cancel(self) -> None:
         if self.status.status == EvaluationStatus.Status.CANCELLED:
             return
-        super()._cancel()
-        self._state_before_ending_.reset()
+        await super()._cancel()
+        await self._state_before_ending_.reset()
         for child in self.sub_nodes:
-            child._cancel()
+            await child._cancel()
     @abstractmethod
     def beginning_opr(self) -> 'Minilang_Operation | FailureReason | None':
         ...
@@ -1855,23 +1870,23 @@ class StdBlock(NonLeaf_Node):
             output.append(opr)
         return output
 
-    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
+    async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
         try:
-            self.ml_state.execute(begin_opr, self._state_after_beginning())
+            await self.ml_state.execute(begin_opr, self._state_after_beginning())
             return None
         except IsabelleError as err:
             return self._beginning_opr_err_msgs(err)
-    def _refresh_footer(self) -> FailureReason | None:
+    async def _refresh_footer(self) -> FailureReason | None:
         ending_opr = self.ending_opr()
         if ending_opr is None:
-            self._state_before_ending_.clone(self.resulting_state())
+            await self._state_before_ending_.clone(self.resulting_state())
         else:
             try:
-                self._state_before_ending_.execute(ending_opr, self.resulting_state())
+                await self._state_before_ending_.execute(ending_opr, self.resulting_state())
             except IsabelleError as err:
                 return self._ending_opr_err_msgs(err)
         return None
-    def _refresh_me_alone(self):
+    async def _refresh_me_alone(self):
         begin_opr = self.beginning_opr()
         now = time()
         reason: FailureReason | None = None
@@ -1882,25 +1897,25 @@ class StdBlock(NonLeaf_Node):
             can_continue = False
             reason = begin_opr
         elif begin_opr is not None:
-            reason = self._refresh_the_beginning_opr(begin_opr)
+            reason = await self._refresh_the_beginning_opr(begin_opr)
             if reason is not None:
                 head_succeeded = False
                 can_continue = False
         else:
-            self.ml_state.clone(self._state_after_beginning())
-        super()._refresh_me_alone()
+            await self.ml_state.clone(self._state_after_beginning())
+        await super()._refresh_me_alone()
         failed_child: Node | None = None
         for child in self.sub_nodes:
             if can_continue:
-                child._refresh_me_alone()
+                await child._refresh_me_alone()
                 can_continue = child.status.status == EvaluationStatus.Status.SUCCESS
                 if not can_continue:
                     reason = self._child_refresh_failure_err_msgs(child)
                     failed_child = child
             else:
-                child._cancel()
+                await child._cancel()
         if can_continue:
-            reason = self._refresh_footer()
+            reason = await self._refresh_footer()
             if reason is not None:
                 can_continue = False
         if can_continue:
@@ -1911,8 +1926,8 @@ class StdBlock(NonLeaf_Node):
             if failed_child is not None:
                 # Populate _state_before_ending_ with the last successful state
                 # (= the failing child's ml_state, which is the state before it ran)
-                failed_child.ml_state.clone(self._state_before_ending_)
-            self._state_after_beginning().sorry(None, self.resulting_state())
+                await failed_child.ml_state.clone(self._state_before_ending_)
+            await self._state_after_beginning().sorry(None, self.resulting_state())
             self.status = EvaluationStatus.Success(time() - now, reason)
         else:
             self._body_subnodes_succeeded = False
@@ -1945,7 +1960,9 @@ class StdBlock(NonLeaf_Node):
         to_fill = self._id_of_openning_prf_to_fill()
         if to_fill is None:
             return None
-        goals = self._state_before_ending_.prooftree.top_goals()
+        ptree = self._state_before_ending_.prooftree
+        assert ptree is not None  # guaranteed by has_pending_goal() above
+        goals = ptree.top_goals()
         if len(goals) > 1 and not self._allow_multi_goal:
             raise InternalError("The open goals of StdBlock should not exceed one. "
             "To express multiple goals, you should use a StdBlock whose children are GoalNodes. See Rule as an example.")
@@ -2032,33 +2049,33 @@ class StdBlock(NonLeaf_Node):
         buffer = StringIO()
         self.quickview(indent, MyIO(buffer))
         return buffer.getvalue()
-    def append(self, gen_node: may_gen_node) -> 'Node | None':
+    async def append(self, gen_node: may_gen_node) -> 'Node | None':
         if not self.opening():
             raise CannotAppend_BlockClosed(self, self._closed_by)
         local_step = self._local_step_of_next_proof_step()
-        ml_state = self._state_before_ending_.clone(None)
+        ml_state = await self._state_before_ending_.clone(None)
         config = NodeConfig(local_step, ml_state, self)
         try:
-            node = gen_node(config)
+            node = await gen_node(config)
         except GenNode_Error as e:
             raise CannotAppend(self, str(e))
         if node is None:
             return None
         self.sub_nodes.append(node)
         if self._can_continue_before_child(node):
-            node._refresh_me_alone()
+            await node._refresh_me_alone()
         else:
-            node._cancel()
+            await node._cancel()
             return node
         if self.opening():
-            def my_gen_node(config: NodeConfig) -> Node | None:
-                if config.ml_state.need_intro(False):
+            async def my_gen_node(config: NodeConfig) -> Node | None:
+                if await config.ml_state.need_intro(False):
                     return Intro(config, "", None, False)
                 else:
                     return None
             ml_state = node.resulting_state()
-            if ml_state.need_intro(False):
-                self.append(my_gen_node)
+            if await ml_state.need_intro(False):
+                await self.append(my_gen_node)
         return node
 
 
@@ -2073,7 +2090,7 @@ class GoalContainer(NonLeaf_Node):
                 else:
                     return Minilang_Operation.END()
         raise InternalError("The given argument is not a child of this node")
-    def _refresh_all_children_after(self, after: 'Node | Literal["end"]', can_continue_i: bool) -> None:
+    async def _refresh_all_children_after(self, after: 'Node | Literal["end"]', can_continue_i: bool) -> None:
         # Each subgoal in AoA is independent, so we don't need to refresh the children after the current node.
         return None
 
@@ -2163,7 +2180,7 @@ class GoalNode(StdBlock):
             return indent
         else:
             return super()._print_step_id(indent, file, update_line)
-    def _refresh_me_alone(self):
+    async def _refresh_me_alone(self):
         is_init = self.age == self.session.age
         old_case = (self.case_vars, self.case_hyps)
         consider_case_msgs = [m for m in self.ml_state.messages if isinstance(m, Consider_Case_Msg)]
@@ -2178,13 +2195,13 @@ class GoalNode(StdBlock):
                 raise InternalError(f"Expected exactly one Consider_Case_Msg in Case's messages, got {len(consider_case_msgs)}")
         if not is_init and (self.case_vars, self.case_hyps) != old_case:
             self.changed = True
-        if self._first_time and not self.sub_nodes and self.ml_state.need_intro(False):
+        if self._first_time and not self.sub_nodes and await self.ml_state.need_intro(False):
             local_step = self._local_step_of_next_proof_step()
-            ml_state = self.ml_state.clone(None)
+            ml_state = await self.ml_state.clone(None)
             config = NodeConfig(local_step, ml_state, self)
             intro = Intro(config, "", None, False)
             self.sub_nodes.append(intro)
-        return super()._refresh_me_alone()
+        return await super()._refresh_me_alone()
     def _fixed_vars_at_me(self, ret: Vars) -> Vars:
         goal = self.goal()
         if goal is not None:
@@ -2218,10 +2235,10 @@ class SubgoalMaker(GoalContainer, StdBlock):
         return GoalNode(NodeConfig(str(goal_index+self._initial_goal_index), ml_state, self), False, True, None)
     def _on_regenerating_goals(self, goals: list[Goal]) -> None:
         pass
-    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
+    async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
         is_init = self.age == self.session.age
         old_n_subnodes = len(self.sub_nodes)
-        fail = super()._refresh_the_beginning_opr(begin_opr)
+        fail = await super()._refresh_the_beginning_opr(begin_opr)
         if fail is not None:
             return fail
         s0 = self._state_after_beginning()
@@ -2241,11 +2258,11 @@ class SubgoalMaker(GoalContainer, StdBlock):
                 if self.parent is not None:
                     self.parent._close_by(self)
                 self.sub_nodes = []
-                ml_state = s0.clone(None)
+                ml_state = await s0.clone(None)
                 for i in range(len(goals)):
                     new_node = self._new_goal_node(i, ml_state)
                     self.sub_nodes.append(new_node)
-                    ml_state = ml_state.sorry(None, None)
+                    ml_state = await ml_state.sorry(None, None)
         if not is_init and len(self.sub_nodes) != old_n_subnodes:
             self.changed = True
         return None
@@ -2312,10 +2329,10 @@ class CaseSplit_Like(SubgoalMaker_NoTailEnder):
             print_vars(self.case_vars, indent, file, {}, "fixing variables")
         if self.case_hyps is not None:
             print_hyps(self.case_hyps, indent, file, {}, "assuming premises")
-    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
+    async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
         is_init = self.age == self.session.age
         old_case = (self.case_vars, self.case_hyps)
-        fail = super()._refresh_the_beginning_opr(begin_opr)
+        fail = await super()._refresh_the_beginning_opr(begin_opr)
         if fail is None and not self.sub_nodes:
             # The case for nonempty self.sub_nodes is handled in _new_goal_node
             s = self._state_after_beginning()
@@ -2400,7 +2417,7 @@ def _filter_unfound(facts: list[IsabelleFact]) -> tuple[list[IsabelleFact], list
             kept.append(f)
     return kept, warnings
 
-def _filter_unprovable(
+async def _filter_unprovable(
     facts: list[IsabelleFact], ml_state: 'Minilang_State'
 ) -> tuple[list[IsabelleFact], list[str]]:
     """Filter out IsabelleFact_ProveInTime that cannot be proven automatically.
@@ -2413,7 +2430,7 @@ def _filter_unprovable(
             pit_statements.append(ascii_of_unicode(f.statement))
     if not pit_statements:
         return facts, []
-    results = ml_state.validate_prove_in_time(pit_statements)
+    results = await ml_state.validate_prove_in_time(pit_statements)
     drop: set[int] = set()
     warnings: list[str] = []
     for idx, result in zip(pit_indices, results):
@@ -2455,30 +2472,30 @@ class Obvious(Leaf):
 
     @staticmethod
     def gen(arg: Obvious_InternalToolArg) -> gen_node:
-        def mk(config: NodeConfig) -> 'Obvious':
+        async def mk(config: NodeConfig) -> 'Obvious':
             return Obvious(config, arg)
         mk._node = Obvious  # type: ignore[attr-defined]
         return mk
 
     @staticmethod
     def interactive_gen(arg: Obvious_ToolArg) -> gen_node:
-        def mk(config: NodeConfig) -> 'Obvious':
+        async def mk(config: NodeConfig) -> 'Obvious':
             ml_state = config.ml_state
-            fetched = ml_state.fetch_facts(arg["facts"])
+            fetched = await ml_state.fetch_facts(arg["facts"])
             resolved, interactions, resolve_indices = _split_fetched(fetched)
 
-            def mk_node(config: NodeConfig) -> 'Obvious':
+            async def mk_node(config2: NodeConfig) -> 'Obvious':
                 facts, warnings = _filter_unfound(resolved)
-                facts, pit_warnings = _filter_unprovable(facts, config.ml_state)
+                facts, pit_warnings = await _filter_unprovable(facts, config2.ml_state)
                 warnings.extend(pit_warnings)
-                node = Obvious(config, Obvious_InternalToolArg(facts=facts))
+                node = Obvious(config2, Obvious_InternalToolArg(facts=facts))
                 for w in warnings:
                     node.warnings.append(Warning(Warning.Position.FOOTER, w))
                 return node
             mk_node._node = Obvious  # type: ignore[attr-defined]
 
             if not interactions:
-                return mk_node(config)
+                return await mk_node(config)
 
             async def kontinue(results: list[Any]) -> gen_node:
                 for i, idx in enumerate(resolve_indices):
@@ -2519,7 +2536,7 @@ class Witness(Leaf):
         return f"Witness {self.witness}"
     @staticmethod
     def gen(arg: Witness_ToolArg) -> gen_node:
-        def mk(config: NodeConfig) -> 'Witness':
+        async def mk(config: NodeConfig) -> 'Witness':
             return Witness(config, arg)
         return mk
 
@@ -2559,7 +2576,7 @@ class Interaction_ChooseDef(Interaction):
             print_indent(indent+1, file)
             file.write(f"{i}. {ref.full_name}: {ref.expression}\n")
         file.write("Select definition(s) to use in unfolding. Call `mcp__proof__answer` with `indexes`, or leave empty to skip.\n")
-    def answer(self, answer: answer) -> list[IsabelleFact]:
+    async def answer(self, answer: answer) -> list[IsabelleFact]:
         if isinstance(answer, str):
             raise Interaction_BadAnswer("This interaction expects index selection, not text.")
         if not answer:
@@ -2596,7 +2613,7 @@ class Unfold(Leaf):
     @staticmethod
     def gen(arg: Unfold_ToolArg_internal) -> gen_node:
         """Simple non-interactive generation with pre-resolved fact refs."""
-        def mk(config: NodeConfig) -> 'Unfold':
+        async def mk(config: NodeConfig) -> 'Unfold':
             return Unfold(config, arg)
         return mk
 
@@ -2609,11 +2626,11 @@ class Unfold(Leaf):
         """
         targets = arg["targets"]
 
-        def mk(config: NodeConfig) -> 'Unfold':
+        async def mk(config: NodeConfig) -> 'Unfold':
             ml_state = config.ml_state
 
             # Query potential definitions for all targets via RPC
-            all_defs = ml_state.potential_defs_of(targets)
+            all_defs = await ml_state.potential_defs_of(targets)
 
             if len(all_defs) == 0:
                 raise GenNode_Error(f"No definitions found for: {', '.join(targets)}")
@@ -2631,7 +2648,7 @@ class Unfold(Leaf):
                 # Multiple definitions - need interaction
                 async def kontinue(results: list[Any]) -> gen_node:
                     selected: list[IsabelleFact] = results[0]
-                    def final_mk(cfg: NodeConfig) -> 'Unfold':
+                    async def final_mk(cfg: NodeConfig) -> 'Unfold':
                         arg_internal: Unfold_ToolArg_internal = {
                             "thought": arg["thought"],
                             "targets": arg["targets"],
@@ -2709,16 +2726,16 @@ class Rewrite(Leaf):
     @staticmethod
     def gen(arg: Rewrite_InternalToolArg) -> gen_node:
         """Non-interactive generation with pre-resolved fact refs."""
-        def mk(config: NodeConfig) -> 'Rewrite':
+        async def mk(config: NodeConfig) -> 'Rewrite':
             return Rewrite(config, arg)
         return mk
 
     @staticmethod
     def interactive_gen(arg: Rewrite_ToolArg) -> gen_node:
         """Interactive generation. Resolves FactByStatement via Interaction_RetrieveFact."""
-        def mk(config: NodeConfig) -> 'Rewrite':
+        async def mk(config: NodeConfig) -> 'Rewrite':
             ml_state = config.ml_state
-            fetched = ml_state.fetch_facts(arg["using"])
+            fetched = await ml_state.fetch_facts(arg["using"])
             resolved, interactions, resolve_indices = _split_fetched(fetched)
 
             def mk_internal() -> Rewrite_InternalToolArg:
@@ -2818,13 +2835,13 @@ class Rewrite(Leaf):
             bindings
         )
 
-    def _refresh_me_alone(self) -> None:
+    async def _refresh_me_alone(self) -> None:
         is_init = self.age == self.session.age
         old_bindings = self.bindings
         old_goal = (self.resulting_state().prooftree_of().top_goal()
                     if self.status.status == EvaluationStatus.Status.SUCCESS else None)
         # Execute the operation via parent Leaf implementation
-        super()._refresh_me_alone()
+        await super()._refresh_me_alone()
 
         # If operation succeeded, extract bindings and track changes
         if self.status.status == EvaluationStatus.Status.SUCCESS:
@@ -2934,7 +2951,7 @@ class Have(StdBlock):
             self.sub_nodes.append(Obvious(sub_config, Obvious_InternalToolArg(facts=[])))
     @staticmethod
     def gen(arg : Have_ToolArg) -> gen_node:
-        def mk(config: NodeConfig) -> 'Have':
+        async def mk(config: NodeConfig) -> 'Have':
             return Have(config, arg)
         return mk
     def quickview_title(self) -> str:
@@ -2955,13 +2972,13 @@ class Have(StdBlock):
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
     def beginning_opr(self) -> Minilang_Operation | None:
         return Minilang_Operation.HAVE(self.name, self.statement['isabelle'])
-    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
-        fail = super()._refresh_the_beginning_opr(begin_opr)
+    async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
+        fail = await super()._refresh_the_beginning_opr(begin_opr)
         if fail is not None:
             return fail
-        if self._first_time and not self.sub_nodes and self._state_after_beginning().need_intro(False):
+        if self._first_time and not self.sub_nodes and await self._state_after_beginning().need_intro(False):
             local_step = self._local_step_of_next_proof_step()
-            ml_state = self._state_after_beginning().clone(None)
+            ml_state = await self._state_after_beginning().clone(None)
             config = NodeConfig(local_step, ml_state, self)
             intro = Intro(config, "", None, False)
             self.sub_nodes.append(intro)
@@ -2998,7 +3015,7 @@ class Suffices(StdBlock):
             self.sub_nodes.append(Obvious(sub_config, Obvious_InternalToolArg(facts=[])))
     @staticmethod
     def gen(arg : Suffices_ToolArg) -> gen_node:
-        def mk(config: NodeConfig) -> 'Suffices':
+        async def mk(config: NodeConfig) -> 'Suffices':
             return Suffices(config, arg)
         return mk
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
@@ -3049,7 +3066,7 @@ class Obtain(StdBlock):
             self.sub_nodes.append(Obvious(sub_config, Obvious_InternalToolArg(facts=[])))
     @staticmethod
     def gen(arg : Obtain_ToolArg) -> gen_node:
-        def mk(config: NodeConfig) -> 'Obtain':
+        async def mk(config: NodeConfig) -> 'Obtain':
             return Obtain(config, arg)
         return mk
     def quickview_title(self) -> str:
@@ -3126,9 +3143,9 @@ class Intro(SubgoalMaker_NoTailEnder):
         self.running_time = 0
     @staticmethod
     def gen(arg: Intro_ToolArg) -> gen_node:
-        def mk(config: NodeConfig) -> 'Intro':
+        async def mk(config: NodeConfig) -> 'Intro':
             if "variable_bindings" in arg or "fact_bindings" in arg:
-                bindings = config.ml_state.compute_bindings(
+                bindings = await config.ml_state.compute_bindings(
                     arg.get("variable_bindings", []), arg.get("fact_bindings", []))
             else:
                 bindings = None
@@ -3160,12 +3177,12 @@ class Intro(SubgoalMaker_NoTailEnder):
             return (None, indent-1)
         else:
             return ("goals", indent+1)
-    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
+    async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
         is_init = self.age == self.session.age
         old_bindings = self.bindings
         s = self._state_after_beginning()
         old_goals = s.prooftree.top_goals() if s.prooftree is not None else None
-        fail = super()._refresh_the_beginning_opr(begin_opr)
+        fail = await super()._refresh_the_beginning_opr(begin_opr)
         if fail is None:
             self.running_time += 1
             messages = self._state_after_beginning().messages
@@ -3276,13 +3293,13 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
 
     @staticmethod
     def gen(arg: InferenceRule_InternalToolArg) -> gen_node:
-        def mk(config: NodeConfig) -> 'InferenceRule':
+        async def mk(config: NodeConfig) -> 'InferenceRule':
             return InferenceRule(config, arg)
         return mk
 
     @staticmethod
     def interactive_gen(arg: InferenceRule_ToolArg) -> gen_node:
-        def mk(config: NodeConfig) -> 'InferenceRule':
+        async def mk(config: NodeConfig) -> 'InferenceRule':
             rule = arg["rule"]
             if rule is None:
                 internal = InferenceRule_InternalToolArg(
@@ -3290,7 +3307,7 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
                 return InferenceRule(config, internal)
 
             ml_state = config.ml_state
-            fetched = ml_state.fetch_facts([rule])
+            fetched = await ml_state.fetch_facts([rule])
             result = fetched[0]
             if isinstance(result, IsabelleFact):
                 internal = InferenceRule_InternalToolArg(
@@ -3367,7 +3384,7 @@ class Branch(SubgoalMaker_NoTailEnder):
         self._initial_goal_index = 0
     @staticmethod
     def gen(arg : Branch_ToolArg) -> gen_node:
-        def mk(config: NodeConfig) -> 'Branch':
+        async def mk(config: NodeConfig) -> 'Branch':
             return Branch(config, arg)
         return mk
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
@@ -3399,8 +3416,8 @@ class Branch(SubgoalMaker_NoTailEnder):
         return FailureReason(f"Subgoal {child.id} fails to be proven.")
     def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         raise InternalError("A Branch doesn't have an ending operation")
-    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
-        fail = super()._refresh_the_beginning_opr(begin_opr)
+    async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
+        fail = await super()._refresh_the_beginning_opr(begin_opr)
         if fail is None:
             if not self.sub_nodes[0].thought:
                 self.sub_nodes[0].thought = "We first show exhaustiveness of the case split"
@@ -3422,7 +3439,7 @@ class CaseSplit(CaseSplit_Like):
         return f"CaseSplit {self.target_isabelle_term}"
     @staticmethod
     def gen(arg : CaseSplit_ToolArg) -> gen_node:
-        def mk(config: NodeConfig) -> 'CaseSplit':
+        async def mk(config: NodeConfig) -> 'CaseSplit':
             return CaseSplit(config, arg)
         return mk
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
@@ -3476,24 +3493,24 @@ class Induction(CaseSplit_Like):
         return f"Induction {self.target_isabelle_term}"
     @staticmethod
     def gen(arg : Induction_ToolArg) -> gen_node:
-        def mk(config: NodeConfig) -> 'Induction':
+        async def mk(config: NodeConfig) -> 'Induction':
             return Induction(config, arg)
         return mk
-    def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
+    async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
         is_init = self.age == self.session.age
         old_variables = list(self.variables)
         if self._first_time:
             try:
-                _, frees, _ = self.ml_state.check_term(self.target_isabelle_term)
+                _, frees, _ = await self.ml_state.check_term(self.target_isabelle_term)
             except InternalError_UnparsedTerm as e:
                 return FailureReason(
                     f"Syntax error in induction target `{e.term}`: {e.reason}")
             # Remove free variables appearing in target_isabelle_term from variables list
             self.variables[:] = [var for var in self.variables if var["name"] not in frees]
-        fail = super()._refresh_the_beginning_opr(begin_opr)
+        fail = await super()._refresh_the_beginning_opr(begin_opr)
         if fail is None:
             vars = self._all_fixed_vars_before_me({})
-            _, frees, _ = self.ml_state.check_term(self.target_isabelle_term)
+            _, frees, _ = await self.ml_state.check_term(self.target_isabelle_term)
             # Remove free variables appearing in target_isabelle_term from vars
             for v in frees:
                 if v in vars:
@@ -3601,29 +3618,31 @@ class GlobalEnv(StdBlock):
 class Root(GoalContainer, StdBlock):
     def __init__(self, context_and_ptree: tuple[Context, ML_ProofTree], connection: Connection, session: 'Session'):
         (context, ptree) = context_and_ptree
-        self.context = context
         ml_state0 = Minilang_State(connection, '$init', ptree)
         super().__init__(NodeConfig("$root", ml_state0, None), "", [])
+        self.context = context
         self.session = session
         self.global_env = GlobalEnv(NodeConfig("global", ml_state0, self))
         self.sub_nodes.append(self.global_env)
-        ml_state = ml_state0.skip(None)
-        # Get number of goals from prooftree
-        if ml_state.prooftree is None:
-            raise ValueError("Root: ml_state.prooftree is None, cannot get top_goals")
-        self.num_goals = len(ml_state.prooftree.top_goals())
-        is_single_goal = self.num_goals == 1
-        for i in range(self.num_goals):
-            if is_single_goal:
-                goal_id = ""
-            else:
-                goal_id = f"goal{i+1}"
-            goal_node = GoalNode(NodeConfig(goal_id, ml_state, self), is_single_goal, True, None)
-            goal_node.id = goal_id
-            self.sub_nodes.append(goal_node)
-            ml_state = ml_state.sorry(None, None)
-        self.final_ml_state = ml_state
-        self._refresh_me_alone()
+    async def _refresh_me_alone(self):
+        if self._first_time:
+            ml_state = await self.ml_state.skip(None)
+            # Get number of goals from prooftree
+            if ml_state.prooftree is None:
+                raise ValueError("Root: ml_state.prooftree is None, cannot get top_goals")
+            self.num_goals = len(ml_state.prooftree.top_goals())
+            is_single_goal = self.num_goals == 1
+            for i in range(self.num_goals):
+                if is_single_goal:
+                    goal_id = ""
+                else:
+                    goal_id = f"goal{i+1}"
+                goal_node = GoalNode(NodeConfig(goal_id, ml_state, self), is_single_goal, True, None)
+                goal_node.id = goal_id
+                self.sub_nodes.append(goal_node)
+                ml_state = await ml_state.sorry(None, None)
+            self.final_ml_state = ml_state
+        await super()._refresh_me_alone()
     def id_of_goal(self) -> step | None:
         return None
     def resulting_state(self) -> Minilang_State:
@@ -3937,10 +3956,11 @@ class Session:
         except LookupError:
             pass
 
-    def initialize(self, root: Root):
+    async def initialize(self, root: Root):
         if hasattr(self, 'root'):
             raise InternalError("The session is already initialized.")
         self.root = root
+        await root._refresh_me_alone()
 
     def _log(self, log_file_handle: Any, event_type: str, debug_messages: Callable[[], list[str]] | None, **data):
         """
@@ -4065,7 +4085,7 @@ class Session:
         """Log debug information to interaction log and logger."""
         self._log(self.interaction_log_file, "DEBUG",
                   lambda: [f"[DEBUG] {msg}"], message=msg)
-    def run(self):
+    async def run(self):
         raise NotImplementedError("`run` must be implemented by subclass")
 
     async def interrupt(self):

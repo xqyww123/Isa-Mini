@@ -86,7 +86,13 @@ async def _handle_raise_interaction(
 
     # 3. All non-forking done — await forks and call continuation
     session.log_interaction("continuation", "all interactions resolved")
-    result = await wi.run_continuation()
+    try:
+        result = await wi.run_continuation()
+    except RaiseInteraction as nested:
+        # Continuation raised a new RaiseInteraction (e.g., async fetch
+        # discovered it needs user interaction). Handle it recursively.
+        session.working_interactions.pop()
+        return await _handle_raise_interaction(session, nested, tool_name)
     session.working_interactions.pop()
     session.log_tool_response(tool_name, f"[INTERACTION RESOLVED] {result}")
     return _Result(result)
@@ -108,15 +114,15 @@ async def _execute_proof_action(
     try:
         match action:
             case "fill":
-                node = session.root.fill(step, gen_node)
+                node = await session.root.fill(step, gen_node)
                 session.refresh_YAML()  # type: ignore[attr-defined]
                 response = await P.filled_step_message(step, session.root, node, session)
             case "insert_before":
-                node = session.root.insert_before(step, gen_node)
+                node = await session.root.insert_before(step, gen_node)
                 session.refresh_YAML()  # type: ignore[attr-defined]
                 response = await P.inserted_before_step_message(step, session.root, node, session)
             case "amend":
-                node = session.root.amend(step, gen_node)
+                node = await session.root.amend(step, gen_node)
                 session.refresh_YAML()  # type: ignore[attr-defined]
                 response = await P.amended_step_message(step, session.root, node, session)
             case _:
@@ -130,11 +136,11 @@ async def _execute_proof_action(
         # Wrap the continuation: after it returns a gen_node, recurse into _execute_proof_action
         original_kont = e.kontinuation
         async def wrapped_kont(results: list[Any]) -> Any:
-            gn = cast(gen_node, await original_kont(results))
+            gn = await original_kont(results)
             assert callable(gn), \
                 "Continuation from _execute_proof_action must return gen_node (callable)"
             return await _execute_proof_action(
-                session, action, step, gn, tool_name, log_prefix)
+                session, action, step, gn, tool_name, log_prefix) # type: ignore[arg-type]
         wrapped_e = RaiseInteraction(e.interactions, wrapped_kont)
         result = await _handle_raise_interaction(session, wrapped_e, tool_name)
         if isinstance(result, _Prompt):
@@ -199,7 +205,7 @@ async def _delete_tool(args: ToolCall_arg) -> ToolCall_ret:
         session.root.session.age += 1
         steps = args["target_steps"]
         try:
-            not_found = session.root.delete(steps)
+            not_found = await session.root.delete(steps)
             session.refresh_YAML()  # type: ignore[attr-defined]
             response = await P.deleted_steps_message(steps, session.root, session)
             if not_found:
@@ -253,7 +259,7 @@ async def _answer_tool(args: ToolCall_arg) -> ToolCall_ret:
 
         # Process the answer
         try:
-            result = current_inter.answer(normalized)
+            result = await current_inter.answer(normalized)
         except Interaction_BadAnswer as e:
             error_msg = str(e)
             session.log_tool_response("mcp__proof__answer", f"BAD ANSWER: {error_msg}")
@@ -317,7 +323,7 @@ async def _semantic_search_tool(args: ToolCall_arg) -> ToolCall_ret:
 
         ml_state = session.root.ml_state
         fetch_k = max(k, 50)
-        results, warnings = ml_state.semantic_knn(query, fetch_k, kinds,
+        results, warnings = await ml_state.semantic_knn(query, fetch_k, kinds,
                                         term_patterns=term_patterns,
                                         type_patterns=type_patterns,
                                         theories_include=theories_include,
@@ -439,8 +445,8 @@ class ClaudeCode(Session):
         fork._fork_index = None
         return fork
 
-    def initialize(self, root: Root):
-        super().initialize(root)
+    async def initialize(self, root: Root):
+        await super().initialize(root)
         with open(self.YAML_path, "w", encoding="utf-8") as f:
             root.print(0, MyIO(f), update_line=True)
         # Build MCP tools — semantic query tools need the Isabelle connection
@@ -465,25 +471,24 @@ class ClaudeCode(Session):
             },
         )
 
-    def run(self):
-        asyncio.run(self._run_with_retry())
+    async def run(self):
+        await self._run_with_retry()
 
     async def interrupt(self):
         if self._client is not None:
             await self._client.interrupt()
 
     async def _run_with_retry(self):
-        import time
         while True:
             try:
                 await self._run()
                 return
             except self._ReachLimitError:
                 self.warn_AoA_opr("Usage limit reached, waiting 20min to retry")
-                time.sleep(1200)
+                await asyncio.sleep(1200)
             except self._RateLimitError:
                 self.warn_AoA_opr("API rate limit, waiting 2s to retry")
-                time.sleep(2)
+                await asyncio.sleep(2)
 
     def close(self):
         """Clean up the session and remove the temporary directory."""
@@ -701,7 +706,7 @@ class ClaudeCode(Session):
         """Launch forking interactions as background tasks. Results stored via fork_kont."""
         async def run_one(idx: int, interaction: Interaction) -> None:
             from .model import _session_var
-            _session_var.set(None)  # Clear the copied parent session so _make_fork succeeds
+            _session_var.set(None)  # type: ignore  # Clear the copied parent session so _make_fork succeeds
             fork = ClaudeCode._make_fork(self) # type: ignore[attr-defined]
             fork._fork_index = idx
             # Fork gets its own single-interaction Working_Interactions.

@@ -1,5 +1,6 @@
 #!/bin/env python
 import argparse
+import asyncio
 from os import abort
 
 import readline
@@ -55,51 +56,54 @@ def CLI_print_state (response):
         console.print('All goals are proven', style='bold green')
 
 
-with Mini(args.addr, 'HOL', initial_pos) as mini:
-    CLI_print_state(mini.print())
+async def main():
+    async with Mini(args.addr, 'HOL', initial_pos) as mini:
+        CLI_print_state(await mini.print())
 
-    while True:
-        try:
-            s = input('mini> ')
-            match s:
-                case r'\conclude':
-                    console.print(mini.conclude())
-                    break
-                case r'\close':
-                    mini.close()
-                    break
-                case str(x) if x.startswith(r'\move_to'):
-                    m = re.match(r'^\\move_to\s+([^:\s]+):(\d+)(:(\d+))?\s*$', x)
-                    if m:
-                        file = m[1]
-                        line = int(m[2])
-                        offset = int(m[4] or 0)
-                        mini.move_to(file, line, offset)
-                        CLI_print_state(mini.print())
-                    else:
-                        console.print(r'Bad Syntax, \move_to <file>:<line>:[offset]', style='bold red')
-                case str(x) if x.startswith(r'\record'):
-                    m = re.match(r'^\\record\s+(\w+)\s*$', x)
-                    if m:
-                        name = m[1]
-                        mini.record(name)
-                        CLI_print_state(mini.print())
-                    else:
-                        console.print(r'Bad Syntax, \record <name>', style='bold red')
-                case str(x) if x.startswith(r'\rollback'):
-                    m = re.match(r'^\\rollback\s+(\w+)\s*$', x)
-                    if m:
-                        name = m[1]
-                        mini.rollback(name)
-                        CLI_print_state(mini.print())
-                    else:
-                        console.print(r'Bad Syntax, \rollback <name>', style='bold red')
-                case _:
-                    rets = mini.eval(s)
-                    CLI_print_state(rets)
-        except KeyboardInterrupt:
-            break
-        except EOFError:
-            break
-        #except Exception as e:
-        #    console.print(e, style='bold red')
+        while True:
+            try:
+                s = input('mini> ')
+                match s:
+                    case r'\conclude':
+                        console.print(await mini.conclude())
+                        break
+                    case r'\close':
+                        await mini.close()
+                        break
+                    case str(x) if x.startswith(r'\move_to'):
+                        m = re.match(r'^\\move_to\s+([^:\s]+):(\d+)(:(\d+))?\s*$', x)
+                        if m:
+                            file = m[1]
+                            line = int(m[2])
+                            offset = int(m[4] or 0)
+                            await mini.move_to(file, line, offset)
+                            CLI_print_state(await mini.print())
+                        else:
+                            console.print(r'Bad Syntax, \move_to <file>:<line>:[offset]', style='bold red')
+                    case str(x) if x.startswith(r'\record'):
+                        m = re.match(r'^\\record\s+(\w+)\s*$', x)
+                        if m:
+                            name = m[1]
+                            await mini.record(name)
+                            CLI_print_state(await mini.print())
+                        else:
+                            console.print(r'Bad Syntax, \record <name>', style='bold red')
+                    case str(x) if x.startswith(r'\rollback'):
+                        m = re.match(r'^\\rollback\s+(\w+)\s*$', x)
+                        if m:
+                            name = m[1]
+                            await mini.rollback(name)
+                            CLI_print_state(await mini.print())
+                        else:
+                            console.print(r'Bad Syntax, \rollback <name>', style='bold red')
+                    case _:
+                        rets = await mini.eval(s)
+                        CLI_print_state(rets)
+            except KeyboardInterrupt:
+                break
+            except EOFError:
+                break
+            #except Exception as e:
+            #    console.print(e, style='bold red')
+
+asyncio.run(main())
