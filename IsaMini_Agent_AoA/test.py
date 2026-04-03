@@ -49,7 +49,7 @@ class ModelTestCase(TestCase):
                     print(diff_result.stderr, file=sys.stderr)
             finally:
                 os.unlink(actual_path)
-        with Session(connection.server.logger, log_dir) as session:
+        async with Session(connection.server.logger, log_dir) as session:
             root = Root((global_context, ptree), connection, session)
             await session.initialize(root)
             buffer = io.StringIO()

@@ -8,4 +8,6 @@ declare [[agent_AoA_driver="test.Suffices"]]
 lemma suffices_test1: "(x::int) * x \<ge> 0"
   by   AgentAoA
 
+ML \<open>Par_Exn.release_first\<close>
+
 end

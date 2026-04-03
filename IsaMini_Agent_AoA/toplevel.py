@@ -43,7 +43,7 @@ async def IsaMini_AoA(data: tuple[Any, Any, str, str, str], connection: Connecti
         drv = Session.Driver.get(driver)
         if drv is None:
             raise UnknownDriver(driver)
-        with drv(connection.server.logger, actual_log_path) as session:
+        async with drv(connection.server.logger, actual_log_path) as session:
             root = Root((global_context, ptree), connection, session)
             await session.initialize(root)
             await session.run()

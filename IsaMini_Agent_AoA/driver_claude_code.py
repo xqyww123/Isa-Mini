@@ -1,13 +1,15 @@
 from typing import Any, cast
-import jsoncomment
+import json
 import asyncio
 import contextvars
 import os
+import shlex
 import tempfile
 import shutil
 from .model import *
 from . import prompts as P
-from claude_agent_sdk import tool, create_sdk_mcp_server, ClaudeAgentOptions, ClaudeSDKClient, HookMatcher, ResultMessage
+from .mcp_http_server import ProofMCPHTTPServer
+from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, HookMatcher, ResultMessage
 
 from claude_agent_sdk.types import (
     HookInput,
@@ -18,345 +20,6 @@ from claude_agent_sdk.types import (
 from io import StringIO
 import Isabelle_Semantic_Embedding
 from Isabelle_Semantic_Embedding.semantics import mk_query_by_name_tool, mk_query_by_position_tool
-
-type ToolCall_ret = dict[str, Any]
-def _mk_ret(str: str) -> ToolCall_ret:
-    return {"content": [ {"type": "text", "text": str} ] }
-
-# Load schema for edit tool
-_current_file = os.path.abspath(__file__)
-_cc_edit_path = os.path.join(os.path.dirname(_current_file), "tools", "cc_edit.jsonc")
-with open(_cc_edit_path, "r", encoding="utf-8") as _f:
-    _cc_edit_schema = jsoncomment.JsonComment().load(_f)
-
-# Load schema for answer tool
-_cc_answer_path = os.path.join(os.path.dirname(_current_file), "tools", "cc_answer.jsonc")
-with open(_cc_answer_path, "r", encoding="utf-8") as _f:
-    _cc_answer_schema = jsoncomment.JsonComment().load(_f)
-
-# Load schema for delete tool
-_cc_delete_path = os.path.join(os.path.dirname(_current_file), "tools", "cc_delete.jsonc")
-with open(_cc_delete_path, "r", encoding="utf-8") as _f:
-    _cc_delete_schema = jsoncomment.JsonComment().load(_f)
-
-# Load schema for semantic search tool
-_cc_semantic_search_path = os.path.join(os.path.dirname(_current_file), "tools", "cc_semantic_search.jsonc")
-with open(_cc_semantic_search_path, "r", encoding="utf-8") as _f:
-    _cc_semantic_search_schema = jsoncomment.JsonComment().load(_f)
-
-
-class _Prompt(NamedTuple):
-    """A prompt string to return to the LLM."""
-    text: str
-
-class _Result(NamedTuple):
-    """A resolved result (gen_node or Any)."""
-    value: Any
-
-async def _handle_raise_interaction(
-    session: 'ClaudeCode',
-    e: RaiseInteraction,
-    tool_name: str,
-) -> '_Prompt | _Result':
-    """Dispatch a RaiseInteraction. Returns _Prompt (for LLM) or _Result (all done)."""
-    wi = Working_Interactions(
-        interactions=e.interactions,
-        results=[None] * len(e.interactions),
-        result_set=[False] * len(e.interactions),
-        kontinuation=e.kontinuation,
-    )
-    session.working_interactions.append(wi)
-    n_forking = sum(1 for inter in e.interactions if inter.forking)
-    n_inline = len(e.interactions) - n_forking
-    session.log_interaction(tool_name,
-        f"{len(e.interactions)} interactions ({n_forking} forking, {n_inline} inline)")
-
-    # 1. Launch forking interactions as background tasks (don't await yet)
-    forking = [(i, inter) for i, inter in enumerate(e.interactions) if inter.forking]
-    if forking:
-        session._launch_forks(forking, wi)  # type: ignore[attr-defined]
-
-    # 2. Find first unfinished non-forking interaction
-    for i, inter in enumerate(wi.interactions):
-        if wi.result_set[i] is False:
-            buffer = StringIO()
-            inter.prompt(0, MyIO(buffer))
-            session.log_tool_response(tool_name, f"[INTERACTION PROMPT]\n{buffer.getvalue()}")
-            return _Prompt(buffer.getvalue())
-
-    # 3. All non-forking done — await forks and call continuation
-    session.log_interaction("continuation", "all interactions resolved")
-    try:
-        result = await wi.run_continuation()
-    except RaiseInteraction as nested:
-        # Continuation raised a new RaiseInteraction (e.g., async fetch
-        # discovered it needs user interaction). Handle it recursively.
-        session.working_interactions.pop()
-        return await _handle_raise_interaction(session, nested, tool_name)
-    session.working_interactions.pop()
-    session.log_tool_response(tool_name, f"[INTERACTION RESOLVED] {result}")
-    return _Result(result)
-
-
-async def _execute_proof_action(
-    session: 'ClaudeCode',
-    action: str,
-    step: str,
-    gen_node: gen_node,
-    tool_name: str,
-    log_prefix: str
-) -> str:
-    """Execute a proof action with complete error handling."""
-    session.root.session.age += 1
-    if not callable(gen_node):
-        raise TypeError(f"gen_node must be callable, got {type(gen_node)}")
-
-    try:
-        match action:
-            case "fill":
-                node = await session.root.fill(step, gen_node)
-                session.refresh_YAML()  # type: ignore[attr-defined]
-                response = await P.filled_step_message(step, session.root, node, session)
-            case "insert_before":
-                node = await session.root.insert_before(step, gen_node)
-                session.refresh_YAML()  # type: ignore[attr-defined]
-                response = await P.inserted_before_step_message(step, session.root, node, session)
-            case "amend":
-                node = await session.root.amend(step, gen_node)
-                session.refresh_YAML()  # type: ignore[attr-defined]
-                response = await P.amended_step_message(step, session.root, node, session)
-            case _:
-                raise ArgumentError({"action": action}, P.invalid_action_error(action))
-
-        session.log_tool_response(tool_name, response)
-        session.log_proof_tree_snapshot(f"{log_prefix}_step_{step}")
-        return response
-
-    except RaiseInteraction as e:
-        # Wrap the continuation: after it returns a gen_node, recurse into _execute_proof_action
-        original_kont = e.kontinuation
-        async def wrapped_kont(results: list[Any]) -> Any:
-            gn = await original_kont(results)
-            assert callable(gn), \
-                "Continuation from _execute_proof_action must return gen_node (callable)"
-            return await _execute_proof_action(
-                session, action, step, gn, tool_name, log_prefix) # type: ignore[arg-type]
-        wrapped_e = RaiseInteraction(e.interactions, wrapped_kont)
-        result = await _handle_raise_interaction(session, wrapped_e, tool_name)
-        if isinstance(result, _Prompt):
-            return result.text
-        return result.value # type: ignore[arg-type]
-
-    except AoA_Error as e:
-        error_msg = str(e)
-        session.log_tool_response(tool_name, f"ERROR: {error_msg}")
-        return error_msg
-
-# # Simple test tool with minimal schema for debugging
-# @tool("test_hello", "A simple test tool to verify MCP server works", {"name": {"type": "string"}})
-# async def _test_tool(args: ToolCall_arg) -> ToolCall_ret:
-#     """Simple test tool to verify MCP server is discoverable."""
-#     name = args.get("name", "World")
-#     return {"content": [{"type": "text", "text": f"Hello, {name}! MCP server is working!"}]}
-
-@tool("edit", "Edit the proof.yaml file", input_schema=_cc_edit_schema)
-async def _edit_tool(args: ToolCall_arg) -> ToolCall_ret:
-    """Edit the proof.yaml file based on provided content."""
-    # Get the current session instance
-    from .model import the_session
-    session = the_session()
-    if not isinstance(session, ClaudeCode):
-        raise InternalError(f"Expected ClaudeCode session, got {type(session)}")
-    session : ClaudeCode = cast(ClaudeCode, session)
-
-    # Log tool call
-    session.log_tool_call("mcp__proof__edit", args)
-
-    try:
-        step = args["target_step"]
-        try:
-            gen_node = Parse_Node(args["proof_operation"])
-        except AoA_Error as e:
-            error_msg = str(e)
-            session.log_tool_response("mcp__proof__edit", f"ERROR: {error_msg}")
-            return _mk_ret(error_msg)
-
-        response = await _execute_proof_action(
-            session, args["action"], step, gen_node,
-            "mcp__proof__edit", "after_fill"
-        )
-        return _mk_ret(response)
-    except Exception as e:
-        session.log_tool_response("mcp__proof__edit", f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
-        os._exit(1)
-
-@tool("delete", "Delete proof steps", input_schema=_cc_delete_schema)
-async def _delete_tool(args: ToolCall_arg) -> ToolCall_ret:
-    """Delete one or more proof steps by their step IDs."""
-    from .model import the_session
-    session = the_session()
-    if not isinstance(session, ClaudeCode):
-        raise InternalError(f"Expected ClaudeCode session, got {type(session)}")
-    session: ClaudeCode = cast(ClaudeCode, session)
-
-    session.log_tool_call("mcp__proof__delete", args)
-
-    try:
-        session.root.session.age += 1
-        steps = args["target_steps"]
-        try:
-            not_found = await session.root.delete(steps)
-            session.refresh_YAML()  # type: ignore[attr-defined]
-            response = await P.deleted_steps_message(steps, session.root, session)
-            if not_found:
-                noun = "step" if len(not_found) == 1 else "steps"
-                response += f"\nWarning: {noun} {', '.join(not_found)} not found and skipped."
-        except AoA_Error as e:
-            error_msg = str(e)
-            session.log_tool_response("mcp__proof__delete", f"ERROR: {error_msg}")
-            return _mk_ret(error_msg)
-
-        session.log_tool_response("mcp__proof__delete", response)
-        session.log_proof_tree_snapshot("after_delete")
-        return _mk_ret(response)
-    except Exception as e:
-        session.log_tool_response("mcp__proof__delete", f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
-        os._exit(1)
-
-@tool("answer", "Answer a pending question", input_schema=_cc_answer_schema)
-async def _answer_tool(args: ToolCall_arg) -> ToolCall_ret:
-    """Answer a pending interaction with the selected indexes."""
-    from .model import the_session
-    session = the_session()
-    if not isinstance(session, ClaudeCode):
-        raise InternalError(f"Expected ClaudeCode session, got {type(session)}")
-    session : ClaudeCode = cast(ClaudeCode, session)
-
-    # Log tool call
-    session.log_tool_call("mcp__proof__answer", args)
-
-    try:
-        if not session.working_interactions:
-            error_msg = "No pending interaction to answer"
-            session.log_tool_response("mcp__proof__answer", f"ERROR: {error_msg}")
-            return _mk_ret(error_msg)
-        wi = session.working_interactions[-1]  # stack top
-
-        # Find the current (first unfinished non-forking) interaction
-        current_idx = None
-        for i, inter in enumerate(wi.interactions):
-            if wi.result_set[i] is False:
-                current_idx = i
-                break
-
-        if current_idx is None:
-            error_msg = "No pending interaction to answer"
-            session.log_tool_response("mcp__proof__answer", f"ERROR: {error_msg}")
-            return _mk_ret(error_msg)
-
-        current_inter = wi.interactions[current_idx]
-        normalized = normalize_answer(args.get("indexes"), args.get("text"))
-
-        # Process the answer
-        try:
-            result = await current_inter.answer(normalized)
-        except Interaction_BadAnswer as e:
-            error_msg = str(e)
-            session.log_tool_response("mcp__proof__answer", f"BAD ANSWER: {error_msg}")
-            return _mk_ret(error_msg)
-        except RaiseInteraction as e:
-            r = await _handle_raise_interaction(session, e, "mcp__proof__answer")
-            if isinstance(r, _Prompt):
-                return _mk_ret(r.text)
-            result = r.value
-
-        # Store the result
-        wi.results[current_idx] = result
-        wi.result_set[current_idx] = True
-        n_done = sum(1 for f in wi.result_set if f is True)
-        session.log_interaction("mcp__proof__answer",
-            f"answered interaction {current_idx} ({n_done}/{len(wi.interactions)} done)")
-
-        # Find next unfinished non-forking interaction
-        for i, inter in enumerate(wi.interactions):
-            if wi.result_set[i] is False:
-                buffer = StringIO()
-                inter.prompt(0, MyIO(buffer))
-                session.log_tool_response("mcp__proof__answer", f"[INTERACTION PROMPT]\n{buffer.getvalue()}")
-                return _mk_ret(buffer.getvalue())
-
-        # All done — await forks and call continuation
-        session.log_interaction("continuation", "all interactions resolved")
-        final = await wi.run_continuation()
-        session.working_interactions.pop()
-        session.log_tool_response("mcp__proof__answer", f"[INTERACTION RESOLVED] {final}")
-        if not session.is_major:
-            await session.interrupt()
-        return _mk_ret(str(final))
-    except Exception as e:
-        session.log_tool_response("mcp__proof__answer", f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
-        os._exit(1)
-
-@tool("semantic_search",
-      "Search for Isabelle entities by English description.",
-      input_schema=_cc_semantic_search_schema)
-async def _semantic_search_tool(args: ToolCall_arg) -> ToolCall_ret:
-    from .model import the_session
-    session = the_session()
-    if not isinstance(session, ClaudeCode):
-        raise InternalError(f"Expected ClaudeCode session, got {type(session)}")
-
-    session.log_tool_call("mcp__proof__semantic_search", args)
-
-    try:
-        query = args.get("query", None)
-        k = args.get("k", 10)
-        try:
-            kinds = [EntityKind.from_label(label) for label in args["kinds"]]
-        except KeyError as e:
-            return _mk_ret(f"Invalid entity kind: {e}")
-
-        term_patterns = args.get("term_patterns", [])
-        type_patterns = args.get("type_patterns", [])
-        theories_include = args.get("theories_include", [])
-        name_contains = args.get("name_contains", [])
-
-        ml_state = session.root.ml_state
-        fetch_k = max(k, 50)
-        results, warnings = await ml_state.semantic_knn(query, fetch_k, kinds,
-                                        term_patterns=term_patterns,
-                                        type_patterns=type_patterns,
-                                        theories_include=theories_include,
-                                        name_contains=name_contains)
-
-        lines: list[str] = []
-        for w in warnings:
-            lines.append(f"Warning: {w}")
-        if not results:
-            lines.append("No matching entities found.")
-            return _mk_ret("\n".join(lines))
-        # Check if results are not distinctive enough
-        if len(results) >= 50:
-            n_above_07 = sum(1 for s, _ in results if s > 0.7)
-            n_above_06 = sum(1 for s, _ in results if s > 0.6)
-            last_score = results[-1][0]
-            if last_score > 0.5 or n_above_06 > 20 or n_above_07 > 10:
-                session.log_interaction("mcp__proof__semantic_search",
-                    f"not distinctive: last_score={last_score:.2f}, n_above_06={n_above_06}, n_above_07={n_above_07}")
-                lines.append("Hint: Results not distinctive enough \u2014 too many high-similarity hits. "
-                             "Try narrowing with term_patterns, type_patterns, or theories_include.")
-        for score, rec in results[:k]:
-            lines.append(f"- [{score:.2f}] {rec.pretty_print}")
-            if rec.interpretation:
-                lines.append(f"  {rec.interpretation}")
-        return _mk_ret("\n".join(lines))
-    except IsabelleError as e:
-        error_msg = "\n".join(e.errors)
-        session.log_tool_response("mcp__proof__semantic_search", f"ERROR: {error_msg}")
-        return _mk_ret(error_msg)
-    except Exception as e:
-        session.log_tool_response("mcp__proof__semantic_search", f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
-        os._exit(1)
 
 @agent_driver("ClaudeCode")
 class ClaudeCode(Session):
@@ -384,40 +47,45 @@ class ClaudeCode(Session):
         'ToolSearch'
     ]
     FORK_WHITELIST = [t for t in TOOL_WHITELIST if t not in ('mcp__proof__edit', 'mcp__proof__delete')]
-    TOOL_TO_CALL = [
-        'TaskCreate',
-        'Agent',
-        'Skill',
-        'Read',
-        'Grep',
-        'mcp__proof__edit',
-        'mcp__proof__delete',
-        'mcp__proof__query_by_name',
-        'mcp__proof__query_by_position',
-        #'mcp__proof__semantic_search',
-    ]
-
     working_dir: str
     _fork_counter: int
     _fork_name: str
     _fork_index: int | None
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Create a fresh, empty temporary working directory for each session
-        self.working_dir = tempfile.mkdtemp(prefix="agent_AoA_")
-        # Check for both read and write permissions
-        if not os.access(self.working_dir, os.R_OK | os.W_OK):
-            raise InternalError(f"The working directory {self.working_dir} is not readable and writable. Please ensure the temporary directory is writable.")
-        self.YAML_path = os.path.join(self.working_dir, "proof.yaml")
-        self._session_id: str | None = None
+    def __init__(self, *args, parent: 'ClaudeCode | None' = None,
+                 interactive_web_terminal: bool = False, **kwargs):
+        super().__init__(*args, parent=parent, **kwargs)
+        if parent is not None:
+            # Fork mode: share parent's state
+            self.working_dir = parent.working_dir
+            self.YAML_path = parent.YAML_path
+            self.root = parent.root
+            self._http_server = parent._http_server
+            self._interactive_web_terminal = parent._interactive_web_terminal
+            parent._fork_counter += 1
+            self._fork_name = f"{parent._fork_name}.fork_{parent._fork_counter}"
+        else:
+            # Normal mode: create fresh state
+            self.working_dir = tempfile.mkdtemp(prefix="agent_AoA_")
+            if not os.access(self.working_dir, os.R_OK | os.W_OK):
+                raise InternalError(
+                    f"The working directory {self.working_dir} is not readable and writable.")
+            self.YAML_path = os.path.join(self.working_dir, "proof.yaml")
+            self._http_server: ProofMCPHTTPServer | None = None
+            self._interactive_web_terminal = interactive_web_terminal
+            self._fork_name = "main"
+
+        # Common to both modes
+        self._session_id: str | None = None       # constant, set in initialize(), used for HTTP server registration
+        self._conversation_id: str | None = None   # mutable, set by Agent SDK hook, used for fork resume
         self._fork_counter = 0
-        self._fork_name = "main"
         self._fork_index = None
         self._client: ClaudeSDKClient | None = None
+        self._mcp_url: str | None = None
+        self._proof_complete: asyncio.Event | None = None
 
     @classmethod
-    def _make_fork(cls, parent: 'ClaudeCode', name: str | None = None) -> 'ClaudeCode':
+    def _make_fork(cls, parent: 'ClaudeCode') -> 'ClaudeCode':
         """Create a fork subsession sharing parent's state.
         Must be called from a different contextvars context than the parent."""
         from .model import _session_var
@@ -429,59 +97,58 @@ class ClaudeCode(Session):
             raise InternalError(
                 "_make_fork must be called in a fresh context "
                 "(use loop.create_task with context=contextvars.copy_context())")
-        fork = object.__new__(cls)
-        parent._fork_counter += 1  # type: ignore[attr-defined]
-        Session.__init__(fork, parent=parent)
-        if name is not None:
-            fork._fork_name = f"{parent._fork_name}.{name}"  # type: ignore[attr-defined]
-        else:
-            fork._fork_name = f"{parent._fork_name}.fork_{parent._fork_counter}"  # type: ignore[attr-defined]
-        fork.root = parent.root
-        fork.working_dir = parent.working_dir  # type: ignore[attr-defined]
-        fork.YAML_path = parent.YAML_path  # type: ignore[attr-defined]
-        fork.mcp = parent.mcp  # type: ignore[attr-defined]
-        fork._session_id = None
-        fork._fork_counter = 0
-        fork._fork_index = None
-        return fork
+        return cls(parent=parent)
 
     async def initialize(self, root: Root):
         await super().initialize(root)
         with open(self.YAML_path, "w", encoding="utf-8") as f:
             root.print(0, MyIO(f), update_line=True)
-        # Build MCP tools — semantic query tools need the Isabelle connection
+
+        # Isabelle semantic query tools (SdkMcpTool instances — schemas/handlers extracted by HTTP server)
         connection = root.ml_state.connection
-        tools = [
-            _edit_tool, _delete_tool, _answer_tool, _semantic_search_tool,
+        extra_sdk_tools = [
             mk_query_by_name_tool(connection, []),
             mk_query_by_position_tool(connection, []),
         ]
-        self.mcp = create_sdk_mcp_server("proof", tools=tools)
-        self.options = ClaudeAgentOptions(
-            model="claude-opus-4-6",
-            thinking={"type": "adaptive"},
-            cwd=self.working_dir,
-            permission_mode="default",
-            allowed_tools=self.TOOL_WHITELIST,
-            mcp_servers={"proof": self.mcp},
-            hooks={
-                "PreToolUse": [
-                    HookMatcher(matcher="*", hooks=[self.permission_control]),
-                ]
-            },
-        )
+
+        # Register with singleton HTTP MCP server
+        self._http_server = await ProofMCPHTTPServer.get_or_create()
+        self._session_id = self._http_server.allocate_session_id()
+        self._mcp_url = await self._http_server.register_session(
+            self._session_id, self, extra_sdk_tools=extra_sdk_tools)
+
+        if not self._interactive_web_terminal:
+            # Embedded mode: Agent SDK connects to HTTP server via URL
+            self.options = ClaudeAgentOptions(
+                model="claude-opus-4-6",
+                thinking={"type": "adaptive"},
+                cwd=self.working_dir,
+                permission_mode="default",
+                allowed_tools=self.TOOL_WHITELIST,
+                mcp_servers={"proof": {"type": "http", "url": self._mcp_url}},
+                hooks={
+                    "PreToolUse": [
+                        HookMatcher(matcher="*", hooks=[self.permission_control]),
+                    ]
+                },
+            )
 
     async def run(self):
         await self._run_with_retry()
 
     async def interrupt(self):
+        if self._interactive_web_terminal and self._proof_complete is not None:
+            self._proof_complete.set()
         if self._client is not None:
             await self._client.interrupt()
 
     async def _run_with_retry(self):
+        if self._interactive_web_terminal:
+            await self._run_standalone()
+            return
         while True:
             try:
-                await self._run()
+                await self._run_embedded()
                 return
             except self._ReachLimitError:
                 self.warn_AoA_opr("Usage limit reached, waiting 20min to retry")
@@ -490,9 +157,13 @@ class ClaudeCode(Session):
                 self.warn_AoA_opr("API rate limit, waiting 2s to retry")
                 await asyncio.sleep(2)
 
-    def close(self):
+    async def close(self):
         """Clean up the session and remove the temporary directory."""
-        super().close()
+        await super().close()
+        # Unregister from HTTP server if registered
+        if self._http_server is not None and self._session_id is not None:
+            await self._http_server.unregister_session(self._session_id)
+            self._session_id = None
         # Only the main session owns the working directory; forks share it.
         if self.is_major and hasattr(self, 'working_dir') and os.path.exists(self.working_dir):
             try:
@@ -530,8 +201,8 @@ class ClaudeCode(Session):
         tool_input = pre_tool_input.get("tool_input") or {}
         cwd = pre_tool_input.get("cwd") or str(self.working_dir)
 
-        # Record session_id for forking
-        self._session_id = pre_tool_input.get("session_id") or self._session_id
+        # Record conversation_id for forking (Agent SDK assigns this)
+        self._conversation_id = pre_tool_input.get("session_id") or self._conversation_id
 
         # 1. Check if tool is in whitelist
         if tool not in self.TOOL_WHITELIST:
@@ -655,9 +326,10 @@ class ClaudeCode(Session):
         if "Rate limit" in text:
             raise self._RateLimitError()
 
-    async def _run(self):
+    async def _run_embedded(self):
+        """Run using the Claude Agent SDK (embedded mode)."""
         if self._client is not None:
-            raise InternalError("_run called while already running")
+            raise InternalError("_run_embedded called while already running")
         try:
             async with ClaudeSDKClient(options=self.options) as client:
                 self._client = client
@@ -688,6 +360,121 @@ class ClaudeCode(Session):
                         return
         finally:
             self._client = None
+
+    async def _run_standalone(self):
+        """Run Claude Code CLI in a tmux session (standalone/interactive mode)."""
+        assert self._session_id is not None, "_run_standalone called before initialize()"
+        import uuid
+        # Claude CLI requires a UUID for --session-id
+        claude_session_id = str(uuid.uuid4())
+        self._conversation_id = claude_session_id
+        self._proof_complete = asyncio.Event()
+        tmux_session = f"proof_{self._session_id}"
+
+        # Write MCP config file
+        assert self._http_server is not None
+        config_path = os.path.join(self.working_dir, "mcp_config.json")
+        with open(config_path, "w") as f:
+            json.dump(self._http_server.mcp_config_json(self._session_id), f)
+
+        # Write launcher script with permission settings mirroring embedded mode:
+        # - proof.yaml: Read/Grep only (Write/Edit denied — must use mcp__proof__edit)
+        # - .claude/plans/: all operations allowed
+        # - Bash: denied
+        # - Interaction state: handled by _check_tool_permission in mcp_http_server
+        yaml_path_abs = os.path.abspath(self.YAML_path)
+        settings = json.dumps({
+            "permissions": {
+                "allow": [
+                    f"Read(//{yaml_path_abs})",
+                    f"Grep(//{yaml_path_abs})",
+                    "Read(//.claude/plans/**)",
+                    "Write(//.claude/plans/**)",
+                    "Edit(//.claude/plans/**)",
+                    "Grep(//.claude/plans/**)",
+                ],
+                "deny": [
+                    "Bash",
+                    "Write",
+                    "Edit",
+                ]
+            }
+        })
+        allowed = ",".join(self.TOOL_WHITELIST)
+        launcher_path = os.path.join(self.working_dir, "launch_claude.sh")
+        error_log = os.path.join(self.working_dir, "claude_error.log")
+        with open(launcher_path, "w") as f:
+            f.write("#!/bin/bash\n")
+            f.write(f"cd {shlex.quote(self.working_dir)}\n")
+            f.write("unset CLAUDECODE\n")  # prevent nesting protection
+            f.write(f"claude --session-id {shlex.quote(claude_session_id)} "
+                    f"--mcp-config {shlex.quote(config_path)} "
+                    f"--strict-mcp-config "
+                    f"--allowed-tools {shlex.quote(allowed)} "
+                    f"--settings {shlex.quote(settings)} "
+                    f"-- {shlex.quote(P.INITIAL_PROMPT)} "
+                    f"2>{shlex.quote(error_log)}\n")
+            f.write(f"echo \"EXIT CODE: $?\" >> {shlex.quote(error_log)}\n")
+        os.chmod(launcher_path, 0o755)
+
+        # Launch tmux session
+        proc = await asyncio.create_subprocess_exec(
+            'tmux', 'new-session', '-d', '-s', tmux_session, launcher_path,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        await proc.wait()
+        self.log_AoA_opr(f"Launched tmux session '{tmux_session}'")
+
+        # Start web terminal server and notify Isabelle with the URL
+        from .web_terminal import WebTerminalServer
+        web_terminal = await WebTerminalServer.get_or_create()
+        web_terminal_url = web_terminal.session_url(tmux_session)
+        await self.root.ml_state.connection.writeln(
+            f"Interactive proof session started. Open web terminal: {web_terminal_url}")
+
+        # Wait for either proof completion or tmux death
+        proof_task = asyncio.create_task(self._proof_complete.wait())
+        monitor_task = asyncio.create_task(self._monitor_tmux(tmux_session))
+
+        try:
+            done, pending = await asyncio.wait(
+                [proof_task, monitor_task],
+                return_when=asyncio.FIRST_COMPLETED)
+            for t in pending:
+                t.cancel()
+        finally:
+            self._proof_complete = None
+            # Replace the tmux pane with a result message (instead of just killing it)
+            is_proof_done = self.root.is_proof_finished()
+            if is_proof_done:
+                msg = r"echo -e '\n\033[32m=== Proof completed successfully ===\033[0m\n' && sleep infinity"
+            else:
+                msg = r"echo -e '\n\033[31m=== Proof session ended (incomplete) ===\033[0m\n' && sleep infinity"
+            respawn = await asyncio.create_subprocess_exec(
+                'tmux', 'respawn-pane', '-t', tmux_session, '-k',
+                'bash', '-c', msg,
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            await respawn.wait()
+
+        # Read error log if it exists
+        error_log = os.path.join(self.working_dir, "claude_error.log")
+        if os.path.exists(error_log):
+            with open(error_log) as f:
+                error_content = f.read().strip()
+            if error_content:
+                self.warn_AoA_opr(f"Claude error log:\n{error_content}")
+
+        self.log_proof()
+
+    async def _monitor_tmux(self, session_name: str):
+        """Poll tmux session status. Returns when session dies."""
+        while True:
+            await asyncio.sleep(2)
+            proc = await asyncio.create_subprocess_exec(
+                'tmux', 'has-session', '-t', session_name,
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            if (await proc.wait()) != 0:
+                self.warn_AoA_opr(f"tmux session '{session_name}' exited")
+                return
 
     def _accumulate_cost(self, message: ResultMessage) -> None:
         """Accumulate per-turn cost from a ResultMessage."""
@@ -722,15 +509,21 @@ class ClaudeCode(Session):
                 result_set=[False],
                 kontinuation=fork_kont,
             ))
+            # Register fork session with HTTP server → own endpoint
+            assert self._http_server is not None
+            fork._session_id = self._http_server.allocate_session_id()
+            fork_url = await self._http_server.register_session(fork._session_id, fork)
+            fork._mcp_url = fork_url
+
             fork_options = ClaudeAgentOptions(
                 model="claude-opus-4-6",
                 thinking={"type": "adaptive"},
-                resume=self._session_id,
+                resume=self._conversation_id,
                 fork_session=True,
                 cwd=self.working_dir,
                 permission_mode="default",
                 allowed_tools=self.FORK_WHITELIST,
-                mcp_servers={"proof": self.mcp},
+                mcp_servers={"proof": {"type": "http", "url": fork_url}},
                 hooks={
                     "PreToolUse": [
                         HookMatcher(matcher="*", hooks=[fork.permission_control]),
@@ -770,7 +563,9 @@ class ClaudeCode(Session):
                         "You haven't submitted your answer. "
                         "You MUST call the mcp__proof__answer tool to submit it.")
             fork._client = None
-            fork.close()
+            if self._http_server is not None and fork._session_id is not None:
+                await self._http_server.unregister_session(fork._session_id)
+            await fork.close()
 
         loop = asyncio.get_running_loop()
         self.log_interaction("fork", f"launching {len(forking)} forking interactions")
@@ -784,3 +579,6 @@ class ClaudeCode(Session):
             self.root.print(0, MyIO(f), update_line=True)
 
 
+@agent_driver("ClaudeCode_Interactive")
+def _claude_code_interactive(logger, log_dir):
+    return ClaudeCode(logger, log_dir, interactive_web_terminal=True)

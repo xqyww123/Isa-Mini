@@ -1287,6 +1287,8 @@ class Node(ABC):
                 status_mark = ""
         file.write(f"{self._kind} {self.id}: {self.quickview_title()} ({changed_mark}{status_mark}line {self.line})\n")
         return indent + 1
+    def does_quickview_need_detail(self) -> bool:
+        return self.changed or self.status.status != EvaluationStatus.Status.SUCCESS
     def quickview(self, indent: int, file: MyIO) -> int:
         return self.quickview_header(indent, file)
     def _print_evaluation_status(self, indent: int, file: MyIO) -> None:
@@ -1749,7 +1751,16 @@ class NonLeaf_Node(Node):
         for child in self.sub_nodes:
             child._print_all_warnings(file)
         self._print_warnings(0, file, [Warning.Position.FOOTER], show_at=True)
+    def does_quickview_need_detail(self) -> bool:
+        if super().does_quickview_need_detail():
+            return True
+        return any(child.does_quickview_need_detail() for child in self.sub_nodes)
     def quickview(self, indent: int, file: MyIO) -> int:
+        if not self.does_quickview_need_detail():
+            indent = super().quickview(indent, file)
+            print_indent(indent, file)
+            file.write("proven\n")
+            return indent
         indent = super().quickview(indent, file)
         for child in self.sub_nodes:
             child.quickview(indent, file)
@@ -2027,6 +2038,14 @@ class StdBlock(NonLeaf_Node):
                 file.write(": empty\n")
         self._print_footer(indent, file, show_warnings=show_warnings)
         return indent
+    def does_quickview_need_detail(self) -> bool:
+        if super().does_quickview_need_detail():
+            return True
+        if self.opening():
+            ptree = self._state_before_ending_.prooftree
+            if ptree is None or self.should_I_show_pending_goal() is not None:
+                return True
+        return False
     def quickview(self, indent: int, file: MyIO) -> int:
         indent = super().quickview(indent, file)
         if self.opening():
@@ -3610,7 +3629,7 @@ class GlobalEnv(StdBlock):
         return None
     def _print_footer(self, indent: int, file: MyIO, show_warnings: bool = False) -> None:
         print_indent(indent, file)
-        file.write(f"You could add global declarations by calling command `edit` with action `fill` and target step `{self.id}.{len(self.sub_nodes)+1}`\n")
+        #file.write(f"You could add global declarations by calling command `edit` with action `fill` and target step `{self.id}.{len(self.sub_nodes)+1}`\n")
     def unfinished_nodes(self, ret: set['Node']) -> None:
         for child in self.sub_nodes:
             child.unfinished_nodes(ret)
@@ -3791,7 +3810,7 @@ class Session:
     proof_oprs_log_file: Any | None   # File handle for proof_oprs.yaml
 
     # class variables
-    Driver: dict[str, Type['Session']] = {}
+    Driver: dict[str, Callable[[logging.Logger | None, str | Path], 'Session']] = {}
 
     def __init__(self, logger: logging.Logger | None = None, log_dir: str | Path = "",
                  parent: 'Session | None' = None):
@@ -3915,17 +3934,16 @@ class Session:
                   indent=2)         # Standard indentation
         file_handle.flush()  # Ensure data is written immediately
 
-    def __enter__(self) -> 'Session':
+    async def __aenter__(self) -> 'Session':
         """Enter the runtime context for this session."""
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Exit the runtime context and clean up the session."""
-        self.close()
-        # Don't suppress exceptions
+        await self.close()
         return False
 
-    def close(self):
+    async def close(self):
         """Clean up the session and release resources.
         Subsessions do not close shared log files — only major sessions do."""
         if not self.is_major:
@@ -4092,9 +4110,21 @@ class Session:
         """Interrupt the agent's processing immediately."""
         raise NotImplementedError("`interrupt` must be implemented by subclass")
 
+    def refresh_YAML(self):
+        """Refresh the YAML file with current proof state. Must be implemented by subclass."""
+        raise NotImplementedError("`refresh_YAML` must be implemented by subclass")
+
+    def _launch_forks(self, forking: list[tuple[int, Interaction]],
+                      wi: Working_Interactions) -> None:
+        """Launch forking interactions as background tasks. Must be implemented by subclass."""
+        raise NotImplementedError("`_launch_forks` must be implemented by subclass")
+
+
+type SessionConstructor = Callable[[logging.Logger | None, str | Path], Session]
 
 def agent_driver(name : str):
-    def decorator(cls : Type[Session]) -> Type[Session]:
-        Session.Driver[name] = cls
-        return cls
+    """Register a Session constructor (class or factory function) under ``name``."""
+    def decorator[T: Type[Session] | SessionConstructor](constructor: T) -> T:
+        Session.Driver[name] = constructor
+        return constructor
     return decorator

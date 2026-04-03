@@ -22,6 +22,16 @@ lemma "2 * (x::nat) \<noteq> 1" by smt
 
 
 
+term \<open>ln_class.ln\<close>
+term \<open>ln_class\<close>
+term \<open>Transcendental.class.ln\<close>
+
+
+
+
+
+
+
 
 
 ML \<open>Seman tic_Store.query_semantics   (Context.Theory @{theory})
