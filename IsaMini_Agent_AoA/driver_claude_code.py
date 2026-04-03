@@ -1,8 +1,10 @@
-from typing import Any, cast
+from typing import Any, Callable, cast
 import json
 import asyncio
 import contextvars
 import os
+import re
+from pathlib import Path
 import shlex
 import tempfile
 import shutil
@@ -20,6 +22,14 @@ from claude_agent_sdk.types import (
 from io import StringIO
 import Isabelle_Semantic_Embedding
 from Isabelle_Semantic_Embedding.semantics import mk_query_by_name_tool, mk_query_by_position_tool
+
+def _serialize_args(args: Any) -> Any:
+    """Best-effort JSON-serializable representation of Minilang operation arguments."""
+    try:
+        json.dumps(args)
+        return args
+    except (TypeError, ValueError):
+        return str(args)
 
 @agent_driver("ClaudeCode")
 class ClaudeCode(Session):
@@ -83,6 +93,9 @@ class ClaudeCode(Session):
         self._client: ClaudeSDKClient | None = None
         self._mcp_url: str | None = None
         self._proof_complete: asyncio.Event | None = None
+        self._on_yaml_refresh: Callable[[], Any] | None = None
+        self._on_operation_status: Callable[[dict], Any] | None = None
+        self._on_log_callback: Callable[[dict], Any] | None = None
 
     @classmethod
     def _make_fork(cls, parent: 'ClaudeCode') -> 'ClaudeCode':
@@ -138,6 +151,8 @@ class ClaudeCode(Session):
 
     async def interrupt(self):
         if self._interactive_web_terminal and self._proof_complete is not None:
+            if self._on_operation_status is not None:
+                self._on_operation_status({"type": "proof_complete", "success": True})
             self._proof_complete.set()
         if self._client is not None:
             await self._client.interrupt()
@@ -417,16 +432,29 @@ class ClaudeCode(Session):
             f.write(f"echo \"EXIT CODE: $?\" >> {shlex.quote(error_log)}\n")
         os.chmod(launcher_path, 0o755)
 
+        # Kill any stale tmux session with the same name (from a previous run)
+        await (await asyncio.create_subprocess_exec(
+            'tmux', 'kill-session', '-t', tmux_session,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)).wait()
+
         # Launch tmux session
         proc = await asyncio.create_subprocess_exec(
-            'tmux', 'new-session', '-d', '-s', tmux_session, launcher_path,
+            'tmux', 'new-session', '-d', '-x', '300', '-y', '80',
+            '-s', tmux_session, launcher_path,
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
         await proc.wait()
         self.log_AoA_opr(f"Launched tmux session '{tmux_session}'")
 
-        # Start web terminal server and notify Isabelle with the URL
+        # Start web terminal server, register YAML path, and set up push notifications
         from .web_terminal import WebTerminalServer
         web_terminal = await WebTerminalServer.get_or_create()
+        web_terminal.register_yaml(tmux_session, self.YAML_path)
+        self._on_yaml_refresh = lambda: asyncio.create_task(
+            web_terminal.notify_yaml_update(tmux_session))
+        self._on_operation_status = lambda msg: asyncio.create_task(
+            web_terminal.notify_status(tmux_session, msg))
+        self._on_log_callback = lambda msg: asyncio.create_task(
+            web_terminal.notify_status(tmux_session, msg))
         web_terminal_url = web_terminal.session_url(tmux_session)
         await self.root.ml_state.connection.writeln(
             f"Interactive proof session started. Open web terminal: {web_terminal_url}")
@@ -443,17 +471,18 @@ class ClaudeCode(Session):
                 t.cancel()
         finally:
             self._proof_complete = None
-            # Replace the tmux pane with a result message (instead of just killing it)
-            is_proof_done = self.root.is_proof_finished()
-            if is_proof_done:
-                msg = r"echo -e '\n\033[32m=== Proof completed successfully ===\033[0m\n' && sleep infinity"
-            else:
-                msg = r"echo -e '\n\033[31m=== Proof session ended (incomplete) ===\033[0m\n' && sleep infinity"
-            respawn = await asyncio.create_subprocess_exec(
-                'tmux', 'respawn-pane', '-t', tmux_session, '-k',
-                'bash', '-c', msg,
-                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-            await respawn.wait()
+            self._on_yaml_refresh = None
+            self._on_operation_status = None
+            self._on_log_callback = None
+            web_terminal.unregister_yaml(tmux_session)
+            # Send proof_complete if not already sent (e.g., tmux died)
+            if not self.root.is_proof_finished():
+                await web_terminal.notify_status(tmux_session,
+                    {"type": "proof_complete", "success": False})
+            # Kill tmux session
+            await (await asyncio.create_subprocess_exec(
+                'tmux', 'kill-session', '-t', tmux_session,
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)).wait()
 
         # Read error log if it exists
         error_log = os.path.join(self.working_dir, "claude_error.log")
@@ -463,7 +492,35 @@ class ClaudeCode(Session):
             if error_content:
                 self.warn_AoA_opr(f"Claude error log:\n{error_content}")
 
+        self._read_cost_from_session_log()
         self.log_proof()
+
+    def _read_cost_from_session_log(self) -> None:
+        """Read cumulative token usage from Claude's JSONL session log (standalone mode)."""
+        if self._conversation_id is None:
+            return
+        project_name = re.sub(r'[^a-zA-Z0-9]', '-', self.working_dir)
+        session_log = Path.home() / ".claude" / "projects" / project_name / f"{self._conversation_id}.jsonl"
+        if not session_log.exists():
+            self.log_cost(f"Session log not found: {session_log}")
+            return
+        try:
+            with open(session_log) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    record = json.loads(line)
+                    if record.get("type") != "assistant":
+                        continue
+                    usage = (record.get("message") or {}).get("usage")
+                    if usage:
+                        self.total_input_tokens += usage.get("input_tokens", 0)
+                        self.total_output_tokens += usage.get("output_tokens", 0)
+                        self.total_cache_creation_input_tokens += usage.get("cache_creation_input_tokens", 0)
+                        self.total_cache_read_input_tokens += usage.get("cache_read_input_tokens", 0)
+        except Exception as e:
+            self.log_cost(f"Failed to read session log: {e}")
 
     async def _monitor_tmux(self, session_name: str):
         """Poll tmux session status. Returns when session dies."""
@@ -478,7 +535,7 @@ class ClaudeCode(Session):
 
     def _accumulate_cost(self, message: ResultMessage) -> None:
         """Accumulate per-turn cost from a ResultMessage."""
-        self.debug_info(f"[COST] usage={message.usage} total_cost_usd={message.total_cost_usd}")
+        self.log_cost(f"usage={message.usage} total_cost_usd={message.total_cost_usd}")
         if message.total_cost_usd:
             self.total_cost_usd += message.total_cost_usd
         if message.usage:
@@ -577,6 +634,34 @@ class ClaudeCode(Session):
     def refresh_YAML(self):
         with open(self.YAML_path, 'w') as f:
             self.root.print(0, MyIO(f), update_line=True)
+        if self._on_yaml_refresh is not None:
+            self._on_yaml_refresh()
+
+    _SKIP_STATUS_OPS = frozenset({"SKIP", "SORRY", "NEXT", "END"})
+
+    def on_log(self, event_type: str, data: dict[str, Any]):
+        if self._on_log_callback is not None:
+            self._on_log_callback({
+                "type": "log", "event": event_type, **data})
+
+    def on_operation_start(self, step_id: str, operation: str, args: Any):
+        if self._on_operation_status is not None and operation not in self._SKIP_STATUS_OPS:
+            self._on_operation_status({
+                "type": "status", "step": step_id,
+                "operation": operation, "args": _serialize_args(args),
+                "state": "running"})
+
+    def on_operation_end(self, step_id: str, operation: str, args: Any, status: EvaluationStatus):
+        if self._on_operation_status is not None and operation not in self._SKIP_STATUS_OPS:
+            msg: dict[str, Any] = {
+                "type": "status", "step": step_id,
+                "operation": operation, "args": _serialize_args(args),
+                "state": "done",
+                "time": status.time,
+                "success": status.status == EvaluationStatus.Status.SUCCESS}
+            if status.reason is not None:
+                msg["error"] = str(status.reason)
+            self._on_operation_status(msg)
 
 
 @agent_driver("ClaudeCode_Interactive")

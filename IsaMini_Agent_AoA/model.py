@@ -814,8 +814,9 @@ class Minilang_State:
             assign_to = Minilang_State(self.connection, type(self).assign_name(), None)
         if isinstance(opr, Minilang_Operation):
             dest_name = assign_to.name
+            session = the_session()
             # Log proof operation
-            the_session().log_proof_operation(
+            session.log_proof_operation(
                 step="execute",
                 operation=opr.command,
                 details={
@@ -824,11 +825,15 @@ class Minilang_State:
                     "operation": str(opr),
                 }
             )
+            session.on_operation_start(self.name, opr.command, opr.arg)
+            now = time()
             try:
                 (msgs, tree) = await self.connection.callback("IsaMini.proof_opr",
                                                         (self.name, dest_name, (opr.command, opr.arg)))
             except IsabelleError as err:
-                the_session().log_proof_operation_error(
+                session.on_operation_end(self.name, opr.command, opr.arg,
+                    EvaluationStatus.Failure(time() - now, FailureReason(''.join(err.errors))))
+                session.log_proof_operation_error(
                     error_message=str(err),
                     errors=err.errors,
                     operation=str(opr)
@@ -836,6 +841,8 @@ class Minilang_State:
                 if err.errors == ["beginning_state_not_found"]:
                     raise InternalError("The beginning state of the execution is not initialized!")
                 raise
+            session.on_operation_end(self.name, opr.command, opr.arg,
+                EvaluationStatus.Success(time() - now))
             msgs = [unpack_message(msg) for msg in msgs]
             assign_to.prooftree = unpack_MLPT(tree)
             assign_to.messages = msgs
@@ -1602,6 +1609,7 @@ class Leaf(Node):
             self.status = EvaluationStatus.Success(time() - now)
         except IsabelleError as err:
             self.status = EvaluationStatus.Failure(time() - now, FailureReason(''.join(err.errors)))
+
     async def append(self, gen_node: may_gen_node) -> 'Node | None':
         raise CannotAppend(self, "It is not a goal or a proof block")
 
@@ -4000,6 +4008,7 @@ class Session:
         if self.logger is not None and debug_messages is not None:
             for msg in debug_messages():
                 self.logger.debug(msg)
+        self.on_log(event_type, data)
 
     # Model interaction logging methods
     def log_model_output(self, text: str):
@@ -4099,6 +4108,11 @@ class Session:
                   error_message=error_message,
                   **extra_data)
 
+    def log_cost(self, msg: str):
+        """Log cost/usage information to interaction log."""
+        self._log(self.interaction_log_file, "COST",
+                  lambda: [f"[COST] {msg}"], message=msg)
+
     def debug_info(self, msg: str):
         """Log debug information to interaction log and logger."""
         self._log(self.interaction_log_file, "DEBUG",
@@ -4118,6 +4132,18 @@ class Session:
                       wi: Working_Interactions) -> None:
         """Launch forking interactions as background tasks. Must be implemented by subclass."""
         raise NotImplementedError("`_launch_forks` must be implemented by subclass")
+
+    def on_log(self, event_type: str, data: dict[str, Any]):
+        """Called on every _log invocation. Override to push logs externally."""
+        pass
+
+    def on_operation_start(self, step_id: str, operation: str, args: Any):
+        """Called before a Minilang operation executes."""
+        pass
+
+    def on_operation_end(self, step_id: str, operation: str, args: Any, status: 'EvaluationStatus'):
+        """Called after a Minilang operation completes (success or failure)."""
+        pass
 
 
 type SessionConstructor = Callable[[logging.Logger | None, str | Path], Session]
