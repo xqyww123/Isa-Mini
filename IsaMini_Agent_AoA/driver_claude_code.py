@@ -52,8 +52,8 @@ class ClaudeCode(Session):
         'mcp__proof__delete',
         'mcp__proof__answer',
         'mcp__proof__query_by_name',
-        'mcp__proof__query_by_position',
-        'mcp__proof__semantic_search',
+        # 'mcp__proof__query_by_position',
+        'mcp__proof__search_isabelle',
         'ToolSearch'
     ]
     FORK_WHITELIST = [t for t in TOOL_WHITELIST if t not in ('mcp__proof__edit', 'mcp__proof__delete')]
@@ -93,7 +93,7 @@ class ClaudeCode(Session):
         self._client: ClaudeSDKClient | None = None
         self._mcp_url: str | None = None
         self._proof_complete: asyncio.Event | None = None
-        self._on_yaml_refresh: Callable[[], Any] | None = None
+        self._on_yaml_refresh: Callable[[str], Any] | None = None  # receives quickview content
         self._on_operation_status: Callable[[dict], Any] | None = None
         self._on_log_callback: Callable[[dict], Any] | None = None
 
@@ -121,7 +121,7 @@ class ClaudeCode(Session):
         connection = root.ml_state.connection
         extra_sdk_tools = [
             mk_query_by_name_tool(connection, []),
-            mk_query_by_position_tool(connection, []),
+            # mk_query_by_position_tool(connection, []),
         ]
 
         # Register with singleton HTTP MCP server
@@ -231,10 +231,11 @@ class ClaudeCode(Session):
             }
 
         # 2. Check proof MCP tool interaction state
+        _BLOCKED_DURING_INTERACTION = {"mcp__proof__edit", "mcp__proof__delete"}
         if tool.startswith("mcp__proof__"):
             if self.working_interactions:
-                # There's a pending interaction - only allow answer tool
-                if tool != "mcp__proof__answer":
+                # There's a pending interaction - block mutating tools
+                if tool in _BLOCKED_DURING_INTERACTION:
                     return {
                         "continue_": False,
                         "hookSpecificOutput": {
@@ -449,8 +450,8 @@ class ClaudeCode(Session):
         from .web_terminal import WebTerminalServer
         web_terminal = await WebTerminalServer.get_or_create()
         web_terminal.register_yaml(tmux_session, self.YAML_path)
-        self._on_yaml_refresh = lambda: asyncio.create_task(
-            web_terminal.notify_yaml_update(tmux_session))
+        self._on_yaml_refresh = lambda qv: asyncio.create_task(
+            web_terminal.notify_yaml_update(tmux_session, qv))
         self._on_operation_status = lambda msg: asyncio.create_task(
             web_terminal.notify_status(tmux_session, msg))
         self._on_log_callback = lambda msg: asyncio.create_task(
@@ -495,32 +496,79 @@ class ClaudeCode(Session):
         self._read_cost_from_session_log()
         self.log_proof()
 
+    # Opus 4.6 pricing per token (USD) for cost estimation from token counts.
+    _PRICING = {
+        "input":        5.00 / 1_000_000,
+        "cache_write": 10.00 / 1_000_000,   # 1-hour tier (Claude Code default)
+        "cache_read":   0.50 / 1_000_000,
+        "output":      25.00 / 1_000_000,
+    }
+
     def _read_cost_from_session_log(self) -> None:
-        """Read cumulative token usage from Claude's JSONL session log (standalone mode)."""
+        """Read token usage from Claude Code JSONL session logs (standalone mode).
+
+        Reads ALL .jsonl files in the project directory to capture costs from
+        both the main CLI session and any fork sub-sessions (which the Agent SDK
+        writes to separate .jsonl files in the same project directory).
+
+        Claude Code writes multiple assistant records per API call (one per
+        streamed content block), each carrying the same ``usage`` of that call.
+        We deduplicate by ``requestId`` so each API call is counted once, keeping
+        the last record (which has the final ``output_tokens``).
+        """
         if self._conversation_id is None:
             return
         project_name = re.sub(r'[^a-zA-Z0-9]', '-', self.working_dir)
-        session_log = Path.home() / ".claude" / "projects" / project_name / f"{self._conversation_id}.jsonl"
-        if not session_log.exists():
-            self.log_cost(f"Session log not found: {session_log}")
+        project_dir = Path.home() / ".claude" / "projects" / project_name
+        if not project_dir.exists():
+            self.log_cost(f"Project directory not found: {project_dir}")
             return
-        try:
-            with open(session_log) as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    record = json.loads(line)
-                    if record.get("type") != "assistant":
-                        continue
-                    usage = (record.get("message") or {}).get("usage")
-                    if usage:
-                        self.total_input_tokens += usage.get("input_tokens", 0)
-                        self.total_output_tokens += usage.get("output_tokens", 0)
-                        self.total_cache_creation_input_tokens += usage.get("cache_creation_input_tokens", 0)
-                        self.total_cache_read_input_tokens += usage.get("cache_read_input_tokens", 0)
-        except Exception as e:
-            self.log_cost(f"Failed to read session log: {e}")
+        jsonl_files = list(project_dir.glob("*.jsonl"))
+        if not jsonl_files:
+            self.log_cost(f"No session logs found in: {project_dir}")
+            return
+
+        # Collect last usage per (session_file, requestId) to deduplicate
+        # streaming records from the same API call.
+        usage_by_request: dict[tuple[str, str], dict] = {}
+        for session_log in jsonl_files:
+            try:
+                with open(session_log) as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        record = json.loads(line)
+                        if record.get("type") != "assistant":
+                            continue
+                        rid = record.get("requestId")
+                        usage = (record.get("message") or {}).get("usage")
+                        if rid and usage:
+                            usage_by_request[(session_log.name, rid)] = usage
+            except Exception as e:
+                self.log_cost(f"Failed to read session log {session_log.name}: {e}")
+
+        # Reset counters — fork costs were accumulated via _accumulate_cost during
+        # execution, but the same data is in the fork JSONL files.  Reading all
+        # JSONL files provides a single, consistent source of truth.
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.total_cache_creation_input_tokens = 0
+        self.total_cache_read_input_tokens = 0
+
+        for usage in usage_by_request.values():
+            self.total_input_tokens += usage.get("input_tokens", 0)
+            self.total_output_tokens += usage.get("output_tokens", 0)
+            self.total_cache_creation_input_tokens += usage.get("cache_creation_input_tokens", 0)
+            self.total_cache_read_input_tokens += usage.get("cache_read_input_tokens", 0)
+
+        p = self._PRICING
+        self.total_cost_usd = (
+            self.total_input_tokens * p["input"]
+            + self.total_cache_creation_input_tokens * p["cache_write"]
+            + self.total_cache_read_input_tokens * p["cache_read"]
+            + self.total_output_tokens * p["output"]
+        )
 
     async def _monitor_tmux(self, session_name: str):
         """Poll tmux session status. Returns when session dies."""
@@ -635,7 +683,8 @@ class ClaudeCode(Session):
         with open(self.YAML_path, 'w') as f:
             self.root.print(0, MyIO(f), update_line=True)
         if self._on_yaml_refresh is not None:
-            self._on_yaml_refresh()
+            quickview = self.root.quickview_string(0)
+            self._on_yaml_refresh(quickview)
 
     _SKIP_STATUS_OPS = frozenset({"SKIP", "SORRY", "NEXT", "END"})
 

@@ -44,6 +44,14 @@ class FailureReason(NamedTuple):
     and Leaf.the_operation() returns."""
     reason: str
 
+class IsabelleEntity:
+    """A resolved Isabelle entity (constant, type, class, locale, etc.) with display info."""
+    __slots__ = ('full_name', 'short_name', 'expression')
+    def __init__(self, full_name: str, short_name: str, expression: list[str]):
+        self.full_name = full_name
+        self.short_name = short_name
+        self.expression = expression
+
 class IsabelleFact(ABC):
     """Abstract base class for facts referenced in proof operations."""
     @abstractmethod
@@ -57,9 +65,9 @@ class IsabelleFact(ABC):
     def __repr__(self) -> str:
         return self.name()
 
-class IsabelleFact_Presented(IsabelleFact):
+class IsabelleFact_Presented(IsabelleFact, IsabelleEntity):
     """A resolved fact with full information from Isabelle."""
-    __slots__ = ('full_name', 'short_name', 'fact', 'expression')
+    __slots__ = ('fact',)
     def __init__(self, full_name: str, short_name: str, fact: Fact, expression: list[term]):
         self.full_name = full_name
         self.short_name = short_name
@@ -876,34 +884,38 @@ class Minilang_State:
     #             return ref
     #         case _:
     #             raise NotImplementedError("Here we should list all the options and ask the LLM to choose which one does it mean")
-    async def fetch_facts(self, facts: list[Fact]
-                    ) -> 'list[IsabelleFact | Interaction_RetrieveFact]':
+    async def fetch_facts(self, facts: list[Fact], *,
+                    single_choice: bool = False,
+                    ) -> 'list[IsabelleFact | Interaction_RetrieveForProof]':
         """Resolve a list of facts. FactByName are batched into one RPC call.
-        Returns IsabelleFact_Presented for resolved facts, Interaction_RetrieveFact
+        Returns IsabelleFact_Presented for resolved facts, Interaction_RetrieveForProof
         for statements needing interaction, or IsabelleFact_Unfound for unfound facts."""
-        out: list[IsabelleFact | Interaction_RetrieveFact] = [None] * len(facts)  # type: ignore
+        out: list[IsabelleFact | Interaction_RetrieveForProof] = [None] * len(facts)  # type: ignore
         # Collect FactByName indices for batch lookup
         name_indices: list[int] = []
         name_queries: list[str] = []
         for i, fact in enumerate(facts):
             if fact["refer_by"] == "statement":
                 stmt = " ".join(cast(FactByStatement, fact)["statement"].split())
-                out[i] = await Interaction_RetrieveFact.create(
-                    state=self, query=stmt, kinds=[EntityKind.THEOREM])
+                out[i] = await Interaction_RetrieveForProof.create(
+                    state=self, query=stmt, kinds=[EntityKind.THEOREM],
+                    single_choice=single_choice)
             else:
                 name_indices.append(i)
                 name_queries.append(fact["name"])
         # Batch resolve all FactByName
         if name_queries:
-            results = await self._retrieve_facts_expr(name_queries)
-            for idx, result in zip(name_indices, results):
+            entities = [(EntityKind.THEOREM, name) for name in name_queries]
+            results = await self._retrieve_entity(entities)
+            for idx, (query_name, result) in zip(name_indices,
+                                                  zip(name_queries, results)):
                 fact = facts[idx]
                 if result is None:
                     out[idx] = IsabelleFact_Unfound(fact)
                 else:
-                    full_name, short_name, exprs = result
+                    short_name, exprs = result
                     out[idx] = IsabelleFact_Presented(
-                        full_name=full_name, short_name=short_name,
+                        full_name=query_name, short_name=short_name,
                         fact=fact, expression=exprs)
         return out
     async def semantic_knn(self, query: str | None, k: int,
@@ -930,7 +942,7 @@ class Minilang_State:
             domain: Semantic_Vector_Store.Domain = Semantic_Vector_Store.ContextExtended(local_keys)
         else:
             domain = Semantic_Vector_Store.ContextAll
-        store: Semantic_Vector_Store = self.connection.semantic_vector_store()  # type: ignore
+        store: Semantic_Vector_Store = await self.connection.semantic_vector_store()  # type: ignore
         if query is not None:
             results, warnings = await store.lookup(query, k, kinds, domain,
                                    term_patterns=term_patterns,
@@ -972,25 +984,16 @@ class Minilang_State:
         """
         result = await self.connection.callback("IsaMini.need_intro", (self.name, consider_conj))
         return result
-    async def _retrieve_facts_expr(self, names: list[str]) -> list[tuple[str, str, list[str]] | None]:
-        """
-        Retrieve facts by their short or full names (batch).
-        Returns list of (full_name, short_name, pretty_unicode_expressions) or None per name.
-        """
-        results = await self.connection.callback("IsaMini.retrieve_fact", (self.name, names))
-        out: list[tuple[str, str, list[str]] | None] = [None] * len(results)
-        for i, r in enumerate(results):
-            if r is not None:
-                full_name, short_name, exprs = r
-                out[i] = (full_name, pretty_unicode(short_name),
-                          [pretty_unicode(e) for e in exprs])
-        return out
-    async def _retrieve_constants_types(self, names: list[str]) -> list[tuple[str, str] | None]:
-        """Retrieve constants by fully qualified names (batch).
-        Returns list of (short_name, pretty_unicode_type) or None per name."""
-        results = await self.connection.callback("IsaMini.retrieve_constant", (self.name, names))
-        return [(pretty_unicode(r[0]), pretty_unicode(r[1])) if r is not None else None
-                for r in results]
+    async def _retrieve_entity(self, entities: list[tuple[EntityKind, str]]
+        ) -> list[tuple[str, list[str]] | None]:
+        """Retrieve entity info by kind and name (short or full).
+        Returns list of (short_name, extra_strings) or None per entity.
+        extra_strings: propositions for theorems/rules, [type] for constants, [] for others."""
+        args = [(int(kind), name) for kind, name in entities]
+        results = await self.connection.callback(
+            "IsaMini.retrieve_entity", (self.name, args))
+        return [(pretty_unicode(r[0]), [pretty_unicode(e) for e in r[1]])
+                if r is not None else None for r in results]
     async def check_term(self, term_str: str) -> tuple[typ, Vars, Vars]:
         """
         Parse and check a term string using Syntax.read_term.
@@ -1095,79 +1098,171 @@ class Interaction_BadAnswer(Exception):
 
 #### Fact Retrieval
 
-class Interaction_RetrieveFact(Interaction):
+_THEOREM_KINDS = frozenset({EntityKind.THEOREM, EntityKind.INTRODUCTION_RULE, EntityKind.ELIMINATION_RULE})
+
+class Interaction_Retrieve(Interaction):
+    """Base class for interactive entity retrieval via forked agent."""
     forking = True
     INITIAL_K = 10
     FINAL_K = 40
 
+    class FetchedEntity(NamedTuple):
+        entity: IsabelleEntity
+        score: float              # semantic similarity score from semantic_knn
+        interpretation: str | None  # human-readable description from SemanticRecord
+
     def __init__(self, state: Minilang_State,
             query: str, kinds: list[EntityKind],
-            candidate_facts: list[IsabelleFact_Presented],
-            relevant_constants: list[tuple[str, str, str]]):
+            candidate_facts: 'list[Interaction_Retrieve.FetchedEntity]',
+            *,
+            initial_k: int | None = None,
+            single_choice: bool = False,
+            term_patterns: list[str] | None = None,
+            type_patterns: list[str] | None = None,
+            theories_include: list[str] | None = None,
+            name_contains: list[str] | None = None,
+    ):
         self.query = query
         self.state = state
-        self.k = self.INITIAL_K
+        self.k = max(initial_k or self.INITIAL_K, len(candidate_facts))
         self.kinds = kinds
         self.candidate_facts = candidate_facts
+        self.single_choice = single_choice
+        self.term_patterns = term_patterns or []
+        self.type_patterns = type_patterns or []
+        self.theories_include = theories_include or []
+        self.name_contains = name_contains or []
+
+    async def _fetch_facts(self) -> 'list[Interaction_Retrieve.FetchedEntity]':
+        import logging
+        _log = logging.getLogger(__name__)
+        candidates, _ = await self.state.semantic_knn(self.query, self.k, self.kinds,
+            term_patterns=self.term_patterns,
+            type_patterns=self.type_patterns,
+            theories_include=self.theories_include,
+            name_contains=self.name_contains)
+        if not candidates:
+            return []
+        entities = [(rec.kind, rec.name) for _, rec in candidates]
+        infos = await self.state._retrieve_entity(entities)
+        results: list[Interaction_Retrieve.FetchedEntity] = []
+        for (score, rec), info in zip(candidates, infos):
+            if info is None:
+                _log.warning("Entity %r (%s) not found in proof context, skipping",
+                             rec.name, rec.kind.label)
+                continue
+            short_name, exprs = info
+            if rec.kind in _THEOREM_KINDS:
+                entity: IsabelleEntity = IsabelleFact_Presented(
+                    full_name=rec.name, short_name=short_name,
+                    fact=FactByName(refer_by="name", name=short_name),
+                    expression=exprs)
+            else:
+                entity = IsabelleEntity(
+                    full_name=rec.name, short_name=short_name,
+                    expression=exprs)
+            results.append(Interaction_Retrieve.FetchedEntity(
+                entity=entity,
+                score=score,
+                interpretation=' '.join(rec.interpretation.split()) if rec.interpretation else None))
+        return results
+
+    def _entity_title(self) -> str:
+        """Dynamic title for the entity kind(s): 'theorems', 'constants', etc."""
+        _KIND_TERMS = {
+            EntityKind.THEOREM: "theorems", EntityKind.CONSTANT: "constants",
+            EntityKind.TYPE: "types", EntityKind.CLASS: "typeclasses",
+            EntityKind.LOCALE: "locales",
+            EntityKind.INTRODUCTION_RULE: "introduction rules",
+            EntityKind.ELIMINATION_RULE: "elimination rules",
+        }
+        if len(self.kinds) == 1:
+            return _KIND_TERMS.get(self.kinds[0], "entities")
+        return "entities"
+
+    def _prompt_candidates(self, indent: int, file: MyIO) -> None:
+        """Shared: render the numbered candidate list (without header)."""
+        if not self.candidate_facts:
+            raise InternalError("Interaction_Retrieve.prompt called with no candidates")
+        for i, fetched in enumerate(self.candidate_facts):
+            print_indent(indent+1, file)
+            file.write(f"{i}. {fetched.entity.full_name}: {fetched.entity.expression}\n")
+            if fetched.interpretation:
+                print_indent(indent+2, file)
+                file.write(f"{fetched.interpretation}\n")
+
+    def prompt(self, indent: int, file: MyIO) -> None:
+        raise NotImplementedError("subclasses must override prompt()")
+
+    async def answer(self, answer: answer) -> 'list[IsabelleEntity | IsabelleFact]':
+        # Text answer — rejected by default; subclass overrides for prove-in-time
+        if isinstance(answer, str) and answer:
+            raise Interaction_BadAnswer("Free-text answers are not allowed here. Select by index.")
+        # Empty answer — expand search if possible
+        if not answer:
+            if self.k < self.FINAL_K:
+                self.k = self.FINAL_K
+                self.candidate_facts = await self._fetch_facts()
+                async def identity(results: list[Any]) -> Any:
+                    return results[0]
+                raise RaiseInteraction([self], identity)
+            else:
+                return []
+        # Index answer
+        if self.single_choice and len(answer) > 1:
+            raise Interaction_BadAnswer("Please select exactly one entry.")
+        selected: list[IsabelleEntity | IsabelleFact] = []
+        for idx in answer:
+            if idx < 0 or idx >= len(self.candidate_facts):
+                raise Interaction_BadAnswer(
+                    f"Index {idx} out of range (0–{len(self.candidate_facts) - 1}).")
+            selected.append(self.candidate_facts[idx].entity)
+        return selected
+
+
+class Interaction_RetrieveForProof(Interaction_Retrieve):
+    """Retrieve theorems/rules for proof operations. Supports prove-in-time and relevant constants."""
+
+    def __init__(self, state: Minilang_State,
+            query: str, kinds: list[EntityKind],
+            candidate_facts: 'list[Interaction_Retrieve.FetchedEntity]',
+            relevant_constants: list[tuple[str, str, str]],
+            **kwargs: Any):
+        super().__init__(state, query, kinds, candidate_facts, **kwargs)
         self.relevant_constants = relevant_constants
 
     @classmethod
     async def create(cls, state: Minilang_State,
-            query: str, kinds: list[EntityKind]) -> 'Interaction_RetrieveFact':
-        inst = object.__new__(cls)
-        inst.query = query
-        inst.state = state
-        inst.k = cls.INITIAL_K
-        inst.kinds = kinds
+            query: str, kinds: list[EntityKind],
+            **kwargs: Any) -> 'Interaction_RetrieveForProof':
+        inst = cls(state, query, kinds, [], [], **kwargs)
         inst.candidate_facts = await inst._fetch_facts()
         inst.relevant_constants = await inst._fetch_constants()
         return inst
-
-    async def _fetch_facts(self) -> list[IsabelleFact_Presented]:
-        import logging
-        _log = logging.getLogger(__name__)
-        candidates, _ = await self.state.semantic_knn(self.query, self.k, self.kinds)
-        if not candidates:
-            return []
-        names = [rec.name for _, rec in candidates]
-        infos = await self.state._retrieve_facts_expr(names)
-        results: list[IsabelleFact_Presented] = []
-        for (score, rec), info in zip(candidates, infos):
-            if info is None:
-                _log.warning("Fact %r not found in proof context, skipping", rec.name)
-                continue
-            full_name, short_name, exprs = info
-            results.append(IsabelleFact_Presented(
-                full_name=full_name,
-                short_name=short_name,
-                fact=FactByName(refer_by="name", name=short_name),
-                expression=exprs))
-        return results
 
     async def _fetch_constants(self) -> list[tuple[str, str, str]]:
         """Fetch relevant constants via semantic search.
         Returns list of (short_name, type, interpretation) triples."""
         candidates, _ = await self.state.semantic_knn(self.query, 10, [EntityKind.CONSTANT])
-        candidates = [(score, rec) for score, rec in candidates if score >= 0.5] # \
-                   # + [(score, rec) for score, rec in candidates if 0.4 <= score < 0.5][:5]
+        candidates = [(score, rec) for score, rec in candidates if score >= 0.5]
         if not candidates:
             return []
-        full_names = [rec.name for _, rec in candidates]
-        infos = await self.state._retrieve_constants_types(full_names)
+        entities = [(EntityKind.CONSTANT, rec.name) for _, rec in candidates]
+        infos = await self.state._retrieve_entity(entities)
         results: list[tuple[str, str, str]] = []
         for (_, rec), info in zip(candidates, infos):
             if info is None:
                 continue
-            short_name, typ = info
-            results.append((short_name, typ, rec.interpretation))
+            short_name, type_strs = info
+            results.append((short_name, type_strs[0] if type_strs else "", rec.interpretation))
         return results
 
     def prompt(self, indent: int, file: MyIO) -> None:
+        title = self._entity_title()
         print_indent(indent, file)
-        file.write("You are looking for a theorem establishing:")
+        file.write(f"You are looking for {title} establishing:")
         print_paragraph(indent, file, self.query)
         file.write("\n")
-        # Show relevant constants
         if self.relevant_constants:
             file.write("Relevant constants in scope:\n")
             for short_name, typ, interp in self.relevant_constants:
@@ -1176,46 +1271,33 @@ class Interaction_RetrieveFact(Interaction):
                 print_indent(indent+2, file)
                 file.write(f"{interp}\n")
             file.write("\n")
-        # Show candidate theorems
-        if not self.candidate_facts:
-            raise InternalError("Interaction_RetrieveFact.prompt called with no candidates")
-        file.write("Similar theorems from the library:\n")
-        for i, fact in enumerate(self.candidate_facts):
-            print_indent(indent+1, file)
-            file.write(f"{i}. {fact.full_name}: {fact.expression}\n")
-        # Instructions
-        file.write("\nIf a theorem above states what you need, answer with its index.\n")
-        file.write("If the statement is trivially provable, answer with the formal Isabelle "
-                   "statement as text. "
+        file.write(f"Similar {title} from the library:\n")
+        self._prompt_candidates(indent, file)
+        if self.single_choice:
+            file.write(f"\nIf an entry above matches what you need, answer with its index.\n")
+        else:
+            file.write(f"\nAnswer with the indices of all matching {title}.\n")
+        file.write("Otherwise, if none matches but the statement is trivially provable, "
+                   "answer with the formal Isabelle statement as text. "
                    "IMPORTANT: all numeric literals MUST be type-annotated, "
                    "e.g., `(2::nat)` not `2`.\n")
         if self.k >= self.FINAL_K:
-            file.write("If no theorem matches and the statement is non-trivial, "
-                       "answer empty to prove it yourself later.\n")
+            file.write("If none of the above applies, answer empty to give up "
+                       "the search and prove the statement yourself later.\n")
         else:
-            file.write("If no theorem matches, answer with empty to see more candidates.\n")
+            file.write("If none of the above applies, answer empty to see more candidates.\n")
 
-    async def answer(self, answer: answer) -> IsabelleFact:
+    async def answer(self, answer: answer) -> 'list[IsabelleEntity | IsabelleFact]':
+        # Text answer → prove-in-time
         if isinstance(answer, str) and answer:
-            return IsabelleFact_ProveInTime(answer)
-        if not answer:
-            if self.k < self.FINAL_K:
-                # Expand search and re-prompt
-                self.k = self.FINAL_K
-                self.candidate_facts = await self._fetch_facts()
-                async def identity(results: list[Any]) -> Any:
-                    return results[0]
-                raise RaiseInteraction([self], identity)
-            else:
-                return IsabelleFact_Unfound(
-                    FactByStatement(refer_by="statement", statement=self.query))
-        if len(answer) > 1:
-            raise Interaction_BadAnswer("Please select exactly one fact.")
-        idx = answer[0]
-        if idx < 0 or idx >= len(self.candidate_facts):
-            raise Interaction_BadAnswer(
-                f"Index {idx} out of range (0–{len(self.candidate_facts) - 1}).")
-        return self.candidate_facts[idx]
+            return [IsabelleFact_ProveInTime(answer)]
+        # Empty answer with no expansion left
+        if not answer and self.k >= self.FINAL_K:
+            if self.single_choice:
+                return [IsabelleFact_Unfound(
+                    FactByStatement(refer_by="statement", statement=self.query))]
+            return []
+        return await super().answer(answer)
 
 
 ### The Abstract Model
@@ -1282,9 +1364,10 @@ class Node(ABC):
         return self._print_step_id(indent, file, update_line)
     def quickview_title(self) -> str:
         return type(self).__name__
-    def quickview_header(self, indent: int, file: MyIO) -> int:
+    def quickview_header(self, indent: int, file: MyIO, done: bool = False) -> int:
         print_indent(indent, file)
         changed_mark = "changed, " if self.changed else ""
+        done_mark = "done, " if done else ""
         match self.status.status:
             case EvaluationStatus.Status.FAILURE:
                 status_mark = "failed, "
@@ -1292,7 +1375,7 @@ class Node(ABC):
                 status_mark = "pending, "
             case _:
                 status_mark = ""
-        file.write(f"{self._kind} {self.id}: {self.quickview_title()} ({changed_mark}{status_mark}line {self.line})\n")
+        file.write(f"{self._kind} {self.id}: {self.quickview_title()} ({changed_mark}{status_mark}{done_mark}line {self.line})\n")
         return indent + 1
     def does_quickview_need_detail(self) -> bool:
         return self.changed or self.status.status != EvaluationStatus.Status.SUCCESS
@@ -1765,10 +1848,7 @@ class NonLeaf_Node(Node):
         return any(child.does_quickview_need_detail() for child in self.sub_nodes)
     def quickview(self, indent: int, file: MyIO) -> int:
         if not self.does_quickview_need_detail():
-            indent = super().quickview(indent, file)
-            print_indent(indent, file)
-            file.write("proven\n")
-            return indent
+            return self.quickview_header(indent, file, done=True)
         indent = super().quickview(indent, file)
         for child in self.sub_nodes:
             child.quickview(indent, file)
@@ -2239,12 +2319,13 @@ class GoalNode(StdBlock):
         if goal is not None:
             ret.update(goal.context.hyps)
         return ret
-    def quickview_header(self, indent: int, file: MyIO) -> int:
+    def quickview_header(self, indent: int, file: MyIO, done: bool = False) -> int:
         if self.is_single_goal:
             return indent
         else:
+            done_mark = "done, " if done else ""
             print_indent(indent, file)
-            file.write(f"{self._kind} {self.id} (line {self.line})\n")
+            file.write(f"{self._kind} {self.id} ({done_mark}line {self.line})\n")
             return indent + 1
 
 class SubgoalMaker(GoalContainer, StdBlock):
@@ -2467,7 +2548,7 @@ async def _filter_unprovable(
     kept = [f for i, f in enumerate(facts) if i not in drop]
     return kept, warnings
 
-def _split_fetched(fetched: 'list[IsabelleFact | Interaction_RetrieveFact]'
+def _split_fetched(fetched: 'list[IsabelleFact | Interaction_RetrieveForProof]'
     ) -> 'tuple[list[IsabelleFact], list[Interaction], list[int]]':
     """Split fetch_facts results into resolved facts, interactions, and placeholder indices.
     IsabelleFact (including Unfound) goes to resolved; Interaction goes to interactions."""
@@ -2508,13 +2589,16 @@ class Obvious(Leaf):
     def interactive_gen(arg: Obvious_ToolArg) -> gen_node:
         async def mk(config: NodeConfig) -> 'Obvious':
             ml_state = config.ml_state
-            fetched = await ml_state.fetch_facts(arg["facts"])
+            fetched = await ml_state.fetch_facts(arg["facts"],
+                single_choice=False)
             resolved, interactions, resolve_indices = _split_fetched(fetched)
+            interaction_results: list[IsabelleFact] = []
 
             async def mk_node(config2: NodeConfig) -> 'Obvious':
-                facts, warnings = _filter_unfound(resolved)
-                facts, pit_warnings = await _filter_unprovable(facts, config2.ml_state)
-                warnings.extend(pit_warnings)
+                # resolved has None placeholders replaced by nothing;
+                # interaction_results collected separately
+                all_facts = [f for f in resolved if f is not None] + interaction_results
+                facts, warnings = _filter_unfound(all_facts)
                 node = Obvious(config2, Obvious_InternalToolArg(facts=facts))
                 for w in warnings:
                     node.warnings.append(Warning(Warning.Position.FOOTER, w))
@@ -2525,8 +2609,8 @@ class Obvious(Leaf):
                 return await mk_node(config)
 
             async def kontinue(results: list[Any]) -> gen_node:
-                for i, idx in enumerate(resolve_indices):
-                    resolved[idx] = results[i]
+                for r in results:
+                    interaction_results.extend(r)
                 return mk_node
 
             raise RaiseInteraction(interactions, kontinue)
@@ -2544,6 +2628,11 @@ class Obvious(Leaf):
         self._print_evaluation_status(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
         return indent
+    async def _refresh_me_alone(self) -> None:
+        self.fact_refs, pit_warnings = await _filter_unprovable(self.fact_refs, self.ml_state)
+        for w in pit_warnings:
+            self.warnings.append(Warning(Warning.Position.FOOTER, w))
+        await super()._refresh_me_alone()
     def the_operation(self) -> 'Minilang_Operation | FailureReason':
         return Minilang_Operation.HAMMER(self.fact_refs)
 
@@ -2759,10 +2848,10 @@ class Rewrite(Leaf):
 
     @staticmethod
     def interactive_gen(arg: Rewrite_ToolArg) -> gen_node:
-        """Interactive generation. Resolves FactByStatement via Interaction_RetrieveFact."""
+        """Interactive generation. Resolves FactByStatement via Interaction_Retrieve."""
         async def mk(config: NodeConfig) -> 'Rewrite':
             ml_state = config.ml_state
-            fetched = await ml_state.fetch_facts(arg["using"])
+            fetched = await ml_state.fetch_facts(arg["using"], single_choice=True)
             resolved, interactions, resolve_indices = _split_fetched(fetched)
 
             def mk_internal() -> Rewrite_InternalToolArg:
@@ -2779,7 +2868,7 @@ class Rewrite(Leaf):
 
             async def kontinue(results: list[Any]) -> gen_node:
                 for i, idx in enumerate(resolve_indices):
-                    resolved[idx] = results[i]
+                    resolved[idx] = results[i][0]  # single_choice=True → unwrap single-element list
                 return Rewrite.gen(mk_internal())
 
             raise RaiseInteraction(interactions, kontinue)
@@ -3334,7 +3423,7 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
                 return InferenceRule(config, internal)
 
             ml_state = config.ml_state
-            fetched = await ml_state.fetch_facts([rule])
+            fetched = await ml_state.fetch_facts([rule], single_choice=True)
             result = fetched[0]
             if isinstance(result, IsabelleFact):
                 internal = InferenceRule_InternalToolArg(
@@ -3344,7 +3433,7 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
             # Needs interaction
             async def kontinue(results: list[Any]) -> gen_node:
                 return InferenceRule.gen(InferenceRule_InternalToolArg(
-                    thought=arg["thought"], rule=rule, rule_ref=results[0]))
+                    thought=arg["thought"], rule=rule, rule_ref=results[0][0]))  # unwrap single-element list
 
             raise RaiseInteraction([result], kontinue) # type: ignore
         return mk

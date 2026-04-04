@@ -53,29 +53,35 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     display: flex; flex-direction: column;
   }}
   .pane-header {{
-    background: #252526; color: #888; font-size: 12px; padding: 4px 10px;
+    background: #252526; color: #888; font-size: 16px; padding: 4px 10px;
     font-family: 'JetBrains Mono', monospace; border-bottom: 1px solid #333;
     display: flex; justify-content: space-between; align-items: center;
     flex-shrink: 0;
   }}
   .pane-header .status {{ color: #4ec9b0; }}
-  #yaml-editor {{ flex: 8; overflow: hidden; }}
+  #top-editors {{ flex: 7; min-height: 0; position: relative; }}
+  .editor-panel {{ position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: none; }}
+  .editor-panel.active {{ display: block; }}
+  #h-divider {{
+    height: 5px; background: #333; cursor: row-resize; flex-shrink: 0;
+  }}
+  #h-divider:hover {{ background: #555; }}
   #bottom-pane {{
-    flex: 2; min-height: 0; display: flex; flex-direction: column;
+    flex: 3; min-height: 0; display: flex; flex-direction: column;
   }}
   .tab-bar {{
     display: flex; background: #252526; border-top: 1px solid #333;
     flex-shrink: 0;
   }}
   .tab-bar .tab {{
-    padding: 4px 14px; font-size: 12px; color: #888; cursor: pointer;
+    padding: 4px 14px; font-size: 16px; color: #888; cursor: pointer;
     font-family: 'JetBrains Mono', monospace; border-right: 1px solid #333;
   }}
   .tab-bar .tab.active {{ color: #ddd; background: #1a1a1a; }}
   .tab-bar .tab:hover {{ color: #ccc; }}
   .tab-content {{
     flex: 1; min-height: 0; overflow-y: auto; padding: 6px 10px;
-    font-family: 'JetBrains Mono', monospace; font-size: 13px;
+    font-family: 'JetBrains Mono', monospace; font-size: 17px;
     color: #ccc; background: #1a1a1a; display: none;
   }}
   .tab-content.active {{ display: block; }}
@@ -101,7 +107,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   #proof-result.success {{ color: #4ec9b0; }}
   #proof-result.failure {{ color: #f44747; }}
   .CodeMirror {{
-    height: 100% !important; font-size: 14px;
+    height: 100% !important; font-size: 18px;
     font-family: 'JetBrains Mono', 'Fira Code', monospace;
   }}
   .yaml-flash {{
@@ -115,7 +121,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   #readonly-toast {{
     position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
     background: #333; color: #ddd; padding: 10px 20px; border-radius: 6px;
-    font-family: 'JetBrains Mono', monospace; font-size: 13px;
+    font-family: 'JetBrains Mono', monospace; font-size: 17px;
     opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 1000;
     max-width: 500px; text-align: center;
   }}
@@ -136,12 +142,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   <div id="divider"></div>
   <div id="yaml-pane">
     <div class="pane-header">
-      <span>proof.yaml</span>
+      <div class="tab-bar" id="top-tab-bar" style="background:transparent;border:none;">
+        <div class="tab active" data-tab="yaml-editor">proof.yaml</div>
+        <div class="tab" data-tab="quickview-editor">Quick Overview</div>
+      </div>
       <span id="yaml-status" class="status">connecting...</span>
     </div>
-    <div id="yaml-editor"></div>
+    <div id="top-editors">
+      <div id="yaml-editor" class="editor-panel active"></div>
+      <div id="quickview-editor" class="editor-panel"></div>
+    </div>
+    <div id="h-divider"></div>
     <div id="bottom-pane">
-      <div class="tab-bar">
+      <div class="tab-bar" id="bottom-tab-bar">
         <div class="tab active" data-tab="status">Minilang Operation Execution</div>
         <div class="tab" data-tab="logs">Logs</div>
       </div>
@@ -165,7 +178,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 // Terminal (left pane)
 // ================================================================
 const term = new Terminal({{
-  cursorBlink: true, fontSize: 14,
+  cursorBlink: true, fontSize: 18,
   fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
   theme: {{ background: '#1e1e1e', foreground: '#d4d4d4', cursor: '#d4d4d4' }},
 }});
@@ -213,25 +226,33 @@ function stepFoldRangeFinder(cm, start) {{
   return null;
 }}
 
-const editor = CodeMirror(document.getElementById('yaml-editor'), {{
+const cmOpts = {{
   mode: 'yaml',
   theme: 'material-darker',
   readOnly: true,
   lineNumbers: true,
   foldGutter: {{ rangeFinder: stepFoldRangeFinder }},
   gutters: ['CodeMirror-linenumbers', 'CodeMirror-foldgutter'],
+}};
+const editor = CodeMirror(document.getElementById('yaml-editor'), cmOpts);
+const qvEditor = CodeMirror(document.getElementById('quickview-editor'), cmOpts);
+
+// Top tab switching
+document.querySelectorAll('#top-tab-bar .tab').forEach(tab => {{
+  tab.addEventListener('click', () => {{
+    document.querySelectorAll('#top-tab-bar .tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.editor-panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById(tab.dataset.tab).classList.add('active');
+    // Refresh the now-visible editor so it renders correctly
+    if (tab.dataset.tab === 'yaml-editor') editor.refresh();
+    else qvEditor.refresh();
+  }});
 }});
 
 // Read-only hint: show toast and flash terminal when user tries to type
 let toastTimer = null;
-editor.getWrapperElement().addEventListener('keydown', (e) => {{
-  // Ignore navigation, modifier-only, and shortcut keys
-  if (e.ctrlKey || e.metaKey || e.altKey) return;
-  const nav = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',
-               'Home','End','PageUp','PageDown','Escape','Tab',
-               'Shift','Control','Alt','Meta','CapsLock'];
-  if (nav.includes(e.key)) return;
-  // Typing attempt on read-only editor
+function showReadonlyToast() {{
   const toast = document.getElementById('readonly-toast');
   toast.classList.add('show');
   clearTimeout(toastTimer);
@@ -240,12 +261,21 @@ editor.getWrapperElement().addEventListener('keydown', (e) => {{
   tp.classList.remove('terminal-flash');
   void tp.offsetWidth;
   tp.classList.add('terminal-flash');
+}}
+[editor, qvEditor].forEach(ed => {{
+  ed.getWrapperElement().addEventListener('keydown', (e) => {{
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const nav = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',
+                 'Home','End','PageUp','PageDown','Escape','Tab',
+                 'Shift','Control','Alt','Meta','CapsLock'];
+    if (nav.includes(e.key)) return;
+    showReadonlyToast();
+  }});
 }});
 
 // ================================================================
 // Live YAML updates via WebSocket + flash-highlight
 // ================================================================
-let lastYaml = '';
 
 function findStepBlock(lines, lineIdx) {{
   // Walk up to find the enclosing "- step id:" line
@@ -269,72 +299,64 @@ function findStepBlock(lines, lineIdx) {{
   return [stepLine, endLine];
 }}
 
-function applyFlashHighlight(oldText, newText) {{
+function applyFlashHighlight(cm, oldText, newText) {{
   const oldLines = oldText.split('\\n');
   const newLines = newText.split('\\n');
-  // Find changed line indices
   const changedLines = new Set();
   const maxLen = Math.max(oldLines.length, newLines.length);
   for (let i = 0; i < maxLen; i++) {{
     if ((oldLines[i] || '') !== (newLines[i] || '')) changedLines.add(i);
   }}
   if (changedLines.size === 0) return;
-  // Expand to enclosing step blocks
   const flashLines = new Set();
   for (const idx of changedLines) {{
     const [start, end] = findStepBlock(newLines, Math.min(idx, newLines.length - 1));
     for (let i = start; i <= end; i++) flashLines.add(i);
   }}
-  // Apply CSS class with animation
   for (const ln of flashLines) {{
-    if (ln < editor.lineCount()) {{
-      editor.addLineClass(ln, 'wrap', 'yaml-flash');
-    }}
+    if (ln < cm.lineCount()) cm.addLineClass(ln, 'wrap', 'yaml-flash');
   }}
-  // Remove class after animation
   setTimeout(() => {{
     for (const ln of flashLines) {{
-      if (ln < editor.lineCount()) {{
-        editor.removeLineClass(ln, 'wrap', 'yaml-flash');
-      }}
+      if (ln < cm.lineCount()) cm.removeLineClass(ln, 'wrap', 'yaml-flash');
     }}
   }}, 4200);
 }}
 
-function updateYaml(newText) {{
-  if (newText === lastYaml) return;
-  // Save fold state
+function updateEditor(cm, lastRef, newText) {{
+  if (newText === lastRef.val) return;
   const foldedLines = [];
-  for (let i = 0; i < editor.lineCount(); i++) {{
-    const marks = editor.findMarksAt(CodeMirror.Pos(i, 0));
+  for (let i = 0; i < cm.lineCount(); i++) {{
+    const marks = cm.findMarksAt(CodeMirror.Pos(i, 0));
     if (marks.some(m => m.__isFold)) foldedLines.push(i);
   }}
-  const scroll = editor.getScrollInfo();
-
-  const oldText = lastYaml;
-  editor.setValue(newText);
-  lastYaml = newText;
-  applyFlashHighlight(oldText, newText);
-
-  // Re-apply folds
+  const scroll = cm.getScrollInfo();
+  const oldText = lastRef.val;
+  cm.setValue(newText);
+  lastRef.val = newText;
+  applyFlashHighlight(cm, oldText, newText);
   for (const ln of foldedLines) {{
-    if (ln < editor.lineCount()) {{
-      const range = stepFoldRangeFinder(editor, CodeMirror.Pos(ln, 0));
-      if (range) editor.foldCode(CodeMirror.Pos(ln, 0), {{ rangeFinder: stepFoldRangeFinder }});
+    if (ln < cm.lineCount()) {{
+      const range = stepFoldRangeFinder(cm, CodeMirror.Pos(ln, 0));
+      if (range) cm.foldCode(CodeMirror.Pos(ln, 0), {{ rangeFinder: stepFoldRangeFinder }});
     }}
   }}
-  editor.scrollTo(scroll.left, scroll.top);
+  cm.scrollTo(scroll.left, scroll.top);
   document.getElementById('yaml-status').textContent = new Date().toLocaleTimeString();
 }}
 
+const lastYaml = {{ val: '' }};
+const lastQv = {{ val: '' }};
+function updateYaml(text) {{ updateEditor(editor, lastYaml, text); }}
+function updateQuickview(text) {{ updateEditor(qvEditor, lastQv, text); }}
+
 // ================================================================
+// Tab switching (bottom)
 // ================================================================
-// Tab switching
-// ================================================================
-document.querySelectorAll('.tab-bar .tab').forEach(tab => {{
+document.querySelectorAll('#bottom-tab-bar .tab').forEach(tab => {{
   tab.addEventListener('click', () => {{
-    document.querySelectorAll('.tab-bar .tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.querySelectorAll('#bottom-tab-bar .tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('#bottom-pane > .tab-content').forEach(c => c.classList.remove('active'));
     tab.classList.add('active');
     document.getElementById(tab.dataset.tab + '-panel').classList.add('active');
   }});
@@ -407,6 +429,7 @@ yamlWs.onmessage = (e) => {{
   const msg = JSON.parse(e.data);
   switch (msg.type) {{
     case 'yaml': updateYaml(msg.content); break;
+    case 'quickview': updateQuickview(msg.content); break;
     case 'status': appendStatus(msg); break;
     case 'log': appendLog(msg); break;
     case 'proof_complete': showProofResult(msg.success); break;
@@ -426,17 +449,36 @@ const divider = document.getElementById('divider');
 const termPane = document.getElementById('terminal-pane');
 const yamlPane = document.getElementById('yaml-pane');
 let dragging = false;
-divider.addEventListener('mousedown', () => {{ dragging = true; }});
+divider.addEventListener('mousedown', (e) => {{ dragging = true; e.preventDefault(); }});
+
+const hDivider = document.getElementById('h-divider');
+const topEditors = document.getElementById('top-editors');
+const bottomPane = document.getElementById('bottom-pane');
+let hDragging = false;
+hDivider.addEventListener('mousedown', (e) => {{ hDragging = true; e.preventDefault(); }});
+
 document.addEventListener('mousemove', (e) => {{
-  if (!dragging) return;
-  const cw = document.getElementById('container').clientWidth;
-  const ratio = e.clientX / cw;
-  termPane.style.flex = `${{ratio}}`;
-  yamlPane.style.flex = `${{1 - ratio}}`;
-  fitAddon.fit();
-  editor.refresh();
+  if (dragging) {{
+    const cw = document.getElementById('container').clientWidth;
+    const ratio = Math.max(0.15, Math.min(0.85, e.clientX / cw));
+    termPane.style.flex = `${{ratio}}`;
+    yamlPane.style.flex = `${{1 - ratio}}`;
+    fitAddon.fit();
+    editor.refresh();
+    qvEditor.refresh();
+  }}
+  if (hDragging) {{
+    const paneRect = yamlPane.getBoundingClientRect();
+    const offset = e.clientY - paneRect.top;
+    const paneHeight = paneRect.height;
+    const ratio = Math.max(0.2, Math.min(0.9, offset / paneHeight));
+    topEditors.style.flex = `${{ratio}}`;
+    bottomPane.style.flex = `${{1 - ratio}}`;
+    editor.refresh();
+    qvEditor.refresh();
+  }}
 }});
-document.addEventListener('mouseup', () => {{ dragging = false; }});
+document.addEventListener('mouseup', () => {{ dragging = false; hDragging = false; }});
 
 // ================================================================
 // Resize handling
@@ -446,6 +488,7 @@ const sendResize = () => {{
   termWs.readyState === 1 && termWs.send(
     JSON.stringify({{type: 'resize', cols: term.cols, rows: term.rows}}));
   editor.refresh();
+  qvEditor.refresh();
 }};
 window.addEventListener('resize', sendResize);
 new ResizeObserver(sendResize).observe(document.getElementById('terminal-pane'));
@@ -467,11 +510,7 @@ async def _tmux_session_exists(name: str) -> bool:
 
 async def terminal_page(request: web.Request) -> web.Response:
     session_name = request.match_info['session_name']
-    if not await _tmux_session_exists(session_name):
-        return web.Response(
-            text=f"Session '{session_name}' not found. Waiting for it to start...",
-            status=404,
-            content_type="text/plain")
+    # Always serve the HTML page — even after session ends, cached content is available
     html = HTML_TEMPLATE.format(session_name=session_name)
     return web.Response(text=html, content_type="text/html")
 
@@ -479,13 +518,16 @@ async def terminal_page(request: web.Request) -> web.Response:
 async def yaml_handler(request: web.Request) -> web.Response:
     """Return current proof.yaml content (used for initial load)."""
     session_name = request.match_info['session_name']
-    yaml_paths: dict[str, str] = request.app['yaml_paths']
-    path = yaml_paths.get(session_name)
-    if path is None or not os.path.exists(path):
-        return web.Response(text="# proof.yaml not available yet\n",
-                            content_type="text/plain")
-    with open(path, "r", encoding="utf-8") as f:
-        return web.Response(text=f.read(), content_type="text/plain")
+    path = request.app['yaml_paths'].get(session_name)
+    if path and os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return web.Response(text=f.read(), content_type="text/plain")
+    # Fall back to cache (session may have ended but content preserved)
+    cached = request.app['yaml_cache'].get(session_name)
+    if cached:
+        return web.Response(text=cached, content_type="text/plain")
+    return web.Response(text="# proof.yaml not available yet\n",
+                        content_type="text/plain")
 
 
 async def yaml_ws_handler(request: web.Request) -> web.WebSocketResponse:
@@ -500,12 +542,20 @@ async def yaml_ws_handler(request: web.Request) -> web.WebSocketResponse:
     subscribers[session_name].add(ws)
 
     try:
-        # Send current content immediately as JSON
-        yaml_paths: dict[str, str] = request.app['yaml_paths']
-        path = yaml_paths.get(session_name)
-        if path and os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                await ws.send_str(json.dumps({"type": "yaml", "content": f.read()}))
+        # Send current content immediately as JSON (try file first, fall back to cache)
+        yaml_content = None
+        yaml_path = request.app['yaml_paths'].get(session_name)
+        if yaml_path and os.path.exists(yaml_path):
+            with open(yaml_path, "r", encoding="utf-8") as f:
+                yaml_content = f.read()
+        else:
+            yaml_content = request.app['yaml_cache'].get(session_name)
+        if yaml_content:
+            await ws.send_str(json.dumps({"type": "yaml", "content": yaml_content}))
+
+        qv_content = request.app['quickview_cache'].get(session_name)
+        if qv_content:
+            await ws.send_str(json.dumps({"type": "quickview", "content": qv_content}))
 
         # Keep connection alive until client disconnects
         async for msg in ws:
@@ -608,8 +658,10 @@ async def _attach_tmux(ws: web.WebSocketResponse, session_name: str):
 
 def create_app() -> web.Application:
     app = web.Application()
-    app['yaml_paths'] = {}        # session_name → yaml file path
-    app['yaml_subscribers'] = {}  # session_name → set[WebSocketResponse]
+    app['yaml_paths'] = {}          # session_name → yaml file path
+    app['yaml_subscribers'] = {}    # session_name → set[WebSocketResponse]
+    app['yaml_cache'] = {}          # session_name → last yaml content (persists after session ends)
+    app['quickview_cache'] = {}     # session_name → last quickview content (persists after session ends)
     app.router.add_get('/{session_name}', terminal_page)
     app.router.add_get('/{session_name}/ws', websocket_handler)
     app.router.add_get('/{session_name}/yaml', yaml_handler)
@@ -661,7 +713,7 @@ class WebTerminalServer:
             self._app['yaml_paths'][session_name] = yaml_path
 
     def unregister_yaml(self, session_name: str):
-        """Unregister the proof.yaml path and close any YAML WebSocket subscribers."""
+        """Unregister paths and close any YAML WebSocket subscribers."""
         if self._app is not None:
             self._app['yaml_paths'].pop(session_name, None)
             self._app['yaml_subscribers'].pop(session_name, None)
@@ -680,16 +732,19 @@ class WebTerminalServer:
         for ws in dead:
             subscribers.discard(ws)
 
-    async def notify_yaml_update(self, session_name: str):
-        """Read proof.yaml and push its content to all YAML WebSocket subscribers."""
+    async def notify_yaml_update(self, session_name: str, quickview: str = ""):
+        """Read proof.yaml and push it with quickview to all WebSocket subscribers."""
         if self._app is None:
             return
-        path = self._app['yaml_paths'].get(session_name)
-        if path is None or not os.path.exists(path):
-            return
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
-        await self._broadcast(session_name, json.dumps({"type": "yaml", "content": content}))
+        yaml_path = self._app['yaml_paths'].get(session_name)
+        if yaml_path and os.path.exists(yaml_path):
+            with open(yaml_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            self._app['yaml_cache'][session_name] = content
+            await self._broadcast(session_name, json.dumps({"type": "yaml", "content": content}))
+        if quickview:
+            self._app['quickview_cache'][session_name] = quickview
+            await self._broadcast(session_name, json.dumps({"type": "quickview", "content": quickview}))
 
     async def notify_status(self, session_name: str, msg: dict):
         """Push a status message (operation start/end, proof_complete) to subscribers."""

@@ -7,18 +7,12 @@
         "type": "string",
         "enum": ["constant", "lemma", "type", "typeclass", "locale",
                  "introduction rule", "elimination rule"]
-      },
-      "description": "Entity kinds to search. Use [\"lemma\"] for theorems."
+      }
     },
-    "query": {
+    "long_description": {
       "type": "string",
-      "description": "English description of the entity to search for. MUST wrap formulas in backticks (like `ln 1`)",
+      "description": "MUST wrap formulas in backticks (like `ln 1`). MUST be LONG",
       "default": ""
-    },
-    "k": {
-      "type": "integer",
-      "description": "Number of results to return.",
-      "default": 10
     },
     "term_patterns": {
       "type": "array",

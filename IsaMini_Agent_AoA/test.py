@@ -563,15 +563,15 @@ async def _test_RetrieveFact(root: Root, file: MyIO):
     fetched = await root.ml_state.fetch_facts([
         {"refer_by": "name", "name": "log_nat_power"},       # known fact → IsabelleFact_Presented
         {"refer_by": "name", "name": "nonexistent_lemma"},    # unknown fact → IsabelleFact_Unfound
-        {"refer_by": "statement", "statement": "8 = 2^3"},   # statement → Interaction_RetrieveFact
+        {"refer_by": "statement", "statement": "8 = 2^3"},   # statement → Interaction_RetrieveForProof
     ])
     for i, f in enumerate(fetched):
         file.write(f"  fetch_facts[{i}]: {type(f).__name__}\n")
     assert isinstance(fetched[0], IsabelleFact_Presented)
     assert isinstance(fetched[1], IsabelleFact_Unfound)
-    assert isinstance(fetched[2], Interaction_RetrieveFact)
+    assert isinstance(fetched[2], Interaction_RetrieveForProof)
     # 2. Test Obvious with both a FactByStatement and a FactByName.
-    #    The FactByStatement triggers Interaction_RetrieveFact which calls
+    #    The FactByStatement triggers Interaction_RetrieveForProof which calls
     #    semantic_knn → entities_of → retrieve_facts internally.
     root.session.age += 1
     try:
@@ -586,15 +586,17 @@ async def _test_RetrieveFact(root: Root, file: MyIO):
         results: list[Any] = [None] * len(e.interactions)
         for i, inter in enumerate(e.interactions):
             file.write(f"  interaction[{i}]: {type(inter).__name__}\n")
-            if isinstance(inter, Interaction_RetrieveFact):
+            if isinstance(inter, Interaction_RetrieveForProof):
                 file.write(f"    query: {inter.query}\n")
                 file.write(f"    candidates: {len(inter.candidate_facts)}\n")
                 # Answer with a ProveInTime statement
                 result = await inter.answer("(8::nat) = 2^3")
-                file.write(f"    ProveInTime answer: {type(result).__name__}\n")
-                assert isinstance(result, IsabelleFact_ProveInTime)
-                file.write(f"    statement: {result.statement}\n")
-                file.write(f"    pack: {result.pack()}\n")
+                assert isinstance(result, list) and len(result) == 1
+                pit = result[0]
+                file.write(f"    ProveInTime answer: {type(pit).__name__}\n")
+                assert isinstance(pit, IsabelleFact_ProveInTime)
+                file.write(f"    statement: {pit.statement}\n")
+                file.write(f"    pack: {pit.pack()}\n")
                 results[i] = result
         # Invoke the continuation to get a gen_node, then fill
         gen = await e.kontinuation(results)
@@ -616,15 +618,15 @@ async def _test_RetrieveFact2(root: Root, file: MyIO):
     fetched = await root.ml_state.fetch_facts([
         {"refer_by": "name", "name": "log_nat_power"},       # known fact → IsabelleFact_Presented
         {"refer_by": "name", "name": "nonexistent_lemma"},    # unknown fact → IsabelleFact_Unfound
-        {"refer_by": "statement", "statement": "8 = 2^3"},   # statement → Interaction_RetrieveFact
+        {"refer_by": "statement", "statement": "8 = 2^3"},   # statement → Interaction_RetrieveForProof
     ])
     for i, f in enumerate(fetched):
         file.write(f"  fetch_facts[{i}]: {type(f).__name__}\n")
     assert isinstance(fetched[0], IsabelleFact_Presented)
     assert isinstance(fetched[1], IsabelleFact_Unfound)
-    assert isinstance(fetched[2], Interaction_RetrieveFact)
+    assert isinstance(fetched[2], Interaction_RetrieveForProof)
     # 2. Test Obvious with both a FactByStatement and a FactByName.
-    #    The FactByStatement triggers Interaction_RetrieveFact which calls
+    #    The FactByStatement triggers Interaction_RetrieveForProof which calls
     #    semantic_knn → entities_of → retrieve_facts internally.
     root.session.age += 1
     try:
@@ -639,15 +641,17 @@ async def _test_RetrieveFact2(root: Root, file: MyIO):
         results: list[Any] = [None] * len(e.interactions)
         for i, inter in enumerate(e.interactions):
             file.write(f"  interaction[{i}]: {type(inter).__name__}\n")
-            if isinstance(inter, Interaction_RetrieveFact):
+            if isinstance(inter, Interaction_RetrieveForProof):
                 file.write(f"    query: {inter.query}\n")
                 file.write(f"    candidates: {len(inter.candidate_facts)}\n")
                 # Answer with a ProveInTime statement
                 result = await inter.answer("(9::nat) = 2^3")
-                file.write(f"    ProveInTime answer: {type(result).__name__}\n")
-                assert isinstance(result, IsabelleFact_ProveInTime)
-                file.write(f"    statement: {result.statement}\n")
-                file.write(f"    pack: {result.pack()}\n")
+                assert isinstance(result, list) and len(result) == 1
+                pit = result[0]
+                file.write(f"    ProveInTime answer: {type(pit).__name__}\n")
+                assert isinstance(pit, IsabelleFact_ProveInTime)
+                file.write(f"    statement: {pit.statement}\n")
+                file.write(f"    pack: {pit.pack()}\n")
                 results[i] = result
         # Invoke the continuation to get a gen_node, then fill
         gen = await e.kontinuation(results)

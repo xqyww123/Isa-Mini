@@ -30,11 +30,14 @@ from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import Tool, TextContent
 
 from .model import (
-    the_session, _session_var, Session, MyIO,
+    the_session, _session_var, Session, Minilang_State, MyIO,
     RaiseInteraction, Working_Interactions, Interaction,
     AoA_Error, InternalError, ArgumentError, IsabelleError,
     Parse_Node, gen_node, normalize_answer, Interaction_BadAnswer,
-    EntityKind,
+    EntityKind, print_indent, print_paragraph,
+    Interaction_Retrieve,
+    IsabelleEntity, IsabelleFact_Presented, FactByName,
+    _THEOREM_KINDS,
 )
 from . import prompts as P
 
@@ -170,10 +173,12 @@ async def _execute_proof_action(
 # Permission Check (both modes)
 # ============================================================================
 
+_BLOCKED_DURING_INTERACTION = {"edit", "delete"}
+
 def _check_tool_permission(session: Session, tool_name: str) -> str | None:
     """Check interaction state. Returns error message or None."""
     if session.working_interactions:
-        if tool_name != "answer":
+        if tool_name in _BLOCKED_DURING_INTERACTION:
             return "Pending interaction — use the answer tool first."
     elif tool_name == "answer":
         return "No pending interaction."
@@ -286,57 +291,208 @@ async def _answer_tool_logic(session: Session, args: dict) -> str:
         os._exit(1)
 
 
-async def _semantic_search_tool_logic(session: Session, args: dict) -> str:
-    session.log_tool_call("mcp__proof__semantic_search", args)
+async def _semantic_search_single(session: Session, q: dict, k: int) -> str:
+    """Run a single semantic search query, returning formatted result text."""
+    query = q.get("long_description", None)
     try:
-        query = args.get("query", None)
-        k = args.get("k", 10)
-        try:
-            kinds = [EntityKind.from_label(label) for label in args["kinds"]]
-        except KeyError as e:
-            return f"Invalid entity kind: {e}"
+        kinds = [EntityKind.from_label(label) for label in q["kinds"]]
+    except KeyError as e:
+        return f"Invalid entity kind: {e}"
 
-        term_patterns = args.get("term_patterns", [])
-        type_patterns = args.get("type_patterns", [])
-        theories_include = args.get("theories_include", [])
-        name_contains = args.get("name_contains", [])
+    term_patterns = q.get("term_patterns", [])
+    type_patterns = q.get("type_patterns", [])
+    theories_include = q.get("theories_include", [])
+    name_contains = q.get("name_contains", [])
 
-        ml_state = session.root.ml_state
-        fetch_k = max(k, 50)
-        results, warnings = await ml_state.semantic_knn(
-            query, fetch_k, kinds,
-            term_patterns=term_patterns,
-            type_patterns=type_patterns,
-            theories_include=theories_include,
-            name_contains=name_contains)
+    ml_state = session.root.ml_state
+    results, warnings = await ml_state.semantic_knn(
+        query, k, kinds,
+        term_patterns=term_patterns,
+        type_patterns=type_patterns,
+        theories_include=theories_include,
+        name_contains=name_contains)
 
-        lines: list[str] = []
-        for w in warnings:
-            lines.append(f"Warning: {w}")
-        if not results:
-            lines.append("No matching entities found.")
-            return "\n".join(lines)
-
-        if len(results) >= 50:
-            n_above_07 = sum(1 for s, _ in results if s > 0.7)
-            n_above_06 = sum(1 for s, _ in results if s > 0.6)
-            last_score = results[-1][0]
-            if last_score > 0.5 or n_above_06 > 20 or n_above_07 > 10:
-                session.log_interaction("mcp__proof__semantic_search",
-                    f"not distinctive: last_score={last_score:.2f}, n_above_06={n_above_06}, n_above_07={n_above_07}")
-                lines.append("Hint: Results not distinctive enough \u2014 too many high-similarity hits. "
-                             "Try narrowing with term_patterns, type_patterns, or theories_include.")
-        for score, rec in results[:k]:
-            lines.append(f"- [{score:.2f}] {rec.pretty_print}")
-            if rec.interpretation:
-                lines.append(f"  {rec.interpretation}")
+    lines: list[str] = []
+    for w in warnings:
+        lines.append(f"Warning: {w}")
+    if not results:
+        lines.append("No matching entities found.")
         return "\n".join(lines)
-    except IsabelleError as e:
-        error_msg = "\n".join(e.errors)
-        session.log_tool_response("mcp__proof__semantic_search", f"ERROR: {error_msg}")
-        return error_msg
+
+    top10 = "\n".join(f"  [{s:.2f}] {r.pretty_print}" for s, r in results[:10])
+    session.log_interaction("mcp__proof__search_isabelle",
+        f"query={query!r}\n{top10}")
+    for score, rec in results[:k]:
+        lines.append(f"- [{score:.2f}] {rec.pretty_print}")
+        if rec.interpretation:
+            lines.append(f"  {rec.interpretation}")
+    return "\n".join(lines)
+
+
+class Interaction_RetrieveForSearch(Interaction_Retrieve):
+    """Retrieve entities for semantic search filtering. No prove-in-time."""
+
+    @classmethod
+    async def create(cls, state: Minilang_State,
+            query: str, kinds: list[EntityKind],
+            **kwargs: Any) -> 'Interaction_RetrieveForSearch':
+        inst = cls(state, query, kinds, [], **kwargs)
+        inst.candidate_facts = await inst._fetch_facts()
+        return inst
+
+    def prompt(self, indent: int, file: MyIO) -> None:
+        title = self._entity_title()
+        print_indent(indent, file)
+        if self.query:
+            file.write(f"You are looking for {title} establishing:")
+            print_paragraph(indent, file, self.query)
+        else:
+            file.write(f"You are looking for {title} matching the search criteria.")
+        file.write("\n")
+        file.write(f"Select all relevant {title} from the following list:\n")
+        self._prompt_candidates(indent, file)
+        file.write("\nYou are encouraged to call the search_isabelle tool "
+                   "to find more if none of the above is relevant.\n")
+        file.write("Answer with the indices of all relevant entries.\n")
+
+
+async def _semantic_search_with_filtering(session: Session, args: dict) -> str:
+    """Run semantic search (k=50) and raise Interaction_RetrieveForSearch for fork-based filtering."""
+    query = args.get("long_description", None)
+    try:
+        kinds = [EntityKind.from_label(label) for label in args["kinds"]]
+    except KeyError as e:
+        return f"Invalid entity kind: {e}"
+
+    ml_state = session.root.ml_state
+    interaction = await Interaction_RetrieveForSearch.create(
+        state=ml_state, query=query or "", kinds=kinds,
+        initial_k=50,
+        single_choice=False,
+        term_patterns=args.get("term_patterns", []),
+        type_patterns=args.get("type_patterns", []),
+        theories_include=args.get("theories_include", []),
+        name_contains=args.get("name_contains", []),
+    )
+
+    if not interaction.candidate_facts:
+        return "No matching entities found."
+
+    async def format_selected(results: list[Any]) -> str:
+        selected = results[0]  # list[IsabelleEntity]
+        if not selected:
+            return "No relevant entities found after filtering."
+        lines: list[str] = []
+        for entity in selected:
+            lines.append(f"- {entity.full_name}: {', '.join(entity.expression)}")
+        return "\n".join(lines)
+
+    raise RaiseInteraction([interaction], format_selected)
+
+
+def _find_active_retrieve_fact(session: Session) -> Interaction_Retrieve | None:
+    """Find the active Interaction_Retrieve in the interaction stack, if any."""
+    for wi in reversed(session.working_interactions):
+        for i, inter in enumerate(wi.interactions):
+            if isinstance(inter, Interaction_Retrieve) and wi.result_set[i] is False:
+                return inter
+    return None
+
+
+async def _semantic_search_extend_candidates(
+    session: Session, args: dict, interaction: Interaction_Retrieve,
+) -> str:
+    """Run semantic search and extend the active interaction's candidate list.
+    Output uses the same format as the interaction prompt, with continuing indices."""
+    query = args.get("long_description", None)
+    try:
+        kinds = [EntityKind.from_label(label) for label in args["kinds"]]
+    except KeyError as e:
+        return f"Invalid entity kind: {e}"
+
+    term_patterns = args.get("term_patterns", [])
+    type_patterns = args.get("type_patterns", [])
+    theories_include = args.get("theories_include", [])
+    name_contains = args.get("name_contains", [])
+
+    ml_state = session.root.ml_state
+    results, warnings = await ml_state.semantic_knn(
+        query, 10, kinds,
+        term_patterns=term_patterns,
+        type_patterns=type_patterns,
+        theories_include=theories_include,
+        name_contains=name_contains)
+
+    lines: list[str] = []
+    for w in warnings:
+        lines.append(f"Warning: {w}")
+    if not results:
+        lines.append("No new matching entities found.")
+        return "\n".join(lines)
+
+    # Convert to FetchedEntity and deduplicate against existing candidates
+    existing_names = {f.entity.full_name for f in interaction.candidate_facts}
+    entities = [(rec.kind, rec.name) for _, rec in results]
+    infos = await ml_state._retrieve_entity(entities)
+    new_facts: list[Interaction_Retrieve.FetchedEntity] = []
+    for (score, rec), info in zip(results, infos):
+        if info is None:
+            continue
+        short_name, exprs = info
+        if rec.name in existing_names:
+            continue
+        if rec.kind in _THEOREM_KINDS:
+            entity: IsabelleEntity = IsabelleFact_Presented(
+                full_name=rec.name, short_name=short_name,
+                fact=FactByName(refer_by="name", name=short_name),
+                expression=exprs)
+        else:
+            entity = IsabelleEntity(
+                full_name=rec.name, short_name=short_name,
+                expression=exprs)
+        new_facts.append(Interaction_Retrieve.FetchedEntity(
+            entity=entity,
+            score=score,
+            interpretation=' '.join(rec.interpretation.split()) if rec.interpretation else None,
+        ))
+
+    if not new_facts:
+        lines.append("No new matching entities found.")
+        return "\n".join(lines)
+
+    # Extend the interaction's candidate list
+    start_idx = len(interaction.candidate_facts)
+    interaction.candidate_facts.extend(new_facts)
+
+    # Format in the same style as Interaction_Retrieve.prompt()
+    for i, fetched in enumerate(new_facts):
+        lines.append(f"{start_idx + i}. {fetched.entity.full_name}: {fetched.entity.expression}")
+        if fetched.interpretation:
+            lines.append(f"  {fetched.interpretation}")
+    return "\n".join(lines)
+
+
+async def _semantic_search_tool_logic(session: Session, args: dict) -> str:
+    session.log_tool_call("mcp__proof__search_isabelle", args)
+    try:
+        active = _find_active_retrieve_fact(session)
+        if active is not None:
+            # Inside a fork with an active Interaction_Retrieve — extend its candidates
+            return await _semantic_search_extend_candidates(session, args, active)
+        # No active Interaction_Retrieve — raise a new one (works for both
+        # mainstream and forks handling other interaction types)
+        return await _semantic_search_with_filtering(session, args)
+    except RaiseInteraction as e:
+        r = await _handle_raise_interaction(session, e, "mcp__proof__search_isabelle")
+        if isinstance(r, _Prompt):
+            return r.text
+        return str(r.value)
+    # except IsabelleError as e:
+    #     error_msg = "\n".join(e.errors)
+    #     session.log_tool_response("mcp__proof__search_isabelle", f"ERROR: {error_msg}")
+    #     return error_msg
     except Exception as e:
-        session.log_tool_response("mcp__proof__semantic_search", f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
+        session.log_tool_response("mcp__proof__search_isabelle", f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
         os._exit(1)
 
 
@@ -365,8 +521,8 @@ def _create_mcp_server(session: Session, extra_sdk_tools: list | None = None) ->
         Tool(name="answer",
              description="Answer a pending question",
              inputSchema=_cc_answer_schema),
-        Tool(name="semantic_search",
-             description="Search for Isabelle entities by English description.",
+        Tool(name="search_isabelle",
+             description="Search for Isabelle entities.",
              inputSchema=_cc_semantic_search_schema),
     ]
 
@@ -405,7 +561,7 @@ def _create_mcp_server(session: Session, extra_sdk_tools: list | None = None) ->
             case "answer":
                 async with tool_lock:
                     result = await _answer_tool_logic(session, arguments)
-            case "semantic_search":
+            case "search_isabelle":
                 result = await _semantic_search_tool_logic(session, arguments)
             case _:
                 handler = extra_handlers.get(name)

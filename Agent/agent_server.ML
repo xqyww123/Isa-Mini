@@ -299,54 +299,54 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         timeout = SOME (Time.fromSeconds 30)
       }
 
-      val retrieve_fact_callback = {
-        name = "IsaMini.retrieve_fact",
-        arg_schema = unpackPair (unpackString, unpackList unpackString),
-        ret_schema = packList (packOption (packTuple3 (packString, packString, packList packString))),
-        function = (fn (state_id, names) =>
+      val retrieve_entity_callback = {
+        name = "IsaMini.retrieve_entity",
+        arg_schema = unpackPair (unpackString,
+          unpackList (unpackPair (Universal_Key.unpack_entity_kind, unpackString))),
+        ret_schema = packList (packOption (packPair (packString, packList packString))),
+        function = (fn (state_id, entities) =>
           let val s0 = get_state state_id
               val ctxt = Minilang.context_of s0
               val thy = Proof_Context.theory_of ctxt
               val SOT = MiniLang_Agent.string_of_term ctxt
+              val SOTy = MiniLang_Agent.string_of_type ctxt
               val facts = Proof_Context.facts_of ctxt
+              val const_space = Proof_Context.const_space ctxt
+              val consts = Proof_Context.consts_of ctxt
+              val type_space = Proof_Context.type_space ctxt
+              val class_space = Proof_Context.class_space ctxt
+              val locale_space = Locale.locale_space thy
               fun select_thms thms idx_opt = case idx_opt of
                     NONE => thms
                   | SOME i => if i >= 1 andalso i <= length thms
                               then [nth thms (i - 1)]
                               else []
-          in map (fn name =>
-              let val (base_name, idx_opt) = Theory_Structure.parse_thm_name name
-                  val full_name = Facts.intern facts base_name
-              in case Facts.lookup (Context.Proof ctxt) facts full_name of
-                   SOME {thms, ...} =>
-                     let val thms' = select_thms thms idx_opt
-                     in if null thms' then NONE
-                        else SOME (full_name,
-                                   Facts.extern ctxt facts full_name,
-                                   map (SOT o Thm.prop_of o Thm.transfer thy) thms')
-                     end
-                 | NONE => NONE
-              end) names
-          end),
-        timeout = NONE
-      }
-
-      val retrieve_constant_callback = {
-        name = "IsaMini.retrieve_constant",
-        arg_schema = unpackPair (unpackString, unpackList unpackString),
-        ret_schema = packList (packOption (packPair (packString, packString))),
-        function = (fn (state_id, names) =>
-          let val s0 = get_state state_id
-              val ctxt = Minilang.context_of s0
-              val const_space = Proof_Context.const_space ctxt
-              val consts = Proof_Context.consts_of ctxt
-              val SOT = MiniLang_Agent.string_of_type ctxt
-          in map (fn name =>
-              (let val short = Name_Space.extern ctxt const_space name
-                   val T = Consts.the_constraint consts name
-               in SOME (short, SOT T) end)
-              handle ERROR _ => NONE) names
-          end),
+              fun retrieve_thm name =
+                let val (base_name, idx_opt) = Theory_Structure.parse_thm_name name
+                    val full_name = Facts.intern facts base_name
+                in case Facts.lookup (Context.Proof ctxt) facts full_name of
+                     SOME {thms, ...} =>
+                       let val thms' = select_thms thms idx_opt
+                       in if null thms' then NONE
+                          else SOME (Facts.extern ctxt facts full_name,
+                                     map (SOT o Thm.prop_of o Thm.transfer thy) thms')
+                       end
+                   | NONE => NONE
+                end
+              fun retrieve (Universal_Key.TheoremK, name) = retrieve_thm name
+                | retrieve (Universal_Key.IntroductionRuleK, name) = retrieve_thm name
+                | retrieve (Universal_Key.EliminationRuleK, name) = retrieve_thm name
+                | retrieve (Universal_Key.ConstantK, name) =
+                    let val short = Name_Space.extern ctxt const_space name
+                        val T = Consts.the_constraint consts name
+                    in SOME (short, [SOTy T]) end
+                | retrieve (Universal_Key.TypeK, name) =
+                    SOME (Name_Space.extern ctxt type_space name, [])
+                | retrieve (Universal_Key.ClassK, name) =
+                    SOME (Name_Space.extern ctxt class_space name, [])
+                | retrieve (Universal_Key.LocaleK, name) =
+                    SOME (Name_Space.extern ctxt locale_space name, [])
+          in map (fn e => retrieve e handle ERROR _ => NONE) entities end),
         timeout = NONE
       }
 
@@ -504,8 +504,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
           mk_callback proof_opr_callback,
           mk_callback reset_state_callback,
           mk_callback lookup_fact_callback,
-          mk_callback retrieve_fact_callback,
-          mk_callback retrieve_constant_callback,
+          mk_callback retrieve_entity_callback,
           mk_callback compute_bindings_callback,
           mk_callback need_intro_callback,
           mk_callback check_term_callback,
