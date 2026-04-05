@@ -620,11 +620,25 @@ class ClaudeCode(Session):
             fork_url = await self._http_server.register_session(fork._session_id, fork)
             fork._mcp_url = fork_url
 
+            mode = interaction.forking
+            # Model selection
+            if mode == ForkingMode.FORKING_CHEAPER_NO_CTXT:
+                model = "claude-sonnet-4-6"
+            else:
+                model = "claude-opus-4-6"
+            # Context inheritance
+            if mode == ForkingMode.FORKING_WITH_CTXT:
+                resume = self._conversation_id
+                fork_session = True
+            else:
+                resume = None
+                fork_session = False
+
             fork_options = ClaudeAgentOptions(
-                model="claude-opus-4-6",
+                model=model,
                 thinking={"type": "adaptive"},
-                resume=self._conversation_id,
-                fork_session=True,
+                resume=resume,
+                fork_session=fork_session,
                 cwd=self.working_dir,
                 permission_mode="default",
                 allowed_tools=self.FORK_WHITELIST,

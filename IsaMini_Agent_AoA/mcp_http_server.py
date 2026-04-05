@@ -33,7 +33,7 @@ from .model import (
     the_session, _session_var, Session, Minilang_State, MyIO,
     RaiseInteraction, Working_Interactions, Interaction,
     AoA_Error, InternalError, ArgumentError, IsabelleError,
-    Parse_Node, gen_node, normalize_answer, Interaction_BadAnswer,
+    Parse_Node, gen_node, normalize_answer, Interaction_BadAnswer, ForkingMode,
     EntityKind, print_indent, print_paragraph,
     Interaction_Retrieve,
     IsabelleEntity, IsabelleFact_Presented, FactByName,
@@ -85,13 +85,11 @@ async def _handle_raise_interaction(
         kontinuation=e.kontinuation,
     )
     session.working_interactions.append(wi)
-    n_forking = sum(1 for inter in e.interactions if inter.forking)
-    n_inline = len(e.interactions) - n_forking
+    forking = [(i, inter) for i, inter in enumerate(e.interactions)
+               if inter.forking != ForkingMode.NO]
+    n_inline = len(e.interactions) - len(forking)
     session.log_interaction(tool_name,
-        f"{len(e.interactions)} interactions ({n_forking} forking, {n_inline} inline)")
-
-    # 1. Launch forking interactions as background tasks (don't await yet)
-    forking = [(i, inter) for i, inter in enumerate(e.interactions) if inter.forking]
+        f"{len(e.interactions)} interactions ({len(forking)} forking, {n_inline} inline)")
     if forking:
         session._launch_forks(forking, wi)
 
@@ -337,6 +335,7 @@ class Interaction_RetrieveForSearch(Interaction_Retrieve):
             query: str, kinds: list[EntityKind],
             **kwargs: Any) -> 'Interaction_RetrieveForSearch':
         inst = cls(state, query, kinds, [], **kwargs)
+        await inst._apply_forking_config()
         inst.candidate_facts = await inst._fetch_facts()
         return inst
 
@@ -479,18 +478,19 @@ async def _semantic_search_tool_logic(session: Session, args: dict) -> str:
         if active is not None:
             # Inside a fork with an active Interaction_Retrieve — extend its candidates
             return await _semantic_search_extend_candidates(session, args, active)
-        # No active Interaction_Retrieve — raise a new one (works for both
-        # mainstream and forks handling other interaction types)
-        return await _semantic_search_with_filtering(session, args)
+        # Check if interactive retrieval is enabled
+        interactive = await session.root.ml_state.connection.config_lookup(
+            "AoA_interactive_retrieval")
+        if interactive:
+            return await _semantic_search_with_filtering(session, args)
+        else:
+            # Direct (non-interactive) retrieval — return raw results
+            return await _semantic_search_single(session, args, k=10)
     except RaiseInteraction as e:
         r = await _handle_raise_interaction(session, e, "mcp__proof__search_isabelle")
         if isinstance(r, _Prompt):
             return r.text
         return str(r.value)
-    # except IsabelleError as e:
-    #     error_msg = "\n".join(e.errors)
-    #     session.log_tool_response("mcp__proof__search_isabelle", f"ERROR: {error_msg}")
-    #     return error_msg
     except Exception as e:
         session.log_tool_response("mcp__proof__search_isabelle", f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
         os._exit(1)

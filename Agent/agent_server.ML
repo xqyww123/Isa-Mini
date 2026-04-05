@@ -6,6 +6,8 @@ type driver = string
 val default_driver: driver
 val agent_aoa_driver: string Config.T
 val AoA_log_dir: string Config.T
+val AoA_interactive_retrieval: bool Config.T
+val AoA_retrieval_forking: string Config.T
 
 type state_id = string
 type states = Minilang.state Symtab.table
@@ -190,6 +192,20 @@ val AoA_log_dir = Attrib.setup_config_string \<^binding>\<open>AoA_log_dir\<clos
         in if user_home = "" then ""
            else user_home ^ "/log/AoA"
         end);
+
+val AoA_interactive_retrieval = Attrib.setup_config_bool \<^binding>\<open>AoA_interactive_retrieval\<close>
+      (K true);
+val _ = Config.register_rpc_option "AoA_interactive_retrieval"
+          (Config.bool_value AoA_interactive_retrieval);
+
+(* Forking mode for retrieval interactions:
+   "with_ctxt" (default)       — fork with opus, inheriting parent context
+   "without_ctxt"              — fork with opus, no context inheritance
+   "cheaper_no_ctxt"           — fork with sonnet, no context inheritance *)
+val AoA_retrieval_forking = Attrib.setup_config_string \<^binding>\<open>AoA_retrieval_forking\<close>
+      (K "with_ctxt");
+val _ = Config.register_rpc_option "AoA_retrieval_forking"
+          (Config.string_value AoA_retrieval_forking);
 
 fun make_invocation_id () =
   let val ms = Time.toMilliseconds (Time.now ())

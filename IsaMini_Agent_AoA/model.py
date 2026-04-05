@@ -8,8 +8,12 @@ from Isabelle_RPC_Host.universal_key import EntityKind, universal_key
 from Isabelle_Semantic_Embedding.semantics import Semantic_Vector_Store, SemanticRecord
 from abc import ABC, abstractmethod
 from enum import Enum
+import json
 import logging
+import os
+import sqlite3
 import yaml
+import platformdirs
 from io import StringIO
 
 type varname = str
@@ -370,6 +374,26 @@ class CannotAmend_NodeNotFound(CannotAmend):
 class CannotAmend_Root(CannotAmend):
     def __str__(self) -> str:
         return f"Cannot amend the root node"
+
+class NoAliveState(AoA_Error):
+    """Raised when interactive_gen needs a live proof state for retrieval/interaction
+    but none is available (e.g., operating on a cancelled node)."""
+    _message = ("No alive proof state is available for interactive operations. "
+                "The target proof context may have been cancelled or not yet evaluated.")
+    def __str__(self) -> str:
+        return self._message
+
+class CannotAppend_NoAliveState(CannotAppend, NoAliveState):
+    def __init__(self, target: 'Node'):
+        CannotAppend.__init__(self, target, NoAliveState._message)
+
+class CannotInsert_NoAliveState(CannotInsert, NoAliveState):
+    def __init__(self, target: 'Node'):
+        CannotInsert.__init__(self, target, NoAliveState._message)
+
+class CannotAmend_NoAliveState(CannotAmend, NoAliveState):
+    def __init__(self, target: 'Node', child: 'Node'):
+        CannotAmend.__init__(self, target, child, NoAliveState._message)
 
 type ToolCall_arg = dict[str, Any]
 class ArgumentError(AoA_Error):
@@ -1058,8 +1082,14 @@ def normalize_answer(indexes: list[int] | None, text: str | None) -> answer:
         return text
     return []
 
+class ForkingMode(Enum):
+    NO = 0                        # inline, not forked
+    FORKING_WITH_CTXT = 1         # fork inheriting parent conversation context
+    FORKING_WITHOUT_CTXT = 2      # fork with fresh context, same model (opus)
+    FORKING_CHEAPER_NO_CTXT = 3   # fork with fresh context, cheaper model (sonnet)
+
 class Interaction:
-    forking: bool = False
+    forking: ForkingMode = ForkingMode.NO
     def prompt(self, indent: int, file: MyIO) -> None:
         raise NotImplementedError("`prompt` must be implemented by subclass")
     async def answer(self, answer: answer) -> Any:
@@ -1100,9 +1130,36 @@ class Interaction_BadAnswer(Exception):
 
 _THEOREM_KINDS = frozenset({EntityKind.THEOREM, EntityKind.INTRODUCTION_RULE, EntityKind.ELIMINATION_RULE})
 
+_retrieval_db_conn: sqlite3.Connection | None = None
+
+def _get_retrieval_db() -> sqlite3.Connection:
+    global _retrieval_db_conn
+    if _retrieval_db_conn is None:
+        cache_dir = platformdirs.user_cache_dir("Isabelle_Semantic_Embedding", "Qiyuan")
+        db_dir = os.path.join(cache_dir, "AoA_Collected")
+        os.makedirs(db_dir, exist_ok=True)
+        _retrieval_db_conn = sqlite3.connect(os.path.join(db_dir, "retrieval_training.db"))
+        _retrieval_db_conn.execute("""CREATE TABLE IF NOT EXISTS retrieval_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            query TEXT NOT NULL,
+            kinds TEXT NOT NULL,
+            interaction_type TEXT NOT NULL,
+            candidates TEXT NOT NULL,
+            selected_indices TEXT NOT NULL,
+            prove_in_time TEXT
+        )""")
+    return _retrieval_db_conn
+
+_FORKING_MODE_MAP = {
+    "cheaper_no_ctxt": ForkingMode.FORKING_CHEAPER_NO_CTXT,
+    "with_ctxt": ForkingMode.FORKING_WITH_CTXT,
+    "without_ctxt": ForkingMode.FORKING_WITHOUT_CTXT,
+}
+
 class Interaction_Retrieve(Interaction):
     """Base class for interactive entity retrieval via forked agent."""
-    forking = True
+    forking = ForkingMode.FORKING_WITH_CTXT  # default, overridden per-instance from config
     INITIAL_K = 10
     FINAL_K = 40
 
@@ -1132,6 +1189,28 @@ class Interaction_Retrieve(Interaction):
         self.type_patterns = type_patterns or []
         self.theories_include = theories_include or []
         self.name_contains = name_contains or []
+
+    async def _apply_forking_config(self) -> None:
+        """Set self.forking from cached session config (loaded lazily on first call).
+        Empty query forces FORKING_WITH_CTXT (the fork needs parent context to understand relevance)."""
+        session = the_session()
+        if session._retrieval_forking_mode is None:
+            try:
+                mode_str = await self.state.connection.config_lookup("AoA_retrieval_forking")
+                if mode_str in _FORKING_MODE_MAP:
+                    session._retrieval_forking_mode = _FORKING_MODE_MAP[mode_str]
+                else:
+                    valid = ", ".join(f'"{k}"' for k in _FORKING_MODE_MAP)
+                    await self.state.connection.warning(
+                        f'Invalid AoA_retrieval_forking value "{mode_str}". '
+                        f'Valid options: {valid}. Using default "{self.forking.name.lower()}".')
+                    session._retrieval_forking_mode = self.forking
+            except Exception:
+                session._retrieval_forking_mode = self.forking
+        if not self.query:
+            self.forking = ForkingMode.FORKING_WITH_CTXT
+        else:
+            self.forking = session._retrieval_forking_mode
 
     async def _fetch_facts(self) -> 'list[Interaction_Retrieve.FetchedEntity]':
         import logging
@@ -1191,6 +1270,30 @@ class Interaction_Retrieve(Interaction):
                 print_indent(indent+2, file)
                 file.write(f"{fetched.interpretation}\n")
 
+    def _log_retrieval_training_data(self, selected_indices: list[int],
+                                     prove_in_time: str | None = None) -> None:
+        """Log retrieval event to the training DB for embedding model improvement."""
+        try:
+            selected_set = set(selected_indices)
+            candidates = json.dumps([
+                {"full_name": f.entity.full_name, "score": f.score,
+                 "expression": f.entity.expression,
+                 "selected": i in selected_set}
+                for i, f in enumerate(self.candidate_facts)
+            ])
+            conn = _get_retrieval_db()
+            conn.execute(
+                "INSERT INTO retrieval_events "
+                "(timestamp, query, kinds, interaction_type, candidates, selected_indices, prove_in_time) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (datetime.utcnow().isoformat(), self.query,
+                 json.dumps([k.label for k in self.kinds]),
+                 type(self).__name__, candidates,
+                 json.dumps(selected_indices), prove_in_time))
+            conn.commit()
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"Failed to log retrieval training data: {e}")
+
     def prompt(self, indent: int, file: MyIO) -> None:
         raise NotImplementedError("subclasses must override prompt()")
 
@@ -1207,6 +1310,8 @@ class Interaction_Retrieve(Interaction):
                     return results[0]
                 raise RaiseInteraction([self], identity)
             else:
+                self._log_retrieval_training_data([])
+                the_session().log_retrieval(self.query, ["none selected"])
                 return []
         # Index answer
         if self.single_choice and len(answer) > 1:
@@ -1217,6 +1322,13 @@ class Interaction_Retrieve(Interaction):
                 raise Interaction_BadAnswer(
                     f"Index {idx} out of range (0–{len(self.candidate_facts) - 1}).")
             selected.append(self.candidate_facts[idx].entity)
+        self._log_retrieval_training_data(list(answer))
+        session = the_session()
+        results = []
+        for e in selected:
+            expr = ", ".join(e.expression) if e.expression else ""
+            results.append(f"{e.short_name}: {expr}" if expr else e.short_name)
+        session.log_retrieval(self.query, results)
         return selected
 
 
@@ -1236,6 +1348,7 @@ class Interaction_RetrieveForProof(Interaction_Retrieve):
             query: str, kinds: list[EntityKind],
             **kwargs: Any) -> 'Interaction_RetrieveForProof':
         inst = cls(state, query, kinds, [], [], **kwargs)
+        await inst._apply_forking_config()
         inst.candidate_facts = await inst._fetch_facts()
         inst.relevant_constants = await inst._fetch_constants()
         return inst
@@ -1288,11 +1401,16 @@ class Interaction_RetrieveForProof(Interaction_Retrieve):
             file.write("If none of the above applies, answer empty to see more candidates.\n")
 
     async def answer(self, answer: answer) -> 'list[IsabelleEntity | IsabelleFact]':
+        session = the_session()
         # Text answer → prove-in-time
         if isinstance(answer, str) and answer:
+            self._log_retrieval_training_data([], prove_in_time=answer)
+            session.log_retrieval(self.query, [f"prove-in-time: {answer}"])
             return [IsabelleFact_ProveInTime(answer)]
         # Empty answer with no expansion left
         if not answer and self.k >= self.FINAL_K:
+            self._log_retrieval_training_data([])
+            session.log_retrieval(self.query, ["unfound"])
             if self.single_choice:
                 return [IsabelleFact_Unfound(
                     FactByStatement(refer_by="statement", statement=self.query))]
@@ -1319,6 +1437,7 @@ class NodeConfig(NamedTuple):
     local_step: local_step
     ml_state: Minilang_State
     parent: 'NonLeaf_Node | None'
+    alive_ml_state: 'Minilang_State | None' = None
 
 class Node(ABC):
     parent: 'NonLeaf_Node | None'
@@ -1780,8 +1899,12 @@ class NonLeaf_Node(Node):
                         new_id = cat_segs_into_id(segs)
                     else:
                         new_id = cat_segs_into_id(prev_id + [1])
+                alive = self._find_alive_state_among_children(i)
+                config = NodeConfig(new_id, await child.ml_state.clone(None), self, alive_ml_state=alive)
                 try:
-                    node = await gen_node(NodeConfig(new_id, await child.ml_state.clone(None), self))
+                    node = await gen_node(config)
+                except NoAliveState:
+                    raise CannotInsert_NoAliveState(before)
                 except GenNode_Error as e:
                     raise CannotInsert(before, str(e))
                 for x in self.sub_nodes:
@@ -1807,6 +1930,13 @@ class NonLeaf_Node(Node):
                 else:
                     return self._resulting_state_of_all_children()
         raise InternalError("The target node is not my children")
+    def _find_alive_state_among_children(self, before_index: int) -> 'Minilang_State | None':
+        """Find the latest alive ml_state at or before `before_index` in sub_nodes.
+        Does not cross block boundaries — does not check self.ml_state."""
+        for i in range(before_index, -1, -1):
+            if self.sub_nodes[i].ml_state.initialized():
+                return self.sub_nodes[i].ml_state
+        return None
     def _locate_node(self, ids: Sequence[local_step], id: step, pos: int = 0) -> 'Node':
         if pos == len(ids):
             return self
@@ -1882,8 +2012,12 @@ class NonLeaf_Node(Node):
     async def _amend_child(self, child: 'Node', gen_node: gen_node) -> 'Node':
         for i, c in enumerate(self.sub_nodes):
             if c is child:
+                alive = self._find_alive_state_among_children(i)
+                config = NodeConfig(child.id, await child.ml_state.clone(None), self, alive_ml_state=alive)
                 try:
-                    new_node = await gen_node(NodeConfig(child.id, await child.ml_state.clone(None), self))
+                    new_node = await gen_node(config)
+                except NoAliveState:
+                    raise CannotAmend_NoAliveState(self, child)
                 except GenNode_Error as e:
                     raise CannotAmend(self, child, str(e))
                 self.sub_nodes[i] = new_node
@@ -1949,6 +2083,12 @@ class StdBlock(NonLeaf_Node):
         #     return self._state_before_ending()
         # else:
         #     return self.resulting_state()
+    def _find_alive_state_among_children(self, before_index: int) -> 'Minilang_State | None':
+        result = super()._find_alive_state_among_children(before_index)
+        if result is not None:
+            return result
+        s = self._state_after_beginning()
+        return s if s.initialized() else None
     def _state_after_beginning(self) -> Minilang_State:
         if self.sub_nodes:
             return self.sub_nodes[0].ml_state
@@ -2161,9 +2301,12 @@ class StdBlock(NonLeaf_Node):
             raise CannotAppend_BlockClosed(self, self._closed_by)
         local_step = self._local_step_of_next_proof_step()
         ml_state = await self._state_before_ending_.clone(None)
-        config = NodeConfig(local_step, ml_state, self)
+        alive = self._find_alive_state_among_children(len(self.sub_nodes) - 1)
+        config = NodeConfig(local_step, ml_state, self, alive_ml_state=alive)
         try:
             node = await gen_node(config)
+        except NoAliveState:
+            raise CannotAppend_NoAliveState(self)
         except GenNode_Error as e:
             raise CannotAppend(self, str(e))
         if node is None:
@@ -2564,6 +2707,13 @@ def _split_fetched(fetched: 'list[IsabelleFact | Interaction_RetrieveForProof]'
             interactions.append(item)
     return resolved, interactions, resolve_indices
 
+def _require_alive_state(config: NodeConfig) -> Minilang_State:
+    """Extract alive_ml_state from config for interactive retrieval.
+    Raises NoAliveState if unavailable."""
+    if config.alive_ml_state is None:
+        raise NoAliveState()
+    return config.alive_ml_state
+
 #### Obvious
 
 class Obvious_ToolArg(TypedDict):
@@ -2588,7 +2738,7 @@ class Obvious(Leaf):
     @staticmethod
     def interactive_gen(arg: Obvious_ToolArg) -> gen_node:
         async def mk(config: NodeConfig) -> 'Obvious':
-            ml_state = config.ml_state
+            ml_state = _require_alive_state(config)
             fetched = await ml_state.fetch_facts(arg["facts"],
                 single_choice=False)
             resolved, interactions, resolve_indices = _split_fetched(fetched)
@@ -2743,7 +2893,7 @@ class Unfold(Leaf):
         targets = arg["targets"]
 
         async def mk(config: NodeConfig) -> 'Unfold':
-            ml_state = config.ml_state
+            ml_state = _require_alive_state(config)
 
             # Query potential definitions for all targets via RPC
             all_defs = await ml_state.potential_defs_of(targets)
@@ -2850,7 +3000,7 @@ class Rewrite(Leaf):
     def interactive_gen(arg: Rewrite_ToolArg) -> gen_node:
         """Interactive generation. Resolves FactByStatement via Interaction_Retrieve."""
         async def mk(config: NodeConfig) -> 'Rewrite':
-            ml_state = config.ml_state
+            ml_state = _require_alive_state(config)
             fetched = await ml_state.fetch_facts(arg["using"], single_choice=True)
             resolved, interactions, resolve_indices = _split_fetched(fetched)
 
@@ -3422,7 +3572,7 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
                     thought=arg["thought"], rule=None, rule_ref=None)
                 return InferenceRule(config, internal)
 
-            ml_state = config.ml_state
+            ml_state = _require_alive_state(config)
             fetched = await ml_state.fetch_facts([rule], single_choice=True)
             result = fetched[0]
             if isinstance(result, IsabelleFact):
@@ -3929,23 +4079,28 @@ class Session:
         self.total_output_tokens: int = 0
         self.total_cache_creation_input_tokens: int = 0
         self.total_cache_read_input_tokens: int = 0
+        self._retrieval_forking_mode: ForkingMode | None = None  # cached config, loaded lazily
         if parent is not None:
             # Subsessions share parent's log files
             self.log_dir = parent.log_dir
             self.interaction_log_path = parent.interaction_log_path
             self.proofs_log_path = parent.proofs_log_path
             self.proof_oprs_log_path = parent.proof_oprs_log_path
+            self.retrieval_log_path = parent.retrieval_log_path
             self.interaction_log_file = parent.interaction_log_file
             self.proofs_log_file = parent.proofs_log_file
             self.proof_oprs_log_file = parent.proof_oprs_log_file
+            self.retrieval_log_file = parent.retrieval_log_file
         else:
             self.log_dir = None
             self.interaction_log_path = None
             self.proofs_log_path = None
             self.proof_oprs_log_path = None
+            self.retrieval_log_path = None
             self.interaction_log_file = None
             self.proofs_log_file = None
             self.proof_oprs_log_file = None
+            self.retrieval_log_file = None
             if log_dir != "":
                 self._setup_log_directory(log_dir)
 
@@ -3994,11 +4149,13 @@ class Session:
         self.interaction_log_path = self.log_dir / "interaction.yaml"
         self.proofs_log_path = self.log_dir / "proofs.yaml"
         self.proof_oprs_log_path = self.log_dir / "proof_oprs.yaml"
+        self.retrieval_log_path = self.log_dir / "retrieval.yaml"
 
         # Open log files in append mode, keep them open
         self.interaction_log_file = open(self.interaction_log_path, 'a', encoding='utf-8')
         self.proofs_log_file = open(self.proofs_log_path, 'a', encoding='utf-8')
         self.proof_oprs_log_file = open(self.proof_oprs_log_path, 'a', encoding='utf-8')
+        self.retrieval_log_file = open(self.retrieval_log_path, 'a', encoding='utf-8')
 
         # Write initial session start markers
         session_start = {
@@ -4008,6 +4165,7 @@ class Session:
         self._append_yaml(self.interaction_log_file, session_start)
         self._append_yaml(self.proofs_log_file, session_start)
         self._append_yaml(self.proof_oprs_log_file, session_start)
+        self._append_yaml(self.retrieval_log_file, session_start)
 
     def _append_yaml(self, file_handle: Any, data: dict[str, Any]):
         """
@@ -4063,6 +4221,10 @@ class Session:
                 self._append_yaml(self.proof_oprs_log_file, session_end)
                 self.proof_oprs_log_file.close()
                 self.proof_oprs_log_file = None
+            if self.retrieval_log_file is not None:
+                self._append_yaml(self.retrieval_log_file, session_end)
+                self.retrieval_log_file.close()
+                self.retrieval_log_file = None
 
         # Clean up the context session reference
         try:
@@ -4137,6 +4299,12 @@ class Session:
         self._log(self.interaction_log_file, "INTERACTION",
                   lambda: [f"[INTERACTION] {tool_name}: {prompt}"],
                   tool_name=tool_name, prompt=prompt)
+
+    def log_retrieval(self, query: str, results: list[str]):
+        """Log a retrieval query and its results to retrieval.yaml."""
+        self._log(self.retrieval_log_file, "RETRIEVAL",
+                  lambda: [f"[RETRIEVAL] {query!r}\n" + "\n".join(f"  {r}" for r in results)],
+                  query=query, results=results)
 
     def log_retry(self, unfinished_nodes: set[Any], retry_prompt: str):
         """Log retry attempt to interaction.yaml."""
