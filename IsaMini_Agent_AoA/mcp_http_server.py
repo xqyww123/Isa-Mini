@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 import socket
 from io import StringIO
 from typing import Any, NamedTuple
@@ -33,7 +34,7 @@ from .model import (
     the_session, _session_var, Session, Minilang_State, MyIO,
     RaiseInteraction, Working_Interactions, Interaction,
     AoA_Error, InternalError, ArgumentError, IsabelleError,
-    Parse_Node, gen_node, normalize_answer, Interaction_BadAnswer, ForkingMode,
+    Parse_Node, parsing_node, _trivial_parsing, normalize_answer, Interaction_BadAnswer, ForkingMode,
     EntityKind, print_indent, print_paragraph,
     Interaction_Retrieve,
     IsabelleEntity, IsabelleFact_Presented, FactByName,
@@ -117,27 +118,27 @@ async def _execute_proof_action(
     session: Session,
     action: str,
     step: str,
-    gn: gen_node,
+    pn: parsing_node,
     tool_name: str,
     log_prefix: str,
 ) -> str:
     """Execute a proof action with complete error handling."""
     session.root.session.age += 1
-    if not callable(gn):
-        raise TypeError(f"gen_node must be callable, got {type(gn)}")
+    if not callable(pn):
+        raise TypeError(f"parsing_node must be callable, got {type(pn)}")
 
     try:
         match action:
             case "fill":
-                node = await session.root.fill(step, gn)
+                node = await session.root.fill(step, pn)
                 session.refresh_YAML()
                 response = await P.filled_step_message(step, session.root, node, session)
             case "insert_before":
-                node = await session.root.insert_before(step, gn)
+                node = await session.root.insert_before(step, pn)
                 session.refresh_YAML()
                 response = await P.inserted_before_step_message(step, session.root, node, session)
             case "amend":
-                node = await session.root.amend(step, gn)
+                node = await session.root.amend(step, pn)
                 session.refresh_YAML()
                 response = await P.amended_step_message(step, session.root, node, session)
             case _:
@@ -154,7 +155,7 @@ async def _execute_proof_action(
             assert callable(result_gn), \
                 "Continuation from _execute_proof_action must return gen_node (callable)"
             return await _execute_proof_action(
-                session, action, step, result_gn, tool_name, log_prefix) # type: ignore[arg-type]
+                session, action, step, _trivial_parsing(result_gn), tool_name, log_prefix)
         wrapped_e = RaiseInteraction(e.interactions, wrapped_kont)
         result = await _handle_raise_interaction(session, wrapped_e, tool_name)
         if isinstance(result, _Prompt):
@@ -202,7 +203,7 @@ async def _edit_tool_logic(session: Session, args: dict) -> str:
             "mcp__proof__edit", "after_fill")
     except Exception as e:
         session.log_tool_response("mcp__proof__edit", f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
-        os._exit(1)
+        sys.exit(1)
 
 
 async def _delete_tool_logic(session: Session, args: dict) -> str:
@@ -226,7 +227,7 @@ async def _delete_tool_logic(session: Session, args: dict) -> str:
         return response
     except Exception as e:
         session.log_tool_response("mcp__proof__delete", f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
-        os._exit(1)
+        sys.exit(1)
 
 
 async def _answer_tool_logic(session: Session, args: dict) -> str:
@@ -286,7 +287,7 @@ async def _answer_tool_logic(session: Session, args: dict) -> str:
         return str(final)
     except Exception as e:
         session.log_tool_response("mcp__proof__answer", f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
-        os._exit(1)
+        sys.exit(1)
 
 
 async def _semantic_search_single(session: Session, q: dict, k: int) -> str:
@@ -493,7 +494,7 @@ async def _semantic_search_tool_logic(session: Session, args: dict) -> str:
         return str(r.value)
     except Exception as e:
         session.log_tool_response("mcp__proof__search_isabelle", f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
-        os._exit(1)
+        sys.exit(1)
 
 
 # ============================================================================

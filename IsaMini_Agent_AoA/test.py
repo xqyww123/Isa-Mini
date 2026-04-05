@@ -414,8 +414,8 @@ async def _test_Unfold1(root: Root, file: MyIO):
         print_header("Interaction Prompt", file)
         assert len(e.interactions) == 1
         e.interactions[0].prompt(0, file)
-        gen_node = await e.kontinuation([await inter.answer([1]) for inter in e.interactions])
-        await root.amend("1", gen_node)
+        gn = await e.kontinuation([await inter.answer([1]) for inter in e.interactions])
+        await root.amend("1", _trivial_parsing(gn))
         print_header("After Answer", file)
         root.print(0, file)
 
@@ -599,9 +599,9 @@ async def _test_RetrieveFact(root: Root, file: MyIO):
                 file.write(f"    pack: {pit.pack()}\n")
                 results[i] = result
         # Invoke the continuation to get a gen_node, then fill
-        gen = await e.kontinuation(results)
+        gn = await e.kontinuation(results)
         root.session.age += 1
-        node = await root.fill("2", gen)
+        node = await root.fill("2", _trivial_parsing(gn))
         file.write(f"Filled node: {type(node).__name__}, id={node.id}\n")
         node.print(1, file, show_warnings=True)
     print_header("After fill", file)
@@ -654,9 +654,9 @@ async def _test_RetrieveFact2(root: Root, file: MyIO):
                 file.write(f"    pack: {pit.pack()}\n")
                 results[i] = result
         # Invoke the continuation to get a gen_node, then fill
-        gen = await e.kontinuation(results)
+        gn = await e.kontinuation(results)
         root.session.age += 1
-        node = await root.fill("2", gen)
+        node = await root.fill("2", _trivial_parsing(gn))
         file.write(f"Filled node: {type(node).__name__}, id={node.id}\n")
         node.print(1, file, show_warnings=True)
     print_header("After fill", file)
