@@ -28,7 +28,7 @@ import jsoncomment
 import uvicorn
 from mcp.server.lowlevel import Server as MCPServer
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-from mcp.types import Tool, TextContent
+from mcp.types import Tool, TextContent, CallToolResult
 
 from .model import (
     the_session, _session_var, Session, Minilang_State, MyIO,
@@ -188,7 +188,7 @@ def _check_tool_permission(session: Session, tool_name: str) -> str | None:
 # Tool Logic Functions (shared, no framework dependency)
 # ============================================================================
 
-async def _edit_tool_logic(session: Session, args: dict) -> str:
+async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     session.log_tool_call("mcp__proof__edit", args)
     try:
         step = args["target_step"]
@@ -197,16 +197,21 @@ async def _edit_tool_logic(session: Session, args: dict) -> str:
         except AoA_Error as e:
             error_msg = str(e)
             session.log_tool_response("mcp__proof__edit", f"ERROR: {error_msg}")
-            return error_msg
-        return await _execute_proof_action(
+            return (error_msg, True)
+        result = await _execute_proof_action(
             session, args["action"], step, gn,
             "mcp__proof__edit", "after_fill")
+        return (result, False)
+    except IsabelleError as e:
+        error_msg = f"Isabelle error: {'; '.join(e.errors)}"
+        session.log_tool_response("mcp__proof__edit", f"ERROR: {error_msg}")
+        return (error_msg, True)
     except Exception as e:
         session.log_tool_response("mcp__proof__edit", f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
         sys.exit(1)
 
 
-async def _delete_tool_logic(session: Session, args: dict) -> str:
+async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     session.log_tool_call("mcp__proof__delete", args)
     try:
         session.root.session.age += 1
@@ -221,22 +226,26 @@ async def _delete_tool_logic(session: Session, args: dict) -> str:
         except AoA_Error as e:
             error_msg = str(e)
             session.log_tool_response("mcp__proof__delete", f"ERROR: {error_msg}")
-            return error_msg
+            return (error_msg, True)
         session.log_tool_response("mcp__proof__delete", response)
         session.log_proof_tree_snapshot("after_delete")
-        return response
+        return (response, False)
+    except IsabelleError as e:
+        error_msg = f"Isabelle error: {'; '.join(e.errors)}"
+        session.log_tool_response("mcp__proof__delete", f"ERROR: {error_msg}")
+        return (error_msg, True)
     except Exception as e:
         session.log_tool_response("mcp__proof__delete", f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
         sys.exit(1)
 
 
-async def _answer_tool_logic(session: Session, args: dict) -> str:
+async def _answer_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     session.log_tool_call("mcp__proof__answer", args)
     try:
         if not session.working_interactions:
             error_msg = "No pending interaction to answer"
             session.log_tool_response("mcp__proof__answer", f"ERROR: {error_msg}")
-            return error_msg
+            return (error_msg, True)
         wi = session.working_interactions[-1]
 
         current_idx = None
@@ -248,7 +257,7 @@ async def _answer_tool_logic(session: Session, args: dict) -> str:
         if current_idx is None:
             error_msg = "No pending interaction to answer"
             session.log_tool_response("mcp__proof__answer", f"ERROR: {error_msg}")
-            return error_msg
+            return (error_msg, True)
 
         current_inter = wi.interactions[current_idx]
         normalized = normalize_answer(args.get("indexes"), args.get("text"))
@@ -258,11 +267,11 @@ async def _answer_tool_logic(session: Session, args: dict) -> str:
         except Interaction_BadAnswer as e:
             error_msg = str(e)
             session.log_tool_response("mcp__proof__answer", f"BAD ANSWER: {error_msg}")
-            return error_msg
+            return (error_msg, True)
         except RaiseInteraction as e:
             r = await _handle_raise_interaction(session, e, "mcp__proof__answer")
             if isinstance(r, _Prompt):
-                return r.text
+                return (r.text, False)
             result = r.value
 
         wi.results[current_idx] = result
@@ -276,7 +285,7 @@ async def _answer_tool_logic(session: Session, args: dict) -> str:
                 buffer = StringIO()
                 inter.prompt(0, MyIO(buffer))
                 session.log_tool_response("mcp__proof__answer", f"[INTERACTION PROMPT]\n{buffer.getvalue()}")
-                return buffer.getvalue()
+                return (buffer.getvalue(), False)
 
         session.log_interaction("continuation", "all interactions resolved")
         final = await wi.run_continuation()
@@ -284,7 +293,11 @@ async def _answer_tool_logic(session: Session, args: dict) -> str:
         session.log_tool_response("mcp__proof__answer", f"[INTERACTION RESOLVED] {final}")
         if not session.is_major:
             await session.interrupt()
-        return str(final)
+        return (str(final), False)
+    except IsabelleError as e:
+        error_msg = f"Isabelle error: {'; '.join(e.errors)}"
+        session.log_tool_response("mcp__proof__answer", f"ERROR: {error_msg}")
+        return (error_msg, True)
     except Exception as e:
         session.log_tool_response("mcp__proof__answer", f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
         sys.exit(1)
@@ -472,26 +485,33 @@ async def _semantic_search_extend_candidates(
     return "\n".join(lines)
 
 
-async def _semantic_search_tool_logic(session: Session, args: dict) -> str:
+async def _semantic_search_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     session.log_tool_call("mcp__proof__search_isabelle", args)
     try:
         active = _find_active_retrieve_fact(session)
         if active is not None:
             # Inside a fork with an active Interaction_Retrieve — extend its candidates
-            return await _semantic_search_extend_candidates(session, args, active)
+            result = await _semantic_search_extend_candidates(session, args, active)
+            return (result, False)
         # Check if interactive retrieval is enabled
         interactive = await session.root.ml_state.connection.config_lookup(
             "AoA_interactive_retrieval")
         if interactive:
-            return await _semantic_search_with_filtering(session, args)
+            result = await _semantic_search_with_filtering(session, args)
+            return (result, False)
         else:
             # Direct (non-interactive) retrieval — return raw results
-            return await _semantic_search_single(session, args, k=10)
+            result = await _semantic_search_single(session, args, k=10)
+            return (result, False)
     except RaiseInteraction as e:
         r = await _handle_raise_interaction(session, e, "mcp__proof__search_isabelle")
         if isinstance(r, _Prompt):
-            return r.text
-        return str(r.value)
+            return (r.text, False)
+        return (str(r.value), False)
+    except IsabelleError as e:
+        error_msg = f"Isabelle error: {'; '.join(e.errors)}"
+        session.log_tool_response("mcp__proof__search_isabelle", f"ERROR: {error_msg}")
+        return (error_msg, True)
     except Exception as e:
         session.log_tool_response("mcp__proof__search_isabelle", f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
         sys.exit(1)
@@ -544,35 +564,40 @@ def _create_mcp_server(session: Session, extra_sdk_tools: list | None = None) ->
         return tools
 
     @server.call_tool()
-    async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+    async def call_tool(name: str, arguments: dict) -> CallToolResult:
         _session_var.set(session)
 
         # Permission check (both modes)
         perm_error = _check_tool_permission(session, name)
         if perm_error:
-            return [TextContent(type="text", text=perm_error)]
+            return CallToolResult(
+                content=[TextContent(type="text", text=perm_error)], isError=True)
 
+        is_error = False
         match name:
             case "edit":
                 async with tool_lock:
-                    result = await _edit_tool_logic(session, arguments)
+                    result, is_error = await _edit_tool_logic(session, arguments)
             case "delete":
                 async with tool_lock:
-                    result = await _delete_tool_logic(session, arguments)
+                    result, is_error = await _delete_tool_logic(session, arguments)
             case "answer":
                 async with tool_lock:
-                    result = await _answer_tool_logic(session, arguments)
+                    result, is_error = await _answer_tool_logic(session, arguments)
             case "search_isabelle":
-                result = await _semantic_search_tool_logic(session, arguments)
+                result, is_error = await _semantic_search_tool_logic(session, arguments)
             case _:
                 handler = extra_handlers.get(name)
                 if handler is not None:
                     ret = await handler(arguments)
                     content = ret.get("content", [])
-                    return [TextContent(type="text", text=c.get("text", "")) for c in content]
-                return [TextContent(type="text", text=f"Unknown tool: {name}")]
+                    return CallToolResult(
+                        content=[TextContent(type="text", text=c.get("text", "")) for c in content])
+                return CallToolResult(
+                    content=[TextContent(type="text", text=f"Unknown tool: {name}")], isError=True)
 
-        return [TextContent(type="text", text=result)]
+        return CallToolResult(
+            content=[TextContent(type="text", text=result)], isError=is_error)
 
     return server
 

@@ -702,6 +702,15 @@ class ClaudeCode(Session):
 
     _SKIP_STATUS_OPS = frozenset({"SKIP", "SORRY", "NEXT", "END"})
 
+    _SKIP_RETRIEVAL = frozenset({"none selected", "unfound"})
+
+    def log_retrieval(self, query: str, results: list[str]):
+        super().log_retrieval(query, results)
+        if self._on_operation_status is not None:
+            if results and not any(r in self._SKIP_RETRIEVAL for r in results):
+                self._on_operation_status({
+                    "type": "retrieval", "query": query, "results": results})
+
     def on_log(self, event_type: str, data: dict[str, Any]):
         if self._on_log_callback is not None:
             self._on_log_callback({

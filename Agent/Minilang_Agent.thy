@@ -24,11 +24,11 @@ begin
 lemma A: \<open>x \<and> x\<close> using x by auto
 
 thm x
-ML \<open>Thm.derivation_id @{thm A}\<close>
+ML \<open>Thm.raw_derivation_name @{thm A}\<close>
 
 end
 
-ML \<open>Thm.derivation_id @{thm A.A}\<close>
+ML \<open>Thm.raw_derivation_name @{thm A.A}\<close>
 
 
 
@@ -37,7 +37,7 @@ ML \<open>Thm.derivation_id @{thm A.A}\<close>
 
 lemma x: "2 = 1 + (1::nat)" by auto
 ML \<open>BNF_Util.meta_mp\<close>
-ML \<open>Thm.derivation_id (Thm.transfer @{theory} BNF_Util.meta_mp)\<close>
+ML \<open>Thm.raw_derivation_name (Thm.transfer @{theory} BNF_Util.meta_mp)\<close>
 
 
 ML \<open>

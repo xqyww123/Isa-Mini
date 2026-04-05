@@ -99,6 +99,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   .tab-content .log-DEBUG {{ color: #666; }}
   .tab-content .log-INTERACTION {{ color: #ce9178; }}
   .tab-content .log-RETRY {{ color: #d7ba7d; }}
+  .tab-content .retrieval-entry {{ margin: 6px 0; }}
+  .tab-content .retrieval-query {{ color: #dcdcaa; font-weight: bold; }}
+  .tab-content .retrieval-result {{ color: #4ec9b0; margin-left: 16px; }}
   #proof-result {{
     display: none; align-items: center; justify-content: center;
     height: 100%; font-size: 28px; font-weight: bold;
@@ -156,11 +159,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <div id="bottom-pane">
       <div class="tab-bar" id="bottom-tab-bar">
         <div class="tab active" data-tab="status">Minilang Operation Execution</div>
+        <div class="tab" data-tab="retrieval">Retrieval</div>
         <div class="tab" data-tab="logs">Logs</div>
       </div>
       <div id="status-panel" class="tab-content active">
         <div id="proof-result"></div>
       </div>
+      <div id="retrieval-panel" class="tab-content"></div>
       <div id="logs-panel" class="tab-content"></div>
     </div>
   </div>
@@ -367,6 +372,7 @@ document.querySelectorAll('#bottom-tab-bar .tab').forEach(tab => {{
 // ================================================================
 const statusPanel = document.getElementById('status-panel');
 const logsPanel = document.getElementById('logs-panel');
+const retrievalPanel = document.getElementById('retrieval-panel');
 const proofResult = document.getElementById('proof-result');
 
 function appendStatus(msg) {{
@@ -413,6 +419,23 @@ function appendLog(msg) {{
   logsPanel.scrollTop = logsPanel.scrollHeight;
 }}
 
+function appendRetrieval(msg) {{
+  const entry = document.createElement('div');
+  entry.className = 'retrieval-entry';
+  const q = document.createElement('div');
+  q.className = 'retrieval-query';
+  q.textContent = `Query: ${{msg.query}}`;
+  entry.appendChild(q);
+  for (const r of (msg.results || [])) {{
+    const d = document.createElement('div');
+    d.className = 'retrieval-result';
+    d.textContent = r;
+    entry.appendChild(d);
+  }}
+  retrievalPanel.appendChild(entry);
+  retrievalPanel.scrollTop = retrievalPanel.scrollHeight;
+}}
+
 function showProofResult(success) {{
   proofResult.className = 'show ' + (success ? 'success' : 'failure');
   proofResult.textContent = success
@@ -431,6 +454,7 @@ yamlWs.onmessage = (e) => {{
     case 'yaml': updateYaml(msg.content); break;
     case 'quickview': updateQuickview(msg.content); break;
     case 'status': appendStatus(msg); break;
+    case 'retrieval': appendRetrieval(msg); break;
     case 'log': appendLog(msg); break;
     case 'proof_complete': showProofResult(msg.success); break;
   }}

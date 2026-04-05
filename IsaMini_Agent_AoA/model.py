@@ -1076,8 +1076,19 @@ class Minilang_State:
         """Validate prove-in-time statements. Returns None per provable, error string per unprovable."""
         if not statements:
             return []
-        return await self.connection.callback(
-            "IsaMini.validate_prove_in_time", (self.name, statements))
+        session = the_session()
+        session.on_operation_start(self.name, "PROVE_IN_TIME", statements)
+        now = time()
+        try:
+            result = await self.connection.callback(
+                "IsaMini.validate_prove_in_time", (self.name, statements))
+            session.on_operation_end(self.name, "PROVE_IN_TIME", statements,
+                EvaluationStatus.Success(time() - now))
+            return result
+        except IsabelleError as err:
+            session.on_operation_end(self.name, "PROVE_IN_TIME", statements,
+                EvaluationStatus.Failure(time() - now, FailureReason(''.join(err.errors))))
+            raise
 
 ### Interaction
 
