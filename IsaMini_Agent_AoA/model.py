@@ -2,7 +2,7 @@ from time import time
 from datetime import datetime
 from pathlib import Path
 from .helper import split_id_into_segs, cat_segs_into_id, incr_id_major, incr_id_minor, MyIO
-from typing import Any, Awaitable, Iterable, NamedTuple, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired, Annotated
+from typing import Any, Awaitable, Iterable, NamedTuple, Protocol, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired, Annotated
 from Isabelle_RPC_Host import Connection, IsabelleError, pretty_unicode, ascii_of_unicode
 from Isabelle_RPC_Host.universal_key import EntityKind, universal_key
 from Isabelle_Semantic_Embedding.semantics import Semantic_Vector_Store, SemanticRecord
@@ -932,7 +932,7 @@ class Minilang_State:
         for i, fact in enumerate(facts):
             if fact["refer_by"] == "statement":
                 stmt = " ".join(cast(FactByStatement, fact)["statement"].split())
-                out[i] = await Interaction_RetrieveForProof.create(
+                out[i] = Interaction_RetrieveForProof(
                     state=self, query=stmt, kinds=[EntityKind.THEOREM],
                     single_choice=single_choice)
             else:
@@ -1110,12 +1110,30 @@ class ForkingMode(Enum):
     FORKING_WITHOUT_CTXT = 2      # fork with fresh context, same model (opus)
     FORKING_CHEAPER_NO_CTXT = 3   # fork with fresh context, cheaper model (sonnet)
 
+class InteractiveRetrievalMode(Enum):
+    NO = "no"                                        # direct results, no forking
+    YES = "yes"                                      # fork-based, answer tool only
+    YES_WITH_RECURSIVE_RETRIEVAL = "yes_recursive"   # fork-based, can also search
+
+INTERACTIVE_RETRIEVAL_MAP = {m.value: m for m in InteractiveRetrievalMode}
+
+# Abstract tool identifiers (driver-agnostic)
+type tool = str
+TOOL_ANSWER: tool = "answer"
+TOOL_SEARCH: tool = "search_isabelle"
+
 class Interaction:
     forking: ForkingMode = ForkingMode.NO
-    def prompt(self, indent: int, file: MyIO) -> None:
+    fork_allowed_tools: list[tool] | None = None  # None = use session default
+    async def prompt(self, indent: int, file: MyIO) -> None:
         raise NotImplementedError("`prompt` must be implemented by subclass")
     async def answer(self, answer: answer) -> Any:
         raise NotImplementedError("`answer` must be implemented by subclass")
+
+class ImmediateAnswer(Exception):
+    """Raised by prompt() when the interaction resolves without LLM input."""
+    def __init__(self, answer: Any):
+        self.answer = answer
 
 type AsyncKontinuation = Callable[[list[Any]], Awaitable[Any]]
 
@@ -1173,7 +1191,7 @@ def _get_retrieval_db() -> sqlite3.Connection:
         )""")
     return _retrieval_db_conn
 
-_FORKING_MODE_MAP = {
+FORKING_MODE_MAP = {
     "cheaper_no_ctxt": ForkingMode.FORKING_CHEAPER_NO_CTXT,
     "with_ctxt": ForkingMode.FORKING_WITH_CTXT,
     "without_ctxt": ForkingMode.FORKING_WITHOUT_CTXT,
@@ -1181,9 +1199,8 @@ _FORKING_MODE_MAP = {
 
 class Interaction_Retrieve(Interaction):
     """Base class for interactive entity retrieval via forked agent."""
-    forking = ForkingMode.FORKING_WITH_CTXT  # default, overridden per-instance from config
-    INITIAL_K = 10
-    FINAL_K = 40
+    INITIAL_K = 40
+    FINAL_K = 100
 
     class FetchedEntity(NamedTuple):
         entity: IsabelleEntity
@@ -1192,7 +1209,6 @@ class Interaction_Retrieve(Interaction):
 
     def __init__(self, state: Minilang_State,
             query: str, kinds: list[EntityKind],
-            candidate_facts: 'list[Interaction_Retrieve.FetchedEntity]',
             *,
             initial_k: int | None = None,
             single_choice: bool = False,
@@ -1203,36 +1219,28 @@ class Interaction_Retrieve(Interaction):
     ):
         self.query = query
         self.state = state
-        self.k = max(initial_k or self.INITIAL_K, len(candidate_facts))
+        self.k = initial_k or self.INITIAL_K
         self.kinds = kinds
-        self.candidate_facts = candidate_facts
         self.single_choice = single_choice
         self.term_patterns = term_patterns or []
         self.type_patterns = type_patterns or []
         self.theories_include = theories_include or []
         self.name_contains = name_contains or []
-
-    async def _apply_forking_config(self) -> None:
-        """Set self.forking from cached session config (loaded lazily on first call).
-        Empty query forces FORKING_WITH_CTXT (the fork needs parent context to understand relevance)."""
+        self._candidate_facts_cache: list[Interaction_Retrieve.FetchedEntity] | None = None
+        # Empty query forces FORKING_WITH_CTXT (fork needs parent context to judge relevance)
         session = the_session()
-        if session._retrieval_forking_mode is None:
-            try:
-                mode_str = await self.state.connection.config_lookup("AoA_retrieval_forking")
-                if mode_str in _FORKING_MODE_MAP:
-                    session._retrieval_forking_mode = _FORKING_MODE_MAP[mode_str]
-                else:
-                    valid = ", ".join(f'"{k}"' for k in _FORKING_MODE_MAP)
-                    await self.state.connection.warning(
-                        f'Invalid AoA_retrieval_forking value "{mode_str}". '
-                        f'Valid options: {valid}. Using default "{self.forking.name.lower()}".')
-                    session._retrieval_forking_mode = self.forking
-            except Exception:
-                session._retrieval_forking_mode = self.forking
-        if not self.query:
+        if not query:
             self.forking = ForkingMode.FORKING_WITH_CTXT
         else:
-            self.forking = session._retrieval_forking_mode
+            self.forking = session.retrieval_forking_mode
+        # Tool access in forks: YES = answer only, YES_RECURSIVE = full access (None = default)
+        if session.interactive_retrieval == InteractiveRetrievalMode.YES:
+            self.fork_allowed_tools = [TOOL_ANSWER]
+
+    async def candidate_facts(self) -> 'list[Interaction_Retrieve.FetchedEntity]':
+        if self._candidate_facts_cache is None:
+            self._candidate_facts_cache = await self._fetch_facts()
+        return self._candidate_facts_cache
 
     async def _fetch_facts(self) -> 'list[Interaction_Retrieve.FetchedEntity]':
         import logging
@@ -1281,27 +1289,29 @@ class Interaction_Retrieve(Interaction):
             return _KIND_TERMS.get(self.kinds[0], "entities")
         return "entities"
 
-    def _prompt_candidates(self, indent: int, file: MyIO) -> None:
+    async def _prompt_candidates(self, indent: int, file: MyIO) -> None:
         """Shared: render the numbered candidate list (without header)."""
-        if not self.candidate_facts:
-            raise InternalError("Interaction_Retrieve.prompt called with no candidates")
-        for i, fetched in enumerate(self.candidate_facts):
+        facts = await self.candidate_facts()
+        if not facts:
+            raise ImmediateAnswer([])
+        for i, fetched in enumerate(facts):
             print_indent(indent+1, file)
             file.write(f"{i}. {fetched.entity.full_name}: {fetched.entity.expression}\n")
             if fetched.interpretation:
                 print_indent(indent+2, file)
                 file.write(f"{fetched.interpretation}\n")
 
-    def _log_retrieval_training_data(self, selected_indices: list[int],
-                                     prove_in_time: str | None = None) -> None:
+    async def _log_retrieval_training_data(self, selected_indices: list[int],
+                                           prove_in_time: str | None = None) -> None:
         """Log retrieval event to the training DB for embedding model improvement."""
         try:
+            facts = await self.candidate_facts()
             selected_set = set(selected_indices)
             candidates = json.dumps([
                 {"full_name": f.entity.full_name, "score": f.score,
                  "expression": f.entity.expression,
                  "selected": i in selected_set}
-                for i, f in enumerate(self.candidate_facts)
+                for i, f in enumerate(facts)
             ])
             conn = _get_retrieval_db()
             conn.execute(
@@ -1316,7 +1326,7 @@ class Interaction_Retrieve(Interaction):
         except Exception as e:
             logging.getLogger(__name__).warning(f"Failed to log retrieval training data: {e}")
 
-    def prompt(self, indent: int, file: MyIO) -> None:
+    async def prompt(self, indent: int, file: MyIO) -> None:
         raise NotImplementedError("subclasses must override prompt()")
 
     async def answer(self, answer: answer) -> 'list[IsabelleEntity | IsabelleFact]':
@@ -1327,24 +1337,25 @@ class Interaction_Retrieve(Interaction):
         if not answer:
             if self.k < self.FINAL_K:
                 self.k = self.FINAL_K
-                self.candidate_facts = await self._fetch_facts()
+                self._candidate_facts_cache = await self._fetch_facts()
                 async def identity(results: list[Any]) -> Any:
                     return results[0]
                 raise RaiseInteraction([self], identity)
             else:
-                self._log_retrieval_training_data([])
+                await self._log_retrieval_training_data([])
                 the_session().log_retrieval(self.query, ["none selected"])
                 return []
         # Index answer
         if self.single_choice and len(answer) > 1:
             raise Interaction_BadAnswer("Please select exactly one entry.")
-        selected: list[IsabelleEntity | IsabelleFact] = []
+        facts = await self.candidate_facts()
+        selected: list[IsabelleEntity] = []
         for idx in answer:
-            if idx < 0 or idx >= len(self.candidate_facts):
+            if idx < 0 or idx >= len(facts):
                 raise Interaction_BadAnswer(
-                    f"Index {idx} out of range (0–{len(self.candidate_facts) - 1}).")
-            selected.append(self.candidate_facts[idx].entity)
-        self._log_retrieval_training_data(list(answer))
+                    f"Index {idx} out of range (0–{len(facts) - 1}).")
+            selected.append(facts[idx].entity)
+        await self._log_retrieval_training_data(list(answer))
         session = the_session()
         results = []
         for e in selected:
@@ -1359,21 +1370,14 @@ class Interaction_RetrieveForProof(Interaction_Retrieve):
 
     def __init__(self, state: Minilang_State,
             query: str, kinds: list[EntityKind],
-            candidate_facts: 'list[Interaction_Retrieve.FetchedEntity]',
-            relevant_constants: list[tuple[str, str, str]],
             **kwargs: Any):
-        super().__init__(state, query, kinds, candidate_facts, **kwargs)
-        self.relevant_constants = relevant_constants
+        super().__init__(state, query, kinds, **kwargs)
+        self._relevant_constants_cache: list[tuple[str, str, str]] | None = None
 
-    @classmethod
-    async def create(cls, state: Minilang_State,
-            query: str, kinds: list[EntityKind],
-            **kwargs: Any) -> 'Interaction_RetrieveForProof':
-        inst = cls(state, query, kinds, [], [], **kwargs)
-        await inst._apply_forking_config()
-        inst.candidate_facts = await inst._fetch_facts()
-        inst.relevant_constants = await inst._fetch_constants()
-        return inst
+    async def relevant_constants(self) -> list[tuple[str, str, str]]:
+        if self._relevant_constants_cache is None:
+            self._relevant_constants_cache = await self._fetch_constants()
+        return self._relevant_constants_cache
 
     async def _fetch_constants(self) -> list[tuple[str, str, str]]:
         """Fetch relevant constants via semantic search.
@@ -1392,22 +1396,23 @@ class Interaction_RetrieveForProof(Interaction_Retrieve):
             results.append((short_name, type_strs[0] if type_strs else "", rec.interpretation))
         return results
 
-    def prompt(self, indent: int, file: MyIO) -> None:
+    async def prompt(self, indent: int, file: MyIO) -> None:
         title = self._entity_title()
         print_indent(indent, file)
         file.write(f"You are looking for {title} establishing:")
         print_paragraph(indent, file, self.query)
         file.write("\n")
-        if self.relevant_constants:
+        constants = await self.relevant_constants()
+        if constants:
             file.write("Relevant constants in scope:\n")
-            for short_name, typ, interp in self.relevant_constants:
+            for short_name, typ, interp in constants:
                 print_indent(indent+1, file)
                 file.write(f"- {short_name}: {typ}\n")
                 print_indent(indent+2, file)
                 file.write(f"{interp}\n")
             file.write("\n")
         file.write(f"Similar {title} from the library:\n")
-        self._prompt_candidates(indent, file)
+        await self._prompt_candidates(indent, file)
         if self.single_choice:
             file.write(f"\nIf an entry above matches what you need, answer with its index.\n")
         else:
@@ -1426,12 +1431,12 @@ class Interaction_RetrieveForProof(Interaction_Retrieve):
         session = the_session()
         # Text answer → prove-in-time
         if isinstance(answer, str) and answer:
-            self._log_retrieval_training_data([], prove_in_time=answer)
+            await self._log_retrieval_training_data([], prove_in_time=answer)
             session.log_retrieval(self.query, [f"prove-in-time: {answer}"])
             return [IsabelleFact_ProveInTime(answer)]
         # Empty answer with no expansion left
         if not answer and self.k >= self.FINAL_K:
-            self._log_retrieval_training_data([])
+            await self._log_retrieval_training_data([])
             session.log_retrieval(self.query, ["unfound"])
             if self.single_choice:
                 return [IsabelleFact_Unfound(
@@ -1442,21 +1447,22 @@ class Interaction_RetrieveForProof(Interaction_Retrieve):
 
 ### The Abstract Model
 
-# parsing_node receives two optional Minilang_State arguments:
+# parsing_node receives two Minilang_State arguments:
 #   alive_state: the latest initialized state within the current proof block.
+#       Always non-None (search walks up through ancestors to root).
 #       Suitable ONLY for retrieval (e.g., fetch_facts, potential_defs_of).
 #       Must NOT be used for proof-goal-specific checks (e.g., need_intro).
 #   exact_state: the actual ml_state at the insertion point, if available.
 #       Suitable for proof-goal-specific operations (e.g., compute_bindings).
 #       May be None if the state is not yet initialized.
 # The exact state is also available later via config.ml_state in gen_node.
-type parsing_node = Callable[[Minilang_State | None, Minilang_State | None], Awaitable['gen_node']]
+type parsing_node = Callable[[Minilang_State, Minilang_State | None], Awaitable['gen_node']]
 type gen_node = Callable[[NodeConfig], 'Node']
 type may_gen_node = Callable[[NodeConfig], 'Node | None']
 
 def _trivial_parsing(gn: gen_node) -> parsing_node:
     """Wrap a sync gen_node in a parsing_node that ignores both states."""
-    async def parse(alive_state: Minilang_State | None,
+    async def parse(alive_state: Minilang_State,
                     exact_state: Minilang_State | None = None) -> gen_node:
         return gn
     return parse
@@ -1938,10 +1944,7 @@ class NonLeaf_Node(Node):
                         new_id = cat_segs_into_id(prev_id + [1])
                 alive = self._find_alive_state(i)
                 exact = child.ml_state if child.ml_state.initialized() else None
-                try:
-                    gn = await pn(alive, exact)
-                except NoAliveState:
-                    raise CannotInsert_NoAliveState(before)
+                gn = await pn(alive, exact)
                 config = NodeConfig(new_id, await child.ml_state.clone(None), self)
                 try:
                     node = gn(config)
@@ -2069,10 +2072,7 @@ class NonLeaf_Node(Node):
             if c is child:
                 alive = self._find_alive_state(i)
                 exact = child.ml_state if child.ml_state.initialized() else None
-                try:
-                    gn = await pn(alive, exact)
-                except NoAliveState:
-                    raise CannotAmend_NoAliveState(self, child)
+                gn = await pn(alive, exact)
                 config = NodeConfig(child.id, await child.ml_state.clone(None), self)
                 try:
                     new_node = gn(config)
@@ -2363,10 +2363,7 @@ class StdBlock(NonLeaf_Node):
         alive = self._find_alive_state(len(self.sub_nodes))
         local_step = self._local_step_of_next_proof_step()
         ml_state = await self._state_before_ending_.clone(None)
-        try:
-            gn = await pn(alive, ml_state if ml_state.initialized() else None)
-        except NoAliveState:
-            raise CannotAppend_NoAliveState(self)
+        gn = await pn(alive, ml_state if ml_state.initialized() else None)
         config = NodeConfig(local_step, ml_state, self)
         try:
             node = gn(config)
@@ -2787,12 +2784,10 @@ class Obvious(Leaf):
 
     @staticmethod
     def interactive_gen(arg: Obvious_ToolArg) -> parsing_node:
-        async def parse(alive_state: Minilang_State | None,
+        async def parse(alive_state: Minilang_State,
                         exact_state: Minilang_State | None = None) -> gen_node:
             if not arg["facts"]:
                 return lambda config: Obvious(config, Obvious_InternalToolArg(facts=[]))
-            if alive_state is None:
-                raise NoAliveState()
             fetched = await alive_state.fetch_facts(arg["facts"],
                 single_choice=False)
             resolved, interactions, resolve_indices = _split_fetched(fetched)
@@ -2880,7 +2875,7 @@ class Interaction_ChooseDef(Interaction):
         """
         self.constants = constants
         self.candidate_defs = candidate_defs
-    def prompt(self, indent: int, file: MyIO) -> None:
+    async def prompt(self, indent: int, file: MyIO) -> None:
         print_indent(indent, file)
         if len(self.constants) == 1:
             file.write(f"Multiple definitions found for {self.constants[0]}:\n")
@@ -2938,11 +2933,8 @@ class Unfold(Leaf):
         """
         targets = arg["targets"]
 
-        async def parse(alive_state: Minilang_State | None,
+        async def parse(alive_state: Minilang_State,
                         exact_state: Minilang_State | None = None) -> gen_node:
-            if alive_state is None:
-                raise NoAliveState()
-
             # Query potential definitions for all targets via RPC
             all_defs = await alive_state.potential_defs_of(targets)
 
@@ -3048,10 +3040,8 @@ class Rewrite(Leaf):
     @staticmethod
     def interactive_gen(arg: Rewrite_ToolArg) -> parsing_node:
         """Interactive generation. Resolves FactByStatement via Interaction_Retrieve."""
-        async def parse(alive_state: Minilang_State | None,
+        async def parse(alive_state: Minilang_State,
                         exact_state: Minilang_State | None = None) -> gen_node:
-            if alive_state is None:
-                raise NoAliveState()
             fetched = await alive_state.fetch_facts(arg["using"], single_choice=True)
             resolved, interactions, resolve_indices = _split_fetched(fetched)
 
@@ -3464,7 +3454,7 @@ class Intro(SubgoalMaker_NoTailEnder):
         pending = (var_bindings, fact_bindings) if var_bindings or fact_bindings else None
         split_conj = arg.get("split_conj", False)
         thought = arg["thought"]
-        async def parse(alive_state: Minilang_State | None,
+        async def parse(alive_state: Minilang_State,
                         exact_state: Minilang_State | None = None) -> gen_node:
             if pending is not None and exact_state is not None:
                 bindings = await exact_state.compute_bindings(pending[0], pending[1])
@@ -3638,15 +3628,13 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
 
     @staticmethod
     def interactive_gen(arg: InferenceRule_ToolArg) -> parsing_node:
-        async def parse(alive_state: Minilang_State | None,
+        async def parse(alive_state: Minilang_State,
                         exact_state: Minilang_State | None = None) -> gen_node:
             rule = arg["rule"]
             if rule is None:
                 return lambda config: InferenceRule(config, InferenceRule_InternalToolArg(
                     thought=arg["thought"], rule=None, rule_ref=None))
 
-            if alive_state is None:
-                raise NoAliveState()
             fetched = await alive_state.fetch_facts([rule], single_choice=True)
             result = fetched[0]
             if isinstance(result, IsabelleFact):
@@ -4126,16 +4114,20 @@ class Session:
     proof_oprs_log_file: Any | None   # File handle for proof_oprs.yaml
 
     # class variables
-    Driver: dict[str, Callable[[logging.Logger | None, str | Path], 'Session']] = {}
+    Driver: dict[str, 'SessionConstructor'] = {}
 
     def __init__(self, logger: logging.Logger | None = None, log_dir: str | Path = "",
-                 parent: 'Session | None' = None):
+                 parent: 'Session | None' = None,
+                 retrieval_forking_mode: ForkingMode = ForkingMode.FORKING_WITH_CTXT,
+                 interactive_retrieval: InteractiveRetrievalMode = InteractiveRetrievalMode.YES):
         """
         Args:
             logger: Python logger for runtime debug messages to the server log stream.
             log_dir: Directory for persistent session logs (interaction.yaml, proofs.yaml,
                 proof_oprs.yaml). Empty string disables file logging.
             parent: Parent session for subsessions. None means this is a major session.
+            retrieval_forking_mode: Forking strategy for interactive retrieval.
+            interactive_retrieval: Whether to use fork-based interactive retrieval.
         """
         self.parent = parent
         _session_var.set(self)
@@ -4148,7 +4140,14 @@ class Session:
         self.total_output_tokens: int = 0
         self.total_cache_creation_input_tokens: int = 0
         self.total_cache_read_input_tokens: int = 0
-        self._retrieval_forking_mode: ForkingMode | None = None  # cached config, loaded lazily
+        self.retrieval_forking_mode: ForkingMode = (
+            parent.retrieval_forking_mode if parent is not None
+            else retrieval_forking_mode)
+        self.interactive_retrieval: InteractiveRetrievalMode = (
+            parent.interactive_retrieval if parent is not None
+            else interactive_retrieval)
+        self.seen_entities: set[str] = (
+            set(parent.seen_entities) if parent is not None else set())
         if parent is not None:
             # Subsessions share parent's log files
             self.log_dir = parent.log_dir
@@ -4266,6 +4265,10 @@ class Session:
         """Exit the runtime context and clean up the session."""
         await self.close()
         return False
+
+    def _internal_tool_name(self, t: tool) -> str:
+        """Translate abstract tool id to driver-specific internal name."""
+        raise NotImplementedError("subclass must override _internal_tool_name")
 
     async def close(self):
         """Clean up the session and release resources.
@@ -4472,7 +4475,10 @@ class Session:
         pass
 
 
-type SessionConstructor = Callable[[logging.Logger | None, str | Path], Session]
+class SessionConstructor(Protocol):
+    def __call__(self, logger: logging.Logger | None, log_dir: str | Path, *,
+                 retrieval_forking_mode: ForkingMode = ...,
+                 interactive_retrieval: InteractiveRetrievalMode = ...) -> Session: ...
 
 def agent_driver(name : str):
     """Register a Session constructor (class or factory function) under ``name``."""

@@ -413,7 +413,7 @@ async def _test_Unfold1(root: Root, file: MyIO):
     except RaiseInteraction as e:
         print_header("Interaction Prompt", file)
         assert len(e.interactions) == 1
-        e.interactions[0].prompt(0, file)
+        await e.interactions[0].prompt(0, file)
         gn = await e.kontinuation([await inter.answer([1]) for inter in e.interactions])
         await root.amend("1", _trivial_parsing(gn))
         print_header("After Answer", file)
@@ -588,7 +588,7 @@ async def _test_RetrieveFact(root: Root, file: MyIO):
             file.write(f"  interaction[{i}]: {type(inter).__name__}\n")
             if isinstance(inter, Interaction_RetrieveForProof):
                 file.write(f"    query: {inter.query}\n")
-                file.write(f"    candidates: {len(inter.candidate_facts)}\n")
+                file.write(f"    candidates: {len(await inter.candidate_facts())}\n")
                 # Answer with a ProveInTime statement
                 result = await inter.answer("(8::nat) = 2^3")
                 assert isinstance(result, list) and len(result) == 1
@@ -643,7 +643,7 @@ async def _test_RetrieveFact2(root: Root, file: MyIO):
             file.write(f"  interaction[{i}]: {type(inter).__name__}\n")
             if isinstance(inter, Interaction_RetrieveForProof):
                 file.write(f"    query: {inter.query}\n")
-                file.write(f"    candidates: {len(inter.candidate_facts)}\n")
+                file.write(f"    candidates: {len(await inter.candidate_facts())}\n")
                 # Answer with a ProveInTime statement
                 result = await inter.answer("(9::nat) = 2^3")
                 assert isinstance(result, list) and len(result) == 1

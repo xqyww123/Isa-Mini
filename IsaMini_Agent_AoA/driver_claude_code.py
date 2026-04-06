@@ -57,6 +57,17 @@ class ClaudeCode(Session):
         'ToolSearch'
     ]
     FORK_WHITELIST = [t for t in TOOL_WHITELIST if t not in ('mcp__proof__edit', 'mcp__proof__delete')]
+    _TOOL_NAME_MAP: dict[str, str] = {
+        "answer": "mcp__proof__answer",
+        "search_isabelle": "mcp__proof__search_isabelle",
+        "edit": "mcp__proof__edit",
+        "delete": "mcp__proof__delete",
+        "query_by_name": "mcp__proof__query_by_name",
+    }
+
+    def _internal_tool_name(self, t: str) -> str:
+        return self._TOOL_NAME_MAP.get(t, t)
+
     working_dir: str
     _fork_counter: int
     _fork_name: str
@@ -597,6 +608,15 @@ class ClaudeCode(Session):
                       wi: Working_Interactions) -> None:
         """Launch forking interactions as background tasks. Results stored via fork_kont."""
         async def run_one(idx: int, interaction: Interaction) -> None:
+            # Prompt early — if ImmediateAnswer, resolve without creating fork infrastructure
+            buffer = StringIO()
+            try:
+                await interaction.prompt(0, MyIO(buffer))
+            except ImmediateAnswer as e:
+                wi.results[idx] = e.answer
+                wi.result_set[idx] = True
+                return
+
             from .model import _session_var
             _session_var.set(None)  # type: ignore  # Clear the copied parent session so _make_fork succeeds
             fork = ClaudeCode._make_fork(self) # type: ignore[attr-defined]
@@ -641,7 +661,9 @@ class ClaudeCode(Session):
                 fork_session=fork_session,
                 cwd=self.working_dir,
                 permission_mode="default",
-                allowed_tools=self.FORK_WHITELIST,
+                allowed_tools=([self._internal_tool_name(t) for t in interaction.fork_allowed_tools]
+                               if interaction.fork_allowed_tools is not None
+                               else self.FORK_WHITELIST),
                 mcp_servers={"proof": {"type": "http", "url": fork_url}},
                 hooks={
                     "PreToolUse": [
@@ -649,8 +671,6 @@ class ClaudeCode(Session):
                     ]
                 },
             )
-            buffer = StringIO()
-            interaction.prompt(0, MyIO(buffer))
             tag = f"[{fork._fork_name}]"
             async with ClaudeSDKClient(options=fork_options) as fork_client:
                 fork._client = fork_client
@@ -737,5 +757,5 @@ class ClaudeCode(Session):
 
 
 @agent_driver("ClaudeCode_Interactive")
-def _claude_code_interactive(logger, log_dir):
-    return ClaudeCode(logger, log_dir, interactive_web_terminal=True)
+def _claude_code_interactive(logger, log_dir, **kwargs):
+    return ClaudeCode(logger, log_dir, interactive_web_terminal=True, **kwargs)

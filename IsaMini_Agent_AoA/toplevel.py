@@ -14,8 +14,9 @@ class UnknownDriver(AoA_Error):
         super().__init__(f"Unknown driver: {driver}")
 
 @isabelle_remote_procedure("IsaMini.AoA")
-async def IsaMini_AoA(data: tuple[Any, Any, str, str, str], connection: Connection):
-    (global_context, ptree, driver, log_dir, invocation_id) = data
+async def IsaMini_AoA(data: tuple[Any, Any, str, str, str, str, str], connection: Connection):
+    (global_context, ptree, driver, log_dir, invocation_id,
+     retrieval_forking_str, interactive_retrieval_str) = data
 
     # Environment variable AoA_LOG_DIR overrides user-provided log_dir
     env_log_dir = os.environ.get('AoA_LOG_DIR')
@@ -43,7 +44,13 @@ async def IsaMini_AoA(data: tuple[Any, Any, str, str, str], connection: Connecti
         drv = Session.Driver.get(driver)
         if drv is None:
             raise UnknownDriver(driver)
-        async with drv(connection.server.logger, actual_log_path) as session:
+        retrieval_forking = FORKING_MODE_MAP.get(
+            retrieval_forking_str, ForkingMode.FORKING_WITH_CTXT)
+        interactive_retrieval = INTERACTIVE_RETRIEVAL_MAP.get(
+            interactive_retrieval_str, InteractiveRetrievalMode.YES_WITH_RECURSIVE_RETRIEVAL)
+        async with drv(connection.server.logger, actual_log_path,
+                       retrieval_forking_mode=retrieval_forking,
+                       interactive_retrieval=interactive_retrieval) as session:
             root = Root((global_context, ptree), connection, session)
             await session.initialize(root)
             await session.run()

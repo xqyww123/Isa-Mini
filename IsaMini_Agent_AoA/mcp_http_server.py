@@ -22,7 +22,7 @@ import os
 import sys
 import socket
 from io import StringIO
-from typing import Any, NamedTuple
+from typing import Any, Callable, NamedTuple, TypeVar
 
 import jsoncomment
 import uvicorn
@@ -32,9 +32,10 @@ from mcp.types import Tool, TextContent, CallToolResult
 
 from .model import (
     the_session, _session_var, Session, Minilang_State, MyIO,
-    RaiseInteraction, Working_Interactions, Interaction,
+    ImmediateAnswer, RaiseInteraction, Working_Interactions, Interaction,
     AoA_Error, InternalError, ArgumentError, IsabelleError,
-    Parse_Node, parsing_node, _trivial_parsing, normalize_answer, Interaction_BadAnswer, ForkingMode,
+    Parse_Node, parsing_node, _trivial_parsing, normalize_answer, Interaction_BadAnswer, ForkingMode, InteractiveRetrievalMode,
+    TOOL_SEARCH,
     EntityKind, print_indent, print_paragraph,
     Interaction_Retrieve,
     IsabelleEntity, IsabelleFact_Presented, FactByName,
@@ -57,7 +58,12 @@ def _load_schema(filename: str) -> dict:
 _cc_edit_schema = _load_schema("cc_edit.jsonc")
 _cc_answer_schema = _load_schema("cc_answer.jsonc")
 _cc_delete_schema = _load_schema("cc_delete.jsonc")
-_cc_semantic_search_schema = _load_schema("cc_semantic_search.jsonc")
+
+BATCHED_SEMANTIC_SEARCH = True
+
+_cc_semantic_search_schema = _load_schema(
+    "cc_semantic_search.jsonc" if BATCHED_SEMANTIC_SEARCH
+    else "cc_semantic_search_single.jsonc")
 
 
 # ============================================================================
@@ -98,7 +104,12 @@ async def _handle_raise_interaction(
     for i, inter in enumerate(wi.interactions):
         if wi.result_set[i] is False:
             buffer = StringIO()
-            inter.prompt(0, MyIO(buffer))
+            try:
+                await inter.prompt(0, MyIO(buffer))
+            except ImmediateAnswer as imm:
+                wi.results[i] = imm.answer
+                wi.result_set[i] = True
+                continue
             session.log_tool_response(tool_name, f"[INTERACTION PROMPT]\n{buffer.getvalue()}")
             return _Prompt(buffer.getvalue())
 
@@ -150,12 +161,12 @@ async def _execute_proof_action(
 
     except RaiseInteraction as e:
         original_kont = e.kontinuation
-        async def wrapped_kont(results: list[Any]) -> Any:
+        async def wrapped_kont(results: list[Any]) -> str:
             result_gn = await original_kont(results)
             assert callable(result_gn), \
                 "Continuation from _execute_proof_action must return gen_node (callable)"
             return await _execute_proof_action(
-                session, action, step, _trivial_parsing(result_gn), tool_name, log_prefix)
+                session, action, step, _trivial_parsing(result_gn), tool_name, log_prefix) # type: ignore[arg-type]
         wrapped_e = RaiseInteraction(e.interactions, wrapped_kont)
         result = await _handle_raise_interaction(session, wrapped_e, tool_name)
         if isinstance(result, _Prompt):
@@ -283,7 +294,12 @@ async def _answer_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         for i, inter in enumerate(wi.interactions):
             if wi.result_set[i] is False:
                 buffer = StringIO()
-                inter.prompt(0, MyIO(buffer))
+                try:
+                    await inter.prompt(0, MyIO(buffer))
+                except ImmediateAnswer as imm:
+                    wi.results[i] = imm.answer
+                    wi.result_set[i] = True
+                    continue
                 session.log_tool_response("mcp__proof__answer", f"[INTERACTION PROMPT]\n{buffer.getvalue()}")
                 return (buffer.getvalue(), False)
 
@@ -303,57 +319,152 @@ async def _answer_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         sys.exit(1)
 
 
-async def _semantic_search_single(session: Session, q: dict, k: int) -> str:
-    """Run a single semantic search query, returning formatted result text."""
-    query = q.get("long_description", None)
+def _format_query_header(q: dict) -> str:
+    """Pretty-print a query dict into a header line."""
+    parts: list[str] = []
+    desc = q.get("long_description", "")
+    if desc:
+        parts.append(desc)
+    for key, label in [
+        ("term_patterns", "term patterns"),
+        ("type_patterns", "type patterns"),
+        ("theories_include", "theories"),
+        ("name_contains", "name contains"),
+    ]:
+        vals = q.get(key, [])
+        if vals:
+            parts.append(f"{label}: {', '.join(vals)}")
+    return "; ".join(parts) if parts else "(no filters)"
+
+
+_T = TypeVar("_T")
+
+def _format_multi_query_grouped(
+    queries: list[dict],
+    groups: list[list[_T]],
+    name_of: Callable[[_T], str],
+    format_entity: Callable[[_T], str],
+    seen: set[str],
+    empty_msg: str = "No relevant entities found.",
+    preamble_of: Callable[[dict, list[_T]], list[str]] | None = None,
+    show_repeated: bool = True,
+) -> list[str]:
+    """Format grouped multi-query results with cross-query dedup by reference.
+
+    ``seen`` is mutated: names of formatted entities are added.
+    ``preamble_of(query, items)`` may return extra lines (e.g. warnings)
+    inserted right after the ``Query:`` header.
+    ``show_repeated``: if False, silently skip repeated entities instead of listing them.
+    """
+    lines: list[str] = []
+    for q, items in zip(queries, groups):
+        lines.append(f"Query: {_format_query_header(q)}")
+        if preamble_of is not None:
+            lines.extend(preamble_of(q, items))
+        new_items: list[_T] = []
+        repeated_names: list[str] = []
+        for item in items:
+            name = name_of(item)
+            if name in seen:
+                repeated_names.append(name)
+            else:
+                new_items.append(item)
+                seen.add(name)
+        if not new_items and not repeated_names:
+            lines.append(f"  {empty_msg}")
+        elif not new_items:
+            lines.append(f"  {empty_msg}")
+        for item in new_items:
+            lines.append(format_entity(item))
+        if show_repeated and repeated_names:
+            if new_items:
+                lines.append(f"  {', '.join(repeated_names)} are also relevant")
+            else:
+                lines.append(f"  {', '.join(repeated_names)} are relevant. No new entities found.")
+        lines.append("")
+    return lines
+
+
+class _KnnResult(NamedTuple):
+    fetched: list[Interaction_Retrieve.FetchedEntity]
+    warnings: list[str]
+    error: str | None
+
+
+async def _run_knn_for_query(
+    ml_state: Minilang_State, q: dict, k: int,
+) -> _KnnResult:
+    """Run semantic_knn for a single query dict and resolve entities via RPC."""
     try:
         kinds = [EntityKind.from_label(label) for label in q["kinds"]]
     except KeyError as e:
-        return f"Invalid entity kind: {e}"
-
-    term_patterns = q.get("term_patterns", [])
-    type_patterns = q.get("type_patterns", [])
-    theories_include = q.get("theories_include", [])
-    name_contains = q.get("name_contains", [])
-
-    ml_state = session.root.ml_state
+        return _KnnResult([], [], f"Invalid entity kind: {e}")
     results, warnings = await ml_state.semantic_knn(
-        query, k, kinds,
-        term_patterns=term_patterns,
-        type_patterns=type_patterns,
-        theories_include=theories_include,
-        name_contains=name_contains)
-
-    lines: list[str] = []
-    for w in warnings:
-        lines.append(f"Warning: {w}")
+        q.get("long_description") or None, k, kinds,
+        term_patterns=q.get("term_patterns", []),
+        type_patterns=q.get("type_patterns", []),
+        theories_include=q.get("theories_include", []),
+        name_contains=q.get("name_contains", []))
     if not results:
-        lines.append("No matching entities found.")
-        return "\n".join(lines)
+        return _KnnResult([], warnings, None)
+    entities = [(rec.kind, rec.name) for _, rec in results]
+    infos = await ml_state._retrieve_entity(entities)
+    out: list[Interaction_Retrieve.FetchedEntity] = []
+    for (score, rec), info in zip(results, infos):
+        if info is None:
+            continue
+        short_name, exprs = info
+        if rec.kind in _THEOREM_KINDS:
+            entity: IsabelleEntity = IsabelleFact_Presented(
+                full_name=rec.name, short_name=short_name,
+                fact=FactByName(refer_by="name", name=short_name),
+                expression=exprs)
+        else:
+            entity = IsabelleEntity(
+                full_name=rec.name, short_name=short_name,
+                expression=exprs)
+        out.append(Interaction_Retrieve.FetchedEntity(
+            entity=entity,
+            score=score,
+            interpretation=' '.join(rec.interpretation.split()) if rec.interpretation else None))
+    return _KnnResult(out, warnings, None)
 
-    top10 = "\n".join(f"  [{s:.2f}] {r.pretty_print}" for s, r in results[:10])
-    session.log_interaction("mcp__proof__search_isabelle",
-        f"query={query!r}\n{top10}")
-    for score, rec in results[:k]:
-        lines.append(f"- [{score:.2f}] {rec.pretty_print}")
-        if rec.interpretation:
-            lines.append(f"  {rec.interpretation}")
-    return "\n".join(lines)
+
+async def _semantic_search_direct(
+    session: Session, queries: list[dict], k: int,
+) -> str:
+    """Run semantic search queries concurrently, returning formatted results."""
+    ml_state = session.root.ml_state
+
+    # Run all queries concurrently (knn + entity retrieval in one step)
+    knn_results = await asyncio.gather(
+        *[_run_knn_for_query(ml_state, q, k) for q in queries])
+
+    seen = session.seen_entities
+    lines: list[str] = []
+    for r in knn_results:
+        if r.error:
+            lines.append(f"Warning: {r.error}")
+        for w in r.warnings:
+            lines.append(f"Warning: {w}")
+        for f in r.fetched[:k]:
+            if f.entity.short_name in seen:
+                continue
+            lines.append(f"- {f.entity.short_name}: {', '.join(f.entity.expression)}")
+            if f.interpretation:
+                lines.append(f"  {f.interpretation}")
+            seen.add(f.entity.short_name)
+    if not lines:
+        lines.append("No new relevant entities found." if seen else "No relevant entities found.")
+    result = "\n".join(lines)
+    session.log_tool_response("mcp__proof__search_isabelle", result)
+    return result
 
 
 class Interaction_RetrieveForSearch(Interaction_Retrieve):
     """Retrieve entities for semantic search filtering. No prove-in-time."""
 
-    @classmethod
-    async def create(cls, state: Minilang_State,
-            query: str, kinds: list[EntityKind],
-            **kwargs: Any) -> 'Interaction_RetrieveForSearch':
-        inst = cls(state, query, kinds, [], **kwargs)
-        await inst._apply_forking_config()
-        inst.candidate_facts = await inst._fetch_facts()
-        return inst
-
-    def prompt(self, indent: int, file: MyIO) -> None:
+    async def prompt(self, indent: int, file: MyIO) -> None:
         title = self._entity_title()
         print_indent(indent, file)
         if self.query:
@@ -363,44 +474,74 @@ class Interaction_RetrieveForSearch(Interaction_Retrieve):
             file.write(f"You are looking for {title} matching the search criteria.")
         file.write("\n")
         file.write(f"Select all relevant {title} from the following list:\n")
-        self._prompt_candidates(indent, file)
-        file.write("\nYou are encouraged to call the search_isabelle tool "
-                   "to find more if none of the above is relevant.\n")
+        await self._prompt_candidates(indent, file)
+        if self.fork_allowed_tools is None or TOOL_SEARCH in self.fork_allowed_tools:
+            file.write("\nYou are encouraged to call the search_isabelle tool "
+                       "to find more if none of the above is relevant.\n")
         file.write("Answer with the indices of all relevant entries.\n")
 
 
-async def _semantic_search_with_filtering(session: Session, args: dict) -> str:
-    """Run semantic search (k=50) and raise Interaction_RetrieveForSearch for fork-based filtering."""
-    query = args.get("long_description", None)
-    try:
-        kinds = [EntityKind.from_label(label) for label in args["kinds"]]
-    except KeyError as e:
-        return f"Invalid entity kind: {e}"
+async def _semantic_search_with_filtering(session: Session, queries: list[dict]) -> str:
+    """Run semantic search and raise Interaction_RetrieveForSearch for fork-based filtering.
 
+    Creates one interaction per query; all are raised together so forks run concurrently.
+    """
     ml_state = session.root.ml_state
-    interaction = await Interaction_RetrieveForSearch.create(
-        state=ml_state, query=query or "", kinds=kinds,
-        initial_k=50,
-        single_choice=False,
-        term_patterns=args.get("term_patterns", []),
-        type_patterns=args.get("type_patterns", []),
-        theories_include=args.get("theories_include", []),
-        name_contains=args.get("name_contains", []),
-    )
+    interactions: list[Interaction] = []
+    for q in queries:
+        try:
+            kinds = [EntityKind.from_label(label) for label in q["kinds"]]
+        except KeyError as e:
+            continue
+        interaction = Interaction_RetrieveForSearch(
+            state=ml_state, query=q.get("long_description", "") or "", kinds=kinds,
+            initial_k=50,
+            single_choice=False,
+            term_patterns=q.get("term_patterns", []),
+            type_patterns=q.get("type_patterns", []),
+            theories_include=q.get("theories_include", []),
+            name_contains=q.get("name_contains", []),
+        )
+        interactions.append(interaction)
 
-    if not interaction.candidate_facts:
-        return "No matching entities found."
+    if not interactions:
+        return "No relevant entities found."
 
-    async def format_selected(results: list[Any]) -> str:
-        selected = results[0]  # list[IsabelleEntity]
-        if not selected:
-            return "No relevant entities found after filtering."
-        lines: list[str] = []
-        for entity in selected:
-            lines.append(f"- {entity.full_name}: {', '.join(entity.expression)}")
-        return "\n".join(lines)
+    _empty_msg = ("No relevant entities exist. "
+        "Exhaustive search completed — you MUST consider alternative proof strategies."
+        if session.interactive_retrieval == InteractiveRetrievalMode.YES_WITH_RECURSIVE_RETRIEVAL
+        else "No relevant entities found.")
 
-    raise RaiseInteraction([interaction], format_selected)
+    seen = session.seen_entities
+
+    async def format_selected(results: list[list[IsabelleEntity]]) -> str:
+        if len(results) == 1:
+            selected = results[0]
+            if not selected:
+                return _empty_msg
+            new_entities = [e for e in selected if e.short_name not in seen]
+            repeated = [e.short_name for e in selected if e.short_name in seen]
+            lines: list[str] = []
+            for entity in new_entities:
+                lines.append(f"- {entity.short_name}: {', '.join(entity.expression)}")
+                seen.add(entity.short_name)
+            if repeated:
+                if new_entities:
+                    lines.append(f"{', '.join(repeated)} are also relevant")
+                else:
+                    lines.append(f"{', '.join(repeated)} are relevant. No new entities found.")
+            return "\n".join(lines) if lines else _empty_msg
+
+        # Multiple queries — grouped output with cross-query dedup by reference
+        return "\n".join(_format_multi_query_grouped(
+            queries, results,
+            name_of=lambda e: e.short_name,
+            format_entity=lambda e: f"  {e.short_name}: {', '.join(e.expression)}",
+            seen=seen,
+            empty_msg=_empty_msg,
+        ))
+
+    raise RaiseInteraction(interactions, format_selected)
 
 
 def _find_active_retrieve_fact(session: Session) -> Interaction_Retrieve | None:
@@ -413,73 +554,48 @@ def _find_active_retrieve_fact(session: Session) -> Interaction_Retrieve | None:
 
 
 async def _semantic_search_extend_candidates(
-    session: Session, args: dict, interaction: Interaction_Retrieve,
+    session: Session, queries: list[dict], interaction: Interaction_Retrieve,
 ) -> str:
-    """Run semantic search and extend the active interaction's candidate list.
+    """Run semantic search queries and extend the active interaction's candidate list.
     Output uses the same format as the interaction prompt, with continuing indices."""
-    query = args.get("long_description", None)
-    try:
-        kinds = [EntityKind.from_label(label) for label in args["kinds"]]
-    except KeyError as e:
-        return f"Invalid entity kind: {e}"
-
-    term_patterns = args.get("term_patterns", [])
-    type_patterns = args.get("type_patterns", [])
-    theories_include = args.get("theories_include", [])
-    name_contains = args.get("name_contains", [])
-
     ml_state = session.root.ml_state
-    results, warnings = await ml_state.semantic_knn(
-        query, 10, kinds,
-        term_patterns=term_patterns,
-        type_patterns=type_patterns,
-        theories_include=theories_include,
-        name_contains=name_contains)
 
+    # Run all queries concurrently (knn + entity retrieval in one step)
+    knn_results = await asyncio.gather(
+        *[_run_knn_for_query(ml_state, q, 10) for q in queries])
+
+    # Collect warnings and errors
     lines: list[str] = []
-    for w in warnings:
-        lines.append(f"Warning: {w}")
-    if not results:
-        lines.append("No new matching entities found.")
-        return "\n".join(lines)
+    for r in knn_results:
+        if r.error:
+            lines.append(f"Warning: {r.error}")
+        for w in r.warnings:
+            lines.append(f"Warning: {w}")
 
-    # Convert to FetchedEntity and deduplicate against existing candidates
-    existing_names = {f.entity.full_name for f in interaction.candidate_facts}
-    entities = [(rec.kind, rec.name) for _, rec in results]
-    infos = await ml_state._retrieve_entity(entities)
+    # Deduplicate against existing candidates and across queries
+    existing = await interaction.candidate_facts()
+    existing_names = {f.entity.full_name for f in existing}
     new_facts: list[Interaction_Retrieve.FetchedEntity] = []
-    for (score, rec), info in zip(results, infos):
-        if info is None:
-            continue
-        short_name, exprs = info
-        if rec.name in existing_names:
-            continue
-        if rec.kind in _THEOREM_KINDS:
-            entity: IsabelleEntity = IsabelleFact_Presented(
-                full_name=rec.name, short_name=short_name,
-                fact=FactByName(refer_by="name", name=short_name),
-                expression=exprs)
-        else:
-            entity = IsabelleEntity(
-                full_name=rec.name, short_name=short_name,
-                expression=exprs)
-        new_facts.append(Interaction_Retrieve.FetchedEntity(
-            entity=entity,
-            score=score,
-            interpretation=' '.join(rec.interpretation.split()) if rec.interpretation else None,
-        ))
+    seen_new: set[str] = set()
+    for r in knn_results:
+        for f in r.fetched:
+            name = f.entity.full_name
+            if name in existing_names or name in seen_new:
+                continue
+            seen_new.add(name)
+            new_facts.append(f)
 
     if not new_facts:
         lines.append("No new matching entities found.")
         return "\n".join(lines)
 
     # Extend the interaction's candidate list
-    start_idx = len(interaction.candidate_facts)
-    interaction.candidate_facts.extend(new_facts)
+    start_idx = len(existing)
+    existing.extend(new_facts)
 
     # Format in the same style as Interaction_Retrieve.prompt()
     for i, fetched in enumerate(new_facts):
-        lines.append(f"{start_idx + i}. {fetched.entity.full_name}: {fetched.entity.expression}")
+        lines.append(f"{start_idx + i}. {fetched.entity.short_name}: {', '.join(fetched.entity.expression)}")
         if fetched.interpretation:
             lines.append(f"  {fetched.interpretation}")
     return "\n".join(lines)
@@ -488,20 +604,19 @@ async def _semantic_search_extend_candidates(
 async def _semantic_search_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     session.log_tool_call("mcp__proof__search_isabelle", args)
     try:
+        queries = args["queries"] if BATCHED_SEMANTIC_SEARCH else [args]
         active = _find_active_retrieve_fact(session)
         if active is not None:
             # Inside a fork with an active Interaction_Retrieve — extend its candidates
-            result = await _semantic_search_extend_candidates(session, args, active)
+            result = await _semantic_search_extend_candidates(session, queries, active)
             return (result, False)
         # Check if interactive retrieval is enabled
-        interactive = await session.root.ml_state.connection.config_lookup(
-            "AoA_interactive_retrieval")
-        if interactive:
-            result = await _semantic_search_with_filtering(session, args)
+        if session.interactive_retrieval != InteractiveRetrievalMode.NO:
+            result = await _semantic_search_with_filtering(session, queries)
             return (result, False)
         else:
             # Direct (non-interactive) retrieval — return raw results
-            result = await _semantic_search_single(session, args, k=10)
+            result = await _semantic_search_direct(session, queries, k=25)
             return (result, False)
     except RaiseInteraction as e:
         r = await _handle_raise_interaction(session, e, "mcp__proof__search_isabelle")

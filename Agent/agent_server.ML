@@ -6,7 +6,7 @@ type driver = string
 val default_driver: driver
 val agent_aoa_driver: string Config.T
 val AoA_log_dir: string Config.T
-val AoA_interactive_retrieval: bool Config.T
+val AoA_interactive_retrieval: string Config.T
 val AoA_retrieval_forking: string Config.T
 
 type state_id = string
@@ -193,10 +193,14 @@ val AoA_log_dir = Attrib.setup_config_string \<^binding>\<open>AoA_log_dir\<clos
            else user_home ^ "/log/AoA"
         end);
 
-val AoA_interactive_retrieval = Attrib.setup_config_bool \<^binding>\<open>AoA_interactive_retrieval\<close>
-      (K true);
+(* Interactive retrieval mode:
+   "no"             — direct results, no forking
+   "yes"            — fork-based interaction, fork can only answer
+   "yes_recursive"  — fork-based interaction, fork can also search (default) *)
+val AoA_interactive_retrieval = Attrib.setup_config_string \<^binding>\<open>AoA_interactive_retrieval\<close>
+      (K "yes");
 val _ = Config.register_rpc_option "AoA_interactive_retrieval"
-          (Config.bool_value AoA_interactive_retrieval);
+          (Config.string_value AoA_interactive_retrieval);
 
 (* Forking mode for retrieval interactions:
    "with_ctxt" (default)       — fork with opus, inheriting parent context
@@ -507,8 +511,10 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         name = "IsaMini.AoA",
         arg_schema = (fn (global_context, driver, invocation_id) =>
             let val log_dir = Config.get ctxt AoA_log_dir
-            in packTuple5 (context_packer ctxt, minilang_tree_packer ctxt, packString, packString, packString)
-                          (global_context, s0_ptree, driver, log_dir, invocation_id)
+                val retrieval_forking = Config.get ctxt AoA_retrieval_forking
+                val interactive_retrieval = Config.get ctxt AoA_interactive_retrieval
+            in packTuple7 (context_packer ctxt, minilang_tree_packer ctxt, packString, packString, packString, packString, packString)
+                          (global_context, s0_ptree, driver, log_dir, invocation_id, retrieval_forking, interactive_retrieval)
             end),
         ret_schema = unpackTuple3 (unpackList MiniLang_Agent.xcmd_unpacker,
                                    unpackOption unpackString,
