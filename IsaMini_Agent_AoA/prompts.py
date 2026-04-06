@@ -23,7 +23,7 @@ EDIT_TOOL_DESCRIPTION = "Edit the proof.yaml file"
 async def filled_step_message(step: str, root: Root, node: Node, session: 'model.Session') -> str:
     """Message returned when a step is successfully filled."""
     file = MyIO(StringIO())
-    file.write(f"Successfully filled step {step}:\n")
+    file.write(f"Filled {node.titled_id}:\n")
     node.print(1, file, update_line=False, show_warnings=True)
     # Print any auto-generated nodes after the filled node (e.g., Intro)
     parent = node.parent
@@ -32,7 +32,7 @@ async def filled_step_message(step: str, root: Root, node: Node, session: 'model
         idx = next((i for i, n in enumerate(siblings) if n is node), -1)
         for sibling in siblings[idx + 1:]:
             sibling.print(1, file, update_line=False, show_warnings=True)
-    if parent is not None:
+    if parent is not None and node._changes_pending_goal:
         goal_and_to_file = parent.should_I_show_pending_goal()
         goal_id = parent.id_of_goal()
         if goal_and_to_file is not None:
@@ -40,12 +40,12 @@ async def filled_step_message(step: str, root: Root, node: Node, session: 'model
             if goal_id is None:
                 file.write(f"Pending goal:\n")
             else:
-                file.write(f"Pending goal of {goal_id}:\n")
+                file.write(f"Pending goal of {parent.titled_id}:\n")
             model.print_goal(goal, 1, False, file, parent._ctxt_of_filling())
             file.write(f"Call command `edit` with action `fill` and target step `{step_to_fill}`"
                 " to provide the proof.\n")
-        elif goal_id is not None:
-            file.write(f"All proof goals of {goal_id} are completed.\n")
+        elif goal_id is not None and not parent.does_quickview_need_detail():
+            file.write(f"All proof goals of {parent.titled_id} are completed.\n")
     if session.warnings:
         file.write("Warnings:\n")
         for w in session.warnings:
@@ -73,7 +73,7 @@ NOT_IMPLEMENTED_INSERT_BEFORE = "insert_before is not implemented"
 async def inserted_before_step_message(step: str, root: Root, node: Node, session: 'model.Session') -> str:
     """Message returned when a step is successfully inserted before another."""
     file = MyIO(StringIO())
-    file.write(f"Successfully inserted step {node.id} before step {step}:\n")
+    file.write(f"Inserted step {node.id} before step {step}:\n")
     node.print(1, file, update_line=False, show_warnings=True)
     if session.warnings:
         file.write("Warnings:\n")
@@ -97,7 +97,7 @@ NOT_IMPLEMENTED_AMEND = "amend is not implemented"
 async def amended_step_message(step: str, root: Root, node: Node, session: 'model.Session') -> str:
     """Message returned when a step is successfully amended."""
     file = MyIO(StringIO())
-    file.write(f"Successfully amended step {step}:\n")
+    file.write(f"Amended step {step}:\n")
     node.print(1, file, update_line=False, show_warnings=True)
     parent = node.parent
     if parent is not None:
@@ -109,19 +109,20 @@ async def amended_step_message(step: str, root: Root, node: Node, session: 'mode
         if remaining <= 2:
             for sibling in siblings[idx + 1:]:
                 sibling.print(1, file, update_line=False, show_warnings=True)
-            goal_and_to_file = parent.should_I_show_pending_goal()
-            goal_id = parent.id_of_goal()
-            if goal_and_to_file is not None:
-                goal, step_to_fill = goal_and_to_file
-                if goal_id is None:
-                    file.write(f"Pending goal:\n")
-                else:
-                    file.write(f"Pending goal of {goal_id}:\n")
-                model.print_goal(goal, 1, False, file, parent._ctxt_of_filling())
-                file.write(f"Call command `edit` with action `fill` and target step `{step_to_fill}`"
-                    " to provide the proof.\n")
-            elif goal_id is not None:
-                file.write(f"All proof goals of {goal_id} are completed.\n")
+            if node._changes_pending_goal:
+                goal_and_to_file = parent.should_I_show_pending_goal()
+                goal_id = parent.id_of_goal()
+                if goal_and_to_file is not None:
+                    goal, step_to_fill = goal_and_to_file
+                    if goal_id is None:
+                        file.write(f"Pending goal:\n")
+                    else:
+                        file.write(f"Pending goal of {parent.titled_id}:\n")
+                    model.print_goal(goal, 1, False, file, parent._ctxt_of_filling())
+                    file.write(f"Call command `edit` with action `fill` and target step `{step_to_fill}`"
+                        " to provide the proof.\n")
+                elif goal_id is not None and not parent.does_quickview_need_detail():
+                    file.write(f"All proof goals of {parent.titled_id} are completed.\n")
     if session.warnings:
         file.write("Warnings:\n")
         for w in session.warnings:
@@ -141,7 +142,8 @@ async def amended_step_message(step: str, root: Root, node: Node, session: 'mode
 async def deleted_steps_message(steps: list[str], root: Root, session: 'model.Session') -> str:
     """Message returned when steps are successfully deleted."""
     file = MyIO(StringIO())
-    file.write(f"Successfully deleted step(s) {', '.join(steps)}.\n")
+    noun = "steps" if len(steps) > 1 else "step"
+    file.write(f"Deleted {noun} {', '.join(steps)}.\n")
     if session.warnings:
         file.write("Warnings:\n")
         for w in session.warnings:

@@ -121,7 +121,7 @@ async def _handle_raise_interaction(
         session.working_interactions.pop()
         return await _handle_raise_interaction(session, nested, tool_name)
     session.working_interactions.pop()
-    session.log_tool_response(tool_name, f"[INTERACTION RESOLVED] {result}")
+    session.log_interaction(tool_name, "interaction resolved")
     return _Result(result)
 
 
@@ -229,8 +229,14 @@ async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         steps = args["target_steps"]
         try:
             not_found = await session.root.delete(steps)
+            if len(not_found) == len(steps):
+                noun = "step" if len(not_found) == 1 else "steps"
+                error_msg = f"Error: {noun} {', '.join(not_found)} not found."
+                session.log_tool_response("mcp__proof__delete", f"ERROR: {error_msg}")
+                return (error_msg, True)
+            deleted = [s for s in steps if s not in not_found]
             session.refresh_YAML()
-            response = await P.deleted_steps_message(steps, session.root, session)
+            response = await P.deleted_steps_message(deleted, session.root, session)
             if not_found:
                 noun = "step" if len(not_found) == 1 else "steps"
                 response += f"\nWarning: {noun} {', '.join(not_found)} not found and skipped."
@@ -442,11 +448,13 @@ async def _semantic_search_direct(
 
     seen = session.seen_entities
     lines: list[str] = []
+    warn_lines: list[str] = []
+    retrieved: list[str] = []
     for r in knn_results:
         if r.error:
-            lines.append(f"Warning: {r.error}")
+            warn_lines.append(f"Warning: {r.error}")
         for w in r.warnings:
-            lines.append(f"Warning: {w}")
+            warn_lines.append(f"Warning: {w}")
         for f in r.fetched[:k]:
             if f.entity.short_name in seen:
                 continue
@@ -454,8 +462,13 @@ async def _semantic_search_direct(
             if f.interpretation:
                 lines.append(f"  {f.interpretation}")
             seen.add(f.entity.short_name)
+            retrieved.append(f"{f.entity.short_name}: {', '.join(f.entity.expression)}")
     if not lines:
         lines.append("No new relevant entities found." if seen else "No relevant entities found.")
+    lines.extend(warn_lines)
+    if retrieved:
+        query_str = "; ".join(_format_query_header(q) for q in queries)
+        session.log_retrieval(query_str, retrieved, quiet=True)
     result = "\n".join(lines)
     session.log_tool_response("mcp__proof__search_isabelle", result)
     return result
@@ -564,13 +577,14 @@ async def _semantic_search_extend_candidates(
     knn_results = await asyncio.gather(
         *[_run_knn_for_query(ml_state, q, 10) for q in queries])
 
-    # Collect warnings and errors
+    # Collect warnings and errors (appended at end)
     lines: list[str] = []
+    warn_lines: list[str] = []
     for r in knn_results:
         if r.error:
-            lines.append(f"Warning: {r.error}")
+            warn_lines.append(f"Warning: {r.error}")
         for w in r.warnings:
-            lines.append(f"Warning: {w}")
+            warn_lines.append(f"Warning: {w}")
 
     # Deduplicate against existing candidates and across queries
     existing = await interaction.candidate_facts()
@@ -587,6 +601,7 @@ async def _semantic_search_extend_candidates(
 
     if not new_facts:
         lines.append("No new matching entities found.")
+        lines.extend(warn_lines)
         return "\n".join(lines)
 
     # Extend the interaction's candidate list
@@ -598,6 +613,7 @@ async def _semantic_search_extend_candidates(
         lines.append(f"{start_idx + i}. {fetched.entity.short_name}: {', '.join(fetched.entity.expression)}")
         if fetched.interpretation:
             lines.append(f"  {fetched.interpretation}")
+    lines.extend(warn_lines)
     return "\n".join(lines)
 
 

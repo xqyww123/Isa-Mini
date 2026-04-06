@@ -114,7 +114,10 @@
       ]
     },
     "SubProof": {
-      "enum": ["Obvious", "Given later"]
+      "anyOf": [
+        { "$ref": "#/$defs/Obvious" },
+        { "const": "Given later" }
+      ]
     },
 
     "Obvious": {

@@ -198,7 +198,7 @@ val AoA_log_dir = Attrib.setup_config_string \<^binding>\<open>AoA_log_dir\<clos
    "yes"            — fork-based interaction, fork can only answer
    "yes_recursive"  — fork-based interaction, fork can also search (default) *)
 val AoA_interactive_retrieval = Attrib.setup_config_string \<^binding>\<open>AoA_interactive_retrieval\<close>
-      (K "yes");
+      (K "no");
 val _ = Config.register_rpc_option "AoA_interactive_retrieval"
           (Config.string_value AoA_interactive_retrieval);
 
@@ -478,7 +478,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                in NONE end
                catch ERROR msg => SOME (REPL.trim_makrup msg)
                    | Timeout.TIMEOUT _ => SOME "Timed out"
-                   | e => raise e\<close>
+                   | exn => SOME (REPL.trim_makrup (Runtime.exn_message exn))\<close>
             ) stmts
           end),
         timeout = NONE

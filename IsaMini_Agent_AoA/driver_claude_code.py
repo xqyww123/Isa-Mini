@@ -83,6 +83,9 @@ class ClaudeCode(Session):
             self.root = parent.root
             self._http_server = parent._http_server
             self._interactive_web_terminal = parent._interactive_web_terminal
+            self._on_yaml_refresh = parent._on_yaml_refresh
+            self._on_operation_status = parent._on_operation_status
+            self._on_log_callback = parent._on_log_callback
             parent._fork_counter += 1
             self._fork_name = f"{parent._fork_name}.fork_{parent._fork_counter}"
         else:
@@ -104,9 +107,10 @@ class ClaudeCode(Session):
         self._client: ClaudeSDKClient | None = None
         self._mcp_url: str | None = None
         self._proof_complete: asyncio.Event | None = None
-        self._on_yaml_refresh: Callable[[str], Any] | None = None  # receives quickview content
-        self._on_operation_status: Callable[[dict], Any] | None = None
-        self._on_log_callback: Callable[[dict], Any] | None = None
+        if parent is None:
+            self._on_yaml_refresh: Callable[[str], Any] | None = None
+            self._on_operation_status: Callable[[dict], Any] | None = None
+            self._on_log_callback: Callable[[dict], Any] | None = None
 
     @classmethod
     def _make_fork(cls, parent: 'ClaudeCode') -> 'ClaudeCode':
@@ -724,8 +728,8 @@ class ClaudeCode(Session):
 
     _SKIP_RETRIEVAL = frozenset({"none selected", "unfound"})
 
-    def log_retrieval(self, query: str, results: list[str]):
-        super().log_retrieval(query, results)
+    def log_retrieval(self, query: str, results: list[str], *, quiet: bool = False):
+        super().log_retrieval(query, results, quiet=quiet)
         if self._on_operation_status is not None:
             if results and not any(r in self._SKIP_RETRIEVAL for r in results):
                 self._on_operation_status({

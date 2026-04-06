@@ -27,7 +27,15 @@ type Var = tuple[varname, typ]
 type Hyp = tuple[varname, term]
 type Vars = dict[varname, typ]
 type Hyps = dict[varname, term]
-type SubProof = Literal["Obvious"] | Literal["Given later"]
+type SubProof = Literal["Given later"] | dict  # Obvious_ToolArg at runtime
+
+def _subproof_is_obvious(sp: SubProof) -> bool:
+    return isinstance(sp, dict) and sp.get("operation") == "Obvious"
+
+# SubProof_parsed: the result of parsing a SubProof.
+# A sync gen_node that creates the Obvious sub-node (with resolved facts), or None for "Given later".
+# Defined as a forward reference since gen_node is declared later.
+type SubProof_parsed = 'gen_node | None'
 
 class Explicit_Var(TypedDict):
     name: varname
@@ -1418,9 +1426,9 @@ class Interaction_RetrieveForProof(Interaction_Retrieve):
         else:
             file.write(f"\nAnswer with the indices of all matching {title}.\n")
         file.write("Otherwise, if none matches but the statement is trivially provable, "
-                   "answer with the formal Isabelle statement as text. "
+                   "formalize the statement into Isabelle propositions and answer with them as text. "
                    "IMPORTANT: all numeric literals MUST be type-annotated, "
-                   "e.g., `(2::nat)` not `2`.\n")
+                   "example: `(2::nat)` not `2`.\n")
         if self.k >= self.FINAL_K:
             file.write("If none of the above applies, answer empty to give up "
                        "the search and prove the statement yourself later.\n")
@@ -1486,6 +1494,7 @@ class Node(ABC):
     parent: 'NonLeaf_Node | None'
     id: 'step'
     line: int
+    _changes_pending_goal = True
 
     def __init__(self, config: NodeConfig, thought: str):
         """
@@ -1508,6 +1517,11 @@ class Node(ABC):
         self._first_time = True
         self.age = self.session.age
         self.line = 0
+
+    @property
+    def titled_id(self) -> str:
+        """Return e.g. 'step 1' or 'goal 2.1'."""
+        return f"{self._kind} {self.id}"
     def id_of_goal(self) -> step | None:
         return self.id
     def _reset_local_step(self, new_local_step: str) -> None:
@@ -1555,7 +1569,7 @@ class Node(ABC):
                 print_paragraph(indent, file, reason.reason)
             case EvaluationStatus.Status.CANCELLED:
                 print_indent(indent, file)
-                file.write("Error: the evaluation is cancelled due to failures in preceding nodes")
+                file.write("Error: the evaluation is cancelled due to failures in preceding nodes\n")
     def _print_evaluation_status_quickview(self, indent: int, file: MyIO) -> None:
         match self.status.status:
             case EvaluationStatus.Status.SUCCESS:
@@ -2267,6 +2281,8 @@ class StdBlock(NonLeaf_Node):
             raise InternalError("The open goals of StdBlock should not exceed one. "
             "To express multiple goals, you should use a StdBlock whose children are GoalNodes. See Rule as an example.")
         return (goals[0], to_fill)
+    def _should_print_footer_pending_goal(self) -> bool:
+        return True
     def _print_footer(self, indent: int, file: MyIO, show_warnings: bool = False) -> None:
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.FOOTER])
         if self.opening():
@@ -2274,7 +2290,7 @@ class StdBlock(NonLeaf_Node):
             if ptree is None:
                 print_indent(indent, file)
                 file.write("Error: Evaluation cancelled due to failures above\n")
-            else:
+            elif self._should_print_footer_pending_goal():
                 result = self.should_I_show_pending_goal()
                 if result is not None:
                     goal, to_fill = result
@@ -2407,31 +2423,24 @@ class GoalNode(StdBlock):
     is a GoalNode corresponding to one of the subgoals, and the children of each
     GoalNode are the proof steps for its corresponding subgoal.
     """
+    _changes_pending_goal = False
     case_vars: list[Var] | None
     case_hyps: list[Hyp] | None
 
-    def __init__(self, config: NodeConfig, is_single_goal: bool, show_goal: bool, auto_proof: SubProof | None):
-        # """
-        # goal_index: starting from 0
-        # """
-        # if single_mode:
-        #     id = f"$goal"
-        # else:
-        #     id = f"proof of goal{goal_index}"
+    def __init__(self, config: NodeConfig, is_single_goal: bool, show_goal: bool,
+                 auto_proof: SubProof_parsed = None):
         super().__init__(config, "", [])
-        # self.id = id
         self.is_single_goal = is_single_goal
         self.show_goal = show_goal
         self._allow_multi_goal = True
         self._kind = "goal"
         self.case_vars = None
         self.case_hyps = None
-        # self.goal_index = goal_index
-        if auto_proof == "Obvious":
+        if auto_proof is not None:
             local_step = self._local_step_of_next_proof_step()
             ml_state = Minilang_State.assign(self.ml_state)
             sub_config = NodeConfig(local_step, ml_state, self)
-            self.sub_nodes.append(Obvious(sub_config, Obvious_InternalToolArg(facts=[])))
+            self.sub_nodes.append(auto_proof(sub_config))
     def goal(self) -> Goal | None:
         ptree = self.ml_state.prooftree
         if ptree is None:
@@ -2445,6 +2454,8 @@ class GoalNode(StdBlock):
                 return None
         else:
             return self.id
+    def _should_print_footer_pending_goal(self) -> bool:
+        return not all(isinstance(c, (Have, Obtain)) for c in self.sub_nodes)
     def beginning_opr(self) -> None:
         return None
     def ending_opr(self) -> Minilang_Operation | None:
@@ -2601,8 +2612,8 @@ class CaseSplit_Like(SubgoalMaker_NoTailEnder):
     case_vars: list[Var] | None
     case_hyps: list[Hyp] | None
     case_name: str | None
-    _initial_proof: SubProof
-    def __init__(self, *args, _initial_proof: SubProof, **kwargs):
+    _initial_proof: SubProof_parsed
+    def __init__(self, *args, _initial_proof: SubProof_parsed = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.case_vars = None
         self.case_hyps = None
@@ -2620,7 +2631,7 @@ class CaseSplit_Like(SubgoalMaker_NoTailEnder):
                 raise InternalError("The child index is out of range")
     def _new_goal_node(self, goal_index: int, ml_state: Minilang_State) -> GoalNode:
         return GoalNode(NodeConfig(str(goal_index+self._initial_goal_index), ml_state, self), False, True,
-                        auto_proof=self._initial_proof if self._initial_proof == "Obvious" else None)
+                        auto_proof=self._initial_proof)
     def _rename_var(self, old_name: varname, new_name: varname) -> 'Node | None':
         if self.sub_nodes:
             return super()._rename_var(old_name, new_name)
@@ -2742,7 +2753,15 @@ async def _filter_unprovable(
     warnings: list[str] = []
     for idx, result in zip(pit_indices, results):
         if result is not None:
-            warnings.append(f'Fact "{facts[idx].name()}" is neither a known theorem nor trivially provable. Ignored \u2014 you may prove it manually if needed.')
+            error_lines = result.splitlines()
+            error_summary = "\n".join(error_lines[:10])
+            if len(error_lines) > 10:
+                error_summary += "\n..."
+            prefix = "\n" if warnings else ""
+            warnings.append(
+                f'{prefix}Ignored "{facts[idx].name()}" \u2014 not a known Isabelle theorem nor trivially provable. '
+                f'You may prove it manually if needed.\n'
+                f'Reason: {error_summary}')
             drop.add(idx)
     kept = [f for i, f in enumerate(facts) if i not in drop]
     return kept, warnings
@@ -2830,6 +2849,26 @@ class Obvious(Leaf):
         await super()._refresh_me_alone()
     def the_operation(self) -> 'Minilang_Operation | FailureReason':
         return Minilang_Operation.HAMMER(self.fact_refs)
+
+async def _parse_subproof(sp: SubProof, alive_state: Minilang_State | None) -> SubProof_parsed:
+    """Parse a SubProof into a sync gen_node (or None for 'Given later').
+    Reuses Obvious.interactive_gen for fact resolution.
+    May raise RaiseInteraction (for FactByStatement) or NoAliveState."""
+    if not _subproof_is_obvious(sp):
+        return None
+    return await Obvious.interactive_gen(sp)(alive_state)
+
+def _gen_with_subproof(cls: type,
+                       parent_factory: 'Callable[[NodeConfig, SubProof_parsed], Node]',
+                       subproof: SubProof) -> parsing_node:
+    """Build a parsing_node that parses a SubProof then creates the parent via parent_factory.
+    The parent_factory receives the parsed SubProof and is responsible for adding the
+    Obvious sub-node to its children."""
+    async def parse(alive_state: Minilang_State | None,
+                    exact_state: Minilang_State | None = None) -> gen_node:
+        parsed = await _parse_subproof(subproof, alive_state)
+        return lambda config: parent_factory(config, parsed)
+    return parse
 
 
 #### Witness
@@ -3250,18 +3289,25 @@ class Have_ToolArg(TypedDict):
 
 @proof_operation("Have", Have_ToolArg)
 class Have(StdBlock):
-    def __init__(self, config: NodeConfig, arg : Have_ToolArg):
+    _changes_pending_goal = False
+    def __init__(self, config: NodeConfig, arg : Have_ToolArg,
+                 subproof_parsed: SubProof_parsed = None):
         super().__init__(config, arg["thought"], [])
         self.statement = arg["statement"]
         self.name = arg["name"]
-        if arg["proof"] == "Obvious":
+        if subproof_parsed is not None:
             local_step = self._local_step_of_next_proof_step()
             ml_state = Minilang_State.assign(self.ml_state)
             sub_config = NodeConfig(local_step, ml_state, self)
-            self.sub_nodes.append(Obvious(sub_config, Obvious_InternalToolArg(facts=[])))
+            self.sub_nodes.append(subproof_parsed(sub_config))
     @staticmethod
     def gen(arg : Have_ToolArg) -> parsing_node:
         return _trivial_parsing(lambda config: Have(config, arg))
+    @staticmethod
+    def interactive_gen(arg : Have_ToolArg) -> parsing_node:
+        return _gen_with_subproof(Have,
+            lambda config, parsed: Have(config, arg, subproof_parsed=parsed),
+            arg["proof"])
     def quickview_title(self) -> str:
         return f"Have {self.name}"
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
@@ -3313,17 +3359,23 @@ class Suffices_ToolArg(TypedDict):
 
 @proof_operation("Suffices", Suffices_ToolArg)
 class Suffices(StdBlock):
-    def __init__(self, config: NodeConfig, arg : Suffices_ToolArg):
+    def __init__(self, config: NodeConfig, arg : Suffices_ToolArg,
+                 subproof_parsed: SubProof_parsed = None):
         super().__init__(config, arg["thought"], [])
         self.statement = arg["statement"]
-        if arg["proof"] == "Obvious":
+        if subproof_parsed is not None:
             local_step = self._local_step_of_next_proof_step()
             ml_state = Minilang_State.assign(self.ml_state)
             sub_config = NodeConfig(local_step, ml_state, self)
-            self.sub_nodes.append(Obvious(sub_config, Obvious_InternalToolArg(facts=[])))
+            self.sub_nodes.append(subproof_parsed(sub_config))
     @staticmethod
     def gen(arg : Suffices_ToolArg) -> parsing_node:
         return _trivial_parsing(lambda config: Suffices(config, arg))
+    @staticmethod
+    def interactive_gen(arg : Suffices_ToolArg) -> parsing_node:
+        return _gen_with_subproof(Suffices,
+            lambda config, parsed: Suffices(config, arg, subproof_parsed=parsed),
+            arg["proof"])
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         self._print_thought(indent, file)
         print_indent(indent, file)
@@ -3361,18 +3413,25 @@ class Obtain_ToolArg(TypedDict):
 
 @proof_operation("Obtain", Obtain_ToolArg)
 class Obtain(StdBlock):
-    def __init__(self, config: NodeConfig, arg : Obtain_ToolArg):
+    _changes_pending_goal = False
+    def __init__(self, config: NodeConfig, arg : Obtain_ToolArg,
+                 subproof_parsed: SubProof_parsed = None):
         super().__init__(config, arg["thought"], [])
         self.variables = arg["variables"]
         self.constraints = arg["constraints"]
-        if arg["proof"] == "Obvious":
+        if subproof_parsed is not None:
             local_step = self._local_step_of_next_proof_step()
             ml_state = Minilang_State.assign(self.ml_state)
             sub_config = NodeConfig(local_step, ml_state, self)
-            self.sub_nodes.append(Obvious(sub_config, Obvious_InternalToolArg(facts=[])))
+            self.sub_nodes.append(subproof_parsed(sub_config))
     @staticmethod
     def gen(arg : Obtain_ToolArg) -> parsing_node:
         return _trivial_parsing(lambda config: Obtain(config, arg))
+    @staticmethod
+    def interactive_gen(arg : Obtain_ToolArg) -> parsing_node:
+        return _gen_with_subproof(Obtain,
+            lambda config, parsed: Obtain(config, arg, subproof_parsed=parsed),
+            arg["proof"])
     def quickview_title(self) -> str:
         names = ", ".join(v["name"] for v in self.variables)
         return f"Obtain {names}"
@@ -3707,13 +3766,25 @@ class Branch_ToolArg(TypedDict):
 
 @proof_operation("Branch", Branch_ToolArg)
 class Branch(SubgoalMaker_NoTailEnder):
-    def __init__(self, config: NodeConfig, arg: Branch_ToolArg):
+    def __init__(self, config: NodeConfig, arg: Branch_ToolArg,
+                 parsed_cases: list[SubProof_parsed] | None = None):
         super().__init__(config, arg["thought"], [])
         self.cases = arg["cases"]
+        self._parsed_cases = parsed_cases or [None] * len(arg["cases"])
         self._initial_goal_index = 0
     @staticmethod
     def gen(arg : Branch_ToolArg) -> parsing_node:
         return _trivial_parsing(lambda config: Branch(config, arg))
+    @staticmethod
+    def interactive_gen(arg : Branch_ToolArg) -> parsing_node:
+        async def parse(alive_state: Minilang_State | None,
+                        exact_state: Minilang_State | None = None) -> gen_node:
+            parsed_cases = []
+            for case in arg["cases"]:
+                parsed = await _parse_subproof(case["proof"], alive_state)
+                parsed_cases.append(parsed)
+            return lambda config: Branch(config, arg, parsed_cases=parsed_cases)
+        return parse
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         return ('cases', indent+1)
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
@@ -3724,9 +3795,8 @@ class Branch(SubgoalMaker_NoTailEnder):
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
     def _new_goal_node(self, goal_index: int, ml_state: Minilang_State) -> GoalNode:
         case_index = goal_index - 1  # goal 0 = exhaustiveness, goals 1..N = cases
-        if 0 <= case_index < len(self.cases):
-            proof = self.cases[case_index]["proof"]
-            auto_proof = proof if proof == "Obvious" else None
+        if 0 <= case_index < len(self._parsed_cases):
+            auto_proof = self._parsed_cases[case_index]
         else:
             auto_proof = None
         return GoalNode(NodeConfig(str(goal_index+self._initial_goal_index), ml_state, self), False, True,
@@ -3759,14 +3829,20 @@ class CaseSplit_ToolArg(TypedDict):
 
 @proof_operation("CaseSplit", CaseSplit_ToolArg)
 class CaseSplit(CaseSplit_Like):
-    def __init__(self, config: NodeConfig, arg: CaseSplit_ToolArg):
-        super().__init__(config, arg["thought"], [], _initial_proof=arg["proof"])
+    def __init__(self, config: NodeConfig, arg: CaseSplit_ToolArg,
+                 subproof_parsed: SubProof_parsed = None):
+        super().__init__(config, arg["thought"], [], _initial_proof=subproof_parsed)
         self.target_isabelle_term = arg["target_isabelle_term"]
     def quickview_title(self) -> str:
         return f"CaseSplit {self.target_isabelle_term}"
     @staticmethod
     def gen(arg : CaseSplit_ToolArg) -> parsing_node:
         return _trivial_parsing(lambda config: CaseSplit(config, arg))
+    @staticmethod
+    def interactive_gen(arg : CaseSplit_ToolArg) -> parsing_node:
+        return _gen_with_subproof(CaseSplit,
+            lambda config, parsed: CaseSplit(config, arg, subproof_parsed=parsed),
+            arg["proof"])
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         return ('cases', indent+1)
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
@@ -3808,8 +3884,9 @@ class Induction_ToolArg(TypedDict):
 @proof_operation("Induction", Induction_ToolArg)
 class Induction(CaseSplit_Like):
     # TODO: processing the rule
-    def __init__(self, config: NodeConfig, arg: Induction_ToolArg):
-        super().__init__(config, arg["thought"], [], _initial_proof=arg["proof"])
+    def __init__(self, config: NodeConfig, arg: Induction_ToolArg,
+                 subproof_parsed: SubProof_parsed = None):
+        super().__init__(config, arg["thought"], [], _initial_proof=subproof_parsed)
         self.arg = arg
         self.target_isabelle_term = arg["target_isabelle_term"]
         self.rule = arg.get("rule", "default")
@@ -3819,6 +3896,11 @@ class Induction(CaseSplit_Like):
     @staticmethod
     def gen(arg : Induction_ToolArg) -> parsing_node:
         return _trivial_parsing(lambda config: Induction(config, arg))
+    @staticmethod
+    def interactive_gen(arg : Induction_ToolArg) -> parsing_node:
+        return _gen_with_subproof(Induction,
+            lambda config, parsed: Induction(config, arg, subproof_parsed=parsed),
+            arg["proof"])
     async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
         is_init = self.age == self.session.age
         old_variables = list(self.variables)
@@ -4372,10 +4454,11 @@ class Session:
                   lambda: [f"[INTERACTION] {tool_name}: {prompt}"],
                   tool_name=tool_name, prompt=prompt)
 
-    def log_retrieval(self, query: str, results: list[str]):
-        """Log a retrieval query and its results to retrieval.yaml."""
+    def log_retrieval(self, query: str, results: list[str], *, quiet: bool = False):
+        """Log a retrieval query and its results to retrieval.yaml.
+        If quiet=True, skip logger output (useful when already logged as TOOL_RESPONSE)."""
         self._log(self.retrieval_log_file, "RETRIEVAL",
-                  lambda: [f"[RETRIEVAL] {query!r}\n" + "\n".join(f"  {r}" for r in results)],
+                  None if quiet else lambda: [f"[RETRIEVAL] {query!r}\n" + "\n".join(f"  {r}" for r in results)],
                   query=query, results=results)
 
     def log_retry(self, unfinished_nodes: set[Any], retry_prompt: str):
