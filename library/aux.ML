@@ -21,6 +21,10 @@ val xwhere : Proof.context ->
         (binding * string option * mixfix) list ->
           thm -> thm
 
+val inst_hol_alls : Proof.context -> (string * cterm) list -> thm -> thm
+val inst_universal_quantifiers : Proof.context -> (indexname * term) list -> thm -> thm
+val inst_universal_quantifiers' : Proof.context -> (indexname * string) list -> thm -> thm
+
 val print_toks : Token.src -> string list
 val trim_markup : string -> string
 val method_sorry : Method.text
@@ -217,6 +221,54 @@ fun xof ctxt (args, concl_args) fixes thm =
    |> Rule_Insts.of_rule ctxt (args, concl_args) fixes
   end
 
+(* Instantiate HOL.All (∀) bound variables in the conclusion of a theorem.
+   Takes a list of (name, cterm) pairs. For each HOL.All-bound variable matching
+   a name, reorders quantifiers as needed and applies spec to instantiate it.
+   Non-targeted ∀-variables are left unchanged. *)
+fun inst_hol_alls ctxt insts thm =
+  if null insts then thm
+  else let
+    fun concl_conv C ctxt ctm =
+      case Thm.term_of ctm
+        of Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs _ =>
+            Conv.arg_conv (Conv.abs_conv (concl_conv C o snd) ctxt) ctm
+         | Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ _ =>
+            Conv.arg_conv (concl_conv C ctxt) ctm
+         | _ => C ctxt ctm
+
+    fun swap_all [] _ ctm = Conv.all_conv ctm
+      | swap_all (NONE :: L) ctxt ctm =
+          let fun swap [] ctm = Conv.all_conv ctm
+                | swap (NONE :: L) ctm = swap L ctm
+                | swap (SOME _ :: L) ctm =
+                   (Conv.rewr_conv @{thm HOL.all_comm[folded atomize_eq]} then_conv
+                    Conv.arg_conv (swap L)) ctm
+           in (Conv.arg_conv (Conv.abs_conv (swap_all L o snd) ctxt)
+               then_conv swap L) ctm end
+      | swap_all (SOME _ :: L) ctxt ctm =
+          Conv.arg_conv (Conv.abs_conv (swap_all L o snd) ctxt) ctm
+
+    fun foralls (Const(\<^const_name>\<open>Trueprop\<close>, _) $ X) = foralls X
+      | foralls (Const(\<^const_name>\<open>HOL.implies\<close>, _) $ _ $ X) = foralls X
+      | foralls (Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs (name, _, X)) = name :: foralls X
+      | foralls (Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs (_, _, X)) = foralls X
+      | foralls (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ X) = foralls X
+      | foralls _ = []
+
+    val alls = foralls (Thm.concl_of thm)
+            |> map (fn name =>
+                case AList.lookup (op =) insts name of
+                  SOME ct => SOME ct
+                | NONE => NONE)
+
+  in Conv.fconv_rule (concl_conv (fn ctxt =>
+          HOLogic.Trueprop_conv (swap_all alls ctxt)) ctxt) thm
+     |> fold (fn SOME ct => (fn th =>
+          th RS Drule.infer_instantiate ctxt [(("x", 0), Thm.incr_indexes_cterm 1 ct)] @{thm spec})
+               | NONE => I) alls
+     |> Drule.zero_var_indexes
+  end
+
 fun xwhere ctxt inst0 fixes thm =
   let val vs = Term.add_var_names (Thm.prop_of thm) []
       val inst = map_filter (fn (((name,0),pos), (name',src)) =>
@@ -227,49 +279,120 @@ fun xwhere ctxt inst0 fixes thm =
    in if forall (fn ((name, _), _) => exists (fn name' => name' = name) vs) inst
     then Rule_Insts.where_rule ctxt inst fixes thm
     else let
-      fun concl_conv C ctxt ctm =
-        case Thm.term_of ctm
-          of Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs _ =>
-              Conv.arg_conv (Conv.abs_conv (concl_conv C o snd) ctxt) ctm
-           | Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ _ =>
-              Conv.arg_conv (concl_conv C ctxt) ctm
-           | _ => C ctxt ctm
-      fun swap_all [] _ ctm = Conv.all_conv ctm
-        | swap_all (NONE :: L) ctxt ctm =
-            let fun swap [] ctm = Conv.all_conv ctm
-                  | swap (NONE :: L) ctm = swap L ctm
-                  | swap (SOME _ :: L) ctm =
-                     (Conv.rewr_conv @{thm HOL.all_comm[folded atomize_eq]} then_conv
-                      Conv.arg_conv (swap L)
-                     ) ctm
-             in (Conv.arg_conv (Conv.abs_conv (swap_all L o snd) ctxt) then_conv swap L) ctm
-            end
-        | swap_all (SOME _ :: L) ctxt ctm =
-            Conv.arg_conv (Conv.abs_conv (swap_all L o snd) ctxt) ctm
       fun foralls (Const(\<^const_name>\<open>Trueprop\<close>, _) $ X) = foralls X
         | foralls (Const(\<^const_name>\<open>HOL.implies\<close>, _) $ _ $ X) = foralls X
         | foralls (Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs (name, T, X)) = (name, T) :: foralls X
         | foralls (Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs (_, _, X)) = foralls X
         | foralls (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ X) = foralls X
         | foralls _ = []
-      val alls = foralls (Thm.concl_of thm)
-              |> map (fn (name, T) =>
+      val hol_insts = foralls (Thm.concl_of thm)
+              |> map_filter (fn (name, T) =>
                   if exists (fn (((name', 0), _), _) => name' = name
                               | _ => false ) inst andalso
                      not (exists (fn (name', _) => name' = name) vs)
-                  then SOME (Thm.var ((name, 0), Thm.ctyp_of ctxt T))
-                  else NONE )
-      val thm'= Conv.fconv_rule (concl_conv (fn ctxt =>
-                  HOLogic.Trueprop_conv (swap_all alls ctxt)) ctxt) thm
-             |> fold (fn SOME ctm => (fn thm =>
-                  thm RS Drule.infer_instantiate ctxt [(("x", 0), ctm)] @{thm spec})
-                       | NONE => I ) alls
+                  then SOME (name, Thm.var ((name, 0), Thm.ctyp_of ctxt T))
+                  else NONE)
+      val thm' = inst_hol_alls ctxt hol_insts thm
    in Rule_Insts.where_rule ctxt inst fixes thm'
   end
   end
 
+(* Instantiate universal quantifiers and schematic variables in a theorem by name.
+   Handles three kinds of variables:
+   - Pure.all (⋀x. ...) — outermost meta-level quantifiers
+   - HOL.All (∀x. ...) — object-level quantifiers in the conclusion
+   - Schematic variables (?x) — anywhere in the theorem
+   Each instantiation is classified automatically based on where the variable name
+   appears in the theorem. *)
+fun inst_universal_quantifiers ctxt insts thm =
+  let
+    val prop = Thm.prop_of thm
 
+    (* === Classification === *)
 
+    val schematic_vars = Term.add_vars prop []
+
+    fun strip_pure_alls (Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs(name, T, body)) =
+          (name, T) :: strip_pure_alls body
+      | strip_pure_alls (Const(\<^const_name>\<open>Pure.all\<close>, Type(_, [T, _])) $ _) =
+          ("_", T) :: []  (* eta-contracted *)
+      | strip_pure_alls _ = []
+    val pure_all_vars = strip_pure_alls prop
+
+    fun get_body (Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs(_, _, body)) = get_body body
+      | get_body (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ body) = get_body body
+      | get_body t = t
+    fun strip_hol_alls (Const(\<^const_name>\<open>Trueprop\<close>, _) $ X) = strip_hol_alls X
+      | strip_hol_alls (Const(\<^const_name>\<open>HOL.implies\<close>, _) $ _ $ X) = strip_hol_alls X
+      | strip_hol_alls (Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs(name, T, X)) =
+          (name, T) :: strip_hol_alls X
+      | strip_hol_alls _ = []
+    val hol_all_vars = strip_hol_alls (get_body prop)
+
+    fun classify ((idx as (name, _)), t) =
+      if exists (fn (idx', _) => idx = idx') schematic_vars
+      then (1, idx, t)
+      else if exists (fn (n, _) => n = name) pure_all_vars
+      then (2, idx, t)
+      else if exists (fn (n, _) => n = name) hol_all_vars
+      then (3, idx, t)
+      else error ("inst_universal_quantifiers: variable " ^
+                  Term.string_of_vname idx ^ " not found in theorem")
+
+    val classified = map classify insts
+    val schematic_insts = map_filter (fn (1, idx, t) => SOME (idx, t) | _ => NONE) classified
+    val pure_insts = map_filter (fn (2, (name,_), t) => SOME (name, t) | _ => NONE) classified
+    val hol_insts = map_filter (fn (3, (name,_), t) => SOME (name, t) | _ => NONE) classified
+
+    (* === Phase 1: Instantiate outermost Pure.all variables === *)
+    fun inst_pure insts thm =
+      if null insts then thm
+      else let
+        fun process thm =
+          case Thm.prop_of thm of
+            Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs(name, T, _) =>
+              (case AList.lookup (op =) insts name of
+                SOME t =>
+                  process (Thm.forall_elim (Thm.cterm_of ctxt t) thm)
+              | NONE =>
+                  let val frees = Term.add_free_names (Thm.prop_of thm) []
+                      val name' = singleton (Name.variant_list frees) name
+                      val free_ct = Thm.cterm_of ctxt (Free(name', T))
+                      val thm' = process (Thm.forall_elim free_ct thm)
+                   in Thm.forall_intr free_ct thm' end)
+          | _ => thm
+      in process thm end
+
+    val thm1 = inst_pure pure_insts thm
+
+    (* === Phase 2: Instantiate schematic variables ===
+       Must happen before HOL.All phase, because inst_hol_alls uses RS which
+       bumps schematic variable indices. *)
+    fun inst_schematic insts thm =
+      if null insts then thm
+      else let
+        val var_names = Term.add_var_names (Thm.prop_of thm) []
+        val _ = map (fn (idx, _) =>
+          if member (op =) var_names idx then ()
+          else error ("inst_universal_quantifiers: schematic variable " ^
+                      Term.string_of_vname idx ^ " not found in theorem"))
+          insts
+        val ct_insts = map (fn (idx, t) => (idx, Thm.cterm_of ctxt t)) insts
+      in Drule.infer_instantiate ctxt ct_insts thm end
+
+    val thm2 = inst_schematic schematic_insts thm1
+
+    (* === Phase 3: Instantiate HOL.All variables in conclusion === *)
+    val hol_cterm_insts = map (fn (name, t) => (name, Thm.cterm_of ctxt t)) hol_insts
+    val thm3 = inst_hol_alls ctxt hol_cterm_insts thm2
+
+  in thm3 end
+
+fun inst_universal_quantifiers' ctxt insts thm =
+  let val (idxs, raws) = ListPair.unzip insts
+      val terms = Syntax.read_terms (Proof_Context.set_mode Proof_Context.mode_pattern ctxt) raws
+   in inst_universal_quantifiers ctxt (idxs ~~ terms) thm
+  end
 
 
 

@@ -823,6 +823,19 @@ class Minilang_Operation(NamedTuple):
     def INDUCT(target: term, vars: list[varname_spec] | None, arbitrary: list[varname], rule: 'IsabelleFact | None') -> 'Minilang_Operation':
         return Minilang_Operation("INDUCT", (ascii_of_unicode(target), vars, [ascii_of_unicode(t) for t in arbitrary], rule.pack() if rule is not None else None))
     @staticmethod
+    def SPECIALIZE(
+        name: str | None,
+        rule_ref: 'IsabelleFact',
+        instantiations: list[tuple[str, str]],  # (var_name, term_string)
+        fact_refs: 'list[IsabelleFact]'
+    ) -> 'Minilang_Operation':
+        return Minilang_Operation("SPECIALIZE", (
+            name,
+            rule_ref.pack(),
+            [(n, ascii_of_unicode(t)) for n, t in instantiations],
+            [r.pack() for r in fact_refs]
+        ))
+    @staticmethod
     def SKIP() -> 'Minilang_Operation':
         return Minilang_Operation("SKIP", None)
 
@@ -3036,6 +3049,138 @@ class Unfold(Leaf):
         if unfound:
             return FailureReason("\n".join(f"Fact \"{f.name()}\" not found" for f in unfound))
         return Minilang_Operation.UNFOLD(self.fact_refs)
+
+
+#### Specialize
+
+class Instantiation(TypedDict):
+    name: str     # variable name (e.g., "x", "n")
+    value: str    # Isabelle term string (e.g., "Suc 0")
+
+class Specialize_ToolArg(TypedDict):
+    thought: str
+    rule: Fact                              # The rule to specialize
+    instantiations: list[Instantiation]     # Variable instantiations
+    discharging_facts: list[Fact]           # Facts to discharge premises
+    result_name: NotRequired[str]           # Optional name for the result
+
+class Specialize_InternalToolArg(NamedTuple):
+    thought: str
+    rule: Fact
+    rule_ref: IsabelleFact
+    instantiations: list[Instantiation]
+    discharging_facts: list[Fact]
+    discharge_refs: list[IsabelleFact]
+    result_name: str | None
+
+@proof_operation("Specialize", Specialize_ToolArg)
+class Specialize(Leaf):
+    def __init__(self, config: NodeConfig, arg: Specialize_InternalToolArg):
+        super().__init__(config, arg.thought)
+        self.rule = arg.rule
+        self.rule_ref = arg.rule_ref
+        self.instantiations = arg.instantiations
+        self.discharging_facts = arg.discharging_facts
+        self.discharge_refs = arg.discharge_refs
+        self.result_name = arg.result_name
+
+    def quickview_title(self) -> str:
+        return f"Specialize {self.rule_ref.name()}"
+
+    @staticmethod
+    def gen(arg: Specialize_InternalToolArg) -> parsing_node:
+        return _trivial_parsing(lambda config: Specialize(config, arg))
+
+    @staticmethod
+    def interactive_gen(arg: Specialize_ToolArg) -> parsing_node:
+        async def parse(alive_state: Minilang_State,
+                        exact_state: Minilang_State | None = None) -> gen_node:
+            # Resolve rule and discharging facts
+            all_facts = [arg["rule"]] + arg.get("discharging_facts", [])
+            fetched = await alive_state.fetch_facts(all_facts, single_choice=True)
+
+            # Check if any need interaction
+            interactions = []
+            for f in fetched:
+                if not isinstance(f, IsabelleFact):
+                    interactions.append(f)
+
+            if interactions:
+                async def kontinue(results: list[Any]) -> gen_node:
+                    resolved: list[IsabelleFact] = []
+                    result_idx = 0
+                    for f in fetched:
+                        if isinstance(f, IsabelleFact):
+                            resolved.append(f)
+                        else:
+                            resolved.append(results[result_idx][0])
+                            result_idx += 1
+                    rule_ref = resolved[0]
+                    discharge_refs = resolved[1:]
+                    internal = Specialize_InternalToolArg(
+                        thought=arg["thought"],
+                        rule=arg["rule"],
+                        rule_ref=rule_ref,
+                        instantiations=arg.get("instantiations", []),
+                        discharging_facts=arg.get("discharging_facts", []),
+                        discharge_refs=discharge_refs,
+                        result_name=arg.get("result_name"))
+                    return lambda config: Specialize(config, internal)
+                raise RaiseInteraction(interactions, kontinue)  # type: ignore
+
+            # All resolved directly
+            resolved = cast(list[IsabelleFact], fetched)
+            rule_ref = resolved[0]
+            discharge_refs = resolved[1:]
+            internal = Specialize_InternalToolArg(
+                thought=arg["thought"],
+                rule=arg["rule"],
+                rule_ref=rule_ref,
+                instantiations=arg.get("instantiations", []),
+                discharging_facts=arg.get("discharging_facts", []),
+                discharge_refs=discharge_refs,
+                result_name=arg.get("result_name"))
+            return lambda config: Specialize(config, internal)
+        return parse
+
+    def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
+        indent = super().print(indent, file, update_line, show_warnings=show_warnings)
+        self._print_thought(indent, file)
+        print_indent(indent, file)
+        file.write("operation: Specialize\n")
+        print_indent(indent, file)
+        file.write("rule:\n")
+        self.rule_ref.print(indent+1, file)
+        if self.instantiations:
+            print_indent(indent, file)
+            file.write("instantiations:\n")
+            for inst in self.instantiations:
+                print_indent(indent+1, file)
+                file.write(f"- {inst['name']} = {inst['value']}\n")
+        if self.discharge_refs:
+            print_indent(indent, file)
+            file.write("discharging facts:\n")
+            for ref in self.discharge_refs:
+                ref.print(indent+1, file)
+        if self.result_name:
+            print_indent(indent, file)
+            file.write(f"result name: {self.result_name}\n")
+        self._print_evaluation_status(indent, file)
+        if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
+        return indent
+
+    def the_operation(self) -> 'Minilang_Operation | FailureReason':
+        if isinstance(self.rule_ref, IsabelleFact_Unfound):
+            return FailureReason(f"Rule fact \"{self.rule_ref.name()}\" not found")
+        unfound = [f for f in self.discharge_refs if isinstance(f, IsabelleFact_Unfound)]
+        if unfound:
+            return FailureReason("\n".join(f"Fact \"{f.name()}\" not found" for f in unfound))
+        return Minilang_Operation.SPECIALIZE(
+            self.result_name,
+            self.rule_ref,
+            [(i["name"], i["value"]) for i in self.instantiations],
+            self.discharge_refs
+        )
 
 
 #### Rewrite

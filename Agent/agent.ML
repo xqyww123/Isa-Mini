@@ -41,6 +41,10 @@ datatype ('term, 'thm, 'fact) command =
   | SIMPLIFY of ('term, 'fact) extended_fact list (*simp facts*) * bool (*use_system_simps*)
               * string list (*premise_names*) * bool (*simplify_goal*)
               * bindings option
+  | SPECIALIZE of string option (*result name*)
+              * ('term, 'fact) extended_fact (*rule*)
+              * (string * 'term) list (*instantiations: var_name * term*)
+              * ('term, 'fact) extended_fact list (*facts to discharge*)
   | SKIP
 
 type xcmd = (string, string, string) command
@@ -147,6 +151,10 @@ datatype ('term, 'thm, 'fact) command =
   | SIMPLIFY of ('term, 'fact) extended_fact list (*simp facts*) * bool (*use_system_simps*)
               * string list (*premise_names*) * bool (*simplify_goal*)
               * bindings option
+  | SPECIALIZE of string option (*result name*)
+              * ('term, 'fact) extended_fact (*rule*)
+              * (string * 'term) list (*instantiations: var_name * term*)
+              * ('term, 'fact) extended_fact list (*facts to discharge*)
   | SKIP
 
 type xcmd = (string, string, string) command
@@ -754,6 +762,13 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
           end)
     | INTRO (opt_bindings, split_conj) =>
         #2 (AUTO_INTRO counters opt_bindings split_conj s)
+    | SPECIALIZE (opt_name, rule_fact, insts, discharge_facts) =>
+        let val ctxt = Minilang.context_of s
+            val rule_thms = resolve_to_thms ctxt [rule_fact]
+            val discharge_thms = resolve_to_thms ctxt discharge_facts
+            val insts' = map (fn (name, tm) => ((name, 0), tm)) insts
+        in Minilang.SPECIALIZE'' opt_name rule_thms insts' discharge_thms s
+        end
     | SKIP => s
 
 local 
@@ -856,6 +871,15 @@ fun check_command_i s (SIMPLIFY (facts, use_sys, prems, simp_goal, bindings_opt)
       let val ctxt = Minilang.context_of s
       in HAMMER (map (check_extended_fact ctxt) facts) end
   | check_command_i _ (INTRO opt_bindings) = INTRO opt_bindings
+  | check_command_i s (SPECIALIZE (opt_name, rule_fact, insts, discharge_facts)) =
+      let val ctxt = Minilang.context_of s
+          val (names, raws) = ListPair.unzip insts
+          val terms = read_terms ctxt raws
+      in SPECIALIZE (opt_name,
+                     check_extended_fact ctxt rule_fact,
+                     names ~~ terms,
+                     map (check_extended_fact ctxt) discharge_facts)
+      end
   | check_command_i _ SKIP = SKIP
 
 fun check_command s x = check_command_i s x

@@ -145,6 +145,10 @@ val INST_VAR : (indexname * string) list -> operation
 val INST_VAR'' : (indexname * term) list -> operation
 val INST_VAR_CMD : command
 
+val SPECIALIZE   : string option -> fact list -> (indexname * string) list -> fact list -> operation
+val SPECIALIZE'' : string option -> thm list  -> (indexname * term) list   -> thm list  -> operation
+val SPECIALIZE_CMD : command
+
 val CONSIDER : (
                (binding * string option * mixfix) list
              * ( (binding * string option * mixfix) list
@@ -2544,6 +2548,68 @@ val INST_VAR_CMD =
    in Parse.and_list1 single_inst >> INST_VAR
   end
 
+(** SPECIALIZE **)
+
+(* Instantiate universal quantifiers in a rule and discharge its premises left-to-right.
+   The result is bound as a local fact in the proof context. *)
+fun SPECIALIZE' prep_thms prep_insts opt_name raw_rules raw_insts raw_facts
+                (ctxt, HHF (st, items) :: SK) =
+  let
+    (* 1. Resolve the rule *)
+    val rules = prep_thms ctxt raw_rules
+    val rule = case rules of [r] => r
+              | _ => raise OPR_FAIL (INVALID_OPR,
+                      "SPECIALIZE expects exactly one rule, got " ^
+                      string_of_int (length rules))
+
+    (* 2. Instantiate universal quantifiers and schematic variables *)
+    val insts = prep_insts ctxt raw_insts
+    val rule' = Minilang_Aux.inst_universal_quantifiers ctxt insts rule
+
+    (* 3. Discharge premises left-to-right with facts via MP *)
+    val facts = prep_thms ctxt raw_facts
+    val result = fold (fn fact => fn th => MP ctxt th fact) facts rule'
+
+    (* 4. Generate name if not provided *)
+    val (name, ctxt') = case opt_name of
+        SOME n => ((Binding.name n, []), ctxt)
+      | NONE => let val jj = get_fact_counter ctxt
+                    val (_, ctxt') = map_fact_counter (fn n => ((), n + 1)) ctxt
+                 in ((Binding.name ("fact" ^ string_of_int jj), []), ctxt') end
+
+    (* 5. Note the result as a local fact *)
+    val lems = elim_conjs ctxt' result
+    val ((noted_name, noted_lems), ctxt'') =
+          Proof_Context.note_thms "" (name, [(lems, [])]) ctxt'
+    val flattened = flatten_facts [(noted_name, map Thm.prop_of noted_lems)]
+  in
+    (ctxt'', HHF (st, cat_items ([], flattened) items) :: SK)
+  end
+  | SPECIALIZE' _ _ _ _ _ _ _ = raise BROKEN_INVARIANT
+
+fun gen_SPECIALIZE prep_thms prep_insts opt_name raw_rules raw_insts raw_facts =
+  timed_OPR 8000 (SPECIALIZE' prep_thms prep_insts opt_name raw_rules raw_insts raw_facts)
+
+fun read_inst_terms ctxt raw_insts =
+  let val (idxs, raws) = ListPair.unzip raw_insts
+      val terms = Syntax.read_terms (Proof_Context.set_mode Proof_Context.mode_pattern ctxt) raws
+   in idxs ~~ terms end
+
+val SPECIALIZE   = gen_SPECIALIZE Attrib.eval_thms read_inst_terms
+val SPECIALIZE'' = gen_SPECIALIZE (K I) (K I)
+
+val SPECIALIZE_CMD =
+  let open Parse
+      val where_clause =
+        Scan.optional (($$$ "where" || $$$ "WHERE")
+          |-- and_list1 (Args.var --| Args.$$$ "=" -- term)) []
+      val with_clause =
+        Scan.optional (($$$ "with" || $$$ "WITH") |-- thms1) []
+   in Scan.option (name --| $$$ ":") -- thms1 -- where_clause -- with_clause
+      >> (fn (((opt_name, rules), insts), facts) =>
+            SPECIALIZE opt_name rules insts facts)
+  end
+
 (** CONSIDER **)
 
 fun atomize_term ctxt =
@@ -3407,6 +3473,7 @@ val CMDS = Symtab.make [
       ("HAVE",    HAVE_CMD),
       ("SUFFICES",SUFFICES_CMD),
       ("INST_VAR",INST_VAR_CMD),
+      ("SPECIALIZE",SPECIALIZE_CMD),
       ("CASE_SPLIT", CASE_SPLIT_CMD),
       ("INDUCT",  INDUCT_CMD),
       ("SIMP" ,   SIMP_CMD),
@@ -3476,6 +3543,7 @@ val keywords = let open Keyword
            (("HAVE",  \<^here>), command_spec (prf_goal, [])),
            (("SUFFICES",\<^here>), command_spec (prf_goal, [])),
            (("INST_VAR",\<^here>), command_spec (prf_decl, [])),
+           (("SPECIALIZE",\<^here>), command_spec (prf_decl, [])),
            (("CASE_SPLIT",  \<^here>), command_spec (prf_goal, [])),
            (("INDUCT",\<^here>), command_spec (prf_goal, [])),
            (("CRUSH", \<^here>), command_spec (prf_goal, [])),
