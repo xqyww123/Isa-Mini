@@ -222,6 +222,11 @@ val DEFINE'' : (binding * string option * mixfix) list
             -> operation
 val DEFINE_CMD : command
 
+val FUN'' : (binding * string option * mixfix) list
+         -> Specification.multi_specs_cmd
+         -> operation
+val FUN_CMD : command
+
 val STEP   : fact list ->  term  -> operation
 val STEP'' : fact list -> string -> operation
 val STEP_CMD : command
@@ -2566,9 +2571,11 @@ fun SPECIALIZE' prep_thms prep_insts opt_name raw_rules raw_insts raw_facts
     val insts = prep_insts ctxt raw_insts
     val rule' = Minilang_Aux.inst_universal_quantifiers ctxt insts rule
 
-    (* 3. Discharge premises left-to-right with facts via MP *)
+    (* 3. Discharge premises left-to-right with facts.
+       xOF handles both Pure.imp and HOL.implies/HOL.All. *)
     val facts = prep_thms ctxt raw_facts
-    val result = fold (fn fact => fn th => MP ctxt th fact) facts rule'
+    val result = if null facts then rule'
+                 else Minilang_Aux.xOF ctxt facts rule'
 
     (* 4. Generate name if not provided *)
     val (name, ctxt') = case opt_name of
@@ -3413,6 +3420,97 @@ val DEFINE_CMD = (Parse.vars --| Parse.where_) -- Parse_Spec.statement -- Parse.
               >> (fn ((a,b),c) => timed_OPR 5 (DEFINE' (Proof.define_cmd a c b)))
 
 
+(** RECURSIVE FUNCTION DEFINITION **)
+
+(* Recursively decompose a possibly-quantified, possibly-conditional
+   equation. Handles both Pure and HOL connectives in any nesting:
+     Pure.all / HOL.All     — quantifiers (stripped)
+     Pure.imp / HOL.implies — premises (stripped, flagged)
+     Trueprop               — HOL embedding (stripped)
+     Pure.eq / HOL.eq       — the equation itself
+   Returns SOME ((head, args), rhs, has_prems) or NONE. *)
+fun decompose_equation t =
+  (case t of
+    Const (\<^const_name>\<open>Pure.all\<close>, _) $ Abs (_, _, body) =>
+      decompose_equation body
+  | Const (\<^const_name>\<open>HOL.All\<close>, _) $ Abs (_, _, body) =>
+      decompose_equation body
+  | Const (\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ concl =>
+      decompose_equation concl
+      |> Option.map (fn (eq, _) => (eq, true))
+  | Const (\<^const_name>\<open>HOL.implies\<close>, _) $ _ $ concl =>
+      decompose_equation concl
+      |> Option.map (fn (eq, _) => (eq, true))
+  | Const (\<^const_name>\<open>HOL.Trueprop\<close>, _) $ inner =>
+      decompose_equation inner
+  | Const (\<^const_name>\<open>HOL.eq\<close>, _) $ lhs $ rhs =>
+      SOME ((strip_comb lhs, rhs), false)
+  | Const (\<^const_name>\<open>Pure.eq\<close>, _) $ lhs $ rhs =>
+      SOME ((strip_comb lhs, rhs), false)
+  | _ => NONE)
+
+(* Check if a parsed equation is compatible with definition:
+   head is Free, no premises, simple variable args, non-recursive *)
+fun can_use_definition fnames eq =
+  (case decompose_equation eq of
+    SOME (((Free _, args), rhs), has_prems) =>
+      not has_prems
+      andalso forall (fn Bound _ => true | Free _ => true | _ => false) args
+      andalso not (Term.exists_subterm
+        (fn Free (n, _) => member (op =) fnames n | _ => false) rhs)
+  | _ => false)
+
+(* Decision: can we use definition or do we need fun?
+   Single equation + definition-compatible => true *)
+fun can_use_definition_cmd fixes specs ctxt =
+  length specs = 1 andalso
+  \<^try>\<open>
+    let
+      val ctxt0 = Variable.set_body false ctxt
+      val ((params, named_specs), _) =
+        Specification.read_multi_specs fixes specs ctxt0
+      val fnames = map (Binding.name_of o fst o fst) params
+    in forall (fn (_, eq) => can_use_definition fnames eq) named_specs end
+  catch exn => false\<close>
+
+fun FUN_by_fun fixes specs config (ctxt, SK) =
+  let val _ = tracing "FUN_by_fun: before add_fun_cmd"
+      val ctxt' = Proof_Local_Function.add_fun_cmd fixes specs config false ctxt
+      val _ = tracing "FUN_by_fun: after add_fun_cmd"
+  in (ctxt', SK) end
+
+fun FUN_by_def fixes specs (ctxt, SK) =
+  let
+    val _ = tracing "FUN_by_def: before definition_cmd"
+    val ((_, eq_str), _, local_fixes) = the_single specs
+    val var = (case fixes of
+        [(b, ty, mx)] => SOME (b, ty, mx) | _ => NONE)
+    val ctxt' = ctxt
+        |> Variable.set_body false
+        |> (fn lthy => Specification.definition_cmd
+              var local_fixes [] (Binding.empty_atts, eq_str) false lthy |> snd)
+        |> Variable.restore_body ctxt
+    val _ = tracing "FUN_by_def: after definition_cmd"
+  in (ctxt', SK) end
+
+(* ML-level API for agent use: auto-detects definition vs fun *)
+fun FUN'' fixes specs = fn ((ctxt, SK), TAB, ID) =>
+  let val f =
+    if can_use_definition_cmd fixes specs ctxt
+    then FUN_by_def fixes specs
+    else FUN_by_fun fixes specs Function_Fun.fun_config
+  in timed_OPR 30 f ((ctxt, SK), TAB, ID) end
+
+val FUN_CMD =
+  Function_Common.function_parser Function_Fun.fun_config
+  >> (fn (config, (fixes, specs)) => fn ((ctxt, SK), TAB, ID) =>
+    let val f =
+      if can_use_definition_cmd fixes specs ctxt
+      then FUN_by_def fixes specs
+      else FUN_by_fun fixes specs config
+    in timed_OPR 30 f ((ctxt, SK), TAB, ID) end)
+
+
 (** CONFIG **)
 
 (*TODO: items*)
@@ -3493,6 +3591,7 @@ val CMDS = Symtab.make [
       ("NOTATION",NOTATION_CMD),
       ("OPEN_MODULE", OPEN_MODULE_CMD),
       ("DEFINE",  DEFINE_CMD),
+      ("FUN",     FUN_CMD),
       ("CONFIG",  CONFIG_CMD),
       ("STEP"  ,  STEP_CMD),
       ("SORRY" ,  END_or_NXT_by_SORRY_CMD)
@@ -3561,6 +3660,7 @@ val keywords = let open Keyword
            (("NOTATION",\<^here>), command_spec (prf_decl, [])),
            (("OPEN_MODULE",\<^here>), command_spec (prf_goal, [])),
            (("DEFINE",\<^here>), command_spec (prf_decl, [])),
+           (("FUN",   \<^here>), command_spec (prf_decl, [])),
            (("CONFIG",\<^here>), command_spec (prf_decl, [])),
            (("STEP",  \<^here>), command_spec (prf_decl, []))
          ]
@@ -3597,7 +3697,15 @@ fun parse_cmds toks =
   end
 
 fun conclude initial_ctxt ((ctxt', S  as [HHF (st',_)]),_,_) =
-      let val st'' = singleton (Proof_Context.export ctxt' initial_ctxt) st'
+      let
+        (* If FUN or similar extended the background theory, transfer
+           initial_ctxt forward so export works (old thy ⊂ new thy) *)
+        val initial_ctxt' =
+          if Context.eq_thy (Proof_Context.theory_of initial_ctxt,
+                             Proof_Context.theory_of ctxt')
+          then initial_ctxt
+          else Proof_Context.transfer (Proof_Context.theory_of ctxt') initial_ctxt
+        val st'' = singleton (Proof_Context.export ctxt' initial_ctxt') st'
                   |> finalize_goal ctxt'
        in Pretty.writeln (pretty_tree ctxt' (print_stack S));
           st''
@@ -3616,7 +3724,10 @@ fun METHOD_i tr : Method.method = CONTEXT_METHOD (fn _ => fn (ctxt,st) =>
   if Thm.no_prems st
   then Seq.single (Seq.Result (ctxt, st))
   else Seq.make (fn () =>
-        SOME (Seq.Result (ctxt, PROVE tr ctxt st), Seq.empty)))
+      let val ret = PROVE tr ctxt st
+          val ctxt' = Proof_Context.transfer (Thm.theory_of_thm ret) ctxt
+       in SOME (Seq.Result (ctxt', ret), Seq.empty)
+      end))
 
 val METHOD = METHOD_i o parse_cmds o lex_cmds
 

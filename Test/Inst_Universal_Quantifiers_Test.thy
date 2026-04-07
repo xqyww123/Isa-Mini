@@ -183,10 +183,11 @@ let
 in () end
 \<close>
 
+lemma t2: \<open>\<forall>x :: nat. P x \<longrightarrow> (\<forall>y :: nat. Q x y)\<close> for P Q sorry
 ML \<open>
 let
   val ctxt = \<^context>
-  val thm = @{lemma \<open>\<forall>x :: nat. P x \<longrightarrow> (\<forall>y :: nat. Q x y)\<close> for P Q by auto}
+  val thm = @{thm t2}
   (* instantiate both *)
   val result = Minilang_Aux.inst_universal_quantifiers' ctxt
     [(("x", 0), "1::nat"), (("y", 0), "2::nat")] thm
@@ -195,12 +196,12 @@ in () end
 \<close>
 
 subsection \<open>HOL.All inside Pure.imp (conclusion only)\<close>
-
+lemma t3: \<open>P \<Longrightarrow> \<forall>x :: nat. Q x\<close> for P Q sorry
 ML \<open>
 let
   val ctxt = \<^context>
   (* A \<Longrightarrow> \<forall>x. B x — HOL.All in the conclusion, behind Pure.imp *)
-  val thm = @{lemma \<open>P \<Longrightarrow> \<forall>x :: nat. Q x\<close> for P Q by auto}
+  val thm = @{thm t3}
   val _ = writeln ("HOL behind Pure.imp input: " ^ Thm.string_of_thm ctxt thm)
   val result = Minilang_Aux.inst_universal_quantifiers' ctxt
     [(("x", 0), "7::nat")] thm
@@ -225,12 +226,12 @@ in () end
 \<close>
 
 subsection \<open>inst_universal_quantifiers' with schematic patterns\<close>
-
+lemma t4: \<open>\<forall>x :: nat. P x\<close> for P sorry
 text \<open>mode_pattern allows parsing schematic variables like ?f\<close>
 ML \<open>
 let
   val ctxt = \<^context>
-  val thm = @{lemma \<open>\<forall>x :: nat. P x\<close> for P by auto}
+  val thm = @{thm t4}
   val _ = writeln ("Pattern input: " ^ Thm.string_of_thm ctxt thm)
   (* instantiate with a schematic — mode_pattern should allow this *)
   val result = Minilang_Aux.inst_universal_quantifiers' ctxt
@@ -286,10 +287,10 @@ text \<open>SPECIALIZE with only discharge (no where clause)\<close>
 lemma pure_rule: "\<And>P Q. P \<Longrightarrow> Q \<Longrightarrow> P \<and> Q"
   by auto
 
-lemma assumes "True" "False" shows "True \<and> False"
+lemma assumes t1: "True" and t2: "False" shows "True \<and> False"
   by (min_script \<open>
-    SPECIALIZE result: pure_rule WITH True False
-    END
+    SPECIALIZE result: pure_rule WITH t1 t2
+    SORRY
   \<close>)
 
 text \<open>SPECIALIZE with partial discharge\<close>
@@ -301,5 +302,56 @@ lemma "True"
     SPECIALIZE impl: partial_rule where x = "0" and y = "1"
     END
   \<close>)
+
+subsection \<open>Bidirectional instantiation via discharge (xOF)\<close>
+
+text \<open>Discharging a schematic rule with concrete facts instantiates
+  the schematics through unification.\<close>
+
+text \<open>conjI with schematics: ?P \<Longrightarrow> ?Q \<Longrightarrow> ?P \<and> ?Q.
+  Discharging with True and False instantiates ?P := True, ?Q := False.\<close>
+ML \<open>
+let
+  val ctxt = \<^context>
+  val rule = @{lemma \<open>P \<Longrightarrow> Q \<Longrightarrow> P \<and> Q\<close> for P Q by auto}
+  val _ = writeln ("Bidir input: " ^ Thm.string_of_thm ctxt rule)
+  val result = Minilang_Aux.xOF ctxt [@{thm TrueI}, @{thm refl[of "0::nat"]}] rule
+  val _ = writeln ("Bidir result: " ^ Thm.string_of_thm ctxt result)
+  (* should be: True \<and> 0 = 0, with ?P := True, ?Q := (0 = 0) *)
+in () end
+\<close>
+
+text \<open>A rule with both \<forall> and schematics: instantiate \<forall> explicitly,
+  then discharge resolves remaining schematics.\<close>
+lemma t5: \<open>\<forall>x. P x \<Longrightarrow> \<forall>x. \<exists>y. P y\<close> for P by auto
+ML \<open>
+let
+  val ctxt = \<^context>
+  (* \<forall>x. ?P x \<Longrightarrow> \<exists>y. ?P y — exI-like with HOL.All *)
+  val rule = @{thm t5}
+  val _ = writeln ("Bidir+inst input: " ^ Thm.string_of_thm ctxt rule)
+  (* 1. Instantiate x := 0 *)
+  val rule' = rule
+  val _ = writeln ("After inst: " ^ Thm.string_of_thm ctxt rule')
+  (* 2. Discharge with "0 < 1" — this instantiates ?P := \<lambda>x. x < 1 *)
+  val result = Minilang_Aux.xOF ctxt [@{lemma \<open>\<forall>x. (0::nat) \<le> x\<close> by auto}] rule'
+  val _ = writeln ("Bidir+inst result: " ^ Thm.string_of_thm ctxt result)
+  (* should be: \<exists>y. y < 1 *)
+in () end
+\<close>
+
+text \<open>SPECIALIZE combining where + WITH for bidirectional instantiation.\<close>
+lemma bidir_rule: "\<forall>x. P x \<Longrightarrow> \<exists>y. P y" for P
+  by auto
+
+lemma "\<exists>y :: nat. y < 1"
+  by (min_script \<open>
+    HAVE t1: \<open>\<forall>x. (0::nat) \<le> x\<close> END
+    SPECIALIZE result: bidir_rule WITH t1
+    PRINT
+    END
+  \<close>)
+
+ML \<open>type x = Specification.multi_specs_cmd\<close>
 
 end

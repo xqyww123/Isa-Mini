@@ -1383,7 +1383,7 @@ class Interaction_Retrieve(Interaction):
             expr = ", ".join(e.expression) if e.expression else ""
             results.append(f"{e.short_name}: {expr}" if expr else e.short_name)
         session.log_retrieval(self.query, results)
-        return selected
+        return cast(list[IsabelleEntity | IsabelleFact], selected)
 
 
 class Interaction_RetrieveForProof(Interaction_Retrieve):

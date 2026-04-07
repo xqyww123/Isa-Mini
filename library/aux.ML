@@ -236,6 +236,16 @@ fun inst_hol_alls ctxt insts thm =
             Conv.arg_conv (concl_conv C ctxt) ctm
          | _ => C ctxt ctm
 
+    (* Pull a ∀ from inside ⟶ consequent(s) to the top:
+       (P ⟶ ∀x. Q x) = (∀x. P ⟶ Q x)  via all_simps(6)[symmetric] *)
+    fun pull_forall ctxt ctm =
+      case Thm.term_of ctm of
+        Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs _ => Conv.all_conv ctm
+      | Const(\<^const_name>\<open>HOL.implies\<close>, _) $ _ $ _ =>
+          (Conv.arg_conv (pull_forall ctxt)
+           then_conv Conv.rewr_conv @{lemma "(P \<longrightarrow> (\<forall>x. Q x)) \<equiv> (\<forall>x. P \<longrightarrow> Q x)" for P Q by auto}) ctm
+      | _ => Conv.all_conv ctm
+
     fun swap_all [] _ ctm = Conv.all_conv ctm
       | swap_all (NONE :: L) ctxt ctm =
           let fun swap [] ctm = Conv.all_conv ctm
@@ -243,10 +253,12 @@ fun inst_hol_alls ctxt insts thm =
                 | swap (SOME _ :: L) ctm =
                    (Conv.rewr_conv @{thm HOL.all_comm[folded atomize_eq]} then_conv
                     Conv.arg_conv (swap L)) ctm
-           in (Conv.arg_conv (Conv.abs_conv (swap_all L o snd) ctxt)
+           in (pull_forall ctxt
+               then_conv Conv.arg_conv (Conv.abs_conv (swap_all L o snd) ctxt)
                then_conv swap L) ctm end
       | swap_all (SOME _ :: L) ctxt ctm =
-          Conv.arg_conv (Conv.abs_conv (swap_all L o snd) ctxt) ctm
+          (pull_forall ctxt
+           then_conv Conv.arg_conv (Conv.abs_conv (swap_all L o snd) ctxt)) ctm
 
     fun foralls (Const(\<^const_name>\<open>Trueprop\<close>, _) $ X) = foralls X
       | foralls (Const(\<^const_name>\<open>HOL.implies\<close>, _) $ _ $ X) = foralls X

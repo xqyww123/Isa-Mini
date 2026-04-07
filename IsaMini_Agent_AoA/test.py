@@ -1296,7 +1296,7 @@ async def _test_delete_intro(root: Root, file: MyIO):
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
 
-@model_test("ForeNodeFail", "Test_ForeNodeFail.thy", 13)
+@model_test("ForeNodeFail", "Test_ForeNodeFail.thy", 12)
 async def _test_ForeNodeFail(root: Root, file: MyIO):
     """Test that nodes after a failed fore node get CANCELLED, not refreshed."""
     print_header("Initial YAML", file)

@@ -11,7 +11,12 @@ definition \<open>NO_SIMP (X::'a::{}) \<equiv> X\<close>
 lemma NO_SIMP_cong[cong]: \<open>NO_SIMP (X::'a::{}) \<equiv> NO_SIMP X\<close> .
 
 ML_file \<open>./library/aux.ML\<close>
+ML_file \<open>./library/function/proof_local_lthy.ML\<close>
+ML_file \<open>./library/function/proof_local_inductive.ML\<close>
+ML_file \<open>./library/function/proof_local_function.ML\<close>
 ML_file \<open>./library/proof.ML\<close>
+
+term Pure.eq
 
 attribute_setup OF = \<open>Attrib.thms >> (fn Bs =>
       Thm.rule_attribute Bs (fn ctxt => Minilang_Aux.xOF (Context.proof_of ctxt) Bs))\<close>
@@ -42,6 +47,70 @@ attribute_setup "where" = \<open>let
             uncurry (Minilang_Aux.xwhere (Context.proof_of context)) args))
  end \<close> "positional instantiation of theorem"
 
+(*
 
+section \<open>Tests for proof-local function infrastructure\<close>
+
+text \<open>Test Proof_Local_Inductive: define an inductive predicate proof-locally
+  via @{ML Inductive.gen_add_inductive} with our proof-local add_ind_def.\<close>
+
+method_setup test_proof_local_ind = \<open>
+  Scan.succeed (fn ctxt =>
+    CONTEXT_METHOD (fn _ => fn (ctxt, st) =>
+      let
+        val ctxt0 = ctxt |> Variable.set_body false
+        val ({intrs, elims, induct, preds, ...}, ctxt') =
+          Inductive.gen_add_inductive_cmd Proof_Local_Inductive.add_ind_def
+            false false
+            [(\<^binding>\<open>my_even\<close>, SOME "nat \<Rightarrow> bool", NoSyn)]
+            []
+            [(((Binding.empty, []), "my_even 0"), [], []),
+             (((Binding.empty, []), "my_even n \<Longrightarrow> my_even (Suc (Suc n))"),
+              [], [(\<^binding>\<open>n\<close>, SOME "nat", NoSyn)])]
+            []
+            ctxt0
+        val ctxt' = Variable.restore_body ctxt ctxt'
+        val _ = writeln ("test_proof_local_ind: defined my_even, "
+          ^ string_of_int (length intrs) ^ " intro rules, "
+          ^ string_of_int (length elims) ^ " elim rules")
+        val thy0 = Proof_Context.theory_of ctxt
+        val thy1 = Proof_Context.theory_of ctxt'
+        val _ = writeln ("  theory forked? " ^
+          Bool.toString (not (Context.eq_thy (thy0, thy1))))
+      in
+        Seq.single (Seq.Result (ctxt', st))
+      end))
+\<close>
+
+lemma "True \<and> True"
+  apply test_proof_local_ind
+  by simp
+
+text \<open>Test Proof_Local_Function: define a recursive function proof-locally.
+  Uses Local_Theory.init with proof-local operations so that the standard
+  function package runs without forking the background theory.\<close>
+
+method_setup test_proof_local_fun = \<open>
+  Scan.succeed (fn ctxt =>
+    CONTEXT_METHOD (fn _ => fn (ctxt, st) =>
+      let
+        val fixes = [(\<^binding>\<open>my_sum\<close>, SOME "nat \<Rightarrow> nat", NoSyn)]
+        val specs : Specification.multi_specs_cmd =
+          [(((Binding.empty, []), "my_sum 0 = 0"), [], []),
+           (((Binding.empty, []), "my_sum (Suc n) = Suc n + my_sum n"),
+            [], [(\<^binding>\<open>n\<close>, SOME "nat", NoSyn)])]
+        val ctxt' = Proof_Local_Function.add_fun_cmd
+              fixes specs Function_Fun.fun_config false ctxt
+        val _ = writeln "test_proof_local_fun: defined my_sum"
+      in
+        Seq.single (Seq.Result (ctxt', st))
+      end))
+\<close>
+
+lemma x: "\<exists>(f::nat \<Rightarrow> nat). f 0 = 0"
+  apply  test_proof_local_fun
+  apply (rule exI[where x="my_sum"])
+  by simp
+*)
 
 end
