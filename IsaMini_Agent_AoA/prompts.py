@@ -32,16 +32,22 @@ async def filled_step_message(step: str, root: Root, node: Node, session: 'model
         idx = next((i for i, n in enumerate(siblings) if n is node), -1)
         for sibling in siblings[idx + 1:]:
             sibling.print(1, file, update_line=False, show_warnings=True)
-    if parent is not None and node._changes_pending_goal:
+    if parent is not None:
         goal_and_to_file = parent.should_I_show_pending_goal()
         goal_id = parent.id_of_goal()
         if goal_and_to_file is not None:
             goal, step_to_fill = goal_and_to_file
-            if goal_id is None:
-                file.write(f"Pending goal:\n")
+            if node._changes_pending_goal:
+                if goal_id is None:
+                    file.write(f"Pending goal:\n")
+                else:
+                    file.write(f"Pending goal of {parent.titled_id}:\n")
+                model.print_goal(goal, 1, False, file, parent._ctxt_of_filling())
             else:
-                file.write(f"Pending goal of {parent.titled_id}:\n")
-            model.print_goal(goal, 1, False, file, parent._ctxt_of_filling())
+                if goal_id is None:
+                    file.write(f"Pending goal: unchanged\n")
+                else:
+                    file.write(f"Pending goal of {parent.titled_id}: unchanged\n")
             file.write(f"Call command `edit` with action `fill` and target step `{step_to_fill}`"
                 " to provide the proof.\n")
         elif goal_id is not None and not parent.does_quickview_need_detail():
@@ -109,20 +115,25 @@ async def amended_step_message(step: str, root: Root, node: Node, session: 'mode
         if remaining <= 2:
             for sibling in siblings[idx + 1:]:
                 sibling.print(1, file, update_line=False, show_warnings=True)
-            if node._changes_pending_goal:
-                goal_and_to_file = parent.should_I_show_pending_goal()
-                goal_id = parent.id_of_goal()
-                if goal_and_to_file is not None:
-                    goal, step_to_fill = goal_and_to_file
+            goal_and_to_file = parent.should_I_show_pending_goal()
+            goal_id = parent.id_of_goal()
+            if goal_and_to_file is not None:
+                goal, step_to_fill = goal_and_to_file
+                if node._changes_pending_goal:
                     if goal_id is None:
                         file.write(f"Pending goal:\n")
                     else:
                         file.write(f"Pending goal of {parent.titled_id}:\n")
                     model.print_goal(goal, 1, False, file, parent._ctxt_of_filling())
-                    file.write(f"Call command `edit` with action `fill` and target step `{step_to_fill}`"
-                        " to provide the proof.\n")
-                elif goal_id is not None and not parent.does_quickview_need_detail():
-                    file.write(f"All proof goals of {parent.titled_id} are completed.\n")
+                else:
+                    if goal_id is None:
+                        file.write(f"Pending goal: unchanged\n")
+                    else:
+                        file.write(f"Pending goal of {parent.titled_id}: unchanged\n")
+                file.write(f"Call command `edit` with action `fill` and target step `{step_to_fill}`"
+                    " to provide the proof.\n")
+            elif goal_id is not None and not parent.does_quickview_need_detail():
+                file.write(f"All proof goals of {parent.titled_id} are completed.\n")
     if session.warnings:
         file.write("Warnings:\n")
         for w in session.warnings:

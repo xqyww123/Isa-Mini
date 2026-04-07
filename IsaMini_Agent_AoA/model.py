@@ -226,14 +226,16 @@ def print_goal(goal: Goal, indent: int, show_header: bool, file, suppressed: Con
         file.write(goal.conclusion)
         file.write("\n")
 
-def print_pending_goal(goal: Goal, step: step, indent: int, file : MyIO, suppressed: Context) -> int:
+def print_pending_goal(goal: Goal, step: step, indent: int, file : MyIO, suppressed: Context,
+                       show_goal: bool = True) -> int:
     line = file.current_line()
     print_indent(indent, file)
     file.write(f"Error: Unfinished Proof! Call command `edit` with action `fill` and target step `{step}`"
         " to provide the proof for the following goal.\n")
-    print_indent(indent, file)
-    file.write("pending proof goal:\n")
-    print_goal(goal, indent+1, False, file, suppressed)
+    if show_goal:
+        print_indent(indent, file)
+        file.write("pending proof goal:\n")
+        print_goal(goal, indent+1, False, file, suppressed)
     return line
 
 def string_of_and_list(l: list[Any]) -> str:
@@ -2303,12 +2305,13 @@ class StdBlock(NonLeaf_Node):
             if ptree is None:
                 print_indent(indent, file)
                 file.write("Error: Evaluation cancelled due to failures above\n")
-            elif self._should_print_footer_pending_goal():
+            else:
                 result = self.should_I_show_pending_goal()
                 if result is not None:
                     goal, to_fill = result
                     self.open_pending_proof_line =\
-                        print_pending_goal(goal, to_fill, indent, file, self._ctxt_of_filling())
+                        print_pending_goal(goal, to_fill, indent, file, self._ctxt_of_filling(),
+                                           show_goal=self._should_print_footer_pending_goal())
                 else:
                     self.open_pending_proof_line = None
     def is_proof_finished(self) -> bool:
