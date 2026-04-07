@@ -40,6 +40,7 @@ from .model import (
     Interaction_Retrieve,
     IsabelleEntity, IsabelleFact_Presented, FactByName,
     _THEOREM_KINDS,
+    AGENT_EXPR_LIMIT,
 )
 from . import prompts as P
 
@@ -60,6 +61,11 @@ _cc_answer_schema = _load_schema("cc_answer.jsonc")
 _cc_delete_schema = _load_schema("cc_delete.jsonc")
 
 BATCHED_SEMANTIC_SEARCH = True
+
+from Isabelle_Semantic_Embedding.semantics import trunc_expr as _trunc_expr_base
+
+def _trunc_expr(s: str) -> str:
+    return _trunc_expr_base(s, AGENT_EXPR_LIMIT)
 
 _cc_semantic_search_schema = _load_schema(
     "cc_semantic_search.jsonc" if BATCHED_SEMANTIC_SEARCH
@@ -458,11 +464,12 @@ async def _semantic_search_direct(
         for f in r.fetched[:k]:
             if f.entity.short_name in seen:
                 continue
-            lines.append(f"- {f.entity.short_name}: {', '.join(f.entity.expression)}")
+            expr_str = _trunc_expr(', '.join(f.entity.expression))
+            lines.append(f"- {f.entity.short_name}: {expr_str}")
             if f.interpretation:
                 lines.append(f"  {f.interpretation}")
             seen.add(f.entity.short_name)
-            retrieved.append(f"{f.entity.short_name}: {', '.join(f.entity.expression)}")
+            retrieved.append(f"{f.entity.short_name}: {expr_str}")
     if not lines:
         lines.append("No new relevant entities found." if seen else "No relevant entities found.")
     lines.extend(warn_lines)
@@ -536,7 +543,7 @@ async def _semantic_search_with_filtering(session: Session, queries: list[dict])
             repeated = [e.short_name for e in selected if e.short_name in seen]
             lines: list[str] = []
             for entity in new_entities:
-                lines.append(f"- {entity.short_name}: {', '.join(entity.expression)}")
+                lines.append(f"- {entity.short_name}: {_trunc_expr(', '.join(entity.expression))}")
                 seen.add(entity.short_name)
             if repeated:
                 if new_entities:
@@ -549,7 +556,7 @@ async def _semantic_search_with_filtering(session: Session, queries: list[dict])
         return "\n".join(_format_multi_query_grouped(
             queries, results,
             name_of=lambda e: e.short_name,
-            format_entity=lambda e: f"  {e.short_name}: {', '.join(e.expression)}",
+            format_entity=lambda e: f"  {e.short_name}: {_trunc_expr(', '.join(e.expression))}",
             seen=seen,
             empty_msg=_empty_msg,
         ))
@@ -610,7 +617,7 @@ async def _semantic_search_extend_candidates(
 
     # Format in the same style as Interaction_Retrieve.prompt()
     for i, fetched in enumerate(new_facts):
-        lines.append(f"{start_idx + i}. {fetched.entity.short_name}: {', '.join(fetched.entity.expression)}")
+        lines.append(f"{start_idx + i}. {fetched.entity.short_name}: {_trunc_expr(', '.join(fetched.entity.expression))}")
         if fetched.interpretation:
             lines.append(f"  {fetched.interpretation}")
     lines.extend(warn_lines)

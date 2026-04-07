@@ -5,7 +5,12 @@ from .helper import split_id_into_segs, cat_segs_into_id, incr_id_major, incr_id
 from typing import Any, Awaitable, Iterable, NamedTuple, Protocol, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired, Annotated
 from Isabelle_RPC_Host import Connection, IsabelleError, pretty_unicode, ascii_of_unicode
 from Isabelle_RPC_Host.universal_key import EntityKind, universal_key
-from Isabelle_Semantic_Embedding.semantics import Semantic_Vector_Store, SemanticRecord
+from Isabelle_Semantic_Embedding.semantics import Semantic_Vector_Store, SemanticRecord, trunc_expr as _trunc_expr_base
+
+AGENT_EXPR_LIMIT = 300
+
+def trunc_expr(s: str) -> str:
+    return _trunc_expr_base(s, AGENT_EXPR_LIMIT)
 from abc import ABC, abstractmethod
 from enum import Enum
 import json
@@ -41,15 +46,15 @@ class Explicit_Var(TypedDict):
     name: varname
     type: str | None
 
-class FactByStatement(TypedDict):
-    refer_by: Literal["statement"]
-    statement: str
+class FactByProposition(TypedDict):
+    refer_by: Literal["proposition"]
+    proposition: str
 
 class FactByName(TypedDict):
     refer_by: Literal["name"]
     name: str
 
-type Fact = FactByStatement | FactByName
+type Fact = FactByProposition | FactByName
 
 class FailureReason(NamedTuple):
     """A human-readable failure reason, used in Interaction.answer() returns
@@ -122,7 +127,7 @@ class IsabelleFact_Unfound(IsabelleFact):
     def name(self) -> str:
         if self.fact["refer_by"] == "name":
             return cast(FactByName, self.fact)["name"]
-        return cast(FactByStatement, self.fact)["statement"]
+        return cast(FactByProposition, self.fact)["proposition"]
     def print(self, indent: int, file: MyIO) -> None:
         print_indent(indent, file)
         file.write(f"- Error: fact \"{self.name()}\" not found\n")
@@ -942,22 +947,19 @@ class Minilang_State:
     #             return ref
     #         case _:
     #             raise NotImplementedError("Here we should list all the options and ask the LLM to choose which one does it mean")
-    async def fetch_facts(self, facts: list[Fact], *,
-                    single_choice: bool = False,
-                    ) -> 'list[IsabelleFact | Interaction_RetrieveForProof]':
+    async def fetch_facts(self, facts: list[Fact]) -> list[IsabelleFact]:
         """Resolve a list of facts. FactByName are batched into one RPC call.
-        Returns IsabelleFact_Presented for resolved facts, Interaction_RetrieveForProof
-        for statements needing interaction, or IsabelleFact_Unfound for unfound facts."""
-        out: list[IsabelleFact | Interaction_RetrieveForProof] = [None] * len(facts)  # type: ignore
+        FactByProposition are converted directly to IsabelleFact_ProveInTime.
+        Returns IsabelleFact_Presented for resolved names, IsabelleFact_ProveInTime
+        for propositions, or IsabelleFact_Unfound for unfound names."""
+        out: list[IsabelleFact] = [None] * len(facts)  # type: ignore
         # Collect FactByName indices for batch lookup
         name_indices: list[int] = []
         name_queries: list[str] = []
         for i, fact in enumerate(facts):
-            if fact["refer_by"] == "statement":
-                stmt = " ".join(cast(FactByStatement, fact)["statement"].split())
-                out[i] = Interaction_RetrieveForProof(
-                    state=self, query=stmt, kinds=[EntityKind.THEOREM],
-                    single_choice=single_choice)
+            if fact["refer_by"] == "proposition":
+                prop = cast(FactByProposition, fact)["proposition"]
+                out[i] = IsabelleFact_ProveInTime(prop)
             else:
                 name_indices.append(i)
                 name_queries.append(fact["name"])
@@ -1013,14 +1015,14 @@ class Minilang_State:
             # Pattern-only search: get filtered entities, look up records, no ranking
             from Isabelle_RPC_Host.context import entities_of
             from Isabelle_Semantic_Embedding.semantics import Semantic_DB
-            candidates, warnings = await entities_of(self.connection, kinds,
+            entries, warnings = await entities_of(self.connection, kinds,
                                      term_patterns=term_patterns,
                                      type_patterns=type_patterns,
                                      theories_include=theories_include,
                                      name_contains=name_contains,
                                      limit=k)
             results = []
-            for uk in candidates:
+            for uk, _ in entries:
                 rec = Semantic_DB[uk]
                 if rec is not None:
                     results.append((0.0, rec._replace(name=ascii_of_unicode(rec.name))))
@@ -1319,7 +1321,7 @@ class Interaction_Retrieve(Interaction):
             raise ImmediateAnswer([])
         for i, fetched in enumerate(facts):
             print_indent(indent+1, file)
-            file.write(f"{i}. {fetched.entity.full_name}: {fetched.entity.expression}\n")
+            file.write(f"{i}. {fetched.entity.full_name}: {trunc_expr(', '.join(fetched.entity.expression))}\n")
             if fetched.interpretation:
                 print_indent(indent+2, file)
                 file.write(f"{fetched.interpretation}\n")
@@ -1387,85 +1389,6 @@ class Interaction_Retrieve(Interaction):
         session.log_retrieval(self.query, results)
         return cast(list[IsabelleEntity | IsabelleFact], selected)
 
-
-class Interaction_RetrieveForProof(Interaction_Retrieve):
-    """Retrieve theorems/rules for proof operations. Supports prove-in-time and relevant constants."""
-
-    def __init__(self, state: Minilang_State,
-            query: str, kinds: list[EntityKind],
-            **kwargs: Any):
-        super().__init__(state, query, kinds, **kwargs)
-        self._relevant_constants_cache: list[tuple[str, str, str]] | None = None
-
-    async def relevant_constants(self) -> list[tuple[str, str, str]]:
-        if self._relevant_constants_cache is None:
-            self._relevant_constants_cache = await self._fetch_constants()
-        return self._relevant_constants_cache
-
-    async def _fetch_constants(self) -> list[tuple[str, str, str]]:
-        """Fetch relevant constants via semantic search.
-        Returns list of (short_name, type, interpretation) triples."""
-        candidates, _ = await self.state.semantic_knn(self.query, 10, [EntityKind.CONSTANT])
-        candidates = [(score, rec) for score, rec in candidates if score >= 0.5]
-        if not candidates:
-            return []
-        entities = [(EntityKind.CONSTANT, rec.name) for _, rec in candidates]
-        infos = await self.state._retrieve_entity(entities)
-        results: list[tuple[str, str, str]] = []
-        for (_, rec), info in zip(candidates, infos):
-            if info is None:
-                continue
-            short_name, type_strs = info
-            results.append((short_name, type_strs[0] if type_strs else "", rec.interpretation))
-        return results
-
-    async def prompt(self, indent: int, file: MyIO) -> None:
-        title = self._entity_title()
-        print_indent(indent, file)
-        file.write(f"You are looking for {title} establishing:")
-        print_paragraph(indent, file, self.query)
-        file.write("\n")
-        constants = await self.relevant_constants()
-        if constants:
-            file.write("Relevant constants in scope:\n")
-            for short_name, typ, interp in constants:
-                print_indent(indent+1, file)
-                file.write(f"- {short_name}: {typ}\n")
-                print_indent(indent+2, file)
-                file.write(f"{interp}\n")
-            file.write("\n")
-        file.write(f"Similar {title} from the library:\n")
-        await self._prompt_candidates(indent, file)
-        if self.single_choice:
-            file.write(f"\nIf an entry above matches what you need, answer with its index.\n")
-        else:
-            file.write(f"\nAnswer with the indices of all matching {title}.\n")
-        file.write("Otherwise, if none matches but the statement is trivially provable, "
-                   "formalize the statement into Isabelle propositions and answer with them as text. "
-                   "IMPORTANT: all numeric literals MUST be type-annotated, "
-                   "example: `(2::nat)` not `2`.\n")
-        if self.k >= self.FINAL_K:
-            file.write("If none of the above applies, answer empty to give up "
-                       "the search and prove the statement yourself later.\n")
-        else:
-            file.write("If none of the above applies, answer empty to see more candidates.\n")
-
-    async def answer(self, answer: answer) -> 'list[IsabelleEntity | IsabelleFact]':
-        session = the_session()
-        # Text answer → prove-in-time
-        if isinstance(answer, str) and answer:
-            await self._log_retrieval_training_data([], prove_in_time=answer)
-            session.log_retrieval(self.query, [f"prove-in-time: {answer}"])
-            return [IsabelleFact_ProveInTime(answer)]
-        # Empty answer with no expansion left
-        if not answer and self.k >= self.FINAL_K:
-            await self._log_retrieval_training_data([])
-            session.log_retrieval(self.query, ["unfound"])
-            if self.single_choice:
-                return [IsabelleFact_Unfound(
-                    FactByStatement(refer_by="statement", statement=self.query))]
-            return []
-        return await super().answer(answer)
 
 
 ### The Abstract Model
@@ -2782,22 +2705,6 @@ async def _filter_unprovable(
     kept = [f for i, f in enumerate(facts) if i not in drop]
     return kept, warnings
 
-def _split_fetched(fetched: 'list[IsabelleFact | Interaction_RetrieveForProof]'
-    ) -> 'tuple[list[IsabelleFact], list[Interaction], list[int]]':
-    """Split fetch_facts results into resolved facts, interactions, and placeholder indices.
-    IsabelleFact (including Unfound) goes to resolved; Interaction goes to interactions."""
-    resolved: list[IsabelleFact] = []
-    interactions: list[Interaction] = []
-    resolve_indices: list[int] = []
-    for item in fetched:
-        if isinstance(item, IsabelleFact):
-            resolved.append(item)
-        else:
-            resolve_indices.append(len(resolved))
-            resolved.append(None)  # type: ignore — placeholder for interaction result
-            interactions.append(item)
-    return resolved, interactions, resolve_indices
-
 
 #### Obvious
 
@@ -2823,28 +2730,14 @@ class Obvious(Leaf):
                         exact_state: Minilang_State | None = None) -> gen_node:
             if not arg["facts"]:
                 return lambda config: Obvious(config, Obvious_InternalToolArg(facts=[]))
-            fetched = await alive_state.fetch_facts(arg["facts"],
-                single_choice=False)
-            resolved, interactions, resolve_indices = _split_fetched(fetched)
-            interaction_results: list[IsabelleFact] = []
-
+            fetched = await alive_state.fetch_facts(arg["facts"])
+            facts, warnings = _filter_unfound(fetched)
             def mk(config: NodeConfig) -> 'Obvious':
-                all_facts = [f for f in resolved if f is not None] + interaction_results
-                facts, warnings = _filter_unfound(all_facts)
                 node = Obvious(config, Obvious_InternalToolArg(facts=facts))
                 for w in warnings:
                     node.warnings.append(Warning(Warning.Position.FOOTER, w))
                 return node
-
-            if not interactions:
-                return mk
-
-            async def kontinue(results: list[Any]) -> gen_node:
-                for r in results:
-                    interaction_results.extend(r)
-                return mk
-
-            raise RaiseInteraction(interactions, kontinue)
+            return mk
         return parse
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
@@ -2869,7 +2762,7 @@ class Obvious(Leaf):
 async def _parse_subproof(sp: SubProof, alive_state: Minilang_State | None) -> SubProof_parsed:
     """Parse a SubProof into a sync gen_node (or None for 'Given later').
     Reuses Obvious.interactive_gen for fact resolution.
-    May raise RaiseInteraction (for FactByStatement) or NoAliveState."""
+    May raise NoAliveState."""
     if not _subproof_is_obvious(sp):
         return None
     return await Obvious.interactive_gen(sp)(alive_state)
@@ -3098,43 +2991,10 @@ class Specialize(Leaf):
     def interactive_gen(arg: Specialize_ToolArg) -> parsing_node:
         async def parse(alive_state: Minilang_State,
                         exact_state: Minilang_State | None = None) -> gen_node:
-            # Resolve rule and discharging facts
             all_facts = [arg["rule"]] + arg.get("discharging_facts", [])
-            fetched = await alive_state.fetch_facts(all_facts, single_choice=True)
-
-            # Check if any need interaction
-            interactions = []
-            for f in fetched:
-                if not isinstance(f, IsabelleFact):
-                    interactions.append(f)
-
-            if interactions:
-                async def kontinue(results: list[Any]) -> gen_node:
-                    resolved: list[IsabelleFact] = []
-                    result_idx = 0
-                    for f in fetched:
-                        if isinstance(f, IsabelleFact):
-                            resolved.append(f)
-                        else:
-                            resolved.append(results[result_idx][0])
-                            result_idx += 1
-                    rule_ref = resolved[0]
-                    discharge_refs = resolved[1:]
-                    internal = Specialize_InternalToolArg(
-                        thought=arg["thought"],
-                        rule=arg["rule"],
-                        rule_ref=rule_ref,
-                        instantiations=arg.get("instantiations", []),
-                        discharging_facts=arg.get("discharging_facts", []),
-                        discharge_refs=discharge_refs,
-                        result_name=arg.get("result_name"))
-                    return lambda config: Specialize(config, internal)
-                raise RaiseInteraction(interactions, kontinue)  # type: ignore
-
-            # All resolved directly
-            resolved = cast(list[IsabelleFact], fetched)
-            rule_ref = resolved[0]
-            discharge_refs = resolved[1:]
+            fetched = await alive_state.fetch_facts(all_facts)
+            rule_ref = fetched[0]
+            discharge_refs = fetched[1:]
             internal = Specialize_InternalToolArg(
                 thought=arg["thought"],
                 rule=arg["rule"],
@@ -3226,33 +3086,18 @@ class Rewrite(Leaf):
 
     @staticmethod
     def interactive_gen(arg: Rewrite_ToolArg) -> parsing_node:
-        """Interactive generation. Resolves FactByStatement via Interaction_Retrieve."""
+        """Resolve facts and create Rewrite node."""
         async def parse(alive_state: Minilang_State,
                         exact_state: Minilang_State | None = None) -> gen_node:
-            fetched = await alive_state.fetch_facts(arg["using"], single_choice=True)
-            resolved, interactions, resolve_indices = _split_fetched(fetched)
-
-            def mk_internal() -> Rewrite_InternalToolArg:
-                return Rewrite_InternalToolArg(
-                    thought=arg["thought"],
-                    use_system_simplifiers=arg["use system simplifiers"],
-                    rewrite_goal=arg["rewrite goal"],
-                    rewrite_premises=arg["rewrite premises"],
-                    using=resolved,
-                )
-
-            def mk(config: NodeConfig) -> 'Rewrite':
-                return Rewrite(config, mk_internal())
-
-            if not interactions:
-                return mk
-
-            async def kontinue(results: list[Any]) -> gen_node:
-                for i, idx in enumerate(resolve_indices):
-                    resolved[idx] = results[i][0]  # single_choice=True → unwrap single-element list
-                return mk
-
-            raise RaiseInteraction(interactions, kontinue)
+            fetched = await alive_state.fetch_facts(arg["using"])
+            internal = Rewrite_InternalToolArg(
+                thought=arg["thought"],
+                use_system_simplifiers=arg["use system simplifiers"],
+                rewrite_goal=arg["rewrite goal"],
+                rewrite_premises=arg["rewrite premises"],
+                using=fetched,
+            )
+            return lambda config: Rewrite(config, internal)
         return parse
 
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
@@ -3841,21 +3686,10 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
             if rule is None:
                 return lambda config: InferenceRule(config, InferenceRule_InternalToolArg(
                     thought=arg["thought"], rule=None, rule_ref=None))
-
-            fetched = await alive_state.fetch_facts([rule], single_choice=True)
-            result = fetched[0]
-            if isinstance(result, IsabelleFact):
-                internal = InferenceRule_InternalToolArg(
-                    thought=arg["thought"], rule=rule, rule_ref=result)
-                return lambda config: InferenceRule(config, internal)
-
-            # Needs interaction
-            async def kontinue(results: list[Any]) -> gen_node:
-                internal = InferenceRule_InternalToolArg(
-                    thought=arg["thought"], rule=rule, rule_ref=results[0][0])  # unwrap single-element list
-                return lambda config: InferenceRule(config, internal)
-
-            raise RaiseInteraction([result], kontinue) # type: ignore
+            fetched = await alive_state.fetch_facts([rule])
+            internal = InferenceRule_InternalToolArg(
+                thought=arg["thought"], rule=rule, rule_ref=fetched[0])
+            return lambda config: InferenceRule(config, internal)
         return parse
     def quickview_title(self) -> str:
         if self.rule_ref is not None:

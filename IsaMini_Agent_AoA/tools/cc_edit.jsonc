@@ -69,48 +69,37 @@
           "type": "string",
           "const": "name"
         },
-        "name": { 
+        "name": {
           "type": "string",
-          "description": "the exact name of the fact in Isabelle/HOL. If unsure, use FactByStatement instead"
+          "description": "the exact name of the fact in Isabelle/HOL"
         }
       },
       "required": [ "refer_by", "name" ],
       "type": "object"
     },
-    "FactByStatement": {
-      "title": "FactByStatement",
+    "FactByProposition": {
+      "title": "FactByProposition",
       "additionalProperties": false,
       "properties": {
         "refer_by": {
           "type": "string",
-          "const": "statement"
+          "const": "proposition"
         },
-        "statement": {
-          "description": "the statement of the fact in English",
+        "proposition": {
+          "description": "a formal Isabelle/HOL proposition to be proven in time. IMPORTANT: all numeric literals MUST be type-annotated, example: `(2::nat)` not `2`",
           "type": "string"
         }
-        // "for_any": {
-        //   "default": [],
-        //   "description": "variables that the fact is universally quantified over",
-        //   "items": {
-        //     "anyOf": [
-        //       { "$ref": "#/$defs/Variable" },
-        //       { "type": "string" }
-        //     ]
-        //   },
-        //   "type": "array"
-        // }
       },
       "required": [
         "refer_by",
-        "statement"
+        "proposition"
       ],
       "type": "object"
     },
     "Fact": {
       "anyOf": [
         { "$ref": "#/$defs/FactByName" },
-        { "$ref": "#/$defs/FactByStatement" }
+        { "$ref": "#/$defs/FactByProposition" }
       ]
     },
     "SubProof": {
