@@ -21,7 +21,6 @@ from claude_agent_sdk.types import (
 )
 from io import StringIO
 import Isabelle_Semantic_Embedding
-from Isabelle_Semantic_Embedding.semantics import mk_query_by_name_tool, mk_query_by_position_tool
 
 def _serialize_args(args: Any) -> Any:
     """Best-effort JSON-serializable representation of Minilang operation arguments."""
@@ -51,8 +50,7 @@ class ClaudeCode(Session):
         'mcp__proof__edit',
         'mcp__proof__delete',
         'mcp__proof__answer',
-        'mcp__proof__query_by_name',
-        # 'mcp__proof__query_by_position',
+        'mcp__proof__query',
         'mcp__proof__search_isabelle',
         'ToolSearch'
     ]
@@ -62,7 +60,7 @@ class ClaudeCode(Session):
         "search_isabelle": "mcp__proof__search_isabelle",
         "edit": "mcp__proof__edit",
         "delete": "mcp__proof__delete",
-        "query_by_name": "mcp__proof__query_by_name",
+        "query": "mcp__proof__query",
     }
 
     def _internal_tool_name(self, t: str) -> str:
@@ -132,18 +130,11 @@ class ClaudeCode(Session):
         with open(self.YAML_path, "w", encoding="utf-8") as f:
             root.print(0, MyIO(f), update_line=True)
 
-        # Isabelle semantic query tools (SdkMcpTool instances — schemas/handlers extracted by HTTP server)
-        connection = root.ml_state.connection
-        extra_sdk_tools = [
-            mk_query_by_name_tool(connection, []),
-            # mk_query_by_position_tool(connection, []),
-        ]
-
         # Register with singleton HTTP MCP server
         self._http_server = await ProofMCPHTTPServer.get_or_create()
         self._session_id = self._http_server.allocate_session_id()
         self._mcp_url = await self._http_server.register_session(
-            self._session_id, self, extra_sdk_tools=extra_sdk_tools)
+            self._session_id, self)
 
         if not self._interactive_web_terminal:
             # Embedded mode: Agent SDK connects to HTTP server via URL
@@ -471,6 +462,8 @@ class ClaudeCode(Session):
             web_terminal.notify_status(tmux_session, msg))
         self._on_log_callback = lambda msg: asyncio.create_task(
             web_terminal.notify_status(tmux_session, msg))
+        # Push initial YAML + quickview so the web page shows content before any operation
+        self.refresh_YAML()
         web_terminal_url = web_terminal.session_url(tmux_session)
         await self.root.ml_state.connection.writeln(
             f"Interactive proof session started. Open web terminal: {web_terminal_url}")

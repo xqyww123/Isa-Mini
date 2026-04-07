@@ -6,7 +6,7 @@ from IsaREPL import REPLFail
 from typing import Any, Awaitable, Coroutine, NamedTuple, Sequence, TypedDict, Callable, TextIO, Union, cast
 from . import model
 from .model import *
-from .model import _filter_unprovable
+from .model import _filter_unprovable, _trivial_parsing
 from abc import ABC, abstractmethod
 import io
 import tempfile
@@ -554,22 +554,23 @@ async def _test_ReferFactByProposition(root: Root, file: MyIO):
 
 @model_test("RetrieveFact", "Test_RetrieveFact1.thy", 6)
 async def _test_RetrieveFact(root: Root, file: MyIO):
-    """Test fetch_facts with FactByName and FactByProposition."""
+    """Test fetch_facts with FactByName, FactByProposition, and FactByDescription."""
     print_header("Initial YAML", file)
     root.print(0, file)
-    # 1. Test fetch_facts with various fact types
+    # 1. Test fetch_facts with all three fact types
     fetched = await root.ml_state.fetch_facts([
-        {"refer_by": "name", "name": "log_nat_power"},       # known fact → IsabelleFact_Presented
-        {"refer_by": "name", "name": "nonexistent_lemma"},    # unknown fact → IsabelleFact_Unfound
-        {"refer_by": "proposition", "proposition": "(8::nat) = 2^3"},  # proposition → IsabelleFact_ProveInTime
+        {"refer_by": "name", "name": "log_nat_power"},           # → IsabelleFact_Presented
+        {"refer_by": "name", "name": "nonexistent_lemma"},        # → IsabelleFact_Unfound
+        {"refer_by": "proposition", "proposition": "(8::nat) = 2^3"},  # → IsabelleFact_ProveInTime
+        {"refer_by": "description", "english": "8 = 2^3"},       # → Interaction_RetrieveForProof
     ])
     for i, f in enumerate(fetched):
         file.write(f"  fetch_facts[{i}]: {type(f).__name__}\n")
     assert isinstance(fetched[0], IsabelleFact_Presented)
     assert isinstance(fetched[1], IsabelleFact_Unfound)
     assert isinstance(fetched[2], IsabelleFact_ProveInTime)
-    # 2. Test Obvious with both a FactByProposition and a FactByName.
-    #    FactByProposition is directly converted to IsabelleFact_ProveInTime (no interaction).
+    assert isinstance(fetched[3], Interaction_RetrieveForProof)
+    # 2. Test Obvious with FactByProposition and FactByName (no interaction).
     root.session.age += 1
     gn = await Obvious.interactive_gen({
         "facts": [
@@ -586,32 +587,47 @@ async def _test_RetrieveFact(root: Root, file: MyIO):
 
 @model_test("RetrieveFact2", "Test_RetrieveFact2.thy", 6)
 async def _test_RetrieveFact2(root: Root, file: MyIO):
-    """Test fetch_facts with FactByName and FactByProposition."""
+    """Test fetch_facts with FactByDescription interaction flow."""
     print_header("Initial YAML", file)
     root.print(0, file)
-    # 1. Test fetch_facts with various fact types
+    # 1. Test fetch_facts with FactByDescription → Interaction_RetrieveForProof
     fetched = await root.ml_state.fetch_facts([
-        {"refer_by": "name", "name": "log_nat_power"},       # known fact → IsabelleFact_Presented
-        {"refer_by": "name", "name": "nonexistent_lemma"},    # unknown fact → IsabelleFact_Unfound
-        {"refer_by": "proposition", "proposition": "(9::nat) = 2^3"},  # proposition → IsabelleFact_ProveInTime
+        {"refer_by": "name", "name": "log_nat_power"},           # → IsabelleFact_Presented
+        {"refer_by": "description", "english": "8 = 2^3"},       # → Interaction_RetrieveForProof
     ])
     for i, f in enumerate(fetched):
         file.write(f"  fetch_facts[{i}]: {type(f).__name__}\n")
     assert isinstance(fetched[0], IsabelleFact_Presented)
-    assert isinstance(fetched[1], IsabelleFact_Unfound)
-    assert isinstance(fetched[2], IsabelleFact_ProveInTime)
-    # 2. Test Obvious with both a FactByProposition and a FactByName.
-    #    FactByProposition is directly converted to IsabelleFact_ProveInTime (no interaction).
+    assert isinstance(fetched[1], Interaction_RetrieveForProof)
+    # 2. Test InferenceRule with FactByDescription (triggers interaction).
     root.session.age += 1
-    gn = await Obvious.interactive_gen({
-        "facts": [
-            {"refer_by": "proposition", "proposition": "(9::nat) = 2^3"},
-            {"refer_by": "name", "name": "log_nat_power"},
-        ]
-    })(root.ml_state)
-    node = await root.fill("2", _trivial_parsing(gn))
-    file.write(f"Filled node: {type(node).__name__}, id={node.id}\n")
-    node.print(1, file, show_warnings=True)
+    try:
+        await root.fill("2", InferenceRule.interactive_gen({
+            "thought": "test description-based retrieval",
+            "rule": {"refer_by": "description", "english": "8 = 2^3"},
+        }))
+    except RaiseInteraction as e:
+        file.write(f"RaiseInteraction raised with {len(e.interactions)} interaction(s)\n")
+        results: list[Any] = [None] * len(e.interactions)
+        for i, inter in enumerate(e.interactions):
+            file.write(f"  interaction[{i}]: {type(inter).__name__}\n")
+            if isinstance(inter, Interaction_RetrieveForProof):
+                file.write(f"    query: {inter.query}\n")
+                file.write(f"    candidates: {len(await inter.candidate_facts())}\n")
+                # Answer with a ProveInTime statement
+                result = await inter.answer("(8::nat) = 2^3")
+                assert isinstance(result, list) and len(result) == 1
+                pit = result[0]
+                file.write(f"    ProveInTime answer: {type(pit).__name__}\n")
+                assert isinstance(pit, IsabelleFact_ProveInTime)
+                file.write(f"    statement: {pit.statement}\n")
+                results[i] = result
+        # Invoke the continuation to get a gen_node, then fill
+        gn = await e.kontinuation(results)
+        root.session.age += 1
+        node = await root.fill("2", _trivial_parsing(gn))
+        file.write(f"Filled node: {type(node).__name__}, id={node.id}\n")
+        node.print(1, file, show_warnings=True)
     print_header("After fill", file)
     root.print(0, file)
     return
@@ -1514,6 +1530,36 @@ async def _test_InductionObviousProof(root: Root, file: MyIO):
     }))
     print_header("After Induction with proof=Obvious", file)
     root.print(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+@model_test("MultiGoalQuickview", "Test_MultiGoalQuickview.thy", 10)
+async def _test_multi_goal_quickview(root: Root, file: MyIO):
+    """Test quickview rendering for root-level multi-goal lemma (shows P and Q and R)."""
+    print_header("Initial State", file)
+    root.print(0, file)
+    print_header("Overview (all unfinished)", file)
+    root.quickview(0, file)
+
+    # Close goal1 with Obvious
+    root.session.age += 1
+    await root.fill("goal1.1", Obvious.interactive_gen({"facts": []}))
+    print_header("Overview (goal1 done)", file)
+    root.quickview(0, file)
+
+    # Close goal2 with Obvious
+    root.session.age += 1
+    await root.fill("goal2.1", Obvious.interactive_gen({"facts": []}))
+    print_header("Overview (goal1+2 done)", file)
+    root.quickview(0, file)
+
+    # Close goal3 with Obvious
+    root.session.age += 1
+    await root.fill("goal3.1", Obvious.interactive_gen({"facts": []}))
+    print_header("Overview (all done)", file)
+    root.quickview(0, file)
 
     unfinished = set()
     root.unfinished_nodes(unfinished)

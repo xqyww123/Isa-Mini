@@ -96,11 +96,24 @@
       ],
       "type": "object"
     },
-    "Fact": {
-      "anyOf": [
-        { "$ref": "#/$defs/FactByName" },
-        { "$ref": "#/$defs/FactByProposition" }
-      ]
+    "FactByDescription": {
+      "title": "FactByDescription",
+      "additionalProperties": false,
+      "properties": {
+        "refer_by": {
+          "type": "string",
+          "const": "description"
+        },
+        "english": {
+          "description": "an English description of the fact to search for",
+          "type": "string"
+        }
+      },
+      "required": [
+        "refer_by",
+        "english"
+      ],
+      "type": "object"
     },
     "SubProof": {
       "anyOf": [
@@ -112,7 +125,7 @@
     "Obvious": {
       "additionalProperties": false,
       "title": "Obvious",
-      "description": "the goal holds trivially",
+      "description": "the goal holds trivially. Caution: this operation barely unfolds definitions unless you supply them in `facts`. This operation is SLOW!",
       "properties": {
         "operation": {
           "const": "Obvious",
@@ -120,7 +133,12 @@
         },
         "facts": {
           "description": "helpful facts for proving the goal",
-          "items": { "$ref": "#/$defs/Fact" },
+          "items": {
+            "anyOf": [
+              { "$ref": "#/$defs/FactByName" },
+              { "$ref": "#/$defs/FactByProposition" }
+            ]
+          },
           "type": "array"
         }
       },
@@ -313,7 +331,12 @@
         },
         "thought": { "$ref": "#/$defs/Thought" },
         // TODO: add common rules like proof by contradiction, proving equality by antisymmetry, etc.
-        "rule": {"$ref": "#/$defs/Fact" }
+        "rule": {
+          "anyOf": [
+            { "$ref": "#/$defs/FactByName" },
+            { "$ref": "#/$defs/FactByDescription" }
+          ]
+        }
       },
       "required": [
         "operation",
@@ -333,7 +356,12 @@
         "thought": { "$ref": "#/$defs/Thought" },
         "using": {
           "description": "equations and facts to use for rewriting",
-          "items": { "$ref": "#/$defs/Fact" },
+          "items": {
+            "anyOf": [
+              { "$ref": "#/$defs/FactByName" },
+              { "$ref": "#/$defs/FactByProposition" }
+            ]
+          },
           "type": "array"
         },
         "use system simplifiers": {

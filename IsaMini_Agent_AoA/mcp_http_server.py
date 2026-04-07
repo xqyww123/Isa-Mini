@@ -22,6 +22,7 @@ import os
 import sys
 import socket
 from io import StringIO
+from time import time
 from typing import Any, Callable, NamedTuple, TypeVar
 
 import jsoncomment
@@ -62,7 +63,93 @@ _cc_delete_schema = _load_schema("cc_delete.jsonc")
 
 BATCHED_SEMANTIC_SEARCH = True
 
-from Isabelle_Semantic_Embedding.semantics import trunc_expr as _trunc_expr_base
+import re
+from Isabelle_RPC_Host.position import IsabellePosition
+from Isabelle_Semantic_Embedding.semantics import (
+    trunc_expr as _trunc_expr_base,
+    _get_definition_with_pos,
+)
+
+# ============================================================================
+# Command Header Parser
+# ============================================================================
+
+_COMMAND_HEADER_RE = re.compile(
+    r"^\s*(?:private\s+|qualified\s+)?"
+    r"(fun|primrec|function|definition|abbreviation|"
+    r"datatype|codatatype|record|typedef|type_synonym|"
+    r"inductive|inductive_set|coinductive|"
+    r"locale|class|subclass|sublocale|interpretation|"
+    r"lemma|theorem|corollary|proposition|schematic_goal|"
+    r"instantiation|instance|overloading|"
+    r"consts|axiomatization|nominal_datatype)\s+"
+)
+
+
+def _parse_command_header(source: str) -> str:
+    """Extract a concise header like ``fun fib`` from Isabelle command source.
+
+    Handles type parameters: ``datatype ('a,'b) tree = ...`` -> ``datatype tree``.
+    Fallback: first several words whose total length just exceeds 24 chars.
+    """
+    def _first_words(text: str) -> str:
+        words = text.split()
+        parts: list[str] = []
+        total = 0
+        for w in words:
+            parts.append(w)
+            total += len(w)
+            if total > 24:
+                break
+        return ' '.join(parts)
+
+    m = _COMMAND_HEADER_RE.match(source)
+    if not m:
+        return _first_words(source)
+    keyword = m.group(1)
+    rest = source[m.end():].lstrip()
+    # Skip type parameters like ('a, 'b)
+    if rest.startswith("(") and "'" in rest[:10]:
+        depth = 0
+        for i, ch in enumerate(rest):
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+            if depth == 0:
+                rest = rest[i + 1:].lstrip()
+                break
+    # Extract the name (first non-whitespace token, strip trailing colons)
+    name_match = re.match(r"(\S+)", rest)
+    if name_match:
+        name = name_match.group(1).rstrip(":")
+        return f"{keyword} {name}"
+    return _first_words(source)
+
+
+def _format_with_definition(
+    session: Session,
+    source: str,
+    cmd_pos: IsabellePosition,
+    indent: int,
+    out,
+) -> None:
+    """Write definition source with show-once tracking.
+
+    First time for a given *cmd_pos*: writes full indented source.
+    Subsequent times: writes ``associated with `{header}```.
+    """
+    if cmd_pos in session.seen_commands:
+        header = session.seen_commands[cmd_pos]
+        print_indent(indent, out)
+        out.write(f"associated with `{header}`\n")
+    else:
+        header = _parse_command_header(source)
+        session.seen_commands[cmd_pos] = header
+        for line in source.split('\n'):
+            print_indent(indent, out)
+            out.write(line)
+            out.write('\n')
 
 def _trunc_expr(s: str) -> str:
     return _trunc_expr_base(s, AGENT_EXPR_LIMIT)
@@ -70,6 +157,23 @@ def _trunc_expr(s: str) -> str:
 _cc_semantic_search_schema = _load_schema(
     "cc_semantic_search.jsonc" if BATCHED_SEMANTIC_SEARCH
     else "cc_semantic_search_single.jsonc")
+
+_cc_query_schema = {
+    "type": "object",
+    "properties": {
+        "type": {
+            "type": "string",
+            "enum": ["constant", "lemma", "type", "typeclass", "locale",
+                     "introduction rule", "elimination rule"],
+            "description": "The kind of entity to query.",
+        },
+        "name": {
+            "type": "string",
+            "description": "The short or full name of the entity to look up.",
+        },
+    },
+    "required": ["type", "name"],
+}
 
 
 # ============================================================================
@@ -399,6 +503,7 @@ def _format_multi_query_grouped(
 
 class _KnnResult(NamedTuple):
     fetched: list[Interaction_Retrieve.FetchedEntity]
+    kinds: list[EntityKind]  # parallel to fetched
     warnings: list[str]
     error: str | None
 
@@ -410,7 +515,7 @@ async def _run_knn_for_query(
     try:
         kinds = [EntityKind.from_label(label) for label in q["kinds"]]
     except KeyError as e:
-        return _KnnResult([], [], f"Invalid entity kind: {e}")
+        return _KnnResult([], [], [], f"Invalid entity kind: {e}")
     results, warnings = await ml_state.semantic_knn(
         q.get("long_description") or None, k, kinds,
         term_patterns=q.get("term_patterns", []),
@@ -418,10 +523,11 @@ async def _run_knn_for_query(
         theories_include=q.get("theories_include", []),
         name_contains=q.get("name_contains", []))
     if not results:
-        return _KnnResult([], warnings, None)
+        return _KnnResult([], [], warnings, None)
     entities = [(rec.kind, rec.name) for _, rec in results]
     infos = await ml_state._retrieve_entity(entities)
     out: list[Interaction_Retrieve.FetchedEntity] = []
+    out_kinds: list[EntityKind] = []
     for (score, rec), info in zip(results, infos):
         if info is None:
             continue
@@ -439,7 +545,8 @@ async def _run_knn_for_query(
             entity=entity,
             score=score,
             interpretation=' '.join(rec.interpretation.split()) if rec.interpretation else None))
-    return _KnnResult(out, warnings, None)
+        out_kinds.append(rec.kind)
+    return _KnnResult(out, out_kinds, warnings, None)
 
 
 async def _semantic_search_direct(
@@ -447,36 +554,68 @@ async def _semantic_search_direct(
 ) -> str:
     """Run semantic search queries concurrently, returning formatted results."""
     ml_state = session.root.ml_state
+    connection = ml_state.connection
 
     # Run all queries concurrently (knn + entity retrieval in one step)
     knn_results = await asyncio.gather(
         *[_run_knn_for_query(ml_state, q, k) for q in queries])
 
     seen = session.seen_entities
-    lines: list[str] = []
     warn_lines: list[str] = []
-    retrieved: list[str] = []
+    # Collect new entities with their kinds
+    new_items: list[tuple[Interaction_Retrieve.FetchedEntity, EntityKind]] = []
     for r in knn_results:
         if r.error:
             warn_lines.append(f"Warning: {r.error}")
         for w in r.warnings:
             warn_lines.append(f"Warning: {w}")
-        for f in r.fetched[:k]:
+        for f, kind in zip(r.fetched[:k], r.kinds[:k]):
             if f.entity.short_name in seen:
                 continue
-            expr_str = _trunc_expr(', '.join(f.entity.expression))
-            lines.append(f"- {f.entity.short_name}: {expr_str}")
-            if f.interpretation:
-                lines.append(f"  {f.interpretation}")
+            new_items.append((f, kind))
             seen.add(f.entity.short_name)
-            retrieved.append(f"{f.entity.short_name}: {expr_str}")
-    if not lines:
-        lines.append("No new relevant entities found." if seen else "No relevant entities found.")
-    lines.extend(warn_lines)
+
+    if not new_items:
+        lines: list[str] = ["No new relevant entities found." if seen else "No relevant entities found."]
+        lines.extend(warn_lines)
+        result = "\n".join(lines)
+        session.log_tool_response("mcp__proof__search_isabelle", result)
+        return result
+
+    # Batch fetch definition sources concurrently (only for non-theorem kinds)
+    from Isabelle_RPC_Host.universal_key import universal_key_of
+
+    async def _get_def_for_entity(f, kind):
+        if kind in _THEOREM_KINDS:
+            return None
+        try:
+            uk = await universal_key_of(connection, kind, f.entity.full_name)
+            return await _get_definition_with_pos(connection, kind, uk)
+        except Exception:
+            return None
+
+    def_infos = await asyncio.gather(*[_get_def_for_entity(f, kind) for f, kind in new_items])
+
+    # Format with definitions
+    buf = StringIO()
+    retrieved: list[str] = []
+    for (f, _kind), def_info in zip(new_items, def_infos):
+        expr_str = _trunc_expr(', '.join(f.entity.expression))
+        buf.write(f"- {f.entity.short_name}:")
+        print_paragraph(1, buf, expr_str)
+        if f.interpretation and (_kind != EntityKind.THEOREM or expr_str.endswith("…")):
+            buf.write(f"  {f.interpretation}\n")
+        if def_info is not None:
+            source, cmd_pos = def_info
+            _format_with_definition(session, source, cmd_pos, indent=1, out=buf)
+        retrieved.append(f"{f.entity.short_name}: {expr_str}")
+    for w in warn_lines:
+        buf.write(w)
+        buf.write('\n')
     if retrieved:
         query_str = "; ".join(_format_query_header(q) for q in queries)
         session.log_retrieval(query_str, retrieved, quiet=True)
-    result = "\n".join(lines)
+    result = buf.getvalue().rstrip('\n')
     session.log_tool_response("mcp__proof__search_isabelle", result)
     return result
 
@@ -624,6 +763,72 @@ async def _semantic_search_extend_candidates(
     return "\n".join(lines)
 
 
+async def _query_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
+    """Query entity by name with show-once definition source tracking."""
+    _TOOL = "mcp__proof__query"
+    session.log_tool_call(_TOOL, args)
+    from Isabelle_Semantic_Embedding.semantics import query_by_name_raw, Semantic_DB, trunc_expr
+    from Isabelle_RPC_Host.universal_key import UndefinedEntity
+
+    def _ret(msg: str, is_error: bool) -> tuple[str, bool]:
+        session.log_tool_response(_TOOL, ("ERROR: " if is_error else "") + msg)
+        return (msg, is_error)
+
+    connection = session.root.ml_state.connection
+    t = args.get("type", "")
+    name = args.get("name", "")
+
+    if not isinstance(t, str) or not isinstance(name, str):
+        return _ret("Invalid arguments.", True)
+    try:
+        tag = EntityKind.from_label(t)
+    except KeyError:
+        return _ret(f"Invalid type: {t!r}.", True)
+    if not name:
+        return _ret("Empty name.", True)
+
+    try:
+        sem, uk = await query_by_name_raw(connection, tag, name, with_pretty=True)
+        prefix = ""
+    except LookupError as e:
+        return _ret(str(e), False)
+    except UndefinedEntity:
+        if "." in name:
+            short = name.rsplit(".", 1)[1]
+            try:
+                sem, uk = await query_by_name_raw(connection, tag, short, with_pretty=True)
+                prefix = f"The {name} is undefined, but we find:\n"
+            except Exception:
+                return _ret(f'Undefined: "{name}". Try search_isabelle.', True)
+        else:
+            return _ret(f'Undefined: "{name}". Try search_isabelle.', True)
+    except IsabelleError as e:
+        return _ret(str(e), True)
+
+    # Format with proper multi-line expression handling
+    rec = Semantic_DB[uk]
+    buf = StringIO()
+    buf.write(prefix)
+    if rec is not None:
+        buf.write(f"{rec.kind.label} {rec.name}:")
+        print_paragraph(2, buf, trunc_expr(rec.expr) if rec.expr else "")
+        buf.write(rec.interpretation)
+        buf.write('\n')
+    else:
+        buf.write(sem)
+        buf.write('\n')
+
+    # Fetch definition source with position-based caching (not for theorems)
+    if tag not in _THEOREM_KINDS:
+        def_info = await _get_definition_with_pos(connection, tag, uk)
+        if def_info is not None:
+            source, cmd_pos = def_info
+            buf.write('\n')
+            _format_with_definition(session, source, cmd_pos, 0, buf)
+
+    return _ret(buf.getvalue().rstrip('\n'), False)
+
+
 async def _semantic_search_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     session.log_tool_call("mcp__proof__search_isabelle", args)
     try:
@@ -647,7 +852,7 @@ async def _semantic_search_tool_logic(session: Session, args: dict) -> tuple[str
             return (r.text, False)
         return (str(r.value), False)
     except IsabelleError as e:
-        error_msg = f"Isabelle error: {'; '.join(e.errors)}"
+        error_msg = '; '.join(e.errors)
         session.log_tool_response("mcp__proof__search_isabelle", f"ERROR: {error_msg}")
         return (error_msg, True)
     except Exception as e:
@@ -683,6 +888,9 @@ def _create_mcp_server(session: Session, extra_sdk_tools: list | None = None) ->
         Tool(name="search_isabelle",
              description="Search for Isabelle entities.",
              inputSchema=_cc_semantic_search_schema),
+        Tool(name="query",
+             description="Look up the definition and English translation of a lemma/constant/type/typeclass/locale.",
+             inputSchema=_cc_query_schema),
     ]
 
     # Extract schema/handler from SdkMcpTool extras
@@ -701,6 +909,13 @@ def _create_mcp_server(session: Session, extra_sdk_tools: list | None = None) ->
     async def list_tools() -> list[Tool]:
         return tools
 
+    _SEARCH_HINT = (
+        "\n\n---\n"
+        "Hint: You've spent a while searching. What you need might not be "
+        "in the library. Consider shifting focus to writing the proof."
+    )
+    _SEARCH_HINT_THRESHOLD = 180  # seconds
+
     @server.call_tool()
     async def call_tool(name: str, arguments: dict) -> CallToolResult:
         _session_var.set(session)
@@ -716,14 +931,18 @@ def _create_mcp_server(session: Session, extra_sdk_tools: list | None = None) ->
             case "edit":
                 async with tool_lock:
                     result, is_error = await _edit_tool_logic(session, arguments)
+                session.last_proof_op_time = time()
             case "delete":
                 async with tool_lock:
                     result, is_error = await _delete_tool_logic(session, arguments)
+                session.last_proof_op_time = time()
             case "answer":
                 async with tool_lock:
                     result, is_error = await _answer_tool_logic(session, arguments)
             case "search_isabelle":
                 result, is_error = await _semantic_search_tool_logic(session, arguments)
+            case "query":
+                result, is_error = await _query_tool_logic(session, arguments)
             case _:
                 handler = extra_handlers.get(name)
                 if handler is not None:
@@ -733,6 +952,11 @@ def _create_mcp_server(session: Session, extra_sdk_tools: list | None = None) ->
                         content=[TextContent(type="text", text=c.get("text", "")) for c in content])
                 return CallToolResult(
                     content=[TextContent(type="text", text=f"Unknown tool: {name}")], isError=True)
+
+        # Append search hint if agent has been searching without proof progress
+        if name in ("search_isabelle", "query") and not is_error:
+            if time() - session.last_proof_op_time >= _SEARCH_HINT_THRESHOLD:
+                result += _SEARCH_HINT
 
         return CallToolResult(
             content=[TextContent(type="text", text=result)], isError=is_error)

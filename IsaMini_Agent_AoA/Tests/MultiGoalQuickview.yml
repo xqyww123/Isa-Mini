@@ -1,0 +1,62 @@
+--------------------------------------------------
+Initial State
+--------------------------------------------------
+variables:
+  - R: bool
+  - Q: bool
+  - P: bool
+premises:
+  - assms(1): P
+  - assms(2): Q
+  - assms(3): R
+proof goals:
+  - goal index: 1
+    - goal id: goal1
+      goal: P
+      proof: empty
+      Error: Unfinished Proof! Call command `edit` with action `fill` and target step `goal1.1` to provide the proof for the following goal.
+  - goal index: 2
+    - goal id: goal2
+      goal: Q
+      proof: empty
+      Error: Unfinished Proof! Call command `edit` with action `fill` and target step `goal2.1` to provide the proof for the following goal.
+  - goal index: 3
+    - goal id: goal3
+      goal: R
+      proof: empty
+      Error: Unfinished Proof! Call command `edit` with action `fill` and target step `goal3.1` to provide the proof for the following goal.
+--------------------------------------------------
+Overview (all unfinished)
+--------------------------------------------------
+goals:
+  - goal1 (line 0)
+    Error: Unfinished Proof (line 17)
+  - goal2 (line 0)
+    Error: Unfinished Proof (line 22)
+  - goal3 (line 0)
+    Error: Unfinished Proof (line 27)
+--------------------------------------------------
+Overview (goal1 done)
+--------------------------------------------------
+goals:
+  - goal1 (done, line 0)
+  - goal2 (line 0)
+    Error: Unfinished Proof (line 19)
+  - goal3 (line 0)
+    Error: Unfinished Proof (line 24)
+--------------------------------------------------
+Overview (goal1+2 done)
+--------------------------------------------------
+goals:
+  - goal1 (done, line 0)
+  - goal2 (done, line 0)
+  - goal3 (line 0)
+    Error: Unfinished Proof (line 24)
+--------------------------------------------------
+Overview (all done)
+--------------------------------------------------
+goals:
+  - goal1 (done, line 0)
+  - goal2 (done, line 0)
+  - goal3 (done, line 0)
+Unfinished nodes: 0
