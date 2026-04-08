@@ -36,7 +36,7 @@ datatype ('term, 'thm, 'fact) command =
   | SUFFICES of 'term
   | OBTAIN   of (string * string option) list (*vars*) * (string option * string) list (*constraints*)
   | SORRY    of Minilang.opt_var_names
-  | HAMMER   of ('term, 'fact) extended_fact list (*with facts*)
+  | HAMMER   of ('term, 'fact) extended_fact list (*with facts*) * int (*timeout in seconds*)
   | INTRO    of bindings option * bool (*split_conj*)
   | SIMPLIFY of ('term, 'fact) extended_fact list (*simp facts*) * bool (*use_system_simps*)
               * string list (*premise_names*) * bool (*simplify_goal*)
@@ -146,7 +146,7 @@ datatype ('term, 'thm, 'fact) command =
   | SUFFICES of 'term
   | OBTAIN   of (string * string option) list (*vars*) * (string option * string) list (*constraints*)
   | SORRY    of Minilang.opt_var_names
-  | HAMMER   of ('term, 'fact) extended_fact list (*with facts*)
+  | HAMMER   of ('term, 'fact) extended_fact list (*with facts*) * int (*timeout in seconds*)
   | INTRO    of bindings option * bool (*split_conj*)
   | SIMPLIFY of ('term, 'fact) extended_fact list (*simp facts*) * bool (*use_system_simps*)
               * string list (*premise_names*) * bool (*simplify_goal*)
@@ -635,9 +635,11 @@ exception FACT_IN_TIME_FAIL of term
 fun pre_resolve_fact (FactByName fref) ctxt = (fref, ctxt)
   | pre_resolve_fact (FactInTime prop) ctxt =
       let val goal = Goal.init (Thm.cterm_of ctxt prop)
-          val (_, proved) = Phi_Sledgehammer_Solver.auto true
-                              Sledgehammer_Fact.no_fact_override NONE (SOME (Time.fromSeconds 10)) ctxt goal
-                            handle ERROR _ => raise FACT_IN_TIME_FAIL prop
+          val proved =
+            (case Seq.pull (Phi_Sledgehammer_Solver.fast_mepo_tac (Time.fromSeconds 3) ctxt 1 goal)
+               of SOME (st', _) => st'
+                | NONE => raise FACT_IN_TIME_FAIL prop)
+            handle ERROR _ => raise FACT_IN_TIME_FAIL prop
           val thm = Goal.finish ctxt proved
           val fact_name = "proven_in_time___"
           val ((_, _), ctxt') = Proof_Context.note_thms ""
@@ -745,21 +747,28 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
         end
     | SORRY vars =>
         Minilang.END_or_NXT_by_SORRY vars s
-    | HAMMER facts => (
+    | HAMMER (facts, timeout) => (
         with_resolved_override s facts (fn s' => fn ovr =>
-          Minilang.HAMMER ovr s')
-        handle Minilang.OPR_FAIL (Minilang.PROOF_FAIL, _) =>
-          let
-            val ctxt = Minilang.context_of s
-            val st = Minilang.leading_proof_sequent_of s
-                  |> Thm.prop_of
-                  |> Logic.dest_implies |> fst
-            val goal_str = string_of_term ctxt st
-            val msg = "Failed to prove the proof goal automatically:\n  " ^ goal_str ^
-                      "\nThe proof is non-trivial and you must provide a detailed proof."
-          in
-            raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL, msg)
+          let val ctxt = Minilang.context_of s'
+              val improved_SH = Config.get ctxt Minilang.mini_use_improved_SH
+              val override' = if improved_SH then ovr
+                              else Sledgehammer_Fact.no_fact_override
+              val prover = fn id => Phi_Sledgehammer_Solver.auto_raw
+                             improved_SH override' id (SOME (Time.fromSeconds timeout))
+          in Minilang.HAMMER prover s'
           end)
+        handle Phi_Sledgehammer_Solver.Auto_Fail reason =>
+          let val msg = case reason
+                of Phi_Sledgehammer_Solver.Subgoal_Fail sub =>
+                     "Automatic proof fails on the subgoal:\n  " ^
+                     string_of_term (Minilang.context_of s) sub ^
+                     "\nThe goal is non-trivial and a detailed proof is required."
+                 | _ => "Automatic proof fails. The goal is non-trivial and a detailed proof is required."
+          in raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL, msg)
+          end
+             | Minilang.OPR_FAIL (Minilang.PROOF_FAIL, _) =>
+          raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL,
+            "Automatic proof fails. The goal is non-trivial and a detailed proof is required."))
     | INTRO (opt_bindings, split_conj) =>
         #2 (AUTO_INTRO counters opt_bindings split_conj s)
     | SPECIALIZE (opt_name, rule_fact, insts, discharge_facts) =>
@@ -867,9 +876,9 @@ fun check_command_i s (SIMPLIFY (facts, use_sys, prems, simp_goal, bindings_opt)
       end
   | check_command_i _ (OBTAIN vc) = OBTAIN vc (*name_opt * string passthrough*)
   | check_command_i _ (SORRY vars) = SORRY vars
-  | check_command_i s (HAMMER facts) =
+  | check_command_i s (HAMMER (facts, timeout)) =
       let val ctxt = Minilang.context_of s
-      in HAMMER (map (check_extended_fact ctxt) facts) end
+      in HAMMER (map (check_extended_fact ctxt) facts, timeout) end
   | check_command_i _ (INTRO opt_bindings) = INTRO opt_bindings
   | check_command_i s (SPECIALIZE (opt_name, rule_fact, insts, discharge_facts)) =
       let val ctxt = Minilang.context_of s

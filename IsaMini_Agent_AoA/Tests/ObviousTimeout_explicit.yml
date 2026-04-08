@@ -1,0 +1,13 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+goal: True
+proof: empty
+--------------------------------------------------
+After Obvious (timeout=10)
+--------------------------------------------------
+goal: True
+proof:
+  - step id: 1
+    operation: Obvious (timeout: 10s)
+Unfinished nodes: 0

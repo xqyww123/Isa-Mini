@@ -158,9 +158,11 @@ val CONSIDER : (
           -> operation
 val CONSIDER_CMD : command
 
-val HAMMER : Sledgehammer.fact_override -> operation
+val HAMMER : (string option -> Proof.context -> thm -> string * thm) -> operation
 val HAMMER_CMD : command
 val enable_cache_by_step : bool Config.T
+val default_prover : Time.time option -> Sledgehammer.fact_override -> Proof.context
+                  -> string option -> Proof.context -> thm -> string * thm
 
 val END : Sledgehammer.fact_override -> operation
 val END_CMD : command
@@ -1391,9 +1393,11 @@ fun potential_defs_of_const ctxt const_name =
     fun try_suffix suffix =
       let
         val name = base_name ^ suffix
+        val facts = Proof_Context.facts_of ctxt
+        val internal_name = Facts.intern facts name
         val thms = (try (Proof_Context.get_thms ctxt) name) |> the_default []
       in
-        map (fn thm => (name, thm)) thms
+        map (fn thm => (internal_name, thm)) thms
       end
 
     val named_defs = maps try_suffix suffixes
@@ -2919,16 +2923,19 @@ exception REPLACE_CMD of string * string
 val enable_cache_by_step = Config.declare_bool ("enable_cache_by_step", \<^here>) (K true)
 val mini_use_improved_SH = Config.declare_bool ("mini_use_improved_SH", \<^here>) (K true)
 
-fun HAMMER_i override step_id (ctxt, HHF (s,facts) :: S) =
+fun default_prover timeout_opt override ctxt =
+  let val improved_SH = Config.get ctxt mini_use_improved_SH
+      val override' = if improved_SH then override
+                      else Sledgehammer_Fact.no_fact_override
+  in fn id => Phi_Sledgehammer_Solver.auto improved_SH override' id timeout_opt
+  end
+
+fun HAMMER_i (prover : string option -> Proof.context -> thm -> string * thm)
+             step_id (ctxt, HHF (s,facts) :: S) =
   let val (_, _, ID_BASE) = IPS_Data.get ctxt
       val ID = ID_BASE ^ "/" ^ step_id
-      val ID' = if Config.get ctxt enable_cache_by_step
-                then SOME ID
-                else NONE
-      val improved_SH = Config.get ctxt mini_use_improved_SH
-      val override = if improved_SH then override
-                     else Sledgehammer_Fact.no_fact_override
-      val (prf, s') = Phi_Sledgehammer_Solver.auto improved_SH override ID' NONE ctxt s
+      val ID' = if Config.get ctxt enable_cache_by_step then SOME ID else NONE
+      val (prf, s') = prover ID' ctxt s
                       handle ERROR E => raise OPR_FAIL (PROOF_FAIL, E)
    in get_reporter () (Internal (SH_PRF prf))
     ; (ctxt, HHF (s', facts) :: S)
@@ -2936,20 +2943,10 @@ fun HAMMER_i override step_id (ctxt, HHF (s,facts) :: S) =
   end
   | HAMMER_i _ _ _ = raise BROKEN_INVARIANT
 
-(*
-fun HAMMER_all override step_id =
-  let val ID_BASE = step_id ^ "/"
-      fun loop j (stack as (_, HHF (s,_) :: _)) =
-        if no_goal' s then stack
-        else HAMMER_i override (ID_BASE ^ string_of_int j) stack
-          |> loop (j+1)
-        | loop _ _ = raise BROKEN_INVARIANT
-   in loop 0
-  end
-*)
-
-fun HAMMER override = OPR_ID (HAMMER_i override o string_of_int)
-val HAMMER_CMD = orverride_parser >> HAMMER
+fun HAMMER prover = OPR_ID (HAMMER_i prover o string_of_int)
+val HAMMER_CMD = orverride_parser >> (fn ovr =>
+  OPR_ID (fn i => fn (stack as (ctxt, _)) =>
+    HAMMER_i (default_prover NONE ovr ctxt) (string_of_int i) stack))
 
 (** END **)
 
@@ -2960,10 +2957,10 @@ fun chk_block_end (stack as (ctxt, _)) =
       else ()
 
 fun END' param SH_override jj ID (stack as (_, HHF _ :: _)) =
-  let val ID_BASE = if jj = 0 then string_of_int ID 
+  let val ID_BASE = if jj = 0 then string_of_int ID
                     else string_of_int ID ^ "+" ^ string_of_int jj
       val _ = chk_block_end stack
-      val (ctxt, SK'1) = HAMMER_i SH_override ID_BASE stack
+      val (ctxt, SK'1) = HAMMER_i (default_prover NONE SH_override (#1 stack)) ID_BASE stack
                       |> conclude_SK
       val st' = case SK'1 of HHF (st', _) :: _ => st'
                            | _ => raise BROKEN_INVARIANT
@@ -2993,7 +2990,7 @@ fun END' param SH_override jj ID (stack as (_, HHF _ :: _)) =
 fun NXT' param SH_override ID (origin as stack as (_, HHF (st, _) :: _)) =
   let val ID_BASE = string_of_int ID
       val _ = chk_block_end stack
-      val (ctxt, SK'1) = HAMMER_i SH_override ID_BASE stack
+      val (ctxt, SK'1) = HAMMER_i (default_prover NONE SH_override (#1 stack)) ID_BASE stack
                       |> conclude_SK
       val st' = case SK'1 of HHF (st', _) :: _ => st'
                            | _ => raise BROKEN_INVARIANT
@@ -3040,7 +3037,7 @@ fun gen_END_or_NXT' param F stack =
 fun END_or_NXT' param SH_override ID stack =
   let val ID_BASE = string_of_int ID
    in chk_block_end stack
-    ; gen_END_or_NXT' param (HAMMER_i SH_override ID_BASE) stack
+    ; gen_END_or_NXT' param (HAMMER_i (default_prover NONE SH_override (#1 stack)) ID_BASE) stack
   end
 
 fun END SH_override = OPR_ID (END' NO_PARAM SH_override 0)

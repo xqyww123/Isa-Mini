@@ -148,7 +148,10 @@ class ClaudeCode(Session):
                 hooks={
                     "PreToolUse": [
                         HookMatcher(matcher="*", hooks=[self.permission_control]),
-                    ]
+                    ],
+                    "PreCompact": [
+                        HookMatcher(matcher="*", hooks=[self.on_compact]),
+                    ],
                 },
             )
 
@@ -210,6 +213,17 @@ class ClaudeCode(Session):
             reason += P.BASH_REJECTION
 
         return reason
+
+    async def on_compact(
+        self,
+        hook_input: HookInput,
+        tool_use_id: str | None,
+        context: HookContext,
+    ) -> HookJSONOutput:
+        """Clear view caches before context compaction so the agent re-discovers entities."""
+        self.seen_commands.clear()
+        self.seen_entities.clear()
+        return {}
 
     async def permission_control(
         self,
@@ -405,6 +419,7 @@ class ClaudeCode(Session):
         # - Bash: denied
         # - Interaction state: handled by _check_tool_permission in mcp_http_server
         yaml_path_abs = os.path.abspath(self.YAML_path)
+        reset_url = f"http://127.0.0.1:{self._http_server.port}/reset_cache/{self._session_id}"
         settings = json.dumps({
             "permissions": {
                 "allow": [
@@ -420,7 +435,16 @@ class ClaudeCode(Session):
                     "Write",
                     "Edit",
                 ]
-            }
+            },
+            "hooks": {
+                "PreCompact": [{
+                    "matcher": "",
+                    "hooks": [{
+                        "type": "command",
+                        "command": f"curl -s {reset_url}",
+                    }],
+                }],
+            },
         })
         allowed = ",".join(self.TOOL_WHITELIST)
         launcher_path = os.path.join(self.working_dir, "launch_claude.sh")
@@ -665,7 +689,10 @@ class ClaudeCode(Session):
                 hooks={
                     "PreToolUse": [
                         HookMatcher(matcher="*", hooks=[fork.permission_control]),
-                    ]
+                    ],
+                    "PreCompact": [
+                        HookMatcher(matcher="*", hooks=[fork.on_compact]),
+                    ],
                 },
             )
             tag = f"[{fork._fork_name}]"

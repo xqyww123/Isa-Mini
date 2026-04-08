@@ -578,7 +578,7 @@ async def _test_RetrieveFact(root: Root, file: MyIO):
             {"refer_by": "name", "name": "log_nat_power"},
         ]
     })(root.ml_state)
-    node = await root.fill("2", _trivial_parsing(gn))
+    node, _ = await root.fill("2", _trivial_parsing(gn))
     file.write(f"Filled node: {type(node).__name__}, id={node.id}\n")
     node.print(1, file, show_warnings=True)
     print_header("After fill", file)
@@ -625,7 +625,7 @@ async def _test_RetrieveFact2(root: Root, file: MyIO):
         # Invoke the continuation to get a gen_node, then fill
         gn = await e.kontinuation(results)
         root.session.age += 1
-        node = await root.fill("2", _trivial_parsing(gn))
+        node, _ = await root.fill("2", _trivial_parsing(gn))
         file.write(f"Filled node: {type(node).__name__}, id={node.id}\n")
         node.print(1, file, show_warnings=True)
     print_header("After fill", file)
@@ -1306,7 +1306,7 @@ async def _test_ForeNodeFail(root: Root, file: MyIO):
 
     # Insert before step 3: predecessor is step 2 (FAILURE), should be CANCELLED
     root.session.age += 1
-    inserted = await root.insert_before("3", Have.gen({
+    inserted, _ = await root.insert_before("3", Have.gen({
         "thought": "inserted step",
         "statement": {"english": "x equals z", "isabelle": "x = z"},
         "name": "lem2"
@@ -1560,6 +1560,71 @@ async def _test_multi_goal_quickview(root: Root, file: MyIO):
     await root.fill("goal3.1", Obvious.interactive_gen({"facts": []}))
     print_header("Overview (all done)", file)
     root.quickview(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+@model_test("ObviousTimeout_explicit", "Test_ObviousTimeout1.thy", 8)
+async def _test_ObviousTimeout_explicit(root: Root, file: MyIO):
+    """Test Obvious with an explicit timeout parameter on False (should fail after ~timeout seconds)."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Obvious with explicit timeout=10 on False — should fail after ~10s
+    root.session.age += 1
+    t0 = time()
+    await root.fill("1", Obvious.interactive_gen({"facts": [], "timeout": 20}))
+    elapsed = time() - t0
+    file.write(f"Elapsed: {elapsed:.1f}s\n")
+    print_header("After Obvious (timeout=10)", file)
+    root.print(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+@model_test("ObviousTimeout_default", "Test_ObviousTimeout2.thy", 8)
+async def _test_ObviousTimeout_default(root: Root, file: MyIO):
+    """Test Obvious without explicit timeout (should default to 20)."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Obvious without timeout — should default to 20
+    root.session.age += 1
+    await root.fill("1", Obvious.interactive_gen({"facts": []}))
+    print_header("After Obvious (default timeout)", file)
+    root.print(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+@model_test("ObviousTimeout_subproof", "Test_ObviousTimeout3.thy", 8)
+async def _test_ObviousTimeout_subproof(root: Root, file: MyIO):
+    """Test Have with proof=Obvious dict including timeout threads through SubProof."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Have with proof as Obvious dict with explicit timeout=15
+    root.session.age += 1
+    await root.fill("1", Have.interactive_gen({
+        "thought": "x squared is non-negative",
+        "statement": {
+            "english": "x times x equals x squared",
+            "isabelle": "x * x = x^2"
+        },
+        "name": "sq",
+        "proof": {"operation": "Obvious", "facts": [], "timeout": 15}
+    }))
+    print_header("After Have with proof=Obvious(timeout=15)", file)
+    root.print(0, file)
+
+    # Close the remaining goal
+    root.session.age += 1
+    await root.fill("2", Obvious.interactive_gen({"facts": [], "timeout": 30}))
+    print_header("After closing remaining goal (timeout=30)", file)
+    root.print(0, file)
 
     unfinished = set()
     root.unfinished_nodes(unfinished)

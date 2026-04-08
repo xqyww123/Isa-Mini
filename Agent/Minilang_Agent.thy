@@ -1,13 +1,14 @@
 theory Minilang_Agent
   imports Minilang.Minilang Isa_REPL.Isa_REPL Complex_Main
           Isabelle_RPC.Remote_Procedure_Calling Semantic_Embedding.Semantic_Embedding
-begin
-(*declare [[ML_debugger]]*)
+begin                             
+declare [[ML_debugger]]
 ML_file "helper.ML"
 ML_file "agent.ML"
 (* ML_file "agent.old.ML" *)
 (* ML_file "model_AoA.ML" *)
 ML_file "agent_packer.ML"
+ML_file "preprocess.ML"
 ML_file "agent_server.ML"
 (* ML_file "tactic.ML.old"
 ML_file "agent_server.old.ML"
@@ -16,6 +17,16 @@ ML_file "tactic.ML.old" *)
 method_setup AgentAoA = \<open>
   Scan.succeed (K MiniLang_Agent_AoA.method)
 \<close>
+
+method_setup goal_split = \<open>
+  Scan.succeed (fn ctxt =>
+    SIMPLE_METHOD (Goal_Preprocess.preprocess_split_tac ctxt))
+\<close>
+
+method_setup custom_split = \<open>
+  Scan.succeed (fn ctxt =>
+    SIMPLE_METHOD (ALLGOALS (Goal_Preprocess.custom_split_tac ctxt)))
+\<close> \<open>directly apply the recursive structural split (no size threshold)\<close>
 
 (*
 locale A = fixes x :: bool assumes x: x

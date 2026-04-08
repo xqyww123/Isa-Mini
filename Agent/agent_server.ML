@@ -282,8 +282,10 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
               error (String.concat [
                 "The following indicated fact is non-trivial, you must prove it manually:\n",
                 REPL.trim_makrup (MiniLang_Agent.string_of_term (Minilang.context_of s0) prop)])
+            | Phi_Sledgehammer_Solver.Auto_Fail _ =>
+              error "Proof operation failed."
             | ERROR msg => error (REPL.trim_makrup msg)),
-        timeout = SOME (Time.fromSeconds 600)
+        timeout = NONE
       }
 
       val reset_state_callback = {
@@ -472,10 +474,10 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
           in map (fn stmt => \<^try>\<open>
                let val prop = MiniLang_Agent.read_prop ctxt stmt
                    val goal = Goal.init (Thm.cterm_of ctxt prop)
-                   val _ = Phi_Sledgehammer_Solver.auto true
-                             Sledgehammer_Fact.no_fact_override NONE
-                             (SOME (Time.fromSeconds 10)) ctxt goal
-               in NONE end
+               in case Seq.pull (Phi_Sledgehammer_Solver.fast_mepo_tac (Time.fromSeconds 3) ctxt 1 goal)
+                    of SOME _ => NONE
+                     | NONE => SOME "Proof failed"
+               end
                catch ERROR msg => SOME (REPL.trim_makrup msg)
                    | Timeout.TIMEOUT _ => SOME "Timed out"
                    | exn => SOME (REPL.trim_makrup (Runtime.exn_message exn))\<close>
@@ -489,24 +491,26 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
       val contextual_thms_callback = {
         name = "IsaMini.contextual_thms",
         arg_schema = unpackString,
-        ret_schema = packList Universal_Key.pack_universal_key,
+        ret_schema = packList (packPair (Universal_Key.pack_universal_key, packString)),
         function = (fn state_id =>
           let val s = get_state state_id
               val context = Context.Proof (Minilang.context_of s)
               val tree = Minilang.print_state s
               val ((_, facts), _) = Minilang.context_of_leading_goal tree
-              val entities = map (Universal_Key.Named_Theorem o fst) facts
+              val names = map fst facts
+              val entities = map Universal_Key.Named_Theorem names
               val keys = map (Universal_Key.key_of (SOME thm_cache) context) entities
            (* val _ = Semantic_Store.interpret_entities context entities
               val _ = Semantic_Store.embed_entities context entities *)
-          in keys end),
+          in keys ~~ names end),
         timeout = NONE
       }
 
       (* Build AoA command with local callbacks *)
       val s0_ptree = Minilang.print_state s0
-      val {is_infra_const, is_infra_thm, is_infra_type, is_infra_class, is_infra_locale} =
-            Infra_Filter.gen_infra_filters (Context.Proof ctxt)
+      val {constants, theorems, types, classes, locales,
+           introduction_rules, elimination_rules} =
+        Semantic_Store.make_entity_callbacks (Context.Proof ctxt)
       val aoa_cmd = {
         name = "IsaMini.AoA",
         arg_schema = (fn (global_context, driver, invocation_id) =>
@@ -536,13 +540,8 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
           mk_callback validate_prove_in_time_callback,
           Universal_Key.make_universal_key_callback' (SOME thm_cache) (Context.Proof ctxt),
           Config.make_config_lookup_callback (Context.Proof ctxt),
-          Context_Callbacks.make_constants_callback (SOME (not o is_infra_const)) (Context.Proof ctxt),
-          Context_Callbacks.make_theorems_callback (SOME (not o is_infra_thm)) (Context.Proof ctxt),
-          Context_Callbacks.make_types_callback (SOME (not o is_infra_type)) (Context.Proof ctxt),
-          Context_Callbacks.make_classes_callback (SOME (not o is_infra_class)) (Context.Proof ctxt),
-          Context_Callbacks.make_locales_callback (SOME (not o is_infra_locale)) (Context.Proof ctxt),
-          Semantic_Store.make_introduction_rules_callback (SOME (not o is_infra_thm)) (Context.Proof ctxt),
-          Semantic_Store.make_elimination_rules_callback (SOME (not o is_infra_thm)) (Context.Proof ctxt),
+          constants, theorems, types, classes, locales,
+          introduction_rules, elimination_rules,
           Context_Callbacks.make_theory_long_name_callback (Context.Proof ctxt),
           Semantic_Store.make_interpret_theory_callback (Context.Proof ctxt)
         ]
@@ -683,6 +682,11 @@ fun method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
            val log_path = if log_dir = "" then "(no logging)"
                           else log_dir ^ "/" ^ invocation_id
            val _ = writeln ("Agent-of-Agents (driver: " ^ driver ^ ", logs: " ^ log_path ^ ")")
+           (* Preprocess: split large goals before handing to the agent *)
+           val sequent =
+             (case SINGLE (Goal_Preprocess.preprocess_split_tac ctxt) sequent of
+                SOME st' => st'
+              | NONE => sequent)
         in AoA_RPC (driver, MiniLang_Agent.default_cfg, invocation_id) (ctxt, sequent)
            |> (fn (_, sequent') => SOME (Seq.Result (ctxt, sequent'), Seq.empty))
        end )

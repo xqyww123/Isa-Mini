@@ -4,7 +4,7 @@
     "queries": {
       "type": "array",
       "minItems": 1,
-      "description": "List of search queries. Results are grouped by query; entities appearing in multiple queries are referenced by name after their first occurrence.",
+      "description": "Batch queries together whenever possible.",
       "items": {
         "type": "object",
         "properties": {

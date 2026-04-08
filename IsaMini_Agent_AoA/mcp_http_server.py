@@ -29,7 +29,7 @@ import jsoncomment
 import uvicorn
 from mcp.server.lowlevel import Server as MCPServer
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-from mcp.types import Tool, TextContent, CallToolResult
+from mcp.types import Tool, ToolAnnotations, TextContent, CallToolResult
 
 from .model import (
     the_session, _session_var, Session, Minilang_State, MyIO,
@@ -242,8 +242,10 @@ async def _execute_proof_action(
     pn: parsing_node,
     tool_name: str,
     log_prefix: str,
-) -> str:
-    """Execute a proof action with complete error handling."""
+) -> tuple[str, bool]:
+    """Execute a proof action with complete error handling.
+    Returns (response_text, is_error) where is_error is True when the
+    inserted/amended node's evaluation failed."""
     session.root.session.age += 1
     if not callable(pn):
         raise TypeError(f"parsing_node must be callable, got {type(pn)}")
@@ -251,15 +253,15 @@ async def _execute_proof_action(
     try:
         match action:
             case "fill":
-                node = await session.root.fill(step, pn)
+                node, is_error = await session.root.fill(step, pn)
                 session.refresh_YAML()
                 response = await P.filled_step_message(step, session.root, node, session)
             case "insert_before":
-                node = await session.root.insert_before(step, pn)
+                node, is_error = await session.root.insert_before(step, pn)
                 session.refresh_YAML()
                 response = await P.inserted_before_step_message(step, session.root, node, session)
             case "amend":
-                node = await session.root.amend(step, pn)
+                node, is_error = await session.root.amend(step, pn)
                 session.refresh_YAML()
                 response = await P.amended_step_message(step, session.root, node, session)
             case _:
@@ -267,11 +269,11 @@ async def _execute_proof_action(
 
         session.log_tool_response(tool_name, response)
         session.log_proof_tree_snapshot(f"{log_prefix}_step_{step}")
-        return response
+        return response, is_error
 
     except RaiseInteraction as e:
         original_kont = e.kontinuation
-        async def wrapped_kont(results: list[Any]) -> str:
+        async def wrapped_kont(results: list[Any]) -> tuple[str, bool]:
             result_gn = await original_kont(results)
             assert callable(result_gn), \
                 "Continuation from _execute_proof_action must return gen_node (callable)"
@@ -280,13 +282,13 @@ async def _execute_proof_action(
         wrapped_e = RaiseInteraction(e.interactions, wrapped_kont)
         result = await _handle_raise_interaction(session, wrapped_e, tool_name)
         if isinstance(result, _Prompt):
-            return result.text
+            return result.text, False
         return result.value
 
     except AoA_Error as e:
         error_msg = str(e)
         session.log_tool_response(tool_name, f"ERROR: {error_msg}")
-        return error_msg
+        return error_msg, True
 
 
 # ============================================================================
@@ -319,10 +321,10 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             error_msg = str(e)
             session.log_tool_response("mcp__proof__edit", f"ERROR: {error_msg}")
             return (error_msg, True)
-        result = await _execute_proof_action(
+        result, is_error = await _execute_proof_action(
             session, args["action"], step, gn,
             "mcp__proof__edit", "after_fill")
-        return (result, False)
+        return (result, is_error)
     except IsabelleError as e:
         error_msg = f"Isabelle error: {'; '.join(e.errors)}"
         session.log_tool_response("mcp__proof__edit", f"ERROR: {error_msg}")
@@ -512,26 +514,34 @@ async def _run_knn_for_query(
     ml_state: Minilang_State, q: dict, k: int,
 ) -> _KnnResult:
     """Run semantic_knn for a single query dict and resolve entities via RPC."""
+    import logging as _logging
+    _perf_log = _logging.getLogger("perf.run_knn_for_query")
+    _t0 = time()
     try:
         kinds = [EntityKind.from_label(label) for label in q["kinds"]]
     except KeyError as e:
         return _KnnResult([], [], [], f"Invalid entity kind: {e}")
+    _t_knn = time()
     results, warnings = await ml_state.semantic_knn(
         q.get("long_description") or None, k, kinds,
         term_patterns=q.get("term_patterns", []),
         type_patterns=q.get("type_patterns", []),
         theories_include=q.get("theories_include", []),
         name_contains=q.get("name_contains", []))
+    _perf_log.info("_run_knn: semantic_knn %.3fs (%d results)", time() - _t_knn, len(results))
     if not results:
         return _KnnResult([], [], warnings, None)
     entities = [(rec.kind, rec.name) for _, rec in results]
+    _t_retrieve = time()
     infos = await ml_state._retrieve_entity(entities)
+    _perf_log.info("_run_knn: _retrieve_entity %.3fs (%d entities)", time() - _t_retrieve, len(entities))
     out: list[Interaction_Retrieve.FetchedEntity] = []
     out_kinds: list[EntityKind] = []
     for (score, rec), info in zip(results, infos):
         if info is None:
-            continue
-        short_name, exprs = info
+            short_name, exprs = rec.name, []
+        else:
+            short_name, exprs = info
         if rec.kind in _THEOREM_KINDS:
             entity: IsabelleEntity = IsabelleFact_Presented(
                 full_name=rec.name, short_name=short_name,
@@ -546,6 +556,7 @@ async def _run_knn_for_query(
             score=score,
             interpretation=' '.join(rec.interpretation.split()) if rec.interpretation else None))
         out_kinds.append(rec.kind)
+    _perf_log.info("_run_knn: total %.3fs", time() - _t0)
     return _KnnResult(out, out_kinds, warnings, None)
 
 
@@ -553,12 +564,17 @@ async def _semantic_search_direct(
     session: Session, queries: list[dict], k: int,
 ) -> str:
     """Run semantic search queries concurrently, returning formatted results."""
+    import logging as _logging
+    _perf_log = _logging.getLogger("perf.search_direct")
+    _t0 = time()
     ml_state = session.root.ml_state
     connection = ml_state.connection
 
     # Run all queries concurrently (knn + entity retrieval in one step)
+    _t_knn = time()
     knn_results = await asyncio.gather(
         *[_run_knn_for_query(ml_state, q, k) for q in queries])
+    _perf_log.info("search_direct: all knn queries %.3fs (%d queries)", time() - _t_knn, len(queries))
 
     seen = session.seen_entities
     warn_lines: list[str] = []
@@ -594,15 +610,21 @@ async def _semantic_search_direct(
         except Exception:
             return None
 
+    _t_defs = time()
     def_infos = await asyncio.gather(*[_get_def_for_entity(f, kind) for f, kind in new_items])
+    _perf_log.info("search_direct: fetch_definitions %.3fs (%d entities)", time() - _t_defs, len(new_items))
+    _perf_log.info("search_direct: total %.3fs", time() - _t0)
 
     # Format with definitions
     buf = StringIO()
     retrieved: list[str] = []
     for (f, _kind), def_info in zip(new_items, def_infos):
         expr_str = _trunc_expr(', '.join(f.entity.expression))
-        buf.write(f"- {f.entity.short_name}:")
-        print_paragraph(1, buf, expr_str)
+        if expr_str:
+            buf.write(f"- {f.entity.short_name}:")
+            print_paragraph(1, buf, expr_str)
+        else:
+            buf.write(f"- {f.entity.short_name}\n")
         if f.interpretation and (_kind != EntityKind.THEOREM or expr_str.endswith("…")):
             buf.write(f"  {f.interpretation}\n")
         if def_info is not None:
@@ -756,7 +778,11 @@ async def _semantic_search_extend_candidates(
 
     # Format in the same style as Interaction_Retrieve.prompt()
     for i, fetched in enumerate(new_facts):
-        lines.append(f"{start_idx + i}. {fetched.entity.short_name}: {_trunc_expr(', '.join(fetched.entity.expression))}")
+        expr_str = _trunc_expr(', '.join(fetched.entity.expression))
+        if expr_str:
+            lines.append(f"{start_idx + i}. {fetched.entity.short_name}: {expr_str}")
+        else:
+            lines.append(f"{start_idx + i}. {fetched.entity.short_name}")
         if fetched.interpretation:
             lines.append(f"  {fetched.interpretation}")
     lines.extend(warn_lines)
@@ -812,8 +838,9 @@ async def _query_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     if rec is not None:
         buf.write(f"{rec.kind.label} {rec.name}:")
         print_paragraph(2, buf, trunc_expr(rec.expr) if rec.expr else "")
-        buf.write(rec.interpretation)
-        buf.write('\n')
+        if rec.interpretation:
+            buf.write(rec.interpretation)
+            buf.write('\n')
     else:
         buf.write(sem)
         buf.write('\n')
@@ -825,6 +852,24 @@ async def _query_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             source, cmd_pos = def_info
             buf.write('\n')
             _format_with_definition(session, source, cmd_pos, 0, buf)
+
+    # Fetch candidate definitions for constants (same mechanism as Unfold)
+    if tag == EntityKind.CONSTANT:
+        try:
+            candidates = await session.root.ml_state.potential_defs_of([name])
+            if candidates:
+                seen = session.seen_entities
+                buf.write('\nRelevant definitions:\n')
+                for cand in candidates:
+                    if cand.short_name in seen:
+                        buf.write(f'- {cand.short_name} (seen)\n')
+                    else:
+                        expr_str = _trunc_expr(', '.join(cand.expression))
+                        buf.write(f'- {cand.short_name}:')
+                        print_paragraph(1, buf, expr_str)
+                        seen.add(cand.short_name)
+        except Exception:
+            pass
 
     return _ret(buf.getvalue().rstrip('\n'), False)
 
@@ -886,11 +931,13 @@ def _create_mcp_server(session: Session, extra_sdk_tools: list | None = None) ->
              description="Answer a pending question",
              inputSchema=_cc_answer_schema),
         Tool(name="search_isabelle",
-             description="Search for Isabelle entities.",
-             inputSchema=_cc_semantic_search_schema),
+             description="Search for Isabelle entities. Filter aggressively: term_patterns, type_patterns, theories_include, name_contains.",
+             inputSchema=_cc_semantic_search_schema,
+             annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)),
         Tool(name="query",
              description="Look up the definition and English translation of a lemma/constant/type/typeclass/locale.",
-             inputSchema=_cc_query_schema),
+             inputSchema=_cc_query_schema,
+             annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)),
     ]
 
     # Extract schema/handler from SdkMcpTool extras
@@ -1024,12 +1071,32 @@ class _SessionRouter:
 
     def __init__(self):
         self.apps: dict[str, _ManagedMCPApp] = {}
+        self.sessions: dict[str, Session] = {}
 
     async def __call__(self, scope, receive, send):
         if scope["type"] not in ("http", "websocket"):
             return
 
         path: str = scope["path"]
+
+        # Handle /reset_cache/<session_id> — clears view caches on context compaction
+        if scope["type"] == "http" and path.startswith("/reset_cache/"):
+            session_id = path[len("/reset_cache/"):]
+            session = self.sessions.get(session_id)
+            if session is not None:
+                session.seen_commands.clear()
+                session.seen_entities.clear()
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"text/plain")],
+            })
+            await send({
+                "type": "http.response.body",
+                "body": b"OK",
+            })
+            return
+
         for session_id, app in list(self.apps.items()):
             prefix = f"/mcp/{session_id}"
             if path == prefix or path.startswith(prefix + "/"):
@@ -1099,10 +1166,12 @@ class ProofMCPHTTPServer:
         app = _ManagedMCPApp(mcp_server)
         await app.start()
         self._router.apps[session_id] = app
+        self._router.sessions[session_id] = session
         return f"http://127.0.0.1:{self._port}/mcp/{session_id}"
 
     async def unregister_session(self, session_id: str):
         app = self._router.apps.pop(session_id, None)
+        self._router.sessions.pop(session_id, None)
         if app is not None:
             await app.stop()
 

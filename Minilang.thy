@@ -4,7 +4,7 @@ theory Minilang
   imports HOL.HOL Auto_Sledgehammer.Auto_Sledgehammer
 begin
 
-declare [[ML_debugger, ML_exception_trace, ML_exception_debugger, ML_print_depth=1000]]
+(* declare [[ML_debugger, ML_exception_trace, ML_exception_debugger, ML_print_depth=1000]] *)
 
 definition \<open>NO_SIMP (X::'a::{}) \<equiv> X\<close>
 
@@ -16,7 +16,7 @@ ML_file \<open>./library/function/proof_local_inductive.ML\<close>
 ML_file \<open>./library/function/proof_local_function.ML\<close>
 ML_file \<open>./library/proof.ML\<close>
 
-term Pure.eq
+(* term Pure.eq *)
 
 attribute_setup OF = \<open>Attrib.thms >> (fn Bs =>
       Thm.rule_attribute Bs (fn ctxt => Minilang_Aux.xOF (Context.proof_of ctxt) Bs))\<close>

@@ -18,9 +18,20 @@ import json
 import logging
 import os
 import sqlite3
+import sys
 import yaml
 import platformdirs
 from io import StringIO
+
+def _setup_perf_logging() -> None:
+    """One-time setup: route all perf.* loggers to stderr."""
+    root = logging.getLogger("perf")
+    if root.handlers:
+        return
+    sh = logging.StreamHandler(sys.stderr)
+    sh.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(message)s"))
+    root.addHandler(sh)
+    root.setLevel(logging.DEBUG)
 
 type varname = str
 type varname_spec = varname | None # underscore '_' is represented as None
@@ -812,8 +823,8 @@ class Minilang_Operation(NamedTuple):
     def RULE(rule_ref: 'IsabelleFact | None') -> 'Minilang_Operation':
         return Minilang_Operation("RULE", [rule_ref.pack()] if rule_ref is not None else [])
     @staticmethod
-    def HAMMER(fact_refs: 'list[IsabelleFact]') -> 'Minilang_Operation':
-        return Minilang_Operation("HAMMER", [r.pack() for r in fact_refs])
+    def HAMMER(fact_refs: 'list[IsabelleFact]', timeout: int = 20) -> 'Minilang_Operation':
+        return Minilang_Operation("HAMMER", ([r.pack() for r in fact_refs], timeout))
     @staticmethod
     def INTRO(bindings: Bindings | None, split: bool) -> 'Minilang_Operation':
         return Minilang_Operation("INTRO", (bindings, split))
@@ -1003,40 +1014,59 @@ class Minilang_State:
         the entity enumeration callbacks for ML-side filtering.
         Returns (results, warnings) where warnings include notices about
         undeclared free variables in term patterns."""
+        _setup_perf_logging()
+        _perf_log = logging.getLogger("perf.semantic_knn")
+        _t0 = time()
         term_patterns = [ascii_of_unicode(p) for p in term_patterns]
         type_patterns = [ascii_of_unicode(p) for p in type_patterns]
         # Build domain
         if EntityKind.THEOREM in kinds:
-            local_keys: list[universal_key] = await self.connection.callback(
+            _t_ctx = time()
+            local_entries: list[tuple] = await self.connection.callback(
                 "IsaMini.contextual_thms", self.name)
-            local_keys = [bytes(k_) for k_ in local_keys]
-            domain: Semantic_Vector_Store.Domain = Semantic_Vector_Store.ContextExtended(local_keys)
+            _perf_log.info("semantic_knn: contextual_thms callback %.3fs (%d entries)",
+                           time() - _t_ctx, len(local_entries))
+            local_keys = [bytes(k_) for k_, _ in local_entries]
+            local_names = {bytes(k_): name for k_, name in local_entries}
+            domain: Semantic_Vector_Store.Domain = Semantic_Vector_Store.ContextExtended(
+                local_keys, extra_names=local_names)
         else:
             domain = Semantic_Vector_Store.ContextAll
+        _t_store = time()
         store: Semantic_Vector_Store = await self.connection.semantic_vector_store()  # type: ignore
+        _perf_log.info("semantic_knn: get_vector_store %.3fs", time() - _t_store)
         if query is not None:
+            _t_lookup = time()
             results, warnings = await store.lookup(query, k, kinds, domain,
                                    term_patterns=term_patterns,
                                    type_patterns=type_patterns,
                                    theories_include=theories_include,
                                    name_contains=name_contains)
+            _perf_log.info("semantic_knn: store.lookup %.3fs", time() - _t_lookup)
+            _perf_log.info("semantic_knn: total %.3fs", time() - _t0)
             return [(score, rec._replace(name=ascii_of_unicode(rec.name)))
                     for score, rec in results], warnings
         else:
             # Pattern-only search: get filtered entities, look up records, no ranking
             from Isabelle_RPC_Host.context import entities_of
             from Isabelle_Semantic_Embedding.semantics import Semantic_DB
+            _t_eof = time()
             entries, warnings = await entities_of(self.connection, kinds,
                                      term_patterns=term_patterns,
                                      type_patterns=type_patterns,
                                      theories_include=theories_include,
                                      name_contains=name_contains,
                                      limit=k)
+            _perf_log.info("semantic_knn: entities_of (pattern-only) %.3fs (%d entries)",
+                           time() - _t_eof, len(entries))
             results = []
-            for uk, _ in entries:
+            for uk, name, _ in entries:
                 rec = Semantic_DB[uk]
                 if rec is not None:
                     results.append((0.0, rec._replace(name=ascii_of_unicode(rec.name))))
+                else:
+                    results.append((0.0, SemanticRecord(EntityKind(uk[16]), ascii_of_unicode(name), None, None)))
+            _perf_log.info("semantic_knn: total %.3fs", time() - _t0)
             return results, warnings
     async def compute_bindings(self, var_names: list[str], fact_names: list[str]) -> Bindings:
         """
@@ -1279,24 +1309,29 @@ class Interaction_Retrieve(Interaction):
         return self._candidate_facts_cache
 
     async def _fetch_facts(self) -> 'list[Interaction_Retrieve.FetchedEntity]':
-        import logging
-        _log = logging.getLogger(__name__)
+        _perf_log = logging.getLogger("perf.fetch_facts")
+        _t0 = time()
+        _perf_log.info("_fetch_facts: start query=%r k=%d kinds=%s",
+                       self.query, self.k, [k.label for k in self.kinds])
+        _t_knn = time()
         candidates, _ = await self.state.semantic_knn(self.query, self.k, self.kinds,
             term_patterns=self.term_patterns,
             type_patterns=self.type_patterns,
             theories_include=self.theories_include,
             name_contains=self.name_contains)
+        _perf_log.info("_fetch_facts: semantic_knn %.3fs (%d candidates)", time() - _t_knn, len(candidates))
         if not candidates:
             return []
         entities = [(rec.kind, rec.name) for _, rec in candidates]
+        _t_retrieve = time()
         infos = await self.state._retrieve_entity(entities)
+        _perf_log.info("_fetch_facts: _retrieve_entity %.3fs (%d entities)", time() - _t_retrieve, len(entities))
         results: list[Interaction_Retrieve.FetchedEntity] = []
         for (score, rec), info in zip(candidates, infos):
             if info is None:
-                _log.warning("Entity %r (%s) not found in proof context, skipping",
-                             rec.name, rec.kind.label)
-                continue
-            short_name, exprs = info
+                short_name, exprs = rec.name, []
+            else:
+                short_name, exprs = info
             if rec.kind in _THEOREM_KINDS:
                 entity: IsabelleEntity = IsabelleFact_Presented(
                     full_name=rec.name, short_name=short_name,
@@ -1310,6 +1345,7 @@ class Interaction_Retrieve(Interaction):
                 entity=entity,
                 score=score,
                 interpretation=' '.join(rec.interpretation.split()) if rec.interpretation else None))
+        _perf_log.info("_fetch_facts: total %.3fs", time() - _t0)
         return results
 
     def _entity_title(self) -> str:
@@ -1408,14 +1444,14 @@ class Interaction_RetrieveForProof(Interaction_Retrieve):
             query: str, kinds: list[EntityKind],
             **kwargs: Any):
         super().__init__(state, query, kinds, **kwargs)
-        self._relevant_constants_cache: list[tuple[str, str, str]] | None = None
+        self._relevant_constants_cache: list[tuple[str, str, str | None]] | None = None
 
-    async def relevant_constants(self) -> list[tuple[str, str, str]]:
+    async def relevant_constants(self) -> list[tuple[str, str, str | None]]:
         if self._relevant_constants_cache is None:
             self._relevant_constants_cache = await self._fetch_constants()
         return self._relevant_constants_cache
 
-    async def _fetch_constants(self) -> list[tuple[str, str, str]]:
+    async def _fetch_constants(self) -> list[tuple[str, str, str | None]]:
         """Fetch relevant constants via semantic search.
         Returns list of (short_name, type, interpretation) triples."""
         candidates, _ = await self.state.semantic_knn(self.query, 10, [EntityKind.CONSTANT])
@@ -1424,11 +1460,12 @@ class Interaction_RetrieveForProof(Interaction_Retrieve):
             return []
         entities = [(EntityKind.CONSTANT, rec.name) for _, rec in candidates]
         infos = await self.state._retrieve_entity(entities)
-        results: list[tuple[str, str, str]] = []
+        results: list[tuple[str, str, str | None]] = []
         for (_, rec), info in zip(candidates, infos):
             if info is None:
-                continue
-            short_name, type_strs = info
+                short_name, type_strs = rec.name, []
+            else:
+                short_name, type_strs = info
             results.append((short_name, type_strs[0] if type_strs else "", rec.interpretation))
         return results
 
@@ -1444,8 +1481,9 @@ class Interaction_RetrieveForProof(Interaction_Retrieve):
             for short_name, typ, interp in constants:
                 print_indent(indent+1, file)
                 file.write(f"- {short_name}: {typ}\n")
-                print_indent(indent+2, file)
-                file.write(f"{interp}\n")
+                if interp:
+                    print_indent(indent+2, file)
+                    file.write(f"{interp}\n")
             file.write("\n")
         file.write(f"Similar {title} from the library:\n")
         await self._prompt_candidates(indent, file)
@@ -1568,10 +1606,12 @@ class Node(ABC):
         return self._print_step_id(indent, file, update_line)
     def quickview_title(self) -> str:
         return type(self).__name__
-    def quickview_header(self, indent: int, file: MyIO, done: bool = False) -> int:
+    def _should_print_done(self) -> bool:
+        return not self.does_quickview_need_detail()
+    def quickview_header(self, indent: int, file: MyIO) -> int:
         print_indent(indent, file)
         changed_mark = "changed, " if self.changed else ""
-        done_mark = "done, " if done else ""
+        done_mark = "done, " if self._should_print_done() else ""
         match self.status.status:
             case EvaluationStatus.Status.FAILURE:
                 status_mark = "failed, "
@@ -1699,10 +1739,11 @@ class Node(ABC):
                 await node._cancel()
             await node._refresh_all_after_me()
             return node
-    async def insert_before(self, step: step, pn: parsing_node) -> 'Node':
+    async def insert_before(self, step: step, pn: parsing_node) -> 'tuple[Node, bool]':
         try:
             node = self.locate_node(step)
-            return await node.insert_before_me(pn)
+            ret = await node.insert_before_me(pn)
+            return ret, ret.status.status == EvaluationStatus.Status.FAILURE
         except NodeNotFound:
             raise CannotInsert_NodeNotFound(step)
     @abstractmethod
@@ -1718,7 +1759,7 @@ class Node(ABC):
     def unfinished_nodes(self, ret: set['Node']) -> None:
         if self.status.status != EvaluationStatus.Status.SUCCESS:
             ret.add(self)
-    async def fill(self, id: step, pn: parsing_node) -> 'Node':
+    async def fill(self, id: step, pn: parsing_node) -> 'tuple[Node, bool]':
         ids = id.split('.')
         node = self._locate_node(ids[:-1], id, 0)
         to_fill = node._id_of_openning_prf_to_fill()
@@ -1729,7 +1770,7 @@ class Node(ABC):
         ret = await node.append(pn)
         if ret is None:
             raise InternalError("Don't know how to fill a node when the node's append method returns None")
-        return ret
+        return ret, ret.status.status == EvaluationStatus.Status.FAILURE
     def _id_of_openning_prf_to_fill(self) -> step | None:
         return None
 
@@ -1863,14 +1904,17 @@ class Node(ABC):
             raise CannotAmend_Root()
     def _amend_from(self, old: 'Node') -> None:
         self._first_time = False
-    async def amend(self, id: step, pn: parsing_node) -> 'Node':
+    async def amend(self, id: step, pn: parsing_node) -> 'tuple[Node, bool]':
         try:
             node = self.locate_node(id)
-            return await node.amend_me(pn)
+            ret = await node.amend_me(pn)
+            return ret, ret.status.status == EvaluationStatus.Status.FAILURE
         except NodeNotFound:
             raise CannotAmend_NodeNotFound(id)
 
 class Leaf(Node):
+    def _should_print_done(self) -> bool:
+        return False
     def __init__(self, config: NodeConfig, thought: str):
         super().__init__(config, thought)
     @abstractmethod
@@ -2073,12 +2117,11 @@ class NonLeaf_Node(Node):
             child._print_all_warnings(file)
         self._print_warnings(0, file, [Warning.Position.FOOTER], show_at=True)
     def does_quickview_need_detail(self) -> bool:
-        if super().does_quickview_need_detail():
-            return True
-        return any(child.does_quickview_need_detail() for child in self.sub_nodes)
+        return super().does_quickview_need_detail() or \
+            any(child.does_quickview_need_detail() for child in self.sub_nodes)
     def quickview(self, indent: int, file: MyIO) -> int:
         if not self.does_quickview_need_detail():
-            return self.quickview_header(indent, file, done=True)
+            return self.quickview_header(indent, file)
         indent = super().quickview(indent, file)
         for child in self.sub_nodes:
             child.quickview(indent, file)
@@ -2527,7 +2570,7 @@ class GoalNode(StdBlock):
         else:
             return super()._print_step_id(indent, file, update_line)
     async def _refresh_me_alone(self):
-        is_init = self.age == self.session.age
+        is_init = self._first_time
         old_case = (self.case_vars, self.case_hyps)
         consider_case_msgs = [m for m in self.ml_state.messages if isinstance(m, Consider_Case_Msg)]
         match consider_case_msgs:
@@ -2558,16 +2601,18 @@ class GoalNode(StdBlock):
         if goal is not None:
             ret.update(goal.context.hyps)
         return ret
-    def quickview_header(self, indent: int, file: MyIO, done: bool = False) -> int:
+    def quickview_header(self, indent: int, file: MyIO) -> int:
         if self.is_single_goal:
             return indent
         else:
-            done_mark = "done, " if done else ""
+            done_mark = "done, " if self._should_print_done() else ""
             print_indent(indent, file)
             file.write(f"- {self.id} ({done_mark}line {self.line})\n")
             return indent + 1
 
 class SubgoalMaker(GoalContainer, StdBlock):
+    def _should_print_done(self) -> bool:
+        return bool(self.sub_nodes) and super()._should_print_done()
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._initial_goal_index : int = 1
@@ -2583,7 +2628,7 @@ class SubgoalMaker(GoalContainer, StdBlock):
     def _on_regenerating_goals(self, goals: list[Goal]) -> None:
         pass
     async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
-        is_init = self.age == self.session.age
+        is_init = self._first_time
         old_n_subnodes = len(self.sub_nodes)
         fail = await super()._refresh_the_beginning_opr(begin_opr)
         if fail is not None:
@@ -2677,7 +2722,7 @@ class CaseSplit_Like(SubgoalMaker_NoTailEnder):
         if self.case_hyps is not None:
             print_hyps(self.case_hyps, indent, file, {}, "assuming premises")
     async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
-        is_init = self.age == self.session.age
+        is_init = self._first_time
         old_case = (self.case_vars, self.case_hyps)
         fail = await super()._refresh_the_beginning_opr(begin_opr)
         if fail is None and not self.sub_nodes:
@@ -2816,15 +2861,18 @@ def _split_fetched(fetched: 'list[IsabelleFact | Interaction_RetrieveForProof]'
 
 class Obvious_ToolArg(TypedDict):
     facts: list[FactByName | FactByProposition]
+    timeout: int
 
 class Obvious_InternalToolArg(NamedTuple):
     facts: list[IsabelleFact]
+    timeout: int = 20
 
 @proof_operation("Obvious", Obvious_ToolArg)
 class Obvious(Leaf):
     def __init__(self, config: NodeConfig, arg: Obvious_InternalToolArg):
         super().__init__(config, "")
         self.fact_refs = arg.facts
+        self.timeout = arg.timeout
 
     @staticmethod
     def gen(arg: Obvious_InternalToolArg) -> parsing_node:
@@ -2834,13 +2882,14 @@ class Obvious(Leaf):
     def interactive_gen(arg: Obvious_ToolArg) -> parsing_node:
         async def parse(alive_state: Minilang_State,
                         exact_state: Minilang_State | None = None) -> gen_node:
+            timeout = arg.get("timeout", 20)
             if not arg["facts"]:
-                return lambda config: Obvious(config, Obvious_InternalToolArg(facts=[]))
+                return lambda config: Obvious(config, Obvious_InternalToolArg(facts=[], timeout=timeout))
             # FactByName | FactByProposition only — no interactions possible
             fetched = cast(list[IsabelleFact], await alive_state.fetch_facts(arg["facts"]))
             facts, warnings = _filter_unfound(fetched)
             def mk(config: NodeConfig) -> 'Obvious':
-                node = Obvious(config, Obvious_InternalToolArg(facts=facts))
+                node = Obvious(config, Obvious_InternalToolArg(facts=facts, timeout=timeout))
                 for w in warnings:
                     node.warnings.append(Warning(Warning.Position.FOOTER, w))
                 return node
@@ -2849,7 +2898,7 @@ class Obvious(Leaf):
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
         print_indent(indent, file)
-        file.write("operation: Obvious\n")
+        file.write(f"operation: Obvious (timeout: {self.timeout}s)\n")
         if self.fact_refs:
             print_indent(indent, file)
             file.write(f"with facts:\n")
@@ -2859,12 +2908,13 @@ class Obvious(Leaf):
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
         return indent
     async def _refresh_me_alone(self) -> None:
-        self.fact_refs, pit_warnings = await _filter_unprovable(self.fact_refs, self.ml_state)
-        for w in pit_warnings:
-            self.warnings.append(Warning(Warning.Position.FOOTER, w))
+        if self._first_time:
+            self.fact_refs, pit_warnings = await _filter_unprovable(self.fact_refs, self.ml_state)
+            for w in pit_warnings:
+                self.warnings.append(Warning(Warning.Position.FOOTER, w))
         await super()._refresh_me_alone()
     def the_operation(self) -> 'Minilang_Operation | FailureReason':
-        return Minilang_Operation.HAMMER(self.fact_refs)
+        return Minilang_Operation.HAMMER(self.fact_refs, self.timeout)
 
 async def _parse_subproof(sp: SubProof, alive_state: Minilang_State | None) -> SubProof_parsed:
     """Parse a SubProof into a sync gen_node (or None for 'Given later').
@@ -3287,7 +3337,11 @@ class Rewrite(Leaf):
         )
 
     async def _refresh_me_alone(self) -> None:
-        is_init = self.age == self.session.age
+        is_init = self._first_time
+        if self._first_time:
+            self.using, pit_warnings = await _filter_unprovable(self.using, self.ml_state)
+            for w in pit_warnings:
+                self.warnings.append(Warning(Warning.Position.FOOTER, w))
         old_bindings = self.bindings
         old_goal = (self.resulting_state().prooftree_of().top_goal()
                     if self.status.status == EvaluationStatus.Status.SUCCESS else None)
@@ -3670,7 +3724,7 @@ class Intro(SubgoalMaker_NoTailEnder):
         else:
             return ("goals", indent+1)
     async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
-        is_init = self.age == self.session.age
+        is_init = self._first_time
         old_bindings = self.bindings
         s = self._state_after_beginning()
         old_goals = s.prooftree.top_goals() if s.prooftree is not None else None
@@ -4004,7 +4058,7 @@ class Induction(CaseSplit_Like):
             lambda config, parsed: Induction(config, arg, subproof_parsed=parsed),
             arg["proof"])
     async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
-        is_init = self.age == self.session.age
+        is_init = self._first_time
         old_variables = list(self.variables)
         if self._first_time:
             try:
