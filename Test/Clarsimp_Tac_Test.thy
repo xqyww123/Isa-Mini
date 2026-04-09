@@ -123,4 +123,18 @@ text \<open>If the above lemma compiles, the SIMPLIFY with an irrelevant rule su
   Summary: check the output window for results of groups A\<dash>E.
   Key question: does group B/E show 0 results for CHANGED?\<close>
 
+record point = xcoord :: nat  ycoord :: nat
+record cpoint = point + color :: string
+
+ML \<open>case @{typ \<open>cpoint\<close>} of Type (_, [Type x  ]) => x\<close>
+
+term cpoint.make
+term cpoint.fields
+typ cpoint_ext
+typ "unit point_scheme"
+typ "unit point_ext"
+typ "unit cpoint_scheme"
+typ "unit cpoint_ext"
+typ 
+
 end

@@ -1713,7 +1713,7 @@ class Node(ABC):
             return
         self.status = EVALUATION_CACNCELLED
         await self.resulting_state().reset()
-    def on_edit_failure(self) -> EditFailureResponse:
+    def _on_edit_failure(self) -> EditFailureResponse:
         """Hook called when this node's evaluation status is FAILURE after fill/insert_before/amend.
         Derived classes can override to customize failure handling.
         Returns (is_error, failure_reason, revert)."""
@@ -1755,7 +1755,7 @@ class Node(ABC):
             node = self.locate_node(step)
             ret = await node.insert_before_me(pn)
             if ret.status.status == EvaluationStatus.Status.FAILURE:
-                response = ret.on_edit_failure()
+                response = ret._on_edit_failure()
                 if response.revert:
                     rp = ret._delete_me()
                     await rp._refresh_me_alone()
@@ -1790,7 +1790,7 @@ class Node(ABC):
         if ret is None:
             raise InternalError("Don't know how to fill a node when the node's append method returns None")
         if ret.status.status == EvaluationStatus.Status.FAILURE:
-            response = ret.on_edit_failure()
+            response = ret._on_edit_failure()
             if response.revert:
                 rp = ret._delete_me()
                 await rp._refresh_me_alone()
@@ -1936,7 +1936,7 @@ class Node(ABC):
             old_node = self.locate_node(id)
             new_node, old_node = await old_node.amend_me(pn)
             if new_node.status.status == EvaluationStatus.Status.FAILURE:
-                response = new_node.on_edit_failure()
+                response = new_node._on_edit_failure()
                 if response.revert:
                     parent = new_node.parent
                     if parent is None:
@@ -2967,6 +2967,10 @@ class Obvious(Leaf):
         await super()._refresh_me_alone()
     def the_operation(self) -> 'Minilang_Operation | FailureReason':
         return Minilang_Operation.HAMMER(self.fact_refs, self.timeout)
+    def _on_edit_failure(self) -> EditFailureResponse:
+        if self.status.status == EvaluationStatus.Status.FAILURE:
+            return EditFailureResponse(is_error=True, failure_reason=self.status.reason, revert=True)
+        return super()._on_edit_failure()
 
 async def _parse_subproof(sp: SubProof, alive_state: Minilang_State | None) -> SubProof_parsed:
     """Parse a SubProof into a sync gen_node (or None for 'Given later').
