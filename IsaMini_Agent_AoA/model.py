@@ -1,5 +1,6 @@
 from time import time
 from datetime import datetime
+from io import StringIO
 from pathlib import Path
 from .helper import split_id_into_segs, cat_segs_into_id, incr_id_major, incr_id_minor, MyIO
 from typing import Any, Awaitable, Iterable, NamedTuple, Protocol, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired, Annotated
@@ -76,6 +77,11 @@ class FailureReason(NamedTuple):
     """A human-readable failure reason, used in Interaction.answer() returns
     and Leaf.the_operation() returns."""
     reason: str
+
+class EditFailureResponse(NamedTuple):
+    is_error: bool
+    failure_reason: FailureReason | None
+    revert: bool
 
 class IsabelleEntity:
     """A resolved Isabelle entity (constant, type, class, locale, etc.) with display info."""
@@ -195,7 +201,7 @@ def print_indent(indent: int, file):
     for _ in range(indent):
         file.write("  ")
 
-def print_paragraph(indent: int, file: MyIO, para: str):
+def print_paragraph(indent: int, file: MyIO | StringIO, para: str):
     lines = para.strip().split("\n")
     match lines:
         case [line]:
@@ -1707,6 +1713,11 @@ class Node(ABC):
             return
         self.status = EVALUATION_CACNCELLED
         await self.resulting_state().reset()
+    def on_edit_failure(self) -> EditFailureResponse:
+        """Hook called when this node's evaluation status is FAILURE after fill/insert_before/amend.
+        Derived classes can override to customize failure handling.
+        Returns (is_error, failure_reason, revert)."""
+        return EditFailureResponse(is_error=True, failure_reason=None, revert=False)
     @abstractmethod
     def assemble(self, output: list[Minilang_Operation] | None = None) -> list[Minilang_Operation]:
         """
@@ -1739,11 +1750,19 @@ class Node(ABC):
                 await node._cancel()
             await node._refresh_all_after_me()
             return node
-    async def insert_before(self, step: step, pn: parsing_node) -> 'tuple[Node, bool]':
+    async def insert_before(self, step: step, pn: parsing_node) -> 'tuple[Node, bool, FailureReason | None]':
         try:
             node = self.locate_node(step)
             ret = await node.insert_before_me(pn)
-            return ret, ret.status.status == EvaluationStatus.Status.FAILURE
+            if ret.status.status == EvaluationStatus.Status.FAILURE:
+                response = ret.on_edit_failure()
+                if response.revert:
+                    rp = ret._delete_me()
+                    await rp._refresh_me_alone()
+                    if rp.parent is not None:
+                        await rp._refresh_all_after_me()
+                return ret, response.is_error, response.failure_reason
+            return ret, False, None
         except NodeNotFound:
             raise CannotInsert_NodeNotFound(step)
     @abstractmethod
@@ -1759,7 +1778,7 @@ class Node(ABC):
     def unfinished_nodes(self, ret: set['Node']) -> None:
         if self.status.status != EvaluationStatus.Status.SUCCESS:
             ret.add(self)
-    async def fill(self, id: step, pn: parsing_node) -> 'tuple[Node, bool]':
+    async def fill(self, id: step, pn: parsing_node) -> 'tuple[Node, bool, FailureReason | None]':
         ids = id.split('.')
         node = self._locate_node(ids[:-1], id, 0)
         to_fill = node._id_of_openning_prf_to_fill()
@@ -1770,7 +1789,15 @@ class Node(ABC):
         ret = await node.append(pn)
         if ret is None:
             raise InternalError("Don't know how to fill a node when the node's append method returns None")
-        return ret, ret.status.status == EvaluationStatus.Status.FAILURE
+        if ret.status.status == EvaluationStatus.Status.FAILURE:
+            response = ret.on_edit_failure()
+            if response.revert:
+                rp = ret._delete_me()
+                await rp._refresh_me_alone()
+                if rp.parent is not None:
+                    await rp._refresh_all_after_me()
+            return ret, response.is_error, response.failure_reason
+        return ret, False, None
     def _id_of_openning_prf_to_fill(self) -> step | None:
         return None
 
@@ -1897,18 +1924,40 @@ class Node(ABC):
                 if rp.parent is not None:
                     await rp._refresh_all_after_me()
         return not_found
-    async def amend_me(self, pn: parsing_node) -> 'Node':
+    async def amend_me(self, pn: parsing_node) -> 'tuple[Node, Node]':
         if self.parent is not None:
             return await self.parent._amend_child(self, pn)
         else:
             raise CannotAmend_Root()
     def _amend_from(self, old: 'Node') -> None:
         self._first_time = False
-    async def amend(self, id: step, pn: parsing_node) -> 'tuple[Node, bool]':
+    async def amend(self, id: step, pn: parsing_node) -> 'tuple[Node, bool, FailureReason | None]':
         try:
-            node = self.locate_node(id)
-            ret = await node.amend_me(pn)
-            return ret, ret.status.status == EvaluationStatus.Status.FAILURE
+            old_node = self.locate_node(id)
+            new_node, old_node = await old_node.amend_me(pn)
+            if new_node.status.status == EvaluationStatus.Status.FAILURE:
+                response = new_node.on_edit_failure()
+                if response.revert:
+                    parent = new_node.parent
+                    if parent is None:
+                        raise InternalError("Cannot revert amend on root node")
+                    for i, c in enumerate(parent.sub_nodes):
+                        if c is new_node:
+                            if isinstance(new_node, NonLeaf_Node) and isinstance(old_node, NonLeaf_Node):
+                                old_node.sub_nodes[:] = new_node.sub_nodes
+                                new_node.sub_nodes.clear()
+                                for child in old_node.sub_nodes:
+                                    child.parent = old_node
+                            parent.sub_nodes[i] = old_node
+                            old_node.parent = parent
+                            if parent._can_continue_before_child(old_node):
+                                await old_node._refresh_me_alone()
+                            else:
+                                await old_node._cancel()
+                            await old_node._refresh_all_after_me()
+                            break
+                return new_node, response.is_error, response.failure_reason
+            return new_node, False, None
         except NodeNotFound:
             raise CannotAmend_NodeNotFound(id)
 
@@ -2152,7 +2201,7 @@ class NonLeaf_Node(Node):
                     self._closed_by = None
                 return
         raise InternalError("The target node is not my children")
-    async def _amend_child(self, child: 'Node', pn: parsing_node) -> 'Node':
+    async def _amend_child(self, child: 'Node', pn: parsing_node) -> 'tuple[Node, Node]':
         for i, c in enumerate(self.sub_nodes):
             if c is child:
                 alive = self._find_alive_state(i)
@@ -2170,7 +2219,7 @@ class NonLeaf_Node(Node):
                 else:
                     await new_node._cancel()
                 await new_node._refresh_all_after_me()
-                return new_node
+                return new_node, child
         raise InternalError("The target node is not my children")
     def _amend_from(self, old: 'NonLeaf_Node') -> None:  # type: ignore[override]
         super()._amend_from(old)
@@ -2513,6 +2562,9 @@ class GoalNode(StdBlock):
             ml_state = Minilang_State.assign(self.ml_state)
             sub_config = NodeConfig(local_step, ml_state, self)
             self.sub_nodes.append(auto_proof(sub_config))
+    @property
+    def titled_id(self) -> str:
+        return self.id
     def goal(self) -> Goal | None:
         ptree = self.ml_state.prooftree
         if ptree is None:
@@ -4726,3 +4778,62 @@ def agent_driver(name : str):
         Session.Driver[name] = constructor
         return constructor
     return decorator
+
+
+# ============================================================================
+# Interaction Dispatch Helpers
+# ============================================================================
+
+class _Prompt(NamedTuple):
+    """A prompt string to return to the LLM."""
+    text: str
+
+class _Result(NamedTuple):
+    """A resolved result (gen_node or Any)."""
+    value: Any
+
+
+async def _handle_raise_interaction(
+    session: Session,
+    e: RaiseInteraction,
+    tool_name: str,
+) -> _Prompt | _Result:
+    """Dispatch a RaiseInteraction. Returns _Prompt (for LLM) or _Result (all done)."""
+    wi = Working_Interactions(
+        interactions=e.interactions,
+        results=[None] * len(e.interactions),
+        result_set=[False] * len(e.interactions),
+        kontinuation=e.kontinuation,
+    )
+    session.working_interactions.append(wi)
+    forking = [(i, inter) for i, inter in enumerate(e.interactions)
+               if inter.forking != ForkingMode.NO]
+    n_inline = len(e.interactions) - len(forking)
+    session.log_interaction(tool_name,
+        f"{len(e.interactions)} interactions ({len(forking)} forking, {n_inline} inline)")
+    if forking:
+        session._launch_forks(forking, wi)
+
+    # 2. Find first unfinished non-forking interaction
+    for i, inter in enumerate(wi.interactions):
+        if wi.result_set[i] is False:
+            buffer = StringIO()
+            try:
+                await inter.prompt(0, MyIO(buffer))
+            except ImmediateAnswer as imm:
+                wi.results[i] = imm.answer
+                wi.result_set[i] = True
+                continue
+            session.log_tool_response(tool_name, f"[INTERACTION PROMPT]\n{buffer.getvalue()}")
+            return _Prompt(buffer.getvalue())
+
+    # 3. All non-forking done — await forks and call continuation
+    session.log_interaction("continuation", "all interactions resolved")
+    try:
+        result = await wi.run_continuation()
+    except RaiseInteraction as nested:
+        session.working_interactions.pop()
+        return await _handle_raise_interaction(session, nested, tool_name)
+    session.working_interactions.pop()
+    session.log_interaction(tool_name, "interaction resolved")
+    return _Result(result)

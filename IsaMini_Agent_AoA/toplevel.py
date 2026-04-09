@@ -13,6 +13,17 @@ class UnknownDriver(AoA_Error):
     def __init__(self, driver: str):
         super().__init__(f"Unknown driver: {driver}")
 
+
+@isabelle_remote_procedure("IsaMini.query_by_name")
+async def _query_by_name_rpc(arg: tuple[int, str], connection: Connection) -> tuple[str, bool]:
+    """Query entity by kind and name — reuses the core of the MCP query tool."""
+    from .retrieval import _query_entity_core
+    from Isabelle_RPC_Host.universal_key import EntityKind
+    kind_int, name = arg
+    tag = EntityKind(kind_int)
+    text, is_error, _uk = await _query_entity_core(connection, tag, name)
+    return (text, is_error)
+
 @isabelle_remote_procedure("IsaMini.AoA")
 async def IsaMini_AoA(data: tuple[Any, Any, str, str, str, str, str], connection: Connection):
     (global_context, ptree, driver, log_dir, invocation_id,

@@ -578,7 +578,7 @@ async def _test_RetrieveFact(root: Root, file: MyIO):
             {"refer_by": "name", "name": "log_nat_power"},
         ]
     })(root.ml_state)
-    node, _ = await root.fill("2", _trivial_parsing(gn))
+    node, _, _ = await root.fill("2", _trivial_parsing(gn))
     file.write(f"Filled node: {type(node).__name__}, id={node.id}\n")
     node.print(1, file, show_warnings=True)
     print_header("After fill", file)
@@ -625,7 +625,7 @@ async def _test_RetrieveFact2(root: Root, file: MyIO):
         # Invoke the continuation to get a gen_node, then fill
         gn = await e.kontinuation(results)
         root.session.age += 1
-        node, _ = await root.fill("2", _trivial_parsing(gn))
+        node, _, _ = await root.fill("2", _trivial_parsing(gn))
         file.write(f"Filled node: {type(node).__name__}, id={node.id}\n")
         node.print(1, file, show_warnings=True)
     print_header("After fill", file)
@@ -1306,7 +1306,7 @@ async def _test_ForeNodeFail(root: Root, file: MyIO):
 
     # Insert before step 3: predecessor is step 2 (FAILURE), should be CANCELLED
     root.session.age += 1
-    inserted, _ = await root.insert_before("3", Have.gen({
+    inserted, _, _ = await root.insert_before("3", Have.gen({
         "thought": "inserted step",
         "statement": {"english": "x equals z", "isabelle": "x = z"},
         "name": "lem2"

@@ -18,6 +18,11 @@ val AoA_RPC : driver * (MiniLang_Agent.cfg * MiniLang_Agent.budget) * string
 
 val method : thm list -> context_state -> context_state Seq.result Seq.seq
 
+(* Query entity by kind and name via the AoA query tool's Python core.
+   Returns (formatted_text, is_error). *)
+val query_by_name : Context.generic ->
+  Universal_Key.entity_kind * string -> string * bool
+
 end
 
 structure MiniLang_Agent_AoA : MINILANG_AGENT_AoA = struct
@@ -690,6 +695,26 @@ fun method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
         in AoA_RPC (driver, MiniLang_Agent.default_cfg, invocation_id) (ctxt, sequent)
            |> (fn (_, sequent') => SOME (Seq.Result (ctxt, sequent'), Seq.empty))
        end )
+
+
+(*** Query by name RPC — reuses the AoA query tool's Python core ***)
+
+local open MessagePackBinIO.Pack MessagePackBinIO.Unpack in
+
+fun query_by_name (context : Context.generic) (kind : Universal_Key.entity_kind, name : string)
+    : string * bool =
+  let
+    val cmd : (Universal_Key.entity_kind * string, string * bool)
+              Remote_Procedure_Calling.command = {
+      name = "IsaMini.query_by_name",
+      arg_schema = packPair (Universal_Key.pack_entity_kind', packString),
+      ret_schema = unpackPair (unpackString, unpackBool),
+      callback = [Universal_Key.make_universal_key_callback context],
+      timeout = NONE
+    }
+  in Remote_Procedure_Calling.call_command cmd (kind, name) end
+
+end (*local*)
 
 
 end
