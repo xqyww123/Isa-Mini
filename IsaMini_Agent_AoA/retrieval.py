@@ -13,7 +13,6 @@ import re
 import sys
 from io import StringIO
 from time import time
-from typing import Callable, NamedTuple, TypeVar
 
 import jsoncomment
 
@@ -30,7 +29,7 @@ from .model import (
     Session, Minilang_State, MyIO,
     RaiseInteraction, Interaction, IsabelleError,
     EntityKind, print_indent, print_paragraph,
-    Interaction_Retrieve,
+    Interaction_Retrieve, RetrievedEntity,
     IsabelleEntity, IsabelleFact_Presented, FactByName,
     _THEOREM_KINDS, AGENT_EXPR_LIMIT,
     TOOL_SEARCH, InteractiveRetrievalMode, ForkingMode,
@@ -56,26 +55,9 @@ def _load_schema(filename: str) -> dict:
 
 BATCHED_SEMANTIC_SEARCH = True
 
-_cc_semantic_search_schema = _load_schema(
+_cc_query_schema = _load_schema(
     "cc_semantic_search.jsonc" if BATCHED_SEMANTIC_SEARCH
     else "cc_semantic_search_single.jsonc")
-
-_cc_query_schema = {
-    "type": "object",
-    "properties": {
-        "type": {
-            "type": "string",
-            "enum": ["constant", "lemma", "type", "typeclass", "locale",
-                     "introduction rule", "elimination rule"],
-            "description": "The kind of entity to query.",
-        },
-        "name": {
-            "type": "string",
-            "description": "The short or full name of the entity to look up.",
-        },
-    },
-    "required": ["type", "name"],
-}
 
 
 # ============================================================================
@@ -172,6 +154,77 @@ def _trunc_expr(s: str) -> str:
     return _trunc_expr_base(s, AGENT_EXPR_LIMIT)
 
 
+async def _format_fetched_entity(
+    f: RetrievedEntity,
+    buf,
+    *,
+    prefix: str = "- ",
+    indent: int = 0,
+    session: Session | None = None,
+    def_info: tuple[str, IsabellePosition] | bool | None = None,
+    potential_defs: bool = False,
+) -> None:
+    """Render a single retrieved entity in unified format.
+
+    ``prefix``: line prefix, e.g. ``"- "`` for final output, ``"{i}. "`` for numbered lists.
+    ``indent``: base indentation level.
+    ``def_info``: ``True`` to fetch definition via RPC, a pre-fetched tuple to use directly,
+    or ``None``/``False`` to skip.  Requires ``session`` for both fetching and show-once tracking.
+    ``potential_defs``: if True and entity is a constant, append relevant definitions.
+    """
+    expr_str = _trunc_expr(', '.join(f.entity.expression))
+    print_indent(indent, buf)
+    if expr_str:
+        buf.write(f"{prefix}{f.entity.short_name}:")
+        print_paragraph(indent + 1, buf, expr_str)
+    else:
+        buf.write(f"{prefix}{f.entity.short_name}\n")
+    if f.interpretation and (f.entity.kind not in _THEOREM_KINDS or expr_str.endswith("…")):
+        print_indent(indent + 1, buf)
+        buf.write(f"{f.interpretation}\n")
+    if def_info is True and session is not None:
+        def_info = await _get_def_for_fetched(session.root.ml_state.connection, f)
+    if isinstance(def_info, tuple) and session is not None:
+        source, cmd_pos = def_info
+        if not _PROOF_COMMAND_RE.match(source):
+            _format_with_definition(session, source, cmd_pos, indent=indent + 1, out=buf)
+    if potential_defs and session is not None and f.entity.kind == EntityKind.CONSTANT:
+        try:
+            candidates = await session.root.ml_state.potential_defs_of([f.entity.short_name])
+            if candidates:
+                seen = session.seen_entities
+                print_indent(indent + 1, buf)
+                buf.write('Relevant definitions:\n')
+                for cand in candidates:
+                    if cand.short_name in seen:
+                        print_indent(indent + 1, buf)
+                        buf.write(f'- {cand.short_name} (seen)\n')
+                    else:
+                        cand_expr = _trunc_expr(', '.join(cand.expression))
+                        print_indent(indent + 1, buf)
+                        buf.write(f'- {cand.short_name}:')
+                        print_paragraph(indent + 2, buf, cand_expr)
+                        seen.add(cand.short_name)
+        except Exception:
+            pass
+
+
+def _format_repeated(
+    new_names: list[str],
+    repeated_names: list[str],
+    buf,
+    *,
+    indent: int = 0,
+) -> None:
+    """Append a note about repeated (already-seen) entity names."""
+    if repeated_names:
+        print_indent(indent, buf)
+        if new_names:
+            buf.write(f"{', '.join(repeated_names)} are also relevant\n")
+        else:
+            buf.write(f"{', '.join(repeated_names)} are relevant. No new entities found.\n")
+
+
 # ============================================================================
 # Multi-Query Formatting
 # ============================================================================
@@ -194,68 +247,23 @@ def _format_query_header(q: dict) -> str:
     return "; ".join(parts) if parts else "(no filters)"
 
 
-_T = TypeVar("_T")
-
-def _format_multi_query_grouped(
-    queries: list[dict],
-    groups: list[list[_T]],
-    name_of: Callable[[_T], str],
-    format_entity: Callable[[_T], str],
-    seen: set[str],
-    empty_msg: str = "No relevant entities found.",
-    preamble_of: Callable[[dict, list[_T]], list[str]] | None = None,
-    show_repeated: bool = True,
-) -> list[str]:
-    """Format grouped multi-query results with cross-query dedup by reference.
-
-    ``seen`` is mutated: names of formatted entities are added.
-    ``preamble_of(query, items)`` may return extra lines (e.g. warnings)
-    inserted right after the ``Query:`` header.
-    ``show_repeated``: if False, silently skip repeated entities instead of listing them.
-    """
-    lines: list[str] = []
-    for q, items in zip(queries, groups):
-        lines.append(f"Query: {_format_query_header(q)}")
-        if preamble_of is not None:
-            lines.extend(preamble_of(q, items))
-        new_items: list[_T] = []
-        repeated_names: list[str] = []
-        for item in items:
-            name = name_of(item)
-            if name in seen:
-                repeated_names.append(name)
-            else:
-                new_items.append(item)
-                seen.add(name)
-        if not new_items and not repeated_names:
-            lines.append(f"  {empty_msg}")
-        elif not new_items:
-            lines.append(f"  {empty_msg}")
-        for item in new_items:
-            lines.append(format_entity(item))
-        if show_repeated and repeated_names:
-            if new_items:
-                lines.append(f"  {', '.join(repeated_names)} are also relevant")
-            else:
-                lines.append(f"  {', '.join(repeated_names)} are relevant. No new entities found.")
-        lines.append("")
-    return lines
-
-
 # ============================================================================
 # Warning Collection / Formatting
 # ============================================================================
 
+_KnnQueryResult = tuple[list[RetrievedEntity], list[str], str | None]
+# (fetched, warnings, error)
+
 def _collect_query_warnings(
-    knn_results: list[_KnnResult],
+    knn_results: list[_KnnQueryResult],
 ) -> list[list[str]]:
     """Collect warnings from each knn result into per-query lists."""
     per_query: list[list[str]] = []
-    for r in knn_results:
+    for _fetched, warnings, error in knn_results:
         qwarns: list[str] = []
-        if r.error:
-            qwarns.append(f"Warning: {r.error}")
-        for w in r.warnings:
+        if error:
+            qwarns.append(f"Warning: {error}")
+        for w in warnings:
             qwarns.append(f"Warning: {w}")
         per_query.append(qwarns)
     return per_query
@@ -284,61 +292,34 @@ def _format_warn_lines(
 # KNN Query
 # ============================================================================
 
-class _KnnResult(NamedTuple):
-    fetched: list[Interaction_Retrieve.FetchedEntity]
-    kinds: list[EntityKind]  # parallel to fetched
-    warnings: list[str]
-    error: str | None
-
-
 async def _run_knn_for_query(
     ml_state: Minilang_State, q: dict, k: int,
-) -> _KnnResult:
-    """Run semantic_knn for a single query dict and resolve entities via RPC."""
-    import logging as _logging
-    _perf_log = _logging.getLogger("perf.run_knn_for_query")
-    _t0 = time()
+) -> _KnnQueryResult:
+    """Parse a query dict and run semantic_knn."""
     try:
         kinds = [EntityKind.from_label(label) for label in q["kinds"]]
     except KeyError as e:
-        return _KnnResult([], [], [], f"Invalid entity kind: {e}")
-    _t_knn = time()
-    results, warnings = await ml_state.semantic_knn(
+        return ([], [], f"Invalid entity kind: {e}")
+    exact_name = q.get("exact_name") or None
+    fetched, warnings = await ml_state.semantic_knn(
         q.get("long_description") or None, k, kinds,
         term_patterns=q.get("term_patterns", []),
         type_patterns=q.get("type_patterns", []),
         theories_include=q.get("theories_include", []),
-        name_contains=q.get("name_contains", []))
-    _perf_log.info("_run_knn: semantic_knn %.3fs (%d results)", time() - _t_knn, len(results))
-    if not results:
-        return _KnnResult([], [], warnings, None)
-    entities = [(rec.kind, rec.name) for _, rec in results]
-    _t_retrieve = time()
-    infos = await ml_state._retrieve_entity(entities)
-    _perf_log.info("_run_knn: _retrieve_entity %.3fs (%d entities)", time() - _t_retrieve, len(entities))
-    out: list[Interaction_Retrieve.FetchedEntity] = []
-    out_kinds: list[EntityKind] = []
-    for (score, rec), info in zip(results, infos):
-        if info is None:
-            short_name, exprs = rec.name, []
-        else:
-            short_name, exprs = info
-        if rec.kind in _THEOREM_KINDS:
-            entity: IsabelleEntity = IsabelleFact_Presented(
-                full_name=rec.name, short_name=short_name,
-                fact=FactByName(refer_by="name", name=short_name),
-                expression=exprs)
-        else:
-            entity = IsabelleEntity(
-                full_name=rec.name, short_name=short_name,
-                expression=exprs)
-        out.append(Interaction_Retrieve.FetchedEntity(
-            entity=entity,
-            score=score,
-            interpretation=' '.join(rec.interpretation.split()) if rec.interpretation else None))
-        out_kinds.append(rec.kind)
-    _perf_log.info("_run_knn: total %.3fs", time() - _t0)
-    return _KnnResult(out, out_kinds, warnings, None)
+        name_contains=q.get("name_contains", []),
+        exact_name=exact_name)
+    return (fetched, warnings, None)
+
+
+async def _get_def_for_fetched(
+    connection, f: RetrievedEntity,
+) -> tuple[str, IsabellePosition] | None:
+    """Fetch definition source for an entity. Returns None on failure."""
+    try:
+        uk = await universal_key_of(connection, f.entity.kind, f.entity.full_name)
+        return await _get_definition_with_pos(connection, f.entity.kind, uk)
+    except Exception:
+        return None
 
 
 # ============================================================================
@@ -353,7 +334,6 @@ async def _semantic_search_direct(
     _perf_log = _logging.getLogger("perf.search_direct")
     _t0 = time()
     ml_state = session.root.ml_state
-    connection = ml_state.connection
 
     # Run all queries concurrently (knn + entity retrieval in one step)
     _t_knn = time()
@@ -363,54 +343,31 @@ async def _semantic_search_direct(
 
     seen = session.seen_entities
     per_query_warnings = _collect_query_warnings(knn_results)
-    # Collect new entities with their kinds
-    new_items: list[tuple[Interaction_Retrieve.FetchedEntity, EntityKind]] = []
-    for r in knn_results:
-        for f, kind in zip(r.fetched[:k], r.kinds[:k]):
+    # Collect new entities
+    new_items: list[RetrievedEntity] = []
+    for fetched, _warnings, _error in knn_results:
+        for f in fetched[:k]:
             if f.entity.short_name in seen:
                 continue
-            new_items.append((f, kind))
+            new_items.append(f)
             seen.add(f.entity.short_name)
 
     if not new_items:
         lines: list[str] = ["No new relevant entities found." if seen else "No relevant entities found."]
         lines.extend(_format_warn_lines(queries, per_query_warnings))
         result = "\n".join(lines)
-        session.log_tool_response("mcp__proof__search_isabelle", result)
+        session.log_tool_response("mcp__proof__query", result)
         return result
 
-    # Batch fetch definition sources concurrently (only for non-theorem kinds)
-    from Isabelle_RPC_Host.universal_key import universal_key_of
-
-    async def _get_def_for_entity(f, kind):
-        if kind in _THEOREM_KINDS:
-            return None
-        try:
-            uk = await universal_key_of(connection, kind, f.entity.full_name)
-            return await _get_definition_with_pos(connection, kind, uk)
-        except Exception:
-            return None
-
-    _t_defs = time()
-    def_infos = await asyncio.gather(*[_get_def_for_entity(f, kind) for f, kind in new_items])
-    _perf_log.info("search_direct: fetch_definitions %.3fs (%d entities)", time() - _t_defs, len(new_items))
     _perf_log.info("search_direct: total %.3fs", time() - _t0)
 
-    # Format with definitions
+    # Format with unified renderer
     buf = StringIO()
     retrieved: list[str] = []
-    for (f, _kind), def_info in zip(new_items, def_infos):
+    for f in new_items:
+        await _format_fetched_entity(f, buf, session=session, def_info=True,
+                                     potential_defs=(f.score == 1.0))
         expr_str = _trunc_expr(', '.join(f.entity.expression))
-        if expr_str:
-            buf.write(f"- {f.entity.short_name}:")
-            print_paragraph(1, buf, expr_str)
-        else:
-            buf.write(f"- {f.entity.short_name}\n")
-        if f.interpretation and (_kind != EntityKind.THEOREM or expr_str.endswith("…")):
-            buf.write(f"  {f.interpretation}\n")
-        if def_info is not None:
-            source, cmd_pos = def_info
-            _format_with_definition(session, source, cmd_pos, indent=1, out=buf)
         retrieved.append(f"{f.entity.short_name}: {expr_str}")
     for w in _format_warn_lines(queries, per_query_warnings):
         buf.write(w)
@@ -419,7 +376,7 @@ async def _semantic_search_direct(
         query_str = "; ".join(_format_query_header(q) for q in queries)
         session.log_retrieval(query_str, retrieved, quiet=True)
     result = buf.getvalue().rstrip('\n')
-    session.log_tool_response("mcp__proof__search_isabelle", result)
+    session.log_tool_response("mcp__proof__query", result)
     return result
 
 
@@ -438,7 +395,7 @@ class Interaction_RetrieveForSearch(Interaction_Retrieve):
         file.write(f"Select all relevant {title} from the following list:\n")
         await self._prompt_candidates(indent, file)
         if self.fork_allowed_tools is None or TOOL_SEARCH in self.fork_allowed_tools:
-            file.write("\nYou are encouraged to call the search_isabelle tool "
+            file.write("\nYou are encouraged to call the query tool "
                        "to find more if none of the above is relevant.\n")
         file.write("Answer with the indices of all relevant entries.\n")
 
@@ -477,31 +434,50 @@ async def _semantic_search_with_filtering(session: Session, queries: list[dict])
     seen = session.seen_entities
 
     async def format_selected(results: list[list[IsabelleEntity]]) -> str:
-        if len(results) == 1:
-            selected = results[0]
-            if not selected:
-                return _empty_msg
-            new_entities = [e for e in selected if e.short_name not in seen]
-            repeated = [e.short_name for e in selected if e.short_name in seen]
-            lines: list[str] = []
-            for entity in new_entities:
-                lines.append(f"- {entity.short_name}: {_trunc_expr(', '.join(entity.expression))}")
-                seen.add(entity.short_name)
-            if repeated:
-                if new_entities:
-                    lines.append(f"{', '.join(repeated)} are also relevant")
-                else:
-                    lines.append(f"{', '.join(repeated)} are relevant. No new entities found.")
-            return "\n".join(lines) if lines else _empty_msg
+        # Build lookup from full_name → RetrievedEntity for each interaction
+        fetched_maps: list[dict[str, RetrievedEntity]] = []
+        for inter in interactions:
+            if isinstance(inter, Interaction_Retrieve):
+                candidates = await inter.candidate_facts()
+                fetched_maps.append({f.entity.full_name: f for f in candidates})
+            else:
+                fetched_maps.append({})
 
-        # Multiple queries — grouped output with cross-query dedup by reference
-        return "\n".join(_format_multi_query_grouped(
-            queries, results,
-            name_of=lambda e: e.short_name,
-            format_entity=lambda e: f"  {e.short_name}: {_trunc_expr(', '.join(e.expression))}",
-            seen=seen,
-            empty_msg=_empty_msg,
-        ))
+        buf = StringIO()
+        multi = len(results) > 1
+
+        for q_idx, (selected, fmap) in enumerate(zip(results, fetched_maps)):
+            if multi:
+                buf.write(f"Query: {_format_query_header(queries[q_idx])}\n")
+            indent = 1 if multi else 0
+
+            new_fetched: list[RetrievedEntity] = []
+            repeated_names: list[str] = []
+            for entity in selected:
+                if entity.short_name in seen:
+                    repeated_names.append(entity.short_name)
+                else:
+                    f = fmap.get(entity.full_name)
+                    if f is not None:
+                        new_fetched.append(f)
+                    seen.add(entity.short_name)
+
+            if not new_fetched and not repeated_names:
+                print_indent(indent, buf)
+                buf.write(f"{_empty_msg}\n")
+            else:
+                for f in new_fetched:
+                    await _format_fetched_entity(f, buf, indent=indent,
+                                                 session=session, def_info=True,
+                                                 potential_defs=(f.score == 1.0))
+
+            _format_repeated(
+                [f.entity.short_name for f in new_fetched],
+                repeated_names, buf, indent=indent)
+            if multi:
+                buf.write("\n")
+
+        return buf.getvalue().rstrip('\n') or _empty_msg
 
     raise RaiseInteraction(interactions, format_selected)
 
@@ -526,16 +502,15 @@ async def _semantic_search_extend_candidates(
     knn_results = await asyncio.gather(
         *[_run_knn_for_query(ml_state, q, 10) for q in queries])
 
-    lines: list[str] = []
     per_query_warnings = _collect_query_warnings(knn_results)
 
     # Deduplicate against existing candidates and across queries
     existing = await interaction.candidate_facts()
     existing_names = {f.entity.full_name for f in existing}
-    new_facts: list[Interaction_Retrieve.FetchedEntity] = []
+    new_facts: list[RetrievedEntity] = []
     seen_new: set[str] = set()
-    for r in knn_results:
-        for f in r.fetched:
+    for fetched_list, _warnings, _error in knn_results:
+        for f in fetched_list:
             name = f.entity.full_name
             if name in existing_names or name in seen_new:
                 continue
@@ -543,7 +518,7 @@ async def _semantic_search_extend_candidates(
             new_facts.append(f)
 
     if not new_facts:
-        lines.append("No new matching entities found.")
+        lines: list[str] = ["No new matching entities found."]
         lines.extend(_format_warn_lines(queries, per_query_warnings))
         return "\n".join(lines)
 
@@ -551,17 +526,14 @@ async def _semantic_search_extend_candidates(
     start_idx = len(existing)
     existing.extend(new_facts)
 
-    # Format in the same style as Interaction_Retrieve.prompt()
+    # Format with unified renderer (numbered for fork prompt)
+    buf = StringIO()
     for i, fetched in enumerate(new_facts):
-        expr_str = _trunc_expr(', '.join(fetched.entity.expression))
-        if expr_str:
-            lines.append(f"{start_idx + i}. {fetched.entity.short_name}: {expr_str}")
-        else:
-            lines.append(f"{start_idx + i}. {fetched.entity.short_name}")
-        if fetched.interpretation:
-            lines.append(f"  {fetched.interpretation}")
-    lines.extend(_format_warn_lines(queries, per_query_warnings))
-    return "\n".join(lines)
+        await _format_fetched_entity(fetched, buf, prefix=f"{start_idx + i}. ")
+    for w in _format_warn_lines(queries, per_query_warnings):
+        buf.write(w)
+        buf.write('\n')
+    return buf.getvalue().rstrip('\n')
 
 
 # ============================================================================
@@ -583,9 +555,9 @@ async def _query_entity_core(connection, tag: EntityKind, name: str
                 uk = await universal_key_of(connection, tag, short)
                 prefix = f"The {name} is undefined, but we find:\n"
             except Exception:
-                return (f'Undefined: "{name}". Try search_isabelle.', True, None)
+                return (f'Undefined: "{name}". Try query.', True, None)
         else:
-            return (f'Undefined: "{name}". Try search_isabelle.', True, None)
+            return (f'Undefined: "{name}". Try query.', True, None)
     except IsabelleError as e:
         return (str(e), True, None)
 
@@ -605,66 +577,7 @@ async def _query_entity_core(connection, tag: EntityKind, name: str
 
 
 async def _query_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
-    """Query entity by name with show-once definition source tracking."""
-    _TOOL = "mcp__proof__query"
-    session.log_tool_call(_TOOL, args)
-
-    def _ret(msg: str, is_error: bool) -> tuple[str, bool]:
-        session.log_tool_response(_TOOL, ("ERROR: " if is_error else "") + msg)
-        return (msg, is_error)
-
-    connection = session.root.ml_state.connection
-    t = args.get("type", "")
-    name = args.get("name", "")
-
-    if not isinstance(t, str) or not isinstance(name, str):
-        return _ret("Invalid arguments.", True)
-    try:
-        tag = EntityKind.from_label(t)
-    except KeyError:
-        return _ret(f"Invalid type: {t!r}.", True)
-    if not name:
-        return _ret("Empty name.", True)
-
-    text, is_error, uk = await _query_entity_core(connection, tag, name)
-    if is_error or uk is None:
-        return _ret(text, is_error)
-
-    buf = StringIO()
-    buf.write(text)
-
-    # Session-specific: fetch definition source with position-based caching
-    # Skip proof commands (lemma/theorem/…) whose source is the full proof
-    def_info = await _get_definition_with_pos(connection, tag, uk)
-    if def_info is not None:
-        source, cmd_pos = def_info
-        if not _PROOF_COMMAND_RE.match(source):
-            buf.write('\n')
-            _format_with_definition(session, source, cmd_pos, 0, buf)
-
-    # Session-specific: fetch candidate definitions for constants
-    if tag == EntityKind.CONSTANT:
-        try:
-            candidates = await session.root.ml_state.potential_defs_of([name])
-            if candidates:
-                seen = session.seen_entities
-                buf.write('\nRelevant definitions:\n')
-                for cand in candidates:
-                    if cand.short_name in seen:
-                        buf.write(f'- {cand.short_name} (seen)\n')
-                    else:
-                        expr_str = _trunc_expr(', '.join(cand.expression))
-                        buf.write(f'- {cand.short_name}:')
-                        print_paragraph(1, buf, expr_str)
-                        seen.add(cand.short_name)
-        except Exception:
-            pass
-
-    return _ret(buf.getvalue().rstrip('\n'), False)
-
-
-async def _semantic_search_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
-    session.log_tool_call("mcp__proof__search_isabelle", args)
+    session.log_tool_call("mcp__proof__query", args)
     try:
         queries = args["queries"] if BATCHED_SEMANTIC_SEARCH else [args]
         active = _find_active_retrieve_fact(session)
@@ -681,14 +594,14 @@ async def _semantic_search_tool_logic(session: Session, args: dict) -> tuple[str
             result = await _semantic_search_direct(session, queries, k=25)
             return (result, False)
     except RaiseInteraction as e:
-        r = await _handle_raise_interaction(session, e, "mcp__proof__search_isabelle")
+        r = await _handle_raise_interaction(session, e, "mcp__proof__query")
         if isinstance(r, _Prompt):
             return (r.text, False)
         return (str(r.value), False)
     except IsabelleError as e:
         error_msg = '; '.join(e.errors)
-        session.log_tool_response("mcp__proof__search_isabelle", f"ERROR: {error_msg}")
+        session.log_tool_response("mcp__proof__query", f"ERROR: {error_msg}")
         return (error_msg, True)
     except Exception as e:
-        session.log_tool_response("mcp__proof__search_isabelle", f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
+        session.log_tool_response("mcp__proof__query", f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
         sys.exit(1)

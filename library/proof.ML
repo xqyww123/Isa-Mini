@@ -1780,14 +1780,21 @@ fun SIMPLIFY_GOAL_AND_PREMISES'
       ) |> Simplifier.add_cong @{thm NO_SIMP_cong}
 
     (* 5. Apply simplification using conversion *)
-    (* TODO: clarsimp_tac always succeeds (even with no progress).
-       Consider wrapping with CHANGED_PROP to raise OPR_FAIL when nothing changes. *)
     fun do_clarsimp () =
-      Clasimp.clarsimp_tac simp_ctxt 1 st_protected |> Seq.hd
+      (CHANGED_PROP (Clasimp.clarsimp_tac simp_ctxt 1) st_protected |> Seq.hd
+       handle Option.Option =>
+         raise OPR_FAIL (PROOF_FAIL,
+           "The simplification made no progress."))
       |> Config.get ctxt auto_deconflict_bound ? deconflict_bound_names_thm ctxt
     val st_simplified =
       case timeout of SOME t => Timeout.apply t do_clarsimp ()
                     | NONE => do_clarsimp ()
+  in
+    (* If clarsimp completely solved the goal (e.g. a contradictory premise),
+       skip the wrap/INTRO/unwrap steps — mirrors the SKIP_SUCCESS pattern in CRUSH' *)
+    if Thm.no_prems st_simplified
+    then (empty_items, (ctxt, HHF (st_simplified, items) :: S))
+    else let
 
     (* 6. Protect goal conclusion to prevent INTRO's allI/impI from affecting it *)
     val st_protected_for_intro =
@@ -1843,7 +1850,7 @@ fun SIMPLIFY_GOAL_AND_PREMISES'
     val st_final = Conv.gconv_rule (unwrap_goal_conclusion_NO_SIMP ctxt_after_intro) 1 st_after_intro
   in
     (items_from_intro, (ctxt_after_intro, HHF (st_final, items_after_intro) :: S_after_intro))
-  end
+  end end
   | SIMPLIFY_GOAL_AND_PREMISES' _ _ _ _ _ _ _ _ = raise BROKEN_INVARIANT
 
 (* Wrapper that uses premise counter for automatic naming *)

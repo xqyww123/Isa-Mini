@@ -12,6 +12,6 @@ lemma XXX_alt: "XXX a b = b + a"
 
 (* Test 1: Simple existential - prove there exists an x equal to 5 *)
 lemma witness_test1: "XXX 1 2 = 3"
-  by   AgentAoA
+  by   aoa
 
 end

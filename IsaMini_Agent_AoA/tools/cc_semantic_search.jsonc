@@ -44,6 +44,10 @@
             "items": { "type": "string" },
             "description": "Constrain entities' names to contain all of these substrings (case-insensitive).",
             "default": []
+          },
+          "exact_name": {
+            "type": "string",
+            "description": "Look up an entity by its exact short or full name. When given, all other search criteria are ignored."
           }
         },
         "required": ["kinds"],

@@ -762,13 +762,13 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
                 of Phi_Sledgehammer_Solver.Subgoal_Fail sub =>
                      "Automatic proof fails on the subgoal:\n  " ^
                      string_of_term (Minilang.context_of s) sub ^
-                     "\nThe goal is non-trivial and a detailed proof is required."
-                 | _ => "Automatic proof fails. The goal is non-trivial and a detailed proof is required."
+                     "\nThe goal is non-trivial and a step-by-step proof is required."
+                 | _ => "Automatic proof fails. The goal is non-trivial and a step-by-step proof is required."
           in raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL, msg)
           end
              | Minilang.OPR_FAIL (Minilang.PROOF_FAIL, _) =>
           raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL,
-            "Automatic proof fails. The goal is non-trivial and a detailed proof is required."))
+            "Automatic proof fails. The goal is non-trivial and a step-by-step proof is required."))
     | INTRO (opt_bindings, split_conj) =>
         #2 (AUTO_INTRO counters opt_bindings split_conj s)
     | SPECIALIZE (opt_name, rule_fact, insts, discharge_facts) =>

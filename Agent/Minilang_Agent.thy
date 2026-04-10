@@ -2,7 +2,7 @@ theory Minilang_Agent
   imports Minilang.Minilang Isa_REPL.Isa_REPL Complex_Main
           Isabelle_RPC.Remote_Procedure_Calling Semantic_Embedding.Semantic_Embedding
 begin                             
-declare [[ML_debugger]]
+(*declare [[ML_debugger]]*)
 ML_file "helper.ML"
 ML_file "agent.ML"
 (* ML_file "agent.old.ML" *)
@@ -14,7 +14,7 @@ ML_file "agent_server.ML"
 ML_file "agent_server.old.ML"
 ML_file "tactic.ML.old" *)
 
-method_setup AgentAoA = \<open>
+method_setup aoa = \<open>
   Scan.succeed (K MiniLang_Agent_AoA.method)
 \<close>
 
@@ -91,7 +91,7 @@ end
 (*
 theorem sqrt2_not_rational:
     "sqrt 2 \<notin> \<rat>"
-  by (AgentAoA)
+  by (aoa)
 *)
 (*
 lemma A and B and C

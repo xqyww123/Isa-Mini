@@ -8,7 +8,7 @@ The Agent AoA (All over Abstraction) is a framework for using AI agents to const
 
 ## Usage
 
-In Isabelle, use `by AgentAoA` to invoke the agent.
+In Isabelle, use `by aoa` to invoke the agent.
 
 ### Configuration Options
 

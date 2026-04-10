@@ -1,0 +1,37 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - y: nat
+  - Q: nat ⇒ bool
+  - x: nat
+  - P: nat ⇒ bool
+premises:
+  - h1: P x
+  - h2: Q y
+goal: P x ∧ Q y
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+--------------------------------------------------
+After Rewrite (should show error)
+--------------------------------------------------
+variables:
+  - y: nat
+  - Q: nat ⇒ bool
+  - x: nat
+  - P: nat ⇒ bool
+premises:
+  - h1: P x
+  - h2: Q y
+goal: P x ∧ Q y
+proof:
+  - step id: 1
+    thought: Attempt rewrite with irrelevant rule
+    operation: Rewrite
+    using:
+      - foo_def: foo = ((0 :: nat) = (0 :: nat))
+    targets:
+      - h1
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  P x ∧ Q y

@@ -7,6 +7,6 @@ declare [[agent_AoA_driver="test.MultiGoalQuickview"]]
 lemma
   assumes "P" "Q" "R"
   shows "P" and "Q" and "R"
-  by  AgentAoA
+  by  aoa
 
 end

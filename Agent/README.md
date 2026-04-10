@@ -43,3 +43,6 @@ The entry point is [./debug_launcher.py](./debug_launcher.py) and [./IsaMini_Age
 ```
 You can see logs from the Agent Server's stdout.
 
+### Notes
+
+- HAMMER now has feedback

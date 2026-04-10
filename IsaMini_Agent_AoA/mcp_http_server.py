@@ -40,9 +40,7 @@ from .model import (
 )
 from .retrieval import (
     BATCHED_SEMANTIC_SEARCH,
-    _semantic_search_tool_logic,
     _query_tool_logic,
-    _cc_semantic_search_schema,
     _cc_query_schema,
 )
 from . import prompts as P
@@ -292,24 +290,24 @@ def _create_mcp_server(session: Session, extra_sdk_tools: list | None = None) ->
     """
     server = MCPServer(f"proof-{id(session)}")
     tool_lock = asyncio.Lock()  # serialize tool calls per session
+    _last_mutate_fail_time: float = 0.0
 
     # Build tool list: built-in + extras
     tools: list[Tool] = [
         Tool(name="edit",
              description="Edit the proof.yaml file",
-             inputSchema=_cc_edit_schema),
+             inputSchema=_cc_edit_schema,
+             annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=False)),
         Tool(name="delete",
              description="Delete proof steps",
-             inputSchema=_cc_delete_schema),
+             inputSchema=_cc_delete_schema,
+             annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=False)),
         Tool(name="answer",
              description="Answer a pending question",
-             inputSchema=_cc_answer_schema),
-        Tool(name="search_isabelle",
-             description="Search for Isabelle entities. Filter aggressively: term_patterns, type_patterns, theories_include, name_contains.",
-             inputSchema=_cc_semantic_search_schema,
-             annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)),
+             inputSchema=_cc_answer_schema,
+             annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False)),
         Tool(name="query",
-             description="Look up the definition and English translation of a lemma/constant/type/typeclass/locale.",
+             description="Search for Isabelle entities by semantic similarity, patterns, or exact name. Use exact_name to look up a known entity; use long_description and filters for discovery.",
              inputSchema=_cc_query_schema,
              annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)),
     ]
@@ -339,6 +337,7 @@ def _create_mcp_server(session: Session, extra_sdk_tools: list | None = None) ->
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict) -> CallToolResult:
+        nonlocal _last_mutate_fail_time
         _session_var.set(session)
 
         # Permission check (both modes)
@@ -348,20 +347,29 @@ def _create_mcp_server(session: Session, extra_sdk_tools: list | None = None) ->
                 content=[TextContent(type="text", text=perm_error)], isError=True)
 
         is_error = False
+        _BATCH_CANCEL_MSG = "Cancelled: a prior edit/delete in this batch failed. Review the error before continuing."
         match name:
             case "edit":
                 async with tool_lock:
-                    result, is_error = await _edit_tool_logic(session, arguments)
+                    if time() - _last_mutate_fail_time < 0.7:
+                        result, is_error = _BATCH_CANCEL_MSG, True
+                    else:
+                        result, is_error = await _edit_tool_logic(session, arguments)
+                        if is_error:
+                            _last_mutate_fail_time = time()
                 session.last_proof_op_time = time()
             case "delete":
                 async with tool_lock:
-                    result, is_error = await _delete_tool_logic(session, arguments)
+                    if time() - _last_mutate_fail_time < 0.7:
+                        result, is_error = _BATCH_CANCEL_MSG, True
+                    else:
+                        result, is_error = await _delete_tool_logic(session, arguments)
+                        if is_error:
+                            _last_mutate_fail_time = time()
                 session.last_proof_op_time = time()
             case "answer":
                 async with tool_lock:
                     result, is_error = await _answer_tool_logic(session, arguments)
-            case "search_isabelle":
-                result, is_error = await _semantic_search_tool_logic(session, arguments)
             case "query":
                 result, is_error = await _query_tool_logic(session, arguments)
             case _:
@@ -375,7 +383,7 @@ def _create_mcp_server(session: Session, extra_sdk_tools: list | None = None) ->
                     content=[TextContent(type="text", text=f"Unknown tool: {name}")], isError=True)
 
         # Append search hint if agent has been searching without proof progress
-        if name in ("search_isabelle", "query") and not is_error:
+        if name == "query" and not is_error:
             if time() - session.last_proof_op_time >= _SEARCH_HINT_THRESHOLD:
                 result += _SEARCH_HINT
 

@@ -9,6 +9,6 @@ lemma fore_node_fail_test:
   assumes h1: "y = x + 0"
       and h2: "z = y * 1"
   shows "x = z"
-  by  AgentAoA
+  by  aoa
 
 end

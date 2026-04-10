@@ -6,7 +6,7 @@ from .helper import split_id_into_segs, cat_segs_into_id, incr_id_major, incr_id
 from typing import Any, Awaitable, Iterable, NamedTuple, Protocol, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired, Annotated
 from Isabelle_RPC_Host import Connection, IsabelleError, pretty_unicode, ascii_of_unicode
 from Isabelle_RPC_Host.position import IsabellePosition
-from Isabelle_RPC_Host.universal_key import EntityKind, universal_key
+from Isabelle_RPC_Host.universal_key import EntityKind, universal_key, universal_key_of, UndefinedEntity
 from Isabelle_Semantic_Embedding.semantics import Semantic_Vector_Store, SemanticRecord, trunc_expr as _trunc_expr_base
 
 AGENT_EXPR_LIMIT = 200
@@ -85,11 +85,19 @@ class EditFailureResponse(NamedTuple):
 
 class IsabelleEntity:
     """A resolved Isabelle entity (constant, type, class, locale, etc.) with display info."""
-    __slots__ = ('full_name', 'short_name', 'expression')
-    def __init__(self, full_name: str, short_name: str, expression: list[str]):
+    __slots__ = ('full_name', 'short_name', 'expression', 'kind')
+    def __init__(self, full_name: str, short_name: str, expression: list[str],
+                 kind: EntityKind):
         self.full_name = full_name
         self.short_name = short_name
         self.expression = expression
+        self.kind = kind
+
+class RetrievedEntity(NamedTuple):
+    """Result of semantic search: an entity with its similarity score and interpretation."""
+    entity: IsabelleEntity
+    score: float              # semantic similarity score
+    interpretation: str | None  # human-readable description from SemanticRecord
 
 class IsabelleFact(ABC):
     """Abstract base class for facts referenced in proof operations."""
@@ -107,11 +115,13 @@ class IsabelleFact(ABC):
 class IsabelleFact_Presented(IsabelleFact, IsabelleEntity):
     """A resolved fact with full information from Isabelle."""
     __slots__ = ('fact',)
-    def __init__(self, full_name: str, short_name: str, fact: Fact, expression: list[term]):
+    def __init__(self, full_name: str, short_name: str, fact: Fact, expression: list[term],
+                 kind: EntityKind = EntityKind.THEOREM):
         self.full_name = full_name
         self.short_name = short_name
         self.fact = fact
         self.expression = expression
+        self.kind = kind
     def name(self) -> str:
         return self.short_name
     def print(self, indent: int, file: MyIO) -> None:
@@ -413,6 +423,37 @@ class CannotAmend_Root(CannotAmend):
     def __str__(self) -> str:
         return f"Cannot amend the root node"
 
+class GoalIsNontrivial(AoA_Error):
+    """Raised when Obvious is attempted on a goal that previously failed Obvious."""
+    _message = ("You cannot claim the goal is obvious again. "
+                "You must provide step-by-step proofs.")
+    def __init__(self, parent: 'Node'):
+        self.parent = parent
+    def __str__(self) -> str:
+        return self._message
+
+class CannotAppend_GoalIsNontrivial(CannotAppend, GoalIsNontrivial):
+    def __init__(self, parent: 'Node'):
+        CannotAppend.__init__(self, parent, GoalIsNontrivial._message)
+        GoalIsNontrivial.__init__(self, parent)
+
+class CannotFill_GoalIsNontrivial(CannotFill, GoalIsNontrivial):
+    def __init__(self, parent: 'Node'):
+        GoalIsNontrivial.__init__(self, parent)
+    def __str__(self) -> str:
+        return GoalIsNontrivial._message
+
+class CannotInsert_GoalIsNontrivial(CannotInsert, GoalIsNontrivial):
+    def __init__(self, parent: 'Node'):
+        CannotInsert.__init__(self, parent, GoalIsNontrivial._message)
+        GoalIsNontrivial.__init__(self, parent)
+
+class CannotAmend_GoalIsNontrivial(CannotAmend, GoalIsNontrivial):
+    def __init__(self, parent: 'Node'):
+        GoalIsNontrivial.__init__(self, parent)
+    def __str__(self) -> str:
+        return GoalIsNontrivial._message
+
 class NoAliveState(AoA_Error):
     """Raised when interactive_gen needs a live proof state for retrieval/interaction
     but none is available (e.g., operating on a cancelled node)."""
@@ -653,6 +694,9 @@ class ML_ProofTree:
         raise NotImplementedError("children must be implemented by subclass")
     def top_goal(self) -> Goal:
         raise NotImplementedError("top_goal must be implemented by subclass")
+    def top_goal_or_none(self) -> 'Goal | None':
+        """Return the top goal, or None if the proof tree is solved (SOLVED_TREE)."""
+        raise NotImplementedError("top_goal_or_none must be implemented by subclass")
     def top_goals(self) -> list[Goal]:
         """
         The goals of the leftest internal node
@@ -665,6 +709,8 @@ class MLPT_Goal(ML_ProofTree):
     def children(self) -> list[ML_ProofTree]:
         return []
     def top_goal(self) -> Goal:
+        return self.goal
+    def top_goal_or_none(self) -> 'Goal | None':
         return self.goal
     def top_goals(self) -> list[Goal]:
         return [self.goal]
@@ -683,6 +729,10 @@ class MLPT_Bundle(ML_ProofTree):
         return self.subs
     def top_goal(self) -> Goal:
         return self.subs[0].top_goal()
+    def top_goal_or_none(self) -> 'Goal | None':
+        if not self.subs:
+            return None  # SOLVED_TREE
+        return self.subs[0].top_goal_or_none()
     def top_goals(self) -> list[Goal]:
         if all(isinstance(sub, MLPT_Goal) for sub in self.subs):
             return [cast(MLPT_Goal, sub).goal for sub in self.subs]
@@ -705,6 +755,8 @@ class MLPT_Block(ML_ProofTree):
         return [self.sub]
     def top_goal(self) -> Goal:
         return self.sub.top_goal()
+    def top_goal_or_none(self) -> 'Goal | None':
+        return self.sub.top_goal_or_none()
     def top_goals(self) -> list[Goal]:
         return self.sub.top_goals()
     def __str__(self) -> str:
@@ -1012,68 +1064,126 @@ class Minilang_State:
                      type_patterns: list[str] = [],
                      theories_include: list[str] = [],
                      name_contains: list[str] = [],
-                     ) -> tuple[list[tuple[float, SemanticRecord]], list[str]]:
-        """Search k nearest entities by semantic similarity.
+                     exact_name: str | None = None,
+                     ) -> tuple[list[RetrievedEntity], list[str]]:
+        """Search k nearest entities by semantic similarity, returning resolved entities.
+        If exact_name is given, does an exact lookup (score=1.0), ignoring other criteria.
         If query is None, returns pattern-filtered entities without semantic ranking.
         For TheoremK, extends the domain with local contextual thm keys.
         Pattern/theory filters (empty = no restriction) are forwarded to
         the entity enumeration callbacks for ML-side filtering.
         Returns (results, warnings) where warnings include notices about
         undeclared free variables in term patterns."""
+        from Isabelle_Semantic_Embedding.semantics import Semantic_DB
         _setup_perf_logging()
         _perf_log = logging.getLogger("perf.semantic_knn")
         _t0 = time()
-        term_patterns = [ascii_of_unicode(p) for p in term_patterns]
-        type_patterns = [ascii_of_unicode(p) for p in type_patterns]
-        # Build domain
-        if EntityKind.THEOREM in kinds:
-            _t_ctx = time()
-            local_entries: list[tuple] = await self.connection.callback(
-                "IsaMini.contextual_thms", self.name)
-            _perf_log.info("semantic_knn: contextual_thms callback %.3fs (%d entries)",
-                           time() - _t_ctx, len(local_entries))
-            local_keys = [bytes(k_) for k_, _ in local_entries]
-            local_names = {bytes(k_): name for k_, name in local_entries}
-            domain: Semantic_Vector_Store.Domain = Semantic_Vector_Store.ContextExtended(
-                local_keys, extra_names=local_names)
-        else:
-            domain = Semantic_Vector_Store.ContextAll
-        _t_store = time()
-        store: Semantic_Vector_Store = await self.connection.semantic_vector_store()  # type: ignore
-        _perf_log.info("semantic_knn: get_vector_store %.3fs", time() - _t_store)
-        if query is not None:
-            _t_lookup = time()
-            results, warnings = await store.lookup(query, k, kinds, domain,
-                                   term_patterns=term_patterns,
-                                   type_patterns=type_patterns,
-                                   theories_include=theories_include,
-                                   name_contains=name_contains)
-            _perf_log.info("semantic_knn: store.lookup %.3fs", time() - _t_lookup)
-            _perf_log.info("semantic_knn: total %.3fs", time() - _t0)
-            return [(score, rec._replace(name=ascii_of_unicode(rec.name)))
-                    for score, rec in results], warnings
-        else:
-            # Pattern-only search: get filtered entities, look up records, no ranking
-            from Isabelle_RPC_Host.context import entities_of
-            from Isabelle_Semantic_Embedding.semantics import Semantic_DB
-            _t_eof = time()
-            entries, warnings = await entities_of(self.connection, kinds,
-                                     term_patterns=term_patterns,
-                                     type_patterns=type_patterns,
-                                     theories_include=theories_include,
-                                     name_contains=name_contains,
-                                     limit=k)
-            _perf_log.info("semantic_knn: entities_of (pattern-only) %.3fs (%d entries)",
-                           time() - _t_eof, len(entries))
-            results = []
-            for uk, name, _ in entries:
+
+        # Exact name lookup — bypass all search criteria
+        if exact_name is not None:
+            scored_recs: list[tuple[float, SemanticRecord]] = []
+            for tag in kinds:
+                try:
+                    uk = await universal_key_of(self.connection, tag, exact_name)
+                except UndefinedEntity:
+                    if "." in exact_name:
+                        short = exact_name.rsplit(".", 1)[1]
+                        try:
+                            uk = await universal_key_of(self.connection, tag, short)
+                        except Exception:
+                            continue
+                    else:
+                        continue
+                except IsabelleError:
+                    continue
                 rec = Semantic_DB[uk]
                 if rec is not None:
-                    results.append((0.0, rec._replace(name=ascii_of_unicode(rec.name))))
+                    scored_recs.append((1.0, rec._replace(name=ascii_of_unicode(rec.name))))
                 else:
-                    results.append((0.0, SemanticRecord(EntityKind(uk[16]), ascii_of_unicode(name), None, None)))
-            _perf_log.info("semantic_knn: total %.3fs", time() - _t0)
-            return results, warnings
+                    scored_recs.append((1.0, SemanticRecord(tag, ascii_of_unicode(exact_name), None, None)))
+            if not scored_recs:
+                return [], [f'Undefined: "{exact_name}"']
+            warnings: list[str] = []
+            # Skip to entity resolution below
+        else:
+
+            term_patterns = [ascii_of_unicode(p) for p in term_patterns]
+            type_patterns = [ascii_of_unicode(p) for p in type_patterns]
+            # Build domain
+            if EntityKind.THEOREM in kinds:
+                _t_ctx = time()
+                local_entries: list[tuple] = await self.connection.callback(
+                    "IsaMini.contextual_thms", self.name)
+                _perf_log.info("semantic_knn: contextual_thms callback %.3fs (%d entries)",
+                               time() - _t_ctx, len(local_entries))
+                local_keys = [bytes(k_) for k_, _ in local_entries]
+                local_names = {bytes(k_): name for k_, name in local_entries}
+                domain: Semantic_Vector_Store.Domain = Semantic_Vector_Store.ContextExtended(
+                    local_keys, extra_names=local_names)
+            else:
+                domain = Semantic_Vector_Store.ContextAll
+            _t_store = time()
+            store: Semantic_Vector_Store = await self.connection.semantic_vector_store()  # type: ignore
+            _perf_log.info("semantic_knn: get_vector_store %.3fs", time() - _t_store)
+            if query is not None:
+                _t_lookup = time()
+                raw_results, warnings = await store.lookup(query, k, kinds, domain,
+                                       term_patterns=term_patterns,
+                                       type_patterns=type_patterns,
+                                       theories_include=theories_include,
+                                       name_contains=name_contains)
+                _perf_log.info("semantic_knn: store.lookup %.3fs", time() - _t_lookup)
+                scored_recs = [(score, rec._replace(name=ascii_of_unicode(rec.name)))
+                               for score, rec in raw_results]
+            else:
+                # Pattern-only search: get filtered entities, look up records, no ranking
+                from Isabelle_RPC_Host.context import entities_of
+                _t_eof = time()
+                entries, warnings = await entities_of(self.connection, kinds,
+                                         term_patterns=term_patterns,
+                                         type_patterns=type_patterns,
+                                         theories_include=theories_include,
+                                         name_contains=name_contains,
+                                         limit=k)
+                _perf_log.info("semantic_knn: entities_of (pattern-only) %.3fs (%d entries)",
+                               time() - _t_eof, len(entries))
+                scored_recs = []
+                for uk, name, _ in entries:
+                    rec = Semantic_DB[uk]
+                    if rec is not None:
+                        scored_recs.append((0.0, rec._replace(name=ascii_of_unicode(rec.name))))
+                    else:
+                        scored_recs.append((0.0, SemanticRecord(EntityKind(uk[16]), ascii_of_unicode(name), None, None)))
+        if not scored_recs:
+            _perf_log.info("semantic_knn: total %.3fs (0 results)", time() - _t0)
+            return [], warnings
+        # Resolve entities via RPC
+        entity_keys = [(rec.kind, rec.name) for _, rec in scored_recs]
+        _t_retrieve = time()
+        infos = await self._retrieve_entity(entity_keys)
+        _perf_log.info("semantic_knn: _retrieve_entity %.3fs (%d entities)",
+                       time() - _t_retrieve, len(entity_keys))
+        out: list[RetrievedEntity] = []
+        for (score, rec), info in zip(scored_recs, infos):
+            if info is None:
+                short_name, exprs = rec.name, []
+            else:
+                short_name, exprs = info
+            if rec.kind in _THEOREM_KINDS:
+                entity: IsabelleEntity = IsabelleFact_Presented(
+                    full_name=rec.name, short_name=short_name,
+                    fact=FactByName(refer_by="name", name=short_name),
+                    expression=exprs, kind=rec.kind)
+            else:
+                entity = IsabelleEntity(
+                    full_name=rec.name, short_name=short_name,
+                    expression=exprs, kind=rec.kind)
+            out.append(RetrievedEntity(
+                entity=entity,
+                score=score,
+                interpretation=' '.join(rec.interpretation.split()) if rec.interpretation else None))
+        _perf_log.info("semantic_knn: total %.3fs", time() - _t0)
+        return out, warnings
     async def compute_bindings(self, var_names: list[str], fact_names: list[str]) -> Bindings:
         """
         Compute bindings for the leading proof goal by binding provided names in order.
@@ -1192,7 +1302,7 @@ INTERACTIVE_RETRIEVAL_MAP = {m.value: m for m in InteractiveRetrievalMode}
 # Abstract tool identifiers (driver-agnostic)
 type tool = str
 TOOL_ANSWER: tool = "answer"
-TOOL_SEARCH: tool = "search_isabelle"
+TOOL_SEARCH: tool = "query"
 
 class Interaction:
     forking: ForkingMode = ForkingMode.NO
@@ -1274,11 +1384,6 @@ class Interaction_Retrieve(Interaction):
     INITIAL_K = 40
     FINAL_K = 40
 
-    class FetchedEntity(NamedTuple):
-        entity: IsabelleEntity
-        score: float              # semantic similarity score from semantic_knn
-        interpretation: str | None  # human-readable description from SemanticRecord
-
     def __init__(self, state: Minilang_State,
             query: str, kinds: list[EntityKind],
             *,
@@ -1298,7 +1403,7 @@ class Interaction_Retrieve(Interaction):
         self.type_patterns = type_patterns or []
         self.theories_include = theories_include or []
         self.name_contains = name_contains or []
-        self._candidate_facts_cache: list[Interaction_Retrieve.FetchedEntity] | None = None
+        self._candidate_facts_cache: list[RetrievedEntity] | None = None
         # Empty query forces FORKING_WITH_CTXT (fork needs parent context to judge relevance)
         session = the_session()
         if not query:
@@ -1309,50 +1414,15 @@ class Interaction_Retrieve(Interaction):
         if session.interactive_retrieval == InteractiveRetrievalMode.YES:
             self.fork_allowed_tools = [TOOL_ANSWER]
 
-    async def candidate_facts(self) -> 'list[Interaction_Retrieve.FetchedEntity]':
+    async def candidate_facts(self) -> list[RetrievedEntity]:
         if self._candidate_facts_cache is None:
-            self._candidate_facts_cache = await self._fetch_facts()
+            self._candidate_facts_cache, _ = await self.state.semantic_knn(
+                self.query, self.k, self.kinds,
+                term_patterns=self.term_patterns,
+                type_patterns=self.type_patterns,
+                theories_include=self.theories_include,
+                name_contains=self.name_contains)
         return self._candidate_facts_cache
-
-    async def _fetch_facts(self) -> 'list[Interaction_Retrieve.FetchedEntity]':
-        _perf_log = logging.getLogger("perf.fetch_facts")
-        _t0 = time()
-        _perf_log.info("_fetch_facts: start query=%r k=%d kinds=%s",
-                       self.query, self.k, [k.label for k in self.kinds])
-        _t_knn = time()
-        candidates, _ = await self.state.semantic_knn(self.query, self.k, self.kinds,
-            term_patterns=self.term_patterns,
-            type_patterns=self.type_patterns,
-            theories_include=self.theories_include,
-            name_contains=self.name_contains)
-        _perf_log.info("_fetch_facts: semantic_knn %.3fs (%d candidates)", time() - _t_knn, len(candidates))
-        if not candidates:
-            return []
-        entities = [(rec.kind, rec.name) for _, rec in candidates]
-        _t_retrieve = time()
-        infos = await self.state._retrieve_entity(entities)
-        _perf_log.info("_fetch_facts: _retrieve_entity %.3fs (%d entities)", time() - _t_retrieve, len(entities))
-        results: list[Interaction_Retrieve.FetchedEntity] = []
-        for (score, rec), info in zip(candidates, infos):
-            if info is None:
-                short_name, exprs = rec.name, []
-            else:
-                short_name, exprs = info
-            if rec.kind in _THEOREM_KINDS:
-                entity: IsabelleEntity = IsabelleFact_Presented(
-                    full_name=rec.name, short_name=short_name,
-                    fact=FactByName(refer_by="name", name=short_name),
-                    expression=exprs)
-            else:
-                entity = IsabelleEntity(
-                    full_name=rec.name, short_name=short_name,
-                    expression=exprs)
-            results.append(Interaction_Retrieve.FetchedEntity(
-                entity=entity,
-                score=score,
-                interpretation=' '.join(rec.interpretation.split()) if rec.interpretation else None))
-        _perf_log.info("_fetch_facts: total %.3fs", time() - _t0)
-        return results
 
     def _entity_title(self) -> str:
         """Dynamic title for the entity kind(s): 'theorems', 'constants', etc."""
@@ -1373,9 +1443,14 @@ class Interaction_Retrieve(Interaction):
         if not facts:
             raise ImmediateAnswer([])
         for i, fetched in enumerate(facts):
+            expr_str = trunc_expr(', '.join(fetched.entity.expression))
             print_indent(indent+1, file)
-            file.write(f"{i}. {fetched.entity.full_name}: {trunc_expr(', '.join(fetched.entity.expression))}\n")
-            if fetched.interpretation:
+            if expr_str:
+                file.write(f"{i}. {fetched.entity.short_name}:")
+                print_paragraph(indent+2, file, expr_str)
+            else:
+                file.write(f"{i}. {fetched.entity.short_name}\n")
+            if fetched.interpretation and (fetched.entity.kind not in _THEOREM_KINDS or expr_str.endswith("…")):
                 print_indent(indent+2, file)
                 file.write(f"{fetched.interpretation}\n")
 
@@ -1415,7 +1490,8 @@ class Interaction_Retrieve(Interaction):
         if not answer:
             if self.k < self.FINAL_K:
                 self.k = self.FINAL_K
-                self._candidate_facts_cache = await self._fetch_facts()
+                self._candidate_facts_cache = None
+                await self.candidate_facts()
                 async def identity(results: list[Any]) -> Any:
                     return results[0]
                 raise RaiseInteraction([self], identity)
@@ -1453,27 +1529,16 @@ class Interaction_RetrieveForProof(Interaction_Retrieve):
         self._relevant_constants_cache: list[tuple[str, str, str | None]] | None = None
 
     async def relevant_constants(self) -> list[tuple[str, str, str | None]]:
-        if self._relevant_constants_cache is None:
-            self._relevant_constants_cache = await self._fetch_constants()
-        return self._relevant_constants_cache
-
-    async def _fetch_constants(self) -> list[tuple[str, str, str | None]]:
-        """Fetch relevant constants via semantic search.
+        """Fetch relevant constants via semantic search (cached).
         Returns list of (short_name, type, interpretation) triples."""
-        candidates, _ = await self.state.semantic_knn(self.query, 10, [EntityKind.CONSTANT])
-        candidates = [(score, rec) for score, rec in candidates if score >= 0.5]
-        if not candidates:
-            return []
-        entities = [(EntityKind.CONSTANT, rec.name) for _, rec in candidates]
-        infos = await self.state._retrieve_entity(entities)
-        results: list[tuple[str, str, str | None]] = []
-        for (_, rec), info in zip(candidates, infos):
-            if info is None:
-                short_name, type_strs = rec.name, []
-            else:
-                short_name, type_strs = info
-            results.append((short_name, type_strs[0] if type_strs else "", rec.interpretation))
-        return results
+        if self._relevant_constants_cache is None:
+            results, _ = await self.state.semantic_knn(self.query, 10, [EntityKind.CONSTANT])
+            self._relevant_constants_cache = [
+                (r.entity.short_name,
+                 r.entity.expression[0] if r.entity.expression else "",
+                 r.interpretation)
+                for r in results if r.score >= 0.5]
+        return self._relevant_constants_cache
 
     async def prompt(self, indent: int, file: MyIO) -> None:
         title = self._entity_title()
@@ -1587,6 +1652,7 @@ class Node(ABC):
         self.changed : bool = False
         self._kind : str = "step"
         self._first_time = True
+        self._is_trivial: bool | None = None
         self.age = self.session.age
         self.line = 0
 
@@ -1763,6 +1829,8 @@ class Node(ABC):
                         await rp._refresh_all_after_me()
                 return ret, response.is_error, response.failure_reason
             return ret, False, None
+        except GoalIsNontrivial as e:
+            raise CannotInsert_GoalIsNontrivial(e.parent)
         except NodeNotFound:
             raise CannotInsert_NodeNotFound(step)
     @abstractmethod
@@ -1786,7 +1854,10 @@ class Node(ABC):
             raise CannotFill_NodeNotFound(id)
         if to_fill != id:
             raise CannotFill_BadNode(id)
-        ret = await node.append(pn)
+        try:
+            ret = await node.append(pn)
+        except GoalIsNontrivial as e:
+            raise CannotFill_GoalIsNontrivial(e.parent)
         if ret is None:
             raise InternalError("Don't know how to fill a node when the node's append method returns None")
         if ret.status.status == EvaluationStatus.Status.FAILURE:
@@ -1958,6 +2029,8 @@ class Node(ABC):
                             break
                 return new_node, response.is_error, response.failure_reason
             return new_node, False, None
+        except GoalIsNontrivial as e:
+            raise CannotAmend_GoalIsNontrivial(e.parent)
         except NodeNotFound:
             raise CannotAmend_NodeNotFound(id)
 
@@ -2089,6 +2162,7 @@ class NonLeaf_Node(Node):
                     if x is node:
                         raise InternalError("The target node to insert is already in my children")
                 self.sub_nodes.insert(i, node)
+                self._is_trivial = None
                 return node
         raise InternalError("Cannot find the target to insert-before in my children")
     def _remove_child(self, child: Node) -> None:
@@ -2213,6 +2287,7 @@ class NonLeaf_Node(Node):
                 except GenNode_Error as e:
                     raise CannotAmend(self, child, str(e))
                 self.sub_nodes[i] = new_node
+                self._is_trivial = None
                 new_node._amend_from(child)
                 if self._can_continue_before_child(new_node):
                     await new_node._refresh_me_alone()
@@ -2509,6 +2584,7 @@ class StdBlock(NonLeaf_Node):
         if node is None:
             return None
         self.sub_nodes.append(node)
+        self._is_trivial = None
         if self._can_continue_before_child(node):
             await node._refresh_me_alone()
         else:
@@ -2596,7 +2672,7 @@ class GoalNode(StdBlock):
         return FailureReason("Fail to prove the goal because one of the following proof steps fails.")
     def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         if self.sub_nodes:
-            return FailureReason("The goal is nontrivial. Detailed proofs are required to prove it.")
+            return FailureReason("The goal is nontrivial. A step-by-step proof is required.")
         else:
             return FailureReason("Each of the following proof steps above is valid, but the goal doesn't trivially follow from these steps. Please provide more detailed proof steps.")
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
@@ -2913,18 +2989,17 @@ def _split_fetched(fetched: 'list[IsabelleFact | Interaction_RetrieveForProof]'
 
 class Obvious_ToolArg(TypedDict):
     facts: list[FactByName | FactByProposition]
-    timeout: int
 
 class Obvious_InternalToolArg(NamedTuple):
     facts: list[IsabelleFact]
-    timeout: int = 20
 
 @proof_operation("Obvious", Obvious_ToolArg)
 class Obvious(Leaf):
     def __init__(self, config: NodeConfig, arg: Obvious_InternalToolArg):
+        if config.parent is not None and config.parent._is_trivial is False:
+            raise GoalIsNontrivial(config.parent)
         super().__init__(config, "")
         self.fact_refs = arg.facts
-        self.timeout = arg.timeout
 
     @staticmethod
     def gen(arg: Obvious_InternalToolArg) -> parsing_node:
@@ -2934,14 +3009,13 @@ class Obvious(Leaf):
     def interactive_gen(arg: Obvious_ToolArg) -> parsing_node:
         async def parse(alive_state: Minilang_State,
                         exact_state: Minilang_State | None = None) -> gen_node:
-            timeout = arg.get("timeout", 20)
             if not arg["facts"]:
-                return lambda config: Obvious(config, Obvious_InternalToolArg(facts=[], timeout=timeout))
+                return lambda config: Obvious(config, Obvious_InternalToolArg(facts=[]))
             # FactByName | FactByProposition only — no interactions possible
             fetched = cast(list[IsabelleFact], await alive_state.fetch_facts(arg["facts"]))
             facts, warnings = _filter_unfound(fetched)
             def mk(config: NodeConfig) -> 'Obvious':
-                node = Obvious(config, Obvious_InternalToolArg(facts=facts, timeout=timeout))
+                node = Obvious(config, Obvious_InternalToolArg(facts=facts))
                 for w in warnings:
                     node.warnings.append(Warning(Warning.Position.FOOTER, w))
                 return node
@@ -2950,7 +3024,7 @@ class Obvious(Leaf):
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
         print_indent(indent, file)
-        file.write(f"operation: Obvious (timeout: {self.timeout}s)\n")
+        file.write(f"operation: Obvious\n")
         if self.fact_refs:
             print_indent(indent, file)
             file.write(f"with facts:\n")
@@ -2965,11 +3039,22 @@ class Obvious(Leaf):
             for w in pit_warnings:
                 self.warnings.append(Warning(Warning.Position.FOOTER, w))
         await super()._refresh_me_alone()
+        if self.parent is not None:
+            if self.status.status == EvaluationStatus.Status.SUCCESS:
+                self.parent._is_trivial = True
+            elif self.status.status == EvaluationStatus.Status.FAILURE:
+                self.parent._is_trivial = False
     def the_operation(self) -> 'Minilang_Operation | FailureReason':
-        return Minilang_Operation.HAMMER(self.fact_refs, self.timeout)
+        return Minilang_Operation.HAMMER(self.fact_refs, 30)
     def _on_edit_failure(self) -> EditFailureResponse:
         if self.status.status == EvaluationStatus.Status.FAILURE:
-            return EditFailureResponse(is_error=True, failure_reason=self.status.reason, revert=True)
+            file = MyIO(StringIO())
+            if self.status.reason:
+                file.write(self.status.reason.reason)
+                file.write('\n')
+            if self.warnings:
+                self._print_warnings(0, file, list(Warning.Position))
+            return EditFailureResponse(is_error=True, failure_reason=FailureReason(file.getvalue()), revert=True)
         return super()._on_edit_failure()
 
 async def _parse_subproof(sp: SubProof, alive_state: Minilang_State | None) -> SubProof_parsed:
@@ -3341,12 +3426,15 @@ class Rewrite(Leaf):
             print_var_bindings(self.bindings[0], indent, file, "fixing variables")
             print_fact_bindings(self.bindings[1], indent, file, "resulting premises")
 
-        if self.status.status == EvaluationStatus.Status.SUCCESS and \
-                self.resulting_state().prooftree_of().top_goal().conclusion != self.ml_state.prooftree_of().top_goal().conclusion:
-            prooftree = self.resulting_state().prooftree_of()
-            print_indent(indent, file)
-            file.write("goal changes into:\n")
-            print_goal(prooftree.top_goal(), indent+1, False, file, self._ctxt_at_me())
+        if self.status.status == EvaluationStatus.Status.SUCCESS:
+            result_goal = self.resulting_state().prooftree_of().top_goal_or_none()
+            if result_goal is None:
+                print_indent(indent, file)
+                file.write("goal is solved.\n")
+            elif result_goal.conclusion != self.ml_state.prooftree_of().top_goal().conclusion:
+                print_indent(indent, file)
+                file.write("goal changes into:\n")
+                print_goal(result_goal, indent+1, False, file, self._ctxt_at_me())
 
         self._print_evaluation_status(indent, file)
         if show_warnings:
@@ -3399,8 +3487,9 @@ class Rewrite(Leaf):
             for w in pit_warnings:
                 self.warnings.append(Warning(Warning.Position.FOOTER, w))
         old_bindings = self.bindings
-        old_goal = (self.resulting_state().prooftree_of().top_goal()
-                    if self.status.status == EvaluationStatus.Status.SUCCESS else None)
+        old_goal = (self.resulting_state().prooftree_of().top_goal_or_none()
+                    if self.status.status == EvaluationStatus.Status.SUCCESS
+                    else None)
         # Execute the operation via parent Leaf implementation
         await super()._refresh_me_alone()
 
@@ -3470,7 +3559,7 @@ class Rewrite(Leaf):
             if self.bindings != old_bindings:
                 self.changed = True
             if self.status.status == EvaluationStatus.Status.SUCCESS and old_goal is not None:
-                new_goal = self.resulting_state().prooftree_of().top_goal()
+                new_goal = self.resulting_state().prooftree_of().top_goal_or_none()
                 if new_goal != old_goal:
                     self.changed = True
 
@@ -3489,6 +3578,17 @@ class Rewrite(Leaf):
                     self.bindings[1][i] = FactBinding(fact.expr, new_name, fact.pretty)
                     return self
         return super()._rename_fact(old_name, new_name)
+
+    def _on_edit_failure(self) -> EditFailureResponse:
+        if self.status.status == EvaluationStatus.Status.FAILURE:
+            file = MyIO(StringIO())
+            if self.status.reason:
+                file.write(self.status.reason.reason)
+                file.write('\n')
+            if self.warnings:
+                self._print_warnings(0, file, list(Warning.Position))
+            return EditFailureResponse(is_error=True, failure_reason=FailureReason(file.getvalue()), revert=True)
+        return super()._on_edit_failure()
 
 
 #### Have

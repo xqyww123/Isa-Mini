@@ -51,16 +51,14 @@ class ClaudeCode(Session):
         'mcp__proof__delete',
         'mcp__proof__answer',
         'mcp__proof__query',
-        'mcp__proof__search_isabelle',
         'ToolSearch'
     ]
     FORK_WHITELIST = [t for t in TOOL_WHITELIST if t not in ('mcp__proof__edit', 'mcp__proof__delete')]
     _TOOL_NAME_MAP: dict[str, str] = {
         "answer": "mcp__proof__answer",
-        "search_isabelle": "mcp__proof__search_isabelle",
+        "query": "mcp__proof__query",
         "edit": "mcp__proof__edit",
         "delete": "mcp__proof__delete",
-        "query": "mcp__proof__query",
     }
 
     def _internal_tool_name(self, t: str) -> str:
@@ -392,10 +390,14 @@ class ClaudeCode(Session):
                         self.log_retry(unfinished_nodes, retry_prompt)
                         await client.query(retry_prompt)
                     else:
-                        self.log_proof()
-                        return
+                        break
         finally:
             self._client = None
+        # Reconcile token counts from JSONL session logs (the single source of
+        # truth that captures main session, driver-managed forks, and any
+        # Agent-tool sub-agents), same as standalone mode.
+        self._read_cost_from_session_log()
+        self.log_proof()
 
     async def _run_standalone(self):
         """Run Claude Code CLI in a tmux session (standalone/interactive mode)."""

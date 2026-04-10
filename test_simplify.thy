@@ -142,4 +142,22 @@ lemma test13:
   (* Expected: assm1: A, assm2: B, assm3: D, assm4: E; c and f unchanged *)
   oops
 
+(* Test 14: Contradictory premise - rewriting produces False, clarsimp solves the goal entirely.
+   Reproduces: exception THM 1 raised (line 232 of "conv.ML"): gconv_rule *)
+definition "MyConst1 \<equiv> (2::nat)"
+definition "MyConst2 \<equiv> (3::nat)"
+
+lemma test_contradictory_premise:
+  assumes eq: "MyConst1 = MyConst2"
+  shows "P" 
+  apply (min_script \<open>
+    HAMMER
+    PRINT
+    END
+  \<close>)
+  done
+
+thm TrueI
+ML \<open>\<close>
+
 end

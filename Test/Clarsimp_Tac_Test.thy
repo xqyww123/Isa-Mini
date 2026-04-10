@@ -106,35 +106,29 @@ end
 \<close>
 
 
-text \<open>Group F: min\_script test with SIMPLIFY on a named premise using an irrelevant rule.\<close>
+text \<open>Group F: min\_script test \<^bold>\<open>after the fix\<close>.
+  SIMPLIFY on a named premise with an irrelevant rule should now fail.\<close>
 
 definition \<open>irrelevant \<equiv> (0::nat) = 0\<close>
 
 lemma "P (x::nat) \<Longrightarrow> Q (y::nat) \<Longrightarrow> P x \<and> Q y"
-  by (min_script \<open>
+  apply (min_script \<open>
     INTRO
     SIMPLIFY PREMISES assm0 WITH irrelevant_def
+  \<close>)
+  \<comment> \<open>The SIMPLIFY now correctly fails because the rule is irrelevant.
+     The proof does not close; we use sorry to let the theory file load.\<close>
+  oops
+
+text \<open>Group G: SIMPLIFY with a \<^bold>\<open>relevant\<close> rule should still succeed.\<close>
+
+definition \<open>myP \<equiv> \<lambda>x::nat. x > 0\<close>
+
+lemma "myP x \<Longrightarrow> Q y \<Longrightarrow> x > 0 \<and> Q y"
+  by (min_script \<open>
+    INTRO
+    SIMPLIFY PREMISES assm0 WITH myP_def
     END
   \<close>)
-
-text \<open>If the above lemma compiles, the SIMPLIFY with an irrelevant rule succeeded
-  without error, confirming that clarsimp\_tac does not fail on no-progress.
-
-  Summary: check the output window for results of groups A\<dash>E.
-  Key question: does group B/E show 0 results for CHANGED?\<close>
-
-record point = xcoord :: nat  ycoord :: nat
-record cpoint = point + color :: string
-
-ML \<open>case @{typ \<open>cpoint\<close>} of Type (_, [Type x  ]) => x\<close>
-
-term cpoint.make
-term cpoint.fields
-typ cpoint_ext
-typ "unit point_scheme"
-typ "unit point_ext"
-typ "unit cpoint_scheme"
-typ "unit cpoint_ext"
-typ 
 
 end

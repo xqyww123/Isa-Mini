@@ -1,0 +1,34 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - b: bool
+  - P: bool ⇒ bool
+goal: P b
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+--------------------------------------------------
+Case Split Bool
+--------------------------------------------------
+variables:
+  - b: bool
+  - P: bool ⇒ bool
+goal: P b
+proof:
+  - step id: 1
+    thought: Case split on boolean b
+    operation: CaseSplit
+    target term: b
+    cases:
+      - goal id: 1.True
+        premises:
+          - True.prem0: b
+        goal: P b
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.1` to provide the proof for the following goal.
+      - goal id: 1.False
+        premises:
+          - False.prem0: ¬ b
+        goal: P b
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.1` to provide the proof for the following goal.

@@ -81,7 +81,7 @@ class ModelTestCase(TestCase):
 TESTS : dict[str, TestCase] = {}
 # IMPORTANT: Each @model_test must have its own dedicated .thy file.
 # Never share a .thy file between different test cases.
-# The `line` argument must be the line number of `by AgentAoA` in the .thy file.
+# The `line` argument must be the line number of `by aoa` in the .thy file.
 def model_test(name: str, file: str, line: int):
     def decorator(func: _TestOpr):
         TESTS[name] = ModelTestCase(name, file, line, func)
@@ -214,6 +214,17 @@ async def _test_CaseSplit(root: Root, file: MyIO):
         "target_isabelle_term": r"l"
     }))
     print_header("Case Split", file)
+    root.print(0, file)
+
+@model_test("CaseSplit_Bool", "Test_CaseSplit_Bool.thy", 8)
+async def _test_CaseSplit_Bool(root: Root, file: MyIO):
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    await root.fill("1", CaseSplit.gen({
+        "thought": "Case split on boolean b",
+        "target_isabelle_term": r"b"
+    }))
+    print_header("Case Split Bool", file)
     root.print(0, file)
 
 @model_test("Induction", "Test_Induction.thy", 8)
@@ -351,6 +362,26 @@ async def _test_Rewrite3(root: Root, file: MyIO):
         "name": "lem1"
     }))
     print_header("After Amend Have", file)
+    root.print(0, file)
+
+@model_test("Rewrite_NoProgress", "Test_Rewrite_NoProgress.thy", 13)
+async def _test_Rewrite_NoProgress(root: Root, file: MyIO):
+    """Rewrite with an irrelevant rule should fail with 'no progress' after the
+    CHANGED_PROP fix in proof.ML."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    # Rewrite h1 using foo_def — completely irrelevant, should make no progress
+    new_node, success, reason = await root.fill("1", Rewrite.interactive_gen({
+        "thought": "Attempt rewrite with irrelevant rule",
+        "using": [{"refer_by": "name", "name": "foo_def"}],
+        "use system simplifiers": False,
+        "rewrite goal": False,
+        "rewrite premises": ["h1"]
+    }))
+    print_header("Reasponse", file)
+    file.write(f"Success: {success}\n")
+    file.write(f"Reason: {reason}\n")
+    print_header("After Rewrite", file)
     root.print(0, file)
 
 @model_test("Witness1", "Test_Witness.thy", 9)
@@ -861,6 +892,31 @@ async def _test_Have1(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1.1", Obvious.interactive_gen({"facts": []}))
 
+@model_test("Rewrite_Contradictory_Premise", "Test_Rewrite_Contradictory_Premise.thy", 13)
+async def _test_Rewrite_Contradictory_Premise(root: Root, file: MyIO):
+    """Reproduces gconv_rule crash when Rewrite completely solves the goal
+    by deriving False from a contradictory premise after definition expansion.
+    Bug: exception THM 1 raised (line 232 of "conv.ML"): gconv_rule"""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    # Rewrite premise 'eq' using MyConst1_def (=2) and MyConst2_def (=3).
+    # The premise "MyConst1 = MyConst2" rewrites to "2 = 3" then False,
+    # causing clarsimp to solve the entire goal.
+    node, is_error, reason = await root.fill("1", Rewrite.interactive_gen({
+        "thought": "Rewrite premise using definitions to derive contradiction",
+        "using": [
+            {"refer_by": "name", "name": "MyConst1_def"},
+            {"refer_by": "name", "name": "MyConst2_def"}
+        ],
+        "use system simplifiers": True,
+        "rewrite goal": False,
+        "rewrite premises": ["eq"]
+    }))
+    print_header("After Rewrite", file)
+    root.print(0, file)
+    file.write(f"is_error: {is_error}\n")
+    file.write(f"reason: {reason}\n")
+
 # class TestCase_Interactive_Unfold:
 #     pass
 
@@ -984,19 +1040,23 @@ async def _test_semantic_knn_patterns(root: Root, file: MyIO):
     from Isabelle_RPC_Host.universal_key import EntityKind
     ml = root.ml_state
 
+    def _pp(r) -> str:
+        expr = ', '.join(r.entity.expression)
+        return f"{r.entity.kind.label} {r.entity.short_name}: {expr}" if expr else f"{r.entity.kind.label} {r.entity.short_name}"
+
     # 1. Baseline: no patterns
     results_base, warnings_base = await ml.semantic_knn("logarithm power", 5, [EntityKind.THEOREM])
     file.write(f"Baseline (no patterns): {len(results_base)} results, {len(warnings_base)} warnings\n")
-    for score, rec in results_base:
-        file.write(f"  {score:.3f} {rec.pretty_print}\n")
+    for r in results_base:
+        file.write(f"  {r.score:.3f} {_pp(r)}\n")
     assert not warnings_base, "Expected no warnings for baseline"
 
     # 2. With term_patterns: restrict to theorems containing "ln"
     results_term, warnings_term = await ml.semantic_knn("logarithm power", 10, [EntityKind.THEOREM],
                                    term_patterns=["ln ?x"])
     file.write(f"With term_patterns=[\"ln ?x\"]: {len(results_term)} results, {len(warnings_term)} warnings\n")
-    for score, rec in results_term:
-        file.write(f"  {score:.3f} {rec.pretty_print}\n")
+    for r in results_term:
+        file.write(f"  {r.score:.3f} {_pp(r)}\n")
     assert len(results_term) > 0, "Expected at least one result with term pattern 'ln ?x'"
 
     # 3. With type_patterns: restrict to theorems involving nat
@@ -1005,8 +1065,8 @@ async def _test_semantic_knn_patterns(root: Root, file: MyIO):
     file.write(f"With type_patterns=[\"nat\"]: {len(results_type)} results, {len(warnings_type)} warnings\n")
     for w in warnings_type:
         file.write(f"  Warning: {w}\n")
-    for score, rec in results_type:
-        file.write(f"  {score:.3f} {rec.pretty_print}\n")
+    for r in results_type:
+        file.write(f"  {r.score:.3f} {_pp(r)}\n")
 
     # 4. With theories_include
     results_thy, warnings_thy = await ml.semantic_knn("logarithm", 10, [EntityKind.THEOREM],
@@ -1014,8 +1074,8 @@ async def _test_semantic_knn_patterns(root: Root, file: MyIO):
     file.write(f"With theories_include=[\"HOL.Transcendental\"]: {len(results_thy)} results, {len(warnings_thy)} warnings\n")
     for w in warnings_thy:
         file.write(f"  Warning: {w}\n")
-    for score, rec in results_thy:
-        file.write(f"  {score:.3f} {rec.pretty_print}\n")
+    for r in results_thy:
+        file.write(f"  {r.score:.3f} {_pp(r)}\n")
 
     # 5. Constants with type_patterns
     results_const, warnings_const = await ml.semantic_knn("logarithm", 5, [EntityKind.CONSTANT],
@@ -1023,8 +1083,8 @@ async def _test_semantic_knn_patterns(root: Root, file: MyIO):
     file.write(f"Constants with type_patterns=[\"real => real\"]: {len(results_const)} results, {len(warnings_const)} warnings\n")
     for w in warnings_const:
         file.write(f"  Warning: {w}\n")
-    for score, rec in results_const:
-        file.write(f"  {score:.3f} {rec.pretty_print}\n")
+    for r in results_const:
+        file.write(f"  {r.score:.3f} {_pp(r)}\n")
 
     # 6. Empty patterns = same as baseline
     results_empty, warnings_empty = await ml.semantic_knn("logarithm power", 5, [EntityKind.THEOREM],
@@ -1037,28 +1097,28 @@ async def _test_semantic_knn_patterns(root: Root, file: MyIO):
     results_nc, warnings_nc = await ml.semantic_knn("logarithm", 10, [EntityKind.THEOREM],
                                     name_contains=["ln"])
     file.write(f"With name_contains=[\"ln\"]: {len(results_nc)} results\n")
-    for score, rec in results_nc:
-        file.write(f"  {score:.3f} {rec.pretty_print}\n")
-        assert "ln" in rec.name.lower(), f"Expected 'ln' in name: {rec.name}"
+    for r in results_nc:
+        file.write(f"  {r.score:.3f} {_pp(r)}\n")
+        assert "ln" in r.entity.full_name.lower(), f"Expected 'ln' in name: {r.entity.full_name}"
     assert len(results_nc) > 0, "Expected at least one result with name containing 'ln'"
 
     # 6c. name_contains: multiple substrings (conjunction)
     results_nc2, warnings_nc2 = await ml.semantic_knn("logarithm", 10, [EntityKind.THEOREM],
                                     name_contains=["ln", "real"])
     file.write(f"With name_contains=[\"ln\", \"real\"]: {len(results_nc2)} results\n")
-    for score, rec in results_nc2:
-        file.write(f"  {score:.3f} {rec.pretty_print}\n")
-        assert "ln" in rec.name.lower() and "real" in rec.name.lower(), \
-            f"Expected both 'ln' and 'real' in name: {rec.name}"
+    for r in results_nc2:
+        file.write(f"  {r.score:.3f} {_pp(r)}\n")
+        assert "ln" in r.entity.full_name.lower() and "real" in r.entity.full_name.lower(), \
+            f"Expected both 'ln' and 'real' in name: {r.entity.full_name}"
     assert len(results_nc2) <= len(results_nc), "Conjunction should narrow results"
 
     # 6d. name_contains with constants
     results_nc_c, warnings_nc_c = await ml.semantic_knn("logarithm", 5, [EntityKind.CONSTANT],
                                     name_contains=["ln"])
     file.write(f"Constants with name_contains=[\"ln\"]: {len(results_nc_c)} results\n")
-    for score, rec in results_nc_c:
-        file.write(f"  {score:.3f} {rec.pretty_print}\n")
-        assert "ln" in rec.name.lower(), f"Expected 'ln' in name: {rec.name}"
+    for r in results_nc_c:
+        file.write(f"  {r.score:.3f} {_pp(r)}\n")
+        assert "ln" in r.entity.full_name.lower(), f"Expected 'ln' in name: {r.entity.full_name}"
 
     # 6e. Empty name_contains = same as baseline
     results_nc_e, _ = await ml.semantic_knn("logarithm power", 5, [EntityKind.THEOREM],
@@ -1069,9 +1129,9 @@ async def _test_semantic_knn_patterns(root: Root, file: MyIO):
     results_lim, warnings_lim = await ml.semantic_knn(None, 3, [EntityKind.THEOREM],
                                     name_contains=["ln"])
     file.write(f"Pattern-only with limit=3, name_contains=[\"ln\"]: {len(results_lim)} results\n")
-    for _, rec in results_lim:
-        file.write(f"  {rec.pretty_print}\n")
-        assert "ln" in rec.name.lower(), f"Expected 'ln' in name: {rec.name}"
+    for r in results_lim:
+        file.write(f"  {_pp(r)}\n")
+        assert "ln" in r.entity.full_name.lower(), f"Expected 'ln' in name: {r.entity.full_name}"
     assert len(results_lim) <= 3, f"Expected at most 3 results, got {len(results_lim)}"
     assert len(results_lim) > 0, "Expected at least one result"
 

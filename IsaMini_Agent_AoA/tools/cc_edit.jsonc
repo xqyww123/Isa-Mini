@@ -140,19 +140,11 @@
             ]
           },
           "type": "array"
-        },
-        "timeout": {
-          "description": "timeout in seconds for the automated prover",
-          "type": "integer",
-          "default": 20,
-          "minimum": 1,
-          "maximum": 30
         }
       },
       "required": [
         "operation",
-        "facts",
-        "timeout"
+        "facts"
       ],
       "type": "object"
     },

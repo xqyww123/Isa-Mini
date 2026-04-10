@@ -9,7 +9,7 @@ lemma rewrite_test:
   assumes h1: "y = x + 0"
       and h2: "\<exists>aAa. z = y * 1 + aAa"
   shows "x = z"
-  by     AgentAoA 
+  by     aoa 
 
 
 end

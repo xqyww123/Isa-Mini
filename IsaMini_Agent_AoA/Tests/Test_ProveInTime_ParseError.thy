@@ -3,6 +3,6 @@ theory Test_ProveInTime_ParseError
 begin
 
 lemma suffices_test1: "(x::int) * x \<ge> 0"
-  by    AgentAoA
+  by    aoa
 
 end

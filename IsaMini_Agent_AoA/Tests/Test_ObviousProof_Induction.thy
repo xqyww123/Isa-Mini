@@ -5,6 +5,6 @@ begin
 declare [[agent_AoA_driver="test.InductionObviousProof"]]
 
 lemma obvious_induction_test: "rev (rev l) = l"
-  by   AgentAoA
+  by   aoa
 
 end

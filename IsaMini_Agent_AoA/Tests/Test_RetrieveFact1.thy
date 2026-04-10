@@ -3,6 +3,6 @@ theory Test_RetrieveFact1
 begin
 declare [[agent_AoA_driver="test.RetrieveFact"]]
 lemma retrieve_fact_test: "0 < (x::real) \<Longrightarrow> ln (x ^ n) = real n * ln x"
-  by  AgentAoA
+  by  aoa
 
 end

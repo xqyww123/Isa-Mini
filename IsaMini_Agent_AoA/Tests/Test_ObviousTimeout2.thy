@@ -5,6 +5,6 @@ begin
 declare [[agent_AoA_driver="test.ObviousTimeout_default"]]
 
 lemma obvious_timeout_test2: "True"
-  by AgentAoA
+  by aoa
 
 end
