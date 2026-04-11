@@ -151,7 +151,7 @@ val unpacker =
      | "HAMMER"   => apfst HAMMER o unpackPair (unpackList unpack_extended_fact, unpackInt)
      | "INTRO"    => apfst INTRO o unpackPair (unpackOption unpack_bindings, unpackBool)
      | "SPECIALIZE" => apfst SPECIALIZE o unpackTuple4 (
-                        unpackOption unpackString,
+                        unpackString,
                         unpack_extended_fact,
                         unpackList (unpackPair (unpackString, unpackString)),
                         unpackList unpack_extended_fact)
@@ -204,7 +204,7 @@ fun packer (SIMPLIFY data) =
   | packer (INTRO data) = packPair (packString, packPair (packOption pack_bindings, packBool)) ("INTRO", data)
   | packer (SPECIALIZE data) =
       packPair (packString, packTuple4 (
-          packOption packString,
+          packString,
           pack_extended_fact,
           packList (packPair (packString, packString)),
           packList pack_extended_fact))

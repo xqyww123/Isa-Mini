@@ -1690,6 +1690,77 @@ async def _test_ObviousTimeout_subproof(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
+@model_test("Specialize1", "Test_Specialize1.thy", 11)
+async def _test_Specialize1(root: Root, file: MyIO):
+    """Test Specialize with HOL universal quantifier instantiation + premise discharge."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    # Specialize h2 (∀x. P x → Q x) with x=0, discharge P 0 using h1
+    root.session.age += 1
+    await root.fill("1", Specialize.interactive_gen({
+        "thought": "Specialize h2 by instantiating x with 0 and discharging with h1",
+        "rule": {"refer_by": "name", "name": "h2"},
+        "instantiations": [{"name": "x", "value": "0"}],
+        "discharging_facts": [{"refer_by": "name", "name": "h1"}],
+        "result_name": "derived_Q0"
+    }))
+    print_header("After Specialize", file)
+    root.print(0, file)
+    # Close goal using the derived fact
+    root.session.age += 1
+    await root.fill("2", Obvious.interactive_gen({
+        "facts": [{"refer_by": "name", "name": "derived_Q0"}]
+    }))
+    print_header("After Obvious", file)
+    root.print(0, file)
+    unfinished_nodes = set()
+    root.unfinished_nodes(unfinished_nodes)
+    file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+
+@model_test("Specialize2", "Test_Specialize2.thy", 11)
+async def _test_Specialize2(root: Root, file: MyIO):
+    """Test Specialize with discharge only (no instantiation)."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    # Specialize h2 (P 0 → Q 0) by discharging with h1 (P 0), no instantiation
+    root.session.age += 1
+    await root.fill("1", Specialize.interactive_gen({
+        "thought": "Discharge h2 with h1 via modus ponens",
+        "rule": {"refer_by": "name", "name": "h2"},
+        "discharging_facts": [{"refer_by": "name", "name": "h1"}],
+        "result_name": "mp_result"
+    }))
+    print_header("After Specialize", file)
+    root.print(0, file)
+    # Close goal using the named result
+    root.session.age += 1
+    await root.fill("2", Obvious.interactive_gen({
+        "facts": [{"refer_by": "name", "name": "mp_result"}]
+    }))
+    print_header("After Obvious", file)
+    root.print(0, file)
+    unfinished_nodes = set()
+    root.unfinished_nodes(unfinished_nodes)
+    file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+
+@model_test("Specialize3", "Test_Specialize3.thy", 10)
+async def _test_Specialize3(root: Root, file: MyIO):
+    """Test Specialize with unfound rule fact — should fail gracefully."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    # Try to specialize a nonexistent rule
+    root.session.age += 1
+    node, is_error, reason = await root.fill("1", Specialize.interactive_gen({
+        "thought": "Try to specialize a nonexistent rule",
+        "rule": {"refer_by": "name", "name": "nonexistent_rule"},
+        "result_name": "should_fail"
+    }))
+    print_header("Response", file)
+    file.write(f"Is error: {is_error}\n")
+    file.write(f"Reason: {reason}\n")
+    print_header("After Specialize (unfound)", file)
+    root.print(0, file)
+
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None):
     import msgpack as mp
     from IsaREPL import Client

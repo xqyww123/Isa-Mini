@@ -1677,7 +1677,7 @@ fun SIMP' _ _ (ctxt, []) = (ctxt, [])
                 (CONTEXT_TACTIC (CHANGED (Clasimp.auto_tac ctxt))) (SOME time) s
       handle Timeout.TIMEOUT _ => 
       raw_apply msg reporter
-                (CONTEXT_TACTIC (CHANGED (Clasimp.clarsimp_tac ctxt 1))) (SOME time) s)
+                (CONTEXT_TACTIC (CHANGED (Clasimp.clarsimp_tac (Smart_Split.add_smart_split ctxt) 1))) (SOME time) s)
       handle OPR_FAIL E =>
                 (case s of (_, HHF (st, _) :: _) =>
                                 if (*need_intro st orelse*) NEED_STANDARD SK0
@@ -1781,7 +1781,7 @@ fun SIMPLIFY_GOAL_AND_PREMISES'
 
     (* 5. Apply simplification using conversion *)
     fun do_clarsimp () =
-      (CHANGED_PROP (Clasimp.clarsimp_tac simp_ctxt 1) st_protected |> Seq.hd
+      (CHANGED_PROP (Clasimp.clarsimp_tac (Smart_Split.add_smart_split simp_ctxt) 1) st_protected |> Seq.hd
        handle Option.Option =>
          raise OPR_FAIL (PROOF_FAIL,
            "The simplification made no progress."))

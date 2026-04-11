@@ -1,0 +1,67 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - Q: nat ⇒ bool
+premises:
+  - h1: P (0 :: nat)
+  - h2: ∀(x :: nat). P x ⟶ Q x
+variables:
+  - P: nat ⇒ bool
+goal: Q (0 :: nat)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+--------------------------------------------------
+After Specialize
+--------------------------------------------------
+variables:
+  - Q: nat ⇒ bool
+premises:
+  - h1: P (0 :: nat)
+  - h2: ∀(x :: nat). P x ⟶ Q x
+variables:
+  - P: nat ⇒ bool
+goal: Q (0 :: nat)
+proof:
+  - step id: 1
+    thought: Specialize h2 by instantiating x with 0 and discharging with h1
+    operation: Specialize
+    rule:
+      - h2: ∀(x :: nat). P x ⟶ Q x
+    instantiations:
+      - x = 0
+    discharging facts:
+      - h1: P (0 :: nat)
+    result name: derived_Q0
+    Error: exception THM 1 raised (line 2601 of "thm.ML"): RSN: no unifiers
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  Q (0 :: nat)
+--------------------------------------------------
+After Obvious
+--------------------------------------------------
+variables:
+  - Q: nat ⇒ bool
+premises:
+  - h1: P (0 :: nat)
+  - h2: ∀(x :: nat). P x ⟶ Q x
+variables:
+  - P: nat ⇒ bool
+goal: Q (0 :: nat)
+proof:
+  - step id: 1
+    thought: Specialize h2 by instantiating x with 0 and discharging with h1
+    operation: Specialize
+    rule:
+      - h2: ∀(x :: nat). P x ⟶ Q x
+    instantiations:
+      - x = 0
+    discharging facts:
+      - h1: P (0 :: nat)
+    result name: derived_Q0
+    Error: exception THM 1 raised (line 2601 of "thm.ML"): RSN: no unifiers
+  - step id: 2
+    operation: Obvious
+    Error: the evaluation is cancelled due to failures in preceding nodes
+Error: Evaluation cancelled due to failures above
+Unfinished nodes: 3

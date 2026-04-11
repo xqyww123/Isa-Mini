@@ -24,16 +24,6 @@ import yaml
 import platformdirs
 from io import StringIO
 
-def _setup_perf_logging() -> None:
-    """One-time setup: route all perf.* loggers to stderr."""
-    root = logging.getLogger("perf")
-    if root.handlers:
-        return
-    sh = logging.StreamHandler(sys.stderr)
-    sh.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(message)s"))
-    root.addHandler(sh)
-    root.setLevel(logging.DEBUG)
-
 type varname = str
 type varname_spec = varname | None # underscore '_' is represented as None
 type typ = str
@@ -672,6 +662,17 @@ class Simplify_Fallback_Nosys_Msg(Message):
     """The simplification timed out with system simplifiers and succeeded without them."""
     pass
 
+class Specialize_Result_Msg(Message):
+    """Result facts produced by SPECIALIZE.
+    Each entry is a (fact_name, pretty_printed_proposition) pair."""
+    def __init__(self, facts: list[tuple[str, str]]) -> None:
+        super().__init__()
+        self.facts = facts
+    @classmethod
+    def unpack(cls, data: list) -> 'Specialize_Result_Msg':
+        # data is [(fact_name, pretty_expression), ...]
+        return cls([(name, pretty_unicode(expr)) for name, expr in data])
+
 def unpack_message(data) -> Message:
     match data:
         case (0, x):
@@ -684,6 +685,8 @@ def unpack_message(data) -> Message:
             return Intro_Bindings_Msg.unpack(x)
         case 4:
             return Simplify_Fallback_Nosys_Msg()
+        case (5, x):
+            return Specialize_Result_Msg.unpack(x)
         case _:
             raise Exception(f"BUG bad message kind: {data}")
 
@@ -906,7 +909,7 @@ class Minilang_Operation(NamedTuple):
         return Minilang_Operation("INDUCT", (ascii_of_unicode(target), vars, [ascii_of_unicode(t) for t in arbitrary], rule.pack() if rule is not None else None))
     @staticmethod
     def SPECIALIZE(
-        name: str | None,
+        name: str,
         rule_ref: 'IsabelleFact',
         instantiations: list[tuple[str, str]],  # (var_name, term_string)
         fact_refs: 'list[IsabelleFact]'
@@ -1075,9 +1078,6 @@ class Minilang_State:
         Returns (results, warnings) where warnings include notices about
         undeclared free variables in term patterns."""
         from Isabelle_Semantic_Embedding.semantics import Semantic_DB
-        _setup_perf_logging()
-        _perf_log = logging.getLogger("perf.semantic_knn")
-        _t0 = time()
 
         # Exact name lookup — bypass all search criteria
         if exact_name is not None:
@@ -1111,42 +1111,32 @@ class Minilang_State:
             type_patterns = [ascii_of_unicode(p) for p in type_patterns]
             # Build domain
             if EntityKind.THEOREM in kinds:
-                _t_ctx = time()
                 local_entries: list[tuple] = await self.connection.callback(
                     "IsaMini.contextual_thms", self.name)
-                _perf_log.info("semantic_knn: contextual_thms callback %.3fs (%d entries)",
-                               time() - _t_ctx, len(local_entries))
                 local_keys = [bytes(k_) for k_, _ in local_entries]
                 local_names = {bytes(k_): name for k_, name in local_entries}
                 domain: Semantic_Vector_Store.Domain = Semantic_Vector_Store.ContextExtended(
                     local_keys, extra_names=local_names)
             else:
                 domain = Semantic_Vector_Store.ContextAll
-            _t_store = time()
             store: Semantic_Vector_Store = await self.connection.semantic_vector_store()  # type: ignore
-            _perf_log.info("semantic_knn: get_vector_store %.3fs", time() - _t_store)
             if query is not None:
-                _t_lookup = time()
                 raw_results, warnings = await store.lookup(query, k, kinds, domain,
                                        term_patterns=term_patterns,
                                        type_patterns=type_patterns,
                                        theories_include=theories_include,
                                        name_contains=name_contains)
-                _perf_log.info("semantic_knn: store.lookup %.3fs", time() - _t_lookup)
                 scored_recs = [(score, rec._replace(name=ascii_of_unicode(rec.name)))
                                for score, rec in raw_results]
             else:
                 # Pattern-only search: get filtered entities, look up records, no ranking
                 from Isabelle_RPC_Host.context import entities_of
-                _t_eof = time()
                 entries, warnings = await entities_of(self.connection, kinds,
                                          term_patterns=term_patterns,
                                          type_patterns=type_patterns,
                                          theories_include=theories_include,
                                          name_contains=name_contains,
                                          limit=k)
-                _perf_log.info("semantic_knn: entities_of (pattern-only) %.3fs (%d entries)",
-                               time() - _t_eof, len(entries))
                 scored_recs = []
                 for uk, name, _ in entries:
                     rec = Semantic_DB[uk]
@@ -1155,14 +1145,10 @@ class Minilang_State:
                     else:
                         scored_recs.append((0.0, SemanticRecord(EntityKind(uk[16]), ascii_of_unicode(name), None, None)))
         if not scored_recs:
-            _perf_log.info("semantic_knn: total %.3fs (0 results)", time() - _t0)
             return [], warnings
         # Resolve entities via RPC
         entity_keys = [(rec.kind, rec.name) for _, rec in scored_recs]
-        _t_retrieve = time()
         infos = await self._retrieve_entity(entity_keys)
-        _perf_log.info("semantic_knn: _retrieve_entity %.3fs (%d entities)",
-                       time() - _t_retrieve, len(entity_keys))
         out: list[RetrievedEntity] = []
         for (score, rec), info in zip(scored_recs, infos):
             if info is None:
@@ -1182,7 +1168,6 @@ class Minilang_State:
                 entity=entity,
                 score=score,
                 interpretation=' '.join(rec.interpretation.split()) if rec.interpretation else None))
-        _perf_log.info("semantic_knn: total %.3fs", time() - _t0)
         return out, warnings
     async def compute_bindings(self, var_names: list[str], fact_names: list[str]) -> Bindings:
         """
@@ -2962,7 +2947,7 @@ async def _filter_unprovable(
             prefix = "\n" if warnings else ""
             warnings.append(
                 f'{prefix}Ignored "{facts[idx].name()}" \u2014 not a known Isabelle theorem nor trivially provable. '
-                f'You may prove it manually if needed.\n'
+                f'Prove it manually using Have if needed.\n'
                 f'Reason: {error_summary}')
             drop.add(idx)
     kept = [f for i, f in enumerate(facts) if i not in drop]
@@ -3256,7 +3241,7 @@ class Specialize_ToolArg(TypedDict):
     rule: FactByName                              # The rule to specialize
     instantiations: list[Instantiation]           # Variable instantiations
     discharging_facts: list[FactByName]           # Facts to discharge premises
-    result_name: NotRequired[str]                 # Optional name for the result
+    result_name: str                              # Name to bind the result under
 
 class Specialize_InternalToolArg(NamedTuple):
     thought: str
@@ -3265,7 +3250,7 @@ class Specialize_InternalToolArg(NamedTuple):
     instantiations: list[Instantiation]
     discharging_facts: list[FactByName]
     discharge_refs: list[IsabelleFact]
-    result_name: str | None
+    result_name: str
 
 @proof_operation("Specialize", Specialize_ToolArg)
 class Specialize(Leaf):
@@ -3277,6 +3262,9 @@ class Specialize(Leaf):
         self.discharging_facts = arg.discharging_facts
         self.discharge_refs = arg.discharge_refs
         self.result_name = arg.result_name
+        self.result_facts: list[tuple[str, str]] | None = None
+        """(fact_name, pretty_expression) pairs for facts derived by SPECIALIZE,
+        populated from Specialize_Result_Msg after successful execution."""
 
     def quickview_title(self) -> str:
         return f"Specialize {self.rule_ref.name()}"
@@ -3301,9 +3289,18 @@ class Specialize(Leaf):
                 instantiations=arg.get("instantiations", []),
                 discharging_facts=arg.get("discharging_facts", []),
                 discharge_refs=discharge_refs,
-                result_name=arg.get("result_name"))
+                result_name=arg["result_name"])
             return lambda config: Specialize(config, internal)
         return parse
+
+    async def _refresh_me_alone(self) -> None:
+        await super()._refresh_me_alone()
+        if self.status.status == EvaluationStatus.Status.SUCCESS:
+            messages = self.resulting_state().messages
+            for m in messages:
+                if isinstance(m, Specialize_Result_Msg):
+                    self.result_facts = m.facts
+                    break
 
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
@@ -3327,9 +3324,24 @@ class Specialize(Leaf):
         if self.result_name:
             print_indent(indent, file)
             file.write(f"result name: {self.result_name}\n")
+        if self.result_facts is not None:
+            print_indent(indent, file)
+            file.write("resulting facts:\n")
+            for name, expr in self.result_facts:
+                print_indent(indent + 1, file)
+                file.write(f"- {name}: {expr}\n")
         self._print_evaluation_status(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
         return indent
+
+    def _fixed_facts_at_me(self, ret: Hyps) -> Hyps:
+        if self.result_facts is not None:
+            for name, expr in self.result_facts:
+                ret[name] = expr
+        return ret
+
+    def _fixed_facts_after_me(self, ret: Hyps) -> Hyps:
+        return self._fixed_facts_at_me(ret)
 
     def the_operation(self) -> 'Minilang_Operation | FailureReason':
         if isinstance(self.rule_ref, IsabelleFact_Unfound):

@@ -12,7 +12,6 @@ import os
 import re
 import sys
 from io import StringIO
-from time import time
 
 import jsoncomment
 
@@ -330,16 +329,11 @@ async def _semantic_search_direct(
     session: Session, queries: list[dict], k: int,
 ) -> str:
     """Run semantic search queries concurrently, returning formatted results."""
-    import logging as _logging
-    _perf_log = _logging.getLogger("perf.search_direct")
-    _t0 = time()
     ml_state = session.root.ml_state
 
     # Run all queries concurrently (knn + entity retrieval in one step)
-    _t_knn = time()
     knn_results = await asyncio.gather(
         *[_run_knn_for_query(ml_state, q, k) for q in queries])
-    _perf_log.info("search_direct: all knn queries %.3fs (%d queries)", time() - _t_knn, len(queries))
 
     seen = session.seen_entities
     per_query_warnings = _collect_query_warnings(knn_results)
@@ -358,8 +352,6 @@ async def _semantic_search_direct(
         result = "\n".join(lines)
         session.log_tool_response("mcp__proof__query", result)
         return result
-
-    _perf_log.info("search_direct: total %.3fs", time() - _t0)
 
     # Format with unified renderer
     buf = StringIO()

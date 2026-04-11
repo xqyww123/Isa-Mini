@@ -493,6 +493,57 @@
       ],
       "type": "object"
     },
+    "Instantiation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "value": {
+          "type": "string",
+          "description": "Isabelle/HOL term to substitute"
+        }
+      },
+      "required": ["name", "value"]
+    },
+    "Specialize": {
+      "additionalProperties": false,
+      "title": "Specialize",
+      "description": "instantiate universal quantifiers in a rule and discharge its premises",
+      "properties": {
+        "operation": {
+          "const": "Specialize",
+          "type": "string"
+        },
+        "thought": { "$ref": "#/$defs/Thought" },
+        "rule": {
+          "$ref": "#/$defs/FactByName",
+          "description": "the rule or theorem to specialize"
+        },
+        "instantiations": {
+          "description": "instantiations for ∀-quantified or schematic variables",
+          "items": { "$ref": "#/$defs/Instantiation" },
+          "type": "array",
+          "default": []
+        },
+        "discharging_facts": {
+          "description": "facts discharging the premises of the rule, left-to-right",
+          "items": { "$ref": "#/$defs/FactByName" },
+          "type": "array",
+          "default": []
+        },
+        "result_name": {
+          "type": "string",
+          "description": "name to bind the resulting derived fact under"
+        }
+      },
+      "required": [
+        "operation",
+        "thought",
+        "rule",
+        "result_name"
+      ],
+      "type": "object"
+    },
     "Operation": {
       "anyOf": [
         { "$ref": "#/$defs/Obvious" },
@@ -506,7 +557,8 @@
         { "$ref": "#/$defs/Witness" },
         { "$ref": "#/$defs/InferenceRule" },
         { "$ref": "#/$defs/Suffices" },
-        { "$ref": "#/$defs/Intro" }
+        { "$ref": "#/$defs/Intro" },
+        { "$ref": "#/$defs/Specialize" }
       ]
     }
   },

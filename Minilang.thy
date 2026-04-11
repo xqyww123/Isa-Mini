@@ -16,6 +16,7 @@ ML_file \<open>./library/function/proof_local_inductive.ML\<close>
 ML_file \<open>./library/function/proof_local_function.ML\<close>
 ML_file \<open>./library/proof.ML\<close>
 
+
 (* term Pure.eq *)
 
 attribute_setup OF = \<open>Attrib.thms >> (fn Bs =>

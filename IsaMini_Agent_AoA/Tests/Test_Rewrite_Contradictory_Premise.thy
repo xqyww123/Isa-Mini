@@ -10,6 +10,6 @@ definition "MyConst2 \<equiv> (3::nat)"
 lemma contradictory_premise_test:
   assumes eq: "MyConst1 = MyConst2"
   shows "P"
-  by   aoa
+  by  aoa
 
 end

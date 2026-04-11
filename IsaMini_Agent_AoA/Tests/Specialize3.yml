@@ -1,0 +1,33 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - P: nat ⇒ bool
+premises:
+  - h1: P (0 :: nat)
+goal: P (0 :: nat)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+--------------------------------------------------
+Response
+--------------------------------------------------
+Is error: True
+Reason: None
+--------------------------------------------------
+After Specialize (unfound)
+--------------------------------------------------
+variables:
+  - P: nat ⇒ bool
+premises:
+  - h1: P (0 :: nat)
+goal: P (0 :: nat)
+proof:
+  - step id: 1
+    thought: Try to specialize a nonexistent rule
+    operation: Specialize
+    rule:
+      - Error: fact "nonexistent_rule" not found
+    Error: Rule fact "nonexistent_rule" not found
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  P (0 :: nat)
