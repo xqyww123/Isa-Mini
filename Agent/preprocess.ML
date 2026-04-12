@@ -16,10 +16,10 @@ end
 structure Goal_Preprocess : GOAL_PREPROCESS = struct
 
 (* Subgoal conclusions smaller than this are left unsplit *)
-val split_skip_size = 50
+val split_skip_size = 30
 
 (* preprocess_split_tac only triggers when the largest subgoal exceeds this *)
-val preprocess_size_threshold = 1000
+val preprocess_size_threshold = 200
 
 (** Custom recursive split tactic **)
 
@@ -73,10 +73,10 @@ fun preprocess_split_tac ctxt st =
                   string_of_int max_goal_size ^ " > " ^
                   string_of_int preprocess_size_threshold ^
                   ", preprocessing by splitting...")
-        val timeout = Time.fromSeconds 180
+        val timeout = Time.fromSeconds 8
       in
-        (* Step 1: try auto with 3-minute timeout *)
-        (case try_tac_timeout timeout (Clasimp.auto_tac ctxt) st of
+        (* Step 1: try auto with 8-second timeout *)
+        (case try_tac_timeout timeout (Clasimp.auto_tac (Smart_Split.add_smart_split ctxt)) st of
           SOME st' =>
             (writeln "auto succeeded in preprocessing";
              Seq.single st')
@@ -86,7 +86,7 @@ fun preprocess_split_tac ctxt st =
             (* Step 2: try clarsimp, then custom split *)
             val st' =
               (case try_tac_timeout timeout
-                      (ALLGOALS (Clasimp.clarsimp_tac ctxt)) st of
+                      (ALLGOALS (Clasimp.clarsimp_tac (Smart_Split.add_smart_split ctxt))) st of
                 SOME s =>
                   (writeln "clarsimp succeeded, applying custom split..."; s)
               | NONE =>

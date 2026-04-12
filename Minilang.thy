@@ -20,7 +20,7 @@ ML_file \<open>./library/proof.ML\<close>
 (* term Pure.eq *)
 
 attribute_setup OF = \<open>Attrib.thms >> (fn Bs =>
-      Thm.rule_attribute Bs (fn ctxt => Minilang_Aux.xOF (Context.proof_of ctxt) Bs))\<close>
+      Thm.rule_attribute Bs (fn ctxt => Minilang_Aux.xOF false (Context.proof_of ctxt) Bs))\<close>
 
 attribute_setup of = \<open>let
      val inst = Args.maybe Parse.embedded_inner_syntax;

@@ -32,7 +32,7 @@ datatype ('term, 'thm, 'fact) command =
   | NEXT     of ('term, 'fact) extended_fact list (*add lemmas*) * Minilang.opt_var_names
   | END      of ('term, 'fact) extended_fact list (*add lemmas*)
   | BRANCH   of (string option * string) list
-  | HAVE     of string (*name*) * 'term (*statement*)
+  | HAVE     of string (*name*) * 'term (*statement*) * bool (*auto_apply*)
   | SUFFICES of 'term
   | OBTAIN   of (string * string option) list (*vars*) * (string option * string) list (*constraints*)
   | SORRY    of Minilang.opt_var_names
@@ -74,6 +74,16 @@ exception SPECIALIZE_RESULT of (string * string) list
 
 val compute_bindings : Minilang.state -> string list -> string list -> bindings
 val check_need_intro : bool -> Minilang.state -> bool
+
+(* Classify a proven theorem and register it into the automatic reasoners
+   (simpset / classical intro/elim set / splitter) that apply. Used by
+   operations that opt into automatic propagation of their resulting fact.
+
+   `auto_apply_attrib` is the ML-level attribute. It is also registered at
+   theory load time under the name `mini_auto_apply` so it can be referenced
+   from a `Token.src` when emitting binding attributes to Minilang.HAVE''. *)
+val classify_thm : Proof.context -> thm -> string list
+val auto_apply_attrib : attribute
 
 val string_of_term : Proof.context -> term -> string
 val string_of_type : Proof.context -> typ -> string
@@ -146,7 +156,7 @@ datatype ('term, 'thm, 'fact) command =
   | NEXT     of ('term, 'fact) extended_fact list (*add lemmas*) * Minilang.opt_var_names
   | END      of ('term, 'fact) extended_fact list (*add lemmas*)
   | BRANCH   of (string option * string) list
-  | HAVE     of string (*name*) * 'term (*statement*)
+  | HAVE     of string (*name*) * 'term (*statement*) * bool (*auto_apply*)
   | SUFFICES of 'term
   | OBTAIN   of (string * string option) list (*vars*) * (string option * string) list (*constraints*)
   | SORRY    of Minilang.opt_var_names
@@ -547,7 +557,7 @@ fun AUTO_SIMPLIFY
         end)
 
     (* Execute SIMPLIFY with both naming functions - call operation *)
-    val simplify_timeout = SOME (Time.fromSeconds 3)
+    val simplify_timeout = SOME (Time.fromSeconds 10)
 
     fun do_simplify use_sys =
       (Minilang.SIMPLIFY_GOAL_AND_PREMISES
@@ -684,6 +694,70 @@ fun with_resolved_override counter s facts f =
       val s' = Minilang.map_context (K ctxt') s
   in f s' ovr end
 
+(* Resolve the defining session of a Const by looking up its entry in the
+   consts name space, then reading the first dotted component of the owning
+   theory's long name (e.g. "HOL.List" → "HOL"). *)
+fun session_of_const ctxt (Const (c, _)) =
+      (let val space = Consts.space_of (Proof_Context.consts_of ctxt)
+           val {theory_long_name, ...} = Name_Space.the_entry space c
+        in case Long_Name.explode theory_long_name of
+             [] => NONE
+           | s :: _ => SOME s
+       end handle ERROR _ => NONE)
+  | session_of_const _ _ = NONE
+
+fun is_user_predicate ctxt t =
+  case session_of_const ctxt (Term.head_of t) of
+    SOME s => s <> "HOL" andalso s <> "Pure"
+  | NONE => false
+
+(* An intro rule in the user's sense: the theorem has at least one premise,
+   and the head of the conclusion is a constant whose defining session is
+   neither HOL nor Pure. *)
+fun chk_user_intro ctxt th =
+  let val prop = Thm.prop_of th
+      val concl = Logic.strip_assums_concl prop
+      val prems = Logic.strip_assums_hyp prop
+      val concl' = case concl of \<^Const>\<open>Trueprop\<close> $ t => t | t => t
+   in not (null prems) andalso is_user_predicate ctxt concl' end
+
+fun classify_thm ctxt th =
+  let val is_intro = chk_user_intro ctxt th
+      val kinds = []
+      val kinds = if Phi_Sledgehammer_Solver.chk_elim th
+                    then "elim" :: kinds else kinds
+      val kinds = if Phi_Sledgehammer_Solver.chk_split th
+                    then "split" :: kinds else kinds
+      val kinds = if is_intro then "intro" :: kinds else kinds
+      (* Per spec: intro ⇒ also register as simp. Independent equations also
+         qualify as simp rules. *)
+      val kinds = if is_intro orelse
+                     Phi_Sledgehammer_Solver.chk_simp (Thm.prop_of th)
+                    then "simp" :: kinds else kinds
+   in kinds end
+
+(* Attribute form of the classifier. Runs at `note_thmss` time (i.e. once the
+   fact has actually been proven and is being bound into the context), which
+   is the only point where the `thm` is stable. Classifies the theorem and
+   directly registers it into the underlying simpset / classical set / split
+   set via the corresponding ML APIs — no round-trip through the attribute
+   name table, which would be both wasteful and fragile. *)
+val auto_apply_attrib : attribute =
+  Thm.declaration_attribute (fn th => fn context =>
+    let val pctxt = Context.proof_of context
+        val kinds = classify_thm pctxt th
+        fun apply_kind "simp"  = Simplifier.map_ss (Raw_Simplifier.add_simp th)
+          | apply_kind "split" = Simplifier.map_ss (Splitter.add_split th)
+          | apply_kind "intro" =
+              (fn ctx => the_default ctx
+                           (#1 (Classical.unsafe_intro NONE (ctx, th))))
+          | apply_kind "elim"  =
+              (fn ctx => the_default ctx
+                           (#1 (Classical.unsafe_elim NONE (ctx, th))))
+          | apply_kind _       = I
+     in fold apply_kind kinds context
+    end)
+
 fun interpret_i (config as (cfg, budget, counters)) cmd s =
   case cmd of
       SIMPLIFY (simp_facts, use_system_simps, premise_names, simplify_goal, user_bindings_opt) =>
@@ -736,8 +810,13 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
             val _ = Synchronized.change prem_ctr (K final_counter)
         in Minilang.CONSIDER brs s
         end
-    | HAVE (name, goal) =>
-        Minilang.HAVE'' [] [] [((Binding.name name, []), [(goal, [])])] s
+    | HAVE (name, goal, auto_apply) =>
+        let val attr_srcs = if auto_apply
+              then [Token.make_src ("mini_auto_apply", Position.none) []]
+              else []
+         in Minilang.HAVE'' [] []
+              [((Binding.name name, attr_srcs), [(goal, [])])] s
+        end
     | SUFFICES goal =>
         Minilang.SUFFICES'' goal s
     | OBTAIN (vars, constraints) =>
@@ -784,9 +863,27 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
         let val ctxt = Minilang.context_of s
             val rule_thms = resolve_to_thms (mk_counter ()) ctxt [rule_fact]
             val discharge_thms = resolve_to_thms (mk_counter ()) ctxt discharge_facts
-            val insts' = map (fn (n, tm) => ((n, 0), tm)) insts
+            (* "?x" or "?x.1" specifically targets a schematic variable (parsed via
+               Lexicon.read_variable; error if not schematic);
+               bare "x" is auto-classified by inst_universal_quantifiers
+               (schematic > Pure.all > HOL.All). *)
+            val all_schematic_vars =
+                  maps (fn r => Term.add_var_names (Thm.prop_of r) []) rule_thms
+            val insts' = map (fn (n, tm) =>
+              if String.isPrefix "?" n then
+                let val idx = case Lexicon.read_variable n
+                      of SOME xi => xi
+                       | NONE => raise Minilang.OPR_FAIL (Minilang.INVALID_OPR,
+                                   "Specialize: cannot parse variable name " ^ quote n)
+                in if member (op =) all_schematic_vars idx then (idx, tm)
+                   else raise Minilang.OPR_FAIL (Minilang.INVALID_OPR,
+                               "Variable " ^ n ^ " is not found in the rule")
+                end
+              else ((n, 0), tm)) insts
             val facts_before = Minilang.get_local_facts s
             val s' = Minilang.SPECIALIZE'' (SOME name) rule_thms insts' discharge_thms s
+                     handle ERROR msg => raise Minilang.OPR_FAIL (Minilang.INVALID_OPR,
+                               REPL.trim_makrup msg)
             val facts_after = Minilang.get_local_facts s'
             val ctxt' = Minilang.context_of s'
             (* Compute newly introduced facts as (fact_name, pretty_expression) pairs *)
@@ -885,9 +982,9 @@ fun check_command_i s (SIMPLIFY (facts, use_sys, prems, simp_goal, bindings_opt)
       let val ctxt = Minilang.context_of s
       in END (map (check_extended_fact ctxt) facts) end
   | check_command_i _ (BRANCH brs) = BRANCH brs (*name_opt * string passthrough*)
-  | check_command_i s (HAVE (name, goal)) =
+  | check_command_i s (HAVE (name, goal, auto_apply)) =
       let val ctxt = Minilang.context_of s
-       in HAVE (name, read_prop ctxt goal)
+       in HAVE (name, read_prop ctxt goal, auto_apply)
       end
   | check_command_i s (SUFFICES goal) =
       let val ctxt = Minilang.context_of s
@@ -920,6 +1017,15 @@ fun interpret cfg xcmd state =
    in interpret_i cfg icmd state
   end
 
+(* Register `auto_apply_attrib` under the name `mini_auto_apply` so that the
+   HAVE branch (and any other operation that wants the same treatment) can
+   reference it via a Token.src when emitting binding attributes to Minilang
+   operations that pass through `Attrib.attribute_cmd` at note-time. *)
+val _ = Theory.setup
+  (Attrib.setup \<^binding>\<open>mini_auto_apply\<close>
+     (Scan.succeed auto_apply_attrib)
+     "classify a proven fact and register it into the applicable automatic \
+     \reasoners (simp / intro / elim / split)")
 
 end
 

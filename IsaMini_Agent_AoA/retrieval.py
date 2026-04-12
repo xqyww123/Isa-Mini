@@ -172,12 +172,14 @@ async def _format_fetched_entity(
     ``potential_defs``: if True and entity is a constant, append relevant definitions.
     """
     expr_str = _trunc_expr(', '.join(f.entity.expression))
+    roles = getattr(f.entity, 'roles', [])
+    tag = "" if (roles or f.entity.kind not in _THEOREM_KINDS) else " [opaque]"
     print_indent(indent, buf)
     if expr_str:
-        buf.write(f"{prefix}{f.entity.short_name}:")
+        buf.write(f"{prefix}{f.entity.short_name}{tag}:")
         print_paragraph(indent + 1, buf, expr_str)
     else:
-        buf.write(f"{prefix}{f.entity.short_name}\n")
+        buf.write(f"{prefix}{f.entity.short_name}{tag}\n")
     if f.interpretation and (f.entity.kind not in _THEOREM_KINDS or expr_str.endswith("…")):
         print_indent(indent + 1, buf)
         buf.write(f"{f.interpretation}\n")
@@ -364,6 +366,11 @@ async def _semantic_search_direct(
     for w in _format_warn_lines(queries, per_query_warnings):
         buf.write(w)
         buf.write('\n')
+    if not session.seen_opaque_note and any(
+            f.entity.kind in _THEOREM_KINDS and not getattr(f.entity, 'roles', [])
+            for f in new_items):
+        buf.write("\n[opaque] — will not be used automatically unless supplied explicitly.\n")
+        session.seen_opaque_note = True
     if retrieved:
         query_str = "; ".join(_format_query_header(q) for q in queries)
         session.log_retrieval(query_str, retrieved, quiet=True)

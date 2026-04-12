@@ -315,7 +315,7 @@ let
   val ctxt = \<^context>
   val rule = @{lemma \<open>P \<Longrightarrow> Q \<Longrightarrow> P \<and> Q\<close> for P Q by auto}
   val _ = writeln ("Bidir input: " ^ Thm.string_of_thm ctxt rule)
-  val result = Minilang_Aux.xOF ctxt [@{thm TrueI}, @{thm refl[of "0::nat"]}] rule
+  val result = Minilang_Aux.xOF false ctxt [@{thm TrueI}, @{thm refl[of "0::nat"]}] rule
   val _ = writeln ("Bidir result: " ^ Thm.string_of_thm ctxt result)
   (* should be: True \<and> 0 = 0, with ?P := True, ?Q := (0 = 0) *)
 in () end
@@ -334,7 +334,7 @@ let
   val rule' = rule
   val _ = writeln ("After inst: " ^ Thm.string_of_thm ctxt rule')
   (* 2. Discharge with "0 < 1" — this instantiates ?P := \<lambda>x. x < 1 *)
-  val result = Minilang_Aux.xOF ctxt [@{lemma \<open>\<forall>x. (0::nat) \<le> x\<close> by auto}] rule'
+  val result = Minilang_Aux.xOF false ctxt [@{lemma \<open>\<forall>x. (0::nat) \<le> x\<close> by auto}] rule'
   val _ = writeln ("Bidir+inst result: " ^ Thm.string_of_thm ctxt result)
   (* should be: \<exists>y. y < 1 *)
 in () end

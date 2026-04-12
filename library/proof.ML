@@ -1660,7 +1660,7 @@ fun INIT'  st = INIT (Proof.context_of st) (#goal (Proof.simple_goal st))
 
 (** Crush **)
 
-val crush_timeout = Attrib.setup_config_int \<^binding>\<open>crush_timeout\<close> (K 3) (*in seconds*)
+val crush_timeout = Attrib.setup_config_int \<^binding>\<open>crush_timeout\<close> (K 8) (*in seconds*)
 
 fun SIMP' _ _ (ctxt, []) = (ctxt, [])
   | SIMP' prep_with raw_with_lems SK0 =
@@ -1704,31 +1704,36 @@ val CRUSH_CMD = ( OPT_VARS -- with_parser )
 
 (** SIMPLIFY_GOAL_AND_PREMISES' **)
 
-(* Helper conversions for wrapping/unwrapping NO_SIMP protection on goal conclusions *)
+(* Helper conversions for wrapping/unwrapping NO_SIMP protection on goal conclusions.
+
+   NO_SIMP is wrapped at the META level (around Trueprop XXX) rather than at
+   the object level (inside Trueprop). This makes NO_SIMP invisible to the
+   classical reasoner, which operates on object-level propositions inside
+   Trueprop. Previously, wrapping inside Trueprop exposed NO_SIMP(False) to
+   the classical reasoner, which could leak '¬ NO_SIMP False' into new
+   premises via classical interactions. *)
 local
   open Conv
   val NO_SIMP_def_sym = @{thm NO_SIMP_def[symmetric]}
   val NO_SIMP_def = @{thm NO_SIMP_def}
 
-  (* Recursively traverse goal structure (⋀x. ... ⟹ ... ⟹ conclusion) to reach the conclusion *)
+  (* Traverse the meta-level structure (⋀x. ... ⟹ ... ⟹ conclusion) to reach
+     the conclusion and apply the transform there. Stops at Trueprop so the
+     transform wraps the entire Trueprop(...) at the meta level. *)
   fun traverse_to_conclusion transform ctxt' ctm =
     case Thm.term_of ctm of
       Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs _ =>
         arg_conv (abs_conv (traverse_to_conclusion transform o snd) ctxt') ctm
     | Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ _ =>
         arg_conv (traverse_to_conclusion transform ctxt') ctm
-    | Const(\<^const_name>\<open>Pure.prop\<close>, _) $ _ =>
-        arg_conv (traverse_to_conclusion transform ctxt') ctm
-    | Const(\<^const_name>\<open>Trueprop\<close>, _) $ _ =>
-        arg_conv (traverse_to_conclusion transform ctxt') ctm
     | _ => transform ctm
 
 in
-  (* Wrap goal conclusion with NO_SIMP to protect it during simplification *)
+  (* Wrap goal conclusion (at the prop level, around Trueprop) with NO_SIMP *)
   fun wrap_goal_conclusion_NO_SIMP ctxt =
     traverse_to_conclusion (rewr_conv NO_SIMP_def_sym) ctxt
 
-  (* Unwrap NO_SIMP from goal conclusion after simplification *)
+  (* Unwrap NO_SIMP from the meta-level goal conclusion after simplification *)
   fun unwrap_goal_conclusion_NO_SIMP ctxt =
     let fun unwrap ctm =
           case Thm.term_of ctm of
@@ -2080,11 +2085,6 @@ fun CASES' diff ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, items0
               if Config.get ctxt high_auto_mode
               then let
                    val simp_thms = maps snd thms
-                                |> filter ((
-                                      fn _ $ (Const(\<^const_name>\<open>HOL.eq\<close>, _) $ _ $ _) => true
-                                       | Const(\<^const_name>\<open>Pure.eq\<close>, _) $ _ $ _ => true
-                                       | _ => false
-                                      ) o Thm.concl_of)
                 in if null simp_thms
                  then goalx
                  else Conv.gconv_rule (Simplifier.full_rewrite (ctxt addsimps simp_thms)) 1 goalx
@@ -2583,10 +2583,22 @@ fun SPECIALIZE' prep_thms prep_insts opt_name raw_rules raw_insts raw_facts
     val rule' = Minilang_Aux.inst_universal_quantifiers ctxt insts rule
 
     (* 3. Discharge premises left-to-right with facts.
-       xOF handles both Pure.imp and HOL.implies/HOL.All. *)
+       xOF handles both Pure.imp and HOL.implies/HOL.All.
+       prove_discharge=true: if OF unification fails, fall back to proving
+       the discharge via insert_tac + fast_mepo_tac. *)
     val facts = prep_thms ctxt raw_facts
     val result = if null facts then rule'
-                 else Minilang_Aux.xOF ctxt facts rule'
+                 else Minilang_Aux.xOF true ctxt facts rule'
+                      handle THM (_, _, [fact_thm, rule_thm]) =>
+                        let val fact_desc =
+                              if Thm.has_name_hint fact_thm
+                              then Minilang_Aux.simp_fact_name' (Thm.get_name_hint fact_thm)
+                              else "\<open>" ^ Thm.string_of_thm ctxt fact_thm ^ "\<close>"
+                        in raise OPR_FAIL (INVALID_OPR,
+                          String.concat ["the given fact ", fact_desc,
+                            " mismatches the target premise \<open>",
+                            Syntax.string_of_term ctxt (hd (Thm.prems_of rule_thm)), "\<close>"])
+                        end
 
     (* 4. Generate name if not provided *)
     val (name, ctxt') = case opt_name of

@@ -468,6 +468,7 @@ class _SessionRouter:
             if session is not None:
                 session.seen_commands.clear()
                 session.seen_entities.clear()
+                session.seen_opaque_note = False
             await send({
                 "type": "http.response.start",
                 "status": 200,

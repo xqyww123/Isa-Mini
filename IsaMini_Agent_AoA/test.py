@@ -892,6 +892,61 @@ async def _test_Have1(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1.1", Obvious.interactive_gen({"facts": []}))
 
+@model_test("HaveAutoApply", "Test_Have_AutoApply.thy", 10)
+async def _test_HaveAutoApply(root: Root, file: MyIO):
+    """Have with auto_apply=True auto-registers the proven equation as a simp
+    rule, so the enclosing goal `myf 3 = 10` can be closed without referring
+    to the new fact by name. Fails if auto_apply_fact is not wired up — plain
+    Obvious cannot unfold `myf` otherwise, since `myf_def` is not a simp rule
+    by default."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Derive an equation for the user-defined constant `myf`. The classifier
+    # sees an equation conclusion (chk_simp) and registers it into the simpset
+    # of the live context via auto_apply_fact.
+    root.session.age += 1
+    await root.fill("1", Have.gen({
+        "thought": "Derive a simp rule for myf so the outer goal becomes trivial",
+        "statement": {
+            "english": "myf n equals n plus 7",
+            "isabelle": r"myf n = n + 7"
+        },
+        "name": "myf_eq",
+        "auto_apply": True,
+    }))
+    print_header("After Have (auto_apply=True)", file)
+    root.print(0, file)
+
+    # Discharge the Have's subgoal by unfolding the definition; `myf_def`
+    # must be passed explicitly because it is not in the default simpset.
+    root.session.age += 1
+    await root.fill("1.1", Obvious.interactive_gen({
+        "facts": [{"refer_by": "name", "name": "myf_def"}]
+    }))
+    print_header("After proving Have sub-goal", file)
+    root.print(0, file)
+
+    # Close the outer goal `myf 3 = 10` with Rewrite that uses ONLY the
+    # system simplification set (no manually-supplied rules). This only
+    # succeeds if `myf_eq` was auto-registered into the simpset by
+    # `mini_auto_apply` — otherwise the system simpset has no way to unfold
+    # `myf` and the goal cannot be reduced to `10 = 10`.
+    root.session.age += 1
+    ret = await root.fill("2", Rewrite.interactive_gen({
+        "thought": "Close the outer goal using only the system simplifier",
+        "using": [],
+        "use system simplifiers": True,
+        "rewrite goal": True,
+        "rewrite premises": []
+    }))
+    print_header("After closing outer goal", file)
+    root.print(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 @model_test("Rewrite_Contradictory_Premise", "Test_Rewrite_Contradictory_Premise.thy", 13)
 async def _test_Rewrite_Contradictory_Premise(root: Root, file: MyIO):
     """Reproduces gconv_rule crash when Rewrite completely solves the goal
@@ -916,6 +971,53 @@ async def _test_Rewrite_Contradictory_Premise(root: Root, file: MyIO):
     root.print(0, file)
     file.write(f"is_error: {is_error}\n")
     file.write(f"reason: {reason}\n")
+
+@model_test("Rewrite_NO_SIMP_Leak", "Test_Rewrite_NO_SIMP_Leak.thy", 33)
+async def _test_Rewrite_NO_SIMP_Leak(root: Root, file: MyIO):
+    """Reproduce NO_SIMP leaking into premises when Rewrite targets a premise
+    while the goal conclusion is False.
+
+    Root cause: SIMPLIFY_GOAL_AND_PREMISES' wraps the conclusion as
+    Trueprop(NO_SIMP(False)) when simplify_goal=false. clear_simpset clears
+    simp rules but preserves the classical wrapper and solvers. When the
+    classical wrapper has notnotD [dest!] (standard in AFP/seL4 projects),
+    clarify resolves double negation, and the resulting interaction with the
+    NO_SIMP-wrapped conclusion can leak '¬ NO_SIMP False' into premises.
+    The unwrapping step only cleans the conclusion, not premises.
+
+    The theory declares notnotD [dest!] to match the seL4/AFP context where
+    the original bug was observed.
+    """
+    def assert_no_NO_SIMP(label: str) -> None:
+        raw_buf = io.StringIO()
+        yaml_buf = MyIO(raw_buf)
+        root.print(0, yaml_buf)
+        yaml_output = raw_buf.getvalue()
+        if "NO_SIMP" in yaml_output:
+            file.write(f"BUG DETECTED ({label}): NO_SIMP leaked into premises!\n")
+            file.write(yaml_output)
+            raise TestFailed(f"NO_SIMP leaked into premises ({label})")
+
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Rewrite premise h using is_nonzero_def with system simplifiers disabled.
+    # This directly takes the cleared-simpset path (same as the timeout fallback).
+    # The premise ¬ is_nonzero(f a) rewrites to ¬(f a ≠ 0) = ¬¬(f a = 0).
+    # With notnotD [dest!] in the classical wrapper, clarify resolves the double
+    # negation. The NO_SIMP(False) conclusion should NOT leak into premises.
+    node, success, reason = await root.fill("1", Rewrite.interactive_gen({
+        "thought": "Rewrite h using is_nonzero_def to expose double negation",
+        "using": [{"refer_by": "name", "name": "is_nonzero_def"}],
+        "use system simplifiers": False,
+        "rewrite goal": False,
+        "rewrite premises": ["h"]
+    }))
+    print_header("After Rewrite", file)
+    root.print(0, file)
+    file.write(f"success: {success}\n")
+    file.write(f"reason: {reason}\n")
+    assert_no_NO_SIMP("NO_SIMP leaked via classical reasoning on wrapped conclusion")
 
 # class TestCase_Interactive_Unfold:
 #     pass
@@ -1690,21 +1792,21 @@ async def _test_ObviousTimeout_subproof(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
-@model_test("Specialize1", "Test_Specialize1.thy", 11)
-async def _test_Specialize1(root: Root, file: MyIO):
-    """Test Specialize with HOL universal quantifier instantiation + premise discharge."""
+@model_test("Derive1", "Test_Specialize1.thy", 11)
+async def _test_Derive1(root: Root, file: MyIO):
+    """Test Derive with HOL universal quantifier instantiation + premise discharge."""
     print_header("Initial YAML", file)
     root.print(0, file)
-    # Specialize h2 (∀x. P x → Q x) with x=0, discharge P 0 using h1
+    # Derive on h2 (∀x. P x → Q x) with x=0, discharge P 0 using h1
     root.session.age += 1
-    await root.fill("1", Specialize.interactive_gen({
-        "thought": "Specialize h2 by instantiating x with 0 and discharging with h1",
+    await root.fill("1", Derive.interactive_gen({
+        "thought": "Instantiate h2 with x=0 and discharge with h1",
         "rule": {"refer_by": "name", "name": "h2"},
         "instantiations": [{"name": "x", "value": "0"}],
         "discharging_facts": [{"refer_by": "name", "name": "h1"}],
         "result_name": "derived_Q0"
     }))
-    print_header("After Specialize", file)
+    print_header("After Derive", file)
     root.print(0, file)
     # Close goal using the derived fact
     root.session.age += 1
@@ -1717,20 +1819,20 @@ async def _test_Specialize1(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
 
-@model_test("Specialize2", "Test_Specialize2.thy", 11)
-async def _test_Specialize2(root: Root, file: MyIO):
-    """Test Specialize with discharge only (no instantiation)."""
+@model_test("Derive2", "Test_Specialize2.thy", 11)
+async def _test_Derive2(root: Root, file: MyIO):
+    """Test Derive with discharge only (no instantiation)."""
     print_header("Initial YAML", file)
     root.print(0, file)
-    # Specialize h2 (P 0 → Q 0) by discharging with h1 (P 0), no instantiation
+    # Derive on h2 (P 0 → Q 0) by discharging with h1 (P 0), no instantiation
     root.session.age += 1
-    await root.fill("1", Specialize.interactive_gen({
+    await root.fill("1", Derive.interactive_gen({
         "thought": "Discharge h2 with h1 via modus ponens",
         "rule": {"refer_by": "name", "name": "h2"},
         "discharging_facts": [{"refer_by": "name", "name": "h1"}],
         "result_name": "mp_result"
     }))
-    print_header("After Specialize", file)
+    print_header("After Derive", file)
     root.print(0, file)
     # Close goal using the named result
     root.session.age += 1
@@ -1743,23 +1845,251 @@ async def _test_Specialize2(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
 
-@model_test("Specialize3", "Test_Specialize3.thy", 10)
-async def _test_Specialize3(root: Root, file: MyIO):
-    """Test Specialize with unfound rule fact — should fail gracefully."""
+@model_test("Derive3", "Test_Specialize3.thy", 10)
+async def _test_Derive3(root: Root, file: MyIO):
+    """Test Derive with unfound rule fact — should fail gracefully."""
     print_header("Initial YAML", file)
     root.print(0, file)
-    # Try to specialize a nonexistent rule
+    # Try to use a nonexistent rule
     root.session.age += 1
-    node, is_error, reason = await root.fill("1", Specialize.interactive_gen({
-        "thought": "Try to specialize a nonexistent rule",
+    node, is_error, reason = await root.fill("1", Derive.interactive_gen({
+        "thought": "Try to use a nonexistent rule",
         "rule": {"refer_by": "name", "name": "nonexistent_rule"},
         "result_name": "should_fail"
     }))
     print_header("Response", file)
     file.write(f"Is error: {is_error}\n")
     file.write(f"Reason: {reason}\n")
-    print_header("After Specialize (unfound)", file)
+    print_header("After Derive (unfound)", file)
     root.print(0, file)
+
+@model_test("Derive4", "Test_Specialize4.thy", 11)
+async def _test_Derive4(root: Root, file: MyIO):
+    """Test Derive where discharging fact is semantically equal but syntactically
+    different from the instantiated premise — reproduces 'OF: no unifiers'."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    # Derive on h2 with x = 1 - 1, then discharge with h1 (P 0).
+    # After instantiation, premise is P (1 - 1) but h1 is P 0 — no syntactic unification.
+    root.session.age += 1
+    node, is_error, reason = await root.fill("1", Derive.interactive_gen({
+        "thought": "Derive h2 with x = 1 - 1, discharge with h1 (P 0) — should fail: no unifiers",
+        "rule": {"refer_by": "name", "name": "h2"},
+        "instantiations": [{"name": "x", "value": "1 - (1::nat)"}],
+        "discharging_facts": [{"refer_by": "name", "name": "h1"}],
+        "result_name": "bad_result"
+    }))
+    print_header("Response", file)
+    file.write(f"Is error: {is_error}\n")
+    file.write(f"Reason: {reason}\n")
+    print_header("After Derive (no unifiers)", file)
+    root.print(0, file)
+
+@model_test("GlobalEnv", "Test_GlobalEnv.thy", 11)
+async def _test_GlobalEnv(root: Root, file: MyIO):
+    """Corner case + recovery on `x = 0 ⟹ x * x = 0`:
+      1. ADD a broken global Have `t1: P` — the bare proposition
+         variable `P` has no content the inherited Obvious sub-step can
+         discharge, so the Have cannot be proven and stays sorry'd.
+      2. Try to USE t1 via Rewrite — Isabelle does register `t1` as a
+         named fact despite the sorry'd proof, so fetch succeeds, but
+         `P` isn't an equation and simp reports "no progress".
+      3. AMEND-recovery: swap t1's statement for the equation `x = 0`
+         (provable from h1 by the inherited Obvious sub-step). The Have
+         flips from FAILURE to SUCCESS without recreating the sub-tree.
+      4. DELETE the global declaration."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    print_header("Initial Overview", file)
+    root.quickview(0, file)
+    file.write(f"GlobalEnv children: {len(root.global_env.sub_nodes)}\n")
+
+    # === ADD: Append a global equation Have and prove it ===
+    root.session.age += 1
+    have1 = await root.global_env.append(Have.gen({
+        "thought": "Restate h1 as a global rewrite rule",
+        "statement": {"english": "P", "isabelle": "P"},
+        "name": "t1",
+        "proof": "Given later"
+    }))
+    file.write(f"Added have1: id={have1.id}, local_step={have1.local_step}, status={have1.status.status.value}\n")
+    # Discharge the subgoal using the original assumption h1
+    root.session.age += 1
+    obv1 = await have1.append(Obvious.interactive_gen({
+        "facts": [{"refer_by": "name", "name": "h1"}]
+    }))
+    file.write(f"Obvious in have1: status={obv1.status.status.value}\n")
+    print_header("After ADD global Have (t1) + prove", file)
+    root.print(0, file)
+    print_header("Overview after ADD", file)
+    root.quickview(0, file)
+
+    # === VISIBILITY: Check whether t1 appears in GoalNode's context ===
+    goal_node = root.sub_nodes[1]  # the single GoalNode
+    ctxt = goal_node._ctxt_before_me()
+    file.write(f"GoalNode context hyps: {sorted(ctxt.hyps.keys())}\n")
+    file.write(f"t1 visible to GoalNode via context: {'t1' in ctxt.hyps}\n")
+
+    # === USE FROM PROOF BODY (failure path): Rewrite goal using broken t1 ===
+    # The Have for t1 is sorry'd because Obvious couldn't discharge `P`.
+    # Isabelle still registers the name `t1` with its sorry'd content,
+    # so the Rewrite below fetches it successfully — but `P` isn't an
+    # equation, so simp reports "no progress" and the Rewrite fails.
+    root.session.age += 1
+    node1, is_error1, reason1 = await root.fill("1", Rewrite.interactive_gen({
+        "thought": "Rewrite the goal using the (broken) global equation t1",
+        "using": [{"refer_by": "name", "name": "t1"}],
+        "use system simplifiers": False,
+        "rewrite goal": True,
+        "rewrite premises": []
+    }))
+    file.write(f"Rewrite step 1 using broken t1: status={node1.status.status.value}, is_error={is_error1}\n")
+    if reason1:
+        file.write(f"  reason: {reason1.reason}\n")
+    print_header("After failed Rewrite at step 1 (broken t1)", file)
+    root.print(0, file)
+
+    # === AMEND (recovery): replace the bare `P` with a provable equation
+    # `x = 0` that the inherited Obvious sub-step (which already references
+    # h1: x = 0) can actually discharge. Verifies:
+    #   (a) AMEND structurally swaps in the new Have on a GlobalEnv child,
+    #   (b) _amend_from carries the existing Obvious sub-step across,
+    #   (c) re-refresh after amend turns the previously-failing Have into
+    #       a SUCCESS — a real recovery, not a no-op rename.
+    root.session.age += 1
+    amended, is_error2, reason2 = await root.amend("global.1", Have.gen({
+        "thought": "Amended: replace unprovable y=x with the equation x=0 (= h1)",
+        "statement": {"english": "x equals zero", "isabelle": "x = 0"},
+        "name": "t1",
+        "proof": "Given later"
+    }))
+    file.write(f"Amend global.1: id={amended.id}, local_step={amended.local_step}, is_error={is_error2}\n")
+    if reason2:
+        file.write(f"  reason: {reason2.reason}\n")
+    file.write(f"Amended Have status: {amended.status.status.value}\n")
+    file.write(f"Amended Have inherited children: {len(amended.sub_nodes)}\n")
+    if amended.sub_nodes:
+        first_child = amended.sub_nodes[0]
+        file.write(f"  inherited child[0]: type={type(first_child).__name__}, status={first_child.status.status.value}\n")
+    print_header("After AMEND global.1 (recovery)", file)
+    root.print(0, file)
+    print_header("Overview after AMEND", file)
+    root.quickview(0, file)
+
+    # === DELETE: Remove the global Have entirely ===
+    not_found = await root.delete(["global.1"])
+    file.write(f"Delete global.1 not_found: {not_found}\n")
+    file.write(f"GlobalEnv children after delete: {len(root.global_env.sub_nodes)}\n")
+    print_header("After DELETE global.1", file)
+    root.print(0, file)
+    print_header("Final Overview", file)
+    root.quickview(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+@model_test("GlobalEnv_happy", "Test_GlobalEnv_happy.thy", 11)
+async def _test_GlobalEnv_happy(root: Root, file: MyIO):
+    """Happy path: lemma `y = x ⟹ x + y = x + x` with both `x` and `y` bound.
+    A global Have `g_eq: y = x` is provable from h1, so the subsequent proof
+    body Rewrite step can actually fetch g_eq and rewrite the goal
+    `x + y = x + x` into `x + x = x + x`, which Obvious then closes.
+    Exercises ADD / VISIBILITY / USE / AMEND / DELETE end-to-end on the
+    success path."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    print_header("Initial Overview", file)
+    root.quickview(0, file)
+    file.write(f"GlobalEnv children: {len(root.global_env.sub_nodes)}\n")
+
+    # === ADD: Append a provable global equation Have ===
+    root.session.age += 1
+    have1 = await root.global_env.append(Have.gen({
+        "thought": "Restate h1 as a global rewrite rule",
+        "statement": {"english": "y equals x", "isabelle": "y = x"},
+        "name": "g_eq",
+        "proof": "Given later"
+    }))
+    file.write(f"Added have1: id={have1.id}, local_step={have1.local_step}, status={have1.status.status.value}\n")
+    # Discharge the subgoal using h1 (trivially true since h1 IS y = x)
+    root.session.age += 1
+    obv1 = await have1.append(Obvious.interactive_gen({
+        "facts": [{"refer_by": "name", "name": "h1"}]
+    }))
+    file.write(f"Obvious in have1: status={obv1.status.status.value}\n")
+    print_header("After ADD global Have (g_eq) + prove", file)
+    root.print(0, file)
+    print_header("Overview after ADD", file)
+    root.quickview(0, file)
+
+    # === VISIBILITY: Check whether g_eq appears in GoalNode's context ===
+    goal_node = root.sub_nodes[1]
+    ctxt = goal_node._ctxt_before_me()
+    file.write(f"GoalNode context hyps: {sorted(ctxt.hyps.keys())}\n")
+    file.write(f"g_eq visible to GoalNode via context: {'g_eq' in ctxt.hyps}\n")
+
+    # === USE FROM PROOF BODY: Rewrite the goal using g_eq (explicit consumption) ===
+    # Rewriting `x + y = x + x` with `y = x` should reduce it to `x + x = x + x`.
+    root.session.age += 1
+    node1, is_error1, reason1 = await root.fill("1", Rewrite.interactive_gen({
+        "thought": "Rewrite the goal using the global equation g_eq",
+        "using": [{"refer_by": "name", "name": "g_eq"}],
+        "use system simplifiers": False,
+        "rewrite goal": True,
+        "rewrite premises": []
+    }))
+    file.write(f"Rewrite step 1 using g_eq: status={node1.status.status.value}, is_error={is_error1}\n")
+    if reason1:
+        file.write(f"  reason: {reason1.reason}\n")
+    print_header("After Rewrite proof body using global decl", file)
+    root.print(0, file)
+
+    # Close the now-trivial residual `x + x = x + x` via an explicit Rewrite
+    # with system simplifiers. No `using` facts needed — simp alone closes
+    # reflexive equalities.
+    root.session.age += 1
+    node2, is_error2, reason2 = await root.fill("2", Rewrite.interactive_gen({
+        "thought": "Close residual reflexive equation via system simplifiers",
+        "using": [],
+        "use system simplifiers": True,
+        "rewrite goal": True,
+        "rewrite premises": []
+    }))
+    file.write(f"Rewrite step 2 (system simp): status={node2.status.status.value}, is_error={is_error2}\n")
+    if reason2:
+        file.write(f"  reason: {reason2.reason}\n")
+    print_header("After Rewrite closes residual goal", file)
+    root.print(0, file)
+
+    # === AMEND: Replace the global Have with a reoriented equation ===
+    root.session.age += 1
+    amended, is_error3, reason3 = await root.amend("global.1", Have.gen({
+        "thought": "Amended: reverse orientation of the equation",
+        "statement": {"english": "x equals y", "isabelle": "x = y"},
+        "name": "g_eq",
+        "proof": "Given later"
+    }))
+    file.write(f"Amend global.1: id={amended.id}, local_step={amended.local_step}, is_error={is_error3}\n")
+    if reason3:
+        file.write(f"  reason: {reason3.reason}\n")
+    print_header("After AMEND global.1", file)
+    root.print(0, file)
+    print_header("Overview after AMEND", file)
+    root.quickview(0, file)
+
+    # === DELETE: Remove the global Have entirely ===
+    not_found = await root.delete(["global.1"])
+    file.write(f"Delete global.1 not_found: {not_found}\n")
+    file.write(f"GlobalEnv children after delete: {len(root.global_env.sub_nodes)}\n")
+    print_header("After DELETE global.1", file)
+    root.print(0, file)
+    print_header("Final Overview", file)
+    root.quickview(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None):
     import msgpack as mp

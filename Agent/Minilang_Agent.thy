@@ -2,7 +2,7 @@ theory Minilang_Agent
   imports Minilang.Minilang Isa_REPL.Isa_REPL Complex_Main
           Isabelle_RPC.Remote_Procedure_Calling Semantic_Embedding.Semantic_Embedding
 begin                             
-(*declare [[ML_debugger]]*)
+declare [[ML_debugger]]
 ML_file "helper.ML"
 ML_file "agent.ML"
 (* ML_file "agent.old.ML" *)
@@ -13,6 +13,30 @@ ML_file "agent_server.ML"
 (* ML_file "tactic.ML.old"
 ML_file "agent_server.old.ML"
 ML_file "tactic.ML.old" *)
+
+ML \<open>
+    let
+      val ctxt = \<^context>
+      val simps = #simps (dest_ss (simpset_of ctxt))
+      val _ = simps |> take 20 |> List.app (fn (name, thm) =>
+        writeln (name ^ "  |  hint=" ^ Thm.get_name_hint thm))
+
+      val cs = Classical.rep_cs (Classical.claset_of ctxt)
+      val intros = map #1 (Item_Net.content (#safeIs cs))
+      val _ = intros |> take 10 |> List.app (fn thm =>
+        writeln ("intro: " ^ Thm.get_name_hint thm))
+
+      (* Also check a specific fact from the fact table *)
+      val facts = Proof_Context.facts_of ctxt
+      val test_name = "HOL.conjI"  (* adjust to any known theorem *)
+      val full_name = Facts.intern facts "conjI"
+      val _ = writeln ("intern: " ^ full_name)
+      val _ = case Facts.lookup (Context.Proof ctxt) facts full_name of
+          SOME {thms, ...} => List.app (fn thm =>
+            writeln ("fact hint: " ^ Thm.get_name_hint thm)) thms
+        | NONE => writeln "not found"
+    in () end
+  \<close>
 
 method_setup aoa = \<open>
   Scan.succeed (K MiniLang_Agent_AoA.method)

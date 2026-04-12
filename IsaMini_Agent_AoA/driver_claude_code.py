@@ -221,6 +221,7 @@ class ClaudeCode(Session):
         """Clear view caches before context compaction so the agent re-discovers entities."""
         self.seen_commands.clear()
         self.seen_entities.clear()
+        self.seen_opaque_note = False
         return {}
 
     async def permission_control(

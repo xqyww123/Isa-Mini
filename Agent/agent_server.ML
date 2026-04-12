@@ -253,6 +253,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
             |> Config.put Minilang.INTRO_split_conj true
             |> Config.put Minilang.INTRO_mk_block true
             |> Config.put Minilang.auto_deconflict_bound true
+            |> Config.put Minilang.high_auto_mode true
             |> Config.put Printer.show_markup false
 
       val global_context = global_context_of (ctxt, sequent)
@@ -285,7 +286,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
           end handle Minilang.OPR_FAIL (Minilang.PROOF_FAIL, msg) =>
               error (REPL.trim_makrup msg)
             | Minilang.OPR_FAIL (Minilang.INVALID_OPR, msg) =>
-              error (String.concat ["Bad proof operation.\n", REPL.trim_makrup msg])
+              error (REPL.trim_makrup msg)
             | Minilang.OPR_FAIL (Minilang.TERMLANG, msg) =>
               error (String.concat ["Syntax Error in Term Language.\n", REPL.trim_makrup msg])
             | MiniLang_Agent.FACT_IN_TIME_FAIL prop =>
@@ -331,11 +332,40 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         timeout = SOME (Time.fromSeconds 30)
       }
 
+      (* Pre-compute system rule membership tables from the init-time context (ctxt).
+         These reflect the background theory's simp/intro/elim declarations, NOT any
+         local additions made during the proof (e.g. local simp adds, using-facts).
+         TODO: to track proof-local rule changes, the tables would need to be
+         rebuilt per proof state from Minilang.context_of. *)
+      val simp_rule_names : Strhashtab.set =
+        Strhashtab.make_set (map fst (#simps (dest_ss (simpset_of ctxt))))
+      (* For intro/elim, Thm.get_name_hint is unreliable (classical_rule derivation
+         strips hints). Use iNet keyed by proposition for fast candidate retrieval,
+         then post-filter with aconv for exactness. *)
+      val (intro_rule_net : term iNet.net, elim_rule_net : term iNet.net) =
+        let val cs = Classical.rep_cs (Classical.claset_of ctxt)
+            fun build_net items =
+              fold (fn (thm, _, _) =>
+                let val p = Thm.prop_of thm
+                in iNet.insert_term_safe (op aconv) (p, p) end) items iNet.empty
+        in (build_net (Item_Net.content (#safeIs cs) @ Item_Net.content (#unsafeIs cs)),
+            build_net (Item_Net.content (#safeEs cs) @ Item_Net.content (#unsafeEs cs)))
+        end
+      fun in_rule_net net prop =
+        exists (fn stored => prop aconv stored) (iNet.match_term net prop)
+      fun thm_roles thms =
+        let val names = map Thm.get_name_hint thms
+            val props = map Thm.prop_of thms
+        in (if exists (Strhashtab.defined simp_rule_names) names then ["simp"] else []) @
+           (if exists (in_rule_net intro_rule_net) props then ["intro"] else []) @
+           (if exists (in_rule_net elim_rule_net) props then ["elim"] else [])
+        end
+
       val retrieve_entity_callback = {
         name = "IsaMini.retrieve_entity",
         arg_schema = unpackPair (unpackString,
           unpackList (unpackPair (Universal_Key.unpack_entity_kind, unpackString))),
-        ret_schema = packList (packOption (packPair (packString, packList packString))),
+        ret_schema = packList (packOption (packTuple3 (packString, packList packString, packList packString))),
         function = (fn (state_id, entities) =>
           let val s0 = get_state state_id
               val ctxt = Minilang.context_of s0
@@ -361,7 +391,8 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                        let val thms' = select_thms thms idx_opt
                        in if null thms' then NONE
                           else SOME (Facts.extern ctxt facts full_name,
-                                     map (SOT o Thm.prop_of o Thm.transfer thy) thms')
+                                     map (SOT o Thm.prop_of o Thm.transfer thy) thms',
+                                     thm_roles thms')
                        end
                    | NONE => NONE
                 end
@@ -369,16 +400,17 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                 | retrieve (Universal_Key.IntroductionRuleK, name) = retrieve_thm name
                 | retrieve (Universal_Key.EliminationRuleK, name) = retrieve_thm name
                 | retrieve (Universal_Key.ConstantK, name) =
-                    let val short = Name_Space.extern ctxt const_space name
+                    let val name = Consts.intern consts name
+                        val short = Name_Space.extern ctxt const_space name
                         val T = Consts.the_constraint consts name
-                    in SOME (short, [SOTy T]) end
+                    in SOME (short, [SOTy T], []) end
                 | retrieve (Universal_Key.TypeK, name) =
-                    SOME (Name_Space.extern ctxt type_space name, [])
+                    SOME (Name_Space.extern ctxt type_space name, [], [])
                 | retrieve (Universal_Key.ClassK, name) =
-                    SOME (Name_Space.extern ctxt class_space name, [])
+                    SOME (Name_Space.extern ctxt class_space name, [], [])
                 | retrieve (Universal_Key.LocaleK, name) =
-                    SOME (Name_Space.extern ctxt locale_space name, [])
-          in map (fn e => retrieve e handle ERROR _ => NONE) entities end),
+                    SOME (Name_Space.extern ctxt locale_space name, [], [])
+          in map (fn e => retrieve e handle ERROR _ => NONE | TYPE _ => NONE) entities end),
         timeout = NONE
       }
 

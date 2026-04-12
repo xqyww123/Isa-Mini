@@ -12,7 +12,7 @@ val induction_tac:
     (string * typ) list list -> term option list -> thm list option ->
     thm list -> int -> context_tactic
 
-val xOF : Proof.context -> thm list -> thm -> thm
+val xOF : bool -> Proof.context -> thm list -> thm -> thm
 val xof : Proof.context -> string option list * string option list ->
     (binding * string option * mixfix) list -> thm -> thm
 
@@ -181,7 +181,38 @@ fun beta_eta_contract_cterm x =
   then Thm.dest_arg (Thm.cprop_of (Drule.beta_eta_conversion x))
   else x
 
-fun xOF ctxt thms st =
+local
+
+(* Discharge a single premise of [rule] using [fact].
+   Fast path: ordinary OF unification.
+   Fallback (when prove_discharge): construct a goal from the premise,
+   insert the fact as an assumption via insert_tac, and prove with fast_mepo_tac. *)
+fun discharge_one _ rule fact =
+      rule OF [fact]
+
+fun discharge_one_prove ctxt rule fact =
+      (rule OF [fact])
+      handle THM _ =>
+        let val premise = hd (Thm.prems_of rule)
+            val goal = Goal.init (Thm.cterm_of ctxt premise)
+            val tac = Method.insert_tac ctxt [fact] 1
+                      THEN Phi_Sledgehammer_Solver.fast_mepo_tac
+                             (Time.fromSeconds 3) ctxt 1
+        in case Seq.pull (tac goal)
+             of SOME (st', _) =>
+                  let val proved = Goal.finish ctxt st'
+                  in rule OF [proved] end
+              | NONE => raise THM ("the given fact mismatches the target premise",
+                                   1, [fact, rule])
+        end
+
+fun discharge_all _ _ rule [] = rule
+  | discharge_all discharge1 ctxt rule (fact :: rest) =
+      discharge_all discharge1 ctxt (discharge1 ctxt rule fact) rest
+
+in
+
+fun xOF prove_discharge ctxt thms st =
   let open Conv
       val LEN = length thms
       fun rulify N ctxt ctm =
@@ -196,18 +227,27 @@ fun xOF ctxt thms st =
               (rewr_conv Thms.atomize_all'sym then_conv rulify N ctxt) ctm
            | Const (\<^const_name>\<open>HOL.Trueprop\<close>, _) $ (Const(\<^const_name>\<open>HOL.implies\<close>, _) $ _ $ _) =>
               (rewr_conv Thms.atomize_imp'sym then_conv rulify N ctxt) ctm
-           | _ => raise THM ("OF : more facts are given than the number of premises of the rule",
+           | _ => raise THM ("more facts are given than the number of premises of the rule",
                               LEN + 1, st :: thms)
+      val discharge1 = if prove_discharge then discharge_one_prove else discharge_one
    in if LEN <= Thm.nprems_of st
-    then st OF thms
+    then (st OF thms
+          handle THM _ =>
+            if not prove_discharge then st OF thms  (* re-raise *)
+            else discharge_all discharge1 ctxt st thms)
     else let
          val i = Thm.maxidx_of st + 1
          val st' = fconv_rule (rulify LEN ctxt) st
                 |> Thm.forall_elim_vars i
-      in (st' OF thms)
+      in (st' OF thms
+          handle THM _ =>
+            if not prove_discharge then st' OF thms  (* re-raise *)
+            else discharge_all discharge1 ctxt st' thms)
       |> fconv_rule (Object_Logic.atomize ctxt)
      end
   end
+
+end
 
 fun xof ctxt (args, concl_args) fixes thm =
   let val num_var = length args - length (Term.add_vars (Thm.prop_of thm) [])
@@ -348,8 +388,7 @@ fun inst_universal_quantifiers ctxt insts thm =
       then (2, idx, t)
       else if exists (fn (n, _) => n = name) hol_all_vars
       then (3, idx, t)
-      else error ("inst_universal_quantifiers: variable " ^
-                  Term.string_of_vname idx ^ " not found in theorem")
+      else error ("Variable " ^ Term.string_of_vname idx ^ " is not found in the rule")
 
     val classified = map classify insts
     val schematic_insts = map_filter (fn (1, idx, t) => SOME (idx, t) | _ => NONE) classified
@@ -386,8 +425,7 @@ fun inst_universal_quantifiers ctxt insts thm =
         val var_names = Term.add_var_names (Thm.prop_of thm) []
         val _ = map (fn (idx, _) =>
           if member (op =) var_names idx then ()
-          else error ("inst_universal_quantifiers: schematic variable " ^
-                      Term.string_of_vname idx ^ " not found in theorem"))
+          else error ("Variable " ^ Term.string_of_vname idx ^ " is not found in the rule"))
           insts
         val ct_insts = map (fn (idx, t) => (idx, Thm.cterm_of ctxt t)) insts
       in Drule.infer_instantiate ctxt ct_insts thm end

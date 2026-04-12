@@ -1,0 +1,43 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - Q: nat ⇒ bool
+premises:
+  - h1: P (0 :: nat)
+  - h2: ∀(x :: nat). P x ⟶ Q x
+variables:
+  - P: nat ⇒ bool
+goal: Q ((1 :: nat) - (1 :: nat))
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+--------------------------------------------------
+Response
+--------------------------------------------------
+Is error: True
+Reason: None
+--------------------------------------------------
+After Specialize (no unifiers)
+--------------------------------------------------
+variables:
+  - Q: nat ⇒ bool
+premises:
+  - h1: P (0 :: nat)
+  - h2: ∀(x :: nat). P x ⟶ Q x
+variables:
+  - P: nat ⇒ bool
+goal: Q ((1 :: nat) - (1 :: nat))
+proof:
+  - step id: 1
+    thought: Specialize h2 with x = 1 - 1, discharge with h1 (P 0) — should fail: no unifiers
+    operation: Specialize
+    rule:
+      - h2: ∀(x :: nat). P x ⟶ Q x
+    instantiations:
+      - x = 1 - (1::nat)
+    discharging facts:
+      - h1: P (0 :: nat)
+    Error: exception THM 0 raised (line 311 of "drule.ML"): OF: no unifiers
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  Q ((1 :: nat) - (1 :: nat))

@@ -6,7 +6,9 @@ from .helper import split_id_into_segs, cat_segs_into_id, incr_id_major, incr_id
 from typing import Any, Awaitable, Iterable, NamedTuple, Protocol, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired, Annotated
 from Isabelle_RPC_Host import Connection, IsabelleError, pretty_unicode, ascii_of_unicode
 from Isabelle_RPC_Host.position import IsabellePosition
-from Isabelle_RPC_Host.universal_key import EntityKind, universal_key, universal_key_of, UndefinedEntity
+from Isabelle_RPC_Host.universal_key import (
+    EntityKind, universal_key, universal_key_of, universal_key_and_name_of, UndefinedEntity,
+)
 from Isabelle_Semantic_Embedding.semantics import Semantic_Vector_Store, SemanticRecord, trunc_expr as _trunc_expr_base
 
 AGENT_EXPR_LIMIT = 200
@@ -75,13 +77,14 @@ class EditFailureResponse(NamedTuple):
 
 class IsabelleEntity:
     """A resolved Isabelle entity (constant, type, class, locale, etc.) with display info."""
-    __slots__ = ('full_name', 'short_name', 'expression', 'kind')
+    __slots__ = ('full_name', 'short_name', 'expression', 'kind', 'roles')
     def __init__(self, full_name: str, short_name: str, expression: list[str],
-                 kind: EntityKind):
+                 kind: EntityKind, roles: list[str] = []):
         self.full_name = full_name
         self.short_name = short_name
         self.expression = expression
         self.kind = kind
+        self.roles = roles
 
 class RetrievedEntity(NamedTuple):
     """Result of semantic search: an entity with its similarity score and interpretation."""
@@ -90,7 +93,12 @@ class RetrievedEntity(NamedTuple):
     interpretation: str | None  # human-readable description from SemanticRecord
 
 class IsabelleFact(ABC):
-    """Abstract base class for facts referenced in proof operations."""
+    """A fact referenced in proof operations.
+
+    Instances are immutable by convention (not runtime-enforced):
+    "updating" a fact means constructing a new instance, e.g. via
+    Minilang_State.refresh_facts.
+    """
     @abstractmethod
     def name(self) -> str: ...
     @abstractmethod
@@ -103,15 +111,19 @@ class IsabelleFact(ABC):
         return self.name()
 
 class IsabelleFact_Presented(IsabelleFact, IsabelleEntity):
-    """A resolved fact with full information from Isabelle."""
+    """A resolved fact with full information from Isabelle. `kind` must be
+    theorem-like (see _THEOREM_KINDS)."""
     __slots__ = ('fact',)
     def __init__(self, full_name: str, short_name: str, fact: Fact, expression: list[term],
-                 kind: EntityKind = EntityKind.THEOREM):
+                 kind: EntityKind = EntityKind.THEOREM, roles: list[str] = []):
+        assert kind in _THEOREM_KINDS, \
+            f"IsabelleFact_Presented requires a theorem-like kind, got {kind}"
         self.full_name = full_name
         self.short_name = short_name
         self.fact = fact
         self.expression = expression
         self.kind = kind
+        self.roles = roles
     def name(self) -> str:
         return self.short_name
     def print(self, indent: int, file: MyIO) -> None:
@@ -871,8 +883,8 @@ class Minilang_Operation(NamedTuple):
     def END() -> 'Minilang_Operation':
         return Minilang_Operation("END", [])
     @staticmethod
-    def HAVE(name: str, statement: term) -> 'Minilang_Operation':
-        return Minilang_Operation("HAVE", (name, ascii_of_unicode(statement)))
+    def HAVE(name: str, statement: term, auto_apply: bool) -> 'Minilang_Operation':
+        return Minilang_Operation("HAVE", (name, ascii_of_unicode(statement), auto_apply))
     @staticmethod
     def SUFFICES(statement: term) -> 'Minilang_Operation':
         return Minilang_Operation("SUFFICES", ascii_of_unicode(statement))
@@ -982,6 +994,13 @@ class Minilang_State:
                     errors=err.errors,
                     operation=str(opr)
                 )
+                # Uninitialize assign_to. Otherwise any prooftree/messages left
+                # over from a previous successful execute on the same Python
+                # object would stay visible through `initialized()` and leak
+                # stale state into downstream consumers after the re-execute
+                # fails.
+                assign_to.prooftree = None
+                assign_to.messages = []
                 if err.errors == ["beginning_state_not_found"]:
                     raise InternalError("The beginning state of the execution is not initialized!")
                 raise
@@ -1056,10 +1075,44 @@ class Minilang_State:
                 if result is None:
                     out[idx] = IsabelleFact_Unfound(fact)
                 else:
-                    short_name, exprs = result
+                    short_name, exprs, roles = result
                     out[idx] = IsabelleFact_Presented(
                         full_name=query_name, short_name=short_name,
-                        fact=fact, expression=exprs)
+                        fact=fact, expression=exprs, roles=roles)
+        return out
+    async def refresh_facts(self, facts: list[IsabelleFact]) -> list[IsabelleFact]:
+        """Re-validate cached Presented/Unfound facts against the current
+        state. ProveInTime facts pass through unchanged. Returns a new
+        list of fresh instances; inputs are not mutated. Precondition:
+        self.initialized()."""
+        out: list[IsabelleFact] = list(facts)
+        query_indices: list[int] = []
+        queries: list[tuple[EntityKind, str]] = []
+        original_facts: list[Fact] = []
+        for i, f in enumerate(facts):
+            if isinstance(f, IsabelleFact_ProveInTime):
+                continue
+            assert isinstance(f, (IsabelleFact_Presented, IsabelleFact_Unfound))
+            # Preserve the kind for Presented; default to THEOREM for
+            # Unfound (the only producers of Unfound today are
+            # theorem-kind lookups).
+            kind = f.kind if isinstance(f, IsabelleFact_Presented) else EntityKind.THEOREM
+            query_indices.append(i)
+            queries.append((kind, cast(FactByName, f.fact)["name"]))
+            original_facts.append(f.fact)
+        if not queries:
+            return out
+        results = await self._retrieve_entity(queries)
+        for idx, (kind, query_name), result, original_fact in zip(
+                query_indices, queries, results, original_facts):
+            if result is None:
+                out[idx] = IsabelleFact_Unfound(original_fact)
+            else:
+                short_name, exprs, roles = result
+                out[idx] = IsabelleFact_Presented(
+                    full_name=query_name, short_name=short_name,
+                    fact=original_fact, expression=exprs,
+                    kind=kind, roles=roles)
         return out
     async def semantic_knn(self, query: str | None, k: int,
                      kinds: list[EntityKind],
@@ -1084,12 +1137,12 @@ class Minilang_State:
             scored_recs: list[tuple[float, SemanticRecord]] = []
             for tag in kinds:
                 try:
-                    uk = await universal_key_of(self.connection, tag, exact_name)
+                    uk, full_name = await universal_key_and_name_of(self.connection, tag, exact_name)
                 except UndefinedEntity:
                     if "." in exact_name:
                         short = exact_name.rsplit(".", 1)[1]
                         try:
-                            uk = await universal_key_of(self.connection, tag, short)
+                            uk, full_name = await universal_key_and_name_of(self.connection, tag, short)
                         except Exception:
                             continue
                     else:
@@ -1100,7 +1153,7 @@ class Minilang_State:
                 if rec is not None:
                     scored_recs.append((1.0, rec._replace(name=ascii_of_unicode(rec.name))))
                 else:
-                    scored_recs.append((1.0, SemanticRecord(tag, ascii_of_unicode(exact_name), None, None)))
+                    scored_recs.append((1.0, SemanticRecord(tag, ascii_of_unicode(full_name), None, None)))
             if not scored_recs:
                 return [], [f'Undefined: "{exact_name}"']
             warnings: list[str] = []
@@ -1152,18 +1205,18 @@ class Minilang_State:
         out: list[RetrievedEntity] = []
         for (score, rec), info in zip(scored_recs, infos):
             if info is None:
-                short_name, exprs = rec.name, []
+                short_name, exprs, roles = rec.name, [], []
             else:
-                short_name, exprs = info
+                short_name, exprs, roles = info
             if rec.kind in _THEOREM_KINDS:
                 entity: IsabelleEntity = IsabelleFact_Presented(
                     full_name=rec.name, short_name=short_name,
                     fact=FactByName(refer_by="name", name=short_name),
-                    expression=exprs, kind=rec.kind)
+                    expression=exprs, kind=rec.kind, roles=roles)
             else:
                 entity = IsabelleEntity(
                     full_name=rec.name, short_name=short_name,
-                    expression=exprs, kind=rec.kind)
+                    expression=exprs, kind=rec.kind, roles=roles)
             out.append(RetrievedEntity(
                 entity=entity,
                 score=score,
@@ -1187,14 +1240,15 @@ class Minilang_State:
         result = await self.connection.callback("IsaMini.need_intro", (self.name, consider_conj))
         return result
     async def _retrieve_entity(self, entities: list[tuple[EntityKind, str]]
-        ) -> list[tuple[str, list[str]] | None]:
+        ) -> list[tuple[str, list[str], list[str]] | None]:
         """Retrieve entity info by kind and name (short or full).
-        Returns list of (short_name, extra_strings) or None per entity.
-        extra_strings: propositions for theorems/rules, [type] for constants, [] for others."""
+        Returns list of (short_name, extra_strings, roles) or None per entity.
+        extra_strings: propositions for theorems/rules, [type] for constants, [] for others.
+        roles: list of system rule set tags ('simp', 'intro', 'elim') for theorems, [] for others."""
         args = [(int(kind), name) for kind, name in entities]
         results = await self.connection.callback(
             "IsaMini.retrieve_entity", (self.name, args))
-        return [(pretty_unicode(r[0]), [pretty_unicode(e) for e in r[1]])
+        return [(pretty_unicode(r[0]), [pretty_unicode(e) for e in r[1]], list(r[2]))
                 if r is not None else None for r in results]
     async def check_term(self, term_str: str) -> tuple[typ, Vars, Vars]:
         """
@@ -2266,7 +2320,7 @@ class NonLeaf_Node(Node):
                 alive = self._find_alive_state(i)
                 exact = child.ml_state if child.ml_state.initialized() else None
                 gn = await pn(alive, exact)
-                config = NodeConfig(child.id, await child.ml_state.clone(None), self)
+                config = NodeConfig(child.local_step, await child.ml_state.clone(None), self)
                 try:
                     new_node = gn(config)
                 except GenNode_Error as e:
@@ -2580,6 +2634,14 @@ class StdBlock(NonLeaf_Node):
             if await ml_state.need_intro(False):
                 await self.append(_trivial_parsing(
                     lambda config: Intro(config, "", None, False)))
+        # Propagate state upward via the cascade chain. Matches the behavior
+        # of insert_before_me / _amend_child, which both call
+        # _refresh_all_after_me after inserting. In particular this is what
+        # makes GlobalEnv → GoalNode propagation fire for plain appends:
+        # without it, global_env.append(Have) would never rerun GlobalEnv's
+        # footer, so no SKIP from GlobalEnv's end state would ever be written
+        # into the GoalNode checkpoints.
+        await node._refresh_all_after_me()
         return node
 
 
@@ -3023,6 +3085,8 @@ class Obvious(Leaf):
             self.fact_refs, pit_warnings = await _filter_unprovable(self.fact_refs, self.ml_state)
             for w in pit_warnings:
                 self.warnings.append(Warning(Warning.Position.FOOTER, w))
+        elif self.ml_state.initialized():
+            self.fact_refs = await self.ml_state.refresh_facts(self.fact_refs)
         await super()._refresh_me_alone()
         if self.parent is not None:
             if self.status.status == EvaluationStatus.Status.SUCCESS:
@@ -3219,6 +3283,11 @@ class Unfold(Leaf):
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
         return indent
 
+    async def _refresh_me_alone(self) -> None:
+        if not self._first_time and self.ml_state.initialized():
+            self.fact_refs = await self.ml_state.refresh_facts(self.fact_refs)
+        await super()._refresh_me_alone()
+
     def the_operation(self) -> 'Minilang_Operation | FailureReason':
         if not self.targets:
             return FailureReason("Unfold operation must specify at least one target.")
@@ -3230,20 +3299,20 @@ class Unfold(Leaf):
         return Minilang_Operation.UNFOLD(self.fact_refs)
 
 
-#### Specialize
+#### Derive
 
 class Instantiation(TypedDict):
     name: str     # variable name (e.g., "x", "n")
     value: str    # Isabelle term string (e.g., "Suc 0")
 
-class Specialize_ToolArg(TypedDict):
+class Derive_ToolArg(TypedDict):
     thought: str
     rule: FactByName                              # The rule to specialize
     instantiations: list[Instantiation]           # Variable instantiations
     discharging_facts: list[FactByName]           # Facts to discharge premises
     result_name: str                              # Name to bind the result under
 
-class Specialize_InternalToolArg(NamedTuple):
+class Derive_InternalToolArg(NamedTuple):
     thought: str
     rule: FactByName
     rule_ref: IsabelleFact
@@ -3252,9 +3321,9 @@ class Specialize_InternalToolArg(NamedTuple):
     discharge_refs: list[IsabelleFact]
     result_name: str
 
-@proof_operation("Specialize", Specialize_ToolArg)
-class Specialize(Leaf):
-    def __init__(self, config: NodeConfig, arg: Specialize_InternalToolArg):
+@proof_operation("Derive", Derive_ToolArg)
+class Derive(Leaf):
+    def __init__(self, config: NodeConfig, arg: Derive_InternalToolArg):
         super().__init__(config, arg.thought)
         self.rule = arg.rule
         self.rule_ref = arg.rule_ref
@@ -3267,14 +3336,14 @@ class Specialize(Leaf):
         populated from Specialize_Result_Msg after successful execution."""
 
     def quickview_title(self) -> str:
-        return f"Specialize {self.rule_ref.name()}"
+        return f"Derive {self.rule_ref.name()}"
 
     @staticmethod
-    def gen(arg: Specialize_InternalToolArg) -> parsing_node:
-        return _trivial_parsing(lambda config: Specialize(config, arg))
+    def gen(arg: Derive_InternalToolArg) -> parsing_node:
+        return _trivial_parsing(lambda config: Derive(config, arg))
 
     @staticmethod
-    def interactive_gen(arg: Specialize_ToolArg) -> parsing_node:
+    def interactive_gen(arg: Derive_ToolArg) -> parsing_node:
         async def parse(alive_state: Minilang_State,
                         exact_state: Minilang_State | None = None) -> gen_node:
             all_facts = [arg["rule"]] + arg.get("discharging_facts", [])
@@ -3282,7 +3351,7 @@ class Specialize(Leaf):
             fetched = cast(list[IsabelleFact], await alive_state.fetch_facts(all_facts))
             rule_ref = fetched[0]
             discharge_refs = fetched[1:]
-            internal = Specialize_InternalToolArg(
+            internal = Derive_InternalToolArg(
                 thought=arg["thought"],
                 rule=arg["rule"],
                 rule_ref=rule_ref,
@@ -3290,10 +3359,15 @@ class Specialize(Leaf):
                 discharging_facts=arg.get("discharging_facts", []),
                 discharge_refs=discharge_refs,
                 result_name=arg["result_name"])
-            return lambda config: Specialize(config, internal)
+            return lambda config: Derive(config, internal)
         return parse
 
     async def _refresh_me_alone(self) -> None:
+        if not self._first_time and self.ml_state.initialized():
+            refreshed = await self.ml_state.refresh_facts(
+                [self.rule_ref, *self.discharge_refs])
+            self.rule_ref = refreshed[0]
+            self.discharge_refs = refreshed[1:]
         await super()._refresh_me_alone()
         if self.status.status == EvaluationStatus.Status.SUCCESS:
             messages = self.resulting_state().messages
@@ -3306,7 +3380,7 @@ class Specialize(Leaf):
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
         self._print_thought(indent, file)
         print_indent(indent, file)
-        file.write("operation: Specialize\n")
+        file.write("operation: Derive\n")
         print_indent(indent, file)
         file.write("rule:\n")
         self.rule_ref.print(indent+1, file)
@@ -3321,9 +3395,9 @@ class Specialize(Leaf):
             file.write("discharging facts:\n")
             for ref in self.discharge_refs:
                 ref.print(indent+1, file)
-        if self.result_name:
-            print_indent(indent, file)
-            file.write(f"result name: {self.result_name}\n")
+        # if self.result_name:
+        #     print_indent(indent, file)
+        #     file.write(f"result name: {self.result_name}\n")
         if self.result_facts is not None:
             print_indent(indent, file)
             file.write("resulting facts:\n")
@@ -3333,6 +3407,17 @@ class Specialize(Leaf):
         self._print_evaluation_status(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
         return indent
+
+    def _on_edit_failure(self) -> EditFailureResponse:
+        if self.status.status == EvaluationStatus.Status.FAILURE:
+            file = MyIO(StringIO())
+            if self.status.reason:
+                file.write(self.status.reason.reason)
+                file.write('\n')
+            if self.warnings:
+                self._print_warnings(0, file, list(Warning.Position))
+            return EditFailureResponse(is_error=True, failure_reason=FailureReason(file.getvalue()), revert=True)
+        return super()._on_edit_failure()
 
     def _fixed_facts_at_me(self, ret: Hyps) -> Hyps:
         if self.result_facts is not None:
@@ -3498,6 +3583,8 @@ class Rewrite(Leaf):
             self.using, pit_warnings = await _filter_unprovable(self.using, self.ml_state)
             for w in pit_warnings:
                 self.warnings.append(Warning(Warning.Position.FOOTER, w))
+        elif self.ml_state.initialized():
+            self.using = await self.ml_state.refresh_facts(self.using)
         old_bindings = self.bindings
         old_goal = (self.resulting_state().prooftree_of().top_goal_or_none()
                     if self.status.status == EvaluationStatus.Status.SUCCESS
@@ -3610,6 +3697,7 @@ class Have_ToolArg(TypedDict):
     statement: Statement
     name: str
     proof: SubProof
+    auto_apply: NotRequired[bool]
 
 @proof_operation("Have", Have_ToolArg)
 class Have(StdBlock):
@@ -3619,6 +3707,7 @@ class Have(StdBlock):
         super().__init__(config, arg["thought"], [])
         self.statement = arg["statement"]
         self.name = arg["name"]
+        self.auto_apply = arg.get("auto_apply", False)
         if subproof_parsed is not None:
             local_step = self._local_step_of_next_proof_step()
             ml_state = Minilang_State.assign(self.ml_state)
@@ -3646,10 +3735,13 @@ class Have(StdBlock):
         file.write(f"isabelle: {self.statement['isabelle']}\n")
         print_indent(indent, file)
         file.write(f"name: {self.name}\n")
+        if self.auto_apply:
+            print_indent(indent, file)
+            file.write("auto_apply: true\n")
         self._print_evaluation_status(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
     def beginning_opr(self) -> Minilang_Operation | None:
-        return Minilang_Operation.HAVE(self.name, self.statement['isabelle'])
+        return Minilang_Operation.HAVE(self.name, self.statement['isabelle'], self.auto_apply)
     async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
         fail = await super()._refresh_the_beginning_opr(begin_opr)
         if fail is not None:
@@ -4033,6 +4125,12 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
 
             raise RaiseInteraction([result], kontinue) # type: ignore
         return parse
+    async def _refresh_me_alone(self) -> None:
+        if (self.rule_ref is not None
+                and not self._first_time
+                and self.ml_state.initialized()):
+            [self.rule_ref] = await self.ml_state.refresh_facts([self.rule_ref])
+        await super()._refresh_me_alone()
     def quickview_title(self) -> str:
         if self.rule_ref is not None:
             return f"Inference Rule {self.rule_ref.name()}"
@@ -4337,9 +4435,25 @@ class GlobalEnv(StdBlock):
         return indent
     def _id_of_openning_prf_to_fill(self) -> step | None:
         return None
+    def _fixed_vars_after_me(self, ret: Vars) -> Vars:
+        # Aggregate vars introduced by children (e.g. a global Obtain), so
+        # that sibling GoalNodes see them in their Python-side context.
+        for child in self.sub_nodes:
+            child._fixed_vars_after_me(ret)
+        return ret
+    def _fixed_facts_after_me(self, ret: Hyps) -> Hyps:
+        # Aggregate facts established by children (e.g. global Have's) so that
+        # sibling GoalNodes see them in their Python-side context. Without
+        # this, Root's _all_fixed_facts_before_a_child(GoalNode, ...) walk
+        # would call the default no-op on GlobalEnv and drop every global
+        # declaration on the floor, even though the underlying Isabelle state
+        # does carry them.
+        for child in self.sub_nodes:
+            child._fixed_facts_after_me(ret)
+        return ret
     def _print_footer(self, indent: int, file: MyIO, show_warnings: bool = False) -> None:
         print_indent(indent, file)
-        #file.write(f"You could add global declarations by calling command `edit` with action `fill` and target step `{self.id}.{len(self.sub_nodes)+1}`\n")
+        file.write(f"You can write global declarations by calling command `edit` with action `fill` and target step `{self.id}.{len(self.sub_nodes)+1}`\n")
     def unfinished_nodes(self, ret: set['Node']) -> None:
         for child in self.sub_nodes:
             child.unfinished_nodes(ret)
@@ -4351,8 +4465,9 @@ class Root(GoalContainer, StdBlock):
         super().__init__(NodeConfig("$root", ml_state0, None), "", [])
         self.context = context
         self.session = session
-        self.global_env = GlobalEnv(NodeConfig("global", ml_state0, self))
+        self.global_env = GlobalEnv(NodeConfig("global", Minilang_State.assign(ml_state0), self))
         self.sub_nodes.append(self.global_env)
+        self.final_ml_state = Minilang_State.assign(ml_state0)
     async def _refresh_me_alone(self):
         if self._first_time:
             ml_state = await self.ml_state.skip(None)
@@ -4370,8 +4485,23 @@ class Root(GoalContainer, StdBlock):
                 goal_node.id = goal_id
                 self.sub_nodes.append(goal_node)
                 ml_state = await ml_state.sorry(None, None)
-            self.final_ml_state = ml_state
+            #self.final_ml_state = ml_state
         await super()._refresh_me_alone()
+    async def _refresh_all_children_after(self, after: 'Node | Literal["end"]', can_continue_i: bool) -> None:
+        # GoalContainer blocks cross-child propagation because each subgoal is
+        # independent in AoA — that's correct for changes initiated *from* a
+        # GoalNode (a change inside one goal must not ripple into siblings).
+        # But GlobalEnv sits before all GoalNodes and its declarations affect
+        # every goal, so a change *from* GlobalEnv must propagate forward to
+        # all GoalNodes. Override to allow that one direction only.
+        if after is self.global_env:
+            for child in self.sub_nodes[1:]:
+                await child._refresh_me_alone()
+            # Root has no parent, no upward recursion.
+            return None
+        # Otherwise (after is a GoalNode or "end"): keep GoalContainer's
+        # behavior — block propagation between independent subgoals.
+        return None
     def id_of_goal(self) -> step | None:
         return None
     def resulting_state(self) -> Minilang_State:
@@ -4555,6 +4685,8 @@ class Session:
             set(parent.seen_entities) if parent is not None else set())
         self.seen_commands: dict[IsabellePosition, str] = (
             dict(parent.seen_commands) if parent is not None else {})
+        self.seen_opaque_note: bool = (
+            parent.seen_opaque_note if parent is not None else False)
         if parent is not None:
             # Subsessions share parent's log files
             self.log_dir = parent.log_dir

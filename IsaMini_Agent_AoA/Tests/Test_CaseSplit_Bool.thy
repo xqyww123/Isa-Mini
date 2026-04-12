@@ -5,6 +5,6 @@ begin
 declare [[agent_AoA_driver="test.CaseSplit_Bool"]]
 
 lemma t_bool: "P (b::bool)"
-  by   aoa
+  by  aoa
 
 end

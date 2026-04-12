@@ -160,7 +160,12 @@
         "thought": { "$ref": "#/$defs/Thought" },
         "statement": { "$ref": "#/$defs/Statement" },
         "name": { "type": "string", "description": "binding of the lemma" },
-        "proof": { "$ref": "#/$defs/SubProof" }
+        "proof": { "$ref": "#/$defs/SubProof" },
+        "auto_apply": {
+          "type": "boolean",
+          "default": false,
+          "description": "if turned on, the proven statement will be registered into the system reasoners and applied automatically"
+        }
       },
       "required": [
         "operation",
@@ -505,13 +510,13 @@
       },
       "required": ["name", "value"]
     },
-    "Specialize": {
+    "Derive": {
       "additionalProperties": false,
-      "title": "Specialize",
-      "description": "instantiate universal quantifiers in a rule and discharge its premises",
+      "title": "Derive",
+      "description": "instantiate universal quantifiers in a rule and discharge its premises, deriving a new fact in one forward-reasoning step",
       "properties": {
         "operation": {
-          "const": "Specialize",
+          "const": "Derive",
           "type": "string"
         },
         "thought": { "$ref": "#/$defs/Thought" },
@@ -558,7 +563,7 @@
         { "$ref": "#/$defs/InferenceRule" },
         { "$ref": "#/$defs/Suffices" },
         { "$ref": "#/$defs/Intro" },
-        { "$ref": "#/$defs/Specialize" }
+        { "$ref": "#/$defs/Derive" }
       ]
     }
   },

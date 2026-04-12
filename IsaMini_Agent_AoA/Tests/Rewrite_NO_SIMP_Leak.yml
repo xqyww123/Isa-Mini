@@ -1,0 +1,41 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+premises:
+  - h: ¬ is_nonzero (wrap (f a))
+You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+variables:
+  - f: nat ⇒ nat
+  - a: nat
+goal: False
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+--------------------------------------------------
+Variant 1: use system simplifiers = True (timeout fallback)
+--------------------------------------------------
+--------------------------------------------------
+After Rewrite (variant 1)
+--------------------------------------------------
+premises:
+  - h: ¬ is_nonzero (wrap (f a))
+You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+variables:
+  - f: nat ⇒ nat
+  - a: nat
+goal: False
+proof:
+  - step id: 1
+    thought: Rewrite h using is_nonzero_def; system simps should timeout on wrap loop
+    operation: Rewrite
+    using:
+      - is_nonzero_def: is_nonzero ?x = (?x ≠ (0 :: nat))
+      - system simplifiers
+    targets:
+      - h
+    resulting premises:
+      - premise0: f a = (0 :: nat)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  False
+success: False
+reason: None
