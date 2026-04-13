@@ -164,7 +164,7 @@
         "auto_apply": {
           "type": "boolean",
           "default": false,
-          "description": "if turned on, the proven statement will be registered into the system reasoners and applied automatically"
+          "description": "if turned on, the proven statement will applied automatically by the system simplifier and reasoner"
         }
       },
       "required": [

@@ -66,6 +66,7 @@ val ready_to_finish : state -> bool
 datatype message = New_Items of items
                  | Goals     of term list
                  | Consider_Case of string * items
+                 | Newly_Fixed of (string * typ) list (*external_name * raw type*)
                  | Internal of exn
 val set_reporter : (message (*new items*) -> unit) -> unit
 val get_reporter : unit -> (message (*new items*) -> unit)
@@ -269,6 +270,7 @@ val counter_mode = Config.declare_string ("Minilang.counter_mode", \<^here>) (K 
 val INTRO_split_conj = Config.declare_bool ("Minilang.INTRO_split_conj", \<^here>) (K false)
 val INTRO_mk_block   = Config.declare_bool ("Minilang.INTRO_mk_block", \<^here>) (K false)
 val auto_deconflict_bound = Config.declare_bool ("Minilang.auto_deconflict_bound", \<^here>) (K false)
+val auto_calculation = Config.declare_bool ("Minilang.auto_calculation", \<^here>) (K true)
 
 fun chk_working_mode mode =
       if member (op =) ["RELAXED", "COMPLETE_NEXT", "STRICT"] mode
@@ -590,6 +592,12 @@ fun stack_is_finished (_, [HHF (st', _)]) = no_goal' st'
   | stack_is_finished _ = false
 fun is_finished (SK,_,_) = stack_is_finished SK
 
+(* The current (top) block's goal is closed.  Used by `chk_block_end` so that
+   END/NEXT in strict mode only require the *local* block to be done — not the
+   entire proof stack. *)
+fun stack_top_finished (_, HHF (st, _) :: _) = no_goal' st
+  | stack_top_finished _ = false
+
 fun stack_is_ready_to_finish (_, HHF (st, _) :: _) = Thm.no_prems st
   | stack_is_ready_to_finish _ = raise BROKEN_INVARIANT
 fun ready_to_finish (s as (SK,_,_)) = stack_is_ready_to_finish SK andalso not (is_finished s)
@@ -600,6 +608,7 @@ fun ready_to_finish (s as (SK,_,_)) = stack_is_ready_to_finish SK andalso not (i
 datatype message = New_Items of items
                  | Goals     of term list
                  | Consider_Case of string * items
+                 | Newly_Fixed of (string * typ) list (*external_name * raw type*)
                  | Internal of exn
 val reporter = Thread_Data.var () : (message -> unit) Thread_Data.var
 val default_reporter = K ()
@@ -992,6 +1001,8 @@ structure Calc_Data = Proof_Data (
 )
 
 fun extend_calc thm ctxt =
+  if not (Config.get ctxt auto_calculation) then ([], ctxt)
+  else
   let val calcs = Calc_Data.get ctxt
       val stat = Proof.init ctxt
       fun extend calc thm = stat
@@ -2330,10 +2341,25 @@ val HAVE_CMD =
 *)
 
 fun gen_HAVE' mkG shows (ctxt0, HHF (st,items) :: S) =
-      let val s01 = mkG ctxt0
+      let
+          (* `set_body false` lets `prep_statement`'s built-in augment
+             implicitly fix free vars of `shows`; `ctxt0` stays as the
+             export reference so they get generalized on the way out. *)
+          val s01 = mkG (Variable.set_body false ctxt0)
           val ctxt01 = Proof.context_of s01
           val goal = #goal (Proof.goal s01)
-                  |> init_goal ctxt01                  
+                  |> init_goal ctxt01
+
+          (* Surface free vars that the augment in `prep_statement` just
+             implicitly fixed in `ctxt01`. The agent renders them as a
+             `for_any:` block. *)
+          val newly_fixed =
+            Variable.add_newly_fixed ctxt01 ctxt0 (Thm.prop_of goal) []
+          val _ =
+            if null newly_fixed then ()
+            else get_reporter ()
+                   (Newly_Fixed (map (apfst (Variable.revert_fixed ctxt01))
+                                     newly_fixed))
 
           val binds = map (apsnd (map (Attrib.attribute_cmd ctxt0)) o fst) shows
           fun CB ctxt' (st',(*items'*) _,S, _) =
@@ -2478,9 +2504,16 @@ fun SUFFICES' prep_prop raw_prop (ctxt0, HHF (st0, items0) :: S) =
                       | G => G
     val impl_term = HOLogic.mk_imp (prop_P, goal_G_atom)
                  |> HOLogic.mk_Trueprop
-    val impl_goal = Thm.cterm_of ctxt0 impl_term
+
+    (* Implicitly fix free vars of P (body-mode bypass, mirrors gen_HAVE'). *)
+    val ctxt_setup = ctxt0
+                  |> Variable.set_body false
+                  |> Proof_Context.augment impl_term
+                  |> Variable.restore_body ctxt0
+
+    val impl_goal = Thm.cterm_of ctxt_setup impl_term
                  |> Goal.init
-                 |> init_goal ctxt0
+                 |> init_goal ctxt_setup
 
     (* Callback when P --> G is proven *)
     fun CB ctxt' (impl_thm, _, SK', _) =
@@ -2501,7 +2534,7 @@ fun SUFFICES' prep_prop raw_prop (ctxt0, HHF (st0, items0) :: S) =
     (* Report the new goal P --> G explicitly *)
     val _ = get_reporter () (Goals [impl_term])
 
-  in (ctxt0, HHF (impl_goal, ([],[]))
+  in (ctxt_setup, HHF (impl_goal, ([],[]))
           :: ENDBLK T_END
           :: MAGIC (CB, PRT, NO_PARAM)
           :: S)
@@ -2970,7 +3003,7 @@ val HAMMER_CMD = orverride_parser >> (fn ovr =>
 (** END **)
 
 fun chk_block_end (stack as (ctxt, _)) =
-      if Config.get ctxt strict_end andalso not (stack_is_finished stack)
+      if Config.get ctxt strict_end andalso not (stack_top_finished stack)
       then raise OPR_FAIL (PROOF_FAIL,
               "Cannot close the proof block because the goal is unsolved yet")
       else ()

@@ -155,6 +155,7 @@ fun minilang_tree_packer ctxt =
 fun minilang_message_packer ctxt =
   let val minilang_items_packer = minilang_items_packer ctxt
       val string_of_term = MiniLang_Agent.string_of_term ctxt
+      val string_of_type = MiniLang_Agent.string_of_type ctxt
       fun pack (Minilang.New_Items items) =
             packPair (packInt, minilang_items_packer) (0, items)
         | pack (Minilang.Goals goals) =
@@ -162,6 +163,9 @@ fun minilang_message_packer ctxt =
                      (1, map string_of_term goals)
         | pack (Minilang.Consider_Case (kase, items)) =
             packPair (packInt, packPair (packString, minilang_items_packer)) (2, (kase, items))
+        | pack (Minilang.Newly_Fixed vars) =
+            packPair (packInt, packList (packPair (packString, packString)))
+                     (6, map (apsnd string_of_type) vars)
         | pack (Minilang.Internal exn) =
             (case exn of
                MiniLang_Agent.INTRO_BINDINGS {missing, auto_introduced, final} =>
@@ -389,8 +393,12 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                 in case Facts.lookup (Context.Proof ctxt) facts full_name of
                      SOME {thms, ...} =>
                        let val thms' = select_thms thms idx_opt
+                           val base_extern = Facts.extern ctxt facts full_name
+                           val short_name = case idx_opt of
+                                 SOME i => Thm_Name.print (base_extern, i)
+                               | NONE => base_extern
                        in if null thms' then NONE
-                          else SOME (Facts.extern ctxt facts full_name,
+                          else SOME (short_name,
                                      map (SOT o Thm.prop_of o Thm.transfer thy) thms',
                                      thm_roles thms')
                        end
@@ -724,6 +732,13 @@ fun method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
            val log_path = if log_dir = "" then "(no logging)"
                           else log_dir ^ "/" ^ invocation_id
            val _ = writeln ("Agent-of-Agents (driver: " ^ driver ^ ", logs: " ^ log_path ^ ")")
+           (* Unfold locale/class instance goals (needs `standard`) before the agent runs *)
+           val sequent =
+             if Phi_Sledgehammer_Solver.need_standard_tac ctxt sequent
+             then (case SINGLE (Classical.standard_tac ctxt []) sequent of
+                     SOME st' => st'
+                   | NONE => sequent)
+             else sequent
            (* Preprocess: split large goals before handing to the agent *)
            val sequent =
              (case SINGLE (Goal_Preprocess.preprocess_split_tac ctxt) sequent of

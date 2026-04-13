@@ -27,7 +27,7 @@ from Isabelle_Semantic_Embedding.semantics import (
 from .model import (
     Session, Minilang_State, MyIO,
     RaiseInteraction, Interaction, IsabelleError,
-    EntityKind, print_indent, print_paragraph,
+    EntityKind, print_indent, print_paragraph, print_expression_list,
     Interaction_Retrieve, RetrievedEntity,
     IsabelleEntity, IsabelleFact_Presented, FactByName,
     _THEOREM_KINDS, AGENT_EXPR_LIMIT,
@@ -77,7 +77,7 @@ _COMMAND_HEADER_RE = re.compile(
 
 _PROOF_COMMAND_RE = re.compile(
     r"^\s*(?:private\s+|qualified\s+)?"
-    r"(?:lemma|theorem|corollary|proposition|schematic_goal)\s"
+    r"(?:lemma|lemmas|theorem|corollary|proposition|schematic_goal)\s"
 )
 
 def _parse_command_header(source: str) -> str:
@@ -171,16 +171,17 @@ async def _format_fetched_entity(
     or ``None``/``False`` to skip.  Requires ``session`` for both fetching and show-once tracking.
     ``potential_defs``: if True and entity is a constant, append relevant definitions.
     """
-    expr_str = _trunc_expr(', '.join(f.entity.expression))
+    exprs = f.entity.expression
     roles = getattr(f.entity, 'roles', [])
     tag = "" if (roles or f.entity.kind not in _THEOREM_KINDS) else " [opaque]"
     print_indent(indent, buf)
-    if expr_str:
+    if exprs:
         buf.write(f"{prefix}{f.entity.short_name}{tag}:")
-        print_paragraph(indent + 1, buf, expr_str)
+        truncated = print_expression_list(indent + 1, buf, exprs)
     else:
         buf.write(f"{prefix}{f.entity.short_name}{tag}\n")
-    if f.interpretation and (f.entity.kind not in _THEOREM_KINDS or expr_str.endswith("…")):
+        truncated = False
+    if f.interpretation and (f.entity.kind not in _THEOREM_KINDS or truncated):
         print_indent(indent + 1, buf)
         buf.write(f"{f.interpretation}\n")
     if def_info is True and session is not None:

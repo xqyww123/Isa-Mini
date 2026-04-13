@@ -1,0 +1,68 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: nat
+  - P: nat ⇒ bool
+premises:
+  - h: x = y
+You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+variables:
+  - y: nat
+goal: P x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+Rewrite step 1: status=success, is_error=False
+--------------------------------------------------
+After successful Rewrite
+--------------------------------------------------
+variables:
+  - x: nat
+  - P: nat ⇒ bool
+premises:
+  - h: x = y
+You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+variables:
+  - y: nat
+goal: P x
+proof:
+  - step id: 1
+    thought: Rewrite the goal using h
+    operation: Rewrite
+    using:
+      - h: x = y
+    targets:
+      - the goal
+    goal changes into:
+      P y
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  P y
+Obvious step 2: status=failure, is_error=True
+  reason: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
+
+--------------------------------------------------
+After failed Obvious (bug point)
+--------------------------------------------------
+variables:
+  - x: nat
+  - P: nat ⇒ bool
+premises:
+  - h: x = y
+You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+variables:
+  - y: nat
+goal: P x
+proof:
+  - step id: 1
+    thought: Rewrite the goal using h
+    operation: Rewrite
+    using:
+      - h: x = y
+    targets:
+      - the goal
+    goal changes into:
+      P y
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  P y

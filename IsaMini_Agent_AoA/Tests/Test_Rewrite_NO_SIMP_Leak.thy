@@ -30,6 +30,6 @@ declare notnotD [dest!]
 lemma no_simp_leak_test:
   assumes h: "\<not> is_nonzero (f (a::nat))"
   shows "False"
-  by aoa
+  by a oa
 
 end

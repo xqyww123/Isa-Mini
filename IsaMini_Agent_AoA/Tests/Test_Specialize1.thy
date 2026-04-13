@@ -8,6 +8,6 @@ lemma specialize_test1:
   assumes h1: "P (0::nat)"
       and h2: "\<forall>x::nat. P x \<longrightarrow> Q x"
   shows "Q (0::nat)"
-  by   aoa
+  by  aoa
 
 end

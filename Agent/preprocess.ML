@@ -19,7 +19,7 @@ structure Goal_Preprocess : GOAL_PREPROCESS = struct
 val split_skip_size = 30
 
 (* preprocess_split_tac only triggers when the largest subgoal exceeds this *)
-val preprocess_size_threshold = 200
+val preprocess_size_threshold = 480
 
 (** Custom recursive split tactic **)
 

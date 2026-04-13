@@ -384,6 +384,59 @@ async def _test_Rewrite_NoProgress(root: Root, file: MyIO):
     print_header("After Rewrite", file)
     root.print(0, file)
 
+# @model_test("RewriteThenObviousFails", "Test_Rewrite_Then_Obvious_Fails.thy", 18)
+# async def _test_RewriteThenObviousFails(root: Root, file: MyIO):
+#     """Reproduce: a successful Rewrite as the last child followed by a
+#     failing Obvious fill must return a graceful failure_reason instead of
+#     crashing with InternalError("Prooftree is not initialized").
+# 
+#     Root cause: Minilang_State.execute() sets assign_to.prooftree = None on
+#     IsabelleError. When the failing step is the last child of a StdBlock,
+#     its resulting_state() resolves to the block's shared
+#     _state_before_ending_ — which is the SAME Python object that the
+#     previous (successful) child's resulting_state() resolves to. Zeroing
+#     the prooftree therefore wipes out the prior successful state. When
+#     fill()'s revert path then calls `rp._refresh_me_alone()` on the
+#     predecessor Rewrite, line 3602 / 3544 of model.py dereferences
+#     `self.resulting_state().prooftree_of()` and raises."""
+#     print_header("Initial YAML", file)
+#     root.print(0, file)
+# 
+#     # Step 1: Rewrite the goal `P x` using `h: x = y`. Succeeds, producing
+#     # the residual goal `P y`. This write populates the block's
+#     # _state_before_ending_ via goal1's resulting_state (goal1 is the last
+#     # child at this moment).
+#     root.session.age += 1
+#     node1, is_error1, reason1 = await root.fill("1", Rewrite.interactive_gen({
+#         "thought": "Rewrite the goal using h",
+#         "using": [{"refer_by": "name", "name": "h"}],
+#         "use system simplifiers": False,
+#         "rewrite goal": True,
+#         "rewrite premises": []
+#     }))
+#     file.write(f"Rewrite step 1: status={node1.status.status.value}, is_error={is_error1}\n")
+#     if reason1:
+#         file.write(f"  reason: {reason1.reason}\n")
+#     print_header("After successful Rewrite", file)
+#     root.print(0, file)
+# 
+#     # Step 2: Obvious with no facts. Expected to fail on `P y` (nothing
+#     # closes it). The bug surfaces here: instead of returning a graceful
+#     # failure_reason, the framework raises InternalError from the
+#     # predecessor re-refresh path.
+#     root.session.age += 1
+#     try:
+#         node2, is_error2, reason2 = await root.fill("2", Obvious.interactive_gen({"facts": []}))
+#         file.write(f"Obvious step 2: status={node2.status.status.value}, is_error={is_error2}\n")
+#         if reason2:
+#             file.write(f"  reason: {reason2.reason}\n")
+#     except InternalError as e:
+#         file.write(f"BUG REPRODUCED: InternalError: {e}\n")
+#     except Exception as e:
+#         file.write(f"UNEXPECTED {type(e).__name__}: {e}\n")
+#     print_header("After failed Obvious (bug point)", file)
+#     root.print(0, file)
+
 @model_test("Witness1", "Test_Witness.thy", 9)
 async def _test_Witness1(root: Root, file: MyIO):
     print_header("Initial YAML", file)

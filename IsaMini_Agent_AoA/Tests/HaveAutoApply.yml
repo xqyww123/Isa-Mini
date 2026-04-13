@@ -1,0 +1,80 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: myf (3 :: nat) = (10 :: nat)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+--------------------------------------------------
+After Have (auto_apply=True)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: myf (3 :: nat) = (10 :: nat)
+proof:
+  - step id: 1
+    thought: Derive a simp rule for myf so the outer goal becomes trivial
+    operation: Have
+    statement:
+      english: myf n equals n plus 7
+      isabelle: myf n = n + 7
+    for_any:
+      n: nat
+    name: myf_eq
+    auto_apply: true
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      myf n = n + (7 :: nat)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+--------------------------------------------------
+After proving Have sub-goal
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: myf (3 :: nat) = (10 :: nat)
+proof:
+  - step id: 1
+    thought: Derive a simp rule for myf so the outer goal becomes trivial
+    operation: Have
+    statement:
+      english: myf n equals n plus 7
+      isabelle: myf n = n + 7
+    for_any:
+      n: nat
+    name: myf_eq
+    auto_apply: true
+    proof:
+      - step id: 1.1
+        operation: Obvious
+        with facts:
+          - myf_def: myf ?n = ?n + (7 :: nat)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+--------------------------------------------------
+After closing outer goal
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: myf (3 :: nat) = (10 :: nat)
+proof:
+  - step id: 1
+    thought: Derive a simp rule for myf so the outer goal becomes trivial
+    operation: Have
+    statement:
+      english: myf n equals n plus 7
+      isabelle: myf n = n + 7
+    for_any:
+      n: nat
+    name: myf_eq
+    auto_apply: true
+    proof:
+      - step id: 1.1
+        operation: Obvious
+        with facts:
+          - myf_def: myf ?n = ?n + (7 :: nat)
+  - step id: 2
+    thought: Close the outer goal using only the system simplifier
+    operation: Rewrite
+    using:
+      - system simplifiers
+    targets:
+      - the goal
+    goal is solved.
+Unfinished nodes: 0

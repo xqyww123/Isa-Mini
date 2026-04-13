@@ -227,6 +227,38 @@ def print_paragraph(indent: int, file: MyIO | StringIO, para: str):
                 file.write(line)
                 file.write("\n")
 
+MAX_EXPR_ITEMS = 5
+
+def print_expression_list(indent: int, file: MyIO | StringIO,
+                          expressions: list[str]) -> bool:
+    """Render the expression(s) that follow a trailing ``:`` on the
+    previous line, individually length-truncated.
+
+    - 1 expression: inline via ``print_paragraph`` on the same line.
+    - >1 expressions: bulleted list, one per line, with ``...`` after
+      ``MAX_EXPR_ITEMS`` items.
+
+    Returns True if any content was truncated (by length or item count)."""
+    if len(expressions) == 1:
+        truncated = trunc_expr(expressions[0])
+        print_paragraph(indent, file, truncated)
+        return truncated.endswith("…")
+    any_truncated = False
+    file.write("\n")
+    for expr in expressions[:MAX_EXPR_ITEMS]:
+        line = trunc_expr(expr)
+        if line.endswith("…"):
+            any_truncated = True
+        print_indent(indent, file)
+        file.write("- ")
+        file.write(line)
+        file.write("\n")
+    if len(expressions) > MAX_EXPR_ITEMS:
+        print_indent(indent, file)
+        file.write("...\n")
+        any_truncated = True
+    return any_truncated
+
 def print_vars(vars: Iterable[tuple[varname, typ]], indent: int, file, suppressed: Vars, banner='variables'):
     printed_banner = False
     for name, type in vars:
@@ -685,6 +717,17 @@ class Specialize_Result_Msg(Message):
         # data is [(fact_name, pretty_expression), ...]
         return cls([(name, pretty_unicode(expr)) for name, expr in data])
 
+class Newly_Fixed_Vars_Msg(Message):
+    """Free variables that the ML side implicitly fixed when setting up a
+    sub-proof goal (e.g. `Have "myf n = n + 7"` auto-fixes `n`). Surfaced as
+    a `for_any:` block on the corresponding node."""
+    def __init__(self, vars: list[tuple[str, str]]) -> None:
+        super().__init__()
+        self.vars = vars  # [(external_name, type_str), ...]
+    @classmethod
+    def unpack(cls, data) -> 'Newly_Fixed_Vars_Msg':
+        return cls([(name, pretty_unicode(typ)) for (name, typ) in data])
+
 def unpack_message(data) -> Message:
     match data:
         case (0, x):
@@ -699,6 +742,8 @@ def unpack_message(data) -> Message:
             return Simplify_Fallback_Nosys_Msg()
         case (5, x):
             return Specialize_Result_Msg.unpack(x)
+        case (6, x):
+            return Newly_Fixed_Vars_Msg.unpack(x)
         case _:
             raise Exception(f"BUG bad message kind: {data}")
 
@@ -994,13 +1039,6 @@ class Minilang_State:
                     errors=err.errors,
                     operation=str(opr)
                 )
-                # Uninitialize assign_to. Otherwise any prooftree/messages left
-                # over from a previous successful execute on the same Python
-                # object would stay visible through `initialized()` and leak
-                # stale state into downstream consumers after the re-execute
-                # fails.
-                assign_to.prooftree = None
-                assign_to.messages = []
                 if err.errors == ["beginning_state_not_found"]:
                     raise InternalError("The beginning state of the execution is not initialized!")
                 raise
@@ -1482,14 +1520,15 @@ class Interaction_Retrieve(Interaction):
         if not facts:
             raise ImmediateAnswer([])
         for i, fetched in enumerate(facts):
-            expr_str = trunc_expr(', '.join(fetched.entity.expression))
+            exprs = fetched.entity.expression
             print_indent(indent+1, file)
-            if expr_str:
+            if exprs:
                 file.write(f"{i}. {fetched.entity.short_name}:")
-                print_paragraph(indent+2, file, expr_str)
+                truncated = print_expression_list(indent+2, file, exprs)
             else:
                 file.write(f"{i}. {fetched.entity.short_name}\n")
-            if fetched.interpretation and (fetched.entity.kind not in _THEOREM_KINDS or expr_str.endswith("…")):
+                truncated = False
+            if fetched.interpretation and (fetched.entity.kind not in _THEOREM_KINDS or truncated):
                 print_indent(indent+2, file)
                 file.write(f"{fetched.interpretation}\n")
 
@@ -3708,6 +3747,8 @@ class Have(StdBlock):
         self.statement = arg["statement"]
         self.name = arg["name"]
         self.auto_apply = arg.get("auto_apply", False)
+        # Populated from `Newly_Fixed_Vars_Msg` after the HAVE op runs.
+        self.for_any: list[tuple[str, str]] = []
         if subproof_parsed is not None:
             local_step = self._local_step_of_next_proof_step()
             ml_state = Minilang_State.assign(self.ml_state)
@@ -3733,6 +3774,12 @@ class Have(StdBlock):
         file.write(f"english: {self.statement['english']}\n")
         print_indent(indent+1, file)
         file.write(f"isabelle: {self.statement['isabelle']}\n")
+        if self.for_any:
+            print_indent(indent, file)
+            file.write("for_any:\n")
+            for name, typ in self.for_any:
+                print_indent(indent+1, file)
+                file.write(f"{name}: {typ}\n")
         print_indent(indent, file)
         file.write(f"name: {self.name}\n")
         if self.auto_apply:
@@ -3746,6 +3793,10 @@ class Have(StdBlock):
         fail = await super()._refresh_the_beginning_opr(begin_opr)
         if fail is not None:
             return fail
+        msgs = [m for m in self._state_after_beginning().messages
+                if isinstance(m, Newly_Fixed_Vars_Msg)]
+        if msgs:
+            self.for_any = msgs[0].vars
         if self._first_time and not self.sub_nodes and await self._state_after_beginning().need_intro(False):
             local_step = self._local_step_of_next_proof_step()
             ml_state = await self._state_after_beginning().clone(None)
