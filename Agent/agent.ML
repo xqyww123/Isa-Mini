@@ -45,6 +45,8 @@ datatype ('term, 'thm, 'fact) command =
               * ('term, 'fact) extended_fact (*rule*)
               * (string * 'term) list (*instantiations: var_name * term*)
               * ('term, 'fact) extended_fact list (*facts to discharge*)
+  | CHAINING of string option (*optional name; auto-generated if NONE*)
+              * ('term, 'fact) extended_fact list (*facts to chain*)
   | SKIP
 
 type xcmd = (string, string, string) command
@@ -169,6 +171,8 @@ datatype ('term, 'thm, 'fact) command =
               * ('term, 'fact) extended_fact (*rule*)
               * (string * 'term) list (*instantiations: var_name * term*)
               * ('term, 'fact) extended_fact list (*facts to discharge*)
+  | CHAINING of string option (*optional name; auto-generated if NONE*)
+              * ('term, 'fact) extended_fact list (*facts to chain*)
   | SKIP
 
 type xcmd = (string, string, string) command
@@ -894,6 +898,21 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
                       (Minilang.Internal (SPECIALIZE_RESULT result))
         in s'
         end
+    | CHAINING (name_opt, facts) =>
+        with_resolved_refs (mk_counter ()) s facts (fn s' => fn refs =>
+          let val ctxt' = Minilang.context_of s'
+              val thms = maps (Attrib.eval_thms ctxt' o single) refs
+              val facts_before = Minilang.get_local_facts s'
+              val s'' = Minilang.CHAINING name_opt thms s'
+              val facts_after = Minilang.get_local_facts s''
+              val new_facts = filter (fn (n, _) =>
+                    not (exists (fn (n', _) => n = n') facts_before)) facts_after
+              val ctxt'' = Minilang.context_of s''
+              val result = map (fn (n, t) => (n, string_of_term ctxt'' t)) new_facts
+              val _ = Minilang.get_reporter ()
+                        (Minilang.Internal (SPECIALIZE_RESULT result))
+           in s''
+          end)
     | SKIP => s
 
 local 
@@ -1005,6 +1024,9 @@ fun check_command_i s (SIMPLIFY (facts, use_sys, prems, simp_goal, bindings_opt)
                      names ~~ terms,
                      map (check_extended_fact ctxt) discharge_facts)
       end
+  | check_command_i s (CHAINING (name_opt, facts)) =
+      let val ctxt = Minilang.context_of s
+      in CHAINING (name_opt, map (check_extended_fact ctxt) facts) end
   | check_command_i _ SKIP = SKIP
 
 fun check_command s x = check_command_i s x

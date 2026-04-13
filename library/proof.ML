@@ -234,6 +234,9 @@ val STEP   : fact list ->  term  -> operation
 val STEP'' : fact list -> string -> operation
 val STEP_CMD : command
 
+val CHAINING : string option -> thm list -> operation
+val CHAINING_CMD : command
+
 (* Toplevel *)
 
 val lex_cmds : string -> Token.src list
@@ -2964,6 +2967,67 @@ val STEP_CMD = Scan.optional (\<^keyword>\<open>(\<close> |-- Parse.thms1 --| \<
             -- Parse.term >> uncurry STEP''
 
 
+(** CHAINING: explicit, on-demand transitive chain construction **)
+
+fun CHAINING_i name_opt thms (ctxt, HHF (st, items) :: SK) =
+      let
+        val _ = if null thms
+                then raise OPR_FAIL (INVALID_OPR,
+                       "CHAINING requires at least one fact")
+                else ()
+
+        val (name, ctxt0) = case name_opt of
+              SOME n => (n, ctxt)
+            | NONE =>
+                let val jj = get_fact_counter ctxt
+                    val (_, ctxt') =
+                      map_fact_counter (fn n => ((), n + 1)) ctxt
+                 in ("chain" ^ string_of_int jj, ctxt')
+                end
+
+        val stat0 = Proof.init ctxt0
+        fun step th st =
+              st |> Proof.set_facts [th]
+                 |> Calculation.also NONE false
+                 |> Seq.pull
+                 |> (fn SOME (Seq.Result st', _) => st'
+                      | SOME (Seq.Error msg, _) =>
+                          raise OPR_FAIL (PROOF_FAIL,
+                            "CHAINING: cannot chain fact: " ^ msg ())
+                      | NONE =>
+                          raise OPR_FAIL (PROOF_FAIL,
+                            "CHAINING: no transitivity rule matches"))
+
+        val final =
+          fold step thms stat0
+            |> Calculation.check
+            |> (fn SOME [th] => th
+                 | _ => raise OPR_FAIL (PROOF_FAIL,
+                          "CHAINING: chain did not resolve to a single theorem"))
+
+        val (new_facts, ctxt') =
+          Proof_Context.note_thmss ""
+            [((Binding.name name, []), [([final], [])])] ctxt0
+
+        val new_items =
+          ([], new_facts |> map (apsnd (map Thm.prop_of)) |> flatten_facts)
+      in
+        (ctxt', HHF (st, cat_items new_items items) :: SK)
+      end
+  | CHAINING_i _ _ _ = raise BROKEN_INVARIANT
+
+val CHAINING = timed_OPR 8 oo CHAINING_i
+
+fun CHAINING_txt raw_name raw_thms (stack as (ctxt, _)) =
+  let val thms = Attrib.eval_thms ctxt raw_thms
+   in CHAINING_i (SOME (Binding.name_of raw_name)) thms stack
+  end
+
+val CHAINING_CMD =
+      Parse.binding --| (Parse.$$$ "with" || Parse.$$$ "WITH") -- Parse.thms1
+        >> (fn (b, raw) => timed_OPR 8 (CHAINING_txt b raw))
+
+
 (** HAMMER **)
 
 fun conclude_SK (ctxt, HHF (st, itms) :: S) = (ctxt, HHF (conclude_goal st, itms) :: S)
@@ -3643,6 +3707,7 @@ val CMDS = Symtab.make [
       ("FUN",     FUN_CMD),
       ("CONFIG",  CONFIG_CMD),
       ("STEP"  ,  STEP_CMD),
+      ("CHAINING",CHAINING_CMD),
       ("SORRY" ,  END_or_NXT_by_SORRY_CMD)
     ]
 
@@ -3711,7 +3776,8 @@ val keywords = let open Keyword
            (("DEFINE",\<^here>), command_spec (prf_decl, [])),
            (("FUN",   \<^here>), command_spec (prf_decl, [])),
            (("CONFIG",\<^here>), command_spec (prf_decl, [])),
-           (("STEP",  \<^here>), command_spec (prf_decl, []))
+           (("STEP",  \<^here>), command_spec (prf_decl, [])),
+           (("CHAINING", \<^here>), command_spec (prf_decl, []))
          ]
      end
 

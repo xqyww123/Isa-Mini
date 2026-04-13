@@ -2144,6 +2144,39 @@ async def _test_GlobalEnv_happy(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
+@model_test("Chaining", "Test_Chaining.thy", 11)
+async def _test_Chaining(root: Root, file: MyIO):
+    """Chain `ab : a = b` and `bc : b <= c` into `ac : a <= c` via registered
+    [trans] rules, then discharge the goal with Obvious using the chained
+    fact. Exercises the named-binding path of the Chaining operation and
+    confirms that the bound fact is visible to downstream operations."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Insert a Chaining step before the main goal so we have both the forward
+    # derivation and the remaining goal slot.
+    await root.fill("1", Chaining.interactive_gen({
+        "thought": "Chain ab and bc by transitivity to derive a <= c",
+        "name": "ac",
+        "facts": [
+            {"refer_by": "name", "name": "ab"},
+            {"refer_by": "name", "name": "bc"},
+        ],
+    }))
+    print_header("After Chaining (named)", file)
+    root.print(0, file)
+
+    # Close the main goal using the chained fact.
+    await root.fill("2", Obvious.interactive_gen({
+        "facts": [{"refer_by": "name", "name": "ac"}],
+    }))
+    print_header("After Obvious using ac", file)
+    root.print(0, file)
+
+    unfinished_nodes = set()
+    root.unfinished_nodes(unfinished_nodes)
+    file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None):
     import msgpack as mp
     from IsaREPL import Client

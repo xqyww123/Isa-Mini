@@ -155,6 +155,9 @@ val unpacker =
                         unpack_extended_fact,
                         unpackList (unpackPair (unpackString, unpackString)),
                         unpackList unpack_extended_fact)
+     | "CHAINING" => apfst CHAINING o unpackPair (
+                        unpackOption unpackString,
+                        unpackList unpack_extended_fact)
      | "SKIP"     => apfst (K SKIP) o unpackUnit
      | cmd => error("Unknown operation " ^ cmd)
   ) #> apfst snd
@@ -209,6 +212,10 @@ fun packer (SIMPLIFY data) =
           packList (packPair (packString, packString)),
           packList pack_extended_fact))
         ("SPECIALIZE", data)
+  | packer (CHAINING data) =
+      packPair (packString,
+                packPair (packOption packString, packList pack_extended_fact))
+        ("CHAINING", data)
   | packer SKIP = packPair (packString, packUnit) ("SKIP", ())
 (* | packer (ROLLBACK data) = packPair (packString, packInt) ("ROLLBACK", data) *)
 

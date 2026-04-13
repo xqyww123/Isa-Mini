@@ -944,6 +944,9 @@ class Minilang_Operation(NamedTuple):
     def HAMMER(fact_refs: 'list[IsabelleFact]', timeout: int = 20) -> 'Minilang_Operation':
         return Minilang_Operation("HAMMER", ([r.pack() for r in fact_refs], timeout))
     @staticmethod
+    def CHAINING(name: str | None, fact_refs: 'list[IsabelleFact]') -> 'Minilang_Operation':
+        return Minilang_Operation("CHAINING", (name, [r.pack() for r in fact_refs]))
+    @staticmethod
     def INTRO(bindings: Bindings | None, split: bool) -> 'Minilang_Operation':
         return Minilang_Operation("INTRO", (bindings, split))
     @staticmethod
@@ -3144,6 +3147,87 @@ class Obvious(Leaf):
                 self._print_warnings(0, file, list(Warning.Position))
             return EditFailureResponse(is_error=True, failure_reason=FailureReason(file.getvalue()), revert=True)
         return super()._on_edit_failure()
+
+class Chaining_ToolArg(TypedDict):
+    thought: str
+    name: NotRequired[str]
+    facts: list[FactByName | FactByProposition]
+
+class Chaining_InternalToolArg(NamedTuple):
+    name: str | None
+    facts: list[IsabelleFact]
+
+@proof_operation("Chaining", Chaining_ToolArg)
+class Chaining(Leaf):
+    def __init__(self, config: NodeConfig, arg: Chaining_InternalToolArg):
+        super().__init__(config, "")
+        self.chain_name = arg.name
+        self.fact_refs = arg.facts
+        self.result_facts: list[tuple[str, str]] | None = None
+        """(fact_name, pretty_expression) pairs for facts derived by CHAINING,
+        populated from Specialize_Result_Msg after successful execution."""
+
+    @staticmethod
+    def gen(arg: Chaining_InternalToolArg) -> parsing_node:
+        return _trivial_parsing(lambda config: Chaining(config, arg))
+
+    @staticmethod
+    def interactive_gen(arg: Chaining_ToolArg) -> parsing_node:
+        async def parse(alive_state: Minilang_State,
+                        exact_state: Minilang_State | None = None) -> gen_node:
+            if not arg["facts"]:
+                raise ArgumentError(cast(ToolCall_arg, arg),
+                    "Chaining requires at least one fact")
+            fetched = cast(list[IsabelleFact], await alive_state.fetch_facts(arg["facts"]))
+            facts, warnings = _filter_unfound(fetched)
+            name = arg.get("name")
+            def mk(config: NodeConfig) -> 'Chaining':
+                node = Chaining(config, Chaining_InternalToolArg(name=name, facts=facts))
+                for w in warnings:
+                    node.warnings.append(Warning(Warning.Position.FOOTER, w))
+                return node
+            return mk
+        return parse
+
+    def print(self, indent: int, file: MyIO, update_line: bool = False,
+              show_warnings: bool = False) -> int:
+        indent = super().print(indent, file, update_line, show_warnings=show_warnings)
+        print_indent(indent, file)
+        file.write("operation: Chaining\n")
+        if self.fact_refs:
+            print_indent(indent, file)
+            file.write("from:\n")
+            for ref in self.fact_refs:
+                ref.print(indent + 1, file)
+        if self.result_facts is not None:
+            print_indent(indent, file)
+            file.write("resulting:\n")
+            for name, expr in self.result_facts:
+                print_indent(indent + 1, file)
+                file.write(f"{name}: {expr}\n")
+        self._print_evaluation_status(indent, file)
+        if show_warnings:
+            self._print_warnings(indent, file,
+                [Warning.Position.HEADER, Warning.Position.FOOTER])
+        return indent
+
+    async def _refresh_me_alone(self) -> None:
+        if self._first_time:
+            self.fact_refs, pit_warnings = await _filter_unprovable(self.fact_refs, self.ml_state)
+            for w in pit_warnings:
+                self.warnings.append(Warning(Warning.Position.FOOTER, w))
+        elif self.ml_state.initialized():
+            self.fact_refs = await self.ml_state.refresh_facts(self.fact_refs)
+        await super()._refresh_me_alone()
+        if self.status.status == EvaluationStatus.Status.SUCCESS:
+            messages = self.resulting_state().messages
+            for m in messages:
+                if isinstance(m, Specialize_Result_Msg):
+                    self.result_facts = m.facts
+                    break
+
+    def the_operation(self) -> 'Minilang_Operation | FailureReason':
+        return Minilang_Operation.CHAINING(self.chain_name, self.fact_refs)
 
 async def _parse_subproof(sp: SubProof, alive_state: Minilang_State | None) -> SubProof_parsed:
     """Parse a SubProof into a sync gen_node (or None for 'Given later').

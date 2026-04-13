@@ -549,6 +549,38 @@
       ],
       "type": "object"
     },
+    "Chaining": {
+      "additionalProperties": false,
+      "title": "Chaining",
+      "description": "chain facts via transitivity (example: deriving a \u2264 c from a = b, b \u2264 c)",
+      "properties": {
+        "operation": {
+          "const": "Chaining",
+          "type": "string"
+        },
+        "thought": { "$ref": "#/$defs/Thought" },
+        "name": {
+          "type": "string",
+          "description": "binding name for the chained result"
+        },
+        "facts": {
+          "items": {
+            "anyOf": [
+              { "$ref": "#/$defs/FactByName" },
+              { "$ref": "#/$defs/FactByProposition" }
+            ]
+          },
+          "type": "array",
+          "minItems": 1
+        }
+      },
+      "required": [
+        "operation",
+        "thought",
+        "facts"
+      ],
+      "type": "object"
+    },
     "Operation": {
       "anyOf": [
         { "$ref": "#/$defs/Obvious" },
@@ -563,7 +595,8 @@
         { "$ref": "#/$defs/InferenceRule" },
         { "$ref": "#/$defs/Suffices" },
         { "$ref": "#/$defs/Intro" },
-        { "$ref": "#/$defs/Derive" }
+        { "$ref": "#/$defs/Derive" },
+        { "$ref": "#/$defs/Chaining" }
       ]
     }
   },
