@@ -581,6 +581,30 @@
       ],
       "type": "object"
     },
+    "Define": {
+      "additionalProperties": false,
+      "title": "Function",
+      "description": "define a (recursive) function",
+      "properties": {
+        "operation": {
+          "const": "Define",
+          "type": "string"
+        },
+        "thought": { "$ref": "#/$defs/Thought" },
+        "name": { "type": "string" },
+        "type": {
+          "type": "string",
+          "description": "Isabelle type expression"
+        },
+        "equations": {
+          "items": {
+            "type": "string",
+            "description": "Isabelle term"
+          },
+          "type": "array"
+        }
+      }
+    },
     "Operation": {
       "anyOf": [
         { "$ref": "#/$defs/Obvious" },

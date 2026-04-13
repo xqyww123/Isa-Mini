@@ -1418,10 +1418,6 @@ fun gen_add_fun add lthy =
           (case Function_Common.import_last_function lthy of
             SOME info => info
           | NONE => error "prove_termination: no function data")
-        (* The stored termination rule was Thm.trim_context'd, losing its
-           theory certificate. termination_rule_tac can't match Frees without it.
-           We use the rule directly from import_last_function (which transfers it)
-           and forall_elim_vars to convert ⋀R to ?R for resolution. *)
         val termination' = Thm.forall_elim_vars 0 termination
         val tac =
           resolve_tac lthy [termination'] 1 THEN

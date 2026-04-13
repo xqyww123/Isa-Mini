@@ -12,6 +12,12 @@ from Isabelle_RPC_Host.universal_key import (
 from Isabelle_Semantic_Embedding.semantics import Semantic_Vector_Store, SemanticRecord, trunc_expr as _trunc_expr_base
 
 AGENT_EXPR_LIMIT = 200
+AGENT_GOAL_CHAR_LIMIT = 400
+
+LONG_GOAL_HINT = (
+    "note: resulting goal is unusually long, "
+    "which is often a sign of a wrong direction.\n"
+)
 
 def trunc_expr(s: str) -> str:
     return _trunc_expr_base(s, AGENT_EXPR_LIMIT)
@@ -285,18 +291,30 @@ def print_hyps(hyps: Iterable[tuple[varname, term]], indent: int, file, suppress
         print_indent(indent+1, file)
         file.write(f"- {name}: {term}\n")
 
-def print_goal(goal: Goal, indent: int, show_header: bool, file, suppressed: Context):
+def print_goal(goal: Goal, indent: int, show_header: bool, file, suppressed: Context,
+               truncate: bool = False):
     print_vars(goal.context.vars.items(), indent, file, suppressed.vars)
     print_hyps(goal.context.hyps.items(), indent, file, suppressed.hyps)
     print_indent(indent, file)
+
+    conclusion = goal.conclusion
+    was_truncated = False
+    if truncate and len(conclusion) > AGENT_GOAL_CHAR_LIMIT:
+        conclusion = _trunc_expr_base(conclusion, AGENT_GOAL_CHAR_LIMIT)
+        was_truncated = True
+
     if any(name not in suppressed.vars for name in goal.context.vars) or\
         any(name not in suppressed.hyps for name in goal.context.hyps):
-        file.write(f"goal: {goal.conclusion}\n")
+        file.write(f"goal: {conclusion}\n")
     else:
         if show_header:
             file.write("goal: ")
-        file.write(goal.conclusion)
+        file.write(conclusion)
         file.write("\n")
+
+    if was_truncated:
+        print_indent(indent, file)
+        file.write(LONG_GOAL_HINT)
 
 def print_pending_goal(goal: Goal, step: step, indent: int, file : MyIO, suppressed: Context,
                        show_goal: bool = True) -> int:
@@ -3430,10 +3448,10 @@ class Instantiation(TypedDict):
 
 class Derive_ToolArg(TypedDict):
     thought: str
-    rule: FactByName                              # The rule to specialize
-    instantiations: list[Instantiation]           # Variable instantiations
-    discharging_facts: list[FactByName]           # Facts to discharge premises
-    result_name: str                              # Name to bind the result under
+    rule: FactByName                                          # The rule to specialize
+    instantiations: NotRequired[list[Instantiation]]          # Variable instantiations (default: [])
+    discharging_facts: NotRequired[list[FactByName]]          # Facts to discharge premises (default: [])
+    result_name: str                                          # Name to bind the result under
 
 class Derive_InternalToolArg(NamedTuple):
     thought: str
@@ -3554,6 +3572,11 @@ class Derive(Leaf):
     def the_operation(self) -> 'Minilang_Operation | FailureReason':
         if isinstance(self.rule_ref, IsabelleFact_Unfound):
             return FailureReason(f"Rule fact \"{self.rule_ref.name()}\" not found")
+        if not self.instantiations and not self.discharge_refs:
+            return FailureReason(
+                "Derive operation must provide at least one of: `instantiations` "
+                "(to instantiate a variable in the rule) or `discharging_facts` "
+                "(to discharge a premise of the rule).")
         unfound = [f for f in self.discharge_refs if isinstance(f, IsabelleFact_Unfound)]
         if unfound:
             return FailureReason("\n".join(f"Fact \"{f.name()}\" not found" for f in unfound))
@@ -3654,7 +3677,8 @@ class Rewrite(Leaf):
             elif result_goal.conclusion != self.ml_state.prooftree_of().top_goal().conclusion:
                 print_indent(indent, file)
                 file.write("goal changes into:\n")
-                print_goal(result_goal, indent+1, False, file, self._ctxt_at_me())
+                print_goal(result_goal, indent+1, False, file, self._ctxt_at_me(),
+                           truncate=True)
 
         self._print_evaluation_status(indent, file)
         if show_warnings:

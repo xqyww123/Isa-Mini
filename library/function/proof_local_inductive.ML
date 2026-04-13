@@ -169,7 +169,7 @@ fun mk_mono ctxt thm =
 fun prove_mono quiet_mode skip_mono predT fp_fun monos ctxt =
  (message (quiet_mode orelse skip_mono andalso Config.get ctxt quick_and_dirty)
     "  Proving monotonicity ...";
-  (if skip_mono then Goal.prove_sorry else Goal.prove_future) ctxt
+  (if skip_mono then Goal.prove else Goal.prove) ctxt
     [] []
     (HOLogic.mk_Trueprop
       (\<^Const>\<open>monotone_on predT predT for
@@ -196,7 +196,7 @@ fun prove_intrs quiet_mode coind mono fp_def k intr_ts rec_preds_defs ctxt ctxt'
     val rules = [refl, TrueI, @{lemma "\<not> False" by (rule notI)}, exI, conjI];
 
     val intrs = map_index (fn (i, intr) =>
-      Goal.prove_sorry ctxt [] [] intr (fn _ => EVERY
+      Goal.prove ctxt [] [] intr (fn _ => EVERY
        [rewrite_goals_tac ctxt rec_preds_defs,
         resolve_tac ctxt [unfold RS iffD2] 1,
         Inductive.select_disj_tac ctxt (length intr_ts) (i + 1) 1,
@@ -238,7 +238,7 @@ fun prove_elims quiet_mode cs params intr_ts intr_names unfold rec_preds_defs ct
         val prems = HOLogic.mk_Trueprop (list_comb (c, params @ frees)) ::
            map mk_elim_prem (map #1 c_intrs)
       in
-        (Goal.prove_sorry ctxt'' [] prems P
+        (Goal.prove ctxt'' [] prems P
           (fn {context = ctxt4, prems} => EVERY
             [cut_tac (hd prems) 1,
              rewrite_goals_tac ctxt4 rec_preds_defs,
@@ -315,7 +315,7 @@ fun prove_eqs quiet_mode cs params intr_ts intrs
                 EVERY (map (fn p => resolve_tac ctxt'' [p] 1) prems')
               end) ctxt' 1);
       in
-        Goal.prove_sorry ctxt' [] [] eq (fn _ =>
+        Goal.prove ctxt' [] [] eq (fn _ =>
           resolve_tac ctxt' @{thms iffI} 1 THEN
           eresolve_tac ctxt' [#1 elim] 1 THEN
           EVERY (map_index prove_intr1 c_intrs) THEN
@@ -402,7 +402,7 @@ fun prove_indrule quiet_mode cs argTs bs xs rec_const params intr_ts mono
 
     val raw_fp_induct = mono RS (fp_def RS @{thm def_lfp_induct});
 
-    val induct = Goal.prove_sorry ctxt'' [] ind_prems ind_concl
+    val induct = Goal.prove ctxt'' [] ind_prems ind_concl
       (fn {context = ctxt3, prems} => EVERY
         [rewrite_goals_tac ctxt3 [inductive_conj_def],
          DETERM (resolve_tac ctxt3 [raw_fp_induct] 1),
@@ -419,7 +419,7 @@ fun prove_indrule quiet_mode cs argTs bs xs rec_const params intr_ts mono
                 [rewrite_rule ctxt3 (inductive_conj_def :: rec_preds_defs @ simp_thms2) prem,
                   conjI, refl] 1)) prems)]);
 
-    val lemma = Goal.prove_sorry ctxt'' [] []
+    val lemma = Goal.prove ctxt'' [] []
       (Logic.mk_implies (ind_concl, mutual_ind_concl)) (fn {context = ctxt3, ...} => EVERY
         [rewrite_goals_tac ctxt3 rec_preds_defs,
          REPEAT (EVERY

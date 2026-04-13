@@ -355,6 +355,10 @@ type opt_var_names  = string option list option
 type opt_prem_names = string option list option
 exception NO_PARAM
 exception CASE_NAME of opt_var_names
+(*MAGIC frame param for a proof-local FUN scope.
+  Carries the outer context (captured before Proof_Context.new_scope),
+  used to Proof_Context.export the proved theorem on block end. *)
+exception FUN_SCOPE of Proof.context
 
 type stack = Proof.context * (frame list)
   (*invariant: the head must be an HHF*)
@@ -3586,11 +3590,58 @@ fun can_use_definition_cmd fixes specs ctxt =
     in forall (fn (_, eq) => can_use_definition fnames eq) named_specs end
   catch exn => false\<close>
 
+(* Callback for a proof-local FUN scope.
+   When the enclosing HHF goal completes, export the proved theorem from
+   the inner (scoped) context back to the outer context, discharging all
+   the local-definition hyps added by Proof_Local_Function.add_fun_cmd. *)
+fun fun_scope_cb ctxt_inner (st_inner, items_inner, SK', param) =
+      (case param of
+         FUN_SCOPE ctxt_outer =>
+           let val st_outer = singleton (Proof_Context.export ctxt_inner ctxt_outer) st_inner
+           in (ctxt_outer, HHF (st_outer, items_inner) :: SK') end
+       | _ => raise BROKEN_INVARIANT)
+
+(* PRT callback for the FUN scope MAGIC frame — pass-through. *)
+fun fun_scope_prt _ t = t
+
+(* Strict adjacency check: a reusable FUN scope must sit immediately below
+   the current top (HHF or HHF::ENDBLK), with no other MAGIC between. Any
+   intervening MAGIC (from INTRO/subgoal/module/case) would mean the existing
+   FUN scope is on the wrong side of a nested proof boundary. *)
+fun has_reusable_fun_scope (ENDBLK _ :: MAGIC (_, _, FUN_SCOPE _) :: _) = true
+  | has_reusable_fun_scope (MAGIC (_, _, FUN_SCOPE _) :: _) = true
+  | has_reusable_fun_scope _ = false
+
+(* Splice a MAGIC frame into `HHF h :: tail`, placing it AFTER an optional
+   leading ENDBLK so that END'/NXT'/gen_END_or_NXT' pattern-matches
+   (HHF :: ENDBLK :: ...) keep working. *)
+fun splice_fun_magic magic (HHF h :: ENDBLK e :: rest) =
+      HHF h :: ENDBLK e :: magic :: rest
+  | splice_fun_magic magic (HHF h :: rest) =
+      HHF h :: magic :: rest
+  | splice_fun_magic _ _ = raise BROKEN_INVARIANT
+
 fun FUN_by_fun fixes specs config (ctxt, SK) =
-  let val _ = tracing "FUN_by_fun: before add_fun_cmd"
-      val ctxt' = Proof_Local_Function.add_fun_cmd fixes specs config false ctxt
-      val _ = tracing "FUN_by_fun: after add_fun_cmd"
-  in (ctxt', SK) end
+  case SK of
+    HHF _ :: tail =>
+      if has_reusable_fun_scope tail then
+        (* Reuse an existing adjacent FUN scope: just run add_fun_cmd on the
+           current (already-scoped) context, leaving the frame stack alone. *)
+        let val ctxt' = Proof_Local_Function.add_fun_cmd fixes specs config false ctxt
+        in (ctxt', SK) end
+      else
+        (* Open a fresh scope: capture the outer context, create a new naming
+           scope, run add_fun_cmd on the scoped context, and splice a MAGIC
+           frame below the current HHF (and any leading ENDBLK). *)
+        let
+          val ctxt_outer = ctxt
+          val (_, ctxt_scoped) = Proof_Context.new_scope ctxt
+          val ctxt_inner =
+            Proof_Local_Function.add_fun_cmd fixes specs config false ctxt_scoped
+          val magic = MAGIC (fun_scope_cb, fun_scope_prt, FUN_SCOPE ctxt_outer)
+          val SK' = splice_fun_magic magic SK
+        in (ctxt_inner, SK') end
+  | _ => raise BROKEN_INVARIANT
 
 fun FUN_by_def fixes specs (ctxt, SK) =
   let
@@ -3606,22 +3657,17 @@ fun FUN_by_def fixes specs (ctxt, SK) =
     val _ = tracing "FUN_by_def: after definition_cmd"
   in (ctxt', SK) end
 
-(* ML-level API for agent use: auto-detects definition vs fun *)
+(* ML-level API for agent use. Always uses the proof-local function package
+   path (even for non-recursive definitions); FUN_by_def is disabled because
+   Specification.definition_cmd forks the background theory, which breaks
+   parallel proof futures with future_result: bad theory. *)
 fun FUN'' fixes specs = fn ((ctxt, SK), TAB, ID) =>
-  let val f =
-    if can_use_definition_cmd fixes specs ctxt
-    then FUN_by_def fixes specs
-    else FUN_by_fun fixes specs Function_Fun.fun_config
-  in timed_OPR 30 f ((ctxt, SK), TAB, ID) end
+  timed_OPR 30 (FUN_by_fun fixes specs Function_Fun.fun_config) ((ctxt, SK), TAB, ID)
 
 val FUN_CMD =
   Function_Common.function_parser Function_Fun.fun_config
   >> (fn (config, (fixes, specs)) => fn ((ctxt, SK), TAB, ID) =>
-    let val f =
-      if can_use_definition_cmd fixes specs ctxt
-      then FUN_by_def fixes specs
-      else FUN_by_fun fixes specs config
-    in timed_OPR 30 f ((ctxt, SK), TAB, ID) end)
+    timed_OPR 30 (FUN_by_fun fixes specs config) ((ctxt, SK), TAB, ID))
 
 
 (** CONFIG **)
@@ -3688,7 +3734,7 @@ val CMDS = Symtab.make [
       ("CASE_SPLIT", CASE_SPLIT_CMD),
       ("INDUCT",  INDUCT_CMD),
       ("SIMP" ,   SIMP_CMD),
-      ("CRUSH",   CRUSH_CMD),
+      (* CRUSH disabled — currently broken *)
       ("SIMPLIFY", SIMPLIFY_CMD),
       ("INTRO",   INTRO_CMD),
       ("ALL_INTRO",INTRO_ALL_CMD),
@@ -3759,7 +3805,7 @@ val keywords = let open Keyword
            (("SPECIALIZE",\<^here>), command_spec (prf_decl, [])),
            (("CASE_SPLIT",  \<^here>), command_spec (prf_goal, [])),
            (("INDUCT",\<^here>), command_spec (prf_goal, [])),
-           (("CRUSH", \<^here>), command_spec (prf_goal, [])),
+           (* CRUSH disabled — currently broken *)
            (("SIMP" , \<^here>), command_spec (prf_goal, [])),
            (("SIMPLIFY", \<^here>), command_spec (prf_goal, [])),
            (("INTRO", \<^here>), command_spec (prf_goal, [])),

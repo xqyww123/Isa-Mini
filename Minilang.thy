@@ -48,7 +48,7 @@ attribute_setup "where" = \<open>let
             uncurry (Minilang_Aux.xwhere (Context.proof_of context)) args))
  end \<close> "positional instantiation of theorem"
 
-(*
+
 
 section \<open>Tests for proof-local function infrastructure\<close>
 
@@ -88,8 +88,8 @@ lemma "True \<and> True"
   by simp
 
 text \<open>Test Proof_Local_Function: define a recursive function proof-locally.
-  Uses Local_Theory.init with proof-local operations so that the standard
-  function package runs without forking the background theory.\<close>
+  Relies on the FUN minilang command wiring a nested scope + MAGIC callback
+  to discharge local-definition hyps at block end.\<close>
 
 method_setup test_proof_local_fun = \<open>
   Scan.succeed (fn ctxt =>
@@ -102,16 +102,34 @@ method_setup test_proof_local_fun = \<open>
             [], [(\<^binding>\<open>n\<close>, SOME "nat", NoSyn)])]
         val ctxt' = Proof_Local_Function.add_fun_cmd
               fixes specs Function_Fun.fun_config false ctxt
-        val _ = writeln "test_proof_local_fun: defined my_sum"
       in
         Seq.single (Seq.Result (ctxt', st))
       end))
 \<close>
 
+text \<open>Raw ML test — bypasses minilang and calls Proof_Local_Function.add_fun_cmd
+  directly, so it does NOT benefit from minilang's FUN scope management.
+  It needs the nested `proof - show ?thesis ... qed .` pattern for hyp discharge.\<close>
+
 lemma x: "\<exists>(f::nat \<Rightarrow> nat). f 0 = 0"
+  subgoal proof - show ?thesis
   apply  test_proof_local_fun
   apply (rule exI[where x="my_sum"])
-  by simp
-*)
+  by simp qed .
+
+text \<open>Test FUN via minilang min_script (uses Minilang.FUN_by_fun which
+  now wires a nested scope + MAGIC callback for hyp discharge).\<close>
+
+lemma y: "\<exists>(f::nat \<Rightarrow> nat). f 0 = 0"
+  by (min_script \<open>
+    FUN my_fun :: "nat \<Rightarrow> nat"
+      where "my_fun 0 = 0"
+          | "my_fun (Suc n) = Suc n + my_fun n"
+    HAVE "\<exists>(f::nat \<Rightarrow> nat). f 0 = 0"
+    CHOOSE my_fun
+    END
+    END
+  \<close>)
+
 
 end
