@@ -199,6 +199,22 @@ async def _test_IntroConj_short(root: Root, file: MyIO):
     print_header("Inference Rule", file)
     root.print(0, file)
 
+@model_test("InferenceRuleSolvesGoal", "Test_InferenceRule_SolvesGoal.thy", 8)
+async def _test_InferenceRuleSolvesGoal(root: Root, file: MyIO):
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    # Apply refl which fully solves "a = a" — produces 0 subgoals.
+    # This exercises the empty-BUNDL code path in InferenceRule._print_header.
+    await root.fill("1", InferenceRule.interactive_gen({
+        "thought": "Apply reflexivity",
+        "rule": {"refer_by": "name", "name": "refl"}
+    }))
+    print_header("After InferenceRule (goal fully solved)", file)
+    root.print(0, file)
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 @model_test("CaseSplit", "Test006.thy", 9)
 async def _test_CaseSplit(root: Root, file: MyIO):
     print_header("Initial YAML", file)
@@ -453,6 +469,120 @@ async def _test_Witness1(root: Root, file: MyIO):
     # Prove the remaining goal (5 = 5) using Obvious
     await root.fill("2", Obvious.interactive_gen({"facts": []}))
     print_header("After Obvious", file)
+    root.print(0, file)
+
+    unfinished_nodes = set()
+    root.unfinished_nodes(unfinished_nodes)
+    file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+
+@model_test("Define_AutoProved", "Test_Define_AutoProved.thy", 14)
+async def _test_Define_AutoProved(root: Root, file: MyIO):
+    """Happy path for the Define operation. Defines `double n = n + n`
+    (non-recursive, trivially terminating), then uses `double` as the
+    witness for the outer existential. The Define node's auto-prove
+    path closes pat-completeness + termination on its own — no
+    deferred block opens, no sub_nodes are added, and Define's
+    `ending_opr` returns `None` so no END is emitted for this node.
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Define `double` — the auto-prove path handles it entirely.
+    await root.fill("1", Define.gen({
+        "thought": "Introduce the doubling function as a witness",
+        "name": "double",
+        "type": r"nat \<Rightarrow> nat",
+        "equations": ["double n = n + n"],
+    }))
+    print_header("After Define (auto-proved)", file)
+    root.print(0, file)
+
+    # Use `double` to instantiate the existential.
+    await root.fill("2", Witness.gen({
+        "thought": "Pick the freshly-defined `double` as the witness",
+        "witness": "double",
+    }))
+    print_header("After Witness", file)
+    root.print(0, file)
+
+    # Close the remaining equation `double 2 = 4` via Obvious.
+    await root.fill("3", Obvious.interactive_gen({"facts": []}))
+    print_header("After Obvious", file)
+    root.print(0, file)
+
+    unfinished_nodes = set()
+    root.unfinished_nodes(unfinished_nodes)
+    file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+
+@model_test("Define_Manual", "Test_Define_Manual.thy", 16)
+async def _test_Define_Manual(root: Root, file: MyIO):
+    """Manual-discharge path for the Define operation. The test .thy
+    sets `Minilang.fun_fake_automatic_failure = true`, which forces
+    the default termination prover, the `BY_METRIC` metric path's
+    sledgehammer, AND the auto+termination_simp simplification pass
+    to all return failure. With that flag set, the Define node's
+    metric path still applies `resolve_tac [termination']` +
+    `relation_infer_tac`, instantiating the schematic `?R` with
+    `measure (\\<lambda>n. n)`, and pushes the raw residual subgoals
+    (`wf (measure (\\<lambda>n. n))` and
+    `\\<And>n. (n, Suc (Suc n)) \\<in> measure (\\<lambda>n. n)`)
+    onto the minilang stack as a deferred block.
+
+    `Define._deferred_block_opened` is set to True from the
+    `Termination_Proof_Opened_Msg` reporter signal, so Define's
+    `ending_opr` returns END. The agent then discharges each residual
+    with Obvious (which uses the real sledgehammer — the fake flag
+    only affects the Define-internal path, not the general
+    `HAMMER_i`/`default_prover` used by Obvious). After both
+    residuals close and the Define block ends, the outer proof
+    continues with Witness + Obvious on the existential goal.
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Define `halve` with a user-supplied metric. Under
+    # fun_fake_automatic_failure, all three auto-prove tiers fail and
+    # the metric path falls through to MetricPartial, pushing the
+    # prepped state (2 subgoals) as a deferred block.
+    await root.fill("1", Define.gen({
+        "thought": "Define halve as a witness; fake flag forces manual "
+                   "discharge of termination residuals",
+        "name": "halve",
+        "type": r"nat \<Rightarrow> nat",
+        "equations": [
+            "halve 0 = 0",
+            "halve (Suc 0) = 0",
+            "halve (Suc (Suc n)) = Suc (halve n)",
+        ],
+        "metric": [r"\<lambda>n::nat. n"],
+    }))
+    print_header("After Define (deferred block opened)", file)
+    root.print(0, file)
+
+    # Discharge the first residual inside the deferred block:
+    # `wf (measure (\<lambda>n. n))`, closed by `wf_measure`.
+    await root.fill("1.1.1", Obvious.interactive_gen({"facts": []}))
+    print_header("After Obvious on residual 1 (well-foundedness)", file)
+    root.print(0, file)
+
+    # Discharge the second residual inside the deferred block:
+    # `\<And>n. (n, Suc (Suc n)) \<in> measure (\<lambda>n. n)`,
+    # closed by `in_measure` + arithmetic.
+    await root.fill("1.2.2", Obvious.interactive_gen({"facts": []}))
+    print_header("After Obvious on residual 2 (decrease)", file)
+    root.print(0, file)
+
+    # Block auto-closes; proceed with the outer proof.
+    await root.fill("2", Witness.gen({
+        "thought": "Pick the freshly-defined `halve` as the witness",
+        "witness": "halve",
+    }))
+    print_header("After Witness", file)
+    root.print(0, file)
+
+    # `halve 4 = Suc (halve 2) = Suc (Suc (halve 0)) = Suc (Suc 0)`.
+    await root.fill("3", Obvious.interactive_gen({"facts": []}))
+    print_header("After Obvious on halve 4 = 2", file)
     root.print(0, file)
 
     unfinished_nodes = set()
@@ -1071,6 +1201,28 @@ async def _test_Rewrite_NO_SIMP_Leak(root: Root, file: MyIO):
     file.write(f"success: {success}\n")
     file.write(f"reason: {reason}\n")
     assert_no_NO_SIMP("NO_SIMP leaked via classical reasoning on wrapped conclusion")
+
+@model_test("Rewrite_Once_Simproc", "Test_Rewrite_Once_Simproc.thy", 25)
+async def _test_Rewrite_Once_Simproc(root: Root, file: MyIO):
+    """Test that a genuinely looping rewrite rule triggers the once-simproc
+    fallback instead of timing out. The rule my_wrap (f x = g (f x)) is
+    self-looping: the LHS matches a subterm of the RHS. The fallback should
+    wrap it as a simproc limited to fire at most once."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    # Rewrite goal using my_wrap — a self-looping rule (f x = g (f x)).
+    # Without the once-simproc fallback this would timeout.
+    node, success, reason = await root.fill("1", Rewrite.interactive_gen({
+        "thought": "Rewrite using my_wrap to unfold f into g(f(...))",
+        "using": [{"refer_by": "name", "name": "my_wrap"}],
+        "use system simplifiers": False,
+        "rewrite goal": True,
+        "rewrite premises": []
+    }))
+    print_header("After Rewrite", file)
+    root.print(0, file)
+    file.write(f"success: {success}\n")
+    file.write(f"reason: {reason}\n")
 
 # class TestCase_Interactive_Unfold:
 #     pass
@@ -2177,6 +2329,82 @@ async def _test_Chaining(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
 
+@model_test("FillOrphanedNode", "Test_FillOrphanedNode.thy", 11)
+async def _test_FillOrphanedNode(root: Root, file: MyIO):
+    """Test that fill can replace a failed non-Obvious node (and its successors)
+    even when _id_of_openning_prf_to_fill points past it.
+
+    Previously, if append left an orphaned node (e.g. a Have with bad syntax)
+    in sub_nodes, subsequent fill calls on the same step ID would fail with
+    CannotFill_BadNode because the only replacement path was for trailing
+    failed Obvious nodes. The extended fill fallback now allows replacing any
+    node (and everything after it) as long as none of them are SUCCESS."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Step 1: Fill with a Have that FAILS (bad Isabelle syntax).
+    # The node stays in sub_nodes with FAILURE status.
+    root.session.age += 1
+    ret1, is_error1, _ = await root.fill("1", Have.gen({
+        "thought": "intentionally bad",
+        "statement": {"english": "bad", "isabelle": "1 1 1"},
+        "name": "bad"
+    }))
+    assert is_error1, "bad Have should report as error"
+    step1 = root.locate_node("1")
+    assert step1.status.status == EvaluationStatus.Status.FAILURE, \
+        f"Expected FAILURE but got {step1.status.status.value}"
+    file.write(f"Step 1 status: {step1.status.status.value}\n")
+    print_header("After step 1 (bad Have, should fail)", file)
+    root.print(0, file)
+
+    # Step 2: Fill an Obvious AFTER the failed Have.
+    # It should be CANCELLED because step 1 failed.
+    root.session.age += 1
+    await root.fill("2", Obvious.interactive_gen({"facts": []}))
+    step2 = root.locate_node("2")
+    assert step2.status.status == EvaluationStatus.Status.CANCELLED, \
+        f"Expected CANCELLED but got {step2.status.status.value}"
+    file.write(f"Step 2 status: {step2.status.status.value}\n")
+    print_header("After step 2 (cancelled Obvious)", file)
+    root.print(0, file)
+
+    # Step 3: Re-fill "1" with a VALID Have.
+    # Old code would raise CannotFill_BadNode because _id_of_openning_prf_to_fill
+    # returns "3" (past the failed Have and cancelled Obvious).
+    # The new fallback allows this because steps 1 and 2 are both non-SUCCESS.
+    root.session.age += 1
+    ret3, is_error3, _ = await root.fill("1", Have.gen({
+        "thought": "valid helper",
+        "statement": {"english": "x is positive", "isabelle": "x > 0"},
+        "name": "x_pos"
+    }))
+    assert not is_error3, "valid Have should succeed"
+    step1_new = root.locate_node("1")
+    assert step1_new.status.status == EvaluationStatus.Status.SUCCESS, \
+        f"Expected SUCCESS but got {step1_new.status.status.value}"
+    file.write(f"Step 1 (re-filled) status: {step1_new.status.status.value}\n")
+    # Steps 2 and onwards should have been deleted by the fill replacement.
+    try:
+        root.locate_node("2")
+        assert False, "Step 2 should have been deleted by fill replacement"
+    except NodeNotFound:
+        file.write("Step 2 correctly deleted by fill replacement\n")
+    print_header("After re-fill step 1 (valid Have)", file)
+    root.print(0, file)
+
+    # Step 4: Complete the proof.
+    root.session.age += 1
+    await root.fill("1.1", Obvious.interactive_gen({"facts": []}))
+    root.session.age += 1
+    await root.fill("2", Obvious.interactive_gen({"facts": []}))
+    print_header("After completing proof", file)
+    root.print(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None):
     import msgpack as mp
     from IsaREPL import Client
@@ -2193,9 +2421,11 @@ async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | No
     async with Client(repl_addr, 'HOL', timeout=1200) as repl:
         await repl.load_theory(['Minilang_Agent.Minilang_Agent'])
         await repl.record_state("init")
-        case_num = len(TESTS)
+        _test_filter = os.environ.get("TEST_FILTER", None)
+        _tests_to_run = [t for t in TESTS.values() if _test_filter is None or _test_filter in t.name]
+        case_num = len(_tests_to_run)
         passed = 0
-        for i, test_case in enumerate(TESTS.values()):
+        for i, test_case in enumerate(_tests_to_run):
             await repl.rollback('init')
             print(f"Running test [{i+1}/{case_num}] {test_case.name}")
             abs_file_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "Tests", test_case.file))

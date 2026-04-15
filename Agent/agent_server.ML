@@ -176,14 +176,25 @@ fun minilang_message_packer ctxt =
                  )) (3, (missing, auto_introduced, final))
              | MiniLang_Agent.SIMPLIFY_FALLBACK_NOSYS =>
                  packInt 4
+             | MiniLang_Agent.SIMPLIFY_FALLBACK_ONCE_SIMPROC =>
+                 packInt 9
              (* (fact_name, pretty_printed_proposition) list *)
              | MiniLang_Agent.SPECIALIZE_RESULT result_facts =>
                  packPair (packInt, packList (packPair (packString, packString)))
                           (5, result_facts)
+             | Minilang.PAT_COMPLETENESS_PROOF_OPENED => packInt 7
+             | Minilang.TERMINATION_PROOF_OPENED => packInt 8
+             | MiniLang_Agent.DEFINE_RESULT (name, ty) =>
+                 packPair (packInt, packPair (packString, packString))
+                          (10, (name, ty))
              | _ => error "BUG #adli: unexpected Internal message")
    in packList pack o filter (fn Minilang.Internal (MiniLang_Agent.INTRO_BINDINGS _) => true
                                  | Minilang.Internal MiniLang_Agent.SIMPLIFY_FALLBACK_NOSYS => true
+                                 | Minilang.Internal MiniLang_Agent.SIMPLIFY_FALLBACK_ONCE_SIMPROC => true
                                  | Minilang.Internal (MiniLang_Agent.SPECIALIZE_RESULT _) => true
+                                 | Minilang.Internal Minilang.PAT_COMPLETENESS_PROOF_OPENED => true
+                                 | Minilang.Internal Minilang.TERMINATION_PROOF_OPENED => true
+                                 | Minilang.Internal (MiniLang_Agent.DEFINE_RESULT _) => true
                                  | Minilang.Internal _ => false
                                  | _ => true)
   end
@@ -614,7 +625,10 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
    of SOME s1' =>
         if Minilang.is_finished s1'
         then let
-          in if exists (fn MiniLang_Agent.SORRY _ => true | _ => false) xcmds
+          in if exists (fn MiniLang_Agent.SORRY_NEXT _ => true
+                         | MiniLang_Agent.SORRY_END_ALL _ => true
+                         | MiniLang_Agent.SORRY_ONLY => true
+                         | _ => false) xcmds
            then error "Internal Error: the returned proofs contains axiomatic sorry."
            else ()
            ; (xcmds, Minilang.conclude ctxt s1')

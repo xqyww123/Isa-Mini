@@ -7,6 +7,8 @@ session Minilang = Auto_Sledgehammer +
 session Minilang_Test in Test = Minilang +
   theories
     Fun_In_Proof_Test
+    Fun_Termination_Examples
+    Inductive_Cases_Simps_Demo
 
 session Minilang_Translator in translator = Minilang +
   sessions

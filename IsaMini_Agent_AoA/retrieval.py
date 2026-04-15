@@ -77,7 +77,7 @@ _COMMAND_HEADER_RE = re.compile(
 
 _PROOF_COMMAND_RE = re.compile(
     r"^\s*(?:private\s+|qualified\s+)?"
-    r"(?:lemma|lemmas|theorem|corollary|proposition|schematic_goal)\s"
+    r"(?:lemma|lemmas|theorem|corollary|proposition|schematic_goal|by|apply|done)\s"
 )
 
 def _parse_command_header(source: str) -> str:

@@ -1,7 +1,7 @@
 text \<open>Driven by AI purely and only.\<close>
 
 theory Minilang
-  imports HOL.HOL Auto_Sledgehammer.Auto_Sledgehammer
+  imports HOL.List Auto_Sledgehammer.Auto_Sledgehammer
 begin
 
 declare [[ML_debugger, ML_exception_trace, ML_exception_debugger, ML_print_depth=1000]]
@@ -49,7 +49,7 @@ attribute_setup "where" = \<open>let
  end \<close> "positional instantiation of theorem"
 
 
-
+(*
 section \<open>Tests for proof-local function infrastructure\<close>
 
 text \<open>Test Proof_Local_Inductive: define an inductive predicate proof-locally
@@ -60,7 +60,7 @@ method_setup test_proof_local_ind = \<open>
     CONTEXT_METHOD (fn _ => fn (ctxt, st) =>
       let
         val ctxt0 = ctxt |> Variable.set_body false
-        val ({intrs, elims, induct, preds, ...}, ctxt') =
+        val (_, ctxt') =
           Inductive.gen_add_inductive_cmd Proof_Local_Inductive.add_ind_def
             false false
             [(\<^binding>\<open>my_even\<close>, SOME "nat \<Rightarrow> bool", NoSyn)]
@@ -71,13 +71,6 @@ method_setup test_proof_local_ind = \<open>
             []
             ctxt0
         val ctxt' = Variable.restore_body ctxt ctxt'
-        val _ = writeln ("test_proof_local_ind: defined my_even, "
-          ^ string_of_int (length intrs) ^ " intro rules, "
-          ^ string_of_int (length elims) ^ " elim rules")
-        val thy0 = Proof_Context.theory_of ctxt
-        val thy1 = Proof_Context.theory_of ctxt'
-        val _ = writeln ("  theory forked? " ^
-          Bool.toString (not (Context.eq_thy (thy0, thy1))))
       in
         Seq.single (Seq.Result (ctxt', st))
       end))
@@ -88,8 +81,9 @@ lemma "True \<and> True"
   by simp
 
 text \<open>Test Proof_Local_Function: define a recursive function proof-locally.
-  Relies on the FUN minilang command wiring a nested scope + MAGIC callback
-  to discharge local-definition hyps at block end.\<close>
+  The raw ML method bypasses minilang, so the caller must wrap the usage in
+  a nested `proof - show ?thesis ... qed .` block for Proof_Context.export
+  at `qed` to discharge the local-definition hyps.\<close>
 
 method_setup test_proof_local_fun = \<open>
   Scan.succeed (fn ctxt =>
@@ -117,8 +111,9 @@ lemma x: "\<exists>(f::nat \<Rightarrow> nat). f 0 = 0"
   apply (rule exI[where x="my_sum"])
   by simp qed .
 
-text \<open>Test FUN via minilang min_script (uses Minilang.FUN_by_fun which
-  now wires a nested scope + MAGIC callback for hyp discharge).\<close>
+text \<open>Test FUN via minilang min_script (uses Minilang.FUN_by_fun).
+  Hyp discharge is handled by minilang's conclude Proof_Context.export
+  at the end of the script.\<close>
 
 lemma y: "\<exists>(f::nat \<Rightarrow> nat). f 0 = 0"
   by (min_script \<open>
@@ -130,6 +125,15 @@ lemma y: "\<exists>(f::nat \<Rightarrow> nat). f 0 = 0"
     END
     END
   \<close>)
+*)
 
+
+lemma "True"
+    by (min_script \<open>
+      FUN f :: "nat \<Rightarrow> nat \<Rightarrow> nat"
+        where "even n \<Longrightarrow> f n m = m"
+            | "odd n  \<Longrightarrow> f n m = Suc m"
+      END
+    \<close>)
 
 end

@@ -97,7 +97,7 @@ val SIMP : with_clause -> operation
 val SIMP'' : (bool * (Facts.ref * Token.src list)) list -> operation
 val SIMP_CMD : command
 
-val SIMPLIFY_GOAL_AND_PREMISES : thm list -> bool -> string list -> bool
+val SIMPLIFY_GOAL_AND_PREMISES : thm list -> simproc list -> bool -> string list -> bool
         -> (term list -> string list) option
         -> ((string * typ) list -> string list) option
         -> Time.time option
@@ -181,6 +181,34 @@ val END_or_NXT : opt_var_names -> Sledgehammer.fact_override -> operation
 val END_or_NXT_by_SORRY : opt_var_names -> state -> state
 val END_or_NXT_by_SORRY_CMD : command
 
+(* SORRY_NEXT: cheat the current subgoal in the current HHF. If the HHF
+   still has remaining subgoals afterwards (the common multi-goal case),
+   return the state with one fewer goal. If the HHF becomes empty and
+   an ENDBLK T_NXT is next, pop it + invoke the MAGIC next-callback.
+   Errors if the HHF becomes empty over an ENDBLK T_END — in that case
+   SORRY_END_ALL is the right command. *)
+val SORRY_NEXT : opt_var_names -> state -> state
+val SORRY_NEXT_CMD : command
+
+(* SORRY_END_ALL: cheat every remaining subgoal in the current HHF,
+   then pop the enclosing ENDBLK. Used to discard an entire (possibly
+   multi-goal) block after a recovery failure. Unlike `SORRY` /
+   `SORRY_NEXT`, this closes the whole block regardless of how many
+   residuals remain — so `Define`'s deferred pat-completeness /
+   termination block (with 2+ unsolved residuals after a body failure)
+   can be closed in one operation. *)
+val SORRY_END_ALL : opt_var_names -> state -> state
+val SORRY_END_ALL_CMD : command
+
+(* SORRY_ONLY: cheat the current subgoal in the current HHF without
+   any NEXT or END transition. The stack frame stays in place — the
+   ENDBLK (if any) is left untouched. This is the sorry analogue of
+   HAMMER: resolve one goal, stay put. Used by the AoA driver to
+   skip-proof the last GoalNode child whose resulting_state feeds
+   directly into the parent's _state_before_ending_. *)
+val SORRY_ONLY : operation
+val SORRY_ONLY_CMD : command
+
 val LET   : (term list * term) list -> operation
 val LET'' : (string list * string) list -> operation
 val LET_CMD : command
@@ -227,8 +255,38 @@ val DEFINE_CMD : command
 
 val FUN'' : (binding * string option * mixfix) list
          -> Specification.multi_specs_cmd
+         -> {metric: string list, open_on_fail: bool}
          -> operation
 val FUN_CMD : command
+val FUN_DEBUG_CMD : command
+
+(* Does a pattern match any subterm of the given term? *)
+val matches_subterm_of : theory -> term -> term -> bool
+
+(* Check if a rewrite equation (lhs, rhs) would loop: the LHS pattern
+   matches a subterm of the RHS. The LHS should use schematic variables
+   for the parts that vary (e.g., output of mksimps already has this). *)
+val simp_rule_loops : theory -> term * term -> bool
+
+(* Wrap a list of theorems into simprocs that each fire at most once.
+   Each call creates fresh one-shot flags. The simplifier's internal
+   prover handles conditions of conditional rules. *)
+val thms_to_once_simprocs : Proof.context -> thm list -> simproc list
+
+(* Detect bad recursive definitions where a schematized LHS matches a
+   subterm of its own RHS, which would produce a looping simp rule.
+   Returns true if looping is detected. *)
+val check_looping_simp_rules :
+  Proof.context ->
+  (binding * string option * mixfix) list ->
+  Specification.multi_specs_cmd -> bool
+
+(* After a function definition, remove its simp rules from the simpset
+   if they were flagged as looping. The function stays defined and its
+   .simps remain accessible by name. *)
+val remove_looping_simps : Proof.context -> Proof.context
+val fun_fake_automatic_failure : bool Config.T
+val fun_fake_pat_completeness_failure : bool Config.T
 
 val STEP   : fact list ->  term  -> operation
 val STEP'' : fact list -> string -> operation
@@ -251,6 +309,14 @@ val MP : Proof.context -> thm -> thm -> thm
 exception IH_MAP of (string * string list) list
 exception SH_PRF of string
 exception REPLACE_CMD of string * string
+
+(* Reporter signals fired by FUN / FUN_DEBUG / FUN'' when a residual
+   pat-completeness or termination goal gets deferred onto the
+   minilang stack for interactive discharge. Exposed here so
+   downstream (e.g. the Agent's message packer) can pattern-match
+   on them. *)
+exception PAT_COMPLETENESS_PROOF_OPENED
+exception TERMINATION_PROOF_OPENED
 
 end
 
@@ -356,6 +422,16 @@ type opt_prem_names = string option list option
 exception NO_PARAM
 exception CASE_NAME of opt_var_names
 
+(* Emitted when FUN leaves a residual pat-completeness goal on the minilang
+   stack for the user to discharge interactively (only reachable via the
+   ML-level FUN'' API with open_on_fail = true). *)
+exception PAT_COMPLETENESS_PROOF_OPENED
+
+(* Emitted when FUN leaves a residual termination goal on the minilang
+   stack (only reachable via the ML-level FUN'' API with open_on_fail
+   = true). *)
+exception TERMINATION_PROOF_OPENED
+
 type stack = Proof.context * (frame list)
   (*invariant: the head must be an HHF*)
 
@@ -449,6 +525,11 @@ fun no_goal (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ (Const(\<^con
   | no_goal (Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ _) = false
   | no_goal _ = true
 val no_goal' = no_goal o Thm.prop_of
+
+fun no_subgoal (Const(\<^const_name>\<open>Pure.prop\<close>, _) $ _) = true
+  | no_subgoal (Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ _) = true
+  | no_subgoal _ = false
+val no_subgoal' = no_subgoal o Thm.prop_of
 
 val goals_of =
   let fun collect (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ G $ (Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ X))
@@ -600,6 +681,8 @@ fun is_finished (SK,_,_) = stack_is_finished SK
    entire proof stack. *)
 fun stack_top_finished (_, HHF (st, _) :: _) = no_goal' st
   | stack_top_finished _ = false
+fun stack_top_no_subgoal (_, HHF (st, _) :: _) = no_subgoal' st
+  | stack_top_no_subgoal _ = false
 
 fun stack_is_ready_to_finish (_, HHF (st, _) :: _) = Thm.no_prems st
   | stack_is_ready_to_finish _ = raise BROKEN_INVARIANT
@@ -1760,6 +1843,7 @@ end
 (* Main operation function *)
 fun SIMPLIFY_GOAL_AND_PREMISES'
     (simp_facts: thm list)
+    (extra_simprocs: simproc list)
     (use_system_simps: bool)
     (premise_names: string list)
     (simplify_goal: bool)
@@ -1796,7 +1880,8 @@ fun SIMPLIFY_GOAL_AND_PREMISES'
       if use_system_simps
       then ctxt addsimps simp_facts
       else Simplifier.clear_simpset ctxt addsimps simp_facts
-      ) |> Simplifier.add_cong @{thm NO_SIMP_cong}
+      ) |> (fn c => c addsimprocs extra_simprocs)
+        |> Simplifier.add_cong @{thm NO_SIMP_cong}
 
     (* 5. Apply simplification using conversion *)
     fun do_clarsimp () =
@@ -1870,11 +1955,12 @@ fun SIMPLIFY_GOAL_AND_PREMISES'
   in
     (items_from_intro, (ctxt_after_intro, HHF (st_final, items_after_intro) :: S_after_intro))
   end end
-  | SIMPLIFY_GOAL_AND_PREMISES' _ _ _ _ _ _ _ _ = raise BROKEN_INVARIANT
+  | SIMPLIFY_GOAL_AND_PREMISES' _ _ _ _ _ _ _ _ _ = raise BROKEN_INVARIANT
 
 (* Wrapper that uses premise counter for automatic naming *)
 fun SIMPLIFY_GOAL_AND_PREMISES
     simp_facts
+    extra_simprocs
     use_system_simps
     premise_names
     simplify_goal
@@ -1882,7 +1968,7 @@ fun SIMPLIFY_GOAL_AND_PREMISES
     naming_vars_fn_opt
     timeout =
   OPR_with_ret (fn s =>
-    let val (items, s') = SIMPLIFY_GOAL_AND_PREMISES' simp_facts use_system_simps premise_names simplify_goal naming_fn_opt naming_vars_fn_opt timeout s
+    let val (items, s') = SIMPLIFY_GOAL_AND_PREMISES' simp_facts extra_simprocs use_system_simps premise_names simplify_goal naming_fn_opt naming_vars_fn_opt timeout s
         val _ = report_goal s'
      in (items, s')
     end)
@@ -1895,7 +1981,7 @@ fun SIMPLIFY_GOAL_AND_PREMISES''
     simplify_goal =
   OPR (fn (ctxt, SK) =>
     let val simp_facts = maps (Attrib.eval_thms ctxt o single) raw_simp_facts
-        val (_, s') = SIMPLIFY_GOAL_AND_PREMISES' simp_facts use_system_simps premise_names simplify_goal NONE NONE NONE (ctxt, SK)
+        val (_, s') = SIMPLIFY_GOAL_AND_PREMISES' simp_facts [] use_system_simps premise_names simplify_goal NONE NONE NONE (ctxt, SK)
         val _ = report_goal s'
      in s'
     end)
@@ -2617,6 +2703,15 @@ fun SPECIALIZE' prep_thms prep_insts opt_name raw_rules raw_insts raw_facts
     (* 2. Instantiate universal quantifiers and schematic variables *)
     val insts = prep_insts ctxt raw_insts
     val rule' = Minilang_Aux.inst_universal_quantifiers ctxt insts rule
+                handle ERROR msg =>
+                  let val rule_name =
+                        if Thm.has_name_hint rule
+                        then Minilang_Aux.simp_fact_name' (Thm.get_name_hint rule)
+                        else "<anonymous>"
+                  in raise OPR_FAIL (INVALID_OPR, String.concat [
+                       "cannot instantiate rule \<open>", rule_name, "\<close>:\n",
+                       msg, "\n",
+                       "the rule is:\n  ", Thm.string_of_thm ctxt rule]) end
 
     (* 3. Discharge premises left-to-right with facts.
        xOF handles both Pure.imp and HOL.implies/HOL.All.
@@ -3064,72 +3159,124 @@ val HAMMER_CMD = orverride_parser >> (fn ovr =>
   OPR_ID (fn i => fn (stack as (ctxt, _)) =>
     HAMMER_i (default_prover NONE ovr ctxt) (string_of_int i) stack))
 
-(** END **)
+(** END / NEXT **)
 
 fun chk_block_end (stack as (ctxt, _)) =
       if Config.get ctxt strict_end andalso not (stack_top_finished stack)
       then raise OPR_FAIL (PROOF_FAIL,
               "Cannot close the proof block because the goal is unsolved yet")
       else ()
+fun chk_block_next_or_end (stack as (ctxt, _)) =
+      if Config.get ctxt strict_end andalso not (stack_top_no_subgoal stack)
+      then raise OPR_FAIL (PROOF_FAIL,
+              "Cannot close the proof block because the goal is unsolved yet")
+      else ()
+fun chk_block_next (stack as (ctxt, _)) =
+      if Config.get ctxt strict_end andalso
+         not (stack_top_no_subgoal stack andalso not (stack_top_finished stack))
+      then raise OPR_FAIL (PROOF_FAIL,
+              "Cannot close the proof block because the goal is unsolved yet")
+      else ()
 
-fun END' param SH_override jj ID (stack as (_, HHF _ :: _)) =
-  let val ID_BASE = if jj = 0 then string_of_int ID
-                    else string_of_int ID ^ "+" ^ string_of_int jj
-      val _ = chk_block_end stack
-      val (ctxt, SK'1) = HAMMER_i (default_prover NONE SH_override (#1 stack)) ID_BASE stack
-                      |> conclude_SK
-      val st' = case SK'1 of HHF (st', _) :: _ => st'
-                           | _ => raise BROKEN_INVARIANT
-   in if no_goal' st'
+(* Generalized END: apply `F` to close a single subgoal in the current
+   HHF, then pop the enclosing ENDBLK. When `end_all = true`, keep
+   applying `F` until the HHF is empty, and when the popped ENDBLK is
+   T_NXT, pop sibling frames until the enclosing T_END is reached. F
+   receives a per-iteration index so it can generate distinct Sledge-
+   hammer cache keys across loop iterations. *)
+fun gen_END end_all (F : int -> stack -> stack) stack =
+  let
+    fun exhaust i st =
+      let val (ctxt, SK) = conclude_SK (F i st)
+      in case SK of
+           HHF (s', _) :: _ =>
+             if no_goal' s' then (i+1, (ctxt, SK))
+             else if end_all then exhaust (i+1) (ctxt, SK)
+             else (i+1, (ctxt, SK))
+         | _ => raise BROKEN_INVARIANT
+      end
+    val (next_i, (ctxt, SK'1)) = exhaust 0 stack
+    val st' = case SK'1 of HHF (st', _) :: _ => st'
+                         | _ => raise BROKEN_INVARIANT
+  in
+    if no_goal' st'
     then case SK'1
-      of HHF s :: ENDBLK T' :: SK' =>
-        ( get_reporter () (Internal (REPLACE_CMD ("END", "END")))
-        ; if T' = T_END then maintain (ctxt, HHF s :: SK')
-          else if not (Config.get ctxt strict_end) andalso
-                  member (op =) ["COMPLETE_NEXT", "RELAXED"]
-                                (Config.get ctxt working_mode)
-          then maintain (ctxt, HHF s :: SK')
-            |> END' param SH_override (jj+1) ID
-          else raise OPR_FAIL (INVALID_OPR, 
-                  "This block should be closed by the " ^
-                  (case T' of T_END => "END" | T_NXT => "NEXT") ^
-                  " command.") )
+      of HHF s :: ENDBLK T_END :: SK' =>
+          ( get_reporter () (Internal (REPLACE_CMD ("END", "END")))
+          ; maintain (ctxt, HHF s :: SK') |> report_goal )
+       | HHF s :: ENDBLK T_NXT :: SK' =>
+          if end_all
+          then ( get_reporter () (Internal (REPLACE_CMD ("NEXT", "NEXT")))
+               ; let val popped = case SK' of MAGIC _ :: rest => rest
+                                            | _ => SK'
+                     fun F' i = F (i + next_i)
+                 in gen_END end_all F' (maintain (ctxt, HHF s :: popped)) end )
+          else raise OPR_FAIL (INVALID_OPR,
+            "This block should be closed by the NEXT command.")
        | _ => raise BROKEN_INVARIANT
-    else if member (op =) ["COMPLETE_NEXT", "RELAXED"]
-                          (Config.get ctxt working_mode)
-    then ( get_reporter () (Internal (REPLACE_CMD ("NEXT", "NEXT")))
-         ; END' param SH_override (jj+1) ID (ctxt, SK'1) )
-    else raise OPR_FAIL (INVALID_OPR, "This block should be closed by the NEXT command.")
+    else raise OPR_FAIL (INVALID_OPR,
+      "This block should be closed by the NEXT command.")
   end
-  | END' _ _ _ _ _ = raise BROKEN_INVARIANT
 
-fun NXT' param SH_override ID (origin as stack as (_, HHF (st, _) :: _)) =
-  let val ID_BASE = string_of_int ID
-      val _ = chk_block_end stack
-      val (ctxt, SK'1) = HAMMER_i (default_prover NONE SH_override (#1 stack)) ID_BASE stack
-                      |> conclude_SK
+(* Generalized NEXT (counterpart to gen_END): apply `F` to close a
+   single subgoal in the current HHF. If the HHF still has remaining
+   subgoals, return the state with one fewer goal. If the HHF becomes
+   empty, pop the enclosing ENDBLK T_NXT and rebuild the MAGIC
+   continuation. If the popped ENDBLK is T_END, error (the caller
+   said NEXT, not END) — the `on_end` handler allows the caller to
+   substitute a recovery behavior (e.g. RELAXED mode's "return the
+   unchanged origin state"). *)
+fun gen_NXT' param (F : stack -> stack) on_end stack =
+  let val (ctxt, SK'1) = conclude_SK (F stack)
       val st' = case SK'1 of HHF (st', _) :: _ => st'
                            | _ => raise BROKEN_INVARIANT
-   in if no_goal' st'
+  in
+    if no_goal' st'
     then case SK'1
-      of HHF s :: ENDBLK T' :: SK' =>
-        ( get_reporter () (Internal (REPLACE_CMD ("NEXT", "NEXT")))
-        ; if T' = T_NXT
-          then (case SK'
-            of MAGIC (CB, PRT, _) :: SK'' =>
-                    maintain (ctxt, HHF s :: MAGIC (CB, PRT, param) :: SK'')
-                 |> report_goal
-             | _ => maintain (ctxt, HHF s :: SK')
-                 |> report_goal )
-          else (case Config.get ctxt working_mode
-            of "RELAXED" => origin
-             | _ => raise OPR_FAIL(INVALID_OPR,  "This block should be closed by the END command."
-          )))
+      of HHF s :: ENDBLK T_NXT :: SK' =>
+          ( get_reporter () (Internal (REPLACE_CMD ("NEXT", "NEXT")))
+          ; case SK' of
+              MAGIC (CB, PRT, _) :: SK'' =>
+                maintain (ctxt, HHF s :: MAGIC (CB, PRT, param) :: SK'')
+                  |> report_goal
+            | _ => maintain (ctxt, HHF s :: SK') |> report_goal )
+       | HHF _ :: ENDBLK T_END :: _ => on_end ()
        | _ => raise BROKEN_INVARIANT
     else report_goal (ctxt, SK'1)
   end
+
+(* END' and NXT' are now thin wrappers that parameterize the generalized
+   helpers with the Sledgehammer-backed closing tactic. *)
+fun END' param SH_override ID (stack as (_, HHF _ :: _)) =
+  let val _ = chk_block_end stack
+      val ctxt0 = #1 stack
+      val end_all = not (Config.get ctxt0 strict_end) andalso
+                    member (op =) ["COMPLETE_NEXT", "RELAXED"]
+                                  (Config.get ctxt0 working_mode)
+      val prover = default_prover NONE SH_override ctxt0
+      fun F i =
+        let val id_base =
+              if i = 0 then string_of_int ID
+              else string_of_int ID ^ "+" ^ string_of_int i
+        in HAMMER_i prover id_base end
+  in gen_END end_all F stack end
+  | END' _ _ _ _ = raise BROKEN_INVARIANT
+
+fun NXT' param SH_override ID (origin as stack as (_, HHF _ :: _)) =
+  let val _ = chk_block_next stack
+      val ctxt0 = #1 stack
+      val prover = default_prover NONE SH_override ctxt0
+      val F = HAMMER_i prover (string_of_int ID)
+      fun on_end () =
+        case Config.get ctxt0 working_mode of
+            "RELAXED" => origin
+          | _ => raise OPR_FAIL (INVALID_OPR,
+                   "This block should be closed by the END command.")
+  in gen_NXT' param F on_end stack end
   | NXT' _ _ _ _ = raise BROKEN_INVARIANT
 
+(* The polymorphic "auto-advance" helper used by the legacy SORRY
+   command, which picks between NEXT and END based on the ENDBLK type. *)
 fun gen_END_or_NXT' param F stack =
   let val (ctxt, SK'1) = conclude_SK (F stack)
       val st' = case SK'1 of HHF (st', _) :: _ => st'
@@ -3152,11 +3299,11 @@ fun gen_END_or_NXT' param F stack =
 
 fun END_or_NXT' param SH_override ID stack =
   let val ID_BASE = string_of_int ID
-   in chk_block_end stack
+   in chk_block_next_or_end stack
     ; gen_END_or_NXT' param (HAMMER_i (default_prover NONE SH_override (#1 stack)) ID_BASE) stack
   end
 
-fun END SH_override = OPR_ID (END' NO_PARAM SH_override 0)
+fun END SH_override = OPR_ID (END' NO_PARAM SH_override)
 fun NXT param SH_override = OPR_ID (NXT' (CASE_NAME param) SH_override)
 fun END_or_NXT param SH_override = OPR_ID (END_or_NXT' (CASE_NAME param) SH_override)
 val END_CMD  = orverride_parser >> END
@@ -3181,6 +3328,27 @@ fun SORRY_i (ctxt, HHF (s,facts) :: S) =
 fun END_or_NXT'_by_SORRY param = gen_END_or_NXT' param SORRY_i
 fun END_or_NXT_by_SORRY param = OPR (END_or_NXT'_by_SORRY (CASE_NAME param))
 val END_or_NXT_by_SORRY_CMD = OPT_VARS >> (fn x => END_or_NXT_by_SORRY x)
+
+(* Explicit sorry variants: SORRY_NEXT advances to the next subgoal
+   (errors on T_END), SORRY_END_ALL cheats every remaining subgoal and
+   closes the enclosing block (handling multi-residual blocks like
+   `Define`'s deferred pat-completeness / termination frame). *)
+fun SORRY_NEXT (param : opt_var_names) : operation =
+  let fun on_end () =
+        raise OPR_FAIL (INVALID_OPR,
+          "SORRY_NEXT closed the last goal of an END block. " ^
+          "Use SORRY_END_ALL to close the entire block.")
+  in OPR (gen_NXT' (CASE_NAME param) SORRY_i on_end) end
+val SORRY_NEXT_CMD : command = OPT_VARS >> SORRY_NEXT
+
+fun SORRY_END_ALL (_ : opt_var_names) : operation =
+  OPR (gen_END true (fn _ => SORRY_i))
+val SORRY_END_ALL_CMD : command = OPT_VARS >> SORRY_END_ALL
+
+(* SORRY_ONLY: cheat one subgoal, stay in place — no NEXT / END.
+   Analogous to HAMMER but using cheat_tac instead of a prover. *)
+val SORRY_ONLY : operation = OPR SORRY_i
+val SORRY_ONLY_CMD : command = Scan.succeed SORRY_ONLY
 
 (** LET **)
 
@@ -3332,7 +3500,7 @@ fun pretty_tree0 _ (BUNDL (_,[])) =
               chunks ( keyword1 (String.concat prefix ^ 
                                 (case children
                                    of [_] => "goal"
-                                    | [ ] => raise BROKEN_INVARIANT
+                                    | [ ] => "no goal"
                                     | _ => string_of_int (length children) ^ " subgoals"))
                     :: map (item o single o pretty []) children
                      @ pretty_items items )
@@ -3586,40 +3754,553 @@ fun can_use_definition_cmd fixes specs ctxt =
     in forall (fn (_, eq) => can_use_definition fnames eq) named_specs end
   catch exn => false\<close>
 
-(* FUN_by_fun runs add_fun_cmd which adds local-definition hyps to the
-   proof context via Local_Defs.define. These hyps are discharged by
-   Proof_Context.export at the nearest enclosing boundary — INTRO's
-   subgoal cleanup, HAVE's block cleanup, or minilang's conclude export.
-   No local scope management is needed here. *)
-fun FUN_by_fun fixes specs config (ctxt, SK) =
-  let val ctxt' = Proof_Local_Function.add_fun_cmd fixes specs config false ctxt
-  in (ctxt', SK) end
+(* ====== FUN: extended pipeline with metric + deferred proof blocks ====== *)
 
-fun FUN_by_def fixes specs (ctxt, SK) =
+(* Per-phase automatic-tactic timeouts, in seconds. *)
+val pat_escalate_timeout =
+  Attrib.setup_config_int \<^binding>\<open>fun_pat_escalate_timeout\<close> (K 30)
+val term_escalate_timeout =
+  Attrib.setup_config_int \<^binding>\<open>fun_term_escalate_timeout\<close> (K 30)
+
+(* Debug only — INTERNAL, not exposed as an attribute. When set,
+   force the automatic default termination prover to always report
+   DefaultFailed. Affects ONLY the termination phase; pat-completeness
+   escalation runs normally regardless of this flag. Used to exercise
+   the BY_METRIC code path in tests without needing a function whose
+   termination is genuinely hard to automate. Set from ML with e.g.
+     setup \<open>Config.put_global Minilang.fun_fake_automatic_failure true\<close> *)
+val fun_fake_automatic_failure =
+  Config.declare_bool ("Minilang.fun_fake_automatic_failure", \<^here>) (K false)
+
+(* Debug only — INTERNAL, not exposed as an attribute. When set,
+   force the pattern-completeness escalation ladder to skip all
+   automatic tactic levels and return the untouched goal, leaving
+   residual subgoals. Combined with FUN'' open_on_fail = true, this
+   pushes the pat-completeness goal onto the minilang stack for
+   interactive discharge — useful for testing the Agent interface's
+   deferred-pat-completeness code path without needing a function
+   whose pat-completeness is genuinely hard to automate. Set from ML
+   with e.g.
+     setup \<open>Config.put_global Minilang.fun_fake_pat_completeness_failure true\<close> *)
+val fun_fake_pat_completeness_failure =
+  Config.declare_bool
+    ("Minilang.fun_fake_pat_completeness_failure", \<^here>) (K false)
+
+(* Run [tac st] under a timeout. Returns SOME (result state) if the
+   tactic produced a state within the timeout; NONE on timeout or if
+   the tactic itself fails (via an exception or empty sequence). *)
+fun run_with_timeout secs tac st =
+  \<^try>\<open>
+    (case Timeout.apply (Time.fromSeconds secs)
+                       (fn () => SINGLE tac st) () of
+        SOME st' => SOME st'
+      | NONE => NONE)
+    catch _ => NONE\<close>
+
+(* Escalation ladder for pattern-completeness. Tries
+     1. pat_completeness; auto
+     2. pat_completeness alone
+     3. untouched goal
+   Always returns a goal state — it may still have open subgoals if
+   all three steps leave residuals. Timeout failures drop us to the
+   next level. *)
+fun escalate_pat ctxt pat_goal_state =
+    if Config.get ctxt fun_fake_pat_completeness_failure
+    then pat_goal_state       (* debug-only shortcut *)
+    else
+      let val T = Config.get ctxt pat_escalate_timeout
+          val tac1 = Pat_Completeness.pat_completeness_tac ctxt 1 THEN auto_tac ctxt
+          val tac2 = Pat_Completeness.pat_completeness_tac ctxt 1
+      in
+        (case run_with_timeout T tac1 pat_goal_state of
+           SOME st => st                           (* Level 1: simplified by (pat_completeness; auto) *)
+         | NONE =>
+             (case run_with_timeout T tac2 pat_goal_state of
+                SOME st => st                      (* Level 2: simplified by pat_completeness alone *)
+              | NONE => pat_goal_state))           (* Level 3: untouched *)
+      end
+
+(* Wrap a non-empty list of measure-function strings as a single
+   well-founded relation. Each metric string is parsed individually
+   via Syntax.parse_term (which preserves YXML position markup from
+   Parse.embedded_inner_syntax). The wrapper constant is built at the
+   term level and the whole thing is type-checked in one call to
+   Syntax.check_term.
+     []              -> NONE (caller decides)
+     [f]             -> SOME (Wellfounded.measure f)
+     [f1, f2, ...]   -> SOME (List.measures [f1, f2, ...]) *)
+fun wrap_measures _ [] = NONE
+  | wrap_measures ctxt [f] =
+      let
+        val f' = Syntax.parse_term ctxt f
+        val measure_const =
+          Const (\<^const_name>\<open>Wellfounded.measure\<close>, dummyT)
+      in
+        SOME (Syntax.check_term ctxt (measure_const $ f'))
+      end
+  | wrap_measures ctxt fs =
+      let
+        val fs' = map (Syntax.parse_term ctxt) fs
+        val list_term =
+          fold_rev (fn t => fn acc =>
+                       Const (\<^const_name>\<open>List.Cons\<close>, dummyT) $ t $ acc)
+                   fs' (Const (\<^const_name>\<open>List.Nil\<close>, dummyT))
+        val measures_const =
+          Const (\<^const_name>\<open>List.measures\<close>, dummyT)
+      in
+        SOME (Syntax.check_term ctxt (measures_const $ list_term))
+      end
+
+datatype term_outcome =
+    Proved of thm        (* totality theorem, ready for term_afterqed *)
+  | DefaultFailed        (* default prover failed AND no metric supplied —
+                            caller must error asking the user to supply
+                            a BY_METRIC clause *)
+  | MetricPartial of thm (* default prover failed, metric was supplied and
+                            applied, but the metric path's internal sledge
+                            could not close the remaining wf/decrease
+                            obligations. The thm is the prepped state
+                            (after resolve termination' + relation_infer),
+                            with the wf + decrease subgoals exposed for
+                            interactive discharge. FUN_DEBUG can push
+                            this onto the minilang stack; plain FUN
+                            errors out. *)
+
+(* Termination dispatch.
+
+   Stage 1 (always run): the default automatic termination prover
+   (unless the debug config fun_fake_automatic_failure is set).
+   Stage 2 (only if stage 1 fails and metric_strs ≠ []): the
+   user-supplied metric path — resolve termination', instantiate via
+   relation_infer_tac, close with sledge.
+
+   Outcomes (caller decides what to do with each):
+   - Stage 1 succeeds                    → Proved totality
+   - Stage 1 fails, no metric            → DefaultFailed
+   - Stage 1 fails, metric closes sledge → Proved totality
+   - Stage 1 fails, metric path sledge
+     couldn't close wf/decrease goals    → MetricPartial prepped
+                                           (the state after resolve +
+                                           relation_infer but before
+                                           sledge, with the wf and
+                                           decrease subgoals exposed)
+   - Metric's prep tactic itself fails
+     (resolve/relation_infer broken)     → error raised immediately *)
+fun dispatch_term ctxt term_goal metric_strs =
   let
-    val _ = tracing "FUN_by_def: before definition_cmd"
-    val ((_, eq_str), _, local_fixes) = the_single specs
-    val var = (case fixes of
-        [(b, ty, mx)] => SOME (b, ty, mx) | _ => NONE)
-    val ctxt' = ctxt
-        |> Variable.set_body false
-        |> (fn lthy => Specification.definition_cmd
-              var local_fixes [] (Binding.empty_atts, eq_str) false lthy |> snd)
-        |> Variable.restore_body ctxt
-    val _ = tracing "FUN_by_def: after definition_cmd"
-  in (ctxt', SK) end
+    val T = Config.get ctxt term_escalate_timeout
+    fun try_prove tac =
+      \<^try>\<open>
+        SOME (Timeout.apply (Time.fromSeconds T)
+               (fn () => Goal.prove ctxt [] [] term_goal (K tac)) ())
+        catch _ => NONE\<close>
 
-(* ML-level API for agent use. Always uses the proof-local function package
-   path (even for non-recursive definitions); FUN_by_def is disabled because
-   Specification.definition_cmd forks the background theory, which breaks
-   parallel proof futures with future_result: bad theory. *)
-fun FUN'' fixes specs = fn ((ctxt, SK), TAB, ID) =>
-  timed_OPR 30 (FUN_by_fun fixes specs Function_Fun.fun_config) ((ctxt, SK), TAB, ID)
+    (* Pre-generalize the function's termination rule so `?R` appears
+       as a top-level schematic Var — this is what both the default
+       prover and Function_Relation.relation_infer_tac need to have
+       something to instantiate. *)
+    val termination' =
+      (case Function_Common.import_last_function ctxt of
+         SOME {termination, ...} => Thm.forall_elim_vars 0 termination
+       | NONE => error "FUN: no function data when dispatching termination")
 
-val FUN_CMD =
-  Function_Common.function_parser Function_Fun.fun_config
-  >> (fn (config, (fixes, specs)) => fn ((ctxt, SK), TAB, ID) =>
-    timed_OPR 30 (FUN_by_fun fixes specs config) ((ctxt, SK), TAB, ID))
+    val default_tac =
+      resolve_tac ctxt [termination'] 1 THEN
+      Function_Common.termination_prover_tac false ctxt
+
+    val default_result =
+      if Config.get ctxt fun_fake_automatic_failure
+      then NONE
+      else try_prove default_tac
+  in
+    (case default_result of
+       SOME thm => Proved thm
+     | NONE =>
+         (case wrap_measures ctxt metric_strs of
+            NONE => DefaultFailed
+          | SOME rel =>
+              let
+                (* Metric path (per plan): resolve termination' to
+                   introduce the schematic ?R, let relation_infer_tac
+                   instantiate it with the user-supplied
+                   measure/measures term, then let
+                   Phi_Sledgehammer_Solver.all_auto discharge the
+                   remaining concrete wf and decrease obligations. *)
+                val sledge_tac : tactic = fn st =>
+                  if Config.get ctxt fun_fake_automatic_failure
+                  then Seq.empty   (* debug: force metric path to fail *)
+                  else
+                  \<^try>\<open>
+                    let
+                      val (_, closed) =
+                        Phi_Sledgehammer_Solver.all_auto
+                          true                                (* improved version *)
+                          Sledgehammer_Fact.no_fact_override  (* no extra facts *)
+                          NONE                                (* no cache id *)
+                          ctxt st
+                    in Seq.single closed end
+                    catch _ => Seq.empty\<close>
+                val prep_tac =
+                  resolve_tac ctxt [termination'] 1
+                  THEN Function_Relation.relation_infer_tac ctxt rel 1
+                val full_tac = prep_tac THEN sledge_tac
+                (* Weaker, cheaper fallback closer used for both a
+                   last-resort full attack and as a simplification
+                   pass on the user-facing residual. Mirrors what
+                   lexicographic_order_tac uses post-instantiation
+                   (see lexicographic_order.ML:213-215). *)
+                val termination_simps =
+                  Named_Theorems.get ctxt \<^named_theorems>\<open>termination_simp\<close>
+                val simp_tac = auto_tac (ctxt addsimps termination_simps)
+                val fake_fail =
+                  Config.get ctxt fun_fake_automatic_failure
+              in
+                (case try_prove full_tac of
+                   SOME thm => Proved thm
+                 | NONE =>
+                     (* Sledge failed. Try auto+termination_simp as a
+                        weaker closer; if it happens to finish the
+                        proof, return Proved. Skipped entirely when
+                        fun_fake_automatic_failure is set, so the
+                        debug path simulates ALL automatic proving
+                        (sledge + simp) failing at once. *)
+                     (case if fake_fail
+                            then NONE
+                            else try_prove (prep_tac THEN simp_tac) of
+                        SOME thm => Proved thm
+                      | NONE =>
+                          (* Neither sledge nor simp closed the
+                             obligations. Compute a *simplified*
+                             partial state for the user, so the
+                             presented residual has had
+                             auto+termination_simp already applied
+                             (which typically closes `wf (measure f)`
+                             and unfolds `(_, _) ∈ measure _` into
+                             `_ < _`). If simp times out, fall back
+                             to the raw state. Under
+                             fun_fake_automatic_failure we also skip
+                             this simplification so the user sees the
+                             raw prep state. *)
+                          let
+                            val init_st =
+                              Goal.init (Thm.cterm_of ctxt term_goal)
+                            val prepped_opt =
+                              if fake_fail
+                              then run_with_timeout T prep_tac init_st
+                              else
+                                (case run_with_timeout T
+                                       (prep_tac THEN simp_tac) init_st of
+                                   SOME st => SOME st
+                                 | NONE =>
+                                     run_with_timeout T prep_tac init_st)
+                          in
+                            (case prepped_opt of
+                               SOME st => MetricPartial st
+                             | NONE =>
+                                 error ("FUN: the BY_METRIC relation " ^
+                                        "could not be applied to the " ^
+                                        "termination goal " ^
+                                        "(resolve/relation_infer failed)"))
+                          end))
+              end))
+  end
+
+(* Run phase 2 (termination). [outer_ctxt] is the body-state reference
+   for Variable.restore_body; [lthy2] has body=false and is the
+   post-partial-function context.
+
+   Three outcomes from dispatch_term:
+   - Proved: finalize via term_afterqed.
+   - DefaultFailed: no metric supplied and default prover couldn't
+     prove termination. Always error asking for BY_METRIC —
+     open_on_fail is ignored because an untouched termination goal
+     isn't actionable guidance for the user.
+   - MetricPartial prepped: metric was supplied, the metric path's
+     internal sledge couldn't close the prepped wf/decrease
+     obligations. If open_on_fail, push the prepped state for
+     interactive discharge; else error. *)
+fun run_phase_2 outer_ctxt lthy2 {term_goal, term_afterqed}
+                metric_strs open_on_fail post SK =
+  (case dispatch_term lthy2 term_goal metric_strs of
+     Proved totality =>
+       let
+         val lthy3 = term_afterqed [[totality]] lthy2
+         val lthy3' = Variable.restore_body outer_ctxt lthy3 |> post
+       in (lthy3', SK) end
+   | DefaultFailed =>
+       error ("FUN: the default termination prover failed to prove " ^
+              "termination for this function. Please provide a " ^
+              "BY_METRIC clause with a suitable measure (or " ^
+              "measures) function, e.g.\n" ^
+              "  FUN foo :: \"...\"\n" ^
+              "    where \"...\"\n" ^
+              "    BY_METRIC \"\<lambda>n. n\"")
+   | MetricPartial prepped =>
+       if not open_on_fail
+       then error ("FUN: the default termination prover failed, and " ^
+                   "the BY_METRIC relation did not fully close the " ^
+                   "remaining well-foundedness / decrease obligations. " ^
+                   "Use the FUN_DEBUG command to discharge them " ^
+                   "interactively.")
+       else
+         let
+           (* Restore outer body state BEFORE pushing; user's
+              interactive minilang commands should see the natural
+              body flag. *)
+           val lthy_for_user = Variable.restore_body outer_ctxt lthy2
+           (* Convert the raw prepped state into minilang's
+              HOL.GOAL-wrapped shape so the HHF satisfies minilang's
+              invariants. init_goal = iso_atomize + protect_goals;
+              for our Pure-level termination goal iso_atomize is a
+              no-op, so this is effectively just protect_goals. *)
+           val init_st = init_goal lthy_for_user prepped
+           fun term_cb ctxt_user (tstate, _, SK', _) =
+             let
+               val lthy2' = Variable.set_body false ctxt_user
+               (* Follow HAVE's CB pattern: Goal.conclude strips the
+                  Pure.prop wrapping, finalize_goal runs iso_rulify
+                  (no-op here), Conjunction.elim_conjunctions splits
+                  any conjunctions (we expect a single result). *)
+               val lems =
+                 Goal.conclude tstate
+                 |> finalize_goal lthy2'
+                 |> Conjunction.elim_conjunctions
+               val totality =
+                 case lems of
+                   [th] => th
+                 | _ => error ("FUN: unexpected number of theorems " ^
+                               "from interactive termination proof")
+               val lthy3 = term_afterqed [[totality]] lthy2'
+               val lthy3' = Variable.restore_body outer_ctxt lthy3 |> post
+             in (lthy3', SK') end
+           (* Capture the outer HHF at push-time so PRINT can show
+              both the deferred termination block and the outer
+              proof goal, mirroring HAVE's PRT pattern. The stack
+              invariant guarantees SK's head is an HHF. *)
+           val (outer_st, outer_items) =
+             case SK of
+               HHF (st, items) :: _ => (st, items)
+             | _ => raise BROKEN_INVARIANT
+           fun term_prt _ t =
+             BUNDL (outer_items,
+                    [BLOCK t, print_stack [HHF (outer_st, outer_items)]])
+           val _ = get_reporter () (Internal TERMINATION_PROOF_OPENED)
+         in
+           (lthy_for_user,
+            HHF (init_st, empty_items)
+            :: ENDBLK T_END
+            :: MAGIC (term_cb, term_prt, NO_PARAM)
+            :: SK)
+           |> report_goal
+         end)
+
+(* Does a pattern match any subterm of the given term? *)
+fun matches_subterm_of thy pat (t as (f $ x)) =
+      ((Pattern.match thy (pat, t) (Vartab.empty, Vartab.empty); true)
+       handle Pattern.MATCH =>
+         matches_subterm_of thy pat f orelse matches_subterm_of thy pat x)
+  | matches_subterm_of thy pat (Abs (_, _, body)) =
+      ((Pattern.match thy (pat, body) (Vartab.empty, Vartab.empty); true)
+       handle Pattern.MATCH => matches_subterm_of thy pat body)
+  | matches_subterm_of thy pat t =
+      (Pattern.match thy (pat, t) (Vartab.empty, Vartab.empty); true)
+      handle Pattern.MATCH => false
+
+(* Check if a rewrite equation (lhs, rhs) would loop: the LHS pattern
+   matches a subterm of the RHS. *)
+fun simp_rule_loops thy (lhs, rhs) = matches_subterm_of thy lhs rhs
+
+(* Wrap a list of theorems into simprocs that each fire at most once.
+   Each thm is decomposed via mksimps into meta-equations; each meta-equation
+   becomes a separate simproc with its own one-shot flag.
+   The simplifier's mk_procrule / rews handles matching, instantiation,
+   and condition-proving on the returned meta-equation. *)
+fun thms_to_once_simprocs ctxt (thms: thm list) : simproc list =
+  let
+    val meta_rules = maps (Raw_Simplifier.mksimps ctxt) thms
+    fun mk_once (i, rule) =
+      let
+        val fired = Unsynchronized.ref false
+        val (lhs, _) = Logic.dest_equals
+              (Logic.strip_imp_concl (Thm.prop_of rule))
+        fun proc _ _ =
+          if !fired then NONE
+          else (fired := true; SOME rule)
+      in
+        SOME (Simplifier.make_simproc ctxt
+          { name = "once_simproc_" ^ string_of_int i,
+            lhss = [lhs],
+            proc = K proc,
+            identifier = [] })
+      end handle TERM _ => NONE
+  in map_filter I (map_index mk_once meta_rules) end
+
+(* Detect bad recursive definitions: if a schematized LHS matches a
+   subterm of its own RHS, the generated simp rule would loop. *)
+fun check_looping_simp_rules ctxt fixes specs =
+  let
+    val thy = Proof_Context.theory_of ctxt
+    val ((_, eq_entries), _) = Specification.read_multi_specs fixes specs ctxt
+    val fun_names =
+      map (fn (b, _, _) => Binding.name_of b) fixes
+      |> Symtab.make_set
+    fun schematize_frees t =
+      let val frees = Term.add_frees t []
+          val subst = map_filter (fn (n, T) =>
+            if Symtab.defined fun_names n then NONE
+            else SOME (Free (n, T), Var ((n, 0), T))) frees
+      in Term.subst_free subst t end
+    fun check_eq (_, eq_term) =
+      let val params = Term.strip_all_vars eq_term
+          val body = Term.strip_all_body eq_term
+          val eq = subst_bounds (rev (map Free params), body)
+          val (lhs, rhs) = HOLogic.dest_eq (HOLogic.dest_Trueprop eq)
+                           handle TERM _ => raise Fail ""
+          val pat = schematize_frees lhs
+      in simp_rule_loops thy (pat, rhs) end
+      handle Fail _ => false
+  in
+    exists check_eq eq_entries
+  end
+
+(* After a function definition completes, if check_looping_simp_rules
+   detected that the generated simp rules would loop, remove them from
+   the simpset. The function remains defined and its .simps are still
+   accessible by name — they're just not applied automatically. *)
+fun remove_looping_simps lthy =
+  case Function_Common.import_last_function lthy of
+    SOME {simps = SOME simps, ...} =>
+      fold Simplifier.del_simp simps lthy
+  | _ => lthy
+
+(* Extended FUN entrypoint. Runs phase 1 (pat-completeness) then phase 2
+   (termination), with escalation + optional deferred-block handoff. *)
+fun FUN_by_fun_ext fixes specs config metric_strs open_on_fail
+                   (outer_ctxt, SK) =
+  let
+    val ctxt_fn = Variable.set_body false outer_ctxt
+    val has_looping_simps = check_looping_simp_rules ctxt_fn fixes specs
+    (* If the definition has looping simp rules, post-process the
+       context after the function is fully defined to remove them
+       from the simpset. The function and its .simps still exist. *)
+    fun post lthy = if has_looping_simps then remove_looping_simps lthy else lthy
+    val {pat_goal_state, pat_afterqed, lthy_after_prepare} =
+      Proof_Local_Function.prepare_pat_goal fixes specs config false ctxt_fn
+    val pat_state = escalate_pat lthy_after_prepare pat_goal_state
+  in
+    if Thm.nprems_of pat_state = 0
+    then
+      let
+        val pat_thm = Goal.finish lthy_after_prepare pat_state
+        val lthy2 = pat_afterqed [[pat_thm]] lthy_after_prepare
+        val phase2 = Proof_Local_Function.prepare_term_goal lthy2
+      in
+        run_phase_2 outer_ctxt lthy2 phase2 metric_strs open_on_fail post SK
+      end
+    else if not open_on_fail
+    then error ("FUN: the pattern-completeness/compatibility proof failed. " ^
+                "Use the FUN_DEBUG command (or the ML-level FUN'' API with " ^
+                "open_on_fail = true) to discharge the residual goals " ^
+                "interactively.")
+    else
+      let
+        val lthy_for_user =
+          Variable.restore_body outer_ctxt lthy_after_prepare
+        (* Convert the raw Goal.init'd pat-completeness state (which
+           has shape `G1 ⟹ G2 ⟹ ... ⟹ Pure.prop C` with multiple
+           Pure.imp premises) into minilang's HOL.GOAL-wrapped shape
+           via init_goal (= iso_atomize + protect_goals). The
+           matching un-wrap happens in pat_cb via
+           Goal.conclude |> finalize_goal |> Conjunction.elim_conjunctions,
+           mirroring HAVE's pattern and term_cb's pattern in run_phase_2. *)
+        val pat_state_for_stack = init_goal lthy_for_user pat_state
+        fun pat_cb ctxt_user (pstate, _, SK', _) =
+          let
+            val lthy1 = Variable.set_body false ctxt_user
+            val lems =
+              Goal.conclude pstate
+              |> finalize_goal lthy1
+              |> Conjunction.elim_conjunctions
+            val pat_thm =
+              case lems of
+                [th] => th
+              | _ => error ("FUN: unexpected number of theorems from " ^
+                            "interactive pat-completeness proof")
+            val lthy2 = pat_afterqed [[pat_thm]] lthy1
+            val phase2 = Proof_Local_Function.prepare_term_goal lthy2
+          in
+            run_phase_2 outer_ctxt lthy2 phase2 metric_strs open_on_fail post SK'
+          end
+        (* Capture the outer HHF at push-time so PRINT can show both
+           the deferred pat-completeness block and the outer proof
+           goal, mirroring HAVE's PRT pattern. The stack invariant
+           guarantees SK's head is an HHF. *)
+        val (outer_st, outer_items) =
+          case SK of
+            HHF (st, items) :: _ => (st, items)
+          | _ => raise BROKEN_INVARIANT
+        fun pat_prt _ t =
+          BUNDL (outer_items,
+                 [BLOCK t, print_stack [HHF (outer_st, outer_items)]])
+        val _ = get_reporter () (Internal PAT_COMPLETENESS_PROOF_OPENED)
+      in
+        (lthy_for_user,
+         HHF (pat_state_for_stack, empty_items)
+         :: ENDBLK T_END
+         :: MAGIC (pat_cb, pat_prt, NO_PARAM)
+         :: SK)
+        |> report_goal
+      end
+  end
+
+(* FUN runs add_fun_cmd which adds local-definition hyps to the proof
+   context via Local_Defs.define. These hyps are discharged by
+   Proof_Context.export at the nearest enclosing boundary — INTRO's
+   subgoal cleanup, HAVE's block cleanup, or minilang's `conclude`
+   export at the end of min_script. No local scope management is
+   needed here. See the header of proof_local_function.ML for the
+   full discussion of the result-discharge timing requirement. *)
+
+(* ML-level API for agent use. Accepts metric and open_on_fail flags;
+   min_script always passes {metric=[], open_on_fail=false} indirectly
+   via the FUN_CMD parser. *)
+fun FUN'' fixes specs {metric, open_on_fail} =
+  fn ((ctxt, SK), TAB, ID) =>
+    timed_OPR 60
+      (FUN_by_fun_ext fixes specs Function_Fun.fun_config metric open_on_fail)
+      ((ctxt, SK), TAB, ID)
+
+(* BY_METRIC "term" (AND "term")*   —   optional trailing clause after
+   the function specification. An empty list means no metric. *)
+val metric_clause =
+  Scan.optional
+    (Parse.$$$ "BY_METRIC" |--
+       (Parse.embedded_inner_syntax :::
+          Scan.repeat (Parse.$$$ "AND" |-- Parse.embedded_inner_syntax)))
+    []
+
+(* Shared body between FUN and FUN_DEBUG: parses the function
+   specification + optional BY_METRIC clause and dispatches to
+   FUN_by_fun_ext with the given open_on_fail flag. *)
+fun mk_FUN_CMD open_on_fail =
+  Function_Common.function_parser Function_Fun.fun_config -- metric_clause
+  >> (fn ((config, (fixes, specs)), metric_strs) =>
+       fn ((ctxt, SK), TAB, ID) =>
+         timed_OPR 60
+           (FUN_by_fun_ext fixes specs config metric_strs open_on_fail)
+           ((ctxt, SK), TAB, ID))
+
+val FUN_CMD = mk_FUN_CMD false
+
+(* FUN_DEBUG: same surface syntax as FUN, but routes through
+   FUN_by_fun_ext with open_on_fail = true. A pat-completeness or
+   termination residual is pushed onto the minilang stack as an HHF
+   frame for interactive discharge, instead of erroring out. Exists
+   primarily to exercise the Agent-interface code path from minilang
+   scripts and to make the internal debug configs
+   fun_fake_pat_completeness_failure / fun_fake_automatic_failure
+   usable from min_script. *)
+val FUN_DEBUG_CMD = mk_FUN_CMD true
 
 
 (** CONFIG **)
@@ -3703,10 +4384,14 @@ val CMDS = Symtab.make [
       ("OPEN_MODULE", OPEN_MODULE_CMD),
       ("DEFINE",  DEFINE_CMD),
       ("FUN",     FUN_CMD),
+      ("FUN_DEBUG", FUN_DEBUG_CMD),
       ("CONFIG",  CONFIG_CMD),
       ("STEP"  ,  STEP_CMD),
       ("CHAINING",CHAINING_CMD),
-      ("SORRY" ,  END_or_NXT_by_SORRY_CMD)
+      ("SORRY" ,  END_or_NXT_by_SORRY_CMD),
+      ("SORRY_NEXT",    SORRY_NEXT_CMD),
+      ("SORRY_END_ALL", SORRY_END_ALL_CMD),
+      ("SORRY_ONLY",    SORRY_ONLY_CMD)
     ]
 
 val keywords = let open Keyword
@@ -3745,11 +4430,16 @@ val keywords = let open Keyword
            (("infix",  \<^here>), quasi_command_spec),
            (("infixr", \<^here>), quasi_command_spec),
            (("infixl", \<^here>), quasi_command_spec),
+           (("BY_METRIC", \<^here>), quasi_command_spec),
+           (("AND",    \<^here>), quasi_command_spec),
 
            (("END",   \<^here>), command_spec (thy_end, [])),
            (("end",   \<^here>), command_spec (thy_end, [])),
            (("NEXT",  \<^here>), command_spec (thy_end, [])),
            (("SORRY", \<^here>), command_spec (thy_end, [])),
+           (("SORRY_NEXT",    \<^here>), command_spec (thy_end, [])),
+           (("SORRY_END_ALL", \<^here>), command_spec (thy_end, [])),
+           (("SORRY_ONLY",   \<^here>), command_spec (prf_goal, [])),
            (("CONSIDER",\<^here>),command_spec (prf_asm_goal, [])),
            (("HAVE",  \<^here>), command_spec (prf_goal, [])),
            (("SUFFICES",\<^here>), command_spec (prf_goal, [])),
@@ -3773,6 +4463,7 @@ val keywords = let open Keyword
            (("OPEN_MODULE",\<^here>), command_spec (prf_goal, [])),
            (("DEFINE",\<^here>), command_spec (prf_decl, [])),
            (("FUN",   \<^here>), command_spec (prf_decl, [])),
+           (("FUN_DEBUG", \<^here>), command_spec (prf_decl, [])),
            (("CONFIG",\<^here>), command_spec (prf_decl, [])),
            (("STEP",  \<^here>), command_spec (prf_decl, [])),
            (("CHAINING", \<^here>), command_spec (prf_decl, []))

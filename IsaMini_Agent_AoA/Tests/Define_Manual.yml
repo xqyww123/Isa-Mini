@@ -1,0 +1,191 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+--------------------------------------------------
+After Define (deferred block opened)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
+proof:
+  - step id: 1
+    thought: Define halve as a witness; fake flag forces manual discharge of termination residuals
+    operation: Define
+    name: halve
+    type: nat \<Rightarrow> nat
+    equations:
+      - halve 0 = 0
+      - halve (Suc 0) = 0
+      - halve (Suc (Suc n)) = Suc (halve n)
+    metric:
+      - \<lambda>n::nat. n
+    proof:
+      - goal id: 1.1
+        goal: wf (measure (λ(n :: nat). n))
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1` to provide the proof for the following goal.
+      - goal id: 1.2
+        goal: ∀(n :: nat). (n, Suc (Suc n)) ∈ measure (λ(n1 :: nat). n1)
+        proof:
+          - step id: 1.2.1
+            operation: Intro
+            fixing variables:
+              - n: nat
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.2` to provide the proof for the following goal.
+        pending proof goal:
+          (n, Suc (Suc n)) ∈ measure (λ(n1 :: nat). n1)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
+--------------------------------------------------
+After Obvious on residual 1 (well-foundedness)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
+proof:
+  - step id: 1
+    thought: Define halve as a witness; fake flag forces manual discharge of termination residuals
+    operation: Define
+    name: halve
+    type: nat \<Rightarrow> nat
+    equations:
+      - halve 0 = 0
+      - halve (Suc 0) = 0
+      - halve (Suc (Suc n)) = Suc (halve n)
+    metric:
+      - \<lambda>n::nat. n
+    proof:
+      - goal id: 1.1
+        goal: wf (measure (λ(n :: nat). n))
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+      - goal id: 1.2
+        goal: ∀(n :: nat). (n, Suc (Suc n)) ∈ measure (λ(n1 :: nat). n1)
+        proof:
+          - step id: 1.2.1
+            operation: Intro
+            fixing variables:
+              - n: nat
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.2` to provide the proof for the following goal.
+        pending proof goal:
+          (n, Suc (Suc n)) ∈ measure (λ(n1 :: nat). n1)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
+--------------------------------------------------
+After Obvious on residual 2 (decrease)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
+proof:
+  - step id: 1
+    thought: Define halve as a witness; fake flag forces manual discharge of termination residuals
+    operation: Define
+    name: halve
+    type: nat \<Rightarrow> nat
+    equations:
+      - halve 0 = 0
+      - halve (Suc 0) = 0
+      - halve (Suc (Suc n)) = Suc (halve n)
+    metric:
+      - \<lambda>n::nat. n
+    proof:
+      - goal id: 1.1
+        goal: wf (measure (λ(n :: nat). n))
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+      - goal id: 1.2
+        goal: ∀(n :: nat). (n, Suc (Suc n)) ∈ measure (λ(n1 :: nat). n1)
+        proof:
+          - step id: 1.2.1
+            operation: Intro
+            fixing variables:
+              - n: nat
+          - step id: 1.2.2
+            operation: Obvious
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
+--------------------------------------------------
+After Witness
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
+proof:
+  - step id: 1
+    thought: Define halve as a witness; fake flag forces manual discharge of termination residuals
+    operation: Define
+    name: halve
+    type: nat \<Rightarrow> nat
+    equations:
+      - halve 0 = 0
+      - halve (Suc 0) = 0
+      - halve (Suc (Suc n)) = Suc (halve n)
+    metric:
+      - \<lambda>n::nat. n
+    proof:
+      - goal id: 1.1
+        goal: wf (measure (λ(n :: nat). n))
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+      - goal id: 1.2
+        goal: ∀(n :: nat). (n, Suc (Suc n)) ∈ measure (λ(n1 :: nat). n1)
+        proof:
+          - step id: 1.2.1
+            operation: Intro
+            fixing variables:
+              - n: nat
+          - step id: 1.2.2
+            operation: Obvious
+  - step id: 2
+    thought: Pick the freshly-defined `halve` as the witness
+    operation: Witness
+    witness: halve
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  halve (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
+--------------------------------------------------
+After Obvious on halve 4 = 2
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
+proof:
+  - step id: 1
+    thought: Define halve as a witness; fake flag forces manual discharge of termination residuals
+    operation: Define
+    name: halve
+    type: nat \<Rightarrow> nat
+    equations:
+      - halve 0 = 0
+      - halve (Suc 0) = 0
+      - halve (Suc (Suc n)) = Suc (halve n)
+    metric:
+      - \<lambda>n::nat. n
+    proof:
+      - goal id: 1.1
+        goal: wf (measure (λ(n :: nat). n))
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+      - goal id: 1.2
+        goal: ∀(n :: nat). (n, Suc (Suc n)) ∈ measure (λ(n1 :: nat). n1)
+        proof:
+          - step id: 1.2.1
+            operation: Intro
+            fixing variables:
+              - n: nat
+          - step id: 1.2.2
+            operation: Obvious
+  - step id: 2
+    thought: Pick the freshly-defined `halve` as the witness
+    operation: Witness
+    witness: halve
+  - step id: 3
+    operation: Obvious
+Unfinished nodes: 0

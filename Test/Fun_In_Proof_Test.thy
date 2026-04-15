@@ -194,13 +194,215 @@ lemma "\<exists>f :: nat \<Rightarrow> nat. f (Suc 0) = Suc (Suc (Suc (Suc (Suc 
   FUN dbl :: "nat \<Rightarrow> nat"
     where "dbl 0 = 0"
         | "dbl (Suc n) = Suc (Suc (dbl n))"
+  BY_METRIC "\<lambda>n::nat. n"
   FUN quad :: "nat \<Rightarrow> nat"
     where "quad n = dbl (dbl n)"
+  BY_METRIC "\<lambda>n::nat. n"
   FUN oct :: "nat \<Rightarrow> nat"
     where "oct n = dbl (quad n)"
+  BY_METRIC "\<lambda>n::nat. n"
   CHOOSE oct
   END
 \<close>)
 
+setup \<open>
+   Config.put_global Minilang.fun_fake_automatic_failure true
+#> Config.put_global Minilang.strict_end true
+(* #> Config.put_global Minilang.fun_fake_pat_completeness_failure true *)
+\<close>
+
+section \<open>BY_METRIC clause\<close>
+
+text \<open>Singleton measure via @{const Wellfounded.measure}. With the
+  default prover forced to fail via the internal debug config
+  @{ML Minilang.fun_fake_automatic_failure}, BY_METRIC is the only
+  way to close termination.\<close>
+
+  
+lemma "\<exists>f :: nat \<Rightarrow> nat. f (Suc (Suc (Suc (Suc 0)))) = Suc (Suc 0)"
+  by (min_script \<open>
+  FUN_DEBUG halve :: "nat \<Rightarrow> nat"
+    where "halve 0 = 0"
+        | "halve (Suc 0) = 0"
+        | "halve (Suc (Suc n)) = Suc (halve n)"
+  BY_METRIC "\<lambda>n. n"
+  HAMMER NEXT HAMMER PRINT
+  END PRINT
+  CHOOSE halve PRINT
+  HAMMER PRINT
+  END
+\<close>)
+
+term Cons
+
+text \<open>Lexicographic product of two measures via @{const List.measures}.
+  Ackermann is the classic example — no single-measure argument works,
+  but `measures [fst, snd]` does.\<close>
+lemma "\<exists>f :: nat \<Rightarrow> nat \<Rightarrow> nat. f 0 0 = Suc 0"
+  by (min_script \<open>
+  FUN_DEBUG my_ack :: "nat \<Rightarrow> nat \<Rightarrow> nat"
+    where "my_ack 0 n = Suc n"
+        | "my_ack (Suc m) 0 = my_ack m (Suc 0)"
+        | "my_ack (Suc m) (Suc n) = my_ack m (my_ack (Suc m) n)"
+    BY_METRIC "\<lambda>(m::nat, n::nat). m" AND "\<lambda>(m::nat, n::nat). n"
+    SORRY
+    SORRY
+    SORRY
+  SORRY
+    PRINT
+  HAMMER
+  END
+\<close>)
+
+setup \<open>Config.put_global Minilang.fun_fake_automatic_failure false\<close>
+
+
+section \<open>Functions where Isabelle's default termination prover genuinely fails\<close>
+
+text \<open>List padding to a target length — each recursive call \<^emph>\<open>grows\<close>
+  \<open>xs\<close> by one element, so \<open>length xs\<close> is strictly \<^emph>\<open>increasing\<close>, and
+  \<open>n\<close> stays constant. Neither \<open>length xs\<close> nor \<open>n\<close> is a valid
+  termination measure on its own, nor are any of their lexicographic
+  products. The measure that works is \<open>n - length xs\<close>, which
+  \<open>lexicographic_order_tac\<close> cannot guess because its search space is
+  limited to the theorems tagged with \<open>[measure_function]\<close> (just
+  \<open>size\<close>/\<open>length\<close>/\<open>id\<close> and their lex products — not arbitrary
+  arithmetic expressions on them). Without \<open>BY_METRIC\<close>, plain \<open>FUN\<close>
+  fails with an error asking the user to supply a metric.\<close>
+
+lemma "\<exists>f :: nat list \<Rightarrow> nat \<Rightarrow> nat list. f [0, 0] 4 = [0, 0, 0, 0]"
+  by (min_script \<open>
+  FUN_DEBUG pad :: "nat list \<Rightarrow> nat \<Rightarrow> nat list"
+    where "pad xs n = (if length xs \<ge> n then xs else pad (xs @ [0]) n)"
+    BY_METRIC "\<lambda>(xs, n::nat). n - length xs"
+  CHOOSE pad
+  HAMMER
+  END
+\<close>)
+
+text \<open>Sanity check: the same function \<^emph>\<open>without\<close> \<open>BY_METRIC\<close> should
+  error out at the termination phase with a clear "please provide
+  BY_METRIC" message. (Commented out — uncomment to see the error
+  interactively.)\<close>
+
+(*
+lemma "\<exists>f :: nat list \<Rightarrow> nat \<Rightarrow> nat list. f [0, 0] 4 = [0, 0, 0, 0]"
+  by (min_script \<open>
+  FUN pad :: "nat list \<Rightarrow> nat \<Rightarrow> nat list"
+    where "pad xs n = (if length xs \<ge> n then xs else pad (xs @ [0]) n)"
+  CHOOSE pad
+  END
+\<close>)
+*)
+
+
+text \<open>Merge sort — a classic case where \<open>lexicographic_order_tac\<close>
+  is unable to discharge termination on its own. The recursion
+  pattern is
+    \<open>msort xs = merge (msort (take (length xs div 2) xs))
+                      (msort (drop (length xs div 2) xs))\<close>
+  so the measure \<^emph>\<open>is\<close> \<open>length\<close>, but proving
+  \<open>length (take (length xs div 2) xs) < length xs\<close> and
+  \<open>length (drop (length xs div 2) xs) < length xs\<close> (when
+  \<open>length xs \<ge> 2\<close>) requires unfolding \<open>length_take\<close> /
+  \<open>length_drop\<close> together with arithmetic about \<open>div\<close>, which the
+  default prover's \<open>termination_simp\<close>-based \<open>auto\<close> can't do on its
+  own. Supplying \<open>BY_METRIC "\<lambda>xs. length xs"\<close> makes the metric path
+  fire, and \<open>Phi_Sledgehammer_Solver.all_auto\<close> closes the decrease
+  obligations.
+
+  \<open>merge\<close>, by contrast, terminates via ordinary lex order on
+  \<open>(length xs, length ys)\<close> which the default prover handles
+  without any metric hint.\<close>
+
+lemma "\<exists>f :: nat list \<Rightarrow> nat list. f [] = []"
+  by (min_script \<open>
+  FUN merge :: "nat list \<Rightarrow> nat list \<Rightarrow> nat list"
+    where "merge [] ys = ys"
+        | "merge xs [] = xs"
+        | "merge (x # xs) (y # ys) =
+             (if x \<le> y then x # merge xs (y # ys) else y # merge (x # xs) ys)"
+  FUN msort :: "nat list \<Rightarrow> nat list"
+    where "msort [] = []"
+        | "msort [x] = [x]"
+        | "msort xs = merge (msort (take (length xs div 2) xs))
+                            (msort (drop (length xs div 2) xs))"
+    BY_METRIC "\<lambda>xs::nat list. length xs"
+  CHOOSE msort
+  HAMMER
+  END
+\<close>)
+
+
+section \<open>Unit tests for @{ML Minilang.check_looping_simp_rules}\<close>
+
+text \<open>Helper: build fixes and specs from a name, optional type, and
+  equation strings, then call the checker.\<close>
+ML \<open>
+fun test_check ctxt name ty_opt eqs =
+  let
+    val fixes = [(Binding.name name, ty_opt, NoSyn)]
+    val specs = map (fn eq => ((Binding.empty_atts, eq), [], [])) eqs
+  in Minilang.check_looping_simp_rules ctxt fixes specs end
+
+fun should_not_loop ctxt name ty_opt eqs =
+  if not (test_check ctxt name ty_opt eqs)
+  then writeln ("PASS (no loop): " ^ name)
+  else error ("FAIL: " ^ name ^ " was flagged as looping but should not be")
+
+fun should_loop ctxt name ty_opt eqs =
+  if test_check ctxt name ty_opt eqs
+  then writeln ("PASS (looping): " ^ name)
+  else error ("FAIL: " ^ name ^ " was not flagged as looping but should be")
+\<close>
+
+text \<open>Good definitions: constructor-pattern LHS, not flagged.\<close>
+ML \<open>
+let val ctxt = \<^context> in
+  should_not_loop ctxt "my_fact" (SOME "nat \<Rightarrow> nat")
+    ["my_fact 0 = 1",
+     "my_fact (Suc n) = (Suc n) * my_fact n"];
+
+  should_not_loop ctxt "fib" (SOME "nat \<Rightarrow> nat")
+    ["fib 0 = 0",
+     "fib (Suc 0) = 1",
+     "fib (Suc (Suc n)) = fib n + fib (Suc n)"];
+
+  should_not_loop ctxt "clamp" (SOME "nat \<Rightarrow> nat")
+    ["clamp n = (if n > 10 then 10 else n)"];
+
+  should_not_loop ctxt "mrg" (SOME "nat list \<Rightarrow> nat list \<Rightarrow> nat list")
+    ["mrg [] ys = ys",
+     "mrg xs [] = xs",
+     "mrg (x # xs) (y # ys) = (if x \<le> y then x # mrg xs (y # ys) else y # mrg (x # xs) ys)"];
+
+  should_not_loop ctxt "ack" (SOME "nat \<Rightarrow> nat \<Rightarrow> nat")
+    ["ack 0 n = Suc n",
+     "ack (Suc m) 0 = ack m (Suc 0)",
+     "ack (Suc m) (Suc n) = ack m (ack (Suc m) n)"];
+
+  should_not_loop ctxt "rev_acc" (SOME "nat list \<Rightarrow> nat list \<Rightarrow> nat list")
+    ["rev_acc [] acc = acc",
+     "rev_acc (x # xs) acc = rev_acc xs (x # acc)"];
+
+  should_not_loop ctxt "double" (SOME "nat \<Rightarrow> nat")
+    ["double n = n + n"]
+end
+\<close>
+
+text \<open>Looping definitions: catch-all LHS with recursive calls in RHS.
+  These are allowed but their simps will be removed from the simpset.\<close>
+ML \<open>
+let val ctxt = \<^context> in
+  should_loop ctxt "bad_f" (SOME "nat \<Rightarrow> nat")
+    ["bad_f n = (if n = 0 then 0 else bad_f (n - 1))"];
+
+  should_loop ctxt "zs" (SOME "nat \<Rightarrow> nat \<Rightarrow> nat \<Rightarrow> nat")
+    ["zs a b n = (if n = 0 then 0 else if n < b then b + zs 1 2 (n - a) else zs b (a + b) n)"];
+
+  should_loop ctxt "bad_pad" (SOME "nat list \<Rightarrow> nat \<Rightarrow> nat list")
+    ["bad_pad xs n = (if length xs \<ge> n then xs else bad_pad (xs @ [0]) n)"]
+end
+\<close>
 
 end

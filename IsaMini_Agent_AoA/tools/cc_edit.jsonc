@@ -31,7 +31,7 @@
         },
         "isabelle": {
           "type": "string",
-          "description": "the corresponding Isabelle/HOL statement"
+          "description": "the corresponding Isabelle statement with all literal numbers annotated with their types"
         }
       },
       "required": [
@@ -50,7 +50,7 @@
         },
         "isabelle": {
           "type": "string",
-          "description": "the corresponding Isabelle/HOL statement"
+          "description": "the corresponding Isabelle statement with all literal numbers annotated with their types"
         },
         "name": {
           "type": "string",
@@ -86,7 +86,7 @@
           "const": "proposition"
         },
         "proposition": {
-          "description": "a formal Isabelle/HOL proposition to be proven in time. IMPORTANT: all numeric literals MUST be type-annotated, example: `(2::nat)` not `2`",
+          "description": "an Isabelle proposition with all literal numbers annotated with their types, to be proven in time",
           "type": "string"
         }
       },
@@ -429,7 +429,7 @@
         },
         "thought": { "$ref": "#/$defs/Thought" },
         "targets": {
-          "description": "the target Isabelle/HOL terms to unfold",
+          "description": "the target Isabelle terms to unfold, with all literal numbers annotated with their types",
           "items": {
             "type": "string"
           },
@@ -454,7 +454,7 @@
         },
         "thought": { "$ref": "#/$defs/Thought" },
         "witness": {
-          "description": "an Isabelle/HOL term",
+          "description": "an Isabelle term with all literal numbers annotated with their types",
           "type": "string"
         }
       },
@@ -505,7 +505,7 @@
         "name": { "type": "string" },
         "value": {
           "type": "string",
-          "description": "Isabelle/HOL term to substitute"
+          "description": "an Isabelle term to substitute, with all literal numbers annotated with their types"
         }
       },
       "required": ["name", "value"]
@@ -599,11 +599,25 @@
         "equations": {
           "items": {
             "type": "string",
-            "description": "Isabelle term"
+            "description": "an Isabelle term with all literal numbers annotated with their types"
           },
           "type": "array"
+        },
+        "metric": {
+          "type": "array",
+          "description": "metric for proving recursion termination, one or more Isabelle terms of type `arg1's type × ... × argN's type → nat` demonstrating the recursion is strictly decreasing. Leave it empty to let Isabelle infer, which often works.",
+          "items": {
+            "type": "string"
+          }
         }
-      }
+      },
+      "required": [
+        "operation",
+        "thought",
+        "name",
+        "equations"
+      ],
+      "type": "object"
     },
     "Operation": {
       "anyOf": [
@@ -620,7 +634,8 @@
         { "$ref": "#/$defs/Suffices" },
         { "$ref": "#/$defs/Intro" },
         { "$ref": "#/$defs/Derive" },
-        { "$ref": "#/$defs/Chaining" }
+        { "$ref": "#/$defs/Chaining" },
+        { "$ref": "#/$defs/Define" }
       ]
     }
   },

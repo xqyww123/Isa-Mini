@@ -145,4 +145,68 @@ proof -
 end
 *)
 
+
+section \<open>Demo of inductive_cases and inductive_simps\<close>
+
+text \<open>A toy inductive predicate: even numbers.\<close>
+
+inductive is_even :: "nat \<Rightarrow> bool" where
+  zero: "is_even 0"
+| step: "is_even n \<Longrightarrow> is_even (Suc (Suc n))"
+
+
+subsection \<open>The raw \<open>cases\<close> rule is general but clumsy\<close>
+
+text \<open>Isabelle auto-generates \<open>is_even.cases\<close> from the introduction rules:
+  \<^prop>\<open>\<lbrakk>is_even a; a = 0 \<Longrightarrow> P; \<And>n. \<lbrakk>a = Suc (Suc n); is_even n\<rbrakk> \<Longrightarrow> P\<rbrakk> \<Longrightarrow> P\<close>
+
+  Using it requires manually discharging the impossible cases when you
+  know something about \<open>a\<close>.\<close>
+
+lemma "is_even (Suc 0) \<Longrightarrow> False"
+  apply (erule is_even.cases)
+   apply simp        \<comment> \<open>case a=0: contradiction Suc 0 = 0\<close>
+  apply simp         \<comment> \<open>case a=Suc(Suc n): contradiction Suc 0 = Suc(Suc n)\<close>
+  done
+
+
+subsection \<open>\<open>inductive_cases\<close>: a simplified, specialized elimination rule\<close>
+
+text \<open>\<open>inductive_cases\<close> pre-analyses the introduction rules and builds a
+  rule specialized to a particular form of the predicate argument.\<close>
+
+inductive_cases is_even_Suc0E: "is_even (Suc 0)"
+
+text \<open>This produces the theorem (printed via \<open>thm\<close>):
+  @{thm is_even_Suc0E}
+
+  i.e.  \<^prop>\<open>is_even (Suc 0) \<Longrightarrow> P\<close>.  The command has automatically
+  proved that neither intro rule can produce \<open>is_even (Suc 0)\<close>, so the
+  rule has no surviving cases — applying it immediately closes any goal.\<close>
+
+thm is_even_Suc0E
+
+lemma "is_even (Suc 0) \<Longrightarrow> False"
+  by (erule is_even_Suc0E)     \<comment> \<open>one-liner now\<close>
+
+
+text \<open>For a more interesting case, specialize at \<open>Suc (Suc n)\<close>:\<close>
+
+inductive_cases is_even_SucSucE: "is_even (Suc (Suc n))"
+
+text \<open>Equivalent ML-level construction using the function \<open>Inductive.mk_cases\<close>
+  directly (this is what the \<open>inductive_cases\<close> command calls underneath):\<close>
+
+ML \<open>
+val is_even_SucSucE_via_ML =
+  Inductive.mk_cases \<^context> \<^prop>\<open>is_even (Suc (Suc n))\<close>
+\<close>
+
+
+text \<open>What about the cleanup tactic \<open>Inductive.mk_cases_tac\<close> by itself?
+  It is NOT a "do case analysis" tactic — it only \emph{cleans up} the
+  goal state \emph{after} the raw \<open>cases\<close> rule has been applied. To use
+  it in an apply-script, you must first apply \<open>is_even.cases\<close> to set up
+  the case obligations, then \<open>mk_cases_tac\<close> discharges the dead branches:\<close>
+
 end

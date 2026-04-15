@@ -6,6 +6,44 @@
 Proof-local function package. Copies the standard function package
 internals but replaces all theory-modifying operations with proof-local
 versions that only modify the proof context, never the background theory.
+
+===============================================================================
+IMPORTANT: result-discharge timing requirement
+===============================================================================
+
+Every theorem produced by this package — simp rules, induction rules, the
+function constant itself — carries local-definition hypotheses of the form
+    Free (fname) \<equiv> rhs
+in its Thm.hyps, one per internal constant introduced by the function
+package (typically 4: fname, fname_sumC, fname_rel, fname_graph). These
+hypotheses come from Local_Defs.define and are discharged only by
+Proof_Context.export at a scope boundary.
+
+It is the CALLER's responsibility to ensure that add_fun_cmd is invoked
+inside a context that will eventually run Proof_Context.export from the
+post-definition context back to the pre-definition context. The export
+uses `def_export` to contract the definitions and remove the hyps.
+
+Concretely, a FUN-defined function is safe to use inside any of the
+following boundaries:
+
+  * Inside an Isar `proof ... qed` block — qed runs Proof_Context.export.
+  * Inside an Isar `{ ... }` block or `show ?thesis` proof — same mechanism.
+  * Inside a minilang `min_script` invocation — minilang's `conclude` runs
+    Proof_Context.export at the end of the script.
+  * Inside a minilang `HAVE`, `INTRO`, or other scope-opening command — each
+    runs its own export at END.
+
+It is NOT safe to call add_fun_cmd in a raw Method.CONTEXT_METHOD that
+returns the augmented context directly to the outer proof state without
+any enclosing export point. In that case the hyps leak into the final
+theorem and, in batch mode with parallel_proofs > 0, cause
+`Thm.future_result: bad hyps` when the lemma's proof future is resolved.
+
+Rule of thumb: if you can picture a `qed` or the minilang `END END`
+running between `add_fun_cmd` and the final lemma theorem, you are fine.
+If nothing between the call and the outer lemma closes a scope, you need
+to add one yourself (a nested `proof - show ?thesis ... qed .` is enough).
 *)
 
 signature PROOF_LOCAL_FUNCTION =
@@ -13,6 +51,27 @@ sig
   val add_fun_cmd: (binding * string option * mixfix) list ->
     Specification.multi_specs_cmd -> Function_Common.function_config ->
     bool -> Proof.context -> Proof.context
+
+  (* Phase 1 setup: prepare the pattern-completeness goal state and
+     continuation, without running any tactic yet. The caller drives
+     the tactic and then invokes [pat_afterqed [[proved]] ctxt] to
+     proceed to the partial function context. *)
+  val prepare_pat_goal:
+    (binding * string option * mixfix) list ->
+    Specification.multi_specs_cmd -> Function_Common.function_config ->
+    bool -> Proof.context ->
+    {pat_goal_state: thm,
+     pat_afterqed: thm list list -> Proof.context -> Proof.context,
+     lthy_after_prepare: Proof.context}
+
+  (* Phase 2 setup: given the context after the partial function has
+     been defined (i.e. after pat_afterqed has run), return the
+     termination goal (as a bare Prop) and a continuation. The caller
+     proves the goal and then invokes [term_afterqed [[totality]] ctxt]
+     to finalize the function. *)
+  val prepare_term_goal: Proof.context ->
+    {term_goal: term,
+     term_afterqed: thm list list -> Proof.context -> Proof.context}
 end
 
 structure Proof_Local_Function : PROOF_LOCAL_FUNCTION =
@@ -1407,37 +1466,63 @@ fun prove_termination_local raw_term_opt tac lthy =
 
 (* ===== Adapted from fun.ML ===== *)
 
-fun gen_add_fun add lthy =
+(* Phase 1 primitive. Runs prepare_function_top to get the pat-completeness
+   goal state + afterqed continuation, and wraps the continuation so it
+   returns the Proof.context only (dropping the info record). *)
+fun prepare_pat_goal fixes specs config int ctxt =
   let
-    fun pat_completeness_auto ctxt =
-      Pat_Completeness.pat_completeness_tac ctxt 1
-      THEN auto_tac ctxt
-    fun prove_termination lthy =
-      let
-        val {termination, ...} =
-          (case Function_Common.import_last_function lthy of
-            SOME info => info
-          | NONE => error "prove_termination: no function data")
-        val termination' = Thm.forall_elim_vars 0 termination
-        val tac =
-          resolve_tac lthy [termination'] 1 THEN
-          Function_Common.termination_prover_tac false lthy
-      in
-        prove_termination_local NONE tac lthy
-      end
+    val ((goal_state, raw_afterqed), lthy') =
+      prepare_function_top int Specification.read_multi_specs fixes specs config ctxt
+    fun pat_afterqed pats ctxt0 = snd (raw_afterqed pats ctxt0)
   in
-    lthy
-    |> add pat_completeness_auto |> snd
-    |> prove_termination |> snd
+    {pat_goal_state = goal_state,
+     pat_afterqed = pat_afterqed,
+     lthy_after_prepare = lthy'}
+  end
+
+(* Phase 2 primitive. Calls prepare_termination_proof_local to build the
+   termination proposition and a continuation, wrapping the continuation
+   so it returns the Proof.context only. *)
+fun prepare_term_goal lthy =
+  let
+    val (goal, raw_afterqed, _) =
+      prepare_termination_proof_local I Syntax.check_term NONE lthy
+    fun term_afterqed totalities ctxt0 = snd (raw_afterqed totalities ctxt0)
+  in
+    {term_goal = goal, term_afterqed = term_afterqed}
   end
 
 
 (* ===== Entry point ===== *)
 
-fun add_fun_cmd fixes specs config int ctxt =
-  ctxt
-  |> Variable.set_body false
-  |> gen_add_fun (fn tac => gen_add_function int Specification.read_multi_specs fixes specs config tac)
-  |> Variable.restore_body ctxt
+(* Fully-automatic convenience wrapper: runs both phases with the default
+   tactics and returns the resulting proof context. Preserves the
+   behaviour of the pre-split implementation. *)
+fun add_fun_cmd fixes specs config int outer_ctxt =
+  let
+    val ctxt = Variable.set_body false outer_ctxt
+    val {pat_goal_state, pat_afterqed, lthy_after_prepare} =
+      prepare_pat_goal fixes specs config int ctxt
+    val pat_thm =
+      (case SINGLE (Pat_Completeness.pat_completeness_tac lthy_after_prepare 1
+                      THEN auto_tac lthy_after_prepare) pat_goal_state of
+         NONE => error "pattern completeness and compatibility proof failed"
+       | SOME st => Goal.finish lthy_after_prepare st)
+    val lthy_after_partial = pat_afterqed [[pat_thm]] lthy_after_prepare
+    val {term_goal, term_afterqed} = prepare_term_goal lthy_after_partial
+    val {termination, ...} =
+      (case Function_Common.import_last_function lthy_after_partial of
+         SOME info => info
+       | NONE => error "prove_termination: no function data")
+    val termination' = Thm.forall_elim_vars 0 termination
+    val default_tac =
+      resolve_tac lthy_after_partial [termination'] 1 THEN
+      Function_Common.termination_prover_tac false lthy_after_partial
+    val totality =
+      Goal.prove lthy_after_partial [] [] term_goal (K default_tac)
+    val lthy_final = term_afterqed [[totality]] lthy_after_partial
+  in
+    Variable.restore_body outer_ctxt lthy_final
+  end
 
 end

@@ -5,6 +5,12 @@ Proof-local replacements for Local_Theory operations.
 These use Local_Defs and Proof_Context operations that do NOT modify
 the background theory, allowing recursive function definitions
 inside proof blocks without forking the theory.
+
+Result-discharge timing: Proof_Local_Lthy.define uses Local_Defs.define,
+which adds its definition as an assumption (Free(b) \<equiv> rhs) to the proof
+context. The assumption must be discharged by Proof_Context.export at a
+scope boundary — see the header of proof_local_function.ML for the full
+timing-requirement discussion.
 *)
 
 signature PROOF_LOCAL_LTHY =

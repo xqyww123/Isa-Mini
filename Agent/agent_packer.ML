@@ -141,7 +141,9 @@ val unpacker =
      | "NEXT"     => apfst NEXT o unpackPair (unpackList unpack_extended_fact, unpack_opt_var_names)
      | "END"      => apfst END o unpackList unpack_extended_fact
      | "NEXT_or_END" => apfst NEXT_OR_END o unpackPair (unpackList unpack_extended_fact, unpack_opt_var_names)
-     | "SORRY"    => apfst SORRY o unpack_opt_var_names
+     | "SORRY_NEXT"    => apfst SORRY_NEXT    o unpack_opt_var_names
+     | "SORRY_END_ALL" => apfst SORRY_END_ALL o unpack_opt_var_names
+     | "SORRY_ONLY"   => apfst (K SORRY_ONLY) o unpackUnit
      | "BRANCH"   => apfst BRANCH   o unpackList (unpackPair (unpackOption unpackString, unpackString))
      | "HAVE"     => apfst HAVE     o unpackTuple3 (unpackString, unpackString, unpackBool)
      | "SUFFICES" => apfst SUFFICES o unpackString
@@ -158,6 +160,12 @@ val unpacker =
      | "CHAINING" => apfst CHAINING o unpackPair (
                         unpackOption unpackString,
                         unpackList unpack_extended_fact)
+     | "DEFINE"   => apfst DEFINE o unpackTuple4 (
+                        unpackString,
+                        unpackOption unpackString,
+                        unpackList unpackString,
+                        unpackList unpackString
+                     )
      | "SKIP"     => apfst (K SKIP) o unpackUnit
      | cmd => error("Unknown operation " ^ cmd)
   ) #> apfst snd
@@ -200,9 +208,14 @@ fun packer (SIMPLIFY data) =
           packList (packPair (packString, packOption packString)),
           packList (packPair (packOption packString, packString))))
         ("OBTAIN", data)
-  | packer (SORRY data) =
+  | packer (SORRY_NEXT data) =
       packPair (packString, pack_opt_var_names)
-        ("SORRY", data)
+        ("SORRY_NEXT", data)
+  | packer (SORRY_END_ALL data) =
+      packPair (packString, pack_opt_var_names)
+        ("SORRY_END_ALL", data)
+  | packer SORRY_ONLY =
+      packPair (packString, packUnit) ("SORRY_ONLY", ())
   | packer (HAMMER data) = packPair (packString, packPair (packList pack_extended_fact, packInt)) ("HAMMER", data)
   | packer (INTRO data) = packPair (packString, packPair (packOption pack_bindings, packBool)) ("INTRO", data)
   | packer (SPECIALIZE data) =
@@ -216,6 +229,13 @@ fun packer (SIMPLIFY data) =
       packPair (packString,
                 packPair (packOption packString, packList pack_extended_fact))
         ("CHAINING", data)
+  | packer (DEFINE data) =
+      packPair (packString,
+                packTuple4 (packString,
+                            packOption packString,
+                            packList packString,
+                            packList packString))
+        ("DEFINE", data)
   | packer SKIP = packPair (packString, packUnit) ("SKIP", ())
 (* | packer (ROLLBACK data) = packPair (packString, packInt) ("ROLLBACK", data) *)
 

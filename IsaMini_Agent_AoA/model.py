@@ -317,11 +317,15 @@ def print_goal(goal: Goal, indent: int, show_header: bool, file, suppressed: Con
         file.write(LONG_GOAL_HINT)
 
 def print_pending_goal(goal: Goal, step: step, indent: int, file : MyIO, suppressed: Context,
-                       show_goal: bool = True) -> int:
+                       show_goal: bool = True, replace_existing: bool = False) -> int:
     line = file.current_line()
     print_indent(indent, file)
-    file.write(f"Error: Unfinished Proof! Call command `edit` with action `fill` and target step `{step}`"
-        " to provide the proof for the following goal.\n")
+    if replace_existing:
+        file.write(f"Error: Unfinished Proof! Call command `edit` with action `fill` and target step `{step}`"
+            " to replace it with a proof.\n")
+    else:
+        file.write(f"Error: Unfinished Proof! Call command `edit` with action `fill` and target step `{step}`"
+            " to provide the proof for the following goal.\n")
     if show_goal:
         print_indent(indent, file)
         file.write("pending proof goal:\n")
@@ -724,6 +728,10 @@ class Simplify_Fallback_Nosys_Msg(Message):
     """The simplification timed out with system simplifiers and succeeded without them."""
     pass
 
+class Simplify_Fallback_Once_Simproc_Msg(Message):
+    """Simplification succeeded only after limiting each rule to fire at most once."""
+    pass
+
 class Specialize_Result_Msg(Message):
     """Result facts produced by SPECIALIZE.
     Each entry is a (fact_name, pretty_printed_proposition) pair."""
@@ -746,6 +754,28 @@ class Newly_Fixed_Vars_Msg(Message):
     def unpack(cls, data) -> 'Newly_Fixed_Vars_Msg':
         return cls([(name, pretty_unicode(typ)) for (name, typ) in data])
 
+class Pat_Completeness_Proof_Opened_Msg(Message):
+    """The pat-completeness auto-proof during a `Define` operation left
+    residual subgoals; a deferred block has been pushed onto the minilang
+    stack for interactive discharge. `Define._refresh_the_beginning_opr`
+    notices this and sets `_deferred_block_opened = True`."""
+    pass
+
+class Termination_Proof_Opened_Msg(Message):
+    """The termination auto-proof during a `Define` operation (including
+    the `BY_METRIC` metric path's internal sledge fallback) left residual
+    well-foundedness / decrease subgoals; a deferred block has been
+    pushed. Same handling as `Pat_Completeness_Proof_Opened_Msg`."""
+    pass
+
+class Define_Result_Msg(Message):
+    """Emitted after a `Define` operation completes. Carries the function
+    name and its (possibly inferred) type so the Python side can update
+    `Define.type` even when the user omitted it."""
+    def __init__(self, name: str, type: str):
+        self.name = name
+        self.type = type
+
 def unpack_message(data) -> Message:
     match data:
         case (0, x):
@@ -758,10 +788,18 @@ def unpack_message(data) -> Message:
             return Intro_Bindings_Msg.unpack(x)
         case 4:
             return Simplify_Fallback_Nosys_Msg()
+        case 9:
+            return Simplify_Fallback_Once_Simproc_Msg()
         case (5, x):
             return Specialize_Result_Msg.unpack(x)
         case (6, x):
             return Newly_Fixed_Vars_Msg.unpack(x)
+        case 7:
+            return Pat_Completeness_Proof_Opened_Msg()
+        case 8:
+            return Termination_Proof_Opened_Msg()
+        case (10, (name, ty)):
+            return Define_Result_Msg(name, ty)
         case _:
             raise Exception(f"BUG bad message kind: {data}")
 
@@ -937,8 +975,32 @@ class Minilang_Operation(NamedTuple):
         return self.__str__()
 
     @staticmethod
-    def SORRY(varnames : list[varname_spec] | None) -> 'Minilang_Operation':
-        return Minilang_Operation("SORRY", varnames)
+    def SORRY_NEXT(varnames : list[varname_spec] | None) -> 'Minilang_Operation':
+        """Cheat one subgoal in the current HHF frame. If the frame
+        still has remaining subgoals, return the state with one fewer
+        goal (the common multi-subgoal-in-one-HHF case used by
+        SubgoalMaker to derive each sibling GoalNode's starting
+        state). If the frame becomes empty, pop the enclosing
+        ENDBLK T_NXT and rebuild the MAGIC continuation. Errors on
+        T_END — callers wanting to close the whole block should use
+        SORRY_END_ALL instead."""
+        return Minilang_Operation("SORRY_NEXT", varnames)
+    @staticmethod
+    def SORRY_END_ALL(varnames : list[varname_spec] | None) -> 'Minilang_Operation':
+        """Cheat every remaining subgoal in the current HHF frame and
+        pop the enclosing ENDBLK. Used by `StdBlock`'s failure-recovery
+        fallback to discard an entire (possibly multi-goal) block —
+        critical for `Define`'s deferred pat-completeness/termination
+        block, which may contain multiple residuals that a single
+        SORRY_NEXT would leave partially unclosed."""
+        return Minilang_Operation("SORRY_END_ALL", varnames)
+    @staticmethod
+    def SORRY_ONLY() -> 'Minilang_Operation':
+        """Cheat one subgoal in the current HHF frame without any
+        NEXT or END transition — the sorry analogue of HAMMER.
+        Used to skip-proof the last GoalNode child whose
+        resulting_state feeds into the parent's _state_before_ending_."""
+        return Minilang_Operation("SORRY_ONLY", ())
     @staticmethod
     def NEXT(varnames : list[varname_spec] | None) -> 'Minilang_Operation':
         return Minilang_Operation("NEXT", ([], varnames))
@@ -973,6 +1035,14 @@ class Minilang_Operation(NamedTuple):
     @staticmethod
     def UNFOLD(fact_refs: 'list[IsabelleFact]') -> 'Minilang_Operation':
         return Minilang_Operation("UNFOLD", [r.pack() for r in fact_refs])
+    @staticmethod
+    def DEFINE(name: str, ty: str | None, equations: list[str], metric: list[str]) -> 'Minilang_Operation':
+        return Minilang_Operation("DEFINE", (
+            name,
+            ascii_of_unicode(ty) if ty is not None else None,
+            [ascii_of_unicode(eq) for eq in equations],
+            [ascii_of_unicode(m) for m in metric],
+        ))
     @staticmethod
     def WITNESS(terms: list[term]) -> 'Minilang_Operation':
         return Minilang_Operation("WITNESS", terms)
@@ -1072,8 +1142,19 @@ class Minilang_State:
             raise NotImplementedError("Here we should implement the execution of a list of Minilang operations")
             #msgs = opr(self, assign_to)
         return assign_to
-    async def sorry(self, varnames: list[varname_spec] | None, assign_to: 'Minilang_State | None') -> 'Minilang_State':
-        return await self.execute(Minilang_Operation.SORRY(varnames), assign_to)
+    async def sorry_next(self, varnames: list[varname_spec] | None, assign_to: 'Minilang_State | None') -> 'Minilang_State':
+        """Cheat one subgoal in the current frame. See
+        `Minilang_Operation.SORRY_NEXT` for semantics."""
+        return await self.execute(Minilang_Operation.SORRY_NEXT(varnames), assign_to)
+    async def sorry_end_all(self, varnames: list[varname_spec] | None, assign_to: 'Minilang_State | None') -> 'Minilang_State':
+        """Cheat every remaining subgoal in the current frame and pop
+        the enclosing ENDBLK. See `Minilang_Operation.SORRY_END_ALL`
+        for semantics."""
+        return await self.execute(Minilang_Operation.SORRY_END_ALL(varnames), assign_to)
+    async def sorry_only(self, assign_to: 'Minilang_State | None') -> 'Minilang_State':
+        """Cheat one subgoal without NEXT/END. See
+        `Minilang_Operation.SORRY_ONLY` for semantics."""
+        return await self.execute(Minilang_Operation.SORRY_ONLY(), assign_to)
     async def skip(self, assign_to: 'Minilang_State | None') -> 'Minilang_State':
         return await self.execute(Minilang_Operation.SKIP(), assign_to)
     async def clone(self, assign_to: 'Minilang_State | None') -> 'Minilang_State':
@@ -1952,7 +2033,35 @@ class Node(ABC):
         if to_fill is None:
             raise CannotFill_NodeNotFound(id)
         if to_fill != id:
-            raise CannotFill_BadNode(id)
+            # Fallback: allow replacing a node (and all its successors) when
+            # every node from the target onward has failed or been cancelled.
+            # This handles orphaned nodes left behind by exceptions during
+            # append (e.g. InternalError in Intro) that would otherwise make
+            # the step permanently unfillable.
+            assert isinstance(node, NonLeaf_Node), (
+                "fill's target must be a NonLeaf_Node — Leaf nodes have no "
+                "children to fill into")
+            found_i = None
+            for i, child in enumerate(node.sub_nodes):
+                if child.id == id:
+                    found_i = i
+                    break
+            if found_i is None or any(
+                c.status.status == EvaluationStatus.Status.SUCCESS
+                for c in node.sub_nodes[found_i:]
+            ):
+                raise CannotFill_BadNode(id)
+        # Replacement semantics: drop the target node (if it exists) and
+        # everything after it so that append puts the new node in that slot.
+        assert isinstance(node, NonLeaf_Node), (
+            "fill's target must be a NonLeaf_Node — Leaf nodes have no "
+            "children to fill into")
+        for i, child in enumerate(node.sub_nodes):
+            if child.id == id:
+                del node.sub_nodes[i:]
+                node._open()  # in case a deleted node had closed the block
+                node._is_trivial = None
+                break
         try:
             ret = await node.append(pn)
         except GoalIsNontrivial as e:
@@ -2494,6 +2603,8 @@ class StdBlock(NonLeaf_Node):
             except IsabelleError as err:
                 return self._ending_opr_err_msgs(err)
         return None
+    async def _skip_proof(self) -> None:
+        await self._state_after_beginning().sorry_end_all(None, self.resulting_state())
     async def _refresh_me_alone(self):
         begin_opr = self.beginning_opr()
         now = time()
@@ -2535,7 +2646,7 @@ class StdBlock(NonLeaf_Node):
                 # Populate _state_before_ending_ with the last successful state
                 # (= the failing child's ml_state, which is the state before it ran)
                 await failed_child.ml_state.clone(self._state_before_ending_)
-            await self._state_after_beginning().sorry(None, self.resulting_state())
+            await self._skip_proof()
             self.status = EvaluationStatus.Success(time() - now, reason)
         else:
             self._body_subnodes_succeeded = False
@@ -2588,9 +2699,11 @@ class StdBlock(NonLeaf_Node):
                 result = self.should_I_show_pending_goal()
                 if result is not None:
                     goal, to_fill = result
+                    replace_existing = any(child.id == to_fill for child in self.sub_nodes)
                     self.open_pending_proof_line =\
                         print_pending_goal(goal, to_fill, indent, file, self._ctxt_of_filling(),
-                                           show_goal=self._should_print_footer_pending_goal())
+                                           show_goal=self._should_print_footer_pending_goal(),
+                                           replace_existing=replace_existing)
                 else:
                     self.open_pending_proof_line = None
     def is_proof_finished(self) -> bool:
@@ -2611,13 +2724,25 @@ class StdBlock(NonLeaf_Node):
         else:
             return "1"
     def _id_of_openning_prf_to_fill(self) -> step | None:
-        if self.opening():
-            if self.id:
-                return f"{self.id}.{self._local_step_of_next_proof_step()}"
-            else:
-                return self._local_step_of_next_proof_step()
-        else:
+        if not self.opening():
             return None
+        # If the tail of sub_nodes is a run of non-successful Obvious nodes,
+        # return the id of the earliest (leftmost) one so the agent can replace
+        # it rather than append after it. See Node.fill for the matching
+        # replacement logic.
+        i = len(self.sub_nodes)
+        while i > 0:
+            child = self.sub_nodes[i - 1]
+            if isinstance(child, Obvious) and child.status.status != EvaluationStatus.Status.SUCCESS:
+                i -= 1
+            else:
+                break
+        if i < len(self.sub_nodes):
+            return self.sub_nodes[i].id
+        if self.id:
+            return f"{self.id}.{self._local_step_of_next_proof_step()}"
+        else:
+            return self._local_step_of_next_proof_step()
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False):
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
         self._print_header(indent, file, show_warnings=show_warnings)
@@ -2707,14 +2832,34 @@ class StdBlock(NonLeaf_Node):
 
 class GoalContainer(NonLeaf_Node):
     def _child_has_ending_opr(self, child : Node) -> bool:
-        return True
+        # Non-last children emit NEXT to advance to the next sibling
+        # subgoal; the last child emits nothing. If the container as
+        # a whole needs a trailing END (e.g. Root, Define's deferred
+        # path), the container itself emits it via its own
+        # has_ending_opr / ending_opr.
+        for i, c in enumerate(self.sub_nodes):
+            if c is child:
+                return i < len(self.sub_nodes) - 1
+        raise InternalError("The given argument is not a child of this node")
     def _ending_opr_of_child(self, child : Node) -> Minilang_Operation | None:
         for i, c in enumerate(self.sub_nodes):
             if c is child:
                 if i < len(self.sub_nodes) - 1:
                     return Minilang_Operation.NEXT(None)
                 else:
-                    return Minilang_Operation.END()
+                    return None
+        raise InternalError("The given argument is not a child of this node")
+    async def _skip_child_proof(self, child : 'GoalNode') -> None:
+        for i, c in enumerate(self.sub_nodes):
+            if c is child:
+                if i < len(self.sub_nodes) - 1:
+                    await child._state_after_beginning().sorry_next(None, child.resulting_state())
+                else:
+                    # Last child: cheat one subgoal in place (no NEXT/END)
+                    # so that child.resulting_state() (= parent._state_before_ending_)
+                    # gets a valid post-sorry prooftree.
+                    await child._state_after_beginning().sorry_only(child.resulting_state())
+                return None
         raise InternalError("The given argument is not a child of this node")
     async def _refresh_all_children_after(self, after: 'Node | Literal["end"]', can_continue_i: bool) -> None:
         # Each subgoal in AoA is independent, so we don't need to refresh the children after the current node.
@@ -2773,6 +2918,10 @@ class GoalNode(StdBlock):
         if not isinstance(self.parent, GoalContainer):
             raise InternalError("The parent of a GoalNode is not a GoalContainer")
         return self.parent._child_has_ending_opr(self)
+    async def _skip_proof(self) -> None:
+        if not isinstance(self.parent, GoalContainer):
+            raise InternalError("The parent of a GoalNode is not a GoalContainer")
+        return await self.parent._skip_child_proof(self)
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         raise InternalError("A GoalNode doesn't have a beginning operation")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
@@ -2855,13 +3004,54 @@ class SubgoalMaker(GoalContainer, StdBlock):
     def beginning_opr(self) -> 'Minilang_Operation | FailureReason':
         ...
     def has_ending_opr(self) -> bool:
-        return True
+        # By default the operation (RULE/BRANCH/INDUCT/CASE_SPLIT/
+        # INTRO) transforms the current top goal in place — no new
+        # block is pushed onto the minilang stack, so no trailing
+        # END is needed. Subclasses whose operation DOES push a new
+        # block (e.g. Define's deferred termination path) override
+        # this to return True and also override ending_opr to emit
+        # the closing END.
+        return False
+    def ending_opr(self) -> Minilang_Operation | None:
+        # Must match has_ending_opr's default above. `_refresh_footer`
+        # uses `ending_opr()` (not `has_ending_opr()`) to decide
+        # whether to run a closing opr, so both must agree.
+        return None
     def _case_vars_of_child(self, child_ind: int) -> list[varname_spec] | None:
         return None
+    def _ending_opr_of_child(self, child : Node) -> Minilang_Operation | None:
+        # Override GoalContainer's default to route NEXT through
+        # `_case_vars_of_child`, so CaseSplit_Like can attach case
+        # variables to the NEXT operation. Non-last children emit
+        # NEXT, the last child emits None (the block as a whole
+        # emits its own END if needed — see has_ending_opr above).
+        for i, c in enumerate(self.sub_nodes):
+            if c is child:
+                if i < len(self.sub_nodes) - 1:
+                    return Minilang_Operation.NEXT(self._case_vars_of_child(i+1))
+                else:
+                    return None
+        raise InternalError("The given argument is not a child of this node")
     def _new_goal_node(self, goal_index: int, ml_state: Minilang_State) -> GoalNode:
         return GoalNode(NodeConfig(str(goal_index+self._initial_goal_index), ml_state, self), False, True, None)
     def _on_regenerating_goals(self, goals: list[Goal]) -> None:
         pass
+    def _should_open_proof_block(self, s0: Minilang_State) -> bool:
+        """Decide whether this operation opens a multi-goal proof block that
+        needs GoalNode children. Default: the resulting state has more than
+        one top-level goal (Intro/Branch/CaseSplit/Induction). `Define`
+        overrides this to base the decision on the reporter messages
+        indicating whether a deferred pat-completeness / termination block
+        has been pushed onto the minilang stack."""
+        return len(s0.prooftree_of().top_goals()) > 1
+    def _block_closes_parent(self) -> bool:
+        """When a proof block opens, whether to truncate the parent's
+        sub_nodes via `_close_by`. True for Intro/Branch/CaseSplit/Induction
+        — their subgoals become the tail of the enclosing proof line, so no
+        siblings can follow. False for `Define` — its deferred block is
+        bracketed by an explicit END opcode, so the parent's proof line
+        continues past `Define`."""
+        return True
     async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
         is_init = self._first_time
         old_n_subnodes = len(self.sub_nodes)
@@ -2871,25 +3061,32 @@ class SubgoalMaker(GoalContainer, StdBlock):
         s0 = self._state_after_beginning()
         if s0.prooftree is None:
             raise InternalError("The prooftree of the state after beginning is not initialized, meaning the node is not refreshed")
-        goals = s0.prooftree.top_goals()
-        # TODO: try to reuse the existing subnodes instead of discarding them.
-        if not self._first_time and len(goals) == len(self.sub_nodes):
-            pass
-        else:
-            self._on_regenerating_goals(goals)
-            if len(goals) <= 1:
-                self.sub_nodes = []
-                if self.parent is not None:
-                    self.parent._open()
+        open_block = self._should_open_proof_block(s0)
+        if open_block:
+            goals = s0.prooftree.top_goals()
+            # TODO: try to reuse the existing subnodes instead of discarding them.
+            if not self._first_time and len(goals) == len(self.sub_nodes):
+                pass
             else:
-                if self.parent is not None:
+                self._on_regenerating_goals(goals)
+                if self._block_closes_parent() and self.parent is not None:
                     self.parent._close_by(self)
                 self.sub_nodes = []
                 ml_state = await s0.clone(None)
                 for i in range(len(goals)):
                     new_node = self._new_goal_node(i, ml_state)
                     self.sub_nodes.append(new_node)
-                    ml_state = await ml_state.sorry(None, None)
+                    # Advance to the next sibling GoalNode by cheating
+                    # the current subgoal (SORRY_NEXT). The placeholder
+                    # states are later overwritten with the real
+                    # linear chain when each GoalNode's footer runs
+                    # its own NEXT.
+                    if i < len(goals) - 1:
+                        ml_state = await ml_state.sorry_next(None, None)
+        else:
+            self.sub_nodes = []
+            if self._block_closes_parent() and self.parent is not None:
+                self.parent._open()
         if not is_init and len(self.sub_nodes) != old_n_subnodes:
             self.changed = True
         return None
@@ -2899,25 +3096,7 @@ class SubgoalMaker(GoalContainer, StdBlock):
         return False
 
 
-class SubgoalMaker_NoTailEnder(SubgoalMaker):
-    def _child_has_ending_opr(self, child : Node) -> bool:
-        for i, c in enumerate(self.sub_nodes):
-            if c is child:
-                if i < len(self.sub_nodes) - 1:
-                    return True
-                else:
-                    return False
-        raise InternalError("The given argument is not a child of this node")
-    def _ending_opr_of_child(self, child : Node) -> Minilang_Operation | None:
-        for i, c in enumerate(self.sub_nodes):
-            if c is child:
-                if i < len(self.sub_nodes) - 1:
-                    return Minilang_Operation.NEXT(self._case_vars_of_child(i+1))
-                else:
-                    return None
-        raise InternalError("The given argument is not a child of this node")
-
-class CaseSplit_Like(SubgoalMaker_NoTailEnder):
+class CaseSplit_Like(SubgoalMaker):
     case_vars: list[Var] | None
     case_hyps: list[Hyp] | None
     case_name: str | None
@@ -3300,6 +3479,171 @@ class Witness(Leaf):
         return Minilang_Operation.WITNESS([ascii_of_unicode(self.witness)])
 
 
+#### Define
+
+class Define_ToolArg(TypedDict):
+    thought: str
+    name: str
+    type: NotRequired[str]
+    equations: list[str]
+    metric: NotRequired[list[str]]
+
+@proof_operation("Define", Define_ToolArg)
+class Define(SubgoalMaker):
+    """Define a (recursive) function proof-locally via minilang's FUN
+    command. The Minilang.FUN'' ML API is invoked with
+    `open_on_fail = true` so that if pat-completeness or termination
+    cannot be discharged automatically, a deferred proof block is
+    pushed onto the minilang stack for the agent to finish
+    interactively.
+
+    Two very different control-flow paths:
+
+    - **Auto-prove path**: the default prover, BY_METRIC sledge, and
+      the auto+termination_simp simplification pass close everything
+      inside FUN. No block is pushed onto the minilang stack, no
+      reporter signal is fired, and `Define` acts as a leaf-like
+      node: zero sub_nodes, `has_ending_opr = False`, nothing
+      emitted after the DEFINE opcode.
+
+    - **Deferred path**: one of `Pat_Completeness_Proof_Opened_Msg`
+      or `Termination_Proof_Opened_Msg` reporter messages arrives
+      post-DEFINE, signalling that a deferred proof block has been
+      pushed with residual subgoals still to discharge. Following
+      the established framework convention (see the comment at
+      `should_I_show_pending_goal` for why multi-goal states must
+      be modelled as GoalNode children), `Define` creates one
+      `GoalNode` child per residual subgoal, advancing the ml_state
+      via `sorry` between siblings. `SubgoalMaker` makes non-last
+      GoalNode children emit `NEXT` and the last emit `None`.
+      Define then emits a single trailing `END` via
+      `has_ending_opr = True` / `ending_opr = END` to close the
+      deferred block — producing the sequence
+      `DEFINE; <proof_1>; NEXT; <proof_2>; END` on the ML side.
+    """
+
+    def __init__(self, config: NodeConfig, arg: Define_ToolArg):
+        super().__init__(config, arg["thought"], [])
+        self.name = arg["name"]
+        self.type: str | None = arg.get("type")
+        self.equations = list(arg["equations"])
+        self.metric = list(arg.get("metric", []))
+        # Set by _refresh_the_beginning_opr based on reporter messages
+        # the ML side emits when FUN pushes a deferred block. Controls
+        # whether the block has GoalNode children / ending END.
+        self._deferred_block_opened: bool = False
+
+    @staticmethod
+    def gen(arg: Define_ToolArg) -> parsing_node:
+        return _trivial_parsing(lambda config: Define(config, arg))
+
+    def quickview_title(self) -> str:
+        return f"Define {self.name}"
+
+    def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
+        self._print_thought(indent, file)
+        print_indent(indent, file)
+        file.write("operation: Define\n")
+        print_indent(indent, file)
+        file.write(f"name: {self.name}\n")
+        if self.type is not None:
+            print_indent(indent, file)
+            file.write(f"type: {self.type}\n")
+        print_indent(indent, file)
+        file.write("equations:\n")
+        for eq in self.equations:
+            print_indent(indent + 1, file)
+            file.write(f"- {eq}\n")
+        if len(self.metric) == 1:
+            print_indent(indent, file)
+            file.write(f"metric: {self.metric[0]}\n")
+        elif self.metric:
+            print_indent(indent, file)
+            file.write("metric:\n")
+            for m in self.metric:
+                print_indent(indent + 1, file)
+                file.write(f"- {m}\n")
+        self._print_evaluation_status(indent, file)
+        if show_warnings:
+            self._print_warnings(indent, file, [Warning.Position.HEADER])
+
+    def _title_of_children(self, indent: int) -> tuple[str | None, int]:
+        return ("proof of termination", indent + 1)
+
+    def beginning_opr(self) -> Minilang_Operation:
+        return Minilang_Operation.DEFINE(
+            self.name, self.type, self.equations, self.metric)
+
+    def _should_open_proof_block(self, s0: Minilang_State) -> bool:
+        # Unlike Intro/Branch/etc., the Define node decides whether a
+        # proof block opens based on the reporter messages — not by
+        # counting top goals (the outer lemma goal is at the top in
+        # the auto-prove path, which would otherwise be misread as
+        # "one residual" and reopen the parent). When the ML side
+        # pushes a deferred pat-completeness / termination block, it
+        # fires Pat_Completeness_Proof_Opened_Msg or
+        # Termination_Proof_Opened_Msg via the minilang reporter, and
+        # the Python side unpacks them into s0.messages.
+        self._deferred_block_opened = any(
+            isinstance(m, (Pat_Completeness_Proof_Opened_Msg,
+                           Termination_Proof_Opened_Msg))
+            for m in s0.messages)
+        # Pick up the inferred type from Define_Result_Msg (covers the
+        # case where the user omitted the type field).
+        for m in s0.messages:
+            if isinstance(m, Define_Result_Msg):
+                self.type = m.type
+                break
+        return self._deferred_block_opened
+    def _block_closes_parent(self) -> bool:
+        # Define's deferred block is internal and bracketed by an
+        # explicit END opcode — the enclosing proof line continues
+        # past Define with more siblings (e.g. a subsequent Witness).
+        return False
+
+    def has_ending_opr(self) -> bool:
+        # Deferred path: Define emits the single trailing END that
+        # closes the minilang deferred block. (The last GoalNode
+        # child emits None by SubgoalMaker's default.)
+        # Auto-prove path: no block on the stack, no END to emit.
+        return self._deferred_block_opened
+
+    def ending_opr(self) -> Minilang_Operation | None:
+        if self._deferred_block_opened:
+            return Minilang_Operation.END()
+        else:
+            return None
+
+    def _define_var(self, ret: Vars) -> Vars:
+        ty = self.type if self.type is not None else "?"
+        ret[self.name] = ty
+        return ret
+
+    def _fixed_vars_at_me(self, ret: Vars) -> Vars:
+        # Variables visible to this node's *children* (the termination
+        # subgoals reference the function being defined).
+        return self._define_var(ret)
+
+    def _fixed_vars_after_me(self, ret: Vars) -> Vars:
+        # Variables visible to *subsequent siblings* (e.g. Witness
+        # picking the function as a witness for the existential goal).
+        return self._define_var(ret)
+
+    def _beginning_opr_err_msgs(self, err: IsabelleError) -> FailureReason:
+        return FailureReason(
+            "Failed to define the function: " + "\n".join(err.errors))
+
+    def _child_refresh_failure_err_msgs(self, child: Node) -> FailureReason:
+        return FailureReason(
+            "One of the proof steps for the function's pat-completeness "
+            "or termination obligations failed.")
+
+    def _ending_opr_err_msgs(self, err: IsabelleError) -> FailureReason:
+        return FailureReason(
+            "The proof body did not fully discharge the "
+            "pat-completeness / termination residuals.")
+
+
 #### Unfold
 
 class Interaction_ChooseDef(Interaction):
@@ -3674,7 +4018,8 @@ class Rewrite(Leaf):
             if result_goal is None:
                 print_indent(indent, file)
                 file.write("goal is solved.\n")
-            elif result_goal.conclusion != self.ml_state.prooftree_of().top_goal().conclusion:
+            elif (prev_goal := self.ml_state.prooftree_of().top_goal_or_none()) is not None \
+                    and result_goal.conclusion != prev_goal.conclusion:
                 print_indent(indent, file)
                 file.write("goal changes into:\n")
                 print_goal(result_goal, indent+1, False, file, self._ctxt_at_me(),
@@ -3800,6 +4145,12 @@ class Rewrite(Leaf):
                 self.use_system_simplifiers = False
                 self.warnings.append(Warning(Warning.Position.HEADER,
                     "System simplifiers caused a timeout and were disabled for this step."))
+
+            # Check for once-simproc fallback (rules limited to fire at most once)
+            once_msgs = [m for m in messages if isinstance(m, Simplify_Fallback_Once_Simproc_Msg)]
+            if once_msgs:
+                self.warnings.append(Warning(Warning.Position.HEADER,
+                    "Rewriting rules caused a loop; each rule was limited to fire at most once."))
 
         if not is_init:
             if self.bindings != old_bindings:
@@ -4073,7 +4424,7 @@ class Intro_ToolArg(TypedDict):
     split_conj: NotRequired[bool]
 
 @proof_operation("Intro", Intro_ToolArg)
-class Intro(SubgoalMaker_NoTailEnder):
+class Intro(SubgoalMaker):
     def __init__(self, config: NodeConfig, thought: str, bindings: Bindings | None, split_conj: bool,
                  _pending_bindings: tuple[list, list] | None = None):
         super().__init__(config, thought, [])
@@ -4131,12 +4482,8 @@ class Intro(SubgoalMaker_NoTailEnder):
         return FailureReason(f"Fail to introduce the variables and premises because: {"\n".join(err.errors)}")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
         return FailureReason(f"Subgoal {child.id} fails to be proven.")
-    def has_ending_opr(self) -> bool:
-        return False
     def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         raise InternalError("An Intro doesn't have an ending operation")
-    def ending_opr(self) -> Minilang_Operation | None:
-        return None
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         if len(self.sub_nodes) <= 1:
             return (None, indent-1)
@@ -4249,7 +4596,7 @@ class InferenceRule_InternalToolArg(NamedTuple):
     rule_ref: IsabelleFact | None
 
 @proof_operation("InferenceRule", InferenceRule_ToolArg)
-class InferenceRule(SubgoalMaker_NoTailEnder):
+class InferenceRule(SubgoalMaker):
     def __init__(self, config: NodeConfig, arg: InferenceRule_InternalToolArg):
         super().__init__(config, arg.thought, [])
         self.rule = arg.rule
@@ -4309,10 +4656,11 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
         if len(self.sub_nodes) <= 1:
             s0 = self._state_after_beginning()
             if s0.prooftree is not None:
-                goal = s0.prooftree.top_goal()
-                print_indent(indent, file)
-                file.write("derived goal:\n")
-                print_goal(goal, indent+1, False, file, self._ctxt_before_me())
+                goal = s0.prooftree.top_goal_or_none()
+                if goal is not None:
+                    print_indent(indent, file)
+                    file.write("derived goal:\n")
+                    print_goal(goal, indent+1, False, file, self._ctxt_before_me())
     def beginning_opr(self) -> 'Minilang_Operation | FailureReason':
         if isinstance(self.rule_ref, IsabelleFact_Unfound):
             return FailureReason(f"Inference rule fact \"{self.rule_ref.name()}\" not found")
@@ -4321,12 +4669,8 @@ class InferenceRule(SubgoalMaker_NoTailEnder):
         return FailureReason(f"Fail to apply the inference rule.{"".join(["\n"+e for e in err.errors])}")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
         return FailureReason(f"Subgoal {child.id} fails to be proven.")
-    def has_ending_opr(self) -> bool:
-        return False
     def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         raise InternalError("An InferenceRule doesn't have an ending operation")
-    def ending_opr(self) -> Minilang_Operation | None:
-        return None
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         if len(self.sub_nodes) <= 1:
             return (None, indent-1)
@@ -4346,7 +4690,7 @@ class Branch_ToolArg(TypedDict):
 #    cases: list[NamedStatement]
 
 @proof_operation("Branch", Branch_ToolArg)
-class Branch(SubgoalMaker_NoTailEnder):
+class Branch(SubgoalMaker):
     def __init__(self, config: NodeConfig, arg: Branch_ToolArg,
                  parsed_cases: list[SubProof_parsed] | None = None):
         super().__init__(config, arg["thought"], [])
@@ -4386,8 +4730,6 @@ class Branch(SubgoalMaker_NoTailEnder):
         if not self.cases:
             return FailureReason("Must specify at least one branching case.")
         return Minilang_Operation.BRANCH([(case["statement"].get("name"), case["statement"]["isabelle"]) for case in self.cases])
-    def ending_opr(self):
-        return None
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         return FailureReason(f"Fail to anlysis the proof goal by cases because: {"\n".join(err.errors)}")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
@@ -4440,8 +4782,6 @@ class CaseSplit(CaseSplit_Like):
             self.target_isabelle_term,
             cast(list[varname_spec] | None, self._case_vars_of_child(0)),
             None)
-    def ending_opr(self):
-        return None
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         return FailureReason(f"Case analysis failed because: {"\n".join(err.errors)}")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
@@ -4553,8 +4893,6 @@ class Induction(CaseSplit_Like):
             cast(list[varname_spec] | None, self._case_vars_of_child(0)),
             [var["name"] for var in self.variables if var["status"] == "generalized"],
             None)
-    def ending_opr(self):
-        return None
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         return FailureReason(f"Induction failed because: {"\n".join(err.errors)}")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
@@ -4627,6 +4965,7 @@ class Root(GoalContainer, StdBlock):
         self.global_env = GlobalEnv(NodeConfig("global", Minilang_State.assign(ml_state0), self))
         self.sub_nodes.append(self.global_env)
         self.final_ml_state = Minilang_State.assign(ml_state0)
+        self._closed_by = self
     async def _refresh_me_alone(self):
         if self._first_time:
             ml_state = await self.ml_state.skip(None)
@@ -4643,7 +4982,8 @@ class Root(GoalContainer, StdBlock):
                 goal_node = GoalNode(NodeConfig(goal_id, ml_state, self), is_single_goal, True, None)
                 goal_node.id = goal_id
                 self.sub_nodes.append(goal_node)
-                ml_state = await ml_state.sorry(None, None)
+                if i < self.num_goals - 1:
+                    ml_state = await ml_state.sorry_next(None, None)
             #self.final_ml_state = ml_state
         await super()._refresh_me_alone()
     async def _refresh_all_children_after(self, after: 'Node | Literal["end"]', can_continue_i: bool) -> None:
@@ -4672,15 +5012,22 @@ class Root(GoalContainer, StdBlock):
     def beginning_opr(self) -> Minilang_Operation | None:
         return None
     def ending_opr(self) -> Minilang_Operation | None:
-        return None
+        # The top-level proof needs a closing END after the last
+        # GoalNode child finishes. Previously this END was emitted
+        # by the last GoalNode child itself via `GoalContainer`'s
+        # default `_ending_opr_of_child` (last-child → END), but
+        # that default is now "last-child → None" (cleaner for
+        # SubgoalMaker subclasses, most of which don't want a
+        # trailing END), so Root emits its own closing END here.
+        return Minilang_Operation.END()
     def has_ending_opr(self) -> bool:
-        return False
+        return True
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         raise InternalError("A Root doesn't have a beginning operation")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
         return FailureReason("") # This suppresses the error message printing on Root
     def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
-        raise InternalError("A Root doesn't have an ending operation")
+        return FailureReason("Failed to close the top-level proof")
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         print_vars(self.context.vars.items(), indent, file, {})
         print_hyps(self.context.hyps.items(), indent, file, {})

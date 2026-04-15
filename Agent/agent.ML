@@ -35,7 +35,9 @@ datatype ('term, 'thm, 'fact) command =
   | HAVE     of string (*name*) * 'term (*statement*) * bool (*auto_apply*)
   | SUFFICES of 'term
   | OBTAIN   of (string * string option) list (*vars*) * (string option * string) list (*constraints*)
-  | SORRY    of Minilang.opt_var_names
+  | SORRY_NEXT    of Minilang.opt_var_names
+  | SORRY_END_ALL of Minilang.opt_var_names
+  | SORRY_ONLY
   | HAMMER   of ('term, 'fact) extended_fact list (*with facts*) * int (*timeout in seconds*)
   | INTRO    of bindings option * bool (*split_conj*)
   | SIMPLIFY of ('term, 'fact) extended_fact list (*simp facts*) * bool (*use_system_simps*)
@@ -47,6 +49,10 @@ datatype ('term, 'thm, 'fact) command =
               * ('term, 'fact) extended_fact list (*facts to discharge*)
   | CHAINING of string option (*optional name; auto-generated if NONE*)
               * ('term, 'fact) extended_fact list (*facts to chain*)
+  | DEFINE   of string (*function name*)
+              * string option (*type expression, NONE = let Isabelle infer*)
+              * string list (*equation clauses*)
+              * string list (*BY_METRIC measures, [] = none*)
   | SKIP
 
 type xcmd = (string, string, string) command
@@ -71,8 +77,12 @@ exception INTRO_BINDINGS of {
     final: bindings
   }
 exception SIMPLIFY_FALLBACK_NOSYS
+exception SIMPLIFY_FALLBACK_ONCE_SIMPROC
 (* (fact_name, pretty_printed_proposition) list — the derived facts produced by SPECIALIZE *)
 exception SPECIALIZE_RESULT of (string * string) list
+(* (function_name, pretty_type) — emitted after DEFINE so the Python side
+   knows the inferred type when the user omitted the type field. *)
+exception DEFINE_RESULT of string * string
 
 val compute_bindings : Minilang.state -> string list -> string list -> bindings
 val check_need_intro : bool -> Minilang.state -> bool
@@ -133,8 +143,10 @@ exception INTRO_BINDINGS of {
     final: bindings
   }
 exception SIMPLIFY_FALLBACK_NOSYS
+exception SIMPLIFY_FALLBACK_ONCE_SIMPROC
 (* (fact_name, pretty_printed_proposition) list — the derived facts produced by SPECIALIZE *)
 exception SPECIALIZE_RESULT of (string * string) list
+exception DEFINE_RESULT of string * string
 
 type counters = {
     prem_counter: int Synchronized.var,
@@ -161,7 +173,9 @@ datatype ('term, 'thm, 'fact) command =
   | HAVE     of string (*name*) * 'term (*statement*) * bool (*auto_apply*)
   | SUFFICES of 'term
   | OBTAIN   of (string * string option) list (*vars*) * (string option * string) list (*constraints*)
-  | SORRY    of Minilang.opt_var_names
+  | SORRY_NEXT    of Minilang.opt_var_names
+  | SORRY_END_ALL of Minilang.opt_var_names
+  | SORRY_ONLY
   | HAMMER   of ('term, 'fact) extended_fact list (*with facts*) * int (*timeout in seconds*)
   | INTRO    of bindings option * bool (*split_conj*)
   | SIMPLIFY of ('term, 'fact) extended_fact list (*simp facts*) * bool (*use_system_simps*)
@@ -173,6 +187,10 @@ datatype ('term, 'thm, 'fact) command =
               * ('term, 'fact) extended_fact list (*facts to discharge*)
   | CHAINING of string option (*optional name; auto-generated if NONE*)
               * ('term, 'fact) extended_fact list (*facts to chain*)
+  | DEFINE   of string (*function name*)
+              * string option (*type expression, NONE = let Isabelle infer*)
+              * string list (*equation clauses*)
+              * string list (*BY_METRIC measures, [] = none*)
   | SKIP
 
 type xcmd = (string, string, string) command
@@ -563,19 +581,46 @@ fun AUTO_SIMPLIFY
     (* Execute SIMPLIFY with both naming functions - call operation *)
     val simplify_timeout = SOME (Time.fromSeconds 10)
 
-    fun do_simplify use_sys =
+    (* Detect self-looping user rules and partition them *)
+    val thy = Proof_Context.theory_of ctxt
+    fun thm_loops thm =
+      exists (fn meta_eq =>
+        let val (lhs, rhs) = Logic.dest_equals
+                (Logic.strip_imp_concl (Thm.prop_of meta_eq))
+        in Minilang.simp_rule_loops thy (lhs, rhs) end
+        handle TERM _ => false)
+      (Raw_Simplifier.mksimps ctxt thm)
+    val (looping_thms, safe_thms) = List.partition thm_loops simp_thms
+    val has_looping = not (null looping_thms)
+    val base_simp_thms = if has_looping then safe_thms else simp_thms
+
+    fun do_simplify thms simprocs use_sys =
       (Minilang.SIMPLIFY_GOAL_AND_PREMISES
-        simp_thms use_sys premise_names simplify_goal
+        thms simprocs use_sys premise_names simplify_goal
         (SOME naming_prems_fn) (SOME naming_vars_fn) simplify_timeout) s
 
-    val (((params', facts'), s'), fell_back_nosys) =
+    fun mk_base_simprocs () =
+      if has_looping then Minilang.thms_to_once_simprocs ctxt looping_thms
+      else []
+
+    fun mk_all_once () = Minilang.thms_to_once_simprocs ctxt simp_thms
+
+    val (((params', facts'), s'), fell_back_nosys, fell_back_once) =
       if use_system_simps
-      then (do_simplify true, false)
-           handle Timeout.TIMEOUT _ => (do_simplify false, true)
-      else (do_simplify false, false)
-      handle Timeout.TIMEOUT _ =>
-        raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL,
-          "Simplification timed out. The rewriting rules may cause an infinite loop.")
+      then (do_simplify base_simp_thms (mk_base_simprocs ()) true, false, false)
+           handle Timeout.TIMEOUT _ =>
+             ((do_simplify base_simp_thms (mk_base_simprocs ()) false, true, false)
+              handle Timeout.TIMEOUT _ =>
+                ((do_simplify [] (mk_all_once ()) false, true, true)
+                 handle Timeout.TIMEOUT _ =>
+                   raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL,
+                     "Simplification timed out. The rewriting rules may cause an infinite loop.")))
+      else (do_simplify base_simp_thms (mk_base_simprocs ()) false, false, false)
+           handle Timeout.TIMEOUT _ =>
+             ((do_simplify [] (mk_all_once ()) false, false, true)
+              handle Timeout.TIMEOUT _ =>
+                raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL,
+                  "Simplification timed out. The rewriting rules may cause an infinite loop."))
 
     (* Always build and report bindings *)
     val _ =
@@ -641,6 +686,10 @@ fun AUTO_SIMPLIFY
     val _ = if fell_back_nosys
             then Minilang.get_reporter ()
                    (Minilang.Internal SIMPLIFY_FALLBACK_NOSYS)
+            else ()
+    val _ = if fell_back_once
+            then Minilang.get_reporter ()
+                   (Minilang.Internal SIMPLIFY_FALLBACK_ONCE_SIMPROC)
             else ()
   in
     s'
@@ -837,8 +886,12 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
                        ([], [], named_constraints))]
         in Minilang.CONSIDER arg s
         end
-    | SORRY vars =>
-        Minilang.END_or_NXT_by_SORRY vars s
+    | SORRY_NEXT vars =>
+        Minilang.SORRY_NEXT vars s
+    | SORRY_END_ALL vars =>
+        Minilang.SORRY_END_ALL vars s
+    | SORRY_ONLY =>
+        Minilang.SORRY_ONLY s
     | HAMMER (facts, timeout) => (
         with_resolved_override (mk_counter ()) s facts (fn s' => fn ovr =>
           let val ctxt = Minilang.context_of s'
@@ -913,6 +966,26 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
                         (Minilang.Internal (SPECIALIZE_RESULT result))
            in s''
           end)
+    | DEFINE (name, ty_opt, equations, metric) =>
+        let
+          val fixes : (binding * string option * mixfix) list =
+            [(Binding.name name, ty_opt, NoSyn)]
+          val specs : Specification.multi_specs_cmd =
+            map (fn eq => ((Binding.empty_atts, eq), [], [])) equations
+          val s' = Minilang.FUN'' fixes specs
+                     {metric = metric, open_on_fail = true} s
+          (* Report the function's type so the Python side can update
+             Define._fixed_vars_at_me / _after_me even when the user
+             omitted the type field. *)
+          val ctxt' = Minilang.context_of s'
+          val ty_str =
+            case Function_Common.import_last_function ctxt' of
+              SOME {fs = f :: _, ...} =>
+                Syntax.string_of_typ ctxt' (fastype_of f)
+            | _ => the_default "?" ty_opt
+          val _ = Minilang.get_reporter ()
+                    (Minilang.Internal (DEFINE_RESULT (name, ty_str)))
+        in s' end
     | SKIP => s
 
 local 
@@ -1010,7 +1083,9 @@ fun check_command_i s (SIMPLIFY (facts, use_sys, prems, simp_goal, bindings_opt)
        in SUFFICES (read_prop ctxt goal)
       end
   | check_command_i _ (OBTAIN vc) = OBTAIN vc (*name_opt * string passthrough*)
-  | check_command_i _ (SORRY vars) = SORRY vars
+  | check_command_i _ (SORRY_NEXT vars) = SORRY_NEXT vars
+  | check_command_i _ (SORRY_END_ALL vars) = SORRY_END_ALL vars
+  | check_command_i _ SORRY_ONLY = SORRY_ONLY
   | check_command_i s (HAMMER (facts, timeout)) =
       let val ctxt = Minilang.context_of s
       in HAMMER (map (check_extended_fact ctxt) facts, timeout) end
@@ -1027,6 +1102,8 @@ fun check_command_i s (SIMPLIFY (facts, use_sys, prems, simp_goal, bindings_opt)
   | check_command_i s (CHAINING (name_opt, facts)) =
       let val ctxt = Minilang.context_of s
       in CHAINING (name_opt, map (check_extended_fact ctxt) facts) end
+  | check_command_i _ (DEFINE d) = DEFINE d
+    (* strings passthrough — Minilang.FUN'' parses them internally *)
   | check_command_i _ SKIP = SKIP
 
 fun check_command s x = check_command_i s x

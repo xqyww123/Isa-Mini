@@ -123,10 +123,23 @@ class ClaudeCode(Session):
                 "(use loop.create_task with context=contextvars.copy_context())")
         return cls(parent=parent)
 
+    _SKILLS = ["isabelle-fun-definition"]
+
+    def _install_skills(self):
+        """Copy skill files from assets/ into the working directory's
+        .claude/skills/ so Claude Code can discover them."""
+        assets = os.path.join(os.path.dirname(__file__), "assets")
+        for skill_name in self._SKILLS:
+            src = os.path.join(assets, f"{skill_name}.md")
+            dst_dir = os.path.join(self.working_dir, ".claude", "skills", skill_name)
+            os.makedirs(dst_dir, exist_ok=True)
+            shutil.copy2(src, os.path.join(dst_dir, "SKILL.md"))
+
     async def initialize(self, root: Root):
         await super().initialize(root)
         with open(self.YAML_path, "w", encoding="utf-8") as f:
             root.print(0, MyIO(f), update_line=True)
+        self._install_skills()
 
         # Register with singleton HTTP MCP server
         self._http_server = await ProofMCPHTTPServer.get_or_create()
@@ -433,6 +446,7 @@ class ClaudeCode(Session):
                     "Write(//.claude/plans/**)",
                     "Edit(//.claude/plans/**)",
                     "Grep(//.claude/plans/**)",
+                    "Read(//.claude/skills/**)",
                 ],
                 "deny": [
                     "Bash",

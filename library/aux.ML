@@ -415,6 +415,10 @@ fun inst_universal_quantifiers ctxt insts thm =
       in process thm end
 
     val thm1 = inst_pure pure_insts thm
+               handle THM (msg, _, _) =>
+                 error ("type mismatch in instantiation of meta-universal (\<And>) \
+                        \variable:\n  " ^
+                        String.translate (fn #"\n" => "\n  " | c => str c) msg)
 
     (* === Phase 2: Instantiate schematic variables ===
        Must happen before HOL.All phase, because inst_hol_alls uses RS which
@@ -428,13 +432,24 @@ fun inst_universal_quantifiers ctxt insts thm =
           else error ("Variable " ^ Term.string_of_vname idx ^ " is not found in the rule"))
           insts
         val ct_insts = map (fn (idx, t) => (idx, Thm.cterm_of ctxt t)) insts
-      in Drule.infer_instantiate ctxt ct_insts thm end
+      in Drule.infer_instantiate ctxt ct_insts thm
+         handle THM (msg, _, _) =>
+           let val cleaned =
+                 perhaps (try (unprefix "infer_instantiate_types: ")) msg
+               val indented =
+                 String.translate (fn #"\n" => "\n  " | c => str c) cleaned
+           in error ("type mismatch in instantiation:\n  " ^ indented) end
+      end
 
     val thm2 = inst_schematic schematic_insts thm1
 
     (* === Phase 3: Instantiate HOL.All variables in conclusion === *)
     val hol_cterm_insts = map (fn (name, t) => (name, Thm.cterm_of ctxt t)) hol_insts
     val thm3 = inst_hol_alls ctxt hol_cterm_insts thm2
+               handle THM (msg, _, _) =>
+                 error ("type mismatch in instantiation of HOL-universal (\<forall>) \
+                        \variable:\n  " ^
+                        String.translate (fn #"\n" => "\n  " | c => str c) msg)
 
   in thm3 end
 
