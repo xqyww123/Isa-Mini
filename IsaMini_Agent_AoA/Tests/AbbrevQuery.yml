@@ -1,0 +1,22 @@
+=== _retrieve_entity on theorems ===
+  even_Suc: abbrevs=['Parity.semiring_parity_class.odd', 'Parity.semiring_parity_class.even']
+    expr: even (Suc ?n) = odd ?n
+=== _retrieve_entity on abbreviation constant ===
+  even: abbrevs=['Parity.semiring_parity_class.even']
+    type: ?'a ⇒ bool
+=== _retrieve_entity on non-abbreviation constant ===
+  plus_nat_inst.plus_nat: abbrevs=[]
+=== abbreviation_defs ===
+  where `odd a` abbreviates `¬ even a`
+  where `even a` abbreviates `(2 :: ?'a) dvd a`
+=== abbreviation_defs on non-abbreviation ===
+  Groups.plus_class.plus: None
+=== semantic_knn abbreviation propagation ===
+=== zero-parameter abbreviation ===
+  my_true: abbrevs=['Test_AbbrevQuery.my_true']
+  where `my_true` abbreviates `True`
+=== theorem without abbreviations ===
+  add_0: abbrevs=[]
+    expr: (0 :: ?'a) + ?a = ?a
+=== nonexistent name ===
+  None

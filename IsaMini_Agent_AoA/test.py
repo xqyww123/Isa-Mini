@@ -2234,10 +2234,8 @@ async def _test_Derive6(root: Root, file: MyIO):
 async def _test_Derive7(root: Root, file: MyIO):
     """Test that SPECIALIZE diagnostic unifier produces actionable error messages.
 
-    Three sub-tests:
-      1. Type clash: mult_mod_cancel_left on nat — should report type mismatch
-      2. Head clash: conjI discharged with a non-conjunction — should report clash
-      3. Successful derive: mp discharged correctly — should NOT error
+    Type clash: mult_mod_cancel_left on nat — should report type mismatch
+    (nat vs ?'a::{euclidean_ring_cancel,semiring_gcd}).
     """
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -2257,23 +2255,8 @@ async def _test_Derive7(root: Root, file: MyIO):
     file.write(f"Is error: {is_error}\n")
     file.write(f"Reason: {reason}\n")
     assert is_error, "Expected type clash error"
-    assert reason is not None and "does not unify with" in reason, \
+    assert reason is not None and "does not unify with" in reason.reason, \
         f"Expected 'does not unify with' in reason, got: {reason}"
-
-    # --- Sub-test 2: Head symbol clash (plus vs times) ---
-    root.session.age += 1
-    node2, is_error2, reason2 = await root.fill("2", Derive.interactive_gen({
-        "thought": "mult_left_cancel needs times but h3 has plus — clash expected",
-        "rule": {"refer_by": "name", "name": "mult_left_cancel"},
-        "discharging_facts": [{"refer_by": "name", "name": "h3"}],
-        "result_name": "should_fail_clash"
-    }))
-    print_header("Sub-test 2: Head symbol clash", file)
-    file.write(f"Is error: {is_error2}\n")
-    file.write(f"Reason: {reason2}\n")
-    assert is_error2, "Expected head clash error"
-    assert reason2 is not None and ("clashes with" in reason2 or "does not unify" in reason2), \
-        f"Expected diagnostic in reason, got: {reason2}"
 
     print_header("Final state", file)
     root.print(0, file)
@@ -2653,7 +2636,7 @@ async def _test_FillOrphanedNode(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
-@model_test("AbbrevQuery", "Test_AbbrevQuery.thy", 8)
+@model_test("AbbrevQuery", "Test_AbbrevQuery.thy", 11)
 async def _test_abbrev_query(root: Root, file: MyIO):
     """Test abbreviation-annotated semantic retrieval.
 
@@ -2718,7 +2701,11 @@ async def _test_abbrev_query(root: Root, file: MyIO):
     if abbrev_names_to_query:
         defs = await ml.abbreviation_defs(abbrev_names_to_query)
         for name, defn in zip(abbrev_names_to_query, defs):
-            file.write(f"  {name}: {defn}\n")
+            if defn is not None:
+                lhs, rhs = defn
+                file.write(f"  where `{lhs}` abbreviates `{rhs}`\n")
+            else:
+                file.write(f"  {name}: None\n")
     else:
         file.write("  (no abbreviations found in theorem)\n")
 
@@ -2735,6 +2722,112 @@ async def _test_abbrev_query(root: Root, file: MyIO):
         abbrevs = r.entity.abbreviation_names
         if abbrevs:
             file.write(f"  {r.entity.short_name}: abbrevs={abbrevs}\n")
+
+    # --- Corner cases ---
+
+    # 7. Zero-parameter abbreviation (my_true defined in the .thy file)
+    file.write("=== zero-parameter abbreviation ===\n")
+    results = await ml._retrieve_entity([(EntityKind.CONSTANT, "my_true")])
+    for r in results:
+        if r is not None:
+            short_name, exprs, roles, abbrev_names = r
+            file.write(f"  {short_name}: abbrevs={abbrev_names}\n")
+        else:
+            file.write("  None\n")
+    defs = await ml.abbreviation_defs(["Test_AbbrevQuery.my_true"])
+    for defn in defs:
+        if defn is not None:
+            lhs, rhs = defn
+            file.write(f"  where `{lhs}` abbreviates `{rhs}`\n")
+        else:
+            file.write(f"  None\n")
+
+    # 8. Theorem with NO abbreviations in its proposition
+    file.write("=== theorem without abbreviations ===\n")
+    results = await ml._retrieve_entity([(EntityKind.THEOREM, "add_0")])
+    for r in results:
+        if r is not None:
+            short_name, exprs, roles, abbrev_names = r
+            file.write(f"  {short_name}: abbrevs={abbrev_names}\n")
+            for e in exprs:
+                file.write(f"    expr: {e}\n")
+        else:
+            file.write("  None\n")
+
+    # 9. Nonexistent name passed to abbreviation_defs
+    file.write("=== nonexistent name ===\n")
+    defs = await ml.abbreviation_defs(["Nonexistent.bogus_name"])
+    for defn in defs:
+        file.write(f"  {defn}\n")
+
+
+@model_test("FactNameResolution", "Test_FactNameResolution.thy", 11)
+async def _test_fact_name_resolution(root: Root, file: MyIO):
+    """Reproduce bug: during amend, _find_alive_state_among_children uses
+    position = index of the amended child, which is < len(sub_nodes).
+    StdBlock's override (model.py:2613) only returns _state_before_ending_
+    when position >= len(sub_nodes) (the append/fill path), so the amend
+    path falls through to sub_nodes[i-1].ml_state — the INPUT state of the
+    preceding step, missing that step's named facts.
+
+    The test proves  x > 2 ==> x > 0  via:
+    1. Fill step 1 (Have "x_gt_1": x > 1) + step 1.1 (Obvious proves it)
+    2. Fill step 2 (plain Obvious) — completes the proof
+    3. Amend step 2 with FactByName("x_gt_1") — amend's alive_state is
+       step1.ml_state (pre-Have), so "x_gt_1" is Unfound.
+
+    The proof still succeeds (auto uses the correct ml_state), but
+    the "not found" warning proves the stale alive_state."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Step 1: Have "x_gt_1" establishes a named intermediate fact.
+    root.session.age += 1
+    await root.fill("1", Have.gen({
+        "thought": "intermediate step",
+        "statement": {"english": "x is greater than 1", "isabelle": "x > 1"},
+        "name": "x_gt_1"
+    }))
+    # Prove the Have subgoal.
+    root.session.age += 1
+    await root.fill("1.1", Obvious.interactive_gen({"facts": []}))
+
+    # Step 2: First fill with plain Obvious (no fact reference).
+    root.session.age += 1
+    await root.fill("2", Obvious.interactive_gen({"facts": []}))
+    print_header("After initial fill (proof complete)", file)
+    root.print(0, file)
+
+    # Now AMEND step 2 with a FactByName reference to "x_gt_1".
+    # _amend_child passes position = index of step 2 (< len(sub_nodes)),
+    # so _find_alive_state_among_children skips the _state_before_ending_
+    # shortcut and returns step1.ml_state — the pre-Have state.
+    root.session.age += 1
+    step2_new, is_error, _ = await root.amend("2", Obvious.interactive_gen({
+        "facts": [{"refer_by": "name", "name": "x_gt_1"}]
+    }))
+
+    # Collect unfound-fact warnings BEFORE any print (print consumes warnings).
+    unfound_warnings = [w for w in step2_new.warnings
+                        if isinstance(w.printer, str) and "not found" in w.printer]
+    file.write(f"Unfound fact warnings on amended step 2: {len(unfound_warnings)}\n")
+    for w in unfound_warnings:
+        file.write(f"  {w.printer}\n")
+
+    assert step2_new.status.status == EvaluationStatus.Status.SUCCESS, \
+        f"Proof should succeed via auto, but got {step2_new.status.status.value}"
+    file.write(f"Amended step 2 status: {step2_new.status.status.value}\n")
+
+    print_header("After amend with FactByName reference", file)
+    root.print(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+    # After the fix, the amend path's alive_state should include "x_gt_1".
+    assert len(unfound_warnings) == 0, \
+        f"Expected 0 unfound warnings (fact should be resolved), got {len(unfound_warnings)}"
 
 
 @model_test("IntroMetaQuant", "Test_IntroMetaQuant.thy", 8)

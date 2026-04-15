@@ -37,8 +37,6 @@ datatype unify_diagnostic =
 
 exception Unif_Diagnostic of unify_diagnostic
 
-(* Internal exception for control flow inside proj/idx — never escapes *)
-exception Unif_Internal
 
 
 (* ---- Diagnostic functions (replace Pattern's tracing versions) ---- *)
@@ -84,7 +82,7 @@ fun mapbnd f =
         | mpb _ atom            = atom
   in mpb 0 end
 
-fun idx [] _      = raise Unif_Internal
+fun idx [] j      = raise Unif_Diagnostic (Projection_Fail (("?", 0), [j], Bound j))
   | idx (i :: is) j = if (i : int) = j then length is else idx is j
 
 fun mkabs (binders, is, t) =
@@ -253,7 +251,7 @@ and flexrigid context (params as (env, binders, F, Fty, is, t)) =
   else
     (let val (u, env') = proj (t, env, binders, is)
      in Envir.update ((F, Fty), mkabs (binders, is, u)) env' end
-     handle Unif_Internal => proj_fail context params)
+     handle Unif_Diagnostic _ => proj_fail context params)
 
 fun diagnostic_unify context = unif context []
 
@@ -272,8 +270,9 @@ fun format_diagnostic ctxt fact_thm prem diag =
   in
     case diag of
       Type_Clash (T, U) =>
-        let val sT = Syntax.string_of_typ ctxt T
-            val sU = Syntax.string_of_typ ctxt U
+        let val ctxt_sorts = ctxt |> Config.put show_sorts true
+            val sT = Syntax.string_of_typ ctxt_sorts T
+            val sU = Syntax.string_of_typ ctxt_sorts U
         in header ^ "\nbecause type " ^ sT ^ " does not unify with " ^ sU end
     | Clash (a, b) =>
         header ^ "\nbecause head symbol " ^ a ^ " clashes with " ^ b

@@ -547,7 +547,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
       val abbreviation_defs_callback = {
         name = "IsaMini.abbreviation_defs",
         arg_schema = unpackPair (unpackString, unpackList unpackString),
-        ret_schema = packList (packOption packString),
+        ret_schema = packList (packOption (packPair (packString, packString))),
         function = (fn (state_id, const_names) =>
           let val s0 = get_state state_id
               val ctxt = Minilang.context_of s0
@@ -556,10 +556,14 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
               val SOT = MiniLang_Agent.string_of_term ctxt'
           in map (fn name =>
               (let val (T, rhs) = Consts.the_abbreviation consts name
-                   val eq = Logic.mk_equals (Const (name, T), rhs)
-               in SOME (SOT eq) end)
+                   val (params, body) = Term.strip_abs rhs
+                   val frees = map Free params
+                   val body' = Term.subst_bounds (rev frees, body)
+                   val lhs = Term.list_comb (Const (name, T), frees)
+               in SOME (SOT lhs, SOT body') end)
               handle TYPE _ => NONE
-                   | ERROR _ => NONE)
+                   | ERROR _ => NONE
+                   | TERM _ => NONE)
              const_names
           end),
         timeout = NONE

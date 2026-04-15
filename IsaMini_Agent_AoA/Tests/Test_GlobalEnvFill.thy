@@ -8,6 +8,6 @@ lemma global_env_fill_test:
   fixes x :: "int"
   assumes h1: "x = 0"
   shows "x * x = 0"
-  by aoa
+  by  aoa
 
 end

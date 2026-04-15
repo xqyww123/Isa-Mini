@@ -1454,14 +1454,15 @@ class Minilang_State:
                         fact=FactByName(refer_by="name", name=short_name),
                         expression=[prop]) for full_name, short_name, prop in result]
 
-    async def abbreviation_defs(self, full_names: list[str]) -> list[str | None]:
-        """Get pretty-printed abbreviation equations (c ≡ rhs) by full name.
+    async def abbreviation_defs(self, full_names: list[str]) -> list[tuple[str, str] | None]:
+        """Get pretty-printed abbreviation (lhs, rhs) pairs by full name.
         Returns None for non-abbreviation constants."""
         if not full_names:
             return []
         results = await self.connection.callback(
             "IsaMini.abbreviation_defs", (self.name, full_names))
-        return [pretty_unicode(r) if r is not None else None for r in results]
+        return [(pretty_unicode(r[0]), pretty_unicode(r[1]))
+                if r is not None else None for r in results]
 
     async def check_looping_rules(self, fact_names: list[str],
                                    simplify_goal: bool,
@@ -2443,7 +2444,10 @@ class NonLeaf_Node(Node):
         raise InternalError("The target node is not my children")
     def _find_alive_state_among_children(self, position: int) -> 'Minilang_State | None':
         """Find the latest alive ml_state before `position` among sub_nodes.
-        position = len(sub_nodes) means after all children.
+        `position` is exclusive (like a Python slice upper bound):
+        callers pass len(sub_nodes) for append, or the child's index for
+        amend/insert_before.
+
         Does not cross block boundaries — does not check self.ml_state."""
         for i in range(min(position, len(self.sub_nodes)) - 1, -1, -1):
             if self.sub_nodes[i].ml_state.initialized():
@@ -2451,7 +2455,7 @@ class NonLeaf_Node(Node):
         return None
     def _find_alive_state(self, position: int) -> Minilang_State:
         """Find an alive state: search children first, then walk up through ancestors.
-        position = len(sub_nodes) means after all children.
+        `position` is exclusive — see _find_alive_state_among_children.
         Always returns a non-None result (the root's ml_state should always be initialized)."""
         result = self._find_alive_state_among_children(position)
         if result is not None:
@@ -2610,9 +2614,14 @@ class StdBlock(NonLeaf_Node):
         # else:
         #     return self.resulting_state()
     def _find_alive_state_among_children(self, position: int) -> 'Minilang_State | None':
-        # Check _state_before_ending_ if position is at or past the end
+        # `position` is exclusive.  The state chain is:
+        #   sub_nodes[0].ml_state →(step 0)→ sub_nodes[1].ml_state →…→ _state_before_ending_
+        # State right before position i = sub_nodes[i].ml_state  (i < len)
+        #                                = _state_before_ending_  (i >= len)
         if position >= len(self.sub_nodes) and self._state_before_ending_.initialized():
             return self._state_before_ending_
+        if position < len(self.sub_nodes) and self.sub_nodes[position].ml_state.initialized():
+            return self.sub_nodes[position].ml_state
         result = super()._find_alive_state_among_children(position)
         if result is not None:
             return result

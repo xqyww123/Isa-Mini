@@ -13,6 +13,6 @@ lemma specialize_test7:
       and h2: "coprime q (2::nat)"
       and h3: "(x::int) + y = z"
   shows "x mod q = y mod q"
-  by aoa
+  by  aoa
 
 end

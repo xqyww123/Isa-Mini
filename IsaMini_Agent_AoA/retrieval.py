@@ -162,7 +162,7 @@ async def _format_fetched_entity(
     session: Session | None = None,
     def_info: tuple[str, IsabellePosition] | bool | None = None,
     potential_defs: bool = False,
-    abbreviation_defs: dict[str, str] = {},
+    abbreviation_defs: dict[str, tuple[str, str]] = {},
 ) -> None:
     """Render a single retrieved entity in unified format.
 
@@ -171,7 +171,7 @@ async def _format_fetched_entity(
     ``def_info``: ``True`` to fetch definition via RPC, a pre-fetched tuple to use directly,
     or ``None``/``False`` to skip.  Requires ``session`` for both fetching and show-once tracking.
     ``potential_defs``: if True and entity is a constant, append relevant definitions.
-    ``abbreviation_defs``: map from abbreviation full name to pretty-printed equation.
+    ``abbreviation_defs``: map from abbreviation full name to (lhs, rhs) pretty-printed strings.
     """
     exprs = f.entity.expression
     roles = getattr(f.entity, 'roles', [])
@@ -197,8 +197,9 @@ async def _format_fetched_entity(
         for aname in abbrev_names:
             if aname in abbreviation_defs and aname not in session.seen_abbreviations:
                 session.seen_abbreviations.add(aname)
+                lhs, rhs = abbreviation_defs[aname]
                 print_indent(indent + 1, buf)
-                buf.write(f"where {_trunc_expr(abbreviation_defs[aname])}\n")
+                buf.write(f"where `{_trunc_expr(lhs)}` abbreviates `{_trunc_expr(rhs)}`\n")
     if potential_defs and session is not None and f.entity.kind == EntityKind.CONSTANT:
         try:
             candidates = await session.root.ml_state.potential_defs_of([f.entity.short_name])
@@ -374,7 +375,7 @@ async def _semantic_search_direct(
         for name in f.entity.abbreviation_names:
             if name not in session.seen_abbreviations and name not in unseen_abbrevs:
                 unseen_abbrevs.append(name)
-    abbrev_defs: dict[str, str] = {}
+    abbrev_defs: dict[str, tuple[str, str]] = {}
     if unseen_abbrevs:
         defs = await ml_state.abbreviation_defs(unseen_abbrevs)
         for name, defn in zip(unseen_abbrevs, defs):
@@ -498,7 +499,7 @@ async def _semantic_search_with_filtering(session: Session, queries: list[dict])
                     for name in f.entity.abbreviation_names:
                         if name not in session.seen_abbreviations and name not in unseen_abbrevs:
                             unseen_abbrevs.append(name)
-                abbrev_defs: dict[str, str] = {}
+                abbrev_defs: dict[str, tuple[str, str]] = {}
                 if unseen_abbrevs:
                     defs = await ml_state.abbreviation_defs(unseen_abbrevs)
                     for name, defn in zip(unseen_abbrevs, defs):

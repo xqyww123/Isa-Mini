@@ -22,6 +22,6 @@ lemma targeted_test:
   assumes h1: "f (a::nat) = c"
       and h2: "f (b::nat) = d"
   shows "g (f a) + f b = c + d"
-  by   aoa
+  by  aoa
 
 end

@@ -1,0 +1,60 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: nat
+premises:
+  - h: (2 :: nat) < x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: nat) < x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+--------------------------------------------------
+After initial fill (proof complete)
+--------------------------------------------------
+variables:
+  - x: nat
+premises:
+  - h: (2 :: nat) < x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: nat) < x
+proof:
+  - step id: 1
+    thought: intermediate step
+    operation: Have
+    statement:
+      english: x is greater than 1
+      isabelle: x > 1
+    name: x_gt_1
+    proof:
+      - step id: 1.1
+        operation: Obvious
+  - step id: 2
+    operation: Obvious
+Unfound fact warnings on amended step 2: 0
+Amended step 2 status: success
+--------------------------------------------------
+After amend with FactByName reference
+--------------------------------------------------
+variables:
+  - x: nat
+premises:
+  - h: (2 :: nat) < x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: nat) < x
+proof:
+  - step id: 1
+    thought: intermediate step
+    operation: Have
+    statement:
+      english: x is greater than 1
+      isabelle: x > 1
+    name: x_gt_1
+    proof:
+      - step id: 1.1
+        operation: Obvious
+  - step id: 2
+    operation: Obvious
+    with facts:
+      - x_gt_1: (1 :: nat) < x
+Unfinished nodes: 0
