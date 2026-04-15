@@ -4,13 +4,14 @@ theory Minilang
   imports HOL.List Auto_Sledgehammer.Auto_Sledgehammer
 begin
 
-declare [[ML_debugger, ML_exception_trace, ML_exception_debugger, ML_print_depth=1000]]
+(* declare [[ML_debugger, ML_exception_trace, ML_exception_debugger, ML_print_depth=1000]] *)
 
 definition \<open>NO_SIMP (X::'a::{}) \<equiv> X\<close>
 
 lemma NO_SIMP_cong[cong]: \<open>NO_SIMP (X::'a::{}) \<equiv> NO_SIMP X\<close> .
 
 ML_file \<open>./library/aux.ML\<close>
+ML_file \<open>./library/unify_diagnostic.ML\<close>
 ML_file \<open>./library/function/proof_local_lthy.ML\<close>
 ML_file \<open>./library/function/proof_local_inductive.ML\<close>
 ML_file \<open>./library/function/proof_local_function.ML\<close>

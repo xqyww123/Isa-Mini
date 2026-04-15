@@ -178,6 +178,8 @@ fun minilang_message_packer ctxt =
                  packInt 4
              | MiniLang_Agent.SIMPLIFY_FALLBACK_ONCE_SIMPROC =>
                  packInt 9
+             | MiniLang_Agent.SIMPLIFY_TARGETS_STALE names =>
+                 packPair (packInt, packList packString) (11, names)
              (* (fact_name, pretty_printed_proposition) list *)
              | MiniLang_Agent.SPECIALIZE_RESULT result_facts =>
                  packPair (packInt, packList (packPair (packString, packString)))
@@ -191,6 +193,7 @@ fun minilang_message_packer ctxt =
    in packList pack o filter (fn Minilang.Internal (MiniLang_Agent.INTRO_BINDINGS _) => true
                                  | Minilang.Internal MiniLang_Agent.SIMPLIFY_FALLBACK_NOSYS => true
                                  | Minilang.Internal MiniLang_Agent.SIMPLIFY_FALLBACK_ONCE_SIMPROC => true
+                                 | Minilang.Internal (MiniLang_Agent.SIMPLIFY_TARGETS_STALE _) => true
                                  | Minilang.Internal (MiniLang_Agent.SPECIALIZE_RESULT _) => true
                                  | Minilang.Internal Minilang.PAT_COMPLETENESS_PROOF_OPENED => true
                                  | Minilang.Internal Minilang.TERMINATION_PROOF_OPENED => true
@@ -376,11 +379,21 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
            (if exists (in_rule_net elim_rule_net) props then ["elim"] else [])
         end
 
+      fun abbreviations_in_term ctxt consts term =
+        let val contracted = singleton (Syntax.uncheck_terms ctxt) term
+        in Term.fold_aterms (fn Const (name, _) =>
+              (fn acc =>
+                if is_some (try (Consts.the_abbreviation consts) name)
+                then insert (op =) name acc
+                else acc)
+            | _ => I) contracted []
+        end
+
       val retrieve_entity_callback = {
         name = "IsaMini.retrieve_entity",
         arg_schema = unpackPair (unpackString,
           unpackList (unpackPair (Universal_Key.unpack_entity_kind, unpackString))),
-        ret_schema = packList (packOption (packTuple3 (packString, packList packString, packList packString))),
+        ret_schema = packList (packOption (packTuple4 (packString, packList packString, packList packString, packList packString))),
         function = (fn (state_id, entities) =>
           let val s0 = get_state state_id
               val ctxt = Minilang.context_of s0
@@ -408,10 +421,14 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                            val short_name = case idx_opt of
                                  SOME i => Thm_Name.print (base_extern, i)
                                | NONE => base_extern
+                           val abbrevs = distinct (op =) (maps
+                                (abbreviations_in_term ctxt consts
+                                  o Thm.prop_of o Thm.transfer thy) thms')
                        in if null thms' then NONE
                           else SOME (short_name,
                                      map (SOT o Thm.prop_of o Thm.transfer thy) thms',
-                                     thm_roles thms')
+                                     thm_roles thms',
+                                     abbrevs)
                        end
                    | NONE => NONE
                 end
@@ -422,13 +439,15 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                     let val name = Consts.intern consts name
                         val short = Name_Space.extern ctxt const_space name
                         val T = Consts.the_constraint consts name
-                    in SOME (short, [SOTy T], []) end
+                        val abbrevs = if is_some (try (Consts.the_abbreviation consts) name)
+                                      then [name] else []
+                    in SOME (short, [SOTy T], [], abbrevs) end
                 | retrieve (Universal_Key.TypeK, name) =
-                    SOME (Name_Space.extern ctxt type_space name, [], [])
+                    SOME (Name_Space.extern ctxt type_space name, [], [], [])
                 | retrieve (Universal_Key.ClassK, name) =
-                    SOME (Name_Space.extern ctxt class_space name, [], [])
+                    SOME (Name_Space.extern ctxt class_space name, [], [], [])
                 | retrieve (Universal_Key.LocaleK, name) =
-                    SOME (Name_Space.extern ctxt locale_space name, [], [])
+                    SOME (Name_Space.extern ctxt locale_space name, [], [], [])
           in map (fn e => retrieve e handle ERROR _ => NONE | TYPE _ => NONE) entities end),
         timeout = NONE
       }
@@ -525,6 +544,27 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         timeout = NONE
       }
 
+      val abbreviation_defs_callback = {
+        name = "IsaMini.abbreviation_defs",
+        arg_schema = unpackPair (unpackString, unpackList unpackString),
+        ret_schema = packList (packOption packString),
+        function = (fn (state_id, const_names) =>
+          let val s0 = get_state state_id
+              val ctxt = Minilang.context_of s0
+              val consts = Proof_Context.consts_of ctxt
+              val ctxt' = Config.put Proof_Context.show_abbrevs false ctxt
+              val SOT = MiniLang_Agent.string_of_term ctxt'
+          in map (fn name =>
+              (let val (T, rhs) = Consts.the_abbreviation consts name
+                   val eq = Logic.mk_equals (Const (name, T), rhs)
+               in SOME (SOT eq) end)
+              handle TYPE _ => NONE
+                   | ERROR _ => NONE)
+             const_names
+          end),
+        timeout = NONE
+      }
+
       val validate_prove_in_time_callback = {
         name = "IsaMini.validate_prove_in_time",
         arg_schema = unpackPair (unpackString, unpackList unpackString),
@@ -567,6 +607,70 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         timeout = NONE
       }
 
+      val check_looping_rules_callback = {
+        name = "IsaMini.check_looping_rules",
+        arg_schema = unpackTuple4 (
+          unpackString,            (* state_id *)
+          unpackList unpackString, (* fact_names *)
+          unpackBool,              (* simplify_goal *)
+          unpackList unpackString  (* premise_names *)
+        ),
+        ret_schema = packList (packTuple3 (
+          packInt,                                                       (* fact index *)
+          packString,                                                    (* rule pretty-print *)
+          packList (packPair (packString, MiniLang_Agent.pack_raw_term)) (* (pretty, raw_term) *)
+        )),
+        function = (fn (state_id, fact_names, simplify_goal, premise_names) =>
+          let val s0 = get_state state_id
+              val ctxt = Minilang.context_of s0
+              val thy = Proof_Context.theory_of ctxt
+              val SOT = MiniLang_Agent.string_of_term ctxt
+
+              (* Resolve fact names to thms *)
+              val facts_thms = map (fn name =>
+                Proof_Context.get_thms ctxt name
+                handle ERROR _ => []) fact_names
+
+              (* Get target terms to search in *)
+              val st = Minilang.leading_proof_sequent_of s0
+              val goal_prop = Thm.prop_of st
+              val goal_concl = Logic.strip_imp_concl goal_prop
+              val prem_terms =
+                flat (map (fn name =>
+                  map Thm.prop_of (Proof_Context.get_thms ctxt name)
+                  handle ERROR _ => []) premise_names)
+              val search_terms =
+                (if simplify_goal then [goal_concl] else []) @ prem_terms
+
+              (* For each fact, check if any simp rule loops *)
+              val results = map_index (fn (i, thms) =>
+                let val meta_rules = maps (Raw_Simplifier.mksimps ctxt) thms
+                    val looping_rules = filter (fn meta_eq =>
+                      let val (lhs, rhs) = Logic.dest_equals
+                              (Logic.strip_imp_concl (Thm.prop_of meta_eq))
+                      in Minilang.simp_rule_loops thy (lhs, rhs) end
+                      handle TERM _ => false) meta_rules
+                in
+                  if null looping_rules then NONE
+                  else
+                    let (* Find matching subterms in target terms *)
+                        val lhss = map_filter (fn rule =>
+                          SOME (fst (Logic.dest_equals
+                            (Logic.strip_imp_concl (Thm.prop_of rule))))
+                          handle TERM _ => NONE) looping_rules
+                        val matches = distinct (fn (a, b) => Term.aconv (a, b))
+                          (flat (map (fn lhs =>
+                            flat (map (Minilang.find_matching_subterms thy lhs) search_terms)
+                          ) lhss))
+                        val rule_pretty = SOT (Thm.prop_of (hd thms))
+                    in SOME (i, rule_pretty, map (fn t => (SOT t, t)) matches)
+                    end
+                end) facts_thms
+          in map_filter I results
+          end handle ERROR msg => error (String.concat ["Error: ", msg])),
+        timeout = NONE
+      }
+
       (* Build AoA command with local callbacks *)
       val s0_ptree = Minilang.print_state s0
       val {constants, theorems, types, classes, locales,
@@ -597,8 +701,10 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
           mk_callback check_term_callback,
           mk_callback schematic_vars_callback,
           mk_callback potential_defs_callback,
+          mk_callback abbreviation_defs_callback,
           mk_callback contextual_thms_callback,
           mk_callback validate_prove_in_time_callback,
+          mk_callback check_looping_rules_callback,
           Universal_Key.make_universal_key_callback' (SOME thm_cache) (Context.Proof ctxt),
           Config.make_config_lookup_callback (Context.Proof ctxt),
           constants, theorems, types, classes, locales,

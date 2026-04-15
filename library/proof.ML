@@ -273,6 +273,15 @@ val simp_rule_loops : theory -> term * term -> bool
    prover handles conditions of conditional rules. *)
 val thms_to_once_simprocs : Proof.context -> thm list -> simproc list
 
+(* Find all subterms of t that match pattern pat.
+   Returns a list of matching subterms (no duplicates by aconv). *)
+val find_matching_subterms : theory -> term -> term -> term list
+
+(* Create simprocs that fire only on specific target terms.
+   Unlike thms_to_once_simprocs, these fire on ALL indicated targets, not just once.
+   Each (thm, targets) pair produces simprocs whose proc checks aconv against targets. *)
+val thms_to_targeted_simprocs : Proof.context -> (thm * term list) list -> simproc list
+
 (* Detect bad recursive definitions where a schematized LHS matches a
    subterm of its own RHS, which would produce a looping simp rule.
    Returns true if looping is detected. *)
@@ -2720,16 +2729,11 @@ fun SPECIALIZE' prep_thms prep_insts opt_name raw_rules raw_insts raw_facts
     val facts = prep_thms ctxt raw_facts
     val result = if null facts then rule'
                  else Minilang_Aux.xOF true ctxt facts rule'
-                      handle THM (_, _, [fact_thm, rule_thm]) =>
-                        let val fact_desc =
-                              if Thm.has_name_hint fact_thm
-                              then Minilang_Aux.simp_fact_name' (Thm.get_name_hint fact_thm)
-                              else "\<open>" ^ Thm.string_of_thm ctxt fact_thm ^ "\<close>"
-                        in raise OPR_FAIL (INVALID_OPR,
-                          String.concat ["the given fact ", fact_desc,
-                            " mismatches the target premise \<open>",
-                            Syntax.string_of_term ctxt (hd (Thm.prems_of rule_thm)), "\<close>"])
-                        end
+                      handle THM _ =>
+                        raise OPR_FAIL (INVALID_OPR,
+                          case Unify_Diagnostic.diagnose_of_failure ctxt rule' facts of
+                            SOME msg => msg
+                          | NONE => "the given facts mismatch the rule premises")
 
     (* 4. Generate name if not provided *)
     val (name, ctxt') = case opt_name of
@@ -2749,7 +2753,7 @@ fun SPECIALIZE' prep_thms prep_insts opt_name raw_rules raw_insts raw_facts
   | SPECIALIZE' _ _ _ _ _ _ _ = raise BROKEN_INVARIANT
 
 fun gen_SPECIALIZE prep_thms prep_insts opt_name raw_rules raw_insts raw_facts =
-  timed_OPR 8000 (SPECIALIZE' prep_thms prep_insts opt_name raw_rules raw_insts raw_facts)
+  timed_OPR 8 (SPECIALIZE' prep_thms prep_insts opt_name raw_rules raw_insts raw_facts)
 
 fun read_inst_terms ctxt raw_insts =
   let val (idxs, raws) = ListPair.unzip raw_insts
@@ -4134,6 +4138,61 @@ fun thms_to_once_simprocs ctxt (thms: thm list) : simproc list =
             identifier = [] })
       end handle TERM _ => NONE
   in map_filter I (map_index mk_once meta_rules) end
+
+(* Find all subterms of t that match pattern pat.
+   Returns a list of matching subterms (no duplicates by aconv). *)
+fun find_matching_subterms thy pat t =
+  let
+    fun collect (t as (f $ x)) acc =
+          let val acc' = collect f (collect x acc)
+          in if (Pattern.match thy (pat, t) (Vartab.empty, Vartab.empty); true)
+                handle Pattern.MATCH => false
+             then if exists (fn t' => Term.aconv (t, t')) acc' then acc'
+                  else t :: acc'
+             else acc'
+          end
+      | collect (Abs (_, _, body)) acc = collect body acc
+      | collect t acc =
+          if (Pattern.match thy (pat, t) (Vartab.empty, Vartab.empty); true)
+             handle Pattern.MATCH => false
+          then if exists (fn t' => Term.aconv (t, t')) acc then acc
+               else t :: acc
+          else acc
+  in collect t [] end
+
+(* Create simprocs that fire only on specific target terms.
+   Each firing consumes the matched target from a mutable list, so the simproc
+   fires at most once per indicated target. This prevents loops when the rule
+   is structurally self-looping (the rewritten result contains a new aconv match). *)
+fun thms_to_targeted_simprocs ctxt (entries: (thm * term list) list) : simproc list =
+  let
+    fun mk_targeted (i, (thm, targets)) =
+      let
+        val meta_rules = Raw_Simplifier.mksimps ctxt thm
+        val remaining = Unsynchronized.ref targets
+      in
+        map_index (fn (j, rule) =>
+          let
+            val (lhs, _) = Logic.dest_equals
+                  (Logic.strip_imp_concl (Thm.prop_of rule))
+            fun proc _ ct =
+              let val t = Thm.term_of ct
+              in case find_first (fn tgt => Term.aconv (t, tgt)) (!remaining) of
+                   SOME matched =>
+                     (remaining := filter (fn tgt => not (Term.aconv (tgt, matched))) (!remaining);
+                      SOME rule)
+                 | NONE => NONE
+              end
+          in
+            SOME (Simplifier.make_simproc ctxt
+              { name = "targeted_simproc_" ^ string_of_int i ^ "_" ^ string_of_int j,
+                lhss = [lhs],
+                proc = K proc,
+                identifier = [] })
+          end handle TERM _ => NONE
+        ) meta_rules
+      end
+  in map_filter I (flat (map_index mk_targeted entries)) end
 
 (* Detect bad recursive definitions: if a schematized LHS matches a
    subterm of its own RHS, the generated simp rule would loop. *)

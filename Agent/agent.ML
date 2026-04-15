@@ -40,7 +40,8 @@ datatype ('term, 'thm, 'fact) command =
   | SORRY_ONLY
   | HAMMER   of ('term, 'fact) extended_fact list (*with facts*) * int (*timeout in seconds*)
   | INTRO    of bindings option * bool (*split_conj*)
-  | SIMPLIFY of ('term, 'fact) extended_fact list (*simp facts*) * bool (*use_system_simps*)
+  | SIMPLIFY of (('term, 'fact) extended_fact * term list option) list (*simp facts with optional targets*)
+              * bool (*use_system_simps*)
               * string list (*premise_names*) * bool (*simplify_goal*)
               * bindings option
   | SPECIALIZE of string (*result name*)
@@ -78,6 +79,7 @@ exception INTRO_BINDINGS of {
   }
 exception SIMPLIFY_FALLBACK_NOSYS
 exception SIMPLIFY_FALLBACK_ONCE_SIMPROC
+exception SIMPLIFY_TARGETS_STALE of string list (* names of discarded rules *)
 (* (fact_name, pretty_printed_proposition) list — the derived facts produced by SPECIALIZE *)
 exception SPECIALIZE_RESULT of (string * string) list
 (* (function_name, pretty_type) — emitted after DEFINE so the Python side
@@ -144,6 +146,7 @@ exception INTRO_BINDINGS of {
   }
 exception SIMPLIFY_FALLBACK_NOSYS
 exception SIMPLIFY_FALLBACK_ONCE_SIMPROC
+exception SIMPLIFY_TARGETS_STALE of string list
 (* (fact_name, pretty_printed_proposition) list — the derived facts produced by SPECIALIZE *)
 exception SPECIALIZE_RESULT of (string * string) list
 exception DEFINE_RESULT of string * string
@@ -178,7 +181,8 @@ datatype ('term, 'thm, 'fact) command =
   | SORRY_ONLY
   | HAMMER   of ('term, 'fact) extended_fact list (*with facts*) * int (*timeout in seconds*)
   | INTRO    of bindings option * bool (*split_conj*)
-  | SIMPLIFY of ('term, 'fact) extended_fact list (*simp facts*) * bool (*use_system_simps*)
+  | SIMPLIFY of (('term, 'fact) extended_fact * term list option) list (*simp facts with optional targets*)
+              * bool (*use_system_simps*)
               * string list (*premise_names*) * bool (*simplify_goal*)
               * bindings option
   | SPECIALIZE of string (*result name*)
@@ -323,7 +327,14 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (split_conj: 
         val goal_term = Thm.prop_of st
                     |> Logic.dest_implies |> fst
                     |> Minilang.deconflict_bound_names ctxt
-        val (vars, prems, _) = Minilang.strip_meta_and_hol_hhf goal_term
+        val (vars, prems0, _) = Minilang.strip_meta_and_hol_hhf goal_term
+
+        (* strip_meta_and_hol_hhf leaves dangling Bound indices in prems;
+           substitute them with Free variables so that aconv matching against
+           provided_prem_names (which contain Free-based internal_terms from
+           compute_bindings) works correctly. *)
+        val frees = rev (map Free vars)
+        val prems = map (fn t => Term.subst_bounds (frees, t)) prems0
 
         (* Step 3: Process variables - try to match with provided names, auto-generate if not found *)
         val (var_bindings, matched_var_names, _) =
@@ -454,7 +465,15 @@ fun compute_bindings (s:Minilang.state) (var_names: string list) (fact_names: st
         (* Extract quantified variables and premises from goal *)
         val goal_term = Thm.prop_of st |> Logic.dest_implies |> fst
                      |> Minilang.deconflict_bound_names ctxt
-        val (vars, prems, _) = Minilang.strip_meta_and_hol_hhf goal_term
+        val (vars, prems0, _) = Minilang.strip_meta_and_hol_hhf goal_term
+
+        (* strip_meta_and_hol_hhf strips Abs binders without substituting
+           the bound variables, so prems0 may contain dangling Bound indices.
+           Replace them with Free variables so that downstream pretty-printing
+           (string_of_term) does not crash with fastype_of: Bound.
+           vars is outermost-first; Bound 0 is the innermost (last) var. *)
+        val frees = rev (map Free vars)
+        val prems = map (fn t => Term.subst_bounds (frees, t)) prems0
 
         (* Check length constraints *)
         val num_vars = length vars
@@ -511,6 +530,7 @@ fun check_need_intro consider_conj (s:Minilang.state) : bool =
 fun AUTO_SIMPLIFY
     (counters: counters)
     (simp_thms: thm list)
+    (targeted_thms: (thm * term list) list)
     (use_system_simps: bool)
     (premise_names: string list)
     (simplify_goal: bool)
@@ -581,8 +601,20 @@ fun AUTO_SIMPLIFY
     (* Execute SIMPLIFY with both naming functions - call operation *)
     val simplify_timeout = SOME (Time.fromSeconds 10)
 
-    (* Detect self-looping user rules and partition them *)
+    (* Build targeted simprocs from user-selected targets.
+       Check for stale targets: if a target term no longer exists in the goal,
+       discard that rule and report. *)
     val thy = Proof_Context.theory_of ctxt
+    val goal_term = Thm.prop_of (Minilang.leading_proof_sequent_of s)
+    val (valid_targeted, stale_targeted) =
+      List.partition (fn (_, targets) =>
+        forall (fn tgt => Term.exists_subterm (fn t => Term.aconv (t, tgt)) goal_term) targets
+      ) targeted_thms
+    val targeted_simprocs = Minilang.thms_to_targeted_simprocs ctxt valid_targeted
+
+    val fell_back_targets_stale = not (null stale_targeted)
+
+    (* Detect self-looping user rules among non-targeted simp_thms and partition them *)
     fun thm_loops thm =
       exists (fn meta_eq =>
         let val (lhs, rhs) = Logic.dest_equals
@@ -596,7 +628,7 @@ fun AUTO_SIMPLIFY
 
     fun do_simplify thms simprocs use_sys =
       (Minilang.SIMPLIFY_GOAL_AND_PREMISES
-        thms simprocs use_sys premise_names simplify_goal
+        thms (simprocs @ targeted_simprocs) use_sys premise_names simplify_goal
         (SOME naming_prems_fn) (SOME naming_vars_fn) simplify_timeout) s
 
     fun mk_base_simprocs () =
@@ -690,6 +722,14 @@ fun AUTO_SIMPLIFY
     val _ = if fell_back_once
             then Minilang.get_reporter ()
                    (Minilang.Internal SIMPLIFY_FALLBACK_ONCE_SIMPROC)
+            else ()
+    val _ = if fell_back_targets_stale
+            then let val stale_names = map (fn (thm, _) =>
+                        Thm.get_name_hint thm
+                        handle ERROR _ => "<unnamed>") stale_targeted
+                 in Minilang.get_reporter ()
+                      (Minilang.Internal (SIMPLIFY_TARGETS_STALE stale_names))
+                 end
             else ()
   in
     s'
@@ -813,10 +853,21 @@ val auto_apply_attrib : attribute =
 
 fun interpret_i (config as (cfg, budget, counters)) cmd s =
   case cmd of
-      SIMPLIFY (simp_facts, use_system_simps, premise_names, simplify_goal, user_bindings_opt) =>
+      SIMPLIFY (simp_facts_with_targets, use_system_simps, premise_names, simplify_goal, user_bindings_opt) =>
         let val ctxt = Minilang.context_of s
-            val simp_thms = resolve_to_thms (mk_counter ()) ctxt simp_facts
-         in AUTO_SIMPLIFY counters simp_thms use_system_simps premise_names
+            val counter = mk_counter ()
+            (* Split facts into targeted and non-targeted *)
+            val (targeted_entries, normal_facts) =
+              fold_rev (fn (fact, SOME targets) => apfst (cons (fact, targets))
+                         | (fact, NONE) => apsnd (cons fact))
+                simp_facts_with_targets ([], [])
+            val simp_thms = resolve_to_thms counter ctxt normal_facts
+            val targeted_thms =
+              maps (fn (fact, targets) =>
+                map (fn thm => (thm, targets))
+                    (resolve_to_thms counter ctxt [fact])
+              ) targeted_entries
+         in AUTO_SIMPLIFY counters simp_thms targeted_thms use_system_simps premise_names
                           simplify_goal user_bindings_opt s
         end
     | UNFOLD facts =>
@@ -1014,9 +1065,10 @@ fun check_extended_fact ctxt (FactByName name) = FactByName (read_fact name)
   | check_extended_fact ctxt (FactInTime stmt) = FactInTime (read_prop ctxt stmt)
 
 in
-fun check_command_i s (SIMPLIFY (facts, use_sys, prems, simp_goal, bindings_opt)) =
+fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, bindings_opt)) =
       let val ctxt = Minilang.context_of s
-      in SIMPLIFY (map (check_extended_fact ctxt) facts, use_sys, prems, simp_goal, bindings_opt) end
+      in SIMPLIFY (map (fn (fact, targets) => (check_extended_fact ctxt fact, targets)) facts_with_targets,
+                   use_sys, prems, simp_goal, bindings_opt) end
   | check_command_i s (RULE facts) =
       let val ctxt = Minilang.context_of s
       in RULE (map (check_extended_fact ctxt) facts) end

@@ -1,0 +1,129 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: int
+premises:
+  - h: (0 :: int) < x
+You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: (0 :: int) < x * x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+Step 1 status: failure
+--------------------------------------------------
+After step 1 (bad Have, should fail)
+--------------------------------------------------
+variables:
+  - x: int
+premises:
+  - h: (0 :: int) < x
+You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: (0 :: int) < x * x
+proof:
+  - step id: 1
+    thought: intentionally bad
+    operation: Have
+    statement:
+      english: bad
+      isabelle: 1 1 1
+    name: bad
+    Error: |
+      Fail to claim the intermediate subgoal because: Syntax Error in Term Language.
+      Type unification failed: No type arity fun :: one
+      
+      Type error in application: operator not of function type
+      
+      Operator:  1::??'a :: ??'a
+      Operand:   1::??'b :: ??'b
+      
+      Coercion Inference:
+      
+      Local coercion insertion on the operator failed:
+      No complex coercion from "??'a" to fun
+    proof: empty
+    Error: Evaluation cancelled due to failures above
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Step 2 status: cancelled
+--------------------------------------------------
+After step 2 (cancelled Obvious)
+--------------------------------------------------
+variables:
+  - x: int
+premises:
+  - h: (0 :: int) < x
+You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: (0 :: int) < x * x
+proof:
+  - step id: 1
+    thought: intentionally bad
+    operation: Have
+    statement:
+      english: bad
+      isabelle: 1 1 1
+    name: bad
+    Error: |
+      Fail to claim the intermediate subgoal because: Syntax Error in Term Language.
+      Type unification failed: No type arity fun :: one
+      
+      Type error in application: operator not of function type
+      
+      Operator:  1::??'a :: ??'a
+      Operand:   1::??'b :: ??'b
+      
+      Coercion Inference:
+      
+      Local coercion insertion on the operator failed:
+      No complex coercion from "??'a" to fun
+    proof: empty
+    Error: Evaluation cancelled due to failures above
+  - step id: 2
+    operation: Obvious
+    Error: the evaluation is cancelled due to failures in preceding nodes
+Error: Evaluation cancelled due to failures above
+Step 1 (re-filled) status: success
+Step 2 correctly deleted by fill replacement
+--------------------------------------------------
+After re-fill step 1 (valid Have)
+--------------------------------------------------
+variables:
+  - x: int
+premises:
+  - h: (0 :: int) < x
+You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: (0 :: int) < x * x
+proof:
+  - step id: 1
+    thought: valid helper
+    operation: Have
+    statement:
+      english: x is positive
+      isabelle: x > 0
+    name: x_pos
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: int) < x
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+--------------------------------------------------
+After completing proof
+--------------------------------------------------
+variables:
+  - x: int
+premises:
+  - h: (0 :: int) < x
+You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+goal: (0 :: int) < x * x
+proof:
+  - step id: 1
+    thought: valid helper
+    operation: Have
+    statement:
+      english: x is positive
+      isabelle: x > 0
+    name: x_pos
+    proof:
+      - step id: 1.1
+        operation: Obvious
+  - step id: 2
+    operation: Obvious
+Unfinished nodes: 0

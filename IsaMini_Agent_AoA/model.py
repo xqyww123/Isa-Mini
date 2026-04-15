@@ -83,14 +83,16 @@ class EditFailureResponse(NamedTuple):
 
 class IsabelleEntity:
     """A resolved Isabelle entity (constant, type, class, locale, etc.) with display info."""
-    __slots__ = ('full_name', 'short_name', 'expression', 'kind', 'roles')
+    __slots__ = ('full_name', 'short_name', 'expression', 'kind', 'roles', 'abbreviation_names')
     def __init__(self, full_name: str, short_name: str, expression: list[str],
-                 kind: EntityKind, roles: list[str] = []):
+                 kind: EntityKind, roles: list[str] = [],
+                 abbreviation_names: list[str] = []):
         self.full_name = full_name
         self.short_name = short_name
         self.expression = expression
         self.kind = kind
         self.roles = roles
+        self.abbreviation_names = abbreviation_names
 
 class RetrievedEntity(NamedTuple):
     """Result of semantic search: an entity with its similarity score and interpretation."""
@@ -121,7 +123,8 @@ class IsabelleFact_Presented(IsabelleFact, IsabelleEntity):
     theorem-like (see _THEOREM_KINDS)."""
     __slots__ = ('fact',)
     def __init__(self, full_name: str, short_name: str, fact: Fact, expression: list[term],
-                 kind: EntityKind = EntityKind.THEOREM, roles: list[str] = []):
+                 kind: EntityKind = EntityKind.THEOREM, roles: list[str] = [],
+                 abbreviation_names: list[str] = []):
         assert kind in _THEOREM_KINDS, \
             f"IsabelleFact_Presented requires a theorem-like kind, got {kind}"
         self.full_name = full_name
@@ -130,6 +133,7 @@ class IsabelleFact_Presented(IsabelleFact, IsabelleEntity):
         self.expression = expression
         self.kind = kind
         self.roles = roles
+        self.abbreviation_names = abbreviation_names
     def name(self) -> str:
         return self.short_name
     def print(self, indent: int, file: MyIO) -> None:
@@ -732,6 +736,16 @@ class Simplify_Fallback_Once_Simproc_Msg(Message):
     """Simplification succeeded only after limiting each rule to fire at most once."""
     pass
 
+class Simplify_Targets_Stale_Msg(Message):
+    """Some rewrite target terms no longer exist in the current goal.
+    The affected rules were discarded."""
+    def __init__(self, discarded_names: list[str]) -> None:
+        super().__init__()
+        self.discarded_names = discarded_names
+    @classmethod
+    def unpack(cls, data: list) -> 'Simplify_Targets_Stale_Msg':
+        return cls(data)
+
 class Specialize_Result_Msg(Message):
     """Result facts produced by SPECIALIZE.
     Each entry is a (fact_name, pretty_printed_proposition) pair."""
@@ -800,6 +814,8 @@ def unpack_message(data) -> Message:
             return Termination_Proof_Opened_Msg()
         case (10, (name, ty)):
             return Define_Result_Msg(name, ty)
+        case (11, names):
+            return Simplify_Targets_Stale_Msg.unpack(names)
         case _:
             raise Exception(f"BUG bad message kind: {data}")
 
@@ -1030,8 +1046,9 @@ class Minilang_Operation(NamedTuple):
     def INTRO(bindings: Bindings | None, split: bool) -> 'Minilang_Operation':
         return Minilang_Operation("INTRO", (bindings, split))
     @staticmethod
-    def SIMPLIFY(fact_refs: 'list[IsabelleFact]', use_system_simps: bool, premise_names: list[str], simplify_goal: bool, bindings: tuple[list[tuple[str, str, str]], list[tuple[lambda_term, str, str]]] | None) -> 'Minilang_Operation':
-        return Minilang_Operation("SIMPLIFY", ([r.pack() for r in fact_refs], use_system_simps, premise_names, simplify_goal, bindings))
+    def SIMPLIFY(facts_with_targets: 'list[tuple[IsabelleFact, list[lambda_term] | None]]', use_system_simps: bool, premise_names: list[str], simplify_goal: bool, bindings: tuple[list[tuple[str, str, str]], list[tuple[lambda_term, str, str]]] | None) -> 'Minilang_Operation':
+        packed_facts = [(r.pack(), targets) for r, targets in facts_with_targets]
+        return Minilang_Operation("SIMPLIFY", (packed_facts, use_system_simps, premise_names, simplify_goal, bindings))
     @staticmethod
     def UNFOLD(fact_refs: 'list[IsabelleFact]') -> 'Minilang_Operation':
         return Minilang_Operation("UNFOLD", [r.pack() for r in fact_refs])
@@ -1215,7 +1232,7 @@ class Minilang_State:
                 if result is None:
                     out[idx] = IsabelleFact_Unfound(fact)
                 else:
-                    short_name, exprs, roles = result
+                    short_name, exprs, roles, _ = result
                     out[idx] = IsabelleFact_Presented(
                         full_name=query_name, short_name=short_name,
                         fact=fact, expression=exprs, roles=roles)
@@ -1248,7 +1265,7 @@ class Minilang_State:
             if result is None:
                 out[idx] = IsabelleFact_Unfound(original_fact)
             else:
-                short_name, exprs, roles = result
+                short_name, exprs, roles, _ = result
                 out[idx] = IsabelleFact_Presented(
                     full_name=query_name, short_name=short_name,
                     fact=original_fact, expression=exprs,
@@ -1345,18 +1362,20 @@ class Minilang_State:
         out: list[RetrievedEntity] = []
         for (score, rec), info in zip(scored_recs, infos):
             if info is None:
-                short_name, exprs, roles = rec.name, [], []
+                short_name, exprs, roles, abbrev_names = rec.name, [], [], []
             else:
-                short_name, exprs, roles = info
+                short_name, exprs, roles, abbrev_names = info
             if rec.kind in _THEOREM_KINDS:
                 entity: IsabelleEntity = IsabelleFact_Presented(
                     full_name=rec.name, short_name=short_name,
                     fact=FactByName(refer_by="name", name=short_name),
-                    expression=exprs, kind=rec.kind, roles=roles)
+                    expression=exprs, kind=rec.kind, roles=roles,
+                    abbreviation_names=abbrev_names)
             else:
                 entity = IsabelleEntity(
                     full_name=rec.name, short_name=short_name,
-                    expression=exprs, kind=rec.kind, roles=roles)
+                    expression=exprs, kind=rec.kind, roles=roles,
+                    abbreviation_names=abbrev_names)
             out.append(RetrievedEntity(
                 entity=entity,
                 score=score,
@@ -1380,15 +1399,17 @@ class Minilang_State:
         result = await self.connection.callback("IsaMini.need_intro", (self.name, consider_conj))
         return result
     async def _retrieve_entity(self, entities: list[tuple[EntityKind, str]]
-        ) -> list[tuple[str, list[str], list[str]] | None]:
+        ) -> list[tuple[str, list[str], list[str], list[str]] | None]:
         """Retrieve entity info by kind and name (short or full).
-        Returns list of (short_name, extra_strings, roles) or None per entity.
+        Returns list of (short_name, extra_strings, roles, abbreviation_names) or None per entity.
         extra_strings: propositions for theorems/rules, [type] for constants, [] for others.
-        roles: list of system rule set tags ('simp', 'intro', 'elim') for theorems, [] for others."""
+        roles: list of system rule set tags ('simp', 'intro', 'elim') for theorems, [] for others.
+        abbreviation_names: full names of abbreviation constants involved in the entity."""
         args = [(int(kind), name) for kind, name in entities]
         results = await self.connection.callback(
             "IsaMini.retrieve_entity", (self.name, args))
-        return [(pretty_unicode(r[0]), [pretty_unicode(e) for e in r[1]], list(r[2]))
+        return [(pretty_unicode(r[0]), [pretty_unicode(e) for e in r[1]], list(r[2]),
+                 [pretty_unicode(n) for n in r[3]])
                 if r is not None else None for r in results]
     async def check_term(self, term_str: str) -> tuple[typ, Vars, Vars]:
         """
@@ -1432,6 +1453,29 @@ class Minilang_State:
                         short_name=short_name,
                         fact=FactByName(refer_by="name", name=short_name),
                         expression=[prop]) for full_name, short_name, prop in result]
+
+    async def abbreviation_defs(self, full_names: list[str]) -> list[str | None]:
+        """Get pretty-printed abbreviation equations (c ≡ rhs) by full name.
+        Returns None for non-abbreviation constants."""
+        if not full_names:
+            return []
+        results = await self.connection.callback(
+            "IsaMini.abbreviation_defs", (self.name, full_names))
+        return [pretty_unicode(r) if r is not None else None for r in results]
+
+    async def check_looping_rules(self, fact_names: list[str],
+                                   simplify_goal: bool,
+                                   premise_names: list[str]
+                                   ) -> list[tuple[int, str, list[tuple[str, lambda_term]]]]:
+        """Check which user-provided rewrite rules are self-looping.
+        Returns [(fact_index, rule_pretty, [(match_pretty, match_raw_term)])]
+        for each looping rule with matching subterms in the rewrite targets."""
+        if not fact_names:
+            return []
+        result = await self.connection.callback(
+            "IsaMini.check_looping_rules",
+            (self.name, fact_names, simplify_goal, premise_names))
+        return result
 
     async def validate_prove_in_time(self, statements: list[str]) -> list[str | None]:
         """Validate prove-in-time statements. Returns None per provable, error string per unprovable."""
@@ -2051,17 +2095,24 @@ class Node(ABC):
                 for c in node.sub_nodes[found_i:]
             ):
                 raise CannotFill_BadNode(id)
-        # Replacement semantics: drop the target node (if it exists) and
-        # everything after it so that append puts the new node in that slot.
+        # Replacement semantics: delete the target node (if it exists) and
+        # everything after it via the standard deletion path, then refresh
+        # the predecessor so the state chain is correct before append.
         assert isinstance(node, NonLeaf_Node), (
             "fill's target must be a NonLeaf_Node — Leaf nodes have no "
             "children to fill into")
+        rp: 'Node | None' = None
         for i, child in enumerate(node.sub_nodes):
             if child.id == id:
-                del node.sub_nodes[i:]
-                node._open()  # in case a deleted node had closed the block
+                rp = child._delete_me()
+                while i < len(node.sub_nodes):
+                    node._delete_child(node.sub_nodes[i])
                 node._is_trivial = None
                 break
+        if rp is not None:
+            await rp._refresh_me_alone()
+            if rp.parent is not None:
+                await rp._refresh_all_after_me()
         try:
             ret = await node.append(pn)
         except GoalIsNontrivial as e:
@@ -3934,6 +3985,66 @@ class Derive(Leaf):
 
 #### Rewrite
 
+# (fact_index, rule_pretty, [(match_pretty, match_raw_term)])
+LoopingRuleInfo = tuple[int, str, list[tuple[str, lambda_term]]]
+
+class Interaction_SelectRewriteTargets(Interaction):
+    """Interaction for selecting specific subterms to rewrite when a rule loops."""
+    def __init__(self, looping_rules: list[LoopingRuleInfo],
+                 fact_names: list[str]):
+        self.looping_rules = looping_rules
+        self.fact_names = fact_names
+    async def prompt(self, indent: int, file: MyIO) -> None:
+        for fact_idx, rule_pretty, matches in self.looping_rules:
+            fact_name = self.fact_names[fact_idx] if fact_idx < len(self.fact_names) else f"rule {fact_idx}"
+            print_indent(indent, file)
+            file.write(f"Rule '{fact_name}' ({rule_pretty}) would cause infinite rewriting.\n")
+            if matches:
+                print_indent(indent, file)
+                file.write("To use this rule safely, select which specific subterm(s) to rewrite:\n")
+                for i, (pretty, _raw) in enumerate(matches):
+                    print_indent(indent + 1, file)
+                    file.write(f"{i}. {pretty}\n")
+            else:
+                print_indent(indent, file)
+                file.write("No matching subterms found in rewrite targets.\n")
+            print_indent(indent, file)
+            file.write("Answer with the index(es) of the subterm(s) to rewrite, or leave empty to drop this rule.\n")
+    async def answer(self, answer: answer) -> list[tuple[int, list[lambda_term]]]:
+        """Returns [(fact_index, [selected_raw_terms])] for each looping rule.
+        Empty selection for a rule means drop it."""
+        result: list[tuple[int, list[lambda_term]]] = []
+        if isinstance(answer, str):
+            raise Interaction_BadAnswer("This interaction expects index selection, not text.")
+        # answer is a list of indices — applied to all looping rules sequentially
+        # For simplicity: if there's one looping rule, indices select its subterms;
+        # if multiple, this needs a richer protocol. For now, support single-rule case.
+        if len(self.looping_rules) == 1:
+            fact_idx, _, matches = self.looping_rules[0]
+            if not answer:
+                result.append((fact_idx, []))
+            else:
+                selected_terms: list[lambda_term] = []
+                for idx in answer:
+                    if idx < 0 or idx >= len(matches):
+                        raise Interaction_BadAnswer(
+                            f"Index {idx} out of range (0–{len(matches) - 1}).")
+                    selected_terms.append(matches[idx][1])
+                result.append((fact_idx, selected_terms))
+        else:
+            # Multiple looping rules: treat answer as list of lists
+            # For now, apply same indices to all rules (can be refined later)
+            for fact_idx, _, matches in self.looping_rules:
+                if not answer:
+                    result.append((fact_idx, []))
+                else:
+                    selected_terms = []
+                    for idx in answer:
+                        if 0 <= idx < len(matches):
+                            selected_terms.append(matches[idx][1])
+                    result.append((fact_idx, selected_terms))
+        return result
+
 Rewrite_ToolArg = TypedDict('Rewrite_ToolArg', {
     'thought': str,
     'using': list[FactByName | FactByProposition],
@@ -3948,6 +4059,8 @@ class Rewrite_InternalToolArg(NamedTuple):
     rewrite_goal: bool
     rewrite_premises: list[str]
     using: list[IsabelleFact]
+    # Per-fact target terms: None = use normally, [] = drop, [t1,t2] = targeted simproc
+    fact_targets: list[list[lambda_term] | None] | None = None
 
 @proof_operation("Rewrite", Rewrite_ToolArg)
 class Rewrite(Leaf):
@@ -3957,6 +4070,7 @@ class Rewrite(Leaf):
         self.rewrite_goal = arg.rewrite_goal
         self.rewrite_premises = arg.rewrite_premises
         self.using = arg.using
+        self.fact_targets = arg.fact_targets  # per-fact target terms
         self.bindings: Bindings | None = None
         self.running_time = 0
     def quickview_title(self) -> str:
@@ -3972,19 +4086,51 @@ class Rewrite(Leaf):
 
     @staticmethod
     def interactive_gen(arg: Rewrite_ToolArg) -> parsing_node:
-        """Resolve facts and create Rewrite node."""
+        """Resolve facts and create Rewrite node.
+        If any rule is self-looping, raise an interaction for target selection."""
         async def parse(alive_state: Minilang_State,
                         exact_state: Minilang_State | None = None) -> gen_node:
             # FactByName | FactByProposition only — no interactions possible
             fetched = cast(list[IsabelleFact], await alive_state.fetch_facts(arg["using"]))
-            internal = Rewrite_InternalToolArg(
-                thought=arg["thought"],
-                use_system_simplifiers=arg["use system simplifiers"],
-                rewrite_goal=arg["rewrite goal"],
-                rewrite_premises=arg["rewrite premises"],
-                using=fetched,
-            )
-            return lambda config: Rewrite(config, internal)
+
+            # Check for looping rules
+            fact_names = [f.name() for f in fetched
+                          if not isinstance(f, IsabelleFact_Unfound)]
+            looping_info: list[LoopingRuleInfo] = []
+            if fact_names:
+                looping_info = await alive_state.check_looping_rules(
+                    fact_names, arg["rewrite goal"], arg["rewrite premises"])
+
+            if looping_info:
+                # Raise interaction for target selection
+                async def kontinue(results: list[Any]) -> gen_node:
+                    selections: list[tuple[int, list[lambda_term]]] = results[0]
+                    # Build per-fact targets: None for non-looping, list for looping
+                    fact_targets: list[list[lambda_term] | None] = [None] * len(fetched)
+                    for fact_idx, selected_terms in selections:
+                        if fact_idx < len(fact_targets):
+                            fact_targets[fact_idx] = selected_terms
+                    internal = Rewrite_InternalToolArg(
+                        thought=arg["thought"],
+                        use_system_simplifiers=arg["use system simplifiers"],
+                        rewrite_goal=arg["rewrite goal"],
+                        rewrite_premises=arg["rewrite premises"],
+                        using=fetched,
+                        fact_targets=fact_targets,
+                    )
+                    return lambda config: Rewrite(config, internal)
+                raise RaiseInteraction(
+                    [Interaction_SelectRewriteTargets(looping_info, fact_names)],
+                    kontinue)
+            else:
+                internal = Rewrite_InternalToolArg(
+                    thought=arg["thought"],
+                    use_system_simplifiers=arg["use system simplifiers"],
+                    rewrite_goal=arg["rewrite goal"],
+                    rewrite_premises=arg["rewrite premises"],
+                    using=fetched,
+                )
+                return lambda config: Rewrite(config, internal)
         return parse
 
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
@@ -4061,8 +4207,16 @@ class Rewrite(Leaf):
             var_bindings = [(vb.internal_varname, vb.external_varname, vb.type) for vb in self.bindings[0]]
             fact_bindings = [(fb.expr, fb.name, fb.pretty) for fb in self.bindings[1]]
             bindings = (var_bindings, fact_bindings)
+        # Build per-fact targets for the operation.
+        # Filter out facts with empty target lists (user chose to drop them).
+        facts_with_targets: list[tuple[IsabelleFact, list[lambda_term] | None]] = []
+        for i, fact in enumerate(self.using):
+            targets = self.fact_targets[i] if self.fact_targets and i < len(self.fact_targets) else None
+            if targets is not None and len(targets) == 0:
+                continue  # user chose to drop this rule
+            facts_with_targets.append((fact, targets))
         return Minilang_Operation.SIMPLIFY(
-            self.using,
+            facts_with_targets,
             self.use_system_simplifiers,
             self.rewrite_premises,
             self.rewrite_goal,
@@ -4151,6 +4305,13 @@ class Rewrite(Leaf):
             if once_msgs:
                 self.warnings.append(Warning(Warning.Position.HEADER,
                     "Rewriting rules caused a loop; each rule was limited to fire at most once."))
+
+            # Check for stale targets (selected targets no longer exist in goal)
+            stale_msgs = [m for m in messages if isinstance(m, Simplify_Targets_Stale_Msg)]
+            for msg in stale_msgs:
+                names = ", ".join(msg.discarded_names)
+                self.warnings.append(Warning(Warning.Position.HEADER,
+                    f"Rewrite targets no longer exist in the current goal. Discarded rules: {names}."))
 
         if not is_init:
             if self.bindings != old_bindings:
@@ -4907,7 +5068,7 @@ class GlobalEnv(StdBlock):
         if not isinstance(config.parent, Root):
             raise InternalError("The parent of a GlobalEnv must be a Root")
         super().__init__(config, "", [])
-        self.id="$global"
+        self.id = "global"
     def id_of_goal(self) -> step | None:
         return None
     def beginning_opr(self) -> None:
@@ -4930,8 +5091,6 @@ class GlobalEnv(StdBlock):
         if update_line:
             self.line = file.current_line()
         return indent
-    def _id_of_openning_prf_to_fill(self) -> step | None:
-        return None
     def _fixed_vars_after_me(self, ret: Vars) -> Vars:
         # Aggregate vars introduced by children (e.g. a global Obtain), so
         # that sibling GoalNodes see them in their Python-side context.
@@ -5193,6 +5352,8 @@ class Session:
             dict(parent.seen_commands) if parent is not None else {})
         self.seen_opaque_note: bool = (
             parent.seen_opaque_note if parent is not None else False)
+        self.seen_abbreviations: set[str] = (
+            set(parent.seen_abbreviations) if parent is not None else set())
         if parent is not None:
             # Subsessions share parent's log files
             self.log_dir = parent.log_dir

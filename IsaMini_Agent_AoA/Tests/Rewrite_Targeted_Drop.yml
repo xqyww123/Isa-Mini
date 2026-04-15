@@ -1,0 +1,33 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - c: nat
+  - a: nat
+premises:
+  - h1: f a = c
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: g (f a) = c
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+--------------------------------------------------
+Interaction Prompt
+--------------------------------------------------
+Rule 'my_wrap' (f ?x = g (f ?x)) would cause infinite rewriting.
+To use this rule safely, select which specific subterm(s) to rewrite:
+  0. f a
+Answer with the index(es) of the subterm(s) to rewrite, or leave empty to drop this rule.
+--------------------------------------------------
+After Rewrite (rule dropped)
+--------------------------------------------------
+variables:
+  - c: nat
+  - a: nat
+premises:
+  - h1: f a = c
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: g (f a) = c
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+success: True
+reason: FailureReason(reason='The simplification made no progress.\n')

@@ -1,0 +1,111 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∀(n :: int). (0 :: int) ≤ n * n
+proof:
+  - step id: 1
+    operation: Intro
+    fixing variables:
+      - n: int
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  (0 :: int) ≤ n * n
+--------------------------------------------------
+After Have (meta-quantified statement)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∀(n :: int). (0 :: int) ≤ n * n
+proof:
+  - step id: 1
+    operation: Intro
+    fixing variables:
+      - n: int
+  - step id: 2
+    thought: Auxiliary: product of positives is positive
+    operation: Have
+    statement:
+      english: product of positives is positive
+      isabelle: \<And>(a::int) b. a > 0 \<Longrightarrow> b > 0 \<Longrightarrow> a * b > 0
+    name: pos_mult
+    proof:
+      - step id: 2.1
+        operation: Intro
+        fixing variables:
+          - a: int
+          - b: int
+        assuming premises:
+          - premise0: (0 :: int) < a
+          - premise1: (0 :: int) < b
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.2` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: int) < a * b
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  (0 :: int) ≤ n * n
+--------------------------------------------------
+After Intro amend (no error — bug not reproduced)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∀(n :: int). (0 :: int) ≤ n * n
+proof:
+  - step id: 1
+    operation: Intro
+    fixing variables:
+      - n: int
+  - step id: 2
+    thought: Auxiliary: product of positives is positive
+    operation: Have
+    statement:
+      english: product of positives is positive
+      isabelle: \<And>(a::int) b. a > 0 \<Longrightarrow> b > 0 \<Longrightarrow> a * b > 0
+    name: pos_mult
+    proof:
+      - step id: 2.1
+        thought: Introduce a, b and the premises
+        operation: Intro
+        fixing variables:
+          - a: int
+          - b: int
+        assuming premises:
+          - a_pos: (0 :: int) < a
+          - b_pos: (0 :: int) < b
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.2` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: int) < a * b
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  (0 :: int) ≤ n * n
+--------------------------------------------------
+Final state
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∀(n :: int). (0 :: int) ≤ n * n
+proof:
+  - step id: 1
+    operation: Intro
+    fixing variables:
+      - n: int
+  - step id: 2
+    thought: Auxiliary: product of positives is positive
+    operation: Have
+    statement:
+      english: product of positives is positive
+      isabelle: \<And>(a::int) b. a > 0 \<Longrightarrow> b > 0 \<Longrightarrow> a * b > 0
+    name: pos_mult
+    proof:
+      - step id: 2.1
+        thought: Introduce a, b and the premises
+        operation: Intro
+        fixing variables:
+          - a: int
+          - b: int
+        assuming premises:
+          - a_pos: (0 :: int) < a
+          - b_pos: (0 :: int) < b
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.2` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: int) < a * b
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  (0 :: int) ≤ n * n

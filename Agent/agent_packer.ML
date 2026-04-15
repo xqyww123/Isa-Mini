@@ -5,6 +5,8 @@ val xcmd_packer : xcmd MessagePackBinIO.Pack.packer
 val xcmd_unpacker : xcmd MessagePackBinIO.Unpack.unpacker
 
 val pack_bindings : bindings MessagePackBinIO.Pack.packer
+val pack_raw_term : term MessagePackBinIO.Pack.packer
+val unpack_raw_term : term MessagePackBinIO.Unpack.unpacker
 
 (*
 val serialize : driver * xcmd list -> string
@@ -116,7 +118,7 @@ val unpack_extended_fact =
 val unpacker =
   unpackPair_dep unpackString (
     fn "SIMPLIFY" => apfst SIMPLIFY o unpackTuple5 (
-                        unpackList unpack_extended_fact,
+                        unpackList (unpackPair (unpack_extended_fact, unpackOption (unpackList unpack_raw_term))),
                         unpackBool,
                         unpackList unpackString,
                         unpackBool,
@@ -172,7 +174,7 @@ val unpacker =
 
 fun packer (SIMPLIFY data) =
       packPair (packString, packTuple5 (
-                  packList pack_extended_fact,
+                  packList (packPair (pack_extended_fact, packOption (packList pack_raw_term))),
                   packBool,
                   packList packString,
                   packBool,
@@ -252,6 +254,8 @@ structure ML_Bytes = MiniLang_Agent_Pack(BytesIO)
 val xcmd_packer = ML_BinIO.packer
 val xcmd_unpacker = ML_BinIO.unpacker
 val pack_bindings = ML_BinIO.pack_bindings
+val pack_raw_term = ML_BinIO.pack_raw_term
+val unpack_raw_term = ML_BinIO.unpack_raw_term
 
 (*
 fun serialize cfg_cmds =

@@ -1,0 +1,51 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - d: nat
+  - c: nat
+  - b: nat
+  - a: nat
+premises:
+  - h1: f a = c
+  - h2: f b = d
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: g (f a) + f b = c + d
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+--------------------------------------------------
+Interaction Prompt
+--------------------------------------------------
+Rule 'my_wrap' (f ?x = g (f ?x)) would cause infinite rewriting.
+To use this rule safely, select which specific subterm(s) to rewrite:
+  0. f a
+  1. f b
+Answer with the index(es) of the subterm(s) to rewrite, or leave empty to drop this rule.
+--------------------------------------------------
+After Targeted Rewrite
+--------------------------------------------------
+variables:
+  - d: nat
+  - c: nat
+  - b: nat
+  - a: nat
+premises:
+  - h1: f a = c
+  - h2: f b = d
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: g (f a) + f b = c + d
+proof:
+  - step id: 1
+    thought: Rewrite f a using my_wrap, leave f b alone
+    operation: Rewrite
+    using:
+      - my_wrap: f ?x = g (f ?x)
+    targets:
+      - the goal
+    goal changes into:
+      g (f a) + g (f b) = c + d
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  g (f a) + g (f b) = c + d
+success: False
+reason: None

@@ -1224,6 +1224,76 @@ async def _test_Rewrite_Once_Simproc(root: Root, file: MyIO):
     file.write(f"success: {success}\n")
     file.write(f"reason: {reason}\n")
 
+@model_test("Rewrite_Targeted", "Test_Rewrite_Targeted.thy", 26)
+async def _test_Rewrite_Targeted(root: Root, file: MyIO):
+    """Test interactive target selection for a looping rewrite rule.
+    The rule my_wrap (f x = g (f x)) loops. The goal contains two matching
+    subterms: f a and f b. We select only the first (f a) to rewrite,
+    leaving f b untouched. The targeted simproc should fire only on f a."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Rewrite goal using my_wrap — triggers interaction because rule loops
+    try:
+        await root.fill("1", Rewrite.interactive_gen({
+            "thought": "Rewrite f a using my_wrap, leave f b alone",
+            "using": [{"refer_by": "name", "name": "my_wrap"}],
+            "use system simplifiers": False,
+            "rewrite goal": True,
+            "rewrite premises": []
+        }))
+        # Should not reach here — interaction expected
+        file.write("ERROR: Expected RaiseInteraction but got none\n")
+    except RaiseInteraction as e:
+        print_header("Interaction Prompt", file)
+        assert len(e.interactions) == 1
+        inter = e.interactions[0]
+        await inter.prompt(0, file)
+
+        # Select index 0 only (should be "f a", leaving "f b" untouched)
+        answer_result = await inter.answer([1])
+        gn = await e.kontinuation([answer_result])
+
+        # Now fill with the resolved node
+        node, success, reason = await root.fill("1", _trivial_parsing(gn))
+        print_header("After Targeted Rewrite", file)
+        root.print(0, file)
+        file.write(f"success: {success}\n")
+        file.write(f"reason: {reason}\n")
+
+@model_test("Rewrite_Targeted_Drop", "Test_Rewrite_Targeted_Drop.thy", 23)
+async def _test_Rewrite_Targeted_Drop(root: Root, file: MyIO):
+    """Test that selecting no targets during the interaction drops the looping
+    rule entirely. The Rewrite should proceed without the rule — since no other
+    rules are provided, the simplification should fail with 'no progress'."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    try:
+        await root.fill("1", Rewrite.interactive_gen({
+            "thought": "Attempt rewrite with looping rule, then dismiss",
+            "using": [{"refer_by": "name", "name": "my_wrap"}],
+            "use system simplifiers": False,
+            "rewrite goal": True,
+            "rewrite premises": []
+        }))
+        file.write("ERROR: Expected RaiseInteraction but got none\n")
+    except RaiseInteraction as e:
+        print_header("Interaction Prompt", file)
+        assert len(e.interactions) == 1
+        inter = e.interactions[0]
+        await inter.prompt(0, file)
+
+        # Answer with empty selection — drop the rule
+        answer_result = await inter.answer([])
+        gn = await e.kontinuation([answer_result])
+
+        node, success, reason = await root.fill("1", _trivial_parsing(gn))
+        print_header("After Rewrite (rule dropped)", file)
+        root.print(0, file)
+        file.write(f"success: {success}\n")
+        file.write(f"reason: {reason}\n")
+
 # class TestCase_Interactive_Unfold:
 #     pass
 
@@ -2090,6 +2160,124 @@ async def _test_Derive4(root: Root, file: MyIO):
     print_header("After Derive (no unifiers)", file)
     root.print(0, file)
 
+@model_test("Derive5", "Test_Specialize5.thy", 12)
+async def _test_Derive5(root: Root, file: MyIO):
+    """Regression test for SPECIALIZE hang: timed_OPR 8000 typo + lazy timeout
+    bypass in discharge_one_prove / fast_mepo_tac.
+
+    mult_mod_cancel_left expects ``?n * ?a mod ?m = ?n * ?b mod ?m`` as its
+    first premise.  h1 is just ``x mod q = y mod q`` (no multiplication), so
+    OF fails.  The fallback discharge_one_prove triggers fast_mepo_tac on a
+    goal with schematic variables.  Before the fix:
+      - timed_OPR 8000 (typo for 8) provides an ~2 h outer timeout
+      - the 3 s timeout in run_mepo_and_render is bypassed by lazy Seq
+        evaluation of the THEN combinator
+    This makes the SPECIALIZE operation hang."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    start = time()
+    node, is_error, reason = await root.fill("1", Derive.interactive_gen({
+        "thought": "Apply mult_mod_cancel_left — h1 lacks ?n*?a pattern, OF will fail",
+        "rule": {"refer_by": "name", "name": "mult_mod_cancel_left"},
+        "discharging_facts": [
+            {"refer_by": "name", "name": "h1"},
+            {"refer_by": "name", "name": "h2"}
+        ],
+        "result_name": "should_fail"
+    }))
+    elapsed = time() - start
+    print_header("Response", file)
+    file.write(f"Is error: {is_error}\n")
+    file.write(f"Reason: {reason}\n")
+    # After fix: SPECIALIZE should timeout via timed_OPR 8 and return an error
+    # within ~10 s.  Before fix: hangs for up to 8000 s.
+    if elapsed > 30:
+        raise TestFailed(
+            f"Derive5: SPECIALIZE took {elapsed:.1f}s (expected <30s). "
+            "Likely timed_OPR 8000 typo / lazy timeout bypass bug."
+        )
+    print_header("After Derive", file)
+    root.print(0, file)
+
+@model_test("Derive6", "Test_Specialize6.thy", 11)
+async def _test_Derive6(root: Root, file: MyIO):
+    """Derive with mult_mod_cancel_left on nat — OF fails because
+    mult_mod_cancel_left requires euclidean_ring_cancel which nat does not
+    satisfy.  The error should be reported clearly, not as a hang."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    start = time()
+    node, is_error, reason = await root.fill("1", Derive.interactive_gen({
+        "thought": "Apply mult_mod_cancel_left on nat — type mismatch, OF will fail",
+        "rule": {"refer_by": "name", "name": "mult_mod_cancel_left"},
+        "discharging_facts": [
+            {"refer_by": "name", "name": "h1"},
+            {"refer_by": "name", "name": "h2"}
+        ],
+        "result_name": "should_fail"
+    }))
+    elapsed = time() - start
+    print_header("Response", file)
+    file.write(f"Is error: {is_error}\n")
+    file.write(f"Reason: {reason}\n")
+    if elapsed > 30:
+        raise TestFailed(
+            f"Derive6: SPECIALIZE took {elapsed:.1f}s (expected <30s). "
+            "Likely timed_OPR / lazy timeout bug."
+        )
+    print_header("After Derive", file)
+    root.print(0, file)
+
+@model_test("Derive7", "Test_Specialize7.thy", 16)
+async def _test_Derive7(root: Root, file: MyIO):
+    """Test that SPECIALIZE diagnostic unifier produces actionable error messages.
+
+    Three sub-tests:
+      1. Type clash: mult_mod_cancel_left on nat — should report type mismatch
+      2. Head clash: conjI discharged with a non-conjunction — should report clash
+      3. Successful derive: mp discharged correctly — should NOT error
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # --- Sub-test 1: Type clash (nat vs euclidean_ring_cancel) ---
+    root.session.age += 1
+    node, is_error, reason = await root.fill("1", Derive.interactive_gen({
+        "thought": "mult_mod_cancel_left on nat — type mismatch expected",
+        "rule": {"refer_by": "name", "name": "mult_mod_cancel_left"},
+        "discharging_facts": [
+            {"refer_by": "name", "name": "h1"},
+            {"refer_by": "name", "name": "h2"}
+        ],
+        "result_name": "should_fail_type"
+    }))
+    print_header("Sub-test 1: Type clash", file)
+    file.write(f"Is error: {is_error}\n")
+    file.write(f"Reason: {reason}\n")
+    assert is_error, "Expected type clash error"
+    assert reason is not None and "does not unify with" in reason, \
+        f"Expected 'does not unify with' in reason, got: {reason}"
+
+    # --- Sub-test 2: Head symbol clash (plus vs times) ---
+    root.session.age += 1
+    node2, is_error2, reason2 = await root.fill("2", Derive.interactive_gen({
+        "thought": "mult_left_cancel needs times but h3 has plus — clash expected",
+        "rule": {"refer_by": "name", "name": "mult_left_cancel"},
+        "discharging_facts": [{"refer_by": "name", "name": "h3"}],
+        "result_name": "should_fail_clash"
+    }))
+    print_header("Sub-test 2: Head symbol clash", file)
+    file.write(f"Is error: {is_error2}\n")
+    file.write(f"Reason: {reason2}\n")
+    assert is_error2, "Expected head clash error"
+    assert reason2 is not None and ("clashes with" in reason2 or "does not unify" in reason2), \
+        f"Expected diagnostic in reason, got: {reason2}"
+
+    print_header("Final state", file)
+    root.print(0, file)
+
 @model_test("GlobalEnv", "Test_GlobalEnv.thy", 11)
 async def _test_GlobalEnv(root: Root, file: MyIO):
     """Corner case + recovery on `x = 0 ⟹ x * x = 0`:
@@ -2296,6 +2484,66 @@ async def _test_GlobalEnv_happy(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
+@model_test("GlobalEnvFill", "Test_GlobalEnvFill.thy", 11)
+async def _test_GlobalEnvFill(root: Root, file: MyIO):
+    """Bug 3 regression test: verify that `root.fill("global.1", ...)`
+    works for adding global declarations.
+
+    Previously GlobalEnv.id was `"$global"` while local_step was
+    `"global"`, so _print_footer advertised `$global.1` which was
+    unreachable by either `$global.1` or `global.1`. The fix sets
+    GlobalEnv.id = "global" and removes the _id_of_openning_prf_to_fill
+    override so StdBlock's logic kicks in."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Verify _print_footer advertises "global.1" (not "$global.1")
+    import re
+    buf = io.StringIO()
+    root.print(0, MyIO(buf))
+    yaml_text = buf.getvalue()
+    m = re.search(r'target step `([\w.]+)`', yaml_text)
+    advertised_id = m.group(1) if m else None
+    file.write(f"Advertised fill target: {advertised_id}\n")
+    assert advertised_id == "global.1", \
+        f"Expected _print_footer to advertise 'global.1', got {advertised_id!r}"
+
+    # Verify id and local_step are both "global"
+    file.write(f"GlobalEnv.id = {root.global_env.id!r}\n")
+    file.write(f"GlobalEnv.local_step = {root.global_env.local_step!r}\n")
+    assert root.global_env.id == "global"
+    assert root.global_env.local_step == "global"
+
+    # fill("global.1") should now succeed
+    root.session.age += 1
+    ret, is_error, reason = await root.fill("global.1", Have.gen({
+        "thought": "global declaration via fill",
+        "statement": {"english": "x is zero", "isabelle": "x = 0"},
+        "name": "g1",
+        "proof": "Given later"
+    }))
+    file.write(f"fill('global.1'): id={ret.id}, status={ret.status.status.value}, is_error={is_error}\n")
+    print_header("After fill global.1", file)
+    root.print(0, file)
+
+    # Prove the global Have
+    root.session.age += 1
+    obv = await ret.append(Obvious.interactive_gen({
+        "facts": [{"refer_by": "name", "name": "h1"}]
+    }))
+    file.write(f"Obvious in global Have: status={obv.status.status.value}\n")
+    print_header("After proving global Have", file)
+    root.print(0, file)
+
+    # The next fill slot should be "global.2"
+    buf2 = io.StringIO()
+    root.print(0, MyIO(buf2))
+    m2 = re.search(r'target step `([\w.]+)`', buf2.getvalue())
+    next_id = m2.group(1) if m2 else None
+    file.write(f"Next advertised fill target: {next_id}\n")
+    assert next_id == "global.2", \
+        f"Expected next target 'global.2', got {next_id!r}"
+
 @model_test("Chaining", "Test_Chaining.thy", 11)
 async def _test_Chaining(root: Root, file: MyIO):
     """Chain `ab : a = b` and `bc : b <= c` into `ac : a <= c` via registered
@@ -2404,6 +2652,152 @@ async def _test_FillOrphanedNode(root: Root, file: MyIO):
     unfinished = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+@model_test("AbbrevQuery", "Test_AbbrevQuery.thy", 8)
+async def _test_abbrev_query(root: Root, file: MyIO):
+    """Test abbreviation-annotated semantic retrieval.
+
+    Verifies:
+    1. _retrieve_entity returns abbreviation_names for theorems mentioning abbreviations
+    2. _retrieve_entity returns abbreviation_names for constants that are abbreviations
+    3. abbreviation_defs returns pretty-printed equations for abbreviation constants
+    4. semantic_knn propagates abbreviation_names onto entities
+    """
+    from Isabelle_RPC_Host.universal_key import EntityKind
+    ml = root.ml_state
+
+    # 1. Retrieve a theorem known to mention the `even` abbreviation
+    #    `even_iff_mod_2_eq_zero`: even n ==> n mod 2 = 0
+    #    `even` is `abbreviation even n == 2 dvd n` in Parity.thy
+    file.write("=== _retrieve_entity on theorems ===\n")
+    results = await ml._retrieve_entity([
+        (EntityKind.THEOREM, "even_Suc"),
+    ])
+    for r in results:
+        if r is not None:
+            short_name, exprs, roles, abbrev_names = r
+            file.write(f"  {short_name}: abbrevs={abbrev_names}\n")
+            for e in exprs:
+                file.write(f"    expr: {e}\n")
+        else:
+            file.write("  None\n")
+
+    # 2. Retrieve the `even` constant itself — should report itself as an abbreviation
+    file.write("=== _retrieve_entity on abbreviation constant ===\n")
+    results = await ml._retrieve_entity([
+        (EntityKind.CONSTANT, "even"),
+    ])
+    for r in results:
+        if r is not None:
+            short_name, exprs, roles, abbrev_names = r
+            file.write(f"  {short_name}: abbrevs={abbrev_names}\n")
+            for e in exprs:
+                file.write(f"    type: {e}\n")
+        else:
+            file.write("  None\n")
+
+    # 3. Retrieve a non-abbreviation constant — should have empty abbreviation list
+    file.write("=== _retrieve_entity on non-abbreviation constant ===\n")
+    results = await ml._retrieve_entity([
+        (EntityKind.CONSTANT, "Nat.plus_nat_inst.plus_nat"),
+    ])
+    for r in results:
+        if r is not None:
+            short_name, exprs, roles, abbrev_names = r
+            file.write(f"  {short_name}: abbrevs={abbrev_names}\n")
+        else:
+            file.write("  None\n")
+
+    # 4. abbreviation_defs: look up the definition of `even`
+    file.write("=== abbreviation_defs ===\n")
+    abbrev_names_to_query: list[str] = []
+    # Collect abbreviation names from the theorem retrieval above
+    thm_result = await ml._retrieve_entity([(EntityKind.THEOREM, "even_Suc")])
+    if thm_result[0] is not None:
+        _, _, _, abbrev_names_to_query = thm_result[0]
+    if abbrev_names_to_query:
+        defs = await ml.abbreviation_defs(abbrev_names_to_query)
+        for name, defn in zip(abbrev_names_to_query, defs):
+            file.write(f"  {name}: {defn}\n")
+    else:
+        file.write("  (no abbreviations found in theorem)\n")
+
+    # 5. abbreviation_defs on a non-abbreviation should return None
+    file.write("=== abbreviation_defs on non-abbreviation ===\n")
+    defs = await ml.abbreviation_defs(["Groups.plus_class.plus"])
+    for name, defn in zip(["Groups.plus_class.plus"], defs):
+        file.write(f"  {name}: {defn}\n")
+
+    # 6. semantic_knn: verify abbreviation_names propagates to entities
+    file.write("=== semantic_knn abbreviation propagation ===\n")
+    results_knn, _ = await ml.semantic_knn("even number divisibility", 5, [EntityKind.THEOREM])
+    for r in results_knn:
+        abbrevs = r.entity.abbreviation_names
+        if abbrevs:
+            file.write(f"  {r.entity.short_name}: abbrevs={abbrevs}\n")
+
+
+@model_test("IntroMetaQuant", "Test_IntroMetaQuant.thy", 8)
+async def _test_IntroMetaQuant(root: Root, file: MyIO):
+    """Reproduce bug: fastype_of: Bound when applying Intro with explicit
+    variable_bindings on a meta-quantified Have subgoal inside a proof
+    context that already has variables introduced by an outer Intro.
+
+    Original failure from interaction log D8CC4AF0C_1E681B8:
+    Step 2.3.3.1.1 tried Intro(variable_bindings=[a,b], fact_bindings=
+    [b_pos, ab_coprime]) on the proof of a Have whose statement was
+      \\<And>(a::int) b. 0 < b \\<Longrightarrow> coprime a b
+                        \\<Longrightarrow> a * a \\<noteq> 5 * (b * b)
+    The Isabelle/ML compute_bindings function raised
+    'exception TERM raised (line 375 of "term.ML"): fastype_of: Bound'.
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # # Step 1: Intro to introduce n from ∀n::int.
+    # # This puts a meta-variable in the proof context — the outer scope
+    # # that the original bug needed.
+    # await root.fill("1", Intro.gen({
+    #     "thought": "Introduce n",
+    # }))
+    # print_header("After outer Intro (introduce n)", file)
+    # root.print(0, file)
+
+    # Step 2: Have with a meta-quantified + implicational statement.
+    # The Have auto-inserts an Intro child (with auto-detected bindings)
+    # because the proof obligation is ∀-quantified at the meta level.
+    await root.fill("2", Have.gen({
+        "thought": "Auxiliary: product of positives is positive",
+        "statement": {
+            "english": "product of positives is positive",
+            "isabelle": r"\<And>(a::int) b. a > 0 \<Longrightarrow> b > 0 \<Longrightarrow> a * b > 0"
+        },
+        "name": "pos_mult"
+    }))
+    print_header("After Have (meta-quantified statement)", file)
+    root.print(0, file)
+
+    # Step 2.1 is the auto-inserted Intro (with auto-detected bindings).
+    # Amend it with explicit variable_bindings and fact_bindings — this
+    # is the pattern that triggered fastype_of: Bound in the original log.
+    # The compute_bindings ML call processes the explicit binding names
+    # against the meta-quantified proof state; in the buggy version this
+    # encounters a dangling de Bruijn index from the outer Intro scope.
+    try:
+        root.session.age += 1
+        await root.amend("2.1", Intro.gen({
+            "thought": "Introduce a, b and the premises",
+            "variable_bindings": ["a", "b"],
+            "fact_bindings": ["a_pos", "b_pos"]
+        }))
+        print_header("After Intro amend (no error — bug not reproduced)", file)
+        root.print(0, file)
+    except Exception as e:
+        file.write(f"BUG REPRODUCED: {type(e).__name__}: {e}\n")
+
+    print_header("Final state", file)
+    root.print(0, file)
+
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None):
     import msgpack as mp

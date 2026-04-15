@@ -162,6 +162,7 @@ async def _format_fetched_entity(
     session: Session | None = None,
     def_info: tuple[str, IsabellePosition] | bool | None = None,
     potential_defs: bool = False,
+    abbreviation_defs: dict[str, str] = {},
 ) -> None:
     """Render a single retrieved entity in unified format.
 
@@ -170,6 +171,7 @@ async def _format_fetched_entity(
     ``def_info``: ``True`` to fetch definition via RPC, a pre-fetched tuple to use directly,
     or ``None``/``False`` to skip.  Requires ``session`` for both fetching and show-once tracking.
     ``potential_defs``: if True and entity is a constant, append relevant definitions.
+    ``abbreviation_defs``: map from abbreviation full name to pretty-printed equation.
     """
     exprs = f.entity.expression
     roles = getattr(f.entity, 'roles', [])
@@ -190,6 +192,13 @@ async def _format_fetched_entity(
         source, cmd_pos = def_info
         if not _PROOF_COMMAND_RE.match(source):
             _format_with_definition(session, source, cmd_pos, indent=indent + 1, out=buf)
+    if abbreviation_defs and session is not None:
+        abbrev_names = f.entity.abbreviation_names
+        for aname in abbrev_names:
+            if aname in abbreviation_defs and aname not in session.seen_abbreviations:
+                session.seen_abbreviations.add(aname)
+                print_indent(indent + 1, buf)
+                buf.write(f"where {_trunc_expr(abbreviation_defs[aname])}\n")
     if potential_defs and session is not None and f.entity.kind == EntityKind.CONSTANT:
         try:
             candidates = await session.root.ml_state.potential_defs_of([f.entity.short_name])
@@ -234,6 +243,9 @@ def _format_repeated(
 def _format_query_header(q: dict) -> str:
     """Pretty-print a query dict into a header line."""
     parts: list[str] = []
+    exact = q.get("exact_name", "")
+    if exact:
+        parts.append(f"exact name: {exact}")
     desc = q.get("long_description", "")
     if desc:
         parts.append(desc)
@@ -356,12 +368,26 @@ async def _semantic_search_direct(
         session.log_tool_response("mcp__proof__query", result)
         return result
 
+    # Batch-fetch abbreviation definitions for unseen abbreviations
+    unseen_abbrevs: list[str] = []
+    for f in new_items:
+        for name in f.entity.abbreviation_names:
+            if name not in session.seen_abbreviations and name not in unseen_abbrevs:
+                unseen_abbrevs.append(name)
+    abbrev_defs: dict[str, str] = {}
+    if unseen_abbrevs:
+        defs = await ml_state.abbreviation_defs(unseen_abbrevs)
+        for name, defn in zip(unseen_abbrevs, defs):
+            if defn is not None:
+                abbrev_defs[name] = defn
+
     # Format with unified renderer
     buf = StringIO()
     retrieved: list[str] = []
     for f in new_items:
         await _format_fetched_entity(f, buf, session=session, def_info=True,
-                                     potential_defs=(f.score == 1.0))
+                                     potential_defs=(f.score == 1.0),
+                                     abbreviation_defs=abbrev_defs)
         expr_str = _trunc_expr(', '.join(f.entity.expression))
         retrieved.append(f"{f.entity.short_name}: {expr_str}")
     for w in _format_warn_lines(queries, per_query_warnings):
@@ -466,10 +492,24 @@ async def _semantic_search_with_filtering(session: Session, queries: list[dict])
                 print_indent(indent, buf)
                 buf.write(f"{_empty_msg}\n")
             else:
+                # Batch-fetch abbreviation definitions for unseen abbreviations
+                unseen_abbrevs: list[str] = []
+                for f in new_fetched:
+                    for name in f.entity.abbreviation_names:
+                        if name not in session.seen_abbreviations and name not in unseen_abbrevs:
+                            unseen_abbrevs.append(name)
+                abbrev_defs: dict[str, str] = {}
+                if unseen_abbrevs:
+                    defs = await ml_state.abbreviation_defs(unseen_abbrevs)
+                    for name, defn in zip(unseen_abbrevs, defs):
+                        if defn is not None:
+                            abbrev_defs[name] = defn
+
                 for f in new_fetched:
                     await _format_fetched_entity(f, buf, indent=indent,
                                                  session=session, def_info=True,
-                                                 potential_defs=(f.score == 1.0))
+                                                 potential_defs=(f.score == 1.0),
+                                                 abbreviation_defs=abbrev_defs)
 
             _format_repeated(
                 [f.entity.short_name for f in new_fetched],
