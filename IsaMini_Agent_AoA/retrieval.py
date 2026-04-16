@@ -25,7 +25,7 @@ from Isabelle_Semantic_Embedding.semantics import (
 )
 
 from .model import (
-    Session, Minilang_State, MyIO,
+    Session, Minilang_State, MyIO, short_name,
     RaiseInteraction, Interaction, IsabelleError,
     EntityKind, print_indent, print_paragraph, print_expression_list,
     Interaction_Retrieve, RetrievedEntity,
@@ -149,8 +149,9 @@ def _format_with_definition(
             out.write(line)
             out.write('\n')
 
-def _trunc_expr(s: str) -> str:
-    return _trunc_expr_base(s, AGENT_EXPR_LIMIT)
+def _trunc_expr(s) -> str:
+    from .model import IsaTerm
+    return _trunc_expr_base(s.unicode if isinstance(s, IsaTerm) else s, AGENT_EXPR_LIMIT)
 
 
 async def _format_fetched_entity(
@@ -178,10 +179,10 @@ async def _format_fetched_entity(
     tag = "" if (roles or f.entity.kind not in _THEOREM_KINDS) else " [opaque]"
     print_indent(indent, buf)
     if exprs:
-        buf.write(f"{prefix}{f.entity.short_name}{tag}:")
+        buf.write(f"{prefix}{f.entity.short_name.unicode}{tag}:")
         truncated = print_expression_list(indent + 1, buf, exprs)
     else:
-        buf.write(f"{prefix}{f.entity.short_name}{tag}\n")
+        buf.write(f"{prefix}{f.entity.short_name.unicode}{tag}\n")
         truncated = False
     if f.interpretation and (f.entity.kind not in _THEOREM_KINDS or truncated):
         print_indent(indent + 1, buf)
@@ -210,11 +211,11 @@ async def _format_fetched_entity(
                 for cand in candidates:
                     if cand.short_name in seen:
                         print_indent(indent + 1, buf)
-                        buf.write(f'- {cand.short_name} (seen)\n')
+                        buf.write(f'- {cand.short_name.unicode} (seen)\n')
                     else:
-                        cand_expr = _trunc_expr(', '.join(cand.expression))
+                        cand_expr = _trunc_expr(', '.join(e.unicode for e in cand.expression))
                         print_indent(indent + 1, buf)
-                        buf.write(f'- {cand.short_name}:')
+                        buf.write(f'- {cand.short_name.unicode}:')
                         print_paragraph(indent + 2, buf, cand_expr)
                         seen.add(cand.short_name)
         except Exception:
@@ -222,8 +223,8 @@ async def _format_fetched_entity(
 
 
 def _format_repeated(
-    new_names: list[str],
-    repeated_names: list[str],
+    new_names: 'list[short_name]',
+    repeated_names: 'list[short_name]',
     buf,
     *,
     indent: int = 0,
@@ -232,9 +233,9 @@ def _format_repeated(
     if repeated_names:
         print_indent(indent, buf)
         if new_names:
-            buf.write(f"{', '.join(repeated_names)} are also relevant\n")
+            buf.write(f"{', '.join(n.unicode for n in repeated_names)} are also relevant\n")
         else:
-            buf.write(f"{', '.join(repeated_names)} are relevant. No new entities found.\n")
+            buf.write(f"{', '.join(n.unicode for n in repeated_names)} are relevant. No new entities found.\n")
 
 
 # ============================================================================
@@ -375,7 +376,7 @@ async def _semantic_search_direct(
         for name in f.entity.abbreviation_names:
             if name not in session.seen_abbreviations and name not in unseen_abbrevs:
                 unseen_abbrevs.append(name)
-    abbrev_defs: dict[str, tuple[str, str]] = {}
+    abbrev_defs: dict = {}
     if unseen_abbrevs:
         defs = await ml_state.abbreviation_defs(unseen_abbrevs)
         for name, defn in zip(unseen_abbrevs, defs):
@@ -389,8 +390,8 @@ async def _semantic_search_direct(
         await _format_fetched_entity(f, buf, session=session, def_info=True,
                                      potential_defs=(f.score == 1.0),
                                      abbreviation_defs=abbrev_defs)
-        expr_str = _trunc_expr(', '.join(f.entity.expression))
-        retrieved.append(f"{f.entity.short_name}: {expr_str}")
+        expr_str = _trunc_expr(', '.join(e.unicode for e in f.entity.expression))
+        retrieved.append(f"{f.entity.short_name.unicode}: {expr_str}")
     for w in _format_warn_lines(queries, per_query_warnings):
         buf.write(w)
         buf.write('\n')
@@ -479,7 +480,7 @@ async def _semantic_search_with_filtering(session: Session, queries: list[dict])
             indent = 1 if multi else 0
 
             new_fetched: list[RetrievedEntity] = []
-            repeated_names: list[str] = []
+            repeated_names: 'list[short_name]' = []
             for entity in selected:
                 if entity.short_name in seen:
                     repeated_names.append(entity.short_name)
@@ -499,7 +500,7 @@ async def _semantic_search_with_filtering(session: Session, queries: list[dict])
                     for name in f.entity.abbreviation_names:
                         if name not in session.seen_abbreviations and name not in unseen_abbrevs:
                             unseen_abbrevs.append(name)
-                abbrev_defs: dict[str, tuple[str, str]] = {}
+                abbrev_defs: dict = {}
                 if unseen_abbrevs:
                     defs = await ml_state.abbreviation_defs(unseen_abbrevs)
                     for name, defn in zip(unseen_abbrevs, defs):

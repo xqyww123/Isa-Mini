@@ -1432,8 +1432,8 @@ async def _test_semantic_knn_patterns(root: Root, file: MyIO):
     ml = root.ml_state
 
     def _pp(r) -> str:
-        expr = ', '.join(r.entity.expression)
-        return f"{r.entity.kind.label} {r.entity.short_name}: {expr}" if expr else f"{r.entity.kind.label} {r.entity.short_name}"
+        expr = ', '.join(e.unicode for e in r.entity.expression)
+        return f"{r.entity.kind.label} {r.entity.short_name.unicode}: {expr}" if expr else f"{r.entity.kind.label} {r.entity.short_name.unicode}"
 
     # 1. Baseline: no patterns
     results_base, warnings_base = await ml.semantic_knn("logarithm power", 5, [EntityKind.THEOREM])
@@ -2263,7 +2263,7 @@ async def _test_GlobalEnv(root: Root, file: MyIO):
     # === VISIBILITY: Check whether t1 appears in GoalNode's context ===
     goal_node = root.sub_nodes[1]  # the single GoalNode
     ctxt = goal_node._ctxt_before_me()
-    file.write(f"GoalNode context hyps: {sorted(ctxt.hyps.keys())}\n")
+    file.write(f"GoalNode context hyps: {[k.unicode for k in sorted(ctxt.hyps.keys())]}\n")
     file.write(f"t1 visible to GoalNode via context: {'t1' in ctxt.hyps}\n")
 
     # === USE FROM PROOF BODY (failure path): Rewrite goal using broken t1 ===
@@ -2362,7 +2362,7 @@ async def _test_GlobalEnv_happy(root: Root, file: MyIO):
     # === VISIBILITY: Check whether g_eq appears in GoalNode's context ===
     goal_node = root.sub_nodes[1]
     ctxt = goal_node._ctxt_before_me()
-    file.write(f"GoalNode context hyps: {sorted(ctxt.hyps.keys())}\n")
+    file.write(f"GoalNode context hyps: {[k.unicode for k in sorted(ctxt.hyps.keys())]}\n")
     file.write(f"g_eq visible to GoalNode via context: {'g_eq' in ctxt.hyps}\n")
 
     # === USE FROM PROOF BODY: Rewrite the goal using g_eq (explicit consumption) ===
@@ -2619,9 +2619,9 @@ async def _test_abbrev_query(root: Root, file: MyIO):
     for r in results:
         if r is not None:
             short_name, exprs, roles, abbrev_names = r
-            file.write(f"  {short_name}: abbrevs={abbrev_names}\n")
+            file.write(f"  {short_name.unicode}: abbrevs={abbrev_names}\n")
             for e in exprs:
-                file.write(f"    expr: {e}\n")
+                file.write(f"    expr: {e.unicode}\n")
         else:
             file.write("  None\n")
 
@@ -2633,9 +2633,9 @@ async def _test_abbrev_query(root: Root, file: MyIO):
     for r in results:
         if r is not None:
             short_name, exprs, roles, abbrev_names = r
-            file.write(f"  {short_name}: abbrevs={abbrev_names}\n")
+            file.write(f"  {short_name.unicode}: abbrevs={abbrev_names}\n")
             for e in exprs:
-                file.write(f"    type: {e}\n")
+                file.write(f"    type: {e.unicode}\n")
         else:
             file.write("  None\n")
 
@@ -2647,7 +2647,7 @@ async def _test_abbrev_query(root: Root, file: MyIO):
     for r in results:
         if r is not None:
             short_name, exprs, roles, abbrev_names = r
-            file.write(f"  {short_name}: abbrevs={abbrev_names}\n")
+            file.write(f"  {short_name.unicode}: abbrevs={abbrev_names}\n")
         else:
             file.write("  None\n")
 
@@ -2663,7 +2663,7 @@ async def _test_abbrev_query(root: Root, file: MyIO):
         for name, defn in zip(abbrev_names_to_query, defs):
             if defn is not None:
                 lhs, rhs = defn
-                file.write(f"  where `{lhs}` abbreviates `{rhs}`\n")
+                file.write(f"  where `{lhs.unicode}` abbreviates `{rhs.unicode}`\n")
             else:
                 file.write(f"  {name}: None\n")
     else:
@@ -2681,7 +2681,7 @@ async def _test_abbrev_query(root: Root, file: MyIO):
     for r in results_knn:
         abbrevs = r.entity.abbreviation_names
         if abbrevs:
-            file.write(f"  {r.entity.short_name}: abbrevs={abbrevs}\n")
+            file.write(f"  {r.entity.short_name.unicode}: abbrevs={abbrevs}\n")
 
     # --- Corner cases ---
 
@@ -2691,14 +2691,14 @@ async def _test_abbrev_query(root: Root, file: MyIO):
     for r in results:
         if r is not None:
             short_name, exprs, roles, abbrev_names = r
-            file.write(f"  {short_name}: abbrevs={abbrev_names}\n")
+            file.write(f"  {short_name.unicode}: abbrevs={abbrev_names}\n")
         else:
             file.write("  None\n")
     defs = await ml.abbreviation_defs(["Test_AbbrevQuery.my_true"])
     for defn in defs:
         if defn is not None:
             lhs, rhs = defn
-            file.write(f"  where `{lhs}` abbreviates `{rhs}`\n")
+            file.write(f"  where `{lhs.unicode}` abbreviates `{rhs.unicode}`\n")
         else:
             file.write(f"  None\n")
 
@@ -2708,9 +2708,9 @@ async def _test_abbrev_query(root: Root, file: MyIO):
     for r in results:
         if r is not None:
             short_name, exprs, roles, abbrev_names = r
-            file.write(f"  {short_name}: abbrevs={abbrev_names}\n")
+            file.write(f"  {short_name.unicode}: abbrevs={abbrev_names}\n")
             for e in exprs:
-                file.write(f"    expr: {e}\n")
+                file.write(f"    expr: {e.unicode}\n")
         else:
             file.write("  None\n")
 

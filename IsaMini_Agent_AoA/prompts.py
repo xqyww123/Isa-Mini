@@ -30,18 +30,6 @@ async def filled_step_message(step: str, root: Root, node: Node, session: 'model
         goal_id = parent.id_of_goal()
         if goal_and_to_file is not None:
             goal, step_to_fill = goal_and_to_file
-            suppressed = parent._ctxt_of_filling()
-            if goal.visible(suppressed) != parent._prev_pending_goal:
-                if goal_id is None:
-                    file.write(f"Pending goal:\n")
-                else:
-                    file.write(f"Pending goal of {parent.titled_id}:\n")
-                model.print_goal(goal, 1, False, file, suppressed)
-            else:
-                if goal_id is None:
-                    file.write(f"Pending goal: unchanged\n")
-                else:
-                    file.write(f"Pending goal of {parent.titled_id}: unchanged\n")
             file.write(f"Call command `edit` with action `fill` and target step `{step_to_fill}`"
                 " to provide the proof.\n")
         elif goal_id is not None and not parent.does_quickview_need_detail():
@@ -103,18 +91,6 @@ async def amended_step_message(step: str, root: Root, node: Node, session: 'mode
         goal_id = parent.id_of_goal()
         if goal_and_to_file is not None:
             goal, step_to_fill = goal_and_to_file
-            suppressed = parent._ctxt_of_filling()
-            if goal.visible(suppressed) != parent._prev_pending_goal:
-                if goal_id is None:
-                    file.write(f"Pending goal:\n")
-                else:
-                    file.write(f"Pending goal of {parent.titled_id}:\n")
-                model.print_goal(goal, 1, False, file, suppressed)
-            else:
-                if goal_id is None:
-                    file.write(f"Pending goal: unchanged\n")
-                else:
-                    file.write(f"Pending goal of {parent.titled_id}: unchanged\n")
             file.write(f"Call command `edit` with action `fill` and target step `{step_to_fill}`"
                 " to provide the proof.\n")
         elif goal_id is not None and not parent.does_quickview_need_detail():

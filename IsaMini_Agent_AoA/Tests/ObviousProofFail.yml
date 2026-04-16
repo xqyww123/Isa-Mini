@@ -63,7 +63,10 @@ Overview
 --------------------------------------------------
 step 1: Have lem1 (line 0)
   Error: Unfinished Proof (line 46)
+  goal: x = x
 step 2: Have bad (line 0)
   Error: Unfinished Proof (line 57)
+  goal: x = x + (1 :: int)
 Error: Unfinished Proof (line 60)
+goal: (0 :: int) ≤ x * x
 Unfinished nodes: 3

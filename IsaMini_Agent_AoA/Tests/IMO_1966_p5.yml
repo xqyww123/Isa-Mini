@@ -55,6 +55,7 @@ Overview
 --------------------------------------------------
 step 1: Have eq1 (line 15)
   Error: Unfinished Proof (line 49)
+  goal: x (1 :: nat) = x (2 :: nat) + x (3 :: nat) + x (4 :: nat)
 Error: Unfinished Proof (line 52)
 --------------------------------------------------
 After failed Obvious on eq1
@@ -93,9 +94,8 @@ Error: Unfinished Proof! Call command `edit` with action `fill` and target step 
 --------------------------------------------------
 Overview
 --------------------------------------------------
-step 1: Have eq1 (line 15)
-  step 1.1: Obvious (line 23)
-Error: Unfinished Proof (line 92)
+step 1: Have eq1 (done, line 15)
+Error: Unfinished Proof (line 93)
 --------------------------------------------------
 After deleting failed Obvious
 --------------------------------------------------
@@ -130,6 +130,7 @@ Overview
 --------------------------------------------------
 step 1: Have eq1 (line 15)
   Error: Unfinished Proof (line 124)
+  goal: x (1 :: nat) = x (2 :: nat) + x (3 :: nat) + x (4 :: nat)
 Error: Unfinished Proof (line 127)
 --------------------------------------------------
 After proving a1_gt_a3
@@ -177,10 +178,9 @@ Error: Unfinished Proof! Call command `edit` with action `fill` and target step 
 Overview
 --------------------------------------------------
 step 1: Have eq1 (line 15)
-  step 1.1: Have a1_gt_a3 (line 23)
-    step 1.1.1: Obvious (line 31)
-  Error: Unfinished Proof (line 172)
-Error: Unfinished Proof (line 175)
+  step 1.1: Have a1_gt_a3 (done, line 23)
+  Error: Unfinished Proof (line 173)
+Error: Unfinished Proof (line 176)
 --------------------------------------------------
 After proving a1_gt_a4
 --------------------------------------------------
@@ -241,7 +241,6 @@ Overview
 --------------------------------------------------
 step 1: Have eq1 (line 15)
   step 1.1: Have a1_gt_a3 (done, line 23)
-  step 1.2: Have a1_gt_a4 (line 36)
-    step 1.2.1: Obvious (line 44)
+  step 1.2: Have a1_gt_a4 (done, line 36)
   Error: Unfinished Proof (line 235)
 Error: Unfinished Proof (line 238)

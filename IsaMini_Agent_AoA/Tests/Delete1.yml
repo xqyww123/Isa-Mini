@@ -57,6 +57,7 @@ step 2: Rewrite goal (line 22)
   goal changes into:
     y = z
 Error: Unfinished Proof (line 31)
+goal: y = z
 --------------------------------------------------
 After deleting step 1 (Have)
 --------------------------------------------------
@@ -86,7 +87,9 @@ pending proof goal:
 Overview
 --------------------------------------------------
 step 2: Rewrite goal (failed, line 22)
-Error: Unfinished Proof (line 82)
+  Error: Fact "lem1" not found
+Error: Unfinished Proof (line 83)
+goal: x = z
 --------------------------------------------------
 After inserting Have before step 2
 --------------------------------------------------
@@ -129,5 +132,9 @@ Overview
 --------------------------------------------------
 step 1: Have lem1 (line 12)
   Error: Unfinished Proof (line 20)
+  goal: x = y + (0 :: int)
 step 2: Rewrite goal (line 23)
+  goal changes into:
+    y + (0 :: int) = z
 Error: Unfinished Proof (line 32)
+goal: y + (0 :: int) = z

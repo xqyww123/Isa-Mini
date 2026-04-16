@@ -82,14 +82,16 @@ proof:
 Overview after 1.0.1
 --------------------------------------------------
 step 1: Branch (line 0)
-  - 1.0 (line 0)
-    step 1.0.1: Obvious (line 0)
+  - 1.0 (done, line 0)
   - 1.1 (line 0)
     Error: Unfinished Proof (line 68)
+    goal: (0 :: int) ≤ x * x
   - 1.2 (line 0)
     Error: Unfinished Proof (line 74)
+    goal: (0 :: int) ≤ x * x
   - 1.3 (line 0)
     Error: Unfinished Proof (line 80)
+    goal: (0 :: int) ≤ x * x
 --------------------------------------------------
 After Obvious on 1.1.1 (x > 0)
 --------------------------------------------------
@@ -132,12 +134,11 @@ Overview after 1.1.1
 --------------------------------------------------
 step 1: Branch (line 0)
   - 1.0 (done, line 0)
-  - 1.1 (line 0)
-    step 1.1.1: Obvious (line 0)
+  - 1.1 (done, line 0)
   - 1.2 (line 0)
-    Error: Unfinished Proof (line 123)
+    Error: Unfinished Proof (line 125)
   - 1.3 (line 0)
-    Error: Unfinished Proof (line 129)
+    Error: Unfinished Proof (line 131)
 --------------------------------------------------
 After Obvious on 1.2.1 (x < 0)
 --------------------------------------------------
@@ -182,10 +183,9 @@ Overview after 1.2.1
 step 1: Branch (line 0)
   - 1.0 (done, line 0)
   - 1.1 (done, line 0)
-  - 1.2 (line 0)
-    step 1.2.1: Obvious (line 0)
+  - 1.2 (done, line 0)
   - 1.3 (line 0)
-    Error: Unfinished Proof (line 178)
+    Error: Unfinished Proof (line 179)
 --------------------------------------------------
 After Obvious on 1.3.1 (x = 0)
 --------------------------------------------------
@@ -228,10 +228,4 @@ proof:
 --------------------------------------------------
 Overview after 1.3.1
 --------------------------------------------------
-step 1: Branch (line 0)
-  - 1.0 (done, line 0)
-  - 1.1 (done, line 0)
-  - 1.2 (done, line 0)
-  - 1.3 (line 0)
-    step 1.3.1: Obvious (line 0)
 Unfinished nodes: 0

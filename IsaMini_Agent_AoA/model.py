@@ -19,8 +19,8 @@ LONG_GOAL_HINT = (
     "which is often a sign of a wrong direction.\n"
 )
 
-def trunc_expr(s: str) -> str:
-    return _trunc_expr_base(s, AGENT_EXPR_LIMIT)
+def trunc_expr(s: 'str | IsaTerm') -> str:
+    return _trunc_expr_base(s.unicode if isinstance(s, IsaTerm) else s, AGENT_EXPR_LIMIT)
 from abc import ABC, abstractmethod
 from enum import Enum
 import json
@@ -32,10 +32,60 @@ import yaml
 import platformdirs
 from io import StringIO
 
-type varname = str
+class IsaTerm:
+    """Dual-representation Isabelle string: Unicode (for LLM display) + ASCII (for Isabelle RPC).
+
+    Constructed at two boundaries:
+    - ``IsaTerm.from_isabelle(ascii_str)`` — when data arrives from Isabelle RPC
+    - ``IsaTerm.from_agent(unicode_str)`` — when the LLM provides a term via tool calls
+    """
+    __slots__ = ('unicode', 'ascii')
+
+    def __init__(self, unicode: str, ascii: str):
+        self.unicode = unicode
+        self.ascii = ascii
+
+    @classmethod
+    def from_isabelle(cls, ascii_str: str) -> 'IsaTerm':
+        """Create from Isabelle RPC output (ASCII notation)."""
+        return cls(pretty_unicode(ascii_str), ascii_str)
+
+    @classmethod
+    def from_agent(cls, unicode_str: str) -> 'IsaTerm':
+        """Create from LLM/agent input (Unicode)."""
+        return cls(unicode_str, ascii_of_unicode(unicode_str))
+
+    def __str__(self) -> str:
+        raise TypeError(
+            "str() on IsaTerm is ambiguous — use .unicode (for display) or .ascii (for Isabelle RPC) explicitly")
+    def __repr__(self) -> str: return f'IsaTerm({self.unicode!r})'
+    def __hash__(self) -> int: return hash(self.ascii)
+    def __eq__(self, other) -> bool:
+        if isinstance(other, IsaTerm): return self.ascii == other.ascii
+        if isinstance(other, str): return self.ascii == other
+        return NotImplemented
+    def __len__(self) -> int: return len(self.unicode)
+    def __lt__(self, other) -> bool:
+        if isinstance(other, IsaTerm): return self.ascii < other.ascii
+        if isinstance(other, str): return self.ascii < other
+        return NotImplemented
+
+# Internal dual-representation types (carry both Unicode and ASCII)
+type varname = IsaTerm
 type varname_spec = varname | None # underscore '_' is represented as None
-type typ = str
-type term = str
+type typ = IsaTerm
+type term = IsaTerm
+
+# External types (raw Unicode strings from LLM tool calls, before wrapping)
+type xterm = str
+type xtyp = str
+type xvarname = str
+type xname = str
+
+type full_name = str   # Isabelle internal name, always ASCII
+type name = IsaTerm    # Isabelle name (short or full), dual-representation
+type short_name = IsaTerm  # Display name, dual-representation
+
 type lambda_term = Any
 type step = str
 type local_step = str
@@ -54,12 +104,12 @@ def _subproof_is_obvious(sp: SubProof) -> bool:
 type SubProof_parsed = 'gen_node | None'
 
 class Explicit_Var(TypedDict):
-    name: varname
-    type: str | None
+    name: xvarname
+    type: xtyp | None
 
 class FactByProposition(TypedDict):
     refer_by: Literal["proposition"]
-    proposition: str
+    proposition: xterm
 
 class FactByDescription(TypedDict):
     refer_by: Literal["description"]
@@ -67,7 +117,7 @@ class FactByDescription(TypedDict):
 
 class FactByName(TypedDict):
     refer_by: Literal["name"]
-    name: str
+    name: xname
 
 type Fact = FactByName | FactByProposition | FactByDescription
 
@@ -84,9 +134,15 @@ class EditFailureResponse(NamedTuple):
 class IsabelleEntity:
     """A resolved Isabelle entity (constant, type, class, locale, etc.) with display info."""
     __slots__ = ('full_name', 'short_name', 'expression', 'kind', 'roles', 'abbreviation_names')
-    def __init__(self, full_name: str, short_name: str, expression: list[str],
+    full_name: 'full_name'
+    short_name: 'short_name'
+    expression: list[term]
+    kind: EntityKind
+    roles: list[str]
+    abbreviation_names: 'list[full_name]'
+    def __init__(self, full_name: 'full_name', short_name: 'short_name', expression: list[term],
                  kind: EntityKind, roles: list[str] = [],
-                 abbreviation_names: list[str] = []):
+                 abbreviation_names: 'list[full_name]' = []):
         self.full_name = full_name
         self.short_name = short_name
         self.expression = expression
@@ -108,7 +164,7 @@ class IsabelleFact(ABC):
     Minilang_State.refresh_facts.
     """
     @abstractmethod
-    def name(self) -> str: ...
+    def name(self) -> 'str | short_name': ...
     @abstractmethod
     def print(self, indent: int, file: MyIO) -> None: ...
     @abstractmethod
@@ -116,15 +172,16 @@ class IsabelleFact(ABC):
         """Pack for RPC. Returns the packed form, or FailureReason on error."""
         ...
     def __repr__(self) -> str:
-        return self.name()
+        n = self.name()
+        return n.unicode if isinstance(n, IsaTerm) else n
 
 class IsabelleFact_Presented(IsabelleFact, IsabelleEntity):
     """A resolved fact with full information from Isabelle. `kind` must be
     theorem-like (see _THEOREM_KINDS)."""
     __slots__ = ('fact',)
-    def __init__(self, full_name: str, short_name: str, fact: Fact, expression: list[term],
+    def __init__(self, full_name: 'full_name', short_name: 'short_name', fact: Fact, expression: list[term],
                  kind: EntityKind = EntityKind.THEOREM, roles: list[str] = [],
-                 abbreviation_names: list[str] = []):
+                 abbreviation_names: 'list[full_name]' = []):
         assert kind in _THEOREM_KINDS, \
             f"IsabelleFact_Presented requires a theorem-like kind, got {kind}"
         self.full_name = full_name
@@ -134,19 +191,19 @@ class IsabelleFact_Presented(IsabelleFact, IsabelleEntity):
         self.kind = kind
         self.roles = roles
         self.abbreviation_names = abbreviation_names
-    def name(self) -> str:
+    def name(self) -> 'short_name':
         return self.short_name
     def print(self, indent: int, file: MyIO) -> None:
         print_indent(indent, file)
         if len(self.expression) == 1:
-            file.write(f"- {self.short_name}: {self.expression[0]}\n")
+            file.write(f"- {self.short_name.unicode}: {self.expression[0].unicode}\n")
         elif len(self.expression) > 1:
-            file.write(f"- {self.short_name}:\n")
+            file.write(f"- {self.short_name.unicode}:\n")
             for expr in self.expression:
                 print_indent(indent + 1, file)
-                file.write(f"  {expr}\n")
+                file.write(f"  {expr.unicode}\n")
         else:
-            file.write(f"- {self.short_name}\n")
+            file.write(f"- {self.short_name.unicode}\n")
     def pack(self) -> tuple[int, str]:
         return (0, self.full_name)
 
@@ -188,11 +245,13 @@ class Context(NamedTuple):
     @classmethod
     def unpack(cls, data) -> 'Context':
         (vars, hyps) = data
-        vars = {pretty_unicode(k): pretty_unicode(v) for k, v in vars.items()}
-        hyps = {pretty_unicode(k): pretty_unicode(v) for k, v in hyps.items()}
+        vars = {IsaTerm.from_isabelle(k): IsaTerm.from_isabelle(v) for k, v in vars.items()}
+        hyps = {IsaTerm.from_isabelle(k): IsaTerm.from_isabelle(v) for k, v in hyps.items()}
         return cls(vars, hyps)
     def __str__(self) -> str:
-        return f"{self.vars}, {self.hyps}"
+        vs = ", ".join(f"{k.unicode}: {v.unicode}" for k, v in self.vars.items())
+        hs = ", ".join(f"{k.unicode}: {v.unicode}" for k, v in self.hyps.items())
+        return f"{{{vs}}}, {{{hs}}}"
 
 class Goal(NamedTuple):
     context: Context
@@ -201,7 +260,7 @@ class Goal(NamedTuple):
     @classmethod
     def unpack(cls, data) -> 'Goal':
         (context, conclusion) = data
-        conclusion = pretty_unicode(conclusion)
+        conclusion = IsaTerm.from_isabelle(conclusion)
         return cls(Context.unpack(context), conclusion)
     def visible(self, suppressed: Context) -> 'Goal':
         """Return a Goal with suppressed vars/hyps removed."""
@@ -213,9 +272,9 @@ class Goal(NamedTuple):
             self.conclusion
         )
     def __str__(self) -> str:
-        return f"{self.context} ⊢ {self.conclusion}"
+        return f"{self.context} ⊢ {self.conclusion.unicode}"
     def __repr__(self) -> str:
-        return str(self)
+        return self.__str__()
 
 class Goals(NamedTuple):
     context: Context
@@ -226,7 +285,8 @@ class Goals(NamedTuple):
         (context, goals) = data
         return cls(Context.unpack(context), [Goal.unpack(goal) for goal in goals])
     def __str__(self) -> str:
-        return f"{self.context} ⊢ {self.goals}"
+        goals_str = ", ".join(g.conclusion.unicode for g in self.goals)
+        return f"{self.context} ⊢ [{goals_str}]"
 
 def print_indent(indent: int, file):
     for _ in range(indent):
@@ -249,7 +309,7 @@ def print_paragraph(indent: int, file: MyIO | StringIO, para: str):
 MAX_EXPR_ITEMS = 5
 
 def print_expression_list(indent: int, file: MyIO | StringIO,
-                          expressions: list[str]) -> bool:
+                          expressions: list[term]) -> bool:
     """Render the expression(s) that follow a trailing ``:`` on the
     previous line, individually length-truncated.
 
@@ -289,7 +349,7 @@ def print_vars(vars: Iterable[tuple[varname, typ]], indent: int, file, suppresse
             file.write(":\n")
             printed_banner = True
         print_indent(indent+1, file)
-        file.write(f"- {name}: {type}\n")
+        file.write(f"- {name.unicode}: {type.unicode}\n")
 
 def print_hyps(hyps: Iterable[tuple[varname, term]], indent: int, file, suppressed: Hyps, banner='premises'):
     printed_banner = False
@@ -302,7 +362,7 @@ def print_hyps(hyps: Iterable[tuple[varname, term]], indent: int, file, suppress
             file.write(":\n")
             printed_banner = True
         print_indent(indent+1, file)
-        file.write(f"- {name}: {term}\n")
+        file.write(f"- {name.unicode}: {term.unicode}\n")
 
 def print_goal(goal: Goal, indent: int, show_header: bool, file, suppressed: Context,
                truncate: bool = False):
@@ -310,19 +370,19 @@ def print_goal(goal: Goal, indent: int, show_header: bool, file, suppressed: Con
     print_hyps(goal.context.hyps.items(), indent, file, suppressed.hyps)
     print_indent(indent, file)
 
-    conclusion = goal.conclusion
+    conclusion_str = goal.conclusion.unicode
     was_truncated = False
-    if truncate and len(conclusion) > AGENT_GOAL_CHAR_LIMIT:
-        conclusion = _trunc_expr_base(conclusion, AGENT_GOAL_CHAR_LIMIT)
+    if truncate and len(conclusion_str) > AGENT_GOAL_CHAR_LIMIT:
+        conclusion_str = _trunc_expr_base(conclusion_str, AGENT_GOAL_CHAR_LIMIT)
         was_truncated = True
 
     if any(name not in suppressed.vars for name in goal.context.vars) or\
         any(name not in suppressed.hyps for name in goal.context.hyps):
-        file.write(f"goal: {conclusion}\n")
+        file.write(f"goal: {conclusion_str}\n")
     else:
         if show_header:
             file.write("goal: ")
-        file.write(conclusion)
+        file.write(conclusion_str)
         file.write("\n")
 
     if was_truncated:
@@ -346,20 +406,22 @@ def print_pending_goal(goal: Goal, step: step, indent: int, file : MyIO, suppres
     return line
 
 def string_of_and_list(l: list[Any]) -> str:
+    def _s(x):
+        return x.unicode if isinstance(x, IsaTerm) else str(x)
     match l:
         case []:
             return ""
         case [a]:
-            return str(a)
+            return _s(a)
         case [a, b]:
-            return f"{a} and {b}"
+            return f"{_s(a)} and {_s(b)}"
         case [*rest, last]:
-            return ", ".join(str(x) for x in rest) + f", and {last}"
+            return ", ".join(_s(x) for x in rest) + f", and {_s(last)}"
         case _:
             raise ValueError(f"Impossible")
 def titled_string_of_and_list(l: list[Any], singular: str, plural: str) -> str:
     if len(l) == 1:
-        return f"{singular} {l[0]}"
+        return f"{singular} {string_of_and_list(l)}"
     else:
         return f"{plural} {string_of_and_list(l)}"
 
@@ -460,7 +522,7 @@ class CannotFill_BadNode(CannotFill):
 class CannotRename(OprError):
     pass
 class CannotRename_NotFound(CannotRename):
-    def __init__(self, old_name: str, new_name: str):
+    def __init__(self, old_name: 'str | varname', new_name: 'str | varname'):
         self.old_name = old_name
         self.new_name = new_name
 class CannotRename_VariableNotFound(CannotRename_NotFound):
@@ -625,8 +687,8 @@ class VariableBinding(NamedTuple):
 
 class FactBinding(NamedTuple):
     expr: lambda_term  # internal_term
-    name: str          # external_name
-    pretty: str        # pretty
+    name: varname      # external_name
+    pretty: term       # pretty
 
 type Bindings = tuple[list[VariableBinding], list[FactBinding]]
 
@@ -638,9 +700,9 @@ def print_var_bindings(var_bindings: list[VariableBinding], indent: int, file: M
         for vb in var_bindings:
             print_indent(indent + 1, file)
             if vb.external_varname == vb.internal_varname:
-                file.write(f"- {vb.external_varname}: {vb.type}\n")
+                file.write(f"- {vb.external_varname.unicode}: {vb.type.unicode}\n")
             else:
-                file.write(f"- {vb.external_varname}: {vb.type}    (renamed from \"{vb.internal_varname}\")\n")
+                file.write(f"- {vb.external_varname.unicode}: {vb.type.unicode}    (renamed from \"{vb.internal_varname.unicode}\")\n")
 
 def print_fact_bindings(fact_bindings: list[FactBinding], indent: int, file: MyIO, banner='facts'):
     if fact_bindings:
@@ -649,7 +711,7 @@ def print_fact_bindings(fact_bindings: list[FactBinding], indent: int, file: MyI
         file.write(":\n")
         for fb in fact_bindings:
             print_indent(indent + 1, file)
-            file.write(f"- {fb.name}: {fb.pretty}\n")
+            file.write(f"- {fb.name.unicode}: {fb.pretty.unicode}\n")
 
 def add_var_to_set(var: VariableBinding, ret: list[VariableBinding]) -> list[VariableBinding]:
     for v in ret:
@@ -723,16 +785,16 @@ class Intro_Bindings_Msg(Message):
         (var_names, prem_names) = data
         var_bindings = [
             VariableBinding(
-                internal_varname=v[0],
-                external_varname=v[1],
-                type=pretty_unicode(v[2])
+                internal_varname=IsaTerm.from_isabelle(v[0]),
+                external_varname=IsaTerm.from_isabelle(v[1]),
+                type=IsaTerm.from_isabelle(v[2])
             ) for v in var_names
         ]
         fact_bindings = [
             FactBinding(
                 expr=p[0],
-                name=p[1],
-                pretty=pretty_unicode(p[2])
+                name=IsaTerm.from_isabelle(p[1]),
+                pretty=IsaTerm.from_isabelle(p[2])
             ) for p in prem_names
         ]
         return (var_bindings, fact_bindings)
@@ -758,24 +820,24 @@ class Simplify_Targets_Stale_Msg(Message):
 class Specialize_Result_Msg(Message):
     """Result facts produced by SPECIALIZE.
     Each entry is a (fact_name, pretty_printed_proposition) pair."""
-    def __init__(self, facts: list[tuple[str, str]]) -> None:
+    def __init__(self, facts: list[tuple[varname, term]]) -> None:
         super().__init__()
         self.facts = facts
     @classmethod
     def unpack(cls, data: list) -> 'Specialize_Result_Msg':
         # data is [(fact_name, pretty_expression), ...]
-        return cls([(name, pretty_unicode(expr)) for name, expr in data])
+        return cls([(IsaTerm.from_isabelle(name), IsaTerm.from_isabelle(expr)) for name, expr in data])
 
 class Newly_Fixed_Vars_Msg(Message):
     """Free variables that the ML side implicitly fixed when setting up a
     sub-proof goal (e.g. `Have "myf n = n + 7"` auto-fixes `n`). Surfaced as
     a `for_any:` block on the corresponding node."""
-    def __init__(self, vars: list[tuple[str, str]]) -> None:
+    def __init__(self, vars: list[tuple[varname, typ]]) -> None:
         super().__init__()
         self.vars = vars  # [(external_name, type_str), ...]
     @classmethod
     def unpack(cls, data) -> 'Newly_Fixed_Vars_Msg':
-        return cls([(name, pretty_unicode(typ)) for (name, typ) in data])
+        return cls([(IsaTerm.from_isabelle(name), IsaTerm.from_isabelle(typ)) for (name, typ) in data])
 
 class Pat_Completeness_Proof_Opened_Msg(Message):
     """The pat-completeness auto-proof during a `Define` operation left
@@ -795,7 +857,7 @@ class Define_Result_Msg(Message):
     """Emitted after a `Define` operation completes. Carries the function
     name and its (possibly inferred) type so the Python side can update
     `Define.type` even when the user omitted it."""
-    def __init__(self, name: str, type: str):
+    def __init__(self, name: str, type: typ):
         self.name = name
         self.type = type
 
@@ -822,7 +884,7 @@ def unpack_message(data) -> Message:
         case 8:
             return Termination_Proof_Opened_Msg()
         case (10, (name, ty)):
-            return Define_Result_Msg(name, pretty_unicode(ty))
+            return Define_Result_Msg(name, IsaTerm.from_isabelle(ty))
         case (11, names):
             return Simplify_Targets_Stale_Msg.unpack(names)
         case _:
@@ -883,7 +945,8 @@ class MLPT_Bundle(ML_ProofTree):
                 raise InternalError("The leftest internal's children should all be goals")
             return left.top_goals()
     def __str__(self) -> str:
-        return f"({self.context} ⊢ {self.subs})"
+        subs_str = ", ".join(repr(s) for s in self.subs)
+        return f"({self.context} ⊢ [{subs_str}])"
     def __eq__(self, other) -> bool:
         if not isinstance(other, MLPT_Bundle):
             return False
@@ -957,34 +1020,40 @@ class Criterion_Simp(Search_Criterion):
         super().__init__(positive)
         self.pattern = pattern
     def dump(self) -> Any:
-        return (self.positive, (5, self.pattern))
+        return (self.positive, (5, self.pattern.ascii))
 class Criterion_XSimp(Search_Criterion):
     def __init__(self, positive: bool, pattern: term, for_any: list[Explicit_Var]):
         super().__init__(positive)
         self.pattern = pattern
         self.for_any = for_any
     def dump(self) -> Any:
-        return (self.positive, (5, self.pattern))
+        return (self.positive, (5, self.pattern.ascii))
         # TODO: implement the for_any
-        # return (self.positive, (8, (self.pattern, self.for_any)))
+        # return (self.positive, (8, (self.pattern.ascii, self.for_any)))
 class Criterion_Pattern(Search_Criterion):
     def __init__(self, positive: bool, pattern: term):
         super().__init__(positive)
         self.pattern = pattern
     def dump(self) -> Any:
-        return (self.positive, (6, self.pattern))
+        return (self.positive, (6, self.pattern.ascii))
 class Criterion_XPattern(Search_Criterion):
     def __init__(self, positive: bool, pattern: term, for_any: list[Explicit_Var]):
         super().__init__(positive)
         self.pattern = pattern
         self.for_any = for_any
     def dump(self) -> Any:
-        return (self.positive, (6, self.pattern))
+        return (self.positive, (6, self.pattern.ascii))
         # TODO: implement the for_any
-        #return (self.positive, (7, (self.pattern, self.for_any)))
+        #return (self.positive, (7, (self.pattern.ascii, self.for_any)))
 
 
 ### Minilang Runtime
+
+def _pack_varnames(varnames: list[varname_spec] | None) -> list[str | None] | None:
+    """Convert varname_spec list to plain strings for RPC serialization."""
+    if varnames is None:
+        return None
+    return [v.ascii if v is not None else None for v in varnames]
 
 class Minilang_Operation(NamedTuple):
     command: str
@@ -1009,7 +1078,7 @@ class Minilang_Operation(NamedTuple):
         ENDBLK T_NXT and rebuild the MAGIC continuation. Errors on
         T_END — callers wanting to close the whole block should use
         SORRY_END_ALL instead."""
-        return Minilang_Operation("SORRY_NEXT", varnames)
+        return Minilang_Operation("SORRY_NEXT", _pack_varnames(varnames))
     @staticmethod
     def SORRY_END_ALL(varnames : list[varname_spec] | None) -> 'Minilang_Operation':
         """Cheat every remaining subgoal in the current HHF frame and
@@ -1018,7 +1087,7 @@ class Minilang_Operation(NamedTuple):
         critical for `Define`'s deferred pat-completeness/termination
         block, which may contain multiple residuals that a single
         SORRY_NEXT would leave partially unclosed."""
-        return Minilang_Operation("SORRY_END_ALL", varnames)
+        return Minilang_Operation("SORRY_END_ALL", _pack_varnames(varnames))
     @staticmethod
     def SORRY_ONLY() -> 'Minilang_Operation':
         """Cheat one subgoal in the current HHF frame without any
@@ -1028,18 +1097,18 @@ class Minilang_Operation(NamedTuple):
         return Minilang_Operation("SORRY_ONLY", None)
     @staticmethod
     def NEXT(varnames : list[varname_spec] | None) -> 'Minilang_Operation':
-        return Minilang_Operation("NEXT", ([], varnames))
+        return Minilang_Operation("NEXT", ([], _pack_varnames(varnames)))
     @staticmethod
     def END() -> 'Minilang_Operation':
         return Minilang_Operation("END", [])
     @staticmethod
-    def HAVE(name: str, statement: term, auto_apply: bool) -> 'Minilang_Operation':
+    def HAVE(name: str, statement: xterm, auto_apply: bool) -> 'Minilang_Operation':
         return Minilang_Operation("HAVE", (name, ascii_of_unicode(statement), auto_apply))
     @staticmethod
-    def SUFFICES(statement: term) -> 'Minilang_Operation':
+    def SUFFICES(statement: xterm) -> 'Minilang_Operation':
         return Minilang_Operation("SUFFICES", ascii_of_unicode(statement))
     @staticmethod
-    def OBTAIN(variables: list[Explicit_Var], constraints: list[tuple[str | None, term]]) -> 'Minilang_Operation':
+    def OBTAIN(variables: list[Explicit_Var], constraints: list[tuple[str | None, xterm]]) -> 'Minilang_Operation':
         vars = [(v["name"], ascii_of_unicode(v["type"]) if "type" in v else None) for v in variables]
         return Minilang_Operation("OBTAIN", (vars, [(n, ascii_of_unicode(c)) for n, c in constraints]))
     @staticmethod
@@ -1053,7 +1122,16 @@ class Minilang_Operation(NamedTuple):
         return Minilang_Operation("CHAINING", (name, [r.pack() for r in fact_refs]))
     @staticmethod
     def INTRO(bindings: Bindings | None, split: bool) -> 'Minilang_Operation':
-        return Minilang_Operation("INTRO", (bindings, split))
+        if bindings is not None:
+            # Convert IsaTerm fields back to ASCII strings for RPC serialization
+            var_bindings = [(vb.internal_varname.ascii, vb.external_varname.ascii, vb.type.ascii)
+                           for vb in bindings[0]]
+            fact_bindings = [(fb.expr, fb.name.ascii, fb.pretty.ascii)
+                            for fb in bindings[1]]
+            packed_bindings: Any = (var_bindings, fact_bindings)
+        else:
+            packed_bindings = None
+        return Minilang_Operation("INTRO", (packed_bindings, split))
     @staticmethod
     def SIMPLIFY(facts_with_targets: 'list[tuple[IsabelleFact, list[lambda_term] | None]]', use_system_simps: bool, premise_names: list[str], simplify_goal: bool, bindings: tuple[list[tuple[str, str, str]], list[tuple[lambda_term, str, str]]] | None) -> 'Minilang_Operation':
         packed_facts = [(r.pack(), targets) for r, targets in facts_with_targets]
@@ -1062,7 +1140,7 @@ class Minilang_Operation(NamedTuple):
     def UNFOLD(fact_refs: 'list[IsabelleFact]') -> 'Minilang_Operation':
         return Minilang_Operation("UNFOLD", [r.pack() for r in fact_refs])
     @staticmethod
-    def DEFINE(name: str, ty: str | None, equations: list[str], metric: list[str]) -> 'Minilang_Operation':
+    def DEFINE(name: str, ty: xtyp | None, equations: list[xterm], metric: list[xterm]) -> 'Minilang_Operation':
         return Minilang_Operation("DEFINE", (
             name,
             ascii_of_unicode(ty) if ty is not None else None,
@@ -1070,22 +1148,22 @@ class Minilang_Operation(NamedTuple):
             [ascii_of_unicode(m) for m in metric],
         ))
     @staticmethod
-    def WITNESS(terms: list[term]) -> 'Minilang_Operation':
-        return Minilang_Operation("WITNESS", terms)
+    def WITNESS(terms: list[xterm]) -> 'Minilang_Operation':
+        return Minilang_Operation("WITNESS", [ascii_of_unicode(t) for t in terms])
     @staticmethod
-    def BRANCH(cases: list[tuple[str | None, term]]) -> 'Minilang_Operation':
+    def BRANCH(cases: list[tuple[str | None, xterm]]) -> 'Minilang_Operation':
         return Minilang_Operation("BRANCH", [(n, ascii_of_unicode(t)) for n, t in cases])
     @staticmethod
-    def CASE_SPLIT(target: term, vars: list[varname_spec] | None, rule: 'IsabelleFact | None') -> 'Minilang_Operation':
-        return Minilang_Operation("CASE_SPLIT", (ascii_of_unicode(target), vars, rule))
+    def CASE_SPLIT(target: xterm, vars: list[varname_spec] | None, rule: 'IsabelleFact | None') -> 'Minilang_Operation':
+        return Minilang_Operation("CASE_SPLIT", (ascii_of_unicode(target), _pack_varnames(vars), rule))
     @staticmethod
-    def INDUCT(target: term, vars: list[varname_spec] | None, arbitrary: list[varname], rule: 'IsabelleFact | None') -> 'Minilang_Operation':
-        return Minilang_Operation("INDUCT", (ascii_of_unicode(target), vars, [ascii_of_unicode(t) for t in arbitrary], rule.pack() if rule is not None else None))
+    def INDUCT(target: xterm, vars: list[varname_spec] | None, arbitrary: list[xvarname], rule: 'IsabelleFact | None') -> 'Minilang_Operation':
+        return Minilang_Operation("INDUCT", (ascii_of_unicode(target), _pack_varnames(vars), [ascii_of_unicode(t) for t in arbitrary], rule.pack() if rule is not None else None))
     @staticmethod
     def SPECIALIZE(
         name: str,
         rule_ref: 'IsabelleFact',
-        instantiations: list[tuple[str, str]],  # (var_name, term_string)
+        instantiations: list[tuple[str, xterm]],  # (var_name, term_string)
         fact_refs: 'list[IsabelleFact]'
     ) -> 'Minilang_Operation':
         return Minilang_Operation("SPECIALIZE", (
@@ -1317,9 +1395,9 @@ class Minilang_State:
                     continue
                 rec = Semantic_DB[uk]
                 if rec is not None:
-                    scored_recs.append((1.0, rec._replace(name=ascii_of_unicode(rec.name))))
+                    scored_recs.append((1.0, rec))
                 else:
-                    scored_recs.append((1.0, SemanticRecord(tag, ascii_of_unicode(full_name), None, None)))
+                    scored_recs.append((1.0, SemanticRecord(tag, full_name, None, None)))
             if not scored_recs:
                 return [], [f'Undefined: "{exact_name}"']
             warnings: list[str] = []
@@ -1345,8 +1423,7 @@ class Minilang_State:
                                        type_patterns=type_patterns,
                                        theories_include=theories_include,
                                        name_contains=name_contains)
-                scored_recs = [(score, rec._replace(name=ascii_of_unicode(rec.name)))
-                               for score, rec in raw_results]
+                scored_recs = [(score, rec) for score, rec in raw_results]
             else:
                 # Pattern-only search: get filtered entities, look up records, no ranking
                 from Isabelle_RPC_Host.context import entities_of
@@ -1360,9 +1437,9 @@ class Minilang_State:
                 for uk, name, _ in entries:
                     rec = Semantic_DB[uk]
                     if rec is not None:
-                        scored_recs.append((0.0, rec._replace(name=ascii_of_unicode(rec.name))))
+                        scored_recs.append((0.0, rec))
                     else:
-                        scored_recs.append((0.0, SemanticRecord(EntityKind(uk[16]), ascii_of_unicode(name), None, None)))
+                        scored_recs.append((0.0, SemanticRecord(EntityKind(uk[16]), name, None, None)))
         if not scored_recs:
             return [], warnings
         # Resolve entities via RPC
@@ -1371,18 +1448,21 @@ class Minilang_State:
         out: list[RetrievedEntity] = []
         for (score, rec), info in zip(scored_recs, infos):
             if info is None:
-                short_name, exprs, roles, abbrev_names = rec.name, [], [], []
+                sname: 'short_name' = IsaTerm.from_isabelle(rec.name)
+                exprs: list[term] = []
+                roles: list[str] = []
+                abbrev_names: 'list[full_name]' = []
             else:
-                short_name, exprs, roles, abbrev_names = info
+                sname, exprs, roles, abbrev_names = info
             if rec.kind in _THEOREM_KINDS:
                 entity: IsabelleEntity = IsabelleFact_Presented(
-                    full_name=rec.name, short_name=short_name,
-                    fact=FactByName(refer_by="name", name=short_name),
+                    full_name=rec.name, short_name=sname,
+                    fact=FactByName(refer_by="name", name=sname.ascii),
                     expression=exprs, kind=rec.kind, roles=roles,
                     abbreviation_names=abbrev_names)
             else:
                 entity = IsabelleEntity(
-                    full_name=rec.name, short_name=short_name,
+                    full_name=rec.name, short_name=sname,
                     expression=exprs, kind=rec.kind, roles=roles,
                     abbreviation_names=abbrev_names)
             out.append(RetrievedEntity(
@@ -1390,7 +1470,7 @@ class Minilang_State:
                 score=score,
                 interpretation=' '.join(rec.interpretation.split()) if rec.interpretation else None))
         return out, warnings
-    async def compute_bindings(self, var_names: list[str], fact_names: list[str]) -> Bindings:
+    async def compute_bindings(self, var_names: list[varname], fact_names: list[varname]) -> Bindings:
         """
         Compute bindings for the leading proof goal by binding provided names in order.
         var_names[i] is bound to the i-th quantified variable in the goal.
@@ -1398,7 +1478,8 @@ class Minilang_State:
         Raises IsabelleError if the lengths don't match the goal structure.
         """
         bindings_data = await self.connection.callback("IsaMini.compute_bindings",
-                                                  (self.name, var_names, fact_names))
+                                                  (self.name, [v.ascii for v in var_names],
+                                                   [f.ascii for f in fact_names]))
         return Intro_Bindings_Msg._unpack_bindings(bindings_data)
     async def need_intro(self, consider_conj: bool) -> bool:
         """
@@ -1408,7 +1489,7 @@ class Minilang_State:
         result = await self.connection.callback("IsaMini.need_intro", (self.name, consider_conj))
         return result
     async def _retrieve_entity(self, entities: list[tuple[EntityKind, str]]
-        ) -> list[tuple[str, list[str], list[str], list[str]] | None]:
+        ) -> list[tuple[short_name, list[term], list[str], list[full_name]] | None]:
         """Retrieve entity info by kind and name (short or full).
         Returns list of (short_name, extra_strings, roles, abbreviation_names) or None per entity.
         extra_strings: propositions for theorems/rules, [type] for constants, [] for others.
@@ -1417,10 +1498,10 @@ class Minilang_State:
         args = [(int(kind), name) for kind, name in entities]
         results = await self.connection.callback(
             "IsaMini.retrieve_entity", (self.name, args))
-        return [(pretty_unicode(r[0]), [pretty_unicode(e) for e in r[1]], list(r[2]),
-                 [pretty_unicode(n) for n in r[3]])
+        return [(IsaTerm.from_isabelle(r[0]), [IsaTerm.from_isabelle(e) for e in r[1]], list(r[2]),
+                 list(r[3]))
                 if r is not None else None for r in results]
-    async def check_term(self, term_str: str) -> tuple[typ, Vars, Vars]:
+    async def check_term(self, term_str: xterm) -> tuple[typ, Vars, Vars]:
         """
         Parse and check a term string using Syntax.read_term.
         Returns a tuple of (term_type, frees, vars) where:
@@ -1431,10 +1512,10 @@ class Minilang_State:
         """
         try:
             term_type, frees_list, vars_list = await self.connection.callback("IsaMini.check_term",
-                                                                         (self.name, term_str))
-            frees = dict(frees_list)
-            vars = dict(vars_list)
-            return (term_type, frees, vars)
+                                                                         (self.name, ascii_of_unicode(term_str)))
+            frees = {IsaTerm.from_isabelle(k): IsaTerm.from_isabelle(v) for k, v in frees_list}
+            vars = {IsaTerm.from_isabelle(k): IsaTerm.from_isabelle(v) for k, v in vars_list}
+            return (IsaTerm.from_isabelle(term_type), frees, vars)
         except IsabelleError as e:
             if len(e.errors) >= 2 and e.errors[0] == "Unparsed":
                 raise InternalError_UnparsedTerm(term_str, e.errors[1])
@@ -1448,29 +1529,31 @@ class Minilang_State:
         """
         try:
             vars_list = await self.connection.callback("IsaMini.schematic_variables_of", self.name)
-            return dict(vars_list)
+            return {IsaTerm.from_isabelle(k): IsaTerm.from_isabelle(v) for k, v in vars_list}
         except IsabelleError as e:
             raise
 
-    async def potential_defs_of(self, terms: list[str]) -> list[IsabelleFact_Presented]:
+    async def potential_defs_of(self, constant_names: 'list[name]') -> list[IsabelleFact_Presented]:
         """
-        Get potential definitions for terms via Potential_Defs_Of RPC.
+        Get potential definitions for constants via Potential_Defs_Of RPC.
+        Each name is parsed as a term to extract the head constant.
         Returns list of IsabelleFact_Presented, deduplicated by proposition.
         """
-        result = await self.connection.callback("IsaMini.potential_defs_of", (self.name, terms))
+        result = await self.connection.callback("IsaMini.potential_defs_of",
+            (self.name, [n.ascii for n in constant_names]))
         return [IsabelleFact_Presented(full_name=full_name,
-                        short_name=short_name,
-                        fact=FactByName(refer_by="name", name=short_name),
-                        expression=[prop]) for full_name, short_name, prop in result]
+                        short_name=IsaTerm.from_isabelle(sname),
+                        fact=FactByName(refer_by="name", name=sname),
+                        expression=[IsaTerm.from_isabelle(prop)]) for full_name, sname, prop in result]
 
-    async def abbreviation_defs(self, full_names: list[str]) -> list[tuple[str, str] | None]:
+    async def abbreviation_defs(self, full_names: list[str]) -> list[tuple[term, term] | None]:
         """Get pretty-printed abbreviation (lhs, rhs) pairs by full name.
         Returns None for non-abbreviation constants."""
         if not full_names:
             return []
         results = await self.connection.callback(
             "IsaMini.abbreviation_defs", (self.name, full_names))
-        return [(pretty_unicode(r[0]), pretty_unicode(r[1]))
+        return [(IsaTerm.from_isabelle(r[0]), IsaTerm.from_isabelle(r[1]))
                 if r is not None else None for r in results]
 
     async def check_looping_rules(self, fact_names: list[str],
@@ -1679,10 +1762,10 @@ class Interaction_Retrieve(Interaction):
             exprs = fetched.entity.expression
             print_indent(indent+1, file)
             if exprs:
-                file.write(f"{i}. {fetched.entity.short_name}:")
+                file.write(f"{i}. {fetched.entity.short_name.unicode}:")
                 truncated = print_expression_list(indent+2, file, exprs)
             else:
-                file.write(f"{i}. {fetched.entity.short_name}\n")
+                file.write(f"{i}. {fetched.entity.short_name.unicode}\n")
                 truncated = False
             if fetched.interpretation and (fetched.entity.kind not in _THEOREM_KINDS or truncated):
                 print_indent(indent+2, file)
@@ -1696,7 +1779,7 @@ class Interaction_Retrieve(Interaction):
             selected_set = set(selected_indices)
             candidates = json.dumps([
                 {"full_name": f.entity.full_name, "score": f.score,
-                 "expression": f.entity.expression,
+                 "expression": [e.unicode for e in f.entity.expression],
                  "selected": i in selected_set}
                 for i, f in enumerate(facts)
             ])
@@ -1747,8 +1830,8 @@ class Interaction_Retrieve(Interaction):
         session = the_session()
         results = []
         for e in selected:
-            expr = ", ".join(e.expression) if e.expression else ""
-            results.append(f"{e.short_name}: {expr}" if expr else e.short_name)
+            expr = ", ".join(x.unicode for x in e.expression) if e.expression else ""
+            results.append(f"{e.short_name.unicode}: {expr}" if expr else e.short_name.unicode)
         session.log_retrieval(self.query, results)
         return cast(list[IsabelleEntity | IsabelleFact], selected)
 
@@ -1760,18 +1843,19 @@ class Interaction_RetrieveForProof(Interaction_Retrieve):
             query: str, kinds: list[EntityKind],
             **kwargs: Any):
         super().__init__(state, query, kinds, **kwargs)
-        self._relevant_constants_cache: list[tuple[str, str, str | None]] | None = None
+        self._relevant_constants_cache: 'list[tuple[short_name, str, str | None]] | None' = None
 
-    async def relevant_constants(self) -> list[tuple[str, str, str | None]]:
+    async def relevant_constants(self) -> 'list[tuple[short_name, str, str | None]]':
         """Fetch relevant constants via semantic search (cached).
         Returns list of (short_name, type, interpretation) triples."""
         if self._relevant_constants_cache is None:
             results, _ = await self.state.semantic_knn(self.query, 10, [EntityKind.CONSTANT])
-            self._relevant_constants_cache = [
+            cache = [
                 (r.entity.short_name,
-                 r.entity.expression[0] if r.entity.expression else "",
+                 r.entity.expression[0].unicode if r.entity.expression else "",
                  r.interpretation)
                 for r in results if r.score >= 0.5]
+            self._relevant_constants_cache = cache
         return self._relevant_constants_cache
 
     async def prompt(self, indent: int, file: MyIO) -> None:
@@ -1785,7 +1869,7 @@ class Interaction_RetrieveForProof(Interaction_Retrieve):
             file.write("Relevant constants in scope:\n")
             for short_name, typ, interp in constants:
                 print_indent(indent+1, file)
-                file.write(f"- {short_name}: {typ}\n")
+                file.write(f"- {short_name.unicode}: {typ}\n")
                 if interp:
                     print_indent(indent+2, file)
                     file.write(f"{interp}\n")
@@ -2206,13 +2290,13 @@ class Node(ABC):
             file.write(f"variables:\n")
             for name, typ in fixed_vars.items():
                 print_indent(indent+1, file)
-                file.write(f"- {name}: {type}\n")
+                file.write(f"- {name.unicode}: {typ.unicode}\n")
         if fixed_facts:
             print_indent(indent, file)
             file.write(f"facts:\n")
-            for name, term in fixed_facts.items():
+            for name, trm in fixed_facts.items():
                 print_indent(indent+1, file)
-                file.write(f"- {name}: {term}\n")
+                file.write(f"- {name.unicode}: {trm.unicode}\n")
     def _warn_discarded_nodes(self, discarded_nodes: list['Node'], msg: str, position: Warning.Position) -> None:
         def printer(indent: int, file: MyIO) -> int:
             print_indent(indent, file)
@@ -2866,7 +2950,7 @@ class StdBlock(NonLeaf_Node):
                 suppressed = self._ctxt_of_filling()
                 visible = goal.visible(suppressed)
                 if visible != self._prev_pending_goal:
-                    print_goal(goal, indent, False, file, suppressed)
+                    print_goal(goal, indent, True, file, suppressed)
                     self._prev_pending_goal = visible
             else:
                 self._prev_pending_goal = None
@@ -3284,12 +3368,12 @@ def proof_operation(operation: str, toolarg_typed_dict: type[Any]):
 
 class Statement(TypedDict):
     english: str
-    isabelle: str
+    isabelle: xterm
 
 class NamedStatement(TypedDict):
     english: str
-    isabelle: str
-    name: NotRequired[str]
+    isabelle: xterm
+    name: NotRequired[xvarname]
 
 def print_statement(self: Statement, indent: int, file: MyIO):
     print_indent(indent, file)
@@ -3448,10 +3532,10 @@ class Chaining(Leaf):
         super().__init__(config, "")
         self.chain_name = arg.name
         self.fact_refs = arg.facts
-        self.result_facts: list[tuple[str, str]] | None = None
+        self.result_facts: list[tuple[varname, term]] | None = None
         """(fact_name, pretty_expression) pairs for facts derived by CHAINING,
         populated from Specialize_Result_Msg after successful execution."""
-        self._prev_result_facts: list[tuple[str, str]] | None = None
+        self._prev_result_facts: list[tuple[varname, term]] | None = None
 
     def quickview(self, indent: int, file: MyIO) -> int:
         indent = super().quickview(indent, file)
@@ -3460,7 +3544,7 @@ class Chaining(Leaf):
             file.write("resulting:\n")
             for name, expr in self.result_facts:
                 print_indent(indent + 1, file)
-                file.write(f"{name}: {expr}\n")
+                file.write(f"{name.unicode}: {expr.unicode}\n")
             self._prev_result_facts = self.result_facts
         return indent
 
@@ -3501,7 +3585,7 @@ class Chaining(Leaf):
             file.write("resulting:\n")
             for name, expr in self.result_facts:
                 print_indent(indent + 1, file)
-                file.write(f"{name}: {expr}\n")
+                file.write(f"{name.unicode}: {expr.unicode}\n")
         self._print_evaluation_status(indent, file)
         if show_warnings:
             self._print_warnings(indent, file,
@@ -3551,7 +3635,7 @@ def _gen_with_subproof(cls: type,
 
 class Witness_ToolArg(TypedDict):
     thought: str
-    witness: str
+    witness: xterm
 
 @proof_operation("Witness", Witness_ToolArg)
 class Witness(Leaf):
@@ -3576,7 +3660,7 @@ class Witness(Leaf):
         return indent
 
     def the_operation(self) -> Minilang_Operation:
-        return Minilang_Operation.WITNESS([ascii_of_unicode(self.witness)])
+        return Minilang_Operation.WITNESS([self.witness])
 
 
 #### Define
@@ -3584,9 +3668,9 @@ class Witness(Leaf):
 class Define_ToolArg(TypedDict):
     thought: str
     name: str
-    type: NotRequired[str]
-    equations: list[str]
-    metric: NotRequired[list[str]]
+    type: NotRequired[xtyp]
+    equations: list[xterm]
+    metric: NotRequired[list[xterm]]
 
 @proof_operation("Define", Define_ToolArg)
 class Define(SubgoalMaker):
@@ -3696,7 +3780,7 @@ class Define(SubgoalMaker):
         # case where the user omitted the type field).
         for m in s0.messages:
             if isinstance(m, Define_Result_Msg):
-                self.type = m.type
+                self.type = m.type.unicode
                 break
         return self._deferred_block_opened
     def _block_closes_parent(self) -> bool:
@@ -3720,7 +3804,7 @@ class Define(SubgoalMaker):
 
     def _define_var(self, ret: Vars) -> Vars:
         ty = self.type if self.type is not None else "?"
-        ret[self.name] = ty
+        ret[IsaTerm.from_agent(self.name)] = IsaTerm.from_agent(ty)
         return ret
 
     def _fixed_vars_at_me(self, ret: Vars) -> Vars:
@@ -3767,7 +3851,7 @@ class Interaction_ChooseDef(Interaction):
             file.write(f"Multiple definitions found for constants {', '.join(self.constants)}:\n")
         for i, ref in enumerate(self.candidate_defs):
             print_indent(indent+1, file)
-            file.write(f"{i}. {ref.full_name}: {ref.expression}\n")
+            file.write(f"{i}. {ref.full_name}: {', '.join(e.unicode for e in ref.expression)}\n")
         file.write("Select definition(s) to use in unfolding. Call `mcp__proof__answer` with `indexes`, or leave empty to skip.\n")
     async def answer(self, answer: answer) -> list[IsabelleFact]:
         if isinstance(answer, str):
@@ -3820,7 +3904,7 @@ class Unfold(Leaf):
         async def parse(alive_state: Minilang_State,
                         exact_state: Minilang_State | None = None) -> gen_node:
             # Query potential definitions for all targets via RPC
-            all_defs = await alive_state.potential_defs_of(targets)
+            all_defs = await alive_state.potential_defs_of([IsaTerm.from_agent(t) for t in targets])
 
             if len(all_defs) == 0:
                 raise GenNode_Error(f"No definitions found for: {', '.join(targets)}")
@@ -3892,7 +3976,7 @@ class Unfold(Leaf):
 
 class Instantiation(TypedDict):
     name: str     # variable name (e.g., "x", "n")
-    value: str    # Isabelle term string (e.g., "Suc 0")
+    value: xterm  # Isabelle term string (e.g., "Suc 0")
 
 class Derive_ToolArg(TypedDict):
     thought: str
@@ -3920,10 +4004,10 @@ class Derive(Leaf):
         self.discharging_facts = arg.discharging_facts
         self.discharge_refs = arg.discharge_refs
         self.result_name = arg.result_name
-        self.result_facts: list[tuple[str, str]] | None = None
+        self.result_facts: list[tuple[varname, term]] | None = None
         """(fact_name, pretty_expression) pairs for facts derived by SPECIALIZE,
         populated from Specialize_Result_Msg after successful execution."""
-        self._prev_result_facts: list[tuple[str, str]] | None = None
+        self._prev_result_facts: list[tuple[varname, term]] | None = None
 
     def quickview_title(self) -> str:
         return f"Derive {self.rule_ref.name()}"
@@ -3934,7 +4018,7 @@ class Derive(Leaf):
             file.write("resulting facts:\n")
             for name, expr in self.result_facts:
                 print_indent(indent + 1, file)
-                file.write(f"- {name}: {expr}\n")
+                file.write(f"- {name.unicode}: {expr.unicode}\n")
             self._prev_result_facts = self.result_facts
         return indent
 
@@ -4003,7 +4087,7 @@ class Derive(Leaf):
             file.write("resulting facts:\n")
             for name, expr in self.result_facts:
                 print_indent(indent + 1, file)
-                file.write(f"- {name}: {expr}\n")
+                file.write(f"- {name.unicode}: {expr.unicode}\n")
         self._print_evaluation_status(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
         return indent
@@ -4167,6 +4251,7 @@ class Rewrite(Leaf):
                     print_indent(indent, file)
                     file.write("goal is solved.\n")
                 else:
+                    assert not isinstance(cur, str)
                     print_indent(indent, file)
                     file.write("goal changes into:\n")
                     print_goal(cur, indent+1, False, file, self._ctxt_at_me(),
@@ -4187,9 +4272,9 @@ class Rewrite(Leaf):
             # FactByName | FactByProposition only — no interactions possible
             fetched = cast(list[IsabelleFact], await alive_state.fetch_facts(arg["using"]))
 
-            # Check for looping rules
-            fact_names = [f.name() for f in fetched
-                          if not isinstance(f, IsabelleFact_Unfound)]
+            # Check for looping rules (names sent to RPC, need ASCII)
+            fact_names = [f.short_name.ascii for f in fetched
+                          if isinstance(f, IsabelleFact_Presented)]
             looping_info: list[LoopingRuleInfo] = []
             if fact_names:
                 looping_info = await alive_state.check_looping_rules(
@@ -4298,8 +4383,8 @@ class Rewrite(Leaf):
             return FailureReason("\n".join(f"Fact \"{f.name()}\" not found" for f in unfound))
         bindings = None
         if self.bindings is not None:
-            var_bindings = [(vb.internal_varname, vb.external_varname, vb.type) for vb in self.bindings[0]]
-            fact_bindings = [(fb.expr, fb.name, fb.pretty) for fb in self.bindings[1]]
+            var_bindings = [(vb.internal_varname.ascii, vb.external_varname.ascii, vb.type.ascii) for vb in self.bindings[0]]
+            fact_bindings = [(fb.expr, fb.name.ascii, fb.pretty.ascii) for fb in self.bindings[1]]
             bindings = (var_bindings, fact_bindings)
         # Build per-fact targets for the operation.
         # Filter out facts with empty target lists (user chose to drop them).
@@ -4372,7 +4457,7 @@ class Rewrite(Leaf):
                         file.write(f"- The proof goal has changed and new variables occur:\n")
                         for binding in auto_vars:
                             print_indent(indent+1, file)
-                            file.write(f"- {binding.external_varname}: {binding.type}\n")
+                            file.write(f"- {binding.external_varname.unicode}: {binding.type.unicode}\n")
                         return indent
                     self.warnings.append(Warning(Warning.Position.HEADER, print_var_warning))
 
@@ -4383,7 +4468,7 @@ class Rewrite(Leaf):
                         file.write(f"- The proof goal has changed and new premises occur:\n")
                         for binding in auto_facts:
                             print_indent(indent+1, file)
-                            file.write(f"- {binding.name}\n")
+                            file.write(f"- {binding.name.unicode}\n")
                         return indent
                     self.warnings.append(Warning(Warning.Position.HEADER, print_fact_warning))
 
@@ -4427,7 +4512,7 @@ class Rewrite(Leaf):
         if self.bindings is not None:
             for i, fact in enumerate(self.bindings[1]):
                 if fact.name == old_name:
-                    self.bindings[1][i] = FactBinding(fact.expr, new_name, fact.pretty)
+                    self.bindings[1][i] = FactBinding(fact.expr, IsaTerm.from_agent(new_name), fact.pretty)
                     return self
         return super()._rename_fact(old_name, new_name)
 
@@ -4462,8 +4547,8 @@ class Have(StdBlock):
         self.name = arg["name"]
         self.auto_apply = arg.get("auto_apply", False)
         # Populated from `Newly_Fixed_Vars_Msg` after the HAVE op runs.
-        self.for_any: list[tuple[str, str]] = []
-        self._prev_for_any: list[tuple[str, str]] = []
+        self.for_any: list[tuple[varname, typ]] = []
+        self._prev_for_any: list[tuple[varname, typ]] = []
         if subproof_parsed is not None:
             local_step = self._local_step_of_next_proof_step()
             ml_state = Minilang_State.assign(self.ml_state)
@@ -4482,7 +4567,7 @@ class Have(StdBlock):
     def quickview(self, indent: int, file: MyIO) -> int:
         indent = super().quickview(indent, file)
         if self.for_any and self.for_any != self._prev_for_any:
-            names = [name for name, _ in self.for_any]
+            names = [name.unicode for name, _ in self.for_any]
             if len(names) == 1:
                 names_str = names[0]
             elif len(names) == 2:
@@ -4508,7 +4593,7 @@ class Have(StdBlock):
             file.write("for_any:\n")
             for name, typ in self.for_any:
                 print_indent(indent+1, file)
-                file.write(f"{name}: {typ}\n")
+                file.write(f"{name.unicode}: {typ.unicode}\n")
         print_indent(indent, file)
         file.write(f"name: {self.name}\n")
         if self.auto_apply:
@@ -4543,7 +4628,7 @@ class Have(StdBlock):
         else:
             return FailureReason("The statement is nontrivial. Detailed proofs are required to establish this statement.")
     def _fixed_facts_after_me(self, ret: Hyps) -> Hyps:
-        ret[self.name] = self.statement['isabelle']
+        ret[IsaTerm.from_agent(self.name)] = IsaTerm.from_agent(self.statement['isabelle'])
         return ret
 
 #### Suffices
@@ -4696,8 +4781,8 @@ class Obtain(StdBlock):
 
 class Intro_ToolArg(TypedDict):
     thought: str
-    variable_bindings: NotRequired[list[varname]]
-    fact_bindings: NotRequired[list[varname]]
+    variable_bindings: NotRequired[list[xvarname]]
+    fact_bindings: NotRequired[list[xvarname]]
     split_conj: NotRequired[bool]
 
 @proof_operation("Intro", Intro_ToolArg)
@@ -4720,7 +4805,9 @@ class Intro(SubgoalMaker):
         async def parse(alive_state: Minilang_State,
                         exact_state: Minilang_State | None = None) -> gen_node:
             if pending is not None and exact_state is not None:
-                bindings = await exact_state.compute_bindings(pending[0], pending[1])
+                bindings = await exact_state.compute_bindings(
+                    [IsaTerm.from_agent(n) for n in pending[0]],
+                    [IsaTerm.from_agent(n) for n in pending[1]])
                 return lambda config: Intro(config, thought, bindings, split_conj)
             return lambda config: Intro(config, thought, None, split_conj,
                                         _pending_bindings=pending)
@@ -4758,7 +4845,9 @@ class Intro(SubgoalMaker):
     async def _refresh_me_alone(self):
         if self._pending_bindings is not None:
             var_bindings, fact_bindings = self._pending_bindings
-            self.bindings = await self.ml_state.compute_bindings(var_bindings, fact_bindings)
+            self.bindings = await self.ml_state.compute_bindings(
+                [IsaTerm.from_agent(n) for n in var_bindings],
+                [IsaTerm.from_agent(n) for n in fact_bindings])
             self._pending_bindings = None
         await super()._refresh_me_alone()
     def beginning_opr(self) -> Minilang_Operation:
@@ -4805,9 +4894,9 @@ class Intro(SubgoalMaker):
                         for binding in intro_bindings_msg.auto_introduced[0]:
                             print_indent(indent+1, file)
                             if binding.external_varname == binding.internal_varname:
-                                file.write(f"- {binding.external_varname}\n")
+                                file.write(f"- {binding.external_varname.unicode}\n")
                             else:
-                                file.write(f"- {binding.internal_varname}, renamed to {binding.external_varname} to prevent name conflicts\n")
+                                file.write(f"- {binding.internal_varname.unicode}, renamed to {binding.external_varname.unicode} to prevent name conflicts\n")
                         return indent
                     self.warnings.append(Warning(Warning.Position.HEADER, print))
                 if intro_bindings_msg.missing[1]:
@@ -4821,7 +4910,7 @@ class Intro(SubgoalMaker):
                         file.write(f"- The proof goal has changed and new premises occur:\n")
                         for binding in intro_bindings_msg.auto_introduced[1]:
                             print_indent(indent+1, file)
-                            file.write(f"- {binding.name}\n")
+                            file.write(f"- {binding.name.unicode}\n")
                         return indent
                     self.warnings.append(Warning(Warning.Position.HEADER, print))
         if not is_init:
@@ -4863,7 +4952,7 @@ class Intro(SubgoalMaker):
         if self.bindings is not None:
             for i, fact in enumerate(self.bindings[1]):
                 if fact.name == old_name:
-                    self.bindings[1][i] = FactBinding(fact.expr, new_name, fact.pretty)
+                    self.bindings[1][i] = FactBinding(fact.expr, IsaTerm.from_agent(new_name), fact.pretty)
                     return self
         return super()._rename_fact(old_name, new_name)
 
@@ -5032,7 +5121,7 @@ class Branch(SubgoalMaker):
 
 class CaseSplit_ToolArg(TypedDict):
     thought: str
-    target_isabelle_term: str
+    target_isabelle_term: xterm
     proof: SubProof
 
 @proof_operation("CaseSplit", CaseSplit_ToolArg)
@@ -5078,11 +5167,11 @@ class CaseSplit(CaseSplit_Like):
 
 type Induction_Rule = str | dict[str, Any]
 class Induction_ToolArg_Variable(TypedDict):
-    name: str
+    name: xvarname
     status: Literal["fixed", "generalized"]
 class Induction_ToolArg(TypedDict):
     thought: str
-    target_isabelle_term: str
+    target_isabelle_term: xterm
     rule: NotRequired[Induction_Rule]  # default: 'default'
     variables: list[Induction_ToolArg_Variable]
     proof: SubProof
@@ -5117,7 +5206,7 @@ class Induction(CaseSplit_Like):
                 return FailureReason(
                     f"Syntax error in induction target `{e.term}`: {e.reason}")
             # Remove free variables appearing in target_isabelle_term from variables list
-            self.variables[:] = [var for var in self.variables if var["name"] not in frees]
+            self.variables[:] = [var for var in self.variables if IsaTerm.from_agent(var["name"]) not in frees]
         fail = await super()._refresh_the_beginning_opr(begin_opr)
         if fail is None:
             vars = self._all_fixed_vars_before_me({})
@@ -5126,7 +5215,8 @@ class Induction(CaseSplit_Like):
             for v in frees:
                 if v in vars:
                     del vars[v]
-            new_var_names = [v for v in vars if v not in [var["name"] for var in self.variables]]
+            var_names_as_isa = [IsaTerm.from_agent(var["name"]) for var in self.variables]
+            new_var_names = [v for v in vars if v not in var_names_as_isa]
             if new_var_names:
                 if self._first_time:
                     return FailureReason(
@@ -5141,7 +5231,7 @@ class Induction(CaseSplit_Like):
                         "Change this by calling the `edit` tool with action `amend` and target step `{self.id}`"
                     )
                     self.warnings.append(Warning(Warning.Position.HEADER, msg))
-            not_used_vars = [var["name"] for var in self.variables if var["name"] not in vars]
+            not_used_vars = [var["name"] for var in self.variables if IsaTerm.from_agent(var["name"]) not in vars]
             if not_used_vars:
                 msg = (
                     f"This induction operation specifies unused "
@@ -5152,7 +5242,7 @@ class Induction(CaseSplit_Like):
             if not_used_vars:
                 self.variables[:] = [var for var in self.variables if var["name"] not in not_used_vars]
             if new_var_names:
-                self.variables.extend({"name": v, "status": "fixed"} for v in new_var_names)
+                self.variables.extend({"name": v.unicode, "status": "fixed"} for v in new_var_names)
         if not is_init and self.variables != old_variables:
             self.changed = True
         return fail
@@ -5478,7 +5568,7 @@ class Session:
         self.interactive_retrieval: InteractiveRetrievalMode = (
             parent.interactive_retrieval if parent is not None
             else interactive_retrieval)
-        self.seen_entities: set[str] = (
+        self.seen_entities: 'set[short_name]' = (
             set(parent.seen_entities) if parent is not None else set())
         self.seen_commands: dict[IsabellePosition, str] = (
             dict(parent.seen_commands) if parent is not None else {})
