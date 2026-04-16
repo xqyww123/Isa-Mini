@@ -2887,6 +2887,99 @@ async def _test_InductionGeneralize(root: Root, file: MyIO):
     root.print(0, file)
 
 
+@model_test("UpstreamChangeResetsObvious", "Test_UpstreamChangeResetsObvious.thy", 11)
+async def _test_UpstreamChangeResetsObvious(root: Root, file: MyIO):
+    """After Obvious fails, _is_trivial=False blocks retries.  Amending or
+    inserting before the parent step should call _on_upstream_change, resetting
+    _is_trivial so Obvious can be attempted again."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Step 1: Have True (trivially provable, Obvious succeeds)
+    root.session.age += 1
+    await root.fill("1", Have.gen({
+        "thought": "trivial helper",
+        "statement": {"english": "True", "isabelle": "True"},
+        "name": "triv",
+    }))
+    root.session.age += 1
+    await root.fill("1.1", Obvious.interactive_gen({"facts": []}))
+    print_header("After step 1 (Have True, Obvious succeeds)", file)
+    root.print(0, file)
+
+    # Step 2: Have False (given later — impossible to prove)
+    root.session.age += 1
+    await root.fill("2", Have.gen({
+        "thought": "impossible statement",
+        "statement": {"english": "False", "isabelle": "False"},
+        "name": "bad",
+    }))
+    print_header("After step 2 (Have False, open proof)", file)
+    root.print(0, file)
+
+    # Step 2.1: Obvious — must fail (can't prove False)
+    root.session.age += 1
+    await root.fill("2.1", Obvious.interactive_gen({"facts": []}))
+    step2 = root.locate_node("2")
+    assert step2._is_trivial is False, \
+        f"Expected _is_trivial=False after Obvious failure, got {step2._is_trivial}"
+    print_header("After step 2.1 (Obvious fails on False)", file)
+    root.print(0, file)
+
+    # Retry Obvious on step 2.1 — should be BLOCKED by GoalIsNontrivial
+    root.session.age += 1
+    try:
+        await root.fill("2.1", Obvious.interactive_gen({"facts": []}))
+        raise TestFailed("Expected CannotFill_GoalIsNontrivial but fill succeeded")
+    except CannotFill_GoalIsNontrivial:
+        pass  # expected
+    file.write("Obvious retry correctly blocked by GoalIsNontrivial\n")
+
+    # --- Test amend: amend step 1 → _on_upstream_change should reset step2._is_trivial ---
+    root.session.age += 1
+    await root.amend("1", Have.gen({
+        "thought": "amended helper",
+        "statement": {"english": "x + y = 3", "isabelle": "x + y = 3"},
+        "name": "sum",
+    }))
+    step2 = root.locate_node("2")
+    assert step2._is_trivial is None, \
+        f"Expected _is_trivial=None after amend of predecessor, got {step2._is_trivial}"
+    file.write("After amend: step2._is_trivial correctly reset to None\n")
+    print_header("After amending step 1", file)
+    root.print(0, file)
+
+    # Obvious on step 2.1 should now be ALLOWED (not blocked), though it will still fail
+    root.session.age += 1
+    await root.fill("2.1", Obvious.interactive_gen({"facts": []}))
+    file.write("Obvious retry allowed after amend (fails on False, as expected)\n")
+    assert step2._is_trivial is False, \
+        f"Expected _is_trivial=False after Obvious fails again, got {step2._is_trivial}"
+    print_header("After Obvious retry (allowed, fails)", file)
+    root.print(0, file)
+
+    # --- Test insert_before: insert before step 2 → _on_upstream_change resets again ---
+    root.session.age += 1
+    await root.insert_before("2", Have.gen({
+        "thought": "inserted step",
+        "statement": {"english": "True", "isabelle": "True"},
+        "name": "ins",
+    }))
+    step2 = root.locate_node("2")
+    assert step2._is_trivial is None, \
+        f"Expected _is_trivial=None after insert_before, got {step2._is_trivial}"
+    file.write("After insert_before: step2._is_trivial correctly reset to None\n")
+    print_header("After inserting before step 2", file)
+    root.print(0, file)
+
+    # Obvious on step 2.1 should be ALLOWED again
+    root.session.age += 1
+    await root.fill("2.1", Obvious.interactive_gen({"facts": []}))
+    file.write("Obvious retry allowed after insert_before\n")
+    print_header("Final state", file)
+    root.print(0, file)
+
+
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None):
     import msgpack as mp
     from IsaREPL import Client

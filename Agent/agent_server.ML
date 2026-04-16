@@ -679,7 +679,8 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
       (* Build AoA command with local callbacks *)
       val s0_ptree = Minilang.print_state s0
       val {constants, theorems, types, classes, locales,
-           introduction_rules, elimination_rules} =
+           introduction_rules, elimination_rules,
+           induction_rules, case_split_rules} =
         Semantic_Store.make_entity_callbacks (Context.Proof ctxt)
       val aoa_cmd = {
         name = "IsaMini.AoA",
@@ -714,6 +715,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
           Config.make_config_lookup_callback (Context.Proof ctxt),
           constants, theorems, types, classes, locales,
           introduction_rules, elimination_rules,
+          induction_rules, case_split_rules,
           Context_Callbacks.make_theory_long_name_callback (Context.Proof ctxt),
           Semantic_Store.make_interpret_theory_callback (Context.Proof ctxt)
         ]

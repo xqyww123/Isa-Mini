@@ -1975,6 +1975,12 @@ class Node(ABC):
         self.line = 0
         self._prev_eval_status: tuple[EvaluationStatus.Status, str | None] | None = None
 
+    def _on_upstream_change(self) -> None:
+        """Called when a predecessor is amended or inserted, meaning
+        the proof state flowing into this node may have changed.
+        Override to clear caches that depend on upstream state."""
+        self._is_trivial = None
+
     @property
     def titled_id(self) -> str:
         """Return e.g. 'step 1' or 'goal 2.1'."""
@@ -2434,6 +2440,11 @@ class NonLeaf_Node(Node):
         super().__init__(config, thought)
         self.sub_nodes = sub_nodes
         self._closed_by = None
+    def _on_upstream_change(self) -> None:
+        super()._on_upstream_change()
+        for child in self.sub_nodes:
+            child._on_upstream_change()
+
     def opening(self) -> bool:
         return self._closed_by is None
     def _open(self) -> None:
@@ -2523,6 +2534,8 @@ class NonLeaf_Node(Node):
                         raise InternalError("The target node to insert is already in my children")
                 self.sub_nodes.insert(i, node)
                 self._is_trivial = None
+                for sibling in self.sub_nodes[i+1:]:
+                    sibling._on_upstream_change()
                 return node
         raise InternalError("Cannot find the target to insert-before in my children")
     def _remove_child(self, child: Node) -> None:
@@ -2651,6 +2664,8 @@ class NonLeaf_Node(Node):
                     raise CannotAmend(self, child, str(e))
                 self.sub_nodes[i] = new_node
                 self._is_trivial = None
+                for sibling in self.sub_nodes[i+1:]:
+                    sibling._on_upstream_change()
                 new_node._amend_from(child)
                 if self._can_continue_before_child(new_node):
                     await new_node._refresh_me_alone()

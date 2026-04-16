@@ -1,0 +1,261 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - y: nat
+  - x: nat
+premises:
+  - h1: x = (1 :: nat)
+  - h2: y = (2 :: nat)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: x + y = (3 :: nat)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+--------------------------------------------------
+After step 1 (Have True, Obvious succeeds)
+--------------------------------------------------
+variables:
+  - y: nat
+  - x: nat
+premises:
+  - h1: x = (1 :: nat)
+  - h2: y = (2 :: nat)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: x + y = (3 :: nat)
+proof:
+  - step id: 1
+    thought: trivial helper
+    operation: Have
+    statement:
+      english: True
+      isabelle: True
+    name: triv
+    proof:
+      - step id: 1.1
+        operation: Obvious
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+--------------------------------------------------
+After step 2 (Have False, open proof)
+--------------------------------------------------
+variables:
+  - y: nat
+  - x: nat
+premises:
+  - h1: x = (1 :: nat)
+  - h2: y = (2 :: nat)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: x + y = (3 :: nat)
+proof:
+  - step id: 1
+    thought: trivial helper
+    operation: Have
+    statement:
+      english: True
+      isabelle: True
+    name: triv
+    proof:
+      - step id: 1.1
+        operation: Obvious
+  - step id: 2
+    thought: impossible statement
+    operation: Have
+    statement:
+      english: False
+      isabelle: False
+    name: bad
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
+    pending proof goal:
+      False
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+--------------------------------------------------
+After step 2.1 (Obvious fails on False)
+--------------------------------------------------
+variables:
+  - y: nat
+  - x: nat
+premises:
+  - h1: x = (1 :: nat)
+  - h2: y = (2 :: nat)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: x + y = (3 :: nat)
+proof:
+  - step id: 1
+    thought: trivial helper
+    operation: Have
+    statement:
+      english: True
+      isabelle: True
+    name: triv
+    proof:
+      - step id: 1.1
+        operation: Obvious
+  - step id: 2
+    thought: impossible statement
+    operation: Have
+    statement:
+      english: False
+      isabelle: False
+    name: bad
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
+    pending proof goal:
+      False
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+Obvious retry correctly blocked by GoalIsNontrivial
+After amend: step2._is_trivial correctly reset to None
+--------------------------------------------------
+After amending step 1
+--------------------------------------------------
+variables:
+  - y: nat
+  - x: nat
+premises:
+  - h1: x = (1 :: nat)
+  - h2: y = (2 :: nat)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: x + y = (3 :: nat)
+proof:
+  - step id: 1
+    thought: amended helper
+    operation: Have
+    statement:
+      english: x + y = 3
+      isabelle: x + y = 3
+    name: sum
+    proof:
+      - step id: 1.1
+        operation: Obvious
+  - step id: 2
+    thought: impossible statement
+    operation: Have
+    statement:
+      english: False
+      isabelle: False
+    name: bad
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
+    pending proof goal:
+      False
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+Obvious retry allowed after amend (fails on False, as expected)
+--------------------------------------------------
+After Obvious retry (allowed, fails)
+--------------------------------------------------
+variables:
+  - y: nat
+  - x: nat
+premises:
+  - h1: x = (1 :: nat)
+  - h2: y = (2 :: nat)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: x + y = (3 :: nat)
+proof:
+  - step id: 1
+    thought: amended helper
+    operation: Have
+    statement:
+      english: x + y = 3
+      isabelle: x + y = 3
+    name: sum
+    proof:
+      - step id: 1.1
+        operation: Obvious
+  - step id: 2
+    thought: impossible statement
+    operation: Have
+    statement:
+      english: False
+      isabelle: False
+    name: bad
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
+    pending proof goal:
+      False
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+After insert_before: step2._is_trivial correctly reset to None
+--------------------------------------------------
+After inserting before step 2
+--------------------------------------------------
+variables:
+  - y: nat
+  - x: nat
+premises:
+  - h1: x = (1 :: nat)
+  - h2: y = (2 :: nat)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: x + y = (3 :: nat)
+proof:
+  - step id: 1
+    thought: amended helper
+    operation: Have
+    statement:
+      english: x + y = 3
+      isabelle: x + y = 3
+    name: sum
+    proof:
+      - step id: 1.1
+        operation: Obvious
+  - step id: 1A
+    thought: inserted step
+    operation: Have
+    statement:
+      english: True
+      isabelle: True
+    name: ins
+    proof: empty
+  - step id: 2
+    thought: impossible statement
+    operation: Have
+    statement:
+      english: False
+      isabelle: False
+    name: bad
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
+    pending proof goal:
+      False
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+Obvious retry allowed after insert_before
+--------------------------------------------------
+Final state
+--------------------------------------------------
+variables:
+  - y: nat
+  - x: nat
+premises:
+  - h1: x = (1 :: nat)
+  - h2: y = (2 :: nat)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: x + y = (3 :: nat)
+proof:
+  - step id: 1
+    thought: amended helper
+    operation: Have
+    statement:
+      english: x + y = 3
+      isabelle: x + y = 3
+    name: sum
+    proof:
+      - step id: 1.1
+        operation: Obvious
+  - step id: 1A
+    thought: inserted step
+    operation: Have
+    statement:
+      english: True
+      isabelle: True
+    name: ins
+    proof: empty
+  - step id: 2
+    thought: impossible statement
+    operation: Have
+    statement:
+      english: False
+      isabelle: False
+    name: bad
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
+    pending proof goal:
+      False
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
