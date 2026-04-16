@@ -46,6 +46,7 @@ val counter_mode : string Config.T
 val INTRO_split_conj : bool Config.T
 val INTRO_mk_block : bool Config.T
 val auto_deconflict_bound : bool Config.T
+val auto_calculation : bool Config.T
 
 val chk_working_mode : string -> unit
 

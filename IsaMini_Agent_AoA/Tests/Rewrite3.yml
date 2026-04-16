@@ -7,14 +7,12 @@ variables:
 premises:
   - h1: y = x + (0 :: int)
   - h2: z = y * (1 :: int)
-You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 variables:
   - y: int
 goal: x = z
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
-pending proof goal:
-  x = z
 --------------------------------------------------
 After Have
 --------------------------------------------------
@@ -24,7 +22,7 @@ variables:
 premises:
   - h1: y = x + (0 :: int)
   - h2: z = y * (1 :: int)
-You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 variables:
   - y: int
 goal: x = z
@@ -40,8 +38,6 @@ proof:
       - step id: 1.1
         operation: Obvious
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
-pending proof goal:
-  x = z
 --------------------------------------------------
 After Rewrite
 --------------------------------------------------
@@ -51,7 +47,7 @@ variables:
 premises:
   - h1: y = x + (0 :: int)
   - h2: z = y * (1 :: int)
-You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 variables:
   - y: int
 goal: x = z
@@ -87,7 +83,7 @@ variables:
 premises:
   - h1: y = x + (0 :: int)
   - h2: z = y * (1 :: int)
-You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 variables:
   - y: int
 goal: x = z
@@ -106,7 +102,7 @@ proof:
     thought: Rewrite the premises to simplify the equations
     operation: Rewrite
     using:
-      - lem1: x = y
+      - lem1: x = y * (1 :: int)
     targets:
       - the goal
     goal changes into:
@@ -123,7 +119,7 @@ variables:
 premises:
   - h1: y = x + (0 :: int)
   - h2: z = y * (1 :: int)
-You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 variables:
   - y: int
 goal: x = z
@@ -138,16 +134,15 @@ proof:
     proof:
       - step id: 1.1
         operation: Obvious
-        Error: |
-          Failed to prove the proof goal automatically:
-            x = y * (2 :: int)
-          The proof is non-trivial and you must provide a detailed proof.
-    Error: Evaluation suspended due to failures in the operations above
+        Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to replace it with a proof.
+    pending proof goal:
+      x = y * (2 :: int)
   - step id: 2
     thought: Rewrite the premises to simplify the equations
     operation: Rewrite
     using:
-      - lem1: x = y
+      - lem1: x = y * (2 :: int)
     targets:
       - the goal
     goal changes into:

@@ -1,28 +1,27 @@
 --------------------------------------------------
-Initial State
+Initial YAML
 --------------------------------------------------
 variables:
-  - R: bool
-  - Q: bool
-  - P: bool
+  - P: nat ⇒ bool
 premises:
-  - assms(1): P
-  - assms(2): Q
-  - assms(3): R
+  - h1: P (0 :: nat)
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: P ∧ Q ∧ R
+goal: P (0 :: nat)
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
 --------------------------------------------------
-Overview
+Response
 --------------------------------------------------
-Error: Unfinished Proof (line 15)
-goal: P ∧ Q ∧ R
-No step goal1.1 needed (auto-proved): NodeNotFound: Step with id goal1.1 is not found
-No step goal2.1 needed (auto-proved): NodeNotFound: Step with id goal2.1 is not found
-No step goal3.1 needed (auto-proved): NodeNotFound: Step with id goal3.1 is not found
+Is error: True
+Reason: FailureReason(reason='Rule fact "nonexistent_rule" not found\n')
 --------------------------------------------------
-Final Overview
+After Derive (unfound)
 --------------------------------------------------
-Error: Unfinished Proof (line 15)
-Unfinished nodes: 1
+variables:
+  - P: nat ⇒ bool
+premises:
+  - h1: P (0 :: nat)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P (0 :: nat)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.

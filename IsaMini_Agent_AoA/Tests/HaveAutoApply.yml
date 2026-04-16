@@ -1,14 +1,14 @@
 --------------------------------------------------
 Initial YAML
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: myf (3 :: nat) = (10 :: nat)
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
 --------------------------------------------------
 After Have (auto_apply=True)
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: myf (3 :: nat) = (10 :: nat)
 proof:
   - step id: 1
@@ -29,7 +29,7 @@ Error: Unfinished Proof! Call command `edit` with action `fill` and target step 
 --------------------------------------------------
 After proving Have sub-goal
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: myf (3 :: nat) = (10 :: nat)
 proof:
   - step id: 1
@@ -51,7 +51,7 @@ Error: Unfinished Proof! Call command `edit` with action `fill` and target step 
 --------------------------------------------------
 After closing outer goal
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: myf (3 :: nat) = (10 :: nat)
 proof:
   - step id: 1

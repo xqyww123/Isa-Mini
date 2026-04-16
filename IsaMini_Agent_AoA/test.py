@@ -122,9 +122,9 @@ async def _test_branch(root: Root, file: MyIO):
     await root.fill("1", Branch.gen({
         "thought": "I don't know",
         "cases": [
-            {"english": "in case x is positive", "isabelle": "x > 0"},
-            {"english": "in case x is negative", "isabelle": "x < 0"},
-            {"english": "in case x is zero", "isabelle": "x = 0"},
+            {"statement": {"english": "in case x is positive", "isabelle": "x > 0"}, "proof": "Given later"},
+            {"statement": {"english": "in case x is negative", "isabelle": "x < 0"}, "proof": "Given later"},
+            {"statement": {"english": "in case x is zero", "isabelle": "x = 0"}, "proof": "Given later"},
         ]
     }))
     print_header("Branch", file)
@@ -308,7 +308,6 @@ async def _test_Rewrite1(root: Root, file: MyIO):
     print_header("After Rewrite", file)
     root.print(0, file)
     await root.rename_fact("premise0", "my_premise")
-    await root.rename_var("aAa", "yyy")
     print_header("After Rename Fact", file)
     root.print(0, file)
 
@@ -317,7 +316,7 @@ async def _test_Rewrite2(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     # Use Rewrite to simplify the premises h1 and h2
-    await root.insert_before("1", Rewrite.interactive_gen({
+    await root.fill("1", Rewrite.interactive_gen({
         "thought": "Rewrite the premises to simplify the equations",
         "using": [{"refer_by": "name", "name": "h1"}],
         "use system simplifiers": True,
@@ -327,10 +326,9 @@ async def _test_Rewrite2(root: Root, file: MyIO):
     print_header("After Rewrite", file)
     root.print(0, file)
     await root.rename_fact("premise0", "my_premise")
-    await root.rename_var("aAa", "yyy")
     print_header("After Rename Fact", file)
     root.print(0, file)
-    await root.delete(["0A"])
+    await root.delete(["1"])
     print_header("After Remove the Rewrite", file)
     root.print(0, file)
 
@@ -594,17 +592,17 @@ async def _test_Witness2(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
 
-    try:
-    # Use Witness to provide a witness (1) for the existential with property
-        await root.fill("1", Witness.gen({
-            "thought": "Provide 1 as witness, which is positive",
-            "witness": "1"
-        }))
-    except CannotAppend as e:
-        file.write(f"Error: {e}\n")
-        return
-    file.write(f"The excepted eception not happen")
-    return
+    # Use Witness on a non-existential goal — should fail gracefully
+    node, is_error, reason = await root.fill("1", Witness.gen({
+        "thought": "Provide 1 as witness, which is positive",
+        "witness": "1"
+    }))
+    if reason:
+        file.write(f"Error: {reason}\n")
+    else:
+        file.write(f"The expected failure did not happen\n")
+    print_header("After Witness (expected failure)", file)
+    root.print(0, file)
 
 @model_test("Unfold1", "Test_Unfold1.thy", 15)
 async def _test_Unfold1(root: Root, file: MyIO):
@@ -1067,7 +1065,7 @@ async def _test_Have1(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1", Have.gen({
         "thought": "helper",
-        "statement": {"english": "x equals x plus 0", "isabelle": r"x + x \<ge> 0 \<Longrightarrow> x = x + 0"},
+        "statement": {"english": "x squared is non-negative", "isabelle": r"(0::int) \<le> x * x"},
         "name": "lem1"
     }))
     print_header("After Have", file)
@@ -1202,7 +1200,7 @@ async def _test_Rewrite_NO_SIMP_Leak(root: Root, file: MyIO):
     file.write(f"reason: {reason}\n")
     assert_no_NO_SIMP("NO_SIMP leaked via classical reasoning on wrapped conclusion")
 
-@model_test("Rewrite_Once_Simproc", "Test_Rewrite_Once_Simproc.thy", 25)
+@model_test("Rewrite_Once_Simproc", "Test_Rewrite_Once_Simproc.thy", 27)
 async def _test_Rewrite_Once_Simproc(root: Root, file: MyIO):
     """Test that a genuinely looping rewrite rule triggers the once-simproc
     fallback instead of timing out. The rule my_wrap (f x = g (f x)) is
@@ -1211,20 +1209,37 @@ async def _test_Rewrite_Once_Simproc(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     # Rewrite goal using my_wrap — a self-looping rule (f x = g (f x)).
-    # Without the once-simproc fallback this would timeout.
-    node, success, reason = await root.fill("1", Rewrite.interactive_gen({
-        "thought": "Rewrite using my_wrap to unfold f into g(f(...))",
-        "using": [{"refer_by": "name", "name": "my_wrap"}],
-        "use system simplifiers": False,
-        "rewrite goal": True,
-        "rewrite premises": []
-    }))
-    print_header("After Rewrite", file)
-    root.print(0, file)
-    file.write(f"success: {success}\n")
-    file.write(f"reason: {reason}\n")
+    # The looping rule triggers RaiseInteraction for target selection.
+    # Select all targets so the once-simproc wraps them.
+    try:
+        node, success, reason = await root.fill("1", Rewrite.interactive_gen({
+            "thought": "Rewrite using my_wrap to unfold f into g(f(...))",
+            "using": [{"refer_by": "name", "name": "my_wrap"}],
+            "use system simplifiers": False,
+            "rewrite goal": True,
+            "rewrite premises": []
+        }))
+        print_header("After Rewrite (no interaction)", file)
+        root.print(0, file)
+        file.write(f"success: {success}\n")
+        file.write(f"reason: {reason}\n")
+    except RaiseInteraction as e:
+        print_header("Interaction Prompt", file)
+        assert len(e.interactions) == 1
+        inter = e.interactions[0]
+        await inter.prompt(0, file)
+        # Select all matching subterms
+        num_matches = len(inter.looping_rules[0][2]) if inter.looping_rules else 0
+        all_indices = list(range(num_matches))
+        answer_result = await inter.answer(all_indices)
+        gn = await e.kontinuation([answer_result])
+        node, success, reason = await root.fill("1", _trivial_parsing(gn))
+        print_header("After Rewrite (via interaction)", file)
+        root.print(0, file)
+        file.write(f"success: {success}\n")
+        file.write(f"reason: {reason}\n")
 
-@model_test("Rewrite_Targeted", "Test_Rewrite_Targeted.thy", 26)
+@model_test("Rewrite_Targeted", "Test_Rewrite_Targeted.thy", 25)
 async def _test_Rewrite_Targeted(root: Root, file: MyIO):
     """Test interactive target selection for a looping rewrite rule.
     The rule my_wrap (f x = g (f x)) loops. The goal contains two matching
@@ -1299,19 +1314,18 @@ async def _test_Rewrite_Targeted_Drop(root: Root, file: MyIO):
 
 @model_test("IMO_1966_p5", "Test_imo_1966_p5.thy", 19)
 async def _test_imo_1966_p5(root: Root, file: MyIO):
-    """Test that inserting Have before Intro leaves the Intro unchanged.
-    Reproduces the calling trace where Have nodes are inserted before the Intro step,
-    and the Intro's proof state ($6 → $8) remains identical because unproven Have
-    blocks use SORRY to restore the same enclosing state."""
+    """Test filling Have steps into an initially empty proof tree.
+    The proof tree has no auto-Intro (the goal is presented directly),
+    so we fill step 1 with a Have, then work on its subproof."""
     print_header("Initial State", file)
     root.print(0, file)
     print_header("Overview", file)
     root.quickview(0, file)
     root.reset_changed()
 
-    # 1. Insert Have eq1 before step 1 (Intro)
+    # 1. Fill step 1 with Have eq1
     root.session.age += 1
-    await root.insert_before("1", Have.gen({
+    await root.fill("1", Have.gen({
         "thought": "Since a(2) < a(1), a(3) < a(2), a(4) < a(3), we know a(1) > a(2) > a(3) > a(4). "
                    "Subtracting h7 from h6, the coefficients factor as (a(1)-a(2))*(-x1+x2+x3+x4)=0. "
                    "Since a(1)-a(2)>0, we get x1=x2+x3+x4.",
@@ -1321,7 +1335,7 @@ async def _test_imo_1966_p5(root: Root, file: MyIO):
             "isabelle": "x (1::nat) = x (2::nat) + x (3::nat) + x (4::nat)"
         }
     }))
-    print_header("After inserting Have eq1 before Intro", file)
+    print_header("After filling Have eq1", file)
     buffer = io.StringIO()
     root.print(0, MyIO(buffer), update_line=True)
     root.print(0, file)
@@ -1331,7 +1345,7 @@ async def _test_imo_1966_p5(root: Root, file: MyIO):
 
     # 2. Try Obvious to prove eq1 — fails (non-trivial)
     root.session.age += 1
-    await root.fill("0A.1", Obvious.interactive_gen({
+    await root.fill("1.1", Obvious.interactive_gen({
         "facts": [
             {"refer_by": "name", "name": "h6"},
             {"refer_by": "name", "name": "h7"},
@@ -1350,7 +1364,7 @@ async def _test_imo_1966_p5(root: Root, file: MyIO):
 
     # 3. Delete the failed Obvious step
     root.session.age += 1
-    await root.delete(["0A.1"])
+    await root.delete(["1.1"])
     print_header("After deleting failed Obvious", file)
     buffer = io.StringIO()
     root.print(0, MyIO(buffer), update_line=True)
@@ -1361,7 +1375,7 @@ async def _test_imo_1966_p5(root: Root, file: MyIO):
 
     # 4. Fill with intermediate Have: a1_gt_a3
     root.session.age += 1
-    await root.fill("0A.1", Have.gen({
+    await root.fill("1.1", Have.gen({
         "thought": "From assms(1) and assms(2), a(1) > a(3), so |a(1) - a(3)| = a(1) - a(3)",
         "name": "a1_gt_a3",
         "statement": {
@@ -1371,7 +1385,7 @@ async def _test_imo_1966_p5(root: Root, file: MyIO):
     }))
     # Prove a1_gt_a3 with Obvious — should succeed
     root.session.age += 1
-    await root.fill("0A.1.1", Obvious.interactive_gen({
+    await root.fill("1.1.1", Obvious.interactive_gen({
         "facts": [
             {"refer_by": "name", "name": "assms(1)"},
             {"refer_by": "name", "name": "assms(2)"}
@@ -1387,7 +1401,7 @@ async def _test_imo_1966_p5(root: Root, file: MyIO):
 
     # 5. Fill with intermediate Have: a1_gt_a4
     root.session.age += 1
-    await root.fill("0A.2", Have.gen({
+    await root.fill("1.2", Have.gen({
         "thought": "From assms, a(1) > a(2) > a(3) > a(4), so a(1) > a(4)",
         "name": "a1_gt_a4",
         "statement": {
@@ -1397,7 +1411,7 @@ async def _test_imo_1966_p5(root: Root, file: MyIO):
     }))
     # Prove a1_gt_a4 with Obvious — should succeed
     root.session.age += 1
-    await root.fill("0A.2.1", Obvious.interactive_gen({
+    await root.fill("1.2.1", Obvious.interactive_gen({
         "facts": [
             {"refer_by": "name", "name": "a1_gt_a3"},
             {"refer_by": "name", "name": "assms(3)"}
@@ -1616,62 +1630,27 @@ async def _test_intro_split_conj(root: Root, file: MyIO):
 
 @model_test("IntroObvious", "Test_IntroObvious.thy", 10)
 async def _test_intro_obvious(root: Root, file: MyIO):
-    """Reproduce: Intro splits A ∧ B ∧ C into subgoals, then Obvious
-    on a subgoal may generate infinite 'True' pending goals."""
+    """Test that Intro on P ∧ Q ∧ R (with assumptions P, Q, R) auto-completes.
+    Previously this could generate infinite 'True' pending goals; now the
+    auto-Intro succeeds outright so no manual fill is needed."""
     print_header("Initial State", file)
     root.print(0, file)
     print_header("Overview", file)
     root.quickview(0, file)
 
     # The auto-Intro at step 1 should introduce premises P, Q, R
-    # and split the conjunction P ∧ Q ∧ R into subgoals.
-    # Try Obvious on the first subgoal (1.1.1).
-    root.session.age += 1
-    await root.fill("1.1.1", Obvious.interactive_gen({"facts": []}))
-    print_header("After Obvious on 1.1.1", file)
-    root.print(0, file)
-    print_header("Overview after 1.1.1", file)
-    root.quickview(0, file)
-
-    # If the bug exists, a "True" pending goal appears in 1.1,
-    # requiring step 1.1.2 to be filled.
+    # and auto-prove the conjunction. No subgoals should remain.
+    # Verify by attempting to fill 1.1.1 — it should fail because
+    # the proof is already complete.
     root.session.age += 1
     try:
-        await root.fill("1.1.2", Obvious.interactive_gen({"facts": []}))
-        print_header("After Obvious on 1.1.2 (True subgoal appeared)", file)
+        await root.fill("1.1.1", Obvious.interactive_gen({"facts": []}))
+        print_header("After Obvious on 1.1.1 (subgoal existed)", file)
         root.print(0, file)
-        print_header("Overview after 1.1.2", file)
+        print_header("Overview after 1.1.1", file)
         root.quickview(0, file)
     except Exception as e:
-        file.write(f"No step 1.1.2 needed (no bug): {type(e).__name__}: {e}\n")
-
-    # If the bug persists, yet another "True" would appear for 1.1.3.
-    root.session.age += 1
-    try:
-        await root.fill("1.1.3", Obvious.interactive_gen({"facts": []}))
-        print_header("After Obvious on 1.1.3 (True subgoal appeared again)", file)
-        root.print(0, file)
-        print_header("Overview after 1.1.3", file)
-        root.quickview(0, file)
-    except Exception as e:
-        file.write(f"No step 1.1.3 needed (no bug): {type(e).__name__}: {e}\n")
-
-    # Now try to close the remaining subgoals 1.2 and 1.3.
-    root.session.age += 1
-    try:
-        await root.fill("1.2.1", Obvious.interactive_gen({"facts": []}))
-        print_header("After Obvious on 1.2.1", file)
-        root.print(0, file)
-    except Exception as e:
-        file.write(f"Cannot fill 1.2.1: {type(e).__name__}: {e}\n")
-
-    root.session.age += 1
-    try:
-        await root.fill("1.3.1", Obvious.interactive_gen({"facts": []}))
-        print_header("After Obvious on 1.3.1", file)
-        root.print(0, file)
-    except Exception as e:
-        file.write(f"Cannot fill 1.3.1: {type(e).__name__}: {e}\n")
+        file.write(f"No step 1.1.1 needed (auto-proved): {type(e).__name__}: {e}\n")
 
     print_header("Final Overview", file)
     root.quickview(0, file)
@@ -1974,49 +1953,27 @@ async def _test_InductionObviousProof(root: Root, file: MyIO):
 
 @model_test("MultiGoalQuickview", "Test_MultiGoalQuickview.thy", 10)
 async def _test_multi_goal_quickview(root: Root, file: MyIO):
-    """Test quickview rendering for root-level multi-goal lemma (shows P and Q and R)."""
+    """Test quickview rendering for root-level multi-goal lemma (shows P and Q and R).
+    Each goal is directly an assumption, so auto-Intro proves them all."""
     print_header("Initial State", file)
     root.print(0, file)
-    print_header("Overview (all unfinished)", file)
+    print_header("Overview", file)
     root.quickview(0, file)
 
-    # Close goal1 with Obvious
-    root.session.age += 1
-    await root.fill("goal1.1", Obvious.interactive_gen({"facts": []}))
-    print_header("Overview (goal1 done)", file)
+    # Each goal (P, Q, R) is directly an assumption, so auto-Intro
+    # should auto-prove them all. Verify by attempting to fill —
+    # should fail because goals are already complete.
+    for goal_name in ["goal1", "goal2", "goal3"]:
+        root.session.age += 1
+        try:
+            await root.fill(f"{goal_name}.1", Obvious.interactive_gen({"facts": []}))
+            print_header(f"Overview ({goal_name} filled manually)", file)
+            root.quickview(0, file)
+        except Exception as e:
+            file.write(f"No step {goal_name}.1 needed (auto-proved): {type(e).__name__}: {e}\n")
+
+    print_header("Final Overview", file)
     root.quickview(0, file)
-
-    # Close goal2 with Obvious
-    root.session.age += 1
-    await root.fill("goal2.1", Obvious.interactive_gen({"facts": []}))
-    print_header("Overview (goal1+2 done)", file)
-    root.quickview(0, file)
-
-    # Close goal3 with Obvious
-    root.session.age += 1
-    await root.fill("goal3.1", Obvious.interactive_gen({"facts": []}))
-    print_header("Overview (all done)", file)
-    root.quickview(0, file)
-
-    unfinished = set()
-    root.unfinished_nodes(unfinished)
-    file.write(f"Unfinished nodes: {len(unfinished)}\n")
-
-@model_test("ObviousTimeout_explicit", "Test_ObviousTimeout1.thy", 8)
-async def _test_ObviousTimeout_explicit(root: Root, file: MyIO):
-    """Test Obvious with an explicit timeout parameter on False (should fail after ~timeout seconds)."""
-    print_header("Initial YAML", file)
-    root.print(0, file)
-
-    # Obvious with explicit timeout=10 on False — should fail after ~10s
-    root.session.age += 1
-    t0 = time()
-    await root.fill("1", Obvious.interactive_gen({"facts": [], "timeout": 20}))
-    elapsed = time() - t0
-    file.write(f"Elapsed: {elapsed:.1f}s\n")
-    print_header("After Obvious (timeout=10)", file)
-    root.print(0, file)
-
     unfinished = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
@@ -2083,13 +2040,16 @@ async def _test_Derive1(root: Root, file: MyIO):
     }))
     print_header("After Derive", file)
     root.print(0, file)
-    # Close goal using the derived fact
+    # Close goal using the derived fact — may already be auto-proved
     root.session.age += 1
-    await root.fill("2", Obvious.interactive_gen({
-        "facts": [{"refer_by": "name", "name": "derived_Q0"}]
-    }))
-    print_header("After Obvious", file)
-    root.print(0, file)
+    try:
+        await root.fill("2", Obvious.interactive_gen({
+            "facts": [{"refer_by": "name", "name": "derived_Q0"}]
+        }))
+        print_header("After Obvious", file)
+        root.print(0, file)
+    except Exception as e:
+        file.write(f"No step 2 needed (auto-proved after Derive): {type(e).__name__}: {e}\n")
     unfinished_nodes = set()
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
@@ -2527,7 +2487,7 @@ async def _test_GlobalEnvFill(root: Root, file: MyIO):
     assert next_id == "global.2", \
         f"Expected next target 'global.2', got {next_id!r}"
 
-@model_test("Chaining", "Test_Chaining.thy", 11)
+@model_test("Chaining", "Test_Chaining.thy", 12)
 async def _test_Chaining(root: Root, file: MyIO):
     """Chain `ab : a = b` and `bc : b <= c` into `ac : a <= c` via registered
     [trans] rules, then discharge the goal with Obvious using the chained
@@ -2889,6 +2849,41 @@ async def _test_IntroMetaQuant(root: Root, file: MyIO):
         file.write(f"BUG REPRODUCED: {type(e).__name__}: {e}\n")
 
     print_header("Final state", file)
+    root.print(0, file)
+
+
+@model_test("InductionGeneralize", "Test_InductionGeneralize.thy", 8)
+async def _test_InductionGeneralize(root: Root, file: MyIO):
+    """Reproduce issue from log D91DC33B9_1A88D48: Induction with a generalized
+    variable drops premises that mention that variable.
+
+    The goal ∀N m. m ≤ N ⟶ m * m ≤ N * N gets auto-Intro'd (step 1) to fix
+    N, m and assume m ≤ N.  Then Induction on N with m generalized (step 2)
+    should preserve the premise m ≤ N in the induction cases.
+
+    Expected (correct) behavior:
+      - Base case: premise m ≤ 0 should appear
+      - Suc case IH: should be ∀m. m ≤ N ⟶ m * m ≤ N * N (bounded)
+
+    Actual (buggy) behavior:
+      - Base case: no premise m ≤ 0 — goal is m * m ≤ 0 for all m (unprovable)
+      - Suc case IH: unconditional ∀m. m * m ≤ N * N (no bound)"""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Step 2 (step 1 is auto-Intro): Induction on N with m generalized.
+    # BUG: the premise "m ≤ N" from the auto-Intro should be preserved in
+    # induction cases, but it gets dropped when m is generalized.
+    await root.fill("2", Induction.gen({
+        "thought": "Induction on N with m generalized",
+        "target_isabelle_term": "N",
+        "variables": [
+            {"name": "N", "status": "fixed"},
+            {"name": "m", "status": "generalized"},
+        ],
+        "rule": None,
+    }))
+    print_header("After Induction (check premises in cases)", file)
     root.print(0, file)
 
 

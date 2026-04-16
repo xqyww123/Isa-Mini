@@ -9,16 +9,15 @@ premises:
   - assms(1): P
   - assms(2): Q
   - assms(3): R
-You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: P ∧ Q ∧ R
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
-pending proof goal:
-  P ∧ Q ∧ R
 --------------------------------------------------
 Overview
 --------------------------------------------------
 Error: Unfinished Proof (line 15)
+goal: P ∧ Q ∧ R
 --------------------------------------------------
 After Intro split_conj=True
 --------------------------------------------------
@@ -30,7 +29,7 @@ premises:
   - assms(1): P
   - assms(2): Q
   - assms(3): R
-You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: P ∧ Q ∧ R
 proof:
   - step id: 1
@@ -41,30 +40,27 @@ proof:
         goal: P
         proof: empty
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1` to provide the proof for the following goal.
-        pending proof goal:
-          P
       - goal id: 1.2
         goal: Q
         proof: empty
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.1` to provide the proof for the following goal.
-        pending proof goal:
-          Q
       - goal id: 1.3
         goal: R
         proof: empty
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.3.1` to provide the proof for the following goal.
-        pending proof goal:
-          R
 --------------------------------------------------
 Overview after split
 --------------------------------------------------
 step 1: Intro (line 0)
-  goal 1.1 (line 0)
-    Error: Unfinished Proof (line 43)
-  goal 1.2 (line 0)
-    Error: Unfinished Proof (line 49)
-  goal 1.3 (line 0)
-    Error: Unfinished Proof (line 55)
+  - 1.1 (line 0)
+    Error: Unfinished Proof (line 42)
+    goal: P
+  - 1.2 (line 0)
+    Error: Unfinished Proof (line 46)
+    goal: Q
+  - 1.3 (line 0)
+    Error: Unfinished Proof (line 50)
+    goal: R
 --------------------------------------------------
 After closing subgoals
 --------------------------------------------------
@@ -76,7 +72,7 @@ premises:
   - assms(1): P
   - assms(2): Q
   - assms(3): R
-You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: P ∧ Q ∧ R
 proof:
   - step id: 1
@@ -102,10 +98,8 @@ proof:
 Final overview
 --------------------------------------------------
 step 1: Intro (line 0)
-  goal 1.1 (line 0)
-    step 1.1.1: Obvious (line 0)
-  goal 1.2 (line 0)
-    step 1.2.1: Obvious (line 0)
-  goal 1.3 (line 0)
+  - 1.1 (done, line 0)
+  - 1.2 (done, line 0)
+  - 1.3 (line 0)
     step 1.3.1: Obvious (line 0)
 Unfinished nodes: 0

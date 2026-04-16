@@ -24,6 +24,6 @@ lemma my_wrap: "f x = g (f (x::nat))"
 lemma once_simproc_test:
   assumes h1: "f (a::nat) = c"
   shows "g (f a) = c"
-  by   a oa
+  by aoa
 
 end

@@ -1032,7 +1032,7 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
           val ty_str =
             case Function_Common.import_last_function ctxt' of
               SOME {fs = f :: _, ...} =>
-                Syntax.string_of_typ ctxt' (fastype_of f)
+                string_of_type ctxt' (fastype_of f)
             | _ => the_default "?" ty_opt
           val _ = Minilang.get_reporter ()
                     (Minilang.Internal (DEFINE_RESULT (name, ty_str)))

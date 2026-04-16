@@ -15,7 +15,14 @@ parser.add_argument(
     default="127.0.0.1:6666",
     help="REPL server address (host:port), default: 127.0.0.1:6666",
 )
+parser.add_argument(
+    "--filter", "-f",
+    default=None,
+    help="Run only test cases whose name contains this substring",
+)
 args = parser.parse_args()
+if args.filter is not None:
+    os.environ["TEST_FILTER"] = args.filter
 rpc_addr = "127.0.0.1:27182"
 logger = Isabelle_RPC_Host.mk_logger_(rpc_addr, None)
 

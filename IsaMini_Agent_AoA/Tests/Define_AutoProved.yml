@@ -1,41 +1,41 @@
 --------------------------------------------------
 Initial YAML
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: ∃(f :: nat ⇒ nat). f (2 :: nat) = (4 :: nat)
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
 --------------------------------------------------
 After Define (auto-proved)
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: ∃(f :: nat ⇒ nat). f (2 :: nat) = (4 :: nat)
 proof:
   - step id: 1
     thought: Introduce the doubling function as a witness
     operation: Define
     name: double
-    type: nat \<Rightarrow> nat
+    type: nat ⇒ nat
     equations:
       - double n = n + n
-    auto_proved: true
+    proof of termination: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   ∃(f :: nat ⇒ nat). f (2 :: nat) = (4 :: nat)
 --------------------------------------------------
 After Witness
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: ∃(f :: nat ⇒ nat). f (2 :: nat) = (4 :: nat)
 proof:
   - step id: 1
     thought: Introduce the doubling function as a witness
     operation: Define
     name: double
-    type: nat \<Rightarrow> nat
+    type: nat ⇒ nat
     equations:
       - double n = n + n
-    auto_proved: true
+    proof of termination: empty
   - step id: 2
     thought: Pick the freshly-defined `double` as the witness
     operation: Witness
@@ -46,17 +46,17 @@ pending proof goal:
 --------------------------------------------------
 After Obvious
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: ∃(f :: nat ⇒ nat). f (2 :: nat) = (4 :: nat)
 proof:
   - step id: 1
     thought: Introduce the doubling function as a witness
     operation: Define
     name: double
-    type: nat \<Rightarrow> nat
+    type: nat ⇒ nat
     equations:
       - double n = n + n
-    auto_proved: true
+    proof of termination: empty
   - step id: 2
     thought: Pick the freshly-defined `double` as the witness
     operation: Witness

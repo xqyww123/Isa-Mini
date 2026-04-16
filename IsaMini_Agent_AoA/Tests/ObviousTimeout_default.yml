@@ -1,13 +1,15 @@
 --------------------------------------------------
 Initial YAML
 --------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: True
 proof: empty
 --------------------------------------------------
-After Obvious (timeout=10)
+After Obvious (default timeout)
 --------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: True
 proof:
   - step id: 1
-    operation: Obvious (timeout: 10s)
+    operation: Obvious
 Unfinished nodes: 0

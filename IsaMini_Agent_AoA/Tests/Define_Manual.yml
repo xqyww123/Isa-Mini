@@ -1,28 +1,27 @@
 --------------------------------------------------
 Initial YAML
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
 --------------------------------------------------
 After Define (deferred block opened)
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
 proof:
   - step id: 1
     thought: Define halve as a witness; fake flag forces manual discharge of termination residuals
     operation: Define
     name: halve
-    type: nat \<Rightarrow> nat
+    type: nat ⇒ nat
     equations:
       - halve 0 = 0
       - halve (Suc 0) = 0
       - halve (Suc (Suc n)) = Suc (halve n)
-    metric:
-      - \<lambda>n::nat. n
-    proof:
+    metric: \<lambda>n::nat. n
+    proof of termination:
       - goal id: 1.1
         goal: wf (measure (λ(n :: nat). n))
         proof: empty
@@ -43,21 +42,20 @@ pending proof goal:
 --------------------------------------------------
 After Obvious on residual 1 (well-foundedness)
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
 proof:
   - step id: 1
     thought: Define halve as a witness; fake flag forces manual discharge of termination residuals
     operation: Define
     name: halve
-    type: nat \<Rightarrow> nat
+    type: nat ⇒ nat
     equations:
       - halve 0 = 0
       - halve (Suc 0) = 0
       - halve (Suc (Suc n)) = Suc (halve n)
-    metric:
-      - \<lambda>n::nat. n
-    proof:
+    metric: \<lambda>n::nat. n
+    proof of termination:
       - goal id: 1.1
         goal: wf (measure (λ(n :: nat). n))
         proof:
@@ -79,21 +77,20 @@ pending proof goal:
 --------------------------------------------------
 After Obvious on residual 2 (decrease)
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
 proof:
   - step id: 1
     thought: Define halve as a witness; fake flag forces manual discharge of termination residuals
     operation: Define
     name: halve
-    type: nat \<Rightarrow> nat
+    type: nat ⇒ nat
     equations:
       - halve 0 = 0
       - halve (Suc 0) = 0
       - halve (Suc (Suc n)) = Suc (halve n)
-    metric:
-      - \<lambda>n::nat. n
-    proof:
+    metric: \<lambda>n::nat. n
+    proof of termination:
       - goal id: 1.1
         goal: wf (measure (λ(n :: nat). n))
         proof:
@@ -114,21 +111,20 @@ pending proof goal:
 --------------------------------------------------
 After Witness
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
 proof:
   - step id: 1
     thought: Define halve as a witness; fake flag forces manual discharge of termination residuals
     operation: Define
     name: halve
-    type: nat \<Rightarrow> nat
+    type: nat ⇒ nat
     equations:
       - halve 0 = 0
       - halve (Suc 0) = 0
       - halve (Suc (Suc n)) = Suc (halve n)
-    metric:
-      - \<lambda>n::nat. n
-    proof:
+    metric: \<lambda>n::nat. n
+    proof of termination:
       - goal id: 1.1
         goal: wf (measure (λ(n :: nat). n))
         proof:
@@ -153,21 +149,20 @@ pending proof goal:
 --------------------------------------------------
 After Obvious on halve 4 = 2
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
 proof:
   - step id: 1
     thought: Define halve as a witness; fake flag forces manual discharge of termination residuals
     operation: Define
     name: halve
-    type: nat \<Rightarrow> nat
+    type: nat ⇒ nat
     equations:
       - halve 0 = 0
       - halve (Suc 0) = 0
       - halve (Suc (Suc n)) = Suc (halve n)
-    metric:
-      - \<lambda>n::nat. n
-    proof:
+    metric: \<lambda>n::nat. n
+    proof of termination:
       - goal id: 1.1
         goal: wf (measure (λ(n :: nat). n))
         proof:

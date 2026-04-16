@@ -8,7 +8,7 @@ goal: (0 :: int) ≤ x * x
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
 --------------------------------------------------
-After Have with proof=Obvious
+After Have
 --------------------------------------------------
 variables:
   - x: int
@@ -16,36 +16,14 @@ You can write global declarations by calling command `edit` with action `fill` a
 goal: (0 :: int) ≤ x * x
 proof:
   - step id: 1
-    thought: x times x is non-negative because x times x equals x squared
+    thought: helper
     operation: Have
     statement:
-      english: x times x equals x squared
-      isabelle: x * x = x^2
-    name: sq
+      english: x squared is non-negative
+      isabelle: (0::int) \<le> x * x
+    name: lem1
     proof: empty
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
     pending proof goal:
-      x * x = x²
+      (0 :: int) ≤ x * x
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
---------------------------------------------------
-After closing the remaining goal
---------------------------------------------------
-variables:
-  - x: int
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: (0 :: int) ≤ x * x
-proof:
-  - step id: 1
-    thought: x times x is non-negative because x times x equals x squared
-    operation: Have
-    statement:
-      english: x times x equals x squared
-      isabelle: x * x = x^2
-    name: sq
-    proof: empty
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
-    pending proof goal:
-      x * x = x²
-  - step id: 2
-    operation: Obvious
-Unfinished nodes: 1

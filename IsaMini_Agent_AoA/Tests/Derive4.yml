@@ -2,43 +2,45 @@
 Initial YAML
 --------------------------------------------------
 variables:
-  - c: nat
-  - a: nat
+  - Q: nat ⇒ bool
 premises:
-  - h1: f a = c
+  - h1: P (0 :: nat)
+  - h2: ∀(x :: nat). P x ⟶ Q x
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: g (f a) = c
+variables:
+  - P: nat ⇒ bool
+goal: Q ((1 :: nat) - (1 :: nat))
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
 --------------------------------------------------
-Interaction Prompt
+Response
 --------------------------------------------------
-Rule 'my_wrap' (f ?x = g (f ?x)) would cause infinite rewriting.
-To use this rule safely, select which specific subterm(s) to rewrite:
-  0. f a
-Answer with the index(es) of the subterm(s) to rewrite, or leave empty to drop this rule.
+Is error: False
+Reason: None
 --------------------------------------------------
-After Rewrite (via interaction)
+After Derive (no unifiers)
 --------------------------------------------------
 variables:
-  - c: nat
-  - a: nat
+  - Q: nat ⇒ bool
 premises:
-  - h1: f a = c
+  - h1: P (0 :: nat)
+  - h2: ∀(x :: nat). P x ⟶ Q x
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: g (f a) = c
+variables:
+  - P: nat ⇒ bool
+goal: Q ((1 :: nat) - (1 :: nat))
 proof:
   - step id: 1
-    thought: Rewrite using my_wrap to unfold f into g(f(...))
-    operation: Rewrite
-    using:
-      - my_wrap: f ?x = g (f ?x)
-    targets:
-      - the goal
-    goal changes into:
-      g (g (f a)) = c
+    thought: Derive h2 with x = 1 - 1, discharge with h1 (P 0) — should fail: no unifiers
+    operation: Derive
+    rule:
+      - h2: ∀(x :: nat). P x ⟶ Q x
+    instantiations:
+      - x = 1 - (1::nat)
+    discharging facts:
+      - h1: P (0 :: nat)
+    resulting facts:
+      - bad_result: Q ((1 :: nat) - (1 :: nat))
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
-  g (g (f a)) = c
-success: False
-reason: None
+  Q ((1 :: nat) - (1 :: nat))

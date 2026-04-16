@@ -1,40 +1,33 @@
 --------------------------------------------------
-Initial State
+Initial YAML
 --------------------------------------------------
 variables:
-  - R: bool
-  - Q: bool
-  - P: bool
+  - y: nat
+  - q: nat
+  - x: nat
 premises:
-  - assms(1): P
-  - assms(2): Q
-  - assms(3): R
+  - h1: x mod q = y mod q
+  - h2: coprime q (2 :: nat)
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: P ∧ Q ∧ R
+goal: x mod q = y mod q
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
 --------------------------------------------------
-Overview
+Response
 --------------------------------------------------
-Error: Unfinished Proof (line 15)
-goal: P ∧ Q ∧ R
+Is error: True
+Reason: FailureReason(reason="the given fact h1 mismatches the target premise ‹(?n::?'a::{euclidean_ring_cancel,semiring_gcd}) * (?a::?'a::{euclidean_ring_cancel,semiring_gcd}) mod (?m::?'a::{euclidean_ring_cancel,semiring_gcd}) = ?n * (?b::?'a::{euclidean_ring_cancel,semiring_gcd}) mod ?m›\nbecause type nat ⇒ nat ⇒ bool does not unify with ?'a::{euclidean_ring_cancel,semiring_gcd} ⇒ ?'a::{euclidean_ring_cancel,semiring_gcd} ⇒ bool\n")
 --------------------------------------------------
-After deleting Intro
+After Derive
 --------------------------------------------------
 variables:
-  - R: bool
-  - Q: bool
-  - P: bool
+  - y: nat
+  - q: nat
+  - x: nat
 premises:
-  - assms(1): P
-  - assms(2): Q
-  - assms(3): R
+  - h1: x mod q = y mod q
+  - h2: coprime q (2 :: nat)
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: P ∧ Q ∧ R
+goal: x mod q = y mod q
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
---------------------------------------------------
-Overview after delete
---------------------------------------------------
-Error: Unfinished Proof (line 35)
-Unfinished nodes: 1

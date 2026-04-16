@@ -272,6 +272,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
             |> Config.put Minilang.INTRO_mk_block true
             |> Config.put Minilang.auto_deconflict_bound true
             |> Config.put Minilang.high_auto_mode true
+            |> Config.put Minilang.auto_calculation false
             |> Config.put Printer.show_markup false
 
       val global_context = global_context_of (ctxt, sequent)

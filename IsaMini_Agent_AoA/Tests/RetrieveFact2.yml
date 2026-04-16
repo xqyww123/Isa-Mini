@@ -4,6 +4,7 @@ Initial YAML
 variables:
   - n: nat
   - x: real
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: (0 :: real) < x ⟶ ln (x ^ n) = real n * ln x
 proof:
   - step id: 1
@@ -29,14 +30,14 @@ Filled node: InferenceRule, id=2
       - (8::nat) = 2^3
     Error: |
       Fail to apply the inference rule.
-      The following indicated fact is non-trivial, you must prove it manually:
-      (8 :: nat) = (2 :: nat) ^ (3 :: nat)
+      Fail to apply the rules
 --------------------------------------------------
 After fill
 --------------------------------------------------
 variables:
   - n: nat
   - x: real
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: (0 :: real) < x ⟶ ln (x ^ n) = real n * ln x
 proof:
   - step id: 1
@@ -50,8 +51,7 @@ proof:
       - (8::nat) = 2^3
     Error: |
       Fail to apply the inference rule.
-      The following indicated fact is non-trivial, you must prove it manually:
-      (8 :: nat) = (2 :: nat) ^ (3 :: nat)
+      Fail to apply the rules
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
   ln (x ^ n) = real n * ln x

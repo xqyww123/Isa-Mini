@@ -49,7 +49,7 @@ attribute_setup "where" = \<open>let
             uncurry (Minilang_Aux.xwhere (Context.proof_of context)) args))
  end \<close> "positional instantiation of theorem"
 
-
+(*
 (*
 section \<open>Tests for proof-local function infrastructure\<close>
 
@@ -136,5 +136,6 @@ lemma "True"
             | "odd n  \<Longrightarrow> f n m = Suc m"
       END
     \<close>)
+*)
 
 end

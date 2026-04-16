@@ -1,69 +1,69 @@
 Baseline (no patterns): 5 results, 0 warnings
-  0.772 lemma Transcendental.log_powr: ?x ≠ 0 ⟹ log ?b (?x powr ?y) = ?y * log ?b ?x
-  0.766 lemma Transcendental.log_base_powr: ?a ≠ 0 ⟹ log (?a powr ?b) ?x = log ?a ?x / ?b
-  0.765 lemma Transcendental.minus_log_eq_powr: ⟦0 < ?b; ?b ≠ 1; 0 < ?x⟧ ⟹ ?y - log ?b ?x = log ?b (?b powr ?y / ?x)
-  0.764 lemma Transcendental.log_of_power_eq: ⟦real ?m = ?b ^ ?n; 1 < ?b⟧ ⟹ real ?n = log ?b (real ?m)
-  0.760 lemma Transcendental.log_base_pow: 0 < ?a ⟹ log (?a ^ ?n) ?x = log ?a ?x / real ?n
+  0.772 lemma log_powr: ?x ≠ (0 :: real) ⟶ log ?b (?x powr ?y) = ?y * log ?b ?x
+  0.766 lemma log_base_powr: ?a ≠ (0 :: real) ⟶ log (?a powr ?b) ?x = log ?a ?x / ?b
+  0.765 lemma minus_log_eq_powr: (0 :: real) < ?b ⟶ ?b ≠ (1 :: real) ⟶ (0 :: real) < ?x ⟶ ?y - log ?b ?x = log ?b (?b powr ?y / ?x)
+  0.764 lemma log_of_power_eq: real ?m = ?b ^ ?n ⟶ (1 :: real) < ?b ⟶ real ?n = log ?b (real ?m)
+  0.760 lemma log_base_pow: (0 :: real) < ?a ⟶ log (?a ^ ?n) ?x = log ?a ?x / real ?n
 With term_patterns=["ln ?x"]: 10 results, 0 warnings
-  0.727 lemma Transcendental.ln_powr: ?x ≠ 0 ⟹ ln (?x powr ?y) = ?y * ln ?x
-  0.716 lemma Transcendental.ln_realpow: 0 < ?x ⟹ ln (?x ^ ?n) = real ?n * ln ?x
-  0.681 lemma Transcendental.log_def: log ?a ?x = ln ?x / ln ?a
-  0.676 lemma Transcendental.ln_powr_bound: ⟦1 ≤ ?x; 0 < ?a⟧ ⟹ ln ?x ≤ ?x powr ?a / ?a
-  0.652 lemma Transcendental.powr_def: ?x powr ?a ≡ if ?x = (0::?'a) then 0::?'a else exp (?a * ln ?x)
-  0.650 lemma Transcendental.ln_powr_bound2: ⟦1 < ?x; 0 < ?a⟧ ⟹ ln ?x powr ?a ≤ ?a powr ?a * ?x
-  0.643 lemma Transcendental.ln_root: ⟦0 < ?n; 0 < ?b⟧ ⟹ ln (root ?n ?b) = ln ?b / real ?n
-  0.643 lemma Transcendental.has_derivative_powr: ⟦(?g has_derivative ?g') (at ?x within ?X); (?f has_derivative ?f') (at ?x within ?X); 0 < ?g ?x; ?x ∈ ?X⟧ ⟹ ((λx. ?g x powr ?f x) has_derivative (λh. ?g ?x powr ?f ?x * (?f' h * ln (?g ?x) + ?g' h * ?f ?x / ?g ?x))) (at ?x within ?X)
-  0.639 lemma Transcendental.log_ln: ln ?x = log (exp 1) ?x
-  0.623 lemma Transcendental.ln_inverse: 0 < ?x ⟹ ln (inverse ?x) = - ln ?x
+  0.727 lemma ln_powr: ?x ≠ (0 :: real) ⟶ ln (?x powr ?y) = ?y * ln ?x
+  0.716 lemma ln_realpow: (0 :: real) < ?x ⟶ ln (?x ^ ?n) = real ?n * ln ?x
+  0.681 lemma log_def: log ?a ?x = ln ?x / ln ?a
+  0.676 lemma ln_powr_bound: (1 :: real) ≤ ?x ⟶ (0 :: real) < ?a ⟶ ln ?x ≤ ?x powr ?a / ?a
+  0.652 lemma powr_def: ?x powr ?a = (if ?x = (0 :: ?'a) then (0 :: ?'a) else exp (?a * ln ?x))
+  0.650 lemma ln_powr_bound2: (1 :: real) < ?x ⟶ (0 :: real) < ?a ⟶ ln ?x powr ?a ≤ ?a powr ?a * ?x
+  0.643 lemma ln_root: (0 :: nat) < ?n ⟶ (0 :: real) < ?b ⟶ ln (root ?n ?b) = ln ?b / real ?n
+  0.643 lemma has_derivative_powr: (?g has_derivative ?g') (at ?x within ?X) ⟶ (?f has_derivative ?f') (at ?x within ?X) ⟶ (0 :: real) < ?g ?x ⟶ ?x ∈ ?X ⟶ ((λ(x1 :: ?'a). ?g x1 powr ?f x1) has_derivative (λ(h :: ?'a). ?g ?x powr ?f ?x * (?f' h * ln (?g ?x) + ?g' h * ?f ?x / ?g ?x))) (at ?x within ?X)
+  0.639 lemma log_ln: ln ?x = log (exp (1 :: real)) ?x
+  0.623 lemma ln_inverse: (0 :: real) < ?x ⟶ ln (inverse ?x) = - ln ?x
 With type_patterns=["nat"]: 10 results, 0 warnings
-  0.748 lemma Transcendental.log_of_power_eq: ⟦real ?m = ?b ^ ?n; 1 < ?b⟧ ⟹ real ?n = log ?b (real ?m)
-  0.733 lemma Transcendental.log_nat_power: 0 < ?x ⟹ log ?b (?x ^ ?n) = real ?n * log ?b ?x
-  0.718 lemma Transcendental.log_root: ⟦0 < ?n; 0 < ?a⟧ ⟹ log ?b (root ?n ?a) = log ?b ?a / real ?n
-  0.711 lemma Transcendental.log_base_pow: 0 < ?a ⟹ log (?a ^ ?n) ?x = log ?a ?x / real ?n
-  0.709 lemma Transcendental.ln_realpow: 0 < ?x ⟹ ln (?x ^ ?n) = real ?n * ln ?x
-  0.701 lemma Transcendental.log_pow_cancel: ⟦0 < ?a; ?a ≠ 1⟧ ⟹ log ?a (?a ^ ?b) = real ?b
-  0.699 lemma Transcendental.ln_root: ⟦0 < ?n; 0 < ?b⟧ ⟹ ln (root ?n ?b) = ln ?b / real ?n
-  0.696 lemma Transcendental.log_base_root: ⟦0 < ?n; 0 < ?b⟧ ⟹ log (root ?n ?b) ?x = real ?n * log ?b ?x
-  0.688 lemma Transcendental.le_log_of_power: ⟦?b ^ ?n ≤ ?m; 1 < ?b⟧ ⟹ real ?n ≤ log ?b ?m
-  0.679 lemma Transcendental.less_log_of_power: ⟦?b ^ ?n < ?m; 1 < ?b⟧ ⟹ real ?n < log ?b ?m
+  0.748 lemma log_of_power_eq: real ?m = ?b ^ ?n ⟶ (1 :: real) < ?b ⟶ real ?n = log ?b (real ?m)
+  0.733 lemma log_nat_power: (0 :: real) < ?x ⟶ log ?b (?x ^ ?n) = real ?n * log ?b ?x
+  0.718 lemma log_root: (0 :: nat) < ?n ⟶ (0 :: real) < ?a ⟶ log ?b (root ?n ?a) = log ?b ?a / real ?n
+  0.711 lemma log_base_pow: (0 :: real) < ?a ⟶ log (?a ^ ?n) ?x = log ?a ?x / real ?n
+  0.709 lemma ln_realpow: (0 :: real) < ?x ⟶ ln (?x ^ ?n) = real ?n * ln ?x
+  0.701 lemma log_pow_cancel: (0 :: real) < ?a ⟶ ?a ≠ (1 :: real) ⟶ log ?a (?a ^ ?b) = real ?b
+  0.699 lemma ln_root: (0 :: nat) < ?n ⟶ (0 :: real) < ?b ⟶ ln (root ?n ?b) = ln ?b / real ?n
+  0.696 lemma log_base_root: (0 :: nat) < ?n ⟶ (0 :: real) < ?b ⟶ log (root ?n ?b) ?x = real ?n * log ?b ?x
+  0.688 lemma le_log_of_power: ?b ^ ?n ≤ ?m ⟶ (1 :: real) < ?b ⟶ real ?n ≤ log ?b ?m
+  0.679 lemma less_log_of_power: ?b ^ ?n < ?m ⟶ (1 :: real) < ?b ⟶ real ?n < log ?b ?m
 With theories_include=["HOL.Transcendental"]: 10 results, 0 warnings
-  0.765 lemma Transcendental.log_def: log ?a ?x = ln ?x / ln ?a
-  0.748 lemma Transcendental.log_of_power_eq: ⟦real ?m = ?b ^ ?n; 1 < ?b⟧ ⟹ real ?n = log ?b (real ?m)
-  0.744 lemma Transcendental.log_one: log ?a 1 = 0
-  0.733 lemma Transcendental.log_nat_power: 0 < ?x ⟹ log ?b (?x ^ ?n) = real ?n * log ?b ?x
-  0.729 lemma Transcendental.log_inverse: 0 < ?x ⟹ log ?a (inverse ?x) = - log ?a ?x
-  0.728 lemma Transcendental.log_eq_one: ⟦0 < ?a; ?a ≠ 1⟧ ⟹ log ?a ?a = 1
-  0.727 lemma Transcendental.minus_log_eq_powr: ⟦0 < ?b; ?b ≠ 1; 0 < ?x⟧ ⟹ ?y - log ?b ?x = log ?b (?b powr ?y / ?x)
-  0.718 lemma Transcendental.log_root: ⟦0 < ?n; 0 < ?a⟧ ⟹ log ?b (root ?n ?a) = log ?b ?a / real ?n
-  0.714 lemma Transcendental.log_minus_eq_powr: ⟦0 < ?b; ?b ≠ 1; 0 < ?x⟧ ⟹ log ?b ?x - ?y = log ?b (?x * ?b powr - ?y)
-  0.712 lemma Transcendental.ln_inverse: 0 < ?x ⟹ ln (inverse ?x) = - ln ?x
+  0.765 lemma log_def: log ?a ?x = ln ?x / ln ?a
+  0.748 lemma log_of_power_eq: real ?m = ?b ^ ?n ⟶ (1 :: real) < ?b ⟶ real ?n = log ?b (real ?m)
+  0.744 lemma log_one: log ?a (1 :: real) = (0 :: real)
+  0.733 lemma log_nat_power: (0 :: real) < ?x ⟶ log ?b (?x ^ ?n) = real ?n * log ?b ?x
+  0.729 lemma log_inverse: (0 :: real) < ?x ⟶ log ?a (inverse ?x) = - log ?a ?x
+  0.728 lemma log_eq_one: (0 :: real) < ?a ⟶ ?a ≠ (1 :: real) ⟶ log ?a ?a = (1 :: real)
+  0.727 lemma minus_log_eq_powr: (0 :: real) < ?b ⟶ ?b ≠ (1 :: real) ⟶ (0 :: real) < ?x ⟶ ?y - log ?b ?x = log ?b (?b powr ?y / ?x)
+  0.718 lemma log_root: (0 :: nat) < ?n ⟶ (0 :: real) < ?a ⟶ log ?b (root ?n ?a) = log ?b ?a / real ?n
+  0.714 lemma log_minus_eq_powr: (0 :: real) < ?b ⟶ ?b ≠ (1 :: real) ⟶ (0 :: real) < ?x ⟶ log ?b ?x - ?y = log ?b (?x * ?b powr - ?y)
+  0.712 lemma ln_inverse: (0 :: real) < ?x ⟶ ln (inverse ?x) = - ln ?x
 Constants with type_patterns=["real => real"]: 5 results, 0 warnings
-  0.732 constant Transcendental.log: real ⇒ real ⇒ real
-  0.530 constant Transcendental.powr_real: real ⇒ real ⇒ real
-  0.516 constant NthRoot.root: nat ⇒ real ⇒ real
-  0.516 constant NthRoot.sqrt: real ⇒ real
-  0.470 constant Transcendental.arcsin: real ⇒ real
+  0.732 constant log: real ⇒ real ⇒ real
+  0.530 constant powr_real: real ⇒ real ⇒ real
+  0.516 constant root: nat ⇒ real ⇒ real
+  0.516 constant sqrt: real ⇒ real
+  0.470 constant arcsin: real ⇒ real
 Empty patterns: 5 results, 0 warnings
 With name_contains=["ln"]: 10 results
-  0.712 lemma Transcendental.ln_inverse: 0 < ?x ⟹ ln (inverse ?x) = - ln ?x
-  0.709 lemma Transcendental.ln_realpow: 0 < ?x ⟹ ln (?x ^ ?n) = real ?n * ln ?x
-  0.708 lemma Transcendental.log_ln: ln ?x = log (exp 1) ?x
-  0.699 lemma Transcendental.ln_root: ⟦0 < ?n; 0 < ?b⟧ ⟹ ln (root ?n ?b) = ln ?b / real ?n
-  0.683 lemma Transcendental.ln_powr: ?x ≠ 0 ⟹ ln (?x powr ?y) = ?y * ln ?x
-  0.668 lemma Transcendental.ln_div: ⟦0 < ?x; 0 < ?y⟧ ⟹ ln (?x / ?y) = ln ?x - ln ?y
-  0.666 lemma Transcendental.ln_mult: ⟦0 < ?x; 0 < ?y⟧ ⟹ ln (?x * ?y) = ln ?x + ln ?y
-  0.663 lemma Transcendental.ln_powr_bound: ⟦1 ≤ ?x; 0 < ?a⟧ ⟹ ln ?x ≤ ?x powr ?a / ?a
-  0.661 lemma Transcendental.ln_class.ln_one: ln (1::?'a) = (0::?'a)
-  0.659 lemma Transcendental.ln_less_zero: ⟦0 < ?x; ?x < 1⟧ ⟹ ln ?x < 0
+  0.712 lemma ln_inverse: (0 :: real) < ?x ⟶ ln (inverse ?x) = - ln ?x
+  0.709 lemma ln_realpow: (0 :: real) < ?x ⟶ ln (?x ^ ?n) = real ?n * ln ?x
+  0.708 lemma log_ln: ln ?x = log (exp (1 :: real)) ?x
+  0.699 lemma ln_root: (0 :: nat) < ?n ⟶ (0 :: real) < ?b ⟶ ln (root ?n ?b) = ln ?b / real ?n
+  0.683 lemma ln_powr: ?x ≠ (0 :: real) ⟶ ln (?x powr ?y) = ?y * ln ?x
+  0.668 lemma ln_div: (0 :: real) < ?x ⟶ (0 :: real) < ?y ⟶ ln (?x / ?y) = ln ?x - ln ?y
+  0.666 lemma ln_mult: (0 :: real) < ?x ⟶ (0 :: real) < ?y ⟶ ln (?x * ?y) = ln ?x + ln ?y
+  0.663 lemma ln_powr_bound: (1 :: real) ≤ ?x ⟶ (0 :: real) < ?a ⟶ ln ?x ≤ ?x powr ?a / ?a
+  0.661 lemma ln_one: ln (1 :: ?'a) = (0 :: ?'a)
+  0.659 lemma ln_less_zero: (0 :: real) < ?x ⟶ ?x < (1 :: real) ⟶ ln ?x < (0 :: real)
 With name_contains=["ln", "real"]: 2 results
-  0.709 lemma Transcendental.ln_realpow: 0 < ?x ⟹ ln (?x ^ ?n) = real ?n * ln ?x
-  0.617 lemma Transcendental.ln_real_def: ln ?x = (THE u. exp u = ?x)
+  0.709 lemma ln_realpow: (0 :: real) < ?x ⟶ ln (?x ^ ?n) = real ?n * ln ?x
+  0.617 lemma ln_real_def: ln ?x = (THE (u :: real). exp u = ?x)
 Constants with name_contains=["ln"]: 1 results
-  0.619 constant Transcendental.ln_class.ln: ?'a::ln ⇒ ?'a::ln
+  0.619 constant ln: ?'a ⇒ ?'a
 Pattern-only with limit=3, name_contains=["ln"]: 3 results
-  lemma Order_Relation.lnear_order_on_empty: linear_order_on {} {}
-  lemma Series.norm_summable_ln_series: norm ?z < 1 ⟹ summable (λn. norm (?z ^ n / of_nat n))
-  lemma Transcendental.DERIV_ln: 0 < ?x ⟹ (ln has_real_derivative inverse ?x) (at ?x)
+  lemma lnear_order_on_empty: linear_order_on {} {}
+  lemma norm_summable_ln_series: norm ?z < (1 :: real) ⟶ summable (λ(n1 :: nat). norm (?z ^ n1 / of_nat n1))
+  lemma DERIV_ln: (0 :: real) < ?x ⟶ (ln has_real_derivative inverse ?x) (at ?x)
 Pattern-only with limit=1: 1 results
 Invalid theory name error: ['Unknown ancestor theory "Nonexistent_Theory_XYZ"']
 Invalid term pattern: 5 results, 1 warnings

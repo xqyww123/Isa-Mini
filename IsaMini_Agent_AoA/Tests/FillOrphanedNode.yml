@@ -5,7 +5,7 @@ variables:
   - x: int
 premises:
   - h: (0 :: int) < x
-You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: (0 :: int) < x * x
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
@@ -17,7 +17,7 @@ variables:
   - x: int
 premises:
   - h: (0 :: int) < x
-You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: (0 :: int) < x * x
 proof:
   - step id: 1
@@ -33,8 +33,8 @@ proof:
       
       Type error in application: operator not of function type
       
-      Operator:  1::??'a :: ??'a
-      Operand:   1::??'b :: ??'b
+      Operator:  1 :: ??'a
+      Operand:   1 :: ??'b
       
       Coercion Inference:
       
@@ -51,7 +51,7 @@ variables:
   - x: int
 premises:
   - h: (0 :: int) < x
-You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: (0 :: int) < x * x
 proof:
   - step id: 1
@@ -67,8 +67,8 @@ proof:
       
       Type error in application: operator not of function type
       
-      Operator:  1::??'a :: ??'a
-      Operand:   1::??'b :: ??'b
+      Operator:  1 :: ??'a
+      Operand:   1 :: ??'b
       
       Coercion Inference:
       
@@ -89,7 +89,7 @@ variables:
   - x: int
 premises:
   - h: (0 :: int) < x
-You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: (0 :: int) < x * x
 proof:
   - step id: 1
@@ -111,7 +111,7 @@ variables:
   - x: int
 premises:
   - h: (0 :: int) < x
-You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: (0 :: int) < x * x
 proof:
   - step id: 1

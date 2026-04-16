@@ -1,0 +1,102 @@
+--------------------------------------------------
+Before step 3.1
+--------------------------------------------------
+variables:
+  - x: real
+premises:
+  - h0: (0 :: real) < x
+  - h1: log (2 :: real) (log (8 :: real) x) = log (8 :: real) (log (2 :: real) x)
+  - valid(1): (0 :: real) < log (8 :: real) x
+  - valid(2): (0 :: real) < log (2 :: real) x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (log (2 :: real) x)² = (27 :: real)
+proof:
+  - step id: 1
+    thought: log_2(8) = 3
+    operation: Have
+    statement:
+      english: log base 2 of 8 equals 3
+      isabelle: log (2::real) (8::real) = (3::real)
+    name: h2
+    proof:
+      - step id: 1.1
+        operation: Obvious
+        with facts:
+          - log_pow_cancel: (0 :: real) < ?a ⟶ ?a ≠ (1 :: real) ⟶ log ?a (?a ^ ?b) = real ?b
+  - step id: 2
+    thought: change of base
+    operation: Have
+    statement:
+      english: log base 8 of x equals log base 2 of x divided by 3
+      isabelle: log (8::real) x = log (2::real) x / (3::real)
+    name: h3
+    proof:
+      - step id: 2.1
+        operation: Obvious
+        with facts:
+          - log_base_change: (0 :: real) < ?a ⟶ ?a ≠ (1 :: real) ⟶ log ?b ?x = log ?a ?x / log ?a ?b
+          - h2: log (2 :: real) (8 :: real) = (3 :: real)
+  - step id: 3
+    thought: change of base again
+    operation: Have
+    statement:
+      english: log base 8 of (log base 2 of x) equals log base 2 of (log base 2 of x) divided by 3
+      isabelle: log (8::real) (log (2::real) x) = log (2::real) (log (2::real) x) / (3::real)
+    name: h4
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3.1` to provide the proof for the following goal.
+    pending proof goal:
+      log (8 :: real) (log (2 :: real) x) = log (2 :: real) (log (2 :: real) x) / (3 :: real)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `4` to provide the proof for the following goal.
+--------------------------------------------------
+After step 3.1 (unexpected Intro at 3.2)
+--------------------------------------------------
+variables:
+  - x: real
+premises:
+  - h0: (0 :: real) < x
+  - h1: log (2 :: real) (log (8 :: real) x) = log (8 :: real) (log (2 :: real) x)
+  - valid(1): (0 :: real) < log (8 :: real) x
+  - valid(2): (0 :: real) < log (2 :: real) x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (log (2 :: real) x)² = (27 :: real)
+proof:
+  - step id: 1
+    thought: log_2(8) = 3
+    operation: Have
+    statement:
+      english: log base 2 of 8 equals 3
+      isabelle: log (2::real) (8::real) = (3::real)
+    name: h2
+    proof:
+      - step id: 1.1
+        operation: Obvious
+        with facts:
+          - log_pow_cancel: (0 :: real) < ?a ⟶ ?a ≠ (1 :: real) ⟶ log ?a (?a ^ ?b) = real ?b
+  - step id: 2
+    thought: change of base
+    operation: Have
+    statement:
+      english: log base 8 of x equals log base 2 of x divided by 3
+      isabelle: log (8::real) x = log (2::real) x / (3::real)
+    name: h3
+    proof:
+      - step id: 2.1
+        operation: Obvious
+        with facts:
+          - log_base_change: (0 :: real) < ?a ⟶ ?a ≠ (1 :: real) ⟶ log ?b ?x = log ?a ?x / log ?a ?b
+          - h2: log (2 :: real) (8 :: real) = (3 :: real)
+  - step id: 3
+    thought: change of base again
+    operation: Have
+    statement:
+      english: log base 8 of (log base 2 of x) equals log base 2 of (log base 2 of x) divided by 3
+      isabelle: log (8::real) (log (2::real) x) = log (2::real) (log (2::real) x) / (3::real)
+    name: h4
+    proof:
+      - step id: 3.1
+        operation: Obvious
+        with facts:
+          - log_base_change: (0 :: real) < ?a ⟶ ?a ≠ (1 :: real) ⟶ log ?b ?x = log ?a ?x / log ?a ?b
+          - h2: log (2 :: real) (8 :: real) = (3 :: real)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `4` to provide the proof for the following goal.

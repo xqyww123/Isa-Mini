@@ -469,6 +469,7 @@ class _SessionRouter:
                 session.seen_commands.clear()
                 session.seen_entities.clear()
                 session.seen_opaque_note = False
+                session.root.session.showed_suffices_notice = False
             await send({
                 "type": "http.response.start",
                 "status": 200,

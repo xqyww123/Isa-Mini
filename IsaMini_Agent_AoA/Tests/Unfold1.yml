@@ -1,16 +1,14 @@
 --------------------------------------------------
 Initial YAML
 --------------------------------------------------
-You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: XXX (1 :: int) (2 :: int) = (3 :: int)
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
-pending proof goal:
-  XXX (1 :: int) (2 :: int) = (3 :: int)
 --------------------------------------------------
 After Unfold
 --------------------------------------------------
-You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: XXX (1 :: int) (2 :: int) = (3 :: int)
 proof:
   - step id: 1
@@ -25,13 +23,13 @@ pending proof goal:
 Interaction Prompt
 --------------------------------------------------
 Multiple definitions found for XXX:
-  0. XXX_def: ['XXX ?a ?b = ?a + ?b']
-  1. XXX_alt: ['XXX ?a ?b = ?b + ?a']
-Select definition(s) to use in unfolding. Call `mcp__proof__answer` with the indexes, or with an empty array to skip.
+  0. Test_Unfold1.XXX_def: ['XXX ?a ?b = ?a + ?b']
+  1. Test_Unfold1.XXX_alt: ['XXX ?a ?b = ?b + ?a']
+Select definition(s) to use in unfolding. Call `mcp__proof__answer` with `indexes`, or leave empty to skip.
 --------------------------------------------------
 After Answer
 --------------------------------------------------
-You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: XXX (1 :: int) (2 :: int) = (3 :: int)
 proof:
   - step id: 1

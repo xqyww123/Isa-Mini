@@ -3,18 +3,16 @@ Initial YAML
 --------------------------------------------------
 variables:
   - l: 'a list
-You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: rev (rev l) = l
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
-pending proof goal:
-  rev (rev l) = l
 --------------------------------------------------
 Induction
 --------------------------------------------------
 variables:
   - l: 'a list
-You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: rev (rev l) = l
 proof:
   - step id: 1
@@ -26,24 +24,19 @@ proof:
         goal: rev (rev []) = []
         proof: empty
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Nil.1` to provide the proof for the following goal.
-        pending proof goal:
-          rev (rev []) = []
       - goal id: 1.Cons
         variables:
           - a: 'a
         premises:
           - Cons.IH: rev (rev l) = l
-        goal: rev (rev (a # l)) = a # l
+        goal: True
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Cons.1` to provide the proof for the following goal.
-        pending proof goal:
-          rev (rev (a # l)) = a # l
 --------------------------------------------------
 Obvious
 --------------------------------------------------
 variables:
   - l: 'a list
-You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: rev (rev l) = l
 proof:
   - step id: 1
@@ -61,17 +54,14 @@ proof:
           - a: 'a
         premises:
           - Cons.IH: rev (rev l) = l
-        goal: rev (rev (a # l)) = a # l
+        goal: True
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Cons.1` to provide the proof for the following goal.
-        pending proof goal:
-          rev (rev (a # l)) = a # l
 --------------------------------------------------
 Obvious
 --------------------------------------------------
 variables:
   - l: 'a list
-You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: rev (rev l) = l
 proof:
   - step id: 1
@@ -89,7 +79,7 @@ proof:
           - a: 'a
         premises:
           - Cons.IH: rev (rev l) = l
-        goal: rev (rev (a # l)) = a # l
+        goal: True
         proof:
           - step id: 1.Cons.1
             operation: Obvious

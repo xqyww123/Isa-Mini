@@ -203,6 +203,15 @@ class Goal(NamedTuple):
         (context, conclusion) = data
         conclusion = pretty_unicode(conclusion)
         return cls(Context.unpack(context), conclusion)
+    def visible(self, suppressed: Context) -> 'Goal':
+        """Return a Goal with suppressed vars/hyps removed."""
+        return Goal(
+            Context(
+                {k: v for k, v in self.context.vars.items() if k not in suppressed.vars},
+                {k: v for k, v in self.context.hyps.items() if k not in suppressed.hyps}
+            ),
+            self.conclusion
+        )
     def __str__(self) -> str:
         return f"{self.context} ⊢ {self.conclusion}"
     def __repr__(self) -> str:
@@ -813,7 +822,7 @@ def unpack_message(data) -> Message:
         case 8:
             return Termination_Proof_Opened_Msg()
         case (10, (name, ty)):
-            return Define_Result_Msg(name, ty)
+            return Define_Result_Msg(name, pretty_unicode(ty))
         case (11, names):
             return Simplify_Targets_Stale_Msg.unpack(names)
         case _:
@@ -1016,7 +1025,7 @@ class Minilang_Operation(NamedTuple):
         NEXT or END transition — the sorry analogue of HAMMER.
         Used to skip-proof the last GoalNode child whose
         resulting_state feeds into the parent's _state_before_ending_."""
-        return Minilang_Operation("SORRY_ONLY", ())
+        return Minilang_Operation("SORRY_ONLY", None)
     @staticmethod
     def NEXT(varnames : list[varname_spec] | None) -> 'Minilang_Operation':
         return Minilang_Operation("NEXT", ([], varnames))
@@ -1880,6 +1889,7 @@ class Node(ABC):
         self._is_trivial: bool | None = None
         self.age = self.session.age
         self.line = 0
+        self._prev_eval_status: tuple[EvaluationStatus.Status, str | None] | None = None
 
     @property
     def titled_id(self) -> str:
@@ -1921,7 +1931,13 @@ class Node(ABC):
     def does_quickview_need_detail(self) -> bool:
         return self.changed or self.status.status != EvaluationStatus.Status.SUCCESS
     def quickview(self, indent: int, file: MyIO) -> int:
-        return self.quickview_header(indent, file)
+        indent = self.quickview_header(indent, file)
+        eval_key = (self.status.status,
+                    self.status.reason.reason if self.status.reason else None)
+        if eval_key != self._prev_eval_status:
+            self._print_evaluation_status(indent, file)
+            self._prev_eval_status = eval_key
+        return indent
     def _print_evaluation_status(self, indent: int, file: MyIO) -> None:
         match self.status.status:
             case EvaluationStatus.Status.SUCCESS:
@@ -2579,6 +2595,7 @@ class StdBlock(NonLeaf_Node):
         self._body_subnodes_succeeded = False
         self._allow_multi_goal = False
         self.open_pending_proof_line: int | None = None
+        self._prev_pending_goal: Goal | None = None
     async def _cancel(self) -> None:
         if self.status.status == EvaluationStatus.Status.CANCELLED:
             return
@@ -2838,12 +2855,23 @@ class StdBlock(NonLeaf_Node):
             if ptree is None:
                 print_indent(indent, file)
                 file.write("Error: Evaluation pending\n")
-            elif self.should_I_show_pending_goal() is not None:
+                self._prev_pending_goal = None
+            elif (goal_and_step := self.should_I_show_pending_goal()) is not None:
+                goal, step_to_fill = goal_and_step
                 print_indent(indent, file)
                 if self.open_pending_proof_line is not None:
                     file.write(f"Error: Unfinished Proof (line {self.open_pending_proof_line})\n")
                 else:
                     file.write("Error: Unfinished Proof\n")
+                suppressed = self._ctxt_of_filling()
+                visible = goal.visible(suppressed)
+                if visible != self._prev_pending_goal:
+                    print_goal(goal, indent, False, file, suppressed)
+                    self._prev_pending_goal = visible
+            else:
+                self._prev_pending_goal = None
+        else:
+            self._prev_pending_goal = None
         return indent
     def print_string(self, indent: int, show_warnings: bool = True) -> str:
         buffer = StringIO()
@@ -3423,6 +3451,18 @@ class Chaining(Leaf):
         self.result_facts: list[tuple[str, str]] | None = None
         """(fact_name, pretty_expression) pairs for facts derived by CHAINING,
         populated from Specialize_Result_Msg after successful execution."""
+        self._prev_result_facts: list[tuple[str, str]] | None = None
+
+    def quickview(self, indent: int, file: MyIO) -> int:
+        indent = super().quickview(indent, file)
+        if self.result_facts is not None and self.result_facts != self._prev_result_facts:
+            print_indent(indent, file)
+            file.write("resulting:\n")
+            for name, expr in self.result_facts:
+                print_indent(indent + 1, file)
+                file.write(f"{name}: {expr}\n")
+            self._prev_result_facts = self.result_facts
+        return indent
 
     @staticmethod
     def gen(arg: Chaining_InternalToolArg) -> parsing_node:
@@ -3599,6 +3639,10 @@ class Define(SubgoalMaker):
 
     def quickview_title(self) -> str:
         return f"Define {self.name}"
+    def _should_print_done(self) -> bool:
+        if self._deferred_block_opened and self._body_subnodes_succeeded:
+            return True
+        return super()._should_print_done()
 
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         self._print_thought(indent, file)
@@ -3879,9 +3923,20 @@ class Derive(Leaf):
         self.result_facts: list[tuple[str, str]] | None = None
         """(fact_name, pretty_expression) pairs for facts derived by SPECIALIZE,
         populated from Specialize_Result_Msg after successful execution."""
+        self._prev_result_facts: list[tuple[str, str]] | None = None
 
     def quickview_title(self) -> str:
         return f"Derive {self.rule_ref.name()}"
+    def quickview(self, indent: int, file: MyIO) -> int:
+        indent = super().quickview(indent, file)
+        if self.result_facts is not None and self.result_facts != self._prev_result_facts:
+            print_indent(indent, file)
+            file.write("resulting facts:\n")
+            for name, expr in self.result_facts:
+                print_indent(indent + 1, file)
+                file.write(f"- {name}: {expr}\n")
+            self._prev_result_facts = self.result_facts
+        return indent
 
     @staticmethod
     def gen(arg: Derive_InternalToolArg) -> parsing_node:
@@ -4082,12 +4137,42 @@ class Rewrite(Leaf):
         self.fact_targets = arg.fact_targets  # per-fact target terms
         self.bindings: Bindings | None = None
         self.running_time = 0
+        self._prev_bindings: Bindings | None = None
+        self._prev_result_goal: Goal | None | str = None
+        """Tracks the post-rewrite goal for quickview change detection.
+        None = not yet shown, 'solved' = goal was solved, Goal = goal changed to."""
     def quickview_title(self) -> str:
         targets: list[str] = []
         if self.rewrite_goal:
             targets.append("goal")
         targets.extend(self.rewrite_premises)
         return f"Rewrite {', '.join(targets)}"
+    def quickview(self, indent: int, file: MyIO) -> int:
+        indent = super().quickview(indent, file)
+        if self.bindings is not None and self.bindings != self._prev_bindings:
+            print_var_bindings(self.bindings[0], indent, file, "fixing variables")
+            print_fact_bindings(self.bindings[1], indent, file, "resulting premises")
+            self._prev_bindings = self.bindings
+        if self.status.status == EvaluationStatus.Status.SUCCESS:
+            result_goal = self.resulting_state().prooftree_of().top_goal_or_none()
+            if result_goal is None:
+                cur: Goal | str = "solved"
+            elif (prev_goal := self.ml_state.prooftree_of().top_goal_or_none()) is not None \
+                    and result_goal.conclusion != prev_goal.conclusion:
+                cur = result_goal
+            else:
+                cur = None  # type: ignore[assignment]
+            if cur is not None and cur != self._prev_result_goal:
+                if cur == "solved":
+                    print_indent(indent, file)
+                    file.write("goal is solved.\n")
+                else:
+                    print_indent(indent, file)
+                    file.write("goal changes into:\n")
+                    print_goal(cur, indent+1, False, file, self._ctxt_at_me(),
+                               truncate=True)
+                self._prev_result_goal = cur
+        return indent
     @staticmethod
     def gen(arg: Rewrite_InternalToolArg) -> parsing_node:
         """Non-interactive generation with pre-resolved fact refs."""
@@ -4378,6 +4463,7 @@ class Have(StdBlock):
         self.auto_apply = arg.get("auto_apply", False)
         # Populated from `Newly_Fixed_Vars_Msg` after the HAVE op runs.
         self.for_any: list[tuple[str, str]] = []
+        self._prev_for_any: list[tuple[str, str]] = []
         if subproof_parsed is not None:
             local_step = self._local_step_of_next_proof_step()
             ml_state = Minilang_State.assign(self.ml_state)
@@ -4393,6 +4479,20 @@ class Have(StdBlock):
             arg["proof"])
     def quickview_title(self) -> str:
         return f"Have {self.name}"
+    def quickview(self, indent: int, file: MyIO) -> int:
+        indent = super().quickview(indent, file)
+        if self.for_any and self.for_any != self._prev_for_any:
+            names = [name for name, _ in self.for_any]
+            if len(names) == 1:
+                names_str = names[0]
+            elif len(names) == 2:
+                names_str = f"{names[0]} and {names[1]}"
+            else:
+                names_str = ", ".join(names[:-1]) + f", and {names[-1]}"
+            print_indent(indent, file)
+            file.write(f"the statement is quantified over {names_str}\n")
+            self._prev_for_any = self.for_any
+        return indent
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         self._print_thought(indent, file)
         print_indent(indent, file)
@@ -4472,6 +4572,13 @@ class Suffices(StdBlock):
         return _gen_with_subproof(Suffices,
             lambda config, parsed: Suffices(config, arg, subproof_parsed=parsed),
             arg["proof"])
+    def quickview(self, indent: int, file: MyIO) -> int:
+        indent = super().quickview(indent, file)
+        if not self.sub_nodes and not self.session.showed_suffices_notice:
+            print_indent(indent, file)
+            file.write("notice: Need to show the provided statement implies the goal\n")
+            self.session.showed_suffices_notice = True
+        return indent
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         self._print_thought(indent, file)
         print_indent(indent, file)
@@ -4602,6 +4709,7 @@ class Intro(SubgoalMaker):
         self.split_conj = split_conj
         self.running_time = 0
         self._pending_bindings = _pending_bindings
+        self._prev_bindings: Bindings | None = None
     @staticmethod
     def gen(arg: Intro_ToolArg) -> parsing_node:
         var_bindings = arg.get("variable_bindings", [])
@@ -4617,6 +4725,13 @@ class Intro(SubgoalMaker):
             return lambda config: Intro(config, thought, None, split_conj,
                                         _pending_bindings=pending)
         return parse
+    def quickview(self, indent: int, file: MyIO) -> int:
+        indent = super().quickview(indent, file)
+        if self.bindings is not None and self.bindings != self._prev_bindings:
+            print_var_bindings(self.bindings[0], indent, file, "fixing variables")
+            print_fact_bindings(self.bindings[1], indent, file, "assuming premises")
+            self._prev_bindings = self.bindings
+        return indent
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         self._print_thought(indent, file)
         print_indent(indent, file)
@@ -5094,6 +5209,12 @@ class GlobalEnv(StdBlock):
         raise InternalError("Internal Bug: Failed to apply INTRO on the proof goal")
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         pass
+    def quickview_header(self, indent: int, file: MyIO) -> int:
+        print_indent(indent, file)
+        file.write("global declarations:\n")
+        return indent + 1
+    def should_I_show_pending_goal(self) -> tuple[Goal, step] | None:
+        return None
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         return (None, indent-1)
     def _print_step_id(self, indent: int, file: MyIO, update_line: bool = False) -> int:
@@ -5219,11 +5340,13 @@ class Root(GoalContainer, StdBlock):
         match self.num_goals:
             case 1:
                 if self.global_env.sub_nodes:
+                    print_indent(indent, file)
                     file.write("proof:\n")
                     self.sub_nodes[1].quickview(indent+1, file)
                 else:
                     self.sub_nodes[1].quickview(indent, file)
             case _:
+                print_indent(indent, file)
                 file.write("goals:\n")
                 for i in range(self.num_goals):
                     self.sub_nodes[i+1].quickview(indent+1, file)
@@ -5361,6 +5484,7 @@ class Session:
             dict(parent.seen_commands) if parent is not None else {})
         self.seen_opaque_note: bool = (
             parent.seen_opaque_note if parent is not None else False)
+        self.showed_suffices_notice: bool = False
         self.seen_abbreviations: set[str] = (
             set(parent.seen_abbreviations) if parent is not None else set())
         if parent is not None:
@@ -5607,7 +5731,7 @@ class Session:
     def log_proof_operation(self, step: str, operation: str, details: dict[str, Any]):
         """Log proof operation to proof_oprs.yaml."""
         self._log(self.proof_oprs_log_file, "PROOF_OPERATION",
-                  lambda: [f"[PROOF_OP] Step {step}: {operation} - {details}"],
+                  None,
                   step=step, operation=operation, details=details)
 
     def log_proof_tree_snapshot(self, snapshot_type: str):
@@ -5649,7 +5773,7 @@ class Session:
             **extra_data: Additional error-related data (e.g., errors list, operation details)
         """
         self._log(self.proof_oprs_log_file, "OPERATION_ERROR",
-                  lambda: [f"[PROOF_OP_ERROR] {error_message}"],
+                  None,
                   error_message=error_message,
                   **extra_data)
 

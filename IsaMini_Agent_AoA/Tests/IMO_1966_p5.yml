@@ -1,0 +1,247 @@
+--------------------------------------------------
+Initial State
+--------------------------------------------------
+variables:
+  - a: nat ⇒ real
+  - x: nat ⇒ real
+premises:
+  - assms(1): a (2 :: nat) < a (1 :: nat)
+  - assms(2): a (3 :: nat) < a (2 :: nat)
+  - assms(3): a (4 :: nat) < a (3 :: nat)
+  - h6: ¦a (1 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (1 :: nat) - a (3 :: nat)¦ * x (3 :: nat) + ¦a (1 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
+  - h7: ¦a (2 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (2 :: nat) - a (3 :: nat)¦ * x (3 :: nat) + ¦a (2 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
+  - h8: ¦a (3 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (3 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (3 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
+  - h9: ¦a (4 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (4 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (4 :: nat) - a (3 :: nat)¦ * x (3 :: nat) = (1 :: real)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: x (2 :: nat) = (0 :: real) ∧ x (3 :: nat) = (0 :: real) ∧ x (1 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦ ∧ x (4 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+--------------------------------------------------
+Overview
+--------------------------------------------------
+Error: Unfinished Proof (line 18)
+goal: x (2 :: nat) = (0 :: real) ∧ x (3 :: nat) = (0 :: real) ∧ x (1 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦ ∧ x (4 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦
+--------------------------------------------------
+After filling Have eq1
+--------------------------------------------------
+variables:
+  - a: nat ⇒ real
+  - x: nat ⇒ real
+premises:
+  - assms(1): a (2 :: nat) < a (1 :: nat)
+  - assms(2): a (3 :: nat) < a (2 :: nat)
+  - assms(3): a (4 :: nat) < a (3 :: nat)
+  - h6: ¦a (1 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (1 :: nat) - a (3 :: nat)¦ * x (3 :: nat) + ¦a (1 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
+  - h7: ¦a (2 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (2 :: nat) - a (3 :: nat)¦ * x (3 :: nat) + ¦a (2 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
+  - h8: ¦a (3 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (3 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (3 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
+  - h9: ¦a (4 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (4 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (4 :: nat) - a (3 :: nat)¦ * x (3 :: nat) = (1 :: real)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: x (2 :: nat) = (0 :: real) ∧ x (3 :: nat) = (0 :: real) ∧ x (1 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦ ∧ x (4 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦
+proof:
+  - step id: 1
+    thought: Since a(2) < a(1), a(3) < a(2), a(4) < a(3), we know a(1) > a(2) > a(3) > a(4). Subtracting h7 from h6, the coefficients factor as (a(1)-a(2))*(-x1+x2+x3+x4)=0. Since a(1)-a(2)>0, we get x1=x2+x3+x4.
+    operation: Have
+    statement:
+      english: x(1) equals x(2) + x(3) + x(4)
+      isabelle: x (1::nat) = x (2::nat) + x (3::nat) + x (4::nat)
+    name: eq1
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      x (1 :: nat) = x (2 :: nat) + x (3 :: nat) + x (4 :: nat)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+--------------------------------------------------
+Overview
+--------------------------------------------------
+step 1: Have eq1 (line 15)
+  Error: Unfinished Proof (line 49)
+Error: Unfinished Proof (line 52)
+--------------------------------------------------
+After failed Obvious on eq1
+--------------------------------------------------
+variables:
+  - a: nat ⇒ real
+  - x: nat ⇒ real
+premises:
+  - assms(1): a (2 :: nat) < a (1 :: nat)
+  - assms(2): a (3 :: nat) < a (2 :: nat)
+  - assms(3): a (4 :: nat) < a (3 :: nat)
+  - h6: ¦a (1 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (1 :: nat) - a (3 :: nat)¦ * x (3 :: nat) + ¦a (1 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
+  - h7: ¦a (2 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (2 :: nat) - a (3 :: nat)¦ * x (3 :: nat) + ¦a (2 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
+  - h8: ¦a (3 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (3 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (3 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
+  - h9: ¦a (4 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (4 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (4 :: nat) - a (3 :: nat)¦ * x (3 :: nat) = (1 :: real)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: x (2 :: nat) = (0 :: real) ∧ x (3 :: nat) = (0 :: real) ∧ x (1 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦ ∧ x (4 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦
+proof:
+  - step id: 1
+    thought: Since a(2) < a(1), a(3) < a(2), a(4) < a(3), we know a(1) > a(2) > a(3) > a(4). Subtracting h7 from h6, the coefficients factor as (a(1)-a(2))*(-x1+x2+x3+x4)=0. Since a(1)-a(2)>0, we get x1=x2+x3+x4.
+    operation: Have
+    statement:
+      english: x(1) equals x(2) + x(3) + x(4)
+      isabelle: x (1::nat) = x (2::nat) + x (3::nat) + x (4::nat)
+    name: eq1
+    proof:
+      - step id: 1.1
+        operation: Obvious
+        with facts:
+          - h6: ¦a (1 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (1 :: nat) - a (3 :: nat)¦ * x (3 :: nat) + ¦a (1 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
+          - h7: ¦a (2 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (2 :: nat) - a (3 :: nat)¦ * x (3 :: nat) + ¦a (2 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
+          - assms(1): a (2 :: nat) < a (1 :: nat)
+          - assms(2): a (3 :: nat) < a (2 :: nat)
+          - assms(3): a (4 :: nat) < a (3 :: nat)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+--------------------------------------------------
+Overview
+--------------------------------------------------
+step 1: Have eq1 (line 15)
+  step 1.1: Obvious (line 23)
+Error: Unfinished Proof (line 92)
+--------------------------------------------------
+After deleting failed Obvious
+--------------------------------------------------
+variables:
+  - a: nat ⇒ real
+  - x: nat ⇒ real
+premises:
+  - assms(1): a (2 :: nat) < a (1 :: nat)
+  - assms(2): a (3 :: nat) < a (2 :: nat)
+  - assms(3): a (4 :: nat) < a (3 :: nat)
+  - h6: ¦a (1 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (1 :: nat) - a (3 :: nat)¦ * x (3 :: nat) + ¦a (1 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
+  - h7: ¦a (2 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (2 :: nat) - a (3 :: nat)¦ * x (3 :: nat) + ¦a (2 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
+  - h8: ¦a (3 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (3 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (3 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
+  - h9: ¦a (4 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (4 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (4 :: nat) - a (3 :: nat)¦ * x (3 :: nat) = (1 :: real)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: x (2 :: nat) = (0 :: real) ∧ x (3 :: nat) = (0 :: real) ∧ x (1 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦ ∧ x (4 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦
+proof:
+  - step id: 1
+    thought: Since a(2) < a(1), a(3) < a(2), a(4) < a(3), we know a(1) > a(2) > a(3) > a(4). Subtracting h7 from h6, the coefficients factor as (a(1)-a(2))*(-x1+x2+x3+x4)=0. Since a(1)-a(2)>0, we get x1=x2+x3+x4.
+    operation: Have
+    statement:
+      english: x(1) equals x(2) + x(3) + x(4)
+      isabelle: x (1::nat) = x (2::nat) + x (3::nat) + x (4::nat)
+    name: eq1
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      x (1 :: nat) = x (2 :: nat) + x (3 :: nat) + x (4 :: nat)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+--------------------------------------------------
+Overview
+--------------------------------------------------
+step 1: Have eq1 (line 15)
+  Error: Unfinished Proof (line 124)
+Error: Unfinished Proof (line 127)
+--------------------------------------------------
+After proving a1_gt_a3
+--------------------------------------------------
+variables:
+  - a: nat ⇒ real
+  - x: nat ⇒ real
+premises:
+  - assms(1): a (2 :: nat) < a (1 :: nat)
+  - assms(2): a (3 :: nat) < a (2 :: nat)
+  - assms(3): a (4 :: nat) < a (3 :: nat)
+  - h6: ¦a (1 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (1 :: nat) - a (3 :: nat)¦ * x (3 :: nat) + ¦a (1 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
+  - h7: ¦a (2 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (2 :: nat) - a (3 :: nat)¦ * x (3 :: nat) + ¦a (2 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
+  - h8: ¦a (3 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (3 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (3 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
+  - h9: ¦a (4 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (4 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (4 :: nat) - a (3 :: nat)¦ * x (3 :: nat) = (1 :: real)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: x (2 :: nat) = (0 :: real) ∧ x (3 :: nat) = (0 :: real) ∧ x (1 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦ ∧ x (4 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦
+proof:
+  - step id: 1
+    thought: Since a(2) < a(1), a(3) < a(2), a(4) < a(3), we know a(1) > a(2) > a(3) > a(4). Subtracting h7 from h6, the coefficients factor as (a(1)-a(2))*(-x1+x2+x3+x4)=0. Since a(1)-a(2)>0, we get x1=x2+x3+x4.
+    operation: Have
+    statement:
+      english: x(1) equals x(2) + x(3) + x(4)
+      isabelle: x (1::nat) = x (2::nat) + x (3::nat) + x (4::nat)
+    name: eq1
+    proof:
+      - step id: 1.1
+        thought: From assms(1) and assms(2), a(1) > a(3), so |a(1) - a(3)| = a(1) - a(3)
+        operation: Have
+        statement:
+          english: a(1) is greater than a(3)
+          isabelle: a (1::nat) > a (3::nat)
+        name: a1_gt_a3
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+            with facts:
+              - assms(1): a (2 :: nat) < a (1 :: nat)
+              - assms(2): a (3 :: nat) < a (2 :: nat)
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2` to provide the proof for the following goal.
+    pending proof goal:
+      x (1 :: nat) = x (2 :: nat) + x (3 :: nat) + x (4 :: nat)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+--------------------------------------------------
+Overview
+--------------------------------------------------
+step 1: Have eq1 (line 15)
+  step 1.1: Have a1_gt_a3 (line 23)
+    step 1.1.1: Obvious (line 31)
+  Error: Unfinished Proof (line 172)
+Error: Unfinished Proof (line 175)
+--------------------------------------------------
+After proving a1_gt_a4
+--------------------------------------------------
+variables:
+  - a: nat ⇒ real
+  - x: nat ⇒ real
+premises:
+  - assms(1): a (2 :: nat) < a (1 :: nat)
+  - assms(2): a (3 :: nat) < a (2 :: nat)
+  - assms(3): a (4 :: nat) < a (3 :: nat)
+  - h6: ¦a (1 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (1 :: nat) - a (3 :: nat)¦ * x (3 :: nat) + ¦a (1 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
+  - h7: ¦a (2 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (2 :: nat) - a (3 :: nat)¦ * x (3 :: nat) + ¦a (2 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
+  - h8: ¦a (3 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (3 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (3 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
+  - h9: ¦a (4 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (4 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (4 :: nat) - a (3 :: nat)¦ * x (3 :: nat) = (1 :: real)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: x (2 :: nat) = (0 :: real) ∧ x (3 :: nat) = (0 :: real) ∧ x (1 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦ ∧ x (4 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦
+proof:
+  - step id: 1
+    thought: Since a(2) < a(1), a(3) < a(2), a(4) < a(3), we know a(1) > a(2) > a(3) > a(4). Subtracting h7 from h6, the coefficients factor as (a(1)-a(2))*(-x1+x2+x3+x4)=0. Since a(1)-a(2)>0, we get x1=x2+x3+x4.
+    operation: Have
+    statement:
+      english: x(1) equals x(2) + x(3) + x(4)
+      isabelle: x (1::nat) = x (2::nat) + x (3::nat) + x (4::nat)
+    name: eq1
+    proof:
+      - step id: 1.1
+        thought: From assms(1) and assms(2), a(1) > a(3), so |a(1) - a(3)| = a(1) - a(3)
+        operation: Have
+        statement:
+          english: a(1) is greater than a(3)
+          isabelle: a (1::nat) > a (3::nat)
+        name: a1_gt_a3
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+            with facts:
+              - assms(1): a (2 :: nat) < a (1 :: nat)
+              - assms(2): a (3 :: nat) < a (2 :: nat)
+      - step id: 1.2
+        thought: From assms, a(1) > a(2) > a(3) > a(4), so a(1) > a(4)
+        operation: Have
+        statement:
+          english: a(1) is greater than a(4)
+          isabelle: a (1::nat) > a (4::nat)
+        name: a1_gt_a4
+        proof:
+          - step id: 1.2.1
+            operation: Obvious
+            with facts:
+              - a1_gt_a3: a (3 :: nat) < a (1 :: nat)
+              - assms(3): a (4 :: nat) < a (3 :: nat)
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.3` to provide the proof for the following goal.
+    pending proof goal:
+      x (1 :: nat) = x (2 :: nat) + x (3 :: nat) + x (4 :: nat)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+--------------------------------------------------
+Overview
+--------------------------------------------------
+step 1: Have eq1 (line 15)
+  step 1.1: Have a1_gt_a3 (done, line 23)
+  step 1.2: Have a1_gt_a4 (line 36)
+    step 1.2.1: Obvious (line 44)
+  Error: Unfinished Proof (line 235)
+Error: Unfinished Proof (line 238)

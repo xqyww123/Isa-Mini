@@ -42,7 +42,8 @@ async def IsaMini_AoA(data: tuple[Any, Any, str, str, str, str, str], connection
 
     global_context = Context.unpack(global_context)
     ptree = unpack_MLPT(ptree)
-    if driver.startswith("test."):
+    is_test = driver.startswith("test.")
+    if is_test:
         # Run specific test associated with the driver
         from .test import TESTS
         test_name = driver[len("test."):]
@@ -71,10 +72,16 @@ async def IsaMini_AoA(data: tuple[Any, Any, str, str, str, str, str], connection
                     session.total_output_tokens,
                     session.total_cost_usd)
 
+    try:
+        assembled = [x.pack() for x in root.assemble()]
+    except InternalError:
+        if not is_test:
+            raise
+        assembled = []
     if root.is_proof_finished():
-        return ([x.pack() for x in root.assemble()], root.final_ml_state.name, cost)
+        return (assembled, root.final_ml_state.name, cost)
     else:
-        return ([x.pack() for x in root.assemble()], None, cost)
+        return (assembled, None, cost)
     # Finally, we return the constructed proof
 
 

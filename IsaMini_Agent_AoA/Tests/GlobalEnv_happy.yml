@@ -1,0 +1,191 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - y: int
+  - x: int
+premises:
+  - h1: y = x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: x + y = x + x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+--------------------------------------------------
+Initial Overview
+--------------------------------------------------
+Error: Unfinished Proof (line 12)
+goal: x + y = x + x
+GlobalEnv children: 0
+Added have1: id=global.1, local_step=1, status=success
+Obvious in have1: status=success
+--------------------------------------------------
+After ADD global Have (g_eq) + prove
+--------------------------------------------------
+variables:
+  - y: int
+  - x: int
+premises:
+  - h1: y = x
+- step id: global.1
+thought: Restate h1 as a global rewrite rule
+operation: Have
+statement:
+  english: y equals x
+  isabelle: y = x
+name: g_eq
+proof:
+  - step id: global.1.1
+    operation: Obvious
+    with facts:
+      - h1: y = x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.2`
+goal: x + y = x + x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+--------------------------------------------------
+Overview after ADD
+--------------------------------------------------
+global declarations
+  step global.1: Have g_eq (line 0)
+    step global.1.1: Obvious (line 0)
+  Error: Unfinished Proof
+proof:
+  Error: Unfinished Proof (line 44)
+GoalNode context hyps: ['g_eq', 'h1']
+g_eq visible to GoalNode via context: True
+Rewrite step 1 using g_eq: status=success, is_error=False
+--------------------------------------------------
+After Rewrite proof body using global decl
+--------------------------------------------------
+variables:
+  - y: int
+  - x: int
+premises:
+  - h1: y = x
+- step id: global.1
+thought: Restate h1 as a global rewrite rule
+operation: Have
+statement:
+  english: y equals x
+  isabelle: y = x
+name: g_eq
+proof:
+  - step id: global.1.1
+    operation: Obvious
+    with facts:
+      - h1: y = x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.2`
+goal: x + y = x + x
+proof:
+  - step id: 1
+    thought: Rewrite the goal using the global equation g_eq
+    operation: Rewrite
+    using:
+      - g_eq: y = x
+    targets:
+      - the goal
+    goal is solved.
+Rewrite step 2 (system simp): status=failure, is_error=True
+  reason: The simplification made no progress.
+
+--------------------------------------------------
+After Rewrite closes residual goal
+--------------------------------------------------
+variables:
+  - y: int
+  - x: int
+premises:
+  - h1: y = x
+- step id: global.1
+thought: Restate h1 as a global rewrite rule
+operation: Have
+statement:
+  english: y equals x
+  isabelle: y = x
+name: g_eq
+proof:
+  - step id: global.1.1
+    operation: Obvious
+    with facts:
+      - h1: y = x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.2`
+goal: x + y = x + x
+proof:
+  - step id: 1
+    thought: Rewrite the goal using the global equation g_eq
+    operation: Rewrite
+    using:
+      - g_eq: y = x
+    targets:
+      - the goal
+    goal is solved.
+Amend global.1: id=global.1, local_step=1, is_error=False
+--------------------------------------------------
+After AMEND global.1
+--------------------------------------------------
+variables:
+  - y: int
+  - x: int
+premises:
+  - h1: y = x
+- step id: global.1
+thought: Amended: reverse orientation of the equation
+operation: Have
+statement:
+  english: x equals y
+  isabelle: x = y
+name: g_eq
+proof:
+  - step id: global.1.1
+    operation: Obvious
+    with facts:
+      - h1: y = x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.2`
+goal: x + y = x + x
+proof:
+  - step id: 1
+    thought: Rewrite the goal using the global equation g_eq
+    operation: Rewrite
+    using:
+      - g_eq: x = y
+    targets:
+      - the goal
+    goal is solved.
+--------------------------------------------------
+Overview after AMEND
+--------------------------------------------------
+global declarations
+  step global.1: Have g_eq (line 0)
+    step global.1.1: Obvious (line 0)
+  Error: Unfinished Proof
+proof:
+Delete global.1 not_found: []
+GlobalEnv children after delete: 0
+--------------------------------------------------
+After DELETE global.1
+--------------------------------------------------
+variables:
+  - y: int
+  - x: int
+premises:
+  - h1: y = x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: x + y = x + x
+proof:
+  - step id: 1
+    thought: Rewrite the goal using the global equation g_eq
+    operation: Rewrite
+    using:
+      - Error: fact "g_eq" not found
+    targets:
+      - the goal
+    Error: Fact "g_eq" not found
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  x + y = x + x
+--------------------------------------------------
+Final Overview
+--------------------------------------------------
+step 1: Rewrite goal (failed, line 0)
+Error: Unfinished Proof (line 183)
+Unfinished nodes: 2

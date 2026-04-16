@@ -3,18 +3,16 @@ Initial YAML
 --------------------------------------------------
 variables:
   - x: int
-You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: (0 :: int) ≤ x * x
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
-pending proof goal:
-  (0 :: int) ≤ x * x
 --------------------------------------------------
 After Have x=x (Obvious succeeds)
 --------------------------------------------------
 variables:
   - x: int
-You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: (0 :: int) ≤ x * x
 proof:
   - step id: 1
@@ -24,18 +22,17 @@ proof:
       english: x equals x
       isabelle: x = x
     name: lem1
-    proof:
-      - step id: 1.1
-        operation: Obvious
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      x = x
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
-pending proof goal:
-  (0 :: int) ≤ x * x
 --------------------------------------------------
 After Have x=x+1 (Obvious fails)
 --------------------------------------------------
 variables:
   - x: int
-You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: (0 :: int) ≤ x * x
 proof:
   - step id: 1
@@ -45,9 +42,10 @@ proof:
       english: x equals x
       isabelle: x = x
     name: lem1
-    proof:
-      - step id: 1.1
-        operation: Obvious
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      x = x
   - step id: 2
     thought: this is false
     operation: Have
@@ -55,26 +53,17 @@ proof:
       english: x equals x plus one
       isabelle: x = x + 1
     name: bad
-    proof:
-      - step id: 2.1
-        operation: Obvious
-        Error: |
-          Failed to prove the proof goal automatically:
-            x = x + (1 :: int)
-          The proof is non-trivial and you must provide a detailed proof.
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.2` to provide the proof for the following goal.
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
     pending proof goal:
       x = x + (1 :: int)
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
-pending proof goal:
-  (0 :: int) ≤ x * x
 --------------------------------------------------
 Overview
 --------------------------------------------------
 step 1: Have lem1 (line 0)
-  step 1.1: Obvious (line 0)
+  Error: Unfinished Proof (line 46)
 step 2: Have bad (line 0)
-  step 2.1: Obvious (failed, line 0)
-  Error: Unfinished Proof (line 65)
-Error: Unfinished Proof (line 68)
+  Error: Unfinished Proof (line 57)
+Error: Unfinished Proof (line 60)
 Unfinished nodes: 3

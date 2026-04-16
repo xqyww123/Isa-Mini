@@ -14,6 +14,11 @@ ML_file "agent_server.ML"
 ML_file "agent_server.old.ML"
 ML_file "tactic.ML.old" *)
 
+method_setup aoa = \<open>
+  Scan.succeed (K MiniLang_Agent_AoA.method)
+\<close>
+
+(*
 ML \<open>
     let
       val ctxt = \<^context>
@@ -38,9 +43,7 @@ ML \<open>
     in () end
   \<close>
 
-method_setup aoa = \<open>
-  Scan.succeed (K MiniLang_Agent_AoA.method)
-\<close>
+
 
 method_setup goal_split = \<open>
   Scan.succeed (fn ctxt =>
@@ -208,5 +211,6 @@ text \<open>What about the cleanup tactic \<open>Inductive.mk_cases_tac\<close> 
   goal state \emph{after} the raw \<open>cases\<close> rule has been applied. To use
   it in an apply-script, you must first apply \<open>is_even.cases\<close> to set up
   the case obligations, then \<open>mk_cases_tac\<close> discharges the dead branches:\<close>
+*)
 
 end

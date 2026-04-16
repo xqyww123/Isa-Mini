@@ -7,14 +7,12 @@ variables:
 premises:
   - h1: y = x + (0 :: int)
   - h2: z = y * (1 :: int)
-You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 variables:
   - y: int
 goal: x = z
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
-pending proof goal:
-  x = z
 --------------------------------------------------
 After building 3 steps
 --------------------------------------------------
@@ -24,7 +22,7 @@ variables:
 premises:
   - h1: y = x + (0 :: int)
   - h2: z = y * (1 :: int)
-You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 variables:
   - y: int
 goal: x = z
@@ -54,9 +52,10 @@ pending proof goal:
 --------------------------------------------------
 Overview
 --------------------------------------------------
-- step 1: Have lem1 (line 12)
-  - step 1.1: Obvious (line 20)
-- step 2: Rewrite goal (line 22)
+step 1: Have lem1 (done, line 12)
+step 2: Rewrite goal (line 22)
+  goal changes into:
+    y = z
 Error: Unfinished Proof (line 31)
 --------------------------------------------------
 After deleting step 1 (Have)
@@ -67,7 +66,7 @@ variables:
 premises:
   - h1: y = x + (0 :: int)
   - h2: z = y * (1 :: int)
-You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 variables:
   - y: int
 goal: x = z
@@ -76,24 +75,18 @@ proof:
     thought: rewrite
     operation: Rewrite
     using:
-      - lem1: x = y
+      - Error: fact "lem1" not found
     targets:
       - the goal
-    goal changes into:
-      premises:
-        - lem1: x = y
-      goal: y = z
-    Error: Undefined fact: "local.lem1"
+    Error: Fact "lem1" not found
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
-  premises:
-    - lem1: x = y
-  goal: y = z
+  x = z
 --------------------------------------------------
 Overview
 --------------------------------------------------
-- step 2: Rewrite goal (failed, line 22)
-Error: Unfinished Proof (line 87)
+step 2: Rewrite goal (failed, line 22)
+Error: Unfinished Proof (line 82)
 --------------------------------------------------
 After inserting Have before step 2
 --------------------------------------------------
@@ -103,7 +96,7 @@ variables:
 premises:
   - h1: y = x + (0 :: int)
   - h2: z = y * (1 :: int)
-You could add global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 variables:
   - y: int
 goal: x = z
@@ -123,7 +116,7 @@ proof:
     thought: rewrite
     operation: Rewrite
     using:
-      - lem1: x = y
+      - lem1: x = y + (0 :: int)
     targets:
       - the goal
     goal changes into:
@@ -134,7 +127,7 @@ pending proof goal:
 --------------------------------------------------
 Overview
 --------------------------------------------------
-- step 1: Have lem1 (line 12)
+step 1: Have lem1 (line 12)
   Error: Unfinished Proof (line 20)
-- step 2: Rewrite goal (changed, line 23)
+step 2: Rewrite goal (line 23)
 Error: Unfinished Proof (line 32)
