@@ -1,0 +1,27 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - n: nat
+  - x: real
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: real) < x ⟶ ln (x ^ n) = real n * ln x
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: (0 :: real) < x
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  ln (x ^ n) = real n * ln x
+RetrieveForProof('log_nat_power'): IsabelleFact_Presented
+  short_name: log_nat_power
+RetrieveForProof('(8::nat) = 2 ^ 3'): IsabelleFact_ProveInTime
+ChooseDef('NF_XXX_def'): ['IsabelleFact_Presented']
+ChooseDef(full_name NF_XXX_alt): ['IsabelleFact_Presented']
+ChooseDef('conjI'): ['IsabelleFact_Presented']
+  resolved short_name: conjI
+ChooseDef('xyzzy_nonexistent_thm'): Interaction_BadAnswer as expected
+--------------------------------------------------
+Done
+--------------------------------------------------

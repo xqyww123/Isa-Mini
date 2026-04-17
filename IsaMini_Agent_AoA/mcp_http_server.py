@@ -307,7 +307,7 @@ def _create_mcp_server(session: Session, extra_sdk_tools: list | None = None) ->
              inputSchema=_cc_answer_schema,
              annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False)),
         Tool(name="query",
-             description="Search for Isabelle entities by semantic similarity, patterns, or exact name. Use exact_name to look up definitions; use long_description and filters for discovery.",
+             description="Search for Isabelle entities by semantic similarity, patterns, or exact name/term. Use exact_name to look up definitions; use exact_term to unfold fancy syntax and retrieve semantic explanations; use long_description and filters for discovery.",
              inputSchema=_cc_query_schema,
              annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)),
     ]

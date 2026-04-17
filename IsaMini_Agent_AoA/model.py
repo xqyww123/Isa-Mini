@@ -1525,6 +1525,23 @@ class Minilang_State:
             else:
                 raise
 
+    async def unfold_syntax(self, term_str: str) -> tuple[str, str, str]:
+        """Parse term and unfold higher-theory syntax.
+        Returns (head_const_name, raw_main_display, normal_display).
+        Raises InternalError_UnparsedTerm if parsing fails."""
+        try:
+            head_name, raw_display, normal_display = await self.connection.callback(
+                "IsaMini.unfold_syntax",
+                (self.name, ascii_of_unicode(term_str)))
+            raw = pretty_unicode(raw_display).replace("??.", "")
+            return (head_name, raw, pretty_unicode(normal_display))
+        except IsabelleError as e:
+            _PREFIX = "Unparsed: "
+            if e.errors and e.errors[0].startswith(_PREFIX):
+                raise InternalError_UnparsedTerm(term_str, e.errors[0][len(_PREFIX):])
+            else:
+                raise
+
     async def schematic_variables_of(self) -> Vars:
         """
         Get all schematic variables from the leading proof goal.
@@ -3893,14 +3910,17 @@ class Define(SubgoalMaker):
 #### Unfold
 
 class Interaction_ChooseDef(Interaction):
-    def __init__(self, constants: list[str], candidate_defs: list[IsabelleFact_Presented]):
+    def __init__(self, constants: list[str], candidate_defs: list[IsabelleFact_Presented],
+                 state: 'Minilang_State | None' = None):
         """
         Args:
             constants: List of constants being unfolded
             candidate_defs: List of candidate definitions
+            state: Optional Minilang_State for name-based fact resolution
         """
         self.constants = constants
         self.candidate_defs = candidate_defs
+        self.state = state
     async def prompt(self, indent: int, file: MyIO) -> None:
         print_indent(indent, file)
         if len(self.constants) == 1:
@@ -3910,10 +3930,20 @@ class Interaction_ChooseDef(Interaction):
         for i, ref in enumerate(self.candidate_defs):
             print_indent(indent+1, file)
             file.write(f"{i}. {ref.full_name}: {', '.join(e.unicode for e in ref.expression)}\n")
-        file.write("Select definition(s) to use in unfolding. Call `mcp__proof__answer` with `indexes`, or leave empty to skip.\n")
+        file.write("Select definition(s) to use in unfolding. Call `mcp__proof__answer` with `indexes`, or answer with the exact name of a definition, or leave empty to skip.\n")
     async def answer(self, answer: answer) -> list[IsabelleFact]:
-        if isinstance(answer, str):
-            raise Interaction_BadAnswer("This interaction expects index selection, not text.")
+        if isinstance(answer, str) and answer:
+            # Try matching against candidate names first
+            for d in self.candidate_defs:
+                if d.short_name.unicode == answer or d.full_name == answer:
+                    return [d]
+            # Try general RPC lookup
+            if self.state is not None:
+                presented = await _try_resolve_as_named_fact(self.state, answer)
+                if presented is not None:
+                    return [presented]
+            raise Interaction_BadAnswer(
+                f"No accessible fact found with name '{answer}'. Select by index.")
         if not answer:
             return []
         for idx in answer:
@@ -3992,7 +4022,7 @@ class Unfold(Leaf):
                     return final_mk
 
                 raise RaiseInteraction(
-                    [Interaction_ChooseDef(targets, all_defs)],
+                    [Interaction_ChooseDef(targets, all_defs, state=alive_state)],
                     kontinue
                 )
         return parse

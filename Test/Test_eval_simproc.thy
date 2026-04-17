@@ -1,6 +1,6 @@
 theory Test_eval_simproc
   imports MathBench_Prover.MathBench_Prover Minilang_Agent.Minilang_Agent "HOL-Library.Code_Target_Nat"
-         "Gauss_Jordan.Determinants2"
+         "Gauss_Jordan.Determinants_IArrays"
 begin
 declare [[z3_extensions, auto_interpret_for_embedding=false, AoA_interactive_retrieval="no"]]
 lemma multiplicity_code [code]:
@@ -29,43 +29,75 @@ qed
 
 ML_file \<open>/home/qiyuan/Current/MLML/tasks/MathBench_Prover/eval_simproc.ML\<close>
 
-simproc_setup eval_ord ("ord m n") =
-  \<open>K Eval_Simproc.eval_ground\<close>
+(*
+ML \<open>
+val eval_static = Eval_Simproc.eval_ground_with (Code_Simp.static_conv {
+  ctxt = \<^context>, simpset = NONE,
+  consts = [\<^const_name>\<open>cong\<close>,
+            \<^const_name>\<open>coprime\<close>, \<^const_name>\<open>totient\<close>,
+            \<^const_name>\<open>multiplicity\<close>,
+            \<^const_name>\<open>fib\<close>, \<^const_name>\<open>fact\<close>,
+            \<^const_name>\<open>binomial\<close>,
+            \<^const_name>\<open>gcd\<close>, \<^const_name>\<open>lcm\<close>]
+})
+\<close>
 
-simproc_setup eval_cong ("[a = b] (mod c)") =
-  \<open>K Eval_Simproc.eval_ground\<close>
+ML \<open>
+fun time_eval name f ctxt ct =
+  let val (timing, result) = Timing.timing (fn () => f ctxt ct) ()
+      val elapsed = #elapsed timing
+      val status = case result of NONE => "NONE" | SOME _ => "OK"
+  in tracing (name ^ " " ^ Syntax.string_of_term ctxt (Thm.term_of ct) ^
+              ": " ^ Value.print_time elapsed ^ "s => " ^ status)
+  end
 
-simproc_setup eval_coprime ("coprime a b") =
-  \<open>K Eval_Simproc.eval_ground\<close>
+val tests = [\<^cterm>\<open>fib 10 :: nat\<close>,
+             \<^cterm>\<open>fact 5 :: nat\<close>,
+             \<^cterm>\<open>(10::nat) choose 3\<close>,
+             \<^cterm>\<open>gcd (12::nat) 8\<close>,
+             \<^cterm>\<open>lcm (12::nat) 8\<close>,
+             \<^cterm>\<open>coprime (4::nat) 9\<close>,
+             \<^cterm>\<open>totient 30\<close>,
+             \<^cterm>\<open>multiplicity (2::nat) 24\<close>]
 
-simproc_setup eval_totient ("totient n") =
-  \<open>K Eval_Simproc.eval_ground\<close>
+val _ = tracing "=== Code_Simp.static_conv ==="
+val _ = app (time_eval "static " eval_static \<^context>) tests
 
-simproc_setup eval_multiplicity ("multiplicity p n") =
-  \<open>K Eval_Simproc.eval_ground\<close>
+val _ = tracing "=== Nbe.dynamic_conv ==="
+val _ = app (time_eval "dynamic" Eval_Simproc.eval_ground \<^context>) tests
+\<close>
+*)
 
-simproc_setup eval_sum ("sum f S") =
-  \<open>K Eval_Simproc.eval_ground\<close>
 
-simproc_setup eval_prod ("prod f S") =
-  \<open>K Eval_Simproc.eval_ground\<close>
 
-simproc_setup eval_fib ("fib n") =
-  \<open>K Eval_Simproc.eval_ground\<close>
 
-simproc_setup eval_fact ("fact n") =
-  \<open>K Eval_Simproc.eval_ground\<close>
 
-simproc_setup eval_choose ("n choose k") =
-  \<open>K Eval_Simproc.eval_ground\<close>
+simproc_setup eval_gcd2 ("gcd a b") = \<open>K Eval_Simproc.eval_ground\<close>
+simproc_setup eval_fib2 ("fib n") = \<open>K Eval_Simproc.eval_ground\<close>
+simproc_setup eval_coprime2 ("coprime a b") = \<open>K Eval_Simproc.eval_ground\<close>
+simproc_setup eval_multiplicity2 ("multiplicity p n") = \<open>K Eval_Simproc.eval_ground\<close>
+simproc_setup eval_totient2 ("totient n") = \<open>K Eval_Simproc.eval_ground\<close>
 
-simproc_setup eval_gcd ("gcd a b") =
-  \<open>K Eval_Simproc.eval_ground\<close>
+(*
+ML \<open>
+fun bench_simp name ct =
+  let val _ = Eval_Simproc.reset_stats ()
+      val (t, thm) = Timing.timing (fn () => Simplifier.rewrite \<^context> ct) ()
+  in tracing (name ^ " total=" ^ Value.print_time (#elapsed t) ^ "s" ^
+              "  result: " ^ Thm.string_of_thm \<^context> thm);
+     Eval_Simproc.print_stats ()
+  end
 
-simproc_setup eval_lcm ("lcm a b") =
-  \<open>K Eval_Simproc.eval_ground\<close>
-
-section \<open>Test: do these need simprocs or does simp already handle them?\<close>
+val _ = bench_simp "gcd 12 8   " \<^cterm>\<open>gcd (12::nat) 8\<close>
+val _ = bench_simp "gcd 12 10  " \<^cterm>\<open>gcd (12::nat) 10\<close>
+val _ = bench_simp "gcd 100 75 " \<^cterm>\<open>gcd (100::nat) 75\<close>
+val _ = bench_simp "fib 10     " \<^cterm>\<open>fib 10 :: nat\<close>
+val _ = bench_simp "coprime 4 9" \<^cterm>\<open>coprime (4::nat) 9\<close>
+val _ = bench_simp "mult 2 24  " \<^cterm>\<open>multiplicity (2::nat) 24\<close>
+val _ = bench_simp "totient 30 " \<^cterm>\<open>totient 30\<close>
+\<close>
+*)
+section \<open>Test lemmas\<close>
 
 lemma \<open>poly [:1, -3, 2::int:] 5 = 36\<close> by simp
 lemma \<open>degree [:1, -3, 2::int:] = 2\<close> by simp
@@ -79,7 +111,14 @@ lemma \<open>gcd (12::nat) 8 = 4\<close> by simp
 lemma \<open>lcm (12::nat) 8 = 24\<close> by simp
 lemma \<open>\<lfloor>3.7::real\<rfloor> = 3\<close> by simp
 lemma \<open>\<lceil>3.2::real\<rceil> = 4\<close> by simp
-lemma \<open>det ((\<chi> i j. if i = j then 2 else 1) :: int^2^2) = 3\<close> by eval
-(* det: not executable — no code equations for vec_lambda, vec_nth, Eps *)
+
+code_datatype set List.coset \<comment> \<open>restore coset as code constructor (undoes Gauss_Jordan/Code_Set.thy)\<close>
+code_datatype vec_lambda
+lemma [code]: "vec_nth (vec_lambda f) i = f i" by simp
+lemma \<open>det ((\<chi> i j. if i = j then 2 else 1) :: real^2^2) = 3\<close> by eval
+
+simproc_setup eval_det2 ("det m") = \<open>K Eval_Simproc.eval_ground\<close>
+
+lemma \<open>det ((\<chi> i j. if i = j then 2 else 1) :: real^2^2) = 3\<close> by simp
 
 end

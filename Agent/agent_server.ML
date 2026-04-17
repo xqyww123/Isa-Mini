@@ -501,6 +501,25 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         timeout = NONE
       }
 
+      val unfold_syntax_callback = {
+        name = "IsaMini.unfold_syntax",
+        arg_schema = unpackPair (unpackString, unpackString),
+        ret_schema = packTuple3 (packString, packString, packString),
+        function = (fn (state_id, term_str) =>
+          let val s0 = get_state state_id
+              val ctxt = Minilang.context_of s0
+              val parsed_term = MiniLang_Agent.read_term ctxt term_str
+              val head = Term.head_of parsed_term
+              val head_name = case head of Const (name, _) => name | _ => ""
+              val raw_display = MiniLang_Agent.string_of_term_main_syntax parsed_term
+              val normal_display = MiniLang_Agent.string_of_term ctxt parsed_term
+          in (head_name, raw_display, normal_display)
+          end handle ERROR msg => error (String.concat ["Unparsed: ", msg])
+            | TERM (msg, _) => error (String.concat ["Unparsed: ", msg])
+            | TYPE (msg, _, _) => error (String.concat ["Unparsed: ", msg])),
+        timeout = NONE
+      }
+
       val schematic_vars_callback = {
         name = "IsaMini.schematic_variables_of",
         arg_schema = unpackString,
@@ -705,6 +724,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
           mk_callback compute_bindings_callback,
           mk_callback need_intro_callback,
           mk_callback check_term_callback,
+          mk_callback unfold_syntax_callback,
           mk_callback schematic_vars_callback,
           mk_callback potential_defs_callback,
           mk_callback abbreviation_defs_callback,

@@ -33,6 +33,7 @@ from .model import (
     _THEOREM_KINDS, AGENT_EXPR_LIMIT,
     TOOL_SEARCH, InteractiveRetrievalMode, ForkingMode,
     _Prompt, _handle_raise_interaction,
+    InternalError_UnparsedTerm,
 )
 
 
@@ -245,6 +246,9 @@ def _format_repeated(
 def _format_query_header(q: dict) -> str:
     """Pretty-print a query dict into a header line."""
     parts: list[str] = []
+    exact_term = q.get("exact_term", "")
+    if exact_term:
+        parts.append(f"exact term: {exact_term}")
     exact = q.get("exact_name", "")
     if exact:
         parts.append(f"exact name: {exact}")
@@ -313,7 +317,7 @@ async def _run_knn_for_query(
 ) -> _KnnQueryResult:
     """Parse a query dict and run semantic_knn."""
     try:
-        kinds = [EntityKind.from_label(label) for label in q["kinds"]]
+        kinds = [EntityKind.from_label(label) for label in q.get("kinds", ["constant"])]
     except KeyError as e:
         return ([], [], f"Invalid entity kind: {e}")
     exact_name = q.get("exact_name") or None
@@ -437,7 +441,7 @@ async def _semantic_search_with_filtering(session: Session, queries: list[dict])
     interactions: list[Interaction] = []
     for q in queries:
         try:
-            kinds = [EntityKind.from_label(label) for label in q["kinds"]]
+            kinds = [EntityKind.from_label(label) for label in q.get("kinds", ["constant"])]
         except KeyError as e:
             continue
         interaction = Interaction_RetrieveForSearch(
@@ -618,23 +622,58 @@ async def _query_entity_core(connection, tag: EntityKind, name: str
     return (buf.getvalue().rstrip('\n'), False, uk)
 
 
+async def _handle_exact_term_query(session: Session, term_str: str) -> str:
+    """Handle an exact_term query: parse, show unfolded form, get head semantics."""
+    ml_state = session.root.ml_state
+    try:
+        head_name, raw_display, normal_display = await ml_state.unfold_syntax(term_str)
+    except InternalError_UnparsedTerm as e:
+        return f"Failed to parse term: {e.reason}"
+    except IsabelleError as e:
+        return f"Error: {'; '.join(e.errors)}"
+
+    buf = StringIO()
+    buf.write(f"{normal_display} ≡ {raw_display}\n")
+
+    if head_name:
+        text, is_error, _uk = await _query_entity_core(
+            ml_state.connection, EntityKind.CONSTANT, head_name)
+        if not is_error:
+            buf.write(f"Head {text}\n")
+        else:
+            buf.write(f"Head {head_name}\n")
+
+    result = buf.getvalue().rstrip('\n')
+    session.log_tool_response("mcp__proof__query", result)
+    return result
+
+
 async def _query_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     session.log_tool_call("mcp__proof__query", args)
     try:
         queries = args["queries"] if BATCHED_SEMANTIC_SEARCH else [args]
-        active = _find_active_retrieve_fact(session)
-        if active is not None:
-            # Inside a fork with an active Interaction_Retrieve — extend its candidates
-            result = await _semantic_search_extend_candidates(session, queries, active)
-            return (result, False)
-        # Check if interactive retrieval is enabled
-        if session.interactive_retrieval != InteractiveRetrievalMode.NO:
-            result = await _semantic_search_with_filtering(session, queries)
-            return (result, False)
-        else:
-            # Direct (non-interactive) retrieval — return raw results
-            result = await _semantic_search_direct(session, queries, k=25)
-            return (result, False)
+
+        # Separate exact_term queries from regular queries
+        exact_term_queries = [q for q in queries if q.get("exact_term")]
+        regular_queries = [q for q in queries if not q.get("exact_term")]
+
+        results: list[str] = []
+
+        # Handle exact_term queries
+        for q in exact_term_queries:
+            results.append(await _handle_exact_term_query(session, q["exact_term"]))
+
+        # Handle regular queries through existing paths
+        if regular_queries:
+            active = _find_active_retrieve_fact(session)
+            if active is not None:
+                results.append(await _semantic_search_extend_candidates(session, regular_queries, active))
+            elif session.interactive_retrieval != InteractiveRetrievalMode.NO:
+                results.append(await _semantic_search_with_filtering(session, regular_queries))
+            else:
+                results.append(await _semantic_search_direct(session, regular_queries, k=25))
+
+        return ("\n\n".join(results), False)
     except RaiseInteraction as e:
         r = await _handle_raise_interaction(session, e, "mcp__proof__query")
         if isinstance(r, _Prompt):

@@ -3012,6 +3012,174 @@ async def _test_UpstreamChangeResetsObvious(root: Root, file: MyIO):
     root.print(0, file)
 
 
+@model_test("NamedFactResolution", "Test_NamedFactResolution.thy", 13)
+async def _test_NamedFactResolution(root: Root, file: MyIO):
+    """Test that Interaction_RetrieveForProof and Interaction_ChooseDef
+    resolve free-text answers as named facts before falling through to
+    prove-in-time or raising BadAnswer."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    ml_state = root.ml_state
+
+    # --- RetrieveForProof: text that IS a valid theorem name ---
+    # "log_nat_power" is a theorem in Complex_Main
+    inter1 = Interaction_RetrieveForProof(
+        state=ml_state, query="logarithm of a power", kinds=[EntityKind.THEOREM])
+    result1 = await inter1.answer("log_nat_power")
+    file.write(f"RetrieveForProof('log_nat_power'): {type(result1[0]).__name__}\n")
+    assert isinstance(result1[0], IsabelleFact_Presented), \
+        f"Expected IsabelleFact_Presented, got {type(result1[0]).__name__}"
+    file.write(f"  short_name: {result1[0].short_name.unicode}\n")
+
+    # --- RetrieveForProof: text that is NOT a valid theorem name ---
+    inter2 = Interaction_RetrieveForProof(
+        state=ml_state, query="something trivial", kinds=[EntityKind.THEOREM])
+    result2 = await inter2.answer("(8::nat) = 2 ^ 3")
+    file.write(f"RetrieveForProof('(8::nat) = 2 ^ 3'): {type(result2[0]).__name__}\n")
+    assert isinstance(result2[0], IsabelleFact_ProveInTime), \
+        f"Expected IsabelleFact_ProveInTime, got {type(result2[0]).__name__}"
+
+    # --- ChooseDef: text matching a candidate short name ---
+    cand_a = IsabelleFact_Presented(
+        full_name="Test_NamedFactResolution.NF_XXX_def",
+        short_name=IsaTerm.from_isabelle("NF_XXX_def"),
+        fact=FactByName(refer_by="name", name="NF_XXX_def"),
+        expression=[IsaTerm.from_isabelle("NF_XXX ?a ?b = ?a + ?b")])
+    cand_b = IsabelleFact_Presented(
+        full_name="Test_NamedFactResolution.NF_XXX_alt",
+        short_name=IsaTerm.from_isabelle("NF_XXX_alt"),
+        fact=FactByName(refer_by="name", name="NF_XXX_alt"),
+        expression=[IsaTerm.from_isabelle("NF_XXX ?a ?b = ?b + ?a")])
+    inter3 = Interaction_ChooseDef(["NF_XXX"], [cand_a, cand_b], state=ml_state)
+    result3 = await inter3.answer("NF_XXX_def")
+    file.write(f"ChooseDef('NF_XXX_def'): {[type(r).__name__ for r in result3]}\n")
+    assert len(result3) == 1 and result3[0] is cand_a, \
+        "Expected cand_a to be selected by short name"
+
+    # --- ChooseDef: text matching a candidate full name ---
+    inter4 = Interaction_ChooseDef(["NF_XXX"], [cand_a, cand_b], state=ml_state)
+    result4 = await inter4.answer("Test_NamedFactResolution.NF_XXX_alt")
+    file.write(f"ChooseDef(full_name NF_XXX_alt): {[type(r).__name__ for r in result4]}\n")
+    assert len(result4) == 1 and result4[0] is cand_b, \
+        "Expected cand_b to be selected by full name"
+
+    # --- ChooseDef: text not matching any candidate, but IS an accessible fact ---
+    inter5 = Interaction_ChooseDef(["NF_XXX"], [cand_a, cand_b], state=ml_state)
+    result5 = await inter5.answer("conjI")
+    file.write(f"ChooseDef('conjI'): {[type(r).__name__ for r in result5]}\n")
+    assert len(result5) == 1 and isinstance(result5[0], IsabelleFact_Presented), \
+        f"Expected IsabelleFact_Presented via RPC lookup, got {type(result5[0]).__name__}"
+    file.write(f"  resolved short_name: {result5[0].short_name.unicode}\n")
+
+    # --- ChooseDef: text not matching anything ---
+    inter6 = Interaction_ChooseDef(["NF_XXX"], [cand_a, cand_b], state=ml_state)
+    try:
+        await inter6.answer("xyzzy_nonexistent_thm")
+        raise TestFailed("Expected Interaction_BadAnswer for nonexistent name")
+    except Interaction_BadAnswer as e:
+        file.write(f"ChooseDef('xyzzy_nonexistent_thm'): Interaction_BadAnswer as expected\n")
+
+    print_header("Done", file)
+
+
+@model_test("UnfoldSyntax", "Test_UnfoldSyntax.thy", 33)
+async def _test_unfold_syntax(root: Root, file: MyIO):
+    """Test the unfold_syntax callback.
+
+    Verifies:
+    1. A standard HOL term returns identical normal and raw displays
+    2. A term using a higher-theory abbreviation (my_conj) is unfolded in raw display
+    3. The head constant name is correctly extracted
+    4. A non-constant head (lambda) returns empty head_name
+    5. An unparseable term raises InternalError_UnparsedTerm
+    """
+    ml = root.ml_state
+
+    # 1. Standard HOL term — no higher-theory syntax to strip
+    file.write("=== standard HOL term ===\n")
+    head, raw, normal = await ml.unfold_syntax("True ∧ False")
+    file.write(f"  head: {head}\n")
+    file.write(f"  normal: {normal}\n")
+    file.write(f"  raw: {raw}\n")
+    assert head == "HOL.conj", f"Expected HOL.conj, got {head}"
+
+    # 2. Term using the custom abbreviation `my_conj` defined in the theory
+    file.write("=== custom abbreviation ===\n")
+    head, raw, normal = await ml.unfold_syntax("my_conj True False")
+    file.write(f"  head: {head}\n")
+    file.write(f"  normal: {normal}\n")
+    file.write(f"  raw: {raw}\n")
+
+    # 3. Term with `even` (abbreviation from Parity, above Main)
+    file.write("=== even abbreviation ===\n")
+    head, raw, normal = await ml.unfold_syntax("even (n::nat)")
+    file.write(f"  head: {head}\n")
+    file.write(f"  normal: {normal}\n")
+    file.write(f"  raw: {raw}\n")
+
+    # 4. Lambda head — head_name should be empty
+    file.write("=== lambda head ===\n")
+    head, raw, normal = await ml.unfold_syntax("λx::nat. x + 1")
+    file.write(f"  head: '{head}'\n")
+    file.write(f"  normal: {normal}\n")
+    file.write(f"  raw: {raw}\n")
+    assert head == "", f"Expected empty head for lambda, got '{head}'"
+
+    # 5. Unparseable term — should raise InternalError_UnparsedTerm
+    file.write("=== unparseable term ===\n")
+    try:
+        await ml.unfold_syntax("%%% bad syntax")
+        raise TestFailed("Expected InternalError_UnparsedTerm")
+    except InternalError_UnparsedTerm:
+        file.write("  raised InternalError_UnparsedTerm as expected\n")
+
+    # 6. Mixfix notation — the real syntax unfolding test
+    file.write("=== mixfix: a ⊕ b ===\n")
+    head, raw, normal = await ml.unfold_syntax("(a::nat) ⊕ b")
+    file.write(f"  head: {head}\n")
+    file.write(f"  normal: {normal}\n")
+    file.write(f"  raw: {raw}\n")
+
+    file.write("=== mixfix: (a ⊕ b) ⊕ c ===\n")
+    head, raw, normal = await ml.unfold_syntax("((a::nat) ⊕ b) ⊕ c")
+    file.write(f"  head: {head}\n")
+    file.write(f"  normal: {normal}\n")
+    file.write(f"  raw: {raw}\n")
+
+    # 7. Custom bind notation
+    file.write("=== bind: m ⤜ f ===\n")
+    head, raw, normal = await ml.unfold_syntax("(Some (1::nat)) ⤜ (λx. if x > 0 then Some (x ⊕ x) else None)")
+    file.write(f"  normal: {normal}\n")
+    file.write(f"  raw: {raw}\n")
+
+    # 8. Custom quantifier with syntax translation
+    file.write("=== custom forall ===\n")
+    head, raw, normal = await ml.unfold_syntax("∀⇩m x ∈ {1,2,3::nat}. x ⊕ x > 0")
+    file.write(f"  normal: {normal}\n")
+    file.write(f"  raw: {raw}\n")
+
+    # 9. Custom sum with syntax translation
+    file.write("=== custom sum ===\n")
+    head, raw, normal = await ml.unfold_syntax("Σ⇩m x ∈ {1,2,3::nat}. x ⊕ x")
+    file.write(f"  normal: {normal}\n")
+    file.write(f"  raw: {raw}\n")
+
+    # 10. Nested: custom quantifier + custom operator + custom sum
+    file.write("=== nested custom syntax ===\n")
+    head, raw, normal = await ml.unfold_syntax("∀⇩m x ∈ {1,2,3::nat}. (Σ⇩m y ∈ {0..<x}. y ⊕ x) > 0")
+    file.write(f"  normal: {normal}\n")
+    file.write(f"  raw: {raw}\n")
+
+    # 11. Full query output via _handle_exact_term_query
+    from .retrieval import _handle_exact_term_query
+    file.write("=== query output: nested ===\n")
+    result = await _handle_exact_term_query(root.session, "∀⇩m x ∈ {1,2,3::nat}. (Σ⇩m y ∈ {0..<x}. y ⊕ x) > 0")
+    file.write(result + "\n")
+
+    print_header("Done", file)
+
+
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None):
     import msgpack as mp
     from IsaREPL import Client

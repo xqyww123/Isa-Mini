@@ -100,6 +100,7 @@ val classify_thm : Proof.context -> thm -> string list
 val auto_apply_attrib : attribute
 
 val string_of_term : Proof.context -> term -> string
+val string_of_term_main_syntax : term -> string
 val string_of_type : Proof.context -> typ -> string
 val string_of_type_full_sort : Proof.context -> typ -> string
 
@@ -216,6 +217,9 @@ fun string_of_term ctxt =
      #> Minilang.deconflict_bound_names ctxt'
      #> RPC_Pretty.print_term printing_cfg ctxt'
     end
+
+val string_of_term_main_syntax =
+    string_of_term (Proof_Context.init_global @{theory Main})
 
 fun string_of_type ctxt =
     let val ctxt' = ctxt
