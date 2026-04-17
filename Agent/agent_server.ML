@@ -695,6 +695,91 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         timeout = NONE
       }
 
+      (* Pre-flight analysis for INDUCT: reports the rule that would be
+       * picked plus its consume-premise shapes, so the Python side can
+       * prompt the user for missing `using` facts before committing to
+       * actually running the induction. Returns NONE if no rule is
+       * found; otherwise SOME (rule_name_opt, consumes, consume_premises,
+       * remaining_premises) with premises pretty-printed as strings. *)
+      val analyze_induct_callback = {
+        name = "IsaMini.analyze_induct",
+        arg_schema = unpackTuple5 (
+          unpackString,                                 (* state_id *)
+          unpackString,                                 (* target term *)
+          unpackList (unpackOption unpackString),       (* vars (opt_var_names) *)
+          unpackList unpackString,                      (* arbitrary (as term strings, expected Free) *)
+          unpackOption unpackString                     (* rule name *)
+        ),
+        ret_schema =
+          packOption (packTuple4 (
+              packOption packString,
+              packInt,
+              packList packString,
+              packList packString)),
+        function = (fn (state_id, target, vars, arbitrary, rule_name_opt) =>
+          let val s0 = get_state state_id
+              val ctxt = Minilang.context_of s0
+              val sot = MiniLang_Agent.string_of_term ctxt
+              val target_term = MiniLang_Agent.read_term ctxt target
+              val arbitrary_terms = map (MiniLang_Agent.read_term ctxt) arbitrary
+              val arbitrary_vs = map (fn Free nt => nt
+                                       | x => error ("The `arbitrary` argument must be variables, \
+                                                     \but (" ^ sot x ^ ") is given.")) arbitrary_terms
+              val opt_rule = Option.map
+                 (fn nm => [Proof_Context.get_thm ctxt nm]) rule_name_opt
+              (* Match the INDUCT arg shape in Agent/agent.ML's dispatcher. *)
+              val args = (false, ([[SOME (NONE, (target_term, false))]],
+                                  (([arbitrary_vs], []), opt_rule)))
+              val analysis = Minilang.analyze_induct ctxt args []
+           in case analysis of
+                NONE => NONE
+              | SOME {rule_name, consumes, consume_premises, remaining_premises, ...} =>
+                  SOME (rule_name, consumes,
+                        map sot consume_premises,
+                        map sot remaining_premises)
+          end handle ERROR msg => error (String.concat ["analyze_induct: ", msg])
+            | TERM (msg, _) => error (String.concat ["analyze_induct: ", msg])
+            | TYPE (msg, _, _) => error (String.concat ["analyze_induct: ", msg])),
+        timeout = NONE
+      }
+
+      (* Pre-flight analysis for CASE_SPLIT. Same shape as analyze_induct but
+       * with no `arbitrary` argument. *)
+      val analyze_case_split_callback = {
+        name = "IsaMini.analyze_case_split",
+        arg_schema = unpackTuple4 (
+          unpackString,                                 (* state_id *)
+          unpackString,                                 (* target term *)
+          unpackList (unpackOption unpackString),       (* vars *)
+          unpackOption unpackString                     (* rule name *)
+        ),
+        ret_schema =
+          packOption (packTuple4 (
+              packOption packString,
+              packInt,
+              packList packString,
+              packList packString)),
+        function = (fn (state_id, target, vars, rule_name_opt) =>
+          let val s0 = get_state state_id
+              val ctxt = Minilang.context_of s0
+              val sot = MiniLang_Agent.string_of_term ctxt
+              val target_term = MiniLang_Agent.read_term ctxt target
+              val opt_rule = Option.map (Proof_Context.get_thm ctxt) rule_name_opt
+              (* Match the CASE_SPLIT arg shape in Agent/agent.ML's dispatcher. *)
+              val args = (false, ([[SOME target_term]], opt_rule))
+              val analysis = Minilang.analyze_case_split ctxt args []
+           in case analysis of
+                NONE => NONE
+              | SOME {rule_name, consumes, consume_premises, remaining_premises, ...} =>
+                  SOME (rule_name, consumes,
+                        map sot consume_premises,
+                        map sot remaining_premises)
+          end handle ERROR msg => error (String.concat ["analyze_case_split: ", msg])
+            | TERM (msg, _) => error (String.concat ["analyze_case_split: ", msg])
+            | TYPE (msg, _, _) => error (String.concat ["analyze_case_split: ", msg])),
+        timeout = NONE
+      }
+
       (* Build AoA command with local callbacks *)
       val s0_ptree = Minilang.print_state s0
       val {constants, theorems, types, classes, locales,
@@ -728,6 +813,8 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
           mk_callback schematic_vars_callback,
           mk_callback potential_defs_callback,
           mk_callback abbreviation_defs_callback,
+          mk_callback analyze_induct_callback,
+          mk_callback analyze_case_split_callback,
           mk_callback contextual_thms_callback,
           mk_callback validate_prove_in_time_callback,
           mk_callback check_looping_rules_callback,

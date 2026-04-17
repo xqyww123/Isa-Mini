@@ -118,50 +118,22 @@ lemma \<open>det ((\<chi> i j. if i = j then 2 else 1) :: real^2^2) = 3\<close> 
 
 section \<open>prime\_factorization test\<close>
 
-simproc_setup eval_prime_factorization ("prime_factorization n") =
-  \<open>K Eval_Simproc.eval_ground\<close>
-
 lemma \<open>prime_factorization (12::nat) = {#2, 2, 3#}\<close>
   by simp
-
-simproc_setup eval_squarefree ("squarefree n") =
-  \<open>K Eval_Simproc.eval_ground\<close>
-
-ML \<open>
-let
-  val ct = \<^cterm>\<open>squarefree (30::nat)\<close>
-  val prop_ct = Thm.apply \<^cterm>\<open>Trueprop\<close> ct
-
-  fun timed name f =
-    let val (t, r) = Timing.timing (fn () =>
-           Timeout.apply (Time.fromSeconds 15) f ()
-           handle Timeout.TIMEOUT _ => (tracing (name ^ " TIMEOUT"); NONE)
-                | ERROR msg => (tracing (name ^ " ERROR: " ^ msg); NONE)) ()
-        val s = case r of NONE => "FAILED"
-                        | SOME thm => Thm.string_of_thm \<^context> thm
-    in tracing (name ^ ": " ^ Value.print_time (#elapsed t) ^ "s  =>  " ^ s) end
-
-  val _ = timed "Code_Runtime (prop)" (fn () =>
-    SOME (Code_Runtime.dynamic_holds_conv \<^context> prop_ct))
-
-  val _ = timed "Code_Simp         " (fn () =>
-    SOME (Code_Simp.dynamic_conv \<^context> ct))
-
-  (* second invocation — is Code_Simp faster with caching? *)
-  val _ = timed "Code_Simp (2nd)   " (fn () =>
-    SOME (Code_Simp.dynamic_conv \<^context> ct))
-
-  (* simpler term for comparison *)
-  val ct2 = \<^cterm>\<open>coprime (4::nat) 9\<close>
-  val _ = timed "Code_Simp coprime " (fn () =>
-    SOME (Code_Simp.dynamic_conv \<^context> ct2))
-in () end
-\<close>
 
 lemma \<open>squarefree (30::nat)\<close>
   by simp
 
 lemma \<open>\<not> squarefree (12::nat)\<close>
+  by simp
+
+simproc_setup eval_residue_primroot ("residue_primroot n a") =
+  \<open>K Eval_Simproc.eval_ground\<close>
+
+lemma \<open>residue_primroot 5 2\<close>
+  by simp
+
+lemma \<open>\<not> residue_primroot 7 2\<close>
   by simp
 
 end

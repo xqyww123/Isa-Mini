@@ -1,3 +1,31 @@
+### Isabelle version upgrade checklist
+
+When upgrading the bundled Isabelle (currently **Isabelle2024**), the
+following pieces of `library/proof.ML` were forked/replicated from
+Isabelle internals and MUST be resynced:
+
+- **Rule-pick helpers** (lookup: `ISABELLE VERSION SYNC REQUIRED ON UPGRADE`
+  block comment in `proof.ML`):
+  - `ind_align_left` / `ind_align_right` — from `induct.ML:401-407`
+  - `ind_prep_inst` — from `induct.ML:412`
+  - `ind_special_rename_params` — from `induct.ML:633`
+  - `ind_get_inductP` — from `induct.ML:754`
+  - `ind_get_casesT` / `ind_get_casesP` — from `induct.ML:485-489`
+  - `mk_induct_inst_rule` — from the `inst_rule` local in
+    `gen_induct_context_tactic` (`induct.ML:763`)
+  - `mk_cases_inst_rule` — from the `inst_rule` local in
+    `cases_context_tactic` (`induct.ML:496`)
+- **Dependencies**: `Rule_Cases.get_consumes`, `Rule_Cases.get`,
+  `Rule_Cases.consume`, `Rule_Cases.strict_mutual_rule`,
+  `Rule_Cases.mutual_rule` (in `rule_cases.ML`).
+
+Symptoms of missed sync: `analyze_induct` / `analyze_case_split`
+reports a stale rule; consume-fact validation fires on the wrong rule;
+subtle divergence between analysis and execution of `INDUCT`/`CASE_SPLIT`.
+
+To resync, diff the referenced source regions against the fork and
+re-apply any semantic changes.
+
 ### DONE
 
 #### Elaboration

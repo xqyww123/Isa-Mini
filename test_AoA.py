@@ -20,9 +20,16 @@ parser.add_argument(
     default=None,
     help="Run only test cases whose name contains this substring",
 )
+parser.add_argument(
+    "--exclude", "-x",
+    default=None,
+    help="Skip test cases whose name contains any of these substrings (comma-separated)",
+)
 args = parser.parse_args()
 if args.filter is not None:
     os.environ["TEST_FILTER"] = args.filter
+if args.exclude is not None:
+    os.environ["TEST_EXCLUDE"] = args.exclude
 rpc_addr = "127.0.0.1:27182"
 logger = Isabelle_RPC_Host.mk_logger_(rpc_addr, None)
 

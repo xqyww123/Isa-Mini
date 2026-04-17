@@ -3115,11 +3115,7 @@ class GoalNode(StdBlock):
         self.case_vars = None
         self.case_hyps = None
         self._prev_quickview_context: tuple[Vars, Hyps] | None = None
-        if auto_proof is not None:
-            local_step = self._local_step_of_next_proof_step()
-            ml_state = Minilang_State.assign(self.ml_state)
-            sub_config = NodeConfig(local_step, ml_state, self)
-            self.sub_nodes.append(auto_proof(sub_config))
+        self._pending_auto_proof: SubProof_parsed | None = auto_proof
     @property
     def titled_id(self) -> str:
         return self.id
@@ -3198,7 +3194,14 @@ class GoalNode(StdBlock):
                 raise InternalError(f"Expected exactly one Consider_Case_Msg in Case's messages, got {len(consider_case_msgs)}")
         if not is_init and (self.case_vars, self.case_hyps) != old_case:
             self.changed = True
-        if self._first_time and not self.sub_nodes and await self.ml_state.need_intro(False):
+        # Attach auto_proof subproof (from Branch/CaseSplit/Induction) before Intro fallback
+        if self._pending_auto_proof is not None and not self.sub_nodes:
+            local_step = self._local_step_of_next_proof_step()
+            ml_state = await self.ml_state.clone(None)
+            sub_config = NodeConfig(local_step, ml_state, self)
+            self.sub_nodes.append(self._pending_auto_proof(sub_config))
+            self._pending_auto_proof = None
+        elif is_init and not self.sub_nodes and await self.ml_state.need_intro(False):
             local_step = self._local_step_of_next_proof_step()
             ml_state = await self.ml_state.clone(None)
             config = NodeConfig(local_step, ml_state, self)
@@ -3459,6 +3462,18 @@ def print_statement(self: Statement, indent: int, file: MyIO):
 
 ### Concrete Models
 
+def _print_raw_fact(fact: 'Fact', indent: int, file: MyIO) -> None:
+    """Print a raw, unresolved fact reference. Used as a fallback when
+    fact_refs is None (refresh not yet run or cancelled)."""
+    print_indent(indent, file)
+    match fact["refer_by"]:
+        case "name":
+            file.write(f"- name: {cast(FactByName, fact)['name']} (pending)\n")
+        case "proposition":
+            file.write(f"- proposition: {cast(FactByProposition, fact)['proposition']} (pending)\n")
+        case "description":
+            file.write(f"- description: {cast(FactByDescription, fact)['english']} (pending)\n")
+
 def _filter_unfound(facts: list[IsabelleFact]) -> tuple[list[IsabelleFact], list[str]]:
     """Filter out IsabelleFact_Unfound from a list.
     Returns (kept_facts, warning_strings)."""
@@ -3524,53 +3539,47 @@ def _split_fetched(fetched: 'list[IsabelleFact | Interaction_RetrieveForProof]'
 class Obvious_ToolArg(TypedDict):
     facts: list[FactByName | FactByProposition]
 
-class Obvious_InternalToolArg(NamedTuple):
-    facts: list[IsabelleFact]
-
 @proof_operation("Obvious", Obvious_ToolArg)
 class Obvious(Leaf):
-    def __init__(self, config: NodeConfig, arg: Obvious_InternalToolArg):
+    def __init__(self, config: NodeConfig, arg: Obvious_ToolArg):
         if config.parent is not None and config.parent._is_trivial is False:
             raise GoalIsNontrivial(config.parent)
         super().__init__(config, "")
-        self.fact_refs = arg.facts
+        self._raw_facts: list[FactByName | FactByProposition] = arg["facts"]
+        self.fact_refs: list[IsabelleFact] | None = None
 
     @staticmethod
-    def gen(arg: Obvious_InternalToolArg) -> parsing_node:
+    def gen(arg: Obvious_ToolArg) -> parsing_node:
         return _trivial_parsing(lambda config: Obvious(config, arg))
 
-    @staticmethod
-    def interactive_gen(arg: Obvious_ToolArg) -> parsing_node:
-        async def parse(alive_state: Minilang_State,
-                        exact_state: Minilang_State | None = None) -> gen_node:
-            if not arg["facts"]:
-                return lambda config: Obvious(config, Obvious_InternalToolArg(facts=[]))
-            # FactByName | FactByProposition only — no interactions possible
-            fetched = cast(list[IsabelleFact], await alive_state.fetch_facts(arg["facts"]))
-            facts, warnings = _filter_unfound(fetched)
-            def mk(config: NodeConfig) -> 'Obvious':
-                node = Obvious(config, Obvious_InternalToolArg(facts=facts))
-                for w in warnings:
-                    node.warnings.append(Warning(Warning.Position.FOOTER, w))
-                return node
-            return mk
-        return parse
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
         print_indent(indent, file)
         file.write(f"operation: Obvious\n")
-        if self.fact_refs:
+        if self.fact_refs is not None:
+            if self.fact_refs:
+                print_indent(indent, file)
+                file.write(f"with facts:\n")
+                for ref in self.fact_refs:
+                    ref.print(indent+1, file)
+        elif self._raw_facts:
             print_indent(indent, file)
             file.write(f"with facts:\n")
-            for ref in self.fact_refs:
-                ref.print(indent+1, file)
+            for ref in self._raw_facts:
+                _print_raw_fact(ref, indent+1, file)
         self._print_evaluation_status(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
         return indent
     async def _refresh_me_alone(self) -> None:
-        if self._first_time:
-            self.fact_refs, pit_warnings = await _filter_unprovable(self.fact_refs, self.ml_state)
-            for w in pit_warnings:
+        if self.fact_refs is None:
+            if self._raw_facts:
+                fetched = cast(list[IsabelleFact], await self.ml_state.fetch_facts(self._raw_facts))
+                facts, unfound_warnings = _filter_unfound(fetched)
+            else:
+                facts = []
+                unfound_warnings = []
+            self.fact_refs, pit_warnings = await _filter_unprovable(facts, self.ml_state)
+            for w in unfound_warnings + pit_warnings:
                 self.warnings.append(Warning(Warning.Position.FOOTER, w))
         elif self.ml_state.initialized():
             self.fact_refs = await self.ml_state.refresh_facts(self.fact_refs)
@@ -3581,7 +3590,7 @@ class Obvious(Leaf):
             elif self.status.status == EvaluationStatus.Status.FAILURE:
                 self.parent._is_trivial = False
     def the_operation(self) -> 'Minilang_Operation | FailureReason':
-        return Minilang_Operation.HAMMER(self.fact_refs, 30)
+        return Minilang_Operation.HAMMER(self.fact_refs if self.fact_refs is not None else [], 30)
     def _on_edit_failure(self) -> EditFailureResponse:
         if self.status.status == EvaluationStatus.Status.FAILURE:
             file = MyIO(StringIO())
@@ -3598,16 +3607,13 @@ class Chaining_ToolArg(TypedDict):
     name: NotRequired[str]
     facts: list[FactByName | FactByProposition]
 
-class Chaining_InternalToolArg(NamedTuple):
-    name: str | None
-    facts: list[IsabelleFact]
-
 @proof_operation("Chaining", Chaining_ToolArg)
 class Chaining(Leaf):
-    def __init__(self, config: NodeConfig, arg: Chaining_InternalToolArg):
+    def __init__(self, config: NodeConfig, arg: Chaining_ToolArg):
         super().__init__(config, "")
-        self.chain_name = arg.name
-        self.fact_refs = arg.facts
+        self.chain_name: str | None = arg.get("name")
+        self._raw_facts: list[FactByName | FactByProposition] = arg["facts"]
+        self.fact_refs: list[IsabelleFact] | None = None
         self.result_facts: list[tuple[varname, term]] | None = None
         """(fact_name, pretty_expression) pairs for facts derived by CHAINING,
         populated from Specialize_Result_Msg after successful execution."""
@@ -3625,37 +3631,25 @@ class Chaining(Leaf):
         return indent
 
     @staticmethod
-    def gen(arg: Chaining_InternalToolArg) -> parsing_node:
+    def gen(arg: Chaining_ToolArg) -> parsing_node:
         return _trivial_parsing(lambda config: Chaining(config, arg))
-
-    @staticmethod
-    def interactive_gen(arg: Chaining_ToolArg) -> parsing_node:
-        async def parse(alive_state: Minilang_State,
-                        exact_state: Minilang_State | None = None) -> gen_node:
-            if not arg["facts"]:
-                raise ArgumentError(cast(ToolCall_arg, arg),
-                    "Chaining requires at least one fact")
-            fetched = cast(list[IsabelleFact], await alive_state.fetch_facts(arg["facts"]))
-            facts, warnings = _filter_unfound(fetched)
-            name = arg.get("name")
-            def mk(config: NodeConfig) -> 'Chaining':
-                node = Chaining(config, Chaining_InternalToolArg(name=name, facts=facts))
-                for w in warnings:
-                    node.warnings.append(Warning(Warning.Position.FOOTER, w))
-                return node
-            return mk
-        return parse
 
     def print(self, indent: int, file: MyIO, update_line: bool = False,
               show_warnings: bool = False) -> int:
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
         print_indent(indent, file)
         file.write("operation: Chaining\n")
-        if self.fact_refs:
+        if self.fact_refs is not None:
+            if self.fact_refs:
+                print_indent(indent, file)
+                file.write("from:\n")
+                for ref in self.fact_refs:
+                    ref.print(indent + 1, file)
+        elif self._raw_facts:
             print_indent(indent, file)
             file.write("from:\n")
-            for ref in self.fact_refs:
-                ref.print(indent + 1, file)
+            for ref in self._raw_facts:
+                _print_raw_fact(ref, indent + 1, file)
         if self.result_facts is not None:
             print_indent(indent, file)
             file.write("resulting:\n")
@@ -3669,10 +3663,15 @@ class Chaining(Leaf):
         return indent
 
     async def _refresh_me_alone(self) -> None:
-        if self._first_time:
-            self.fact_refs, pit_warnings = await _filter_unprovable(self.fact_refs, self.ml_state)
-            for w in pit_warnings:
-                self.warnings.append(Warning(Warning.Position.FOOTER, w))
+        if self.fact_refs is None:
+            if self._raw_facts:
+                fetched = cast(list[IsabelleFact], await self.ml_state.fetch_facts(self._raw_facts))
+                facts, unfound_warnings = _filter_unfound(fetched)
+                self.fact_refs, pit_warnings = await _filter_unprovable(facts, self.ml_state)
+                for w in unfound_warnings + pit_warnings:
+                    self.warnings.append(Warning(Warning.Position.FOOTER, w))
+            else:
+                self.fact_refs = []  # the_operation will report "requires at least one fact"
         elif self.ml_state.initialized():
             self.fact_refs = await self.ml_state.refresh_facts(self.fact_refs)
         await super()._refresh_me_alone()
@@ -3684,15 +3683,27 @@ class Chaining(Leaf):
                     break
 
     def the_operation(self) -> 'Minilang_Operation | FailureReason':
-        return Minilang_Operation.CHAINING(self.chain_name, self.fact_refs)
+        if not self._raw_facts:
+            return FailureReason("Chaining requires at least one fact")
+        return Minilang_Operation.CHAINING(self.chain_name, self.fact_refs if self.fact_refs is not None else [])
+
+    def _on_edit_failure(self) -> EditFailureResponse:
+        if self.status.status == EvaluationStatus.Status.FAILURE:
+            file = MyIO(StringIO())
+            if self.status.reason:
+                file.write(self.status.reason.reason)
+                file.write('\n')
+            if self.warnings:
+                self._print_warnings(0, file, list(Warning.Position))
+            return EditFailureResponse(is_error=True, failure_reason=FailureReason(file.getvalue()), revert=True)
+        return super()._on_edit_failure()
 
 async def _parse_subproof(sp: SubProof, alive_state: Minilang_State | None) -> SubProof_parsed:
     """Parse a SubProof into a sync gen_node (or None for 'Given later').
-    Reuses Obvious.interactive_gen for fact resolution.
-    May raise NoAliveState."""
+    Obvious now resolves its own facts on first refresh; parsing is trivial."""
     if not _subproof_is_obvious(sp):
         return None
-    return await Obvious.interactive_gen(sp)(alive_state)
+    return await Obvious.gen(cast(Obvious_ToolArg, sp))(alive_state)
 
 def _gen_with_subproof(cls: type,
                        parent_factory: 'Callable[[NodeConfig, SubProof_parsed], Node]',
@@ -3958,70 +3969,18 @@ class Unfold_ToolArg(TypedDict):
     thought: str
     targets: list[str]  # Isabelle/HOL terms to unfold
 
-class Unfold_ToolArg_internal(TypedDict):
-    thought: str
-    targets: list[str]  # Isabelle/HOL terms to unfold
-    fact_refs: list[IsabelleFact]
-
 
 @proof_operation("Unfold", Unfold_ToolArg)
 class Unfold(Leaf):
-    def __init__(self, config: NodeConfig, arg: Unfold_ToolArg_internal):
-        """
-        Initialize with already-resolved fact references.
-        This is called after interactive_gen completes.
-        """
+    def __init__(self, config: NodeConfig, arg: Unfold_ToolArg):
         super().__init__(config, arg["thought"])
-        self.targets = arg["targets"]
-        self.fact_refs = arg["fact_refs"]
+        self.targets: list[str] = arg["targets"]
+        self.fact_refs: list[IsabelleFact] | None = None
     def quickview_title(self) -> str:
         return f"Unfold {', '.join(self.targets)}"
     @staticmethod
-    def gen(arg: Unfold_ToolArg_internal) -> parsing_node:
-        """Simple non-interactive generation with pre-resolved fact refs."""
+    def gen(arg: Unfold_ToolArg) -> parsing_node:
         return _trivial_parsing(lambda config: Unfold(config, arg))
-
-    @staticmethod
-    def interactive_gen(arg: Unfold_ToolArg) -> parsing_node:
-        """
-        Interactive generation that queries RPC for potential definitions.
-        Raises Interaction_ChooseDef if multiple definitions exist.
-        Supports multiple targets.
-        """
-        targets = arg["targets"]
-
-        async def parse(alive_state: Minilang_State,
-                        exact_state: Minilang_State | None = None) -> gen_node:
-            # Query potential definitions for all targets via RPC
-            all_defs = await alive_state.potential_defs_of([IsaTerm.from_agent(t) for t in targets])
-
-            if len(all_defs) == 0:
-                raise GenNode_Error(f"No definitions found for: {', '.join(targets)}")
-
-            elif len(all_defs) == 1:
-                # Single definition - use it automatically
-                def mk(config: NodeConfig) -> 'Unfold':
-                    arg_internal: Unfold_ToolArg_internal = {
-                        "thought": arg["thought"],
-                        "targets": arg["targets"],
-                        "fact_refs": [all_defs[0]]
-                    }
-                    return Unfold(config, arg_internal)
-                return mk
-
-            else:
-                # Multiple definitions — delegate selection to a sub-agent
-                selected: list[IsabelleFact] = await the_session().fork_interaction(
-                    Interaction_ChooseDef(targets, all_defs, state=alive_state))
-                def final_mk(cfg: NodeConfig) -> 'Unfold':
-                    arg_internal: Unfold_ToolArg_internal = {
-                        "thought": arg["thought"],
-                        "targets": arg["targets"],
-                        "fact_refs": selected
-                    }
-                    return Unfold(cfg, arg_internal)
-                return final_mk
-        return parse
 
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
@@ -4039,15 +3998,36 @@ class Unfold(Leaf):
         return indent
 
     async def _refresh_me_alone(self) -> None:
-        if not self._first_time and self.ml_state.initialized():
+        if self.fact_refs is None:
+            all_defs = await self.ml_state.potential_defs_of(
+                [IsaTerm.from_agent(t) for t in self.targets])
+            if len(all_defs) == 0:
+                self.fact_refs = []  # the_operation will report "no definitions found"
+            elif len(all_defs) == 1:
+                self.fact_refs = [all_defs[0]]
+            else:
+                self.fact_refs = await the_session().fork_interaction(
+                    Interaction_ChooseDef(self.targets, all_defs, state=self.ml_state))
+        elif self.ml_state.initialized():
             self.fact_refs = await self.ml_state.refresh_facts(self.fact_refs)
         await super()._refresh_me_alone()
+
+    def _on_edit_failure(self) -> EditFailureResponse:
+        if self.status.status == EvaluationStatus.Status.FAILURE:
+            file = MyIO(StringIO())
+            if self.status.reason:
+                file.write(self.status.reason.reason)
+                file.write('\n')
+            if self.warnings:
+                self._print_warnings(0, file, list(Warning.Position))
+            return EditFailureResponse(is_error=True, failure_reason=FailureReason(file.getvalue()), revert=True)
+        return super()._on_edit_failure()
 
     def the_operation(self) -> 'Minilang_Operation | FailureReason':
         if not self.targets:
             return FailureReason("Unfold operation must specify at least one target.")
         if not self.fact_refs:
-            return FailureReason("Unfold operation must specify at least one fact reference.")
+            return FailureReason(f"No definitions found for: {', '.join(self.targets)}")
         unfound = [f for f in self.fact_refs if isinstance(f, IsabelleFact_Unfound)]
         if unfound:
             return FailureReason("\n".join(f"Fact \"{f.name().unicode}\" not found" for f in unfound))
@@ -4067,32 +4047,25 @@ class Derive_ToolArg(TypedDict):
     discharging_facts: NotRequired[list[FactByName]]          # Facts to discharge premises (default: [])
     result_name: str                                          # Name to bind the result under
 
-class Derive_InternalToolArg(NamedTuple):
-    thought: str
-    rule: FactByName
-    rule_ref: IsabelleFact
-    instantiations: list[Instantiation]
-    discharging_facts: list[FactByName]
-    discharge_refs: list[IsabelleFact]
-    result_name: str
-
 @proof_operation("Derive", Derive_ToolArg)
 class Derive(Leaf):
-    def __init__(self, config: NodeConfig, arg: Derive_InternalToolArg):
-        super().__init__(config, arg.thought)
-        self.rule = arg.rule
-        self.rule_ref = arg.rule_ref
-        self.instantiations = arg.instantiations
-        self.discharging_facts = arg.discharging_facts
-        self.discharge_refs = arg.discharge_refs
-        self.result_name = arg.result_name
+    def __init__(self, config: NodeConfig, arg: Derive_ToolArg):
+        super().__init__(config, arg["thought"])
+        self.rule: FactByName = arg["rule"]
+        self.instantiations: list[Instantiation] = arg.get("instantiations", [])
+        self.discharging_facts: list[FactByName] = arg.get("discharging_facts", [])
+        self.result_name: str = arg["result_name"]
+        self.rule_ref: IsabelleFact | None = None
+        self.discharge_refs: list[IsabelleFact] | None = None
         self.result_facts: list[tuple[varname, term]] | None = None
         """(fact_name, pretty_expression) pairs for facts derived by SPECIALIZE,
         populated from Specialize_Result_Msg after successful execution."""
         self._prev_result_facts: list[tuple[varname, term]] | None = None
 
     def quickview_title(self) -> str:
-        return f"Derive {self.rule_ref.name().unicode}"
+        if self.rule_ref is not None:
+            return f"Derive {self.rule_ref.name().unicode}"
+        return f"Derive {self.rule['name']}"
     def quickview(self, indent: int, file: MyIO) -> int:
         indent = super().quickview(indent, file)
         if self.result_facts is not None and self.result_facts != self._prev_result_facts:
@@ -4105,31 +4078,16 @@ class Derive(Leaf):
         return indent
 
     @staticmethod
-    def gen(arg: Derive_InternalToolArg) -> parsing_node:
+    def gen(arg: Derive_ToolArg) -> parsing_node:
         return _trivial_parsing(lambda config: Derive(config, arg))
 
-    @staticmethod
-    def interactive_gen(arg: Derive_ToolArg) -> parsing_node:
-        async def parse(alive_state: Minilang_State,
-                        exact_state: Minilang_State | None = None) -> gen_node:
-            all_facts = [arg["rule"]] + arg.get("discharging_facts", [])
-            # FactByName only — no interactions possible
-            fetched = cast(list[IsabelleFact], await alive_state.fetch_facts(all_facts))
-            rule_ref = fetched[0]
-            discharge_refs = fetched[1:]
-            internal = Derive_InternalToolArg(
-                thought=arg["thought"],
-                rule=arg["rule"],
-                rule_ref=rule_ref,
-                instantiations=arg.get("instantiations", []),
-                discharging_facts=arg.get("discharging_facts", []),
-                discharge_refs=discharge_refs,
-                result_name=arg["result_name"])
-            return lambda config: Derive(config, internal)
-        return parse
-
     async def _refresh_me_alone(self) -> None:
-        if not self._first_time and self.ml_state.initialized():
+        if self.rule_ref is None or self.discharge_refs is None:
+            all_refs = [self.rule] + self.discharging_facts
+            fetched = cast(list[IsabelleFact], await self.ml_state.fetch_facts(all_refs))
+            self.rule_ref = fetched[0]
+            self.discharge_refs = fetched[1:]
+        elif self.ml_state.initialized():
             refreshed = await self.ml_state.refresh_facts(
                 [self.rule_ref, *self.discharge_refs])
             self.rule_ref = refreshed[0]
@@ -4149,18 +4107,27 @@ class Derive(Leaf):
         file.write("operation: Derive\n")
         print_indent(indent, file)
         file.write("rule:\n")
-        self.rule_ref.print(indent+1, file)
+        if self.rule_ref is not None:
+            self.rule_ref.print(indent+1, file)
+        else:
+            _print_raw_fact(self.rule, indent+1, file)
         if self.instantiations:
             print_indent(indent, file)
             file.write("instantiations:\n")
             for inst in self.instantiations:
                 print_indent(indent+1, file)
                 file.write(f"- {inst['name']} = {inst['value']}\n")
-        if self.discharge_refs:
+        if self.discharge_refs is not None:
+            if self.discharge_refs:
+                print_indent(indent, file)
+                file.write("discharging facts:\n")
+                for ref in self.discharge_refs:
+                    ref.print(indent+1, file)
+        elif self.discharging_facts:
             print_indent(indent, file)
             file.write("discharging facts:\n")
-            for ref in self.discharge_refs:
-                ref.print(indent+1, file)
+            for ref in self.discharging_facts:
+                _print_raw_fact(ref, indent+1, file)
         # if self.result_name:
         #     print_indent(indent, file)
         #     file.write(f"result name: {self.result_name}\n")
@@ -4195,6 +4162,8 @@ class Derive(Leaf):
         return self._fixed_facts_at_me(ret)
 
     def the_operation(self) -> 'Minilang_Operation | FailureReason':
+        assert self.rule_ref is not None and self.discharge_refs is not None, \
+            "Derive.the_operation called before first refresh resolved refs"
         if isinstance(self.rule_ref, IsabelleFact_Unfound):
             return FailureReason(f"Rule fact \"{self.rule_ref.name().unicode}\" not found")
         if not self.instantiations and not self.discharge_refs:
@@ -4283,24 +4252,16 @@ Rewrite_ToolArg = TypedDict('Rewrite_ToolArg', {
     'rewrite premises': list[str]
 })
 
-class Rewrite_InternalToolArg(NamedTuple):
-    thought: str
-    use_system_simplifiers: bool
-    rewrite_goal: bool
-    rewrite_premises: list[str]
-    using: list[IsabelleFact]
-    # Per-fact target terms: None = use normally, [] = drop, [t1,t2] = targeted simproc
-    fact_targets: list[list[lambda_term] | None] | None = None
-
 @proof_operation("Rewrite", Rewrite_ToolArg)
 class Rewrite(Leaf):
-    def __init__(self, config: NodeConfig, arg: Rewrite_InternalToolArg):
-        super().__init__(config, arg.thought)
-        self.use_system_simplifiers = arg.use_system_simplifiers
-        self.rewrite_goal = arg.rewrite_goal
-        self.rewrite_premises = arg.rewrite_premises
-        self.using = arg.using
-        self.fact_targets = arg.fact_targets  # per-fact target terms
+    def __init__(self, config: NodeConfig, arg: Rewrite_ToolArg):
+        super().__init__(config, arg["thought"])
+        self.use_system_simplifiers: bool = arg["use system simplifiers"]
+        self.rewrite_goal: bool = arg["rewrite goal"]
+        self.rewrite_premises: list[str] = arg["rewrite premises"]
+        self._raw_using: list[FactByName | FactByProposition] = arg["using"]
+        self.using: list[IsabelleFact] | None = None
+        self.fact_targets: list[list[lambda_term] | None] | None = None
         self.bindings: Bindings | None = None
         self.running_time = 0
         self._prev_bindings: Bindings | None = None
@@ -4341,66 +4302,24 @@ class Rewrite(Leaf):
                 self._prev_result_goal = cur
         return indent
     @staticmethod
-    def gen(arg: Rewrite_InternalToolArg) -> parsing_node:
-        """Non-interactive generation with pre-resolved fact refs."""
+    def gen(arg: Rewrite_ToolArg) -> parsing_node:
         return _trivial_parsing(lambda config: Rewrite(config, arg))
-
-    @staticmethod
-    def interactive_gen(arg: Rewrite_ToolArg) -> parsing_node:
-        """Resolve facts and create Rewrite node.
-        If any rule is self-looping, raise an interaction for target selection."""
-        async def parse(alive_state: Minilang_State,
-                        exact_state: Minilang_State | None = None) -> gen_node:
-            # FactByName | FactByProposition only — no interactions possible
-            fetched = cast(list[IsabelleFact], await alive_state.fetch_facts(arg["using"]))
-
-            # Check for looping rules (names sent to RPC, need ASCII)
-            fact_names = [f.short_name.ascii for f in fetched
-                          if isinstance(f, IsabelleFact_Presented)]
-            looping_info: list[LoopingRuleInfo] = []
-            if fact_names:
-                looping_info = await alive_state.check_looping_rules(
-                    fact_names, arg["rewrite goal"], arg["rewrite premises"])
-
-            if looping_info:
-                # Delegate target selection to a sub-agent
-                selections: list[tuple[int, list[lambda_term]]] = \
-                    await the_session().fork_interaction(
-                        Interaction_SelectRewriteTargets(looping_info, fact_names))
-                fact_targets: list[list[lambda_term] | None] = [None] * len(fetched)
-                for fact_idx, selected_terms in selections:
-                    if fact_idx < len(fact_targets):
-                        fact_targets[fact_idx] = selected_terms
-                internal = Rewrite_InternalToolArg(
-                    thought=arg["thought"],
-                    use_system_simplifiers=arg["use system simplifiers"],
-                    rewrite_goal=arg["rewrite goal"],
-                    rewrite_premises=arg["rewrite premises"],
-                    using=fetched,
-                    fact_targets=fact_targets,
-                )
-                return lambda config: Rewrite(config, internal)
-            else:
-                internal = Rewrite_InternalToolArg(
-                    thought=arg["thought"],
-                    use_system_simplifiers=arg["use system simplifiers"],
-                    rewrite_goal=arg["rewrite goal"],
-                    rewrite_premises=arg["rewrite premises"],
-                    using=fetched,
-                )
-                return lambda config: Rewrite(config, internal)
-        return parse
 
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
         self._print_thought(indent, file)
         print_indent(indent, file)
         file.write("operation: Rewrite\n")
-        if self.using or self.use_system_simplifiers:
+        has_facts = (self.using is not None and self.using) or self._raw_using
+        if has_facts or self.use_system_simplifiers:
             print_indent(indent, file)
             file.write(f"using:\n")
-            for ref in self.using:
-                ref.print(indent+1, file)
+            if self.using is not None:
+                for ref in self.using:
+                    ref.print(indent+1, file)
+            elif self._raw_using:
+                for ref in self._raw_using:
+                    _print_raw_fact(ref, indent+1, file)
             if self.use_system_simplifiers:
                 print_indent(indent+1, file)
                 file.write("- system simplifiers\n")
@@ -4457,7 +4376,8 @@ class Rewrite(Leaf):
             return FailureReason(
                 "Rewrite operation must target at least one of: the goal or some premises. "
                 "Set 'rewrite goal' to true or provide at least one premise name in 'rewrite premises'.")
-        unfound = [f for f in self.using if isinstance(f, IsabelleFact_Unfound)]
+        using = self.using if self.using is not None else []
+        unfound = [f for f in using if isinstance(f, IsabelleFact_Unfound)]
         if unfound:
             return FailureReason("\n".join(f"Fact \"{f.name().unicode}\" not found" for f in unfound))
         bindings = None
@@ -4468,7 +4388,7 @@ class Rewrite(Leaf):
         # Build per-fact targets for the operation.
         # Filter out facts with empty target lists (user chose to drop them).
         facts_with_targets: list[tuple[IsabelleFact, list[lambda_term] | None]] = []
-        for i, fact in enumerate(self.using):
+        for i, fact in enumerate(using):
             targets = self.fact_targets[i] if self.fact_targets and i < len(self.fact_targets) else None
             if targets is not None and len(targets) == 0:
                 continue  # user chose to drop this rule
@@ -4483,10 +4403,27 @@ class Rewrite(Leaf):
 
     async def _refresh_me_alone(self) -> None:
         is_init = self._first_time
-        if self._first_time:
-            self.using, pit_warnings = await _filter_unprovable(self.using, self.ml_state)
-            for w in pit_warnings:
+        if self.using is None:
+            fetched = cast(list[IsabelleFact], await self.ml_state.fetch_facts(self._raw_using))
+            facts, unfound_warnings = _filter_unfound(fetched)
+            self.using, pit_warnings = await _filter_unprovable(facts, self.ml_state)
+            for w in unfound_warnings + pit_warnings:
                 self.warnings.append(Warning(Warning.Position.FOOTER, w))
+            # Check for looping rules and fork interaction if needed
+            fact_names = [f.short_name.ascii for f in self.using
+                          if isinstance(f, IsabelleFact_Presented)]
+            if fact_names:
+                looping_info = await self.ml_state.check_looping_rules(
+                    fact_names, self.rewrite_goal, self.rewrite_premises)
+                if looping_info:
+                    selections: list[tuple[int, list[lambda_term]]] = \
+                        await the_session().fork_interaction(
+                            Interaction_SelectRewriteTargets(looping_info, fact_names))
+                    fact_targets: list[list[lambda_term] | None] = [None] * len(self.using)
+                    for fact_idx, selected_terms in selections:
+                        if fact_idx < len(fact_targets):
+                            fact_targets[fact_idx] = selected_terms
+                    self.fact_targets = fact_targets
         elif self.ml_state.initialized():
             self.using = await self.ml_state.refresh_facts(self.using)
         old_bindings = self.bindings
@@ -4619,8 +4556,7 @@ class Have_ToolArg(TypedDict):
 @proof_operation("Have", Have_ToolArg)
 class Have(StdBlock):
     _changes_pending_goal = False
-    def __init__(self, config: NodeConfig, arg : Have_ToolArg,
-                 subproof_parsed: SubProof_parsed = None):
+    def __init__(self, config: NodeConfig, arg : Have_ToolArg):
         super().__init__(config, arg["thought"], [])
         self.statement = arg["statement"]
         self.name = arg["name"]
@@ -4628,19 +4564,11 @@ class Have(StdBlock):
         # Populated from `Newly_Fixed_Vars_Msg` after the HAVE op runs.
         self.for_any: list[tuple[varname, typ]] = []
         self._prev_for_any: list[tuple[varname, typ]] = []
-        if subproof_parsed is not None:
-            local_step = self._local_step_of_next_proof_step()
-            ml_state = Minilang_State.assign(self.ml_state)
-            sub_config = NodeConfig(local_step, ml_state, self)
-            self.sub_nodes.append(subproof_parsed(sub_config))
+        # Raw subproof dict; attached to sub_nodes on first refresh, then set to None.
+        self._raw_proof: SubProof | None = arg.get("proof", "Given later")
     @staticmethod
     def gen(arg : Have_ToolArg) -> parsing_node:
         return _trivial_parsing(lambda config: Have(config, arg))
-    @staticmethod
-    def interactive_gen(arg : Have_ToolArg) -> parsing_node:
-        return _gen_with_subproof(Have,
-            lambda config, parsed: Have(config, arg, subproof_parsed=parsed),
-            arg["proof"])
     def quickview_title(self) -> str:
         return f"Have {self.name}"
     def quickview(self, indent: int, file: MyIO) -> int:
@@ -4690,12 +4618,23 @@ class Have(StdBlock):
                 if isinstance(m, Newly_Fixed_Vars_Msg)]
         if msgs:
             self.for_any = msgs[0].vars
-        if self._first_time and not self.sub_nodes and await self._state_after_beginning().need_intro(False):
-            local_step = self._local_step_of_next_proof_step()
-            ml_state = await self._state_after_beginning().clone(None)
-            config = NodeConfig(local_step, ml_state, self)
-            intro = Intro(config, "", None, False)
-            self.sub_nodes.append(intro)
+        if self._raw_proof is not None and not self.sub_nodes:
+            if _subproof_is_obvious(self._raw_proof):
+                local_step = self._local_step_of_next_proof_step()
+                ml_state = await self._state_after_beginning().clone(None)
+                sub_config = NodeConfig(local_step, ml_state, self)
+                try:
+                    self.sub_nodes.append(Obvious(sub_config, cast(Obvious_ToolArg, self._raw_proof)))
+                except GoalIsNontrivial:
+                    return FailureReason("Subproof's Obvious cannot prove a nontrivial goal")
+                self._raw_proof = None
+            elif await self._state_after_beginning().need_intro(False):
+                local_step = self._local_step_of_next_proof_step()
+                ml_state = await self._state_after_beginning().clone(None)
+                config = NodeConfig(local_step, ml_state, self)
+                intro = Intro(config, "", None, False)
+                self.sub_nodes.append(intro)
+                self._raw_proof = None
         return None
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         return FailureReason(f"Fail to claim the intermediate subgoal because: {"\n".join(err.errors)}")
@@ -4719,23 +4658,27 @@ class Suffices_ToolArg(TypedDict):
 
 @proof_operation("Suffices", Suffices_ToolArg)
 class Suffices(StdBlock):
-    def __init__(self, config: NodeConfig, arg : Suffices_ToolArg,
-                 subproof_parsed: SubProof_parsed = None):
+    def __init__(self, config: NodeConfig, arg : Suffices_ToolArg):
         super().__init__(config, arg["thought"], [])
         self.statement = arg["statement"]
-        if subproof_parsed is not None:
-            local_step = self._local_step_of_next_proof_step()
-            ml_state = Minilang_State.assign(self.ml_state)
-            sub_config = NodeConfig(local_step, ml_state, self)
-            self.sub_nodes.append(subproof_parsed(sub_config))
+        self._raw_proof: SubProof | None = arg.get("proof", "Given later")
     @staticmethod
     def gen(arg : Suffices_ToolArg) -> parsing_node:
         return _trivial_parsing(lambda config: Suffices(config, arg))
-    @staticmethod
-    def interactive_gen(arg : Suffices_ToolArg) -> parsing_node:
-        return _gen_with_subproof(Suffices,
-            lambda config, parsed: Suffices(config, arg, subproof_parsed=parsed),
-            arg["proof"])
+    async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
+        fail = await super()._refresh_the_beginning_opr(begin_opr)
+        if fail is not None:
+            return fail
+        if self._raw_proof is not None and not self.sub_nodes and _subproof_is_obvious(self._raw_proof):
+            local_step = self._local_step_of_next_proof_step()
+            ml_state = await self._state_after_beginning().clone(None)
+            sub_config = NodeConfig(local_step, ml_state, self)
+            try:
+                self.sub_nodes.append(Obvious(sub_config, cast(Obvious_ToolArg, self._raw_proof)))
+            except GoalIsNontrivial:
+                return FailureReason("Subproof's Obvious cannot prove a nontrivial goal")
+            self._raw_proof = None
+        return None
     def quickview(self, indent: int, file: MyIO) -> int:
         indent = super().quickview(indent, file)
         if not self.sub_nodes and not self.session.showed_suffices_notice:
@@ -4781,24 +4724,28 @@ class Obtain_ToolArg(TypedDict):
 @proof_operation("Obtain", Obtain_ToolArg)
 class Obtain(StdBlock):
     _changes_pending_goal = False
-    def __init__(self, config: NodeConfig, arg : Obtain_ToolArg,
-                 subproof_parsed: SubProof_parsed = None):
+    def __init__(self, config: NodeConfig, arg : Obtain_ToolArg):
         super().__init__(config, arg["thought"], [])
         self.variables = arg["variables"]
         self.constraints = arg["constraints"]
-        if subproof_parsed is not None:
-            local_step = self._local_step_of_next_proof_step()
-            ml_state = Minilang_State.assign(self.ml_state)
-            sub_config = NodeConfig(local_step, ml_state, self)
-            self.sub_nodes.append(subproof_parsed(sub_config))
+        self._raw_proof: SubProof | None = arg.get("proof", "Given later")
     @staticmethod
     def gen(arg : Obtain_ToolArg) -> parsing_node:
         return _trivial_parsing(lambda config: Obtain(config, arg))
-    @staticmethod
-    def interactive_gen(arg : Obtain_ToolArg) -> parsing_node:
-        return _gen_with_subproof(Obtain,
-            lambda config, parsed: Obtain(config, arg, subproof_parsed=parsed),
-            arg["proof"])
+    async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
+        fail = await super()._refresh_the_beginning_opr(begin_opr)
+        if fail is not None:
+            return fail
+        if self._raw_proof is not None and not self.sub_nodes and _subproof_is_obvious(self._raw_proof):
+            local_step = self._local_step_of_next_proof_step()
+            ml_state = await self._state_after_beginning().clone(None)
+            sub_config = NodeConfig(local_step, ml_state, self)
+            try:
+                self.sub_nodes.append(Obvious(sub_config, cast(Obvious_ToolArg, self._raw_proof)))
+            except GoalIsNontrivial:
+                return FailureReason("Subproof's Obvious cannot prove a nontrivial goal")
+            self._raw_proof = None
+        return None
     def quickview_title(self) -> str:
         names = ", ".join(v["name"] for v in self.variables)
         return f"Obtain {names}"
@@ -4881,16 +4828,8 @@ class Intro(SubgoalMaker):
         pending = (var_bindings, fact_bindings) if var_bindings or fact_bindings else None
         split_conj = arg.get("split_conj", False)
         thought = arg["thought"]
-        async def parse(alive_state: Minilang_State,
-                        exact_state: Minilang_State | None = None) -> gen_node:
-            if pending is not None and exact_state is not None:
-                bindings = await exact_state.compute_bindings(
-                    [IsaTerm.from_agent(n) for n in pending[0]],
-                    [IsaTerm.from_agent(n) for n in pending[1]])
-                return lambda config: Intro(config, thought, bindings, split_conj)
-            return lambda config: Intro(config, thought, None, split_conj,
-                                        _pending_bindings=pending)
-        return parse
+        return _trivial_parsing(
+            lambda config: Intro(config, thought, None, split_conj, _pending_bindings=pending))
     def quickview(self, indent: int, file: MyIO) -> int:
         indent = super().quickview(indent, file)
         if self.bindings is not None and self.bindings != self._prev_bindings:
@@ -5043,49 +4982,29 @@ class InferenceRule_ToolArg(TypedDict):
     rule: FactByName | FactByDescription | None
     # TODO: write some skills telling the agent how to associate common operations (e.g., proof by contradiction, proof by cases, etc.) with the inference rules
 
-class InferenceRule_InternalToolArg(NamedTuple):
-    thought: str
-    rule: FactByName | FactByDescription | None
-    rule_ref: IsabelleFact | None
-
 @proof_operation("InferenceRule", InferenceRule_ToolArg)
 class InferenceRule(SubgoalMaker):
-    def __init__(self, config: NodeConfig, arg: InferenceRule_InternalToolArg):
-        super().__init__(config, arg.thought, [])
-        self.rule = arg.rule
-        self.rule_ref = arg.rule_ref
+    def __init__(self, config: NodeConfig, arg: InferenceRule_ToolArg):
+        super().__init__(config, arg["thought"], [])
+        self.rule: FactByName | FactByDescription | None = arg["rule"]
+        self.rule_ref: IsabelleFact | None = None
         self._opening = False
 
     @staticmethod
-    def gen(arg: InferenceRule_InternalToolArg) -> parsing_node:
+    def gen(arg: InferenceRule_ToolArg) -> parsing_node:
         return _trivial_parsing(lambda config: InferenceRule(config, arg))
 
-    @staticmethod
-    def interactive_gen(arg: InferenceRule_ToolArg) -> parsing_node:
-        async def parse(alive_state: Minilang_State,
-                        exact_state: Minilang_State | None = None) -> gen_node:
-            rule = arg["rule"]
-            if rule is None:
-                return lambda config: InferenceRule(config, InferenceRule_InternalToolArg(
-                    thought=arg["thought"], rule=None, rule_ref=None))
-
-            fetched = await alive_state.fetch_facts([rule])
+    async def _refresh_me_alone(self) -> None:
+        if self.rule is not None and self.rule_ref is None:
+            fetched = await self.ml_state.fetch_facts([self.rule])
             result = fetched[0]
             if isinstance(result, IsabelleFact):
-                internal = InferenceRule_InternalToolArg(
-                    thought=arg["thought"], rule=rule, rule_ref=result)
-                return lambda config: InferenceRule(config, internal)
-
-            # FactByDescription → delegate to a sub-agent
-            selected = await the_session().fork_interaction(result)
-            internal = InferenceRule_InternalToolArg(
-                thought=arg["thought"], rule=rule, rule_ref=selected[0])
-            return lambda config: InferenceRule(config, internal)
-        return parse
-    async def _refresh_me_alone(self) -> None:
-        if (self.rule_ref is not None
-                and not self._first_time
-                and self.ml_state.initialized()):
+                self.rule_ref = result
+            else:
+                # FactByDescription → delegate to a sub-agent
+                selected = await the_session().fork_interaction(result)
+                self.rule_ref = selected[0]
+        elif self.rule_ref is not None and self.ml_state.initialized():
             [self.rule_ref] = await self.ml_state.refresh_facts([self.rule_ref])
         await super()._refresh_me_alone()
     def quickview_title(self) -> str:
@@ -5100,6 +5019,9 @@ class InferenceRule(SubgoalMaker):
         if self.rule_ref is not None:
             file.write("rule:\n")
             self.rule_ref.print(indent+1, file)
+        elif self.rule is not None:
+            file.write("rule:\n")
+            _print_raw_fact(self.rule, indent+1, file)
         else:
             file.write("rule: default\n")
         self._print_evaluation_status(indent, file)
@@ -5142,25 +5064,14 @@ class Branch_ToolArg(TypedDict):
 
 @proof_operation("Branch", Branch_ToolArg)
 class Branch(SubgoalMaker):
-    def __init__(self, config: NodeConfig, arg: Branch_ToolArg,
-                 parsed_cases: list[SubProof_parsed] | None = None):
+    def __init__(self, config: NodeConfig, arg: Branch_ToolArg):
         super().__init__(config, arg["thought"], [])
         self.cases = arg["cases"]
-        self._parsed_cases = parsed_cases or [None] * len(arg["cases"])
+        self._parsed_cases: list[SubProof_parsed] | None = None
         self._initial_goal_index = 0
     @staticmethod
     def gen(arg : Branch_ToolArg) -> parsing_node:
         return _trivial_parsing(lambda config: Branch(config, arg))
-    @staticmethod
-    def interactive_gen(arg : Branch_ToolArg) -> parsing_node:
-        async def parse(alive_state: Minilang_State | None,
-                        exact_state: Minilang_State | None = None) -> gen_node:
-            parsed_cases = []
-            for case in arg["cases"]:
-                parsed = await _parse_subproof(case["proof"], alive_state)
-                parsed_cases.append(parsed)
-            return lambda config: Branch(config, arg, parsed_cases=parsed_cases)
-        return parse
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         return ('cases', indent+1)
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
@@ -5171,10 +5082,9 @@ class Branch(SubgoalMaker):
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
     def _new_goal_node(self, goal_index: int, ml_state: Minilang_State) -> GoalNode:
         case_index = goal_index - 1  # goal 0 = exhaustiveness, goals 1..N = cases
-        if 0 <= case_index < len(self._parsed_cases):
+        auto_proof: SubProof_parsed = None
+        if self._parsed_cases is not None and 0 <= case_index < len(self._parsed_cases):
             auto_proof = self._parsed_cases[case_index]
-        else:
-            auto_proof = None
         return GoalNode(NodeConfig(str(goal_index+self._initial_goal_index), ml_state, self), False, True,
                         auto_proof=auto_proof)
     def beginning_opr(self) -> 'Minilang_Operation | FailureReason':
@@ -5188,6 +5098,16 @@ class Branch(SubgoalMaker):
     def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         raise InternalError("A Branch doesn't have an ending operation")
     async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
+        if self._parsed_cases is None:
+            parsed_cases: list[SubProof_parsed] = []
+            for case in self.cases:
+                raw = case.get("proof", "Given later")
+                if _subproof_is_obvious(raw):
+                    obv_arg = cast(Obvious_ToolArg, raw)
+                    parsed_cases.append(lambda config, a=obv_arg: Obvious(config, a))
+                else:
+                    parsed_cases.append(None)
+            self._parsed_cases = parsed_cases
         fail = await super()._refresh_the_beginning_opr(begin_opr)
         if fail is None:
             if not self.sub_nodes[0].thought:
@@ -5203,20 +5123,15 @@ class CaseSplit_ToolArg(TypedDict):
 
 @proof_operation("CaseSplit", CaseSplit_ToolArg)
 class CaseSplit(CaseSplit_Like):
-    def __init__(self, config: NodeConfig, arg: CaseSplit_ToolArg,
-                 subproof_parsed: SubProof_parsed = None):
-        super().__init__(config, arg["thought"], [], _initial_proof=subproof_parsed)
+    def __init__(self, config: NodeConfig, arg: CaseSplit_ToolArg):
+        super().__init__(config, arg["thought"], [], _initial_proof=None)
         self.target_isabelle_term = arg["target_isabelle_term"]
+        self._raw_proof: SubProof | None = arg.get("proof", "Given later")
     def quickview_title(self) -> str:
         return f"CaseSplit {self.target_isabelle_term}"
     @staticmethod
     def gen(arg : CaseSplit_ToolArg) -> parsing_node:
         return _trivial_parsing(lambda config: CaseSplit(config, arg))
-    @staticmethod
-    def interactive_gen(arg : CaseSplit_ToolArg) -> parsing_node:
-        return _gen_with_subproof(CaseSplit,
-            lambda config, parsed: CaseSplit(config, arg, subproof_parsed=parsed),
-            arg["proof"])
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         return ('cases', indent+1)
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
@@ -5239,6 +5154,13 @@ class CaseSplit(CaseSplit_Like):
         return FailureReason(f"Subgoal {child.id} fails to be proven.")
     def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         raise InternalError("A Branch doesn't have an ending operation")
+    async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
+        if self._initial_proof is None and self._raw_proof is not None:
+            if _subproof_is_obvious(self._raw_proof):
+                obv_arg = cast(Obvious_ToolArg, self._raw_proof)
+                self._initial_proof = lambda config, a=obv_arg: Obvious(config, a)
+            self._raw_proof = None
+        return await super()._refresh_the_beginning_opr(begin_opr)
 
 ### Induction
 
@@ -5256,27 +5178,27 @@ class Induction_ToolArg(TypedDict):
 @proof_operation("Induction", Induction_ToolArg)
 class Induction(CaseSplit_Like):
     # TODO: processing the rule
-    def __init__(self, config: NodeConfig, arg: Induction_ToolArg,
-                 subproof_parsed: SubProof_parsed = None):
-        super().__init__(config, arg["thought"], [], _initial_proof=subproof_parsed)
+    def __init__(self, config: NodeConfig, arg: Induction_ToolArg):
+        super().__init__(config, arg["thought"], [], _initial_proof=None)
         self.arg = arg
         self.target_isabelle_term = arg["target_isabelle_term"]
         self.rule = arg.get("rule", "default")
         self.variables = arg["variables"]
+        self._raw_proof: SubProof | None = arg.get("proof", "Given later")
     def quickview_title(self) -> str:
         return f"Induction {self.target_isabelle_term}"
     @staticmethod
     def gen(arg : Induction_ToolArg) -> parsing_node:
         return _trivial_parsing(lambda config: Induction(config, arg))
-    @staticmethod
-    def interactive_gen(arg : Induction_ToolArg) -> parsing_node:
-        return _gen_with_subproof(Induction,
-            lambda config, parsed: Induction(config, arg, subproof_parsed=parsed),
-            arg["proof"])
     async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
+        if self._initial_proof is None and self._raw_proof is not None:
+            if _subproof_is_obvious(self._raw_proof):
+                obv_arg = cast(Obvious_ToolArg, self._raw_proof)
+                self._initial_proof = lambda config, a=obv_arg: Obvious(config, a)
+            self._raw_proof = None
         is_init = self._first_time
         old_variables = list(self.variables)
-        if self._first_time:
+        if is_init:
             try:
                 _, frees, _ = await self.ml_state.check_term(self.target_isabelle_term)
             except InternalError_UnparsedTerm as e:
@@ -5295,7 +5217,7 @@ class Induction(CaseSplit_Like):
             var_names_as_isa = [IsaTerm.from_agent(var["name"]) for var in self.variables]
             new_var_names = [v for v in vars if v not in var_names_as_isa]
             if new_var_names:
-                if self._first_time:
+                if is_init:
                     return FailureReason(
                         f"The {titled_string_of_and_list(new_var_names, 'variable', 'variables')} "
                         f"appear in the induction context but are not classified in the 'variables' argument. "

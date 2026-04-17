@@ -111,20 +111,56 @@ val potential_defs_of_const : Proof.context -> string -> (string * thm) list
 val UNFOLD : thm list -> operation
 val UNFOLD_CMD : command
 
+(* INDUCT / CASE_SPLIT facts are split into two roles:
+ *   using     : facts intended to discharge the rule's major premises
+ *               (the `consumes` count). Required: |using| >= consumes.
+ *               When `strict_consumes_check` is true, also |using| <= consumes.
+ *   insertion : facts to be inserted as goal premises before induction
+ *               (via the same `more_facts` path that auto-insert uses).
+ *               No role in rule's consume discharge.
+ * Minilang / Agent callers put everything in `using`; `insertion` is an
+ * ML-level extension point (currently only the internal auto-insert
+ * mechanism uses it — see induct_auto_insert_facts). *)
+type induct_facts = {using: thm list, insertion: thm list}
+
 val INDUCT : bool * ((binding option * (term * bool)) option list list *
               (((string * typ) list list * term option list) * thm list option))
           -> opt_var_names
-          -> thm list
+          -> induct_facts
           -> operation
 val INDUCT'' : Token.src * opt_var_names * fact list -> operation
 val INDUCT_CMD : command
 
 val CASE_SPLIT   : bool * (term option list list * thm option)
                 -> opt_var_names
-                -> thm list
+                -> induct_facts
                 -> operation
 val CASE_SPLIT'' : Token.src * opt_var_names * fact list -> operation
 val CASE_SPLIT_CMD : command
+
+(* Analysis of an INDUCT / CASE_SPLIT invocation without executing the tactic.
+ * Reports the picked rule and the premise shapes the user's `using` facts
+ * must match to discharge the rule's `consumes` major premises.
+ *
+ * `consume_premises` is the list of the first `consumes` premises of the
+ * post-inst_rule theorem — exactly what Rule_Cases.consume will try to
+ * unify against user-supplied facts (via Drule.multi_resolve). *)
+type induct_analysis =
+  {rule: thm,
+   rule_name: string option,
+   consumes: int,
+   consume_premises: term list,
+   remaining_premises: term list}
+
+val analyze_induct : Proof.context
+  -> bool * ((binding option * (term * bool)) option list list *
+             (((string * typ) list list * term option list) * thm list option))
+  -> thm list
+  -> induct_analysis option
+val analyze_case_split : Proof.context
+  -> bool * (term option list list * thm option)
+  -> thm list
+  -> induct_analysis option
 
 val record_history : string -> operation
 val restore_history : string -> operation
@@ -2233,20 +2269,329 @@ fun CASES' diff ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, items0
 
 exception IH_MAP of (string * string list) list
 
-val induct_auto_use_facts = Attrib.setup_config_bool \<^binding>\<open>induct_auto_use_facts\<close> (K false)
+(* Auto-insert mechanism for induction (previously named induct_auto_use_facts).
+ * When enabled, local facts mentioning "dirty" free variables (those being
+ * inducted on or generalized) are automatically collected, wrapped via
+ * TAG + conjunction, and passed through the induction tactic's more_facts
+ * path — where Method.insert_tac inserts them as goal premises that get
+ * generalized along with the arbitrary variables. After induction, the
+ * wrapped conjunction is unpacked and restored as named local facts in
+ * each case's context (see update_tampered below).
+ *
+ * The legacy name `induct_auto_use_facts` is a misnomer: no "using" role
+ * is performed — the facts always flow through insertion. *)
+val induct_auto_insert_facts = Attrib.setup_config_bool \<^binding>\<open>induct_auto_insert_facts\<close> (K false)
 
-fun INDUCT' (no_simp, (insts, ((arbitrary, taking), opt_rule))) first_vars using (ctxt, SK) =
-  let val (tamper_facts, tamper_fact') =
-        if Config.get ctxt induct_auto_use_facts
+(* When true, INDUCT/CASE_SPLIT reject excess `using` facts (|using| > the
+ * rule's `consumes` count). Default false preserves legacy behavior where
+ * extras silently flow to insertion. The |using| < consumes check is
+ * unconditional (always errors) regardless of this flag. *)
+val strict_consumes_check = Attrib.setup_config_bool \<^binding>\<open>strict_consumes_check\<close> (K false)
+
+(* ========================================================================
+ * ISABELLE VERSION SYNC REQUIRED ON UPGRADE
+ * ========================================================================
+ * The helpers below (align_left, align_right, prep_inst, special_rename_params,
+ * get_inductP_local, mk_inst_rule, get_casesT_local, get_casesP_local,
+ * mk_inst_cases_rule) are verbatim copies of private functions from
+ *   contrib/Isabelle2024/src/Tools/induct.ML
+ *
+ * They exist so that pick_induct_rule / pick_case_split_rule can replicate
+ * Isabelle's rule-discovery logic without modifying the system induction
+ * tactic. The picked rule is then passed to Isabelle's induction_tac as
+ * opt_rule = SOME [picked_rule], forcing Isabelle to use exactly the rule
+ * we pre-analyzed.
+ *
+ * Last synced with: Isabelle2024
+ * When upgrading Isabelle, verify these are still correct by diffing:
+ *   - contrib/Isabelle2024/src/Tools/induct.ML:
+ *     align_left/align_right (lines 401-407),
+ *     prep_inst (line 412),
+ *     special_rename_params (line 633),
+ *     get_inductP (line 754),
+ *     get_casesP/get_casesT (lines 485-488),
+ *     inst_rule inside gen_induct_context_tactic (line 763),
+ *     inst_rule inside cases_context_tactic (line 496).
+ *   - contrib/Isabelle2024/src/Pure/Isar/rule_cases.ML:
+ *     consume (line 198), get_consumes.
+ *
+ * Symptom of missed sync: analyze_induct / analyze_case_split reports a
+ * stale rule; consume-fact validation fires on the wrong rule; subtle
+ * divergence between analysis and execution.
+ * ======================================================================== *)
+
+(* Aligned pairing — copied from induct.ML (lines 401-407, private). *)
+fun ind_align_left msg xs ys =
+  let val m = length xs and n = length ys
+  in if m < n then error msg else (take n xs ~~ ys) end;
+
+fun ind_align_right msg xs ys =
+  let val m = length xs and n = length ys
+  in if m < n then error msg else (drop (m - n) xs ~~ ys) end;
+
+(* Instantiation preparation — copied from induct.ML (line 412, private). *)
+fun ind_prep_inst ctxt align tune (tm, ts) =
+  let
+    fun prep_var (Var (x, xT), SOME t) =
+          let
+            val ct = Thm.cterm_of ctxt (tune t);
+            val tT = Thm.typ_of_cterm ct;
+          in
+            if Type.could_unify (tT, xT) then SOME (x, ct)
+            else error (Pretty.string_of (Pretty.block
+             [Pretty.str "Ill-typed instantiation:", Pretty.fbrk,
+              Syntax.pretty_term ctxt (Thm.term_of ct), Pretty.str " ::", Pretty.brk 1,
+              Syntax.pretty_typ ctxt tT]))
+          end
+      | prep_var (_, NONE) = NONE;
+    val xs = Induct.vars_of tm;
+  in
+    align "Rule has fewer variables than instantiations given" xs ts
+    |> map_filter prep_var
+  end;
+
+(* Induct-predicate rule lookup — copied from induct.ML (line 754, private). *)
+fun ind_get_inductP ctxt (fact :: _) = map single (Induct.find_inductP ctxt (Thm.concl_of fact))
+  | ind_get_inductP _ _ = [];
+
+(* Cases rule lookups — copied from induct.ML (lines 485-489, private). *)
+fun ind_get_casesT ctxt ((SOME t :: _) :: _) = Induct.find_casesT ctxt (Term.fastype_of t)
+  | ind_get_casesT _ _ = [];
+
+fun ind_get_casesP ctxt (fact :: _) = Induct.find_casesP ctxt (Thm.concl_of fact)
+  | ind_get_casesP _ _ = [];
+
+(* Special parameter renaming for type-induction with a single Free target.
+ * Copied from induct.ML (line 633, private). *)
+fun ind_special_rename_params ctxt [[SOME (Free (z, Type (T, _)))]] [thm] =
+      let
+        val x = Name.clean (Variable.revert_fixed ctxt z);
+        fun index _ [] = []
+          | index i (y :: ys) =
+              if x = y then x ^ string_of_int i :: index (i + 1) ys
+              else y :: index i ys;
+        fun rename_params [] = []
+          | rename_params ((y, Type (U, _)) :: ys) =
+              (if U = T then x else y) :: rename_params ys
+          | rename_params ((y, _) :: ys) = y :: rename_params ys;
+        fun rename_asm A =
+          let
+            val xs = rename_params (Logic.strip_params A);
+            val xs' =
+              (case filter (fn x' => x' = x) xs of
+                [] => xs
+              | [_] => xs
+              | _ => index 1 xs);
+          in Logic.list_rename_params xs' A end;
+        fun rename_prop prop =
+          let val (As, C) = Logic.strip_horn prop
+          in Logic.list_implies (map rename_asm As, C) end;
+        val thm' = Thm.renamed_prop (rename_prop (Thm.prop_of thm)) thm;
+      in [Rule_Cases.save thm thm'] end
+  | ind_special_rename_params _ _ ths = ths;
+
+(* Inst_rule for INDUCTION — derived from induct.ML:763 (inside gen_induct_context_tactic).
+ * Returns ((cases, consumes), instantiated_thm) — the same shape that
+ * Isabelle's ruleq produces. We discard mod_cases here because our agent
+ * uses the rule only for consumes + premise display; the actual tactic
+ * run (with opt_rule = SOME [picked]) re-applies IH-naming mod_cases
+ * inside induction_tac. *)
+fun mk_induct_inst_rule ctxt insts (concls, r) =
+  (if null insts then `Rule_Cases.get r
+   else (ind_align_left "Rule has fewer conclusions than arguments given"
+          (map Logic.strip_imp_concl (Logic.dest_conjunctions (Thm.concl_of r))) insts
+        |> maps (ind_prep_inst ctxt ind_align_right (Induct.atomize_term ctxt))
+        |> infer_instantiate ctxt) r |> pair (Rule_Cases.get r));
+
+(* Inst_rule for CASE_SPLIT — derived from induct.ML:496 (inside cases_context_tactic).
+ * Note the different alignment and argument structure. *)
+fun mk_cases_inst_rule ctxt insts r =
+  (if null insts then r
+   else
+     (ind_align_left "Rule has fewer premises than arguments given" (Thm.prems_of r) insts
+       |> maps (ind_prep_inst ctxt ind_align_left I)
+       |> infer_instantiate ctxt) r)
+  |> pair (Rule_Cases.get r);
+
+(* Pick the induction rule that Isabelle's induction_tac would pick first
+ * (modulo fall-through on downstream failures, which the simpler pre-pick
+ * approach does not preserve). Returns (raw_rule, (cases_info, consumes, inst_thm))
+ * — the raw_rule is what to pass as opt_rule to Isabelle; the inst_thm
+ * carries the post-inst_rule premises for user display. *)
+fun pick_induct_rule ctxt opt_rule insts facts =
+  let
+    fun try_inst_rule pair =
+      (SOME (mk_induct_inst_rule ctxt insts pair)) handle ERROR _ => NONE
+  in
+    case opt_rule of
+      SOME rs =>
+        (case try (Rule_Cases.strict_mutual_rule ctxt) rs of
+           NONE => NONE
+         | SOME mr =>
+             (case try_inst_rule mr of
+                NONE => NONE
+              | SOME result => SOME (#2 mr, result)))
+    | NONE =>
+        let
+          val candidates =
+            ind_get_inductP ctxt facts @
+            map (ind_special_rename_params ctxt insts) (Induct.get_inductT ctxt insts)
+          val mutuals = map_filter (Rule_Cases.mutual_rule ctxt) candidates
+          fun find [] = NONE
+            | find (pair :: rest) =
+                (case try_inst_rule pair of
+                   NONE => find rest
+                 | SOME result => SOME (#2 pair, result))
+        in find mutuals end
+  end;
+
+(* Pick the case-split rule. Mirrors pick_induct_rule but for cases_context_tactic. *)
+fun pick_case_split_rule ctxt opt_rule insts facts =
+  let
+    fun try_inst r =
+      (SOME (mk_cases_inst_rule ctxt insts r)) handle ERROR _ => NONE
+    (* Mimic cases_context_tactic's logic that bumps the first fact into
+     * opt_rule if its concl is an elim-rule conclusion. *)
+    val (opt_rule', facts') =
+      (case (opt_rule, facts) of
+        (NONE, th :: ths) =>
+          if is_some (Object_Logic.elim_concl ctxt th) then (SOME th, ths)
+          else (opt_rule, facts)
+      | _ => (opt_rule, facts));
+  in
+    case opt_rule' of
+      SOME r =>
+        (case try_inst r of
+           NONE => NONE
+         | SOME result => SOME (r, result))
+    | NONE =>
+        let
+          val candidates =
+            ind_get_casesP ctxt facts' @ ind_get_casesT ctxt insts
+          fun find [] = NONE
+            | find (r :: rest) =
+                (case try_inst r of
+                   NONE => find rest
+                 | SOME result => SOME (r, result))
+        in find candidates end
+  end;
+
+(* Structure-side type declarations matching the signature. SML requires
+ * the structure to repeat concrete `type t = ty` bindings even when the
+ * signature already specifies them. *)
+type induct_facts = {using: thm list, insertion: thm list}
+type induct_analysis =
+  {rule: thm,
+   rule_name: string option,
+   consumes: int,
+   consume_premises: term list,
+   remaining_premises: term list}
+
+(* Build the analysis record from a picked, post-inst_rule theorem.
+ * `consumes` comes from the theorem's `consumes` tag; the first `consumes`
+ * premises are the major premises that Rule_Cases.consume will try to
+ * discharge, the rest are the induction / case-split cases.
+ *
+ * These premise terms are precisely what user-supplied facts must unify
+ * against (via Drule.multi_resolve), so they are suitable for pretty-
+ * printing in an interactive consume-fact prompt. *)
+fun analysis_of_thm thm : induct_analysis =
+  let
+    val n = Rule_Cases.get_consumes thm
+    val prems = Thm.prems_of thm
+    val name_final =
+      if Thm.has_name_hint thm
+      then let val s = Thm.get_name_hint thm
+           in if s = "" then NONE else SOME s end
+      else NONE
+  in
+    {rule = thm,
+     rule_name = name_final,
+     consumes = n,
+     consume_premises = take n prems,
+     remaining_premises = drop n prems}
+  end;
+
+(* analyze_induct: pre-execution pick-and-report for INDUCT. Returns NONE
+ * if no candidate rule instantiates successfully. The `facts` argument is
+ * used only for predicate-rule discovery (get_inductP looks at the first
+ * fact's conclusion). *)
+fun analyze_induct ctxt (_, (def_insts, ((_, _), opt_rule))) facts =
+  let
+    (* def_insts is a list of conjunct-groups; Induct.add_defs processes
+     * a single conjunct-group. Fold across the outer list, then transpose
+     * to get (term option list list, thm list list). *)
+    val ((insts, _), _) =
+      fold_map Induct.add_defs def_insts ctxt |>> split_list
+  in
+    case pick_induct_rule ctxt opt_rule insts facts of
+      NONE => NONE
+    | SOME (_, (_, inst_thm)) => SOME (analysis_of_thm inst_thm)
+  end;
+
+(* analyze_case_split: pre-execution pick-and-report for CASE_SPLIT. *)
+fun analyze_case_split ctxt (_, (insts, opt_rule)) facts =
+  case pick_case_split_rule ctxt opt_rule insts facts of
+    NONE => NONE
+  | SOME (_, (_, inst_thm)) => SOME (analysis_of_thm inst_thm);
+
+fun INDUCT' (no_simp, (insts, ((arbitrary, taking), opt_rule))) first_vars
+            ({using, insertion} : induct_facts)
+            (ctxt, SK) =
+  let
+      (* Pre-execution: pick the rule that will be used and validate that
+       * the user supplied enough `using` facts to discharge its major
+       * premises. The picked rule is then forced on induction_tac via
+       * opt_rule = SOME [raw_rule] to guarantee the tactic uses exactly
+       * the same rule we analyzed. *)
+      val analysis_opt = analyze_induct ctxt
+                           (no_simp, (insts, ((arbitrary, taking), opt_rule)))
+                           using
+      val (effective_opt_rule, consumes_n, rule_name_str) =
+        case analysis_opt of
+          NONE =>
+            (* No rule found. Fall through to induction_tac with user's
+             * opt_rule — it will produce a proper error itself. *)
+            (opt_rule, 0, "<no rule found>")
+        | SOME {rule, rule_name, consumes, ...} =>
+            let val name_str = case rule_name of
+                                 SOME s => s
+                               | NONE => "<auto-picked rule>"
+                (* Force use of the analyzed rule. We pass the post-
+                 * inst_rule theorem; Isabelle's inst_rule will re-apply
+                 * (idempotent on already-instantiated rules). *)
+                val forced_rule =
+                  case opt_rule of
+                    SOME _ => opt_rule   (* user explicit — keep as-is *)
+                  | NONE => SOME [rule]
+            in (forced_rule, consumes, name_str) end
+
+      (* Validate consumes count. *)
+      val u = length using
+      val _ =
+        if u < consumes_n then
+          raise OPR_FAIL (INVALID_OPR,
+            "Induction rule `" ^ rule_name_str ^ "` requires " ^
+            string_of_int consumes_n ^ " `using` fact(s) to discharge its major \
+            \premise(s), but only " ^ string_of_int u ^ " were provided.")
+        else if Config.get ctxt strict_consumes_check andalso u > consumes_n then
+          raise OPR_FAIL (INVALID_OPR,
+            "strict_consumes_check: induction rule `" ^ rule_name_str ^
+            "` consumes " ^ string_of_int consumes_n ^ " fact(s), but " ^
+            string_of_int u ^ " were provided as `using`.")
+        else ()
+
+      val (tamper_facts, tamper_fact') =
+        if Config.get ctxt induct_auto_insert_facts
         then let
             val ((_, facts), _) = context_of_leading_goal (print_stack SK)
             val facts = map (fn (name, _) => (name, Proof_Context.get_thms ctxt name)) facts
-            
+
             val dirty_frees = fold (fold (fn NONE => I
                                            | SOME (_, (X, _)) => Term.add_frees X)) insts []
                            |> fold (curry (merge (op =))) arbitrary
             val dirty = member (op =) dirty_frees
-      
+
             val tamper_facts = map (apsnd (map (` ( Term.exists_subterm (fn Free f => dirty f
                                                                           | _ => false)
                                                   o Thm.prop_of)))) facts
@@ -2257,14 +2602,23 @@ fun INDUCT' (no_simp, (insts, ((arbitrary, taking), opt_rule))) first_vars using
         else ([], [])
 
       val IH_map = Unsynchronized.ref []
-      val diff = case opt_rule of NONE => 0
+      val diff = case effective_opt_rule of NONE => 0
                     | SOME rules => length rules - 1
+      (* The effective fact list passed to induction_tac combines:
+       *   1. `using`       — driven by user; first `consumes` are discharged
+       *                      by Rule_Cases.consume, rest flow to more_facts.
+       *   2. tampered-wrapped theorem (only if using is empty AND auto-insert
+       *                      fired) — preserves name recovery via update_tampered.
+       *   3. `insertion`   — always appended; go to more_facts → Method.insert_tac.
+       *)
       fun tac (ctxt, st) =
         let val st' = pop_n_goals (diff + 1) st
-         in induction_tac IH_map (not no_simp) insts arbitrary taking opt_rule
-              (if null using
-               then if null tamper_fact' then [] else [wraps ctxt tamper_fact']
-               else using) 1 (ctxt, st')
+            val main_facts =
+              if null using
+              then if null tamper_fact' then [] else [wraps ctxt tamper_fact']
+              else using
+         in induction_tac IH_map (not no_simp) insts arbitrary taking effective_opt_rule
+              (main_facts @ insertion) 1 (ctxt, st')
         end
 
       fun update_tampered ctxt th =
@@ -2289,11 +2643,44 @@ fun INDUCT' (no_simp, (insts, ((arbitrary, taking), opt_rule))) first_vars using
     ; ret
   end
 
-fun CASE_SPLIT' (no_simp, (insts, opt_rule)) vars facts =
-  let (* val facts' = if (* not (null (flat insts)) orelse *) is_some opt_rule then [] else facts *)
-      val facts' = facts
-      val tac = Induct.cases_context_tactic (not no_simp) insts opt_rule facts' 1
-   in CASES' 0 (K (K [])) tac vars
+fun CASE_SPLIT' (no_simp, (insts, opt_rule)) vars ({using, insertion} : induct_facts) (ctxt, SK) =
+  let
+      (* Pre-execution: pick the case-split rule and validate that the user
+       * supplied enough `using` facts to discharge its major premises. *)
+      val analysis_opt = analyze_case_split ctxt (no_simp, (insts, opt_rule)) using
+      val (effective_opt_rule, consumes_n, rule_name_str) =
+        case analysis_opt of
+          NONE => (opt_rule, 0, "<no rule found>")
+        | SOME {rule, rule_name, consumes, ...} =>
+            let val name_str = case rule_name of
+                                 SOME s => s
+                               | NONE => "<auto-picked rule>"
+                val forced_rule =
+                  case opt_rule of
+                    SOME _ => opt_rule
+                  | NONE => SOME rule
+            in (forced_rule, consumes, name_str) end
+
+      val u = length using
+      val _ =
+        if u < consumes_n then
+          raise OPR_FAIL (INVALID_OPR,
+            "Case-split rule `" ^ rule_name_str ^ "` requires " ^
+            string_of_int consumes_n ^ " `using` fact(s) to discharge its major \
+            \premise(s), but only " ^ string_of_int u ^ " were provided.")
+        else if Config.get ctxt strict_consumes_check andalso u > consumes_n then
+          raise OPR_FAIL (INVALID_OPR,
+            "strict_consumes_check: case-split rule `" ^ rule_name_str ^
+            "` consumes " ^ string_of_int consumes_n ^ " fact(s), but " ^
+            string_of_int u ^ " were provided as `using`.")
+        else ()
+
+      (* Combine using + insertion: first `consumes` of `using` are discharged
+       * by Rule_Cases.consume, the rest flow through `more_facts` into
+       * Method.insert_tac. Insertion is always appended after using. *)
+      val facts' = using @ insertion
+      val tac = Induct.cases_context_tactic (not no_simp) insts effective_opt_rule facts' 1
+   in CASES' 0 (K (K [])) tac vars (ctxt, SK)
   end
 
 val INDUCT = timed_OPR 10 ooo INDUCT'
@@ -2304,13 +2691,14 @@ fun INDUCT'' (args, vars, raw_using) s =
                  else args @ [Token.eof]
       val (args', _) = ind_synt (Context.Proof ctxt) toks
       val using = Attrib.eval_thms ctxt raw_using
-   in timed_OPR 10 (INDUCT' args' vars using) s
+   in timed_OPR 10 (INDUCT' args' vars {using = using, insertion = []}) s
   end
 val INDUCT_CMD = CONTEXTUAL_CMD (fn ctxt =>
          ind_synt (Context.Proof ctxt) -- OPT_VARS -- Scan.optional WITH_CLAUSE []
       >> (fn (((no_simp, (insts, ((arbitrary, taking), opt_rule))), vars), raw_using) =>
         let val using = Attrib.eval_thms ctxt raw_using
-         in INDUCT (no_simp, (insts, ((arbitrary, taking), opt_rule))) vars using
+         in INDUCT (no_simp, (insts, ((arbitrary, taking), opt_rule))) vars
+              {using = using, insertion = []}
         end ))
 
 val CASE_SPLIT = timed_OPR 10 ooo CASE_SPLIT'
@@ -2318,7 +2706,8 @@ val CASE_SPLIT_CMD = CONTEXTUAL_CMD (fn ctxt =>
          case_synt (Context.Proof ctxt) -- OPT_VARS -- Scan.optional WITH_CLAUSE []
       >> (fn (((no_simp, (insts, opt_rule)), vars), raw_facts) =>
         let val facts = Attrib.eval_thms ctxt raw_facts
-         in CASE_SPLIT (no_simp, (insts, opt_rule)) vars facts
+         in CASE_SPLIT (no_simp, (insts, opt_rule)) vars
+              {using = facts, insertion = []}
         end ) )
 fun CASE_SPLIT'' (args, vars, raw_facts) s =
   let val ctxt = context_of s
@@ -2327,7 +2716,7 @@ fun CASE_SPLIT'' (args, vars, raw_facts) s =
                  else args @ [Token.eof]
       val (args', _) = case_synt (Context.Proof ctxt) toks
       val facts = Attrib.eval_thms ctxt raw_facts
-   in timed_OPR 10 (CASE_SPLIT' args' vars facts) s
+   in timed_OPR 10 (CASE_SPLIT' args' vars {using = facts, insertion = []}) s
   end
 
 

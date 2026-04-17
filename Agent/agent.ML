@@ -888,14 +888,16 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
         with_resolved_refs (mk_counter ()) s facts (fn s' => fn refs =>
           Minilang.RULE refs [] s')
     | CASE_SPLIT (target, vars, rule) =>
-        Minilang.CASE_SPLIT (false, ([[SOME target]], rule)) vars [] s
+        Minilang.CASE_SPLIT (false, ([[SOME target]], rule)) vars
+          {using = [], insertion = []} s
     | INDUCT (target, vars, arbitrary, rule) =>
         let val ctxt = Minilang.context_of s
             val vs = map (fn Free nt => nt
                            | x => error ("The `arbitrary` argument must be variables, but (" ^
                                          string_of_term ctxt x ^ ") is given.")) arbitrary
         in Minilang.INDUCT
-                    (false, ([[SOME (NONE, (target, false))]], (([vs], []), Option.map single rule))) vars [] s
+                    (false, ([[SOME (NONE, (target, false))]], (([vs], []), Option.map single rule))) vars
+                    {using = [], insertion = []} s
         end
     | NEXT_OR_END (lemmas, vars) =>
         with_resolved_override (mk_counter ()) s lemmas (fn s' => fn ovr =>
