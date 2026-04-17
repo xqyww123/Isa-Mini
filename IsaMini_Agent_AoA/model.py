@@ -1,3 +1,4 @@
+import asyncio
 from time import time
 from datetime import datetime
 from io import StringIO
@@ -1623,13 +1624,11 @@ def normalize_answer(indexes: list[int] | None, text: str | None) -> answer:
     return []
 
 class ForkingMode(Enum):
-    NO = 0                        # inline, not forked
     FORKING_WITH_CTXT = 1         # fork inheriting parent conversation context
     FORKING_WITHOUT_CTXT = 2      # fork with fresh context, same model (opus)
     FORKING_CHEAPER_NO_CTXT = 3   # fork with fresh context, cheaper model (sonnet)
 
 class InteractiveRetrievalMode(Enum):
-    NO = "no"                                        # direct results, no forking
     YES = "yes"                                      # fork-based, answer tool only
     YES_WITH_RECURSIVE_RETRIEVAL = "yes_recursive"   # fork-based, can also search
 
@@ -1641,7 +1640,7 @@ TOOL_ANSWER: tool = "answer"
 TOOL_SEARCH: tool = "query"
 
 class Interaction:
-    forking: ForkingMode = ForkingMode.NO
+    forking: ForkingMode = ForkingMode.FORKING_WITH_CTXT
     fork_allowed_tools: list[tool] | None = None  # None = use session default
     async def prompt(self, indent: int, file: MyIO) -> None:
         raise NotImplementedError("`prompt` must be implemented by subclass")
@@ -1653,36 +1652,31 @@ class ImmediateAnswer(Exception):
     def __init__(self, answer: Any):
         self.answer = answer
 
-type AsyncKontinuation = Callable[[list[Any]], Awaitable[Any]]
-
-class RaiseInteraction(Exception):
-    def __init__(self, interactions: list[Interaction],
-                 kontinuation: AsyncKontinuation):
-        self.interactions = interactions
-        self.kontinuation = kontinuation
-
-class Working_Interactions(NamedTuple):
-    interactions: list[Interaction]
-    results: list[Any]
-    result_set: list[bool | Awaitable[Any]]  # False=pending, True=done, Awaitable=in-flight
-    kontinuation: AsyncKontinuation
-
-    async def run_continuation(self) -> Any:
-        """Await any in-flight results, then call the continuation."""
-        for i, flag in enumerate(self.result_set):
-            if isinstance(flag, bool):
-                if not flag:
-                    raise InternalError(f"Interaction {i} not resolved before calling continuation")
-            else:
-                # Awaitable — wait for it
-                await flag
-                if not self.result_set[i] is True:
-                    raise InternalError(f"Forked interaction {i} did not store its result")
-        return await self.kontinuation(self.results)
+class InteractionExpanded(Exception):
+    """Raised by answer() when the interaction's candidate list has been expanded
+    and the caller should re-prompt the LLM with the new list. The new prompt text
+    is carried in ``new_prompt``. The interaction remains active."""
+    def __init__(self, new_prompt: str):
+        self.new_prompt = new_prompt
 
 class Interaction_BadAnswer(Exception):
     """Raised when an answer to an interaction is invalid. The interaction remains active."""
     pass
+
+
+class Fork_Pending(NamedTuple):
+    """Carried by a fork session during its single-interaction lifetime.
+
+    ``answer`` is the slot where the LLM's reply lands: the ``answer`` MCP
+    tool completes it with the value returned by ``interaction.answer(...)``,
+    and the fork's run loop reads it back. ``answer.done()`` doubles as the
+    "already answered" predicate used to reject duplicate ``answer`` calls.
+
+    (An ``asyncio.Future`` is used for the slot because it is the stdlib
+    one-shot set-once container; the future is never awaited — only polled.)
+    """
+    interaction: Interaction
+    answer: asyncio.Future[Any]
 
 #### Fact Retrieval
 
@@ -1764,6 +1758,13 @@ class Interaction_Retrieve(Interaction):
         if session.interactive_retrieval == InteractiveRetrievalMode.YES:
             self.fork_allowed_tools = [TOOL_ANSWER]
 
+    async def _render_prompt(self) -> str:
+        """Render the prompt into a string. Used after candidate-list expansion
+        to build the new prompt text carried by InteractionExpanded."""
+        buf = StringIO()
+        await self.prompt(0, MyIO(buf))
+        return buf.getvalue()
+
     async def candidate_facts(self) -> list[RetrievedEntity]:
         if self._candidate_facts_cache is None:
             self._candidate_facts_cache, _ = await self.state.semantic_knn(
@@ -1782,6 +1783,8 @@ class Interaction_Retrieve(Interaction):
             EntityKind.LOCALE: "locales",
             EntityKind.INTRODUCTION_RULE: "introduction rules",
             EntityKind.ELIMINATION_RULE: "elimination rules",
+            EntityKind.INDUCTION_RULE: "induction rules",
+            EntityKind.CASE_SPLIT_RULE: "case-split rules",
         }
         if len(self.kinds) == 1:
             return _KIND_TERMS.get(self.kinds[0], "entities")
@@ -1843,9 +1846,7 @@ class Interaction_Retrieve(Interaction):
                 self.k = self.FINAL_K
                 self._candidate_facts_cache = None
                 await self.candidate_facts()
-                async def identity(results: list[Any]) -> Any:
-                    return results[0]
-                raise RaiseInteraction([self], identity)
+                raise InteractionExpanded(await self._render_prompt())
             else:
                 await self._log_retrieval_training_data([])
                 the_session().log_retrieval(self.query, ["none selected"])
@@ -4009,25 +4010,18 @@ class Unfold(Leaf):
                 return mk
 
             else:
-                # Multiple definitions - need interaction
-                async def kontinue(results: list[Any]) -> gen_node:
-                    selected: list[IsabelleFact] = results[0]
-                    def final_mk(cfg: NodeConfig) -> 'Unfold':
-                        arg_internal: Unfold_ToolArg_internal = {
-                            "thought": arg["thought"],
-                            "targets": arg["targets"],
-                            "fact_refs": selected
-                        }
-                        return Unfold(cfg, arg_internal)
-                    return final_mk
-
-                raise RaiseInteraction(
-                    [Interaction_ChooseDef(targets, all_defs, state=alive_state)],
-                    kontinue
-                )
+                # Multiple definitions — delegate selection to a sub-agent
+                selected: list[IsabelleFact] = await the_session().fork_interaction(
+                    Interaction_ChooseDef(targets, all_defs, state=alive_state))
+                def final_mk(cfg: NodeConfig) -> 'Unfold':
+                    arg_internal: Unfold_ToolArg_internal = {
+                        "thought": arg["thought"],
+                        "targets": arg["targets"],
+                        "fact_refs": selected
+                    }
+                    return Unfold(cfg, arg_internal)
+                return final_mk
         return parse
-
-        return mk
 
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
@@ -4369,26 +4363,23 @@ class Rewrite(Leaf):
                     fact_names, arg["rewrite goal"], arg["rewrite premises"])
 
             if looping_info:
-                # Raise interaction for target selection
-                async def kontinue(results: list[Any]) -> gen_node:
-                    selections: list[tuple[int, list[lambda_term]]] = results[0]
-                    # Build per-fact targets: None for non-looping, list for looping
-                    fact_targets: list[list[lambda_term] | None] = [None] * len(fetched)
-                    for fact_idx, selected_terms in selections:
-                        if fact_idx < len(fact_targets):
-                            fact_targets[fact_idx] = selected_terms
-                    internal = Rewrite_InternalToolArg(
-                        thought=arg["thought"],
-                        use_system_simplifiers=arg["use system simplifiers"],
-                        rewrite_goal=arg["rewrite goal"],
-                        rewrite_premises=arg["rewrite premises"],
-                        using=fetched,
-                        fact_targets=fact_targets,
-                    )
-                    return lambda config: Rewrite(config, internal)
-                raise RaiseInteraction(
-                    [Interaction_SelectRewriteTargets(looping_info, fact_names)],
-                    kontinue)
+                # Delegate target selection to a sub-agent
+                selections: list[tuple[int, list[lambda_term]]] = \
+                    await the_session().fork_interaction(
+                        Interaction_SelectRewriteTargets(looping_info, fact_names))
+                fact_targets: list[list[lambda_term] | None] = [None] * len(fetched)
+                for fact_idx, selected_terms in selections:
+                    if fact_idx < len(fact_targets):
+                        fact_targets[fact_idx] = selected_terms
+                internal = Rewrite_InternalToolArg(
+                    thought=arg["thought"],
+                    use_system_simplifiers=arg["use system simplifiers"],
+                    rewrite_goal=arg["rewrite goal"],
+                    rewrite_premises=arg["rewrite premises"],
+                    using=fetched,
+                    fact_targets=fact_targets,
+                )
+                return lambda config: Rewrite(config, internal)
             else:
                 internal = Rewrite_InternalToolArg(
                     thought=arg["thought"],
@@ -5085,13 +5076,11 @@ class InferenceRule(SubgoalMaker):
                     thought=arg["thought"], rule=rule, rule_ref=result)
                 return lambda config: InferenceRule(config, internal)
 
-            # FactByDescription → needs interaction
-            async def kontinue(results: list[Any]) -> gen_node:
-                internal = InferenceRule_InternalToolArg(
-                    thought=arg["thought"], rule=rule, rule_ref=results[0][0])
-                return lambda config: InferenceRule(config, internal)
-
-            raise RaiseInteraction([result], kontinue) # type: ignore
+            # FactByDescription → delegate to a sub-agent
+            selected = await the_session().fork_interaction(result)
+            internal = InferenceRule_InternalToolArg(
+                thought=arg["thought"], rule=rule, rule_ref=selected[0])
+            return lambda config: InferenceRule(config, internal)
         return parse
     async def _refresh_me_alone(self) -> None:
         if (self.rule_ref is not None
@@ -5643,7 +5632,10 @@ class Session:
         self.age = 0
         self.last_proof_op_time: float = time()
         self.logger = logger or (parent.logger if parent else None)
-        self.working_interactions: list[Working_Interactions] = []
+        # On a fork, the interaction it is answering (plus its eventual
+        # result). None on the main session; also None on forks before
+        # assignment and after cleanup.
+        self.fork_pending: 'Fork_Pending | None' = None
         self.warnings: list[str] = []
         self.total_cost_usd: float = 0.0
         self.total_input_tokens: int = 0
@@ -5976,10 +5968,16 @@ class Session:
         """Refresh the YAML file with current proof state. Must be implemented by subclass."""
         raise NotImplementedError("`refresh_YAML` must be implemented by subclass")
 
-    def _launch_forks(self, forking: list[tuple[int, Interaction]],
-                      wi: Working_Interactions) -> None:
-        """Launch forking interactions as background tasks. Must be implemented by subclass."""
-        raise NotImplementedError("`_launch_forks` must be implemented by subclass")
+    async def fork_interaction(self, interaction: 'Interaction') -> Any:
+        """Run ``interaction`` by spawning a sub-agent and awaiting its answer.
+
+        Short-circuits via ``ImmediateAnswer`` without spawning a subprocess.
+        Otherwise spawns a forked session with its own MCP endpoint, queries
+        the LLM with the rendered prompt, and drives the answer loop
+        (including ``InteractionExpanded`` re-prompts) until the fork
+        submits a final answer. Returns the answer produced by
+        ``interaction.answer``. Must be implemented by subclass."""
+        raise NotImplementedError("`fork_interaction` must be implemented by subclass")
 
     def on_log(self, event_type: str, data: dict[str, Any]):
         """Called on every _log invocation. Override to push logs externally."""
@@ -6007,60 +6005,3 @@ def agent_driver(name : str):
     return decorator
 
 
-# ============================================================================
-# Interaction Dispatch Helpers
-# ============================================================================
-
-class _Prompt(NamedTuple):
-    """A prompt string to return to the LLM."""
-    text: str
-
-class _Result(NamedTuple):
-    """A resolved result (gen_node or Any)."""
-    value: Any
-
-
-async def _handle_raise_interaction(
-    session: Session,
-    e: RaiseInteraction,
-    tool_name: str,
-) -> _Prompt | _Result:
-    """Dispatch a RaiseInteraction. Returns _Prompt (for LLM) or _Result (all done)."""
-    wi = Working_Interactions(
-        interactions=e.interactions,
-        results=[None] * len(e.interactions),
-        result_set=[False] * len(e.interactions),
-        kontinuation=e.kontinuation,
-    )
-    session.working_interactions.append(wi)
-    forking = [(i, inter) for i, inter in enumerate(e.interactions)
-               if inter.forking != ForkingMode.NO]
-    n_inline = len(e.interactions) - len(forking)
-    session.log_interaction(tool_name,
-        f"{len(e.interactions)} interactions ({len(forking)} forking, {n_inline} inline)")
-    if forking:
-        session._launch_forks(forking, wi)
-
-    # 2. Find first unfinished non-forking interaction
-    for i, inter in enumerate(wi.interactions):
-        if wi.result_set[i] is False:
-            buffer = StringIO()
-            try:
-                await inter.prompt(0, MyIO(buffer))
-            except ImmediateAnswer as imm:
-                wi.results[i] = imm.answer
-                wi.result_set[i] = True
-                continue
-            session.log_tool_response(tool_name, f"[INTERACTION PROMPT]\n{buffer.getvalue()}")
-            return _Prompt(buffer.getvalue())
-
-    # 3. All non-forking done — await forks and call continuation
-    session.log_interaction("continuation", "all interactions resolved")
-    try:
-        result = await wi.run_continuation()
-    except RaiseInteraction as nested:
-        session.working_interactions.pop()
-        return await _handle_raise_interaction(session, nested, tool_name)
-    session.working_interactions.pop()
-    session.log_interaction(tool_name, "interaction resolved")
-    return _Result(result)

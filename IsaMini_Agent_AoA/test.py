@@ -654,19 +654,18 @@ async def _test_Unfold1(root: Root, file: MyIO):
     )))
     print_header("After Unfold", file)
     root.print(0, file)
-    try:
-        await root.amend("1", Unfold.interactive_gen({
-            "thought": "Unfold the goal",
-            "targets": ["XXX"],
-        }))
-    except RaiseInteraction as e:
+
+    async def stub_fork(interaction):
         print_header("Interaction Prompt", file)
-        assert len(e.interactions) == 1
-        await e.interactions[0].prompt(0, file)
-        gn = await e.kontinuation([await inter.answer([1]) for inter in e.interactions])
-        await root.amend("1", _trivial_parsing(gn))
-        print_header("After Answer", file)
-        root.print(0, file)
+        await interaction.prompt(0, file)
+        return await interaction.answer([1])
+    root.session.fork_interaction = stub_fork
+    await root.amend("1", Unfold.interactive_gen({
+        "thought": "Unfold the goal",
+        "targets": ["XXX"],
+    }))
+    print_header("After Answer", file)
+    root.print(0, file)
 
     unfinished_nodes = set()
     root.unfinished_nodes(unfinished_nodes)
@@ -850,33 +849,29 @@ async def _test_RetrieveFact2(root: Root, file: MyIO):
     assert isinstance(fetched[1], Interaction_RetrieveForProof)
     # 2. Test InferenceRule with FactByDescription (triggers interaction).
     root.session.age += 1
-    try:
-        await root.fill("2", InferenceRule.interactive_gen({
-            "thought": "test description-based retrieval",
-            "rule": {"refer_by": "description", "english": "8 = 2^3"},
-        }))
-    except RaiseInteraction as e:
-        file.write(f"RaiseInteraction raised with {len(e.interactions)} interaction(s)\n")
-        results: list[Any] = [None] * len(e.interactions)
-        for i, inter in enumerate(e.interactions):
-            file.write(f"  interaction[{i}]: {type(inter).__name__}\n")
-            if isinstance(inter, Interaction_RetrieveForProof):
-                file.write(f"    query: {inter.query}\n")
-                file.write(f"    candidates: {len(await inter.candidate_facts())}\n")
-                # Answer with a ProveInTime statement
-                result = await inter.answer("(8::nat) = 2^3")
-                assert isinstance(result, list) and len(result) == 1
-                pit = result[0]
-                file.write(f"    ProveInTime answer: {type(pit).__name__}\n")
-                assert isinstance(pit, IsabelleFact_ProveInTime)
-                file.write(f"    statement: {pit.statement.unicode}\n")
-                results[i] = result
-        # Invoke the continuation to get a gen_node, then fill
-        gn = await e.kontinuation(results)
-        root.session.age += 1
-        node, _, _ = await root.fill("2", _trivial_parsing(gn))
-        file.write(f"Filled node: {type(node).__name__}, id={node.id}\n")
-        node.print(1, file, show_warnings=True)
+
+    async def stub_fork(interaction):
+        file.write(f"RaiseInteraction raised with 1 interaction(s)\n")
+        file.write(f"  interaction[0]: {type(interaction).__name__}\n")
+        assert isinstance(interaction, Interaction_RetrieveForProof)
+        file.write(f"    query: {interaction.query}\n")
+        file.write(f"    candidates: {len(await interaction.candidate_facts())}\n")
+        # Answer with a ProveInTime statement
+        result = await interaction.answer("(8::nat) = 2^3")
+        assert isinstance(result, list) and len(result) == 1
+        pit = result[0]
+        file.write(f"    ProveInTime answer: {type(pit).__name__}\n")
+        assert isinstance(pit, IsabelleFact_ProveInTime)
+        file.write(f"    statement: {pit.statement.unicode}\n")
+        return result
+    root.session.fork_interaction = stub_fork
+
+    node, _, _ = await root.fill("2", InferenceRule.interactive_gen({
+        "thought": "test description-based retrieval",
+        "rule": {"refer_by": "description", "english": "8 = 2^3"},
+    }))
+    file.write(f"Filled node: {type(node).__name__}, id={node.id}\n")
+    node.print(1, file, show_warnings=True)
     print_header("After fill", file)
     root.print(0, file)
     return
@@ -1246,35 +1241,26 @@ async def _test_Rewrite_Once_Simproc(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     # Rewrite goal using my_wrap — a self-looping rule (f x = g (f x)).
-    # The looping rule triggers RaiseInteraction for target selection.
+    # The looping rule triggers an interaction for target selection.
     # Select all targets so the once-simproc wraps them.
-    try:
-        node, success, reason = await root.fill("1", Rewrite.interactive_gen({
-            "thought": "Rewrite using my_wrap to unfold f into g(f(...))",
-            "using": [{"refer_by": "name", "name": "my_wrap"}],
-            "use system simplifiers": False,
-            "rewrite goal": True,
-            "rewrite premises": []
-        }))
-        print_header("After Rewrite (no interaction)", file)
-        root.print(0, file)
-        file.write(f"success: {success}\n")
-        file.write(f"reason: {reason}\n")
-    except RaiseInteraction as e:
+    async def stub_fork(interaction):
         print_header("Interaction Prompt", file)
-        assert len(e.interactions) == 1
-        inter = e.interactions[0]
-        await inter.prompt(0, file)
-        # Select all matching subterms
-        num_matches = len(inter.looping_rules[0][2]) if inter.looping_rules else 0
-        all_indices = list(range(num_matches))
-        answer_result = await inter.answer(all_indices)
-        gn = await e.kontinuation([answer_result])
-        node, success, reason = await root.fill("1", _trivial_parsing(gn))
-        print_header("After Rewrite (via interaction)", file)
-        root.print(0, file)
-        file.write(f"success: {success}\n")
-        file.write(f"reason: {reason}\n")
+        await interaction.prompt(0, file)
+        assert isinstance(interaction, Interaction_SelectRewriteTargets)
+        num_matches = len(interaction.looping_rules[0][2]) if interaction.looping_rules else 0
+        return await interaction.answer(list(range(num_matches)))
+    root.session.fork_interaction = stub_fork
+    node, success, reason = await root.fill("1", Rewrite.interactive_gen({
+        "thought": "Rewrite using my_wrap to unfold f into g(f(...))",
+        "using": [{"refer_by": "name", "name": "my_wrap"}],
+        "use system simplifiers": False,
+        "rewrite goal": True,
+        "rewrite premises": []
+    }))
+    print_header("After Rewrite (via interaction)", file)
+    root.print(0, file)
+    file.write(f"success: {success}\n")
+    file.write(f"reason: {reason}\n")
 
 @model_test("Rewrite_Targeted", "Test_Rewrite_Targeted.thy", 25)
 async def _test_Rewrite_Targeted(root: Root, file: MyIO):
@@ -1285,33 +1271,23 @@ async def _test_Rewrite_Targeted(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
 
-    # Rewrite goal using my_wrap — triggers interaction because rule loops
-    try:
-        await root.fill("1", Rewrite.interactive_gen({
-            "thought": "Rewrite f a using my_wrap, leave f b alone",
-            "using": [{"refer_by": "name", "name": "my_wrap"}],
-            "use system simplifiers": False,
-            "rewrite goal": True,
-            "rewrite premises": []
-        }))
-        # Should not reach here — interaction expected
-        file.write("ERROR: Expected RaiseInteraction but got none\n")
-    except RaiseInteraction as e:
+    async def stub_fork(interaction):
         print_header("Interaction Prompt", file)
-        assert len(e.interactions) == 1
-        inter = e.interactions[0]
-        await inter.prompt(0, file)
-
-        # Select index 0 only (should be "f a", leaving "f b" untouched)
-        answer_result = await inter.answer([1])
-        gn = await e.kontinuation([answer_result])
-
-        # Now fill with the resolved node
-        node, success, reason = await root.fill("1", _trivial_parsing(gn))
-        print_header("After Targeted Rewrite", file)
-        root.print(0, file)
-        file.write(f"success: {success}\n")
-        file.write(f"reason: {reason}\n")
+        await interaction.prompt(0, file)
+        # Select index 1 only (should be "f a", leaving "f b" untouched)
+        return await interaction.answer([1])
+    root.session.fork_interaction = stub_fork
+    node, success, reason = await root.fill("1", Rewrite.interactive_gen({
+        "thought": "Rewrite f a using my_wrap, leave f b alone",
+        "using": [{"refer_by": "name", "name": "my_wrap"}],
+        "use system simplifiers": False,
+        "rewrite goal": True,
+        "rewrite premises": []
+    }))
+    print_header("After Targeted Rewrite", file)
+    root.print(0, file)
+    file.write(f"success: {success}\n")
+    file.write(f"reason: {reason}\n")
 
 @model_test("Rewrite_Targeted_Drop", "Test_Rewrite_Targeted_Drop.thy", 23)
 async def _test_Rewrite_Targeted_Drop(root: Root, file: MyIO):
@@ -1321,30 +1297,23 @@ async def _test_Rewrite_Targeted_Drop(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
 
-    try:
-        await root.fill("1", Rewrite.interactive_gen({
-            "thought": "Attempt rewrite with looping rule, then dismiss",
-            "using": [{"refer_by": "name", "name": "my_wrap"}],
-            "use system simplifiers": False,
-            "rewrite goal": True,
-            "rewrite premises": []
-        }))
-        file.write("ERROR: Expected RaiseInteraction but got none\n")
-    except RaiseInteraction as e:
+    async def stub_fork(interaction):
         print_header("Interaction Prompt", file)
-        assert len(e.interactions) == 1
-        inter = e.interactions[0]
-        await inter.prompt(0, file)
-
+        await interaction.prompt(0, file)
         # Answer with empty selection — drop the rule
-        answer_result = await inter.answer([])
-        gn = await e.kontinuation([answer_result])
-
-        node, success, reason = await root.fill("1", _trivial_parsing(gn))
-        print_header("After Rewrite (rule dropped)", file)
-        root.print(0, file)
-        file.write(f"success: {success}\n")
-        file.write(f"reason: {reason}\n")
+        return await interaction.answer([])
+    root.session.fork_interaction = stub_fork
+    node, success, reason = await root.fill("1", Rewrite.interactive_gen({
+        "thought": "Attempt rewrite with looping rule, then dismiss",
+        "using": [{"refer_by": "name", "name": "my_wrap"}],
+        "use system simplifiers": False,
+        "rewrite goal": True,
+        "rewrite premises": []
+    }))
+    print_header("After Rewrite (rule dropped)", file)
+    root.print(0, file)
+    file.write(f"success: {success}\n")
+    file.write(f"reason: {reason}\n")
 
 # class TestCase_Interactive_Unfold:
 #     pass
@@ -1570,15 +1539,29 @@ async def _test_semantic_knn_patterns(root: Root, file: MyIO):
     assert len(results_lim1) == 1, f"Expected exactly 1 result, got {len(results_lim1)}"
 
     # --- Error cases ---
-    from Isabelle_RPC_Host.rpc import IsabelleError
 
-    # 7. Invalid theory name in theories_include
-    try:
-        await ml.semantic_knn("logarithm", 5, [EntityKind.THEOREM],
-                        theories_include=["Nonexistent_Theory_XYZ"])
-        assert False, "Expected IsabelleError for invalid theory name"
-    except IsabelleError as e:
-        file.write(f"Invalid theory name error: {e}\n")
+    # 7a. Mix of valid and invalid theories: valid theory still searched,
+    # invalid one produces a warning.
+    results_mix, warnings_mix = await ml.semantic_knn(
+        "logarithm", 5, [EntityKind.THEOREM],
+        theories_include=["HOL.Transcendental", "Nonexistent_Theory_XYZ"])
+    file.write(f"Mixed valid/invalid theories: {len(results_mix)} results, {len(warnings_mix)} warnings\n")
+    for w in warnings_mix:
+        file.write(f"  Warning: {w}\n")
+    assert len(results_mix) > 0, "Expected results from the valid theory"
+    assert any("Nonexistent_Theory_XYZ" in w for w in warnings_mix), \
+        "Expected warning mentioning the unknown theory"
+
+    # 7b. All invalid theories: zero results plus warnings for each.
+    results_bad_thy, warnings_bad_thy = await ml.semantic_knn(
+        "logarithm", 5, [EntityKind.THEOREM],
+        theories_include=["Nonexistent_Theory_XYZ", "Also_Nonexistent_Theory"])
+    file.write(f"All invalid theories: {len(results_bad_thy)} results, {len(warnings_bad_thy)} warnings\n")
+    for w in warnings_bad_thy:
+        file.write(f"  Warning: {w}\n")
+    assert len(results_bad_thy) == 0, "Expected zero results when all theories invalid"
+    assert any("Nonexistent_Theory_XYZ" in w for w in warnings_bad_thy)
+    assert any("Also_Nonexistent_Theory" in w for w in warnings_bad_thy)
 
     # 8. Invalid term pattern (unparseable) → warning, not error
     results_bad_term, warnings_bad_term = await ml.semantic_knn("logarithm", 5, [EntityKind.THEOREM],
@@ -1606,6 +1589,67 @@ async def _test_semantic_knn_patterns(root: Root, file: MyIO):
         file.write(f"  Warning: {w}\n")
     assert len(warnings_misspell) > 0, "Expected warning about undeclared free variable"
     assert "misspeled_ln" in warnings_misspell[0], "Warning should mention the misspelled name"
+
+
+@model_test("SemanticKNN_theories_include",
+            "Test_SemanticKNN_theories_include.thy", 8)
+async def _test_semantic_knn_theories_include(root: Root, file: MyIO):
+    """semantic_knn: unknown names in theories_include yield warnings,
+    not aborts. Reproduces agent log 2026-04-17 where an invalid
+    ``theories_include=['Discrete_Sqrt', 'Sqrt']`` killed the whole query.
+
+    Covers four behaviors:
+      1. Only unknown → zero results + warning (Option A semantics).
+      2. Mixed valid + unknown → valid theory still searched + warning.
+      3. Duplicate unknown names → warnings deduplicated.
+      4. Unknown name on a non-theorem kind (CONSTANT) → still yields warning.
+    """
+    from Isabelle_RPC_Host.universal_key import EntityKind
+    ml = root.ml_state
+
+    # 1. Only an unknown theory: zero results + one warning, no abort.
+    results1, warnings1 = await ml.semantic_knn(
+        "list append", 5, [EntityKind.THEOREM],
+        theories_include=["Nonexistent_XYZ"])
+    file.write(f"Only unknown: {len(results1)} results, {len(warnings1)} warnings\n")
+    for w in warnings1:
+        file.write(f"  Warning: {w}\n")
+    assert len(results1) == 0, "All-invalid theories_include must give zero results"
+    assert len(warnings1) == 1
+    assert "Nonexistent_XYZ" in warnings1[0]
+
+    # 2. Mixed valid + unknown: still get results from the valid theory.
+    results2, warnings2 = await ml.semantic_knn(
+        "list append", 5, [EntityKind.THEOREM],
+        theories_include=["HOL.List", "Nonexistent_XYZ"])
+    file.write(f"Mixed valid/unknown: {len(results2)} results, {len(warnings2)} warnings\n")
+    for w in warnings2:
+        file.write(f"  Warning: {w}\n")
+    assert len(results2) > 0, "Valid HOL.List should still yield results"
+    assert any("Nonexistent_XYZ" in w for w in warnings2)
+    assert not any("HOL.List" in w for w in warnings2), \
+        "Valid theory must not produce a warning"
+
+    # 3. Duplicated unknown name: warnings are deduplicated.
+    results3, warnings3 = await ml.semantic_knn(
+        "list append", 5, [EntityKind.THEOREM],
+        theories_include=["Nonexistent_XYZ", "Nonexistent_XYZ"])
+    file.write(f"Duplicate unknown: {len(results3)} results, {len(warnings3)} warnings\n")
+    for w in warnings3:
+        file.write(f"  Warning: {w}\n")
+    assert len(warnings3) == 1, "Duplicate unknown names must dedup to one warning"
+
+    # 4. Unknown theory applied to CONSTANT kind (exercises make_constants_callback
+    #    path rather than make_theorems_callback).
+    results4, warnings4 = await ml.semantic_knn(
+        "append", 5, [EntityKind.CONSTANT],
+        theories_include=["Nonexistent_XYZ"])
+    file.write(f"Constant kind with unknown: {len(results4)} results, {len(warnings4)} warnings\n")
+    for w in warnings4:
+        file.write(f"  Warning: {w}\n")
+    assert len(results4) == 0
+    assert len(warnings4) == 1
+    assert "Nonexistent_XYZ" in warnings4[0]
 
 
 @model_test("SemanticKNN_lexerr", "Test_SemanticKNN_lexerr.thy", 8)
@@ -1796,7 +1840,7 @@ async def _test_prove_in_time_parse_error(root: Root, file: MyIO):
 
     The bug: validate_prove_in_time raises IsabelleError for unparseable
     statements inside _filter_unprovable → mk_node, which is not caught
-    by the driver, leaving working_interactions stuck."""
+    by the driver."""
     print_header("Initial State", file)
     root.print(0, file)
 

@@ -265,31 +265,18 @@ class ClaudeCode(Session):
                 },
             }
 
-        # 2. Check proof MCP tool interaction state
-        _BLOCKED_DURING_INTERACTION = {"mcp__proof__edit", "mcp__proof__delete"}
-        if tool.startswith("mcp__proof__"):
-            if self.working_interactions:
-                # There's a pending interaction - block mutating tools
-                if tool in _BLOCKED_DURING_INTERACTION:
-                    return {
-                        "continue_": False,
-                        "hookSpecificOutput": {
-                            "hookEventName": "PreToolUse",
-                            "permissionDecision": "deny",
-                            "permissionDecisionReason": "There is a pending interaction that must be answered first. Use the mcp__proof__answer tool.",
-                        },
-                    }
-            else:
-                # No pending interaction - reject answer tool
-                if tool == "mcp__proof__answer":
-                    return {
-                        "continue_": False,
-                        "hookSpecificOutput": {
-                            "hookEventName": "PreToolUse",
-                            "permissionDecision": "deny",
-                            "permissionDecisionReason": "No pending interaction. The answer tool can only be used when there is an active interaction.",
-                        },
-                    }
+        # 2. Check proof MCP tool interaction state.
+        # Only forks assigned to answer an interaction may call the ``answer`` tool.
+        if tool == "mcp__proof__answer" and (
+                self.fork_pending is None or self.fork_pending.answer.done()):
+            return {
+                "continue_": False,
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "No pending interaction. The answer tool can only be used when there is an active interaction.",
+                },
+            }
 
         # 3. For file tools, check path restrictions
         if tool in ['Read', 'Grep', 'Write', 'Edit']:
@@ -644,81 +631,79 @@ class ClaudeCode(Session):
             self.total_cache_creation_input_tokens += message.usage.get("cache_creation_input_tokens", 0)
             self.total_cache_read_input_tokens += message.usage.get("cache_read_input_tokens", 0)
 
+    async def fork_interaction(self, interaction: Interaction) -> Any:
+        """Spawn a sub-agent to answer ``interaction`` and return its result.
 
-    def _launch_forks(self, forking: list[tuple[int, Interaction]],
-                      wi: Working_Interactions) -> None:
-        """Launch forking interactions as background tasks. Results stored via fork_kont."""
-        async def run_one(idx: int, interaction: Interaction) -> None:
-            # Prompt early — if ImmediateAnswer, resolve without creating fork infrastructure
-            buffer = StringIO()
-            try:
-                await interaction.prompt(0, MyIO(buffer))
-            except ImmediateAnswer as e:
-                wi.results[idx] = e.answer
-                wi.result_set[idx] = True
-                return
+        Short-circuits via ``ImmediateAnswer`` from ``prompt()`` without
+        spawning a subprocess. Otherwise runs a forked ``ClaudeCode`` session
+        whose ``mcp__proof__answer`` tool resolves the interaction. Concurrent
+        callers (e.g. ``asyncio.gather(*fork_interaction(i) for i in ...)``)
+        each get their own fork. All fork body work runs in a fresh
+        ``contextvars`` context so the per-call ``_session_var`` does not
+        leak into the caller.
+        """
+        # Render prompt — short-circuit on ImmediateAnswer
+        buffer = StringIO()
+        try:
+            await interaction.prompt(0, MyIO(buffer))
+        except ImmediateAnswer as e:
+            return e.answer
 
-            from .model import _session_var
-            _session_var.set(None)  # type: ignore  # Clear the copied parent session so _make_fork succeeds
-            fork = ClaudeCode._make_fork(self) # type: ignore[attr-defined]
-            fork._fork_index = idx
-            # Fork gets its own single-interaction Working_Interactions.
-            # The continuation stores the result back into the parent's wi.
-            async def fork_kont(results: list[Any]) -> Any:
-                result = results[0]
-                wi.results[idx] = result
-                wi.result_set[idx] = True
-                return result
-            fork.working_interactions.append(Working_Interactions(
-                interactions=[interaction],
-                results=[None],
-                result_set=[False],
-                kontinuation=fork_kont,
-            ))
-            # Register fork session with HTTP server → own endpoint
-            assert self._http_server is not None
-            fork._session_id = self._http_server.allocate_session_id()
-            fork_url = await self._http_server.register_session(fork._session_id, fork)
-            fork._mcp_url = fork_url
+        loop = asyncio.get_running_loop()
+        ctx = contextvars.copy_context()
+        task = loop.create_task(self._run_fork(interaction, buffer.getvalue()), context=ctx)
+        return await task
 
-            mode = interaction.forking
-            # Model selection
-            if mode == ForkingMode.FORKING_CHEAPER_NO_CTXT:
-                model = "claude-sonnet-4-6"
-            else:
-                model = "claude-opus-4-6"
-            # Context inheritance
-            if mode == ForkingMode.FORKING_WITH_CTXT:
-                resume = self._conversation_id
-                fork_session = True
-            else:
-                resume = None
-                fork_session = False
+    async def _run_fork(self, interaction: Interaction, prompt_text: str) -> Any:
+        """Body of a forked interaction, run in its own contextvars context."""
+        from .model import _session_var, Fork_Pending
+        _session_var.set(None)  # type: ignore  # Clear the copied parent session so _make_fork succeeds
+        fork = ClaudeCode._make_fork(self)  # type: ignore[attr-defined]
+        fork.fork_pending = Fork_Pending(
+            interaction, asyncio.get_running_loop().create_future())
 
-            fork_options = ClaudeAgentOptions(
-                model=model,
-                thinking={"type": "adaptive"},
-                resume=resume,
-                fork_session=fork_session,
-                cwd=self.working_dir,
-                permission_mode="default",
-                allowed_tools=([self._internal_tool_name(t) for t in interaction.fork_allowed_tools]
-                               if interaction.fork_allowed_tools is not None
-                               else self.FORK_WHITELIST),
-                mcp_servers={"proof": {"type": "http", "url": fork_url}},
-                hooks={
-                    "PreToolUse": [
-                        HookMatcher(matcher="*", hooks=[fork.permission_control]),
-                    ],
-                    "PreCompact": [
-                        HookMatcher(matcher="*", hooks=[fork.on_compact]),
-                    ],
-                },
-            )
-            tag = f"[{fork._fork_name}]"
+        assert self._http_server is not None
+        fork._session_id = self._http_server.allocate_session_id()
+        fork_url = await self._http_server.register_session(fork._session_id, fork)
+        fork._mcp_url = fork_url
+
+        mode = interaction.forking
+        if mode == ForkingMode.FORKING_CHEAPER_NO_CTXT:
+            model = "claude-sonnet-4-6"
+        else:
+            model = "claude-opus-4-6"
+        if mode == ForkingMode.FORKING_WITH_CTXT:
+            resume = self._conversation_id
+            fork_session = True
+        else:
+            resume = None
+            fork_session = False
+
+        fork_options = ClaudeAgentOptions(
+            model=model,
+            thinking={"type": "adaptive"},
+            resume=resume,
+            fork_session=fork_session,
+            cwd=self.working_dir,
+            permission_mode="default",
+            allowed_tools=([self._internal_tool_name(t) for t in interaction.fork_allowed_tools]
+                           if interaction.fork_allowed_tools is not None
+                           else self.FORK_WHITELIST),
+            mcp_servers={"proof": {"type": "http", "url": fork_url}},
+            hooks={
+                "PreToolUse": [
+                    HookMatcher(matcher="*", hooks=[fork.permission_control]),
+                ],
+                "PreCompact": [
+                    HookMatcher(matcher="*", hooks=[fork.on_compact]),
+                ],
+            },
+        )
+        tag = f"[{fork._fork_name}]"
+        try:
             async with ClaudeSDKClient(options=fork_options) as fork_client:
                 fork._client = fork_client
-                fork_prompt = (buffer.getvalue() +
+                fork_prompt = (prompt_text +
                     "\n\nForget the previous instructions. "
                     "Your only task is to answer the question above "
                     "and you MUST use the mcp__proof__answer tool to submit your answer. "
@@ -739,23 +724,20 @@ class ClaudeCode(Session):
                         if isinstance(message, ResultMessage):
                             self._accumulate_cost(message)
                             fork.log_interaction("fork", f"{tag} completed: subtype={message.subtype}")
-                    if not fork.working_interactions:
+                    assert fork.fork_pending is not None
+                    if fork.fork_pending.answer.done():
                         break
                     fork.log_interaction("fork", f"{tag} retrying: interaction not answered")
                     await fork_client.query(
                         "You haven't submitted your answer. "
                         "You MUST call the mcp__proof__answer tool to submit it.")
             fork._client = None
+        finally:
             if self._http_server is not None and fork._session_id is not None:
                 await self._http_server.unregister_session(fork._session_id)
             await fork.close()
-
-        loop = asyncio.get_running_loop()
-        self.log_interaction("fork", f"launching {len(forking)} forking interactions")
-        for idx, inter in forking:
-            ctx = contextvars.copy_context()
-            task = loop.create_task(run_one(idx, inter), context=ctx)
-            wi.result_set[idx] = task
+        assert fork.fork_pending is not None and fork.fork_pending.answer.done()
+        return fork.fork_pending.answer.result()
 
     def refresh_YAML(self):
         with open(self.YAML_path, 'w') as f:

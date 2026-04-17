@@ -56,10 +56,22 @@ async def IsaMini_AoA(data: tuple[Any, Any, str, str, str, str, str], connection
         drv = Session.Driver.get(driver)
         if drv is None:
             raise UnknownDriver(driver)
-        retrieval_forking = FORKING_MODE_MAP.get(
-            retrieval_forking_str, ForkingMode.FORKING_WITH_CTXT)
-        interactive_retrieval = INTERACTIVE_RETRIEVAL_MAP.get(
-            interactive_retrieval_str, InteractiveRetrievalMode.YES_WITH_RECURSIVE_RETRIEVAL)
+        logger = connection.server.logger
+        retrieval_forking = FORKING_MODE_MAP.get(retrieval_forking_str)
+        if retrieval_forking is None:
+            if retrieval_forking_str:
+                logger.warning(
+                    f"Unknown retrieval_forking '{retrieval_forking_str}', "
+                    f"falling back to 'with_ctxt'. Known: {sorted(FORKING_MODE_MAP)}")
+            retrieval_forking = ForkingMode.FORKING_WITH_CTXT
+        interactive_retrieval = INTERACTIVE_RETRIEVAL_MAP.get(interactive_retrieval_str)
+        if interactive_retrieval is None:
+            if interactive_retrieval_str:
+                logger.warning(
+                    f"Unknown interactive_retrieval '{interactive_retrieval_str}', "
+                    f"falling back to 'yes_recursive'. "
+                    f"Known: {sorted(INTERACTIVE_RETRIEVAL_MAP)}")
+            interactive_retrieval = InteractiveRetrievalMode.YES_WITH_RECURSIVE_RETRIEVAL
         async with drv(connection.server.logger, actual_log_path,
                        retrieval_forking_mode=retrieval_forking,
                        interactive_retrieval=interactive_retrieval) as session:

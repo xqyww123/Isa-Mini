@@ -21,7 +21,6 @@ import asyncio
 import os
 import sys
 import socket
-from io import StringIO
 from time import time
 from typing import Any
 
@@ -32,11 +31,10 @@ from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import Tool, ToolAnnotations, TextContent, CallToolResult
 
 from .model import (
-    the_session, _session_var, Session, MyIO,
-    ImmediateAnswer, RaiseInteraction, Interaction,
-    AoA_Error, InternalError, ArgumentError, IsabelleError,
-    Parse_Node, parsing_node, _trivial_parsing, normalize_answer, Interaction_BadAnswer, ForkingMode,
-    _Prompt, _Result, _handle_raise_interaction,
+    _session_var, Session,
+    InteractionExpanded,
+    AoA_Error, ArgumentError, IsabelleError,
+    Parse_Node, parsing_node, normalize_answer, Interaction_BadAnswer,
 )
 from .retrieval import (
     BATCHED_SEMANTIC_SEARCH,
@@ -111,20 +109,6 @@ async def _execute_proof_action(
         session.log_proof_tree_snapshot(f"{log_prefix}_step_{step}")
         return response, is_error
 
-    except RaiseInteraction as e:
-        original_kont = e.kontinuation
-        async def wrapped_kont(results: list[Any]) -> tuple[str, bool]:
-            result_gn = await original_kont(results)
-            assert callable(result_gn), \
-                "Continuation from _execute_proof_action must return gen_node (callable)"
-            return await _execute_proof_action(
-                session, action, step, _trivial_parsing(result_gn), tool_name, log_prefix) # type: ignore[arg-type]
-        wrapped_e = RaiseInteraction(e.interactions, wrapped_kont)
-        result = await _handle_raise_interaction(session, wrapped_e, tool_name)
-        if isinstance(result, _Prompt):
-            return result.text, False
-        return result.value
-
     except AoA_Error as e:
         error_msg = str(e)
         session.log_tool_response(tool_name, f"ERROR: {error_msg}")
@@ -135,14 +119,15 @@ async def _execute_proof_action(
 # Permission Check (both modes)
 # ============================================================================
 
-_BLOCKED_DURING_INTERACTION = {"edit", "delete"}
-
 def _check_tool_permission(session: Session, tool_name: str) -> str | None:
-    """Check interaction state. Returns error message or None."""
-    if session.working_interactions:
-        if tool_name in _BLOCKED_DURING_INTERACTION:
-            return "Pending interaction — use the answer tool first."
-    elif tool_name == "answer":
+    """Check interaction state. Returns error message or None.
+
+    Only the fork session assigned to answer an interaction may call the
+    ``answer`` tool. The parent session never has a pending interaction
+    because all interactions are delegated to forks via ``fork_interaction``.
+    """
+    if tool_name == "answer" and (
+            session.fork_pending is None or session.fork_pending.answer.done()):
         return "No pending interaction."
     return None
 
@@ -209,65 +194,40 @@ async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
 
 
 async def _answer_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
+    """Handle an ``answer`` tool call from a forked sub-agent.
+
+    On success: completes ``session.fork_pending.answer`` with the computed
+    answer and interrupts the session so ``fork_interaction`` can return.
+    On ``InteractionExpanded``: returns the new prompt so the same fork
+    re-submits with the expanded list.
+    """
     session.log_tool_call("mcp__proof__answer", args)
     try:
-        if not session.working_interactions:
-            error_msg = "No pending interaction to answer"
-            session.log_tool_response("mcp__proof__answer", f"ERROR: {error_msg}")
-            return (error_msg, True)
-        wi = session.working_interactions[-1]
-
-        current_idx = None
-        for i, inter in enumerate(wi.interactions):
-            if wi.result_set[i] is False:
-                current_idx = i
-                break
-
-        if current_idx is None:
+        pending = session.fork_pending
+        if pending is None or pending.answer.done():
             error_msg = "No pending interaction to answer"
             session.log_tool_response("mcp__proof__answer", f"ERROR: {error_msg}")
             return (error_msg, True)
 
-        current_inter = wi.interactions[current_idx]
         normalized = normalize_answer(args.get("indexes"), args.get("text"))
 
         try:
-            result = await current_inter.answer(normalized)
+            result = await pending.interaction.answer(normalized)
         except Interaction_BadAnswer as e:
             error_msg = str(e)
             session.log_tool_response("mcp__proof__answer", f"BAD ANSWER: {error_msg}")
             return (error_msg, True)
-        except RaiseInteraction as e:
-            r = await _handle_raise_interaction(session, e, "mcp__proof__answer")
-            if isinstance(r, _Prompt):
-                return (r.text, False)
-            result = r.value
+        except InteractionExpanded as exp:
+            session.log_tool_response(
+                "mcp__proof__answer", f"[INTERACTION PROMPT]\n{exp.new_prompt}")
+            return (exp.new_prompt, False)
 
-        wi.results[current_idx] = result
-        wi.result_set[current_idx] = True
-        n_done = sum(1 for f in wi.result_set if f is True)
-        session.log_interaction("mcp__proof__answer",
-            f"answered interaction {current_idx} ({n_done}/{len(wi.interactions)} done)")
-
-        for i, inter in enumerate(wi.interactions):
-            if wi.result_set[i] is False:
-                buffer = StringIO()
-                try:
-                    await inter.prompt(0, MyIO(buffer))
-                except ImmediateAnswer as imm:
-                    wi.results[i] = imm.answer
-                    wi.result_set[i] = True
-                    continue
-                session.log_tool_response("mcp__proof__answer", f"[INTERACTION PROMPT]\n{buffer.getvalue()}")
-                return (buffer.getvalue(), False)
-
-        session.log_interaction("continuation", "all interactions resolved")
-        final = await wi.run_continuation()
-        session.working_interactions.pop()
-        session.log_tool_response("mcp__proof__answer", f"[INTERACTION RESOLVED] {final}")
+        pending.answer.set_result(result)
+        session.log_interaction("mcp__proof__answer", "interaction answered")
+        session.log_tool_response("mcp__proof__answer", f"[INTERACTION RESOLVED] {result}")
         if not session.is_major:
             await session.interrupt()
-        return (str(final), False)
+        return (str(result), False)
     except IsabelleError as e:
         error_msg = f"Isabelle error: {'; '.join(e.errors)}"
         session.log_tool_response("mcp__proof__answer", f"ERROR: {error_msg}")

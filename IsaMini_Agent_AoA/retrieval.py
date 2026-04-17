@@ -26,13 +26,11 @@ from Isabelle_Semantic_Embedding.semantics import (
 
 from .model import (
     Session, Minilang_State, MyIO, short_name,
-    RaiseInteraction, Interaction, IsabelleError,
+    Interaction, IsabelleError,
     EntityKind, print_indent, print_paragraph, print_expression_list,
-    Interaction_Retrieve, RetrievedEntity,
-    IsabelleEntity, IsabelleFact_Presented, FactByName,
+    Interaction_Retrieve, RetrievedEntity, IsabelleEntity,
     _THEOREM_KINDS, AGENT_EXPR_LIMIT,
-    TOOL_SEARCH, InteractiveRetrievalMode, ForkingMode,
-    _Prompt, _handle_raise_interaction,
+    TOOL_SEARCH, InteractiveRetrievalMode,
     InternalError_UnparsedTerm,
 )
 
@@ -346,71 +344,6 @@ async def _get_def_for_fetched(
 # Search Strategies
 # ============================================================================
 
-async def _semantic_search_direct(
-    session: Session, queries: list[dict], k: int,
-) -> str:
-    """Run semantic search queries concurrently, returning formatted results."""
-    ml_state = session.root.ml_state
-
-    # Run all queries concurrently (knn + entity retrieval in one step)
-    knn_results = await asyncio.gather(
-        *[_run_knn_for_query(ml_state, q, k) for q in queries])
-
-    seen = session.seen_entities
-    per_query_warnings = _collect_query_warnings(knn_results)
-    # Collect new entities
-    new_items: list[RetrievedEntity] = []
-    for fetched, _warnings, _error in knn_results:
-        for f in fetched[:k]:
-            if f.entity.short_name in seen:
-                continue
-            new_items.append(f)
-            seen.add(f.entity.short_name)
-
-    if not new_items:
-        lines: list[str] = ["No new relevant entities found." if seen else "No relevant entities found."]
-        lines.extend(_format_warn_lines(queries, per_query_warnings))
-        result = "\n".join(lines)
-        session.log_tool_response("mcp__proof__query", result)
-        return result
-
-    # Batch-fetch abbreviation definitions for unseen abbreviations
-    unseen_abbrevs: list[str] = []
-    for f in new_items:
-        for name in f.entity.abbreviation_names:
-            if name not in session.seen_abbreviations and name not in unseen_abbrevs:
-                unseen_abbrevs.append(name)
-    abbrev_defs: dict = {}
-    if unseen_abbrevs:
-        defs = await ml_state.abbreviation_defs(unseen_abbrevs)
-        for name, defn in zip(unseen_abbrevs, defs):
-            if defn is not None:
-                abbrev_defs[name] = defn
-
-    # Format with unified renderer
-    buf = StringIO()
-    retrieved: list[str] = []
-    for f in new_items:
-        await _format_fetched_entity(f, buf, session=session, def_info=True,
-                                     potential_defs=(f.score == 1.0),
-                                     abbreviation_defs=abbrev_defs)
-        expr_str = _trunc_expr(', '.join(e.unicode for e in f.entity.expression))
-        retrieved.append(f"{f.entity.short_name.unicode}: {expr_str}")
-    for w in _format_warn_lines(queries, per_query_warnings):
-        buf.write(w)
-        buf.write('\n')
-    if not session.seen_opaque_note and any(
-            f.entity.kind in _THEOREM_KINDS and not getattr(f.entity, 'roles', [])
-            for f in new_items):
-        buf.write("\n[opaque] — will not be used automatically unless supplied explicitly.\n")
-        session.seen_opaque_note = True
-    if retrieved:
-        query_str = "; ".join(_format_query_header(q) for q in queries)
-        session.log_retrieval(query_str, retrieved, quiet=True)
-    result = buf.getvalue().rstrip('\n')
-    session.log_tool_response("mcp__proof__query", result)
-    return result
-
 
 class Interaction_RetrieveForSearch(Interaction_Retrieve):
     """Retrieve entities for semantic search filtering. No prove-in-time."""
@@ -433,16 +366,18 @@ class Interaction_RetrieveForSearch(Interaction_Retrieve):
 
 
 async def _semantic_search_with_filtering(session: Session, queries: list[dict]) -> str:
-    """Run semantic search and raise Interaction_RetrieveForSearch for fork-based filtering.
+    """Run semantic search and spawn one sub-agent per query to filter candidates.
 
-    Creates one interaction per query; all are raised together so forks run concurrently.
+    Sub-agents run concurrently via ``asyncio.gather``. Each sub-agent returns
+    the list of entities it selected; the parent formats them into the final
+    search result string.
     """
     ml_state = session.root.ml_state
     interactions: list[Interaction] = []
     for q in queries:
         try:
             kinds = [EntityKind.from_label(label) for label in q.get("kinds", ["constant"])]
-        except KeyError as e:
+        except KeyError:
             continue
         interaction = Interaction_RetrieveForSearch(
             state=ml_state, query=q.get("long_description", "") or "", kinds=kinds,
@@ -465,76 +400,67 @@ async def _semantic_search_with_filtering(session: Session, queries: list[dict])
 
     seen = session.seen_entities
 
-    async def format_selected(results: list[list[IsabelleEntity]]) -> str:
-        # Build lookup from full_name → RetrievedEntity for each interaction
-        fetched_maps: list[dict[str, RetrievedEntity]] = []
-        for inter in interactions:
-            if isinstance(inter, Interaction_Retrieve):
-                candidates = await inter.candidate_facts()
-                fetched_maps.append({f.entity.full_name: f for f in candidates})
+    results: list[list[IsabelleEntity]] = await asyncio.gather(
+        *[session.fork_interaction(i) for i in interactions])
+
+    # Build lookup from full_name → RetrievedEntity for each interaction
+    fetched_maps: list[dict[str, RetrievedEntity]] = []
+    for inter in interactions:
+        if isinstance(inter, Interaction_Retrieve):
+            candidates = await inter.candidate_facts()
+            fetched_maps.append({f.entity.full_name: f for f in candidates})
+        else:
+            fetched_maps.append({})
+
+    buf = StringIO()
+    multi = len(results) > 1
+
+    for q_idx, (selected, fmap) in enumerate(zip(results, fetched_maps)):
+        if multi:
+            buf.write(f"Query: {_format_query_header(queries[q_idx])}\n")
+        indent = 1 if multi else 0
+
+        new_fetched: list[RetrievedEntity] = []
+        repeated_names: 'list[short_name]' = []
+        for entity in selected:
+            if entity.short_name in seen:
+                repeated_names.append(entity.short_name)
             else:
-                fetched_maps.append({})
+                f = fmap.get(entity.full_name)
+                if f is not None:
+                    new_fetched.append(f)
+                seen.add(entity.short_name)
 
-        buf = StringIO()
-        multi = len(results) > 1
+        if not new_fetched and not repeated_names:
+            print_indent(indent, buf)
+            buf.write(f"{_empty_msg}\n")
+        else:
+            # Batch-fetch abbreviation definitions for unseen abbreviations
+            unseen_abbrevs: list[str] = []
+            for f in new_fetched:
+                for name in f.entity.abbreviation_names:
+                    if name not in session.seen_abbreviations and name not in unseen_abbrevs:
+                        unseen_abbrevs.append(name)
+            abbrev_defs: dict = {}
+            if unseen_abbrevs:
+                defs = await ml_state.abbreviation_defs(unseen_abbrevs)
+                for name, defn in zip(unseen_abbrevs, defs):
+                    if defn is not None:
+                        abbrev_defs[name] = defn
 
-        for q_idx, (selected, fmap) in enumerate(zip(results, fetched_maps)):
-            if multi:
-                buf.write(f"Query: {_format_query_header(queries[q_idx])}\n")
-            indent = 1 if multi else 0
+            for f in new_fetched:
+                await _format_fetched_entity(f, buf, indent=indent,
+                                             session=session, def_info=True,
+                                             potential_defs=(f.score == 1.0),
+                                             abbreviation_defs=abbrev_defs)
 
-            new_fetched: list[RetrievedEntity] = []
-            repeated_names: 'list[short_name]' = []
-            for entity in selected:
-                if entity.short_name in seen:
-                    repeated_names.append(entity.short_name)
-                else:
-                    f = fmap.get(entity.full_name)
-                    if f is not None:
-                        new_fetched.append(f)
-                    seen.add(entity.short_name)
+        _format_repeated(
+            [f.entity.short_name for f in new_fetched],
+            repeated_names, buf, indent=indent)
+        if multi:
+            buf.write("\n")
 
-            if not new_fetched and not repeated_names:
-                print_indent(indent, buf)
-                buf.write(f"{_empty_msg}\n")
-            else:
-                # Batch-fetch abbreviation definitions for unseen abbreviations
-                unseen_abbrevs: list[str] = []
-                for f in new_fetched:
-                    for name in f.entity.abbreviation_names:
-                        if name not in session.seen_abbreviations and name not in unseen_abbrevs:
-                            unseen_abbrevs.append(name)
-                abbrev_defs: dict = {}
-                if unseen_abbrevs:
-                    defs = await ml_state.abbreviation_defs(unseen_abbrevs)
-                    for name, defn in zip(unseen_abbrevs, defs):
-                        if defn is not None:
-                            abbrev_defs[name] = defn
-
-                for f in new_fetched:
-                    await _format_fetched_entity(f, buf, indent=indent,
-                                                 session=session, def_info=True,
-                                                 potential_defs=(f.score == 1.0),
-                                                 abbreviation_defs=abbrev_defs)
-
-            _format_repeated(
-                [f.entity.short_name for f in new_fetched],
-                repeated_names, buf, indent=indent)
-            if multi:
-                buf.write("\n")
-
-        return buf.getvalue().rstrip('\n') or _empty_msg
-
-    raise RaiseInteraction(interactions, format_selected)
-
-
-def _find_active_retrieve_fact(session: Session) -> Interaction_Retrieve | None:
-    """Find the active Interaction_Retrieve in the interaction stack, if any."""
-    for wi in reversed(session.working_interactions):
-        for i, inter in enumerate(wi.interactions):
-            if isinstance(inter, Interaction_Retrieve) and wi.result_set[i] is False:
-                return inter
-    return None
+    return buf.getvalue().rstrip('\n') or _empty_msg
 
 
 async def _semantic_search_extend_candidates(
@@ -663,22 +589,18 @@ async def _query_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         for q in exact_term_queries:
             results.append(await _handle_exact_term_query(session, q["exact_term"]))
 
-        # Handle regular queries through existing paths
+        # Handle regular queries
         if regular_queries:
-            active = _find_active_retrieve_fact(session)
-            if active is not None:
-                results.append(await _semantic_search_extend_candidates(session, regular_queries, active))
-            elif session.interactive_retrieval != InteractiveRetrievalMode.NO:
-                results.append(await _semantic_search_with_filtering(session, regular_queries))
+            pending = session.fork_pending
+            if (pending is not None and not pending.answer.done()
+                    and isinstance(pending.interaction, Interaction_Retrieve)):
+                # Fork session extending its own candidate list
+                results.append(await _semantic_search_extend_candidates(
+                    session, regular_queries, pending.interaction))
             else:
-                results.append(await _semantic_search_direct(session, regular_queries, k=25))
+                results.append(await _semantic_search_with_filtering(session, regular_queries))
 
         return ("\n\n".join(results), False)
-    except RaiseInteraction as e:
-        r = await _handle_raise_interaction(session, e, "mcp__proof__query")
-        if isinstance(r, _Prompt):
-            return (r.text, False)
-        return (str(r.value), False)
     except IsabelleError as e:
         error_msg = '; '.join(e.errors)
         session.log_tool_response("mcp__proof__query", f"ERROR: {error_msg}")

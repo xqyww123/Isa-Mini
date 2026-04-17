@@ -65,7 +65,11 @@ Pattern-only with limit=3, name_contains=["ln"]: 3 results
   lemma norm_summable_ln_series: norm ?z < (1 :: real) ⟶ summable (λ(n1 :: nat). norm (?z ^ n1 / of_nat n1))
   lemma DERIV_ln: (0 :: real) < ?x ⟶ (ln has_real_derivative inverse ?x) (at ?x)
 Pattern-only with limit=1: 1 results
-Invalid theory name error: ['Unknown ancestor theory "Nonexistent_Theory_XYZ"']
+Mixed valid/invalid theories: 5 results, 1 warnings
+  Warning: Unknown theory "Nonexistent_Theory_XYZ" in theories_include; skipped
+All invalid theories: 0 results, 2 warnings
+  Warning: Unknown theory "Nonexistent_Theory_XYZ" in theories_include; skipped
+  Warning: Unknown theory "Also_Nonexistent_Theory" in theories_include; skipped
 Invalid term pattern: 5 results, 1 warnings
   Warning: Inner syntax error
 at "? ? ? bad syntax"
