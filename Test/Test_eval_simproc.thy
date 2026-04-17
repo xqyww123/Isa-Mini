@@ -1,7 +1,8 @@
 theory Test_eval_simproc
-  imports MathBench_Prover.MathBench_Prover Minilang_Agent.Minilang_Agent "HOL-Library.Code_Target_Nat"
-         "Gauss_Jordan.Determinants_IArrays"
+  imports MathBench_Prover.MathBench_Prover Minilang_Agent.Minilang_Agent
 begin
+
+(*
 declare [[z3_extensions, auto_interpret_for_embedding=false, AoA_interactive_retrieval="no"]]
 lemma multiplicity_code [code]:
   "multiplicity p x =
@@ -77,7 +78,7 @@ simproc_setup eval_fib2 ("fib n") = \<open>K Eval_Simproc.eval_ground\<close>
 simproc_setup eval_coprime2 ("coprime a b") = \<open>K Eval_Simproc.eval_ground\<close>
 simproc_setup eval_multiplicity2 ("multiplicity p n") = \<open>K Eval_Simproc.eval_ground\<close>
 simproc_setup eval_totient2 ("totient n") = \<open>K Eval_Simproc.eval_ground\<close>
-
+*)
 (*
 ML \<open>
 fun bench_simp name ct =
@@ -111,13 +112,6 @@ lemma \<open>gcd (12::nat) 8 = 4\<close> by simp
 lemma \<open>lcm (12::nat) 8 = 24\<close> by simp
 lemma \<open>\<lfloor>3.7::real\<rfloor> = 3\<close> by simp
 lemma \<open>\<lceil>3.2::real\<rceil> = 4\<close> by simp
-
-code_datatype set List.coset \<comment> \<open>restore coset as code constructor (undoes Gauss_Jordan/Code_Set.thy)\<close>
-code_datatype vec_lambda
-lemma [code]: "vec_nth (vec_lambda f) i = f i" by simp
-lemma \<open>det ((\<chi> i j. if i = j then 2 else 1) :: real^2^2) = 3\<close> by eval
-
-simproc_setup eval_det2 ("det m") = \<open>K Eval_Simproc.eval_ground\<close>
 
 lemma \<open>det ((\<chi> i j. if i = j then 2 else 1) :: real^2^2) = 3\<close> by simp
 

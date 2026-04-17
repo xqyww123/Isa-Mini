@@ -16,7 +16,7 @@ Error: Unfinished Proof! Call command `edit` with action `fill` and target step 
 --------------------------------------------------
 Overview
 --------------------------------------------------
-Error: Unfinished Proof (line 15)
+Error: Unfinished Proof (line 15). Call command `edit` with action `fill` and target step `1`
 goal: P ∧ Q ∧ R
 No step goal1.1 needed (auto-proved): NodeNotFound: Step with id goal1.1 is not found
 No step goal2.1 needed (auto-proved): NodeNotFound: Step with id goal2.1 is not found
@@ -24,5 +24,5 @@ No step goal3.1 needed (auto-proved): NodeNotFound: Step with id goal3.1 is not 
 --------------------------------------------------
 Final Overview
 --------------------------------------------------
-Error: Unfinished Proof (line 15)
+Error: Unfinished Proof (line 15). Fill step `1`
 Unfinished nodes: 1

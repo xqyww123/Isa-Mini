@@ -264,10 +264,15 @@ async def _test_GoalCtxQuickview(root: Root, file: MyIO):
     """Test that quickview prints goal.context.vars even when case_vars is None.
     After Intro+split_conj on '∀x::nat. P x ∧ Q x', the fixed variable x
     appears in each GoalNode's goal.context.vars but NOT in case_vars (since
-    these GoalNodes come from IntroSplitConj, not CaseSplit)."""
+    these GoalNodes come from IntroSplitConj, not CaseSplit).
+
+    The leading ⋀x triggers the framework's auto-Intro at step 1 (fixes x,
+    split_conj=False) which leaves a single residual goal `P x ∧ Q x` and
+    does not open a sub-proof block. We apply the manual split_conj at the
+    next step (2) on that residual."""
     root.session.age += 1
-    await root.fill("1", Intro.gen({
-        "thought": "Fix x and split conjunction",
+    await root.fill("2", Intro.gen({
+        "thought": "Split conjunction",
         "split_conj": True
     }))
     print_header("Full print", file)

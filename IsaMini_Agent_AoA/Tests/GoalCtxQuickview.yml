@@ -1,0 +1,38 @@
+--------------------------------------------------
+Full print
+--------------------------------------------------
+variables:
+  - Q: nat ⇒ bool
+  - P: nat ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∀(x :: nat). P x ∧ Q x
+proof:
+  - step id: 1
+    operation: Intro
+    fixing variables:
+      - x: nat
+  - step id: 2
+    thought: Split conjunction
+    operation: Intro
+    goals:
+      - goal id: 2.1
+        goal: P x
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1.1` to provide the proof for the following goal.
+      - goal id: 2.2
+        goal: Q x
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.2.1` to provide the proof for the following goal.
+--------------------------------------------------
+Quickview (should show x in subgoal context)
+--------------------------------------------------
+step 1: Intro (line 0)
+  fixing variables:
+    - x: nat
+step 2: Intro (line 0)
+  - 2.1 (line 0)
+    Error: Unfinished Proof (line 21). Call command `edit` with action `fill` and target step `2.1.1`
+    goal: P x
+  - 2.2 (line 0)
+    Error: Unfinished Proof (line 25). Fill step `2.2.1`
+    goal: Q x
