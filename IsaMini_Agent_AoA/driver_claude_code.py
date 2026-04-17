@@ -237,6 +237,7 @@ class ClaudeCode(Session):
         self.seen_entities.clear()
         self.seen_opaque_note = False
         self.root.session.showed_suffices_notice = False
+        self.showed_fill_hint = False
         return {}
 
     async def permission_control(

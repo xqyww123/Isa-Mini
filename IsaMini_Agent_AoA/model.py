@@ -164,7 +164,7 @@ class IsabelleFact(ABC):
     Minilang_State.refresh_facts.
     """
     @abstractmethod
-    def name(self) -> 'str | short_name': ...
+    def name(self) -> 'short_name | term': ...
     @abstractmethod
     def print(self, indent: int, file: MyIO) -> None: ...
     @abstractmethod
@@ -172,8 +172,7 @@ class IsabelleFact(ABC):
         """Pack for RPC. Returns the packed form, or FailureReason on error."""
         ...
     def __repr__(self) -> str:
-        n = self.name()
-        return n.unicode if isinstance(n, IsaTerm) else n
+        return self.name().unicode
 
 class IsabelleFact_Presented(IsabelleFact, IsabelleEntity):
     """A resolved fact with full information from Isabelle. `kind` must be
@@ -210,31 +209,31 @@ class IsabelleFact_Presented(IsabelleFact, IsabelleEntity):
 class IsabelleFact_ProveInTime(IsabelleFact):
     """A fact to be proven just-in-time by Isabelle."""
     __slots__ = ('statement',)
-    def __init__(self, statement: str):
+    def __init__(self, statement: term):
         self.statement = statement
-    def name(self) -> str:
+    def name(self) -> 'term':
         return self.statement
     def print(self, indent: int, file: MyIO) -> None:
         print_indent(indent, file)
-        file.write(f"- {self.statement}\n")
+        file.write(f"- {self.statement.unicode}\n")
     def pack(self) -> tuple[int, str]:
-        return (1, ascii_of_unicode(self.statement))
+        return (1, self.statement.ascii)
 
 class IsabelleFact_Unfound(IsabelleFact):
     """A fact that could not be found in the Isabelle context."""
     __slots__ = ('fact',)
     def __init__(self, fact: Fact):
         self.fact = fact
-    def name(self) -> str:
+    def name(self) -> 'short_name | term':
         match self.fact["refer_by"]:
-            case "name": return cast(FactByName, self.fact)["name"]
-            case "proposition": return cast(FactByProposition, self.fact)["proposition"]
-            case "description": return cast(FactByDescription, self.fact)["english"]
+            case "name": return IsaTerm.from_agent(cast(FactByName, self.fact)["name"])
+            case "proposition": return IsaTerm.from_agent(cast(FactByProposition, self.fact)["proposition"])
+            case "description": return IsaTerm.from_agent(cast(FactByDescription, self.fact)["english"])
     def print(self, indent: int, file: MyIO) -> None:
         print_indent(indent, file)
-        file.write(f"- Error: fact \"{self.name()}\" not found\n")
+        file.write(f"- Error: fact \"{self.name().unicode}\" not found\n")
     def pack(self) -> Any:
-        raise InternalError(f"Attempting to pack an unfound fact \"{self.name()}\". "
+        raise InternalError(f"Attempting to pack an unfound fact \"{self.name().unicode}\". "
                             "Unfound facts should be filtered out before packing.")
 
 
@@ -526,9 +525,13 @@ class CannotRename_NotFound(CannotRename):
         self.old_name = old_name
         self.new_name = new_name
 class CannotRename_VariableNotFound(CannotRename_NotFound):
+    old_name: varname
+    new_name: varname
     def __str__(self) -> str:
-        return f"Cannot rename. The variable {self.old_name} is not found"
+        return f"Cannot rename. The variable {self.old_name.unicode} is not found"
 class CannotRename_FactNotFound(CannotRename_NotFound):
+    old_name: str
+    new_name: str
     def __str__(self) -> str:
         return f"Cannot rename. The fact {self.old_name} is not found"
 
@@ -1301,7 +1304,7 @@ class Minilang_State:
         for i, fact in enumerate(facts):
             if fact["refer_by"] == "proposition":
                 prop = cast(FactByProposition, fact)["proposition"]
-                out[i] = IsabelleFact_ProveInTime(prop)
+                out[i] = IsabelleFact_ProveInTime(IsaTerm.from_agent(prop))
             elif fact["refer_by"] == "description":
                 desc = " ".join(cast(FactByDescription, fact)["english"].split())
                 out[i] = Interaction_RetrieveForProof(
@@ -1668,6 +1671,20 @@ class Interaction_BadAnswer(Exception):
 
 _THEOREM_KINDS = frozenset({EntityKind.THEOREM, EntityKind.INTRODUCTION_RULE, EntityKind.ELIMINATION_RULE})
 
+async def _try_resolve_as_named_fact(
+    state: 'Minilang_State', name: str
+) -> 'IsabelleFact_Presented | None':
+    """Try to resolve free text as an accessible named theorem. Returns None if not found."""
+    results = await state._retrieve_entity([(EntityKind.THEOREM, name)])
+    result = results[0]
+    if result is not None:
+        short_name, exprs, roles, abbrev = result
+        return IsabelleFact_Presented(
+            full_name=name, short_name=short_name,
+            fact=FactByName(refer_by="name", name=name),
+            expression=exprs, roles=roles, abbreviation_names=abbrev)
+    return None
+
 _retrieval_db_conn: sqlite3.Connection | None = None
 
 def _get_retrieval_db() -> sqlite3.Connection:
@@ -1892,11 +1909,16 @@ class Interaction_RetrieveForProof(Interaction_Retrieve):
 
     async def answer(self, answer: answer) -> 'list[IsabelleEntity | IsabelleFact]':
         session = the_session()
-        # Text answer → prove-in-time
+        # Text answer → try named fact first, then prove-in-time
         if isinstance(answer, str) and answer:
+            presented = await _try_resolve_as_named_fact(self.state, answer)
+            if presented is not None:
+                await self._log_retrieval_training_data([])
+                session.log_retrieval(self.query, [f"named: {answer}"])
+                return [presented]
             await self._log_retrieval_training_data([], prove_in_time=answer)
             session.log_retrieval(self.query, [f"prove-in-time: {answer}"])
-            return [IsabelleFact_ProveInTime(answer)]
+            return [IsabelleFact_ProveInTime(IsaTerm.from_agent(answer))]
         # Empty answer with no expansion left
         if not answer and self.k >= self.FINAL_K:
             await self._log_retrieval_training_data([])
@@ -2958,10 +2980,12 @@ class StdBlock(NonLeaf_Node):
             elif (goal_and_step := self.should_I_show_pending_goal()) is not None:
                 goal, step_to_fill = goal_and_step
                 print_indent(indent, file)
-                if self.open_pending_proof_line is not None:
-                    file.write(f"Error: Unfinished Proof (line {self.open_pending_proof_line})\n")
+                line_hint = f" (line {self.open_pending_proof_line})" if self.open_pending_proof_line is not None else ""
+                if self.session.showed_fill_hint:
+                    file.write(f"Error: Unfinished Proof{line_hint}. Fill step `{step_to_fill}`\n")
                 else:
-                    file.write("Error: Unfinished Proof\n")
+                    file.write(f"Error: Unfinished Proof{line_hint}. Call command `edit` with action `fill` and target step `{step_to_fill}`\n")
+                    self.session.showed_fill_hint = True
                 suppressed = self._ctxt_of_filling()
                 visible = goal.visible(suppressed)
                 if visible != self._prev_pending_goal:
@@ -3072,6 +3096,7 @@ class GoalNode(StdBlock):
         self._kind = "goal"
         self.case_vars = None
         self.case_hyps = None
+        self._prev_quickview_context: tuple[Vars, Hyps] | None = None
         if auto_proof is not None:
             local_step = self._local_step_of_next_proof_step()
             ml_state = Minilang_State.assign(self.ml_state)
@@ -3179,7 +3204,25 @@ class GoalNode(StdBlock):
             done_mark = "done, " if self._should_print_done() else ""
             print_indent(indent, file)
             file.write(f"- {self.id} ({done_mark}line {self.line})\n")
-            return indent + 1
+            child_indent = indent + 1
+            if self.show_goal:
+                goal = self.goal()
+                if goal is not None:
+                    suppressed = self._ctxt_before_me()
+                    if self.case_vars or self.case_hyps:
+                        merged_vars = {v[0]: v[1] for v in (self.case_vars or [])} | goal.context.vars
+                        merged_hyps = {h[0]: h[1] for h in (self.case_hyps or [])} | goal.context.hyps
+                    else:
+                        merged_vars = goal.context.vars
+                        merged_hyps = goal.context.hyps
+                    visible_vars = {k: v for k, v in merged_vars.items() if k not in suppressed.vars}
+                    visible_hyps = {k: v for k, v in merged_hyps.items() if k not in suppressed.hyps}
+                    visible = (visible_vars, visible_hyps)
+                    if visible != self._prev_quickview_context:
+                        print_vars(merged_vars.items(), child_indent, file, suppressed.vars)
+                        print_hyps(merged_hyps.items(), child_indent, file, suppressed.hyps)
+                        self._prev_quickview_context = visible
+            return child_indent
 
 class SubgoalMaker(GoalContainer, StdBlock):
     def _should_print_done(self) -> bool:
@@ -3405,7 +3448,7 @@ def _filter_unfound(facts: list[IsabelleFact]) -> tuple[list[IsabelleFact], list
     warnings: list[str] = []
     for f in facts:
         if isinstance(f, IsabelleFact_Unfound):
-            warnings.append(f"Fact \"{f.name()}\" not found, skipped.")
+            warnings.append(f"Fact \"{f.name().unicode}\" not found, skipped.")
         else:
             kept.append(f)
     return kept, warnings
@@ -3420,7 +3463,7 @@ async def _filter_unprovable(
     for i, f in enumerate(facts):
         if isinstance(f, IsabelleFact_ProveInTime):
             pit_indices.append(i)
-            pit_statements.append(ascii_of_unicode(f.statement))
+            pit_statements.append(f.statement.ascii)
     if not pit_statements:
         return facts, []
     results = await ml_state.validate_prove_in_time(pit_statements)
@@ -3434,7 +3477,7 @@ async def _filter_unprovable(
                 error_summary += "\n..."
             prefix = "\n" if warnings else ""
             warnings.append(
-                f'{prefix}Ignored "{facts[idx].name()}" \u2014 not a known Isabelle theorem nor trivially provable. '
+                f'{prefix}Ignored "{facts[idx].name().unicode}" \u2014 not a known Isabelle theorem nor trivially provable. '
                 f'Prove it manually using Have if needed.\n'
                 f'Reason: {error_summary}')
             drop.add(idx)
@@ -3983,7 +4026,7 @@ class Unfold(Leaf):
             return FailureReason("Unfold operation must specify at least one fact reference.")
         unfound = [f for f in self.fact_refs if isinstance(f, IsabelleFact_Unfound)]
         if unfound:
-            return FailureReason("\n".join(f"Fact \"{f.name()}\" not found" for f in unfound))
+            return FailureReason("\n".join(f"Fact \"{f.name().unicode}\" not found" for f in unfound))
         return Minilang_Operation.UNFOLD(self.fact_refs)
 
 
@@ -4025,7 +4068,7 @@ class Derive(Leaf):
         self._prev_result_facts: list[tuple[varname, term]] | None = None
 
     def quickview_title(self) -> str:
-        return f"Derive {self.rule_ref.name()}"
+        return f"Derive {self.rule_ref.name().unicode}"
     def quickview(self, indent: int, file: MyIO) -> int:
         indent = super().quickview(indent, file)
         if self.result_facts is not None and self.result_facts != self._prev_result_facts:
@@ -4129,7 +4172,7 @@ class Derive(Leaf):
 
     def the_operation(self) -> 'Minilang_Operation | FailureReason':
         if isinstance(self.rule_ref, IsabelleFact_Unfound):
-            return FailureReason(f"Rule fact \"{self.rule_ref.name()}\" not found")
+            return FailureReason(f"Rule fact \"{self.rule_ref.name().unicode}\" not found")
         if not self.instantiations and not self.discharge_refs:
             return FailureReason(
                 "Derive operation must provide at least one of: `instantiations` "
@@ -4137,7 +4180,7 @@ class Derive(Leaf):
                 "(to discharge a premise of the rule).")
         unfound = [f for f in self.discharge_refs if isinstance(f, IsabelleFact_Unfound)]
         if unfound:
-            return FailureReason("\n".join(f"Fact \"{f.name()}\" not found" for f in unfound))
+            return FailureReason("\n".join(f"Fact \"{f.name().unicode}\" not found" for f in unfound))
         return Minilang_Operation.SPECIALIZE(
             self.result_name,
             self.rule_ref,
@@ -4395,7 +4438,7 @@ class Rewrite(Leaf):
                 "Set 'rewrite goal' to true or provide at least one premise name in 'rewrite premises'.")
         unfound = [f for f in self.using if isinstance(f, IsabelleFact_Unfound)]
         if unfound:
-            return FailureReason("\n".join(f"Fact \"{f.name()}\" not found" for f in unfound))
+            return FailureReason("\n".join(f"Fact \"{f.name().unicode}\" not found" for f in unfound))
         bindings = None
         if self.bindings is not None:
             var_bindings = [(vb.internal_varname.ascii, vb.external_varname.ascii, vb.type.ascii) for vb in self.bindings[0]]
@@ -5028,7 +5071,7 @@ class InferenceRule(SubgoalMaker):
         await super()._refresh_me_alone()
     def quickview_title(self) -> str:
         if self.rule_ref is not None:
-            return f"Inference Rule {self.rule_ref.name()}"
+            return f"Inference Rule {self.rule_ref.name().unicode}"
         return "Inference Rule"
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         self._print_thought(indent, file)
@@ -5052,7 +5095,7 @@ class InferenceRule(SubgoalMaker):
                     print_goal(goal, indent+1, False, file, self._ctxt_before_me())
     def beginning_opr(self) -> 'Minilang_Operation | FailureReason':
         if isinstance(self.rule_ref, IsabelleFact_Unfound):
-            return FailureReason(f"Inference rule fact \"{self.rule_ref.name()}\" not found")
+            return FailureReason(f"Inference rule fact \"{self.rule_ref.name().unicode}\" not found")
         return Minilang_Operation.RULE(self.rule_ref)
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         return FailureReason(f"Fail to apply the inference rule.{"".join(["\n"+e for e in err.errors])}")
@@ -5592,6 +5635,7 @@ class Session:
         self.showed_suffices_notice: bool = False
         self.seen_abbreviations: set[str] = (
             set(parent.seen_abbreviations) if parent is not None else set())
+        self.showed_fill_hint: bool = False
         if parent is not None:
             # Subsessions share parent's log files
             self.log_dir = parent.log_dir

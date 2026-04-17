@@ -1,0 +1,46 @@
+--------------------------------------------------
+Full print (shows variables and premises)
+--------------------------------------------------
+variables:
+  - l: 'a list
+  - P: 'a list ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P l
+proof:
+  - step id: 1
+    thought: Case split on list l
+    operation: CaseSplit
+    target term: l
+    cases:
+      - goal id: 1.Nil
+        premises:
+          - Nil.prem0: l = []
+        goal: P []
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Nil.1` to provide the proof for the following goal.
+      - goal id: 1.Cons
+        variables:
+          - a: 'a
+          - list: 'a list
+        premises:
+          - Cons.prem0: l = a # list
+        goal: P (a # list)
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Cons.1` to provide the proof for the following goal.
+--------------------------------------------------
+Quickview (should show variables and premises too)
+--------------------------------------------------
+step 1: CaseSplit l (line 0)
+  - 1.Nil (line 0)
+    premises:
+      - Nil.prem0: l = []
+    Error: Unfinished Proof (line 20). Call command `edit` with action `fill` and target step `1.Nil.1`
+    goal: P []
+  - 1.Cons (line 0)
+    variables:
+      - a: 'a
+      - list: 'a list
+    premises:
+      - Cons.prem0: l = a # list
+    Error: Unfinished Proof (line 29). Fill step `1.Cons.1`
+    goal: P (a # list)
