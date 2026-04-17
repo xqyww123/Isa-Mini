@@ -34,7 +34,7 @@ from .model import (
     _session_var, Session,
     InteractionExpanded,
     AoA_Error, ArgumentError, IsabelleError,
-    Parse_Node, parsing_node, normalize_answer, Interaction_BadAnswer,
+    Parse_Node, gen_node, normalize_answer, Interaction_BadAnswer,
 )
 from .retrieval import (
     BATCHED_SEMANTIC_SEARCH,
@@ -68,7 +68,7 @@ async def _execute_proof_action(
     session: Session,
     action: str,
     step: str,
-    pn: parsing_node,
+    gn: gen_node,
     tool_name: str,
     log_prefix: str,
 ) -> tuple[str, bool]:
@@ -76,27 +76,25 @@ async def _execute_proof_action(
     Returns (response_text, is_error) where is_error is True when the
     inserted/amended node's evaluation failed."""
     session.root.session.age += 1
-    if not callable(pn):
-        raise TypeError(f"parsing_node must be callable, got {type(pn)}")
 
     try:
         match action:
             case "fill":
-                node, is_error, failure_reason = await session.root.fill(step, pn)
+                node, is_error, failure_reason = await session.root.fill(step, gn)
                 session.refresh_YAML()
                 if failure_reason is not None:
                     response = failure_reason.reason
                 else:
                     response = await P.filled_step_message(step, session.root, node, session)
             case "insert_before":
-                node, is_error, failure_reason = await session.root.insert_before(step, pn)
+                node, is_error, failure_reason = await session.root.insert_before(step, gn)
                 session.refresh_YAML()
                 if failure_reason is not None:
                     response = failure_reason.reason
                 else:
                     response = await P.inserted_before_step_message(step, session.root, node, session)
             case "amend":
-                node, is_error, failure_reason = await session.root.amend(step, pn)
+                node, is_error, failure_reason = await session.root.amend(step, gn)
                 session.refresh_YAML()
                 if failure_reason is not None:
                     response = failure_reason.reason

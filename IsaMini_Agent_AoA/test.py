@@ -6,7 +6,7 @@ from IsaREPL import REPLFail
 from typing import Any, Awaitable, Coroutine, NamedTuple, Sequence, TypedDict, Callable, TextIO, Union, cast
 from . import model
 from .model import *
-from .model import _filter_unprovable, _trivial_parsing
+from .model import _filter_unprovable
 from abc import ABC, abstractmethod
 import io
 import tempfile
@@ -823,13 +823,13 @@ async def _test_RetrieveFact(root: Root, file: MyIO):
     assert isinstance(fetched[3], Interaction_RetrieveForProof)
     # 2. Test Obvious with FactByProposition and FactByName (no interaction).
     root.session.age += 1
-    gn = await Obvious.gen({
+    gn = Obvious.gen({
         "facts": [
             {"refer_by": "proposition", "proposition": "(8::nat) = 2^3"},
             {"refer_by": "name", "name": "log_nat_power"},
         ]
-    })(root.ml_state)
-    node, _, _ = await root.fill("2", _trivial_parsing(gn))
+    })
+    node, _, _ = await root.fill("2", gn)
     file.write(f"Filled node: {type(node).__name__}, id={node.id}\n")
     node.print(1, file, show_warnings=True)
     print_header("After fill", file)

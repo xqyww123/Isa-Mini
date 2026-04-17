@@ -1950,25 +1950,11 @@ class Interaction_RetrieveForProof(Interaction_Retrieve):
 
 ### The Abstract Model
 
-# parsing_node receives two Minilang_State arguments:
-#   alive_state: the latest initialized state within the current proof block.
-#       Always non-None (search walks up through ancestors to root).
-#       Suitable ONLY for retrieval (e.g., fetch_facts, potential_defs_of).
-#       Must NOT be used for proof-goal-specific checks (e.g., need_intro).
-#   exact_state: the actual ml_state at the insertion point, if available.
-#       Suitable for proof-goal-specific operations (e.g., compute_bindings).
-#       May be None if the state is not yet initialized.
-# The exact state is also available later via config.ml_state in gen_node.
-type parsing_node = Callable[[Minilang_State, Minilang_State | None], Awaitable['gen_node']]
+# gen_node: a sync node factory that turns a NodeConfig into a fully-constructed Node.
+# Retrieval and interactions are deferred to the Node's first _refresh_me_alone call
+# via per-field `X is None` sentinels — no state needs to flow in at construction.
 type gen_node = Callable[[NodeConfig], 'Node']
 type may_gen_node = Callable[[NodeConfig], 'Node | None']
-
-def _trivial_parsing(gn: gen_node) -> parsing_node:
-    """Wrap a sync gen_node in a parsing_node that ignores both states."""
-    async def parse(alive_state: Minilang_State,
-                    exact_state: Minilang_State | None = None) -> gen_node:
-        return gn
-    return parse
 
 type printer = Callable[[int, MyIO], int]
 
@@ -2176,21 +2162,21 @@ class Node(ABC):
             raise InternalError("Don't know how to refresh a node and all its after nodes when the node's parent is none")
         else:
             await self.parent._refresh_all_children_after(self, self.status.status == EvaluationStatus.Status.SUCCESS)
-    async def insert_before_me(self, pn: parsing_node) -> 'Node':
+    async def insert_before_me(self, gn: gen_node) -> 'Node':
         if self.parent is None:
             raise InternalError("Don't know how to refresh a node and all its after nodes when the node's parent is none")
         else:
-            node = await self.parent._insert_before_child(self, pn)
+            node = await self.parent._insert_before_child(self, gn)
             if self.parent._can_continue_before_child(node):
                 await node._refresh_me_alone()
             else:
                 await node._cancel()
             await node._refresh_all_after_me()
             return node
-    async def insert_before(self, step: step, pn: parsing_node) -> 'tuple[Node, bool, FailureReason | None]':
+    async def insert_before(self, step: step, gn: gen_node) -> 'tuple[Node, bool, FailureReason | None]':
         try:
             node = self.locate_node(step)
-            ret = await node.insert_before_me(pn)
+            ret = await node.insert_before_me(gn)
             if ret.status.status == EvaluationStatus.Status.FAILURE:
                 response = ret._on_edit_failure()
                 if response.revert:
@@ -2205,7 +2191,7 @@ class Node(ABC):
         except NodeNotFound:
             raise CannotInsert_NodeNotFound(step)
     @abstractmethod
-    async def append(self, pn: parsing_node) -> 'Node | None':
+    async def append(self, gn: gen_node) -> 'Node | None':
         ...
     def _locate_node(self, ids: Sequence[local_step], id: step, pos: int = 0) -> 'Node':
         if pos == len(ids):
@@ -2217,7 +2203,7 @@ class Node(ABC):
     def unfinished_nodes(self, ret: set['Node']) -> None:
         if self.status.status != EvaluationStatus.Status.SUCCESS:
             ret.add(self)
-    async def fill(self, id: step, pn: parsing_node) -> 'tuple[Node, bool, FailureReason | None]':
+    async def fill(self, id: step, gn: gen_node) -> 'tuple[Node, bool, FailureReason | None]':
         ids = id.split('.')
         node = self._locate_node(ids[:-1], id, 0)
         to_fill = node._id_of_openning_prf_to_fill()
@@ -2261,7 +2247,7 @@ class Node(ABC):
             if rp.parent is not None:
                 await rp._refresh_all_after_me()
         try:
-            ret = await node.append(pn)
+            ret = await node.append(gn)
         except GoalIsNontrivial as e:
             raise CannotFill_GoalIsNontrivial(e.parent)
         if ret is None:
@@ -2401,17 +2387,17 @@ class Node(ABC):
                 if rp.parent is not None:
                     await rp._refresh_all_after_me()
         return not_found
-    async def amend_me(self, pn: parsing_node) -> 'tuple[Node, Node]':
+    async def amend_me(self, gn: gen_node) -> 'tuple[Node, Node]':
         if self.parent is not None:
-            return await self.parent._amend_child(self, pn)
+            return await self.parent._amend_child(self, gn)
         else:
             raise CannotAmend_Root()
     def _amend_from(self, old: 'Node') -> None:
         self._first_time = False
-    async def amend(self, id: step, pn: parsing_node) -> 'tuple[Node, bool, FailureReason | None]':
+    async def amend(self, id: step, gn: gen_node) -> 'tuple[Node, bool, FailureReason | None]':
         try:
             old_node = self.locate_node(id)
-            new_node, old_node = await old_node.amend_me(pn)
+            new_node, old_node = await old_node.amend_me(gn)
             if new_node.status.status == EvaluationStatus.Status.FAILURE:
                 response = new_node._on_edit_failure()
                 if response.revert:
@@ -2469,7 +2455,7 @@ class Leaf(Node):
         except IsabelleError as err:
             self.status = EvaluationStatus.Failure(time() - now, FailureReason(''.join(err.errors)))
 
-    async def append(self, pn: parsing_node) -> 'Node | None':
+    async def append(self, gn: gen_node) -> 'Node | None':
         raise CannotAppend(self, "It is not a goal or a proof block")
 
 class NonLeaf_Node(Node):
@@ -2538,7 +2524,7 @@ class NonLeaf_Node(Node):
             if can_continue:
                 if self.parent is not None:
                     await self.parent._refresh_all_children_after(self, can_continue)
-    async def _insert_before_child(self, before: 'Node', pn: parsing_node) -> 'Node':
+    async def _insert_before_child(self, before: 'Node', gn: gen_node) -> 'Node':
         """
         invalidates the status of all nodes including and after the `before`
         """
@@ -2561,9 +2547,6 @@ class NonLeaf_Node(Node):
                         new_id = cat_segs_into_id(segs)
                     else:
                         new_id = cat_segs_into_id(prev_id + [1])
-                alive = self._find_alive_state(i)
-                exact = child.ml_state if child.ml_state.initialized() else None
-                gn = await pn(alive, exact)
                 config = NodeConfig(new_id, await child.ml_state.clone(None), self)
                 try:
                     node = gn(config)
@@ -2595,31 +2578,6 @@ class NonLeaf_Node(Node):
                 else:
                     return self._resulting_state_of_all_children()
         raise InternalError("The target node is not my children")
-    def _find_alive_state_among_children(self, position: int) -> 'Minilang_State | None':
-        """Find the latest alive ml_state before `position` among sub_nodes.
-        `position` is exclusive (like a Python slice upper bound):
-        callers pass len(sub_nodes) for append, or the child's index for
-        amend/insert_before.
-
-        Does not cross block boundaries — does not check self.ml_state."""
-        for i in range(min(position, len(self.sub_nodes)) - 1, -1, -1):
-            if self.sub_nodes[i].ml_state.initialized():
-                return self.sub_nodes[i].ml_state
-        return None
-    def _find_alive_state(self, position: int) -> Minilang_State:
-        """Find an alive state: search children first, then walk up through ancestors.
-        `position` is exclusive — see _find_alive_state_among_children.
-        Always returns a non-None result (the root's ml_state should always be initialized)."""
-        result = self._find_alive_state_among_children(position)
-        if result is not None:
-            return result
-        if self.ml_state.initialized():
-            return self.ml_state
-        if self.parent is not None:
-            for i, c in enumerate(self.parent.sub_nodes):
-                if c is self:
-                    return self.parent._find_alive_state(i)
-        raise InternalError("No alive state found anywhere in the proof tree")
     def _locate_node(self, ids: Sequence[local_step], id: step, pos: int = 0) -> 'Node':
         if pos == len(ids):
             return self
@@ -2691,12 +2649,9 @@ class NonLeaf_Node(Node):
                     self._closed_by = None
                 return
         raise InternalError("The target node is not my children")
-    async def _amend_child(self, child: 'Node', pn: parsing_node) -> 'tuple[Node, Node]':
+    async def _amend_child(self, child: 'Node', gn: gen_node) -> 'tuple[Node, Node]':
         for i, c in enumerate(self.sub_nodes):
             if c is child:
-                alive = self._find_alive_state(i)
-                exact = child.ml_state if child.ml_state.initialized() else None
-                gn = await pn(alive, exact)
                 config = NodeConfig(child.local_step, await child.ml_state.clone(None), self)
                 try:
                     new_node = gn(config)
@@ -2769,20 +2724,6 @@ class StdBlock(NonLeaf_Node):
         #     return self._state_before_ending()
         # else:
         #     return self.resulting_state()
-    def _find_alive_state_among_children(self, position: int) -> 'Minilang_State | None':
-        # `position` is exclusive.  The state chain is:
-        #   sub_nodes[0].ml_state →(step 0)→ sub_nodes[1].ml_state →…→ _state_before_ending_
-        # State right before position i = sub_nodes[i].ml_state  (i < len)
-        #                                = _state_before_ending_  (i >= len)
-        if position >= len(self.sub_nodes) and self._state_before_ending_.initialized():
-            return self._state_before_ending_
-        if position < len(self.sub_nodes) and self.sub_nodes[position].ml_state.initialized():
-            return self.sub_nodes[position].ml_state
-        result = super()._find_alive_state_among_children(position)
-        if result is not None:
-            return result
-        s = self._state_after_beginning()
-        return s if s.initialized() else None
     def _state_after_beginning(self) -> Minilang_State:
         if self.sub_nodes:
             return self.sub_nodes[0].ml_state
@@ -3022,13 +2963,11 @@ class StdBlock(NonLeaf_Node):
         buffer = StringIO()
         self.quickview(indent, MyIO(buffer))
         return buffer.getvalue()
-    async def append(self, pn: parsing_node) -> 'Node | None':
+    async def append(self, gn: gen_node) -> 'Node | None':
         if not self.opening():
             raise CannotAppend_BlockClosed(self, self._closed_by)
-        alive = self._find_alive_state(len(self.sub_nodes))
         local_step = self._local_step_of_next_proof_step()
         ml_state = await self._state_before_ending_.clone(None)
-        gn = await pn(alive, ml_state if ml_state.initialized() else None)
         config = NodeConfig(local_step, ml_state, self)
         try:
             node = gn(config)
@@ -3046,8 +2985,7 @@ class StdBlock(NonLeaf_Node):
         if self.opening():
             ml_state = node.resulting_state()
             if await ml_state.need_intro(False):
-                await self.append(_trivial_parsing(
-                    lambda config: Intro(config, "", None, False)))
+                await self.append(lambda config: Intro(config, "", None, False))
         # Propagate state upward via the cascade chain. Matches the behavior
         # of insert_before_me / _amend_child, which both call
         # _refresh_all_after_me after inserting. In particular this is what
@@ -3427,7 +3365,7 @@ class CaseSplit_Like(SubgoalMaker):
 
 class OperationMeta(NamedTuple):
     toolarg_typed_dict: type[Any]
-    gen_func: Callable[[Any], parsing_node]
+    gen_func: Callable[[Any], gen_node]
 
 OPERATION_REGISTRY: dict[str, OperationMeta] = {}
 
@@ -3438,10 +3376,7 @@ def proof_operation(operation: str, toolarg_typed_dict: type[Any]):
     define a staticmethod `gen(arg: ToolArg) -> gen_node`.
     """
     def decorator(cls: type[Any]):
-        if hasattr(cls, "interactive_gen"):
-            OPERATION_REGISTRY[operation] = OperationMeta(toolarg_typed_dict, cls.interactive_gen)  # type: ignore[attr-defined]
-        else:
-            OPERATION_REGISTRY[operation] = OperationMeta(toolarg_typed_dict, cls.gen)  # type: ignore[attr-defined]
+        OPERATION_REGISTRY[operation] = OperationMeta(toolarg_typed_dict, cls.gen)  # type: ignore[attr-defined]
         return cls
     return decorator
 
@@ -3549,8 +3484,8 @@ class Obvious(Leaf):
         self.fact_refs: list[IsabelleFact] | None = None
 
     @staticmethod
-    def gen(arg: Obvious_ToolArg) -> parsing_node:
-        return _trivial_parsing(lambda config: Obvious(config, arg))
+    def gen(arg: Obvious_ToolArg) -> gen_node:
+        return lambda config: Obvious(config, arg)
 
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
@@ -3631,8 +3566,8 @@ class Chaining(Leaf):
         return indent
 
     @staticmethod
-    def gen(arg: Chaining_ToolArg) -> parsing_node:
-        return _trivial_parsing(lambda config: Chaining(config, arg))
+    def gen(arg: Chaining_ToolArg) -> gen_node:
+        return lambda config: Chaining(config, arg)
 
     def print(self, indent: int, file: MyIO, update_line: bool = False,
               show_warnings: bool = False) -> int:
@@ -3698,26 +3633,6 @@ class Chaining(Leaf):
             return EditFailureResponse(is_error=True, failure_reason=FailureReason(file.getvalue()), revert=True)
         return super()._on_edit_failure()
 
-async def _parse_subproof(sp: SubProof, alive_state: Minilang_State | None) -> SubProof_parsed:
-    """Parse a SubProof into a sync gen_node (or None for 'Given later').
-    Obvious now resolves its own facts on first refresh; parsing is trivial."""
-    if not _subproof_is_obvious(sp):
-        return None
-    return await Obvious.gen(cast(Obvious_ToolArg, sp))(alive_state)
-
-def _gen_with_subproof(cls: type,
-                       parent_factory: 'Callable[[NodeConfig, SubProof_parsed], Node]',
-                       subproof: SubProof) -> parsing_node:
-    """Build a parsing_node that parses a SubProof then creates the parent via parent_factory.
-    The parent_factory receives the parsed SubProof and is responsible for adding the
-    Obvious sub-node to its children."""
-    async def parse(alive_state: Minilang_State | None,
-                    exact_state: Minilang_State | None = None) -> gen_node:
-        parsed = await _parse_subproof(subproof, alive_state)
-        return lambda config: parent_factory(config, parsed)
-    return parse
-
-
 #### Witness
 
 class Witness_ToolArg(TypedDict):
@@ -3732,8 +3647,8 @@ class Witness(Leaf):
     def quickview_title(self) -> str:
         return f"Witness {self.witness}"
     @staticmethod
-    def gen(arg: Witness_ToolArg) -> parsing_node:
-        return _trivial_parsing(lambda config: Witness(config, arg))
+    def gen(arg: Witness_ToolArg) -> gen_node:
+        return lambda config: Witness(config, arg)
 
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
@@ -3805,8 +3720,8 @@ class Define(SubgoalMaker):
         self._deferred_block_opened: bool = False
 
     @staticmethod
-    def gen(arg: Define_ToolArg) -> parsing_node:
-        return _trivial_parsing(lambda config: Define(config, arg))
+    def gen(arg: Define_ToolArg) -> gen_node:
+        return lambda config: Define(config, arg)
 
     def quickview_title(self) -> str:
         return f"Define {self.name}"
@@ -3979,8 +3894,8 @@ class Unfold(Leaf):
     def quickview_title(self) -> str:
         return f"Unfold {', '.join(self.targets)}"
     @staticmethod
-    def gen(arg: Unfold_ToolArg) -> parsing_node:
-        return _trivial_parsing(lambda config: Unfold(config, arg))
+    def gen(arg: Unfold_ToolArg) -> gen_node:
+        return lambda config: Unfold(config, arg)
 
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
@@ -4078,8 +3993,8 @@ class Derive(Leaf):
         return indent
 
     @staticmethod
-    def gen(arg: Derive_ToolArg) -> parsing_node:
-        return _trivial_parsing(lambda config: Derive(config, arg))
+    def gen(arg: Derive_ToolArg) -> gen_node:
+        return lambda config: Derive(config, arg)
 
     async def _refresh_me_alone(self) -> None:
         if self.rule_ref is None or self.discharge_refs is None:
@@ -4302,8 +4217,8 @@ class Rewrite(Leaf):
                 self._prev_result_goal = cur
         return indent
     @staticmethod
-    def gen(arg: Rewrite_ToolArg) -> parsing_node:
-        return _trivial_parsing(lambda config: Rewrite(config, arg))
+    def gen(arg: Rewrite_ToolArg) -> gen_node:
+        return lambda config: Rewrite(config, arg)
 
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
@@ -4567,8 +4482,8 @@ class Have(StdBlock):
         # Raw subproof dict; attached to sub_nodes on first refresh, then set to None.
         self._raw_proof: SubProof | None = arg.get("proof", "Given later")
     @staticmethod
-    def gen(arg : Have_ToolArg) -> parsing_node:
-        return _trivial_parsing(lambda config: Have(config, arg))
+    def gen(arg : Have_ToolArg) -> gen_node:
+        return lambda config: Have(config, arg)
     def quickview_title(self) -> str:
         return f"Have {self.name}"
     def quickview(self, indent: int, file: MyIO) -> int:
@@ -4663,8 +4578,8 @@ class Suffices(StdBlock):
         self.statement = arg["statement"]
         self._raw_proof: SubProof | None = arg.get("proof", "Given later")
     @staticmethod
-    def gen(arg : Suffices_ToolArg) -> parsing_node:
-        return _trivial_parsing(lambda config: Suffices(config, arg))
+    def gen(arg : Suffices_ToolArg) -> gen_node:
+        return lambda config: Suffices(config, arg)
     async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
         fail = await super()._refresh_the_beginning_opr(begin_opr)
         if fail is not None:
@@ -4730,8 +4645,8 @@ class Obtain(StdBlock):
         self.constraints = arg["constraints"]
         self._raw_proof: SubProof | None = arg.get("proof", "Given later")
     @staticmethod
-    def gen(arg : Obtain_ToolArg) -> parsing_node:
-        return _trivial_parsing(lambda config: Obtain(config, arg))
+    def gen(arg : Obtain_ToolArg) -> gen_node:
+        return lambda config: Obtain(config, arg)
     async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
         fail = await super()._refresh_the_beginning_opr(begin_opr)
         if fail is not None:
@@ -4822,14 +4737,13 @@ class Intro(SubgoalMaker):
         self._pending_bindings = _pending_bindings
         self._prev_bindings: Bindings | None = None
     @staticmethod
-    def gen(arg: Intro_ToolArg) -> parsing_node:
+    def gen(arg: Intro_ToolArg) -> gen_node:
         var_bindings = arg.get("variable_bindings", [])
         fact_bindings = arg.get("fact_bindings", [])
         pending = (var_bindings, fact_bindings) if var_bindings or fact_bindings else None
         split_conj = arg.get("split_conj", False)
         thought = arg["thought"]
-        return _trivial_parsing(
-            lambda config: Intro(config, thought, None, split_conj, _pending_bindings=pending))
+        return lambda config: Intro(config, thought, None, split_conj, _pending_bindings=pending)
     def quickview(self, indent: int, file: MyIO) -> int:
         indent = super().quickview(indent, file)
         if self.bindings is not None and self.bindings != self._prev_bindings:
@@ -4991,8 +4905,8 @@ class InferenceRule(SubgoalMaker):
         self._opening = False
 
     @staticmethod
-    def gen(arg: InferenceRule_ToolArg) -> parsing_node:
-        return _trivial_parsing(lambda config: InferenceRule(config, arg))
+    def gen(arg: InferenceRule_ToolArg) -> gen_node:
+        return lambda config: InferenceRule(config, arg)
 
     async def _refresh_me_alone(self) -> None:
         if self.rule is not None and self.rule_ref is None:
@@ -5070,8 +4984,8 @@ class Branch(SubgoalMaker):
         self._parsed_cases: list[SubProof_parsed] | None = None
         self._initial_goal_index = 0
     @staticmethod
-    def gen(arg : Branch_ToolArg) -> parsing_node:
-        return _trivial_parsing(lambda config: Branch(config, arg))
+    def gen(arg : Branch_ToolArg) -> gen_node:
+        return lambda config: Branch(config, arg)
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         return ('cases', indent+1)
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
@@ -5130,8 +5044,8 @@ class CaseSplit(CaseSplit_Like):
     def quickview_title(self) -> str:
         return f"CaseSplit {self.target_isabelle_term}"
     @staticmethod
-    def gen(arg : CaseSplit_ToolArg) -> parsing_node:
-        return _trivial_parsing(lambda config: CaseSplit(config, arg))
+    def gen(arg : CaseSplit_ToolArg) -> gen_node:
+        return lambda config: CaseSplit(config, arg)
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         return ('cases', indent+1)
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
@@ -5188,8 +5102,8 @@ class Induction(CaseSplit_Like):
     def quickview_title(self) -> str:
         return f"Induction {self.target_isabelle_term}"
     @staticmethod
-    def gen(arg : Induction_ToolArg) -> parsing_node:
-        return _trivial_parsing(lambda config: Induction(config, arg))
+    def gen(arg : Induction_ToolArg) -> gen_node:
+        return lambda config: Induction(config, arg)
     async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
         if self._initial_proof is None and self._raw_proof is not None:
             if _subproof_is_obvious(self._raw_proof):
@@ -5486,7 +5400,7 @@ class Root(GoalContainer, StdBlock):
 #          2. GoalNode: Q --> P
 
 ### Gen Node
-def Parse_Node(data: ToolCall_arg) -> parsing_node:
+def Parse_Node(data: ToolCall_arg) -> gen_node:
     operation = data.get("operation")
     if operation is None:
         raise ArgumentError_MissingRequiredKeys(data, "<tool call>", ["operation"])
