@@ -589,32 +589,6 @@ class CannotAmend_GoalIsNontrivial(CannotAmend, GoalIsNontrivial):
     def __str__(self) -> str:
         return GoalIsNontrivial._message
 
-class NoAliveState(AoA_Error):
-    """Raised when interactive_gen needs a live proof state for retrieval/interaction
-    but none is available (e.g., operating on a cancelled node)."""
-    _message = ("No alive proof state is available for interactive operations. "
-                "The target proof context may have been cancelled or not yet evaluated.")
-    def __str__(self) -> str:
-        return self._message
-
-class CannotAppend_NoAliveState(CannotAppend, NoAliveState):
-    def __init__(self, target: 'Node'):
-        CannotAppend.__init__(self, target,
-            "Cannot fill this step because the proof context here was not successfully evaluated, "
-            "due to a failure in a preceding proof step.")
-
-class CannotInsert_NoAliveState(CannotInsert, NoAliveState):
-    def __init__(self, target: 'Node'):
-        CannotInsert.__init__(self, target,
-            "Cannot insert before this step because the proof context here was not successfully evaluated, "
-            "due to a failure in a preceding proof step.")
-
-class CannotAmend_NoAliveState(CannotAmend, NoAliveState):
-    def __init__(self, target: 'Node', child: 'Node'):
-        CannotAmend.__init__(self, target, child,
-            "Cannot amend this step because the proof context here was not successfully evaluated, "
-            "due to a failure in a preceding proof step.")
-
 type ToolCall_arg = dict[str, Any]
 class ArgumentError(AoA_Error):
     def __init__(self, arg: ToolCall_arg, reason: str):
