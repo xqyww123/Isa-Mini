@@ -3128,6 +3128,61 @@ async def _test_Induction_SchematicInst_ByDescription(root: Root, file: MyIO):
     root.print(0, file)
 
 
+@model_test("Induction_SchematicInst_PremDischarge", "Test_Induction_SchematicInst.thy", 17)
+async def _test_Induction_SchematicInst_PremDischarge(root: Root, file: MyIO):
+    """End-to-end subgoals-policy integration: schematic instantiation +
+    |using| < consumes should yield a `Prem0` subgoal that subsequent
+    proof steps can discharge.
+
+    Induction on `i` using `int_le_induct[where ?k = k]` with no `using`
+    facts produces cases `2.base`, `2.step`, plus `2.Prem0` carrying the
+    unconsumed `i \u2264 k` premise. This test verifies:
+
+      1. `2.Prem0` is a locatable node after Induction;
+      2. `2.Prem0.1` is fillable — Obvious discharges the leftover
+         premise using the in-scope assumption `Prem0.prem0: i \u2264 k`
+         (via hammer / auto).
+
+    Isolates the end-to-end plumbing from Phase 3's interaction layer
+    through to Minilang's `CASES'` subgoal materialization."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    async def stub_fork(interaction):
+        if isinstance(interaction, Interaction_InstantiateSchematics):
+            return await interaction.answer(Answer(instantiations=[("?k", "k")]))
+        raise TestFailed(
+            f"Unexpected interaction: {type(interaction).__name__}")
+    root.session.fork_interaction = stub_fork
+
+    await root.fill("2", Induction.gen({
+        "thought": "induct on i; rely on subgoals policy for the consume premise",
+        "target_isabelle_term": "i",
+        "rule": {"refer_by": "name", "name": "int_le_induct"},
+        "variables": [
+            {"name": "i", "status": "fixed"},
+            {"name": "k", "status": "fixed"},
+        ],
+    }))
+    print_header("After Induction (Prem0 subgoal should be present)", file)
+    root.print(0, file)
+
+    # Assert 2.Prem0 exists and is reachable as a goal node.
+    try:
+        prem0 = root.locate_node("2.Prem0")
+    except NodeNotFound:
+        raise TestFailed("Expected `2.Prem0` subgoal after subgoals-policy Induction")
+    file.write(f"\n[assertion] 2.Prem0 located: {type(prem0).__name__}\n")
+
+    # Try discharging Prem0 with Obvious — exercises the downstream plumbing.
+    # Pass the in-scope premise explicitly so the solver can use it.
+    await root.fill("2.Prem0.1", Obvious.gen({
+        "facts": [{"refer_by": "name", "name": "Prem0.prem0"}]
+    }))
+    print_header("After attempting Obvious on 2.Prem0", file)
+    root.print(0, file)
+
+
 @model_test("UpstreamChangeResetsObvious", "Test_UpstreamChangeResetsObvious.thy", 11)
 async def _test_UpstreamChangeResetsObvious(root: Root, file: MyIO):
     """After Obvious fails, _is_trivial=False blocks retries.  Amending or
