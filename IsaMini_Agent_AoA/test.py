@@ -3068,6 +3068,66 @@ async def _test_Induction_SchematicInst_BadType(root: Root, file: MyIO):
     root.print(0, file)
 
 
+@model_test("Induction_SchematicInst_ByDescription", "Test_Induction_SchematicInst.thy", 17)
+async def _test_Induction_SchematicInst_ByDescription(root: Root, file: MyIO):
+    """Exercises the `FactByDescription` branch of `_resolve_rule`.
+    The stub expects two forked interactions in order:
+      1. Interaction_RetrieveForProof(kinds=[INDUCTION_RULE], single_choice=True)
+         — answer with `name="int_le_induct"` to resolve by name.
+      2. Interaction_InstantiateSchematics for `?k`
+         — answer with `?k = k`."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    interactions: list[str] = []
+
+    async def stub_fork(interaction):
+        if len(interactions) == 0:
+            # Rule retrieval stage. Skip prompt() — its candidate list
+            # comes from semantic_knn which may return empty when
+            # induction-rule embeddings are not populated in this
+            # environment; an empty list would raise ImmediateAnswer
+            # and short-circuit the test. Answering by `name` bypasses
+            # the candidate list entirely.
+            assert isinstance(interaction, Interaction_RetrieveForProof), \
+                f"Expected Interaction_RetrieveForProof first, got {type(interaction).__name__}"
+            assert interaction.kinds == [EntityKind.INDUCTION_RULE], \
+                f"Expected kinds=[INDUCTION_RULE], got {interaction.kinds}"
+            assert interaction.single_choice, \
+                "Expected single_choice=True for rule retrieval"
+            interactions.append("retrieve")
+            file.write("\n[stub] rule retrieval interaction; answering by name "
+                       "'int_le_induct'\n\n")
+            return await interaction.answer(Answer(name="int_le_induct"))
+        if len(interactions) == 1:
+            # Schematic instantiation stage — safe to call prompt().
+            print_header("Interaction Prompt", file)
+            await interaction.prompt(0, file)
+            assert isinstance(interaction, Interaction_InstantiateSchematics), \
+                f"Expected Interaction_InstantiateSchematics second, got {type(interaction).__name__}"
+            assert "int_le_induct" in interaction.rule_name, \
+                f"rule_name should reference int_le_induct, got {interaction.rule_name}"
+            interactions.append("instantiate")
+            return await interaction.answer(Answer(instantiations=[("?k", "k")]))
+        raise TestFailed(f"Unexpected third interaction: {type(interaction).__name__}")
+    root.session.fork_interaction = stub_fork
+
+    await root.fill("2", Induction.gen({
+        "thought": "induct on i; look up the rule by description",
+        "target_isabelle_term": "i",
+        "rule": {"refer_by": "description",
+                 "english": "descending induction on an integer bounded above"},
+        "variables": [
+            {"name": "i", "status": "fixed"},
+            {"name": "k", "status": "fixed"},
+        ],
+    }))
+    assert interactions == ["retrieve", "instantiate"], \
+        f"Expected [retrieve, instantiate] sequence, got {interactions}"
+    print_header("After Induction via FactByDescription + schematic inst", file)
+    root.print(0, file)
+
+
 @model_test("UpstreamChangeResetsObvious", "Test_UpstreamChangeResetsObvious.thy", 11)
 async def _test_UpstreamChangeResetsObvious(root: Root, file: MyIO):
     """After Obvious fails, _is_trivial=False blocks retries.  Amending or
