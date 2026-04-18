@@ -1994,10 +1994,12 @@ class Interaction_InstantiateSchematics(Interaction):
     answer."""
 
     def __init__(self,
+                 state: 'Minilang_State',
                  rule_name: str,
                  consume_premises: list[str],
                  schematic_vars: list[tuple[str, str]],
                  kind: Literal["induction", "case-split"]):
+        self.state = state
         self.rule_name = rule_name
         self.consume_premises = consume_premises
         self.schematic_vars = schematic_vars
@@ -2049,7 +2051,20 @@ class Interaction_InstantiateSchematics(Interaction):
             raise Interaction_BadAnswer(
                 f"Unknown schematic variable(s): {', '.join(sorted(extra))}. "
                 f"Expected one of: {', '.join(sorted(required))}.")
-        return [(n, by_name[n]) for n, _ in self.schematic_vars]
+        insts = [(n, by_name[n]) for n, _ in self.schematic_vars]
+        # Hand off to ML for term-level validation: parse each term in
+        # the rule's context and check type compatibility with the
+        # schematic's type. On rejection Isabelle's own error message
+        # is relayed to the LLM as a BadAnswer reason — usually specific
+        # enough (type clash includes the failing term, unknown-var
+        # errors name the variable).
+        err: str | None = await self.state.connection.callback(
+            "IsaMini.validate_instantiation",
+            (self.state.name, self.rule_name, insts))
+        if err is not None:
+            raise Interaction_BadAnswer(
+                f"Instantiation rejected by Isabelle:\n{err}")
+        return insts
 
 
 ### The Abstract Model
@@ -3493,6 +3508,7 @@ class CaseSplit_Like(SubgoalMaker):
                         "Isabelle did not auto-pick a named rule. Specify "
                         "a rule explicitly.")
                 instantiate = Interaction_InstantiateSchematics(
+                    state=self.ml_state,
                     rule_name=final_name,
                     consume_premises=consume_prems,
                     schematic_vars=schematic_vars,

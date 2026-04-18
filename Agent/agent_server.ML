@@ -783,6 +783,97 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         timeout = NONE
       }
 
+      (* Pre-flight validation for schematic-variable instantiation of an
+       * induction / case-split rule. Takes the rule name and a list of
+       * (var_name, term_string) pairs; attempts the structured
+       * instantiation via Rule_Insts.where_rule. Returns SOME error_msg
+       * on any failure (syntax, type, or unknown schematic), NONE on
+       * success. Used by Interaction_InstantiateSchematics.answer to
+       * reject a bad instantiation before it poisons the INDUCT cache. *)
+      val validate_instantiation_callback = {
+        name = "IsaMini.validate_instantiation",
+        arg_schema = unpackTuple3 (
+          unpackString,                                 (* state_id *)
+          unpackString,                                 (* rule name *)
+          unpackList (unpackPair (unpackString, unpackString))
+        ),
+        ret_schema = packOption packString,
+        function = (fn (state_id, rule_name, insts) =>
+          let val s0 = get_state state_id
+              val ctxt = Minilang.context_of s0
+              val raw_rule = Proof_Context.get_thm ctxt rule_name
+              (* Var names come from Python as `"?k"` (or `"?k.3"`) —
+               * parse back to indexname via Lexicon.read_variable,
+               * which tolerates the leading `?`. *)
+              fun parse_var v =
+                case Lexicon.read_variable v of
+                  SOME ix => ix
+                | NONE => error ("Malformed schematic variable name: `" ^ v ^ "`")
+              (* Collect schematic vars of the rule with their expected
+               * types — used to pre-validate each instantiation term. *)
+              val rule_vars : typ Vartab.table =
+                Vartab.build (Vars.fold (fn ((ix, T), _) => Vartab.insert (K true) (ix, T))
+                                (Vars.build (Thm.fold_terms {hyps = false}
+                                               Vars.add_vars raw_rule)))
+              (* Per-var validation. Parse the term in the rule's
+               * context, get its inferred type, then Sign.typ_match
+               * against the schematic's expected type. TYPE_MATCH (the
+               * bare exception Rule_Insts.where_rule would otherwise
+               * raise later, with no message) is handled specifically
+               * here to emit a named, context-rich error. Any other
+               * exception (parse error, unknown name, …) falls through
+               * to the outer \<^try>. *)
+              val thy = Proof_Context.theory_of ctxt
+              val sotyp = MiniLang_Agent.string_of_type ctxt
+              fun validate_one (var_str, t_str) =
+                \<^try>\<open>
+                  let val ix = parse_var var_str
+                      val expected_ty =
+                        case Vartab.lookup rule_vars ix of
+                          SOME ty => ty
+                        | NONE =>
+                            error ("No schematic variable `" ^ var_str ^
+                                   "` in rule `" ^ rule_name ^ "`.")
+                      val parsed = Syntax.parse_term ctxt t_str
+                      val checked = Syntax.check_term ctxt parsed
+                      val actual_ty = Term.fastype_of checked
+                      val _ = Sign.typ_match thy (expected_ty, actual_ty)
+                                Vartab.empty
+                        handle Type.TYPE_MATCH =>
+                          error ("Type mismatch: variable `" ^ var_str ^
+                                 "` expects type `" ^ sotyp expected_ty ^
+                                 "`, but term `" ^ t_str ^
+                                 "` has type `" ^ sotyp actual_ty ^ "`.")
+                  in NONE end
+                  catch exn => SOME (var_str, Runtime.exn_message exn)
+                \<close>
+
+              (* Walk all instantiations; first failure wins. *)
+              fun first_failure [] = NONE
+                | first_failure (p :: rest) =
+                    (case validate_one p of
+                       NONE => first_failure rest
+                     | some => some)
+          in
+            case first_failure insts of
+              SOME (v, msg) =>
+                SOME ("Instantiation of `" ^ v ^ "` rejected:\n" ^ msg)
+            | NONE =>
+              (* All term types check out individually; final sweep via
+               * where_rule catches any remaining structural issue
+               * (e.g. unknown schematic name — though parse_var /
+               * lookup above already rejects that). *)
+              \<^try>\<open>
+                (Rule_Insts.where_rule ctxt
+                   (map (fn (v, t) => ((parse_var v, Position.none), t)) insts)
+                   [] raw_rule;
+                 NONE)
+                catch exn => SOME (Runtime.exn_message exn)
+              \<close>
+          end),
+        timeout = NONE
+      }
+
       (* Build AoA command with local callbacks *)
       val s0_ptree = Minilang.print_state s0
       val {constants, theorems, types, classes, locales,
@@ -818,6 +909,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
           mk_callback abbreviation_defs_callback,
           mk_callback analyze_induct_callback,
           mk_callback analyze_case_split_callback,
+          mk_callback validate_instantiation_callback,
           mk_callback contextual_thms_callback,
           mk_callback validate_prove_in_time_callback,
           mk_callback check_looping_rules_callback,

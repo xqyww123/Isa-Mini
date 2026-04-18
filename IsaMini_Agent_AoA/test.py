@@ -3019,6 +3019,55 @@ async def _test_Induction_SchematicInst(root: Root, file: MyIO):
     root.print(0, file)
 
 
+@model_test("Induction_SchematicInst_BadType", "Test_Induction_SchematicInst.thy", 17)
+async def _test_Induction_SchematicInst_BadType(root: Root, file: MyIO):
+    """Exercises the `IsaMini.validate_instantiation` callback's
+    BadAnswer retry path. Same goal / rule as Induction_SchematicInst,
+    but the stub answers `?k = True` (bool, expected int) on the first
+    attempt — Isabelle must reject with a type-mismatch message,
+    `answer()` must raise `Interaction_BadAnswer`, and the stub then
+    recovers with the correct `?k = k`."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    attempts: list[str] = []
+
+    async def stub_fork(interaction):
+        print_header("Interaction Prompt", file)
+        await interaction.prompt(0, file)
+        if not isinstance(interaction, Interaction_InstantiateSchematics):
+            raise TestFailed(
+                f"Unexpected interaction: {type(interaction).__name__}")
+        # Attempt 1: bool instead of int — must be rejected.
+        try:
+            await interaction.answer(Answer(instantiations=[("?k", "True")]))
+        except Interaction_BadAnswer as e:
+            attempts.append(f"rejected: {e}")
+            file.write(f"\nAttempt 1 rejected as expected:\n  {e}\n\n")
+        else:
+            raise TestFailed(
+                "Expected Interaction_BadAnswer for `?k = True`, got silent success")
+        # Attempt 2: correct instantiation.
+        result = await interaction.answer(Answer(instantiations=[("?k", "k")]))
+        attempts.append("accepted")
+        return result
+    root.session.fork_interaction = stub_fork
+
+    await root.fill("2", Induction.gen({
+        "thought": "induct on i; first try wrong type for ?k, then fix",
+        "target_isabelle_term": "i",
+        "rule": {"refer_by": "name", "name": "int_le_induct"},
+        "variables": [
+            {"name": "i", "status": "fixed"},
+            {"name": "k", "status": "fixed"},
+        ],
+    }))
+    assert len(attempts) == 2 and attempts[-1] == "accepted", \
+        f"Expected [rejected, accepted] trace, got {attempts}"
+    print_header("After recovery with good instantiation", file)
+    root.print(0, file)
+
+
 @model_test("UpstreamChangeResetsObvious", "Test_UpstreamChangeResetsObvious.thy", 11)
 async def _test_UpstreamChangeResetsObvious(root: Root, file: MyIO):
     """After Obvious fails, _is_trivial=False blocks retries.  Amending or
