@@ -1634,6 +1634,39 @@ def normalize_answer(indexes: list[int] | None,
     insts = [(i["variable"], i["term"]) for i in instantiations] if instantiations else []
     return Answer(indexes=idx, name=n, statement=s, instantiations=insts)
 
+
+# Small helpers shared by the `Interaction.answer` overrides. They exist so
+# each subclass doesn't have to restate "this interaction only accepts
+# indexes / only some fields" with slightly different wording, and so the
+# "range-check + BadAnswer" pattern around candidate indexing is stated
+# once. Forward refs: both raise `Interaction_BadAnswer` defined below —
+# called at runtime, so declaration order doesn't matter.
+
+_ANSWER_FIELDS = ("indexes", "name", "statement", "instantiations")
+
+def _reject_fields(answer: 'Answer', *, allow: set[str], hint: str) -> None:
+    """Raise `Interaction_BadAnswer` if `answer` carries any field outside
+    `allow` (empty-list / None fields count as 'not used'). `hint` is
+    appended verbatim — use it to suggest what the interaction does
+    expect, e.g. 'Select by `indexes`.'."""
+    using: set[str] = set()
+    if answer.indexes: using.add("indexes")
+    if answer.name is not None: using.add("name")
+    if answer.statement is not None: using.add("statement")
+    if answer.instantiations: using.add("instantiations")
+    extra = using - allow
+    if extra:
+        raise Interaction_BadAnswer(
+            f"This interaction does not accept "
+            f"{', '.join(sorted(extra))}. {hint}")
+
+def _check_index(idx: int, length: int) -> None:
+    """Raise `Interaction_BadAnswer` if `idx` is out of `[0, length)`."""
+    if idx < 0 or idx >= length:
+        raise Interaction_BadAnswer(
+            f"Index {idx} out of range (0–{length - 1}).")
+
+
 class ForkingMode(Enum):
     FORKING_WITH_CTXT = 1         # fork inheriting parent conversation context
     FORKING_WITHOUT_CTXT = 2      # fork with fresh context, same model (opus)
@@ -1848,12 +1881,11 @@ class Interaction_Retrieve(Interaction):
         raise NotImplementedError("subclasses must override prompt()")
 
     async def answer(self, answer: Answer) -> 'list[IsabelleEntity | IsabelleFact]':
-        # Base class: accepts `indexes` only. `name`/`statement` are rejected
-        # here — subclasses (e.g. Interaction_RetrieveForProof) override to
-        # support named-fact lookup and prove-in-time.
-        if answer.name is not None or answer.statement is not None:
-            raise Interaction_BadAnswer(
-                "This interaction expects index selection, not `name` or `statement`.")
+        # Base class: accepts `indexes` only. Subclasses (e.g.
+        # Interaction_RetrieveForProof) override to also consume `name` /
+        # `statement`.
+        _reject_fields(answer, allow={"indexes"},
+                       hint="Select candidate(s) by `indexes`.")
         # Empty answer — expand search if possible
         if not answer.indexes:
             if self.k < self.FINAL_K:
@@ -1871,9 +1903,7 @@ class Interaction_Retrieve(Interaction):
         facts = await self.candidate_facts()
         selected: list[IsabelleEntity] = []
         for idx in answer.indexes:
-            if idx < 0 or idx >= len(facts):
-                raise Interaction_BadAnswer(
-                    f"Index {idx} out of range (0–{len(facts) - 1}).")
+            _check_index(idx, len(facts))
             selected.append(facts[idx].entity)
         await self._log_retrieval_training_data(list(answer.indexes))
         session = the_session()
@@ -4088,9 +4118,8 @@ class Interaction_ChooseDef(Interaction):
     async def answer(self, answer: Answer) -> list[IsabelleFact]:
         """Priority: name > indexes. `statement` is rejected (use Have/Obvious
         instead if you want to prove-in-time)."""
-        if answer.statement is not None:
-            raise Interaction_BadAnswer(
-                "This interaction does not accept `statement`; select a definition by `indexes` or `name`.")
+        _reject_fields(answer, allow={"indexes", "name"},
+                       hint="Select a definition by `indexes` or `name`.")
         if answer.name is not None:
             # Try matching against candidate names first
             for d in self.candidate_defs:
@@ -4106,9 +4135,7 @@ class Interaction_ChooseDef(Interaction):
         if not answer.indexes:
             return []
         for idx in answer.indexes:
-            if idx < 0 or idx >= len(self.candidate_defs):
-                raise Interaction_BadAnswer(
-                    f"Index {idx} out of range (0–{len(self.candidate_defs) - 1}).")
+            _check_index(idx, len(self.candidate_defs))
         return [self.candidate_defs[idx] for idx in answer.indexes]
 
 
@@ -4359,9 +4386,8 @@ class Interaction_SelectRewriteTargets(Interaction):
     async def answer(self, answer: Answer) -> list[tuple[int, list[lambda_term]]]:
         """Returns [(fact_index, [selected_raw_terms])] for each looping rule.
         Empty selection for a rule means drop it. Accepts `indexes` only."""
-        if answer.name is not None or answer.statement is not None:
-            raise Interaction_BadAnswer(
-                "This interaction expects index selection, not `name` or `statement`.")
+        _reject_fields(answer, allow={"indexes"},
+                       hint="Select subterm(s) by `indexes`.")
         idxs = answer.indexes
         result: list[tuple[int, list[lambda_term]]] = []
         # answer is a list of indices — applied to all looping rules sequentially
@@ -4374,9 +4400,7 @@ class Interaction_SelectRewriteTargets(Interaction):
             else:
                 selected_terms: list[lambda_term] = []
                 for idx in idxs:
-                    if idx < 0 or idx >= len(matches):
-                        raise Interaction_BadAnswer(
-                            f"Index {idx} out of range (0–{len(matches) - 1}).")
+                    _check_index(idx, len(matches))
                     selected_terms.append(matches[idx][1])
                 result.append((fact_idx, selected_terms))
         else:
