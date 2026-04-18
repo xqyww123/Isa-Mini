@@ -207,7 +207,11 @@ async def _answer_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             session.log_tool_response("mcp__proof__answer", f"ERROR: {error_msg}")
             return (error_msg, True)
 
-        normalized = normalize_answer(args.get("indexes"), args.get("text"))
+        normalized = normalize_answer(
+            args.get("indexes"),
+            args.get("name"),
+            args.get("statement"),
+            args.get("instantiations"))
 
         try:
             result = await pending.interaction.answer(normalized)

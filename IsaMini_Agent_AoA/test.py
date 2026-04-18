@@ -648,7 +648,7 @@ async def _test_Unfold1(root: Root, file: MyIO):
 
     # First Unfold: silently pick XXX_def (index 0) — no interaction printed.
     async def stub_silent(interaction):
-        return await interaction.answer([0])
+        return await interaction.answer(Answer(indexes=[0]))
     root.session.fork_interaction = stub_silent
     await root.fill("1", Unfold.gen({
         "thought": "Unfold the goal",
@@ -661,7 +661,7 @@ async def _test_Unfold1(root: Root, file: MyIO):
     async def stub_fork(interaction):
         print_header("Interaction Prompt", file)
         await interaction.prompt(0, file)
-        return await interaction.answer([1])
+        return await interaction.answer(Answer(indexes=[1]))
     root.session.fork_interaction = stub_fork
     await root.amend("1", Unfold.gen({
         "thought": "Unfold the goal",
@@ -860,7 +860,7 @@ async def _test_RetrieveFact2(root: Root, file: MyIO):
         file.write(f"    query: {interaction.query}\n")
         file.write(f"    candidates: {len(await interaction.candidate_facts())}\n")
         # Answer with a ProveInTime statement
-        result = await interaction.answer("(8::nat) = 2^3")
+        result = await interaction.answer(Answer(statement="(8::nat) = 2^3"))
         assert isinstance(result, list) and len(result) == 1
         pit = result[0]
         file.write(f"    ProveInTime answer: {type(pit).__name__}\n")
@@ -1245,7 +1245,7 @@ async def _test_Rewrite_Once_Simproc(root: Root, file: MyIO):
         await interaction.prompt(0, file)
         assert isinstance(interaction, Interaction_SelectRewriteTargets)
         num_matches = len(interaction.looping_rules[0][2]) if interaction.looping_rules else 0
-        return await interaction.answer(list(range(num_matches)))
+        return await interaction.answer(Answer(indexes=list(range(num_matches))))
     root.session.fork_interaction = stub_fork
     node, success, reason = await root.fill("1", Rewrite.gen({
         "thought": "Rewrite using my_wrap to unfold f into g(f(...))",
@@ -1272,7 +1272,7 @@ async def _test_Rewrite_Targeted(root: Root, file: MyIO):
         print_header("Interaction Prompt", file)
         await interaction.prompt(0, file)
         # Select index 1 only (should be "f a", leaving "f b" untouched)
-        return await interaction.answer([1])
+        return await interaction.answer(Answer(indexes=[1]))
     root.session.fork_interaction = stub_fork
     node, success, reason = await root.fill("1", Rewrite.gen({
         "thought": "Rewrite f a using my_wrap, leave f b alone",
@@ -1298,7 +1298,7 @@ async def _test_Rewrite_Targeted_Drop(root: Root, file: MyIO):
         print_header("Interaction Prompt", file)
         await interaction.prompt(0, file)
         # Answer with empty selection — drop the rule
-        return await interaction.answer([])
+        return await interaction.answer(Answer())
     root.session.fork_interaction = stub_fork
     node, success, reason = await root.fill("1", Rewrite.gen({
         "thought": "Attempt rewrite with looping rule, then dismiss",
@@ -3074,21 +3074,21 @@ async def _test_NamedFactResolution(root: Root, file: MyIO):
     # "log_nat_power" is a theorem in Complex_Main
     inter1 = Interaction_RetrieveForProof(
         state=ml_state, query="logarithm of a power", kinds=[EntityKind.THEOREM])
-    result1 = await inter1.answer("log_nat_power")
-    file.write(f"RetrieveForProof('log_nat_power'): {type(result1[0]).__name__}\n")
+    result1 = await inter1.answer(Answer(name="log_nat_power"))
+    file.write(f"RetrieveForProof(name='log_nat_power'): {type(result1[0]).__name__}\n")
     assert isinstance(result1[0], IsabelleFact_Presented), \
         f"Expected IsabelleFact_Presented, got {type(result1[0]).__name__}"
     file.write(f"  short_name: {result1[0].short_name.unicode}\n")
 
-    # --- RetrieveForProof: text that is NOT a valid theorem name ---
+    # --- RetrieveForProof: prove-in-time statement (not a name) ---
     inter2 = Interaction_RetrieveForProof(
         state=ml_state, query="something trivial", kinds=[EntityKind.THEOREM])
-    result2 = await inter2.answer("(8::nat) = 2 ^ 3")
-    file.write(f"RetrieveForProof('(8::nat) = 2 ^ 3'): {type(result2[0]).__name__}\n")
+    result2 = await inter2.answer(Answer(statement="(8::nat) = 2 ^ 3"))
+    file.write(f"RetrieveForProof(statement='(8::nat) = 2 ^ 3'): {type(result2[0]).__name__}\n")
     assert isinstance(result2[0], IsabelleFact_ProveInTime), \
         f"Expected IsabelleFact_ProveInTime, got {type(result2[0]).__name__}"
 
-    # --- ChooseDef: text matching a candidate short name ---
+    # --- ChooseDef: name matching a candidate short name ---
     cand_a = IsabelleFact_Presented(
         full_name="Test_NamedFactResolution.NF_XXX_def",
         short_name=IsaTerm.from_isabelle("NF_XXX_def"),
@@ -3100,33 +3100,33 @@ async def _test_NamedFactResolution(root: Root, file: MyIO):
         fact=FactByName(refer_by="name", name="NF_XXX_alt"),
         expression=[IsaTerm.from_isabelle("NF_XXX ?a ?b = ?b + ?a")])
     inter3 = Interaction_ChooseDef(["NF_XXX"], [cand_a, cand_b], state=ml_state)
-    result3 = await inter3.answer("NF_XXX_def")
-    file.write(f"ChooseDef('NF_XXX_def'): {[type(r).__name__ for r in result3]}\n")
+    result3 = await inter3.answer(Answer(name="NF_XXX_def"))
+    file.write(f"ChooseDef(name='NF_XXX_def'): {[type(r).__name__ for r in result3]}\n")
     assert len(result3) == 1 and result3[0] is cand_a, \
         "Expected cand_a to be selected by short name"
 
-    # --- ChooseDef: text matching a candidate full name ---
+    # --- ChooseDef: name matching a candidate full name ---
     inter4 = Interaction_ChooseDef(["NF_XXX"], [cand_a, cand_b], state=ml_state)
-    result4 = await inter4.answer("Test_NamedFactResolution.NF_XXX_alt")
-    file.write(f"ChooseDef(full_name NF_XXX_alt): {[type(r).__name__ for r in result4]}\n")
+    result4 = await inter4.answer(Answer(name="Test_NamedFactResolution.NF_XXX_alt"))
+    file.write(f"ChooseDef(name=full_name NF_XXX_alt): {[type(r).__name__ for r in result4]}\n")
     assert len(result4) == 1 and result4[0] is cand_b, \
         "Expected cand_b to be selected by full name"
 
-    # --- ChooseDef: text not matching any candidate, but IS an accessible fact ---
+    # --- ChooseDef: name not matching any candidate, but IS an accessible fact ---
     inter5 = Interaction_ChooseDef(["NF_XXX"], [cand_a, cand_b], state=ml_state)
-    result5 = await inter5.answer("conjI")
-    file.write(f"ChooseDef('conjI'): {[type(r).__name__ for r in result5]}\n")
+    result5 = await inter5.answer(Answer(name="conjI"))
+    file.write(f"ChooseDef(name='conjI'): {[type(r).__name__ for r in result5]}\n")
     assert len(result5) == 1 and isinstance(result5[0], IsabelleFact_Presented), \
         f"Expected IsabelleFact_Presented via RPC lookup, got {type(result5[0]).__name__}"
     file.write(f"  resolved short_name: {result5[0].short_name.unicode}\n")
 
-    # --- ChooseDef: text not matching anything ---
+    # --- ChooseDef: name not matching anything ---
     inter6 = Interaction_ChooseDef(["NF_XXX"], [cand_a, cand_b], state=ml_state)
     try:
-        await inter6.answer("xyzzy_nonexistent_thm")
+        await inter6.answer(Answer(name="xyzzy_nonexistent_thm"))
         raise TestFailed("Expected Interaction_BadAnswer for nonexistent name")
     except Interaction_BadAnswer as e:
-        file.write(f"ChooseDef('xyzzy_nonexistent_thm'): Interaction_BadAnswer as expected\n")
+        file.write(f"ChooseDef(name='xyzzy_nonexistent_thm'): Interaction_BadAnswer as expected\n")
 
     print_header("Done", file)
 

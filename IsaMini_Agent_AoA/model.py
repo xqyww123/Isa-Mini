@@ -1585,17 +1585,50 @@ class Minilang_State:
 
 ### Interaction
 
-# abstract base class
-type answer = Annotated[list[int], "sorted and all elements are distinct"] | str
+# Structured answer object carried by every interaction reply. Each
+# Interaction subclass's `answer()` method documents which fields it
+# consumes and in what priority order; fields not consumed are ignored.
+#
+# - `indexes`       : selection into a numbered candidate list
+# - `name`          : exact name of an accessible fact/entity (strict
+#                     lookup — no fallback to prove-in-time)
+# - `statement`     : an Isabelle term string (prove-in-time for
+#                     rule-retrieval interactions; instantiation value
+#                     for single-variable schematic interactions)
+# - `instantiations`: (variable-name, term) pairs for multi-variable
+#                     schematic instantiation
+class Answer(NamedTuple):
+    # The list defaults are shared; the codebase treats Answer as read-only
+    # (constructed once per reply, never mutated in place).
+    indexes: Annotated[list[int], "sorted and all elements are distinct"] = []
+    name: str | None = None
+    statement: str | None = None
+    instantiations: list[tuple[str, str]] = []
 
-def normalize_answer(indexes: list[int] | None, text: str | None) -> answer:
-    """Normalize the answer from two optional fields.
-    indexes takes priority; text is used only when indexes is empty or absent."""
-    if indexes:
-        return sorted(set(indexes))
-    if text:
-        return text
-    return []
+# Backward-compatible alias; new signatures should prefer `Answer`.
+type answer = Answer
+
+_EMPTY_ANSWER = Answer(indexes=[], name=None, statement=None, instantiations=[])
+
+def normalize_answer(indexes: list[int] | None,
+                     name: str | None,
+                     statement: str | None,
+                     instantiations: list[dict[str, str]] | None) -> Answer:
+    """Build a structured Answer from the raw tool-arg fields.
+
+    All four fields are independent — interactions extract what they need
+    in their own priority order. Empty / missing inputs become the
+    conventional empty values (empty list, None)."""
+    idx = sorted(set(indexes)) if indexes else []
+    n = name if name else None
+    s = statement if statement else None
+    insts = [(i["variable"], i["term"]) for i in instantiations] if instantiations else []
+    return Answer(indexes=idx, name=n, statement=s, instantiations=insts)
+
+def _answer_is_empty(ans: Answer) -> bool:
+    """All four fields empty — conventionally means 'give up / expand'."""
+    return not ans.indexes and ans.name is None and ans.statement is None \
+       and not ans.instantiations
 
 class ForkingMode(Enum):
     FORKING_WITH_CTXT = 1         # fork inheriting parent conversation context
@@ -1618,7 +1651,7 @@ class Interaction:
     fork_allowed_tools: list[tool] | None = None  # None = use session default
     async def prompt(self, indent: int, file: MyIO) -> None:
         raise NotImplementedError("`prompt` must be implemented by subclass")
-    async def answer(self, answer: answer) -> Any:
+    async def answer(self, answer: Answer) -> Any:
         raise NotImplementedError("`answer` must be implemented by subclass")
 
 class ImmediateAnswer(Exception):
@@ -1810,12 +1843,15 @@ class Interaction_Retrieve(Interaction):
     async def prompt(self, indent: int, file: MyIO) -> None:
         raise NotImplementedError("subclasses must override prompt()")
 
-    async def answer(self, answer: answer) -> 'list[IsabelleEntity | IsabelleFact]':
-        # Text answer — rejected by default; subclass overrides for prove-in-time
-        if isinstance(answer, str) and answer:
-            raise Interaction_BadAnswer("Free-text answers are not allowed here. Select by index.")
+    async def answer(self, answer: Answer) -> 'list[IsabelleEntity | IsabelleFact]':
+        # Base class: accepts `indexes` only. `name`/`statement` are rejected
+        # here — subclasses (e.g. Interaction_RetrieveForProof) override to
+        # support named-fact lookup and prove-in-time.
+        if answer.name is not None or answer.statement is not None:
+            raise Interaction_BadAnswer(
+                "This interaction expects index selection, not `name` or `statement`.")
         # Empty answer — expand search if possible
-        if not answer:
+        if not answer.indexes:
             if self.k < self.FINAL_K:
                 self.k = self.FINAL_K
                 self._candidate_facts_cache = None
@@ -1826,16 +1862,16 @@ class Interaction_Retrieve(Interaction):
                 the_session().log_retrieval(self.query, ["none selected"])
                 return []
         # Index answer
-        if self.single_choice and len(answer) > 1:
+        if self.single_choice and len(answer.indexes) > 1:
             raise Interaction_BadAnswer("Please select exactly one entry.")
         facts = await self.candidate_facts()
         selected: list[IsabelleEntity] = []
-        for idx in answer:
+        for idx in answer.indexes:
             if idx < 0 or idx >= len(facts):
                 raise Interaction_BadAnswer(
                     f"Index {idx} out of range (0–{len(facts) - 1}).")
             selected.append(facts[idx].entity)
-        await self._log_retrieval_training_data(list(answer))
+        await self._log_retrieval_training_data(list(answer.indexes))
         session = the_session()
         results = []
         for e in selected:
@@ -1899,20 +1935,36 @@ class Interaction_RetrieveForProof(Interaction_Retrieve):
         else:
             file.write("If none of the above applies, answer empty to see more candidates.\n")
 
-    async def answer(self, answer: answer) -> 'list[IsabelleEntity | IsabelleFact]':
+    async def answer(self, answer: Answer) -> 'list[IsabelleEntity | IsabelleFact]':
+        """Priority order: name > indexes > statement (> empty-expand).
+
+        `name`      → strict lookup of an accessible named fact. BadAnswer
+                      if the name doesn't resolve — it does NOT fall through
+                      to prove-in-time.
+        `indexes`   → select from the candidate list (delegates to super).
+        `statement` → prove-in-time: treat as a new proposition to prove
+                      inline.
+        (all empty) → expand the candidate list, or give up on the second
+                      empty answer (delegates to super)."""
         session = the_session()
-        # Text answer → try named fact first, then prove-in-time
-        if isinstance(answer, str) and answer:
-            presented = await _try_resolve_as_named_fact(self.state, answer)
-            if presented is not None:
-                await self._log_retrieval_training_data([])
-                session.log_retrieval(self.query, [f"named: {answer}"])
-                return [presented]
-            await self._log_retrieval_training_data([], prove_in_time=answer)
-            session.log_retrieval(self.query, [f"prove-in-time: {answer}"])
-            return [IsabelleFact_ProveInTime(IsaTerm.from_agent(answer))]
-        # Empty answer with no expansion left
-        if not answer and self.k >= self.FINAL_K:
+        # 1. Name lookup (strict — does not fall through)
+        if answer.name is not None:
+            presented = await _try_resolve_as_named_fact(self.state, answer.name)
+            if presented is None:
+                raise Interaction_BadAnswer(
+                    f"No accessible fact found with name '{answer.name}'.")
+            await self._log_retrieval_training_data([])
+            session.log_retrieval(self.query, [f"named: {answer.name}"])
+            return [presented]
+        # 2. Index selection → delegate to super (which also handles empty
+        #    → expand/give-up). But first peel off the statement (prove-
+        #    in-time) and empty-with-no-expansion-left paths that super
+        #    would reject.
+        if answer.statement is not None and not answer.indexes:
+            await self._log_retrieval_training_data([], prove_in_time=answer.statement)
+            session.log_retrieval(self.query, [f"prove-in-time: {answer.statement}"])
+            return [IsabelleFact_ProveInTime(IsaTerm.from_agent(answer.statement))]
+        if _answer_is_empty(answer) and self.k >= self.FINAL_K:
             await self._log_retrieval_training_data([])
             session.log_retrieval(self.query, ["unfound"])
             if self.single_choice:
@@ -3831,27 +3883,32 @@ class Interaction_ChooseDef(Interaction):
         for i, ref in enumerate(self.candidate_defs):
             print_indent(indent+1, file)
             file.write(f"{i}. {ref.full_name}: {', '.join(e.unicode for e in ref.expression)}\n")
-        file.write("Select definition(s) to use in unfolding. Call `mcp__proof__answer` with `indexes`, or answer with the exact name of a definition, or leave empty to skip.\n")
-    async def answer(self, answer: answer) -> list[IsabelleFact]:
-        if isinstance(answer, str) and answer:
+        file.write("Select definition(s) to use in unfolding. Call `mcp__proof__answer` with `indexes`, or the `name` of a definition, or leave empty to skip.\n")
+    async def answer(self, answer: Answer) -> list[IsabelleFact]:
+        """Priority: name > indexes. `statement` is rejected (use Have/Obvious
+        instead if you want to prove-in-time)."""
+        if answer.statement is not None:
+            raise Interaction_BadAnswer(
+                "This interaction does not accept `statement`; select a definition by `indexes` or `name`.")
+        if answer.name is not None:
             # Try matching against candidate names first
             for d in self.candidate_defs:
-                if d.short_name.unicode == answer or d.full_name == answer:
+                if d.short_name.unicode == answer.name or d.full_name == answer.name:
                     return [d]
             # Try general RPC lookup
             if self.state is not None:
-                presented = await _try_resolve_as_named_fact(self.state, answer)
+                presented = await _try_resolve_as_named_fact(self.state, answer.name)
                 if presented is not None:
                     return [presented]
             raise Interaction_BadAnswer(
-                f"No accessible fact found with name '{answer}'. Select by index.")
-        if not answer:
+                f"No accessible fact found with name '{answer.name}'. Select by index.")
+        if not answer.indexes:
             return []
-        for idx in answer:
+        for idx in answer.indexes:
             if idx < 0 or idx >= len(self.candidate_defs):
                 raise Interaction_BadAnswer(
                     f"Index {idx} out of range (0–{len(self.candidate_defs) - 1}).")
-        return [self.candidate_defs[idx] for idx in answer]
+        return [self.candidate_defs[idx] for idx in answer.indexes]
 
 
 class Unfold_ToolArg(TypedDict):
@@ -4098,22 +4155,24 @@ class Interaction_SelectRewriteTargets(Interaction):
                 file.write("No matching subterms found in rewrite targets.\n")
             print_indent(indent, file)
             file.write("Answer with the index(es) of the subterm(s) to rewrite, or leave empty to drop this rule.\n")
-    async def answer(self, answer: answer) -> list[tuple[int, list[lambda_term]]]:
+    async def answer(self, answer: Answer) -> list[tuple[int, list[lambda_term]]]:
         """Returns [(fact_index, [selected_raw_terms])] for each looping rule.
-        Empty selection for a rule means drop it."""
+        Empty selection for a rule means drop it. Accepts `indexes` only."""
+        if answer.name is not None or answer.statement is not None:
+            raise Interaction_BadAnswer(
+                "This interaction expects index selection, not `name` or `statement`.")
+        idxs = answer.indexes
         result: list[tuple[int, list[lambda_term]]] = []
-        if isinstance(answer, str):
-            raise Interaction_BadAnswer("This interaction expects index selection, not text.")
         # answer is a list of indices — applied to all looping rules sequentially
         # For simplicity: if there's one looping rule, indices select its subterms;
         # if multiple, this needs a richer protocol. For now, support single-rule case.
         if len(self.looping_rules) == 1:
             fact_idx, _, matches = self.looping_rules[0]
-            if not answer:
+            if not idxs:
                 result.append((fact_idx, []))
             else:
                 selected_terms: list[lambda_term] = []
-                for idx in answer:
+                for idx in idxs:
                     if idx < 0 or idx >= len(matches):
                         raise Interaction_BadAnswer(
                             f"Index {idx} out of range (0–{len(matches) - 1}).")
@@ -4123,11 +4182,11 @@ class Interaction_SelectRewriteTargets(Interaction):
             # Multiple looping rules: treat answer as list of lists
             # For now, apply same indices to all rules (can be refined later)
             for fact_idx, _, matches in self.looping_rules:
-                if not answer:
+                if not idxs:
                     result.append((fact_idx, []))
                 else:
                     selected_terms = []
-                    for idx in answer:
+                    for idx in idxs:
                         if 0 <= idx < len(matches):
                             selected_terms.append(matches[idx][1])
                     result.append((fact_idx, selected_terms))
@@ -5004,16 +5063,16 @@ class Branch(SubgoalMaker):
 
 ### CaseSplit
 
-# Rule specification for CaseSplit/Induction. "default" means let Isabelle
-# auto-pick; FactByName targets a specific rule; FactByDescription triggers
-# a semantic retrieval interaction at refresh time (constrained to
-# INDUCTION_RULE / CASE_SPLIT_RULE kind).
-type InductRule = Literal["default"] | FactByName | FactByDescription
+# Rule field on CaseSplit and Induction uses the same shape:
+#   Literal["default"] | FactByName | FactByDescription
+# "default" = let Isabelle auto-pick; FactByName = specific rule;
+# FactByDescription = trigger a semantic retrieval interaction at refresh
+# time (constrained to CASE_SPLIT_RULE / INDUCTION_RULE kind).
 
 class CaseSplit_ToolArg(TypedDict):
     thought: str
     target_isabelle_term: xterm
-    rule: NotRequired[InductRule]  # default: "default"
+    rule: NotRequired[Literal["default"] | FactByName | FactByDescription]
     proof: SubProof
 
 @proof_operation("CaseSplit", CaseSplit_ToolArg)
@@ -5065,7 +5124,7 @@ class Induction_ToolArg_Variable(TypedDict):
 class Induction_ToolArg(TypedDict):
     thought: str
     target_isabelle_term: xterm
-    rule: NotRequired[InductRule]  # default: "default"
+    rule: NotRequired[Literal["default"] | FactByName | FactByDescription]
     variables: list[Induction_ToolArg_Variable]
     proof: SubProof
 
