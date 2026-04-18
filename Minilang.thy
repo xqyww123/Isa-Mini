@@ -34,6 +34,7 @@ attribute_setup of = \<open>let
             uncurry (Minilang_Aux.xof (Context.proof_of context)) args))
  end \<close> "positional instantiation of theorem"
 
+(*
 attribute_setup "where" = \<open>let
      fun peek parserX toks =
           let val (retX, toks') = parserX toks
@@ -48,7 +49,7 @@ attribute_setup "where" = \<open>let
         Thm.rule_attribute [] (fn context =>
             uncurry (Minilang_Aux.xwhere (Context.proof_of context)) args))
  end \<close> "positional instantiation of theorem"
-
+*)
 (*
 (*
 section \<open>Tests for proof-local function infrastructure\<close>

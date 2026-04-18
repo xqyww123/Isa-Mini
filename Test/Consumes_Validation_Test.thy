@@ -133,7 +133,7 @@ lemma int_le_demox:
   assumes le: "i \<le> k"
   shows "(i::int) + k \<ge> 2 * i"
 thm int_le_induct[where ?k = \<open>k\<close>]
-  by (min_script \<open>INDUCT i rule: int_le_induct[where ?k = \<open>k\<close>] NEXT NEXT PRINT END\<close>)
+  by (min_script \<open>INDUCT i rule: int_le_induct[where ?k = \<open>k\<close>] PRINT NEXT NEXT PRINT END\<close>)
 thm int_le_induct
 
 

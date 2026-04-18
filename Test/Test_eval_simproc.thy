@@ -1,6 +1,9 @@
 theory Test_eval_simproc
   imports MathBench_Prover.MathBench_Prover Minilang_Agent.Minilang_Agent
     "Polynomial_Factorization.Prime_Factorization"
+    "Catalan_Numbers.Catalan_Numbers"
+    "Bernoulli.Bernoulli"
+    "Bell_Numbers_Spivey.Bell_Numbers"
 begin
 
 (*
@@ -121,6 +124,31 @@ section \<open>prime\_factorization test\<close>
 lemma \<open>prime_factorization (12::nat) = {#2, 2, 3#}\<close>
   by simp
 
+ML \<open>
+let
+  val ct = \<^cterm>\<open>squarefree (30::nat)\<close>
+  val prop_ct = Thm.apply \<^cterm>\<open>Trueprop\<close> ct
+
+  fun timed name f =
+    let val (t, r) = Timing.timing (fn () =>
+           Timeout.apply (Time.fromSeconds 15) f ()
+           handle Timeout.TIMEOUT _ => (tracing (name ^ " TIMEOUT"); NONE)
+                | ERROR msg => (tracing (name ^ " ERROR: " ^ msg); NONE)) ()
+        val s = case r of NONE => "FAILED"
+                        | SOME thm => Thm.string_of_thm \<^context> thm
+    in tracing (name ^ ": " ^ Value.print_time (#elapsed t) ^ "s  =>  " ^ s) end
+in
+  timed "Code_Runtime (prop)" (fn () =>
+    SOME (Code_Runtime.dynamic_holds_conv \<^context> prop_ct));
+  timed "Code_Runtime (bool)" (fn () =>
+    SOME (Code_Runtime.dynamic_holds_conv \<^context> ct));
+  timed "Nbe (bool)         " (fn () =>
+    SOME (Nbe.dynamic_conv \<^context> ct));
+  timed "Simproc            " (fn () =>
+    Eval_Simproc.eval_ground \<^context> ct)
+end
+\<close>
+
 lemma \<open>squarefree (30::nat)\<close>
   by simp
 
@@ -134,6 +162,46 @@ lemma \<open>residue_primroot 5 2\<close>
   by simp
 
 lemma \<open>\<not> residue_primroot 7 2\<close>
+  by simp
+
+section \<open>Combinatorics\<close>
+
+simproc_setup eval_catalan ("catalan n") =
+  \<open>K Eval_Simproc.eval_ground\<close>
+
+lemma \<open>catalan 5 = 42\<close>
+  by eval
+
+(*
+lemma \<open>catalan 5 = 42\<close>
+  by simp
+*)
+
+simproc_setup eval_bernoulli ("bernoulli n") =
+  \<open>K Eval_Simproc.eval_ground\<close>
+
+lemma \<open>bernoulli 0 = 1\<close>
+  by simp
+
+lemma \<open>bernoulli 4 = -1/30\<close>
+  by eval
+
+lemma \<open>bernoulli 4 = -1/30\<close>
+  by simp
+
+simproc_setup eval_Bell ("Bell n") =
+  \<open>K Eval_Simproc.eval_ground\<close>
+
+lemma \<open>Bell 5 = 52\<close>
+  by eval
+
+lemma \<open>Bell 5 = 52\<close>
+  by simp
+
+simproc_setup eval_Stirling ("Stirling n k") =
+  \<open>K Eval_Simproc.eval_ground\<close>
+
+lemma \<open>Stirling 5 3 = 25\<close>
   by simp
 
 end
