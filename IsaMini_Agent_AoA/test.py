@@ -288,7 +288,6 @@ async def _test_Induction(root: Root, file: MyIO):
         "thought": "some thought about Induction",
         "target_isabelle_term": r"l",
         "variables": [{"name": "l", "status": "fixed"}],
-        "rule": None
     }))
     print_header("Induction", file)
     root.print(0, file)
@@ -2961,9 +2960,62 @@ async def _test_InductionGeneralize(root: Root, file: MyIO):
             {"name": "N", "status": "fixed"},
             {"name": "m", "status": "generalized"},
         ],
-        "rule": None,
     }))
     print_header("After Induction (check premises in cases)", file)
+    root.print(0, file)
+
+
+@model_test("Induction_SchematicInst", "Test_Induction_SchematicInst.thy", 17)
+async def _test_Induction_SchematicInst(root: Root, file: MyIO):
+    """FactByName + schematic-variable instantiation end-to-end.
+
+    Goal: `i ≤ k ⟹ (i::int) + k ≥ 2 * i`. After auto-Intro we request
+    Induction on `i` with `rule = FactByName("int_le_induct")`. That rule
+    has consumes=1 and a schematic `?k` in its consume premise, so the
+    Phase 3 flow must fork `Interaction_InstantiateSchematics` asking for
+    `?k`. We answer `?k = k`; the composed rule string
+    `int_le_induct[where ?k = k]` is sent to Minilang's INDUCT, which
+    under `consumes_policy = subgoals` surfaces the unconsumed `i ≤ k`
+    premise as an extra `Prem0` subgoal alongside the usual cases.
+
+    The test does not complete the proof; it only verifies the
+    interaction fires with the right shape and that INDUCT accepts the
+    instantiated rule string."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    interaction_seen = {"count": 0}
+
+    async def stub_fork(interaction):
+        interaction_seen["count"] += 1
+        print_header(f"Interaction #{interaction_seen['count']} Prompt", file)
+        await interaction.prompt(0, file)
+        if isinstance(interaction, Interaction_InstantiateSchematics):
+            assert interaction.kind == "induction"
+            assert "int_le_induct" in interaction.rule_name, \
+                f"rule_name should reference int_le_induct, got {interaction.rule_name}"
+            var_names = {n for n, _ in interaction.schematic_vars}
+            assert "?k" in var_names, \
+                f"expected ?k among schematic vars, got {sorted(var_names)}"
+            return await interaction.answer(Answer(instantiations=[("?k", "k")]))
+        raise TestFailed(
+            f"Unexpected interaction: {type(interaction).__name__} "
+            f"(only Interaction_InstantiateSchematics was expected for FactByName)")
+    root.session.fork_interaction = stub_fork
+
+    # Step 1 is the auto-Intro; Induction is step 2.
+    await root.fill("2", Induction.gen({
+        "thought": "induct on i using int_le_induct (requires ?k instantiation)",
+        "target_isabelle_term": "i",
+        "rule": {"refer_by": "name", "name": "int_le_induct"},
+        "variables": [
+            {"name": "i", "status": "fixed"},
+            {"name": "k", "status": "fixed"},
+        ],
+    }))
+    assert interaction_seen["count"] == 1, \
+        f"Expected exactly 1 interaction (schematic instantiation), got {interaction_seen['count']}"
+    print_header("After Induction with schematic instantiation", file)
     root.print(0, file)
 
 

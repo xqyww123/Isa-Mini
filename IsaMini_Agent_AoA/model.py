@@ -1132,11 +1132,20 @@ class Minilang_Operation(NamedTuple):
     def BRANCH(cases: list[tuple[str | None, xterm]]) -> 'Minilang_Operation':
         return Minilang_Operation("BRANCH", [(n, ascii_of_unicode(t)) for n, t in cases])
     @staticmethod
-    def CASE_SPLIT(target: xterm, vars: list[varname_spec] | None, rule: 'IsabelleFact | None') -> 'Minilang_Operation':
-        return Minilang_Operation("CASE_SPLIT", (ascii_of_unicode(target), _pack_varnames(vars), rule))
+    def CASE_SPLIT(target: xterm, vars: list[varname_spec] | None, rule: str | None) -> 'Minilang_Operation':
+        # `rule` is the raw Isabelle rule source (e.g. `nat.exhaust` or
+        # `int_le_induct[where ?k = k]`). It is parsed on the ML side via
+        # Attrib.eval_thms / read_thms, which handles attribute syntax.
+        return Minilang_Operation("CASE_SPLIT",
+            (ascii_of_unicode(target), _pack_varnames(vars),
+             ascii_of_unicode(rule) if rule is not None else None))
     @staticmethod
-    def INDUCT(target: xterm, vars: list[varname_spec] | None, arbitrary: list[xvarname], rule: 'IsabelleFact | None') -> 'Minilang_Operation':
-        return Minilang_Operation("INDUCT", (ascii_of_unicode(target), _pack_varnames(vars), [ascii_of_unicode(t) for t in arbitrary], rule.pack() if rule is not None else None))
+    def INDUCT(target: xterm, vars: list[varname_spec] | None, arbitrary: list[xvarname], rule: str | None) -> 'Minilang_Operation':
+        # `rule` is the raw Isabelle rule source; see CASE_SPLIT above.
+        return Minilang_Operation("INDUCT",
+            (ascii_of_unicode(target), _pack_varnames(vars),
+             [ascii_of_unicode(t) for t in arbitrary],
+             ascii_of_unicode(rule) if rule is not None else None))
     @staticmethod
     def SPECIALIZE(
         name: str,
@@ -1969,6 +1978,80 @@ class Interaction_RetrieveForProof(Interaction_Retrieve):
         return await super().answer(answer)
 
 
+class Interaction_InstantiateSchematics(Interaction):
+    """Prompt the LLM to instantiate schematic variables of an induction /
+    case-split rule.
+
+    The pre-flight `IsaMini.analyze_induct` / `analyze_case_split` callback
+    reports schematic variables appearing in the rule's consume premises.
+    Under `consumes_policy = subgoals`, unconsumed premises are surfaced as
+    `Prem<i>` subgoals, but only when they contain no schematic variables;
+    this interaction closes that gap by asking the agent to make them
+    concrete before the rule is applied.
+
+    Consumes the `instantiations` field of `Answer`. Every schematic
+    variable listed in `schematic_vars` must appear exactly once in the
+    answer."""
+
+    def __init__(self,
+                 rule_name: str,
+                 consume_premises: list[str],
+                 schematic_vars: list[tuple[str, str]],
+                 kind: Literal["induction", "case-split"]):
+        self.rule_name = rule_name
+        self.consume_premises = consume_premises
+        self.schematic_vars = schematic_vars
+        self.kind = kind
+
+    async def prompt(self, indent: int, file: MyIO) -> None:
+        kind_word = "induction" if self.kind == "induction" else "case-split"
+        n_vars = len(self.schematic_vars)
+        print_indent(indent, file)
+        file.write(
+            f"The {kind_word} rule `{self.rule_name}` has "
+            f"{'a schematic variable' if n_vars == 1 else f'{n_vars} schematic variables'} "
+            "that must be instantiated before the rule can be applied.\n")
+        print_indent(indent, file)
+        file.write("Consume premises (they become `Prem<i>` subgoals, "
+                   "or are discharged by `using` facts):\n")
+        for i, prem in enumerate(self.consume_premises):
+            print_indent(indent + 1, file)
+            file.write(f"{i}. {prem}\n")
+        print_indent(indent, file)
+        file.write("Schematic variables to instantiate:\n")
+        for name, typ in self.schematic_vars:
+            print_indent(indent + 1, file)
+            file.write(f"- {name} :: {typ}\n")
+        print_indent(indent, file)
+        file.write("Answer with `instantiations`, a list of "
+                   "{variable, term} objects. Each term must be a "
+                   "type-correct Isabelle expression.\n")
+
+    async def answer(self, answer: Answer) -> list[tuple[str, str]]:
+        if not answer.instantiations:
+            names = ", ".join(n for n, _ in self.schematic_vars)
+            raise Interaction_BadAnswer(
+                f"This interaction requires `instantiations` for variables: {names}.")
+        required = {n for n, _ in self.schematic_vars}
+        provided: set[str] = set()
+        by_name: dict[str, str] = {}
+        for v, t in answer.instantiations:
+            if v in provided:
+                raise Interaction_BadAnswer(f"Variable `{v}` was instantiated twice.")
+            provided.add(v)
+            by_name[v] = t
+        missing = required - provided
+        if missing:
+            raise Interaction_BadAnswer(
+                f"Missing instantiations for: {', '.join(sorted(missing))}.")
+        extra = provided - required
+        if extra:
+            raise Interaction_BadAnswer(
+                f"Unknown schematic variable(s): {', '.join(sorted(extra))}. "
+                f"Expected one of: {', '.join(sorted(required))}.")
+        return [(n, by_name[n]) for n, _ in self.schematic_vars]
+
+
 ### The Abstract Model
 
 # gen_node: a sync node factory that turns a NodeConfig into a fully-constructed Node.
@@ -2765,9 +2848,19 @@ class StdBlock(NonLeaf_Node):
             output.append(opr)
         return output
 
-    async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
+    async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
+        # Re-read `beginning_opr` here instead of taking it as an arg:
+        # overrides (e.g. CaseSplit_Like) can do async preparation first
+        # (setting cached state on `self`) and let this super-call read
+        # the updated opr fresh, without having to rebuild anything.
+        # Invariant: `_refresh_me_alone` only calls this when the opr
+        # is a concrete `Minilang_Operation` (None / FailureReason are
+        # dispatched separately).
+        opr = self.beginning_opr()
+        assert isinstance(opr, Minilang_Operation), \
+            f"_refresh_the_beginning_opr expects a Minilang_Operation, got {type(opr).__name__}"
         try:
-            await self.ml_state.execute(begin_opr, self._state_after_beginning())
+            await self.ml_state.execute(opr, self._state_after_beginning())
             return None
         except IsabelleError as err:
             return self._beginning_opr_err_msgs(err)
@@ -2794,7 +2887,7 @@ class StdBlock(NonLeaf_Node):
             can_continue = False
             reason = begin_opr
         elif begin_opr is not None:
-            reason = await self._refresh_the_beginning_opr(begin_opr)
+            reason = await self._refresh_the_beginning_opr()
             if reason is not None:
                 head_succeeded = False
                 can_continue = False
@@ -3262,10 +3355,10 @@ class SubgoalMaker(GoalContainer, StdBlock):
         bracketed by an explicit END opcode, so the parent's proof line
         continues past `Define`."""
         return True
-    async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
+    async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
         is_init = self._first_time
         old_n_subnodes = len(self.sub_nodes)
-        fail = await super()._refresh_the_beginning_opr(begin_opr)
+        fail = await super()._refresh_the_beginning_opr()
         if fail is not None:
             return fail
         s0 = self._state_after_beginning()
@@ -3311,11 +3404,108 @@ class CaseSplit_Like(SubgoalMaker):
     case_hyps: list[Hyp] | None
     case_name: str | None
     _initial_proof: SubProof_parsed
+    # Rule resolution cache. `_resolved_rule_str = None` means "no explicit
+    # rule" (auto-pick on the ML side). Set once on the first refresh and
+    # reused afterwards — re-amending the node is expected to replace the
+    # whole instance, so no invalidation hook is needed.
+    _resolved_rule_str: str | None
+    _rule_resolved: bool
     def __init__(self, *args, _initial_proof: SubProof_parsed = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.case_vars = None
         self.case_hyps = None
         self._initial_proof = _initial_proof
+        self._resolved_rule_str = None
+        self._rule_resolved = False
+
+    async def _resolve_rule(self,
+                            rule_spec: 'Literal["default"] | FactByName | FactByDescription',
+                            target: xterm,
+                            arbitrary: list[xvarname],
+                            kind: Literal["induction", "case-split"],
+                           ) -> 'FailureReason | None':
+        """Resolve `rule_spec` to a concrete Isabelle rule source string
+        (possibly with a `[where ?v = t]` attribute clause) and cache it
+        in `self._resolved_rule_str`.
+
+        Three stages:
+          1. Map `rule_spec` → `rule_name: str | None`. `FactByDescription`
+             forks an `Interaction_RetrieveForProof` (single_choice).
+          2. Call the `IsaMini.analyze_induct` / `analyze_case_split`
+             callback to discover any schematic variables appearing in
+             the rule's consume premises.
+          3. If schematic vars are present, fork an
+             `Interaction_InstantiateSchematics` to collect instantiations,
+             then assemble `rule_name[where ?v1 = t1, ...]`.
+
+        Returns None on success (result in `self._resolved_rule_str`),
+        or a `FailureReason` if resolution failed (e.g. no matching rule,
+        prove-in-time answer for a rule query, callback error)."""
+        # 1. rule_spec → rule_name
+        if rule_spec == "default":
+            rule_name: str | None = None
+        elif rule_spec["refer_by"] == "name":
+            rule_name = rule_spec["name"]
+        elif rule_spec["refer_by"] == "description":
+            desc = rule_spec["english"]
+            entity_kind = (EntityKind.INDUCTION_RULE if kind == "induction"
+                           else EntityKind.CASE_SPLIT_RULE)
+            retrieve = Interaction_RetrieveForProof(
+                self.ml_state, desc, [entity_kind], single_choice=True)
+            results = await self.session.fork_interaction(retrieve)
+            if not results:
+                return FailureReason(f"No rule matching `{desc}` was found.")
+            r = results[0]
+            if isinstance(r, IsabelleFact_Unfound):
+                return FailureReason(f"No rule matching `{desc}` was found.")
+            if isinstance(r, IsabelleFact_ProveInTime):
+                return FailureReason(
+                    f"Rule retrieval for {kind} does not support prove-in-time; "
+                    "specify a named rule.")
+            rule_name = r.full_name  # IsabelleEntity or IsabelleFact_Presented
+        else:
+            raise InternalError(f"Unexpected rule spec: {rule_spec}")
+        # 2. analyze rule for schematic vars
+        callback_name = ("IsaMini.analyze_induct" if kind == "induction"
+                         else "IsaMini.analyze_case_split")
+        state_id = self.ml_state.name
+        target_ascii = ascii_of_unicode(target)
+        arbitrary_ascii = [ascii_of_unicode(a) for a in arbitrary]
+        callback_args: Any = (
+            (state_id, target_ascii, [], arbitrary_ascii, rule_name)
+            if kind == "induction"
+            else (state_id, target_ascii, [], rule_name))
+        try:
+            analysis = await self.ml_state.connection.callback(
+                callback_name, callback_args)
+        except IsabelleError as err:
+            return FailureReason(
+                f"Pre-flight analysis of {kind} rule failed: "
+                f"{''.join(err.errors)}")
+        # 3. instantiate schematic vars if any
+        if analysis is not None:
+            picked_name, _, consume_prems, _, schematic_vars = analysis
+            if schematic_vars:
+                final_name = rule_name if rule_name is not None else picked_name
+                if final_name is None:
+                    return FailureReason(
+                        f"The {kind} rule has schematic variables, but "
+                        "Isabelle did not auto-pick a named rule. Specify "
+                        "a rule explicitly.")
+                instantiate = Interaction_InstantiateSchematics(
+                    rule_name=final_name,
+                    consume_premises=consume_prems,
+                    schematic_vars=schematic_vars,
+                    kind=kind)
+                insts: list[tuple[str, str]] = \
+                    await self.session.fork_interaction(instantiate)
+                where_clause = ", ".join(f"{v} = {t}" for v, t in insts)
+                self._resolved_rule_str = f"{final_name}[where {where_clause}]"
+                self._rule_resolved = True
+                return None
+        self._resolved_rule_str = rule_name
+        self._rule_resolved = True
+        return None
     def _case_vars_of_child(self, child_ind: int) -> list[varname_spec] | None:
         if self.sub_nodes:
             node = self.sub_nodes[child_ind]
@@ -3345,10 +3535,10 @@ class CaseSplit_Like(SubgoalMaker):
             print_vars(self.case_vars, indent, file, {}, "fixing variables")
         if self.case_hyps is not None:
             print_hyps(self.case_hyps, indent, file, {}, "assuming premises")
-    async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
+    async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
         is_init = self._first_time
         old_case = (self.case_vars, self.case_hyps)
-        fail = await super()._refresh_the_beginning_opr(begin_opr)
+        fail = await super()._refresh_the_beginning_opr()
         if fail is None and not self.sub_nodes:
             # The case for nonempty self.sub_nodes is handled in _new_goal_node
             s = self._state_after_beginning()
@@ -4553,8 +4743,8 @@ class Have(StdBlock):
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
     def beginning_opr(self) -> Minilang_Operation | None:
         return Minilang_Operation.HAVE(self.name, self.statement['isabelle'], self.auto_apply)
-    async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
-        fail = await super()._refresh_the_beginning_opr(begin_opr)
+    async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
+        fail = await super()._refresh_the_beginning_opr()
         if fail is not None:
             return fail
         msgs = [m for m in self._state_after_beginning().messages
@@ -4608,8 +4798,8 @@ class Suffices(StdBlock):
     @staticmethod
     def gen(arg : Suffices_ToolArg) -> gen_node:
         return lambda config: Suffices(config, arg)
-    async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
-        fail = await super()._refresh_the_beginning_opr(begin_opr)
+    async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
+        fail = await super()._refresh_the_beginning_opr()
         if fail is not None:
             return fail
         if self._raw_proof is not None and not self.sub_nodes and _subproof_is_obvious(self._raw_proof):
@@ -4675,8 +4865,8 @@ class Obtain(StdBlock):
     @staticmethod
     def gen(arg : Obtain_ToolArg) -> gen_node:
         return lambda config: Obtain(config, arg)
-    async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
-        fail = await super()._refresh_the_beginning_opr(begin_opr)
+    async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
+        fail = await super()._refresh_the_beginning_opr()
         if fail is not None:
             return fail
         if self._raw_proof is not None and not self.sub_nodes and _subproof_is_obvious(self._raw_proof):
@@ -4823,12 +5013,12 @@ class Intro(SubgoalMaker):
             return (None, indent-1)
         else:
             return ("goals", indent+1)
-    async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
+    async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
         is_init = self._first_time
         old_bindings = self.bindings
         s = self._state_after_beginning()
         old_goals = s.prooftree.top_goals() if s.prooftree is not None else None
-        fail = await super()._refresh_the_beginning_opr(begin_opr)
+        fail = await super()._refresh_the_beginning_opr()
         if fail is None:
             self.running_time += 1
             messages = self._state_after_beginning().messages
@@ -5039,7 +5229,7 @@ class Branch(SubgoalMaker):
         return FailureReason(f"Subgoal {child.id} fails to be proven.")
     def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         raise InternalError("A Branch doesn't have an ending operation")
-    async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
+    async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
         if self._parsed_cases is None:
             parsed_cases: list[SubProof_parsed] = []
             for case in self.cases:
@@ -5050,7 +5240,7 @@ class Branch(SubgoalMaker):
                 else:
                     parsed_cases.append(None)
             self._parsed_cases = parsed_cases
-        fail = await super()._refresh_the_beginning_opr(begin_opr)
+        fail = await super()._refresh_the_beginning_opr()
         if fail is None:
             if not self.sub_nodes[0].thought:
                 self.sub_nodes[0].thought = "We first show exhaustiveness of the case split"
@@ -5075,6 +5265,8 @@ class CaseSplit(CaseSplit_Like):
     def __init__(self, config: NodeConfig, arg: CaseSplit_ToolArg):
         super().__init__(config, arg["thought"], [], _initial_proof=None)
         self.target_isabelle_term = arg["target_isabelle_term"]
+        self.rule_spec: 'Literal["default"] | FactByName | FactByDescription' = \
+            arg.get("rule", "default")
         self._raw_proof: SubProof | None = arg.get("proof", "Given later")
     def quickview_title(self) -> str:
         return f"CaseSplit {self.target_isabelle_term}"
@@ -5096,20 +5288,25 @@ class CaseSplit(CaseSplit_Like):
         return Minilang_Operation.CASE_SPLIT(
             self.target_isabelle_term,
             cast(list[varname_spec] | None, self._case_vars_of_child(0)),
-            None)
+            self._resolved_rule_str)
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         return FailureReason(f"Case analysis failed because: {"\n".join(err.errors)}")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
         return FailureReason(f"Subgoal {child.id} fails to be proven.")
     def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         raise InternalError("A Branch doesn't have an ending operation")
-    async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
+    async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
         if self._initial_proof is None and self._raw_proof is not None:
             if _subproof_is_obvious(self._raw_proof):
                 obv_arg = cast(Obvious_ToolArg, self._raw_proof)
                 self._initial_proof = lambda config, a=obv_arg: Obvious(config, a)
             self._raw_proof = None
-        return await super()._refresh_the_beginning_opr(begin_opr)
+        if not self._rule_resolved:
+            fail = await self._resolve_rule(
+                self.rule_spec, self.target_isabelle_term, [], "case-split")
+            if fail is not None:
+                return fail
+        return await super()._refresh_the_beginning_opr()
 
 ### Induction
 
@@ -5125,12 +5322,12 @@ class Induction_ToolArg(TypedDict):
 
 @proof_operation("Induction", Induction_ToolArg)
 class Induction(CaseSplit_Like):
-    # TODO: processing the rule
     def __init__(self, config: NodeConfig, arg: Induction_ToolArg):
         super().__init__(config, arg["thought"], [], _initial_proof=None)
         self.arg = arg
         self.target_isabelle_term = arg["target_isabelle_term"]
-        self.rule = arg.get("rule", "default")
+        self.rule_spec: 'Literal["default"] | FactByName | FactByDescription' = \
+            arg.get("rule", "default")
         self.variables = arg["variables"]
         self._raw_proof: SubProof | None = arg.get("proof", "Given later")
     def quickview_title(self) -> str:
@@ -5138,7 +5335,7 @@ class Induction(CaseSplit_Like):
     @staticmethod
     def gen(arg : Induction_ToolArg) -> gen_node:
         return lambda config: Induction(config, arg)
-    async def _refresh_the_beginning_opr(self, begin_opr: Minilang_Operation) -> 'FailureReason | None':
+    async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
         if self._initial_proof is None and self._raw_proof is not None:
             if _subproof_is_obvious(self._raw_proof):
                 obv_arg = cast(Obvious_ToolArg, self._raw_proof)
@@ -5154,7 +5351,13 @@ class Induction(CaseSplit_Like):
                     f"Syntax error in induction target `{e.term}`: {e.reason}")
             # Remove free variables appearing in target_isabelle_term from variables list
             self.variables[:] = [var for var in self.variables if IsaTerm.from_agent(var["name"]) not in frees]
-        fail = await super()._refresh_the_beginning_opr(begin_opr)
+        if not self._rule_resolved:
+            arbitrary = [v["name"] for v in self.variables if v["status"] == "generalized"]
+            fail = await self._resolve_rule(
+                self.rule_spec, self.target_isabelle_term, arbitrary, "induction")
+            if fail is not None:
+                return fail
+        fail = await super()._refresh_the_beginning_opr()
         if fail is None:
             vars = self._all_fixed_vars_before_me({})
             _, frees, _ = await self.ml_state.check_term(self.target_isabelle_term)
@@ -5214,7 +5417,7 @@ class Induction(CaseSplit_Like):
             self.target_isabelle_term,
             cast(list[varname_spec] | None, self._case_vars_of_child(0)),
             [var["name"] for var in self.variables if var["status"] == "generalized"],
-            None)
+            self._resolved_rule_str)
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         return FailureReason(f"Induction failed because: {"\n".join(err.errors)}")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
