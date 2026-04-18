@@ -485,16 +485,21 @@ fun compute_bindings (s:Minilang.state) (var_names: string list) (fact_names: st
         val num_var_names = length var_names
         val num_fact_names = length fact_names
 
-        val _ = if num_var_names <> num_vars
+        (* Partial bindings are allowed: the first num_var_names quantifiers
+           get the provided names, the rest are auto-named by AUTO_INTRO.
+           Over-specification is still rejected. *)
+        val _ = if num_var_names > num_vars
                 then raise Minilang.OPR_FAIL (Minilang.INVALID_OPR,
-                       "Expected " ^ string_of_int num_vars ^ " variable name(s), but got " ^
-                       string_of_int num_var_names)
+                       "Too many variable names: goal has " ^ string_of_int num_vars ^
+                       " leading quantifier(s) but " ^ string_of_int num_var_names ^
+                       " name(s) were provided")
                 else ()
 
-        val _ = if num_fact_names <> num_prems
+        val _ = if num_fact_names > num_prems
                 then raise Minilang.OPR_FAIL (Minilang.INVALID_OPR,
-                       "Expected " ^ string_of_int num_prems ^ " fact name(s), but got " ^
-                       string_of_int num_fact_names)
+                       "Too many fact names: goal has " ^ string_of_int num_prems ^
+                       " premise(s) but " ^ string_of_int num_fact_names ^
+                       " name(s) were provided")
                 else ()
 
         (* Bind variables in order: var_names[i] -> vars[i] *)

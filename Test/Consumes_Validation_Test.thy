@@ -192,12 +192,11 @@ end
 
 section \<open>E. Policy \<open>consumes_policy\<close> --- string-valued config\<close>
 
-text \<open>Verify \<open>consumes_policy\<close> is accessible and parseable. The effective
-      value in this test context depends on which theory chain is loaded:
-      - bare \<open>Minilang.Minilang\<close>: \<open>"require"\<close> (the config's global default)
-      - theories that import \<open>Minilang_Agent\<close>: \<open>"subgoals"\<close>
-        (set via \<open>declare [[consumes_policy = "subgoals"]]\<close> in that theory)
-      We only assert that the value is one of the three accepted modes.
+text \<open>Verify \<open>consumes_policy\<close> is accessible and the theory-level
+      default is \<open>"require"\<close>. The AoA agent applies
+      \<open>"subgoals"\<close> per-session in \<open>agent_server.ML\<close> via \<open>Config.put\<close>, not
+      as a theory-wide \<open>declare\<close>, so theories that merely import
+      \<open>Minilang_Agent\<close> still see the stock default here.
 
       Full behavior is exercised indirectly:
       - \<open>D1\<close> verified the \<open>"require"\<close> error-on-under behavior.
@@ -207,11 +206,11 @@ ML \<open>
 local
   val default_val = Config.get \<^context> Minilang.consumes_policy
 in
-  val _ = writeln "### E1: consumes_policy accessible"
+  val _ = writeln "### E1: consumes_policy default"
   val _ =
-    if default_val = "require" orelse default_val = "subgoals" orelse default_val = "strict"
-    then writeln ("  E1: OK — consumes_policy = `" ^ default_val ^ "` (valid)")
-    else writeln ("  E1: FAIL — unexpected value `" ^ default_val ^ "`")
+    if default_val = "require"
+    then writeln "  E1: OK — default is `require`"
+    else writeln ("  E1: FAIL — expected `require`, got `" ^ default_val ^ "`")
 end
 \<close>
 

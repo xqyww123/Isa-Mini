@@ -1,0 +1,35 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∀a (b :: nat). (0 :: nat) ≤ a + b
+proof:
+  - step id: 1
+    operation: Intro
+    fixing variables:
+      - a: nat
+      - b: nat
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  (0 :: nat) ≤ a + b
+EXCEPTION: IsabelleError: ['Bad operation: Too many variable names: goal has 2 leading quantifier(s) but 3 name(s) were provided']
+--------------------------------------------------
+Final state
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∀a (b :: nat). (0 :: nat) ≤ a + b
+proof:
+  - step id: 1
+    thought: Over-specify bindings.
+    operation: Intro
+    fixing variables:
+      - a
+      - b
+      - c
+    Error: Not yet evaluated
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  variables:
+    - a: nat
+    - b: nat
+  goal: (0 :: nat) ≤ a + b

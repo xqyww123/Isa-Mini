@@ -1673,6 +1673,7 @@ class ForkingMode(Enum):
     FORKING_CHEAPER_NO_CTXT = 3   # fork with fresh context, cheaper model (sonnet)
 
 class InteractiveRetrievalMode(Enum):
+    NO = "no"                                        # direct-append, no fork
     YES = "yes"                                      # fork-based, answer tool only
     YES_WITH_RECURSIVE_RETRIEVAL = "yes_recursive"   # fork-based, can also search
 
@@ -5077,6 +5078,11 @@ class Intro(SubgoalMaker):
                     vstr = titled_string_of_and_list(varnames, "variable", "variables")
                     self.warnings.append(Warning(Warning.Position.HEADER,
                         f"The proof goal has changed. Tracking of the {vstr} has been lost."))
+                # TODO: under partial Intro bindings, auto_introduced[0]/[1]
+                # also includes trailing vars/prems the agent deliberately
+                # left unbound. The "new ... occur" wording misleads on
+                # goal-change re-refresh. Fix by diffing against the prior
+                # refresh's quantifier count rather than matched-names set.
                 if intro_bindings_msg.auto_introduced[0]:
                     def print(indent: int, file: MyIO) -> int:
                         print_indent(indent, file)

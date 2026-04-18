@@ -104,6 +104,32 @@ val _ = bench_simp "totient 30 " \<^cterm>\<open>totient 30\<close>
 *)
 section \<open>Test lemmas\<close>
 
+lemma strip_Trueprop_eq: \<open>(Trueprop P \<equiv> Trueprop Q) \<Longrightarrow> P \<equiv> Q\<close>
+unfolding atomize_eq
+proof rule
+  assume A: \<open>Trueprop P \<equiv> Trueprop Q\<close>
+     and B: P
+  from B[unfolded A]
+  show "Q" .
+next
+  assume A: \<open>Trueprop P \<equiv> Trueprop Q\<close>
+     and B: Q
+  show "P"
+    unfolding A
+    using B .
+qed
+  
+
+
+
+
+
+
+
+
+
+
+
 lemma \<open>poly [:1, -3, 2::int:] 5 = 36\<close> by simp
 lemma \<open>degree [:1, -3, 2::int:] = 2\<close> by simp
 lemma \<open>card {2, 3, 5, 7::nat} = 4\<close> by simp
@@ -123,31 +149,6 @@ section \<open>prime\_factorization test\<close>
 
 lemma \<open>prime_factorization (12::nat) = {#2, 2, 3#}\<close>
   by simp
-
-ML \<open>
-let
-  val ct = \<^cterm>\<open>squarefree (30::nat)\<close>
-  val prop_ct = Thm.apply \<^cterm>\<open>Trueprop\<close> ct
-
-  fun timed name f =
-    let val (t, r) = Timing.timing (fn () =>
-           Timeout.apply (Time.fromSeconds 15) f ()
-           handle Timeout.TIMEOUT _ => (tracing (name ^ " TIMEOUT"); NONE)
-                | ERROR msg => (tracing (name ^ " ERROR: " ^ msg); NONE)) ()
-        val s = case r of NONE => "FAILED"
-                        | SOME thm => Thm.string_of_thm \<^context> thm
-    in tracing (name ^ ": " ^ Value.print_time (#elapsed t) ^ "s  =>  " ^ s) end
-in
-  timed "Code_Runtime (prop)" (fn () =>
-    SOME (Code_Runtime.dynamic_holds_conv \<^context> prop_ct));
-  timed "Code_Runtime (bool)" (fn () =>
-    SOME (Code_Runtime.dynamic_holds_conv \<^context> ct));
-  timed "Nbe (bool)         " (fn () =>
-    SOME (Nbe.dynamic_conv \<^context> ct));
-  timed "Simproc            " (fn () =>
-    Eval_Simproc.eval_ground \<^context> ct)
-end
-\<close>
 
 lemma \<open>squarefree (30::nat)\<close>
   by simp
@@ -172,10 +173,9 @@ simproc_setup eval_catalan ("catalan n") =
 lemma \<open>catalan 5 = 42\<close>
   by eval
 
-(*
 lemma \<open>catalan 5 = 42\<close>
   by simp
-*)
+
 
 simproc_setup eval_bernoulli ("bernoulli n") =
   \<open>K Eval_Simproc.eval_ground\<close>

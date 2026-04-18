@@ -1,0 +1,53 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∀n a (b :: nat). a + b ≤ n ⟶ a ≤ n
+proof:
+  - step id: 1
+    operation: Intro
+    fixing variables:
+      - n: nat
+      - a: nat
+      - b: nat
+    assuming premises:
+      - premise0: a + b ≤ n
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  a ≤ n
+--------------------------------------------------
+After partial Intro amend (no error)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∀n a (b :: nat). a + b ≤ n ⟶ a ≤ n
+proof:
+  - step id: 1
+    thought: Intro only the outermost n; leave a, b for later.
+    operation: Intro
+    fixing variables:
+      - n: nat
+      - a: nat
+      - b: nat
+    assuming premises:
+      - premise1: a + b ≤ n
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  a ≤ n
+--------------------------------------------------
+Final state
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∀n a (b :: nat). a + b ≤ n ⟶ a ≤ n
+proof:
+  - step id: 1
+    thought: Intro only the outermost n; leave a, b for later.
+    operation: Intro
+    fixing variables:
+      - n: nat
+      - a: nat
+      - b: nat
+    assuming premises:
+      - premise1: a + b ≤ n
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  a ≤ n

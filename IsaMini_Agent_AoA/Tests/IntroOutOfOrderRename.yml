@@ -1,0 +1,44 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∀n (m :: nat). n + m = m + n
+proof:
+  - step id: 1
+    operation: Intro
+    fixing variables:
+      - n: nat
+      - m: nat
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  n + m = m + n
+--------------------------------------------------
+After Intro amend (single binding 'm')
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∀n (m :: nat). n + m = m + n
+proof:
+  - step id: 1
+    thought: Single binding — positional vs keyed probe.
+    operation: Intro
+    fixing variables:
+      - m: nat    (renamed from "n")
+      - m1: nat    (renamed from "m")
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  m + m1 = m1 + m
+--------------------------------------------------
+Final state
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∀n (m :: nat). n + m = m + n
+proof:
+  - step id: 1
+    thought: Single binding — positional vs keyed probe.
+    operation: Intro
+    fixing variables:
+      - m: nat    (renamed from "n")
+      - m1: nat    (renamed from "m")
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  m + m1 = m1 + m

@@ -323,11 +323,7 @@ fun inst_hol_alls ctxt insts thm =
 
 fun xwhere ctxt inst0 fixes thm =
   let val vs = Term.add_var_names (Thm.prop_of thm) []
-      val inst = map_filter (fn (((name,0),pos), (name',src)) =>
-                                  if name = name'
-                                  then NONE
-                                  else SOME (((name,0),pos), src)
-                              | (x, (_, src)) => SOME (x, src) ) inst0
+      val inst = map (fn (idx_pos, (_, src)) => (idx_pos, src)) inst0
    in if forall (fn ((name, _), _) => exists (fn name' => name' = name) vs) inst
     then Rule_Insts.where_rule ctxt inst fixes thm
     else let

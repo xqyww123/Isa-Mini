@@ -2931,6 +2931,107 @@ async def _test_IntroMetaQuant(root: Root, file: MyIO):
     root.print(0, file)
 
 
+# ---------------------------------------------------------------------------
+# Baseline probes for proposed "partial Intro bindings" feature.
+# These capture current behavior before any change to compute_bindings.
+# Goal in each test has ≥2 leading ∀s; we drive Intro with varied
+# `variable_bindings` lengths and record what happens.
+# ---------------------------------------------------------------------------
+
+@model_test("IntroPartialVars", "Test_IntroPartialVars.thy", 8)
+async def _test_IntroPartialVars(root: Root, file: MyIO):
+    """Baseline: goal has 3 leading ∀s but we supply only 1 variable binding.
+    Step 1 is auto-Intro'd during session.initialize; we amend it with
+    our explicit partial binding. Expected today (pre-fix): Isabelle error
+        "Bad operation: Expected 3 variable name(s), but got 1"
+    from compute_bindings (agent.ML:488). After the fix this should
+    bind `n` to the first quantified var and auto-name the remaining two."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    try:
+        root.session.age += 1
+        await root.amend("1", Intro.gen({
+            "thought": "Intro only the outermost n; leave a, b for later.",
+            "variable_bindings": ["n"],
+        }))
+        print_header("After partial Intro amend (no error)", file)
+        root.print(0, file)
+    except Exception as e:
+        file.write(f"EXCEPTION: {type(e).__name__}: {e}\n")
+    print_header("Final state", file)
+    root.print(0, file)
+
+
+@model_test("IntroEmptyBindings", "Test_IntroEmptyBindings.thy", 8)
+async def _test_IntroEmptyBindings(root: Root, file: MyIO):
+    """Baseline: goal has 3 leading ∀s; we amend step 1 with NO
+    variable_bindings. `Intro.gen` sets `_pending_bindings=None` so
+    compute_bindings is bypassed and AUTO_INTRO auto-generates all names.
+    Confirms the "empty bypass" path works today."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    try:
+        root.session.age += 1
+        await root.amend("1", Intro.gen({
+            "thought": "Intro with no explicit bindings.",
+        }))
+        print_header("After Intro amend (empty bindings)", file)
+        root.print(0, file)
+    except Exception as e:
+        file.write(f"EXCEPTION: {type(e).__name__}: {e}\n")
+    print_header("Final state", file)
+    root.print(0, file)
+
+
+@model_test("IntroOverSpec", "Test_IntroOverSpec.thy", 8)
+async def _test_IntroOverSpec(root: Root, file: MyIO):
+    """Baseline: goal has 2 leading ∀s; we amend step 1 with 3
+    variable_bindings. Expected today: Isabelle error
+        "Bad operation: Expected 2 variable name(s), but got 3"
+    After the fix over-specification should still be rejected (cleanly),
+    so this test's expected output is what we want to preserve."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    try:
+        root.session.age += 1
+        await root.amend("1", Intro.gen({
+            "thought": "Over-specify bindings.",
+            "variable_bindings": ["a", "b", "c"],
+        }))
+        print_header("After Intro amend (over-specified)", file)
+        root.print(0, file)
+    except Exception as e:
+        file.write(f"EXCEPTION: {type(e).__name__}: {e}\n")
+    print_header("Final state", file)
+    root.print(0, file)
+
+
+@model_test("IntroOutOfOrderRename", "Test_IntroOutOfOrderRename.thy", 12)
+async def _test_IntroOutOfOrderRename(root: Root, file: MyIO):
+    """Distinguish positional vs keyed semantics.
+    Goal: ∀(n::nat) (m::nat). n + m = m + n
+    Internal var order: [n, m]. We amend with variable_bindings=["m"].
+      - Positional (first-k): pair "m" with the first var (n) → renames n to m.
+      - Keyed (by internal name): "m" matches the second var → first gets
+        auto-name, second named "m".
+    This test should crash today (length mismatch); the output after the
+    fix will show which semantics we ended up choosing."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    try:
+        root.session.age += 1
+        await root.amend("1", Intro.gen({
+            "thought": "Single binding — positional vs keyed probe.",
+            "variable_bindings": ["m"],
+        }))
+        print_header("After Intro amend (single binding 'm')", file)
+        root.print(0, file)
+    except Exception as e:
+        file.write(f"EXCEPTION: {type(e).__name__}: {e}\n")
+    print_header("Final state", file)
+    root.print(0, file)
+
+
 @model_test("InductionGeneralize", "Test_InductionGeneralize.thy", 8)
 async def _test_InductionGeneralize(root: Root, file: MyIO):
     """Reproduce issue from log D91DC33B9_1A88D48: Induction with a generalized
@@ -3181,6 +3282,41 @@ async def _test_Induction_SchematicInst_PremDischarge(root: Root, file: MyIO):
     }))
     print_header("After attempting Obvious on 2.Prem0", file)
     root.print(0, file)
+
+
+@model_test("Induction_SingleCase", "Test_Induction_SingleCase.thy", 20)
+async def _test_Induction_SingleCase(root: Root, file: MyIO):
+    """Reproducer for the single-case Induction bug (#24).
+
+    `less_induct` produces a single remaining goal (the `case less`
+    with induction hypothesis `less.hyps` in scope). A well-formed
+    proof tree should have the Induction node own a child GoalNode for
+    that case — addressable as e.g. `1.less` or `1.1`. Currently the
+    framework inlines the single case as a parent-level continuation
+    (no child created), because SubgoalMaker._should_open_proof_block
+    gates on `len(top_goals) > 1`.
+
+    This test asserts that the Induction node ends up with a non-empty
+    `sub_nodes` list. It will FAIL until the bug is fixed."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    await root.fill("1", Induction.gen({
+        "thought": "well-founded induction on n",
+        "target_isabelle_term": "n",
+        "rule": {"refer_by": "name", "name": "less_induct"},
+        "variables": [{"name": "n", "status": "fixed"}],
+    }))
+    print_header("After single-case Induction", file)
+    root.print(0, file)
+
+    induct_node = root.locate_node("1")
+    file.write(f"\nInduction node sub_nodes count: {len(induct_node.sub_nodes)}\n")
+    assert len(induct_node.sub_nodes) >= 1, (
+        "REGRESSION: single-case Induction produced no child GoalNode; "
+        "the `case less` subgoal got inlined at the parent level instead. "
+        f"sub_nodes = {induct_node.sub_nodes}"
+    )
 
 
 @model_test("UpstreamChangeResetsObvious", "Test_UpstreamChangeResetsObvious.thy", 11)

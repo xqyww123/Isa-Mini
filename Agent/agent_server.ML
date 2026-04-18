@@ -222,9 +222,9 @@ val AoA_log_dir = Attrib.setup_config_string \<^binding>\<open>AoA_log_dir\<clos
         end);
 
 (* Interactive retrieval mode:
-   "no"             — direct results, no forking
+   "no"             — direct results, no forking (default)
    "yes"            — fork-based interaction, fork can only answer
-   "yes_recursive"  — fork-based interaction, fork can also search (default) *)
+   "yes_recursive"  — fork-based interaction, fork can also search *)
 val AoA_interactive_retrieval = Attrib.setup_config_string \<^binding>\<open>AoA_interactive_retrieval\<close>
       (K "no");
 val _ = Config.register_rpc_option "AoA_interactive_retrieval"
@@ -274,6 +274,20 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
             |> Config.put Minilang.high_auto_mode true
             |> Config.put Minilang.auto_calculation false
             |> Config.put Printer.show_markup false
+            (* Under `subgoals`, an induction / case-split rule with
+             * `consumes > 0` and insufficient `using` facts yields
+             * `Prem<i>` subgoals for the agent to discharge through its
+             * normal proof flow, instead of erroring out. Schematic vars
+             * in those premises trigger an instantiation prompt on the
+             * Python side before induction runs. *)
+            |> Config.put Minilang.consumes_policy "subgoals"
+            (* Auto-insert: local facts mentioning the inducted /
+             * generalized free variables get wrapped and inserted into
+             * the goal before induction runs, then restored as named
+             * facts inside each case's context. Saves the agent from
+             * having to enumerate them (the Induction tool arg has no
+             * `using` field — see Phase-3 scope notes). *)
+            |> Config.put Minilang.induct_auto_insert_facts true
 
       val global_context = global_context_of (ctxt, sequent)
       val s0 = Minilang.INIT ctxt sequent

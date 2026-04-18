@@ -150,7 +150,7 @@ class ClaudeCode(Session):
         if not self._interactive_web_terminal:
             # Embedded mode: Agent SDK connects to HTTP server via URL
             self.options = ClaudeAgentOptions(
-                model="claude-opus-4-6",
+                model="claude-opus-4-7",
                 thinking={"type": "adaptive"},
                 cwd=self.working_dir,
                 permission_mode="default",
@@ -671,7 +671,7 @@ class ClaudeCode(Session):
         if mode == ForkingMode.FORKING_CHEAPER_NO_CTXT:
             model = "claude-sonnet-4-6"
         else:
-            model = "claude-opus-4-6"
+            model = "claude-opus-4-7"
         if mode == ForkingMode.FORKING_WITH_CTXT:
             resume = self._conversation_id
             fork_session = True

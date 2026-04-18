@@ -460,12 +460,12 @@
         },
         "thought": { "$ref": "#/$defs/Thought" },
         "variable_bindings": {
-          "description": "names to bind to the universally quantified variables, in order",
+          "description": "names for the leading universally quantified variables, in order; omit or truncate to leave trailing variables auto-named",
           "items": { "type": "string" },
           "type": "array"
         },
         "fact_bindings": {
-          "description": "names to bind to the premises, in order",
+          "description": "names for the leading premises, in order; omit or truncate to leave trailing premises auto-numbered",
           "items": { "type": "string" },
           "type": "array"
         },

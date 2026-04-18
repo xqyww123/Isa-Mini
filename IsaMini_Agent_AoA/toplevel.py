@@ -69,9 +69,9 @@ async def IsaMini_AoA(data: tuple[Any, Any, str, str, str, str, str], connection
             if interactive_retrieval_str:
                 logger.warning(
                     f"Unknown interactive_retrieval '{interactive_retrieval_str}', "
-                    f"falling back to 'yes_recursive'. "
+                    f"falling back to 'no'. "
                     f"Known: {sorted(INTERACTIVE_RETRIEVAL_MAP)}")
-            interactive_retrieval = InteractiveRetrievalMode.YES_WITH_RECURSIVE_RETRIEVAL
+            interactive_retrieval = InteractiveRetrievalMode.NO
         async with drv(connection.server.logger, actual_log_path,
                        retrieval_forking_mode=retrieval_forking,
                        interactive_retrieval=interactive_retrieval) as session:

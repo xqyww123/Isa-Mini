@@ -345,6 +345,72 @@ async def _get_def_for_fetched(
 # ============================================================================
 
 
+async def _semantic_search_direct(
+    session: Session, queries: list[dict], k: int,
+) -> str:
+    """Run semantic search queries concurrently, returning formatted results."""
+    ml_state = session.root.ml_state
+
+    # Run all queries concurrently (knn + entity retrieval in one step)
+    knn_results = await asyncio.gather(
+        *[_run_knn_for_query(ml_state, q, k) for q in queries])
+
+    seen = session.seen_entities
+    per_query_warnings = _collect_query_warnings(knn_results)
+    # Collect new entities
+    new_items: list[RetrievedEntity] = []
+    for fetched, _warnings, _error in knn_results:
+        for f in fetched[:k]:
+            if f.entity.short_name in seen:
+                continue
+            new_items.append(f)
+            seen.add(f.entity.short_name)
+
+    if not new_items:
+        lines: list[str] = ["No new relevant entities found." if seen else "No relevant entities found."]
+        lines.extend(_format_warn_lines(queries, per_query_warnings))
+        result = "\n".join(lines)
+        session.log_tool_response("mcp__proof__query", result)
+        return result
+
+    # Batch-fetch abbreviation definitions for unseen abbreviations
+    unseen_abbrevs: list[str] = []
+    for f in new_items:
+        for name in f.entity.abbreviation_names:
+            if name not in session.seen_abbreviations and name not in unseen_abbrevs:
+                unseen_abbrevs.append(name)
+    abbrev_defs: dict = {}
+    if unseen_abbrevs:
+        defs = await ml_state.abbreviation_defs(unseen_abbrevs)
+        for name, defn in zip(unseen_abbrevs, defs):
+            if defn is not None:
+                abbrev_defs[name] = defn
+
+    # Format with unified renderer
+    buf = StringIO()
+    retrieved: list[str] = []
+    for f in new_items:
+        await _format_fetched_entity(f, buf, session=session, def_info=True,
+                                     potential_defs=(f.score == 1.0),
+                                     abbreviation_defs=abbrev_defs)
+        expr_str = _trunc_expr(', '.join(e.unicode for e in f.entity.expression))
+        retrieved.append(f"{f.entity.short_name.unicode}: {expr_str}")
+    for w in _format_warn_lines(queries, per_query_warnings):
+        buf.write(w)
+        buf.write('\n')
+    if not session.seen_opaque_note and any(
+            f.entity.kind in _THEOREM_KINDS and not getattr(f.entity, 'roles', [])
+            for f in new_items):
+        buf.write("\n[opaque] — will not be used automatically unless supplied explicitly.\n")
+        session.seen_opaque_note = True
+    if retrieved:
+        query_str = "; ".join(_format_query_header(q) for q in queries)
+        session.log_retrieval(query_str, retrieved, quiet=True)
+    result = buf.getvalue().rstrip('\n')
+    session.log_tool_response("mcp__proof__query", result)
+    return result
+
+
 class Interaction_RetrieveForSearch(Interaction_Retrieve):
     """Retrieve entities for semantic search filtering. No prove-in-time."""
 
@@ -597,6 +663,8 @@ async def _query_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
                 # Fork session extending its own candidate list
                 results.append(await _semantic_search_extend_candidates(
                     session, regular_queries, pending.interaction))
+            elif session.interactive_retrieval == InteractiveRetrievalMode.NO:
+                results.append(await _semantic_search_direct(session, regular_queries, k=25))
             else:
                 results.append(await _semantic_search_with_filtering(session, regular_queries))
 

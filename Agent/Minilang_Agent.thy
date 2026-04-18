@@ -18,13 +18,11 @@ method_setup aoa = \<open>
   Scan.succeed (K MiniLang_Agent_AoA.method)
 \<close>
 
-(* The AoA agent runs with `consumes_policy = subgoals`: when an induction
- * rule has `consumes > 0` but the agent hasn't supplied matching `using`
- * facts, the unconsumed premises appear as extra `Prem<i>` subgoals that
- * the agent discharges through its normal proof flow. Schematic variables
- * in those premises trigger an interactive instantiation prompt on the
- * Python side before induction runs. *)
-declare [[consumes_policy = "subgoals"]]
+(* AoA-agent-specific INDUCT/CASE_SPLIT tuning (consumes_policy,
+ * induct_auto_insert_facts, …) is applied per-session in agent_server.ML
+ * via Config.put on the session context, not as a theory-level `declare`
+ * here — so non-AoA Minilang users of this theory keep the stock
+ * defaults. *)
 
 (*
 ML \<open>
