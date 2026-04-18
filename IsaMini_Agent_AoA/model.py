@@ -1605,10 +1605,10 @@ class Answer(NamedTuple):
     statement: str | None = None
     instantiations: list[tuple[str, str]] = []
 
-# Backward-compatible alias; new signatures should prefer `Answer`.
-type answer = Answer
-
-_EMPTY_ANSWER = Answer(indexes=[], name=None, statement=None, instantiations=[])
+    def is_empty(self) -> bool:
+        """All four fields empty — conventionally means 'give up / expand'."""
+        return (not self.indexes and self.name is None
+                and self.statement is None and not self.instantiations)
 
 def normalize_answer(indexes: list[int] | None,
                      name: str | None,
@@ -1624,11 +1624,6 @@ def normalize_answer(indexes: list[int] | None,
     s = statement if statement else None
     insts = [(i["variable"], i["term"]) for i in instantiations] if instantiations else []
     return Answer(indexes=idx, name=n, statement=s, instantiations=insts)
-
-def _answer_is_empty(ans: Answer) -> bool:
-    """All four fields empty — conventionally means 'give up / expand'."""
-    return not ans.indexes and ans.name is None and ans.statement is None \
-       and not ans.instantiations
 
 class ForkingMode(Enum):
     FORKING_WITH_CTXT = 1         # fork inheriting parent conversation context
@@ -1964,7 +1959,7 @@ class Interaction_RetrieveForProof(Interaction_Retrieve):
             await self._log_retrieval_training_data([], prove_in_time=answer.statement)
             session.log_retrieval(self.query, [f"prove-in-time: {answer.statement}"])
             return [IsabelleFact_ProveInTime(IsaTerm.from_agent(answer.statement))]
-        if _answer_is_empty(answer) and self.k >= self.FINAL_K:
+        if answer.is_empty() and self.k >= self.FINAL_K:
             await self._log_retrieval_training_data([])
             session.log_retrieval(self.query, ["unfound"])
             if self.single_choice:

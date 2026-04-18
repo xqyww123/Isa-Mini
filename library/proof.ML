@@ -2569,6 +2569,78 @@ fun analyze_case_split ctxt (_, (insts, opt_rule)) facts =
   | SOME (raw_rule, ((_, consumes_n), inst_thm)) =>
       SOME (mk_analysis (raw_rule, consumes_n, inst_thm));
 
+(* Shared consumes-count validation for INDUCT'/CASE_SPLIT'. Raises
+ * OPR_FAIL on policy violation. Returns unit on success (the caller
+ * proceeds to tactic execution).
+ *
+ *   kind_str       : "Induction" or "Case-split" (error-message prefix)
+ *   rule_name_str  : picked rule's name, for error messages
+ *   consumes_n     : rule's consumes count (0 when no rule was picked)
+ *   u              : |using|
+ *   arbitrary      : arbitrary-var list (INDUCT only; [] for CASE_SPLIT)
+ *                    — used to emit an extra warning under `"subgoals"`
+ *                    policy when combined with |using| < consumes
+ *   inst_thm_opt   : the post-inst_rule theorem for the picked rule
+ *                    (SOME thm when analysis succeeded, NONE otherwise).
+ *                    Needed under `"subgoals"` to inspect unconsumed
+ *                    premises for schematic variables.
+ *)
+fun validate_consumes ctxt
+      {kind_str, rule_name_str, consumes_n, u, arbitrary, inst_thm_opt} =
+  let val policy = parse_consumes_policy (Config.get ctxt consumes_policy) in
+  case policy of
+    "require" =>
+      if u < consumes_n then
+        raise OPR_FAIL (INVALID_OPR,
+          kind_str ^ " rule `" ^ rule_name_str ^ "` requires " ^
+          string_of_int consumes_n ^ " `using` fact(s) to discharge its \
+          \major premise(s), but only " ^ string_of_int u ^ " were \
+          \provided. (policy = `require`; set `consumes_policy` to \
+          \`subgoals` to allow unconsumed premises to appear as \
+          \subgoals instead.)")
+      else ()
+  | "subgoals" =>
+      if u < consumes_n then
+        let
+          (* Unconsumed premises after inst_rule (post-pick). Reject if
+           * any contains schematic variables — Minilang's CASES' does
+           * not handle subgoals with schematics well. *)
+          val unconsumed =
+            case inst_thm_opt of
+              NONE => []
+            | SOME thm => drop u (take consumes_n (Thm.prems_of thm))
+          val schematic_vars =
+            fold Term.add_vars unconsumed []
+            |> map (Term.string_of_vname o #1)
+            |> distinct (op =)
+          val _ =
+            if null schematic_vars then ()
+            else raise OPR_FAIL (INVALID_OPR,
+              "Schematic variable" ^
+              (if length schematic_vars = 1 then " " else "s ") ^
+              String.concatWith ", " schematic_vars ^
+              " must be instantiated.")
+        in
+          if exists (not o null) arbitrary
+          then writeln
+            "warning: `consumes_policy = subgoals` with |using| < \
+            \consumes and a non-empty `arbitrary` clause: Isabelle's \
+            \arbitrary_tac may silently skip the generalization."
+          else ()
+        end
+      else ()
+  | "strict" =>
+      if u <> consumes_n then
+        raise OPR_FAIL (INVALID_OPR,
+          kind_str ^ " rule `" ^ rule_name_str ^ "` consumes " ^
+          string_of_int consumes_n ^ " fact(s), but " ^
+          string_of_int u ^ " were provided as `using`. (policy = \
+          \`strict`; set `consumes_policy` to `require` or `subgoals` \
+          \to relax this check.)")
+      else ()
+  | _ => ()   (* parse_consumes_policy already rejected invalid values *)
+  end;
+
 fun INDUCT' (no_simp, (insts, ((arbitrary, taking), opt_rule))) first_vars
             ({using, insertion} : induct_facts)
             (ctxt, SK) =
@@ -2599,72 +2671,22 @@ fun INDUCT' (no_simp, (insts, ((arbitrary, taking), opt_rule))) first_vars
                   | NONE => SOME [raw_rule]
             in (forced_rule, consumes_n, name_str, SOME inst_thm) end
 
-      (* Validate consumes count according to the configured policy. *)
       val u = length using
-      val policy = parse_consumes_policy (Config.get ctxt consumes_policy)
-      val _ =
-        case policy of
-          "require" =>
-            if u < consumes_n then
-              raise OPR_FAIL (INVALID_OPR,
-                "Induction rule `" ^ rule_name_str ^ "` requires " ^
-                string_of_int consumes_n ^ " `using` fact(s) to discharge its \
-                \major premise(s), but only " ^ string_of_int u ^ " were \
-                \provided. (policy = `require`; set `consumes_policy` to \
-                \`subgoals` to allow unconsumed premises to appear as \
-                \subgoals instead.)")
-            else ()
-        | "subgoals" =>
-            if u < consumes_n then
-              let
-                (* Unconsumed premises after inst_rule (post-pick). Reject if
-                 * any contains schematic variables — Minilang's CASES' does
-                 * not handle subgoals with schematics well. *)
-                val unconsumed =
-                  case inst_thm_opt of
-                    NONE => []
-                  | SOME thm => drop u (take consumes_n (Thm.prems_of thm))
-                val schematic_vars =
-                  fold Term.add_vars unconsumed []
-                  |> map (Term.string_of_vname o #1)
-                  |> distinct (op =)
-                val _ =
-                  if null schematic_vars then ()
-                  else raise OPR_FAIL (INVALID_OPR,
-                    "Schematic variable" ^
-                    (if length schematic_vars = 1 then " " else "s ") ^
-                    String.concatWith ", " schematic_vars ^
-                    " must be instantiated.")
-              in
-                if exists (not o null) arbitrary
-                then writeln
-                  "warning: `consumes_policy = subgoals` with |using| < \
-                  \consumes and a non-empty `arbitrary` clause: Isabelle's \
-                  \arbitrary_tac may silently skip the generalization."
-                else ()
-              end
-            else ()
-        | "strict" =>
-            if u <> consumes_n then
-              raise OPR_FAIL (INVALID_OPR,
-                "Induction rule `" ^ rule_name_str ^ "` consumes " ^
-                string_of_int consumes_n ^ " fact(s), but " ^
-                string_of_int u ^ " were provided as `using`. (policy = \
-                \`strict`; set `consumes_policy` to `require` or `subgoals` \
-                \to relax this check.)")
-            else ()
-        | _ => ()   (* parse_consumes_policy already rejected invalid values *)
+      val _ = validate_consumes ctxt
+                {kind_str = "Induction", rule_name_str = rule_name_str,
+                 consumes_n = consumes_n, u = u,
+                 arbitrary = arbitrary, inst_thm_opt = inst_thm_opt}
 
       (* Under `subgoals` policy with |using| < consumes: lower the rule's
        * `consumes` tag to `u` so Isabelle's internalize atomizes only the
-       * premises actually discharged by `using`. The remaining premises
-       * stay as ordinary rule premises, which resolve_tac then turns into
-       * `Prem<i>` subgoals (handled by CASES'). Without this, internalize
-       * would atomize the unconsumed premise into the rule's conclusion
-       * (via `premise ⟶ concl`), making resolve fail on concrete goals
-       * whose shape doesn't include a matching HOL implication. *)
+       * premises actually discharged by `using`. Remaining premises stay
+       * as ordinary rule premises, which resolve_tac turns into `Prem<i>`
+       * subgoals (handled by CASES'). Without this, internalize would
+       * atomize the unconsumed premise into the rule's conclusion (via
+       * `premise ⟶ concl`), making resolve fail on concrete goals whose
+       * shape doesn't include a matching HOL implication. *)
       val effective_opt_rule =
-        if policy = "subgoals" andalso u < consumes_n
+        if Config.get ctxt consumes_policy = "subgoals" andalso u < consumes_n
         then case effective_opt_rule of
                SOME rules => SOME (map (Rule_Cases.put_consumes (SOME u)) rules)
              | NONE => NONE
@@ -2754,56 +2776,16 @@ fun CASE_SPLIT' (no_simp, (insts, opt_rule)) vars ({using, insertion} : induct_f
             in (forced_rule, consumes_n, name_str, SOME inst_thm) end
 
       val u = length using
-      val policy = parse_consumes_policy (Config.get ctxt consumes_policy)
-      val _ =
-        case policy of
-          "require" =>
-            if u < consumes_n then
-              raise OPR_FAIL (INVALID_OPR,
-                "Case-split rule `" ^ rule_name_str ^ "` requires " ^
-                string_of_int consumes_n ^ " `using` fact(s) to discharge its \
-                \major premise(s), but only " ^ string_of_int u ^ " were \
-                \provided. (policy = `require`; set `consumes_policy` to \
-                \`subgoals` to allow unconsumed premises to appear as \
-                \subgoals instead.)")
-            else ()
-        | "subgoals" =>
-            if u < consumes_n then
-              let
-                val unconsumed =
-                  case inst_thm_opt of
-                    NONE => []
-                  | SOME thm => drop u (take consumes_n (Thm.prems_of thm))
-                val schematic_vars =
-                  fold Term.add_vars unconsumed []
-                  |> map (Term.string_of_vname o #1)
-                  |> distinct (op =)
-              in
-                if null schematic_vars then ()
-                else raise OPR_FAIL (INVALID_OPR,
-                  "Schematic variable" ^
-                  (if length schematic_vars = 1 then " " else "s ") ^
-                  String.concatWith ", " schematic_vars ^
-                  " must be instantiated.")
-              end
-            else ()
-        | "strict" =>
-            if u <> consumes_n then
-              raise OPR_FAIL (INVALID_OPR,
-                "Case-split rule `" ^ rule_name_str ^ "` consumes " ^
-                string_of_int consumes_n ^ " fact(s), but " ^
-                string_of_int u ^ " were provided as `using`. (policy = \
-                \`strict`; set `consumes_policy` to `require` or `subgoals` \
-                \to relax this check.)")
-            else ()
-        | _ => ()
+      val _ = validate_consumes ctxt
+                {kind_str = "Case-split", rule_name_str = rule_name_str,
+                 consumes_n = consumes_n, u = u,
+                 arbitrary = [], inst_thm_opt = inst_thm_opt}
 
       (* Under `subgoals` policy with |using| < consumes: lower the rule's
        * `consumes` tag so cases_context_tactic leaves the remaining
-       * premises as ordinary Prem<i> subgoals rather than atomizing them
-       * into the rule's conclusion. *)
+       * premises as ordinary Prem<i> subgoals. See INDUCT' for rationale. *)
       val effective_opt_rule =
-        if policy = "subgoals" andalso u < consumes_n
+        if Config.get ctxt consumes_policy = "subgoals" andalso u < consumes_n
         then case effective_opt_rule of
                SOME rule => SOME (Rule_Cases.put_consumes (SOME u) rule)
              | NONE => NONE
