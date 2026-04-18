@@ -3463,6 +3463,10 @@ class CaseSplit_Like(SubgoalMaker):
         self._initial_proof = _initial_proof
         self._resolved_rule_str = None
         self._rule_resolved = False
+        # quickview dedup: remember what case_vars / case_hyps we last
+        # printed so we don't repeat them on every re-render unless
+        # they actually changed (mirrors Intro's `_prev_bindings`).
+        self._prev_case_printed: tuple[list[Var] | None, list[Hyp] | None] | None = None
 
     async def _resolve_rule(self,
                             rule_spec: 'Literal["default"] | FactByName | FactByDescription',
@@ -3578,10 +3582,52 @@ class CaseSplit_Like(SubgoalMaker):
                         return self
             return None
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False) -> None:
+        # Only the single-subgoal path ever populates `case_vars` /
+        # `case_hyps` on `self` (multi-subgoal has them on each child
+        # GoalNode). Guard defensively so a stale leftover would not
+        # accidentally double-print with the child GoalNodes'
+        # _print_header rendering.
+        if self.sub_nodes:
+            return
         if self.case_vars is not None:
             print_vars(self.case_vars, indent, file, {}, "fixing variables")
         if self.case_hyps is not None:
             print_hyps(self.case_hyps, indent, file, {}, "assuming premises")
+    def quickview(self, indent: int, file: MyIO) -> int:
+        # Single-subgoal path: this node owns the case's fresh
+        # bindings (no child GoalNode was created). Announce them in
+        # quickview mirroring the full-print `_print_header`. Use
+        # `_prev_case_printed` to avoid re-emitting the section on
+        # every re-render (mirrors Intro's `_prev_bindings` dedup).
+        indent = super().quickview(indent, file)
+        if not self.sub_nodes and (self.case_vars or self.case_hyps):
+            current = (self.case_vars, self.case_hyps)
+            if current != self._prev_case_printed:
+                if self.case_vars:
+                    print_vars(self.case_vars, indent, file, {}, "fixing variables")
+                if self.case_hyps:
+                    print_hyps(self.case_hyps, indent, file, {}, "assuming premises")
+                self._prev_case_printed = current
+        return indent
+    def _fixed_vars_at_me(self, ret: Vars) -> Vars:
+        # Single-case path: this node owns `case_vars`. Expose them so
+        # subsequent siblings' `_ctxt_before_me()` (via the parent's
+        # walk over `_fixed_vars_after_me`) and the pending-goal
+        # suppression see them as already-introduced. For multi-case
+        # the per-child GoalNode propagates its own context instead.
+        if not self.sub_nodes and self.case_vars:
+            for name, ty in self.case_vars:
+                ret[name] = ty
+        return ret
+    def _fixed_facts_at_me(self, ret: Hyps) -> Hyps:
+        if not self.sub_nodes and self.case_hyps:
+            for name, prop in self.case_hyps:
+                ret[name] = prop
+        return ret
+    def _fixed_vars_after_me(self, ret: Vars) -> Vars:
+        return self._fixed_vars_at_me(ret)
+    def _fixed_facts_after_me(self, ret: Hyps) -> Hyps:
+        return self._fixed_facts_at_me(ret)
     async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
         is_init = self._first_time
         old_case = (self.case_vars, self.case_hyps)
@@ -4903,6 +4949,19 @@ class Obtain(StdBlock):
         self.variables = arg["variables"]
         self.constraints = arg["constraints"]
         self._raw_proof: SubProof | None = arg.get("proof", "Given later")
+        # Populated from `New_Item_Msg` after OBTAIN runs: the vars +
+        # facts Isabelle actually fixed, with types inferred by the ML
+        # side. Used by `_fixed_*_after_me` so subsequent siblings see
+        # them and the parent's pending-goal suppression can hide them
+        # rather than re-listing under the pending goal. Preferred over
+        # walking `self.variables` / `self.constraints` because (a) the
+        # agent may omit an explicit `type:` and ML inference fills it
+        # in, and (b) IsaTerm conversion is already done here.
+        self._introduced: Context = Context({}, {})
+        # Quickview dedup: only re-emit the obtained vars / constraints
+        # block when `_introduced` actually changed (mirrors Intro's
+        # `_prev_bindings`).
+        self._prev_quickview_introduced: Context | None = None
     @staticmethod
     def gen(arg : Obtain_ToolArg) -> gen_node:
         return lambda config: Obtain(config, arg)
@@ -4920,6 +4979,42 @@ class Obtain(StdBlock):
                 return FailureReason("Subproof's Obvious cannot prove a nontrivial goal")
             self._raw_proof = None
         return None
+    async def _refresh_footer(self) -> 'FailureReason | None':
+        # `New_Item_Msg` for OBTAIN fires inside CONSIDER'i's CB
+        # continuation, which is triggered when the existential's
+        # sub-proof completes and the block's END is executed (not
+        # during the beginning OBTAIN call). So we read it AFTER the
+        # footer has run, on `resulting_state()`.
+        fail = await super()._refresh_footer()
+        if fail is not None:
+            return fail
+        msgs = [m for m in self.resulting_state().messages
+                if isinstance(m, New_Item_Msg)]
+        if msgs:
+            self._introduced = msgs[0].items
+        return None
+    def _fixed_vars_after_me(self, ret: Vars) -> Vars:
+        ret.update(self._introduced.vars)
+        return ret
+    def _fixed_facts_after_me(self, ret: Hyps) -> Hyps:
+        ret.update(self._introduced.hyps)
+        return ret
+    def quickview(self, indent: int, file: MyIO) -> int:
+        # After the obtain fires, announce the fresh vars + constraint
+        # facts in quickview (mirrors `_print_header`'s full-print
+        # listing). Deduped — same dedup idea as Intro's
+        # `_prev_bindings`: only re-emit when `_introduced` actually
+        # changed.
+        indent = super().quickview(indent, file)
+        if self._introduced != self._prev_quickview_introduced:
+            if self._introduced.vars:
+                print_vars(self._introduced.vars.items(), indent, file, {},
+                           "obtained variables")
+            if self._introduced.hyps:
+                print_hyps(self._introduced.hyps.items(), indent, file, {},
+                           "constraints")
+            self._prev_quickview_introduced = self._introduced
+        return indent
     def quickview_title(self) -> str:
         names = ", ".join(v["name"] for v in self.variables)
         return f"Obtain {names}"

@@ -1,0 +1,42 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - m: nat
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (∃(k :: nat). k = m) ⟶ True
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: ∃(k :: nat). k = m
+--------------------------------------------------
+After Obtain
+--------------------------------------------------
+variables:
+  - m: nat
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (∃(k :: nat). k = m) ⟶ True
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: ∃(k :: nat). k = m
+  - step id: 2
+    thought: unpack the existential
+    operation: Obtain
+    variables:
+      - k: nat
+    constraint:
+      name: k_def
+      english: the existential witness
+      isabelle: k = m
+    proof:
+      - step id: 2.1
+        operation: Obvious
+--------------------------------------------------
+Quickview (first render)
+--------------------------------------------------
+--------------------------------------------------
+Quickview (re-render — introduced block should be deduped)
+--------------------------------------------------

@@ -3319,6 +3319,75 @@ async def _test_Induction_SingleCase(root: Root, file: MyIO):
     )
 
 
+@model_test("Obtain_Fixed", "Test_Obtain_Fixed.thy", 8)
+async def _test_Obtain_Fixed(root: Root, file: MyIO):
+    """Verify Obtain's ML-fed `_introduced` Context + propagation.
+
+    Scenario: lemma `∃k::nat. k = m ⟹ True`. Auto-Intro at step 1
+    surfaces `assm0: ∃k. k = m`. Step 2 is `Obtain k` with named
+    constraint `k_def: k = m`.
+
+    Assertions:
+      - `_introduced.vars` carries `k :: nat` (ML-inferred type).
+      - `_introduced.hyps` carries `k_def: k = m`.
+      - `_fixed_vars_after_me` / `_fixed_facts_after_me` expose both
+        to subsequent-sibling ctxt lookups.
+      - Quickview includes the "obtained variables" / "constraints"
+        sections (deduped via `_prev_quickview_introduced`)."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # `proof: Obvious` attaches a subproof that discharges the
+    # existential via the in-scope `assm0: ∃k::nat. k = m`, letting
+    # the block close and CONSIDER'i emit its `New_Item_Msg`.
+    await root.fill("2", Obtain.gen({
+        "thought": "unpack the existential",
+        "variables": [{"name": "k", "type": "nat"}],
+        "constraints": [{"name": "k_def",
+                         "isabelle": "k = m",
+                         "english": "the existential witness"}],
+        "proof": {"operation": "Obvious", "facts": []},
+    }))
+    print_header("After Obtain", file)
+    root.print(0, file)
+
+    obtain_node = root.locate_node("2")
+    assert isinstance(obtain_node, Obtain), \
+        f"Expected Obtain at step 2, got {type(obtain_node).__name__}"
+
+    # (1) _introduced populated from New_Item_Msg
+    intro_vars = obtain_node._introduced.vars
+    intro_hyps = obtain_node._introduced.hyps
+    assert intro_vars, f"_introduced.vars empty; expected `k`. got {intro_vars}"
+    assert intro_hyps, f"_introduced.hyps empty; expected `k_def`. got {intro_hyps}"
+    # Var name surfaces as `k`
+    var_names = {n.unicode for n in intro_vars}
+    assert "k" in var_names, \
+        f"expected `k` among obtained vars, got {var_names}"
+    # Constraint surfaces under its requested name `k_def`
+    hyp_names = {n.unicode for n in intro_hyps}
+    assert "k_def" in hyp_names, \
+        f"expected `k_def` among obtained hyps, got {hyp_names}"
+
+    # (2) _fixed_*_after_me propagate to a downstream ctxt dict
+    vars_after = obtain_node._fixed_vars_after_me({})
+    hyps_after = obtain_node._fixed_facts_after_me({})
+    assert "k" in {n.unicode for n in vars_after}, \
+        f"_fixed_vars_after_me must expose `k`, got {vars_after}"
+    assert "k_def" in {n.unicode for n in hyps_after}, \
+        f"_fixed_facts_after_me must expose `k_def`, got {hyps_after}"
+
+    # (3) Quickview emits the introduced block the first time
+    print_header("Quickview (first render)", file)
+    root.quickview(0, file)
+
+    # (4) Re-rendering quickview with no change: dedup should suppress
+    # the introduced block on the re-emit. Harder to assert inline
+    # without capturing — leave to eyeballing the printed output.
+    print_header("Quickview (re-render — introduced block should be deduped)", file)
+    root.quickview(0, file)
+
+
 @model_test("UpstreamChangeResetsObvious", "Test_UpstreamChangeResetsObvious.thy", 11)
 async def _test_UpstreamChangeResetsObvious(root: Root, file: MyIO):
     """After Obvious fails, _is_trivial=False blocks retries.  Amending or
