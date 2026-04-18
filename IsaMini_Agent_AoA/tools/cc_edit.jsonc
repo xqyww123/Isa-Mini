@@ -246,6 +246,15 @@
         },
         "thought": { "$ref": "#/$defs/Thought" },
         "target_isabelle_term": { "type": "string" },
+        "rule": {
+          "description": "case-split rule to apply. Omit (or set to \"default\") for auto-pick. Use FactByName when you know the rule's exact name; use FactByDescription to let the system retrieve matching rules.",
+          "anyOf": [
+            { "const": "default" },
+            { "$ref": "#/$defs/FactByName" },
+            { "$ref": "#/$defs/FactByDescription" }
+          ],
+          "default": "default"
+        },
         "proof": { "$ref": "#/$defs/SubProof" }
       },
       "required": [
@@ -268,37 +277,11 @@
         "thought": { "$ref": "#/$defs/Thought" },
         "target_isabelle_term": { "type": "string" },
         "rule": {
-          "description": "how the induction should work",
+          "description": "induction rule to apply. Omit (or set to \"default\") for auto-pick. Use FactByName when you know the rule's exact name; use FactByDescription to let the system retrieve matching rules by an English description (e.g. \"descending induction from k\").",
           "anyOf": [
-            {
-              "type": "string",
-              "enum": [ "default", "reversely" ]
-            },
-            {
-              "type": "object",
-              "description": "perform ascending or descending induction from an optional start to an optional end",
-              "properties": {
-                "rule": {
-                  "type": "string",
-                  "enum": [ "ascending", "descending" ]
-                },
-                "start": {
-                  "type": "string",
-                  "description": "lower bound if ascending, or upper bound if descending. Omit to indicate no bound (negative or positive infinity)"
-                },
-                "end": {
-                  "type": "string",
-                  "description": "upper bound if ascending, or lower bound if descending. Omit to indicate no bound (positive or negative infinity)"
-                }
-              },
-              "required": [
-                "rule"
-              ]
-            },
-            {
-              "type": "string",
-              "description": "any other rule described in English"
-            }
+            { "const": "default" },
+            { "$ref": "#/$defs/FactByName" },
+            { "$ref": "#/$defs/FactByDescription" }
           ],
           "default": "default"
         },

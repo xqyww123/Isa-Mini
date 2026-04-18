@@ -5004,9 +5004,16 @@ class Branch(SubgoalMaker):
 
 ### CaseSplit
 
+# Rule specification for CaseSplit/Induction. "default" means let Isabelle
+# auto-pick; FactByName targets a specific rule; FactByDescription triggers
+# a semantic retrieval interaction at refresh time (constrained to
+# INDUCTION_RULE / CASE_SPLIT_RULE kind).
+type InductRule = Literal["default"] | FactByName | FactByDescription
+
 class CaseSplit_ToolArg(TypedDict):
     thought: str
     target_isabelle_term: xterm
+    rule: NotRequired[InductRule]  # default: "default"
     proof: SubProof
 
 @proof_operation("CaseSplit", CaseSplit_ToolArg)
@@ -5052,14 +5059,13 @@ class CaseSplit(CaseSplit_Like):
 
 ### Induction
 
-type Induction_Rule = str | dict[str, Any]
 class Induction_ToolArg_Variable(TypedDict):
     name: xvarname
     status: Literal["fixed", "generalized"]
 class Induction_ToolArg(TypedDict):
     thought: str
     target_isabelle_term: xterm
-    rule: NotRequired[Induction_Rule]  # default: 'default'
+    rule: NotRequired[InductRule]  # default: "default"
     variables: list[Induction_ToolArg_Variable]
     proof: SubProof
 

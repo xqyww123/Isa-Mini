@@ -699,8 +699,14 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
        * picked plus its consume-premise shapes, so the Python side can
        * prompt the user for missing `using` facts before committing to
        * actually running the induction. Returns NONE if no rule is
-       * found; otherwise SOME (rule_name_opt, consumes, consume_premises,
-       * remaining_premises) with premises pretty-printed as strings. *)
+       * found; otherwise SOME
+       *   (rule_name_opt, consumes,
+       *    consume_premises, remaining_premises,
+       *    schematic_vars)
+       * where consume_premises/remaining_premises are pretty-printed as
+       * strings, and schematic_vars is the list of (varname_str, type_str)
+       * pairs appearing inside consume_premises (the variables the user
+       * must either instantiate or discharge via `using`). *)
       val analyze_induct_callback = {
         name = "IsaMini.analyze_induct",
         arg_schema = unpackTuple5 (
@@ -711,15 +717,17 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
           unpackOption unpackString                     (* rule name *)
         ),
         ret_schema =
-          packOption (packTuple4 (
+          packOption (packTuple5 (
               packOption packString,
               packInt,
               packList packString,
-              packList packString)),
+              packList packString,
+              packList (packPair (packString, packString)))),
         function = (fn (state_id, target, vars, arbitrary, rule_name_opt) =>
           let val s0 = get_state state_id
               val ctxt = Minilang.context_of s0
               val sot = MiniLang_Agent.string_of_term ctxt
+              val sotyp = MiniLang_Agent.string_of_type ctxt
               val target_term = MiniLang_Agent.read_term ctxt target
               val arbitrary_terms = map (MiniLang_Agent.read_term ctxt) arbitrary
               val arbitrary_vs = map (fn Free nt => nt
@@ -734,9 +742,18 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
            in case analysis of
                 NONE => NONE
               | SOME {rule_name, consumes, consume_premises, remaining_premises, ...} =>
-                  SOME (rule_name, consumes,
-                        map sot consume_premises,
-                        map sot remaining_premises)
+                  let
+                    val schematic_vars =
+                      fold Term.add_vars consume_premises []
+                      |> distinct (op =)
+                      |> map (fn (name_idx, ty) =>
+                            (Term.string_of_vname name_idx, sotyp ty))
+                  in
+                    SOME (rule_name, consumes,
+                          map sot consume_premises,
+                          map sot remaining_premises,
+                          schematic_vars)
+                  end
           end handle ERROR msg => error (String.concat ["analyze_induct: ", msg])
             | TERM (msg, _) => error (String.concat ["analyze_induct: ", msg])
             | TYPE (msg, _, _) => error (String.concat ["analyze_induct: ", msg])),
@@ -754,15 +771,17 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
           unpackOption unpackString                     (* rule name *)
         ),
         ret_schema =
-          packOption (packTuple4 (
+          packOption (packTuple5 (
               packOption packString,
               packInt,
               packList packString,
-              packList packString)),
+              packList packString,
+              packList (packPair (packString, packString)))),
         function = (fn (state_id, target, vars, rule_name_opt) =>
           let val s0 = get_state state_id
               val ctxt = Minilang.context_of s0
               val sot = MiniLang_Agent.string_of_term ctxt
+              val sotyp = MiniLang_Agent.string_of_type ctxt
               val target_term = MiniLang_Agent.read_term ctxt target
               val opt_rule = Option.map (Proof_Context.get_thm ctxt) rule_name_opt
               (* Match the CASE_SPLIT arg shape in Agent/agent.ML's dispatcher. *)
@@ -771,9 +790,18 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
            in case analysis of
                 NONE => NONE
               | SOME {rule_name, consumes, consume_premises, remaining_premises, ...} =>
-                  SOME (rule_name, consumes,
-                        map sot consume_premises,
-                        map sot remaining_premises)
+                  let
+                    val schematic_vars =
+                      fold Term.add_vars consume_premises []
+                      |> distinct (op =)
+                      |> map (fn (name_idx, ty) =>
+                            (Term.string_of_vname name_idx, sotyp ty))
+                  in
+                    SOME (rule_name, consumes,
+                          map sot consume_premises,
+                          map sot remaining_premises,
+                          schematic_vars)
+                  end
           end handle ERROR msg => error (String.concat ["analyze_case_split: ", msg])
             | TERM (msg, _) => error (String.concat ["analyze_case_split: ", msg])
             | TYPE (msg, _, _) => error (String.concat ["analyze_case_split: ", msg])),
