@@ -108,6 +108,85 @@ async def amended_step_message(step: str, root: Root, node: Node, session: 'mode
         await session.interrupt()
     root.reset()
     return file.getvalue()
+def unapplied_batch_warning(unapplied: list[dict], failure: Exception, failed_idx: int) -> str:
+    """Render a single aggregated warning string for the unapplied tail of a
+    multi-item edit batch.  Includes the underlying failure reason and the
+    verbatim content of every operation starting from the failing index, so
+    the agent can re-submit any of them at the right location."""
+    import yaml as _yaml
+    reason = str(failure) if failure is not None else "unknown"
+    dump = _yaml.safe_dump(unapplied, default_flow_style=False,
+                           allow_unicode=True, sort_keys=False, width=120).rstrip()
+    return (
+        f"{len(unapplied)} operation(s) from this edit batch were not applied "
+        f"(starting at index {failed_idx}). Reason: {reason}. "
+        f"Previously-committed items in this batch remain in the tree. "
+        f"You may re-submit any unapplied operation at the appropriate "
+        f"location on a later tool call. Unapplied operations:\n{dump}")
+
+
+async def batch_edit_message(
+    action: str, target_step: str, root: Root,
+    committed: list[Node], session: 'model.Session',
+    failure: Exception | None,
+) -> str:
+    """Response message for a multi-item edit batch.
+
+    Shows which ops landed (if any), emits the ``session.warnings`` block
+    (including the aggregated unapplied-batch warning), then renders the
+    overall quickview.  Mirrors the single-op templates' structure so the
+    agent's expectations are preserved."""
+    file = MyIO(StringIO())
+    if committed:
+        ids = ", ".join(n.titled_id for n in committed)
+        if action == "fill":
+            verb = "Filled"
+        elif action == "insert_before":
+            verb = "Inserted"
+        elif action == "amend":
+            verb = "Amended at"
+        else:
+            verb = "Applied"
+        file.write(
+            f"{verb} {len(committed)} step(s) at target {target_step}: {ids}.\n")
+        # Show pending-proof hint if the last committed node's parent still has
+        # a pending goal (mirrors the single-op messages).
+        last = committed[-1]
+        parent = last.parent
+        if parent is not None:
+            goal_and_to_file = parent.should_I_show_pending_goal()
+            goal_id = parent.id_of_goal()
+            if goal_and_to_file is not None:
+                _, step_to_fill = goal_and_to_file
+                file.write(
+                    f"Call command `edit` with action `fill` and target step "
+                    f"`{step_to_fill}` to provide the proof.\n")
+            elif goal_id is not None and not parent.does_quickview_need_detail():
+                file.write(
+                    f"All proof goals of {parent.titled_id} are completed.\n")
+    else:
+        # Nothing applied — report the failure cause.
+        if failure is not None:
+            file.write(f"No operations from this batch were applied: {failure}\n")
+        else:
+            file.write("No operations from this batch were applied.\n")
+    if session.warnings:
+        file.write("Warnings:\n")
+        for w in session.warnings:
+            file.write(f"  - {w}\n")
+        session.warnings.clear()
+    file.write("Overall outline:\n")
+    root.quickview(1, file)
+    root.reset_changed()
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    if not unfinished:
+        file.write("Congratulations! All goals are proven.\n")
+        await session.interrupt()
+    root.reset()
+    return file.getvalue()
+
+
 async def deleted_steps_message(steps: list[str], root: Root, session: 'model.Session') -> str:
     """Message returned when steps are successfully deleted."""
     file = MyIO(StringIO())

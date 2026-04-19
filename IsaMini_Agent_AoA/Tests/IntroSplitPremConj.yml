@@ -89,8 +89,8 @@ proof:
     operation: Intro
     assuming premises:
       - premise0(1): A
+      - premise0(2): B
       - premise0(3): C
-      - my_B: B
       - premise1(1): ∀(x :: 'a). P x
       - premise1(2): ∀(x :: 'a). Q x
       - premise2(1): D ⟶ E
@@ -98,9 +98,7 @@ proof:
       - premise3: big1 ∧ big2 ∧ big3 ∧ big4 ∧ big5 ∧ big6 ∧ big7 ∧ big8 ∧ big9 ∧ big10 ∧ big11 ∧ big12 ⟶ G ∧ H
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
-  premises:
-    - premise0(2): B
-  goal: A ∧ B ∧ C ∧ P (SOME (x :: 'a). True) ∧ Q (SOME (x :: 'a). True) ∧ (D ⟶ E) ∧ (D ⟶ F)
+  A ∧ B ∧ C ∧ P (SOME (x :: 'a). True) ∧ Q (SOME (x :: 'a). True) ∧ (D ⟶ E) ∧ (D ⟶ F)
 --------------------------------------------------
 After rename premise3 → my_Big (non-destructured singleton)
 --------------------------------------------------
@@ -134,8 +132,8 @@ proof:
     operation: Intro
     assuming premises:
       - premise0(1): A
+      - premise0(2): B
       - premise0(3): C
-      - my_B: B
       - premise1(1): ∀(x :: 'a). P x
       - premise1(2): ∀(x :: 'a). Q x
       - premise2(1): D ⟶ E
@@ -143,9 +141,7 @@ proof:
       - my_Big: big1 ∧ big2 ∧ big3 ∧ big4 ∧ big5 ∧ big6 ∧ big7 ∧ big8 ∧ big9 ∧ big10 ∧ big11 ∧ big12 ⟶ G ∧ H
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
-  premises:
-    - premise0(2): B
-  goal: A ∧ B ∧ C ∧ P (SOME (x :: 'a). True) ∧ Q (SOME (x :: 'a). True) ∧ (D ⟶ E) ∧ (D ⟶ F)
+  A ∧ B ∧ C ∧ P (SOME (x :: 'a). True) ∧ Q (SOME (x :: 'a). True) ∧ (D ⟶ E) ∧ (D ⟶ F)
 --------------------------------------------------
 After Obvious on 2
 --------------------------------------------------
@@ -179,8 +175,8 @@ proof:
     operation: Intro
     assuming premises:
       - premise0(1): A
+      - premise0(2): B
       - premise0(3): C
-      - my_B: B
       - premise1(1): ∀(x :: 'a). P x
       - premise1(2): ∀(x :: 'a). Q x
       - premise2(1): D ⟶ E
@@ -194,8 +190,8 @@ Final Overview
 step 1: Intro (changed, line 0)
   assuming premises:
     - premise0(1): A
+    - premise0(2): B
     - premise0(3): C
-    - my_B: B
     - premise1(1): ∀(x :: 'a). P x
     - premise1(2): ∀(x :: 'a). Q x
     - premise2(1): D ⟶ E

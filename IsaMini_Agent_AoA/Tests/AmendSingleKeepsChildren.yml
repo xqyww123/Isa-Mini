@@ -1,0 +1,50 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+--------------------------------------------------
+After seed Have { proof: [Obvious] }
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: initial
+    operation: Have
+    statement:
+      english: init
+      isabelle: x * x \<ge> 0
+    name: orig
+    proof:
+      - step id: 1.1
+        operation: Obvious
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+--------------------------------------------------
+After single-item amend; inherited children should remain
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: Suffices with no proof — should inherit
+    operation: Suffices
+    statement:
+      english: repl
+      isabelle: x * x \<ge> 0
+    proof:
+      - step id: 1.1
+        operation: Obvious
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  (0 :: int) ≤ x * x
+Suffices sub_nodes kinds: ['Obvious']
+_amend_from preservation verified.

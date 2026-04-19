@@ -34,8 +34,12 @@ from .model import (
     _session_var, Session,
     InteractionExpanded,
     AoA_Error, ArgumentError, IsabelleError,
+    CannotAmend_Root, CannotDelete_Root,
+    NodeNotFound,
     Parse_Node, gen_node, normalize_answer, Interaction_BadAnswer,
+    _validate_op_forest,
 )
+import yaml as _yaml
 from .retrieval import (
     BATCHED_SEMANTIC_SEARCH,
     _query_tool_logic,
@@ -134,19 +138,48 @@ def _check_tool_permission(session: Session, tool_name: str) -> str | None:
 # Tool Logic Functions (shared, no framework dependency)
 # ============================================================================
 
+class _StopBatch(Exception):
+    """Internal sentinel used inside ``_execute_proof_batch`` to break out
+    of the commit loop when a Group-B exception occurs on some item."""
+
+
 async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     session.log_tool_call("mcp__proof__edit", args)
     try:
-        step = args["target_step"]
+        step = args.get("target_step")
+        action = args.get("action")
+        ops_list = args.get("proof_operations")
+        if not isinstance(step, str) or not step:
+            error_msg = "target_step must be a non-empty string"
+            session.log_tool_response("mcp__proof__edit", f"ERROR: {error_msg}")
+            return (error_msg, True)
+        if not isinstance(ops_list, list) or not ops_list:
+            error_msg = "proof_operations must be a non-empty array of proof operations"
+            session.log_tool_response("mcp__proof__edit", f"ERROR: {error_msg}")
+            return (error_msg, True)
+        # Recursive pre-validation — reject atomically on any shape issue.
         try:
-            gn = Parse_Node(args["proof_operation"])
+            _validate_op_forest(ops_list)
         except AoA_Error as e:
             error_msg = str(e)
             session.log_tool_response("mcp__proof__edit", f"ERROR: {error_msg}")
             return (error_msg, True)
-        result, is_error = await _execute_proof_action(
-            session, args["action"], step, gn,
-            "mcp__proof__edit", "after_fill")
+        if len(ops_list) == 1:
+            # Single-op path preserves existing semantics including
+            # ``_on_edit_failure``-driven auto-revert for Obvious.
+            try:
+                gn = Parse_Node(ops_list[0])
+            except AoA_Error as e:
+                error_msg = str(e)
+                session.log_tool_response("mcp__proof__edit", f"ERROR: {error_msg}")
+                return (error_msg, True)
+            result, is_error = await _execute_proof_action(
+                session, action, step, gn,
+                "mcp__proof__edit", "after_fill")
+            return (result, is_error)
+        # Multi-item batch path.
+        result, is_error = await _execute_proof_batch(
+            session, action, step, ops_list)
         return (result, is_error)
     except IsabelleError as e:
         error_msg = f"Isabelle error: {'; '.join(e.errors)}"
@@ -155,6 +188,134 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     except Exception as e:
         session.log_tool_response("mcp__proof__edit", f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
         sys.exit(1)
+
+
+async def _execute_proof_batch(
+    session: Session,
+    action: str,
+    target_step: str,
+    ops_list: list[dict],
+) -> tuple[str, bool]:
+    """Commit-and-warn loop for multi-item edit batches (len > 1).
+
+    Per-action dispatch:
+    - ``fill``: first op fills ``target_step``; subsequent ops are appended
+      to the same parent via ``parent.append``.
+    - ``insert_before``: each op is inserted before ``target_step`` in
+      order via ``root.insert_before`` with ``apply_edit_failure=False``.
+    - ``amend``: ``target_step`` is deleted (losing its sub_nodes) and the
+      list is inserted at its former slot.
+
+    On first Group-B exception at index i, stops and emits a SINGLE
+    aggregated ``session.warnings`` entry for ``ops_list[i:]``.
+    ``is_error = (len(committed) == 0)`` per the batch semantics.
+    ``_on_edit_failure`` is NOT invoked within a batch (no auto-revert)."""
+    root = session.root
+    root.session.age += 1
+    committed: list = []
+    failure: Exception | None = None
+    failed_idx: int = 0
+    try:
+        match action:
+            case "fill":
+                try:
+                    gn = Parse_Node(ops_list[0])
+                    node, _, _ = await root.fill(
+                        target_step, gn, apply_edit_failure=False)
+                    committed.append(node)
+                except AoA_Error as e:
+                    failure = e
+                    failed_idx = 0
+                    raise _StopBatch
+                parent = committed[0].parent
+                if parent is None:
+                    failure = ArgumentError(
+                        {"target_step": target_step},
+                        "filled node has no parent to append to")
+                    failed_idx = 1
+                    raise _StopBatch
+                for i in range(1, len(ops_list)):
+                    try:
+                        gn = Parse_Node(ops_list[i])
+                        new_node = await parent.append(gn)
+                        if new_node is None:
+                            raise ArgumentError(
+                                ops_list[i],
+                                "append returned None")
+                        committed.append(new_node)
+                    except AoA_Error as e:
+                        failure = e
+                        failed_idx = i
+                        raise _StopBatch
+            case "insert_before":
+                for i, op in enumerate(ops_list):
+                    try:
+                        gn = Parse_Node(op)
+                        node, _, _ = await root.insert_before(
+                            target_step, gn, apply_edit_failure=False)
+                        committed.append(node)
+                    except AoA_Error as e:
+                        failure = e
+                        failed_idx = i
+                        raise _StopBatch
+            case "amend":
+                try:
+                    target = root.locate_node(target_step)
+                except NodeNotFound:
+                    failure = ArgumentError(
+                        {"target_step": target_step},
+                        f"Cannot amend the node {target_step} because it is not found")
+                    failed_idx = 0
+                    raise _StopBatch
+                parent = target.parent
+                if parent is None:
+                    failure = CannotAmend_Root()
+                    failed_idx = 0
+                    raise _StopBatch
+                # Capture the next sibling (or None) BEFORE delete so we know
+                # where to insert the list items.
+                idx_in_parent = next(
+                    (k for k, c in enumerate(parent.sub_nodes) if c is target),
+                    -1)
+                next_sibling = (parent.sub_nodes[idx_in_parent + 1]
+                                if 0 <= idx_in_parent < len(parent.sub_nodes) - 1
+                                else None)
+                await root.delete([target_step])
+                for i, op in enumerate(ops_list):
+                    try:
+                        gn = Parse_Node(op)
+                        if next_sibling is not None:
+                            node, _, _ = await root.insert_before(
+                                next_sibling.id, gn, apply_edit_failure=False)
+                        else:
+                            new_node = await parent.append(gn)
+                            if new_node is None:
+                                raise ArgumentError(op, "append returned None")
+                            node = new_node
+                        committed.append(node)
+                    except AoA_Error as e:
+                        failure = e
+                        failed_idx = i
+                        raise _StopBatch
+            case _:
+                error_msg = P.invalid_action_error(action)
+                session.log_tool_response("mcp__proof__edit", f"ERROR: {error_msg}")
+                return (error_msg, True)
+    except _StopBatch:
+        pass
+
+    session.refresh_YAML()
+    if failure is not None:
+        unapplied = ops_list[failed_idx:]
+        session.warnings.append(
+            P.unapplied_batch_warning(unapplied, failure, failed_idx))
+    is_error = len(committed) == 0
+    response = await P.batch_edit_message(
+        action, target_step, root, committed, session, failure)
+    session.log_tool_response("mcp__proof__edit", response)
+    session.log_proof_tree_snapshot(
+        f"after_batch_{action}_step_{target_step}")
+    return (response, is_error)
 
 
 async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
@@ -313,11 +474,16 @@ def _create_mcp_server(session: Session, extra_sdk_tools: list | None = None) ->
         match name:
             case "edit":
                 async with tool_lock:
-                    if time() - _last_mutate_fail_time < 0.7:
+                    # A multi-item edit batch is one intended unit; bypass the
+                    # 0.7s spam-cooldown so a single submitted batch is never
+                    # self-aborted against its own tail.
+                    ops = arguments.get("proof_operations") if isinstance(arguments, dict) else None
+                    is_batch = isinstance(ops, list) and len(ops) > 1
+                    if not is_batch and time() - _last_mutate_fail_time < 0.7:
                         result, is_error = _BATCH_CANCEL_MSG, True
                     else:
                         result, is_error = await _edit_tool_logic(session, arguments)
-                        if is_error:
+                        if is_error and not is_batch:
                             _last_mutate_fail_time = time()
                 session.last_proof_op_time = time()
             case "delete":

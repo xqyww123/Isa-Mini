@@ -1,0 +1,33 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+is_error: False
+--------------------------------------------------
+After batch [InferenceRule ccontr, Obvious]
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: proof by contradiction
+    operation: Inference Rule
+    rule:
+      - ccontr: (¬ ?P ⟶ False) ⟶ ?P
+    derived goal:
+      ¬ (0 :: int) ≤ x * x ⟶ False
+  - step id: 2
+    operation: Intro
+    assuming premises:
+      - premise0: ¬ (0 :: int) ≤ x * x
+  - step id: 3
+    operation: Obvious
+sibling kinds: ['InferenceRule', 'Intro', 'Obvious']
+Unfinished nodes: 0

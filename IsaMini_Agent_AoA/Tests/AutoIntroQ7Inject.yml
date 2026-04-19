@@ -1,0 +1,35 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+--------------------------------------------------
+After Have with proof=[Obvious]; Q7 injects Intro which truncates Obvious
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: outer Have; agent forgot to Intro first
+    operation: Have
+    statement:
+      english: refl
+      isabelle: \<forall>(a::int). a = a
+    name: refl
+    proof:
+      - step id: 1.1
+        operation: Intro
+        fixing variables:
+          - a: int
+      - step id: 1.2
+        operation: Obvious
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Have.sub_nodes[0] kind: Intro
+Have.sub_nodes total: 2
+FOOTER warnings on Have: 0

@@ -1,0 +1,38 @@
+--------------------------------------------------
+Initial State
+--------------------------------------------------
+variables:
+  - R: bool
+  - Q: bool
+  - P: bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P ⟶ Q ⟶ R ⟶ P ∧ Q ∧ R
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: P
+      - premise1: Q
+      - premise2: R
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  P ∧ Q ∧ R
+--------------------------------------------------
+After Obvious on 2
+--------------------------------------------------
+variables:
+  - R: bool
+  - Q: bool
+  - P: bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P ⟶ Q ⟶ R ⟶ P ∧ Q ∧ R
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: P
+      - premise1: Q
+      - premise2: R
+  - step id: 2
+    operation: Obvious
+Unfinished nodes: 0

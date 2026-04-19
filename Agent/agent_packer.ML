@@ -89,20 +89,15 @@ fun unpack_var_name s =
 fun pack_var_name {internal_name, external_name, typ_pretty} =
   packTuple3 (packString, packString, packString) (internal_name, external_name, typ_pretty)
 
-(* Serialize prem_name record {internal_term: term * int option,
-                                external_name: string, pretty: string}.
-   internal_term is packed as a pair (term, int option); int option None = singleton
-   (non-destructed) binding, Some k = k-th atom of a destructed conj group. *)
+(* Serialize prem_name record {internal_term: term, external_name: string, pretty: string} *)
 fun unpack_prem_name s =
-  let val (((t, idx), external_name, pretty), s') =
-        unpackTuple3 (unpackPair (unpack_raw_term, unpackOption unpackInt),
-                      unpackString, unpackString) s
-  in ({internal_term = (t, idx), external_name = external_name, pretty = pretty}, s')
+  let val ((internal_term, external_name, pretty), s') =
+        unpackTuple3 (unpack_raw_term, unpackString, unpackString) s
+  in ({internal_term = internal_term, external_name = external_name, pretty = pretty}, s')
   end
 
-fun pack_prem_name {internal_term = (t, idx), external_name, pretty} =
-  packTuple3 (packPair (pack_raw_term, packOption packInt), packString, packString)
-    ((t, idx), external_name, pretty)
+fun pack_prem_name {internal_term, external_name, pretty} =
+  packTuple3 (pack_raw_term, packString, packString) (internal_term, external_name, pretty)
 
 val unpack_bindings =
   unpackPair (unpackList unpack_var_name, unpackList unpack_prem_name)

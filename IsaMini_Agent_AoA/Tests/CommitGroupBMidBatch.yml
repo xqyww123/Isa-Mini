@@ -1,0 +1,28 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: x = x + (1 :: int)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+is_error: False
+--------------------------------------------------
+After batch; first Obvious FAILED, rest aggregated into warnings
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: x = x + (1 :: int)
+proof:
+  - step id: 1
+    operation: Obvious
+    Error: |
+      Automatic proof fails on the subgoal:
+        False
+      The goal is non-trivial and a step-by-step proof is required.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to replace it with a proof.
+pending proof goal:
+  x = x + (1 :: int)
+session.warnings count: 0

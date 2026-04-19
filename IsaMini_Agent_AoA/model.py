@@ -94,15 +94,15 @@ type Var = tuple[varname, typ]
 type Hyp = tuple[varname, term]
 type Vars = dict[varname, typ]
 type Hyps = dict[varname, term]
-type SubProof = Literal["Given later"] | dict  # Obvious_ToolArg at runtime
-
-def _subproof_is_obvious(sp: SubProof) -> bool:
-    return isinstance(sp, dict) and sp.get("operation") == "Obvious"
-
-# SubProof_parsed: the result of parsing a SubProof.
-# A sync gen_node that creates the Obvious sub-node (with resolved facts), or None for "Given later".
-# Defined as a forward reference since gen_node is declared later.
-type SubProof_parsed = 'gen_node | None'
+# `proof` (type alias): an ordered list of raw operation dicts (ToolCall_arg)
+# to attach as children at refresh time.  The type alias itself is never None —
+# optionality is expressed at the ToolArg field level and inside the runtime
+# nodes as `proof | None`, where None means "no proof provided — keep
+# _amend_from-inherited children or fall through to auto-Intro".  Kept in
+# raw (pre-parse) form so at attach time we can inspect the first op for the
+# Q7 auto-Intro decision; actual gen_nodes are produced by `Parse_Node` at
+# attach time.
+type proof = list[dict]
 
 class Explicit_Var(TypedDict):
     name: xvarname
@@ -664,10 +664,9 @@ class VariableBinding(NamedTuple):
     type: typ
 
 class FactBinding(NamedTuple):
-    expr: lambda_term  # internal_term's origin conjunction term (.fst of the ML-side pair)
+    expr: lambda_term  # internal_term
     name: varname      # external_name (may include "(k)" suffix for destructed atoms)
     pretty: term       # pretty
-    index: int | None = None  # atom index within a destructed group (.snd of the ML-side pair)
 
 type Bindings = tuple[list[VariableBinding], list[FactBinding]]
 
@@ -771,8 +770,7 @@ class Intro_Bindings_Msg(Message):
         ]
         fact_bindings = [
             FactBinding(
-                expr=p[0][0],                              # origin conj term (.fst)
-                index=p[0][1],                             # atom index or None (.snd)
+                expr=p[0],
                 name=IsaTerm.from_isabelle(p[1]),
                 pretty=IsaTerm.from_isabelle(p[2])
             ) for p in prem_names
@@ -1108,14 +1106,14 @@ class Minilang_Operation(NamedTuple):
             # prem_name.internal_term schema.
             var_bindings = [(vb.internal_varname.ascii, vb.external_varname.ascii, vb.type.ascii)
                            for vb in bindings[0]]
-            fact_bindings = [((fb.expr, fb.index), fb.name.ascii, fb.pretty.ascii)
+            fact_bindings = [(fb.expr, fb.name.ascii, fb.pretty.ascii)
                             for fb in bindings[1]]
             packed_bindings: Any = (var_bindings, fact_bindings)
         else:
             packed_bindings = None
         return Minilang_Operation("INTRO", (packed_bindings, split))
     @staticmethod
-    def SIMPLIFY(facts_with_targets: 'list[tuple[IsabelleFact, list[lambda_term] | None]]', use_system_simps: bool, premise_names: list[str], simplify_goal: bool, bindings: tuple[list[tuple[str, str, str]], list[tuple[tuple[lambda_term, int | None], str, str]]] | None) -> 'Minilang_Operation':
+    def SIMPLIFY(facts_with_targets: 'list[tuple[IsabelleFact, list[lambda_term] | None]]', use_system_simps: bool, premise_names: list[str], simplify_goal: bool, bindings: tuple[list[tuple[str, str, str]], list[tuple[lambda_term, str, str]]] | None) -> 'Minilang_Operation':
         packed_facts = [(r.pack(), targets) for r, targets in facts_with_targets]
         return Minilang_Operation("SIMPLIFY", (packed_facts, use_system_simps, premise_names, simplify_goal, bindings))
     @staticmethod
@@ -2165,6 +2163,21 @@ class Node(ABC):
         Override to clear caches that depend on upstream state."""
         self._is_trivial = None
 
+    @classmethod
+    def _should_forbid_successor(cls) -> 'FailureReason | None':
+        """Class-level predicate used by the recursive pre-validator.
+        Return a `FailureReason` explaining the rejection when this
+        operation kind may never have another proof operation placed
+        after it as a sibling (e.g. terminal operations like `Obvious`
+        that either discharge the goal or mark it non-trivial).
+        Return `None` to let the validator accept any successor —
+        any runtime truncation is then handled by `_close_by` plus the
+        FOOTER warning at refresh time.
+        The message is used verbatim by the validator (prepended with a
+        path annotation), so each subclass may tailor it to its own
+        semantics."""
+        return None
+
     @property
     def titled_id(self) -> str:
         """Return e.g. 'step 1' or 'goal 2.1'."""
@@ -2332,11 +2345,22 @@ class Node(ABC):
                 await node._cancel()
             await node._refresh_all_after_me()
             return node
-    async def insert_before(self, step: step, gn: gen_node) -> 'tuple[Node, bool, FailureReason | None]':
+    async def insert_before(self, step: step, gn: gen_node,
+                            apply_edit_failure: bool = True
+                            ) -> 'tuple[Node, bool, FailureReason | None]':
+        """Insert a node before ``step``.
+
+        ``apply_edit_failure`` (default True) controls whether the inserted
+        node's ``_on_edit_failure`` hook is invoked on refresh failure.  The
+        single-op commit path keeps the default so that e.g. a failing
+        ``Obvious`` is auto-reverted to leave a blank slot.  The multi-item
+        batch path (see ``mcp_http_server._execute_proof_batch``) passes
+        ``False`` to suppress revert — failed nodes stay in the tree in a
+        FAILURE state so the agent can see them and amend as needed."""
         try:
             node = self.locate_node(step)
             ret = await node.insert_before_me(gn)
-            if ret.status.status == EvaluationStatus.Status.FAILURE:
+            if apply_edit_failure and ret.status.status == EvaluationStatus.Status.FAILURE:
                 response = ret._on_edit_failure()
                 if response.revert:
                     rp = ret._delete_me()
@@ -2362,7 +2386,14 @@ class Node(ABC):
     def unfinished_nodes(self, ret: set['Node']) -> None:
         if self.status.status != EvaluationStatus.Status.SUCCESS:
             ret.add(self)
-    async def fill(self, id: step, gn: gen_node) -> 'tuple[Node, bool, FailureReason | None]':
+    async def fill(self, id: step, gn: gen_node,
+                   apply_edit_failure: bool = True
+                   ) -> 'tuple[Node, bool, FailureReason | None]':
+        """Fill a blank proof slot (or replace an existing failed step via the
+        fallback path) with a newly-constructed node.
+
+        ``apply_edit_failure`` mirrors the parameter on ``insert_before`` —
+        multi-item batches pass False to suppress auto-revert."""
         ids = id.split('.')
         node = self._locate_node(ids[:-1], id, 0)
         to_fill = node._id_of_openning_prf_to_fill()
@@ -2411,7 +2442,7 @@ class Node(ABC):
             raise CannotFill_GoalIsNontrivial(e.parent)
         if ret is None:
             raise InternalError("Don't know how to fill a node when the node's append method returns None")
-        if ret.status.status == EvaluationStatus.Status.FAILURE:
+        if apply_edit_failure and ret.status.status == EvaluationStatus.Status.FAILURE:
             response = ret._on_edit_failure()
             if response.revert:
                 rp = ret._delete_me()
@@ -2843,8 +2874,10 @@ class NonLeaf_Node(Node):
         ...
 
 class StdBlock(NonLeaf_Node):
+    _raw_proofs: 'proof | None'  # default None; subclasses that carry a `proof` field set this in __init__
     def __init__(self, config: NodeConfig, thought: str, sub_nodes: list['Node']):
         super().__init__(config, thought, sub_nodes)
+        self._raw_proofs = None
         # Convention: the _state_before_ending_ should be used only when self.has_ending_opr()
         self._state_before_ending_ = Minilang_State.assign(config.ml_state)
         self._body_subnodes_succeeded = False
@@ -3134,6 +3167,87 @@ class StdBlock(NonLeaf_Node):
         buffer = StringIO()
         self.quickview(indent, MyIO(buffer))
         return buffer.getvalue()
+    async def _attach_raw_proofs(self, auto_intro: bool) -> 'FailureReason | None':
+        """Consume ``self._raw_proofs`` at first refresh and attach each operation
+        as a direct child of this block.
+
+        If ``auto_intro`` is True (only Have today) and the agent's first op is
+        NOT ``Intro``, an auto-Intro is injected before the provided list when
+        the current goal state calls for one (``need_intro(False)``).
+
+        If any children were inherited via ``_amend_from`` (previous block's
+        sub_nodes) and a provided list is given, Q6 redirects them into the
+        LAST provided node's body when that node is a StdBlock that can host
+        children; otherwise they are emitted as a ``_warn_discarded_nodes``
+        entry and dropped.
+
+        Returns ``FailureReason`` only on bugs during construction (validator
+        should have caught all shape issues); returns ``None`` on success.
+        The appended children are not refreshed here — the outer
+        ``StdBlock._refresh_me_alone`` loop does that."""
+        if self._raw_proofs is not None:
+            inherited = list(self.sub_nodes)
+            # Preserve the post-beginning state: when sub_nodes is non-empty
+            # (inherited via _amend_from), the super()._refresh_the_beginning_opr
+            # call just wrote the post-beginning state into sub_nodes[0].ml_state
+            # (because `_state_after_beginning()` returned that pointer).  After
+            # we wipe sub_nodes below, `_state_after_beginning()` would fall
+            # back to `_state_before_ending_`, which still holds the STALE
+            # pre-beginning state.  Sync it here so newly-attached children
+            # clone a valid post-beginning state.
+            if inherited:
+                await inherited[0].ml_state.clone(self._state_before_ending_)
+            self.sub_nodes = []
+            raw_list = list(self._raw_proofs)
+            self._raw_proofs = None
+            first_op_name = (
+                raw_list[0].get("operation")
+                if raw_list and isinstance(raw_list[0], dict) else None)
+            if (auto_intro
+                    and first_op_name != "Intro"
+                    and await self._state_after_beginning().need_intro(False)):
+                local_step = self._local_step_of_next_proof_step()
+                ml_state = await self._state_after_beginning().clone(None)
+                config = NodeConfig(local_step, ml_state, self)
+                self.sub_nodes.append(Intro(config, "", None, False))
+            for raw_op in raw_list:
+                try:
+                    gn = Parse_Node(raw_op)
+                except AoA_Error as e:
+                    return FailureReason(
+                        f"Failed to construct nested proof operation: {e}")
+                local_step = self._local_step_of_next_proof_step()
+                ml_state = await self._state_after_beginning().clone(None)
+                sub_config = NodeConfig(local_step, ml_state, self)
+                try:
+                    new_child = gn(sub_config)
+                except GoalIsNontrivial:
+                    return FailureReason(
+                        "Nested proof contains Obvious on a goal that is not "
+                        "trivially provable")
+                self.sub_nodes.append(new_child)
+            if inherited:
+                last = self.sub_nodes[-1] if self.sub_nodes else None
+                if isinstance(last, StdBlock):
+                    for child in inherited:
+                        child.parent = last
+                    last.sub_nodes.extend(inherited)
+                else:
+                    self._warn_discarded_nodes(
+                        inherited,
+                        "The last provided proof operation cannot host the "
+                        "previously inherited sub-proof steps; these inherited "
+                        "steps have been discarded",
+                        Warning.Position.FOOTER)
+            return None
+        if (auto_intro
+                and not self.sub_nodes
+                and await self._state_after_beginning().need_intro(False)):
+            local_step = self._local_step_of_next_proof_step()
+            ml_state = await self._state_after_beginning().clone(None)
+            config = NodeConfig(local_step, ml_state, self)
+            self.sub_nodes.append(Intro(config, "", None, False))
+        return None
     async def append(self, gn: gen_node) -> 'Node | None':
         if not self.opening():
             raise CannotAppend_BlockClosed(self, self._closed_by)
@@ -3215,7 +3329,7 @@ class GoalNode(StdBlock):
     case_hyps: list[Hyp] | None
 
     def __init__(self, config: NodeConfig, is_single_goal: bool, show_goal: bool,
-                 auto_proof: SubProof_parsed = None):
+                 auto_proof: proof | None = None):
         super().__init__(config, "", [])
         self.is_single_goal = is_single_goal
         self.show_goal = show_goal
@@ -3224,7 +3338,7 @@ class GoalNode(StdBlock):
         self.case_vars = None
         self.case_hyps = None
         self._prev_quickview_context: tuple[Vars, Hyps] | None = None
-        self._pending_auto_proof: SubProof_parsed | None = auto_proof
+        self._pending_auto_proof: proof | None = auto_proof
     @property
     def titled_id(self) -> str:
         return self.id
@@ -3303,13 +3417,33 @@ class GoalNode(StdBlock):
                 raise InternalError(f"Expected exactly one Consider_Case_Msg in Case's messages, got {len(consider_case_msgs)}")
         if not is_init and (self.case_vars, self.case_hyps) != old_case:
             self.changed = True
-        # Attach auto_proof subproof (from Branch/CaseSplit/Induction) before Intro fallback
+        # Attach auto_proof subproof (list of raw ops from Branch/CaseSplit/Induction) before Intro fallback.
         if self._pending_auto_proof is not None and not self.sub_nodes:
-            local_step = self._local_step_of_next_proof_step()
-            ml_state = await self.ml_state.clone(None)
-            sub_config = NodeConfig(local_step, ml_state, self)
-            self.sub_nodes.append(self._pending_auto_proof(sub_config))
+            raw_list = self._pending_auto_proof
             self._pending_auto_proof = None
+            first_op_name = (
+                raw_list[0].get("operation")
+                if raw_list and isinstance(raw_list[0], dict) else None)
+            # Q7: auto-Intro injection unless the agent's first op is already Intro.
+            if (first_op_name != "Intro"
+                    and await self.ml_state.need_intro(False)):
+                local_step = self._local_step_of_next_proof_step()
+                ml_state = await self.ml_state.clone(None)
+                config = NodeConfig(local_step, ml_state, self)
+                self.sub_nodes.append(Intro(config, "", None, False))
+            for raw_op in raw_list:
+                try:
+                    gn = Parse_Node(raw_op)
+                except AoA_Error:
+                    # Validator should have caught shape issues; skip defensively.
+                    continue
+                local_step = self._local_step_of_next_proof_step()
+                ml_state = await self.ml_state.clone(None)
+                sub_config = NodeConfig(local_step, ml_state, self)
+                try:
+                    self.sub_nodes.append(gn(sub_config))
+                except GoalIsNontrivial:
+                    break
         elif is_init and not self.sub_nodes and await self.ml_state.need_intro(False):
             local_step = self._local_step_of_next_proof_step()
             ml_state = await self.ml_state.clone(None)
@@ -3354,6 +3488,28 @@ class GoalNode(StdBlock):
                         self._prev_quickview_context = visible
             return child_indent
 
+class _OpenSubgoalBlock(Enum):
+    """Result of `SubgoalMaker._should_open_proof_block` — unifies the former
+    two methods `_should_open_proof_block` (open-or-not) and
+    `_block_closes_parent` (close-or-not-when-open).
+
+    - ``NO``: no subgoal block opens this refresh (e.g. Intro on a goal that
+      no longer has meta-quantifiers, or Define when it didn't enter the
+      deferred-block path).
+    - ``YES``: a subgoal block opens but the enclosing parent proof-line
+      is NOT closed — this is `Define`'s deferred block, bracketed by an
+      explicit END opcode so the parent's proof line continues past it.
+    - ``YES_AND_CLOSE_PARENT_BLOCK``: a subgoal block opens AND the parent's
+      proof line is truncated via `_close_by` — any siblings after this
+      node become meaningless and are moved to a FOOTER warning.
+
+    Invariant: the closing info is only meaningful when a block opens, which
+    is why these three values are exhaustive (there is no
+    "no-open-but-close-parent" case)."""
+    NO = 0
+    YES = 1
+    YES_AND_CLOSE_PARENT_BLOCK = 2
+
 class SubgoalMaker(GoalContainer, StdBlock):
     def _should_print_done(self) -> bool:
         return bool(self.sub_nodes) and super()._should_print_done()
@@ -3396,22 +3552,23 @@ class SubgoalMaker(GoalContainer, StdBlock):
         return GoalNode(NodeConfig(str(goal_index+self._initial_goal_index), ml_state, self), False, True, None)
     def _on_regenerating_goals(self, goals: list[Goal]) -> None:
         pass
-    def _should_open_proof_block(self, s0: Minilang_State) -> bool:
-        """Decide whether this operation opens a multi-goal proof block that
-        needs GoalNode children. Default: the resulting state has more than
-        one top-level goal (Intro/Branch/CaseSplit/Induction). `Define`
-        overrides this to base the decision on the reporter messages
-        indicating whether a deferred pat-completeness / termination block
-        has been pushed onto the minilang stack."""
-        return len(s0.prooftree_of().top_goals()) > 1
-    def _block_closes_parent(self) -> bool:
-        """When a proof block opens, whether to truncate the parent's
-        sub_nodes via `_close_by`. True for Intro/Branch/CaseSplit/Induction
-        — their subgoals become the tail of the enclosing proof line, so no
-        siblings can follow. False for `Define` — its deferred block is
-        bracketed by an explicit END opcode, so the parent's proof line
-        continues past `Define`."""
-        return True
+    def _should_open_proof_block(self, s0: Minilang_State) -> _OpenSubgoalBlock:
+        """Decide whether this refresh opens a subgoal block, and if so
+        whether the enclosing parent block is also closed via `_close_by`.
+
+        Default (Intro/InferenceRule/Branch/CaseSplit/Induction): open a
+        block iff the state has more than one top-level goal; if so, also
+        close the parent proof line (subgoals become its tail, siblings
+        after this node become meaningless).
+
+        `Define` overrides this to base the decision on reporter messages
+        indicating whether the deferred pat-completeness / termination
+        block has been pushed onto the minilang stack; when it opens,
+        it does NOT close the parent line (its block is internal and
+        bracketed by an END opcode)."""
+        if len(s0.prooftree_of().top_goals()) > 1:
+            return _OpenSubgoalBlock.YES_AND_CLOSE_PARENT_BLOCK
+        return _OpenSubgoalBlock.NO
     async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
         is_init = self._first_time
         old_n_subnodes = len(self.sub_nodes)
@@ -3421,15 +3578,16 @@ class SubgoalMaker(GoalContainer, StdBlock):
         s0 = self._state_after_beginning()
         if s0.prooftree is None:
             raise InternalError("The prooftree of the state after beginning is not initialized, meaning the node is not refreshed")
-        open_block = self._should_open_proof_block(s0)
-        if open_block:
+        decision = self._should_open_proof_block(s0)
+        if decision != _OpenSubgoalBlock.NO:
             goals = s0.prooftree.top_goals()
             # TODO: try to reuse the existing subnodes instead of discarding them.
             if not self._first_time and len(goals) == len(self.sub_nodes):
                 pass
             else:
                 self._on_regenerating_goals(goals)
-                if self._block_closes_parent() and self.parent is not None:
+                if (decision == _OpenSubgoalBlock.YES_AND_CLOSE_PARENT_BLOCK
+                        and self.parent is not None):
                     self.parent._close_by(self)
                 if self.sub_nodes:
                     self._warn_discarded_nodes(
@@ -3455,7 +3613,17 @@ class SubgoalMaker(GoalContainer, StdBlock):
                     "Since this operation no longer opens a proof block, the following previously held proof steps are discarded",
                     Warning.Position.FOOTER)
             self.sub_nodes = []
-            if self._block_closes_parent() and self.parent is not None:
+            # Re-open the parent iff the parent is currently closed (by any
+            # closer) AND we are the tail of its sub_nodes — i.e., whatever
+            # closing happened previously is now effectively undone because
+            # this refresh doesn't open a block.  (`_close_by` always
+            # truncates the parent to end at the closer, so the "I'm the
+            # tail" check is how we identify the closer without tracking
+            # identity across refresh cycles.)
+            if (self.parent is not None
+                    and self.parent._closed_by is not None
+                    and self.parent.sub_nodes
+                    and self.parent.sub_nodes[-1] is self):
                 self.parent._open()
         if not is_init and len(self.sub_nodes) != old_n_subnodes:
             self.changed = True
@@ -3470,14 +3638,14 @@ class CaseSplit_Like(SubgoalMaker):
     case_vars: list[Var] | None
     case_hyps: list[Hyp] | None
     case_name: str | None
-    _initial_proof: SubProof_parsed
+    _initial_proof: proof | None
     # Rule resolution cache. `_resolved_rule_str = None` means "no explicit
     # rule" (auto-pick on the ML side). Set once on the first refresh and
     # reused afterwards — re-amending the node is expected to replace the
     # whole instance, so no invalidation hook is needed.
     _resolved_rule_str: str | None
     _rule_resolved: bool
-    def __init__(self, *args, _initial_proof: SubProof_parsed = None, **kwargs):
+    def __init__(self, *args, _initial_proof: proof | None = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.case_vars = None
         self.case_hyps = None
@@ -3691,6 +3859,7 @@ class CaseSplit_Like(SubgoalMaker):
 class OperationMeta(NamedTuple):
     toolarg_typed_dict: type[Any]
     gen_func: Callable[[Any], gen_node]
+    cls: type[Any]  # the Node subclass; used by the validator for reflection
 
 OPERATION_REGISTRY: dict[str, OperationMeta] = {}
 
@@ -3701,7 +3870,7 @@ def proof_operation(operation: str, toolarg_typed_dict: type[Any]):
     define a staticmethod `gen(arg: ToolArg) -> gen_node`.
     """
     def decorator(cls: type[Any]):
-        OPERATION_REGISTRY[operation] = OperationMeta(toolarg_typed_dict, cls.gen)  # type: ignore[attr-defined]
+        OPERATION_REGISTRY[operation] = OperationMeta(toolarg_typed_dict, cls.gen, cls)  # type: ignore[attr-defined]
         return cls
     return decorator
 
@@ -3807,6 +3976,12 @@ class Obvious(Leaf):
         super().__init__(config, "")
         self._raw_facts: list[FactByName | FactByProposition] = arg["facts"]
         self.fact_refs: list[IsabelleFact] | None = None
+
+    @classmethod
+    def _should_forbid_successor(cls) -> FailureReason | None:
+        return FailureReason(
+            "The Obvious operation concludes the proof, "
+            "so no further proof operations may follow it.")
 
     @staticmethod
     def gen(arg: Obvious_ToolArg) -> gen_node:
@@ -4089,7 +4264,7 @@ class Define(SubgoalMaker):
         return Minilang_Operation.DEFINE(
             self.name, self.type, self.equations, self.metric)
 
-    def _should_open_proof_block(self, s0: Minilang_State) -> bool:
+    def _should_open_proof_block(self, s0: Minilang_State) -> _OpenSubgoalBlock:
         # Unlike Intro/Branch/etc., the Define node decides whether a
         # proof block opens based on the reporter messages — not by
         # counting top goals (the outer lemma goal is at the top in
@@ -4109,12 +4284,13 @@ class Define(SubgoalMaker):
             if isinstance(m, Define_Result_Msg):
                 self.type = m.type.unicode
                 break
-        return self._deferred_block_opened
-    def _block_closes_parent(self) -> bool:
-        # Define's deferred block is internal and bracketed by an
-        # explicit END opcode — the enclosing proof line continues
-        # past Define with more siblings (e.g. a subsequent Witness).
-        return False
+        # Define's deferred block is internal and bracketed by an explicit
+        # END opcode — the enclosing proof line continues past Define with
+        # more siblings (e.g. a subsequent Witness).  So when it opens, it
+        # does NOT close the parent.
+        if self._deferred_block_opened:
+            return _OpenSubgoalBlock.YES
+        return _OpenSubgoalBlock.NO
 
     def has_ending_opr(self) -> bool:
         # Deferred path: Define emits the single trailing END that
@@ -4624,7 +4800,7 @@ class Rewrite(Leaf):
         bindings = None
         if self.bindings is not None:
             var_bindings = [(vb.internal_varname.ascii, vb.external_varname.ascii, vb.type.ascii) for vb in self.bindings[0]]
-            fact_bindings = [((fb.expr, fb.index), fb.name.ascii, fb.pretty.ascii) for fb in self.bindings[1]]
+            fact_bindings = [(fb.expr, fb.name.ascii, fb.pretty.ascii) for fb in self.bindings[1]]
             bindings = (var_bindings, fact_bindings)
         # Build per-fact targets for the operation.
         # Filter out facts with empty target lists (user chose to drop them).
@@ -4769,7 +4945,7 @@ class Rewrite(Leaf):
         if self.bindings is not None:
             for i, fact in enumerate(self.bindings[1]):
                 if fact.name == old_name:
-                    self.bindings[1][i] = FactBinding(fact.expr, IsaTerm.from_agent(new_name), fact.pretty, fact.index)
+                    self.bindings[1][i] = FactBinding(fact.expr, IsaTerm.from_agent(new_name), fact.pretty)
                     return self
         return super()._rename_fact(old_name, new_name)
 
@@ -4791,7 +4967,7 @@ class Have_ToolArg(TypedDict):
     thought: str
     statement: Statement
     name: str
-    proof: SubProof
+    proof: NotRequired[proof | None]
     auto_apply: NotRequired[bool]
 
 @proof_operation("Have", Have_ToolArg)
@@ -4805,8 +4981,8 @@ class Have(StdBlock):
         # Populated from `Newly_Fixed_Vars_Msg` after the HAVE op runs.
         self.for_any: list[tuple[varname, typ]] = []
         self._prev_for_any: list[tuple[varname, typ]] = []
-        # Raw subproof dict; attached to sub_nodes on first refresh, then set to None.
-        self._raw_proof: SubProof | None = arg.get("proof", "Given later")
+        # Raw subproof list; consumed by _attach_raw_proofs on first refresh.
+        self._raw_proofs: proof | None = arg.get("proof")
     @staticmethod
     def gen(arg : Have_ToolArg) -> gen_node:
         return lambda config: Have(config, arg)
@@ -4859,24 +5035,7 @@ class Have(StdBlock):
                 if isinstance(m, Newly_Fixed_Vars_Msg)]
         if msgs:
             self.for_any = msgs[0].vars
-        if self._raw_proof is not None and not self.sub_nodes:
-            if _subproof_is_obvious(self._raw_proof):
-                local_step = self._local_step_of_next_proof_step()
-                ml_state = await self._state_after_beginning().clone(None)
-                sub_config = NodeConfig(local_step, ml_state, self)
-                try:
-                    self.sub_nodes.append(Obvious(sub_config, cast(Obvious_ToolArg, self._raw_proof)))
-                except GoalIsNontrivial:
-                    return FailureReason("Subproof's Obvious cannot prove a nontrivial goal")
-                self._raw_proof = None
-            elif await self._state_after_beginning().need_intro(False):
-                local_step = self._local_step_of_next_proof_step()
-                ml_state = await self._state_after_beginning().clone(None)
-                config = NodeConfig(local_step, ml_state, self)
-                intro = Intro(config, "", None, False)
-                self.sub_nodes.append(intro)
-                self._raw_proof = None
-        return None
+        return await self._attach_raw_proofs(auto_intro=True)
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         return FailureReason(f"Fail to claim the intermediate subgoal because: {"\n".join(err.errors)}")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
@@ -4895,14 +5054,14 @@ class Have(StdBlock):
 class Suffices_ToolArg(TypedDict):
     thought: str
     statement: Statement
-    proof: SubProof
+    proof: NotRequired[proof | None]
 
 @proof_operation("Suffices", Suffices_ToolArg)
 class Suffices(StdBlock):
     def __init__(self, config: NodeConfig, arg : Suffices_ToolArg):
         super().__init__(config, arg["thought"], [])
         self.statement = arg["statement"]
-        self._raw_proof: SubProof | None = arg.get("proof", "Given later")
+        self._raw_proofs: proof | None = arg.get("proof")
     @staticmethod
     def gen(arg : Suffices_ToolArg) -> gen_node:
         return lambda config: Suffices(config, arg)
@@ -4910,16 +5069,7 @@ class Suffices(StdBlock):
         fail = await super()._refresh_the_beginning_opr()
         if fail is not None:
             return fail
-        if self._raw_proof is not None and not self.sub_nodes and _subproof_is_obvious(self._raw_proof):
-            local_step = self._local_step_of_next_proof_step()
-            ml_state = await self._state_after_beginning().clone(None)
-            sub_config = NodeConfig(local_step, ml_state, self)
-            try:
-                self.sub_nodes.append(Obvious(sub_config, cast(Obvious_ToolArg, self._raw_proof)))
-            except GoalIsNontrivial:
-                return FailureReason("Subproof's Obvious cannot prove a nontrivial goal")
-            self._raw_proof = None
-        return None
+        return await self._attach_raw_proofs(auto_intro=False)
     def quickview(self, indent: int, file: MyIO) -> int:
         indent = super().quickview(indent, file)
         if not self.sub_nodes and not self.session.showed_suffices_notice:
@@ -4960,7 +5110,7 @@ class Obtain_ToolArg(TypedDict):
     thought: str
     variables: list[Explicit_Var]
     constraints: list[NamedStatement]
-    proof: SubProof
+    proof: NotRequired[proof | None]
 
 @proof_operation("Obtain", Obtain_ToolArg)
 class Obtain(StdBlock):
@@ -4969,7 +5119,7 @@ class Obtain(StdBlock):
         super().__init__(config, arg["thought"], [])
         self.variables = arg["variables"]
         self.constraints = arg["constraints"]
-        self._raw_proof: SubProof | None = arg.get("proof", "Given later")
+        self._raw_proofs: proof | None = arg.get("proof")
         # Populated from `New_Item_Msg` after OBTAIN runs: the vars +
         # facts Isabelle actually fixed, with types inferred by the ML
         # side. Used by `_fixed_*_after_me` so subsequent siblings see
@@ -4990,16 +5140,7 @@ class Obtain(StdBlock):
         fail = await super()._refresh_the_beginning_opr()
         if fail is not None:
             return fail
-        if self._raw_proof is not None and not self.sub_nodes and _subproof_is_obvious(self._raw_proof):
-            local_step = self._local_step_of_next_proof_step()
-            ml_state = await self._state_after_beginning().clone(None)
-            sub_config = NodeConfig(local_step, ml_state, self)
-            try:
-                self.sub_nodes.append(Obvious(sub_config, cast(Obvious_ToolArg, self._raw_proof)))
-            except GoalIsNontrivial:
-                return FailureReason("Subproof's Obvious cannot prove a nontrivial goal")
-            self._raw_proof = None
-        return None
+        return await self._attach_raw_proofs(auto_intro=False)
     async def _refresh_footer(self) -> 'FailureReason | None':
         # `New_Item_Msg` for OBTAIN fires inside CONSIDER'i's CB
         # continuation, which is triggered when the existential's
@@ -5263,7 +5404,7 @@ class Intro(SubgoalMaker):
         if self.bindings is not None:
             for i, fact in enumerate(self.bindings[1]):
                 if fact.name == old_name:
-                    self.bindings[1][i] = FactBinding(fact.expr, IsaTerm.from_agent(new_name), fact.pretty, fact.index)
+                    self.bindings[1][i] = FactBinding(fact.expr, IsaTerm.from_agent(new_name), fact.pretty)
                     return self
         return super()._rename_fact(old_name, new_name)
 
@@ -5347,7 +5488,7 @@ class InferenceRule(SubgoalMaker):
 
 class Branch_Case_ToolArg(TypedDict):
     statement: NamedStatement
-    proof: SubProof
+    proof: NotRequired[proof | None]
 class Branch_ToolArg(TypedDict):
     thought: str
     cases: list[Branch_Case_ToolArg]
@@ -5360,7 +5501,7 @@ class Branch(SubgoalMaker):
     def __init__(self, config: NodeConfig, arg: Branch_ToolArg):
         super().__init__(config, arg["thought"], [])
         self.cases = arg["cases"]
-        self._parsed_cases: list[SubProof_parsed] | None = None
+        self._parsed_cases: list[proof | None] | None = None
         self._initial_goal_index = 0
     @staticmethod
     def gen(arg : Branch_ToolArg) -> gen_node:
@@ -5375,7 +5516,7 @@ class Branch(SubgoalMaker):
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
     def _new_goal_node(self, goal_index: int, ml_state: Minilang_State) -> GoalNode:
         case_index = goal_index - 1  # goal 0 = exhaustiveness, goals 1..N = cases
-        auto_proof: SubProof_parsed = None
+        auto_proof: proof | None = None
         if self._parsed_cases is not None and 0 <= case_index < len(self._parsed_cases):
             auto_proof = self._parsed_cases[case_index]
         return GoalNode(NodeConfig(str(goal_index+self._initial_goal_index), ml_state, self), False, True,
@@ -5392,14 +5533,10 @@ class Branch(SubgoalMaker):
         raise InternalError("A Branch doesn't have an ending operation")
     async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
         if self._parsed_cases is None:
-            parsed_cases: list[SubProof_parsed] = []
+            parsed_cases: list[proof | None] = []
             for case in self.cases:
-                raw = case.get("proof", "Given later")
-                if _subproof_is_obvious(raw):
-                    obv_arg = cast(Obvious_ToolArg, raw)
-                    parsed_cases.append(lambda config, a=obv_arg: Obvious(config, a))
-                else:
-                    parsed_cases.append(None)
+                raw = case.get("proof")
+                parsed_cases.append(list(raw) if raw else None)
             self._parsed_cases = parsed_cases
         fail = await super()._refresh_the_beginning_opr()
         if fail is None:
@@ -5419,7 +5556,7 @@ class CaseSplit_ToolArg(TypedDict):
     thought: str
     target_isabelle_term: xterm
     rule: NotRequired[Literal["default"] | FactByName | FactByDescription]
-    proof: SubProof
+    proof: NotRequired[proof | None]
 
 @proof_operation("CaseSplit", CaseSplit_ToolArg)
 class CaseSplit(CaseSplit_Like):
@@ -5428,7 +5565,7 @@ class CaseSplit(CaseSplit_Like):
         self.target_isabelle_term = arg["target_isabelle_term"]
         self.rule_spec: 'Literal["default"] | FactByName | FactByDescription' = \
             arg.get("rule", "default")
-        self._raw_proof: SubProof | None = arg.get("proof", "Given later")
+        self._raw_proofs: proof | None = arg.get("proof")
     def quickview_title(self) -> str:
         return f"CaseSplit {self.target_isabelle_term}"
     @staticmethod
@@ -5457,11 +5594,9 @@ class CaseSplit(CaseSplit_Like):
     def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         raise InternalError("A Branch doesn't have an ending operation")
     async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
-        if self._initial_proof is None and self._raw_proof is not None:
-            if _subproof_is_obvious(self._raw_proof):
-                obv_arg = cast(Obvious_ToolArg, self._raw_proof)
-                self._initial_proof = lambda config, a=obv_arg: Obvious(config, a)
-            self._raw_proof = None
+        if self._initial_proof is None and self._raw_proofs is not None:
+            self._initial_proof = list(self._raw_proofs) if self._raw_proofs else None
+            self._raw_proofs = None
         if not self._rule_resolved:
             fail = await self._resolve_rule(
                 self.rule_spec, self.target_isabelle_term, [], "case-split")
@@ -5479,7 +5614,7 @@ class Induction_ToolArg(TypedDict):
     target_isabelle_term: xterm
     rule: NotRequired[Literal["default"] | FactByName | FactByDescription]
     variables: list[Induction_ToolArg_Variable]
-    proof: SubProof
+    proof: NotRequired[proof | None]
 
 @proof_operation("Induction", Induction_ToolArg)
 class Induction(CaseSplit_Like):
@@ -5490,18 +5625,16 @@ class Induction(CaseSplit_Like):
         self.rule_spec: 'Literal["default"] | FactByName | FactByDescription' = \
             arg.get("rule", "default")
         self.variables = arg["variables"]
-        self._raw_proof: SubProof | None = arg.get("proof", "Given later")
+        self._raw_proofs: proof | None = arg.get("proof")
     def quickview_title(self) -> str:
         return f"Induction {self.target_isabelle_term}"
     @staticmethod
     def gen(arg : Induction_ToolArg) -> gen_node:
         return lambda config: Induction(config, arg)
     async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
-        if self._initial_proof is None and self._raw_proof is not None:
-            if _subproof_is_obvious(self._raw_proof):
-                obv_arg = cast(Obvious_ToolArg, self._raw_proof)
-                self._initial_proof = lambda config, a=obv_arg: Obvious(config, a)
-            self._raw_proof = None
+        if self._initial_proof is None and self._raw_proofs is not None:
+            self._initial_proof = list(self._raw_proofs) if self._raw_proofs else None
+            self._raw_proofs = None
         is_init = self._first_time
         old_variables = list(self.variables)
         if is_init:
@@ -5805,9 +5938,107 @@ def Parse_Node(data: ToolCall_arg) -> gen_node:
     meta = OPERATION_REGISTRY.get(operation)
     if meta is None:
         raise ArgumentError_UnknownProofOperation(data)
-    toolarg_typed_dict, gen_func = meta
-    _check_tool_arg_keys(toolarg_typed_dict, data, operation)
-    return gen_func(cast(Any, data))
+    _check_tool_arg_keys(meta.toolarg_typed_dict, data, operation)
+    return meta.gen_func(cast(Any, data))
+
+
+def _op_has_proof_field(toolarg_typed_dict: type) -> bool:
+    """Reflection helper: does this TypedDict declare a `proof` field?"""
+    return "proof" in getattr(toolarg_typed_dict, "__annotations__", {})
+
+
+def _validate_op_dict(data: Any, path: str) -> None:
+    """Recursively validate an operation dict and any nested `proof[]` /
+    `cases[].proof[]` lists.  Raises `ArgumentError` on the first issue with
+    a path-annotated error message (e.g.
+    ``proof_operations[1].cases[0].proof[2]``).
+
+    Shape-only: required keys, known operation names, and `proof[]`
+    well-formedness.  Does NOT construct nodes or execute Isabelle; those
+    happen later, at commit / refresh time."""
+    if not isinstance(data, dict):
+        raise ArgumentError({},
+            f"{path}: expected a proof operation object, got {type(data).__name__}")
+    operation = data.get("operation")
+    if operation is None:
+        raise ArgumentError_MissingRequiredKeys(data, path, ["operation"])
+    meta = OPERATION_REGISTRY.get(operation)
+    if meta is None:
+        raise ArgumentError_UnknownProofOperation(data)
+    _check_tool_arg_keys(meta.toolarg_typed_dict, data, f"{path} ({operation})")
+    # Recurse into `proof[]` (when the ToolArg TypedDict declares one).
+    if _op_has_proof_field(meta.toolarg_typed_dict):
+        nested = data.get("proof")
+        if nested is not None:
+            if not isinstance(nested, list):
+                raise ArgumentError(data,
+                    f"{path}.proof: expected an array of proof operations, "
+                    f"got {type(nested).__name__}")
+            _validate_op_list(nested, f"{path}.proof")
+    # Recurse into per-case `cases[i].proof` lists when the ToolArg declares
+    # a `cases` field whose entry shape includes a `proof` field (currently
+    # only `Branch`; detected structurally via `Branch_Case_ToolArg` on the
+    # container).
+    cases_type = getattr(meta.toolarg_typed_dict, "__annotations__", {}).get("cases")
+    if cases_type is not None:
+        case_elem_type = _list_element_type(cases_type)
+        if case_elem_type is not None and _op_has_proof_field(case_elem_type):
+            cases = data.get("cases")
+            if isinstance(cases, list):
+                for ci, case in enumerate(cases):
+                    if not isinstance(case, dict):
+                        continue
+                    case_proof = case.get("proof")
+                    if case_proof is None:
+                        continue
+                    if not isinstance(case_proof, list):
+                        raise ArgumentError(data,
+                            f"{path}.cases[{ci}].proof: expected an array "
+                            f"of proof operations, got "
+                            f"{type(case_proof).__name__}")
+                    _validate_op_list(case_proof, f"{path}.cases[{ci}].proof")
+
+
+def _list_element_type(t: Any) -> type | None:
+    """Extract X from ``list[X]`` (PEP 585) / ``List[X]``.  Returns None if
+    ``t`` isn't recognisable as a parametrised list."""
+    args = getattr(t, "__args__", None)
+    origin = getattr(t, "__origin__", None)
+    if origin is list and args and len(args) == 1:
+        return args[0]
+    return None
+
+
+def _validate_op_list(ops: Any, path: str) -> None:
+    """Validate a list of operation dicts.  Runs the per-item shape check
+    (`_validate_op_dict`) on each, then applies the successor-forbidden rule:
+    any operation whose class returns a non-None `FailureReason` from
+    `cls._should_forbid_successor()` must be the last item in its list — the
+    rejection message is the one the class provides (so each terminal
+    operation can tailor its own explanation)."""
+    if not isinstance(ops, list):
+        raise ArgumentError({},
+            f"{path}: expected an array of proof operations, got {type(ops).__name__}")
+    for i, op in enumerate(ops):
+        _validate_op_dict(op, f"{path}[{i}]")
+    for i, op in enumerate(ops[:-1]):
+        op_name = op.get("operation") if isinstance(op, dict) else None
+        if op_name is None:
+            continue
+        meta = OPERATION_REGISTRY.get(op_name)
+        if meta is None:
+            continue
+        reason = meta.cls._should_forbid_successor()
+        if reason is not None:
+            raise ArgumentError(op, f"{path}[{i}]: {reason.reason}")
+
+
+def _validate_op_forest(ops: Any) -> None:
+    """Top-level entry point for validating the forest of proof operations
+    submitted in a single tool call.  Must be called BEFORE any mutation of
+    the proof tree.  Raises `ArgumentError` on the first issue with a
+    path-annotated message."""
+    _validate_op_list(ops, "proof_operations")
 
 ## Session
 
@@ -6195,12 +6426,16 @@ class Session:
         raise NotImplementedError("`run` must be implemented by subclass")
 
     async def interrupt(self):
-        """Interrupt the agent's processing immediately."""
-        raise NotImplementedError("`interrupt` must be implemented by subclass")
+        """Interrupt the agent's processing immediately.  Default no-op — the
+        base class has no active agent loop to halt; drivers such as
+        ``ClaudeCode`` override this to cancel their in-flight request."""
+        pass
 
     def refresh_YAML(self):
-        """Refresh the YAML file with current proof state. Must be implemented by subclass."""
-        raise NotImplementedError("`refresh_YAML` must be implemented by subclass")
+        """Refresh the YAML file with current proof state.  Default no-op — the
+        base class (used by the test suite) has no persistent YAML surface;
+        drivers such as ``ClaudeCode`` override this to write/push the file."""
+        pass
 
     async def fork_interaction(self, interaction: 'Interaction') -> Any:
         """Run ``interaction`` by spawning a sub-agent and awaiting its answer.

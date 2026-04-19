@@ -1,0 +1,59 @@
+--------------------------------------------------
+Initial State
+--------------------------------------------------
+variables:
+  - C: bool
+  - B: bool
+  - A: bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: A ∧ B ∧ C ⟶ A ∧ B ∧ C
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0(1): A
+      - premise0(2): B
+      - premise0(3): C
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  A ∧ B ∧ C
+--------------------------------------------------
+After rename premise0(1) → my_A
+--------------------------------------------------
+variables:
+  - C: bool
+  - B: bool
+  - A: bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: A ∧ B ∧ C ⟶ A ∧ B ∧ C
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - my_A(1): A
+      - my_A(2): B
+      - my_A(3): C
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  A ∧ B ∧ C
+Rename premise0(2) failed: CannotRename_FactNotFound: Cannot rename. The fact premise0(2) is not found
+Rename premise0(3) failed: CannotRename_FactNotFound: Cannot rename. The fact premise0(3) is not found
+--------------------------------------------------
+After Obvious on 2
+--------------------------------------------------
+variables:
+  - C: bool
+  - B: bool
+  - A: bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: A ∧ B ∧ C ⟶ A ∧ B ∧ C
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - my_A(1): A
+      - my_A(2): B
+      - my_A(3): C
+  - step id: 2
+    operation: Obvious
+Unfinished nodes: 0

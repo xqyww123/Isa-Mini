@@ -122,9 +122,9 @@ async def _test_branch(root: Root, file: MyIO):
     await root.fill("1", Branch.gen({
         "thought": "I don't know",
         "cases": [
-            {"statement": {"english": "in case x is positive", "isabelle": "x > 0"}, "proof": "Given later"},
-            {"statement": {"english": "in case x is negative", "isabelle": "x < 0"}, "proof": "Given later"},
-            {"statement": {"english": "in case x is zero", "isabelle": "x = 0"}, "proof": "Given later"},
+            {"statement": {"english": "in case x is positive", "isabelle": "x > 0"}},
+            {"statement": {"english": "in case x is negative", "isabelle": "x < 0"}},
+            {"statement": {"english": "in case x is zero", "isabelle": "x = 0"}},
         ]
     }))
     print_header("Branch", file)
@@ -1759,6 +1759,96 @@ async def _test_intro_split_prem_conj(root: Root, file: MyIO):
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
 
+@model_test("IntroSplitPremConj_AllRenamed", "Test_IntroSplitPremConj_AllRenamed.thy", 13)
+async def _test_intro_split_prem_conj_all_renamed(root: Root, file: MyIO):
+    """Corner: rename all atoms of a conj group. All default-form entries
+    (premise0(1), premise0(2), premise0(3)) should be hidden in the
+    reported bindings after the renames — only my_A, my_B, my_C remain."""
+    print_header("Initial State", file)
+    root.print(0, file)
+
+    # Rename each atom in turn
+    for (old, new) in [("premise0(1)", "my_A"),
+                       ("premise0(2)", "my_B"),
+                       ("premise0(3)", "my_C")]:
+        root.session.age += 1
+        try:
+            await root.rename_fact(old, new)
+            print_header(f"After rename {old} → {new}", file)
+            root.print(0, file)
+        except Exception as e:
+            file.write(f"Rename {old} failed: {type(e).__name__}: {e}\n")
+
+    # Discharge the (trivial) conclusion
+    root.session.age += 1
+    try:
+        await root.fill("2", Obvious.gen({"facts": []}))
+        print_header("After Obvious on 2", file)
+        root.print(0, file)
+    except Exception as e:
+        file.write(f"Obvious on 2 failed: {type(e).__name__}: {e}\n")
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+
+@model_test("IntroSplitPremConj_IdenticalPrems", "Test_IntroSplitPremConj_IdenticalPrems.thy", 14)
+async def _test_intro_split_prem_conj_identical_prems(root: Root, file: MyIO):
+    """Corner: two premises with syntactically identical terms A ∧ B.
+    Rematch groups by aconv on .fst — both prems' atoms share the same
+    internal_term conjunction. Each prem should still get its own
+    positional base name (premise0, premise1) and independent atom
+    indexing (1..2 each)."""
+    print_header("Initial State", file)
+    root.print(0, file)
+    print_header("Overview", file)
+    root.quickview(0, file)
+
+    # Rename premise0(2) to distinguish it; premise1(2) should NOT follow.
+    root.session.age += 1
+    try:
+        await root.rename_fact("premise0(2)", "from_first")
+        print_header("After rename premise0(2) → from_first", file)
+        root.print(0, file)
+    except Exception as e:
+        file.write(f"Rename premise0(2) failed: {type(e).__name__}: {e}\n")
+
+    root.session.age += 1
+    try:
+        await root.fill("2", Obvious.gen({"facts": []}))
+        print_header("After Obvious on 2", file)
+        root.print(0, file)
+    except Exception as e:
+        file.write(f"Obvious on 2 failed: {type(e).__name__}: {e}\n")
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+
+@model_test("IntroSplitPremConj_NoDestruct", "Test_IntroSplitPremConj_NoDestruct.thy", 13)
+async def _test_intro_split_prem_conj_no_destruct(root: Root, file: MyIO):
+    """Corner: no premise is destructible. split_prem_conj should be a
+    no-op; every prem appears as a plain premiseN binding with no (k)
+    suffix, no aliases. Verifies alias machinery doesn't misfire on
+    inapplicable inputs."""
+    print_header("Initial State", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    try:
+        await root.fill("2", Obvious.gen({"facts": []}))
+        print_header("After Obvious on 2", file)
+        root.print(0, file)
+    except Exception as e:
+        file.write(f"Obvious on 2 failed: {type(e).__name__}: {e}\n")
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+
 @model_test("IntroObvious", "Test_IntroObvious.thy", 10)
 async def _test_intro_obvious(root: Root, file: MyIO):
     """Test that Intro on P ∧ Q ∧ R (with assumptions P, Q, R) auto-completes.
@@ -1988,7 +2078,6 @@ async def _test_ObviousProofFail(root: Root, file: MyIO):
         "thought": "trivial identity",
         "statement": {"english": "x equals x", "isabelle": "x = x"},
         "name": "lem1",
-        "proof": "Obvious"
     }))
     print_header("After Have x=x (Obvious succeeds)", file)
     root.print(0, file)
@@ -1999,7 +2088,6 @@ async def _test_ObviousProofFail(root: Root, file: MyIO):
         "thought": "this is false",
         "statement": {"english": "x equals x plus one", "isabelle": "x = x + 1"},
         "name": "bad",
-        "proof": "Obvious"
     }))
     print_header("After Have x=x+1 (Obvious fails)", file)
     root.print(0, file)
@@ -2027,7 +2115,6 @@ async def _test_HaveObviousProof(root: Root, file: MyIO):
             "isabelle": "x * x = x^2"
         },
         "name": "sq",
-        "proof": "Obvious"
     }))
     print_header("After Have with proof=Obvious", file)
     root.print(0, file)
@@ -2055,7 +2142,6 @@ async def _test_SufficesObviousProof(root: Root, file: MyIO):
             "english": "x squared plus 1 is greater than 0",
             "isabelle": "x * x + 1 > 0"
         },
-        "proof": "Obvious"
     }))
     print_header("After Suffices with proof=Obvious", file)
     root.print(0, file)
@@ -2075,7 +2161,6 @@ async def _test_InductionObviousProof(root: Root, file: MyIO):
         "thought": "Induction on list l",
         "target_isabelle_term": "l",
         "variables": [],
-        "proof": "Obvious"
     }))
     print_header("After Induction with proof=Obvious", file)
     root.print(0, file)
@@ -2142,7 +2227,7 @@ async def _test_ObviousTimeout_subproof(root: Root, file: MyIO):
             "isabelle": "x * x = x^2"
         },
         "name": "sq",
-        "proof": {"operation": "Obvious", "facts": [], "timeout": 15}
+        "proof": [{"operation": "Obvious", "facts": [], "timeout": 15}]
     }))
     print_header("After Have with proof=Obvious(timeout=15)", file)
     root.print(0, file)
@@ -2379,7 +2464,6 @@ async def _test_GlobalEnv(root: Root, file: MyIO):
         "thought": "Restate h1 as a global rewrite rule",
         "statement": {"english": "P", "isabelle": "P"},
         "name": "t1",
-        "proof": "Given later"
     }))
     file.write(f"Added have1: id={have1.id}, local_step={have1.local_step}, status={have1.status.status.value}\n")
     # Discharge the subgoal using the original assumption h1
@@ -2430,7 +2514,6 @@ async def _test_GlobalEnv(root: Root, file: MyIO):
         "thought": "Amended: replace unprovable y=x with the equation x=0 (= h1)",
         "statement": {"english": "x equals zero", "isabelle": "x = 0"},
         "name": "t1",
-        "proof": "Given later"
     }))
     file.write(f"Amend global.1: id={amended.id}, local_step={amended.local_step}, is_error={is_error2}\n")
     if reason2:
@@ -2478,7 +2561,6 @@ async def _test_GlobalEnv_happy(root: Root, file: MyIO):
         "thought": "Restate h1 as a global rewrite rule",
         "statement": {"english": "y equals x", "isabelle": "y = x"},
         "name": "g_eq",
-        "proof": "Given later"
     }))
     file.write(f"Added have1: id={have1.id}, local_step={have1.local_step}, status={have1.status.status.value}\n")
     # Discharge the subgoal using h1 (trivially true since h1 IS y = x)
@@ -2537,7 +2619,6 @@ async def _test_GlobalEnv_happy(root: Root, file: MyIO):
         "thought": "Amended: reverse orientation of the equation",
         "statement": {"english": "x equals y", "isabelle": "x = y"},
         "name": "g_eq",
-        "proof": "Given later"
     }))
     file.write(f"Amend global.1: id={amended.id}, local_step={amended.local_step}, is_error={is_error3}\n")
     if reason3:
@@ -2596,7 +2677,6 @@ async def _test_GlobalEnvFill(root: Root, file: MyIO):
         "thought": "global declaration via fill",
         "statement": {"english": "x is zero", "isabelle": "x = 0"},
         "name": "g1",
-        "proof": "Given later"
     }))
     file.write(f"fill('global.1'): id={ret.id}, status={ret.status.status.value}, is_error={is_error}\n")
     print_header("After fill global.1", file)
@@ -3182,7 +3262,7 @@ async def _test_Obtain_Fixed(root: Root, file: MyIO):
         "constraints": [{"name": "k_def",
                          "isabelle": "k = m",
                          "english": "the existential witness"}],
-        "proof": {"operation": "Obvious", "facts": []},
+        "proof": [{"operation": "Obvious", "facts": []}],
     }))
     print_header("After Obtain", file)
     root.print(0, file)
@@ -3527,6 +3607,629 @@ async def _test_AmendLeafToNonLeaf(root: Root, file: MyIO):
         ) from e
     print_header("After amend Obvious -> InferenceRule", file)
     root.print(0, file)
+
+
+# ---------------------------------------------------------------------------
+# Multi-node edit tests — exercise the batched-edit upgrade (proof_operations
+# list, nested proof trees, commit-and-warn) and the recursive pre-validator.
+# These tests invoke the MCP-level helpers directly so the full routing is
+# covered, not just the per-node primitives.
+# ---------------------------------------------------------------------------
+
+from .model import Warning as _W
+
+
+@model_test("DeepNestedProof", "Test_DeepNestedProof.thy", 8)
+async def _test_DeepNestedProof(root: Root, file: MyIO):
+    """Three-level nested proof tree: Have -> Have -> Have -> Obvious.  Verifies
+    that the recursive `proof` field is consumed correctly at every depth."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    await root.fill("1", Have.gen({
+        "thought": "L1",
+        "statement": {"english": "L1", "isabelle": r"x * x \<ge> 0"},
+        "name": "L1",
+        "proof": [
+            {"operation": "Have", "thought": "L2",
+             "statement": {"english": "L2", "isabelle": r"x * x \<ge> 0"},
+             "name": "L2",
+             "proof": [
+                 {"operation": "Have", "thought": "L3",
+                  "statement": {"english": "L3", "isabelle": r"x * x \<ge> 0"},
+                  "name": "L3",
+                  "proof": [
+                      {"operation": "Obvious", "facts": []},
+                  ]},
+             ]},
+        ],
+    }))
+    print_header("After 3-level nested Have", file)
+    root.print(0, file)
+    l1 = root.locate_node("1")
+    assert isinstance(l1, Have), f"L1 kind: {type(l1).__name__}"
+    assert l1.sub_nodes and isinstance(l1.sub_nodes[0], Have), \
+        f"L1 first child: {type(l1.sub_nodes[0]).__name__ if l1.sub_nodes else 'none'}"
+    l2 = l1.sub_nodes[0]
+    assert l2.sub_nodes and isinstance(l2.sub_nodes[0], Have), \
+        f"L2 first child: {type(l2.sub_nodes[0]).__name__ if l2.sub_nodes else 'none'}"
+    l3 = l2.sub_nodes[0]
+    assert l3.sub_nodes, "L3 should have at least one child (the Obvious)"
+    file.write(f"depth-3 verified: "
+               f"{type(l1).__name__}->{type(l2).__name__}->"
+               f"{type(l3).__name__}->{type(l3.sub_nodes[0]).__name__}\n")
+
+
+@model_test("AmendQ6Preservation", "Test_AmendQ6Preservation.thy", 8)
+async def _test_AmendQ6Preservation(root: Root, file: MyIO):
+    """Single-item amend with a nested proof; the target had a pre-existing
+    child (_amend_from).  Q6 rule: inherited children get redirected into
+    the LAST provided node's body.
+
+    Seed: Have { sub: [Obvious] }
+    Amend with: Suffices { proof: [Have inner (no proof)] }
+    Expected: Suffices.sub = [Have inner { sub: [old Obvious] }]  (Q6 fold)."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    await root.fill("1", Have.gen({
+        "thought": "outer",
+        "statement": {"english": "outer", "isabelle": r"x * x \<ge> 0"},
+        "name": "outer",
+        "proof": [{"operation": "Obvious", "facts": []}],
+    }))
+    print_header("After seed Have { proof: [Obvious] }", file)
+    root.print(0, file)
+    outer = root.locate_node("1")
+    assert outer.sub_nodes and isinstance(outer.sub_nodes[0], Obvious), "seed failed"
+    pre_id = id(outer.sub_nodes[0])
+
+    root.session.age += 1
+    await root.amend("1", Suffices.gen({
+        "thought": "replace outer Have with Suffices + nested Have",
+        "statement": {"english": "repl", "isabelle": r"x * x \<ge> 0"},
+        "proof": [
+            {"operation": "Have", "thought": "inner no-proof",
+             "statement": {"english": "inner", "isabelle": r"x * x \<ge> 0"},
+             "name": "inner"},
+        ],
+    }))
+    print_header("After amend; Q6 should fold old Obvious into inner Have", file)
+    root.print(0, file)
+    suff = root.locate_node("1")
+    assert isinstance(suff, Suffices), f"expected Suffices, got {type(suff).__name__}"
+    assert suff.sub_nodes and isinstance(suff.sub_nodes[0], Have), \
+        f"expected Suffices's first child Have, got {[type(c).__name__ for c in suff.sub_nodes]}"
+    inner = suff.sub_nodes[0]
+    assert any(id(c) == pre_id for c in inner.sub_nodes), \
+        (f"Q6 FAIL: pre-amend Obvious not found in inner Have. "
+         f"inner.sub_nodes: {[type(c).__name__ for c in inner.sub_nodes]}")
+    file.write("Q6 redirect into last-provided-node's body verified.\n")
+
+
+@model_test("RefreshFailMidBatch", "Test_RefreshFailMidBatch.thy", 8)
+async def _test_RefreshFailMidBatch(root: Root, file: MyIO):
+    """Batch fill where the first item (a Have whose nested Obvious proves
+    a false statement) fails at refresh.  Subsequent siblings must be
+    CANCELLED by `_can_continue_before_child`, all remain in the tree
+    (batch path suppresses `_on_edit_failure` revert)."""
+    from .mcp_http_server import _execute_proof_batch
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    result, is_error = await _execute_proof_batch(
+        root.session, "fill", "1",
+        [
+            {"operation": "Have", "thought": "bad aux (false)",
+             "statement": {"english": "false", "isabelle": r"(0::int) = (1::int)"},
+             "name": "bad",
+             "proof": [{"operation": "Obvious", "facts": []}]},
+            {"operation": "Have", "thought": "later aux",
+             "statement": {"english": "later", "isabelle": r"x * x \<ge> 0"},
+             "name": "later",
+             "proof": [{"operation": "Obvious", "facts": []}]},
+            {"operation": "Obvious", "facts": []},
+        ],
+    )
+    file.write(f"is_error: {is_error}\n")
+    print_header("After batched fill (first Have fails, rest cascade-cancel)", file)
+    root.print(0, file)
+    n1 = root.locate_node("1")
+    parent = n1.parent
+    assert parent is not None
+    sibs = parent.sub_nodes
+    file.write(f"sibling kinds: {[type(c).__name__ for c in sibs]}\n")
+    file.write(f"sibling statuses: {[c.status.status.name for c in sibs]}\n")
+    assert len(sibs) >= 3, f"expected >=3 siblings, got {len(sibs)}"
+
+
+@model_test("CommitGroupBMidBatch", "Test_CommitGroupBMidBatch.thy", 8)
+async def _test_CommitGroupBMidBatch(root: Root, file: MyIO):
+    """Main goal `(x::int) = x+1` is false — direct Obvious fails and sets
+    parent._is_trivial=False.  The second Obvious then raises
+    GoalIsNontrivial AT CONSTRUCTION (commit-time Group-B).
+    `_execute_proof_batch` catches it and dumps the unapplied tail into
+    one aggregated session.warnings entry.  `is_error=False` because at
+    least one item (the failed Obvious) landed in the tree."""
+    from .mcp_http_server import _execute_proof_batch
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    result, is_error = await _execute_proof_batch(
+        root.session, "fill", "1",
+        [
+            {"operation": "Obvious", "facts": []},
+            {"operation": "Obvious", "facts": []},  # GoalIsNontrivial at ctor
+            {"operation": "Obvious", "facts": []},
+        ],
+    )
+    file.write(f"is_error: {is_error}\n")
+    print_header("After batch; first Obvious FAILED, rest aggregated into warnings", file)
+    root.print(0, file)
+    ws = root.session.warnings
+    file.write(f"session.warnings count: {len(ws)}\n")
+    if ws:
+        head = ws[0][:300].replace("\n", " | ")
+        file.write(f"aggregated warning head: {head}...\n")
+
+
+@model_test("AutoIntroQ7Skip", "Test_AutoIntroQ7Skip.thy", 8)
+async def _test_AutoIntroQ7Skip(root: Root, file: MyIO):
+    """Have wrapping a ∀-statement: need_intro is True.  Agent-provided
+    proof STARTS with Intro → Q7 skip rule: no auto-injection, tree has
+    exactly one Intro (the agent's)."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    await root.fill("1", Have.gen({
+        "thought": "outer Have wrapping ∀-stmt",
+        "statement": {"english": "refl", "isabelle": r"\<forall>(a::int). a = a"},
+        "name": "refl",
+        "proof": [
+            {"operation": "Intro", "thought": "agent's explicit Intro"},
+            {"operation": "Obvious", "facts": []},
+        ],
+    }))
+    print_header("After Have with proof starting with Intro (Q7: no auto-inject)", file)
+    root.print(0, file)
+    have = root.locate_node("1")
+    kinds = [type(c).__name__ for c in have.sub_nodes]
+    file.write(f"Have.sub_nodes kinds: {kinds}\n")
+    intro_count = sum(1 for c in have.sub_nodes if isinstance(c, Intro))
+    assert intro_count == 1, f"Q7 skip FAIL: expected exactly 1 Intro, got {intro_count}"
+
+
+@model_test("AutoIntroQ7Inject", "Test_AutoIntroQ7Inject.thy", 8)
+async def _test_AutoIntroQ7Inject(root: Root, file: MyIO):
+    """Have wrapping a ∀-statement: need_intro is True.  Agent-provided
+    proof does NOT start with Intro → Q7: auto-Intro is injected.  The
+    injected Intro closes the Have via _close_by, truncating trailing
+    siblings.  Truncation is reported via FOOTER warning on Have."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    await root.fill("1", Have.gen({
+        "thought": "outer Have; agent forgot to Intro first",
+        "statement": {"english": "refl", "isabelle": r"\<forall>(a::int). a = a"},
+        "name": "refl",
+        "proof": [{"operation": "Obvious", "facts": []}],
+    }))
+    print_header("After Have with proof=[Obvious]; Q7 injects Intro which truncates Obvious", file)
+    root.print(0, file, show_warnings=True)
+    have = root.locate_node("1")
+    first = have.sub_nodes[0] if have.sub_nodes else None
+    file.write(f"Have.sub_nodes[0] kind: {type(first).__name__ if first else 'none'}\n")
+    file.write(f"Have.sub_nodes total: {len(have.sub_nodes)}\n")
+    foot = [w for w in have.warnings if w.position == _W.Position.FOOTER]
+    file.write(f"FOOTER warnings on Have: {len(foot)}\n")
+
+
+@model_test("AmendSingleKeepsChildren", "Test_AmendSingleKeepsChildren.thy", 8)
+async def _test_AmendSingleKeepsChildren(root: Root, file: MyIO):
+    """Single-item amend with NO nested proof — _amend_from preservation
+    keeps the target's existing sub_nodes intact on the new node."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    await root.fill("1", Have.gen({
+        "thought": "initial",
+        "statement": {"english": "init", "isabelle": r"x * x \<ge> 0"},
+        "name": "orig",
+        "proof": [{"operation": "Obvious", "facts": []}],
+    }))
+    print_header("After seed Have { proof: [Obvious] }", file)
+    root.print(0, file)
+    have = root.locate_node("1")
+    assert have.sub_nodes, "seed failed"
+    obv_id = id(have.sub_nodes[0])
+
+    root.session.age += 1
+    await root.amend("1", Suffices.gen({
+        "thought": "Suffices with no proof — should inherit",
+        "statement": {"english": "repl", "isabelle": r"x * x \<ge> 0"},
+    }))
+    print_header("After single-item amend; inherited children should remain", file)
+    root.print(0, file)
+    suff = root.locate_node("1")
+    assert isinstance(suff, Suffices), f"expected Suffices, got {type(suff).__name__}"
+    sub_ids = [id(c) for c in suff.sub_nodes]
+    file.write(f"Suffices sub_nodes kinds: {[type(c).__name__ for c in suff.sub_nodes]}\n")
+    assert obv_id in sub_ids, "_amend_from preservation FAIL"
+    file.write("_amend_from preservation verified.\n")
+
+
+@model_test("ValidatorNestedPath", "Test_ValidatorNestedPath.thy", 8)
+async def _test_ValidatorNestedPath(root: Root, file: MyIO):
+    """Verify the recursive validator reports path-annotated errors at the
+    deepest nested site (both for a missing-field error and for a nested
+    forbid-successor violation)."""
+    from .model import _validate_op_forest, AoA_Error
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    try:
+        _validate_op_forest([
+            {"operation": "Have", "thought": "L1",
+             "statement": {"english": "L1", "isabelle": r"x * x \<ge> 0"},
+             "name": "L1",
+             "proof": [
+                 {"operation": "Have", "thought": "L2",
+                  "statement": {"english": "L2", "isabelle": r"x * x \<ge> 0"},
+                  "name": "L2",
+                  "proof": [
+                      {"operation": "Obvious"},  # missing facts
+                  ]},
+             ]},
+        ])
+        file.write("UNEXPECTED: deep missing-field accepted\n")
+    except AoA_Error as e:
+        msg = str(e)
+        file.write(f"deep-missing path in error: "
+                   f"{'proof_operations[0].proof[0].proof[0]' in msg}\n")
+        assert "proof_operations[0].proof[0].proof[0]" in msg, msg
+
+    # Forbid-successor violation nested inside Have.proof: Obvious at index 0
+    # followed by another op.
+    try:
+        _validate_op_forest([
+            {"operation": "Have", "thought": "outer",
+             "statement": {"english": "o", "isabelle": r"x * x \<ge> 0"},
+             "name": "o",
+             "proof": [
+                 {"operation": "Obvious", "facts": []},
+                 {"operation": "Obvious", "facts": []},
+             ]},
+        ])
+        file.write("UNEXPECTED: nested forbid-successor violation accepted\n")
+    except AoA_Error as e:
+        msg = str(e)
+        file.write(f"nested forbid-successor path in error: "
+                   f"{'proof_operations[0].proof[0]' in msg}\n")
+        assert "proof_operations[0].proof[0]" in msg, msg
+        assert "Obvious" in msg
+    file.write("recursive validator path annotation verified.\n")
+
+
+@model_test("CaseSplitNestedProofAllCases", "Test_CaseSplitNestedProofAllCases.thy", 8)
+async def _test_CaseSplitNestedProofAllCases(root: Root, file: MyIO):
+    """CaseSplit carries a single nested `proof: [Obvious]` — it should be
+    applied as `auto_proof` to EACH resulting GoalNode."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    await root.fill("1", CaseSplit.gen({
+        "thought": "case-split on sign of x",
+        "target_isabelle_term": "x",
+        "rule": "default",
+        "proof": [{"operation": "Obvious", "facts": []}],
+    }))
+    print_header("After CaseSplit with proof=[Obvious] applying to each case", file)
+    root.print(0, file)
+    cs = root.locate_node("1")
+    gn_kids = [c for c in cs.sub_nodes if type(c).__name__ == "GoalNode"]
+    file.write(f"GoalNode children count: {len(gn_kids)}\n")
+    for gn in gn_kids:
+        kind0 = type(gn.sub_nodes[0]).__name__ if gn.sub_nodes else "none"
+        file.write(f"  {gn.id}: first sub = {kind0}\n")
+        assert gn.sub_nodes, f"GoalNode {gn.id} empty — auto_proof did not apply"
+
+
+@model_test("NestedHaveProof", "Test_NestedHaveProof.thy", 8)
+async def _test_NestedHaveProof(root: Root, file: MyIO):
+    """A single-item batch where the item's `proof` field carries a nested
+    Obvious — verifies that nested proof lists are parsed and attached as
+    children at refresh time."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    await root.fill("1", Have.gen({
+        "thought": "auxiliary restating of the goal",
+        "statement": {"english": "x*x nonneg", "isabelle": r"x * x \<ge> 0"},
+        "name": "h1",
+        "proof": [{"operation": "Obvious", "facts": []}],
+    }))
+    print_header("After Have with nested proof=[Obvious]", file)
+    root.print(0, file)
+    have_node = root.locate_node("1")
+    assert isinstance(have_node, Have), f"expected Have at 1, got {type(have_node).__name__}"
+    assert len(have_node.sub_nodes) >= 1, \
+        f"expected at least one nested child under Have, got {len(have_node.sub_nodes)}"
+
+
+@model_test("BatchFill_HaveObvious", "Test_BatchFill_HaveObvious.thy", 8)
+async def _test_BatchFill_HaveObvious(root: Root, file: MyIO):
+    """Multi-item fill batch [Have with nested Obvious, Obvious]: verify the
+    first fills target_step, the second appends to the same parent, and the
+    outer goal gets discharged by the appended Obvious."""
+    from .mcp_http_server import _execute_proof_batch
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    result, is_error = await _execute_proof_batch(
+        root.session, "fill", "1",
+        [
+            {"operation": "Have", "thought": "restate goal as aux",
+             "statement": {"english": "x*x nonneg", "isabelle": r"x * x \<ge> 0"},
+             "name": "aux",
+             "proof": [{"operation": "Obvious", "facts": []}]},
+            {"operation": "Obvious",
+             "facts": [{"refer_by": "name", "name": "aux"}]},
+        ],
+    )
+    file.write(f"is_error: {is_error}\n")
+    print_header("After batched fill [Have(proof:[Obvious]), Obvious]", file)
+    root.print(0, file)
+    unfinished: set[Node] = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+
+@model_test("BatchInsertBefore", "Test_BatchInsertBefore.thy", 8)
+async def _test_BatchInsertBefore(root: Root, file: MyIO):
+    """insert_before with a list of two Have ops — each carries its own
+    nested proof, and both land as consecutive siblings before the target."""
+    from .mcp_http_server import _execute_proof_batch
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    # Seed the tree with a pre-existing Obvious at step 1.
+    await root.fill("1", Obvious.gen({"facts": []}))
+    print_header("After initial fill with Obvious", file)
+    root.print(0, file)
+    # Batch-insert two Haves before step 1.
+    root.session.age += 1
+    result, is_error = await _execute_proof_batch(
+        root.session, "insert_before", "1",
+        [
+            {"operation": "Have", "thought": "first aux",
+             "statement": {"english": "aux a", "isabelle": r"x * x \<ge> 0"},
+             "name": "aux_a",
+             "proof": [{"operation": "Obvious", "facts": []}]},
+            {"operation": "Have", "thought": "second aux",
+             "statement": {"english": "aux b", "isabelle": r"x * x \<ge> 0"},
+             "name": "aux_b",
+             "proof": [{"operation": "Obvious", "facts": []}]},
+        ],
+    )
+    file.write(f"is_error: {is_error}\n")
+    print_header("After batched insert_before [Have, Have]", file)
+    root.print(0, file)
+
+
+@model_test("BatchAmendMulti", "Test_BatchAmendMulti.thy", 8)
+async def _test_BatchAmendMulti(root: Root, file: MyIO):
+    """amend with a multi-item list — target deleted, list inserted at its
+    former slot; no `_amend_from` inheritance (old children gone with target)."""
+    from .mcp_http_server import _execute_proof_batch
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    # Seed a Have with inner proof.
+    root.session.age += 1
+    await root.fill("1", Have.gen({
+        "thought": "original",
+        "statement": {"english": "orig", "isabelle": r"x * x \<ge> 0"},
+        "name": "orig",
+        "proof": [{"operation": "Obvious", "facts": []}],
+    }))
+    print_header("After initial Have at step 1", file)
+    root.print(0, file)
+    # Amend step 1 with a two-item list (delete + insert semantics).
+    root.session.age += 1
+    result, is_error = await _execute_proof_batch(
+        root.session, "amend", "1",
+        [
+            {"operation": "Have", "thought": "replacement 1",
+             "statement": {"english": "r1", "isabelle": r"x * x \<ge> 0"},
+             "name": "r1",
+             "proof": [{"operation": "Obvious", "facts": []}]},
+            {"operation": "Have", "thought": "replacement 2",
+             "statement": {"english": "r2", "isabelle": r"x * x \<ge> 0"},
+             "name": "r2",
+             "proof": [{"operation": "Obvious", "facts": []}]},
+        ],
+    )
+    file.write(f"is_error: {is_error}\n")
+    print_header("After batched amend [Have, Have] replacing step 1", file)
+    root.print(0, file)
+
+
+@model_test("NestedBranchCases", "Test_NestedBranchCases.thy", 8)
+async def _test_NestedBranchCases(root: Root, file: MyIO):
+    """A Branch whose individual `cases[i].proof` fields each carry a nested
+    Obvious list — all cases get their proof attached at refresh time."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    await root.fill("1", Branch.gen({
+        "thought": "trichotomy on x",
+        "cases": [
+            {"statement": {"english": "positive", "isabelle": "x > 0"},
+             "proof": [{"operation": "Obvious", "facts": []}]},
+            {"statement": {"english": "negative", "isabelle": "x < 0"},
+             "proof": [{"operation": "Obvious", "facts": []}]},
+            {"statement": {"english": "zero", "isabelle": "x = 0"},
+             "proof": [{"operation": "Obvious", "facts": []}]},
+        ],
+    }))
+    print_header("After Branch with per-case nested Obvious", file)
+    root.print(0, file)
+
+
+@model_test("BatchCase1Reject", "Test_BatchCase1Reject.thy", 8)
+async def _test_BatchCase1Reject(root: Root, file: MyIO):
+    """The recursive validator must reject a forest where a terminal
+    operation (one whose class returns a non-None `FailureReason` from
+    `_should_forbid_successor`, i.e. `Obvious`) is followed by another
+    sibling at the same level — nothing can execute after such an op."""
+    from .model import _validate_op_forest, AoA_Error
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    ops = [
+        {"operation": "Obvious", "facts": []},
+        {"operation": "Obvious", "facts": []},
+    ]
+    try:
+        _validate_op_forest(ops)
+        file.write("UNEXPECTED: validator accepted [Obvious, Obvious]\n")
+    except AoA_Error as e:
+        file.write(f"validator correctly rejected:\n{e}\n")
+    # Complementary: Branch followed by Obvious is NO LONGER rejected statically
+    # — closing behaviour for Branch is runtime-dependent (depends on goal count
+    # and Isabelle state), so truncation is handled at refresh time by
+    # `_close_by` plus a FOOTER warning.
+    ops2 = [
+        {"operation": "Branch", "thought": "trichotomy",
+         "cases": [
+             {"statement": {"english": "p", "isabelle": "x > 0"}},
+             {"statement": {"english": "z", "isabelle": "x = 0"}},
+             {"statement": {"english": "n", "isabelle": "x < 0"}},
+         ]},
+        {"operation": "Obvious", "facts": []},
+    ]
+    try:
+        _validate_op_forest(ops2)
+        file.write("validator accepted [Branch, Obvious] (closing is runtime-dependent)\n")
+    except AoA_Error as e:
+        file.write(f"UNEXPECTED: {e}\n")
+    # The tree must be untouched — no mutation on validation failure.
+    print_header("Tree after validator checks (should be unchanged)", file)
+    root.print(0, file)
+
+
+@model_test("InferenceRuleBatch", "Test_InferenceRuleBatch.thy", 8)
+async def _test_InferenceRuleBatch(root: Root, file: MyIO):
+    """Regression test for the real-world failure where the validator's old
+    hardcoded `_STRICT_SUBGOALMAKER_OPS` wrongly rejected a batch starting
+    with `InferenceRule ccontr` followed by `Have`/`Obvious` siblings.
+
+    Under the refactored validator, only `Obvious` is statically rejected
+    when followed by siblings.  For `InferenceRule ccontr`: the rule
+    produces a single subgoal at runtime (the contradictory premise plus
+    `False`), so `_should_open_proof_block` returns NO — no block is
+    opened, the parent block is NOT closed, and subsequent siblings in the
+    batch attach normally."""
+    from .mcp_http_server import _execute_proof_batch
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    result, is_error = await _execute_proof_batch(
+        root.session, "fill", "1",
+        [
+            {"operation": "InferenceRule",
+             "thought": "proof by contradiction",
+             "rule": {"refer_by": "name", "name": "ccontr"}},
+            {"operation": "Obvious", "facts": []},
+        ],
+    )
+    file.write(f"is_error: {is_error}\n")
+    print_header("After batch [InferenceRule ccontr, Obvious]", file)
+    root.print(0, file)
+    # Both items should have landed as siblings under the goal's proof line.
+    n1 = root.locate_node("1")
+    parent = n1.parent
+    assert parent is not None
+    kinds = [type(c).__name__ for c in parent.sub_nodes]
+    file.write(f"sibling kinds: {kinds}\n")
+    assert "InferenceRule" in kinds, (
+        f"InferenceRule missing from sibling list; batch validator must have "
+        f"rejected — got kinds {kinds}")
+    # The Obvious should be present as a sibling (not swallowed into some
+    # InferenceRule subgoal slot), confirming no-close-parent behaviour.
+    assert kinds.count("Obvious") >= 1, \
+        f"expected Obvious as a sibling, got kinds {kinds}"
+    unfinished: set[Node] = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+
+@model_test("InferenceRuleBatch_MultiSubgoal",
+            "Test_InferenceRuleBatch_MultiSubgoal.thy", 8)
+async def _test_InferenceRuleBatch_MultiSubgoal(root: Root, file: MyIO):
+    """Complement to `InferenceRuleBatch`: when an InferenceRule splits the
+    goal into multiple subgoals, `SubgoalMaker._should_open_proof_block`
+    returns YES_AND_CLOSE_PARENT_BLOCK, which closes the parent proof line.
+    Subsequent siblings in the batch cannot attach — `StdBlock.append` raises
+    `CannotAppend_BlockClosed`.  The batch path catches this, commits only
+    the InferenceRule, and emits a single aggregated `session.warnings`
+    entry carrying the unapplied tail verbatim so the agent can re-submit
+    the steps at the correct location (inside one of the new GoalNodes).
+    `is_error` stays False because one item did land in the tree."""
+    from .mcp_http_server import _execute_proof_batch
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    # conjI splits `P ∧ Q` into two subgoals — SubgoalMaker will CLOSE the parent.
+    result, is_error = await _execute_proof_batch(
+        root.session, "fill", "1",
+        [
+            {"operation": "InferenceRule",
+             "thought": "split conjunction via conjI",
+             "rule": {"refer_by": "name", "name": "conjI"}},
+            # These two are agent's mistake — they cannot be siblings after
+            # a block-closing SubgoalMaker.  Expected to be aggregated into
+            # `session.warnings` as unapplied.
+            {"operation": "Have", "thought": "misplaced aux",
+             "statement": {"english": "aux", "isabelle": "(1::int) = (1::int)"},
+             "name": "aux",
+             "proof": [{"operation": "Obvious", "facts": []}]},
+            {"operation": "Obvious", "facts": []},
+        ],
+    )
+    file.write(f"is_error: {is_error}\n")
+    print_header("After batch; InferenceRule splits, siblings aggregated into session.warnings",
+                 file)
+    # Print with show_warnings=True so FOOTER discard warnings surface.
+    root.print(0, file, show_warnings=True)
+    n1 = root.locate_node("1")
+    assert isinstance(n1, InferenceRule), \
+        f"step 1 should be the InferenceRule, got {type(n1).__name__}"
+    parent = n1.parent
+    assert parent is not None
+    # Parent must be closed by the InferenceRule.
+    assert parent._closed_by is n1, \
+        f"parent._closed_by should be the InferenceRule; got {parent._closed_by!r}"
+    # Parent's sub_nodes should contain only the InferenceRule (no stray siblings).
+    assert parent.sub_nodes and parent.sub_nodes[-1] is n1, \
+        f"InferenceRule should be parent's last child; kinds={[type(c).__name__ for c in parent.sub_nodes]}"
+    # InferenceRule should now have exactly 2 GoalNode children (from conjI).
+    goal_kids = [c for c in n1.sub_nodes if type(c).__name__ == "GoalNode"]
+    file.write(f"InferenceRule GoalNode children: {len(goal_kids)}\n")
+    assert len(goal_kids) == 2, \
+        f"expected 2 subgoals from conjI on P∧Q, got {len(goal_kids)}"
+    # `is_error` must be False (InferenceRule landed).
+    assert is_error is False, f"expected is_error=False, got {is_error}"
+    # The aggregated warning is rendered into the response text and then
+    # `session.warnings` is cleared by `batch_edit_message` (matches the
+    # existing single-op step-message templates).  Inspect `result` instead.
+    assert isinstance(result, str)
+    file.write(f"response length: {len(result)} chars\n")
+    assert "2 operation(s) from this edit batch were not applied" in result, \
+        f"response missing aggregated-warning header; response:\n{result}"
+    assert "starting at index 1" in result, \
+        f"response missing failed-index marker; response:\n{result}"
+    assert "misplaced aux" in result, \
+        f"response should quote the unapplied Have's thought verbatim; response:\n{result}"
+    assert "operation: Obvious" in result, \
+        f"response should quote the unapplied Obvious op verbatim; response:\n{result}"
 
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None):

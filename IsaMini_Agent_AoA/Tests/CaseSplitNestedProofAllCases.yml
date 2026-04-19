@@ -1,0 +1,43 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+--------------------------------------------------
+After CaseSplit with proof=[Obvious] applying to each case
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: case-split on sign of x
+    operation: CaseSplit
+    target term: x
+    cases:
+      - goal id: 1.nonneg
+        variables:
+          - n: nat
+        premises:
+          - nonneg.prem0: x = int n
+        goal: True
+        proof:
+          - step id: 1.nonneg.1
+            operation: Obvious
+      - goal id: 1.neg
+        variables:
+          - n: nat
+        premises:
+          - neg.prem0: x = - int (Suc n)
+        goal: True
+        proof:
+          - step id: 1.neg.1
+            operation: Obvious
+GoalNode children count: 2
+  1.nonneg: first sub = Obvious
+  1.neg: first sub = Obvious

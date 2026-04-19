@@ -22,18 +22,7 @@ exception OPR_FAIL of fail_reason * string
 
 type with_clause = (bool (*with or without*) * string (*name*) * thm) list
 type opt_var_names  = string option list option
-(* Per-premise binding spec.
-   NONE               = let the premise counter auto-assign (e.g. "premise0")
-                        with no atom-level aliases.
-   SOME (base, atoms) = use `base` as the main binding name; `atoms` is a
-                        positional list of per-atom alias overrides — the
-                        k-th entry (if SOME a) adds an extra binding
-                        `a = [k-th atom thm]` alongside the main group
-                        (whose atoms are still exposed as base(1..N) by
-                        flatten_facts). Entries beyond the actual atom
-                        count, or NONE entries, produce no extra binding.
-                        `atoms = []` means "no aliases" — the common case. *)
-type opt_prem_names = (string * string option list) option list option
+type opt_prem_names = string option list option
 
 (* options *)
 
@@ -485,7 +474,7 @@ datatype frame = HHF   of thm (*a local_facts bundle node, represented as a Here
                | ENDBLK of endblk_type
 
 type opt_var_names  = string option list option
-type opt_prem_names = (string * string option list) option list option
+type opt_prem_names = string option list option
 exception NO_PARAM
 exception CASE_NAME of opt_var_names
 
@@ -1048,8 +1037,12 @@ end
    needing an actual thm. Accepts either a bool term (to be Trueprop-wrapped)
    or an already-prop term (used directly). Detects the already-prop case
    syntactically so the check works even if the term still carries loose
-   Bound indices (fastype_of would crash on those). *)
+   Bound indices (fastype_of would crash on those).
+   When INTRO_split_prem_conj is off, behaves as an identity (returns [term])
+   so callers never have to gate the call site on the config flag. *)
 fun deep_destruct_term ctxt term =
+  if not (Config.get ctxt INTRO_split_prem_conj) then [term]
+  else
   let val prop = case term of
                    \<^Const>\<open>Trueprop\<close> $ _ => term
                  | Const (\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ _ => term
@@ -1060,10 +1053,7 @@ fun deep_destruct_term ctxt term =
       val atoms = deep_destruct_prem ctxt assumed
       fun unprop (\<^Const>\<open>Trueprop\<close> $ t) = t
         | unprop t = t
-   (* Eta-expand so that ∀x. P x renders as "∀x. P x", not "All P". The
-      rewrite rules leave the RHS in eta-contracted form (e.g. All P) which
-      isn't displayed with binder notation. *)
-   in map (Envir.eta_long [] o unprop o Thm.concl_of) atoms end
+   in map (unprop o Thm.concl_of) atoms end
 
 fun wraps ctxt ths = ths
       |> map (Conv.fconv_rule (HOLogic.Trueprop_conv (Conv.rewr_conv Thms.TAG_def'sym)))
@@ -1484,44 +1474,23 @@ fun INTRO' mode split_conj_opt split_prem_conj_opt bs premise_names s =
                   case split_prem_conj_opt
                     of SOME b => b
                      | NONE => Config.get (#context foc) INTRO_split_prem_conj
-            (* For each prem, produce its main binding plus any per-atom
-               alias bindings in one pass. The counter is threaded via
-               map_premise_counter + fold_map. *)
-            val (per_prem_bindings, ctxt) =
-                  map_premise_counter (fn counter_val =>
-                    fold_map (fn (d, th) => fn current_counter =>
-                      let val ((name, aliases), next_counter) =
-                            case premise_names of
-                              SOME specs =>
-                                (case nth specs d of
-                                   SOME (n, al) => ((n, al), current_counter)
-                                 | NONE => ((assm_name current_counter, []),
-                                            current_counter + 1))
-                            | NONE => ((assm_name current_counter, []),
-                                       current_counter + 1)
-                          val thms = if do_split_prem_conj andalso name <> ""
-                                     then deep_destruct_prem (#context foc) th
-                                     else [th]
-                          val main = ((Binding.name name, []), [(thms, [])])
-                          (* Per-atom alias bindings: positional — the i-th
-                             entry (if SOME a) emits `a = [nth thms i]`.
-                             Entries beyond the atom count or NONE entries
-                             produce nothing. *)
-                          val atom_aliases =
-                                flat (map_index (fn (i, entry) =>
-                                  case entry of
-                                    SOME alias =>
-                                      if alias <> "" andalso i < length thms
-                                      then [((Binding.name alias, []),
-                                             [([nth thms i], [])])]
-                                      else []
-                                  | NONE => []
-                                ) aliases)
-                       in (main :: atom_aliases, next_counter)
-                      end
-                    ) (map_index I (#prems foc)) counter_val
-                  ) (#context foc)
-            val bindings = flat per_prem_bindings
+            val (bindings, ctxt) = map_premise_counter (fn counter_val =>
+                  fold_map (fn (d, th) => fn current_counter =>
+                    let val (name, next_counter) =
+                          case premise_names of
+                            SOME names =>
+                              (case nth names d of
+                                 SOME n => (n, current_counter)  (* Use provided name, including "" for skip *)
+                               | NONE => (assm_name current_counter, current_counter + 1))
+                          | NONE => (assm_name current_counter, current_counter + 1)
+                        val thms = if do_split_prem_conj andalso name <> ""
+                                   then deep_destruct_prem (#context foc) th
+                                   else [th]
+                     in (((Binding.name name, []), [(thms, [])]), next_counter)
+                    end
+                  ) (map_index I (#prems foc)) counter_val
+                ) (#context foc)
+            (* Filter out bindings with empty names *)
             val bindings_filtered = filter (fn ((b, _), _) => Binding.name_of b <> "") bindings
          in ctxt
          |> Proof_Context.note_thmss "" bindings_filtered
@@ -1818,17 +1787,10 @@ fun TRY_STANDARD SK =
   else SK
 
 fun INTRO mode sco spco bs pn = timed_OPR_with_ret 5000 (INTRO' mode sco spco bs pn)
-(* OPT_PREMS parses to `string option list option` (per-prem names, no aliases).
-   Wrap each SOME name into SOME (name, []) to match the new opt_prem_names
-   schema. The CLI form cannot express per-atom aliases. *)
-fun wrap_opt_prems (pn : string option list option) : opt_prem_names =
-  Option.map (map (Option.map (fn n => (n, [])))) pn
 val INTRO_CMD = (OPT_VARS -- OPT_PREMS)
-        >> (fn (vs, pn) => fn s => #2 (timed_OPR_with_ret 2
-              (INTRO' SINGLE_GOAL NONE NONE vs (wrap_opt_prems pn)) s))
+        >> (fn args => fn s => #2 (timed_OPR_with_ret 2 (uncurry (INTRO' SINGLE_GOAL NONE NONE) args) s))
 val INTRO_ALL_CMD = (OPT_VARS -- OPT_PREMS)
-        >> (fn (vs, pn) => fn s => #2 (timed_OPR_with_ret 2
-              (INTRO' ALL_SUBGOALS NONE NONE vs (wrap_opt_prems pn)) s))
+        >> (fn args => fn s => #2 (timed_OPR_with_ret 2 (uncurry (INTRO' ALL_SUBGOALS NONE NONE) args) s))
 val TRANSPARENT_INTRO = OPR_NO_INCR TRANSPARENT_INTRO'
 
 local
@@ -2110,11 +2072,7 @@ fun SIMPLIFY_GOAL_AND_PREMISES'
       exists (fn orig => Term.aconv (orig, prem_term)) orig_prem_terms
       orelse exists (fn orig => Term.aconv (orig, prem_term)) orig_goal_prems
 
-    (* 9. Generate premise names: SOME "" for unchanged, SOME name for changed.
-       SIMPLIFY doesn't emit per-atom aliases (clarsimp handles goal-level
-       conjE before this point), so aliases are always []. *)
-    fun wrap_name (SOME n) = SOME (n, []) : (string * string option list) option
-      | wrap_name NONE     = NONE
+    (* 9. Generate premise names: SOME "" for unchanged, SOME name for changed *)
     val (premise_names_for_intro, ctxt_with_counter) =
       case naming_fn_opt of
         SOME naming_fn =>
@@ -2123,16 +2081,15 @@ fun SIMPLIFY_GOAL_AND_PREMISES'
             val names = prems_after_intro
               |> map (fn prem_term => if is_unchanged prem_term then NONE else SOME prem_term)
               |> burrow_options naming_fn
-              |> map (fn NONE => wrap_name (SOME "") | SOME name => wrap_name (SOME name))
+              |> map (fn NONE => SOME "" | SOME name => SOME name)
           in (names, ctxt)
           end
       | NONE =>
           map_premise_counter (fn counter_val =>
             fold_map (fn prem_term => fn current_counter =>
               if is_unchanged prem_term
-              then (wrap_name (SOME ""), current_counter)  (* Unchanged *)
-              else (wrap_name (SOME (assm_name current_counter)),
-                    current_counter + 1)  (* Changed *)
+              then (SOME "", current_counter)  (* Unchanged *)
+              else (SOME (assm_name current_counter), current_counter + 1)  (* Changed *)
             ) prems_after_intro counter_val
           ) ctxt
 

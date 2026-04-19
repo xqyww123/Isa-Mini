@@ -1,0 +1,58 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+--------------------------------------------------
+After initial Have at step 1
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: original
+    operation: Have
+    statement:
+      english: orig
+      isabelle: x * x \<ge> 0
+    name: orig
+    proof:
+      - step id: 1.1
+        operation: Obvious
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+is_error: False
+--------------------------------------------------
+After batched amend [Have, Have] replacing step 1
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: replacement 1
+    operation: Have
+    statement:
+      english: r1
+      isabelle: x * x \<ge> 0
+    name: r1
+    proof:
+      - step id: 1.1
+        operation: Obvious
+  - step id: 2
+    thought: replacement 2
+    operation: Have
+    statement:
+      english: r2
+      isabelle: x * x \<ge> 0
+    name: r2
+    proof:
+      - step id: 2.1
+        operation: Obvious
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.

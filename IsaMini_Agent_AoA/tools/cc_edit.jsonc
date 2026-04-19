@@ -115,13 +115,6 @@
       ],
       "type": "object"
     },
-    "SubProof": {
-      "anyOf": [
-        { "$ref": "#/$defs/Obvious" },
-        { "const": "Given later" }
-      ]
-    },
-
     "Obvious": {
       "additionalProperties": false,
       "title": "Obvious",
@@ -160,7 +153,10 @@
         "thought": { "$ref": "#/$defs/Thought" },
         "statement": { "$ref": "#/$defs/Statement" },
         "name": { "type": "string", "description": "binding of the lemma" },
-        "proof": { "$ref": "#/$defs/SubProof" },
+        "proof": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Operation" }
+        },
         "auto_apply": {
           "type": "boolean",
           "default": false,
@@ -171,8 +167,7 @@
         "operation",
         "thought",
         "statement",
-        "name",
-        "proof"
+        "name"
       ],
       "type": "object"
     },
@@ -195,14 +190,16 @@
           "type": "array",
           "items": { "$ref": "#/$defs/NamedStatement" }
         },
-        "proof": { "$ref": "#/$defs/SubProof" }
+        "proof": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Operation" }
+        }
       },
       "required": [
         "operation",
         "thought",
         "variables",
-        "constraints",
-        "proof"
+        "constraints"
       ],
       "type": "object"
     },
@@ -221,9 +218,12 @@
             "type": "object",
             "properties": {
               "statement": { "$ref": "#/$defs/NamedStatement" },
-              "proof": { "$ref": "#/$defs/SubProof" }
+              "proof": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/Operation" }
+              }
             },
-            "required": [ "statement", "proof" ]
+            "required": [ "statement" ]
           },
           "type": "array"
         }
@@ -255,13 +255,15 @@
           ],
           "default": "default"
         },
-        "proof": { "$ref": "#/$defs/SubProof" }
+        "proof": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Operation" }
+        }
       },
       "required": [
         "operation",
         "thought",
-        "target_isabelle_term",
-        "proof"
+        "target_isabelle_term"
       ],
       "type": "object"
     },
@@ -297,14 +299,16 @@
           },
           "type": "array"
         },
-        "proof": { "$ref": "#/$defs/SubProof" }
+        "proof": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Operation" }
+        }
       },
       "required": [
         "operation",
         "thought",
         "target_isabelle_term",
-        "variables",
-        "proof"
+        "variables"
       ],
       "type": "object"
     },
@@ -391,13 +395,15 @@
         "statement": {
           "$ref": "#/$defs/Statement"
         },
-        "proof": { "$ref": "#/$defs/SubProof" }
+        "proof": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Operation" }
+        }
       },
       "required": [
         "operation",
         "thought",
-        "statement",
-        "proof"
+        "statement"
       ],
       "type": "object"
     },
@@ -637,12 +643,17 @@
       "type": "string",
       "description": "id of the target step"
     },
-    "proof_operation": { "$ref": "#/$defs/Operation" }
+    "proof_operations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Operation" },
+      "minItems": 1,
+      "description": "ordered list of proof operations to apply at target_step. For action 'fill', the first operation fills the blank slot and subsequent operations append as successive siblings. For 'insert_before', operations are inserted contiguously before target_step in order. For 'amend' with a single operation, it replaces target_step (preserving its sub-steps via inheritance); with multiple operations, target_step is deleted and the list is inserted at that position."
+    }
   },
   "required": [
     "action",
     "target_step",
-    "proof_operation"
+    "proof_operations"
   ],
   "additionalProperties": false
 }
