@@ -288,6 +288,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
              * having to enumerate them (the Induction tool arg has no
              * `using` field — see Phase-3 scope notes). *)
             |> Config.put Minilang.induct_auto_insert_facts true
+            |> Config.put Phi_Sledgehammer_Solver.try_parallel_smt_cvc5 true
 
       val global_context = global_context_of (ctxt, sequent)
       val s0 = Minilang.INIT ctxt sequent

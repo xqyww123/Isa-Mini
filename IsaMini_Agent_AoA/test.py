@@ -3649,6 +3649,50 @@ async def _test_unfold_syntax(root: Root, file: MyIO):
     print_header("Done", file)
 
 
+@model_test("AmendLeafToNonLeaf", "Test_AmendLeafToNonLeaf.thy", 8)
+async def _test_AmendLeafToNonLeaf(root: Root, file: MyIO):
+    """Reproduce: AttributeError: 'Obvious' object has no attribute 'sub_nodes'
+    at model.py:2825 (NonLeaf_Node._amend_from).
+
+    Trigger: amend a Leaf (Obvious) into a NonLeaf (InferenceRule). The
+    NonLeaf override of _amend_from unconditionally executes
+        self.sub_nodes[:] = old.sub_nodes
+    but _amend_child (model.py:2815) calls new_node._amend_from(child)
+    without guarding on the old node's kind, so any Leaf -> NonLeaf amend
+    crashes here before refresh.
+
+    The reverse-revert path in Node.amend (model.py:2560) already has the
+    correct `isinstance(new_node, NonLeaf_Node) and isinstance(old_node,
+    NonLeaf_Node)` guard — the forward _amend_from is missing it.
+
+    Original log (2026-04-18): the agent amended Obvious at step
+    1.2.3.1.1.1 with InferenceRule(rule=ccontr) to switch to proof by
+    contradiction, and the server returned
+        UNEXPECTED ERROR: AttributeError: 'Obvious' object has no attribute 'sub_nodes'
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("1", Obvious.gen({"facts": []}))
+    print_header("After fill step 1 with Obvious (Leaf)", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    try:
+        await root.amend("1", InferenceRule.gen({
+            "thought": "Switch to proof by contradiction.",
+            "rule": {"refer_by": "name", "name": "ccontr"},
+        }))
+    except AttributeError as e:
+        raise TestFailed(
+            f"BUG REPRODUCED: {type(e).__name__}: {e} "
+            f"(NonLeaf_Node._amend_from does not guard against Leaf `old`)"
+        ) from e
+    print_header("After amend Obvious -> InferenceRule", file)
+    root.print(0, file)
+
+
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None):
     import msgpack as mp
     from IsaREPL import Client

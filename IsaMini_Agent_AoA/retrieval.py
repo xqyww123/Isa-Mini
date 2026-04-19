@@ -53,9 +53,19 @@ def _load_schema(filename: str) -> dict:
 
 BATCHED_SEMANTIC_SEARCH = True
 
+DEFAULT_QUERY_K = 15
+MAX_QUERY_K = 50
+
 _cc_query_schema = _load_schema(
     "cc_semantic_search.jsonc" if BATCHED_SEMANTIC_SEARCH
     else "cc_semantic_search_single.jsonc")
+
+
+def _query_k(q: dict) -> int:
+    k = q.get("k", DEFAULT_QUERY_K)
+    if not isinstance(k, int) or k < 1:
+        return DEFAULT_QUERY_K
+    return min(k, MAX_QUERY_K)
 
 
 # ============================================================================
@@ -311,16 +321,16 @@ def _format_warn_lines(
 # ============================================================================
 
 async def _run_knn_for_query(
-    ml_state: Minilang_State, q: dict, k: int,
+    ml_state: Minilang_State, q: dict,
 ) -> _KnnQueryResult:
-    """Parse a query dict and run semantic_knn."""
+    """Parse a query dict and run semantic_knn. Reads ``k`` from the query dict."""
     try:
         kinds = [EntityKind.from_label(label) for label in q.get("kinds", ["constant"])]
     except KeyError as e:
         return ([], [], f"Invalid entity kind: {e}")
     exact_name = q.get("exact_name") or None
     fetched, warnings = await ml_state.semantic_knn(
-        q.get("long_description") or None, k, kinds,
+        q.get("long_description") or None, _query_k(q), kinds,
         term_patterns=q.get("term_patterns", []),
         type_patterns=q.get("type_patterns", []),
         theories_include=q.get("theories_include", []),
@@ -346,21 +356,22 @@ async def _get_def_for_fetched(
 
 
 async def _semantic_search_direct(
-    session: Session, queries: list[dict], k: int,
+    session: Session, queries: list[dict],
 ) -> str:
-    """Run semantic search queries concurrently, returning formatted results."""
+    """Run semantic search queries concurrently, returning formatted results.
+    Each query carries its own ``k`` (see ``_query_k``)."""
     ml_state = session.root.ml_state
 
     # Run all queries concurrently (knn + entity retrieval in one step)
     knn_results = await asyncio.gather(
-        *[_run_knn_for_query(ml_state, q, k) for q in queries])
+        *[_run_knn_for_query(ml_state, q) for q in queries])
 
     seen = session.seen_entities
     per_query_warnings = _collect_query_warnings(knn_results)
     # Collect new entities
     new_items: list[RetrievedEntity] = []
-    for fetched, _warnings, _error in knn_results:
-        for f in fetched[:k]:
+    for q, (fetched, _warnings, _error) in zip(queries, knn_results):
+        for f in fetched[:_query_k(q)]:
             if f.entity.short_name in seen:
                 continue
             new_items.append(f)
@@ -538,7 +549,7 @@ async def _semantic_search_extend_candidates(
 
     # Run all queries concurrently (knn + entity retrieval in one step)
     knn_results = await asyncio.gather(
-        *[_run_knn_for_query(ml_state, q, 10) for q in queries])
+        *[_run_knn_for_query(ml_state, q) for q in queries])
 
     per_query_warnings = _collect_query_warnings(knn_results)
 
@@ -664,7 +675,7 @@ async def _query_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
                 results.append(await _semantic_search_extend_candidates(
                     session, regular_queries, pending.interaction))
             elif session.interactive_retrieval == InteractiveRetrievalMode.NO:
-                results.append(await _semantic_search_direct(session, regular_queries, k=25))
+                results.append(await _semantic_search_direct(session, regular_queries))
             else:
                 results.append(await _semantic_search_with_filtering(session, regular_queries))
 

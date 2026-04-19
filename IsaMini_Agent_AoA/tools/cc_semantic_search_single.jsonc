@@ -38,6 +38,13 @@
       "items": { "type": "string" },
       "description": "Constrain entities' names to contain all of these substrings (case-insensitive).",
       "default": []
+    },
+    "k": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50,
+      "default": 15,
+      "description": "Number of top results to return. Raise it when exploring broadly, lower it when you only need the closest match."
     }
   },
   "required": ["kinds"],

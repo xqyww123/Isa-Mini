@@ -106,7 +106,7 @@ type SubProof_parsed = 'gen_node | None'
 
 class Explicit_Var(TypedDict):
     name: xvarname
-    type: xtyp | None
+    type: NotRequired[xtyp | None]
 
 class FactByProposition(TypedDict):
     refer_by: Literal["proposition"]
@@ -2203,6 +2203,8 @@ class Node(ABC):
         if eval_key != self._prev_eval_status:
             self._print_evaluation_status(indent, file)
             self._prev_eval_status = eval_key
+        if self.does_quickview_need_detail():
+            self._print_warnings(indent, file, list(Warning.Position))
         return indent
     def _print_evaluation_status(self, indent: int, file: MyIO) -> None:
         match self.status.status:
@@ -2229,7 +2231,6 @@ class Node(ABC):
                 file.write("evaluation cancelled")
     def _print_warnings(self, indent: int, file: MyIO, positions: list[Warning.Position], show_at: bool = False) -> None:
         warnings = [warning for warning in self.warnings if warning.position in positions]
-        self.warnings[:] = [warning for warning in self.warnings if warning.position not in positions]
         match warnings:
             case []:
                 pass
@@ -2819,8 +2820,10 @@ class NonLeaf_Node(Node):
                 await new_node._refresh_all_after_me()
                 return new_node, child
         raise InternalError("The target node is not my children")
-    def _amend_from(self, old: 'NonLeaf_Node') -> None:  # type: ignore[override]
+    def _amend_from(self, old: 'Node') -> None:
         super()._amend_from(old)
+        if not isinstance(old, NonLeaf_Node):
+            return
         self.sub_nodes[:] = old.sub_nodes
         old.sub_nodes.clear()
         for child in self.sub_nodes:
@@ -5026,7 +5029,7 @@ class Obtain(StdBlock):
         file.write(f"variables:\n")
         for v in self.variables:
             print_indent(indent+1, file)
-            if v['type'] is not None:
+            if v.get('type') is not None:
                 file.write(f"- {v['name']}: {v['type']}\n")
             else:
                 file.write(f"- {v['name']}\n")
@@ -5071,7 +5074,6 @@ class Obtain(StdBlock):
             return FailureReason("The statement is nontrivial. Detailed proofs are required to establish this statement.")
         else:
             return FailureReason("Each of the following proof steps above is valid, but the target statement doesn't trivially follow from these steps. Please provide more detailed proof steps.")
-
 #### INTRO
 
 class Intro_ToolArg(TypedDict):

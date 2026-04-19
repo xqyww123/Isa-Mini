@@ -46,6 +46,13 @@
             "description": "Constrain entities' names to contain all of these substrings (case-insensitive).",
             "default": []
           },
+          "k": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 15,
+            "description": "Number of top results to return for this query. Raise it when exploring broadly, lower it when you only need the closest match."
+          },
           "exact_name": {
             "type": "string",
             "description": "Look up an entity by its exact short or full name. When given, all other search criteria are ignored."
@@ -55,7 +62,7 @@
             "description": "Parse a term, show its unfolded lambda structure (Main-level syntax only), and look up the head constant. When given, all other fields are ignored."
           }
         },
-        "required": [],
+        "required": ["kinds"],
         "additionalProperties": false
       }
     }

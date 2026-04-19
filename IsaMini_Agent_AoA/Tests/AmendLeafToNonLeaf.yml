@@ -1,0 +1,37 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - a: nat
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: a = a
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+--------------------------------------------------
+After fill step 1 with Obvious (Leaf)
+--------------------------------------------------
+variables:
+  - a: nat
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: a = a
+proof:
+  - step id: 1
+    operation: Obvious
+--------------------------------------------------
+After amend Obvious -> InferenceRule
+--------------------------------------------------
+variables:
+  - a: nat
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: a = a
+proof:
+  - step id: 1
+    thought: Switch to proof by contradiction.
+    operation: Inference Rule
+    rule:
+      - ccontr: (¬ ?P ⟶ False) ⟶ ?P
+    derived goal:
+      a ≠ a ⟶ False
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  a ≠ a ⟶ False

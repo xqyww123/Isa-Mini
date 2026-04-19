@@ -138,7 +138,7 @@ class ClaudeCode(Session):
     async def initialize(self, root: Root):
         await super().initialize(root)
         with open(self.YAML_path, "w", encoding="utf-8") as f:
-            root.print(0, MyIO(f), update_line=True)
+            root.print(0, MyIO(f), update_line=True, show_warnings=True)
         self._install_skills()
 
         # Register with singleton HTTP MCP server
@@ -741,7 +741,7 @@ class ClaudeCode(Session):
 
     def refresh_YAML(self):
         with open(self.YAML_path, 'w') as f:
-            self.root.print(0, MyIO(f), update_line=True)
+            self.root.print(0, MyIO(f), update_line=True, show_warnings=True)
         if self._on_yaml_refresh is not None:
             quickview = self.root.quickview_string(0)
             self._on_yaml_refresh(quickview)
