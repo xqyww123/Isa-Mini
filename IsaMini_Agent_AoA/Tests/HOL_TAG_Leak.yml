@@ -37,12 +37,11 @@ proof:
       - n: nat
     assuming premises:
       - premise0: n ≤ p
-      - 1.IH: ∀m<n. HOL.TAG (m ≤ p) ⟶ P m
+      - 1.IH: ∀m<n. m ≤ p ⟶ P m
     Error: The variable P appear in the induction context but are not classified in the 'variables' argument. You should indicate whether each is 'arbitrary' (generalized during induction) or 'fixed' (held constant).
     cases: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
   P i
 
-Leaked HOL.TAG hyps: 1
-  - 1.IH: ∀m<n. HOL.TAG (m ≤ p) ⟶ P m
+Leaked HOL.TAG hyps: 0

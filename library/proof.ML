@@ -22,7 +22,18 @@ exception OPR_FAIL of fail_reason * string
 
 type with_clause = (bool (*with or without*) * string (*name*) * thm) list
 type opt_var_names  = string option list option
-type opt_prem_names = string option list option
+(* Per-premise binding spec.
+   NONE               = let the premise counter auto-assign (e.g. "premise0")
+                        with no atom-level aliases.
+   SOME (base, atoms) = use `base` as the main binding name; `atoms` is a
+                        positional list of per-atom alias overrides — the
+                        k-th entry (if SOME a) adds an extra binding
+                        `a = [k-th atom thm]` alongside the main group
+                        (whose atoms are still exposed as base(1..N) by
+                        flatten_facts). Entries beyond the actual atom
+                        count, or NONE entries, produce no extra binding.
+                        `atoms = []` means "no aliases" — the common case. *)
+type opt_prem_names = (string * string option list) option list option
 
 (* options *)
 
@@ -44,6 +55,8 @@ val strict_end: bool Config.T
     (*If enabled, the NEXT and END will not apply SH but require the proof goals are all solved*)
 val counter_mode : string Config.T
 val INTRO_split_conj : bool Config.T
+val INTRO_split_prem_conj : bool Config.T
+val INTRO_split_prem_conj_size_limit : int Config.T
 val INTRO_mk_block : bool Config.T
 val auto_deconflict_bound : bool Config.T
 val auto_calculation : bool Config.T
@@ -79,13 +92,17 @@ val cat_items : items -> items -> items
 val get_local_facts : state -> local_facts
 
 datatype intros_mode = ALL_SUBGOALS | SINGLE_GOAL
-val INTRO : intros_mode -> bool option -> opt_var_names -> opt_prem_names -> state -> items * state
+val INTRO : intros_mode -> bool option -> bool option
+         -> opt_var_names -> opt_prem_names
+         -> state -> items * state
 val INTRO_CMD : command
 val TRANSPARENT_INTRO : operation
 
 (* Helper functions for INTRO *)
 val need_intro : bool -> thm -> bool
 val strip_meta_and_hol_hhf : term -> (string * typ) list * term list * term
+val deep_destruct_prem : Proof.context -> thm -> thm list
+val deep_destruct_term : Proof.context -> term -> term list
 
 val apply : string -> context_tactic -> Time.time option -> stack -> stack
 val apply_method : string -> thm list -> Method.method -> Time.time option -> stack -> stack
@@ -385,6 +402,8 @@ val high_auto_mode = Attrib.setup_config_bool \<^binding>\<open>high_auto_mode\<
 val strict_end = Config.declare_bool ("Minilang.strict_end", \<^here>) (K false)
 val counter_mode = Config.declare_string ("Minilang.counter_mode", \<^here>) (K "consecutive")
 val INTRO_split_conj = Config.declare_bool ("Minilang.INTRO_split_conj", \<^here>) (K false)
+val INTRO_split_prem_conj = Config.declare_bool ("Minilang.INTRO_split_prem_conj", \<^here>) (K true)
+val INTRO_split_prem_conj_size_limit = Config.declare_int ("Minilang.INTRO_split_prem_conj_size_limit", \<^here>) (K 20)
 val INTRO_mk_block   = Config.declare_bool ("Minilang.INTRO_mk_block", \<^here>) (K false)
 val auto_deconflict_bound = Config.declare_bool ("Minilang.auto_deconflict_bound", \<^here>) (K false)
 val auto_calculation = Config.declare_bool ("Minilang.auto_calculation", \<^here>) (K true)
@@ -466,7 +485,7 @@ datatype frame = HHF   of thm (*a local_facts bundle node, represented as a Here
                | ENDBLK of endblk_type
 
 type opt_var_names  = string option list option
-type opt_prem_names = string option list option
+type opt_prem_names = (string * string option list) option list option
 exception NO_PARAM
 exception CASE_NAME of opt_var_names
 
@@ -948,18 +967,103 @@ fun MP ctxt thAB thA =
 
 (* Helpers II *)
 
-fun elim_conjs ctxt =
+fun elim_conjs _ =
   let fun elim thm =
       case Thm.prop_of thm
         of \<^Const>\<open>Pure.conjunction\<close> $ _ $ _ =>
-            elim (MP ctxt Thms.conjunctionD1 thm) @
-            elim (MP ctxt Thms.conjunctionD2 thm)
+            elim (thm RS Thms.conjunctionD1) @
+            elim (thm RS Thms.conjunctionD2)
          | \<^Const>\<open>Trueprop\<close> $ (\<^Const>\<open>HOL.conj\<close> $ _ $ _) =>
-            elim (MP ctxt Thms.conjunct1 thm) @
-            elim (MP ctxt Thms.conjunct2 thm)
+            elim (thm RS Thms.conjunct1) @
+            elim (thm RS Thms.conjunct2)
          | _ => [thm]
    in elim
   end
+
+(* Deep destructuring of a conjunctive premise thm.
+
+   Pushes conjunctions outward via two rewrites, then splits the resulting
+   HOL.conj tree via elim_conjs:
+   - all_conj_distrib: (∀x. P x ∧ Q x) ⟷ (∀x. P x) ∧ (∀x. Q x)     — always
+   - imp_conjR:        (A ⟶ B ∧ C) ⟷ (A ⟶ B) ∧ (A ⟶ C)           — only if smart_size A < limit
+
+   The rewriting is driven by a plain bottom-up conversion (Conv library,
+   no Simplifier involved) so behavior is fully predictable: each matching
+   position fires exactly once per pass, recursion on the result handles
+   newly exposed patterns, and termination is by structural decrease on
+   the total nested-conj depth. *)
+local
+  val all_conj_distrib_meta = @{thm HOL.all_conj_distrib} RS @{thm eq_reflection}
+  val imp_conjR_meta        = @{thm HOL.imp_conjR}        RS @{thm eq_reflection}
+
+  (* Bottom-up tree walk: descend first, try `step` at current position after
+     descent, recurse on result if step fired. Atoms (Const/Free/Var/Bound)
+     return reflexivity, never raise. *)
+  fun walk_bu step ctxt ct =
+    let
+      val descent =
+        case Thm.term_of ct of
+          _ $ _ => Conv.combination_conv (walk_bu step ctxt) (walk_bu step ctxt) ct
+        | Abs _ => Conv.abs_conv (fn (_, ctxt') => walk_bu step ctxt') ctxt ct
+        | _ => Thm.reflexive ct
+      val ct1 = Thm.rhs_of descent
+      val step_res = Conv.try_conv step ct1
+      val combined = Thm.transitive descent step_res
+    in
+      if Thm.is_reflexive step_res
+      then combined
+      else Thm.transitive combined (walk_bu step ctxt (Thm.rhs_of step_res))
+    end
+in
+fun deep_destruct_prem ctxt thm =
+  let
+    val size_limit = Config.get ctxt INTRO_split_prem_conj_size_limit
+
+    (* Single-position rewrite step. Matches only when the RHS is a HOL.conj
+       (pattern-match on the term's top-of-subtree shape, cheaper than running
+       rewr_conv and catching the mismatch). *)
+    fun step ct =
+      case Thm.term_of ct of
+        Const (\<^const_name>\<open>HOL.All\<close>, _) $ Abs (_, _,
+          Const (\<^const_name>\<open>HOL.conj\<close>, _) $ _ $ _) =>
+            Conv.rewr_conv all_conj_distrib_meta ct
+      | Const (\<^const_name>\<open>HOL.implies\<close>, _) $ ant $
+          (Const (\<^const_name>\<open>HOL.conj\<close>, _) $ _ $ _) =>
+            if smart_size_of_term ant < size_limit
+            then Conv.rewr_conv imp_conjR_meta ct
+            else Conv.no_conv ct
+      | _ => Conv.no_conv ct
+
+    (* thm's prop is Trueprop-wrapped; descend past Trueprop, then walk the
+       bool-level term. *)
+    val rewritten =
+      Conv.fconv_rule (HOLogic.Trueprop_conv (walk_bu step ctxt)) thm
+      handle CTERM _ => thm | THM _ => thm
+  in elim_conjs ctxt rewritten end
+end
+
+(* Term-level preview of deep_destruct_prem: returns the bool terms
+   of the atoms that deep_destruct_prem would produce. Used by AUTO_INTRO
+   and compute_bindings to compute the prem → atoms mapping without
+   needing an actual thm. Accepts either a bool term (to be Trueprop-wrapped)
+   or an already-prop term (used directly). Detects the already-prop case
+   syntactically so the check works even if the term still carries loose
+   Bound indices (fastype_of would crash on those). *)
+fun deep_destruct_term ctxt term =
+  let val prop = case term of
+                   \<^Const>\<open>Trueprop\<close> $ _ => term
+                 | Const (\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ _ => term
+                 | Const (\<^const_name>\<open>Pure.all\<close>, _) $ _ => term
+                 | _ => HOLogic.mk_Trueprop term
+      val cprop = Thm.cterm_of ctxt prop
+      val assumed = Thm.assume cprop
+      val atoms = deep_destruct_prem ctxt assumed
+      fun unprop (\<^Const>\<open>Trueprop\<close> $ t) = t
+        | unprop t = t
+   (* Eta-expand so that ∀x. P x renders as "∀x. P x", not "All P". The
+      rewrite rules leave the RHS in eta-contracted form (e.g. All P) which
+      isn't displayed with binder notation. *)
+   in map (Envir.eta_long [] o unprop o Thm.concl_of) atoms end
 
 fun wraps ctxt ths = ths
       |> map (Conv.fconv_rule (HOLogic.Trueprop_conv (Conv.rewr_conv Thms.TAG_def'sym)))
@@ -1364,7 +1468,7 @@ fun INTRO'' F mode split_conj_opt bs (origin as (ctxt, HHF (st0, items) :: L)) =
     end
   | INTRO'' _ _ _ _ _ = raise BROKEN_INVARIANT
 
-fun INTRO' mode split_conj_opt bs premise_names s =
+fun INTRO' mode split_conj_opt split_prem_conj_opt bs premise_names s =
   let val _ = if mode = ALL_SUBGOALS andalso is_some premise_names
               then raise OPR_FAIL (INVALID_OPR, "premise_names must be NONE in ALL_SUBGOALS mode")
               else ()
@@ -1376,20 +1480,48 @@ fun INTRO' mode split_conj_opt bs premise_names s =
                           then raise OPR_FAIL (INVALID_OPR, "bad premise binding number")
                           else ()
                        | NONE => ()
-            val (bindings, ctxt) = map_premise_counter (fn counter_val =>
-                  fold_map (fn (d, th) => fn current_counter =>
-                    let val (name, next_counter) =
-                          case premise_names of
-                            SOME names =>
-                              (case nth names d of
-                                 SOME n => (n, current_counter)  (* Use provided name, including "" for skip *)
-                               | NONE => (assm_name current_counter, current_counter + 1))
-                          | NONE => (assm_name current_counter, current_counter + 1)
-                     in (((Binding.name name, []), [([th], [])]), next_counter)
-                    end
-                  ) (map_index I (#prems foc)) counter_val
-                ) (#context foc)
-            (* Filter out bindings with empty names *)
+            val do_split_prem_conj =
+                  case split_prem_conj_opt
+                    of SOME b => b
+                     | NONE => Config.get (#context foc) INTRO_split_prem_conj
+            (* For each prem, produce its main binding plus any per-atom
+               alias bindings in one pass. The counter is threaded via
+               map_premise_counter + fold_map. *)
+            val (per_prem_bindings, ctxt) =
+                  map_premise_counter (fn counter_val =>
+                    fold_map (fn (d, th) => fn current_counter =>
+                      let val ((name, aliases), next_counter) =
+                            case premise_names of
+                              SOME specs =>
+                                (case nth specs d of
+                                   SOME (n, al) => ((n, al), current_counter)
+                                 | NONE => ((assm_name current_counter, []),
+                                            current_counter + 1))
+                            | NONE => ((assm_name current_counter, []),
+                                       current_counter + 1)
+                          val thms = if do_split_prem_conj andalso name <> ""
+                                     then deep_destruct_prem (#context foc) th
+                                     else [th]
+                          val main = ((Binding.name name, []), [(thms, [])])
+                          (* Per-atom alias bindings: positional — the i-th
+                             entry (if SOME a) emits `a = [nth thms i]`.
+                             Entries beyond the atom count or NONE entries
+                             produce nothing. *)
+                          val atom_aliases =
+                                flat (map_index (fn (i, entry) =>
+                                  case entry of
+                                    SOME alias =>
+                                      if alias <> "" andalso i < length thms
+                                      then [((Binding.name alias, []),
+                                             [([nth thms i], [])])]
+                                      else []
+                                  | NONE => []
+                                ) aliases)
+                       in (main :: atom_aliases, next_counter)
+                      end
+                    ) (map_index I (#prems foc)) counter_val
+                  ) (#context foc)
+            val bindings = flat per_prem_bindings
             val bindings_filtered = filter (fn ((b, _), _) => Binding.name_of b <> "") bindings
          in ctxt
          |> Proof_Context.note_thmss "" bindings_filtered
@@ -1404,7 +1536,7 @@ fun INTRO' mode split_conj_opt bs premise_names s =
 fun TRANSPARENT_INTRO' (origin as (ctxt, HHF (st, _) :: _)) =
       if Config.get ctxt transparent_intro andalso
          has_prems_universal_vars (fst (Logic.dest_implies (Thm.prop_of st)))
-      then #2 (INTRO' SINGLE_GOAL NONE NONE NONE origin)
+      then #2 (INTRO' SINGLE_GOAL NONE NONE NONE NONE origin)
       else origin
   | TRANSPARENT_INTRO' _ = raise BROKEN_INVARIANT
 
@@ -1685,11 +1817,18 @@ fun TRY_STANDARD SK =
               (K ()) (CONTEXT_TACTIC (Classical.standard_tac (#1 SK) [])) NONE SK
   else SK
 
-val INTRO = timed_OPR_with_ret 5000 oooo INTRO'
+fun INTRO mode sco spco bs pn = timed_OPR_with_ret 5000 (INTRO' mode sco spco bs pn)
+(* OPT_PREMS parses to `string option list option` (per-prem names, no aliases).
+   Wrap each SOME name into SOME (name, []) to match the new opt_prem_names
+   schema. The CLI form cannot express per-atom aliases. *)
+fun wrap_opt_prems (pn : string option list option) : opt_prem_names =
+  Option.map (map (Option.map (fn n => (n, [])))) pn
 val INTRO_CMD = (OPT_VARS -- OPT_PREMS)
-        >> (fn args => fn s => #2 (timed_OPR_with_ret 2 (uncurry (INTRO' SINGLE_GOAL NONE) args) s))
+        >> (fn (vs, pn) => fn s => #2 (timed_OPR_with_ret 2
+              (INTRO' SINGLE_GOAL NONE NONE vs (wrap_opt_prems pn)) s))
 val INTRO_ALL_CMD = (OPT_VARS -- OPT_PREMS)
-        >> (fn args => fn s => #2 (timed_OPR_with_ret 2 (uncurry (INTRO' ALL_SUBGOALS NONE) args) s))
+        >> (fn (vs, pn) => fn s => #2 (timed_OPR_with_ret 2
+              (INTRO' ALL_SUBGOALS NONE NONE vs (wrap_opt_prems pn)) s))
 val TRANSPARENT_INTRO = OPR_NO_INCR TRANSPARENT_INTRO'
 
 local
@@ -1846,7 +1985,7 @@ fun SIMP' _ _ (ctxt, []) = (ctxt, [])
 
 fun CRUSH' prep_with (vars, raw_with_lems) SK0 =
      SIMP' prep_with raw_with_lems SK0
-  |> SKIP_SUCCESS (#2 o INTRO' ALL_SUBGOALS NONE vars NONE)
+  |> SKIP_SUCCESS (#2 o INTRO' ALL_SUBGOALS NONE NONE vars NONE)
   |> report_goal
 
 
@@ -1971,7 +2110,11 @@ fun SIMPLIFY_GOAL_AND_PREMISES'
       exists (fn orig => Term.aconv (orig, prem_term)) orig_prem_terms
       orelse exists (fn orig => Term.aconv (orig, prem_term)) orig_goal_prems
 
-    (* 9. Generate premise names: SOME "" for unchanged, SOME name for changed *)
+    (* 9. Generate premise names: SOME "" for unchanged, SOME name for changed.
+       SIMPLIFY doesn't emit per-atom aliases (clarsimp handles goal-level
+       conjE before this point), so aliases are always []. *)
+    fun wrap_name (SOME n) = SOME (n, []) : (string * string option list) option
+      | wrap_name NONE     = NONE
     val (premise_names_for_intro, ctxt_with_counter) =
       case naming_fn_opt of
         SOME naming_fn =>
@@ -1980,15 +2123,16 @@ fun SIMPLIFY_GOAL_AND_PREMISES'
             val names = prems_after_intro
               |> map (fn prem_term => if is_unchanged prem_term then NONE else SOME prem_term)
               |> burrow_options naming_fn
-              |> map (fn NONE => SOME "" | SOME name => SOME name)
+              |> map (fn NONE => wrap_name (SOME "") | SOME name => wrap_name (SOME name))
           in (names, ctxt)
           end
       | NONE =>
           map_premise_counter (fn counter_val =>
             fold_map (fn prem_term => fn current_counter =>
               if is_unchanged prem_term
-              then (SOME "", current_counter)  (* Unchanged *)
-              else (SOME (assm_name current_counter), current_counter + 1)  (* Changed *)
+              then (wrap_name (SOME ""), current_counter)  (* Unchanged *)
+              else (wrap_name (SOME (assm_name current_counter)),
+                    current_counter + 1)  (* Changed *)
             ) prems_after_intro counter_val
           ) ctxt
 
@@ -2004,7 +2148,7 @@ fun SIMPLIFY_GOAL_AND_PREMISES'
 
     (* 11. Call INTRO' with the generated premise names and variable names *)
     val (items_from_intro, (ctxt_after_intro, HHF (st_after_intro, items_after_intro) :: S_after_intro)) =
-      INTRO' SINGLE_GOAL NONE var_names_for_intro (SOME premise_names_for_intro)
+      INTRO' SINGLE_GOAL NONE NONE var_names_for_intro (SOME premise_names_for_intro)
              (ctxt_with_counter, HHF (st_protected_for_intro, items) :: S)
 
     (* 12. Unwrap NO_SIMP from the goal conclusion *)

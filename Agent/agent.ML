@@ -13,7 +13,11 @@ type cfg = {
   }
 
 type var_name = {internal_name: string, external_name: string, typ_pretty: string}
-type prem_name = {internal_term: term, external_name: string, pretty: string}
+(* internal_term is a pair (origin_conj_term, atom_index):
+   - (conj, NONE)   — non-destructed singleton prem binding
+   - (conj, SOME k) — k-th atom of a destructed grouped binding whose origin
+                      premise term is conj (k is 1-based) *)
+type prem_name = {internal_term: term * int option, external_name: string, pretty: string}
 type bindings = var_name list * prem_name list
 
 datatype ('term, 'fact) extended_fact =
@@ -137,7 +141,7 @@ val default_cfg : (cfg * budget) = ({
     })
 
 type var_name = {internal_name: string, external_name: string, typ_pretty: string}
-type prem_name = {internal_term: term, external_name: string, pretty: string}
+type prem_name = {internal_term: term * int option, external_name: string, pretty: string}
 type bindings = var_name list * prem_name list
 
 exception INTRO_BINDINGS of {
@@ -309,12 +313,14 @@ fun get_witness_types s =
    in extract_leading_ex_types goal
   end
 
-fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (split_conj: bool) (s:Minilang.state)
+fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (split_conj: bool)
+               (s:Minilang.state)
   : bindings * Minilang.state =
   let
     val ctxt = Minilang.context_of s
             |> Config.put Printer.show_markup false
     val st = Minilang.leading_proof_sequent_of s
+    val split_prem_conj = Config.get ctxt Minilang.INTRO_split_prem_conj
 
     (* Extract provided bindings, use empty lists if NONE *)
     val (provided_var_names, provided_prem_names) = the_default ([], []) opt_bindings
@@ -374,32 +380,66 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (split_conj: 
         (* Convert var_bindings to opt_var_names for Minilang.INTRO *)
         val minilang_var_names = SOME (map (SOME o #external_name) var_bindings)
 
-        (* Step 4: Process premises - try to match with provided names, auto-generate if not found *)
+        (* Step 4a: Preview atom structure per prem via term-level destruct.
+           prem_plan : term list list, per goal prem its atom terms. This is
+           used both for the per-atom alias computation in rematching (below)
+           and for origin_info reconstruction after INTRO returns. *)
+        val prem_plan =
+          if split_prem_conj
+          then map (fn prem => Minilang.deep_destruct_term ctxt prem) prems
+          else map single prems
+
+        (* Step 4b: Rematch, producing opt_prem_names in its new schema
+           `(string * string option list) option list` directly.
+           For each goal prem:
+             - collect all provided entries whose .fst internal_term aconv-matches,
+             - pick base name from the first match (stripped of any "(k)" suffix),
+             - for each atom position k, if any match has .snd = SOME k and
+               external_name differs from "base(k)", record the alias there;
+               otherwise leave NONE. *)
         val prem_counter = #prem_counter counters
         val (prem_names_for_intro, matched_prem_terms) =
           let
             val counter_start = Synchronized.value prem_counter
-            (* For each premise in goal, try to find a match in provided names *)
-            val (names_with_flags, final_counter) =
-              fold_map (fn prem_term => fn counter_val =>
-                case find_first (fn {internal_term, ...} => internal_term aconv prem_term) provided_prem_names of
-                  SOME {external_name, ...} =>
-                    (* Matched: use provided external name *)
-                    ((SOME external_name, SOME prem_term), counter_val)
-                | NONE =>
-                    (* Not matched: auto-generate name using counter *)
-                    let val name = "premise" ^ string_of_int counter_val
-                     in ((SOME name, NONE), counter_val + 1)
-                    end
-              ) prems counter_start
-
+            val (entries, final_counter) =
+              fold_map (fn (prem_term, atoms) => fn counter_val =>
+                let
+                  val matches = filter (fn {internal_term = (t, _), ...} => t aconv prem_term)
+                                       provided_prem_names
+                  val atom_count = length atoms
+                in
+                  case matches of
+                    [] =>
+                      let val name = "premise" ^ string_of_int counter_val
+                       in ((SOME (name, []), NONE), counter_val + 1) end
+                  | (first :: _) =>
+                      let val base = Minilang_Aux.base_name (#external_name first)
+                          val aliases =
+                            if atom_count <= 1 then []
+                            else List.tabulate (atom_count, fn i =>
+                              let val k = i + 1
+                                  val expected = base ^ "(" ^ string_of_int k ^ ")"
+                                  val renamed =
+                                    find_first
+                                      (fn {internal_term = (_, idx), external_name, ...} =>
+                                        idx = SOME k andalso external_name <> expected)
+                                      matches
+                               in Option.map #external_name renamed end)
+                       in ((SOME (base, aliases), SOME prem_term), counter_val) end
+                end
+              ) (prems ~~ prem_plan) counter_start
             val _ = Synchronized.change prem_counter (K final_counter)
-            val matched = map_filter snd names_with_flags
-           in (map fst names_with_flags, matched)
+            val matched = map_filter snd entries
+           in (map fst entries, matched)
           end
 
-        (* Step 5: Call INTRO with SINGLE_GOAL mode and get the items it fixed *)
-        val ((params', facts'), s') = Minilang.INTRO Minilang.SINGLE_GOAL (SOME split_conj) minilang_var_names (SOME prem_names_for_intro) s
+        (* Step 5: Call INTRO. prem_names_for_intro is already shaped as
+           (string * string option list) option list — the new opt_prem_names
+           inner type. INTRO's F will emit main bindings plus per-atom alias
+           bindings in one note_thmss pass. *)
+        val ((params', facts'), s') =
+          Minilang.INTRO Minilang.SINGLE_GOAL (SOME split_conj) NONE
+                         minilang_var_names (SOME prem_names_for_intro) s
 
         (* Step 6: Extract context from the new state *)
         val ctxt' = Minilang.context_of s'
@@ -411,11 +451,70 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (split_conj: 
                                           typ_pretty = string_of_type ctxt' ty})
                                        var_bindings params'
 
-        val prem_bindings_final = map2 (fn prem_term => fn (name, prop) =>
-                                         {internal_term = prem_term,
-                                          external_name = name,
-                                          pretty = string_of_term ctxt' prop})
-                                       prems facts'
+        (* Map each atom in facts' back to its origin prem term and atom index.
+           facts' ordering mirrors what INTRO''s F emitted: per goal prem,
+           first the main binding's atoms (k = 1..N via flatten_facts), then
+           the per-atom alias bindings in positional order. We reconstruct
+           the same interleaving here using `prem_plan` (atom counts) and
+           `prem_names_for_intro` (alias specs per prem). *)
+        val origin_info : (term * int option) list =
+          flat (map_index (fn (p_idx, (prem, atoms)) =>
+                  let val main_entries =
+                        case atoms of
+                          [_] => [(prem, NONE)]
+                        | _ => map_index (fn (i, _) => (prem, SOME (i+1))) atoms
+                      val aliases_for_this_prem =
+                        case nth prem_names_for_intro p_idx of
+                          SOME (_, als) => als
+                        | NONE => []
+                      val alias_entries =
+                        flat (map_index (fn (i, entry) =>
+                          case entry of
+                            SOME _ => [(prem, SOME (i+1))]
+                          | NONE => []
+                        ) aliases_for_this_prem)
+                   in main_entries @ alias_entries end
+                ) (prems ~~ prem_plan))
+
+        val prem_bindings_final_raw =
+          if length origin_info = length facts'
+          then map2 (fn (prem, idx) => fn (name, prop) =>
+                       {internal_term = (prem, idx),
+                        external_name = name,
+                        pretty = string_of_term ctxt' prop})
+                    origin_info facts'
+          else (* Fallback if plan and facts disagree: pair 1-1 with NONE index *)
+               map2 (fn prem => fn (name, prop) =>
+                       {internal_term = (prem, NONE),
+                        external_name = name,
+                        pretty = string_of_term ctxt' prop})
+                    prems facts'
+
+        (* For each destructed atom that has both a default-form entry
+           (e.g. "premise0(2)") and an alias entry (e.g. "my_B"), drop the
+           default-form one from the reported list. The binding is still
+           present in the proof context — the agent can still write
+           "premise0(2)" — but we only surface the user-chosen name. *)
+        fun is_default_form (e : prem_name) =
+              case #internal_term e of
+                (_, SOME k) =>
+                  #external_name e =
+                    Minilang_Aux.base_name (#external_name e) ^
+                    "(" ^ string_of_int k ^ ")"
+              | (_, NONE) => false
+        fun same_atom_key (a : prem_name) (b : prem_name) =
+              let val (ta, ia) = #internal_term a
+                  val (tb, ib) = #internal_term b
+               in ia = ib andalso ia <> NONE andalso Term.aconv (ta, tb) end
+        fun has_alias_sibling e all =
+              exists (fn other =>
+                        same_atom_key e other andalso not (is_default_form other))
+                     all
+        val prem_bindings_final =
+          filter (fn e =>
+                    not (is_default_form e andalso
+                         has_alias_sibling e prem_bindings_final_raw))
+                 prem_bindings_final_raw
 
         (* Step 8: Compute missing bindings (provided but not used in goal) *)
         (* Only report variables where external_name != internal_name *)
@@ -425,10 +524,10 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (split_conj: 
                  not (member (op =) (map fst vars) internal_name)) provided_var_names
           else []
 
-        (* For premises, report all missing bindings *)
+        (* For premises, report all missing bindings (match on origin conj term only) *)
         val missing_prems = if report_missing
-          then filter (fn {internal_term, ...} =>
-                 not (exists (fn p => p aconv internal_term) prems)) provided_prem_names
+          then filter (fn {internal_term = (t, _), ...} =>
+                 not (exists (fn p => p aconv t) prems)) provided_prem_names
           else []
 
         (* Step 9: Compute auto-introduced bindings (in goal but not matched with provided) *)
@@ -436,8 +535,8 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (split_conj: 
                           not (member (op =) matched_var_names internal_name))
                         var_bindings_final
 
-        val auto_prems = filter (fn {internal_term, ...} =>
-                           not (exists (fn t => t aconv internal_term) matched_prem_terms))
+        val auto_prems = filter (fn {internal_term = (t, _), ...} =>
+                           not (exists (fn u => u aconv t) matched_prem_terms))
                          prem_bindings_final
 
         (* Step 10: Send INTRO_BINDINGS message with three fields *)
@@ -453,13 +552,19 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (split_conj: 
       end
   end
 
-(* Compute bindings for the leading proof goal by binding provided names in order *)
-fun compute_bindings (s:Minilang.state) (var_names: string list) (fact_names: string list)
+(* Compute bindings for the leading proof goal by binding provided names in order.
+   When Minilang.INTRO_split_prem_conj is on (the default for the agent) and a
+   prem is conj-shaped, a single provided name expands into multiple entries
+   with (prem, SOME k) internal_term and "name(k)" external_name — mirroring
+   what AUTO_INTRO will emit. *)
+fun compute_bindings (s:Minilang.state)
+                     (var_names: string list) (fact_names: string list)
   : bindings =
   let
     val ctxt = Minilang.context_of s
               |> Config.put Printer.show_markup false
     val st = Minilang.leading_proof_sequent_of s
+    val split_prem_conj = Config.get ctxt Minilang.INTRO_split_prem_conj
   in
     (* Check if there's a quantified goal *)
     if not (Minilang.need_intro false st) then
@@ -515,15 +620,29 @@ fun compute_bindings (s:Minilang.state) (var_names: string list) (fact_names: st
                   pairs
           end
 
-        (* Bind premises in order: fact_names[j] -> prems[j] *)
+        (* Bind premises in order: fact_names[j] -> prems[j].
+           If split_prem_conj is on, preview-destruct each conj-shaped prem and
+           expand its single provided name into "name(1)/(2)/..." entries, each
+           with composite internal_term (prem, SOME k). *)
         val prem_bindings =
           let
             val pairs = ListPair.zip (fact_names, prems)
-           in map (fn (ex_name, prem_term) =>
-                    {internal_term = prem_term,
+            fun one (ex_name, prem_term) =
+              if split_prem_conj
+              then let val atoms = Minilang.deep_destruct_term ctxt prem_term
+                in case atoms of
+                     [_] => [{internal_term = (prem_term, NONE),
+                              external_name = ex_name,
+                              pretty = string_of_term ctxt prem_term}]
+                   | _ => map_index (fn (i, atom) =>
+                            {internal_term = (prem_term, SOME (i+1)),
+                             external_name = ex_name ^ "(" ^ string_of_int (i+1) ^ ")",
+                             pretty = string_of_term ctxt atom}) atoms
+                end
+              else [{internal_term = (prem_term, NONE),
                      external_name = ex_name,
-                     pretty = string_of_term ctxt prem_term})
-                  pairs
+                     pretty = string_of_term ctxt prem_term}]
+           in maps one pairs
           end
       in
         (var_bindings, prem_bindings)
@@ -590,12 +709,15 @@ fun AUTO_SIMPLIFY
           (* Store the prem_terms for later use *)
           val _ = prems_before_ref := prem_terms
 
-          (* Use fold_map to thread counter through all premises *)
+          (* Use fold_map to thread counter through all premises. Match on origin
+             conj term (.fst of internal_term pair) for rematch with destructed groups. *)
           val (names, final_counter) = fold_map (fn prem_term => fn counter_val =>
-            case find_first (fn {internal_term, ...} => internal_term aconv prem_term) provided_prem_names of
+            case find_first (fn {internal_term = (t, _), ...} => t aconv prem_term)
+                            provided_prem_names of
               SOME {external_name, ...} =>
                 let val _ = matched_prem_terms_ref := prem_term :: !matched_prem_terms_ref
-                in (external_name, counter_val)
+                    val base = Minilang_Aux.base_name external_name
+                in (base, counter_val)
                 end
             | NONE =>
                 (* Auto-generate name using counter *)
@@ -678,10 +800,13 @@ fun AUTO_SIMPLIFY
              typ_pretty = string_of_type ctxt' ty})
           (!vars_before_ref) params'
 
-        (* Build final premise bindings from facts' returned by SIMPLIFY *)
+        (* Build final premise bindings from facts' returned by SIMPLIFY.
+           SIMPLIFY doesn't destruct conj prems (clarsimp handles goal-level
+           conjE before this point), so every emitted fact corresponds 1-1 to
+           a prem in prems_before_ref; index stays NONE. *)
         val prem_bindings_final =
           map2 (fn prem_term => fn (name, exterm) =>
-            {internal_term = prem_term,
+            {internal_term = (prem_term, NONE),
              external_name = name,
              pretty = string_of_term ctxt' exterm})
           (!prems_before_ref) facts'
@@ -693,11 +818,12 @@ fun AUTO_SIMPLIFY
               not (exists (fn (vn, _) => vn = internal_name) (!vars_before_ref))) provided_var_names
           else []
 
-        (* Compute missing premise bindings - provided but not in prems_before *)
+        (* Compute missing premise bindings - provided but not in prems_before.
+           Match on the origin conj term (.fst of internal_term). *)
         val missing_prems =
           if report_bindings then
-            filter (fn {internal_term, ...} =>
-              not (exists (fn prem_term => prem_term aconv internal_term) (!prems_before_ref))) provided_prem_names
+            filter (fn {internal_term = (t, _), ...} =>
+              not (exists (fn prem_term => prem_term aconv t) (!prems_before_ref))) provided_prem_names
           else []
 
         (* Compute auto-introduced variables - not matched during naming *)
@@ -711,8 +837,8 @@ fun AUTO_SIMPLIFY
         (* Compute auto-introduced premises - not matched during naming *)
         val auto_prems =
           if report_bindings then
-            filter (fn {internal_term, ...} =>
-              not (exists (fn t => t aconv internal_term) matched_prem_terms))
+            filter (fn {internal_term = (t, _), ...} =>
+              not (exists (fn u => u aconv t) matched_prem_terms))
             prem_bindings_final
           else []
 

@@ -664,9 +664,10 @@ class VariableBinding(NamedTuple):
     type: typ
 
 class FactBinding(NamedTuple):
-    expr: lambda_term  # internal_term
-    name: varname      # external_name
+    expr: lambda_term  # internal_term's origin conjunction term (.fst of the ML-side pair)
+    name: varname      # external_name (may include "(k)" suffix for destructed atoms)
     pretty: term       # pretty
+    index: int | None = None  # atom index within a destructed group (.snd of the ML-side pair)
 
 type Bindings = tuple[list[VariableBinding], list[FactBinding]]
 
@@ -770,7 +771,8 @@ class Intro_Bindings_Msg(Message):
         ]
         fact_bindings = [
             FactBinding(
-                expr=p[0],
+                expr=p[0][0],                              # origin conj term (.fst)
+                index=p[0][1],                             # atom index or None (.snd)
                 name=IsaTerm.from_isabelle(p[1]),
                 pretty=IsaTerm.from_isabelle(p[2])
             ) for p in prem_names
@@ -1101,17 +1103,19 @@ class Minilang_Operation(NamedTuple):
     @staticmethod
     def INTRO(bindings: Bindings | None, split: bool) -> 'Minilang_Operation':
         if bindings is not None:
-            # Convert IsaTerm fields back to ASCII strings for RPC serialization
+            # Convert IsaTerm fields back to ASCII strings for RPC serialization.
+            # fact_bindings' expr packs as a (term, int option) pair to match the ML
+            # prem_name.internal_term schema.
             var_bindings = [(vb.internal_varname.ascii, vb.external_varname.ascii, vb.type.ascii)
                            for vb in bindings[0]]
-            fact_bindings = [(fb.expr, fb.name.ascii, fb.pretty.ascii)
+            fact_bindings = [((fb.expr, fb.index), fb.name.ascii, fb.pretty.ascii)
                             for fb in bindings[1]]
             packed_bindings: Any = (var_bindings, fact_bindings)
         else:
             packed_bindings = None
         return Minilang_Operation("INTRO", (packed_bindings, split))
     @staticmethod
-    def SIMPLIFY(facts_with_targets: 'list[tuple[IsabelleFact, list[lambda_term] | None]]', use_system_simps: bool, premise_names: list[str], simplify_goal: bool, bindings: tuple[list[tuple[str, str, str]], list[tuple[lambda_term, str, str]]] | None) -> 'Minilang_Operation':
+    def SIMPLIFY(facts_with_targets: 'list[tuple[IsabelleFact, list[lambda_term] | None]]', use_system_simps: bool, premise_names: list[str], simplify_goal: bool, bindings: tuple[list[tuple[str, str, str]], list[tuple[tuple[lambda_term, int | None], str, str]]] | None) -> 'Minilang_Operation':
         packed_facts = [(r.pack(), targets) for r, targets in facts_with_targets]
         return Minilang_Operation("SIMPLIFY", (packed_facts, use_system_simps, premise_names, simplify_goal, bindings))
     @staticmethod
@@ -1462,10 +1466,14 @@ class Minilang_State:
         Compute bindings for the leading proof goal by binding provided names in order.
         var_names[i] is bound to the i-th quantified variable in the goal.
         fact_names[j] is bound to the j-th premise in the goal.
+        When the Minilang.INTRO_split_prem_conj config is on (the default for the
+        Minilang agent), a conj-shaped premise's single provided name expands into
+        multiple "name(k)" entries — one per atomic conjunct.
         Raises IsabelleError if the lengths don't match the goal structure.
         """
         bindings_data = await self.connection.callback("IsaMini.compute_bindings",
-                                                  (self.name, [v.ascii for v in var_names],
+                                                  (self.name,
+                                                   [v.ascii for v in var_names],
                                                    [f.ascii for f in fact_names]))
         return Intro_Bindings_Msg._unpack_bindings(bindings_data)
     async def need_intro(self, consider_conj: bool) -> bool:
@@ -3423,6 +3431,11 @@ class SubgoalMaker(GoalContainer, StdBlock):
                 self._on_regenerating_goals(goals)
                 if self._block_closes_parent() and self.parent is not None:
                     self.parent._close_by(self)
+                if self.sub_nodes:
+                    self._warn_discarded_nodes(
+                        list(self.sub_nodes),
+                        "Due to changes in this operation's subgoal structure, the following previously held proof steps are discarded",
+                        Warning.Position.FOOTER)
                 self.sub_nodes = []
                 ml_state = await s0.clone(None)
                 for i in range(len(goals)):
@@ -3436,6 +3449,11 @@ class SubgoalMaker(GoalContainer, StdBlock):
                     if i < len(goals) - 1:
                         ml_state = await ml_state.sorry_next(None, None)
         else:
+            if self.sub_nodes:
+                self._warn_discarded_nodes(
+                    list(self.sub_nodes),
+                    "Since this operation no longer opens a proof block, the following previously held proof steps are discarded",
+                    Warning.Position.FOOTER)
             self.sub_nodes = []
             if self._block_closes_parent() and self.parent is not None:
                 self.parent._open()
@@ -4606,7 +4624,7 @@ class Rewrite(Leaf):
         bindings = None
         if self.bindings is not None:
             var_bindings = [(vb.internal_varname.ascii, vb.external_varname.ascii, vb.type.ascii) for vb in self.bindings[0]]
-            fact_bindings = [(fb.expr, fb.name.ascii, fb.pretty.ascii) for fb in self.bindings[1]]
+            fact_bindings = [((fb.expr, fb.index), fb.name.ascii, fb.pretty.ascii) for fb in self.bindings[1]]
             bindings = (var_bindings, fact_bindings)
         # Build per-fact targets for the operation.
         # Filter out facts with empty target lists (user chose to drop them).
@@ -4751,7 +4769,7 @@ class Rewrite(Leaf):
         if self.bindings is not None:
             for i, fact in enumerate(self.bindings[1]):
                 if fact.name == old_name:
-                    self.bindings[1][i] = FactBinding(fact.expr, IsaTerm.from_agent(new_name), fact.pretty)
+                    self.bindings[1][i] = FactBinding(fact.expr, IsaTerm.from_agent(new_name), fact.pretty, fact.index)
                     return self
         return super()._rename_fact(old_name, new_name)
 
@@ -5245,7 +5263,7 @@ class Intro(SubgoalMaker):
         if self.bindings is not None:
             for i, fact in enumerate(self.bindings[1]):
                 if fact.name == old_name:
-                    self.bindings[1][i] = FactBinding(fact.expr, IsaTerm.from_agent(new_name), fact.pretty)
+                    self.bindings[1][i] = FactBinding(fact.expr, IsaTerm.from_agent(new_name), fact.pretty, fact.index)
                     return self
         return super()._rename_fact(old_name, new_name)
 

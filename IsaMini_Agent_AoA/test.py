@@ -1705,6 +1705,60 @@ async def _test_intro_split_conj(root: Root, file: MyIO):
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
 
+@model_test("IntroSplitPremConj", "Test_IntroSplitPremConj.thy", 29)
+async def _test_intro_split_prem_conj(root: Root, file: MyIO):
+    """Exercise split_prem_conj destructuring on:
+      - plain conj           A ∧ B ∧ C        → 3 atoms, premise0(1..3)
+      - ∀-conj               ∀x. P x ∧ Q x    → 2 atoms, premise1(1..2)
+      - ⟶-conj (small ant)  D ⟶ E ∧ F         → 2 atoms, premise2(1..2)
+      - ⟶-conj (large ant)  BIG ⟶ G ∧ H       → 1 atom, premise3 (size guard)
+
+    The auto-Intro at proof start fires split_prem_conj (config-default true)
+    so the initial printed state already shows the destructured bindings.
+    Also verifies the composite-key rematch: renaming a single atom of a
+    group only affects the (conj, SOME k) entry — other atoms stay intact.
+    """
+    print_header("Initial State (auto-Intro should have destructured 3 of 4 prems)", file)
+    root.print(0, file)
+    print_header("Overview", file)
+    root.quickview(0, file)
+
+    # Rename the middle atom of the plain-conj group: premise0(2) → my_B
+    root.session.age += 1
+    try:
+        await root.rename_fact("premise0(2)", "my_B")
+        print_header("After rename premise0(2) → my_B (middle atom of grouped binding)", file)
+        root.print(0, file)
+    except Exception as e:
+        file.write(f"Rename premise0(2) failed: {type(e).__name__}: {e}\n")
+
+    # Rename a non-destructured singleton: premise3 → my_Big
+    root.session.age += 1
+    try:
+        await root.rename_fact("premise3", "my_Big")
+        print_header("After rename premise3 → my_Big (non-destructured singleton)", file)
+        root.print(0, file)
+    except Exception as e:
+        file.write(f"Rename premise3 failed: {type(e).__name__}: {e}\n")
+
+    # Auto-Intro already occupies step 1; the pending goal is step 2.
+    # Try to discharge it with Obvious using the destructured atoms.
+    root.session.age += 1
+    try:
+        await root.fill("2", Obvious.gen({"facts": []}))
+        print_header("After Obvious on 2", file)
+        root.print(0, file)
+    except Exception as e:
+        file.write(f"Obvious on 2 failed: {type(e).__name__}: {e}\n")
+
+    print_header("Final Overview", file)
+    root.quickview(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+
 @model_test("IntroObvious", "Test_IntroObvious.thy", 10)
 async def _test_intro_obvious(root: Root, file: MyIO):
     """Test that Intro on P ∧ Q ∧ R (with assumptions P, Q, R) auto-completes.
@@ -3093,11 +3147,12 @@ async def _test_HOL_TAG_Leak(root: Root, file: MyIO):
     for n, t in leaked:
         file.write(f"  - {n}: {t}\n")
 
-    assert leaked, (
-        "REGRESSION: expected HOL.TAG to leak into the IH after "
-        "auto-insert + nat_less_induct, but no leaked hyp was found. "
-        "Either the bug is fixed (delete this test) or the test setup "
-        "no longer triggers auto-insert.")
+    assert not leaked, (
+        "REGRESSION: HOL.TAG is leaking into the IH again after "
+        "auto-insert + nat_less_induct. The deep `unwrap_tags` pass in "
+        "library/proof.ML must descend into HOL-level binders (∀, ⟶, …) "
+        "so the IH's wrapped premises get stripped before being surfaced "
+        f"in case_hyps. Leaked hyps: {leaked}")
 
 
 @model_test("Obtain_Fixed", "Test_Obtain_Fixed.thy", 8)
