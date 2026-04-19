@@ -142,6 +142,9 @@ Overview after AMEND
 global declarations:
 proof:
   step 1: Rewrite goal (changed, line 0)
+    notice:
+      - The proof goal has changed and new premises occur:
+        - premise0
     resulting premises:
       - premise0: ¬ P
     goal changes into:
@@ -179,6 +182,9 @@ Final Overview
 --------------------------------------------------
 step 1: Rewrite goal (changed, failed, line 0)
   Error: Fact "t1" not found
-Error: Unfinished Proof (line 174). Fill step `2`
+  notice:
+    - The proof goal has changed and new premises occur:
+      - premise0
+Error: Unfinished Proof (line 177). Fill step `2`
 goal: x * x = (0 :: int) ∨ P
 Unfinished nodes: 2

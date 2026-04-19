@@ -1014,8 +1014,11 @@ fun unwrap_conjs ctxt th =
       else raise THM ("Not tagged", 0, [th])
 
 fun unwrap_tags ctxt th =
-  let fun conv ctxt ctm =
-        (case Thm.term_of ctm
+  let val has_tag = Term.exists_Const
+        (fn (\<^const_name>\<open>HOL.TAG\<close>, _) => true | _ => false)
+      fun conv ctxt ctm =
+        if not (has_tag (Thm.term_of ctm)) then Conv.all_conv ctm
+        else case Thm.term_of ctm
            of Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs _ =>
                 Conv.arg_conv (Conv.abs_conv (conv o snd) ctxt) ctm
             | Const(\<^const_name>\<open>Pure.imp\<close>, _)
@@ -1034,11 +1037,19 @@ fun unwrap_tags ctxt th =
               ( Conv.arg1_conv (HOLogic.Trueprop_conv (Conv.rewr_conv Thms.TAG_def))
               then_conv conv ctxt
               ) ctm
-            | Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ _ =>
-              (Conv.combination_conv (Conv.arg_conv (conv ctxt)) (conv ctxt)) ctm
-            | _ => Conv.all_conv ctm)
-      val qchk = Term.exists_Const (fn (\<^const_name>\<open>HOL.TAG\<close>, _) => true | _ => false)
-   in if qchk (Thm.prop_of th)
+            (* Bare TAG anywhere (HOL-level): unfold and continue inside.
+               Subsumes the prior `Trueprop $ TAG _` premise case via the
+               generic `_ $ _` recursion below. *)
+            | Const(\<^const_name>\<open>HOL.TAG\<close>, _) $ _ =>
+              (Conv.rewr_conv Thms.TAG_def then_conv conv ctxt) ctm
+            (* Generic descent. Per-subterm `has_tag` short-circuit above
+               keeps this O(size of TAG-bearing region), not O(prop). This
+               is what reaches into HOL binders (∀, ⟶, ∃, …) where the IH
+               from rules like nat_less_induct buries the wrapped premise. *)
+            | _ $ _ => Conv.comb_conv (conv ctxt) ctm
+            | Abs _ => Conv.abs_conv (fn (_, c) => conv c) ctxt ctm
+            | _ => Conv.all_conv ctm
+   in if has_tag (Thm.prop_of th)
     then Conv.fconv_rule (conv ctxt) th
     else th
   end

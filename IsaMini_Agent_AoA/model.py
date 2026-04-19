@@ -5521,7 +5521,7 @@ class Induction(CaseSplit_Like):
                     msg = (
                         f"The {titled_string_of_and_list(new_var_names, 'variable', 'variables')} are not classified "
                         "as fixed or generalized; fixed is assumed. "
-                        "Change this by calling the `edit` tool with action `amend` and target step `{self.id}`"
+                        f"Change this by calling the `edit` tool with action `amend` and target step `{self.id}`"
                     )
                     self.warnings.append(Warning(Warning.Position.HEADER, msg))
             not_used_vars = [var["name"] for var in self.variables if IsaTerm.from_agent(var["name"]) not in vars]

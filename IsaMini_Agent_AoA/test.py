@@ -3032,291 +3032,72 @@ async def _test_IntroOutOfOrderRename(root: Root, file: MyIO):
     root.print(0, file)
 
 
-@model_test("InductionGeneralize", "Test_InductionGeneralize.thy", 8)
-async def _test_InductionGeneralize(root: Root, file: MyIO):
-    """Reproduce issue from log D91DC33B9_1A88D48: Induction with a generalized
-    variable drops premises that mention that variable.
+@model_test("HOL_TAG_Leak", "Test_HOL_TAG_Leak.thy", 31)
+async def _test_HOL_TAG_Leak(root: Root, file: MyIO):
+    """REGRESSION: HOL.TAG leaks into the induction hypothesis presented
+    to the agent.
 
-    The goal ∀N m. m ≤ N ⟶ m * m ≤ N * N gets auto-Intro'd (step 1) to fix
-    N, m and assume m ≤ N.  Then Induction on N with m generalized (step 2)
-    should preserve the premise m ≤ N in the induction cases.
+    The auto-insert-facts mechanism (enabled by agent_server.ML at
+    session start, see library/proof.ML's `induct_auto_insert_facts`)
+    wraps local facts mentioning a generalized variable in `HOL.TAG`
+    and inserts them as goal premises so they get generalized along
+    with the variable. After induction, `update_tampered` strips the
+    TAG from the per-case top-level facts -- but the IH proposition,
+    which still contains the wrapped premises bound under the
+    induction's outer quantifier, is never unwrapped. The agent sees
+    e.g. `1.IH: ∀m<n. ∀x. HOL.TAG (x ≤ p) ⟶ P x`.
 
-    Expected (correct) behavior:
-      - Base case: premise m ≤ 0 should appear
-      - Suc case IH: should be ∀m. m ≤ N ⟶ m * m ≤ N * N (bounded)
+    Reproduced from logs:
+      DA348EF63_14FD684 (IMO 1988 P6, Vieta jumping)
+      DA36C4FF0_17E38C8 (strong induction over `prime (f i)`)
 
-    Actual (buggy) behavior:
-      - Base case: no premise m ≤ 0 — goal is m * m ≤ 0 for all m (unprovable)
-      - Suc case IH: unconditional ∀m. m * m ≤ N * N (no bound)"""
+    Setup:
+      - lemma `(i::nat) ≤ p ⟹ P i` -- premise mentions `i`.
+      - Auto-Intro at step 1 fixes `i`, assumes `i ≤ p`.
+      - Step 2: Induction on `i` using `nat_less_induct`, generalizing
+        `i`. Auto-insert wraps `i ≤ p`, induction generalizes both,
+        IH ends up containing `HOL.TAG (x ≤ p)`.
+    """
     print_header("Initial YAML", file)
     root.print(0, file)
 
-    # Step 2 (step 1 is auto-Intro): Induction on N with m generalized.
-    # BUG: the premise "m ≤ N" from the auto-Intro should be preserved in
-    # induction cases, but it gets dropped when m is generalized.
     await root.fill("2", Induction.gen({
-        "thought": "Induction on N with m generalized",
-        "target_isabelle_term": "N",
-        "variables": [
-            {"name": "N", "status": "fixed"},
-            {"name": "m", "status": "generalized"},
-        ],
-    }))
-    print_header("After Induction (check premises in cases)", file)
-    root.print(0, file)
-
-
-@model_test("Induction_SchematicInst", "Test_Induction_SchematicInst.thy", 17)
-async def _test_Induction_SchematicInst(root: Root, file: MyIO):
-    """FactByName + schematic-variable instantiation end-to-end.
-
-    Goal: `i ≤ k ⟹ (i::int) + k ≥ 2 * i`. After auto-Intro we request
-    Induction on `i` with `rule = FactByName("int_le_induct")`. That rule
-    has consumes=1 and a schematic `?k` in its consume premise, so the
-    Phase 3 flow must fork `Interaction_InstantiateSchematics` asking for
-    `?k`. We answer `?k = k`; the composed rule string
-    `int_le_induct[where ?k = k]` is sent to Minilang's INDUCT, which
-    under `consumes_policy = subgoals` surfaces the unconsumed `i ≤ k`
-    premise as an extra `Prem0` subgoal alongside the usual cases.
-
-    The test does not complete the proof; it only verifies the
-    interaction fires with the right shape and that INDUCT accepts the
-    instantiated rule string."""
-    print_header("Initial YAML", file)
-    root.print(0, file)
-
-    interaction_seen = {"count": 0}
-
-    async def stub_fork(interaction):
-        interaction_seen["count"] += 1
-        print_header(f"Interaction #{interaction_seen['count']} Prompt", file)
-        await interaction.prompt(0, file)
-        if isinstance(interaction, Interaction_InstantiateSchematics):
-            assert interaction.kind == "induction"
-            assert "int_le_induct" in interaction.rule_name, \
-                f"rule_name should reference int_le_induct, got {interaction.rule_name}"
-            var_names = {n for n, _ in interaction.schematic_vars}
-            assert "?k" in var_names, \
-                f"expected ?k among schematic vars, got {sorted(var_names)}"
-            return await interaction.answer(Answer(instantiations=[("?k", "k")]))
-        raise TestFailed(
-            f"Unexpected interaction: {type(interaction).__name__} "
-            f"(only Interaction_InstantiateSchematics was expected for FactByName)")
-    root.session.fork_interaction = stub_fork
-
-    # Step 1 is the auto-Intro; Induction is step 2.
-    await root.fill("2", Induction.gen({
-        "thought": "induct on i using int_le_induct (requires ?k instantiation)",
+        "thought": "strong induction on i, generalize i, keep p fixed",
         "target_isabelle_term": "i",
-        "rule": {"refer_by": "name", "name": "int_le_induct"},
+        "rule": {"refer_by": "name", "name": "nat_less_induct"},
         "variables": [
-            {"name": "i", "status": "fixed"},
-            {"name": "k", "status": "fixed"},
+            {"name": "i", "status": "generalized"},
+            {"name": "p", "status": "fixed"},
         ],
     }))
-    assert interaction_seen["count"] == 1, \
-        f"Expected exactly 1 interaction (schematic instantiation), got {interaction_seen['count']}"
-    print_header("After Induction with schematic instantiation", file)
+    print_header("After Induction (HOL.TAG should leak into IH)", file)
     root.print(0, file)
 
+    induct_node = root.locate_node("2")
 
-@model_test("Induction_SchematicInst_BadType", "Test_Induction_SchematicInst.thy", 17)
-async def _test_Induction_SchematicInst_BadType(root: Root, file: MyIO):
-    """Exercises the `IsaMini.validate_instantiation` callback's
-    BadAnswer retry path. Same goal / rule as Induction_SchematicInst,
-    but the stub answers `?k = True` (bool, expected int) on the first
-    attempt — Isabelle must reject with a type-mismatch message,
-    `answer()` must raise `Interaction_BadAnswer`, and the stub then
-    recovers with the correct `?k = k`."""
-    print_header("Initial YAML", file)
-    root.print(0, file)
+    # nat_less_induct produces a single case; case_hyps may live on the
+    # parent CaseSplit_Like node (single-subgoal path) or on a child
+    # GoalNode (multi-subgoal path). Walk both to be robust.
+    leaked: list[tuple[str, str]] = []
+    def collect(node):
+        case_hyps = getattr(node, "case_hyps", None)
+        if case_hyps:
+            for name, term in case_hyps:
+                if "HOL.TAG" in term.unicode:
+                    leaked.append((name.unicode, term.unicode))
+        for sub in getattr(node, "sub_nodes", []) or []:
+            collect(sub)
+    collect(induct_node)
 
-    attempts: list[str] = []
+    file.write(f"\nLeaked HOL.TAG hyps: {len(leaked)}\n")
+    for n, t in leaked:
+        file.write(f"  - {n}: {t}\n")
 
-    async def stub_fork(interaction):
-        print_header("Interaction Prompt", file)
-        await interaction.prompt(0, file)
-        if not isinstance(interaction, Interaction_InstantiateSchematics):
-            raise TestFailed(
-                f"Unexpected interaction: {type(interaction).__name__}")
-        # Attempt 1: bool instead of int — must be rejected.
-        try:
-            await interaction.answer(Answer(instantiations=[("?k", "True")]))
-        except Interaction_BadAnswer as e:
-            attempts.append(f"rejected: {e}")
-            file.write(f"\nAttempt 1 rejected as expected:\n  {e}\n\n")
-        else:
-            raise TestFailed(
-                "Expected Interaction_BadAnswer for `?k = True`, got silent success")
-        # Attempt 2: correct instantiation.
-        result = await interaction.answer(Answer(instantiations=[("?k", "k")]))
-        attempts.append("accepted")
-        return result
-    root.session.fork_interaction = stub_fork
-
-    await root.fill("2", Induction.gen({
-        "thought": "induct on i; first try wrong type for ?k, then fix",
-        "target_isabelle_term": "i",
-        "rule": {"refer_by": "name", "name": "int_le_induct"},
-        "variables": [
-            {"name": "i", "status": "fixed"},
-            {"name": "k", "status": "fixed"},
-        ],
-    }))
-    assert len(attempts) == 2 and attempts[-1] == "accepted", \
-        f"Expected [rejected, accepted] trace, got {attempts}"
-    print_header("After recovery with good instantiation", file)
-    root.print(0, file)
-
-
-@model_test("Induction_SchematicInst_ByDescription", "Test_Induction_SchematicInst.thy", 17)
-async def _test_Induction_SchematicInst_ByDescription(root: Root, file: MyIO):
-    """Exercises the `FactByDescription` branch of `_resolve_rule`.
-    The stub expects two forked interactions in order:
-      1. Interaction_RetrieveForProof(kinds=[INDUCTION_RULE], single_choice=True)
-         — answer with `name="int_le_induct"` to resolve by name.
-      2. Interaction_InstantiateSchematics for `?k`
-         — answer with `?k = k`."""
-    print_header("Initial YAML", file)
-    root.print(0, file)
-
-    interactions: list[str] = []
-
-    async def stub_fork(interaction):
-        if len(interactions) == 0:
-            # Rule retrieval stage. Skip prompt() — its candidate list
-            # comes from semantic_knn which may return empty when
-            # induction-rule embeddings are not populated in this
-            # environment; an empty list would raise ImmediateAnswer
-            # and short-circuit the test. Answering by `name` bypasses
-            # the candidate list entirely.
-            assert isinstance(interaction, Interaction_RetrieveForProof), \
-                f"Expected Interaction_RetrieveForProof first, got {type(interaction).__name__}"
-            assert interaction.kinds == [EntityKind.INDUCTION_RULE], \
-                f"Expected kinds=[INDUCTION_RULE], got {interaction.kinds}"
-            assert interaction.single_choice, \
-                "Expected single_choice=True for rule retrieval"
-            interactions.append("retrieve")
-            file.write("\n[stub] rule retrieval interaction; answering by name "
-                       "'int_le_induct'\n\n")
-            return await interaction.answer(Answer(name="int_le_induct"))
-        if len(interactions) == 1:
-            # Schematic instantiation stage — safe to call prompt().
-            print_header("Interaction Prompt", file)
-            await interaction.prompt(0, file)
-            assert isinstance(interaction, Interaction_InstantiateSchematics), \
-                f"Expected Interaction_InstantiateSchematics second, got {type(interaction).__name__}"
-            assert "int_le_induct" in interaction.rule_name, \
-                f"rule_name should reference int_le_induct, got {interaction.rule_name}"
-            interactions.append("instantiate")
-            return await interaction.answer(Answer(instantiations=[("?k", "k")]))
-        raise TestFailed(f"Unexpected third interaction: {type(interaction).__name__}")
-    root.session.fork_interaction = stub_fork
-
-    await root.fill("2", Induction.gen({
-        "thought": "induct on i; look up the rule by description",
-        "target_isabelle_term": "i",
-        "rule": {"refer_by": "description",
-                 "english": "descending induction on an integer bounded above"},
-        "variables": [
-            {"name": "i", "status": "fixed"},
-            {"name": "k", "status": "fixed"},
-        ],
-    }))
-    assert interactions == ["retrieve", "instantiate"], \
-        f"Expected [retrieve, instantiate] sequence, got {interactions}"
-    print_header("After Induction via FactByDescription + schematic inst", file)
-    root.print(0, file)
-
-
-@model_test("Induction_SchematicInst_PremDischarge", "Test_Induction_SchematicInst.thy", 17)
-async def _test_Induction_SchematicInst_PremDischarge(root: Root, file: MyIO):
-    """End-to-end subgoals-policy integration: schematic instantiation +
-    |using| < consumes should yield a `Prem0` subgoal that subsequent
-    proof steps can discharge.
-
-    Induction on `i` using `int_le_induct[where ?k = k]` with no `using`
-    facts produces cases `2.base`, `2.step`, plus `2.Prem0` carrying the
-    unconsumed `i \u2264 k` premise. This test verifies:
-
-      1. `2.Prem0` is a locatable node after Induction;
-      2. `2.Prem0.1` is fillable — Obvious discharges the leftover
-         premise using the in-scope assumption `Prem0.prem0: i \u2264 k`
-         (via hammer / auto).
-
-    Isolates the end-to-end plumbing from Phase 3's interaction layer
-    through to Minilang's `CASES'` subgoal materialization."""
-    print_header("Initial YAML", file)
-    root.print(0, file)
-
-    async def stub_fork(interaction):
-        if isinstance(interaction, Interaction_InstantiateSchematics):
-            return await interaction.answer(Answer(instantiations=[("?k", "k")]))
-        raise TestFailed(
-            f"Unexpected interaction: {type(interaction).__name__}")
-    root.session.fork_interaction = stub_fork
-
-    await root.fill("2", Induction.gen({
-        "thought": "induct on i; rely on subgoals policy for the consume premise",
-        "target_isabelle_term": "i",
-        "rule": {"refer_by": "name", "name": "int_le_induct"},
-        "variables": [
-            {"name": "i", "status": "fixed"},
-            {"name": "k", "status": "fixed"},
-        ],
-    }))
-    print_header("After Induction (Prem0 subgoal should be present)", file)
-    root.print(0, file)
-
-    # Assert 2.Prem0 exists and is reachable as a goal node.
-    try:
-        prem0 = root.locate_node("2.Prem0")
-    except NodeNotFound:
-        raise TestFailed("Expected `2.Prem0` subgoal after subgoals-policy Induction")
-    file.write(f"\n[assertion] 2.Prem0 located: {type(prem0).__name__}\n")
-
-    # Try discharging Prem0 with Obvious — exercises the downstream plumbing.
-    # Pass the in-scope premise explicitly so the solver can use it.
-    await root.fill("2.Prem0.1", Obvious.gen({
-        "facts": [{"refer_by": "name", "name": "Prem0.prem0"}]
-    }))
-    print_header("After attempting Obvious on 2.Prem0", file)
-    root.print(0, file)
-
-
-@model_test("Induction_SingleCase", "Test_Induction_SingleCase.thy", 20)
-async def _test_Induction_SingleCase(root: Root, file: MyIO):
-    """Reproducer for the single-case Induction bug (#24).
-
-    `less_induct` produces a single remaining goal (the `case less`
-    with induction hypothesis `less.hyps` in scope). A well-formed
-    proof tree should have the Induction node own a child GoalNode for
-    that case — addressable as e.g. `1.less` or `1.1`. Currently the
-    framework inlines the single case as a parent-level continuation
-    (no child created), because SubgoalMaker._should_open_proof_block
-    gates on `len(top_goals) > 1`.
-
-    This test asserts that the Induction node ends up with a non-empty
-    `sub_nodes` list. It will FAIL until the bug is fixed."""
-    print_header("Initial YAML", file)
-    root.print(0, file)
-
-    await root.fill("1", Induction.gen({
-        "thought": "well-founded induction on n",
-        "target_isabelle_term": "n",
-        "rule": {"refer_by": "name", "name": "less_induct"},
-        "variables": [{"name": "n", "status": "fixed"}],
-    }))
-    print_header("After single-case Induction", file)
-    root.print(0, file)
-
-    induct_node = root.locate_node("1")
-    file.write(f"\nInduction node sub_nodes count: {len(induct_node.sub_nodes)}\n")
-    assert len(induct_node.sub_nodes) >= 1, (
-        "REGRESSION: single-case Induction produced no child GoalNode; "
-        "the `case less` subgoal got inlined at the parent level instead. "
-        f"sub_nodes = {induct_node.sub_nodes}"
-    )
+    assert leaked, (
+        "REGRESSION: expected HOL.TAG to leak into the IH after "
+        "auto-insert + nat_less_induct, but no leaked hyp was found. "
+        "Either the bug is fixed (delete this test) or the test setup "
+        "no longer triggers auto-insert.")
 
 
 @model_test("Obtain_Fixed", "Test_Obtain_Fixed.thy", 8)
