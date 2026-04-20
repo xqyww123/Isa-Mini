@@ -5,7 +5,7 @@ All user-facing messages, error messages, and prompt texts are defined here.
 
 from typing import Any
 from . import model
-from .model import Node, Root
+from .model import Node, Root, gen_node
 from io import StringIO
 from .helper import MyIO
 
@@ -108,15 +108,17 @@ async def amended_step_message(step: str, root: Root, node: Node, session: 'mode
         await session.interrupt()
     root.reset()
     return file.getvalue()
-def unapplied_batch_warning(unapplied: list[dict], failure: Exception, failed_idx: int) -> str:
+def unapplied_batch_warning(unapplied: list[gen_node], failure: Exception, failed_idx: int) -> str:
     """Render a single aggregated warning string for the unapplied tail of a
-    multi-item edit batch.  Includes the underlying failure reason and the
-    verbatim content of every operation starting from the failing index, so
-    the agent can re-submit any of them at the right location."""
+    multi-item edit batch.  Each gen_node carries its original raw
+    ToolCall dict (`.raw`) which we dump verbatim so the agent can see
+    exactly what it submitted and resubmit at the right location."""
     import yaml as _yaml
     reason = str(failure) if failure is not None else "unknown"
-    dump = _yaml.safe_dump(unapplied, default_flow_style=False,
-                           allow_unicode=True, sort_keys=False, width=120).rstrip()
+    raw_dicts = [g.raw for g in unapplied]
+    dump = _yaml.safe_dump(
+        raw_dicts, default_flow_style=False,
+        allow_unicode=True, sort_keys=False, width=120).rstrip()
     return (
         f"{len(unapplied)} operation(s) from this edit batch were not applied "
         f"(starting at index {failed_idx}). Reason: {reason}. "

@@ -4,7 +4,8 @@ from datetime import datetime
 from io import StringIO
 from pathlib import Path
 from .helper import split_id_into_segs, cat_segs_into_id, incr_id_major, incr_id_minor, MyIO
-from typing import Any, Awaitable, Iterable, NamedTuple, Protocol, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired, Annotated
+from .linked_list import Cons, LinkedList, from_iterable, iterate, concat
+from typing import Any, Awaitable, Iterable, Mapping, NamedTuple, Protocol, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired, Annotated
 from Isabelle_RPC_Host import Connection, IsabelleError, pretty_unicode, ascii_of_unicode
 from Isabelle_RPC_Host.position import IsabellePosition
 from Isabelle_RPC_Host.universal_key import (
@@ -94,15 +95,24 @@ type Var = tuple[varname, typ]
 type Hyp = tuple[varname, term]
 type Vars = dict[varname, typ]
 type Hyps = dict[varname, term]
-# `proof` (type alias): an ordered list of raw operation dicts (ToolCall_arg)
-# to attach as children at refresh time.  The type alias itself is never None —
-# optionality is expressed at the ToolArg field level and inside the runtime
-# nodes as `proof | None`, where None means "no proof provided — keep
-# _amend_from-inherited children or fall through to auto-Intro".  Kept in
-# raw (pre-parse) form so at attach time we can inspect the first op for the
-# Q7 auto-Intro decision; actual gen_nodes are produced by `Parse_Node` at
-# attach time.
-type proof = list[dict]
+# `ToolCall_arg` — the generic shape of any ToolCall argument dict sent by
+# the agent.  `Mapping[str, Any]` rather than `dict[str, Any]` so TypedDict
+# subclasses are assignable (TypedDicts are NOT pyright-subtypes of `dict`
+# but ARE of `Mapping[str, object]` / `Mapping[str, Any]`).
+type ToolCall_arg = Mapping[str, Any]
+# `raw_op` (type alias): a single raw proof-operation dict as received from
+# the agent — same shape as `ToolCall_arg`, named distinctly to signal "one
+# raw proof op" in the parsing pipeline.
+type raw_op = ToolCall_arg
+# `raw_proof` (type alias): an ordered list of raw operation dicts as
+# received from the agent, BEFORE parsing via `Parse_Nodes`.  Used only in
+# `*_ToolArg` field types (schema-level shape); node instance fields never
+# hold `raw_proof` — they hold the parsed `proof` (list of `gen_node`)
+# instead.  Optionality (absence of a proof body) is expressed by
+# `NotRequired[raw_proof | None]` at the ToolArg level and by
+# `proof | None` on instance fields.
+type raw_proof = list[raw_op]
+
 
 class Explicit_Var(TypedDict):
     name: xvarname
@@ -589,7 +599,6 @@ class CannotAmend_GoalIsNontrivial(CannotAmend, GoalIsNontrivial):
     def __str__(self) -> str:
         return GoalIsNontrivial._message
 
-type ToolCall_arg = dict[str, Any]
 class ArgumentError(AoA_Error):
     def __init__(self, arg: ToolCall_arg, reason: str):
         self.arg = arg
@@ -2106,11 +2115,7 @@ class Interaction_InstantiateSchematics(Interaction):
 
 ### The Abstract Model
 
-# gen_node: a sync node factory that turns a NodeConfig into a fully-constructed Node.
-# Retrieval and interactions are deferred to the Node's first _refresh_me_alone call
-# via per-field `X is None` sentinels — no state needs to flow in at construction.
-type gen_node = Callable[[NodeConfig], 'Node']
-type may_gen_node = Callable[[NodeConfig], 'Node | None']
+type may_gen_node = Callable[['NodeConfig'], 'Node | None']
 
 type printer = Callable[[int, MyIO], int]
 
@@ -2126,6 +2131,38 @@ class NodeConfig(NamedTuple):
     local_step: local_step
     ml_state: Minilang_State
     parent: 'NonLeaf_Node | None'
+
+# `gen_node`: a parsed proof-op.  Carries:
+#   - `cls`: the class that will be constructed (so runtime consumers can
+#     ask "is this an Intro?" without peeking at raw dicts);
+#   - `factory`: a sync callable that turns a `NodeConfig` into a
+#     fully-constructed `Node`;
+#   - `raw`: the original raw ToolCall dict (preserved for error reporting
+#     — e.g. `unapplied_batch_warning` dumps the unapplied tail's raw dicts
+#     so the agent can see what it submitted and re-submit).
+# Retrieval and interactions are deferred to the Node's first
+# `_refresh_me_alone` call via per-field `X is None` sentinels — no state
+# needs to flow in at construction.
+class gen_node(NamedTuple):
+    cls: type
+    factory: Callable[[NodeConfig], 'Node']
+    raw: ToolCall_arg
+
+# `proof` (type alias): the PARSED in-memory form of a proof body — a list of
+# already-parsed `gen_node`s.  Node instance fields that carry a sub-proof
+# store this form (never raw dicts), so `Parse_Nodes` is only invoked once
+# per op at tool-call time, not on every refresh.
+type proof = list[gen_node]
+
+
+# `_RawOp`: one element of the parsing pipeline's input linked list — a raw
+# ToolCall dict (`op`) paired with the path string (`path`) used when
+# constructing error messages about that op.  Path is precomputed once at
+# `Parse_Op_List` entry (as `f"{container_path}[{i}]"`) so the recursion
+# doesn't re-compute it per step.
+class _RawOp(NamedTuple):
+    op: raw_op
+    path: str
 
 class Node(ABC):
     parent: 'NonLeaf_Node | None'
@@ -2164,19 +2201,40 @@ class Node(ABC):
         self._is_trivial = None
 
     @classmethod
-    def _should_forbid_successor(cls) -> 'FailureReason | None':
-        """Class-level predicate used by the recursive pre-validator.
-        Return a `FailureReason` explaining the rejection when this
-        operation kind may never have another proof operation placed
-        after it as a sibling (e.g. terminal operations like `Obvious`
-        that either discharge the goal or mark it non-trivial).
-        Return `None` to let the validator accept any successor —
-        any runtime truncation is then handled by `_close_by` plus the
-        FOOTER warning at refresh time.
-        The message is used verbatim by the validator (prepended with a
-        path annotation), so each subclass may tailor it to its own
-        semantics."""
-        return None
+    def gen_single(
+        cls,
+        arg: Any,
+        path: str = "<direct>",
+    ) -> gen_node:
+        """Build the self `gen_node` for this op (one node — no tail).
+        Default factory: `lambda cfg: cls(cfg, arg)` — fits every class
+        whose `__init__` signature is `(config, arg)` and that has no
+        nested proof fields to pre-parse.
+
+        Subclasses override when the `__init__` signature differs (extra
+        positional for pre-parsed `proof` / `proofs` / `cases`) or when
+        the ToolArg carries nested fields that must be parsed at gen
+        time.  Path is only used for error messages when parsing nested
+        fields; it has a default for direct/test invocations like
+        `Obvious.gen_single({"facts": []})`."""
+        return gen_node(cls=cls, factory=lambda cfg: cls(cfg, arg), raw=arg)
+
+    @classmethod
+    def gen(
+        cls,
+        arg: Any,
+        remaining: 'LinkedList[_RawOp]',
+        path: str,
+    ) -> 'LinkedList[gen_node]':
+        """Base: `Cons(gen_single(arg, path), Parse_Nodes(remaining))`.
+
+        Most subclasses only override `gen_single` (which builds the
+        self gn).  Classes that need access to `remaining` itself
+        (Obvious's forbid-successor check; InferenceRule/Intro splice)
+        override `gen` directly — non-splice paths can still delegate to
+        `super().gen(...)`.
+        """
+        return Cons(cls.gen_single(arg, path), Parse_Nodes(remaining))
 
     @property
     def titled_id(self) -> str:
@@ -2739,7 +2797,7 @@ class NonLeaf_Node(Node):
                         new_id = cat_segs_into_id(prev_id + [1])
                 config = NodeConfig(new_id, await child.ml_state.clone(None), self)
                 try:
-                    node = gn(config)
+                    node = gn.factory(config)
                 except GenNode_Error as e:
                     raise CannotInsert(before, str(e))
                 for x in self.sub_nodes:
@@ -2844,7 +2902,7 @@ class NonLeaf_Node(Node):
             if c is child:
                 config = NodeConfig(child.local_step, await child.ml_state.clone(None), self)
                 try:
-                    new_node = gn(config)
+                    new_node = gn.factory(config)
                 except GenNode_Error as e:
                     raise CannotAmend(self, child, str(e))
                 self.sub_nodes[i] = new_node
@@ -2874,16 +2932,38 @@ class NonLeaf_Node(Node):
         ...
 
 class StdBlock(NonLeaf_Node):
-    _raw_proofs: 'proof | None'  # default None; subclasses that carry a `proof` field set this in __init__
+    # Pre-parsed sub-proof body (list[gen_node]).  Subclasses that accept a
+    # `proof` field set this in __init__; consumed by `_attach_proof` on
+    # first refresh.
+    _proof: 'proof | None'
     def __init__(self, config: NodeConfig, thought: str, sub_nodes: list['Node']):
         super().__init__(config, thought, sub_nodes)
-        self._raw_proofs = None
+        self._proof = None
         # Convention: the _state_before_ending_ should be used only when self.has_ending_opr()
         self._state_before_ending_ = Minilang_State.assign(config.ml_state)
         self._body_subnodes_succeeded = False
         self._allow_multi_goal = False
         self.open_pending_proof_line: int | None = None
         self._prev_pending_goal: Goal | None = None
+
+    @classmethod
+    def gen_single(cls, arg: Any, path: str = "<direct>") -> gen_node:
+        """Default for StdBlock subclasses (Have / Suffices / Obtain):
+        parse the optional `proof` body eagerly and pass the pre-parsed
+        `proof | None` as the second ctor positional.  Subclasses whose
+        `__init__` signature is `(config, arg, parsed_proof)` inherit
+        this with no override.
+
+        The `cast(Any, cls)` tells pyright that `cls` is actually a
+        subclass (Have/Suffices/Obtain) whose `__init__` takes
+        `(config, arg, parsed_proof)`, not the generic `type[StdBlock]`
+        which it infers (StdBlock's own `__init__` is
+        `(config, thought, sub_nodes)`)."""
+        parsed = _parse_optional_raw_proof(arg.get("proof"), f"{path}.proof")
+        return gen_node(
+            cls=cls,
+            factory=lambda cfg: cast(Any, cls)(cfg, arg, parsed),
+            raw=arg)
     async def _cancel(self) -> None:
         if self.status.status == EvaluationStatus.Status.CANCELLED:
             return
@@ -3167,25 +3247,26 @@ class StdBlock(NonLeaf_Node):
         buffer = StringIO()
         self.quickview(indent, MyIO(buffer))
         return buffer.getvalue()
-    async def _attach_raw_proofs(self, auto_intro: bool) -> 'FailureReason | None':
-        """Consume ``self._raw_proofs`` at first refresh and attach each operation
-        as a direct child of this block.
+    async def _attach_proof(self, auto_intro: bool) -> 'FailureReason | None':
+        """Consume ``self._proof`` (a pre-parsed list[gen_node]) at first
+        refresh and attach each as a direct child of this block.
 
-        If ``auto_intro`` is True (only Have today) and the agent's first op is
-        NOT ``Intro``, an auto-Intro is injected before the provided list when
-        the current goal state calls for one (``need_intro(False)``).
+        If ``auto_intro`` is True (only Have today) and the provided body's
+        first gen_node is NOT an ``Intro``, an auto-Intro is injected before
+        the provided list when the current goal state calls for one
+        (``need_intro(False)``).
 
-        If any children were inherited via ``_amend_from`` (previous block's
-        sub_nodes) and a provided list is given, Q6 redirects them into the
-        LAST provided node's body when that node is a StdBlock that can host
-        children; otherwise they are emitted as a ``_warn_discarded_nodes``
-        entry and dropped.
+        If any children were inherited via ``_amend_from`` (previous
+        block's sub_nodes) and a provided list is given, Q6 redirects them
+        into the LAST provided node's body when that node is a StdBlock
+        that can host children; otherwise they are emitted as a
+        ``_warn_discarded_nodes`` entry and dropped.
 
-        Returns ``FailureReason`` only on bugs during construction (validator
-        should have caught all shape issues); returns ``None`` on success.
-        The appended children are not refreshed here — the outer
-        ``StdBlock._refresh_me_alone`` loop does that."""
-        if self._raw_proofs is not None:
+        Returns ``FailureReason`` only on bugs during construction;
+        returns ``None`` on success.  The appended children are not
+        refreshed here — the outer ``StdBlock._refresh_me_alone`` loop
+        does that."""
+        if self._proof is not None:
             inherited = list(self.sub_nodes)
             # Preserve the post-beginning state: when sub_nodes is non-empty
             # (inherited via _amend_from), the super()._refresh_the_beginning_opr
@@ -3198,29 +3279,22 @@ class StdBlock(NonLeaf_Node):
             if inherited:
                 await inherited[0].ml_state.clone(self._state_before_ending_)
             self.sub_nodes = []
-            raw_list = list(self._raw_proofs)
-            self._raw_proofs = None
-            first_op_name = (
-                raw_list[0].get("operation")
-                if raw_list and isinstance(raw_list[0], dict) else None)
+            gns = list(self._proof)
+            self._proof = None
+            first_cls = gns[0].cls if gns else None
             if (auto_intro
-                    and first_op_name != "Intro"
+                    and first_cls is not Intro
                     and await self._state_after_beginning().need_intro(False)):
                 local_step = self._local_step_of_next_proof_step()
                 ml_state = await self._state_after_beginning().clone(None)
                 config = NodeConfig(local_step, ml_state, self)
                 self.sub_nodes.append(Intro(config, "", None, False))
-            for raw_op in raw_list:
-                try:
-                    gn = Parse_Node(raw_op)
-                except AoA_Error as e:
-                    return FailureReason(
-                        f"Failed to construct nested proof operation: {e}")
+            for gn in gns:
                 local_step = self._local_step_of_next_proof_step()
                 ml_state = await self._state_after_beginning().clone(None)
                 sub_config = NodeConfig(local_step, ml_state, self)
                 try:
-                    new_child = gn(sub_config)
+                    new_child = gn.factory(sub_config)
                 except GoalIsNontrivial:
                     return FailureReason(
                         "Nested proof contains Obvious on a goal that is not "
@@ -3255,7 +3329,7 @@ class StdBlock(NonLeaf_Node):
         ml_state = await self._state_before_ending_.clone(None)
         config = NodeConfig(local_step, ml_state, self)
         try:
-            node = gn(config)
+            node = gn.factory(config)
         except GenNode_Error as e:
             raise CannotAppend(self, str(e))
         if node is None:
@@ -3270,7 +3344,10 @@ class StdBlock(NonLeaf_Node):
         if self.opening():
             ml_state = node.resulting_state()
             if await ml_state.need_intro(False):
-                await self.append(lambda config: Intro(config, "", None, False))
+                await self.append(gen_node(
+                    cls=Intro,
+                    factory=lambda config: Intro(config, "", None, False),
+                    raw={}))
         # Propagate state upward via the cascade chain. Matches the behavior
         # of insert_before_me / _amend_child, which both call
         # _refresh_all_after_me after inserting. In particular this is what
@@ -3329,7 +3406,8 @@ class GoalNode(StdBlock):
     case_hyps: list[Hyp] | None
 
     def __init__(self, config: NodeConfig, is_single_goal: bool, show_goal: bool,
-                 auto_proof: proof | None = None):
+                 auto_proof: 'proof | None' = None,
+                 auto_proof_by_case: 'dict[str, proof] | None' = None):
         super().__init__(config, "", [])
         self.is_single_goal = is_single_goal
         self.show_goal = show_goal
@@ -3338,7 +3416,16 @@ class GoalNode(StdBlock):
         self.case_vars = None
         self.case_hyps = None
         self._prev_quickview_context: tuple[Vars, Hyps] | None = None
-        self._pending_auto_proof: proof | None = auto_proof
+        # `_pending_auto_proof` is the directly-provided pre-parsed
+        # proof body (Branch / InferenceRule / Intro pass via `auto_proof`;
+        # CaseSplit / Induction resolve via `auto_proof_by_case` below).
+        self._pending_auto_proof: 'proof | None' = auto_proof
+        # When set, this is a shared case_name → proof dict owned by the
+        # parent SubgoalMaker.  On first refresh, once this GoalNode learns
+        # its case_name from Consider_Case_Msg, it pops the matching entry
+        # and promotes it to `_pending_auto_proof`.  Unpopped entries
+        # (unknown case_names) are reported by the parent later.
+        self._pending_auto_proof_by_case: 'dict[str, proof] | None' = auto_proof_by_case
     @property
     def titled_id(self) -> str:
         return self.id
@@ -3417,31 +3504,37 @@ class GoalNode(StdBlock):
                 raise InternalError(f"Expected exactly one Consider_Case_Msg in Case's messages, got {len(consider_case_msgs)}")
         if not is_init and (self.case_vars, self.case_hyps) != old_case:
             self.changed = True
-        # Attach auto_proof subproof (list of raw ops from Branch/CaseSplit/Induction) before Intro fallback.
+        # If the parent supplied a case_name → proof dict (CaseSplit /
+        # Induction `proofs`), resolve it now that the case_name is known.
+        # The matched entry is popped so the parent can later inspect the
+        # dict to report any case_names that never matched.
+        if (self._pending_auto_proof is None
+                and self._pending_auto_proof_by_case is not None
+                and consider_case_msgs):
+            cn = consider_case_msgs[0].case
+            body = self._pending_auto_proof_by_case.pop(cn, None)
+            if body is not None:
+                self._pending_auto_proof = body
+            self._pending_auto_proof_by_case = None
+        # Attach auto_proof subproof (pre-parsed list[gen_node] from
+        # Branch/CaseSplit/Induction) before Intro fallback.
         if self._pending_auto_proof is not None and not self.sub_nodes:
-            raw_list = self._pending_auto_proof
+            gns = self._pending_auto_proof
             self._pending_auto_proof = None
-            first_op_name = (
-                raw_list[0].get("operation")
-                if raw_list and isinstance(raw_list[0], dict) else None)
-            # Q7: auto-Intro injection unless the agent's first op is already Intro.
-            if (first_op_name != "Intro"
+            first_cls = gns[0].cls if gns else None
+            # Q7: auto-Intro injection unless the first gen_node is Intro.
+            if (first_cls is not Intro
                     and await self.ml_state.need_intro(False)):
                 local_step = self._local_step_of_next_proof_step()
                 ml_state = await self.ml_state.clone(None)
                 config = NodeConfig(local_step, ml_state, self)
                 self.sub_nodes.append(Intro(config, "", None, False))
-            for raw_op in raw_list:
-                try:
-                    gn = Parse_Node(raw_op)
-                except AoA_Error:
-                    # Validator should have caught shape issues; skip defensively.
-                    continue
+            for gn in gns:
                 local_step = self._local_step_of_next_proof_step()
                 ml_state = await self.ml_state.clone(None)
                 sub_config = NodeConfig(local_step, ml_state, self)
                 try:
-                    self.sub_nodes.append(gn(sub_config))
+                    self.sub_nodes.append(gn.factory(sub_config))
                 except GoalIsNontrivial:
                     break
         elif is_init and not self.sub_nodes and await self.ml_state.need_intro(False):
@@ -3516,6 +3609,70 @@ class SubgoalMaker(GoalContainer, StdBlock):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._initial_goal_index : int = 1
+
+    @classmethod
+    def gen_single(cls, arg: Any, path: str = "<direct>") -> gen_node:
+        """Break the `StdBlock.gen_single` chain.  SubgoalMakers inherit
+        from `StdBlock` for runtime utilities but don't carry a `proof`
+        field on their ToolArg — Define inherits this default factory
+        directly; InferenceRule / Intro / Branch / CaseSplit / Induction
+        override with their own nested-proof parsing.  Without this
+        override, SubgoalMaker subclasses would pick up
+        `StdBlock.gen_single`'s `cls(cfg, arg, parsed_proof)` factory
+        which doesn't match their `__init__` signatures."""
+        return gen_node(cls=cls, factory=lambda cfg: cls(cfg, arg), raw=arg)
+
+    @classmethod
+    def _singleton_splice(
+        cls, arg: ToolCall_arg, path: str,
+    ) -> 'tuple[raw_proof, str, ToolCall_arg] | None':
+        """Hook for the 'singleton-splice' auto-correction: if this
+        SubgoalMaker's ToolArg carries a nested proof list with exactly
+        ONE entry, return `(body_ops, body_path, corrected_arg)` so
+        `SubgoalMaker.gen` can inline the body as siblings immediately
+        after this op.  `corrected_arg` is `arg` with the spliced-out
+        field stripped — same type as the input `arg` — so when `gen`
+        re-dispatches through `cls.gen_single(corrected_arg, path)` the
+        gn_node's stored proofs state reflects the post-splice shape
+        (proofs parsed into None).  Return `None` to opt out
+        (Define / Branch).
+
+        Splice makes semantic sense only when the subclass's runtime
+        behaviour for a single resulting subgoal is 'don't close the
+        parent's proof block' — i.e. siblings after this op continue to
+        prove the transformed goal.  InferenceRule, Intro, CaseSplit,
+        and Induction all satisfy that; Branch does not (Branch with a
+        single case is ill-formed anyway); Define has no `proofs`
+        field."""
+        return None
+
+    @classmethod
+    def gen(cls, arg: Any, remaining: 'LinkedList[_RawOp]',
+            path: str) -> 'LinkedList[gen_node]':
+        """Shared splice dispatch for SubgoalMakers.  If `_singleton_splice`
+        returns non-None, build the body's raw-op linked list, concat
+        with `remaining` (so the body's last op sees the outer remaining
+        for forbid-successor purposes), parse it, and prepend this op
+        via `cls.gen_single(corrected_arg, path)`.  Otherwise delegate
+        to `super().gen` (which also ends up at `cls.gen_single`, but
+        with the unmodified `arg`)."""
+        hit = cls._singleton_splice(arg, path)
+        if hit is not None:
+            body, body_path, corrected_arg = hit
+            # Invariant: `_singleton_splice` implementations MUST strip the
+            # spliced-out field (`proofs` for all splice-eligible classes)
+            # from `corrected_arg` — otherwise `cls.gen_single` would
+            # re-parse the body (double-process).  Catching the violation
+            # at runtime surfaces any bad override immediately.
+            assert 'proofs' not in corrected_arg, (
+                f'{cls.__name__}._singleton_splice must strip the spliced '
+                f'field from corrected_arg to avoid double-processing')
+            body_raw = from_iterable(
+                _RawOp(op, f"{body_path}[{i}]")
+                for i, op in enumerate(body))
+            tail = Parse_Nodes(concat(body_raw, remaining))
+            return Cons(cls.gen_single(corrected_arg, path), tail)
+        return super().gen(arg, remaining, path)
     @abstractmethod
     def beginning_opr(self) -> 'Minilang_Operation | FailureReason':
         ...
@@ -3638,24 +3795,108 @@ class CaseSplit_Like(SubgoalMaker):
     case_vars: list[Var] | None
     case_hyps: list[Hyp] | None
     case_name: str | None
-    _initial_proof: proof | None
+    # `_proofs_by_case`: case_name → proof body.  Populated from the
+    # agent-provided `proofs: list[Proof_PerCase]` at first refresh.  Shared
+    # (by reference) with each GoalNode via `auto_proof_by_case`; GoalNodes
+    # pop their matching entry when their case_name surfaces, so leftover
+    # entries after children refresh = case_names the agent wrote that did
+    # not match any actual subgoal (reported as a FOOTER warning).
+    _proofs_by_case: 'dict[str, proof] | None'
     # Rule resolution cache. `_resolved_rule_str = None` means "no explicit
     # rule" (auto-pick on the ML side). Set once on the first refresh and
     # reused afterwards — re-amending the node is expected to replace the
     # whole instance, so no invalidation hook is needed.
     _resolved_rule_str: str | None
     _rule_resolved: bool
-    def __init__(self, *args, _initial_proof: proof | None = None, **kwargs):
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.case_vars = None
         self.case_hyps = None
-        self._initial_proof = _initial_proof
+        self._proofs_by_case = None
         self._resolved_rule_str = None
         self._rule_resolved = False
         # quickview dedup: remember what case_vars / case_hyps we last
         # printed so we don't repeat them on every re-render unless
         # they actually changed (mirrors Intro's `_prev_bindings`).
         self._prev_case_printed: tuple[list[Var] | None, list[Hyp] | None] | None = None
+
+    @classmethod
+    def gen_single(cls, arg: Any, path: str = "<direct>") -> gen_node:
+        """Default for CaseSplit / Induction: parse per-case `proofs`
+        into `dict[case_name, proof]` and hand to the ctor.  Both
+        subclasses take the same `__init__` signature
+        `(config, arg, proofs_by_case)`, so one implementation covers
+        both.
+
+        Rejects non-list `proofs`, bad entries, non-string `case_name`,
+        non-list `body`, and duplicate `case_name`s — all with
+        path-annotated errors."""
+        raw = arg.get("proofs")
+        proofs_by_case: 'dict[str, proof] | None' = None
+        # Empty `proofs` list is normalized to None ("proofs not provided")
+        # so `proofs: []` behaves identically to `proofs: None`.
+        if raw is not None and raw != []:
+            if not isinstance(raw, list):
+                raise ArgumentError({},
+                    f"{path}.proofs: expected an array, got {type(raw).__name__}")
+            proofs_by_case = {}
+            for pi, entry in enumerate(raw):
+                entry_path = f"{path}.proofs[{pi}]"
+                if not isinstance(entry, dict):
+                    raise ArgumentError({},
+                        f"{entry_path}: expected an object with `case_name` "
+                        f"and `body`, got {type(entry).__name__}")
+                missing = [k for k in ("case_name", "body") if k not in entry]
+                if missing:
+                    raise ArgumentError_MissingRequiredKeys(entry, entry_path, missing)
+                cn = entry["case_name"]
+                if not isinstance(cn, str):
+                    raise ArgumentError(entry,
+                        f"{entry_path}.case_name: expected string, got "
+                        f"{type(cn).__name__}")
+                if cn in proofs_by_case:
+                    raise ArgumentError(entry,
+                        f"{entry_path}.case_name: duplicate case_name `{cn}` "
+                        f"— each case may appear at most once in `proofs`")
+                body = entry["body"]
+                if not isinstance(body, list):
+                    raise ArgumentError(entry,
+                        f"{entry_path}.body: expected an array of proof "
+                        f"operations, got {type(body).__name__}")
+                proofs_by_case[cn] = Parse_Op_List(body, f"{entry_path}.body")
+        return gen_node(
+            cls=cls,
+            factory=lambda cfg: cast(Any, cls)(cfg, arg, proofs_by_case),
+            raw=arg)
+
+    @classmethod
+    def _singleton_splice(
+        cls, arg: ToolCall_arg, path: str,
+    ) -> 'tuple[raw_proof, str, ToolCall_arg] | None':
+        """When `proofs` has exactly one `{case_name, body}` entry, splice
+        its `body` as siblings.  CaseSplit / Induction with a single
+        runtime subgoal does NOT close the parent's proof block, so
+        siblings after this op continue to prove the (transformed) goal
+        — equivalent to attaching `body` to that single case."""
+        proofs = arg.get("proofs")
+        if not (isinstance(proofs, list) and len(proofs) == 1):
+            return None
+        entry = proofs[0]
+        entry_path = f"{path}.proofs[0]"
+        if not isinstance(entry, dict):
+            raise ArgumentError(arg,
+                f"{entry_path}: expected an object with `case_name` and "
+                f"`body`, got {type(entry).__name__}")
+        missing = [k for k in ("case_name", "body") if k not in entry]
+        if missing:
+            raise ArgumentError_MissingRequiredKeys(entry, entry_path, missing)
+        body = entry["body"]
+        if not isinstance(body, list):
+            raise ArgumentError(entry,
+                f"{entry_path}.body: expected an array of proof operations, "
+                f"got {type(body).__name__}")
+        corrected = {k: v for k, v in arg.items() if k != "proofs"}
+        return body, f"{entry_path}.body", corrected
 
     async def _resolve_rule(self,
                             rule_spec: 'Literal["default"] | FactByName | FactByDescription',
@@ -3758,8 +3999,11 @@ class CaseSplit_Like(SubgoalMaker):
             else:
                 raise InternalError("The child index is out of range")
     def _new_goal_node(self, goal_index: int, ml_state: Minilang_State) -> GoalNode:
-        return GoalNode(NodeConfig(str(goal_index+self._initial_goal_index), ml_state, self), False, True,
-                        auto_proof=self._initial_proof)
+        return GoalNode(
+            NodeConfig(str(goal_index + self._initial_goal_index), ml_state, self),
+            False, True,
+            auto_proof_by_case=self._proofs_by_case,
+        )
     def _rename_var(self, old_name: varname, new_name: varname) -> 'Node | None':
         if self.sub_nodes:
             return super()._rename_var(old_name, new_name)
@@ -3858,19 +4102,24 @@ class CaseSplit_Like(SubgoalMaker):
 
 class OperationMeta(NamedTuple):
     toolarg_typed_dict: type[Any]
-    gen_func: Callable[[Any], gen_node]
-    cls: type[Any]  # the Node subclass; used by the validator for reflection
+    cls: type[Any]  # the Node subclass — `.gen(arg, container, index, path)` dispatches here
 
 OPERATION_REGISTRY: dict[str, OperationMeta] = {}
 
 def proof_operation(operation: str, toolarg_typed_dict: type[Any]):
-    """
-    Class decorator to register a tool operation and its ToolArg TypedDict.
-    The operation name is given explicitly by `operation`, and the class must
-    define a staticmethod `gen(arg: ToolArg) -> gen_node`.
+    """Class decorator to register a Node subclass as a proof operation.
+
+    The class must define a classmethod
+    `gen(cls, arg, remaining, path) -> LinkedList[gen_node]` following the
+    base `Node.gen` contract: validate the ToolArg, parse any nested
+    proof fields via `Parse_Op_List`, call `super().gen(arg, remaining,
+    path)` to obtain the parsed tail (linked list of gen_nodes), and
+    return `Cons(my_gn, tail)` where `my_gn = gen_node(cls=..., factory=
+    ..., raw=arg)`.  Classes that forbid a successor (e.g. `Obvious`)
+    check `remaining is not None` themselves and raise.
     """
     def decorator(cls: type[Any]):
-        OPERATION_REGISTRY[operation] = OperationMeta(toolarg_typed_dict, cls.gen, cls)  # type: ignore[attr-defined]
+        OPERATION_REGISTRY[operation] = OperationMeta(toolarg_typed_dict, cls)
         return cls
     return decorator
 
@@ -3978,14 +4227,18 @@ class Obvious(Leaf):
         self.fact_refs: list[IsabelleFact] | None = None
 
     @classmethod
-    def _should_forbid_successor(cls) -> FailureReason | None:
-        return FailureReason(
-            "The Obvious operation concludes the proof, "
-            "so no further proof operations may follow it.")
-
-    @staticmethod
-    def gen(arg: Obvious_ToolArg) -> gen_node:
-        return lambda config: Obvious(config, arg)
+    def gen(cls, arg: Obvious_ToolArg, remaining: 'LinkedList[_RawOp]',
+            path: str) -> 'LinkedList[gen_node]':
+        # Obvious concludes the proof — forbid any sibling after it in
+        # the same list.  If remaining is None we delegate to super()
+        # (base Node.gen → Cons(gen_single, parse empty tail) = one-cell
+        # list) which gets the default self gn via `Node.gen_single`.
+        if remaining is not None:
+            raise ArgumentError(arg,
+                f"{remaining.head.path}: The Obvious operation at {path} "
+                f"concludes the proof, so no further proof operations "
+                f"may follow it.")
+        return super().gen(arg, remaining, path)
 
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
@@ -4065,10 +4318,6 @@ class Chaining(Leaf):
             self._prev_result_facts = self.result_facts
         return indent
 
-    @staticmethod
-    def gen(arg: Chaining_ToolArg) -> gen_node:
-        return lambda config: Chaining(config, arg)
-
     def print(self, indent: int, file: MyIO, update_line: bool = False,
               show_warnings: bool = False) -> int:
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
@@ -4146,10 +4395,6 @@ class Witness(Leaf):
         self.witness = arg["witness"]
     def quickview_title(self) -> str:
         return f"Witness {self.witness}"
-    @staticmethod
-    def gen(arg: Witness_ToolArg) -> gen_node:
-        return lambda config: Witness(config, arg)
-
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
         self._print_thought(indent, file)
@@ -4218,10 +4463,6 @@ class Define(SubgoalMaker):
         # the ML side emits when FUN pushes a deferred block. Controls
         # whether the block has GoalNode children / ending END.
         self._deferred_block_opened: bool = False
-
-    @staticmethod
-    def gen(arg: Define_ToolArg) -> gen_node:
-        return lambda config: Define(config, arg)
 
     def quickview_title(self) -> str:
         return f"Define {self.name}"
@@ -4396,10 +4637,6 @@ class Unfold(Leaf):
         self.fact_refs: list[IsabelleFact] | None = None
     def quickview_title(self) -> str:
         return f"Unfold {', '.join(self.targets)}"
-    @staticmethod
-    def gen(arg: Unfold_ToolArg) -> gen_node:
-        return lambda config: Unfold(config, arg)
-
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
         self._print_thought(indent, file)
@@ -4494,10 +4731,6 @@ class Derive(Leaf):
                 file.write(f"- {name.unicode}: {expr.unicode}\n")
             self._prev_result_facts = self.result_facts
         return indent
-
-    @staticmethod
-    def gen(arg: Derive_ToolArg) -> gen_node:
-        return lambda config: Derive(config, arg)
 
     async def _refresh_me_alone(self) -> None:
         if self.rule_ref is None or self.discharge_refs is None:
@@ -4718,10 +4951,6 @@ class Rewrite(Leaf):
                                truncate=True)
                 self._prev_result_goal = cur
         return indent
-    @staticmethod
-    def gen(arg: Rewrite_ToolArg) -> gen_node:
-        return lambda config: Rewrite(config, arg)
-
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
         self._print_thought(indent, file)
@@ -4967,13 +5196,14 @@ class Have_ToolArg(TypedDict):
     thought: str
     statement: Statement
     name: str
-    proof: NotRequired[proof | None]
+    proof: NotRequired[raw_proof | None]
     auto_apply: NotRequired[bool]
 
 @proof_operation("Have", Have_ToolArg)
 class Have(StdBlock):
     _changes_pending_goal = False
-    def __init__(self, config: NodeConfig, arg : Have_ToolArg):
+    def __init__(self, config: NodeConfig, arg : Have_ToolArg,
+                 parsed_proof: 'proof | None' = None):
         super().__init__(config, arg["thought"], [])
         self.statement = arg["statement"]
         self.name = arg["name"]
@@ -4981,11 +5211,9 @@ class Have(StdBlock):
         # Populated from `Newly_Fixed_Vars_Msg` after the HAVE op runs.
         self.for_any: list[tuple[varname, typ]] = []
         self._prev_for_any: list[tuple[varname, typ]] = []
-        # Raw subproof list; consumed by _attach_raw_proofs on first refresh.
-        self._raw_proofs: proof | None = arg.get("proof")
-    @staticmethod
-    def gen(arg : Have_ToolArg) -> gen_node:
-        return lambda config: Have(config, arg)
+        # Pre-parsed subproof body (list[gen_node]); consumed by
+        # _attach_proof on first refresh.
+        self._proof: 'proof | None' = parsed_proof
     def quickview_title(self) -> str:
         return f"Have {self.name}"
     def quickview(self, indent: int, file: MyIO) -> int:
@@ -5035,7 +5263,7 @@ class Have(StdBlock):
                 if isinstance(m, Newly_Fixed_Vars_Msg)]
         if msgs:
             self.for_any = msgs[0].vars
-        return await self._attach_raw_proofs(auto_intro=True)
+        return await self._attach_proof(auto_intro=True)
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         return FailureReason(f"Fail to claim the intermediate subgoal because: {"\n".join(err.errors)}")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
@@ -5054,22 +5282,20 @@ class Have(StdBlock):
 class Suffices_ToolArg(TypedDict):
     thought: str
     statement: Statement
-    proof: NotRequired[proof | None]
+    proof: NotRequired[raw_proof | None]
 
 @proof_operation("Suffices", Suffices_ToolArg)
 class Suffices(StdBlock):
-    def __init__(self, config: NodeConfig, arg : Suffices_ToolArg):
+    def __init__(self, config: NodeConfig, arg : Suffices_ToolArg,
+                 parsed_proof: 'proof | None' = None):
         super().__init__(config, arg["thought"], [])
         self.statement = arg["statement"]
-        self._raw_proofs: proof | None = arg.get("proof")
-    @staticmethod
-    def gen(arg : Suffices_ToolArg) -> gen_node:
-        return lambda config: Suffices(config, arg)
+        self._proof: 'proof | None' = parsed_proof
     async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
         fail = await super()._refresh_the_beginning_opr()
         if fail is not None:
             return fail
-        return await self._attach_raw_proofs(auto_intro=False)
+        return await self._attach_proof(auto_intro=False)
     def quickview(self, indent: int, file: MyIO) -> int:
         indent = super().quickview(indent, file)
         if not self.sub_nodes and not self.session.showed_suffices_notice:
@@ -5110,16 +5336,17 @@ class Obtain_ToolArg(TypedDict):
     thought: str
     variables: list[Explicit_Var]
     constraints: list[NamedStatement]
-    proof: NotRequired[proof | None]
+    proof: NotRequired[raw_proof | None]
 
 @proof_operation("Obtain", Obtain_ToolArg)
 class Obtain(StdBlock):
     _changes_pending_goal = False
-    def __init__(self, config: NodeConfig, arg : Obtain_ToolArg):
+    def __init__(self, config: NodeConfig, arg : Obtain_ToolArg,
+                 parsed_proof: 'proof | None' = None):
         super().__init__(config, arg["thought"], [])
         self.variables = arg["variables"]
         self.constraints = arg["constraints"]
-        self._raw_proofs: proof | None = arg.get("proof")
+        self._proof: 'proof | None' = parsed_proof
         # Populated from `New_Item_Msg` after OBTAIN runs: the vars +
         # facts Isabelle actually fixed, with types inferred by the ML
         # side. Used by `_fixed_*_after_me` so subsequent siblings see
@@ -5133,14 +5360,11 @@ class Obtain(StdBlock):
         # block when `_introduced` actually changed (mirrors Intro's
         # `_prev_bindings`).
         self._prev_quickview_introduced: Context | None = None
-    @staticmethod
-    def gen(arg : Obtain_ToolArg) -> gen_node:
-        return lambda config: Obtain(config, arg)
     async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
         fail = await super()._refresh_the_beginning_opr()
         if fail is not None:
             return fail
-        return await self._attach_raw_proofs(auto_intro=False)
+        return await self._attach_proof(auto_intro=False)
     async def _refresh_footer(self) -> 'FailureReason | None':
         # `New_Item_Msg` for OBTAIN fires inside CONSIDER'i's CB
         # continuation, which is triggered when the existential's
@@ -5188,8 +5412,9 @@ class Obtain(StdBlock):
         file.write(f"variables:\n")
         for v in self.variables:
             print_indent(indent+1, file)
-            if v.get('type') is not None:
-                file.write(f"- {v['name']}: {v['type']}\n")
+            typ = v.get('type')
+            if typ is not None:
+                file.write(f"- {v['name']}: {typ}\n")
             else:
                 file.write(f"- {v['name']}\n")
         match self.constraints:
@@ -5240,25 +5465,54 @@ class Intro_ToolArg(TypedDict):
     variable_bindings: NotRequired[list[xvarname]]
     fact_bindings: NotRequired[list[xvarname]]
     split_conj: NotRequired[bool]
+    proofs: NotRequired[list[raw_proof] | None]
 
 @proof_operation("Intro", Intro_ToolArg)
 class Intro(SubgoalMaker):
     def __init__(self, config: NodeConfig, thought: str, bindings: Bindings | None, split_conj: bool,
-                 _pending_bindings: tuple[list, list] | None = None):
+                 _pending_bindings: tuple[list, list] | None = None,
+                 parsed_proofs: 'list[proof] | None' = None):
         super().__init__(config, thought, [])
         self.bindings = bindings
         self.split_conj = split_conj
         self.running_time = 0
         self._pending_bindings = _pending_bindings
         self._prev_bindings: Bindings | None = None
-    @staticmethod
-    def gen(arg: Intro_ToolArg) -> gen_node:
+        # Per-subgoal positional PARSED proofs (same shape as
+        # InferenceRule's): `_proofs[i]` is the pre-parsed body applied to
+        # the i-th resulting subgoal's GoalNode.  Auto-injected Intros (in
+        # Have / GoalNode refresh paths) pass None.
+        self._proofs: 'list[proof] | None' = parsed_proofs
+    @classmethod
+    def gen_single(cls, arg: Intro_ToolArg,
+                   path: str = "<direct>") -> gen_node:
+        """Non-splice path (positional `proofs`, or no `proofs`): unpack
+        ToolArg fields, parse `proofs` into `list[proof]`, build factory."""
         var_bindings = arg.get("variable_bindings", [])
         fact_bindings = arg.get("fact_bindings", [])
         pending = (var_bindings, fact_bindings) if var_bindings or fact_bindings else None
         split_conj = arg.get("split_conj", False)
         thought = arg["thought"]
-        return lambda config: Intro(config, thought, None, split_conj, _pending_bindings=pending)
+        parsed_proofs = _parse_positional_proofs(
+            arg.get("proofs"), f"{path}.proofs")
+        factory = lambda cfg: Intro(
+            cfg, thought, None, split_conj,
+            _pending_bindings=pending, parsed_proofs=parsed_proofs)
+        return gen_node(cls=cls, factory=factory, raw=arg)
+
+    @classmethod
+    def _singleton_splice(cls, arg: ToolCall_arg,
+                          path: str) -> 'tuple[raw_proof, str, ToolCall_arg] | None':
+        return _singleton_splice_positional(arg, path)
+    def _new_goal_node(self, goal_index: int, ml_state: Minilang_State) -> GoalNode:
+        auto_proof: 'proof | None' = None
+        if self._proofs is not None and goal_index < len(self._proofs):
+            auto_proof = self._proofs[goal_index]
+        return GoalNode(
+            NodeConfig(str(goal_index + self._initial_goal_index), ml_state, self),
+            False, True,
+            auto_proof=auto_proof,
+        )
     def quickview(self, indent: int, file: MyIO) -> int:
         indent = super().quickview(indent, file)
         if self.bindings is not None and self.bindings != self._prev_bindings:
@@ -5414,19 +5668,48 @@ class Intro(SubgoalMaker):
 class InferenceRule_ToolArg(TypedDict):
     thought: str
     rule: FactByName | FactByDescription | None
+    proofs: NotRequired[list[raw_proof] | None]
     # TODO: write some skills telling the agent how to associate common operations (e.g., proof by contradiction, proof by cases, etc.) with the inference rules
 
 @proof_operation("InferenceRule", InferenceRule_ToolArg)
 class InferenceRule(SubgoalMaker):
-    def __init__(self, config: NodeConfig, arg: InferenceRule_ToolArg):
+    def __init__(self, config: NodeConfig, arg: InferenceRule_ToolArg,
+                 parsed_proofs: 'list[proof] | None' = None):
         super().__init__(config, arg["thought"], [])
         self.rule: FactByName | FactByDescription | None = arg["rule"]
         self.rule_ref: IsabelleFact | None = None
         self._opening = False
+        # `_proofs[i]` is the pre-parsed proof body applied to the i-th
+        # resulting subgoal (positional).  The len==1 case is handled by
+        # singleton splice in `gen` — inlined as siblings, with
+        # `parsed_proofs=None` reaching here.
+        self._proofs: 'list[proof] | None' = parsed_proofs
 
-    @staticmethod
-    def gen(arg: InferenceRule_ToolArg) -> gen_node:
-        return lambda config: InferenceRule(config, arg)
+    @classmethod
+    def gen_single(cls, arg: InferenceRule_ToolArg,
+                   path: str = "<direct>") -> gen_node:
+        """Non-splice path (positional `proofs`, or no `proofs`):
+        parse `proofs` into `list[proof]` and hand to the ctor."""
+        parsed_proofs = _parse_positional_proofs(
+            arg.get("proofs"), f"{path}.proofs")
+        return gen_node(
+            cls=cls, factory=lambda cfg: cls(cfg, arg, parsed_proofs),
+            raw=arg)
+
+    @classmethod
+    def _singleton_splice(cls, arg: ToolCall_arg,
+                          path: str) -> 'tuple[raw_proof, str, ToolCall_arg] | None':
+        return _singleton_splice_positional(arg, path)
+
+    def _new_goal_node(self, goal_index: int, ml_state: Minilang_State) -> GoalNode:
+        auto_proof: 'proof | None' = None
+        if self._proofs is not None and goal_index < len(self._proofs):
+            auto_proof = self._proofs[goal_index]
+        return GoalNode(
+            NodeConfig(str(goal_index + self._initial_goal_index), ml_state, self),
+            False, True,
+            auto_proof=auto_proof,
+        )
 
     async def _refresh_me_alone(self) -> None:
         if self.rule is not None and self.rule_ref is None:
@@ -5488,7 +5771,7 @@ class InferenceRule(SubgoalMaker):
 
 class Branch_Case_ToolArg(TypedDict):
     statement: NamedStatement
-    proof: NotRequired[proof | None]
+    proof: NotRequired[raw_proof | None]
 class Branch_ToolArg(TypedDict):
     thought: str
     cases: list[Branch_Case_ToolArg]
@@ -5498,14 +5781,35 @@ class Branch_ToolArg(TypedDict):
 
 @proof_operation("Branch", Branch_ToolArg)
 class Branch(SubgoalMaker):
-    def __init__(self, config: NodeConfig, arg: Branch_ToolArg):
+    def __init__(self, config: NodeConfig, arg: Branch_ToolArg,
+                 parsed_cases: 'list[proof | None] | None' = None):
         super().__init__(config, arg["thought"], [])
         self.cases = arg["cases"]
-        self._parsed_cases: list[proof | None] | None = None
+        # Per-case pre-parsed proofs; `parsed_cases[i]` is the body for
+        # the i-th `cases` entry (1:1 with `self.cases`).  `None` entries
+        # mean "no proof provided for this case".
+        self._parsed_cases: 'list[proof | None] | None' = parsed_cases
         self._initial_goal_index = 0
-    @staticmethod
-    def gen(arg : Branch_ToolArg) -> gen_node:
-        return lambda config: Branch(config, arg)
+    @classmethod
+    def gen_single(cls, arg: Branch_ToolArg,
+                   path: str = "<direct>") -> gen_node:
+        cases = arg.get("cases")
+        if not isinstance(cases, list):
+            raise ArgumentError(arg,
+                f"{path}.cases: expected an array, "
+                f"got {type(cases).__name__}")
+        parsed_cases: list[proof | None] = []
+        for ci, case in enumerate(cases):
+            case_path = f"{path}.cases[{ci}]"
+            if not isinstance(case, dict):
+                raise ArgumentError(arg,
+                    f"{case_path}: expected an object, got "
+                    f"{type(case).__name__}")
+            parsed_cases.append(
+                _parse_optional_raw_proof(case.get("proof"), f"{case_path}.proof"))
+        return gen_node(
+            cls=cls, factory=lambda cfg: cls(cfg, arg, parsed_cases),
+            raw=arg)
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         return ('cases', indent+1)
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
@@ -5516,7 +5820,7 @@ class Branch(SubgoalMaker):
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
     def _new_goal_node(self, goal_index: int, ml_state: Minilang_State) -> GoalNode:
         case_index = goal_index - 1  # goal 0 = exhaustiveness, goals 1..N = cases
-        auto_proof: proof | None = None
+        auto_proof: 'proof | None' = None
         if self._parsed_cases is not None and 0 <= case_index < len(self._parsed_cases):
             auto_proof = self._parsed_cases[case_index]
         return GoalNode(NodeConfig(str(goal_index+self._initial_goal_index), ml_state, self), False, True,
@@ -5532,12 +5836,6 @@ class Branch(SubgoalMaker):
     def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         raise InternalError("A Branch doesn't have an ending operation")
     async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
-        if self._parsed_cases is None:
-            parsed_cases: list[proof | None] = []
-            for case in self.cases:
-                raw = case.get("proof")
-                parsed_cases.append(list(raw) if raw else None)
-            self._parsed_cases = parsed_cases
         fail = await super()._refresh_the_beginning_opr()
         if fail is None:
             if not self.sub_nodes[0].thought:
@@ -5552,25 +5850,32 @@ class Branch(SubgoalMaker):
 # FactByDescription = trigger a semantic retrieval interaction at refresh
 # time (constrained to CASE_SPLIT_RULE / INDUCTION_RULE kind).
 
+class Proof_PerCase(TypedDict):
+    """One entry in the `proofs` list of CaseSplit / Induction.  `case_name`
+    names one of the Isabelle cases produced by the rule (matched at runtime
+    against `Consider_Case_Msg.case` / `GoalNode.local_step`); `body` is the
+    ordered list of sub-operations applied to that case's GoalNode."""
+    case_name: str
+    body: raw_proof
+
+
 class CaseSplit_ToolArg(TypedDict):
     thought: str
     target_isabelle_term: xterm
     rule: NotRequired[Literal["default"] | FactByName | FactByDescription]
-    proof: NotRequired[proof | None]
+    proofs: NotRequired[list[Proof_PerCase] | None]
 
 @proof_operation("CaseSplit", CaseSplit_ToolArg)
 class CaseSplit(CaseSplit_Like):
-    def __init__(self, config: NodeConfig, arg: CaseSplit_ToolArg):
-        super().__init__(config, arg["thought"], [], _initial_proof=None)
+    def __init__(self, config: NodeConfig, arg: CaseSplit_ToolArg,
+                 proofs_by_case: 'dict[str, proof] | None' = None):
+        super().__init__(config, arg["thought"], [])
         self.target_isabelle_term = arg["target_isabelle_term"]
         self.rule_spec: 'Literal["default"] | FactByName | FactByDescription' = \
             arg.get("rule", "default")
-        self._raw_proofs: proof | None = arg.get("proof")
+        self._proofs_by_case = proofs_by_case
     def quickview_title(self) -> str:
         return f"CaseSplit {self.target_isabelle_term}"
-    @staticmethod
-    def gen(arg : CaseSplit_ToolArg) -> gen_node:
-        return lambda config: CaseSplit(config, arg)
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         return ('cases', indent+1)
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
@@ -5594,9 +5899,6 @@ class CaseSplit(CaseSplit_Like):
     def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         raise InternalError("A Branch doesn't have an ending operation")
     async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
-        if self._initial_proof is None and self._raw_proofs is not None:
-            self._initial_proof = list(self._raw_proofs) if self._raw_proofs else None
-            self._raw_proofs = None
         if not self._rule_resolved:
             fail = await self._resolve_rule(
                 self.rule_spec, self.target_isabelle_term, [], "case-split")
@@ -5614,27 +5916,22 @@ class Induction_ToolArg(TypedDict):
     target_isabelle_term: xterm
     rule: NotRequired[Literal["default"] | FactByName | FactByDescription]
     variables: list[Induction_ToolArg_Variable]
-    proof: NotRequired[proof | None]
+    proofs: NotRequired[list[Proof_PerCase] | None]
 
 @proof_operation("Induction", Induction_ToolArg)
 class Induction(CaseSplit_Like):
-    def __init__(self, config: NodeConfig, arg: Induction_ToolArg):
-        super().__init__(config, arg["thought"], [], _initial_proof=None)
+    def __init__(self, config: NodeConfig, arg: Induction_ToolArg,
+                 proofs_by_case: 'dict[str, proof] | None' = None):
+        super().__init__(config, arg["thought"], [])
         self.arg = arg
         self.target_isabelle_term = arg["target_isabelle_term"]
         self.rule_spec: 'Literal["default"] | FactByName | FactByDescription' = \
             arg.get("rule", "default")
         self.variables = arg["variables"]
-        self._raw_proofs: proof | None = arg.get("proof")
+        self._proofs_by_case = proofs_by_case
     def quickview_title(self) -> str:
         return f"Induction {self.target_isabelle_term}"
-    @staticmethod
-    def gen(arg : Induction_ToolArg) -> gen_node:
-        return lambda config: Induction(config, arg)
     async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
-        if self._initial_proof is None and self._raw_proofs is not None:
-            self._initial_proof = list(self._raw_proofs) if self._raw_proofs else None
-            self._raw_proofs = None
         is_init = self._first_time
         old_variables = list(self.variables)
         if is_init:
@@ -5835,13 +6132,6 @@ class Root(GoalContainer, StdBlock):
     def beginning_opr(self) -> Minilang_Operation | None:
         return None
     def ending_opr(self) -> Minilang_Operation | None:
-        # The top-level proof needs a closing END after the last
-        # GoalNode child finishes. Previously this END was emitted
-        # by the last GoalNode child itself via `GoalContainer`'s
-        # default `_ending_opr_of_child` (last-child → END), but
-        # that default is now "last-child → None" (cleaner for
-        # SubgoalMaker subclasses, most of which don't want a
-        # trailing END), so Root emits its own closing END here.
         return Minilang_Operation.END()
     def has_ending_opr(self) -> bool:
         return True
@@ -5931,31 +6221,27 @@ class Root(GoalContainer, StdBlock):
 #          2. GoalNode: Q --> P
 
 ### Gen Node
-def Parse_Node(data: ToolCall_arg) -> gen_node:
-    operation = data.get("operation")
-    if operation is None:
-        raise ArgumentError_MissingRequiredKeys(data, "<tool call>", ["operation"])
-    meta = OPERATION_REGISTRY.get(operation)
-    if meta is None:
-        raise ArgumentError_UnknownProofOperation(data)
-    _check_tool_arg_keys(meta.toolarg_typed_dict, data, operation)
-    return meta.gen_func(cast(Any, data))
 
+def Parse_Nodes(
+    remaining: 'LinkedList[_RawOp]',
+) -> 'LinkedList[gen_node]':
+    """Parse a linked list of raw ops into a linked list of gen_nodes.
+    Empty `remaining` → `None`; otherwise pull the head, dispatch its
+    class's `.gen(arg, tail, path)`, and return whatever linked list
+    that produces (the subclass may itself prepend more cells before
+    the tail, e.g. via singleton splice).
 
-def _op_has_proof_field(toolarg_typed_dict: type) -> bool:
-    """Reflection helper: does this TypedDict declare a `proof` field?"""
-    return "proof" in getattr(toolarg_typed_dict, "__annotations__", {})
-
-
-def _validate_op_dict(data: Any, path: str) -> None:
-    """Recursively validate an operation dict and any nested `proof[]` /
-    `cases[].proof[]` lists.  Raises `ArgumentError` on the first issue with
-    a path-annotated error message (e.g.
-    ``proof_operations[1].cases[0].proof[2]``).
-
-    Shape-only: required keys, known operation names, and `proof[]`
-    well-formedness.  Does NOT construct nodes or execute Isabelle; those
-    happen later, at commit / refresh time."""
+    Validation of the raw dict (is it a dict? does it have a known
+    `operation`? does it satisfy the ToolArg's required keys?) lives
+    here; validation of the ToolArg's semantic content and parsing of
+    any nested `proof` / `proofs` / `cases[].proof` fields live inside
+    `cls.gen(arg, remaining, path)`.
+    """
+    if remaining is None:
+        return None
+    cell = remaining.head
+    data = cell.op
+    path = cell.path
     if not isinstance(data, dict):
         raise ArgumentError({},
             f"{path}: expected a proof operation object, got {type(data).__name__}")
@@ -5965,80 +6251,84 @@ def _validate_op_dict(data: Any, path: str) -> None:
     meta = OPERATION_REGISTRY.get(operation)
     if meta is None:
         raise ArgumentError_UnknownProofOperation(data)
-    _check_tool_arg_keys(meta.toolarg_typed_dict, data, f"{path} ({operation})")
-    # Recurse into `proof[]` (when the ToolArg TypedDict declares one).
-    if _op_has_proof_field(meta.toolarg_typed_dict):
-        nested = data.get("proof")
-        if nested is not None:
-            if not isinstance(nested, list):
-                raise ArgumentError(data,
-                    f"{path}.proof: expected an array of proof operations, "
-                    f"got {type(nested).__name__}")
-            _validate_op_list(nested, f"{path}.proof")
-    # Recurse into per-case `cases[i].proof` lists when the ToolArg declares
-    # a `cases` field whose entry shape includes a `proof` field (currently
-    # only `Branch`; detected structurally via `Branch_Case_ToolArg` on the
-    # container).
-    cases_type = getattr(meta.toolarg_typed_dict, "__annotations__", {}).get("cases")
-    if cases_type is not None:
-        case_elem_type = _list_element_type(cases_type)
-        if case_elem_type is not None and _op_has_proof_field(case_elem_type):
-            cases = data.get("cases")
-            if isinstance(cases, list):
-                for ci, case in enumerate(cases):
-                    if not isinstance(case, dict):
-                        continue
-                    case_proof = case.get("proof")
-                    if case_proof is None:
-                        continue
-                    if not isinstance(case_proof, list):
-                        raise ArgumentError(data,
-                            f"{path}.cases[{ci}].proof: expected an array "
-                            f"of proof operations, got "
-                            f"{type(case_proof).__name__}")
-                    _validate_op_list(case_proof, f"{path}.cases[{ci}].proof")
+    op_path = f"{path} ({operation})"
+    _check_tool_arg_keys(meta.toolarg_typed_dict, data, op_path)
+    return meta.cls.gen(cast(Any, data), remaining.tail, op_path)
 
 
-def _list_element_type(t: Any) -> type | None:
-    """Extract X from ``list[X]`` (PEP 585) / ``List[X]``.  Returns None if
-    ``t`` isn't recognisable as a parametrised list."""
-    args = getattr(t, "__args__", None)
-    origin = getattr(t, "__origin__", None)
-    if origin is list and args and len(args) == 1:
-        return args[0]
-    return None
-
-
-def _validate_op_list(ops: Any, path: str) -> None:
-    """Validate a list of operation dicts.  Runs the per-item shape check
-    (`_validate_op_dict`) on each, then applies the successor-forbidden rule:
-    any operation whose class returns a non-None `FailureReason` from
-    `cls._should_forbid_successor()` must be the last item in its list — the
-    rejection message is the one the class provides (so each terminal
-    operation can tailor its own explanation)."""
+def Parse_Op_List(ops: Any, container_path: str) -> list[gen_node]:
+    """Entry point — parse an entire list of op dicts into a flat
+    `list[gen_node]`.  Atomic: on any failure anywhere in the tree, raises
+    before any mutation could have occurred.  Internally builds a linked
+    list of `_RawOp(op, path)` cells and runs `Parse_Nodes`; materializes
+    the resulting linked list of gen_nodes into a regular Python list for
+    storage / downstream use."""
     if not isinstance(ops, list):
         raise ArgumentError({},
-            f"{path}: expected an array of proof operations, got {type(ops).__name__}")
-    for i, op in enumerate(ops):
-        _validate_op_dict(op, f"{path}[{i}]")
-    for i, op in enumerate(ops[:-1]):
-        op_name = op.get("operation") if isinstance(op, dict) else None
-        if op_name is None:
-            continue
-        meta = OPERATION_REGISTRY.get(op_name)
-        if meta is None:
-            continue
-        reason = meta.cls._should_forbid_successor()
-        if reason is not None:
-            raise ArgumentError(op, f"{path}[{i}]: {reason.reason}")
+            f"{container_path}: expected an array of proof operations, "
+            f"got {type(ops).__name__}")
+    raw = from_iterable(
+        _RawOp(op, f"{container_path}[{i}]") for i, op in enumerate(ops))
+    return list(iterate(Parse_Nodes(raw)))
 
 
-def _validate_op_forest(ops: Any) -> None:
-    """Top-level entry point for validating the forest of proof operations
-    submitted in a single tool call.  Must be called BEFORE any mutation of
-    the proof tree.  Raises `ArgumentError` on the first issue with a
-    path-annotated message."""
-    _validate_op_list(ops, "proof_operations")
+# --- shared helpers consumed by per-class `.gen` classmethods -----------
+
+def _parse_optional_raw_proof(
+    raw: 'raw_proof | None', path: str,
+) -> 'proof | None':
+    """Parse the optional `proof` body of Have / Suffices / Obtain /
+    Branch-case.  `None` stays `None`; a list is recursively parsed into
+    a flat `list[gen_node]`."""
+    if raw is None:
+        return None
+    return Parse_Op_List(raw, path)
+
+
+def _parse_positional_proofs(
+    raw: Any, path: str,
+) -> 'list[proof] | None':
+    """Parse the positional per-subgoal `proofs: list[raw_proof]` field of
+    InferenceRule / Intro (NON-singleton case — callers handle the len==1
+    splice themselves).  Returns `None` if `raw is None` OR `raw == []`
+    — an empty `proofs` list is normalized to 'no proofs provided' so
+    `proofs: []` behaves identically to `proofs: None` downstream."""
+    if raw is None or raw == []:
+        return None
+    if not isinstance(raw, list):
+        raise ArgumentError({},
+            f"{path}: expected an array, got {type(raw).__name__}")
+    out: list[proof] = []
+    for pi, body in enumerate(raw):
+        body_path = f"{path}[{pi}]"
+        if not isinstance(body, list):
+            raise ArgumentError({},
+                f"{body_path}: expected an array of proof operations, "
+                f"got {type(body).__name__}")
+        out.append(Parse_Op_List(body, body_path))
+    return out
+
+
+def _singleton_splice_positional(
+    arg: ToolCall_arg, path: str,
+) -> 'tuple[raw_proof, str, ToolCall_arg] | None':
+    """Shared `_singleton_splice` for InferenceRule / Intro shape:
+    `proofs: list[raw_proof]`.  When `len(proofs) == 1`, return
+    `(body_ops, body_path, corrected_arg)` where `corrected_arg` is
+    `arg` with the `proofs` field stripped — so re-dispatching through
+    `cls.gen_single(corrected_arg, path)` yields a gn_node with
+    `parsed_proofs=None`."""
+    proofs = arg.get("proofs")
+    if not (isinstance(proofs, list) and len(proofs) == 1):
+        return None
+    body = proofs[0]
+    if not isinstance(body, list):
+        raise ArgumentError(arg,
+            f"{path}.proofs[0]: expected an array of proof operations, "
+            f"got {type(body).__name__}")
+    corrected = {k: v for k, v in arg.items() if k != "proofs"}
+    return body, f"{path}.proofs[0]", corrected
+
 
 ## Session
 

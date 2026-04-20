@@ -9,4 +9,4 @@ proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
 deep-missing path in error: True
 nested forbid-successor path in error: True
-recursive validator path annotation verified.
+recursive parse path annotation verified.

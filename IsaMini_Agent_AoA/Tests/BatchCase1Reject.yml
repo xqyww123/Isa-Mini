@@ -7,12 +7,12 @@ You can write global declarations by calling command `edit` with action `fill` a
 goal: (0 :: int) ≤ x * x
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
-validator correctly rejected:
+parser correctly rejected:
 Bad Argument
-proof_operations[0]: The Obvious operation concludes the proof, so no further proof operations may follow it.
-validator accepted [Branch, Obvious] (closing is runtime-dependent)
+proof_operations[1]: The Obvious operation at proof_operations[0] (Obvious) concludes the proof, so no further proof operations may follow it.
+parser accepted [Branch, Obvious] (closing is runtime-dependent)
 --------------------------------------------------
-Tree after validator checks (should be unchanged)
+Tree after parse checks (should be unchanged)
 --------------------------------------------------
 variables:
   - x: int
