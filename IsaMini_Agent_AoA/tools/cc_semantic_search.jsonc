@@ -46,6 +46,11 @@
             "description": "Constrain entities' names to contain all of these substrings (case-insensitive).",
             "default": []
           },
+          "target_type": {
+            "type": "string",
+            "description": "Induction/case-split rules only: restrict to rules whose induction/case target has this type. Wildcards (_, 'a, ?a) allowed.",
+            "default": ""
+          },
           "k": {
             "type": "integer",
             "minimum": 1,

@@ -82,8 +82,9 @@ proof:
     targets:
       - the goal
     goal is solved.
-Rewrite step 2 (system simp): status=failure, is_error=True
-  reason: The simplification made no progress.
+Rewrite step 2 (system simp): status=reverted, is_error=True
+  reason: Cannot fill a node with id 2
+The simplification made no progress.
 
 --------------------------------------------------
 After Rewrite closes residual goal
@@ -153,6 +154,7 @@ Overview after AMEND
 --------------------------------------------------
 global declarations:
 proof:
+  done
 Delete global.1 not_found: []
 GlobalEnv children after delete: 0
 --------------------------------------------------
@@ -182,6 +184,6 @@ Final Overview
 --------------------------------------------------
 step 1: Rewrite goal (failed, line 0)
   Error: Fact "g_eq" not found
-Error: Unfinished Proof (line 177). Fill step `2`
+Error: Unfinished Proof (line 179). Fill step `2`
 goal: x + y = x + x
 Unfinished nodes: 2

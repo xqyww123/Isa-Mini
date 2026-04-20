@@ -263,6 +263,9 @@ def _format_query_header(q: dict) -> str:
     desc = q.get("long_description", "")
     if desc:
         parts.append(desc)
+    target_type = q.get("target_type", "")
+    if target_type:
+        parts.append(f"target type: {target_type}")
     for key, label in [
         ("term_patterns", "term patterns"),
         ("type_patterns", "type patterns"),
@@ -335,7 +338,8 @@ async def _run_knn_for_query(
         type_patterns=q.get("type_patterns", []),
         theories_include=q.get("theories_include", []),
         name_contains=q.get("name_contains", []),
-        exact_name=exact_name)
+        exact_name=exact_name,
+        target_type=q.get("target_type", "") or "")
     return (fetched, warnings, None)
 
 
@@ -464,6 +468,7 @@ async def _semantic_search_with_filtering(session: Session, queries: list[dict])
             type_patterns=q.get("type_patterns", []),
             theories_include=q.get("theories_include", []),
             name_contains=q.get("name_contains", []),
+            target_type=q.get("target_type", "") or "",
         )
         interactions.append(interaction)
 

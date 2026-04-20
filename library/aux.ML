@@ -46,6 +46,7 @@ val simp_fact_name : Proof.context -> string -> string
 
 val flatten_facts : (string * term list) list -> (string * term) list
 val base_name : string -> string
+val unflatten_facts : (string * 'a) list -> (string * (string * 'a) list) list
 val filter_redundant_facts : (string * term) list -> (string * term) list
 
 val implode_with' : 'a -> 'a list list -> 'a list -> 'a list
@@ -589,6 +590,28 @@ fun base_name name =
   case String.tokens (fn c => c = #"(") name of
     [base, _] => base
   | _ => name
+
+(* Inverse of flatten_facts: group consecutive entries sharing the same base
+   name (via base_name) into one (base_name, atoms) entry. Each atom retains
+   its original flat external name so downstream consumers don't need to
+   re-derive it. Input entries are assumed to appear in per-group contiguous
+   runs, as flatten_facts emits them. Names without a "(k)" suffix form
+   singleton groups. *)
+fun unflatten_facts (facts: (string * 'a) list) : (string * (string * 'a) list) list =
+  let
+    fun emit acc (base, pairs) = (base, rev pairs) :: acc
+    fun loop [] cur acc =
+          (case cur of NONE => rev acc | SOME g => rev (emit acc g))
+      | loop ((name, v) :: rest) cur acc =
+          let val b = base_name name in
+            case cur of
+              NONE => loop rest (SOME (b, [(name, v)])) acc
+            | SOME (cb, pairs) =>
+                if b = cb
+                then loop rest (SOME (cb, (name, v) :: pairs)) acc
+                else loop rest (SOME (b, [(name, v)])) (emit acc (cb, pairs))
+          end
+  in loop facts NONE [] end
 
 (* Filter out redundant "that" and "assms" entries that just alias other facts *)
 (* Works on flattened (string * term) list with indexed names *)

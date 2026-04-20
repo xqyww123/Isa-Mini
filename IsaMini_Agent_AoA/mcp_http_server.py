@@ -34,9 +34,9 @@ from .model import (
     _session_var, Session,
     InteractionExpanded,
     AoA_Error, ArgumentError, IsabelleError,
-    CannotAmend_Root, CannotDelete_Root,
-    NodeNotFound,
-    Parse_Op_List, gen_node, normalize_answer, Interaction_BadAnswer,
+    CannotDelete_Root,
+    EvaluationStatus,
+    Parse_Op_List, normalize_answer, Interaction_BadAnswer,
 )
 import yaml as _yaml
 from .retrieval import (
@@ -64,59 +64,6 @@ _cc_delete_schema = _load_schema("cc_delete.jsonc")
 
 
 # ============================================================================
-# Tool Logic Helpers
-# ============================================================================
-
-async def _execute_proof_action(
-    session: Session,
-    action: str,
-    step: str,
-    gn: gen_node,
-    tool_name: str,
-    log_prefix: str,
-) -> tuple[str, bool]:
-    """Execute a proof action with complete error handling.
-    Returns (response_text, is_error) where is_error is True when the
-    inserted/amended node's evaluation failed."""
-    session.root.session.age += 1
-
-    try:
-        match action:
-            case "fill":
-                node, is_error, failure_reason = await session.root.fill(step, gn)
-                session.refresh_YAML()
-                if failure_reason is not None:
-                    response = failure_reason.reason
-                else:
-                    response = await P.filled_step_message(step, session.root, node, session)
-            case "insert_before":
-                node, is_error, failure_reason = await session.root.insert_before(step, gn)
-                session.refresh_YAML()
-                if failure_reason is not None:
-                    response = failure_reason.reason
-                else:
-                    response = await P.inserted_before_step_message(step, session.root, node, session)
-            case "amend":
-                node, is_error, failure_reason = await session.root.amend(step, gn)
-                session.refresh_YAML()
-                if failure_reason is not None:
-                    response = failure_reason.reason
-                else:
-                    response = await P.amended_step_message(step, session.root, node, session)
-            case _:
-                raise ArgumentError({"action": action}, P.invalid_action_error(action))
-
-        session.log_tool_response(tool_name, response)
-        session.log_proof_tree_snapshot(f"{log_prefix}_step_{step}")
-        return response, is_error
-
-    except AoA_Error as e:
-        error_msg = str(e)
-        session.log_tool_response(tool_name, f"ERROR: {error_msg}")
-        return error_msg, True
-
-
-# ============================================================================
 # Permission Check (both modes)
 # ============================================================================
 
@@ -137,11 +84,6 @@ def _check_tool_permission(session: Session, tool_name: str) -> str | None:
 # Tool Logic Functions (shared, no framework dependency)
 # ============================================================================
 
-class _StopBatch(Exception):
-    """Internal sentinel used inside ``_execute_proof_batch`` to break out
-    of the commit loop when a Group-B exception occurs on some item."""
-
-
 async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     session.log_tool_call("mcp__proof__edit", args)
     try:
@@ -160,7 +102,7 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             error_msg = "proof_operations must be a non-empty array of proof operations"
             session.log_tool_response("mcp__proof__edit", f"ERROR: {error_msg}")
             return (error_msg, True)
-        # Parse atomically: validation, splice, and gen_node construction
+        # Parse atomically: validation, splice, and Parsed_Opr construction
         # all happen in one pass — on any failure, no tree mutation has
         # occurred.
         try:
@@ -169,148 +111,36 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             error_msg = str(e)
             session.log_tool_response("mcp__proof__edit", f"ERROR: {error_msg}")
             return (error_msg, True)
-        if len(gns) == 1:
-            # Single-op path preserves existing semantics including
-            # ``_on_edit_failure``-driven auto-revert for Obvious.
-            result, is_error = await _execute_proof_action(
-                session, action, step, gns[0],
-                "mcp__proof__edit", "after_fill")
-            return (result, is_error)
-        # Multi-item batch path.
-        result, is_error = await _execute_proof_batch(
-            session, action, step, gns)
-        return (result, is_error)
+
+        root = session.root
+        root.session.age += 1
+        match action:
+            case "fill":
+                outcome = await root.fill(step, gns)
+            case "insert_before":
+                outcome = await root.insert_before(step, gns)
+            case "amend":
+                outcome = await root.amend(step, gns)
+            case _:
+                error_msg = P.invalid_action_error(action)
+                session.log_tool_response("mcp__proof__edit", f"ERROR: {error_msg}")
+                return (error_msg, True)
+
+        session.refresh_YAML()
+        response = await P.edit_message(root, outcome, session)
+        is_error = outcome.failure is not None and outcome.failure.is_error
+        session.log_tool_response("mcp__proof__edit", response)
+        session.log_proof_tree_snapshot(f"after_{action}_step_{step}")
+        return (response, is_error)
     except IsabelleError as e:
         error_msg = f"Isabelle error: {'; '.join(e.errors)}"
         session.log_tool_response("mcp__proof__edit", f"ERROR: {error_msg}")
         return (error_msg, True)
     except Exception as e:
-        session.log_tool_response("mcp__proof__edit", f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
+        session.log_tool_response(
+            "mcp__proof__edit",
+            f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
         sys.exit(1)
-
-
-async def _execute_proof_batch(
-    session: Session,
-    action: str,
-    target_step: str,
-    gns: 'list[gen_node]',
-) -> tuple[str, bool]:
-    """Commit-and-warn loop for multi-item edit batches (len > 1).
-
-    Per-action dispatch:
-    - ``fill``: first gn fills ``target_step``; subsequent gns are appended
-      to the same parent via ``parent.append``.
-    - ``insert_before``: each gn is inserted before ``target_step`` in
-      order via ``root.insert_before`` with ``apply_edit_failure=False``.
-    - ``amend``: ``target_step`` is deleted (losing its sub_nodes) and the
-      list is inserted at its former slot.
-
-    On first Group-B exception at index i, stops and emits a SINGLE
-    aggregated ``session.warnings`` entry for ``gns[i:]``.
-    ``is_error = (len(committed) == 0)`` per the batch semantics.
-    ``_on_edit_failure`` is NOT invoked within a batch (no auto-revert)."""
-    root = session.root
-    root.session.age += 1
-    committed: list = []
-    failure: Exception | None = None
-    failed_idx: int = 0
-    try:
-        match action:
-            case "fill":
-                try:
-                    node, _, _ = await root.fill(
-                        target_step, gns[0], apply_edit_failure=False)
-                    committed.append(node)
-                except AoA_Error as e:
-                    failure = e
-                    failed_idx = 0
-                    raise _StopBatch
-                parent = committed[0].parent
-                if parent is None:
-                    failure = ArgumentError(
-                        {"target_step": target_step},
-                        "filled node has no parent to append to")
-                    failed_idx = 1
-                    raise _StopBatch
-                for i in range(1, len(gns)):
-                    try:
-                        new_node = await parent.append(gns[i])
-                        if new_node is None:
-                            raise ArgumentError(
-                                {},
-                                "append returned None")
-                        committed.append(new_node)
-                    except AoA_Error as e:
-                        failure = e
-                        failed_idx = i
-                        raise _StopBatch
-            case "insert_before":
-                for i, gn in enumerate(gns):
-                    try:
-                        node, _, _ = await root.insert_before(
-                            target_step, gn, apply_edit_failure=False)
-                        committed.append(node)
-                    except AoA_Error as e:
-                        failure = e
-                        failed_idx = i
-                        raise _StopBatch
-            case "amend":
-                try:
-                    target = root.locate_node(target_step)
-                except NodeNotFound:
-                    failure = ArgumentError(
-                        {"target_step": target_step},
-                        f"Cannot amend the node {target_step} because it is not found")
-                    failed_idx = 0
-                    raise _StopBatch
-                parent = target.parent
-                if parent is None:
-                    failure = CannotAmend_Root()
-                    failed_idx = 0
-                    raise _StopBatch
-                # Capture the next sibling (or None) BEFORE delete so we know
-                # where to insert the list items.
-                idx_in_parent = next(
-                    (k for k, c in enumerate(parent.sub_nodes) if c is target),
-                    -1)
-                next_sibling = (parent.sub_nodes[idx_in_parent + 1]
-                                if 0 <= idx_in_parent < len(parent.sub_nodes) - 1
-                                else None)
-                await root.delete([target_step])
-                for i, gn in enumerate(gns):
-                    try:
-                        if next_sibling is not None:
-                            node, _, _ = await root.insert_before(
-                                next_sibling.id, gn, apply_edit_failure=False)
-                        else:
-                            new_node = await parent.append(gn)
-                            if new_node is None:
-                                raise ArgumentError({}, "append returned None")
-                            node = new_node
-                        committed.append(node)
-                    except AoA_Error as e:
-                        failure = e
-                        failed_idx = i
-                        raise _StopBatch
-            case _:
-                error_msg = P.invalid_action_error(action)
-                session.log_tool_response("mcp__proof__edit", f"ERROR: {error_msg}")
-                return (error_msg, True)
-    except _StopBatch:
-        pass
-
-    session.refresh_YAML()
-    if failure is not None:
-        unapplied = gns[failed_idx:]
-        session.warnings.append(
-            P.unapplied_batch_warning(unapplied, failure, failed_idx))
-    is_error = len(committed) == 0
-    response = await P.batch_edit_message(
-        action, target_step, root, committed, session, failure)
-    session.log_tool_response("mcp__proof__edit", response)
-    session.log_proof_tree_snapshot(
-        f"after_batch_{action}_step_{target_step}")
-    return (response, is_error)
 
 
 async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:

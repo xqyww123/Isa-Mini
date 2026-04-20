@@ -1,0 +1,71 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+--------------------------------------------------
+[1] fill [Obvious] — goal is non-trivial
+--------------------------------------------------
+Filled step 1.
+Outline:
+  done
+Congratulations! All goals are proven.
+---------------
+is_error: False
+--------------------------------------------------
+[2] batch fill [Have(nested), Obvious(using aux)]
+--------------------------------------------------
+Filled nothing.
+Cannot fill a node with id 1
+The target already exists. Fill does not overwrite existing successful steps.
+---------------
+is_error: True
+--------------------------------------------------
+[3] amend missing target '999'
+--------------------------------------------------
+Amended nothing.
+Cannot amend the node 999
+The node is not found.
+---------------
+is_error: True
+--------------------------------------------------
+[4] amend step 1 with unprovable `1 = 2`
+--------------------------------------------------
+Amended step 1.
+Outline:
+  step 1: Have bad (line 0)
+    step 1.1: Obvious (failed, line 0)
+      Error: |
+        Automatic proof fails on the subgoal:
+          False
+        The goal is non-trivial and a step-by-step proof is required.
+    Error: Unfinished Proof. Call command `edit` with action `fill` and target step `1.1`
+    goal: (1 :: int) = (2 :: int)
+  Error: Unfinished Proof. Fill step `2`
+  goal: (0 :: int) ≤ x * x
+---------------
+is_error: False
+--------------------------------------------------
+[5] amend step 1 (recovery) with `x*x >= 0`
+--------------------------------------------------
+Amended step 1.
+Outline:
+  step 1: Have aux2 (done, line 0)
+  Error: Unfinished Proof (line 23). Fill step `2`
+---------------
+is_error: False
+--------------------------------------------------
+[6] batch insert_before [Have, Have] at step 1
+--------------------------------------------------
+Inserted step 0A-0B.
+Outline:
+  step 0A: Have h1 (done, line 0)
+  step 0B: Have h2 (done, line 0)
+  step 1: Have aux2 (done, line 0)
+  Error: Unfinished Proof (line 16). Fill step `2`
+---------------
+is_error: False

@@ -5,7 +5,7 @@ All user-facing messages, error messages, and prompt texts are defined here.
 
 from typing import Any
 from . import model
-from .model import Node, Root, gen_node
+from .model import Node, NonLeaf_Node, Root, Parsed_Opr, FailureReason
 from io import StringIO
 from .helper import MyIO
 
@@ -20,172 +20,64 @@ EDIT_TOOL_DESCRIPTION = "Edit the proof.yaml file"
 # Edit Action Response Messages
 # ============================================================================
 
-async def filled_step_message(step: str, root: Root, node: Node, session: 'model.Session') -> str:
-    """Message returned when a step is successfully filled."""
-    file = MyIO(StringIO())
-    file.write(f"Filled {node.titled_id}.\n")
-    parent = node.parent
-    if parent is not None:
-        goal_and_to_file = parent.should_I_show_pending_goal()
-        goal_id = parent.id_of_goal()
-        if goal_and_to_file is not None:
-            goal, step_to_fill = goal_and_to_file
-            file.write(f"Call command `edit` with action `fill` and target step `{step_to_fill}`"
-                " to provide the proof.\n")
-        elif goal_id is not None and not parent.does_quickview_need_detail():
-            file.write(f"All proof goals of {parent.titled_id} are completed.\n")
-    if session.warnings:
-        file.write("Warnings:\n")
-        for w in session.warnings:
-            file.write(f"  - {w}\n")
-        session.warnings.clear()
-    file.write("Overall outline:\n")
-    root.quickview(1, file)
-    root.reset_changed()
-    unfinished = set()
-    root.unfinished_nodes(unfinished)
-    if not unfinished:
-        file.write("Congratulations! All goals are proven.\n")
-        await session.interrupt()
-    root.reset()
-    return file.getvalue()
-
-# ============================================================================
-# Not Implemented Error Messages
-# ============================================================================
-
-NOT_IMPLEMENTED_INSERT_BEFORE = "insert_before is not implemented"
+_VERB = {
+    model.EditOperation.FILL: "Filled",
+    model.EditOperation.INSERT: "Inserted",
+    model.EditOperation.AMEND: "Amended",
+}
 
 
-async def inserted_before_step_message(step: str, root: Root, node: Node, session: 'model.Session') -> str:
-    """Message returned when a step is successfully inserted before another."""
-    file = MyIO(StringIO())
-    file.write(f"Inserted step {node.id} before step {step}.\n")
-    if session.warnings:
-        file.write("Warnings:\n")
-        for w in session.warnings:
-            file.write(f"  - {w}\n")
-        session.warnings.clear()
-    file.write("Overall outline:\n")
-    root.quickview(1, file)
-    root.reset_changed()
-    unfinished = set()
-    root.unfinished_nodes(unfinished)
-    if not unfinished:
-        file.write("Congratulations! All goals are proven.\n")
-        await session.interrupt()
-    root.reset()
-    return file.getvalue()
-NOT_IMPLEMENTED_AMEND = "amend is not implemented"
+def _headline(outcome: 'model.EditOutcome') -> str:
+    verb = _VERB[outcome.operation]
+    c = outcome.committed
+    if not c:
+        return f"{verb} nothing.\n"
+    if len(c) == 1:
+        return f"{verb} step {c[0].id}.\n"
+    return f"{verb} step {c[0].id}-{c[-1].id}.\n"
 
 
-async def amended_step_message(step: str, root: Root, node: Node, session: 'model.Session') -> str:
-    """Message returned when a step is successfully amended."""
-    file = MyIO(StringIO())
-    file.write(f"Amended step {step}.\n")
-    parent = node.parent
-    if parent is not None:
-        goal_and_to_file = parent.should_I_show_pending_goal()
-        goal_id = parent.id_of_goal()
-        if goal_and_to_file is not None:
-            goal, step_to_fill = goal_and_to_file
-            file.write(f"Call command `edit` with action `fill` and target step `{step_to_fill}`"
-                " to provide the proof.\n")
-        elif goal_id is not None and not parent.does_quickview_need_detail():
-            file.write(f"All proof goals of {parent.titled_id} are completed.\n")
-    if session.warnings:
-        file.write("Warnings:\n")
-        for w in session.warnings:
-            file.write(f"  - {w}\n")
-        session.warnings.clear()
-    file.write("Overall outline:\n")
-    root.quickview(1, file)
-    root.reset_changed()
-    unfinished = set()
-    root.unfinished_nodes(unfinished)
-    if not unfinished:
-        file.write("Congratulations! All goals are proven.\n")
-        await session.interrupt()
-    root.reset()
-    return file.getvalue()
-def unapplied_batch_warning(unapplied: list[gen_node], failure: Exception, failed_idx: int) -> str:
-    """Render a single aggregated warning string for the unapplied tail of a
-    multi-item edit batch.  Each gen_node carries its original raw
-    ToolCall dict (`.raw`) which we dump verbatim so the agent can see
-    exactly what it submitted and resubmit at the right location."""
-    import yaml as _yaml
-    reason = str(failure) if failure is not None else "unknown"
-    raw_dicts = [g.raw for g in unapplied]
-    dump = _yaml.safe_dump(
-        raw_dicts, default_flow_style=False,
-        allow_unicode=True, sort_keys=False, width=120).rstrip()
-    return (
-        f"{len(unapplied)} operation(s) from this edit batch were not applied "
-        f"(starting at index {failed_idx}). Reason: {reason}. "
-        f"Previously-committed items in this batch remain in the tree. "
-        f"You may re-submit any unapplied operation at the appropriate "
-        f"location on a later tool call. Unapplied operations:\n{dump}")
-
-
-async def batch_edit_message(
-    action: str, target_step: str, root: Root,
-    committed: list[Node], session: 'model.Session',
-    failure: Exception | None,
+async def edit_message(
+    root: Root,
+    outcome: 'model.EditOutcome',
+    session: 'model.Session',
 ) -> str:
-    """Response message for a multi-item edit batch.
+    """Response for `fill` / `insert_before` / `amend`, dispatched on
+    `outcome.operation`.
 
-    Shows which ops landed (if any), emits the ``session.warnings`` block
-    (including the aggregated unapplied-batch warning), then renders the
-    overall quickview.  Mirrors the single-op templates' structure so the
-    agent's expectations are preserved."""
+    If `outcome.failure.is_error`, `str(failure)` is prepended to the
+    response.  If `failure` is set but `is_error=False`, it is appended."""
+    failure = outcome.failure
     file = MyIO(StringIO())
-    if committed:
-        ids = ", ".join(n.titled_id for n in committed)
-        if action == "fill":
-            verb = "Filled"
-        elif action == "insert_before":
-            verb = "Inserted"
-        elif action == "amend":
-            verb = "Amended at"
-        else:
-            verb = "Applied"
-        file.write(
-            f"{verb} {len(committed)} step(s) at target {target_step}: {ids}.\n")
-        # Show pending-proof hint if the last committed node's parent still has
-        # a pending goal (mirrors the single-op messages).
-        last = committed[-1]
-        parent = last.parent
-        if parent is not None:
-            goal_and_to_file = parent.should_I_show_pending_goal()
-            goal_id = parent.id_of_goal()
-            if goal_and_to_file is not None:
-                _, step_to_fill = goal_and_to_file
-                file.write(
-                    f"Call command `edit` with action `fill` and target step "
-                    f"`{step_to_fill}` to provide the proof.\n")
-            elif goal_id is not None and not parent.does_quickview_need_detail():
-                file.write(
-                    f"All proof goals of {parent.titled_id} are completed.\n")
-    else:
-        # Nothing applied — report the failure cause.
-        if failure is not None:
-            file.write(f"No operations from this batch were applied: {failure}\n")
-        else:
-            file.write("No operations from this batch were applied.\n")
+    file.write(_headline(outcome))
+    if failure is not None and failure.is_error:
+        file.write(f"{failure}\n")
+    _p = outcome.committed[-1].parent if outcome.committed else None
+    parent_hint = _p if isinstance(_p, NonLeaf_Node) else None
+    # Completion hint only for fill/amend; insert intentionally skips it.
+    if parent_hint is not None and outcome.operation is not model.EditOperation.INSERT:
+        goal_id = parent_hint.id_of_goal()
+        if (goal_id is not None
+                and parent_hint.should_I_show_pending_goal() is None
+                and not parent_hint.does_quickview_need_detail()):
+            file.write(f"All proof goals of {parent_hint.titled_id} are completed.\n")
     if session.warnings:
         file.write("Warnings:\n")
         for w in session.warnings:
             file.write(f"  - {w}\n")
         session.warnings.clear()
-    file.write("Overall outline:\n")
-    root.quickview(1, file)
-    root.reset_changed()
-    unfinished = set()
-    root.unfinished_nodes(unfinished)
-    if not unfinished:
-        file.write("Congratulations! All goals are proven.\n")
-        await session.interrupt()
-    root.reset()
+    if outcome.committed:
+        file.write("Outline:\n")
+        root.quickview(1, file)
+        root.reset_changed()
+        unfinished = set()
+        root.unfinished_nodes(unfinished)
+        if not unfinished:
+            file.write("Congratulations! All goals are proven.\n")
+            await session.interrupt()
+        root.reset()
+    if failure is not None and not failure.is_error:
+        file.write(f"{failure}\n")
     return file.getvalue()
 
 
@@ -199,7 +91,7 @@ async def deleted_steps_message(steps: list[str], root: Root, session: 'model.Se
         for w in session.warnings:
             file.write(f"  - {w}\n")
         session.warnings.clear()
-    file.write("Overall outline:\n")
+    file.write("Outline:\n")
     root.quickview(1, file)
     root.reset_changed()
     unfinished = set()

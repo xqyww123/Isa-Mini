@@ -255,9 +255,20 @@
           ],
           "default": "default"
         },
-        "proof": {
+        "proofs": {
           "type": "array",
-          "items": { "$ref": "#/$defs/Operation" }
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "case_name": { "type": "string" },
+              "body": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/Operation" }
+              }
+            },
+            "required": [ "case_name", "body" ]
+          }
         }
       },
       "required": [
@@ -299,9 +310,20 @@
           },
           "type": "array"
         },
-        "proof": {
+        "proofs": {
           "type": "array",
-          "items": { "$ref": "#/$defs/Operation" }
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "case_name": { "type": "string" },
+              "body": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/Operation" }
+              }
+            },
+            "required": [ "case_name", "body" ]
+          }
         }
       },
       "required": [
@@ -328,6 +350,13 @@
             { "$ref": "#/$defs/FactByName" },
             { "$ref": "#/$defs/FactByDescription" }
           ]
+        },
+        "proofs": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/Operation" }
+          }
         }
       },
       "required": [
@@ -479,6 +508,13 @@
           "type": "boolean",
           "default": false,
           "description": "whether to split conjunctions in the goal after introduction"
+        },
+        "proofs": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/Operation" }
+          }
         }
       },
       "required": [

@@ -4,7 +4,7 @@ begin
 
 declare [[agent_AoA_driver="test.CaseSplitNestedProofAllCases"]]
 
-lemma t1: "(x::int) * x \<ge> 0"
+lemma t_bool: "P (b::bool)"
   by aoa
 
 end

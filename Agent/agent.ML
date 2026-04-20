@@ -418,26 +418,19 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (split_conj: 
                                        var_bindings params'
 
         (* Each goal prem may expand to multiple atoms in facts' (flatten_facts
-           emits base(1..N) when the prem was destructured). origin_info
-           replicates each prem by its atom count so map2 against facts'
-           yields one FactBinding per emitted atom. *)
-        val prem_plan = map (Minilang.deep_destruct_term ctxt) prems
-        val origin_info : term list =
-          flat (map (fn (prem, atoms) => replicate (length atoms) prem) (prems ~~ prem_plan))
-
+           emits base(1..N) when the prem was destructured). unflatten_facts
+           groups contiguous atoms by base name, preserving each atom's flat
+           external name. All atoms of one group share the origin prem's term
+           as internal_term. grouped_facts is parallel to prems by design
+           (one group per goal premise). *)
+        val grouped_facts = Minilang_Aux.unflatten_facts facts'
         val prem_bindings_final =
-          if length origin_info = length facts'
-          then map2 (fn prem_term => fn (name, prop) =>
-                       {internal_term = prem_term,
-                        external_name = name,
-                        pretty = string_of_term ctxt' prop})
-                    origin_info facts'
-          else (* Fallback: pair 1-1 when plan and facts disagree *)
-               map2 (fn prem => fn (name, prop) =>
-                       {internal_term = prem,
-                        external_name = name,
-                        pretty = string_of_term ctxt' prop})
-                    prems facts'
+          flat (map2 (fn prem_term => fn (_, atoms) =>
+                        map (fn (name, prop) =>
+                              {internal_term = prem_term,
+                               external_name = name,
+                               pretty = string_of_term ctxt' prop}) atoms)
+                     prems grouped_facts)
 
         (* Step 8: Compute missing bindings (provided but not used in goal) *)
         (* Only report variables where external_name != internal_name *)

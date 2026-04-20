@@ -24,6 +24,7 @@ LONG_GOAL_HINT = (
 def trunc_expr(s: 'str | IsaTerm') -> str:
     return _trunc_expr_base(s.unicode if isinstance(s, IsaTerm) else s, AGENT_EXPR_LIMIT)
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from enum import Enum
 import json
 import logging
@@ -107,7 +108,7 @@ type raw_op = ToolCall_arg
 # `raw_proof` (type alias): an ordered list of raw operation dicts as
 # received from the agent, BEFORE parsing via `Parse_Nodes`.  Used only in
 # `*_ToolArg` field types (schema-level shape); node instance fields never
-# hold `raw_proof` — they hold the parsed `proof` (list of `gen_node`)
+# hold `raw_proof` — they hold the parsed `proof` (list of `Parsed_Opr`)
 # instead.  Optionality (absence of a proof body) is expressed by
 # `NotRequired[raw_proof | None]` at the ToolArg level and by
 # `proof | None` on instance fields.
@@ -137,10 +138,6 @@ class FailureReason(NamedTuple):
     and Leaf.the_operation() returns."""
     reason: str
 
-class EditFailureResponse(NamedTuple):
-    is_error: bool
-    failure_reason: FailureReason | None
-    revert: bool
 
 class IsabelleEntity:
     """A resolved Isabelle entity (constant, type, class, locale, etc.) with display info."""
@@ -446,31 +443,101 @@ class AoA_Error(Exception):
 class OprError(AoA_Error):
     pass
 
-class CannotInsert(OprError):
-    def __init__(self, insert_into: 'Node', reason : str):
-        self.reason = reason
-        self.insert_into = insert_into
-    def __str__(self) -> str:
-        return f"Cannot insert before the node {self.insert_into.id}.\n{self.reason}"
-class CannotInsert_NodeNotFound(CannotInsert):
-    def __init__(self, id: step):
-        self.id = id
-    def __str__(self) -> str:
-        return f"Cannot insert before the node {self.id} because it is not found"
+class EditOperation(Enum):
+    """Top-level edit actions exposed to the agent."""
+    FILL = "fill"
+    INSERT = "insert_before"
+    AMEND = "amend"
 
-class CannotAppend(OprError):
-    def __init__(self, target : 'Node', reason : str):
-        self.reason = reason
-        self.target = target
+
+class EditFailureBehavior(Enum):
+    """What `_on_edit_failure` tells the edit method to do after a
+    committed node resolves to FAILURE on refresh."""
+    CONTINUE = "continue"                  # batch continues, node stays in tree
+    TERMINATE = "terminate"                # batch stops, node stays in tree
+    TERMINATE_AND_REVERT = "terminate_and_revert"  # batch stops, node deleted from tree
+
+
+class CannotEdit(AoA_Error):
+    """Unified failure carrier for fill/insert_before/amend."""
+    def __init__(self,
+                 target_step: step,
+                 operation: 'EditOperation | None' = None,
+                 unapplied_oprs: 'list[Parsed_Opr] | None' = None,
+                 is_error: bool = True):
+        # `operation` is None when raised from a node factory (only site:
+        # Obvious → GoalIsNontrivial); the enclosing edit method fills it
+        # in at catch time.
+        self.target_step = target_step
+        self.operation = operation
+        self.unapplied_oprs = list(unapplied_oprs) if unapplied_oprs else []
+        self.is_error = is_error
     def __str__(self) -> str:
-        return f"Cannot append on node {self.target.id}.\n{self.reason}"
-class CannotAppend_BlockClosed(CannotAppend):
-    def __init__(self, target : 'Node', closed_by: 'Node | None'):
-        if closed_by is None:
-            msg = f"The proof block is closed."
+        match self.operation:
+            case EditOperation.FILL:
+                return f"Cannot fill a node with id {self.target_step}"
+            case EditOperation.INSERT:
+                return f"Cannot insert before the node {self.target_step}"
+            case EditOperation.AMEND:
+                return f"Cannot amend the node {self.target_step}"
+            case _:
+                raise InternalError(
+                    f"CannotEdit.__str__: unknown operation {self.operation!r}")
+
+
+class CannotEdit_BlockClosed(CannotEdit):
+    """A block-closed proof line can take no more appends."""
+    def __init__(self, closed_by: 'step | None', *args, **kw):
+        super().__init__(*args, **kw)
+        self.closed_by = closed_by
+    def __str__(self) -> str:
+        if self.closed_by is None:
+            tail = "The proof block is closed."
         else:
-            msg = f"The proof block is closed. You should append to node {closed_by.id} instead."
-        super().__init__(target, msg)
+            tail = (f"The proof block is closed. "
+                    f"You should edit node {self.closed_by} instead.")
+        return f"{super().__str__()}\n{tail}"
+
+
+class CannotEdit_NodeNotFound(CannotEdit):
+    """Locate failed: the target step id does not exist."""
+    def __str__(self) -> str:
+        return f"{super().__str__()}\nThe node is not found."
+
+
+class CannotEdit_BadNode(CannotEdit):
+    """`fill` target has a SUCCESS step at or below it."""
+    def __str__(self) -> str:
+        return (f"{super().__str__()}\n"
+                f"The target already exists. "
+                f"Fill does not overwrite existing successful steps.")
+
+
+class CannotEdit_Root(CannotEdit):
+    """`amend` was called on the root node."""
+    def __str__(self) -> str:
+        return f"{super().__str__()}\nIt is the root node."
+
+
+class CannotEdit_EvaluationFailed(CannotEdit):
+    """Set by an `_on_edit_failure` hook that terminated the edit."""
+    def __init__(self, reason: 'FailureReason', *args, **kw):
+        super().__init__(*args, **kw)
+        self.reason = reason
+    def __str__(self) -> str:
+        return f"{super().__str__()}\n{self.reason.reason}"
+
+
+class GoalIsNontrivial(CannotEdit):
+    """Raised by `Obvious.__init__` when the parent goal is non-trivial."""
+    _message = ("You cannot claim the goal is obvious again. "
+                "You must provide step-by-step proofs.")
+    def __init__(self, parent: 'Node', **kw):
+        super().__init__(target_step=parent.id, **kw)
+        self.parent = parent
+    def __str__(self) -> str:
+        return f"{super().__str__()}\n{self._message}"
+
 
 class FactNotFound(OprError):
     pass
@@ -494,16 +561,6 @@ class InternalError_UnparsedTerm(InternalError):
     def __str__(self) -> str:
         return f"Syntax error in term `{self.term}`\n{self.reason}"
 
-class GenNode_Error(InternalError):
-    """
-    Raised during gen_node construction when node cannot be created.
-    Should be caught by append/insert methods and converted to Cannot* errors.
-    """
-    def __init__(self, reason: str):
-        self.reason = reason
-    def __str__(self) -> str:
-        return self.reason
-
 class NodeNotFound(OprError):
     def __init__(self, id: step):
         self.id = id
@@ -517,18 +574,6 @@ class InvalidAnswer(OprError):
     def __str__(self) -> str:
         return f"Invalid answer: {self.reason}"
 
-class CannotFill(OprError):
-    pass
-class CannotFill_NodeNotFound(CannotFill):
-    def __init__(self, id: step):
-        self.id = id
-    def __str__(self) -> str:
-        return f"Cannot fill a node with id {self.id}"
-class CannotFill_BadNode(CannotFill):
-    def __init__(self, id: step):
-        self.id = id
-    def __str__(self) -> str:
-        return f"Cannot fill a node with id {self.id}"
 class CannotRename(OprError):
     pass
 class CannotRename_NotFound(CannotRename):
@@ -556,48 +601,6 @@ class CannotDelete_NodeNotFound(CannotDelete):
 class CannotDelete_Root(CannotDelete):
     def __str__(self) -> str:
         return f"Cannot delete the root node"
-
-class CannotAmend(OprError):
-    pass
-class CannotAmend_NodeNotFound(CannotAmend):
-    def __init__(self, id: step):
-        self.id = id
-    def __str__(self) -> str:
-        return f"Cannot amend the node {self.id} because the node is not found"
-class CannotAmend_Root(CannotAmend):
-    def __str__(self) -> str:
-        return f"Cannot amend the root node"
-
-class GoalIsNontrivial(AoA_Error):
-    """Raised when Obvious is attempted on a goal that previously failed Obvious."""
-    _message = ("You cannot claim the goal is obvious again. "
-                "You must provide step-by-step proofs.")
-    def __init__(self, parent: 'Node'):
-        self.parent = parent
-    def __str__(self) -> str:
-        return self._message
-
-class CannotAppend_GoalIsNontrivial(CannotAppend, GoalIsNontrivial):
-    def __init__(self, parent: 'Node'):
-        CannotAppend.__init__(self, parent, GoalIsNontrivial._message)
-        GoalIsNontrivial.__init__(self, parent)
-
-class CannotFill_GoalIsNontrivial(CannotFill, GoalIsNontrivial):
-    def __init__(self, parent: 'Node'):
-        GoalIsNontrivial.__init__(self, parent)
-    def __str__(self) -> str:
-        return GoalIsNontrivial._message
-
-class CannotInsert_GoalIsNontrivial(CannotInsert, GoalIsNontrivial):
-    def __init__(self, parent: 'Node'):
-        CannotInsert.__init__(self, parent, GoalIsNontrivial._message)
-        GoalIsNontrivial.__init__(self, parent)
-
-class CannotAmend_GoalIsNontrivial(CannotAmend, GoalIsNontrivial):
-    def __init__(self, parent: 'Node'):
-        GoalIsNontrivial.__init__(self, parent)
-    def __str__(self) -> str:
-        return GoalIsNontrivial._message
 
 class ArgumentError(AoA_Error):
     def __init__(self, arg: ToolCall_arg, reason: str):
@@ -1363,6 +1366,7 @@ class Minilang_State:
                      theories_include: list[str] = [],
                      name_contains: list[str] = [],
                      exact_name: str | None = None,
+                     target_type: str = "",
                      ) -> tuple[list[RetrievedEntity], list[str]]:
         """Search k nearest entities by semantic similarity, returning resolved entities.
         If exact_name is given, does an exact lookup (score=1.0), ignoring other criteria.
@@ -1404,6 +1408,7 @@ class Minilang_State:
 
             term_patterns = [ascii_of_unicode(p) for p in term_patterns]
             type_patterns = [ascii_of_unicode(p) for p in type_patterns]
+            target_type = ascii_of_unicode(target_type)
             # Build domain
             if EntityKind.THEOREM in kinds:
                 local_entries: list[tuple] = await self.connection.callback(
@@ -1420,7 +1425,8 @@ class Minilang_State:
                                        term_patterns=term_patterns,
                                        type_patterns=type_patterns,
                                        theories_include=theories_include,
-                                       name_contains=name_contains)
+                                       name_contains=name_contains,
+                                       target_type=target_type)
                 scored_recs = [(score, rec) for score, rec in raw_results]
             else:
                 # Pattern-only search: get filtered entities, look up records, no ranking
@@ -1430,7 +1436,8 @@ class Minilang_State:
                                          type_patterns=type_patterns,
                                          theories_include=theories_include,
                                          name_contains=name_contains,
-                                         limit=k)
+                                         limit=k,
+                                         target_type=target_type)
                 scored_recs = []
                 for uk, name, _ in entries:
                     rec = Semantic_DB[uk]
@@ -1797,6 +1804,7 @@ class Interaction_Retrieve(Interaction):
             type_patterns: list[str] | None = None,
             theories_include: list[str] | None = None,
             name_contains: list[str] | None = None,
+            target_type: str = "",
     ):
         self.query = query
         self.state = state
@@ -1807,6 +1815,7 @@ class Interaction_Retrieve(Interaction):
         self.type_patterns = type_patterns or []
         self.theories_include = theories_include or []
         self.name_contains = name_contains or []
+        self.target_type = target_type
         self._candidate_facts_cache: list[RetrievedEntity] | None = None
         # Empty query forces FORKING_WITH_CTXT (fork needs parent context to judge relevance)
         session = the_session()
@@ -1832,7 +1841,8 @@ class Interaction_Retrieve(Interaction):
                 term_patterns=self.term_patterns,
                 type_patterns=self.type_patterns,
                 theories_include=self.theories_include,
-                name_contains=self.name_contains)
+                name_contains=self.name_contains,
+                target_type=self.target_type)
         return self._candidate_facts_cache
 
     def _entity_title(self) -> str:
@@ -2132,7 +2142,7 @@ class NodeConfig(NamedTuple):
     ml_state: Minilang_State
     parent: 'NonLeaf_Node | None'
 
-# `gen_node`: a parsed proof-op.  Carries:
+# `Parsed_Opr`: a parsed proof-op.  Carries:
 #   - `cls`: the class that will be constructed (so runtime consumers can
 #     ask "is this an Intro?" without peeking at raw dicts);
 #   - `factory`: a sync callable that turns a `NodeConfig` into a
@@ -2143,16 +2153,73 @@ class NodeConfig(NamedTuple):
 # Retrieval and interactions are deferred to the Node's first
 # `_refresh_me_alone` call via per-field `X is None` sentinels — no state
 # needs to flow in at construction.
-class gen_node(NamedTuple):
+class Parsed_Opr(NamedTuple):
     cls: type
     factory: Callable[[NodeConfig], 'Node']
     raw: ToolCall_arg
 
 # `proof` (type alias): the PARSED in-memory form of a proof body — a list of
-# already-parsed `gen_node`s.  Node instance fields that carry a sub-proof
+# already-parsed `Parsed_Opr`s.  Node instance fields that carry a sub-proof
 # store this form (never raw dicts), so `Parse_Nodes` is only invoked once
 # per op at tool-call time, not on every refresh.
-type proof = list[gen_node]
+type proof = list[Parsed_Opr]
+
+
+@dataclass
+class EditOutcome:
+    """Mutable record of the state of an edit operation in progress or
+    just completed.  `append` / `insert_before_me` / `amend_me` and the
+    top-level `fill` / `insert_before` / `amend` mutate an `EditOutcome`
+    in place as they run — never raising `AoA_Error`; only `InternalError`
+    (a bug) propagates.
+
+    - `operation`: which user-facing edit was attempted (Fill/Insert/
+      Amend).  Always set by the internal primitive from its `op` parameter.
+    - `committed`: nodes added to the tree (in order).  On
+      `TERMINATE_AND_REVERT` the reverted node is popped so `committed`
+      reflects what is actually in the tree.
+    - `failure`: a `CannotEdit` subclass when the edit ran into an
+      expected failure, or `None` on full success.  Carries
+      `operation` / `unapplied_oprs` / `is_error` in its fields.
+    - `request`: the original `list[Parsed_Opr]` the caller submitted.
+      Hooks (e.g. `Obvious._on_edit_failure`) inspect this to decide
+      batch-size-aware policy."""
+    operation: 'EditOperation'
+    committed: 'list[Node]' = field(default_factory=list)
+    failure: 'CannotEdit | None' = None
+    request: 'list[Parsed_Opr]' = field(default_factory=list)
+
+    async def commit_and_hook(
+        self,
+        can_continue: bool,
+        node: 'Node',
+    ) -> 'tuple[EditFailureBehavior, bool]':
+        """Post-attach bookkeeping shared by `append` / `insert_before_me`:
+        refresh the newly-attached `node`, add it to `committed`, run
+        `_on_edit_failure` if the refresh resolved to FAILURE.  On
+        `TERMINATE_AND_REVERT`: delete the node from the tree and pop
+        it from `committed`.  Returns `(behavior, cancelled)`; `cancelled`
+        tells the caller the node was `_cancel`'d (no refresh, but still
+        in the tree)."""
+        cancelled = False
+        if can_continue:
+            await node._refresh_me_alone()
+        else:
+            await node._cancel()
+            cancelled = True
+        if not cancelled:
+            await node._refresh_all_after_me()
+        self.committed.append(node)
+        if cancelled or node.status.status != EvaluationStatus.Status.FAILURE:
+            return (EditFailureBehavior.CONTINUE, cancelled)
+        behavior, _ = node._on_edit_failure(self)
+        if behavior is EditFailureBehavior.TERMINATE_AND_REVERT:
+            rp = node._delete_me()
+            await rp._refresh_me_alone()
+            if rp.parent is not None:
+                await rp._refresh_all_after_me()
+            self.committed.pop()
+        return (behavior, cancelled)
 
 
 # `_RawOp`: one element of the parsing pipeline's input linked list — a raw
@@ -2205,8 +2272,8 @@ class Node(ABC):
         cls,
         arg: Any,
         path: str = "<direct>",
-    ) -> gen_node:
-        """Build the self `gen_node` for this op (one node — no tail).
+    ) -> Parsed_Opr:
+        """Build the self `Parsed_Opr` for this op (one node — no tail).
         Default factory: `lambda cfg: cls(cfg, arg)` — fits every class
         whose `__init__` signature is `(config, arg)` and that has no
         nested proof fields to pre-parse.
@@ -2217,7 +2284,7 @@ class Node(ABC):
         time.  Path is only used for error messages when parsing nested
         fields; it has a default for direct/test invocations like
         `Obvious.gen_single({"facts": []})`."""
-        return gen_node(cls=cls, factory=lambda cfg: cls(cfg, arg), raw=arg)
+        return Parsed_Opr(cls=cls, factory=lambda cfg: cls(cfg, arg), raw=arg)
 
     @classmethod
     def gen(
@@ -2225,7 +2292,7 @@ class Node(ABC):
         arg: Any,
         remaining: 'LinkedList[_RawOp]',
         path: str,
-    ) -> 'LinkedList[gen_node]':
+    ) -> 'LinkedList[Parsed_Opr]':
         """Base: `Cons(gen_single(arg, path), Parse_Nodes(remaining))`.
 
         Most subclasses only override `gen_single` (which builds the
@@ -2366,11 +2433,31 @@ class Node(ABC):
             return
         self.status = EVALUATION_CACNCELLED
         await self.resulting_state().reset()
-    def _on_edit_failure(self) -> EditFailureResponse:
-        """Hook called when this node's evaluation status is FAILURE after fill/insert_before/amend.
-        Derived classes can override to customize failure handling.
-        Returns (is_error, failure_reason, revert)."""
-        return EditFailureResponse(is_error=True, failure_reason=None, revert=False)
+    def _on_edit_failure(
+        self, outcome: 'EditOutcome'
+    ) -> 'tuple[EditFailureBehavior, EditOutcome]':
+        """Hook called during `append`/`insert_before_me`/`amend_me` when
+        this node has just been committed and its refresh resolved to
+        FAILURE status.  `self` is that failing node; at call time
+        `outcome.committed[-1] is self` and `outcome.operation` reflects
+        the top-level edit action (Fill/Insert/Amend).
+
+        Default behaviour: return `(CONTINUE, outcome)` — the batch
+        continues, the failing node stays in the tree, the agent sees
+        the FAILURE from tree structure.
+
+        Override contract: return `(behavior, outcome)`.
+        - `CONTINUE`: batch moves on; failing node stays in tree.
+        - `TERMINATE`: batch stops; failing node stays in tree.
+        - `TERMINATE_AND_REVERT`: batch stops; failing node is removed
+          from the tree by the caller (but stays in `outcome.committed`).
+
+        Hooks MAY mutate `outcome.failure` (typically to a
+        `CannotEdit_EvaluationFailed(reason=..., operation=
+        outcome.operation, ...)`).  Hooks inspect `outcome.request`
+        for batch-size-aware decisions (typical: only
+        TERMINATE_AND_REVERT on singleton)."""
+        return (EditFailureBehavior.CONTINUE, outcome)
     @abstractmethod
     def assemble(self, output: list[Minilang_Operation] | None = None) -> list[Minilang_Operation]:
         """
@@ -2392,47 +2479,57 @@ class Node(ABC):
             raise InternalError("Don't know how to refresh a node and all its after nodes when the node's parent is none")
         else:
             await self.parent._refresh_all_children_after(self, self.status.status == EvaluationStatus.Status.SUCCESS)
-    async def insert_before_me(self, gn: gen_node) -> 'Node':
+    async def insert_before_me(
+        self, gns: 'list[Parsed_Opr]',
+        op: 'EditOperation' = EditOperation.INSERT,
+    ) -> 'EditOutcome':
+        """Insert `gns` as siblings immediately before `self`, in order.
+        Catches Group-B construction errors (`GoalIsNontrivial`) into
+        `EditOutcome.failure` and stops the batch.  After each commit,
+        if the inserted node's status is FAILURE, invokes
+        `_on_edit_failure`; the returned `EditFailureBehavior` decides
+        whether the batch continues, stops, or stops-and-reverts."""
+        outcome = EditOutcome(operation=op, request=gns)
         if self.parent is None:
-            raise InternalError("Don't know how to refresh a node and all its after nodes when the node's parent is none")
-        else:
-            node = await self.parent._insert_before_child(self, gn)
-            if self.parent._can_continue_before_child(node):
-                await node._refresh_me_alone()
-            else:
-                await node._cancel()
-            await node._refresh_all_after_me()
-            return node
-    async def insert_before(self, step: step, gn: gen_node,
-                            apply_edit_failure: bool = True
-                            ) -> 'tuple[Node, bool, FailureReason | None]':
-        """Insert a node before ``step``.
-
-        ``apply_edit_failure`` (default True) controls whether the inserted
-        node's ``_on_edit_failure`` hook is invoked on refresh failure.  The
-        single-op commit path keeps the default so that e.g. a failing
-        ``Obvious`` is auto-reverted to leave a blank slot.  The multi-item
-        batch path (see ``mcp_http_server._execute_proof_batch``) passes
-        ``False`` to suppress revert — failed nodes stay in the tree in a
-        FAILURE state so the agent can see them and amend as needed."""
+            raise InternalError("Cannot insert_before_me on a parentless node")
+        if not gns:
+            return outcome
+        parent = self.parent
+        for i, gn in enumerate(gns):
+            try:
+                node = await parent._insert_before_child(self, gn)
+            except GoalIsNontrivial as e:
+                e.operation = op
+                e.unapplied_oprs = list(gns[i:])
+                e.is_error = len(outcome.committed) == 0
+                outcome.failure = e
+                return outcome
+            behavior, _ = await outcome.commit_and_hook(
+                parent._can_continue_before_child(node), node)
+            if behavior is not EditFailureBehavior.CONTINUE:
+                return outcome
+        return outcome
+    async def insert_before(
+        self, step: step, gns: 'list[Parsed_Opr]',
+    ) -> 'EditOutcome':
+        """Insert `gns` as siblings before `step`, in order.  Returns an
+        `EditOutcome` — never raises AoA_Error."""
+        op = EditOperation.INSERT
+        outcome = EditOutcome(operation=op, request=gns)
+        if not gns:
+            return outcome
         try:
             node = self.locate_node(step)
-            ret = await node.insert_before_me(gn)
-            if apply_edit_failure and ret.status.status == EvaluationStatus.Status.FAILURE:
-                response = ret._on_edit_failure()
-                if response.revert:
-                    rp = ret._delete_me()
-                    await rp._refresh_me_alone()
-                    if rp.parent is not None:
-                        await rp._refresh_all_after_me()
-                return ret, response.is_error, response.failure_reason
-            return ret, False, None
-        except GoalIsNontrivial as e:
-            raise CannotInsert_GoalIsNontrivial(e.parent)
         except NodeNotFound:
-            raise CannotInsert_NodeNotFound(step)
+            outcome.failure = CannotEdit_NodeNotFound(
+                target_step=step, operation=op, unapplied_oprs=list(gns), is_error=True)
+            return outcome
+        return await node.insert_before_me(gns, op=op)
     @abstractmethod
-    async def append(self, gn: gen_node) -> 'Node | None':
+    async def append(
+        self, gns: 'list[Parsed_Opr]',
+        op: 'EditOperation' = EditOperation.FILL,
+    ) -> 'EditOutcome':
         ...
     def _locate_node(self, ids: Sequence[local_step], id: step, pos: int = 0) -> 'Node':
         if pos == len(ids):
@@ -2444,25 +2541,33 @@ class Node(ABC):
     def unfinished_nodes(self, ret: set['Node']) -> None:
         if self.status.status != EvaluationStatus.Status.SUCCESS:
             ret.add(self)
-    async def fill(self, id: step, gn: gen_node,
-                   apply_edit_failure: bool = True
-                   ) -> 'tuple[Node, bool, FailureReason | None]':
-        """Fill a blank proof slot (or replace an existing failed step via the
-        fallback path) with a newly-constructed node.
-
-        ``apply_edit_failure`` mirrors the parameter on ``insert_before`` —
-        multi-item batches pass False to suppress auto-revert."""
+    async def fill(self, id: step, gns: 'list[Parsed_Opr]') -> 'EditOutcome':
+        """Fill a blank proof slot (or replace an existing failed step
+        via the fallback path) with one or more newly-constructed
+        nodes, delegating to the target's `append(gns)` once the slot
+        is cleared.  Returns an `EditOutcome` — never raises AoA_Error."""
+        op = EditOperation.FILL
+        outcome = EditOutcome(operation=op, request=gns)
+        if not gns:
+            return outcome
         ids = id.split('.')
-        node = self._locate_node(ids[:-1], id, 0)
+        try:
+            node = self._locate_node(ids[:-1], id, 0)
+        except NodeNotFound:
+            outcome.failure = CannotEdit_NodeNotFound(
+                target_step=id, operation=op, unapplied_oprs=list(gns), is_error=True)
+            return outcome
         to_fill = node._id_of_openning_prf_to_fill()
         if to_fill is None:
-            raise CannotFill_NodeNotFound(id)
+            outcome.failure = CannotEdit_NodeNotFound(
+                target_step=id, operation=op, unapplied_oprs=list(gns), is_error=True)
+            return outcome
         if to_fill != id:
-            # Fallback: allow replacing a node (and all its successors) when
-            # every node from the target onward has failed or been cancelled.
-            # This handles orphaned nodes left behind by exceptions during
-            # append (e.g. InternalError in Intro) that would otherwise make
-            # the step permanently unfillable.
+            # Fallback: allow replacing a node (and all its successors)
+            # when every node from the target onward has failed or been
+            # cancelled.  Handles orphaned nodes left behind by exceptions
+            # during append (e.g. InternalError in Intro) that would
+            # otherwise make the step permanently unfillable.
             assert isinstance(node, NonLeaf_Node), (
                 "fill's target must be a NonLeaf_Node — Leaf nodes have no "
                 "children to fill into")
@@ -2475,10 +2580,13 @@ class Node(ABC):
                 c.status.status == EvaluationStatus.Status.SUCCESS
                 for c in node.sub_nodes[found_i:]
             ):
-                raise CannotFill_BadNode(id)
-        # Replacement semantics: delete the target node (if it exists) and
-        # everything after it via the standard deletion path, then refresh
-        # the predecessor so the state chain is correct before append.
+                outcome.failure = CannotEdit_BadNode(
+                    target_step=id, operation=op, unapplied_oprs=list(gns), is_error=True)
+                return outcome
+        # Replacement semantics: delete the target node (if it exists)
+        # and everything after it via the standard deletion path, then
+        # refresh the predecessor so the state chain is correct before
+        # append.
         assert isinstance(node, NonLeaf_Node), (
             "fill's target must be a NonLeaf_Node — Leaf nodes have no "
             "children to fill into")
@@ -2494,21 +2602,7 @@ class Node(ABC):
             await rp._refresh_me_alone()
             if rp.parent is not None:
                 await rp._refresh_all_after_me()
-        try:
-            ret = await node.append(gn)
-        except GoalIsNontrivial as e:
-            raise CannotFill_GoalIsNontrivial(e.parent)
-        if ret is None:
-            raise InternalError("Don't know how to fill a node when the node's append method returns None")
-        if apply_edit_failure and ret.status.status == EvaluationStatus.Status.FAILURE:
-            response = ret._on_edit_failure()
-            if response.revert:
-                rp = ret._delete_me()
-                await rp._refresh_me_alone()
-                if rp.parent is not None:
-                    await rp._refresh_all_after_me()
-            return ret, response.is_error, response.failure_reason
-        return ret, False, None
+        return await node.append(gns, op=op)
     def _id_of_openning_prf_to_fill(self) -> step | None:
         return None
 
@@ -2635,44 +2729,104 @@ class Node(ABC):
                 if rp.parent is not None:
                     await rp._refresh_all_after_me()
         return not_found
-    async def amend_me(self, gn: gen_node) -> 'tuple[Node, Node]':
-        if self.parent is not None:
-            return await self.parent._amend_child(self, gn)
-        else:
-            raise CannotAmend_Root()
-    def _amend_from(self, old: 'Node') -> None:
-        self._first_time = False
-    async def amend(self, id: step, gn: gen_node) -> 'tuple[Node, bool, FailureReason | None]':
-        try:
-            old_node = self.locate_node(id)
-            new_node, old_node = await old_node.amend_me(gn)
+    async def amend_me(
+        self, gns: 'list[Parsed_Opr]',
+        op: 'EditOperation' = EditOperation.AMEND,
+    ) -> 'tuple[EditOutcome, Node]':
+        """Replace `self` with nodes built from `gns`.
+
+        For `len(gns) == 1`: in-place replacement via `_amend_child`'s
+        `_amend_from` path — the new node inherits `self`'s sub_nodes.
+        If the replacement resolves to FAILURE, the hook
+        `_on_edit_failure` may return `TERMINATE_AND_REVERT`, in which
+        case `self` is restored in place (including its sub_nodes).
+
+        For `len(gns) != 1`: delete `self`, then insert `gns` at its
+        former slot.  `self`'s sub_nodes are dropped.
+
+        Returns `(outcome, original_self)`.  Never raises AoA_Error."""
+        outcome = EditOutcome(operation=op, request=gns)
+        if self.parent is None:
+            outcome.failure = CannotEdit_Root(
+                target_step=self.id,
+                operation=op, unapplied_oprs=list(gns), is_error=True)
+            return outcome, self
+        if not gns:
+            return outcome, self
+        if len(gns) == 1:
+            try:
+                new_node, old = await self.parent._amend_child(self, gns[0])
+            except GoalIsNontrivial as e:
+                e.operation = op
+                e.unapplied_oprs = list(gns)
+                e.is_error = True
+                outcome.failure = e
+                return outcome, self
+            outcome.committed.append(new_node)
             if new_node.status.status == EvaluationStatus.Status.FAILURE:
-                response = new_node._on_edit_failure()
-                if response.revert:
+                behavior, outcome = new_node._on_edit_failure(outcome)
+                if behavior is EditFailureBehavior.TERMINATE_AND_REVERT:
                     parent = new_node.parent
                     if parent is None:
                         raise InternalError("Cannot revert amend on root node")
                     for i, c in enumerate(parent.sub_nodes):
                         if c is new_node:
-                            if isinstance(new_node, NonLeaf_Node) and isinstance(old_node, NonLeaf_Node):
-                                old_node.sub_nodes[:] = new_node.sub_nodes
+                            if (isinstance(new_node, NonLeaf_Node)
+                                    and isinstance(old, NonLeaf_Node)):
+                                old.sub_nodes[:] = new_node.sub_nodes
                                 new_node.sub_nodes.clear()
-                                for child in old_node.sub_nodes:
-                                    child.parent = old_node
-                            parent.sub_nodes[i] = old_node
-                            old_node.parent = parent
-                            if parent._can_continue_before_child(old_node):
-                                await old_node._refresh_me_alone()
+                                for child in old.sub_nodes:
+                                    child.parent = old
+                            parent.sub_nodes[i] = old
+                            old.parent = parent
+                            if parent._can_continue_before_child(old):
+                                await old._refresh_me_alone()
                             else:
-                                await old_node._cancel()
-                            await old_node._refresh_all_after_me()
+                                await old._cancel()
+                            await old._refresh_all_after_me()
                             break
-                return new_node, response.is_error, response.failure_reason
-            return new_node, False, None
-        except GoalIsNontrivial as e:
-            raise CannotAmend_GoalIsNontrivial(e.parent)
+                    outcome.committed.pop()
+                    return outcome, old
+            return outcome, old
+        # Multi-amend: delete self + insert gns at former slot.
+        parent = self.parent
+        idx_in_parent = next(
+            (k for k, c in enumerate(parent.sub_nodes) if c is self), -1)
+        if idx_in_parent < 0:
+            raise InternalError("amend_me: self is not a child of its parent")
+        next_sibling = (parent.sub_nodes[idx_in_parent + 1]
+                        if idx_in_parent + 1 < len(parent.sub_nodes)
+                        else None)
+        old_self = self
+        rp = old_self._delete_me()
+        if rp is not None:
+            await rp._refresh_me_alone()
+            if rp.parent is not None:
+                await rp._refresh_all_after_me()
+        if next_sibling is not None:
+            sub_outcome = await next_sibling.insert_before_me(gns, op=op)
+        else:
+            assert isinstance(parent, StdBlock), (
+                "amend of last child requires StdBlock parent (for append)")
+            sub_outcome = await parent.append(gns, op=op)
+        return sub_outcome, old_self
+    def _amend_from(self, old: 'Node') -> None:
+        self._first_time = False
+    async def amend(self, id: step, gns: 'list[Parsed_Opr]') -> 'EditOutcome':
+        """Replace the node at `id` with nodes built from `gns`.  Returns
+        an `EditOutcome` — never raises AoA_Error."""
+        op = EditOperation.AMEND
+        outcome = EditOutcome(operation=op, request=gns)
+        if not gns:
+            return outcome
+        try:
+            old_node = self.locate_node(id)
         except NodeNotFound:
-            raise CannotAmend_NodeNotFound(id)
+            outcome.failure = CannotEdit_NodeNotFound(
+                target_step=id, operation=op, unapplied_oprs=list(gns), is_error=True)
+            return outcome
+        sub_outcome, _ = await old_node.amend_me(gns, op=op)
+        return sub_outcome
 
 class Leaf(Node):
     def _should_print_done(self) -> bool:
@@ -2703,8 +2857,15 @@ class Leaf(Node):
         except IsabelleError as err:
             self.status = EvaluationStatus.Failure(time() - now, FailureReason(''.join(err.errors)))
 
-    async def append(self, gn: gen_node) -> 'Node | None':
-        raise CannotAppend(self, "It is not a goal or a proof block")
+    async def append(
+        self, gns: 'list[Parsed_Opr]',
+        op: 'EditOperation' = EditOperation.FILL,
+    ) -> 'EditOutcome':
+        # Unreachable in practice: callers of `append` (fill, amend_me,
+        # tests) all target NonLeaf_Node instances.  Treat as a bug.
+        raise InternalError(
+            f"append called on Leaf node {self.id}; "
+            f"expected a NonLeaf_Node target")
 
 class NonLeaf_Node(Node):
     _closed_by: Node | None # Some proof operation (e.g. Branch) may close a block, preventing all later appending to this block.
@@ -2772,7 +2933,7 @@ class NonLeaf_Node(Node):
             if can_continue:
                 if self.parent is not None:
                     await self.parent._refresh_all_children_after(self, can_continue)
-    async def _insert_before_child(self, before: 'Node', gn: gen_node) -> 'Node':
+    async def _insert_before_child(self, before: 'Node', gn: Parsed_Opr) -> 'Node':
         """
         invalidates the status of all nodes including and after the `before`
         """
@@ -2796,10 +2957,7 @@ class NonLeaf_Node(Node):
                     else:
                         new_id = cat_segs_into_id(prev_id + [1])
                 config = NodeConfig(new_id, await child.ml_state.clone(None), self)
-                try:
-                    node = gn.factory(config)
-                except GenNode_Error as e:
-                    raise CannotInsert(before, str(e))
+                node = gn.factory(config)
                 for x in self.sub_nodes:
                     if x is node:
                         raise InternalError("The target node to insert is already in my children")
@@ -2897,14 +3055,11 @@ class NonLeaf_Node(Node):
                     self._closed_by = None
                 return
         raise InternalError("The target node is not my children")
-    async def _amend_child(self, child: 'Node', gn: gen_node) -> 'tuple[Node, Node]':
+    async def _amend_child(self, child: 'Node', gn: Parsed_Opr) -> 'tuple[Node, Node]':
         for i, c in enumerate(self.sub_nodes):
             if c is child:
                 config = NodeConfig(child.local_step, await child.ml_state.clone(None), self)
-                try:
-                    new_node = gn.factory(config)
-                except GenNode_Error as e:
-                    raise CannotAmend(self, child, str(e))
+                new_node = gn.factory(config)
                 self.sub_nodes[i] = new_node
                 self._is_trivial = None
                 for sibling in self.sub_nodes[i+1:]:
@@ -2932,7 +3087,7 @@ class NonLeaf_Node(Node):
         ...
 
 class StdBlock(NonLeaf_Node):
-    # Pre-parsed sub-proof body (list[gen_node]).  Subclasses that accept a
+    # Pre-parsed sub-proof body (list[Parsed_Opr]).  Subclasses that accept a
     # `proof` field set this in __init__; consumed by `_attach_proof` on
     # first refresh.
     _proof: 'proof | None'
@@ -2947,7 +3102,7 @@ class StdBlock(NonLeaf_Node):
         self._prev_pending_goal: Goal | None = None
 
     @classmethod
-    def gen_single(cls, arg: Any, path: str = "<direct>") -> gen_node:
+    def gen_single(cls, arg: Any, path: str = "<direct>") -> Parsed_Opr:
         """Default for StdBlock subclasses (Have / Suffices / Obtain):
         parse the optional `proof` body eagerly and pass the pre-parsed
         `proof | None` as the second ctor positional.  Subclasses whose
@@ -2960,7 +3115,7 @@ class StdBlock(NonLeaf_Node):
         which it infers (StdBlock's own `__init__` is
         `(config, thought, sub_nodes)`)."""
         parsed = _parse_optional_raw_proof(arg.get("proof"), f"{path}.proof")
-        return gen_node(
+        return Parsed_Opr(
             cls=cls,
             factory=lambda cfg: cast(Any, cls)(cfg, arg, parsed),
             raw=arg)
@@ -3248,11 +3403,11 @@ class StdBlock(NonLeaf_Node):
         self.quickview(indent, MyIO(buffer))
         return buffer.getvalue()
     async def _attach_proof(self, auto_intro: bool) -> 'FailureReason | None':
-        """Consume ``self._proof`` (a pre-parsed list[gen_node]) at first
+        """Consume ``self._proof`` (a pre-parsed list[Parsed_Opr]) at first
         refresh and attach each as a direct child of this block.
 
         If ``auto_intro`` is True (only Have today) and the provided body's
-        first gen_node is NOT an ``Intro``, an auto-Intro is injected before
+        first Parsed_Opr is NOT an ``Intro``, an auto-Intro is injected before
         the provided list when the current goal state calls for one
         (``need_intro(False)``).
 
@@ -3322,41 +3477,79 @@ class StdBlock(NonLeaf_Node):
             config = NodeConfig(local_step, ml_state, self)
             self.sub_nodes.append(Intro(config, "", None, False))
         return None
-    async def append(self, gn: gen_node) -> 'Node | None':
+    async def append(
+        self, gns: 'list[Parsed_Opr]',
+        op: 'EditOperation' = EditOperation.FILL,
+    ) -> 'EditOutcome':
+        """Append `gns` as children, in order.  For each: build, attach,
+        refresh, cascade.  Catches Group-B construction failures
+        (`CannotEdit_BlockClosed`, `GoalIsNontrivial`) into
+        `EditOutcome.failure` and stops the batch.  After each commit,
+        if the node's refresh resolves to FAILURE, invokes
+        `_on_edit_failure`; the returned `EditFailureBehavior` decides
+        whether the batch continues, stops, or stops-and-reverts.
+
+        Auto-Intro is injected after each successfully committed node
+        when the block is still opening and the resulting state needs
+        an Intro (Q7: skipped when the user's next item is already an
+        Intro)."""
+        outcome = EditOutcome(operation=op, request=gns)
+        def _block_closed(unapplied: 'list[Parsed_Opr]') -> CannotEdit_BlockClosed:
+            return CannotEdit_BlockClosed(
+                self._closed_by.id if self._closed_by is not None else None,
+                self.id,
+                operation=op, unapplied_oprs=unapplied,
+                is_error=len(outcome.committed) == 0)
         if not self.opening():
-            raise CannotAppend_BlockClosed(self, self._closed_by)
-        local_step = self._local_step_of_next_proof_step()
-        ml_state = await self._state_before_ending_.clone(None)
-        config = NodeConfig(local_step, ml_state, self)
-        try:
-            node = gn.factory(config)
-        except GenNode_Error as e:
-            raise CannotAppend(self, str(e))
-        if node is None:
-            return None
-        self.sub_nodes.append(node)
-        self._is_trivial = None
-        if self._can_continue_before_child(node):
-            await node._refresh_me_alone()
-        else:
-            await node._cancel()
-            return node
-        if self.opening():
-            ml_state = node.resulting_state()
-            if await ml_state.need_intro(False):
-                await self.append(gen_node(
-                    cls=Intro,
-                    factory=lambda config: Intro(config, "", None, False),
-                    raw={}))
-        # Propagate state upward via the cascade chain. Matches the behavior
-        # of insert_before_me / _amend_child, which both call
-        # _refresh_all_after_me after inserting. In particular this is what
-        # makes GlobalEnv → GoalNode propagation fire for plain appends:
-        # without it, global_env.append(Have) would never rerun GlobalEnv's
-        # footer, so no SKIP from GlobalEnv's end state would ever be written
-        # into the GoalNode checkpoints.
-        await node._refresh_all_after_me()
-        return node
+            outcome.failure = _block_closed(list(gns))
+            return outcome
+        if not gns:
+            return outcome
+        for i, gn in enumerate(gns):
+            if not self.opening():
+                outcome.failure = _block_closed(list(gns[i:]))
+                return outcome
+            local_step = self._local_step_of_next_proof_step()
+            ml_state = await self._state_before_ending_.clone(None)
+            config = NodeConfig(local_step, ml_state, self)
+            try:
+                node = gn.factory(config)
+            except GoalIsNontrivial as e:
+                e.operation = op
+                e.unapplied_oprs = list(gns[i:])
+                e.is_error = len(outcome.committed) == 0
+                outcome.failure = e
+                return outcome
+            if node is None:
+                # Factory refused (rare); skip this gn.
+                continue
+            self.sub_nodes.append(node)
+            self._is_trivial = None
+            behavior, cancelled = await outcome.commit_and_hook(
+                self._can_continue_before_child(node), node)
+            if behavior is not EditFailureBehavior.CONTINUE:
+                return outcome
+            # Q7: skip auto-Intro injection if the user's next item is
+            # already an Intro.
+            next_is_intro = (i + 1 < len(gns)
+                             and gns[i + 1].cls is Intro)
+            if not cancelled and not next_is_intro and self.opening():
+                next_state = node.resulting_state()
+                if await next_state.need_intro(False):
+                    auto_gn = Parsed_Opr(
+                        cls=Intro,
+                        factory=lambda config: Intro(config, "", None, False),
+                        raw={})
+                    auto_local = self._local_step_of_next_proof_step()
+                    auto_state = await self._state_before_ending_.clone(None)
+                    auto_config = NodeConfig(auto_local, auto_state, self)
+                    auto_node = auto_gn.factory(auto_config)
+                    self.sub_nodes.append(auto_node)
+                    self._is_trivial = None
+                    await outcome.commit_and_hook(
+                        self._can_continue_before_child(auto_node),
+                        auto_node)
+        return outcome
 
 
 class GoalContainer(NonLeaf_Node):
@@ -3516,13 +3709,13 @@ class GoalNode(StdBlock):
             if body is not None:
                 self._pending_auto_proof = body
             self._pending_auto_proof_by_case = None
-        # Attach auto_proof subproof (pre-parsed list[gen_node] from
+        # Attach auto_proof subproof (pre-parsed list[Parsed_Opr] from
         # Branch/CaseSplit/Induction) before Intro fallback.
         if self._pending_auto_proof is not None and not self.sub_nodes:
             gns = self._pending_auto_proof
             self._pending_auto_proof = None
             first_cls = gns[0].cls if gns else None
-            # Q7: auto-Intro injection unless the first gen_node is Intro.
+            # Q7: auto-Intro injection unless the first Parsed_Opr is Intro.
             if (first_cls is not Intro
                     and await self.ml_state.need_intro(False)):
                 local_step = self._local_step_of_next_proof_step()
@@ -3556,6 +3749,9 @@ class GoalNode(StdBlock):
         return ret
     def quickview_header(self, indent: int, file: MyIO) -> int:
         if self.is_single_goal:
+            if self._should_print_done():
+                print_indent(indent, file)
+                file.write(f"done\n")
             return indent
         else:
             done_mark = "done, " if self._should_print_done() else ""
@@ -3611,7 +3807,7 @@ class SubgoalMaker(GoalContainer, StdBlock):
         self._initial_goal_index : int = 1
 
     @classmethod
-    def gen_single(cls, arg: Any, path: str = "<direct>") -> gen_node:
+    def gen_single(cls, arg: Any, path: str = "<direct>") -> Parsed_Opr:
         """Break the `StdBlock.gen_single` chain.  SubgoalMakers inherit
         from `StdBlock` for runtime utilities but don't carry a `proof`
         field on their ToolArg — Define inherits this default factory
@@ -3620,7 +3816,7 @@ class SubgoalMaker(GoalContainer, StdBlock):
         override, SubgoalMaker subclasses would pick up
         `StdBlock.gen_single`'s `cls(cfg, arg, parsed_proof)` factory
         which doesn't match their `__init__` signatures."""
-        return gen_node(cls=cls, factory=lambda cfg: cls(cfg, arg), raw=arg)
+        return Parsed_Opr(cls=cls, factory=lambda cfg: cls(cfg, arg), raw=arg)
 
     @classmethod
     def _singleton_splice(
@@ -3648,7 +3844,7 @@ class SubgoalMaker(GoalContainer, StdBlock):
 
     @classmethod
     def gen(cls, arg: Any, remaining: 'LinkedList[_RawOp]',
-            path: str) -> 'LinkedList[gen_node]':
+            path: str) -> 'LinkedList[Parsed_Opr]':
         """Shared splice dispatch for SubgoalMakers.  If `_singleton_splice`
         returns non-None, build the body's raw-op linked list, concat
         with `remaining` (so the body's last op sees the outer remaining
@@ -3821,7 +4017,7 @@ class CaseSplit_Like(SubgoalMaker):
         self._prev_case_printed: tuple[list[Var] | None, list[Hyp] | None] | None = None
 
     @classmethod
-    def gen_single(cls, arg: Any, path: str = "<direct>") -> gen_node:
+    def gen_single(cls, arg: Any, path: str = "<direct>") -> Parsed_Opr:
         """Default for CaseSplit / Induction: parse per-case `proofs`
         into `dict[case_name, proof]` and hand to the ctor.  Both
         subclasses take the same `__init__` signature
@@ -3864,7 +4060,7 @@ class CaseSplit_Like(SubgoalMaker):
                         f"{entry_path}.body: expected an array of proof "
                         f"operations, got {type(body).__name__}")
                 proofs_by_case[cn] = Parse_Op_List(body, f"{entry_path}.body")
-        return gen_node(
+        return Parsed_Opr(
             cls=cls,
             factory=lambda cfg: cast(Any, cls)(cfg, arg, proofs_by_case),
             raw=arg)
@@ -4110,11 +4306,11 @@ def proof_operation(operation: str, toolarg_typed_dict: type[Any]):
     """Class decorator to register a Node subclass as a proof operation.
 
     The class must define a classmethod
-    `gen(cls, arg, remaining, path) -> LinkedList[gen_node]` following the
+    `gen(cls, arg, remaining, path) -> LinkedList[Parsed_Opr]` following the
     base `Node.gen` contract: validate the ToolArg, parse any nested
     proof fields via `Parse_Op_List`, call `super().gen(arg, remaining,
     path)` to obtain the parsed tail (linked list of gen_nodes), and
-    return `Cons(my_gn, tail)` where `my_gn = gen_node(cls=..., factory=
+    return `Cons(my_gn, tail)` where `my_gn = Parsed_Opr(cls=..., factory=
     ..., raw=arg)`.  Classes that forbid a successor (e.g. `Obvious`)
     check `remaining is not None` themselves and raise.
     """
@@ -4228,7 +4424,7 @@ class Obvious(Leaf):
 
     @classmethod
     def gen(cls, arg: Obvious_ToolArg, remaining: 'LinkedList[_RawOp]',
-            path: str) -> 'LinkedList[gen_node]':
+            path: str) -> 'LinkedList[Parsed_Opr]':
         # Obvious concludes the proof — forbid any sibling after it in
         # the same list.  If remaining is None we delegate to super()
         # (base Node.gen → Cons(gen_single, parse empty tail) = one-cell
@@ -4279,16 +4475,26 @@ class Obvious(Leaf):
                 self.parent._is_trivial = False
     def the_operation(self) -> 'Minilang_Operation | FailureReason':
         return Minilang_Operation.HAMMER(self.fact_refs if self.fact_refs is not None else [], 30)
-    def _on_edit_failure(self) -> EditFailureResponse:
+    def _on_edit_failure(self, outcome: 'EditOutcome') -> 'tuple[EditFailureBehavior, EditOutcome]':
         if self.status.status == EvaluationStatus.Status.FAILURE:
+            # Multi-op batches skip auto-revert so the agent sees
+            # the failing node and can amend it.
+            if len(outcome.request) > 1:
+                return super()._on_edit_failure(outcome)
             file = MyIO(StringIO())
             if self.status.reason:
                 file.write(self.status.reason.reason)
                 file.write('\n')
             if self.warnings:
                 self._print_warnings(0, file, list(Warning.Position))
-            return EditFailureResponse(is_error=True, failure_reason=FailureReason(file.getvalue()), revert=True)
-        return super()._on_edit_failure()
+            outcome.failure = CannotEdit_EvaluationFailed(
+                FailureReason(file.getvalue()),
+                self.id,
+                operation=outcome.operation,
+                unapplied_oprs=[],
+                is_error=True)
+            return (EditFailureBehavior.TERMINATE_AND_REVERT, outcome)
+        return super()._on_edit_failure(outcome)
 
 class Chaining_ToolArg(TypedDict):
     thought: str
@@ -4371,16 +4577,26 @@ class Chaining(Leaf):
             return FailureReason("Chaining requires at least one fact")
         return Minilang_Operation.CHAINING(self.chain_name, self.fact_refs if self.fact_refs is not None else [])
 
-    def _on_edit_failure(self) -> EditFailureResponse:
+    def _on_edit_failure(self, outcome: 'EditOutcome') -> 'tuple[EditFailureBehavior, EditOutcome]':
         if self.status.status == EvaluationStatus.Status.FAILURE:
+            # Multi-op batches skip auto-revert so the agent sees
+            # the failing node and can amend it.
+            if len(outcome.request) > 1:
+                return super()._on_edit_failure(outcome)
             file = MyIO(StringIO())
             if self.status.reason:
                 file.write(self.status.reason.reason)
                 file.write('\n')
             if self.warnings:
                 self._print_warnings(0, file, list(Warning.Position))
-            return EditFailureResponse(is_error=True, failure_reason=FailureReason(file.getvalue()), revert=True)
-        return super()._on_edit_failure()
+            outcome.failure = CannotEdit_EvaluationFailed(
+                FailureReason(file.getvalue()),
+                self.id,
+                operation=outcome.operation,
+                unapplied_oprs=[],
+                is_error=True)
+            return (EditFailureBehavior.TERMINATE_AND_REVERT, outcome)
+        return super()._on_edit_failure(outcome)
 
 #### Witness
 
@@ -4667,16 +4883,26 @@ class Unfold(Leaf):
             self.fact_refs = await self.ml_state.refresh_facts(self.fact_refs)
         await super()._refresh_me_alone()
 
-    def _on_edit_failure(self) -> EditFailureResponse:
+    def _on_edit_failure(self, outcome: 'EditOutcome') -> 'tuple[EditFailureBehavior, EditOutcome]':
         if self.status.status == EvaluationStatus.Status.FAILURE:
+            # Multi-op batches skip auto-revert so the agent sees
+            # the failing node and can amend it.
+            if len(outcome.request) > 1:
+                return super()._on_edit_failure(outcome)
             file = MyIO(StringIO())
             if self.status.reason:
                 file.write(self.status.reason.reason)
                 file.write('\n')
             if self.warnings:
                 self._print_warnings(0, file, list(Warning.Position))
-            return EditFailureResponse(is_error=True, failure_reason=FailureReason(file.getvalue()), revert=True)
-        return super()._on_edit_failure()
+            outcome.failure = CannotEdit_EvaluationFailed(
+                FailureReason(file.getvalue()),
+                self.id,
+                operation=outcome.operation,
+                unapplied_oprs=[],
+                is_error=True)
+            return (EditFailureBehavior.TERMINATE_AND_REVERT, outcome)
+        return super()._on_edit_failure(outcome)
 
     def the_operation(self) -> 'Minilang_Operation | FailureReason':
         if not self.targets:
@@ -4792,16 +5018,26 @@ class Derive(Leaf):
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
         return indent
 
-    def _on_edit_failure(self) -> EditFailureResponse:
+    def _on_edit_failure(self, outcome: 'EditOutcome') -> 'tuple[EditFailureBehavior, EditOutcome]':
         if self.status.status == EvaluationStatus.Status.FAILURE:
+            # Multi-op batches skip auto-revert so the agent sees
+            # the failing node and can amend it.
+            if len(outcome.request) > 1:
+                return super()._on_edit_failure(outcome)
             file = MyIO(StringIO())
             if self.status.reason:
                 file.write(self.status.reason.reason)
                 file.write('\n')
             if self.warnings:
                 self._print_warnings(0, file, list(Warning.Position))
-            return EditFailureResponse(is_error=True, failure_reason=FailureReason(file.getvalue()), revert=True)
-        return super()._on_edit_failure()
+            outcome.failure = CannotEdit_EvaluationFailed(
+                FailureReason(file.getvalue()),
+                self.id,
+                operation=outcome.operation,
+                unapplied_oprs=[],
+                is_error=True)
+            return (EditFailureBehavior.TERMINATE_AND_REVERT, outcome)
+        return super()._on_edit_failure(outcome)
 
     def _fixed_facts_at_me(self, ret: Hyps) -> Hyps:
         if self.result_facts is not None:
@@ -5178,16 +5414,26 @@ class Rewrite(Leaf):
                     return self
         return super()._rename_fact(old_name, new_name)
 
-    def _on_edit_failure(self) -> EditFailureResponse:
+    def _on_edit_failure(self, outcome: 'EditOutcome') -> 'tuple[EditFailureBehavior, EditOutcome]':
         if self.status.status == EvaluationStatus.Status.FAILURE:
+            # Multi-op batches skip auto-revert so the agent sees
+            # the failing node and can amend it.
+            if len(outcome.request) > 1:
+                return super()._on_edit_failure(outcome)
             file = MyIO(StringIO())
             if self.status.reason:
                 file.write(self.status.reason.reason)
                 file.write('\n')
             if self.warnings:
                 self._print_warnings(0, file, list(Warning.Position))
-            return EditFailureResponse(is_error=True, failure_reason=FailureReason(file.getvalue()), revert=True)
-        return super()._on_edit_failure()
+            outcome.failure = CannotEdit_EvaluationFailed(
+                FailureReason(file.getvalue()),
+                self.id,
+                operation=outcome.operation,
+                unapplied_oprs=[],
+                is_error=True)
+            return (EditFailureBehavior.TERMINATE_AND_REVERT, outcome)
+        return super()._on_edit_failure(outcome)
 
 
 #### Have
@@ -5211,7 +5457,7 @@ class Have(StdBlock):
         # Populated from `Newly_Fixed_Vars_Msg` after the HAVE op runs.
         self.for_any: list[tuple[varname, typ]] = []
         self._prev_for_any: list[tuple[varname, typ]] = []
-        # Pre-parsed subproof body (list[gen_node]); consumed by
+        # Pre-parsed subproof body (list[Parsed_Opr]); consumed by
         # _attach_proof on first refresh.
         self._proof: 'proof | None' = parsed_proof
     def quickview_title(self) -> str:
@@ -5485,7 +5731,7 @@ class Intro(SubgoalMaker):
         self._proofs: 'list[proof] | None' = parsed_proofs
     @classmethod
     def gen_single(cls, arg: Intro_ToolArg,
-                   path: str = "<direct>") -> gen_node:
+                   path: str = "<direct>") -> Parsed_Opr:
         """Non-splice path (positional `proofs`, or no `proofs`): unpack
         ToolArg fields, parse `proofs` into `list[proof]`, build factory."""
         var_bindings = arg.get("variable_bindings", [])
@@ -5498,7 +5744,7 @@ class Intro(SubgoalMaker):
         factory = lambda cfg: Intro(
             cfg, thought, None, split_conj,
             _pending_bindings=pending, parsed_proofs=parsed_proofs)
-        return gen_node(cls=cls, factory=factory, raw=arg)
+        return Parsed_Opr(cls=cls, factory=factory, raw=arg)
 
     @classmethod
     def _singleton_splice(cls, arg: ToolCall_arg,
@@ -5687,12 +5933,12 @@ class InferenceRule(SubgoalMaker):
 
     @classmethod
     def gen_single(cls, arg: InferenceRule_ToolArg,
-                   path: str = "<direct>") -> gen_node:
+                   path: str = "<direct>") -> Parsed_Opr:
         """Non-splice path (positional `proofs`, or no `proofs`):
         parse `proofs` into `list[proof]` and hand to the ctor."""
         parsed_proofs = _parse_positional_proofs(
             arg.get("proofs"), f"{path}.proofs")
-        return gen_node(
+        return Parsed_Opr(
             cls=cls, factory=lambda cfg: cls(cfg, arg, parsed_proofs),
             raw=arg)
 
@@ -5792,7 +6038,7 @@ class Branch(SubgoalMaker):
         self._initial_goal_index = 0
     @classmethod
     def gen_single(cls, arg: Branch_ToolArg,
-                   path: str = "<direct>") -> gen_node:
+                   path: str = "<direct>") -> Parsed_Opr:
         cases = arg.get("cases")
         if not isinstance(cases, list):
             raise ArgumentError(arg,
@@ -5807,7 +6053,7 @@ class Branch(SubgoalMaker):
                     f"{type(case).__name__}")
             parsed_cases.append(
                 _parse_optional_raw_proof(case.get("proof"), f"{case_path}.proof"))
-        return gen_node(
+        return Parsed_Opr(
             cls=cls, factory=lambda cfg: cls(cfg, arg, parsed_cases),
             raw=arg)
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
@@ -6224,7 +6470,7 @@ class Root(GoalContainer, StdBlock):
 
 def Parse_Nodes(
     remaining: 'LinkedList[_RawOp]',
-) -> 'LinkedList[gen_node]':
+) -> 'LinkedList[Parsed_Opr]':
     """Parse a linked list of raw ops into a linked list of gen_nodes.
     Empty `remaining` → `None`; otherwise pull the head, dispatch its
     class's `.gen(arg, tail, path)`, and return whatever linked list
@@ -6256,9 +6502,9 @@ def Parse_Nodes(
     return meta.cls.gen(cast(Any, data), remaining.tail, op_path)
 
 
-def Parse_Op_List(ops: Any, container_path: str) -> list[gen_node]:
+def Parse_Op_List(ops: Any, container_path: str) -> list[Parsed_Opr]:
     """Entry point — parse an entire list of op dicts into a flat
-    `list[gen_node]`.  Atomic: on any failure anywhere in the tree, raises
+    `list[Parsed_Opr]`.  Atomic: on any failure anywhere in the tree, raises
     before any mutation could have occurred.  Internally builds a linked
     list of `_RawOp(op, path)` cells and runs `Parse_Nodes`; materializes
     the resulting linked list of gen_nodes into a regular Python list for
@@ -6279,7 +6525,7 @@ def _parse_optional_raw_proof(
 ) -> 'proof | None':
     """Parse the optional `proof` body of Have / Suffices / Obtain /
     Branch-case.  `None` stays `None`; a list is recursively parsed into
-    a flat `list[gen_node]`."""
+    a flat `list[Parsed_Opr]`."""
     if raw is None:
         return None
     return Parse_Op_List(raw, path)

@@ -2,8 +2,8 @@
   Authors: Albert Qiaochu Jiang
 *)
 
-theory imo_1984_p2 imports
-  Complex_Main
+theory Test_imo_1984_p2 imports
+  MathBench_Prover.MathBench_Prover Minilang_Agent.Minilang_Agent
 begin
 
 theorem imo_1984_p2:

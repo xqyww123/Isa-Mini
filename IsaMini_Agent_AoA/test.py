@@ -5,6 +5,7 @@ import time
 from IsaREPL import REPLFail
 from typing import Any, Awaitable, Coroutine, NamedTuple, Sequence, TypedDict, Callable, TextIO, Union, cast
 from . import model
+from . import prompts as _P
 from .model import *
 from .model import _filter_unprovable
 from abc import ABC, abstractmethod
@@ -99,19 +100,19 @@ async def _test_sqrt2(root: Root, file: MyIO):
     root.print(0, file)
     #goal = root.locate_node("goal1") # the same as root.sub_nodes[1]
     goal = root.sub_nodes[1]
-    await goal.append(InferenceRule.gen_single({"thought": "Proof by contradiction", "rule": None}))
+    await goal.append([InferenceRule.gen_single({"thought": "Proof by contradiction", "rule": None})])
     print_header("Setting the inference rule", file)
     root.print(0, file)
-    await goal.append(Obtain.gen_single({"thought": "I don't know", "variables": [{"name": "m", "type": "nat"}, {"name": "n", "type": "nat"}],
-            "constraints": [{"isabelle": "¦sqrt 2¦ = m / n", "english": "some fancy explanation"}]}))
+    await goal.append([Obtain.gen_single({"thought": "I don't know", "variables": [{"name": "m", "type": "nat"}, {"name": "n", "type": "nat"}],
+            "constraints": [{"isabelle": "¦sqrt 2¦ = m / n", "english": "some fancy explanation"}]})])
     print_header("Obtain m n", file)
     root.print(0, file)
     #node = root.locate_node("2.1") # not appear
-    await root.fill("2.1", Obvious.gen_single({"facts": []}))
+    await root.fill("2.1", [Obvious.gen_single({"facts": []})])
     print_header("Obvious", file)
     root.print(0, file)
-    await root.fill("3", Have.gen_single({"thought": "I don't know", "statement": {"english": "some fancy explanation", "isabelle": "m^2 = (sqrt 2)^2 * n^2"}, "name": "helper_lemma"}))
-    await root.fill("3.1", Obvious.gen_single({"facts": []}))
+    await root.fill("3", [Have.gen_single({"thought": "I don't know", "statement": {"english": "some fancy explanation", "isabelle": "m^2 = (sqrt 2)^2 * n^2"}, "name": "helper_lemma"})])
+    await root.fill("3.1", [Obvious.gen_single({"facts": []})])
     print_header("Have", file)
     root.print(0, file)
 
@@ -119,20 +120,20 @@ async def _test_sqrt2(root: Root, file: MyIO):
 async def _test_branch(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
-    await root.fill("1", Branch.gen_single({
+    await root.fill("1", [Branch.gen_single({
         "thought": "I don't know",
         "cases": [
             {"statement": {"english": "in case x is positive", "isabelle": "x > 0"}},
             {"statement": {"english": "in case x is negative", "isabelle": "x < 0"}},
             {"statement": {"english": "in case x is zero", "isabelle": "x = 0"}},
         ]
-    }))
+    })])
     print_header("Branch", file)
     root.print(0, file)
 
     # Close the exhaustiveness goal 1.0
     root.session.age += 1
-    await root.fill("1.0.1", Obvious.gen_single({"facts": []}))
+    await root.fill("1.0.1", [Obvious.gen_single({"facts": []})])
     print_header("After Obvious on 1.0.1 (exhaustiveness)", file)
     root.print(0, file)
     print_header("Overview after 1.0.1", file)
@@ -140,7 +141,7 @@ async def _test_branch(root: Root, file: MyIO):
 
     # Close case 1.1 (x > 0)
     root.session.age += 1
-    await root.fill("1.1.1", Obvious.gen_single({"facts": []}))
+    await root.fill("1.1.1", [Obvious.gen_single({"facts": []})])
     print_header("After Obvious on 1.1.1 (x > 0)", file)
     root.print(0, file)
     print_header("Overview after 1.1.1", file)
@@ -148,7 +149,7 @@ async def _test_branch(root: Root, file: MyIO):
 
     # Close case 1.2 (x < 0)
     root.session.age += 1
-    await root.fill("1.2.1", Obvious.gen_single({"facts": []}))
+    await root.fill("1.2.1", [Obvious.gen_single({"facts": []})])
     print_header("After Obvious on 1.2.1 (x < 0)", file)
     root.print(0, file)
     print_header("Overview after 1.2.1", file)
@@ -156,7 +157,7 @@ async def _test_branch(root: Root, file: MyIO):
 
     # Close case 1.3 (x = 0)
     root.session.age += 1
-    await root.fill("1.3.1", Obvious.gen_single({"facts": []}))
+    await root.fill("1.3.1", [Obvious.gen_single({"facts": []})])
     print_header("After Obvious on 1.3.1 (x = 0)", file)
     root.print(0, file)
     print_header("Overview after 1.3.1", file)
@@ -170,10 +171,10 @@ async def _test_branch(root: Root, file: MyIO):
 async def _test_EquivDerive(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
-    await root.fill("2", InferenceRule.gen_single({
+    await root.fill("2", [InferenceRule.gen_single({
         "thought": "Destruct equivalence",
         "rule": None
-    }))
+    })])
     print_header("Inference Rule", file)
     root.print(0, file)
 
@@ -181,10 +182,10 @@ async def _test_EquivDerive(root: Root, file: MyIO):
 async def _test_IntroConj(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
-    await root.fill("2", InferenceRule.gen_single({
+    await root.fill("2", [InferenceRule.gen_single({
         "thought": "Destruct equivalence",
         "rule": None
-    }))
+    })])
     print_header("Inference Rule", file)
     root.print(0, file)
 
@@ -192,10 +193,10 @@ async def _test_IntroConj(root: Root, file: MyIO):
 async def _test_IntroConj_short(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
-    await root.fill("2", InferenceRule.gen_single({
+    await root.fill("2", [InferenceRule.gen_single({
         "thought": "Destruct equivalence",
         "rule": None
-    }))
+    })])
     print_header("Inference Rule", file)
     root.print(0, file)
 
@@ -205,10 +206,10 @@ async def _test_InferenceRuleSolvesGoal(root: Root, file: MyIO):
     root.print(0, file)
     # Apply refl which fully solves "a = a" — produces 0 subgoals.
     # This exercises the empty-BUNDL code path in InferenceRule._print_header.
-    await root.fill("1", InferenceRule.gen_single({
+    await root.fill("1", [InferenceRule.gen_single({
         "thought": "Apply reflexivity",
         "rule": {"refer_by": "name", "name": "refl"}
-    }))
+    })])
     print_header("After InferenceRule (goal fully solved)", file)
     root.print(0, file)
     unfinished = set()
@@ -219,16 +220,16 @@ async def _test_InferenceRuleSolvesGoal(root: Root, file: MyIO):
 async def _test_CaseSplit(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
-    await root.fill("1", CaseSplit.gen_single({
+    await root.fill("1", [CaseSplit.gen_single({
         "thought": "Case split",
         "target_isabelle_term": r"l"
-    }))
+    })])
     print_header("Case Split", file)
     root.print(0, file)
-    await root.fill("1.Nil.1", CaseSplit.gen_single({
+    await root.fill("1.Nil.1", [CaseSplit.gen_single({
         "thought": "Case split",
         "target_isabelle_term": r"l"
-    }))
+    })])
     print_header("Case Split", file)
     root.print(0, file)
 
@@ -236,10 +237,10 @@ async def _test_CaseSplit(root: Root, file: MyIO):
 async def _test_CaseSplit_Bool(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
-    await root.fill("1", CaseSplit.gen_single({
+    await root.fill("1", [CaseSplit.gen_single({
         "thought": "Case split on boolean b",
         "target_isabelle_term": r"b"
-    }))
+    })])
     print_header("Case Split Bool", file)
     root.print(0, file)
 
@@ -250,10 +251,10 @@ async def _test_CaseSplit_Quickview(root: Root, file: MyIO):
     but quickview omits them entirely.
     Uses a list CaseSplit so both case_vars (Cons introduces a, list)
     and case_hyps (e.g. Cons.prem0: l = a # list) are exercised."""
-    await root.fill("1", CaseSplit.gen_single({
+    await root.fill("1", [CaseSplit.gen_single({
         "thought": "Case split on list l",
         "target_isabelle_term": r"l"
-    }))
+    })])
     print_header("Full print (shows variables and premises)", file)
     root.print(0, file)
     print_header("Quickview (should show variables and premises too)", file)
@@ -271,10 +272,10 @@ async def _test_GoalCtxQuickview(root: Root, file: MyIO):
     does not open a sub-proof block. We apply the manual split_conj at the
     next step (2) on that residual."""
     root.session.age += 1
-    await root.fill("2", Intro.gen_single({
+    await root.fill("2", [Intro.gen_single({
         "thought": "Split conjunction",
         "split_conj": True
-    }))
+    })])
     print_header("Full print", file)
     root.print(0, file)
     print_header("Quickview (should show x in subgoal context)", file)
@@ -284,19 +285,19 @@ async def _test_GoalCtxQuickview(root: Root, file: MyIO):
 async def _test_Induction(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
-    await root.fill("1", Induction.gen_single({
+    await root.fill("1", [Induction.gen_single({
         "thought": "some thought about Induction",
         "target_isabelle_term": r"l",
         "variables": [{"name": "l", "status": "fixed"}],
-    }))
+    })])
     print_header("Induction", file)
     root.print(0, file)
-    await root.fill("1.Nil.1", Obvious.gen_single({"facts": []}))
+    await root.fill("1.Nil.1", [Obvious.gen_single({"facts": []})])
     print_header("Obvious", file)
     root.print(0, file)
-    await root.fill("1.Cons.1", Obvious.gen_single({
+    await root.fill("1.Cons.1", [Obvious.gen_single({
         "facts": [{"refer_by": "name", "name": "Cons.IH"}]
-    }))
+    })])
     print_header("Obvious", file)
     root.print(0, file)
     unfinished_nodes = set()
@@ -308,21 +309,21 @@ async def _test_Suffices(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     # Use "it suffices to show" that x*x + 1 > 0
-    await root.fill("1", Suffices.gen_single({
+    await root.fill("1", [Suffices.gen_single({
         "thought": "It suffices to show a stronger statement",
         "statement": {
             "english": "x squared plus 1 is greater than 0",
             "isabelle": "x * x + 1 > 0"
         }
-    }))
+    })])
     print_header("After Suffices", file)
     root.print(0, file)
     # Now we need to prove: (x * x + 1 > 0) --> (x * x >= 0)
-    await root.fill("1.1", Obvious.gen_single({"facts": []}))
+    await root.fill("1.1", [Obvious.gen_single({"facts": []})])
     print_header("After proving implication", file)
     root.print(0, file)
     # Now we need to prove: x * x + 1 > 0
-    await root.fill("2", Obvious.gen_single({"facts": []}))
+    await root.fill("2", [Obvious.gen_single({"facts": []})])
     print_header("After proving suffices goal", file)
     root.print(0, file)
     unfinished_nodes = set()
@@ -334,13 +335,13 @@ async def _test_Rewrite1(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     # Use Rewrite to simplify the premises h1 and h2
-    await root.fill("1", Rewrite.gen_single({
+    await root.fill("1", [Rewrite.gen_single({
         "thought": "Rewrite the premises to simplify the equations",
         "using": [{"refer_by": "name", "name": "h1"}],
         "use system simplifiers": True,
         "rewrite goal": False,
         "rewrite premises": ["h2"]
-    }))
+    })])
     print_header("After Rewrite", file)
     root.print(0, file)
     await root.rename_fact("premise0", "my_premise")
@@ -352,13 +353,13 @@ async def _test_Rewrite2(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     # Use Rewrite to simplify the premises h1 and h2
-    await root.fill("1", Rewrite.gen_single({
+    await root.fill("1", [Rewrite.gen_single({
         "thought": "Rewrite the premises to simplify the equations",
         "using": [{"refer_by": "name", "name": "h1"}],
         "use system simplifiers": True,
         "rewrite goal": False,
         "rewrite premises": ["h2"]
-    }))
+    })])
     print_header("After Rewrite", file)
     root.print(0, file)
     await root.rename_fact("premise0", "my_premise")
@@ -373,44 +374,44 @@ async def _test_Rewrite3(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     # Use Rewrite to simplify the premises h1 and h2
-    await root.fill("1", Have.gen_single({
+    await root.fill("1", [Have.gen_single({
         "thought": "I don't know",
         "statement": {
             "english": "x squared plus 1 is greater than 0",
             "isabelle": "x = y"
         },
         "name": "lem1"
-    }))
-    await root.fill("1.1", Obvious.gen_single({"facts": []}))
+    })])
+    await root.fill("1.1", [Obvious.gen_single({"facts": []})])
     print_header("After Have", file)
     root.print(0, file)
-    await root.fill("2", Rewrite.gen_single({
+    await root.fill("2", [Rewrite.gen_single({
         "thought": "Rewrite the premises to simplify the equations",
         "using": [{"refer_by": "name", "name": "lem1"}],
         "use system simplifiers": False,
         "rewrite goal": True,
         "rewrite premises": []
-    }))
+    })])
     print_header("After Rewrite", file)
     root.print(0, file)
-    await root.amend("1", Have.gen_single({
+    await root.amend("1", [Have.gen_single({
         "thought": "I don't know!!!",
         "statement": {
             "english": "x squared plus 1 is greater than 0",
             "isabelle": "x = y * 1"
         },
         "name": "lem1"
-    }))
+    })])
     print_header("After Amend Have", file)
     root.print(0, file)
-    await root.amend("1", Have.gen_single({
+    await root.amend("1", [Have.gen_single({
         "thought": "I don't know!!!",
         "statement": {
             "english": "x squared plus 1 is greater than 0",
             "isabelle": "x = y * 2"
         },
         "name": "lem1"
-    }))
+    })])
     print_header("After Amend Have", file)
     root.print(0, file)
 
@@ -421,13 +422,16 @@ async def _test_Rewrite_NoProgress(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     # Rewrite h1 using foo_def — completely irrelevant, should make no progress
-    new_node, success, reason = await root.fill("1", Rewrite.gen_single({
+    _outcome = await root.fill("1", [Rewrite.gen_single({
         "thought": "Attempt rewrite with irrelevant rule",
         "using": [{"refer_by": "name", "name": "foo_def"}],
         "use system simplifiers": False,
         "rewrite goal": False,
         "rewrite premises": ["h1"]
-    }))
+    })])
+    # Rewrite reverts on no-progress, so committed may be empty.
+    success = _outcome.failure is not None and _outcome.failure.is_error
+    reason = _outcome.failure
     print_header("Reasponse", file)
     file.write(f"Success: {success}\n")
     file.write(f"Reason: {reason}\n")
@@ -466,7 +470,7 @@ async def _test_Rewrite_NoProgress(root: Root, file: MyIO):
 #     }))
 #     file.write(f"Rewrite step 1: status={node1.status.status.value}, is_error={is_error1}\n")
 #     if reason1:
-#         file.write(f"  reason: {reason1.reason}\n")
+#         file.write(f"  reason: {reason1.reason if isinstance(reason1, FailureReason) else reason1}\n")
 #     print_header("After successful Rewrite", file)
 #     root.print(0, file)
 # 
@@ -479,7 +483,7 @@ async def _test_Rewrite_NoProgress(root: Root, file: MyIO):
 #         node2, is_error2, reason2 = await root.fill("2", Obvious.gen_single({"facts": []}))
 #         file.write(f"Obvious step 2: status={node2.status.status.value}, is_error={is_error2}\n")
 #         if reason2:
-#             file.write(f"  reason: {reason2.reason}\n")
+#             file.write(f"  reason: {reason2.reason if isinstance(reason2, FailureReason) else reason2}\n")
 #     except InternalError as e:
 #         file.write(f"BUG REPRODUCED: InternalError: {e}\n")
 #     except Exception as e:
@@ -493,15 +497,15 @@ async def _test_Witness1(root: Root, file: MyIO):
     root.print(0, file)
 
     # Use Witness to provide a witness for the existential goal
-    await root.fill("1", Witness.gen_single({
+    await root.fill("1", [Witness.gen_single({
         "thought": "Provide 5 as witness for the existential",
         "witness": "5"
-    }))
+    })])
     print_header("After Witness", file)
     root.print(0, file)
 
     # Prove the remaining goal (5 = 5) using Obvious
-    await root.fill("2", Obvious.gen_single({"facts": []}))
+    await root.fill("2", [Obvious.gen_single({"facts": []})])
     print_header("After Obvious", file)
     root.print(0, file)
 
@@ -522,25 +526,25 @@ async def _test_Define_AutoProved(root: Root, file: MyIO):
     root.print(0, file)
 
     # Define `double` — the auto-prove path handles it entirely.
-    await root.fill("1", Define.gen_single({
+    await root.fill("1", [Define.gen_single({
         "thought": "Introduce the doubling function as a witness",
         "name": "double",
         "type": r"nat \<Rightarrow> nat",
         "equations": ["double n = n + n"],
-    }))
+    })])
     print_header("After Define (auto-proved)", file)
     root.print(0, file)
 
     # Use `double` to instantiate the existential.
-    await root.fill("2", Witness.gen_single({
+    await root.fill("2", [Witness.gen_single({
         "thought": "Pick the freshly-defined `double` as the witness",
         "witness": "double",
-    }))
+    })])
     print_header("After Witness", file)
     root.print(0, file)
 
     # Close the remaining equation `double 2 = 4` via Obvious.
-    await root.fill("3", Obvious.gen_single({"facts": []}))
+    await root.fill("3", [Obvious.gen_single({"facts": []})])
     print_header("After Obvious", file)
     root.print(0, file)
 
@@ -578,7 +582,7 @@ async def _test_Define_Manual(root: Root, file: MyIO):
     # fun_fake_automatic_failure, all three auto-prove tiers fail and
     # the metric path falls through to MetricPartial, pushing the
     # prepped state (2 subgoals) as a deferred block.
-    await root.fill("1", Define.gen_single({
+    await root.fill("1", [Define.gen_single({
         "thought": "Define halve as a witness; fake flag forces manual "
                    "discharge of termination residuals",
         "name": "halve",
@@ -589,33 +593,33 @@ async def _test_Define_Manual(root: Root, file: MyIO):
             "halve (Suc (Suc n)) = Suc (halve n)",
         ],
         "metric": [r"\<lambda>n::nat. n"],
-    }))
+    })])
     print_header("After Define (deferred block opened)", file)
     root.print(0, file)
 
     # Discharge the first residual inside the deferred block:
     # `wf (measure (\<lambda>n. n))`, closed by `wf_measure`.
-    await root.fill("1.1.1", Obvious.gen_single({"facts": []}))
+    await root.fill("1.1.1", [Obvious.gen_single({"facts": []})])
     print_header("After Obvious on residual 1 (well-foundedness)", file)
     root.print(0, file)
 
     # Discharge the second residual inside the deferred block:
     # `\<And>n. (n, Suc (Suc n)) \<in> measure (\<lambda>n. n)`,
     # closed by `in_measure` + arithmetic.
-    await root.fill("1.2.2", Obvious.gen_single({"facts": []}))
+    await root.fill("1.2.2", [Obvious.gen_single({"facts": []})])
     print_header("After Obvious on residual 2 (decrease)", file)
     root.print(0, file)
 
     # Block auto-closes; proceed with the outer proof.
-    await root.fill("2", Witness.gen_single({
+    await root.fill("2", [Witness.gen_single({
         "thought": "Pick the freshly-defined `halve` as the witness",
         "witness": "halve",
-    }))
+    })])
     print_header("After Witness", file)
     root.print(0, file)
 
     # `halve 4 = Suc (halve 2) = Suc (Suc (halve 0)) = Suc (Suc 0)`.
-    await root.fill("3", Obvious.gen_single({"facts": []}))
+    await root.fill("3", [Obvious.gen_single({"facts": []})])
     print_header("After Obvious on halve 4 = 2", file)
     root.print(0, file)
 
@@ -629,10 +633,12 @@ async def _test_Witness2(root: Root, file: MyIO):
     root.print(0, file)
 
     # Use Witness on a non-existential goal — should fail gracefully
-    node, is_error, reason = await root.fill("1", Witness.gen_single({
+    _outcome = await root.fill("1", [Witness.gen_single({
         "thought": "Provide 1 as witness, which is positive",
         "witness": "1"
-    }))
+    })])
+    is_error = _outcome.failure is not None and _outcome.failure.is_error
+    reason = _outcome.failure
     if reason:
         file.write(f"Error: {reason}\n")
     else:
@@ -649,10 +655,10 @@ async def _test_Unfold1(root: Root, file: MyIO):
     async def stub_silent(interaction):
         return await interaction.answer(Answer(indexes=[0]))
     root.session.fork_interaction = stub_silent
-    await root.fill("1", Unfold.gen_single({
+    await root.fill("1", [Unfold.gen_single({
         "thought": "Unfold the goal",
         "targets": ["XXX"],
-    }))
+    })])
     print_header("After Unfold", file)
     root.print(0, file)
 
@@ -662,10 +668,10 @@ async def _test_Unfold1(root: Root, file: MyIO):
         await interaction.prompt(0, file)
         return await interaction.answer(Answer(indexes=[1]))
     root.session.fork_interaction = stub_fork
-    await root.amend("1", Unfold.gen_single({
+    await root.amend("1", [Unfold.gen_single({
         "thought": "Unfold the goal",
         "targets": ["XXX"],
-    }))
+    })])
     print_header("After Answer", file)
     root.print(0, file)
 
@@ -679,21 +685,21 @@ async def _test_Delete1(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     root.session.age += 1
-    await root.fill("1", Have.gen_single({
+    await root.fill("1", [Have.gen_single({
         "thought": "helper",
         "statement": {"english": "x equals y plus 0", "isabelle": "x = y"},
         "name": "lem1"
-    }))
+    })])
     root.session.age += 1
-    await root.fill("1.1", Obvious.gen_single({"facts": []}))
+    await root.fill("1.1", [Obvious.gen_single({"facts": []})])
     root.session.age += 1
-    await root.fill("2", Rewrite.gen_single({
+    await root.fill("2", [Rewrite.gen_single({
         "thought": "rewrite",
         "using": [{"refer_by": "name", "name": "lem1"}],
         "use system simplifiers": False,
         "rewrite goal": True,
         "rewrite premises": []
-    }))
+    })])
     print_header("After building 3 steps", file)
     root.print(0, file, update_line=False)
     buffer = io.StringIO()
@@ -711,11 +717,11 @@ async def _test_Delete1(root: Root, file: MyIO):
     root.reset_changed()
     # Insert a Have before step 2
     root.session.age += 1
-    await root.insert_before("2", Have.gen_single({
+    await root.insert_before("2", [Have.gen_single({
         "thought": "re-add helper",
         "statement": {"english": "x equals y plus 0", "isabelle": "x = y + 0"},
         "name": "lem1"
-    }))
+    })])
     print_header("After inserting Have before step 2", file)
     root.print(0, file)
     buffer = io.StringIO()
@@ -828,7 +834,9 @@ async def _test_RetrieveFact(root: Root, file: MyIO):
             {"refer_by": "name", "name": "log_nat_power"},
         ]
     })
-    node, _, _ = await root.fill("2", gn)
+    _outcome = await root.fill("2", [gn])
+    node = _outcome.committed[0] if _outcome.committed else None
+    assert node is not None
     file.write(f"Filled node: {type(node).__name__}, id={node.id}\n")
     node.print(1, file, show_warnings=True)
     print_header("After fill", file)
@@ -868,10 +876,12 @@ async def _test_RetrieveFact2(root: Root, file: MyIO):
         return result
     root.session.fork_interaction = stub_fork
 
-    node, _, _ = await root.fill("2", InferenceRule.gen_single({
+    _outcome = await root.fill("2", [InferenceRule.gen_single({
         "thought": "test description-based retrieval",
         "rule": {"refer_by": "description", "english": "8 = 2^3"},
-    }))
+    })])
+    node = _outcome.committed[0] if _outcome.committed else None
+    assert node is not None
     file.write(f"Filled node: {type(node).__name__}, id={node.id}\n")
     node.print(1, file, show_warnings=True)
     print_header("After fill", file)
@@ -884,52 +894,52 @@ async def _test_Obvious_partial_solve(root: Root, file: MyIO):
     an unexpected Intro node to be auto-appended."""
     # Step 1: Have h2: log 2 8 = 3
     root.session.age += 1
-    await root.fill("1", Have.gen_single({
+    await root.fill("1", [Have.gen_single({
         "thought": "log_2(8) = 3",
         "name": "h2",
         "statement": {
             "english": "log base 2 of 8 equals 3",
             "isabelle": "log (2::real) (8::real) = (3::real)"
         }
-    }))
+    })])
     # Step 1.1: Obvious with log_pow_cancel
     root.session.age += 1
-    await root.fill("1.1", Obvious.gen_single({"facts": [{"refer_by": "name", "name": "log_pow_cancel"}]}))
+    await root.fill("1.1", [Obvious.gen_single({"facts": [{"refer_by": "name", "name": "log_pow_cancel"}]})])
     # Step 2: Have h3: log 8 x = log 2 x / 3
     root.session.age += 1
-    await root.fill("2", Have.gen_single({
+    await root.fill("2", [Have.gen_single({
         "thought": "change of base",
         "name": "h3",
         "statement": {
             "english": "log base 8 of x equals log base 2 of x divided by 3",
             "isabelle": "log (8::real) x = log (2::real) x / (3::real)"
         }
-    }))
+    })])
     # Step 2.1: Obvious with log_base_change and h2
     root.session.age += 1
-    await root.fill("2.1", Obvious.gen_single({"facts": [
+    await root.fill("2.1", [Obvious.gen_single({"facts": [
         {"refer_by": "name", "name": "log_base_change"},
         {"refer_by": "name", "name": "h2"}
-    ]}))
+    ]})])
     # Step 3: Have h4: log 8 (log 2 x) = log 2 (log 2 x) / 3
     root.session.age += 1
-    await root.fill("3", Have.gen_single({
+    await root.fill("3", [Have.gen_single({
         "thought": "change of base again",
         "name": "h4",
         "statement": {
             "english": "log base 8 of (log base 2 of x) equals log base 2 of (log base 2 of x) divided by 3",
             "isabelle": "log (8::real) (log (2::real) x) = log (2::real) (log (2::real) x) / (3::real)"
         }
-    }))
+    })])
     print_header("Before step 3.1", file)
     root.print(0, file)
     # Step 3.1: Obvious with log_base_change + h2 → HAMMER partially solves,
     # leaving subgoals that trigger an unexpected Intro at step 3.2
     root.session.age += 1
-    await root.fill("3.1", Obvious.gen_single({"facts": [
+    await root.fill("3.1", [Obvious.gen_single({"facts": [
         {"refer_by": "name", "name": "log_base_change"},
         {"refer_by": "name", "name": "h2"}
-    ]}))
+    ]})])
     print_header("After step 3.1 (unexpected Intro at 3.2)", file)
     root.print(0, file)
 
@@ -940,23 +950,23 @@ async def _test_Hammer_ProveInTime(root: Root, file: MyIO):
     root.print(0, file)
     # Step 1: Have h_log8
     root.session.age += 1
-    await root.fill("1", Have.gen_single({
+    await root.fill("1", [Have.gen_single({
         "thought": "log base 8 of x equals log base 2 of x divided by 3",
         "name": "h_log8",
         "statement": {
             "english": "log base 8 of x equals (log base 2 of x) / 3",
             "isabelle": "log (8::real) x = log (2::real) x / 3"
         }
-    }))
+    })])
     print_header("After Have h_log8", file)
     root.print(0, file)
     # Step 1.1: Obvious with a ProveInTime fact (by proposition), a library fact, and a local premise
     root.session.age += 1
-    await root.fill("1.1", Obvious.gen_single({"facts": [
+    await root.fill("1.1", [Obvious.gen_single({"facts": [
         {"refer_by": "proposition", "proposition": "(8::real) = (2::real) ^ (3::nat)"},
         {"refer_by": "name", "name": "log_base_pow"},
         {"refer_by": "name", "name": "h0"},
-    ]}))
+    ]})])
     print_header("After Obvious with ProveInTime", file)
     root.print(0, file)
 
@@ -966,31 +976,31 @@ async def _test_Simplify_stuck(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     root.session.age += 1
-    await root.fill("1", Have.gen_single({
+    await root.fill("1", [Have.gen_single({
         "thought": "Since 8 = 2^3, log base 8 of x equals log base 2 of x divided by 3",
         "name": "h2",
         "statement": {
             "english": "log base 8 of x equals log base 2 of x divided by 3",
             "isabelle": "log (8::real) x = log (2::real) x / 3"
         }
-    }))
+    })])
     print_header("After Have h2", file)
     root.print(0, file)
     root.session.age += 1
-    await root.fill("1.1", Have.gen_single({
+    await root.fill("1.1", [Have.gen_single({
         "thought": "First establish that 8 = 2^3 as reals",
         "name": "h8",
         "statement": {
             "english": "8 equals 2 to the power 3",
             "isabelle": "(8::real) = (2::real) ^ 3"
         }
-    }))
+    })])
     root.session.age += 1
-    await root.fill("1.1.1", Obvious.gen_single({"facts": []}))
+    await root.fill("1.1.1", [Obvious.gen_single({"facts": []})])
     print_header("After proving h8", file)
     root.print(0, file)
     root.session.age += 1
-    await root.fill("1.2", Rewrite.gen_single({
+    await root.fill("1.2", [Rewrite.gen_single({
         "thought": "Rewrite 8 as 2^3 in the goal using h8, then apply log_base_pow",
         "using": [
             {"refer_by": "name", "name": "h8"},
@@ -999,7 +1009,7 @@ async def _test_Simplify_stuck(root: Root, file: MyIO):
         "use system simplifiers": True,
         "rewrite goal": True,
         "rewrite premises": []
-    }))
+    })])
     print_header("After Rewrite", file)
     root.print(0, file)
 
@@ -1011,30 +1021,30 @@ async def _test_Simplify_no_intro_bindings(root: Root, file: MyIO):
     root.print(0, file)
     # Step 1: Have h2
     root.session.age += 1
-    await root.fill("1", Have.gen_single({
+    await root.fill("1", [Have.gen_single({
         "thought": "log base 8 of x equals log base 2 of x divided by 3",
         "name": "h2",
         "statement": {
             "english": "log base 8 of x equals log base 2 of x divided by 3",
             "isabelle": "log (8::real) x = log 2 x / 3"
         }
-    }))
+    })])
     # Step 1.1: Have h8eq (inside h2's proof)
     root.session.age += 1
-    await root.fill("1.1", Have.gen_single({
+    await root.fill("1.1", [Have.gen_single({
         "thought": "First establish that 8 = 2^3 as reals",
         "name": "h8eq",
         "statement": {
             "english": "8 equals 2 to the power 3",
             "isabelle": "(8::real) = 2 ^ 3"
         }
-    }))
+    })])
     # Step 1.1.1: Obvious (proves h8eq)
     root.session.age += 1
-    await root.fill("1.1.1", Obvious.gen_single({"facts": []}))
+    await root.fill("1.1.1", [Obvious.gen_single({"facts": []})])
     # Step 1.2: Rewrite using h8eq + log_base_pow (triggers timeout fallback)
     root.session.age += 1
-    await root.fill("1.2", Rewrite.gen_single({
+    await root.fill("1.2", [Rewrite.gen_single({
         "thought": "Rewrite 8 as 2^3 using h8eq, then apply log_base_pow",
         "using": [
             {"refer_by": "name", "name": "h8eq"},
@@ -1043,37 +1053,37 @@ async def _test_Simplify_no_intro_bindings(root: Root, file: MyIO):
         "use system simplifiers": True,
         "rewrite goal": True,
         "rewrite premises": []
-    }))
+    })])
     # Step 1.3: Obvious (closes h2's remaining goal)
     root.session.age += 1
-    await root.fill("1.3", Obvious.gen_single({"facts": []}))
+    await root.fill("1.3", [Obvious.gen_single({"facts": []})])
     print_header("After completing h2", file)
     root.print(0, file)
     # Step 2: Have h3
     root.session.age += 1
-    await root.fill("2", Have.gen_single({
+    await root.fill("2", [Have.gen_single({
         "thought": "Rewrite h1 using h2",
         "name": "h3",
         "statement": {
             "english": "log base 2 of (log base 2 of x divided by 3) equals log base 2 of (log base 2 of x) divided by 3",
             "isabelle": "log (2::real) (log 2 x / 3) = log 2 (log 2 x) / 3"
         }
-    }))
+    })])
     # Step 2.1: Have h2b (inside h3's proof)
     root.session.age += 1
-    await root.fill("2.1", Have.gen_single({
+    await root.fill("2.1", [Have.gen_single({
         "thought": "log 8 (log 2 x) = log 2 (log 2 x) / 3 by the same log_base_pow argument",
         "name": "h2b",
         "statement": {
             "english": "log base 8 of (log base 2 of x) equals log base 2 of (log base 2 of x) divided by 3",
             "isabelle": "log (8::real) (log 2 x) = log 2 (log 2 x) / 3"
         }
-    }))
+    })])
     # Step 2.1.1: Rewrite using h8eq + log_base_pow with no system simplifiers
     # h8eq is OUT OF SCOPE here (it was local to step 1's proof)
     # This triggers: Expected exactly one Intro_Bindings_Msg, got 0
     root.session.age += 1
-    await root.fill("2.1.1", Rewrite.gen_single({
+    await root.fill("2.1.1", [Rewrite.gen_single({
         "thought": "Rewrite 8 as 2^3 using h8eq and apply log_base_pow",
         "using": [
             {"refer_by": "name", "name": "h8eq"},
@@ -1082,7 +1092,7 @@ async def _test_Simplify_no_intro_bindings(root: Root, file: MyIO):
         "use system simplifiers": False,
         "rewrite goal": True,
         "rewrite premises": []
-    }))
+    })])
     print_header("After step 2.1.1", file)
     root.print(0, file)
 
@@ -1091,15 +1101,15 @@ async def _test_Have1(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     root.session.age += 1
-    await root.fill("1", Have.gen_single({
+    await root.fill("1", [Have.gen_single({
         "thought": "helper",
         "statement": {"english": "x squared is non-negative", "isabelle": r"(0::int) \<le> x * x"},
         "name": "lem1"
-    }))
+    })])
     print_header("After Have", file)
     root.print(0, file)
     root.session.age += 1
-    await root.fill("1.1", Obvious.gen_single({"facts": []}))
+    await root.fill("1.1", [Obvious.gen_single({"facts": []})])
 
 @model_test("HaveAutoApply", "Test_Have_AutoApply.thy", 10)
 async def _test_HaveAutoApply(root: Root, file: MyIO):
@@ -1115,7 +1125,7 @@ async def _test_HaveAutoApply(root: Root, file: MyIO):
     # sees an equation conclusion (chk_simp) and registers it into the simpset
     # of the live context via auto_apply_fact.
     root.session.age += 1
-    await root.fill("1", Have.gen_single({
+    await root.fill("1", [Have.gen_single({
         "thought": "Derive a simp rule for myf so the outer goal becomes trivial",
         "statement": {
             "english": "myf n equals n plus 7",
@@ -1123,16 +1133,16 @@ async def _test_HaveAutoApply(root: Root, file: MyIO):
         },
         "name": "myf_eq",
         "auto_apply": True,
-    }))
+    })])
     print_header("After Have (auto_apply=True)", file)
     root.print(0, file)
 
     # Discharge the Have's subgoal by unfolding the definition; `myf_def`
     # must be passed explicitly because it is not in the default simpset.
     root.session.age += 1
-    await root.fill("1.1", Obvious.gen_single({
+    await root.fill("1.1", [Obvious.gen_single({
         "facts": [{"refer_by": "name", "name": "myf_def"}]
-    }))
+    })])
     print_header("After proving Have sub-goal", file)
     root.print(0, file)
 
@@ -1142,13 +1152,13 @@ async def _test_HaveAutoApply(root: Root, file: MyIO):
     # `mini_auto_apply` — otherwise the system simpset has no way to unfold
     # `myf` and the goal cannot be reduced to `10 = 10`.
     root.session.age += 1
-    ret = await root.fill("2", Rewrite.gen_single({
+    ret = await root.fill("2", [Rewrite.gen_single({
         "thought": "Close the outer goal using only the system simplifier",
         "using": [],
         "use system simplifiers": True,
         "rewrite goal": True,
         "rewrite premises": []
-    }))
+    })])
     print_header("After closing outer goal", file)
     root.print(0, file)
 
@@ -1166,7 +1176,7 @@ async def _test_Rewrite_Contradictory_Premise(root: Root, file: MyIO):
     # Rewrite premise 'eq' using MyConst1_def (=2) and MyConst2_def (=3).
     # The premise "MyConst1 = MyConst2" rewrites to "2 = 3" then False,
     # causing clarsimp to solve the entire goal.
-    node, is_error, reason = await root.fill("1", Rewrite.gen_single({
+    _outcome = await root.fill("1", [Rewrite.gen_single({
         "thought": "Rewrite premise using definitions to derive contradiction",
         "using": [
             {"refer_by": "name", "name": "MyConst1_def"},
@@ -1175,11 +1185,13 @@ async def _test_Rewrite_Contradictory_Premise(root: Root, file: MyIO):
         "use system simplifiers": True,
         "rewrite goal": False,
         "rewrite premises": ["eq"]
-    }))
+    })])
+    is_error = _outcome.failure is not None and _outcome.failure.is_error
+    reason = _outcome.failure
     print_header("After Rewrite", file)
     root.print(0, file)
     file.write(f"is_error: {is_error}\n")
-    file.write(f"reason: {reason}\n")
+    file.write(f"reason: {reason.reason if isinstance(reason, FailureReason) else reason}\n")
 
 @model_test("Rewrite_NO_SIMP_Leak", "Test_Rewrite_NO_SIMP_Leak.thy", 33)
 async def _test_Rewrite_NO_SIMP_Leak(root: Root, file: MyIO):
@@ -1215,17 +1227,19 @@ async def _test_Rewrite_NO_SIMP_Leak(root: Root, file: MyIO):
     # The premise ¬ is_nonzero(f a) rewrites to ¬(f a ≠ 0) = ¬¬(f a = 0).
     # With notnotD [dest!] in the classical wrapper, clarify resolves the double
     # negation. The NO_SIMP(False) conclusion should NOT leak into premises.
-    node, success, reason = await root.fill("1", Rewrite.gen_single({
+    _outcome = await root.fill("1", [Rewrite.gen_single({
         "thought": "Rewrite h using is_nonzero_def to expose double negation",
         "using": [{"refer_by": "name", "name": "is_nonzero_def"}],
         "use system simplifiers": False,
         "rewrite goal": False,
         "rewrite premises": ["h"]
-    }))
+    })])
+    success = _outcome.failure is not None and _outcome.failure.is_error
+    reason = _outcome.failure
     print_header("After Rewrite", file)
     root.print(0, file)
     file.write(f"success: {success}\n")
-    file.write(f"reason: {reason}\n")
+    file.write(f"reason: {reason.reason if isinstance(reason, FailureReason) else reason}\n")
     assert_no_NO_SIMP("NO_SIMP leaked via classical reasoning on wrapped conclusion")
 
 @model_test("Rewrite_Once_Simproc", "Test_Rewrite_Once_Simproc.thy", 27)
@@ -1246,17 +1260,19 @@ async def _test_Rewrite_Once_Simproc(root: Root, file: MyIO):
         num_matches = len(interaction.looping_rules[0][2]) if interaction.looping_rules else 0
         return await interaction.answer(Answer(indexes=list(range(num_matches))))
     root.session.fork_interaction = stub_fork
-    node, success, reason = await root.fill("1", Rewrite.gen_single({
+    _outcome = await root.fill("1", [Rewrite.gen_single({
         "thought": "Rewrite using my_wrap to unfold f into g(f(...))",
         "using": [{"refer_by": "name", "name": "my_wrap"}],
         "use system simplifiers": False,
         "rewrite goal": True,
         "rewrite premises": []
-    }))
+    })])
+    success = _outcome.failure is not None and _outcome.failure.is_error
+    reason = _outcome.failure
     print_header("After Rewrite (via interaction)", file)
     root.print(0, file)
     file.write(f"success: {success}\n")
-    file.write(f"reason: {reason}\n")
+    file.write(f"reason: {reason.reason if isinstance(reason, FailureReason) else reason}\n")
 
 @model_test("Rewrite_Targeted", "Test_Rewrite_Targeted.thy", 25)
 async def _test_Rewrite_Targeted(root: Root, file: MyIO):
@@ -1273,17 +1289,19 @@ async def _test_Rewrite_Targeted(root: Root, file: MyIO):
         # Select index 1 only (should be "f a", leaving "f b" untouched)
         return await interaction.answer(Answer(indexes=[1]))
     root.session.fork_interaction = stub_fork
-    node, success, reason = await root.fill("1", Rewrite.gen_single({
+    _outcome = await root.fill("1", [Rewrite.gen_single({
         "thought": "Rewrite f a using my_wrap, leave f b alone",
         "using": [{"refer_by": "name", "name": "my_wrap"}],
         "use system simplifiers": False,
         "rewrite goal": True,
         "rewrite premises": []
-    }))
+    })])
+    success = _outcome.failure is not None and _outcome.failure.is_error
+    reason = _outcome.failure
     print_header("After Targeted Rewrite", file)
     root.print(0, file)
     file.write(f"success: {success}\n")
-    file.write(f"reason: {reason}\n")
+    file.write(f"reason: {reason.reason if isinstance(reason, FailureReason) else reason}\n")
 
 @model_test("Rewrite_Targeted_Drop", "Test_Rewrite_Targeted_Drop.thy", 23)
 async def _test_Rewrite_Targeted_Drop(root: Root, file: MyIO):
@@ -1299,17 +1317,19 @@ async def _test_Rewrite_Targeted_Drop(root: Root, file: MyIO):
         # Answer with empty selection — drop the rule
         return await interaction.answer(Answer())
     root.session.fork_interaction = stub_fork
-    node, success, reason = await root.fill("1", Rewrite.gen_single({
+    _outcome = await root.fill("1", [Rewrite.gen_single({
         "thought": "Attempt rewrite with looping rule, then dismiss",
         "using": [{"refer_by": "name", "name": "my_wrap"}],
         "use system simplifiers": False,
         "rewrite goal": True,
         "rewrite premises": []
-    }))
+    })])
+    success = _outcome.failure is not None and _outcome.failure.is_error
+    reason = _outcome.failure
     print_header("After Rewrite (rule dropped)", file)
     root.print(0, file)
     file.write(f"success: {success}\n")
-    file.write(f"reason: {reason}\n")
+    file.write(f"reason: {reason.reason if isinstance(reason, FailureReason) else reason}\n")
 
 # class TestCase_Interactive_Unfold:
 #     pass
@@ -1327,7 +1347,7 @@ async def _test_imo_1966_p5(root: Root, file: MyIO):
 
     # 1. Fill step 1 with Have eq1
     root.session.age += 1
-    await root.fill("1", Have.gen_single({
+    await root.fill("1", [Have.gen_single({
         "thought": "Since a(2) < a(1), a(3) < a(2), a(4) < a(3), we know a(1) > a(2) > a(3) > a(4). "
                    "Subtracting h7 from h6, the coefficients factor as (a(1)-a(2))*(-x1+x2+x3+x4)=0. "
                    "Since a(1)-a(2)>0, we get x1=x2+x3+x4.",
@@ -1336,7 +1356,7 @@ async def _test_imo_1966_p5(root: Root, file: MyIO):
             "english": "x(1) equals x(2) + x(3) + x(4)",
             "isabelle": "x (1::nat) = x (2::nat) + x (3::nat) + x (4::nat)"
         }
-    }))
+    })])
     print_header("After filling Have eq1", file)
     buffer = io.StringIO()
     root.print(0, MyIO(buffer), update_line=True)
@@ -1347,7 +1367,7 @@ async def _test_imo_1966_p5(root: Root, file: MyIO):
 
     # 2. Try Obvious to prove eq1 — fails (non-trivial)
     root.session.age += 1
-    await root.fill("1.1", Obvious.gen_single({
+    await root.fill("1.1", [Obvious.gen_single({
         "facts": [
             {"refer_by": "name", "name": "h6"},
             {"refer_by": "name", "name": "h7"},
@@ -1355,7 +1375,7 @@ async def _test_imo_1966_p5(root: Root, file: MyIO):
             {"refer_by": "name", "name": "assms(2)"},
             {"refer_by": "name", "name": "assms(3)"}
         ]
-    }))
+    })])
     print_header("After failed Obvious on eq1", file)
     buffer = io.StringIO()
     root.print(0, MyIO(buffer), update_line=True)
@@ -1377,22 +1397,22 @@ async def _test_imo_1966_p5(root: Root, file: MyIO):
 
     # 4. Fill with intermediate Have: a1_gt_a3
     root.session.age += 1
-    await root.fill("1.1", Have.gen_single({
+    await root.fill("1.1", [Have.gen_single({
         "thought": "From assms(1) and assms(2), a(1) > a(3), so |a(1) - a(3)| = a(1) - a(3)",
         "name": "a1_gt_a3",
         "statement": {
             "english": "a(1) is greater than a(3)",
             "isabelle": "a (1::nat) > a (3::nat)"
         }
-    }))
+    })])
     # Prove a1_gt_a3 with Obvious — should succeed
     root.session.age += 1
-    await root.fill("1.1.1", Obvious.gen_single({
+    await root.fill("1.1.1", [Obvious.gen_single({
         "facts": [
             {"refer_by": "name", "name": "assms(1)"},
             {"refer_by": "name", "name": "assms(2)"}
         ]
-    }))
+    })])
     print_header("After proving a1_gt_a3", file)
     buffer = io.StringIO()
     root.print(0, MyIO(buffer), update_line=True)
@@ -1403,22 +1423,22 @@ async def _test_imo_1966_p5(root: Root, file: MyIO):
 
     # 5. Fill with intermediate Have: a1_gt_a4
     root.session.age += 1
-    await root.fill("1.2", Have.gen_single({
+    await root.fill("1.2", [Have.gen_single({
         "thought": "From assms, a(1) > a(2) > a(3) > a(4), so a(1) > a(4)",
         "name": "a1_gt_a4",
         "statement": {
             "english": "a(1) is greater than a(4)",
             "isabelle": "a (1::nat) > a (4::nat)"
         }
-    }))
+    })])
     # Prove a1_gt_a4 with Obvious — should succeed
     root.session.age += 1
-    await root.fill("1.2.1", Obvious.gen_single({
+    await root.fill("1.2.1", [Obvious.gen_single({
         "facts": [
             {"refer_by": "name", "name": "a1_gt_a3"},
             {"refer_by": "name", "name": "assms(3)"}
         ]
-    }))
+    })])
     print_header("After proving a1_gt_a4", file)
     buffer = io.StringIO()
     root.print(0, MyIO(buffer), update_line=True)
@@ -1679,10 +1699,10 @@ async def _test_intro_split_conj(root: Root, file: MyIO):
     # the remaining goal is P ∧ Q ∧ R.
     # Apply Intro with split_conj=True to split the conjunction.
     root.session.age += 1
-    await root.fill("1", Intro.gen_single({
+    await root.fill("1", [Intro.gen_single({
         "thought": "Split conjunction into separate subgoals",
         "split_conj": True
-    }))
+    })])
     print_header("After Intro split_conj=True", file)
     root.print(0, file)
     print_header("Overview after split", file)
@@ -1692,7 +1712,7 @@ async def _test_intro_split_conj(root: Root, file: MyIO):
     for i in range(1, 4):
         root.session.age += 1
         try:
-            await root.fill(f"1.{i}.1", Obvious.gen_single({"facts": []}))
+            await root.fill(f"1.{i}.1", [Obvious.gen_single({"facts": []})])
         except Exception as e:
             file.write(f"Cannot fill 1.{i}.1: {type(e).__name__}: {e}\n")
     print_header("After closing subgoals", file)
@@ -1726,7 +1746,7 @@ async def _test_intro_split_prem_conj(root: Root, file: MyIO):
     # Discharge it with Obvious using the destructured atoms.
     root.session.age += 1
     try:
-        await root.fill("2", Obvious.gen_single({"facts": []}))
+        await root.fill("2", [Obvious.gen_single({"facts": []})])
         print_header("After Obvious on 2", file)
         root.print(0, file)
     except Exception as e:
@@ -1752,7 +1772,7 @@ async def _test_intro_split_prem_conj_identical_prems(root: Root, file: MyIO):
 
     root.session.age += 1
     try:
-        await root.fill("2", Obvious.gen_single({"facts": []}))
+        await root.fill("2", [Obvious.gen_single({"facts": []})])
         print_header("After Obvious on 2", file)
         root.print(0, file)
     except Exception as e:
@@ -1774,7 +1794,7 @@ async def _test_intro_split_prem_conj_no_destruct(root: Root, file: MyIO):
 
     root.session.age += 1
     try:
-        await root.fill("2", Obvious.gen_single({"facts": []}))
+        await root.fill("2", [Obvious.gen_single({"facts": []})])
         print_header("After Obvious on 2", file)
         root.print(0, file)
     except Exception as e:
@@ -1800,14 +1820,16 @@ async def _test_intro_obvious(root: Root, file: MyIO):
     # Verify by attempting to fill 1.1.1 — it should fail because
     # the proof is already complete.
     root.session.age += 1
-    try:
-        await root.fill("1.1.1", Obvious.gen_single({"facts": []}))
+    _outcome = await root.fill("1.1.1", [Obvious.gen_single({"facts": []})])
+    if _outcome.failure is not None:
+        file.write(
+            f"No step 1.1.1 needed (auto-proved): "
+            f"{type(_outcome.failure).__name__}: {_outcome.failure}\n")
+    else:
         print_header("After Obvious on 1.1.1 (subgoal existed)", file)
         root.print(0, file)
         print_header("Overview after 1.1.1", file)
         root.quickview(0, file)
-    except Exception as e:
-        file.write(f"No step 1.1.1 needed (auto-proved): {type(e).__name__}: {e}\n")
 
     print_header("Final Overview", file)
     root.quickview(0, file)
@@ -1846,22 +1868,22 @@ async def _test_ForeNodeFail(root: Root, file: MyIO):
 
     # Step 1: Have with a valid statement (succeeds)
     root.session.age += 1
-    await root.fill("1", Have.gen_single({
+    await root.fill("1", [Have.gen_single({
         "thought": "helper",
         "statement": {"english": "x equals y", "isabelle": "x = y"},
         "name": "lem1"
-    }))
-    await root.fill("1.1", Obvious.gen_single({"facts": []}))
+    })])
+    await root.fill("1.1", [Obvious.gen_single({"facts": []})])
     print_header("After step 1 (Have x=y, should succeed)", file)
     root.print(0, file)
 
     # Step 2: Have with INVALID Isabelle syntax (should FAIL)
     root.session.age += 1
-    await root.fill("2", Have.gen_single({
+    await root.fill("2", [Have.gen_single({
         "thought": "intentionally bad step",
         "statement": {"english": "invalid", "isabelle": "1 1 1"},
         "name": "bad"
-    }))
+    })])
     step2 = root.locate_node("2")
     file.write(f"Step 2 status: {step2.status.status.value}\n")
     print_header("After step 2 (invalid Have, should fail)", file)
@@ -1869,7 +1891,7 @@ async def _test_ForeNodeFail(root: Root, file: MyIO):
 
     # Step 3 (fill): Should be CANCELLED because step 2 failed
     root.session.age += 1
-    await root.fill("3", Obvious.gen_single({"facts": []}))
+    await root.fill("3", [Obvious.gen_single({"facts": []})])
     step3 = root.locate_node("3")
     file.write(f"Step 3 status (fill after failed): {step3.status.status.value}\n")
     assert step3.status.status == EvaluationStatus.Status.CANCELLED, \
@@ -1879,11 +1901,13 @@ async def _test_ForeNodeFail(root: Root, file: MyIO):
 
     # Insert before step 3: predecessor is step 2 (FAILURE), should be CANCELLED
     root.session.age += 1
-    inserted, _, _ = await root.insert_before("3", Have.gen_single({
+    _outcome = await root.insert_before("3", [Have.gen_single({
         "thought": "inserted step",
         "statement": {"english": "x equals z", "isabelle": "x = z"},
         "name": "lem2"
-    }))
+    })])
+    inserted = _outcome.committed[0] if _outcome.committed else None
+    assert inserted is not None
     file.write(f"Inserted step status (insert_before after failed): {inserted.status.status.value}\n")
     assert inserted.status.status == EvaluationStatus.Status.CANCELLED, \
         f"insert_before: Expected CANCELLED but got {inserted.status.status.value}"
@@ -1892,11 +1916,11 @@ async def _test_ForeNodeFail(root: Root, file: MyIO):
 
     # Amend step 2 to fix it (valid statement)
     root.session.age += 1
-    await root.amend("2", Have.gen_single({
+    await root.amend("2", [Have.gen_single({
         "thought": "fixed step",
         "statement": {"english": "y equals x", "isabelle": "y = x"},
         "name": "lem_fixed"
-    }))
+    })])
     step2_fixed = root.locate_node("2")
     file.write(f"Step 2 status after amend (should succeed): {step2_fixed.status.status.value}\n")
     # After fixing step 2, subsequent steps should be refreshed (no longer CANCELLED)
@@ -1972,9 +1996,9 @@ async def _test_prove_in_time_parse_error(root: Root, file: MyIO):
     # --- Test 5: Obvious.gen_single() with bad ProveInTime (HAMMER path) ---
     root.session.age += 1
     try:
-        await root.fill("1", Obvious.gen_single({"facts": [
+        await root.fill("1", [Obvious.gen_single({"facts": [
             {"refer_by": "proposition", "proposition": stmt_ascii}
-        ]}))
+        ]})])
         file.write("Obvious created (should have failure status)\n")
         node = root.locate_node("1")
         file.write(f"Step 1 status: {node.status.status.value}\n")
@@ -1993,7 +2017,7 @@ async def _test_prove_in_time_parse_error(root: Root, file: MyIO):
     try:
         await root.fill("1" if root.locate_node("1").status.status != EvaluationStatus.Status.SUCCESS
                   else "2",
-                  Obvious.gen_single({"facts": []}))
+                  [Obvious.gen_single({"facts": []})])
         file.write("Subsequent fill succeeded (tree not stuck)\n")
     except Exception as e:
         file.write(f"Subsequent fill: {type(e).__name__}: {e}\n")
@@ -2010,21 +2034,21 @@ async def _test_ObviousProofFail(root: Root, file: MyIO):
 
     # Have with an easy statement — Obvious should succeed
     root.session.age += 1
-    await root.fill("1", Have.gen_single({
+    await root.fill("1", [Have.gen_single({
         "thought": "trivial identity",
         "statement": {"english": "x equals x", "isabelle": "x = x"},
         "name": "lem1",
-    }))
+    })])
     print_header("After Have x=x (Obvious succeeds)", file)
     root.print(0, file)
 
     # Have with a hard/false statement — Obvious (HAMMER) should fail
     root.session.age += 1
-    await root.fill("2", Have.gen_single({
+    await root.fill("2", [Have.gen_single({
         "thought": "this is false",
         "statement": {"english": "x equals x plus one", "isabelle": "x = x + 1"},
         "name": "bad",
-    }))
+    })])
     print_header("After Have x=x+1 (Obvious fails)", file)
     root.print(0, file)
 
@@ -2044,20 +2068,20 @@ async def _test_HaveObviousProof(root: Root, file: MyIO):
 
     # Have with proof: "Obvious" — Obvious sub-node should be auto-created
     root.session.age += 1
-    await root.fill("1", Have.gen_single({
+    await root.fill("1", [Have.gen_single({
         "thought": "x times x is non-negative because x times x equals x squared",
         "statement": {
             "english": "x times x equals x squared",
             "isabelle": "x * x = x^2"
         },
         "name": "sq",
-    }))
+    })])
     print_header("After Have with proof=Obvious", file)
     root.print(0, file)
 
     # The remaining goal should still need a proof
     root.session.age += 1
-    await root.fill("2", Obvious.gen_single({"facts": []}))
+    await root.fill("2", [Obvious.gen_single({"facts": []})])
     print_header("After closing the remaining goal", file)
     root.print(0, file)
 
@@ -2072,13 +2096,13 @@ async def _test_SufficesObviousProof(root: Root, file: MyIO):
     root.print(0, file)
 
     root.session.age += 1
-    await root.fill("1", Suffices.gen_single({
+    await root.fill("1", [Suffices.gen_single({
         "thought": "It suffices to show a stronger statement",
         "statement": {
             "english": "x squared plus 1 is greater than 0",
             "isabelle": "x * x + 1 > 0"
         },
-    }))
+    })])
     print_header("After Suffices with proof=Obvious", file)
     root.print(0, file)
 
@@ -2093,11 +2117,11 @@ async def _test_InductionObviousProof(root: Root, file: MyIO):
     root.print(0, file)
 
     root.session.age += 1
-    await root.fill("1", Induction.gen_single({
+    await root.fill("1", [Induction.gen_single({
         "thought": "Induction on list l",
         "target_isabelle_term": "l",
         "variables": [],
-    }))
+    })])
     print_header("After Induction with proof=Obvious", file)
     root.print(0, file)
 
@@ -2119,12 +2143,14 @@ async def _test_multi_goal_quickview(root: Root, file: MyIO):
     # should fail because goals are already complete.
     for goal_name in ["goal1", "goal2", "goal3"]:
         root.session.age += 1
-        try:
-            await root.fill(f"{goal_name}.1", Obvious.gen_single({"facts": []}))
+        _outcome = await root.fill(f"{goal_name}.1", [Obvious.gen_single({"facts": []})])
+        if _outcome.failure is not None:
+            file.write(
+                f"No step {goal_name}.1 needed (auto-proved): "
+                f"{type(_outcome.failure).__name__}: {_outcome.failure}\n")
+        else:
             print_header(f"Overview ({goal_name} filled manually)", file)
             root.quickview(0, file)
-        except Exception as e:
-            file.write(f"No step {goal_name}.1 needed (auto-proved): {type(e).__name__}: {e}\n")
 
     print_header("Final Overview", file)
     root.quickview(0, file)
@@ -2140,7 +2166,7 @@ async def _test_ObviousTimeout_default(root: Root, file: MyIO):
 
     # Obvious without timeout — should default to 20
     root.session.age += 1
-    await root.fill("1", Obvious.gen_single({"facts": []}))
+    await root.fill("1", [Obvious.gen_single({"facts": []})])
     print_header("After Obvious (default timeout)", file)
     root.print(0, file)
 
@@ -2156,7 +2182,7 @@ async def _test_ObviousTimeout_subproof(root: Root, file: MyIO):
 
     # Have with proof as Obvious dict with explicit timeout=15
     root.session.age += 1
-    await root.fill("1", Have.gen_single({
+    await root.fill("1", [Have.gen_single({
         "thought": "x squared is non-negative",
         "statement": {
             "english": "x times x equals x squared",
@@ -2164,13 +2190,13 @@ async def _test_ObviousTimeout_subproof(root: Root, file: MyIO):
         },
         "name": "sq",
         "proof": [{"operation": "Obvious", "facts": [], "timeout": 15}]
-    }))
+    })])
     print_header("After Have with proof=Obvious(timeout=15)", file)
     root.print(0, file)
 
     # Close the remaining goal
     root.session.age += 1
-    await root.fill("2", Obvious.gen_single({"facts": [], "timeout": 30}))
+    await root.fill("2", [Obvious.gen_single({"facts": [], "timeout": 30})])
     print_header("After closing remaining goal (timeout=30)", file)
     root.print(0, file)
 
@@ -2185,25 +2211,27 @@ async def _test_Derive1(root: Root, file: MyIO):
     root.print(0, file)
     # Derive on h2 (∀x. P x → Q x) with x=0, discharge P 0 using h1
     root.session.age += 1
-    await root.fill("1", Derive.gen_single({
+    await root.fill("1", [Derive.gen_single({
         "thought": "Instantiate h2 with x=0 and discharge with h1",
         "rule": {"refer_by": "name", "name": "h2"},
         "instantiations": [{"name": "x", "value": "0"}],
         "discharging_facts": [{"refer_by": "name", "name": "h1"}],
         "result_name": "derived_Q0"
-    }))
+    })])
     print_header("After Derive", file)
     root.print(0, file)
     # Close goal using the derived fact — may already be auto-proved
     root.session.age += 1
-    try:
-        await root.fill("2", Obvious.gen_single({
-            "facts": [{"refer_by": "name", "name": "derived_Q0"}]
-        }))
+    _outcome = await root.fill("2", [Obvious.gen_single({
+        "facts": [{"refer_by": "name", "name": "derived_Q0"}]
+    })])
+    if _outcome.failure is not None:
+        file.write(
+            f"No step 2 needed (auto-proved after Derive): "
+            f"{type(_outcome.failure).__name__}: {_outcome.failure}\n")
+    else:
         print_header("After Obvious", file)
         root.print(0, file)
-    except Exception as e:
-        file.write(f"No step 2 needed (auto-proved after Derive): {type(e).__name__}: {e}\n")
     unfinished_nodes = set()
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
@@ -2215,19 +2243,19 @@ async def _test_Derive2(root: Root, file: MyIO):
     root.print(0, file)
     # Derive on h2 (P 0 → Q 0) by discharging with h1 (P 0), no instantiation
     root.session.age += 1
-    await root.fill("1", Derive.gen_single({
+    await root.fill("1", [Derive.gen_single({
         "thought": "Discharge h2 with h1 via modus ponens",
         "rule": {"refer_by": "name", "name": "h2"},
         "discharging_facts": [{"refer_by": "name", "name": "h1"}],
         "result_name": "mp_result"
-    }))
+    })])
     print_header("After Derive", file)
     root.print(0, file)
     # Close goal using the named result
     root.session.age += 1
-    await root.fill("2", Obvious.gen_single({
+    await root.fill("2", [Obvious.gen_single({
         "facts": [{"refer_by": "name", "name": "mp_result"}]
-    }))
+    })])
     print_header("After Obvious", file)
     root.print(0, file)
     unfinished_nodes = set()
@@ -2241,11 +2269,13 @@ async def _test_Derive3(root: Root, file: MyIO):
     root.print(0, file)
     # Try to use a nonexistent rule
     root.session.age += 1
-    node, is_error, reason = await root.fill("1", Derive.gen_single({
+    _outcome = await root.fill("1", [Derive.gen_single({
         "thought": "Try to use a nonexistent rule",
         "rule": {"refer_by": "name", "name": "nonexistent_rule"},
         "result_name": "should_fail"
-    }))
+    })])
+    is_error = _outcome.failure is not None and _outcome.failure.is_error
+    reason = _outcome.failure
     print_header("Response", file)
     file.write(f"Is error: {is_error}\n")
     file.write(f"Reason: {reason}\n")
@@ -2261,13 +2291,15 @@ async def _test_Derive4(root: Root, file: MyIO):
     # Derive on h2 with x = 1 - 1, then discharge with h1 (P 0).
     # After instantiation, premise is P (1 - 1) but h1 is P 0 — no syntactic unification.
     root.session.age += 1
-    node, is_error, reason = await root.fill("1", Derive.gen_single({
+    _outcome = await root.fill("1", [Derive.gen_single({
         "thought": "Derive h2 with x = 1 - 1, discharge with h1 (P 0) — should fail: no unifiers",
         "rule": {"refer_by": "name", "name": "h2"},
         "instantiations": [{"name": "x", "value": "1 - (1::nat)"}],
         "discharging_facts": [{"refer_by": "name", "name": "h1"}],
         "result_name": "bad_result"
-    }))
+    })])
+    is_error = _outcome.failure is not None and _outcome.failure.is_error
+    reason = _outcome.failure
     print_header("Response", file)
     file.write(f"Is error: {is_error}\n")
     file.write(f"Reason: {reason}\n")
@@ -2291,7 +2323,7 @@ async def _test_Derive5(root: Root, file: MyIO):
     root.print(0, file)
     root.session.age += 1
     start = time()
-    node, is_error, reason = await root.fill("1", Derive.gen_single({
+    _outcome = await root.fill("1", [Derive.gen_single({
         "thought": "Apply mult_mod_cancel_left — h1 lacks ?n*?a pattern, OF will fail",
         "rule": {"refer_by": "name", "name": "mult_mod_cancel_left"},
         "discharging_facts": [
@@ -2299,7 +2331,9 @@ async def _test_Derive5(root: Root, file: MyIO):
             {"refer_by": "name", "name": "h2"}
         ],
         "result_name": "should_fail"
-    }))
+    })])
+    is_error = _outcome.failure is not None and _outcome.failure.is_error
+    reason = _outcome.failure
     elapsed = time() - start
     print_header("Response", file)
     file.write(f"Is error: {is_error}\n")
@@ -2323,7 +2357,7 @@ async def _test_Derive6(root: Root, file: MyIO):
     root.print(0, file)
     root.session.age += 1
     start = time()
-    node, is_error, reason = await root.fill("1", Derive.gen_single({
+    _outcome = await root.fill("1", [Derive.gen_single({
         "thought": "Apply mult_mod_cancel_left on nat — type mismatch, OF will fail",
         "rule": {"refer_by": "name", "name": "mult_mod_cancel_left"},
         "discharging_facts": [
@@ -2331,7 +2365,9 @@ async def _test_Derive6(root: Root, file: MyIO):
             {"refer_by": "name", "name": "h2"}
         ],
         "result_name": "should_fail"
-    }))
+    })])
+    is_error = _outcome.failure is not None and _outcome.failure.is_error
+    reason = _outcome.failure
     elapsed = time() - start
     print_header("Response", file)
     file.write(f"Is error: {is_error}\n")
@@ -2356,7 +2392,7 @@ async def _test_Derive7(root: Root, file: MyIO):
 
     # --- Sub-test 1: Type clash (nat vs euclidean_ring_cancel) ---
     root.session.age += 1
-    node, is_error, reason = await root.fill("1", Derive.gen_single({
+    _outcome = await root.fill("1", [Derive.gen_single({
         "thought": "mult_mod_cancel_left on nat — type mismatch expected",
         "rule": {"refer_by": "name", "name": "mult_mod_cancel_left"},
         "discharging_facts": [
@@ -2364,12 +2400,14 @@ async def _test_Derive7(root: Root, file: MyIO):
             {"refer_by": "name", "name": "h2"}
         ],
         "result_name": "should_fail_type"
-    }))
+    })])
+    is_error = _outcome.failure is not None and _outcome.failure.is_error
+    reason = _outcome.failure
     print_header("Sub-test 1: Type clash", file)
     file.write(f"Is error: {is_error}\n")
     file.write(f"Reason: {reason}\n")
     assert is_error, "Expected type clash error"
-    assert reason is not None and "does not unify with" in reason.reason, \
+    assert reason is not None and "does not unify with" in str(reason), \
         f"Expected 'does not unify with' in reason, got: {reason}"
 
     print_header("Final state", file)
@@ -2390,28 +2428,32 @@ async def _test_GlobalEnv(root: Root, file: MyIO):
       4. DELETE the global declaration."""
     print_header("Initial YAML", file)
     root.print(0, file)
-    print_header("Initial Overview", file)
-    root.quickview(0, file)
     file.write(f"GlobalEnv children: {len(root.global_env.sub_nodes)}\n")
 
     # === ADD: Append a global equation Have and prove it ===
     root.session.age += 1
-    have1 = await root.global_env.append(Have.gen_single({
+    _have_outcome = await root.global_env.append([Have.gen_single({
         "thought": "Restate h1 as a global rewrite rule",
         "statement": {"english": "P", "isabelle": "P"},
         "name": "t1",
-    }))
+    })])
+    [have1] = _have_outcome.committed
+    print_header("edit_message: ADD global Have t1", file)
+    file.write(await _P.edit_message(root, _have_outcome, root.session))
+    file.write("---------------\n")
     file.write(f"Added have1: id={have1.id}, local_step={have1.local_step}, status={have1.status.status.value}\n")
-    # Discharge the subgoal using the original assumption h1
     root.session.age += 1
-    obv1 = await have1.append(Obvious.gen_single({
+    _obv_outcome = await have1.append([Obvious.gen_single({
         "facts": [{"refer_by": "name", "name": "h1"}]
-    }))
-    file.write(f"Obvious in have1: status={obv1.status.status.value}\n")
-    print_header("After ADD global Have (t1) + prove", file)
-    root.print(0, file)
-    print_header("Overview after ADD", file)
-    root.quickview(0, file)
+    })])
+    print_header("edit_message: Obvious under t1", file)
+    file.write(await _P.edit_message(root, _obv_outcome, root.session))
+    file.write("---------------\n")
+    if _obv_outcome.committed:
+        obv_status = _obv_outcome.committed[0].status.status.value
+    else:
+        obv_status = "reverted"
+    file.write(f"Obvious in have1: status={obv_status}\n")
 
     # === VISIBILITY: Check whether t1 appears in GoalNode's context ===
     goal_node = root.sub_nodes[1]  # the single GoalNode
@@ -2425,18 +2467,29 @@ async def _test_GlobalEnv(root: Root, file: MyIO):
     # so the Rewrite below fetches it successfully — but `P` isn't an
     # equation, so simp reports "no progress" and the Rewrite fails.
     root.session.age += 1
-    node1, is_error1, reason1 = await root.fill("1", Rewrite.gen_single({
+    _outcome = await root.fill("1", [Rewrite.gen_single({
         "thought": "Rewrite the goal using the (broken) global equation t1",
         "using": [{"refer_by": "name", "name": "t1"}],
         "use system simplifiers": False,
         "rewrite goal": True,
         "rewrite premises": []
-    }))
+    })])
+    print_header("edit_message: Rewrite step 1 using broken t1", file)
+    file.write(await _P.edit_message(root, _outcome, root.session))
+    file.write("---------------\n")
+    # Verify: the Rewrite node IS in the tree (quickview just folded it
+    # because its `changed` flag was cleared after the first edit_message's
+    # `root.reset_changed()` and the outer GoalNode didn't get re-flagged
+    # as changed by a trivial Rewrite).
+    print_header("Full tree.print after Rewrite (node is present)", file)
+    root.print(0, file)
+    node1 = _outcome.committed[0] if _outcome.committed else None
+    assert node1 is not None
+    is_error1 = _outcome.failure is not None and _outcome.failure.is_error
+    reason1 = _outcome.failure
     file.write(f"Rewrite step 1 using broken t1: status={node1.status.status.value}, is_error={is_error1}\n")
     if reason1:
-        file.write(f"  reason: {reason1.reason}\n")
-    print_header("After failed Rewrite at step 1 (broken t1)", file)
-    root.print(0, file)
+        file.write(f"  reason: {reason1.reason if isinstance(reason1, FailureReason) else reason1}\n")
 
     # === AMEND (recovery): replace the bare `P` with a provable equation
     # `x = 0` that the inherited Obvious sub-step (which already references
@@ -2446,36 +2499,117 @@ async def _test_GlobalEnv(root: Root, file: MyIO):
     #   (c) re-refresh after amend turns the previously-failing Have into
     #       a SUCCESS — a real recovery, not a no-op rename.
     root.session.age += 1
-    amended, is_error2, reason2 = await root.amend("global.1", Have.gen_single({
+    _outcome = await root.amend("global.1", [Have.gen_single({
         "thought": "Amended: replace unprovable y=x with the equation x=0 (= h1)",
         "statement": {"english": "x equals zero", "isabelle": "x = 0"},
         "name": "t1",
-    }))
+    })])
+    print_header("edit_message: AMEND global.1 (recovery)", file)
+    file.write(await _P.edit_message(root, _outcome, root.session))
+    file.write("---------------\n")
+    amended = _outcome.committed[0] if _outcome.committed else None
+    assert amended is not None
+    is_error2 = _outcome.failure is not None and _outcome.failure.is_error
+    reason2 = _outcome.failure
     file.write(f"Amend global.1: id={amended.id}, local_step={amended.local_step}, is_error={is_error2}\n")
     if reason2:
-        file.write(f"  reason: {reason2.reason}\n")
+        file.write(f"  reason: {reason2.reason if isinstance(reason2, FailureReason) else reason2}\n")
     file.write(f"Amended Have status: {amended.status.status.value}\n")
-    file.write(f"Amended Have inherited children: {len(amended.sub_nodes)}\n")
-    if amended.sub_nodes:
-        first_child = amended.sub_nodes[0]
+    file.write(f"Amended Have inherited children: {len(cast(NonLeaf_Node, amended).sub_nodes)}\n")
+    if cast(NonLeaf_Node, amended).sub_nodes:
+        first_child = cast(NonLeaf_Node, amended).sub_nodes[0]
         file.write(f"  inherited child[0]: type={type(first_child).__name__}, status={first_child.status.status.value}\n")
-    print_header("After AMEND global.1 (recovery)", file)
-    root.print(0, file)
-    print_header("Overview after AMEND", file)
-    root.quickview(0, file)
 
     # === DELETE: Remove the global Have entirely ===
     not_found = await root.delete(["global.1"])
     file.write(f"Delete global.1 not_found: {not_found}\n")
     file.write(f"GlobalEnv children after delete: {len(root.global_env.sub_nodes)}\n")
-    print_header("After DELETE global.1", file)
-    root.print(0, file)
-    print_header("Final Overview", file)
-    root.quickview(0, file)
 
     unfinished = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+@model_test("GlobalEnv_BodyDone", "Test_GlobalEnv_BodyDone.thy", 10)
+async def _test_GlobalEnv_BodyDone(root: Root, file: MyIO):
+    """The body is discharged early and then the global environment is
+    edited repeatedly.  An unfinished global Have keeps the overall
+    lemma open throughout (so 'Congratulations' never fires), while the
+    folded body must render as `proof:\\n  done\\n` instead of a bare
+    `proof:\\n` after every global edit."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Add a global Have with no sub-proof — stays sorry'd, ensuring the
+    # overall lemma never hits 'all goals proven' during the test.
+    root.session.age += 1
+    _outcome = await root.global_env.append([Have.gen_single({
+        "thought": "Unprovable bare proposition — no Obvious under it",
+        "statement": {"english": "P", "isabelle": "P"},
+        "name": "g1",
+    })])
+    print_header("edit_message: ADD global g1 (unfinished)", file)
+    file.write(await _P.edit_message(root, _outcome, root.session))
+    file.write("---------------\n")
+
+    # Discharge the (trivial) proof body; never touch it again.
+    root.session.age += 1
+    _outcome = await root.fill("1", [Obvious.gen_single({"facts": []})])
+    print_header("edit_message: Obvious (discharge body)", file)
+    file.write(await _P.edit_message(root, _outcome, root.session))
+    file.write("---------------\n")
+
+    # Repeatedly append more unfinished global Haves.  After each edit
+    # the body stays SUCCESS (folds to 'done'), but g1/g2/g3 remain
+    # unfinished, so the lemma is still open.
+    for name in ["g2", "g3"]:
+        root.session.age += 1
+        _outcome = await root.global_env.append([Have.gen_single({
+            "thought": f"Another unfinished global Have {name}",
+            "statement": {"english": "P", "isabelle": "P"},
+            "name": name,
+        })])
+        print_header(f"edit_message: ADD global {name} (unfinished)", file)
+        file.write(await _P.edit_message(root, _outcome, root.session))
+        file.write("---------------\n")
+
+@model_test("GlobalEnv_BodyUnfilled", "Test_GlobalEnv_BodyUnfilled.thy", 10)
+async def _test_GlobalEnv_BodyUnfilled(root: Root, file: MyIO):
+    """The single proof body is never filled (stays pending).  We
+    repeatedly edit the global environment — this exercises the
+    opposite of `GlobalEnv_BodyDone`: here `does_quickview_need_detail`
+    stays True on the body, so `proof:` must persist with its pending
+    'Error: Unfinished Proof...' hint after every global edit."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Append three global Haves (each left unfinished: no Obvious).
+    for name in ["g1", "g2", "g3"]:
+        root.session.age += 1
+        _outcome = await root.global_env.append([Have.gen_single({
+            "thought": f"Unfinished global Have {name}",
+            "statement": {"english": "P", "isabelle": "P"},
+            "name": name,
+        })])
+        print_header(f"edit_message: ADD global {name} (unfinished)", file)
+        file.write(await _P.edit_message(root, _outcome, root.session))
+        file.write("---------------\n")
+
+    # Amend g2 to a different unprovable statement — still leaves the
+    # body untouched and unfinished.
+    root.session.age += 1
+    _outcome = await root.amend("global.2", [Have.gen_single({
+        "thought": "Amended g2 statement (still unfinished)",
+        "statement": {"english": "Q", "isabelle": "Q"},
+        "name": "g2",
+    })])
+    print_header("edit_message: AMEND global.2", file)
+    file.write(await _P.edit_message(root, _outcome, root.session))
+    file.write("---------------\n")
+
+    # Delete g1 — body still untouched.
+    not_found = await root.delete(["global.1"])
+    file.write(f"Delete global.1 not_found: {not_found}\n")
+    file.write(f"GlobalEnv children after delete: {len(root.global_env.sub_nodes)}\n")
 
 @model_test("GlobalEnv_happy", "Test_GlobalEnv_happy.thy", 11)
 async def _test_GlobalEnv_happy(root: Root, file: MyIO):
@@ -2493,17 +2627,17 @@ async def _test_GlobalEnv_happy(root: Root, file: MyIO):
 
     # === ADD: Append a provable global equation Have ===
     root.session.age += 1
-    have1 = await root.global_env.append(Have.gen_single({
+    [have1] = (await root.global_env.append([Have.gen_single({
         "thought": "Restate h1 as a global rewrite rule",
         "statement": {"english": "y equals x", "isabelle": "y = x"},
         "name": "g_eq",
-    }))
+    })])).committed
     file.write(f"Added have1: id={have1.id}, local_step={have1.local_step}, status={have1.status.status.value}\n")
     # Discharge the subgoal using h1 (trivially true since h1 IS y = x)
     root.session.age += 1
-    obv1 = await have1.append(Obvious.gen_single({
+    [obv1] = (await have1.append([Obvious.gen_single({
         "facts": [{"refer_by": "name", "name": "h1"}]
-    }))
+    })])).committed
     file.write(f"Obvious in have1: status={obv1.status.status.value}\n")
     print_header("After ADD global Have (g_eq) + prove", file)
     root.print(0, file)
@@ -2519,16 +2653,20 @@ async def _test_GlobalEnv_happy(root: Root, file: MyIO):
     # === USE FROM PROOF BODY: Rewrite the goal using g_eq (explicit consumption) ===
     # Rewriting `x + y = x + x` with `y = x` should reduce it to `x + x = x + x`.
     root.session.age += 1
-    node1, is_error1, reason1 = await root.fill("1", Rewrite.gen_single({
+    _outcome = await root.fill("1", [Rewrite.gen_single({
         "thought": "Rewrite the goal using the global equation g_eq",
         "using": [{"refer_by": "name", "name": "g_eq"}],
         "use system simplifiers": False,
         "rewrite goal": True,
         "rewrite premises": []
-    }))
+    })])
+    node1 = _outcome.committed[0] if _outcome.committed else None
+    assert node1 is not None
+    is_error1 = _outcome.failure is not None and _outcome.failure.is_error
+    reason1 = _outcome.failure
     file.write(f"Rewrite step 1 using g_eq: status={node1.status.status.value}, is_error={is_error1}\n")
     if reason1:
-        file.write(f"  reason: {reason1.reason}\n")
+        file.write(f"  reason: {reason1.reason if isinstance(reason1, FailureReason) else reason1}\n")
     print_header("After Rewrite proof body using global decl", file)
     root.print(0, file)
 
@@ -2536,29 +2674,42 @@ async def _test_GlobalEnv_happy(root: Root, file: MyIO):
     # with system simplifiers. No `using` facts needed — simp alone closes
     # reflexive equalities.
     root.session.age += 1
-    node2, is_error2, reason2 = await root.fill("2", Rewrite.gen_single({
+    _outcome = await root.fill("2", [Rewrite.gen_single({
         "thought": "Close residual reflexive equation via system simplifiers",
         "using": [],
         "use system simplifiers": True,
         "rewrite goal": True,
         "rewrite premises": []
-    }))
-    file.write(f"Rewrite step 2 (system simp): status={node2.status.status.value}, is_error={is_error2}\n")
+    })])
+    # Step 1's Rewrite already solved the goal, so step 2's Rewrite makes
+    # no progress and fails.  Rewrite overrides `_on_edit_failure` to revert
+    # in singleton mode (the new generalized behaviour), so
+    # `_outcome.committed` is empty and the failure info lives in
+    # `_outcome.failure` / `_outcome.is_error`.
+    node2 = _outcome.committed[0] if _outcome.committed else None
+    status_val = node2.status.status.value if node2 else "reverted"
+    is_error2 = _outcome.failure is not None and _outcome.failure.is_error
+    reason2 = _outcome.failure
+    file.write(f"Rewrite step 2 (system simp): status={status_val}, is_error={is_error2}\n")
     if reason2:
-        file.write(f"  reason: {reason2.reason}\n")
+        file.write(f"  reason: {reason2.reason if isinstance(reason2, FailureReason) else reason2}\n")
     print_header("After Rewrite closes residual goal", file)
     root.print(0, file)
 
     # === AMEND: Replace the global Have with a reoriented equation ===
     root.session.age += 1
-    amended, is_error3, reason3 = await root.amend("global.1", Have.gen_single({
+    _outcome = await root.amend("global.1", [Have.gen_single({
         "thought": "Amended: reverse orientation of the equation",
         "statement": {"english": "x equals y", "isabelle": "x = y"},
         "name": "g_eq",
-    }))
+    })])
+    amended = _outcome.committed[0] if _outcome.committed else None
+    assert amended is not None
+    is_error3 = _outcome.failure is not None and _outcome.failure.is_error
+    reason3 = _outcome.failure
     file.write(f"Amend global.1: id={amended.id}, local_step={amended.local_step}, is_error={is_error3}\n")
     if reason3:
-        file.write(f"  reason: {reason3.reason}\n")
+        file.write(f"  reason: {reason3.reason if isinstance(reason3, FailureReason) else reason3}\n")
     print_header("After AMEND global.1", file)
     root.print(0, file)
     print_header("Overview after AMEND", file)
@@ -2609,20 +2760,24 @@ async def _test_GlobalEnvFill(root: Root, file: MyIO):
 
     # fill("global.1") should now succeed
     root.session.age += 1
-    ret, is_error, reason = await root.fill("global.1", Have.gen_single({
+    _outcome = await root.fill("global.1", [Have.gen_single({
         "thought": "global declaration via fill",
         "statement": {"english": "x is zero", "isabelle": "x = 0"},
         "name": "g1",
-    }))
+    })])
+    ret = _outcome.committed[0] if _outcome.committed else None
+    assert ret is not None
+    is_error = _outcome.failure is not None and _outcome.failure.is_error
+    reason = _outcome.failure
     file.write(f"fill('global.1'): id={ret.id}, status={ret.status.status.value}, is_error={is_error}\n")
     print_header("After fill global.1", file)
     root.print(0, file)
 
     # Prove the global Have
     root.session.age += 1
-    obv = await ret.append(Obvious.gen_single({
+    [obv] = (await ret.append([Obvious.gen_single({
         "facts": [{"refer_by": "name", "name": "h1"}]
-    }))
+    })])).committed
     file.write(f"Obvious in global Have: status={obv.status.status.value}\n")
     print_header("After proving global Have", file)
     root.print(0, file)
@@ -2647,21 +2802,21 @@ async def _test_Chaining(root: Root, file: MyIO):
 
     # Insert a Chaining step before the main goal so we have both the forward
     # derivation and the remaining goal slot.
-    await root.fill("1", Chaining.gen_single({
+    await root.fill("1", [Chaining.gen_single({
         "thought": "Chain ab and bc by transitivity to derive a <= c",
         "name": "ac",
         "facts": [
             {"refer_by": "name", "name": "ab"},
             {"refer_by": "name", "name": "bc"},
         ],
-    }))
+    })])
     print_header("After Chaining (named)", file)
     root.print(0, file)
 
     # Close the main goal using the chained fact.
-    await root.fill("2", Obvious.gen_single({
+    await root.fill("2", [Obvious.gen_single({
         "facts": [{"refer_by": "name", "name": "ac"}],
-    }))
+    })])
     print_header("After Obvious using ac", file)
     root.print(0, file)
 
@@ -2685,12 +2840,14 @@ async def _test_FillOrphanedNode(root: Root, file: MyIO):
     # Step 1: Fill with a Have that FAILS (bad Isabelle syntax).
     # The node stays in sub_nodes with FAILURE status.
     root.session.age += 1
-    ret1, is_error1, _ = await root.fill("1", Have.gen_single({
+    _outcome = await root.fill("1", [Have.gen_single({
         "thought": "intentionally bad",
         "statement": {"english": "bad", "isabelle": "1 1 1"},
         "name": "bad"
-    }))
-    assert is_error1, "bad Have should report as error"
+    })])
+    # Have does not override _on_edit_failure, so outcome.is_error stays
+    # False (the agent observes FAILURE from the tree itself).  The node
+    # still commits with FAILURE status — that's the contract tested here.
     step1 = root.locate_node("1")
     assert step1.status.status == EvaluationStatus.Status.FAILURE, \
         f"Expected FAILURE but got {step1.status.status.value}"
@@ -2701,7 +2858,7 @@ async def _test_FillOrphanedNode(root: Root, file: MyIO):
     # Step 2: Fill an Obvious AFTER the failed Have.
     # It should be CANCELLED because step 1 failed.
     root.session.age += 1
-    await root.fill("2", Obvious.gen_single({"facts": []}))
+    await root.fill("2", [Obvious.gen_single({"facts": []})])
     step2 = root.locate_node("2")
     assert step2.status.status == EvaluationStatus.Status.CANCELLED, \
         f"Expected CANCELLED but got {step2.status.status.value}"
@@ -2714,11 +2871,12 @@ async def _test_FillOrphanedNode(root: Root, file: MyIO):
     # returns "3" (past the failed Have and cancelled Obvious).
     # The new fallback allows this because steps 1 and 2 are both non-SUCCESS.
     root.session.age += 1
-    ret3, is_error3, _ = await root.fill("1", Have.gen_single({
+    _outcome = await root.fill("1", [Have.gen_single({
         "thought": "valid helper",
         "statement": {"english": "x is positive", "isabelle": "x > 0"},
         "name": "x_pos"
-    }))
+    })])
+    is_error3 = _outcome.failure is not None and _outcome.failure.is_error
     assert not is_error3, "valid Have should succeed"
     step1_new = root.locate_node("1")
     assert step1_new.status.status == EvaluationStatus.Status.SUCCESS, \
@@ -2735,9 +2893,9 @@ async def _test_FillOrphanedNode(root: Root, file: MyIO):
 
     # Step 4: Complete the proof.
     root.session.age += 1
-    await root.fill("1.1", Obvious.gen_single({"facts": []}))
+    await root.fill("1.1", [Obvious.gen_single({"facts": []})])
     root.session.age += 1
-    await root.fill("2", Obvious.gen_single({"facts": []}))
+    await root.fill("2", [Obvious.gen_single({"facts": []})])
     print_header("After completing proof", file)
     root.print(0, file)
 
@@ -2892,18 +3050,18 @@ async def _test_fact_name_resolution(root: Root, file: MyIO):
 
     # Step 1: Have "x_gt_1" establishes a named intermediate fact.
     root.session.age += 1
-    await root.fill("1", Have.gen_single({
+    await root.fill("1", [Have.gen_single({
         "thought": "intermediate step",
         "statement": {"english": "x is greater than 1", "isabelle": "x > 1"},
         "name": "x_gt_1"
-    }))
+    })])
     # Prove the Have subgoal.
     root.session.age += 1
-    await root.fill("1.1", Obvious.gen_single({"facts": []}))
+    await root.fill("1.1", [Obvious.gen_single({"facts": []})])
 
     # Step 2: First fill with plain Obvious (no fact reference).
     root.session.age += 1
-    await root.fill("2", Obvious.gen_single({"facts": []}))
+    await root.fill("2", [Obvious.gen_single({"facts": []})])
     print_header("After initial fill (proof complete)", file)
     root.print(0, file)
 
@@ -2912,9 +3070,12 @@ async def _test_fact_name_resolution(root: Root, file: MyIO):
     # so _find_alive_state_among_children skips the _state_before_ending_
     # shortcut and returns step1.ml_state — the pre-Have state.
     root.session.age += 1
-    step2_new, is_error, _ = await root.amend("2", Obvious.gen_single({
+    _outcome = await root.amend("2", [Obvious.gen_single({
         "facts": [{"refer_by": "name", "name": "x_gt_1"}]
-    }))
+    })])
+    step2_new = _outcome.committed[0] if _outcome.committed else None
+    assert step2_new is not None
+    is_error = _outcome.failure is not None and _outcome.failure.is_error
 
     # Collect unfound-fact warnings BEFORE any print (print consumes warnings).
     unfound_warnings = [w for w in step2_new.warnings
@@ -2968,14 +3129,14 @@ async def _test_IntroMetaQuant(root: Root, file: MyIO):
     # Step 2: Have with a meta-quantified + implicational statement.
     # The Have auto-inserts an Intro child (with auto-detected bindings)
     # because the proof obligation is ∀-quantified at the meta level.
-    await root.fill("2", Have.gen_single({
+    await root.fill("2", [Have.gen_single({
         "thought": "Auxiliary: product of positives is positive",
         "statement": {
             "english": "product of positives is positive",
             "isabelle": r"\<And>(a::int) b. a > 0 \<Longrightarrow> b > 0 \<Longrightarrow> a * b > 0"
         },
         "name": "pos_mult"
-    }))
+    })])
     print_header("After Have (meta-quantified statement)", file)
     root.print(0, file)
 
@@ -2987,11 +3148,11 @@ async def _test_IntroMetaQuant(root: Root, file: MyIO):
     # encounters a dangling de Bruijn index from the outer Intro scope.
     try:
         root.session.age += 1
-        await root.amend("2.1", Intro.gen_single({
+        await root.amend("2.1", [Intro.gen_single({
             "thought": "Introduce a, b and the premises",
             "variable_bindings": ["a", "b"],
             "fact_bindings": ["a_pos", "b_pos"]
-        }))
+        })])
         print_header("After Intro amend (no error — bug not reproduced)", file)
         root.print(0, file)
     except Exception as e:
@@ -3020,10 +3181,10 @@ async def _test_IntroPartialVars(root: Root, file: MyIO):
     root.print(0, file)
     try:
         root.session.age += 1
-        await root.amend("1", Intro.gen_single({
+        await root.amend("1", [Intro.gen_single({
             "thought": "Intro only the outermost n; leave a, b for later.",
             "variable_bindings": ["n"],
-        }))
+        })])
         print_header("After partial Intro amend (no error)", file)
         root.print(0, file)
     except Exception as e:
@@ -3042,9 +3203,9 @@ async def _test_IntroEmptyBindings(root: Root, file: MyIO):
     root.print(0, file)
     try:
         root.session.age += 1
-        await root.amend("1", Intro.gen_single({
+        await root.amend("1", [Intro.gen_single({
             "thought": "Intro with no explicit bindings.",
-        }))
+        })])
         print_header("After Intro amend (empty bindings)", file)
         root.print(0, file)
     except Exception as e:
@@ -3064,10 +3225,10 @@ async def _test_IntroOverSpec(root: Root, file: MyIO):
     root.print(0, file)
     try:
         root.session.age += 1
-        await root.amend("1", Intro.gen_single({
+        await root.amend("1", [Intro.gen_single({
             "thought": "Over-specify bindings.",
             "variable_bindings": ["a", "b", "c"],
-        }))
+        })])
         print_header("After Intro amend (over-specified)", file)
         root.print(0, file)
     except Exception as e:
@@ -3090,10 +3251,10 @@ async def _test_IntroOutOfOrderRename(root: Root, file: MyIO):
     root.print(0, file)
     try:
         root.session.age += 1
-        await root.amend("1", Intro.gen_single({
+        await root.amend("1", [Intro.gen_single({
             "thought": "Single binding — positional vs keyed probe.",
             "variable_bindings": ["m"],
-        }))
+        })])
         print_header("After Intro amend (single binding 'm')", file)
         root.print(0, file)
     except Exception as e:
@@ -3131,7 +3292,7 @@ async def _test_HOL_TAG_Leak(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
 
-    await root.fill("2", Induction.gen_single({
+    await root.fill("2", [Induction.gen_single({
         "thought": "strong induction on i, generalize i, keep p fixed",
         "target_isabelle_term": "i",
         "rule": {"refer_by": "name", "name": "nat_less_induct"},
@@ -3139,7 +3300,7 @@ async def _test_HOL_TAG_Leak(root: Root, file: MyIO):
             {"name": "i", "status": "generalized"},
             {"name": "p", "status": "fixed"},
         ],
-    }))
+    })])
     print_header("After Induction (HOL.TAG should leak into IH)", file)
     root.print(0, file)
 
@@ -3192,14 +3353,14 @@ async def _test_Obtain_Fixed(root: Root, file: MyIO):
     # `proof: Obvious` attaches a subproof that discharges the
     # existential via the in-scope `assm0: ∃k::nat. k = m`, letting
     # the block close and CONSIDER'i emit its `New_Item_Msg`.
-    await root.fill("2", Obtain.gen_single({
+    await root.fill("2", [Obtain.gen_single({
         "thought": "unpack the existential",
         "variables": [{"name": "k", "type": "nat"}],
         "constraints": [{"name": "k_def",
                          "isabelle": "k = m",
                          "english": "the existential witness"}],
         "proof": [{"operation": "Obvious", "facts": []}],
-    }))
+    })])
     print_header("After Obtain", file)
     root.print(0, file)
 
@@ -3208,8 +3369,8 @@ async def _test_Obtain_Fixed(root: Root, file: MyIO):
         f"Expected Obtain at step 2, got {type(obtain_node).__name__}"
 
     # (1) _introduced populated from New_Item_Msg
-    intro_vars = obtain_node._introduced.vars
-    intro_hyps = obtain_node._introduced.hyps
+    intro_vars = cast(Obtain, obtain_node)._introduced.vars
+    intro_hyps = cast(Obtain, obtain_node)._introduced.hyps
     assert intro_vars, f"_introduced.vars empty; expected `k`. got {intro_vars}"
     assert intro_hyps, f"_introduced.hyps empty; expected `k_def`. got {intro_hyps}"
     # Var name surfaces as `k`
@@ -3250,29 +3411,29 @@ async def _test_UpstreamChangeResetsObvious(root: Root, file: MyIO):
 
     # Step 1: Have True (trivially provable, Obvious succeeds)
     root.session.age += 1
-    await root.fill("1", Have.gen_single({
+    await root.fill("1", [Have.gen_single({
         "thought": "trivial helper",
         "statement": {"english": "True", "isabelle": "True"},
         "name": "triv",
-    }))
+    })])
     root.session.age += 1
-    await root.fill("1.1", Obvious.gen_single({"facts": []}))
+    await root.fill("1.1", [Obvious.gen_single({"facts": []})])
     print_header("After step 1 (Have True, Obvious succeeds)", file)
     root.print(0, file)
 
     # Step 2: Have False (given later — impossible to prove)
     root.session.age += 1
-    await root.fill("2", Have.gen_single({
+    await root.fill("2", [Have.gen_single({
         "thought": "impossible statement",
         "statement": {"english": "False", "isabelle": "False"},
         "name": "bad",
-    }))
+    })])
     print_header("After step 2 (Have False, open proof)", file)
     root.print(0, file)
 
     # Step 2.1: Obvious — must fail (can't prove False)
     root.session.age += 1
-    await root.fill("2.1", Obvious.gen_single({"facts": []}))
+    await root.fill("2.1", [Obvious.gen_single({"facts": []})])
     step2 = root.locate_node("2")
     assert step2._is_trivial is False, \
         f"Expected _is_trivial=False after Obvious failure, got {step2._is_trivial}"
@@ -3281,20 +3442,18 @@ async def _test_UpstreamChangeResetsObvious(root: Root, file: MyIO):
 
     # Retry Obvious on step 2.1 — should be BLOCKED by GoalIsNontrivial
     root.session.age += 1
-    try:
-        await root.fill("2.1", Obvious.gen_single({"facts": []}))
-        raise TestFailed("Expected CannotFill_GoalIsNontrivial but fill succeeded")
-    except CannotFill_GoalIsNontrivial:
-        pass  # expected
+    _outcome = await root.fill("2.1", [Obvious.gen_single({"facts": []})])
+    assert isinstance(_outcome.failure, GoalIsNontrivial), \
+        f"Expected GoalIsNontrivial failure but got {_outcome.failure!r}"
     file.write("Obvious retry correctly blocked by GoalIsNontrivial\n")
 
     # --- Test amend: amend step 1 → _on_upstream_change should reset step2._is_trivial ---
     root.session.age += 1
-    await root.amend("1", Have.gen_single({
+    await root.amend("1", [Have.gen_single({
         "thought": "amended helper",
         "statement": {"english": "x + y = 3", "isabelle": "x + y = 3"},
         "name": "sum",
-    }))
+    })])
     step2 = root.locate_node("2")
     assert step2._is_trivial is None, \
         f"Expected _is_trivial=None after amend of predecessor, got {step2._is_trivial}"
@@ -3304,7 +3463,7 @@ async def _test_UpstreamChangeResetsObvious(root: Root, file: MyIO):
 
     # Obvious on step 2.1 should now be ALLOWED (not blocked), though it will still fail
     root.session.age += 1
-    await root.fill("2.1", Obvious.gen_single({"facts": []}))
+    await root.fill("2.1", [Obvious.gen_single({"facts": []})])
     file.write("Obvious retry allowed after amend (fails on False, as expected)\n")
     assert step2._is_trivial is False, \
         f"Expected _is_trivial=False after Obvious fails again, got {step2._is_trivial}"
@@ -3313,11 +3472,11 @@ async def _test_UpstreamChangeResetsObvious(root: Root, file: MyIO):
 
     # --- Test insert_before: insert before step 2 → _on_upstream_change resets again ---
     root.session.age += 1
-    await root.insert_before("2", Have.gen_single({
+    await root.insert_before("2", [Have.gen_single({
         "thought": "inserted step",
         "statement": {"english": "True", "isabelle": "True"},
         "name": "ins",
-    }))
+    })])
     step2 = root.locate_node("2")
     assert step2._is_trivial is None, \
         f"Expected _is_trivial=None after insert_before, got {step2._is_trivial}"
@@ -3327,7 +3486,7 @@ async def _test_UpstreamChangeResetsObvious(root: Root, file: MyIO):
 
     # Obvious on step 2.1 should be ALLOWED again
     root.session.age += 1
-    await root.fill("2.1", Obvious.gen_single({"facts": []}))
+    await root.fill("2.1", [Obvious.gen_single({"facts": []})])
     file.write("Obvious retry allowed after insert_before\n")
     print_header("Final state", file)
     root.print(0, file)
@@ -3526,16 +3685,16 @@ async def _test_AmendLeafToNonLeaf(root: Root, file: MyIO):
     root.print(0, file)
 
     root.session.age += 1
-    await root.fill("1", Obvious.gen_single({"facts": []}))
+    await root.fill("1", [Obvious.gen_single({"facts": []})])
     print_header("After fill step 1 with Obvious (Leaf)", file)
     root.print(0, file)
 
     root.session.age += 1
     try:
-        await root.amend("1", InferenceRule.gen_single({
+        await root.amend("1", [InferenceRule.gen_single({
             "thought": "Switch to proof by contradiction.",
             "rule": {"refer_by": "name", "name": "ccontr"},
-        }))
+        })])
     except AttributeError as e:
         raise TestFailed(
             f"BUG REPRODUCED: {type(e).__name__}: {e} "
@@ -3563,7 +3722,7 @@ async def _test_DeepNestedProof(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     root.session.age += 1
-    await root.fill("1", Have.gen_single({
+    await root.fill("1", [Have.gen_single({
         "thought": "L1",
         "statement": {"english": "L1", "isabelle": r"x * x \<ge> 0"},
         "name": "L1",
@@ -3580,21 +3739,22 @@ async def _test_DeepNestedProof(root: Root, file: MyIO):
                   ]},
              ]},
         ],
-    }))
+    })])
     print_header("After 3-level nested Have", file)
     root.print(0, file)
     l1 = root.locate_node("1")
     assert isinstance(l1, Have), f"L1 kind: {type(l1).__name__}"
+    assert isinstance(l1, NonLeaf_Node)
     assert l1.sub_nodes and isinstance(l1.sub_nodes[0], Have), \
         f"L1 first child: {type(l1.sub_nodes[0]).__name__ if l1.sub_nodes else 'none'}"
     l2 = l1.sub_nodes[0]
-    assert l2.sub_nodes and isinstance(l2.sub_nodes[0], Have), \
-        f"L2 first child: {type(l2.sub_nodes[0]).__name__ if l2.sub_nodes else 'none'}"
-    l3 = l2.sub_nodes[0]
-    assert l3.sub_nodes, "L3 should have at least one child (the Obvious)"
+    assert cast(NonLeaf_Node, l2).sub_nodes and isinstance(cast(NonLeaf_Node, l2).sub_nodes[0], Have), \
+        f"L2 first child: {type(cast(NonLeaf_Node, l2).sub_nodes[0]).__name__ if cast(NonLeaf_Node, l2).sub_nodes else 'none'}"
+    l3 = cast(NonLeaf_Node, l2).sub_nodes[0]
+    assert cast(NonLeaf_Node, l3).sub_nodes, "L3 should have at least one child (the Obvious)"
     file.write(f"depth-3 verified: "
                f"{type(l1).__name__}->{type(l2).__name__}->"
-               f"{type(l3).__name__}->{type(l3.sub_nodes[0]).__name__}\n")
+               f"{type(l3).__name__}->{type(cast(NonLeaf_Node, l3).sub_nodes[0]).__name__}\n")
 
 
 @model_test("AmendQ6Preservation", "Test_AmendQ6Preservation.thy", 8)
@@ -3609,20 +3769,21 @@ async def _test_AmendQ6Preservation(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     root.session.age += 1
-    await root.fill("1", Have.gen_single({
+    _seed_outcome = await root.fill("1", [Have.gen_single({
         "thought": "outer",
         "statement": {"english": "outer", "isabelle": r"x * x \<ge> 0"},
         "name": "outer",
         "proof": [{"operation": "Obvious", "facts": []}],
-    }))
-    print_header("After seed Have { proof: [Obvious] }", file)
-    root.print(0, file)
+    })])
+    print_header("edit_message: seed Have { proof: [Obvious] }", file)
+    file.write(await _P.edit_message(root, _seed_outcome, root.session))
+    file.write("---------------\n")
     outer = root.locate_node("1")
-    assert outer.sub_nodes and isinstance(outer.sub_nodes[0], Obvious), "seed failed"
-    pre_id = id(outer.sub_nodes[0])
+    assert cast(NonLeaf_Node, outer).sub_nodes and isinstance(cast(NonLeaf_Node, outer).sub_nodes[0], Obvious), "seed failed"
+    pre_id = id(cast(NonLeaf_Node, outer).sub_nodes[0])
 
     root.session.age += 1
-    await root.amend("1", Suffices.gen_single({
+    _amend_outcome = await root.amend("1", [Suffices.gen_single({
         "thought": "replace outer Have with Suffices + nested Have",
         "statement": {"english": "repl", "isabelle": r"x * x \<ge> 0"},
         "proof": [
@@ -3630,17 +3791,18 @@ async def _test_AmendQ6Preservation(root: Root, file: MyIO):
              "statement": {"english": "inner", "isabelle": r"x * x \<ge> 0"},
              "name": "inner"},
         ],
-    }))
-    print_header("After amend; Q6 should fold old Obvious into inner Have", file)
-    root.print(0, file)
+    })])
+    print_header("edit_message: amend into Suffices; Q6 folds Obvious into inner Have", file)
+    file.write(await _P.edit_message(root, _amend_outcome, root.session))
+    file.write("---------------\n")
     suff = root.locate_node("1")
     assert isinstance(suff, Suffices), f"expected Suffices, got {type(suff).__name__}"
-    assert suff.sub_nodes and isinstance(suff.sub_nodes[0], Have), \
-        f"expected Suffices's first child Have, got {[type(c).__name__ for c in suff.sub_nodes]}"
-    inner = suff.sub_nodes[0]
-    assert any(id(c) == pre_id for c in inner.sub_nodes), \
+    assert cast(NonLeaf_Node, suff).sub_nodes and isinstance(cast(NonLeaf_Node, suff).sub_nodes[0], Have), \
+        f"expected Suffices's first child Have, got {[type(c).__name__ for c in cast(NonLeaf_Node, suff).sub_nodes]}"
+    inner = cast(NonLeaf_Node, suff).sub_nodes[0]
+    assert any(id(c) == pre_id for c in cast(NonLeaf_Node, inner).sub_nodes), \
         (f"Q6 FAIL: pre-amend Obvious not found in inner Have. "
-         f"inner.sub_nodes: {[type(c).__name__ for c in inner.sub_nodes]}")
+         f"inner.sub_nodes: {[type(c).__name__ for c in cast(NonLeaf_Node, inner).sub_nodes]}")
     file.write("Q6 redirect into last-provided-node's body verified.\n")
 
 
@@ -3650,13 +3812,13 @@ async def _test_RefreshFailMidBatch(root: Root, file: MyIO):
     a false statement) fails at refresh.  Subsequent siblings must be
     CANCELLED by `_can_continue_before_child`, all remain in the tree
     (batch path suppresses `_on_edit_failure` revert)."""
-    from .mcp_http_server import _execute_proof_batch
+    from .mcp_http_server import _edit_tool_logic
     print_header("Initial YAML", file)
     root.print(0, file)
     root.session.age += 1
-    result, is_error = await _execute_proof_batch(
-        root.session, "fill", "1",
-        [
+    result, is_error = await _edit_tool_logic(
+        root.session,
+        {"target_step": "1", "action": "fill", "proof_operations": [
             {"operation": "Have", "thought": "bad aux (false)",
              "statement": {"english": "false", "isabelle": r"(0::int) = (1::int)"},
              "name": "bad",
@@ -3666,8 +3828,7 @@ async def _test_RefreshFailMidBatch(root: Root, file: MyIO):
              "name": "later",
              "proof": [{"operation": "Obvious", "facts": []}]},
             {"operation": "Obvious", "facts": []},
-        ],
-    )
+        ]})
     file.write(f"is_error: {is_error}\n")
     print_header("After batched fill (first Have fails, rest cascade-cancel)", file)
     root.print(0, file)
@@ -3682,26 +3843,48 @@ async def _test_RefreshFailMidBatch(root: Root, file: MyIO):
 
 @model_test("CommitGroupBMidBatch", "Test_CommitGroupBMidBatch.thy", 8)
 async def _test_CommitGroupBMidBatch(root: Root, file: MyIO):
-    """Main goal `(x::int) = x+1` is false — direct Obvious fails and sets
-    parent._is_trivial=False.  The second Obvious then raises
-    GoalIsNontrivial AT CONSTRUCTION (commit-time Group-B).
-    `_execute_proof_batch` catches it and dumps the unapplied tail into
-    one aggregated session.warnings entry.  `is_error=False` because at
-    least one item (the failed Obvious) landed in the tree."""
-    from .mcp_http_server import _execute_proof_batch
+    """Commit-time Group-B in the middle of a batch: the first item is a
+    Branch on trichotomy, which produces multiple top-level subgoals.
+    `SubgoalMaker._should_open_proof_block` returns
+    YES_AND_CLOSE_PARENT_BLOCK → parent is closed via `_close_by`.
+    Subsequent siblings in the batch hit `StdBlock.append`'s
+    opening-check and fail with `CannotAppend_BlockClosed`.  The
+    append loop catches this Group-B failure, stops at the second
+    item, and `_edit_tool_logic` emits a single aggregated
+    `session.warnings` entry carrying the unapplied tail verbatim.
+    (Historical note: this test used to chain `[Obvious, Obvious, Obvious]`
+    to trigger `GoalIsNontrivial` at construction, but the parse-time
+    Obvious-forbids-successor rule rejects that fixture outright, so
+    the remaining reachable commit-time Group-B path is exercised here.)"""
+    from .mcp_http_server import _edit_tool_logic
     print_header("Initial YAML", file)
     root.print(0, file)
     root.session.age += 1
-    result, is_error = await _execute_proof_batch(
-        root.session, "fill", "1",
-        [
-            {"operation": "Obvious", "facts": []},
-            {"operation": "Obvious", "facts": []},  # GoalIsNontrivial at ctor
-            {"operation": "Obvious", "facts": []},
-        ],
-    )
+    result, is_error = await _edit_tool_logic(
+        root.session,
+        {"target_step": "1", "action": "fill", "proof_operations": [
+            {"operation": "Branch", "thought": "trichotomy closes the proof line",
+             "cases": [
+                 {"statement": {"english": "positive", "isabelle": "x > 0"}},
+                 {"statement": {"english": "zero", "isabelle": "x = 0"}},
+                 {"statement": {"english": "negative", "isabelle": "x < 0"}},
+             ]},
+            # These two cannot be siblings after a block-closing SubgoalMaker.
+            # Aggregated into session.warnings.  Wrapped in Have (instead of
+            # bare Obvious) because top-level Obvious forbids successor at
+            # parse time — we need the commit-time path to fire, not the
+            # parse-time one.
+            {"operation": "Have", "thought": "misplaced aux a",
+             "statement": {"english": "trivial", "isabelle": "(1::int) = 1"},
+             "name": "aux_a",
+             "proof": [{"operation": "Obvious", "facts": []}]},
+            {"operation": "Have", "thought": "misplaced aux b",
+             "statement": {"english": "trivial", "isabelle": "(2::int) = 2"},
+             "name": "aux_b",
+             "proof": [{"operation": "Obvious", "facts": []}]},
+        ]})
     file.write(f"is_error: {is_error}\n")
-    print_header("After batch; first Obvious FAILED, rest aggregated into warnings", file)
+    print_header("After batch; Branch closes parent, siblings aggregated into warnings", file)
     root.print(0, file)
     ws = root.session.warnings
     file.write(f"session.warnings count: {len(ws)}\n")
@@ -3718,7 +3901,7 @@ async def _test_AutoIntroQ7Skip(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     root.session.age += 1
-    await root.fill("1", Have.gen_single({
+    await root.fill("1", [Have.gen_single({
         "thought": "outer Have wrapping ∀-stmt",
         "statement": {"english": "refl", "isabelle": r"\<forall>(a::int). a = a"},
         "name": "refl",
@@ -3726,13 +3909,13 @@ async def _test_AutoIntroQ7Skip(root: Root, file: MyIO):
             {"operation": "Intro", "thought": "agent's explicit Intro"},
             {"operation": "Obvious", "facts": []},
         ],
-    }))
+    })])
     print_header("After Have with proof starting with Intro (Q7: no auto-inject)", file)
     root.print(0, file)
     have = root.locate_node("1")
-    kinds = [type(c).__name__ for c in have.sub_nodes]
+    kinds = [type(c).__name__ for c in cast(NonLeaf_Node, have).sub_nodes]
     file.write(f"Have.sub_nodes kinds: {kinds}\n")
-    intro_count = sum(1 for c in have.sub_nodes if isinstance(c, Intro))
+    intro_count = sum(1 for c in cast(NonLeaf_Node, have).sub_nodes if isinstance(c, Intro))
     assert intro_count == 1, f"Q7 skip FAIL: expected exactly 1 Intro, got {intro_count}"
 
 
@@ -3745,18 +3928,18 @@ async def _test_AutoIntroQ7Inject(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     root.session.age += 1
-    await root.fill("1", Have.gen_single({
+    await root.fill("1", [Have.gen_single({
         "thought": "outer Have; agent forgot to Intro first",
         "statement": {"english": "refl", "isabelle": r"\<forall>(a::int). a = a"},
         "name": "refl",
         "proof": [{"operation": "Obvious", "facts": []}],
-    }))
+    })])
     print_header("After Have with proof=[Obvious]; Q7 injects Intro which truncates Obvious", file)
     root.print(0, file, show_warnings=True)
     have = root.locate_node("1")
-    first = have.sub_nodes[0] if have.sub_nodes else None
+    first = cast(NonLeaf_Node, have).sub_nodes[0] if cast(NonLeaf_Node, have).sub_nodes else None
     file.write(f"Have.sub_nodes[0] kind: {type(first).__name__ if first else 'none'}\n")
-    file.write(f"Have.sub_nodes total: {len(have.sub_nodes)}\n")
+    file.write(f"Have.sub_nodes total: {len(cast(NonLeaf_Node, have).sub_nodes)}\n")
     foot = [w for w in have.warnings if w.position == _W.Position.FOOTER]
     file.write(f"FOOTER warnings on Have: {len(foot)}\n")
 
@@ -3768,29 +3951,29 @@ async def _test_AmendSingleKeepsChildren(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     root.session.age += 1
-    await root.fill("1", Have.gen_single({
+    await root.fill("1", [Have.gen_single({
         "thought": "initial",
         "statement": {"english": "init", "isabelle": r"x * x \<ge> 0"},
         "name": "orig",
         "proof": [{"operation": "Obvious", "facts": []}],
-    }))
+    })])
     print_header("After seed Have { proof: [Obvious] }", file)
     root.print(0, file)
     have = root.locate_node("1")
-    assert have.sub_nodes, "seed failed"
-    obv_id = id(have.sub_nodes[0])
+    assert cast(NonLeaf_Node, have).sub_nodes, "seed failed"
+    obv_id = id(cast(NonLeaf_Node, have).sub_nodes[0])
 
     root.session.age += 1
-    await root.amend("1", Suffices.gen_single({
+    await root.amend("1", [Suffices.gen_single({
         "thought": "Suffices with no proof — should inherit",
         "statement": {"english": "repl", "isabelle": r"x * x \<ge> 0"},
-    }))
+    })])
     print_header("After single-item amend; inherited children should remain", file)
     root.print(0, file)
     suff = root.locate_node("1")
     assert isinstance(suff, Suffices), f"expected Suffices, got {type(suff).__name__}"
-    sub_ids = [id(c) for c in suff.sub_nodes]
-    file.write(f"Suffices sub_nodes kinds: {[type(c).__name__ for c in suff.sub_nodes]}\n")
+    sub_ids = [id(c) for c in cast(NonLeaf_Node, suff).sub_nodes]
+    file.write(f"Suffices sub_nodes kinds: {[type(c).__name__ for c in cast(NonLeaf_Node, suff).sub_nodes]}\n")
     assert obv_id in sub_ids, "_amend_from preservation FAIL"
     file.write("_amend_from preservation verified.\n")
 
@@ -3860,7 +4043,7 @@ async def _test_CaseSplitNestedProofAllCases(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     root.session.age += 1
-    await root.fill("1", CaseSplit.gen_single({
+    await root.fill("1", [CaseSplit.gen_single({
         "thought": "case-split on boolean b",
         "target_isabelle_term": "b",
         "rule": "default",
@@ -3868,16 +4051,16 @@ async def _test_CaseSplitNestedProofAllCases(root: Root, file: MyIO):
             {"case_name": "True",  "body": [{"operation": "Obvious", "facts": []}]},
             {"case_name": "False", "body": [{"operation": "Obvious", "facts": []}]},
         ],
-    }))
+    })])
     print_header("After CaseSplit with per-case proofs", file)
     root.print(0, file)
     cs = root.locate_node("1")
-    gn_kids = [c for c in cs.sub_nodes if type(c).__name__ == "GoalNode"]
+    gn_kids = [c for c in cast(NonLeaf_Node, cs).sub_nodes if type(c).__name__ == "GoalNode"]
     file.write(f"GoalNode children count: {len(gn_kids)}\n")
     for gn in gn_kids:
-        kind0 = type(gn.sub_nodes[0]).__name__ if gn.sub_nodes else "none"
+        kind0 = type(cast(NonLeaf_Node, gn).sub_nodes[0]).__name__ if cast(NonLeaf_Node, gn).sub_nodes else "none"
         file.write(f"  {gn.id}: first sub = {kind0}\n")
-        assert gn.sub_nodes, (
+        assert cast(NonLeaf_Node, gn).sub_nodes, (
             f"GoalNode {gn.id} empty — per-case auto_proof did not apply "
             f"(case_name lookup probably failed)")
 
@@ -3890,18 +4073,18 @@ async def _test_NestedHaveProof(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     root.session.age += 1
-    await root.fill("1", Have.gen_single({
+    await root.fill("1", [Have.gen_single({
         "thought": "auxiliary restating of the goal",
         "statement": {"english": "x*x nonneg", "isabelle": r"x * x \<ge> 0"},
         "name": "h1",
         "proof": [{"operation": "Obvious", "facts": []}],
-    }))
+    })])
     print_header("After Have with nested proof=[Obvious]", file)
     root.print(0, file)
     have_node = root.locate_node("1")
     assert isinstance(have_node, Have), f"expected Have at 1, got {type(have_node).__name__}"
-    assert len(have_node.sub_nodes) >= 1, \
-        f"expected at least one nested child under Have, got {len(have_node.sub_nodes)}"
+    assert len(cast(NonLeaf_Node, have_node).sub_nodes) >= 1, \
+        f"expected at least one nested child under Have, got {len(cast(NonLeaf_Node, have_node).sub_nodes)}"
 
 
 @model_test("BatchFill_HaveObvious", "Test_BatchFill_HaveObvious.thy", 8)
@@ -3909,21 +4092,23 @@ async def _test_BatchFill_HaveObvious(root: Root, file: MyIO):
     """Multi-item fill batch [Have with nested Obvious, Obvious]: verify the
     first fills target_step, the second appends to the same parent, and the
     outer goal gets discharged by the appended Obvious."""
-    from .mcp_http_server import _execute_proof_batch
+    from .mcp_http_server import _edit_tool_logic
     print_header("Initial YAML", file)
     root.print(0, file)
     root.session.age += 1
-    result, is_error = await _execute_proof_batch(
-        root.session, "fill", "1",
-        [
+    result, is_error = await _edit_tool_logic(
+        root.session,
+        {"target_step": "1", "action": "fill", "proof_operations": [
             {"operation": "Have", "thought": "restate goal as aux",
              "statement": {"english": "x*x nonneg", "isabelle": r"x * x \<ge> 0"},
              "name": "aux",
              "proof": [{"operation": "Obvious", "facts": []}]},
             {"operation": "Obvious",
              "facts": [{"refer_by": "name", "name": "aux"}]},
-        ],
-    )
+        ]})
+    print_header("edit_message: batch fill [Have(proof:[Obvious]), Obvious]", file)
+    file.write(result)
+    file.write("---------------\n")
     file.write(f"is_error: {is_error}\n")
     print_header("After batched fill [Have(proof:[Obvious]), Obvious]", file)
     root.print(0, file)
@@ -3932,23 +4117,122 @@ async def _test_BatchFill_HaveObvious(root: Root, file: MyIO):
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
 
+@model_test("ComplexEditFlow", "Test_ComplexEditFlow.thy", 8)
+async def _test_ComplexEditFlow(root: Root, file: MyIO):
+    """Exercises diverse `edit_message` variants in one flow:
+      (1) bare Obvious on a non-trivial goal → GoalIsNontrivial,
+      (2) batch fill success → range headline + Congratulations,
+      (3) amend missing target → CannotEdit_NodeNotFound,
+      (4) amend with unprovable replacement → is_error=True + revert,
+      (5) amend recovery → success,
+      (6) batch insert_before → range headline."""
+    from .mcp_http_server import _edit_tool_logic
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # (1) bare Obvious on a non-trivial goal.
+    result, is_error = await _edit_tool_logic(
+        root.session,
+        {"target_step": "1", "action": "fill", "proof_operations": [
+            {"operation": "Obvious", "facts": []},
+        ]})
+    print_header("[1] fill [Obvious] — goal is non-trivial", file)
+    file.write(result)
+    file.write("---------------\n")
+    file.write(f"is_error: {is_error}\n")
+
+    # (2) batch fill: Have(nested Obvious) + Obvious using aux → done.
+    result, is_error = await _edit_tool_logic(
+        root.session,
+        {"target_step": "1", "action": "fill", "proof_operations": [
+            {"operation": "Have", "thought": "restate goal",
+             "statement": {"english": "nonneg", "isabelle": r"x * x \<ge> 0"},
+             "name": "aux",
+             "proof": [{"operation": "Obvious", "facts": []}]},
+            {"operation": "Obvious",
+             "facts": [{"refer_by": "name", "name": "aux"}]},
+        ]})
+    print_header("[2] batch fill [Have(nested), Obvious(using aux)]", file)
+    file.write(result)
+    file.write("---------------\n")
+    file.write(f"is_error: {is_error}\n")
+
+    # (3) amend a node that doesn't exist.
+    result, is_error = await _edit_tool_logic(
+        root.session,
+        {"target_step": "999", "action": "amend", "proof_operations": [
+            {"operation": "Obvious", "facts": []},
+        ]})
+    print_header("[3] amend missing target '999'", file)
+    file.write(result)
+    file.write("---------------\n")
+    file.write(f"is_error: {is_error}\n")
+
+    # (4) amend step 1 into an unprovable statement — nested Obvious fails,
+    #     hook requests TERMINATE_AND_REVERT.
+    result, is_error = await _edit_tool_logic(
+        root.session,
+        {"target_step": "1", "action": "amend", "proof_operations": [
+            {"operation": "Have", "thought": "unprovable replacement",
+             "statement": {"english": "false", "isabelle": "(1::int) = 2"},
+             "name": "bad",
+             "proof": [{"operation": "Obvious", "facts": []}]},
+        ]})
+    print_header("[4] amend step 1 with unprovable `1 = 2`", file)
+    file.write(result)
+    file.write("---------------\n")
+    file.write(f"is_error: {is_error}\n")
+
+    # (5) amend step 1 with a provable renamed Have → success.
+    result, is_error = await _edit_tool_logic(
+        root.session,
+        {"target_step": "1", "action": "amend", "proof_operations": [
+            {"operation": "Have", "thought": "renamed aux",
+             "statement": {"english": "nonneg", "isabelle": r"x * x \<ge> 0"},
+             "name": "aux2",
+             "proof": [{"operation": "Obvious", "facts": []}]},
+        ]})
+    print_header("[5] amend step 1 (recovery) with `x*x >= 0`", file)
+    file.write(result)
+    file.write("---------------\n")
+    file.write(f"is_error: {is_error}\n")
+
+    # (6) batch insert_before [Have, Have] at step 1.
+    result, is_error = await _edit_tool_logic(
+        root.session,
+        {"target_step": "1", "action": "insert_before", "proof_operations": [
+            {"operation": "Have", "thought": "ins1",
+             "statement": {"english": "h1", "isabelle": r"x * x \<ge> 0"},
+             "name": "h1",
+             "proof": [{"operation": "Obvious", "facts": []}]},
+            {"operation": "Have", "thought": "ins2",
+             "statement": {"english": "h2", "isabelle": r"x * x \<ge> 0"},
+             "name": "h2",
+             "proof": [{"operation": "Obvious", "facts": []}]},
+        ]})
+    print_header("[6] batch insert_before [Have, Have] at step 1", file)
+    file.write(result)
+    file.write("---------------\n")
+    file.write(f"is_error: {is_error}\n")
+
+
 @model_test("BatchInsertBefore", "Test_BatchInsertBefore.thy", 8)
 async def _test_BatchInsertBefore(root: Root, file: MyIO):
     """insert_before with a list of two Have ops — each carries its own
     nested proof, and both land as consecutive siblings before the target."""
-    from .mcp_http_server import _execute_proof_batch
+    from .mcp_http_server import _edit_tool_logic
     print_header("Initial YAML", file)
     root.print(0, file)
     root.session.age += 1
     # Seed the tree with a pre-existing Obvious at step 1.
-    await root.fill("1", Obvious.gen_single({"facts": []}))
+    await root.fill("1", [Obvious.gen_single({"facts": []})])
     print_header("After initial fill with Obvious", file)
     root.print(0, file)
     # Batch-insert two Haves before step 1.
     root.session.age += 1
-    result, is_error = await _execute_proof_batch(
-        root.session, "insert_before", "1",
-        [
+    result, is_error = await _edit_tool_logic(
+        root.session,
+        {"target_step": "1", "action": "insert_before", "proof_operations": [
             {"operation": "Have", "thought": "first aux",
              "statement": {"english": "aux a", "isabelle": r"x * x \<ge> 0"},
              "name": "aux_a",
@@ -3957,8 +4241,7 @@ async def _test_BatchInsertBefore(root: Root, file: MyIO):
              "statement": {"english": "aux b", "isabelle": r"x * x \<ge> 0"},
              "name": "aux_b",
              "proof": [{"operation": "Obvious", "facts": []}]},
-        ],
-    )
+        ]})
     file.write(f"is_error: {is_error}\n")
     print_header("After batched insert_before [Have, Have]", file)
     root.print(0, file)
@@ -3968,24 +4251,24 @@ async def _test_BatchInsertBefore(root: Root, file: MyIO):
 async def _test_BatchAmendMulti(root: Root, file: MyIO):
     """amend with a multi-item list — target deleted, list inserted at its
     former slot; no `_amend_from` inheritance (old children gone with target)."""
-    from .mcp_http_server import _execute_proof_batch
+    from .mcp_http_server import _edit_tool_logic
     print_header("Initial YAML", file)
     root.print(0, file)
     # Seed a Have with inner proof.
     root.session.age += 1
-    await root.fill("1", Have.gen_single({
+    await root.fill("1", [Have.gen_single({
         "thought": "original",
         "statement": {"english": "orig", "isabelle": r"x * x \<ge> 0"},
         "name": "orig",
         "proof": [{"operation": "Obvious", "facts": []}],
-    }))
+    })])
     print_header("After initial Have at step 1", file)
     root.print(0, file)
     # Amend step 1 with a two-item list (delete + insert semantics).
     root.session.age += 1
-    result, is_error = await _execute_proof_batch(
-        root.session, "amend", "1",
-        [
+    result, is_error = await _edit_tool_logic(
+        root.session,
+        {"target_step": "1", "action": "amend", "proof_operations": [
             {"operation": "Have", "thought": "replacement 1",
              "statement": {"english": "r1", "isabelle": r"x * x \<ge> 0"},
              "name": "r1",
@@ -3994,8 +4277,7 @@ async def _test_BatchAmendMulti(root: Root, file: MyIO):
              "statement": {"english": "r2", "isabelle": r"x * x \<ge> 0"},
              "name": "r2",
              "proof": [{"operation": "Obvious", "facts": []}]},
-        ],
-    )
+        ]})
     file.write(f"is_error: {is_error}\n")
     print_header("After batched amend [Have, Have] replacing step 1", file)
     root.print(0, file)
@@ -4008,7 +4290,7 @@ async def _test_NestedBranchCases(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
     root.session.age += 1
-    await root.fill("1", Branch.gen_single({
+    await root.fill("1", [Branch.gen_single({
         "thought": "trichotomy on x",
         "cases": [
             {"statement": {"english": "positive", "isabelle": "x > 0"},
@@ -4018,7 +4300,7 @@ async def _test_NestedBranchCases(root: Root, file: MyIO):
             {"statement": {"english": "zero", "isabelle": "x = 0"},
              "proof": [{"operation": "Obvious", "facts": []}]},
         ],
-    }))
+    })])
     print_header("After Branch with per-case nested Obvious", file)
     root.print(0, file)
 
@@ -4076,19 +4358,18 @@ async def _test_InferenceRuleBatch(root: Root, file: MyIO):
     so `_should_open_proof_block` returns NO — no block is opened, the
     parent block is NOT closed, and subsequent siblings in the batch
     attach normally."""
-    from .mcp_http_server import _execute_proof_batch
+    from .mcp_http_server import _edit_tool_logic
     print_header("Initial YAML", file)
     root.print(0, file)
     root.session.age += 1
-    result, is_error = await _execute_proof_batch(
-        root.session, "fill", "1",
-        [
+    result, is_error = await _edit_tool_logic(
+        root.session,
+        {"target_step": "1", "action": "fill", "proof_operations": [
             {"operation": "InferenceRule",
              "thought": "proof by contradiction",
              "rule": {"refer_by": "name", "name": "ccontr"}},
             {"operation": "Obvious", "facts": []},
-        ],
-    )
+        ]})
     file.write(f"is_error: {is_error}\n")
     print_header("After batch [InferenceRule ccontr, Obvious]", file)
     root.print(0, file)
@@ -4122,14 +4403,14 @@ async def _test_InferenceRuleBatch_MultiSubgoal(root: Root, file: MyIO):
     entry carrying the unapplied tail verbatim so the agent can re-submit
     the steps at the correct location (inside one of the new GoalNodes).
     `is_error` stays False because one item did land in the tree."""
-    from .mcp_http_server import _execute_proof_batch
+    from .mcp_http_server import _edit_tool_logic
     print_header("Initial YAML", file)
     root.print(0, file)
     root.session.age += 1
     # conjI splits `P ∧ Q` into two subgoals — SubgoalMaker will CLOSE the parent.
-    result, is_error = await _execute_proof_batch(
-        root.session, "fill", "1",
-        [
+    result, is_error = await _edit_tool_logic(
+        root.session,
+        {"target_step": "1", "action": "fill", "proof_operations": [
             {"operation": "InferenceRule",
              "thought": "split conjunction via conjI",
              "rule": {"refer_by": "name", "name": "conjI"}},
@@ -4141,8 +4422,7 @@ async def _test_InferenceRuleBatch_MultiSubgoal(root: Root, file: MyIO):
              "name": "aux",
              "proof": [{"operation": "Obvious", "facts": []}]},
             {"operation": "Obvious", "facts": []},
-        ],
-    )
+        ]})
     file.write(f"is_error: {is_error}\n")
     print_header("After batch; InferenceRule splits, siblings aggregated into session.warnings",
                  file)
@@ -4160,7 +4440,7 @@ async def _test_InferenceRuleBatch_MultiSubgoal(root: Root, file: MyIO):
     assert parent.sub_nodes and parent.sub_nodes[-1] is n1, \
         f"InferenceRule should be parent's last child; kinds={[type(c).__name__ for c in parent.sub_nodes]}"
     # InferenceRule should now have exactly 2 GoalNode children (from conjI).
-    goal_kids = [c for c in n1.sub_nodes if type(c).__name__ == "GoalNode"]
+    goal_kids = [c for c in cast(NonLeaf_Node, n1).sub_nodes if type(c).__name__ == "GoalNode"]
     file.write(f"InferenceRule GoalNode children: {len(goal_kids)}\n")
     assert len(goal_kids) == 2, \
         f"expected 2 subgoals from conjI on P∧Q, got {len(goal_kids)}"
@@ -4189,13 +4469,13 @@ async def _test_InferenceRuleProofsPerSubgoal(root: Root, file: MyIO):
     positionally as `auto_proof` on the i-th GoalNode child of the
     InferenceRule.  `conjI` splits `P ∧ Q` into two subgoals, each
     discharged by its own Obvious."""
-    from .mcp_http_server import _execute_proof_batch
+    from .mcp_http_server import _edit_tool_logic
     print_header("Initial YAML", file)
     root.print(0, file)
     root.session.age += 1
-    result, is_error = await _execute_proof_batch(
-        root.session, "fill", "1",
-        [
+    result, is_error = await _edit_tool_logic(
+        root.session,
+        {"target_step": "1", "action": "fill", "proof_operations": [
             {"operation": "InferenceRule",
              "thought": "split ∧ via conjI",
              "rule": {"refer_by": "name", "name": "conjI"},
@@ -4203,21 +4483,20 @@ async def _test_InferenceRuleProofsPerSubgoal(root: Root, file: MyIO):
                  [{"operation": "Obvious", "facts": []}],
                  [{"operation": "Obvious", "facts": []}],
              ]},
-        ],
-    )
+        ]})
     file.write(f"is_error: {is_error}\n")
     print_header("After batch; per-subgoal proofs landed under InferenceRule",
                  file)
     root.print(0, file)
     ir = root.locate_node("1")
-    goal_kids = [c for c in ir.sub_nodes if type(c).__name__ == "GoalNode"]
+    goal_kids = [c for c in cast(NonLeaf_Node, ir).sub_nodes if type(c).__name__ == "GoalNode"]
     file.write(f"InferenceRule GoalNode children: {len(goal_kids)}\n")
     assert len(goal_kids) == 2, \
         f"expected 2 subgoals from conjI on P∧Q, got {len(goal_kids)}"
     for i, gn in enumerate(goal_kids):
-        assert gn.sub_nodes, (
+        assert cast(NonLeaf_Node, gn).sub_nodes, (
             f"GoalNode {gn.id} is empty — positional proofs[{i}] did not apply")
-        file.write(f"  {gn.id}: first sub = {type(gn.sub_nodes[0]).__name__}\n")
+        file.write(f"  {gn.id}: first sub = {type(cast(NonLeaf_Node, gn).sub_nodes[0]).__name__}\n")
     unfinished: set[Node] = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")

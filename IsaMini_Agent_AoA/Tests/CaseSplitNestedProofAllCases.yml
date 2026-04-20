@@ -2,42 +2,48 @@
 Initial YAML
 --------------------------------------------------
 variables:
-  - x: int
+  - b: bool
+  - P: bool ⇒ bool
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: (0 :: int) ≤ x * x
+goal: P b
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
 --------------------------------------------------
-After CaseSplit with proof=[Obvious] applying to each case
+After CaseSplit with per-case proofs
 --------------------------------------------------
 variables:
-  - x: int
+  - b: bool
+  - P: bool ⇒ bool
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: (0 :: int) ≤ x * x
+goal: P b
 proof:
   - step id: 1
-    thought: case-split on sign of x
+    thought: case-split on boolean b
     operation: CaseSplit
-    target term: x
+    target term: b
     cases:
-      - goal id: 1.nonneg
-        variables:
-          - n: nat
+      - goal id: 1.True
         premises:
-          - nonneg.prem0: x = int n
-        goal: True
+          - True.prem0: b
+        goal: P True
         proof:
-          - step id: 1.nonneg.1
+          - step id: 1.True.1
             operation: Obvious
-      - goal id: 1.neg
-        variables:
-          - n: nat
+            Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.1` to replace it with a proof.
+        pending proof goal:
+          P True
+      - goal id: 1.False
         premises:
-          - neg.prem0: x = - int (Suc n)
-        goal: True
+          - False.prem0: ¬ b
+        goal: P False
         proof:
-          - step id: 1.neg.1
+          - step id: 1.False.1
             operation: Obvious
+            Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.1` to replace it with a proof.
+        pending proof goal:
+          P False
 GoalNode children count: 2
-  1.nonneg: first sub = Obvious
-  1.neg: first sub = Obvious
+  1.True: first sub = Obvious
+  1.False: first sub = Obvious

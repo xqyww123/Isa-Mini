@@ -29,25 +29,6 @@ step 1: Intro (line 0)
 Error: Unfinished Proof (line 17). Call command `edit` with action `fill` and target step `2`
 goal: A ∧ B
 --------------------------------------------------
-After rename premise0(2) → from_first
---------------------------------------------------
-variables:
-  - B: bool
-  - A: bool
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: A ∧ B ⟶ A ∧ B ⟶ A ∧ B
-proof:
-  - step id: 1
-    operation: Intro
-    assuming premises:
-      - premise0(1): A
-      - premise0(2): B
-      - premise0(1): A
-      - premise0(2): B
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
-pending proof goal:
-  A ∧ B
---------------------------------------------------
 After Obvious on 2
 --------------------------------------------------
 variables:
@@ -61,8 +42,8 @@ proof:
     assuming premises:
       - premise0(1): A
       - premise0(2): B
-      - premise0(1): A
-      - premise0(2): B
+      - premise1(1): A
+      - premise1(2): B
   - step id: 2
     operation: Obvious
 Unfinished nodes: 0
