@@ -12,15 +12,18 @@ premises:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: P ∧ Q ∧ R
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 Overview
 --------------------------------------------------
 Error: Unfinished Proof (line 15). Call command `edit` with action `fill` and target step `1`
 goal: P ∧ Q ∧ R
-No step goal1.1 needed (auto-proved): NodeNotFound: Step with id goal1.1 is not found
-No step goal2.1 needed (auto-proved): NodeNotFound: Step with id goal2.1 is not found
-No step goal3.1 needed (auto-proved): NodeNotFound: Step with id goal3.1 is not found
+No step goal1.1 needed (auto-proved): CannotEdit_NodeNotFound: Cannot fill a node with id goal1.1
+The node is not found.
+No step goal2.1 needed (auto-proved): CannotEdit_NodeNotFound: Cannot fill a node with id goal2.1
+The node is not found.
+No step goal3.1 needed (auto-proved): CannotEdit_NodeNotFound: Cannot fill a node with id goal3.1
+The node is not found.
 --------------------------------------------------
 Final Overview
 --------------------------------------------------

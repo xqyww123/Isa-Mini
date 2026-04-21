@@ -17,7 +17,7 @@ proof:
           - Nil.prem0: l = []
         goal: P []
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Nil.1` to provide the proof for the following goal.
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Nil.1` to provide the proof.
       - goal id: 1.Cons
         variables:
           - a: 'a
@@ -26,7 +26,7 @@ proof:
           - Cons.prem0: l = a # list
         goal: P (a # list)
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Cons.1` to provide the proof for the following goal.
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Cons.1` to provide the proof.
 --------------------------------------------------
 Quickview (should show variables and premises too)
 --------------------------------------------------

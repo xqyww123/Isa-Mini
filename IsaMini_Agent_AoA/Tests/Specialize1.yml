@@ -10,7 +10,7 @@ variables:
   - P: nat ⇒ bool
 goal: Q (0 :: nat)
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After Specialize
 --------------------------------------------------

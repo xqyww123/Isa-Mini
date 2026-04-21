@@ -505,7 +505,9 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
               val term_type = Term.type_of parsed_term
               val type_string = string_of_type term_type
               val frees = Term.add_frees parsed_term []
-                  |> map (fn (name, ty) => (name, string_of_type ty))
+                  |> map (fn (name, ty) =>
+                            (Name.clean (Variable.revert_fixed ctxt name),
+                             string_of_type ty))
               val vars = Term.add_vars parsed_term []
                   |> map (fn (name_idx, ty) =>
                           (Term.string_of_vname name_idx, string_of_type ty))

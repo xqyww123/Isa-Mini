@@ -6,10 +6,10 @@ variables:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: x = x + (1 :: int)
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 is_error: False
 --------------------------------------------------
-After batch; first Obvious FAILED, rest aggregated into warnings
+After batch; Branch closes parent, siblings aggregated into warnings
 --------------------------------------------------
 variables:
   - x: int
@@ -17,12 +17,30 @@ You can write global declarations by calling command `edit` with action `fill` a
 goal: x = x + (1 :: int)
 proof:
   - step id: 1
-    operation: Obvious
-    Error: |
-      Automatic proof fails on the subgoal:
-        False
-      The goal is non-trivial and a step-by-step proof is required.
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to replace it with a proof.
-pending proof goal:
-  x = x + (1 :: int)
+    thought: trichotomy closes the proof line
+    operation: Branch
+    cases:
+      - goal id: 1.0
+        thought: We first show exhaustiveness of the case split
+        goal: (0 :: int) < x ∨ x = (0 :: int) ∨ x < (0 :: int)
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.0.1` to provide the proof.
+      - goal id: 1.1
+        premises:
+          - premise0: (0 :: int) < x
+        goal: x = x + (1 :: int)
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1` to provide the proof.
+      - goal id: 1.2
+        premises:
+          - premise1: x = (0 :: int)
+        goal: x = x + (1 :: int)
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.1` to provide the proof.
+      - goal id: 1.3
+        premises:
+          - premise2: x < (0 :: int)
+        goal: x = x + (1 :: int)
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.3.1` to provide the proof.
 session.warnings count: 0

@@ -7,7 +7,7 @@ variables:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: P b
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 Case Split Bool
 --------------------------------------------------
@@ -27,10 +27,10 @@ proof:
           - True.prem0: b
         goal: P True
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.1` to provide the proof for the following goal.
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.1` to provide the proof.
       - goal id: 1.False
         premises:
           - False.prem0: ¬ b
         goal: P False
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.1` to provide the proof for the following goal.
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.1` to provide the proof.

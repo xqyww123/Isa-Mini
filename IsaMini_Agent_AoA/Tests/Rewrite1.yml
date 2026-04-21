@@ -12,7 +12,7 @@ variables:
   - y: 'a
 goal: x = z
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After Rewrite
 --------------------------------------------------

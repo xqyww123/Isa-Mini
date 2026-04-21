@@ -281,6 +281,42 @@ async def _test_GoalCtxQuickview(root: Root, file: MyIO):
     print_header("Quickview (should show x in subgoal context)", file)
     root.quickview(0, file)
 
+@model_test("ResetLocalStepCascade", "Test_ResetLocalStepCascade.thy", 8)
+async def _test_ResetLocalStepCascade(root: Root, file: MyIO):
+    """Verifies that `_reset_local_step` cascades id recomputation to
+    descendants.  Without the cascade, renaming a GoalNode would leave
+    its sub-nodes' `.id` strings carrying the stale parent prefix."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    # Seed: successful list induction with Obvious children in both cases.
+    await root.fill("1", [Induction.gen_single({
+        "thought": "induct on l",
+        "target_isabelle_term": r"l",
+        "variables": [{"name": "l", "status": "fixed"}],
+    })])
+    await root.fill("1.Nil.1", [Obvious.gen_single({"facts": []})])
+    await root.fill("1.Cons.1", [Obvious.gen_single({
+        "facts": [{"refer_by": "name", "name": "Cons.IH"}]
+    })])
+    print_header("After seed (cases Nil/Cons, each with an Obvious child)", file)
+    root.print(0, file)
+
+    nil_gn = root.locate_node("1.Nil")
+    nil_child = root.locate_node("1.Nil.1")
+    assert nil_gn.id == "1.Nil", f"pre-rename parent id: {nil_gn.id}"
+    assert nil_child.id == "1.Nil.1", f"pre-rename child id: {nil_child.id}"
+
+    nil_gn._reset_local_step("renamed")
+    if nil_gn.id != "1.renamed":
+        raise TestFailed(
+            f"Parent id not updated: got `{nil_gn.id}`, expected `1.renamed`")
+    if nil_child.id != "1.renamed.1":
+        raise TestFailed(
+            f"Cascade failed: child id stayed `{nil_child.id}`, "
+            f"expected `1.renamed.1`")
+    file.write(
+        f"rename cascade verified: parent={nil_gn.id}, child={nil_child.id}\n")
+
 @model_test("Induction", "Test_Induction.thy", 8)
 async def _test_Induction(root: Root, file: MyIO):
     print_header("Initial YAML", file)
@@ -1094,6 +1130,56 @@ async def _test_Simplify_no_intro_bindings(root: Root, file: MyIO):
         "rewrite premises": []
     })])
     print_header("After step 2.1.1", file)
+    root.print(0, file)
+
+@model_test("Intro_no_intro_bindings", "Test_Intro_no_intro_bindings.thy", 8)
+async def _test_Intro_no_intro_bindings(root: Root, file: MyIO):
+    """Reproduces 'Expected exactly one Intro_Bindings_Msg in Intro's messages, got 0'.
+
+    Root cause: `AUTO_INTRO` (contrib/Isa-Mini/Agent/agent.ML:326-329) short-
+    circuits on `not (Minilang.need_intro split_conj st)` and returns
+    `(([], []), s)` without calling `Minilang.get_reporter () (INTRO_BINDINGS ...)`.
+    `need_intro` (contrib/Isa-Mini/library/proof.ML:1187) is false when the
+    leading goal has no outer Pure.imp / Pure.all / HOL.All / HOL.implies
+    (nor HOL.conj when split_conj is on). The Python side
+    (model.py:5817, `Intro._refresh_the_beginning_opr`) then finds zero
+    `Intro_Bindings_Msg` and raises `InternalError`.
+
+    Trigger here: `CaseSplit` on a boolean brings the case hypothesis into the
+    goal context as a named premise (`True.prem0: b`), leaving the residual
+    goal `P True` with no outer ⋀ / ⟹. An `Intro` inside that case (e.g. to
+    rename the hypothesis via `fact_bindings`) hits the early-return path.
+    This matches the real-world trace where `CaseSplit` on `q = (3 :: nat)`
+    was followed by `Intro { fact_bindings: ['q_eq_3'] }` inside the True case.
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    # Step 1: CaseSplit on b. Each case subgoal has the hypothesis already in
+    # the local context (True.prem0: b, False.prem0: ¬ b); the residual goals
+    # `P True` / `P False` have no outer quantifier or implication.
+    root.session.age += 1
+    await root.fill("1", [CaseSplit.gen_single({
+        "thought": "Case split on boolean b",
+        "target_isabelle_term": r"b"
+    })])
+    print_header("After CaseSplit", file)
+    root.print(0, file)
+    # Step 1.True.1: Intro with a fact_binding. `need_intro` is false for
+    # `P True`, so AUTO_INTRO short-circuits without emitting INTRO_BINDINGS,
+    # and the Python `_refresh_the_beginning_opr` raises InternalError:
+    #   Expected exactly one Intro_Bindings_Msg in Intro's messages, got 0
+    root.session.age += 1
+    _intro_outcome = await root.fill("1.True.1", [Intro.gen_single({
+        "thought": "Rename the case hypothesis",
+        "fact_bindings": ["b_true"]
+    })])
+    print_header("edit_message: Intro under 1.True", file)
+    file.write(await _P.edit_message(root, _intro_outcome, root.session))
+    file.write("---------------\n")
+    print_header("Intro node print (1.True.1)", file)
+    intro_node = root.locate_node("1.True.1")
+    intro_node.print(0, file)
+    print_header("Full tree after Intro", file)
     root.print(0, file)
 
 @model_test("Have1", "Test_Have1.thy", 9)
@@ -3263,6 +3349,114 @@ async def _test_IntroOutOfOrderRename(root: Root, file: MyIO):
     root.print(0, file)
 
 
+@model_test("Induction_IHRename", "Test_Induction_IHRename.thy", 33)
+async def _test_Induction_IHRename(root: Root, file: MyIO):
+    """REPRODUCER: Induction case IH carries an Isabelle-internal variant
+    of the induction variable (e.g. ``na__``) instead of the external
+    display name (``n``) that appears in the step's ``fixing variables``
+    header.
+
+    Observed (from a live run, target_step 5.2)::
+
+        step 5: Have gen
+          step 5.1: Intro
+          step 5.2: Induction n :: nat
+            fixing variables:
+              - n: nat
+            assuming premises:
+              - premise2: n <= p - (2 :: nat)
+              - 1.IH: forall m<na__. forall x<=p - (2 :: nat). prime (f x)
+
+    Recipe (this test):
+      - Outer lemma fixes ``f :: nat => nat``, ``p :: nat``, ``i :: nat``.
+      - Step 1: ``Have gen: "!!n. n \\<le> p - 2 \\<Longrightarrow> f n < p"``
+      - Inside the Have sub-proof:
+          step 1.1: Intro (fixes ``n``, introduces premise ``n \\<le> p - 2``)
+          step 1.2: Induction on ``n`` via ``nat_less_induct``,
+                    generalizing ``n``, keeping ``f`` and ``p`` fixed.
+
+    Expected (after fix): the IH term's free induction variable matches
+    the display name in ``fixing variables`` -- i.e. ``n``, not ``na``/
+    ``na__``.
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    await root.fill("1", [Have.gen_single({
+        "thought": "sub-lemma to induct on",
+        "statement": {
+            "english": "for every n, if n is at most p-2 then f n is less than p",
+            "isabelle": r"\<And>n::nat. n \<le> p - 2 \<Longrightarrow> f n < p"
+        },
+        "name": "gen"
+    })])
+    print_header("After Have gen", file)
+    root.print(0, file)
+
+    # Inside the Have sub-proof:
+    # step 1.1 is already auto-Intro (fixes n, assumes n <= p - 2).
+    # step 1.2 is the Induction.
+    await root.fill("1.2", [Induction.gen_single({
+        "thought": "strong induction on n, generalize n, keep p and f fixed",
+        "target_isabelle_term": "n :: nat",
+        "rule": {"refer_by": "name", "name": "nat_less_induct"},
+        "variables": [
+            {"name": "f", "status": "fixed"},
+            {"name": "p", "status": "fixed"},
+            {"name": "n", "status": "generalized"},
+        ],
+    })])
+    print_header("After Induction (IH should use `n`, not internal variant)", file)
+    root.print(0, file)
+
+    import re
+    induct_node = root.locate_node("1.2")
+
+    display_vars: list[str] = []
+    def collect_vars(node):
+        case_vars = getattr(node, "case_vars", None)
+        if case_vars:
+            for name, _ty in case_vars:
+                display_vars.append(name.unicode if hasattr(name, "unicode") else str(name))
+        for sub in getattr(node, "sub_nodes", []) or []:
+            collect_vars(sub)
+    collect_vars(induct_node)
+    file.write(f"\nDisplay names in `fixing variables`: {display_vars}\n")
+
+    offending: list[tuple[str, str]] = []
+    def collect_hyps(node):
+        case_hyps = getattr(node, "case_hyps", None)
+        if case_hyps:
+            for hname, term in case_hyps:
+                t = term.unicode
+                # Any token starting with 'n' and followed by letters /
+                # underscores -- the shape an Isabelle-internal variant
+                # of `n` would take (na, na_, na__, nb, ...).
+                for m in re.finditer(r"\bn[a-z]_*\b", t):
+                    tok = m.group(0)
+                    if tok in ("nat", "not", "ne", "no"):
+                        continue
+                    offending.append((hname.unicode, tok))
+        for sub in getattr(node, "sub_nodes", []) or []:
+            collect_hyps(sub)
+    collect_hyps(induct_node)
+
+    file.write(f"Offending IH tokens: {len(offending)}\n")
+    for hn, tok in offending:
+        file.write(f"  - {hn}: token={tok}\n")
+
+    assert not offending, (
+        "REPRODUCED: Induction IH carries an Isabelle-internal variant "
+        f"of the induction variable (seen: {offending}). The step's "
+        "`fixing variables` reports the external display name, but the "
+        "IH hyp term retains the variant-renamed Free. The mismatch "
+        "happens in library/proof.ML:2353-2355: `items'.vars` is built "
+        "from `map (apfst Binding.name_of) fixes` (the rule's Case "
+        "struct's original bindings), while `items'.hyps` comes from "
+        "`Thm.prop_of thms` (which carry Frees with the post-`apply_case` "
+        "variant names produced by `add_fixes`).")
+
+
 @model_test("HOL_TAG_Leak", "Test_HOL_TAG_Leak.thy", 31)
 async def _test_HOL_TAG_Leak(root: Root, file: MyIO):
     """REGRESSION: HOL.TAG leaks into the induction hypothesis presented
@@ -4247,6 +4441,76 @@ async def _test_BatchInsertBefore(root: Root, file: MyIO):
     root.print(0, file)
 
 
+@model_test("AmendMultiSequence", "Test_AmendMultiSequence.thy", 8)
+async def _test_AmendMultiSequence(root: Root, file: MyIO):
+    """`amend` on a single step where the replacement is a *list* of
+    several proof operations.  The target is deleted and the list lands
+    in its former slot as consecutive siblings — exercises the
+    multi-item amend path and the `Amended step X-Y.` range headline."""
+    from .mcp_http_server import _edit_tool_logic
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Seed the proof with a single Have (will later be amended into many).
+    root.session.age += 1
+    result, is_error = await _edit_tool_logic(
+        root.session,
+        {"target_step": "1", "action": "fill", "proof_operations": [
+            {"operation": "Have", "thought": "seed aux",
+             "statement": {"english": "nonneg", "isabelle": r"x * x \<ge> 0"},
+             "name": "seed",
+             "proof": [{"operation": "Obvious", "facts": []}]},
+        ]})
+    print_header("[1] seed fill: single Have", file)
+    file.write(result)
+    file.write("---------------\n")
+    file.write(f"is_error: {is_error}\n")
+
+    # Amend step 1 with THREE replacement Haves; target is removed and
+    # the three land as siblings at its former position.
+    root.session.age += 1
+    result, is_error = await _edit_tool_logic(
+        root.session,
+        {"target_step": "1", "action": "amend", "proof_operations": [
+            {"operation": "Have", "thought": "replacement A",
+             "statement": {"english": "rA", "isabelle": r"x * x \<ge> 0"},
+             "name": "rA",
+             "proof": [{"operation": "Obvious", "facts": []}]},
+            {"operation": "Have", "thought": "replacement B",
+             "statement": {"english": "rB", "isabelle": r"x * x \<ge> 0"},
+             "name": "rB",
+             "proof": [{"operation": "Obvious", "facts": []}]},
+            {"operation": "Have", "thought": "replacement C",
+             "statement": {"english": "rC", "isabelle": r"x * x \<ge> 0"},
+             "name": "rC",
+             "proof": [{"operation": "Obvious", "facts": []}]},
+        ]})
+    print_header("[2] amend step 1 with THREE Haves", file)
+    file.write(result)
+    file.write("---------------\n")
+    file.write(f"is_error: {is_error}\n")
+
+    # Amend the middle of the triple (step 2) with TWO replacements — to
+    # exercise mid-sequence multi-amend.
+    root.session.age += 1
+    result, is_error = await _edit_tool_logic(
+        root.session,
+        {"target_step": "2", "action": "amend", "proof_operations": [
+            {"operation": "Have", "thought": "mid replacement 1",
+             "statement": {"english": "m1", "isabelle": r"x * x \<ge> 0"},
+             "name": "m1",
+             "proof": [{"operation": "Obvious", "facts": []}]},
+            {"operation": "Have", "thought": "mid replacement 2",
+             "statement": {"english": "m2", "isabelle": r"x * x \<ge> 0"},
+             "name": "m2",
+             "proof": [{"operation": "Obvious", "facts": []}]},
+        ]})
+    print_header("[3] amend step 2 with TWO Haves (mid-sequence)", file)
+    file.write(result)
+    file.write("---------------\n")
+    file.write(f"is_error: {is_error}\n")
+
+
 @model_test("BatchAmendMulti", "Test_BatchAmendMulti.thy", 8)
 async def _test_BatchAmendMulti(root: Root, file: MyIO):
     """amend with a multi-item list — target deleted, list inserted at its
@@ -4446,19 +4710,14 @@ async def _test_InferenceRuleBatch_MultiSubgoal(root: Root, file: MyIO):
         f"expected 2 subgoals from conjI on P∧Q, got {len(goal_kids)}"
     # `is_error` must be False (InferenceRule landed).
     assert is_error is False, f"expected is_error=False, got {is_error}"
-    # The aggregated warning is rendered into the response text and then
-    # `session.warnings` is cleared by `batch_edit_message` (matches the
-    # existing single-op step-message templates).  Inspect `result` instead.
     assert isinstance(result, str)
     file.write(f"response length: {len(result)} chars\n")
-    assert "2 operation(s) from this edit batch were not applied" in result, \
-        f"response missing aggregated-warning header; response:\n{result}"
-    assert "starting at index 1" in result, \
-        f"response missing failed-index marker; response:\n{result}"
-    assert "misplaced aux" in result, \
-        f"response should quote the unapplied Have's thought verbatim; response:\n{result}"
-    assert "operation: Obvious" in result, \
-        f"response should quote the unapplied Obvious op verbatim; response:\n{result}"
+    assert "Filled step 1." in result, \
+        f"response missing single-commit headline; response:\n{result}"
+    assert "The proof block is closed" in result, \
+        f"response missing block-closed failure notice; response:\n{result}"
+    assert "You should edit node 1 instead" in result, \
+        f"response missing closed_by redirect hint; response:\n{result}"
 
 
 @model_test("InferenceRuleProofsPerSubgoal",

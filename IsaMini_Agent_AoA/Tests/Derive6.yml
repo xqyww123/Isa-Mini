@@ -11,12 +11,14 @@ premises:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: x mod q = y mod q
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 Response
 --------------------------------------------------
 Is error: True
-Reason: FailureReason(reason="the given fact h1 mismatches the target premise ‹(?n::?'a::{euclidean_ring_cancel,semiring_gcd}) * (?a::?'a::{euclidean_ring_cancel,semiring_gcd}) mod (?m::?'a::{euclidean_ring_cancel,semiring_gcd}) = ?n * (?b::?'a::{euclidean_ring_cancel,semiring_gcd}) mod ?m›\nbecause type nat ⇒ nat ⇒ bool does not unify with ?'a::{euclidean_ring_cancel,semiring_gcd} ⇒ ?'a::{euclidean_ring_cancel,semiring_gcd} ⇒ bool\n")
+Reason: Cannot fill a node with id 1
+the given fact h1 mismatches the target premise ‹(?n::?'a::{euclidean_ring_cancel,semiring_gcd}) * (?a::?'a::{euclidean_ring_cancel,semiring_gcd}) mod (?m::?'a::{euclidean_ring_cancel,semiring_gcd}) = ?n * (?b::?'a::{euclidean_ring_cancel,semiring_gcd}) mod ?m›
+because type nat ⇒ nat ⇒ bool does not unify with ?'a::{euclidean_ring_cancel,semiring_gcd} ⇒ ?'a::{euclidean_ring_cancel,semiring_gcd} ⇒ bool
 --------------------------------------------------
 After Derive
 --------------------------------------------------
@@ -30,4 +32,4 @@ premises:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: x mod q = y mod q
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.

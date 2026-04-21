@@ -12,7 +12,7 @@ variables:
   - y: int
 goal: x = z
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After Have
 --------------------------------------------------
@@ -37,7 +37,7 @@ proof:
     proof:
       - step id: 1.1
         operation: Obvious
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
 --------------------------------------------------
 After Rewrite
 --------------------------------------------------

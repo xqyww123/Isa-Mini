@@ -8,12 +8,13 @@ premises:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: P (0 :: nat)
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 Response
 --------------------------------------------------
 Is error: True
-Reason: FailureReason(reason='Rule fact "nonexistent_rule" not found\n')
+Reason: Cannot fill a node with id 1
+Rule fact "nonexistent_rule" not found
 --------------------------------------------------
 After Derive (unfound)
 --------------------------------------------------
@@ -24,4 +25,4 @@ premises:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: P (0 :: nat)
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.

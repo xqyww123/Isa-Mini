@@ -6,7 +6,7 @@ variables:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: (0 :: int) ≤ x * x
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 parser correctly rejected:
 Bad Argument
 proof_operations[1]: The Obvious operation at proof_operations[0] (Obvious) concludes the proof, so no further proof operations may follow it.
@@ -19,4 +19,4 @@ variables:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: (0 :: int) ≤ x * x
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.

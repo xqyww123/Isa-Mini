@@ -4,7 +4,7 @@ Initial YAML
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: (1 :: int) = (1 :: int) ∧ (2 :: int) = (2 :: int)
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 is_error: False
 --------------------------------------------------
 After batch; InferenceRule splits, siblings aggregated into session.warnings
@@ -21,10 +21,10 @@ proof:
       - goal id: 1.1
         goal: (1 :: int) = (1 :: int)
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1` to provide the proof for the following goal.
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1` to provide the proof.
       - goal id: 1.2
         goal: (2 :: int) = (2 :: int)
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.1` to provide the proof for the following goal.
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.1` to provide the proof.
 InferenceRule GoalNode children: 2
-response length: 908 chars
+response length: 398 chars

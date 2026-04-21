@@ -325,7 +325,22 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (split_conj: 
   in
     (* Step 1: Check if INTRO is applicable *)
     if not (Minilang.need_intro split_conj st) then
-      (([], []), s)
+      let
+        (* No leading ⋀/⟹/∀/⟶ to introduce: nothing is bound. Still emit
+           INTRO_BINDINGS so the Python side's invariant (exactly one per
+           INTRO op) holds. Provided bindings fall entirely into `missing`,
+           filtered the same way as the success path below. *)
+        val missing_vars = if report_missing
+          then filter (fn {internal_name, external_name, ...} =>
+                 external_name <> internal_name) provided_var_names
+          else []
+        val missing_prems = if report_missing then provided_prem_names else []
+        val _ = Minilang.get_reporter () (Minilang.Internal (INTRO_BINDINGS {
+          missing = (missing_vars, missing_prems),
+          auto_introduced = ([], []),
+          final = ([], [])
+        }))
+      in (([], []), s) end
     else
       let
         (* Step 2: Extract quantified variables and premises from goal *)

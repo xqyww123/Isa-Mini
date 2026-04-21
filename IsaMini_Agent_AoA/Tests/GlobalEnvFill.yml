@@ -8,7 +8,7 @@ premises:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: x * x = (0 :: int)
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 Advertised fill target: global.1
 GlobalEnv.id = 'global'
 GlobalEnv.local_step = 'global'
@@ -34,7 +34,7 @@ pending proof goal:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.2`
 goal: x * x = (0 :: int)
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 Obvious in global Have: status=success
 --------------------------------------------------
 After proving global Have
@@ -58,5 +58,5 @@ proof:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.2`
 goal: x * x = (0 :: int)
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 Next advertised fill target: global.2

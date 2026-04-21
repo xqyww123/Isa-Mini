@@ -403,9 +403,12 @@ def print_pending_goal(goal: Goal, step: step, indent: int, file : MyIO, suppres
     if replace_existing:
         file.write(f"Error: Unfinished Proof! Call command `edit` with action `fill` and target step `{step}`"
             " to replace it with a proof.\n")
-    else:
+    elif show_goal:
         file.write(f"Error: Unfinished Proof! Call command `edit` with action `fill` and target step `{step}`"
             " to provide the proof for the following goal.\n")
+    else:
+        file.write(f"Error: Unfinished Proof! Call command `edit` with action `fill` and target step `{step}`"
+            " to provide the proof.\n")
     if show_goal:
         print_indent(indent, file)
         file.write("pending proof goal:\n")
@@ -475,11 +478,14 @@ class CannotEdit(AoA_Error):
     def __str__(self) -> str:
         match self.operation:
             case EditOperation.FILL:
-                return f"Cannot fill a node with id {self.target_step}"
+                return (f"Cannot fill a node with id {self.target_step}"
+                        if self.target_step else "Cannot fill this step")
             case EditOperation.INSERT:
-                return f"Cannot insert before the node {self.target_step}"
+                return (f"Cannot insert before the node {self.target_step}"
+                        if self.target_step else "Cannot insert before this step")
             case EditOperation.AMEND:
-                return f"Cannot amend the node {self.target_step}"
+                return (f"Cannot amend the node {self.target_step}"
+                        if self.target_step else "Cannot amend this step")
             case _:
                 raise InternalError(
                     f"CannotEdit.__str__: unknown operation {self.operation!r}")
@@ -2311,10 +2317,14 @@ class Node(ABC):
         return self.id
     def _reset_local_step(self, new_local_step: str) -> None:
         self.local_step = new_local_step
+        self._recompute_id()
+    def _recompute_id(self) -> None:
         if self.parent is not None and self.parent.id:
             self.id = f"{self.parent.id}.{self.local_step}"
         else:
             self.id = self.local_step
+        for child in getattr(self, "sub_nodes", ()):
+            child._recompute_id()
     def _print_step_id(self, indent: int, file: MyIO, update_line: bool = False) -> int:
         if update_line:
             self.line = file.current_line()
@@ -4484,7 +4494,6 @@ class Obvious(Leaf):
             file = MyIO(StringIO())
             if self.status.reason:
                 file.write(self.status.reason.reason)
-                file.write('\n')
             if self.warnings:
                 self._print_warnings(0, file, list(Warning.Position))
             outcome.failure = CannotEdit_EvaluationFailed(
@@ -4586,7 +4595,6 @@ class Chaining(Leaf):
             file = MyIO(StringIO())
             if self.status.reason:
                 file.write(self.status.reason.reason)
-                file.write('\n')
             if self.warnings:
                 self._print_warnings(0, file, list(Warning.Position))
             outcome.failure = CannotEdit_EvaluationFailed(
@@ -4892,7 +4900,6 @@ class Unfold(Leaf):
             file = MyIO(StringIO())
             if self.status.reason:
                 file.write(self.status.reason.reason)
-                file.write('\n')
             if self.warnings:
                 self._print_warnings(0, file, list(Warning.Position))
             outcome.failure = CannotEdit_EvaluationFailed(
@@ -5027,7 +5034,6 @@ class Derive(Leaf):
             file = MyIO(StringIO())
             if self.status.reason:
                 file.write(self.status.reason.reason)
-                file.write('\n')
             if self.warnings:
                 self._print_warnings(0, file, list(Warning.Position))
             outcome.failure = CannotEdit_EvaluationFailed(
@@ -5423,7 +5429,6 @@ class Rewrite(Leaf):
             file = MyIO(StringIO())
             if self.status.reason:
                 file.write(self.status.reason.reason)
-                file.write('\n')
             if self.warnings:
                 self._print_warnings(0, file, list(Warning.Position))
             outcome.failure = CannotEdit_EvaluationFailed(

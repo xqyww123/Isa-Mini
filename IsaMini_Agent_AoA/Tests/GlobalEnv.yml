@@ -9,7 +9,7 @@ premises:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: x * x = (0 :: int) ∨ P
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 GlobalEnv children: 0
 --------------------------------------------------
 edit_message: ADD global Have t1
@@ -31,7 +31,6 @@ edit_message: Obvious under t1
 Filled nothing.
 Cannot fill a node with id global.1.1
 Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
-
 ---------------
 Obvious in have1: status=reverted
 GoalNode context hyps: ['h1', 't1']

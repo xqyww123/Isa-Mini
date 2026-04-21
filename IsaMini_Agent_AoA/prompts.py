@@ -51,7 +51,8 @@ async def edit_message(
     file = MyIO(StringIO())
     file.write(_headline(outcome))
     if failure is not None and failure.is_error:
-        file.write(f"{failure}\n")
+        file.write(str(failure))
+        file.write("\n")
     _p = outcome.committed[-1].parent if outcome.committed else None
     parent_hint = _p if isinstance(_p, NonLeaf_Node) else None
     # Completion hint only for fill/amend; insert intentionally skips it.
@@ -77,7 +78,8 @@ async def edit_message(
             await session.interrupt()
         root.reset()
     if failure is not None and not failure.is_error:
-        file.write(f"{failure}\n")
+        file.write(str(failure))
+        file.write("\n")
     return file.getvalue()
 
 

@@ -9,7 +9,7 @@ premises:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: g (f a) = c
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 Interaction Prompt
 --------------------------------------------------
@@ -28,6 +28,7 @@ premises:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: g (f a) = c
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 success: True
-reason: FailureReason(reason='The simplification made no progress.\n')
+reason: Cannot fill a node with id 1
+The simplification made no progress.

@@ -10,7 +10,7 @@ premises:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: x + y = (3 :: nat)
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After step 1 (Have True, Obvious succeeds)
 --------------------------------------------------
@@ -33,7 +33,7 @@ proof:
     proof:
       - step id: 1.1
         operation: Obvious
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
 --------------------------------------------------
 After step 2 (Have False, open proof)
 --------------------------------------------------
@@ -67,7 +67,7 @@ proof:
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
     pending proof goal:
       False
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof.
 --------------------------------------------------
 After step 2.1 (Obvious fails on False)
 --------------------------------------------------
@@ -101,7 +101,7 @@ proof:
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
     pending proof goal:
       False
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof.
 Obvious retry correctly blocked by GoalIsNontrivial
 After amend: step2._is_trivial correctly reset to None
 --------------------------------------------------
@@ -137,7 +137,7 @@ proof:
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
     pending proof goal:
       False
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof.
 Obvious retry allowed after amend (fails on False, as expected)
 --------------------------------------------------
 After Obvious retry (allowed, fails)
@@ -172,7 +172,7 @@ proof:
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
     pending proof goal:
       False
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof.
 After insert_before: step2._is_trivial correctly reset to None
 --------------------------------------------------
 After inserting before step 2
@@ -215,7 +215,7 @@ proof:
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
     pending proof goal:
       False
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof.
 Obvious retry allowed after insert_before
 --------------------------------------------------
 Final state
@@ -258,4 +258,4 @@ proof:
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
     pending proof goal:
       False
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof.

@@ -1,34 +1,39 @@
 --------------------------------------------------
 Initial YAML
 --------------------------------------------------
+variables:
+  - l: 'a list
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: (1 :: int) = (1 :: int) ∧ (2 :: int) = (2 :: int)
+goal: rev (rev l) = l
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
-is_error: False
 --------------------------------------------------
-After batch; per-subgoal proofs landed under InferenceRule
+After seed (cases Nil/Cons, each with an Obvious child)
 --------------------------------------------------
+variables:
+  - l: 'a list
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: (1 :: int) = (1 :: int) ∧ (2 :: int) = (2 :: int)
+goal: rev (rev l) = l
 proof:
   - step id: 1
-    thought: split ∧ via conjI
-    operation: Inference Rule
-    rule:
-      - conjI: ?P ⟶ ?Q ⟶ ?P ∧ ?Q
-    derived subgoals:
-      - goal id: 1.1
-        goal: (1 :: int) = (1 :: int)
+    thought: induct on l
+    operation: Induction
+    target term: l
+    cases:
+      - goal id: 1.Nil
+        goal: rev (rev []) = []
         proof:
-          - step id: 1.1.1
+          - step id: 1.Nil.1
             operation: Obvious
-      - goal id: 1.2
-        goal: (2 :: int) = (2 :: int)
+      - goal id: 1.Cons
+        variables:
+          - a: 'a
+        premises:
+          - Cons.IH: rev (rev l) = l
+        goal: True
         proof:
-          - step id: 1.2.1
+          - step id: 1.Cons.1
             operation: Obvious
-InferenceRule GoalNode children: 2
-  1.1: first sub = Obvious
-  1.2: first sub = Obvious
-Unfinished nodes: 0
+            with facts:
+              - Cons.IH: rev (rev l) = l
+rename cascade verified: parent=1.renamed, child=1.renamed.1

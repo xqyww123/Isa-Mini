@@ -15,7 +15,7 @@ premises:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: x (2 :: nat) = (0 :: real) ∧ x (3 :: nat) = (0 :: real) ∧ x (1 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦ ∧ x (4 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 Overview
 --------------------------------------------------
@@ -49,7 +49,7 @@ proof:
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
     pending proof goal:
       x (1 :: nat) = x (2 :: nat) + x (3 :: nat) + x (4 :: nat)
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
 --------------------------------------------------
 Overview
 --------------------------------------------------
@@ -90,7 +90,7 @@ proof:
           - assms(1): a (2 :: nat) < a (1 :: nat)
           - assms(2): a (3 :: nat) < a (2 :: nat)
           - assms(3): a (4 :: nat) < a (3 :: nat)
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
 --------------------------------------------------
 Overview
 --------------------------------------------------
@@ -124,7 +124,7 @@ proof:
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
     pending proof goal:
       x (1 :: nat) = x (2 :: nat) + x (3 :: nat) + x (4 :: nat)
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
 --------------------------------------------------
 Overview
 --------------------------------------------------
@@ -173,7 +173,7 @@ proof:
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2` to provide the proof for the following goal.
     pending proof goal:
       x (1 :: nat) = x (2 :: nat) + x (3 :: nat) + x (4 :: nat)
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
 --------------------------------------------------
 Overview
 --------------------------------------------------
@@ -235,7 +235,7 @@ proof:
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.3` to provide the proof for the following goal.
     pending proof goal:
       x (1 :: nat) = x (2 :: nat) + x (3 :: nat) + x (4 :: nat)
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
 --------------------------------------------------
 Overview
 --------------------------------------------------

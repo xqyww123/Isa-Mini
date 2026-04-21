@@ -18,11 +18,11 @@ proof:
       - goal id: 2.1
         goal: P x
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1.1` to provide the proof for the following goal.
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1.1` to provide the proof.
       - goal id: 2.2
         goal: Q x
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.2.1` to provide the proof for the following goal.
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.2.1` to provide the proof.
 --------------------------------------------------
 Quickview (should show x in subgoal context)
 --------------------------------------------------

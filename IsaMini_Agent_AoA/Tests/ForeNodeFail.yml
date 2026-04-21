@@ -12,7 +12,7 @@ variables:
   - y: int
 goal: x = z
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After step 1 (Have x=y, should succeed)
 --------------------------------------------------
@@ -37,7 +37,7 @@ proof:
     proof:
       - step id: 1.1
         operation: Obvious
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
 Step 2 status: failure
 --------------------------------------------------
 After step 2 (invalid Have, should fail)
@@ -85,7 +85,7 @@ proof:
       No complex coercion from "??'a" to fun
     proof: empty
     Error: Evaluation cancelled due to failures above
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof.
 Step 3 status (fill after failed): cancelled
 --------------------------------------------------
 After step 3 (fill, should be cancelled)

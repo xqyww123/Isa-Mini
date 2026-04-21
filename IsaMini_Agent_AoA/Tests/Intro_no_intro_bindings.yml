@@ -1,0 +1,116 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - b: bool
+  - P: bool ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P b
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After CaseSplit
+--------------------------------------------------
+variables:
+  - b: bool
+  - P: bool ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P b
+proof:
+  - step id: 1
+    thought: Case split on boolean b
+    operation: CaseSplit
+    target term: b
+    cases:
+      - goal id: 1.True
+        premises:
+          - True.prem0: b
+        goal: P True
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.1` to provide the proof.
+      - goal id: 1.False
+        premises:
+          - False.prem0: ¬ b
+        goal: P False
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.1` to provide the proof.
+--------------------------------------------------
+edit_message: Intro under 1.True
+--------------------------------------------------
+Filled step 1.True.1.
+Outline:
+  step 1: CaseSplit b (line 0)
+    - 1.True (line 0)
+      premises:
+        - True.prem0: b
+      step 1.True.1: Intro (line 0)
+        - 1.True.1.1 (line 0)
+          Error: Unfinished Proof. Call command `edit` with action `fill` and target step `1.True.1.1.1`
+          goal: P True
+        - 1.True.1.False (line 0)
+          premises:
+            - False.prem0: ¬ b
+          Error: Unfinished Proof. Fill step `1.True.1.False.1`
+          goal: P False
+    - 1.False (line 0)
+      premises:
+        - False.prem0: ¬ b
+      Error: Unfinished Proof (line 36). Fill step `1.False.1`
+      goal: P False
+---------------
+--------------------------------------------------
+Intro node print (1.True.1)
+--------------------------------------------------
+- step id: 1.True.1
+  thought: Rename the case hypothesis
+  operation: Intro
+  goals:
+    - goal id: 1.True.1.1
+      goal: P True
+      proof: empty
+      Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.1.1.1` to provide the proof.
+    - goal id: 1.True.1.False
+      premises:
+        - False.prem0: ¬ b
+      goal: P False
+      proof: empty
+      Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.1.False.1` to provide the proof.
+--------------------------------------------------
+Full tree after Intro
+--------------------------------------------------
+variables:
+  - b: bool
+  - P: bool ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P b
+proof:
+  - step id: 1
+    thought: Case split on boolean b
+    operation: CaseSplit
+    target term: b
+    cases:
+      - goal id: 1.True
+        premises:
+          - True.prem0: b
+        goal: P True
+        proof:
+          - step id: 1.True.1
+            thought: Rename the case hypothesis
+            operation: Intro
+            goals:
+              - goal id: 1.True.1.1
+                goal: P True
+                proof: empty
+                Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.1.1.1` to provide the proof.
+              - goal id: 1.True.1.False
+                premises:
+                  - False.prem0: ¬ b
+                goal: P False
+                proof: empty
+                Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.1.False.1` to provide the proof.
+      - goal id: 1.False
+        premises:
+          - False.prem0: ¬ b
+        goal: P False
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.1` to provide the proof.

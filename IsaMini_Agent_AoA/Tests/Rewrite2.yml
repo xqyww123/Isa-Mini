@@ -14,7 +14,7 @@ variables:
   - y: 'a
 goal: x = z ∧ PP z ∧ (∀(x1 :: 'b). AA z x1)
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After Rewrite
 --------------------------------------------------
@@ -89,4 +89,4 @@ variables:
   - y: 'a
 goal: x = z ∧ PP z ∧ (∀(x1 :: 'b). AA z x1)
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
