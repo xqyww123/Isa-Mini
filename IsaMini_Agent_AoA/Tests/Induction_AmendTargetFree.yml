@@ -1,0 +1,88 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - f: nat ⇒ nat
+  - Q: nat ⇒ bool
+  - p: nat
+premises:
+  - h0: f ?x = ?x * ?x + ?x + p
+  - h1: ?k ≤ p div (3 :: nat) ⟶ Q (f ?k)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∀i≤p - (2 :: nat). Q (f i)
+proof:
+  - step id: 1
+    operation: Intro
+    fixing variables:
+      - i: nat
+    assuming premises:
+      - premise0: i ≤ p - (2 :: nat)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  Q (f i)
+--------------------------------------------------
+After fill step 2 (init path --- is_init=True strips i)
+--------------------------------------------------
+variables:
+  - f: nat ⇒ nat
+  - Q: nat ⇒ bool
+  - p: nat
+premises:
+  - h0: f ?x = ?x * ?x + ?x + p
+  - h1: ?k ≤ p div (3 :: nat) ⟶ Q (f ?k)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∀i≤p - (2 :: nat). Q (f i)
+proof:
+  - step id: 1
+    operation: Intro
+    fixing variables:
+      - i: nat
+    assuming premises:
+      - premise0: i ≤ p - (2 :: nat)
+  - step id: 2
+    thought: strong induction on i; init call (is_init=True strips i even if listed)
+    operation: Induction
+    target term: i
+    fixing variables:
+      - x: nat
+    assuming premises:
+      - premise0: x ≤ p - (2 :: nat)
+      - less.IH: ?y < x ⟶ ?y ≤ p - (2 :: nat) ⟶ Q (f ?y)
+    cases: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  Q (f x)
+--------------------------------------------------
+After amend step 2 (amend path --- must still strip i)
+--------------------------------------------------
+variables:
+  - f: nat ⇒ nat
+  - Q: nat ⇒ bool
+  - p: nat
+premises:
+  - h0: f ?x = ?x * ?x + ?x + p
+  - h1: ?k ≤ p div (3 :: nat) ⟶ Q (f ?k)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∀i≤p - (2 :: nat). Q (f i)
+proof:
+  - step id: 1
+    operation: Intro
+    fixing variables:
+      - i: nat
+    assuming premises:
+      - premise0: i ≤ p - (2 :: nat)
+  - step id: 2
+    thought: amend: re-list i as generalized; replay the bug path
+    operation: Induction
+    target term: i
+    fixing variables:
+      - x: nat
+    assuming premises:
+      - premise0: x ≤ p - (2 :: nat)
+      - less.IH: ?y < x ⟶ ?y ≤ p - (2 :: nat) ⟶ Q (f ?y)
+    cases: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  Q (f x)
+
+Degenerate-IH signatures found: 0

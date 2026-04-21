@@ -1164,9 +1164,22 @@ async def _test_Intro_no_intro_bindings(root: Root, file: MyIO):
     })])
     print_header("After CaseSplit", file)
     root.print(0, file)
-    # Step 1.True.1: Intro with a fact_binding. `need_intro` is false for
-    # `P True`, so AUTO_INTRO short-circuits without emitting INTRO_BINDINGS,
-    # and the Python `_refresh_the_beginning_opr` raises InternalError:
+    # === DEBUG PROBE: verify whether 1.True's ml_state carries both cases' top_goals ===
+    true_goal = root.locate_node("1.True")
+    pt = true_goal.ml_state.prooftree
+    if pt is not None:
+        tgs = pt.top_goals()
+        file.write(f"[probe] 1.True.ml_state.top_goals() count={len(tgs)}\n")
+        for i, g in enumerate(tgs):
+            file.write(f"[probe]   [{i}] {g.conclusion.unicode}\n")
+    else:
+        file.write("[probe] 1.True.ml_state.prooftree is None\n")
+    # Step 1.True.1: Intro with a fact_binding. Empirically verified via
+    # `ml_state.need_intro(...)` probe that both need_intro(True) and
+    # need_intro(False) return False at `1.True` (the case hypothesis is
+    # already a named local premise, not an outer ⟹), so AUTO_INTRO
+    # short-circuits without emitting INTRO_BINDINGS. Pre-fix the Python
+    # `_refresh_the_beginning_opr` then raised:
     #   Expected exactly one Intro_Bindings_Msg in Intro's messages, got 0
     root.session.age += 1
     _intro_outcome = await root.fill("1.True.1", [Intro.gen_single({
@@ -1179,7 +1192,134 @@ async def _test_Intro_no_intro_bindings(root: Root, file: MyIO):
     print_header("Intro node print (1.True.1)", file)
     intro_node = root.locate_node("1.True.1")
     intro_node.print(0, file)
+    # === DEBUG PROBE: Intro's _state_after_beginning top_goals ===
+    sab = intro_node._state_after_beginning()
+    pt = sab.prooftree
+    if pt is not None:
+        tgs = pt.top_goals()
+        file.write(f"[probe] Intro._state_after_beginning.top_goals() count={len(tgs)}\n")
+        for i, g in enumerate(tgs):
+            file.write(f"[probe]   [{i}] {g.conclusion.unicode}\n")
+    else:
+        file.write("[probe] Intro._state_after_beginning.prooftree is None\n")
+    # Also check each of Intro's sub_nodes' ml_state
+    for child in intro_node.sub_nodes:
+        cpt = child.ml_state.prooftree
+        if cpt is not None:
+            tgs = cpt.top_goals()
+            file.write(f"[probe] Intro.sub[{child.id}].ml_state.top_goals() count={len(tgs)}: ")
+            file.write(", ".join(g.conclusion.unicode for g in tgs))
+            file.write("\n")
     print_header("Full tree after Intro", file)
+    root.print(0, file)
+
+@model_test("InferenceRule_in_CaseSplit", "Test_InferenceRule_in_CaseSplit.thy", 8)
+async def _test_InferenceRule_in_CaseSplit(root: Root, file: MyIO):
+    """Verify that an InferenceRule producing exactly 1 subgoal inside a
+    CaseSplit case triggers the same sibling-leak display bug as Intro
+    no-op. Both inherit SubgoalMaker (model.py:5722, 5926); neither
+    overrides `_refresh_the_beginning_opr` / `_should_open_proof_block`,
+    so the "open a 2-child block iff top_goals() > 1" check at
+    model.py:3932 fires for both whenever the top HHF leaves exactly 1
+    goal (→ `prt0` gives `PROP` → MAGIC's `cat_tree` composes it with
+    the sibling case into a *leaf* BUNDL → `MLPT_Bundle.top_goals`
+    returns both).
+
+    Setup: goal `b ⟶ P b`, CaseSplit on b, then impI in the True case.
+    impI applied via `Thm.biresolution` gives exactly 1 resulting
+    subgoal (`True ⟹ P True`), so the top HHF has 1 goal.
+
+    Expected: `1.True.1` (the InferenceRule) spuriously shows 2 child
+    subgoals — `1.True.1.1` plus a sibling-leak `1.True.1.False`
+    renamed from the outer CaseSplit's False case — same symptom as
+    Intro no-op.
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    await root.fill("1", [CaseSplit.gen_single({
+        "thought": "Case split on boolean b",
+        "target_isabelle_term": r"b"
+    })])
+    print_header("After CaseSplit", file)
+    root.print(0, file)
+    # Apply disjI1 to `P True ∨ P True` — produces exactly 1 protected
+    # subgoal `P True` in the top HHF. With the top HHF at 1 goal,
+    # `print_stack`'s `prt0` returns PROP; the MAGIC PRT callback then
+    # composes it with the False sibling into a leaf BUNDL, so
+    # `top_goals()` leaks to 2.
+    root.session.age += 1
+    await root.fill("1.True.1", [InferenceRule.gen_single({
+        "thought": "Apply disjI1 (produces exactly 1 subgoal from disjunction)",
+        "rule": {"refer_by": "name", "name": "disjI1"}
+    })])
+    # === DEBUG PROBE: confirm the sibling leak on the InferenceRule node ===
+    ir_node = root.locate_node("1.True.1")
+    sab = ir_node._state_after_beginning()
+    pt = sab.prooftree
+    if pt is not None:
+        tgs = pt.top_goals()
+        file.write(f"[probe] InferenceRule._state_after_beginning.top_goals() count={len(tgs)}: ")
+        file.write(", ".join(g.conclusion.unicode for g in tgs))
+        file.write("\n")
+    else:
+        file.write("[probe] InferenceRule._state_after_beginning.prooftree is None\n")
+    file.write(f"[probe] InferenceRule sub_nodes ids: {[c.id for c in cast(NonLeaf_Node, ir_node).sub_nodes]}\n")
+    print_header("After InferenceRule (expect spurious 2nd sibling-leak subgoal)", file)
+    root.print(0, file)
+
+@model_test("Nested_InferenceRule_Leak",
+            "Test_Nested_InferenceRule_Leak.thy", 8)
+async def _test_Nested_InferenceRule_Leak(root: Root, file: MyIO):
+    """Verify that the sibling-leak bug also manifests WITHOUT a CaseSplit —
+    plain nested `InferenceRule`s are enough.
+
+    Setup: goal `((1=1) ∧ (2=2)) ∧ (3=3)`.
+    - Outer conjI → 2 subgoals: `(1=1) ∧ (2=2)` and `(3=3)`.
+    - Inner conjI on the first subgoal → expected 2 subgoals (`1=1`, `2=2`);
+      however at the ML level RULE does NOT push a new frame, so
+      `Thm.biresolution ... 1` just rewrites the single top HHF from
+      `[(1=1)∧(2=2), 3=3]` to `[1=1, 2=2, 3=3]` — three *flat* protected
+      subgoals.  Python's `MLPT_Bundle.top_goals` (model.py:935-942) returns
+      `[1=1, 2=2, 3=3]` and `SubgoalMaker._refresh_the_beginning_opr` at
+      model.py:3932 opens a 3-child block.  The third child is advanced by
+      `sorry_next` and lands on the outer sibling `3=3` — same symptom as
+      the CaseSplit-based leaks, without any CaseSplit involved.
+
+    Expected (empirically): inner InferenceRule has 3 sub_nodes, not 2.
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    # Step 1: outer conjI — produces 2 subgoals
+    root.session.age += 1
+    await root.fill("1", [InferenceRule.gen_single({
+        "thought": "Outer conjI: split ((1=1)∧(2=2)) ∧ (3=3)",
+        "rule": {"refer_by": "name", "name": "conjI"}
+    })])
+    print_header("After outer conjI (expect 2 child GoalNodes: 1.1, 1.2)", file)
+    root.print(0, file)
+    outer_ir = root.locate_node("1")
+    outer_kids = [c.id for c in cast(NonLeaf_Node, outer_ir).sub_nodes
+                  if type(c).__name__ == "GoalNode"]
+    file.write(f"[probe] outer conjI GoalNode children: {outer_kids}\n")
+    # Step 1.1.1: inner conjI on the first subgoal (1=1) ∧ (2=2)
+    root.session.age += 1
+    await root.fill("1.1.1", [InferenceRule.gen_single({
+        "thought": "Inner conjI on first subgoal: split (1=1) ∧ (2=2)",
+        "rule": {"refer_by": "name", "name": "conjI"}
+    })])
+    inner_ir = root.locate_node("1.1.1")
+    sab = inner_ir._state_after_beginning()
+    pt = sab.prooftree
+    if pt is not None:
+        tgs = pt.top_goals()
+        file.write(f"[probe] inner conjI._state_after_beginning.top_goals() count={len(tgs)}: ")
+        file.write(", ".join(g.conclusion.unicode for g in tgs))
+        file.write("\n")
+    inner_kids = [c.id for c in cast(NonLeaf_Node, inner_ir).sub_nodes
+                  if type(c).__name__ == "GoalNode"]
+    file.write(f"[probe] inner conjI GoalNode children: {inner_kids}\n")
+    print_header("After inner conjI (2 expected; 3 if leak present)", file)
     root.print(0, file)
 
 @model_test("Have1", "Test_Have1.thy", 9)
@@ -3457,6 +3597,228 @@ async def _test_Induction_IHRename(root: Root, file: MyIO):
         "variant names produced by `add_fixes`).")
 
 
+@model_test("Induction_AmendTargetFree",
+            "Test_Induction_AmendTargetFree.thy", 50)
+async def _test_Induction_AmendTargetFree(root: Root, file: MyIO):
+    """REGRESSION: on amend of an Induction node, the induction target
+    must not reach the ML side inside `arbitrary:` --- otherwise ML's
+    induction_tac produces a degenerate IH (schematic vars disconnected
+    from the case variable).
+
+    Agent flow from
+    $ISABELLE_HOME_USER/log/AoA/DAF690E06_168BB2A/proofs.yaml
+    (2026-04-21 17:46:25--31, Rabinowitz):
+
+      fill step 1 = [Intro(i, ile), Induction(vars=[i gen, ile gen])]
+        -> Python validation rejects step 2 ("f, p not classified")
+      amend step 2 = Induction(vars=[i gen, ile gen, f fix, p fix])
+
+    Before the fix at model.py:6235: on amend the `if is_init:` guard
+    skipped target-stripping, so `i` stayed in `self.variables` with
+    status `generalized` and `beginning_opr()` emitted
+        INDUCT(('i', None, ['i', 'ile'], 'less_induct'))
+    to ML. The resulting IH carried an independent `?i` schematic:
+        less.IH : ?y < x --> ?i <= p - 2 --> prime (f ?i)
+
+    After the fix: target-stripping is unconditional. The amend emits
+        INDUCT(('i', None, ['ile'], 'less_induct'))
+    and the IH is well-formed:
+        less.IH : [?y < x; ?y <= p - 2] ==> prime (f ?y)
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # The goal `\<forall>i. i \<le> p - 2 \<longrightarrow> Q (f i)` triggers
+    # an auto-Intro: step 1 is already Intro (fixes i, names premise0),
+    # leaving step 2 as the first fillable slot. We place the Induction
+    # there.
+    await root.fill("2", [Induction.gen_single({
+        "thought": "strong induction on i; init call "
+                   "(is_init=True strips i even if listed)",
+        "target_isabelle_term": "i",
+        "rule": {"refer_by": "name", "name": "less_induct"},
+        "variables": [
+            {"name": "i", "status": "generalized"},
+            {"name": "f", "status": "fixed"},
+            {"name": "p", "status": "fixed"},
+            {"name": "Q", "status": "fixed"},
+        ],
+    })])
+    print_header("After fill step 2 (init path --- is_init=True strips i)", file)
+    root.print(0, file)
+
+    # Amend step 2 (the Induction) with `i` re-listed as generalized.
+    # Before the fix: `if is_init:` was skipped (is_init=False), `i`
+    # stayed in `self.variables`, and `beginning_opr()` emitted
+    # `INDUCT(('i', None, ['i', ...], 'less_induct'))`, producing
+    # a degenerate IH with an independent `?i` schematic.
+    # After the fix: target-strip is unconditional; `i` is dropped
+    # here too, arbitrary excludes the target, IH stays well-formed.
+    await root.amend("2", [Induction.gen_single({
+        "thought": "amend: re-list i as generalized; replay the bug path",
+        "target_isabelle_term": "i",
+        "rule": {"refer_by": "name", "name": "less_induct"},
+        "variables": [
+            {"name": "i", "status": "generalized"},
+            {"name": "f", "status": "fixed"},
+            {"name": "p", "status": "fixed"},
+            {"name": "Q", "status": "fixed"},
+        ],
+    })])
+    print_header("After amend step 2 (amend path --- must still strip i)", file)
+    root.print(0, file)
+
+    # Verify the IH on step 2 does not carry a schematic that alias-matches
+    # the target `i` --- the degenerate-IH signature from the bug.
+    import re
+    induct_node = root.locate_node("2")
+    offending: list[tuple[str, str]] = []
+    def collect_hyps(node):
+        case_hyps = getattr(node, "case_hyps", None)
+        if case_hyps:
+            for hname, term in case_hyps:
+                t = term.unicode if hasattr(term, "unicode") else str(term)
+                # If the IH contains both `?i` and the case var `x` as
+                # independent schematics, something is wrong. Specifically
+                # the degenerate IH shape has `?i` or `?x_<index>` that
+                # does not match the Isar-level `?y` used for the
+                # less_induct case's bound variable.
+                name = hname.unicode if hasattr(hname, "unicode") else str(hname)
+                if name.endswith(".IH"):
+                    # Flag an IH that references a schematic `?i` ---
+                    # the footprint of the degenerate predicate.
+                    if re.search(r"\?i\b", t):
+                        offending.append((name, t))
+        for sub in getattr(node, "sub_nodes", []) or []:
+            collect_hyps(sub)
+    collect_hyps(induct_node)
+
+    file.write(f"\nDegenerate-IH signatures found: {len(offending)}\n")
+    for hn, t in offending:
+        file.write(f"  - {hn}: {t}\n")
+
+    assert not offending, (
+        "REPRODUCED: on amend, the induction target reached ML's "
+        "arbitrary: slot and produced a degenerate IH. "
+        f"Offending hyps: {offending}. Fix is at model.py:6235 "
+        "(strip target frees from self.variables unconditionally, "
+        "not only when is_init).")
+
+
+@model_test("Induction_IHFactRef", "Test_Induction_IHFactRef.thy", 36)
+async def _test_Induction_IHFactRef(root: Root, file: MyIO):
+    """REPRODUCER: referencing the induction hypothesis by its displayed
+    name ``1.IH`` errors out with ``Cannot parse "1.IH" as a fact
+    reference``.
+
+    Observed (from run ``DABBC86F4_165BA82``, 2026-04-21 00:47:07)::
+
+        operation: HAMMER(([(0, '1.IH'), ...], 30))
+        error_message: 'Syntax Error in Term Language.\\nCannot parse
+                        "1.IH" as a fact reference'
+
+    Root cause (confirmed by ``isabelle process`` probe):
+
+    * ``library/proof.ML:2320`` binds each case hyp under
+      ``Binding.qualify_name true binding (fst asms)`` — e.g.
+      ``"1.IH"`` — and the qualified name lands in ``items'`` /
+      ``Consider_Case``. Python prints it verbatim under ``assuming
+      premises:`` (``model.py:4234``).
+    * ``agent.ML`` / ``read_fact`` (line 1103) calls ``Parse.thm``.
+      ``Parse.thm`` uses ``name = short_ident | long_ident | number |
+      ...``. For input ``"1.IH"`` the tokenizer produces **three**
+      tokens ``[1, ., IH]`` (``scan_longid`` requires both segments to
+      be ``scan_id``'s, and ``1`` is a ``Nat``). ``Parse.thm`` consumes
+      only the leading ``1`` as ``Facts.Named "1"`` and leaves ``.IH``
+      unconsumed → ``Scan.read Token.stopper`` returns ``NONE`` →
+      ``read_fact`` errors.
+
+    Recipe (this test):
+      * ``Have h: "\\<And>n::nat. n < p \\<Longrightarrow> True"``
+      * The Have's body auto-Intros at ``1.1`` (fixes ``n``, assumes
+        ``n < p``).
+      * Step ``1.2``: ``Induction n`` via ``nat_less_induct``
+        generalizing ``n`` (produces case ``1`` with hyp ``1.IH``).
+      * Step ``1.3``: attempt ``Obvious facts=[1.IH]``.
+
+    The bug surfaces during ``check_command_i`` for ``HAMMER`` (see
+    ``contrib/Isa-Mini/Agent/agent.ML:1200-1202``), which maps
+    ``check_extended_fact`` over every fact ref — so the parse error
+    fires irrespective of whether the goal is trivially provable.
+
+    Expected (after fix): the ``Obvious`` step resolves the ``1.IH``
+    fact reference without a parse error. No ``"Cannot parse ... as a
+    fact reference"`` message should surface in the failure reason.
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    await root.fill("1", [Have.gen_single({
+        "thought": "sub-lemma for strong induction",
+        "statement": {
+            "english": "for every n, n < p implies True",
+            "isabelle": r"\<And>n::nat. n < p \<Longrightarrow> True",
+        },
+        "name": "h",
+    })])
+    print_header("After Have h (auto-Intro at 1.1 fixes n, assumes n < p)", file)
+    root.print(0, file)
+
+    # The Have's body auto-Intros at 1.1.  Step 1.2 is the Induction.
+    await root.fill("1.2", [Induction.gen_single({
+        "thought": "strong induction on n, generalize n, keep p fixed",
+        "target_isabelle_term": "n :: nat",
+        "rule": {"refer_by": "name", "name": "nat_less_induct"},
+        "variables": [
+            {"name": "p", "status": "fixed"},
+            {"name": "n", "status": "generalized"},
+        ],
+    })])
+    print_header("After Induction (case 1 produced with hyp `1.IH`)", file)
+    root.print(0, file)
+
+    # Confirm the displayed hyp name really is "1.IH" — that is the
+    # exact token the agent copies back into a fact reference.
+    induct_node = root.locate_node("1.2")
+    displayed_hyp_names: list[str] = []
+    def collect_hyps(node):
+        case_hyps = getattr(node, "case_hyps", None)
+        if case_hyps:
+            for hname, _term in case_hyps:
+                displayed_hyp_names.append(
+                    hname.unicode if hasattr(hname, "unicode") else str(hname))
+        for sub in getattr(node, "sub_nodes", []) or []:
+            collect_hyps(sub)
+    collect_hyps(induct_node)
+    file.write(f"\nDisplayed hyp names under case 1: {displayed_hyp_names}\n")
+
+    # Now have the agent use "1.IH" as a fact reference — exactly the
+    # flow that fails in the live log.
+    root.session.age += 1
+    _outcome = await root.fill("1.3", [Obvious.gen_single({
+        "facts": [{"refer_by": "name", "name": "1.IH"}],
+    })])
+    is_error = _outcome.failure is not None and _outcome.failure.is_error
+    reason = _outcome.failure
+    reason_text = (reason.reason if isinstance(reason, FailureReason)
+                   else str(reason) if reason is not None else "")
+    print_header("After Obvious facts=[1.IH]", file)
+    root.print(0, file)
+    file.write(f"is_error: {is_error}\n")
+    file.write(f"reason: {reason_text}\n")
+
+    assert "Cannot parse" not in reason_text and '"1.IH"' not in reason_text, (
+        "REPRODUCED: read_fact cannot parse the qualified fact name "
+        "`1.IH` that Minilang itself shows under `assuming premises:`. "
+        "`Parse.thm` tokenizes `1.IH` as three separate tokens "
+        "`[1, ., IH]` (scan_longid needs both segments to be "
+        "identifiers, and `1` is a Nat). The fix has to either quote "
+        "numeric-prefix qualified names before handing them to "
+        "Parse.thm (agent.ML:1103 read_fact), or display the hyp "
+        "under a parseable name (library/proof.ML:2320). Observed "
+        "reason: " + reason_text)
+
+
 @model_test("HOL_TAG_Leak", "Test_HOL_TAG_Leak.thy", 31)
 async def _test_HOL_TAG_Leak(root: Root, file: MyIO):
     """REGRESSION: HOL.TAG leaks into the induction hypothesis presented
@@ -4259,6 +4621,86 @@ async def _test_CaseSplitNestedProofAllCases(root: Root, file: MyIO):
             f"(case_name lookup probably failed)")
 
 
+@model_test("CaseSplit_MapCase", "Test_CaseSplit_MapCase.thy", 8)
+async def _test_CaseSplit_MapCase(root: Root, file: MyIO):
+    """CaseSplit with `proofs` that deliberately uses wrong case_names
+    (`"t"`, `"f"`). The exact-name pop at GoalNode refresh fails, which
+    triggers `Interaction_MapCase` per GoalNode. The stub fork picks
+    index 0 each time, so `"t"` is mapped to actual case `True` and
+    `"f"` is mapped to actual case `False`. Verifies that:
+      - the interaction is fired (prompt printed)
+      - picked supplied body lands on the right GoalNode
+      - no leftover FOOTER warning (all supplied got mapped)"""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    async def stub_fork(interaction):
+        assert isinstance(interaction, Interaction_MapCase), \
+            f"unexpected interaction type {type(interaction).__name__}"
+        print_header(f"Interaction Prompt for actual case `{interaction.actual_case}`", file)
+        await interaction.prompt(0, file)
+        # Pick index 0 of the remaining supplied options. Because the
+        # stub is called sequentially per GoalNode and each GoalNode
+        # pops its pick from the shared dict, the options list shrinks
+        # monotonically across calls.
+        return await interaction.answer(Answer(indexes=[0]))
+    root.session.fork_interaction = stub_fork
+
+    root.session.age += 1
+    await root.fill("1", [CaseSplit.gen_single({
+        "thought": "case-split on boolean b with wrong case_names",
+        "target_isabelle_term": "b",
+        "rule": "default",
+        "proofs": [
+            {"case_name": "t",  "body": [{"operation": "Obvious", "facts": []}]},
+            {"case_name": "f", "body": [{"operation": "Obvious", "facts": []}]},
+        ],
+    })])
+    print_header("After CaseSplit with mapped case_names", file)
+    root.print(0, file)
+    cs = root.locate_node("1")
+    gn_kids = [c for c in cast(NonLeaf_Node, cs).sub_nodes if type(c).__name__ == "GoalNode"]
+    file.write(f"GoalNode children count: {len(gn_kids)}\n")
+    for gn in gn_kids:
+        kind0 = type(cast(NonLeaf_Node, gn).sub_nodes[0]).__name__ if cast(NonLeaf_Node, gn).sub_nodes else "none"
+        file.write(f"  {gn.id}: first sub = {kind0}\n")
+        assert cast(NonLeaf_Node, gn).sub_nodes, (
+            f"GoalNode {gn.id} empty — MapCase interaction did not land a body")
+
+
+@model_test("CaseSplit_MapCaseDrop", "Test_CaseSplit_MapCaseDrop.thy", 8)
+async def _test_CaseSplit_MapCaseDrop(root: Root, file: MyIO):
+    """CaseSplit with `proofs` that uses a wrong case_name. The stub
+    answers empty `indexes` (drop). Verifies:
+      - the interaction is fired
+      - no body is attached to the unresolved GoalNode (stays empty)
+      - the unclaimed supplied appears in the FOOTER warning"""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    async def stub_fork(interaction):
+        assert isinstance(interaction, Interaction_MapCase), \
+            f"unexpected interaction type {type(interaction).__name__}"
+        print_header(f"Interaction Prompt for actual case `{interaction.actual_case}`", file)
+        await interaction.prompt(0, file)
+        # Empty indexes = drop; the supplied body stays in _proofs_by_case
+        # and should surface as a FOOTER warning after refresh.
+        return await interaction.answer(Answer(indexes=[]))
+    root.session.fork_interaction = stub_fork
+
+    root.session.age += 1
+    await root.fill("1", [CaseSplit.gen_single({
+        "thought": "case-split on boolean b; supplied name does not match any actual case",
+        "target_isabelle_term": "b",
+        "rule": "default",
+        "proofs": [
+            {"case_name": "wrong", "body": [{"operation": "Obvious", "facts": []}]},
+        ],
+    })])
+    print_header("After CaseSplit with dropped supplied", file)
+    root.print(0, file, show_warnings=True)
+
+
 @model_test("NestedHaveProof", "Test_NestedHaveProof.thy", 8)
 async def _test_NestedHaveProof(root: Root, file: MyIO):
     """A single-item batch where the item's `proof` field carries a nested
@@ -4759,6 +5201,186 @@ async def _test_InferenceRuleProofsPerSubgoal(root: Root, file: MyIO):
     unfinished: set[Node] = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+
+@model_test("CcontrIntroMatch", "Test_Ccontr_Intro_Match.thy", 14)
+async def _test_CcontrIntroMatch(root: Root, file: MyIO):
+    """Reproducer for `exception Match raised (line 675 of library/proof.ML)`
+    replayed from the real Rabinowitz proof logged at /tmp/t3 step 3.2.10.
+
+    The stack at the failure is Intro→Induction(nat_less_induct)→Branch,
+    with 7 Have steps preceding the ccontr. Earlier simpler shapes
+    (single Branch, single InferenceRule) do NOT fire the bug — only the
+    two-level CASES nest (Induction + Branch) plus accumulated local facts
+    reaches the cat_tree(BLOCK, PROP) mismatch.
+
+    Structural hypothesis: agent_server.ML:272 sets INTRO_mk_block=true →
+    INTRO''.PRT wraps in BLOCK → the enclosing single-sibling CASES PRT
+    (library/proof.ML:2374) invokes cat_tree (BLOCK _) (PROP _) →
+    cat_tree has no BLOCK pattern at lib/proof.ML:675-677 → Match.
+    """
+    from .mcp_http_server import _edit_tool_logic
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # --- Step 1: Intro (fix i, leave `i ≤ p-2` as premise) ---
+    root.session.age += 1
+    await root.fill("1", [Intro.gen_single({
+        "thought": "Introduce the universally quantified variable i, keep i≤p-2 as premise",
+        "variable_bindings": ["i"],
+        "fact_bindings": [],
+    })])
+    # --- Step 2: Induction on i via nat_less_induct ---
+    root.session.age += 1
+    await root.fill("2", [Induction.gen_single({
+        "thought": "Strong induction on i",
+        "target_isabelle_term": "i",
+        "rule": {"refer_by": "name", "name": "nat_less_induct"},
+        "variables": [
+            {"name": "i", "status": "generalized"},
+            {"name": "f", "status": "fixed"},
+            {"name": "p", "status": "fixed"},
+        ],
+    })])
+    print_header("After Intro + Induction", file)
+    root.print(0, file)
+
+    # --- Step 3: Branch on whether n ≤ ⌊sqrt(p/3)⌋ ---
+    root.session.age += 1
+    await root.fill("3", [Branch.gen_single({
+        "thought": "Case split on whether n ≤ sqrt(p/3)",
+        "cases": [
+            {"statement": {"name": "small",
+                           "english": "n small enough for h1 to apply",
+                           "isabelle": "int n ≤ ⌊sqrt (real p / (3::real))⌋"}},
+            {"statement": {"name": "large",
+                           "english": "n too large for h1 to apply directly",
+                           "isabelle": "¬ (int n ≤ ⌊sqrt (real p / (3::real))⌋)"}},
+        ]
+    })])
+    # Discharge the exhaustiveness goal 3.0
+    root.session.age += 1
+    await root.fill("3.0.1", [Obvious.gen_single({"facts": []})])
+    # Discharge case 3.1 (small)
+    root.session.age += 1
+    await root.fill("3.1.1", [Obvious.gen_single({
+        "facts": [{"refer_by": "name", "name": "h1"},
+                  {"refer_by": "name", "name": "small"}]
+    })])
+    print_header("After Branch setup + close small case", file)
+    root.print(0, file)
+
+    # --- Case 3.2 body: Rewrite + 7 Haves, matching the log ---
+    root.session.age += 1
+    await root.fill("3.2.1", [Rewrite.gen_single({
+        "thought": "unfold f n using h0",
+        "using": [{"refer_by": "name", "name": "h0"}],
+        "use system simplifiers": True,
+        "rewrite goal": True,
+        "rewrite premises": [],
+    })])
+    root.session.age += 1
+    await root.fill("3.2.2", [Have.gen_single({
+        "thought": "p is prime from h1 with k=0",
+        "name": "prime_p",
+        "statement": {"english": "p is prime", "isabelle": "prime p"},
+        "proof": [
+            {"operation": "Derive",
+             "thought": "instantiate h1 with k=0",
+             "rule": {"refer_by": "name", "name": "h1"},
+             "instantiations": [{"name": "?k", "value": "(0::nat)"}],
+             "result_name": "h1_0"},
+            {"operation": "Obvious",
+             "facts": [{"refer_by": "name", "name": "h1_0"},
+                       {"refer_by": "name", "name": "h0"}]},
+        ],
+    })])
+    root.session.age += 1
+    await root.fill("3.2.3", [Have.gen_single({
+        "thought": "p ≥ 2 since it is prime",
+        "name": "pge2",
+        "statement": {"english": "p ≥ 2", "isabelle": "p ≥ (2::nat)"},
+        "proof": [{"operation": "Obvious",
+                   "facts": [{"refer_by": "name", "name": "prime_p"},
+                             {"refer_by": "name", "name": "prime_ge_2_nat"}]}],
+    })])
+    root.session.age += 1
+    await root.fill("3.2.4", [Have.gen_single({
+        "thought": "sqrt(p/3) < real n from large + floor_less_iff",
+        "name": "sqrt_lt",
+        "statement": {"english": "sqrt(p/3) < real n",
+                      "isabelle": "sqrt (real p / (3::real)) < real n"},
+        "proof": [{"operation": "Obvious",
+                   "facts": [{"refer_by": "name", "name": "large"},
+                             {"refer_by": "name", "name": "floor_less_iff"}]}],
+    })])
+    root.session.age += 1
+    await root.fill("3.2.5", [Have.gen_single({
+        "thought": "squaring sqrt(p/3) < real n gives p/3 < n^2",
+        "name": "p_third_lt",
+        "statement": {"english": "p/3 < real n^2",
+                      "isabelle": "real p / (3::real) < (real n)^2"},
+        "proof": [{"operation": "Obvious",
+                   "facts": [{"refer_by": "name", "name": "sqrt_lt"},
+                             {"refer_by": "name", "name": "pge2"}]}],
+    })])
+    root.session.age += 1
+    await root.fill("3.2.6", [Have.gen_single({
+        "thought": "multiply by 3 to get p < 3n^2",
+        "name": "n_big",
+        "statement": {"english": "p < 3n^2",
+                      "isabelle": "p < (3::nat) * n^2"},
+        "proof": [{"operation": "Obvious",
+                   "facts": [{"refer_by": "name", "name": "p_third_lt"}]}],
+    })])
+    root.session.age += 1
+    await root.fill("3.2.7", [Have.gen_single({
+        "thought": "n ≥ 1 since 3n^2 > p ≥ 2",
+        "name": "nge1",
+        "statement": {"english": "n ≥ 1", "isabelle": "n ≥ (1::nat)"},
+        "proof": [{"operation": "Obvious",
+                   "facts": [{"refer_by": "name", "name": "n_big"},
+                             {"refer_by": "name", "name": "pge2"}]}],
+    })])
+    root.session.age += 1
+    await root.fill("3.2.8", [Have.gen_single({
+        "thought": "fn > 1",
+        "name": "fn_gt1",
+        "statement": {"english": "n^2 + n + p > 1",
+                      "isabelle": "n^2 + n + p > (1::nat)"},
+        "proof": [{"operation": "Obvious",
+                   "facts": [{"refer_by": "name", "name": "pge2"}]}],
+    })])
+    print_header("After case 3.2 setup (Rewrite + 7 Haves)", file)
+    root.print(0, file)
+
+    # --- Step 3.2.9: InferenceRule(ccontr) with positional Intro splice ---
+    #     This is the exact call shape that triggered Match in /tmp/t3.
+    root.session.age += 1
+    result, is_error = await _edit_tool_logic(
+        root.session,
+        {"target_step": "3.2.9", "action": "fill", "proof_operations": [
+            {"operation": "InferenceRule",
+             "thought": "Proof by contradiction",
+             "rule": {"refer_by": "name", "name": "ccontr"},
+             "proofs": [[
+                 {"operation": "Intro",
+                  "thought": "assume ¬ prime (n² + n + p)",
+                  "fact_bindings": ["nprime"]}
+             ]]},
+        ]})
+    file.write(f"is_error: {is_error}\n")
+    print_header("After fill(3.2.9, InferenceRule ccontr + Intro splice)", file)
+    root.print(0, file)
+
+    # Regression guard: before the cat_tree BLOCK patch, the inner Intro
+    # failed with `exception Match raised (line 675 ...)`. It must succeed
+    # now so that a future regression can't pass by accidentally matching
+    # the golden YAML.
+    intro_node = root.locate_node("3.2.10")
+    assert intro_node.status.status == EvaluationStatus.Status.SUCCESS, (
+        f"3.2.10 Intro expected SUCCESS after the cat_tree BLOCK patch, "
+        f"got {intro_node.status.status.value}")
 
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None):

@@ -1,0 +1,63 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ((1 :: int) = (1 :: int) ∧ (2 :: int) = (2 :: int)) ∧ (3 :: int) = (3 :: int)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After outer conjI (expect 2 child GoalNodes: 1.1, 1.2)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ((1 :: int) = (1 :: int) ∧ (2 :: int) = (2 :: int)) ∧ (3 :: int) = (3 :: int)
+proof:
+  - step id: 1
+    thought: Outer conjI: split ((1=1)∧(2=2)) ∧ (3=3)
+    operation: Inference Rule
+    rule:
+      - conjI: ?P ⟶ ?Q ⟶ ?P ∧ ?Q
+    derived subgoals:
+      - goal id: 1.1
+        goal: (1 :: int) = (1 :: int) ∧ (2 :: int) = (2 :: int)
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1` to provide the proof.
+      - goal id: 1.2
+        goal: (3 :: int) = (3 :: int)
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.1` to provide the proof.
+[probe] outer conjI GoalNode children: ['1.1', '1.2']
+[probe] inner conjI._state_after_beginning.top_goals() count=3: (1 :: int) = (1 :: int), (2 :: int) = (2 :: int), (3 :: int) = (3 :: int)
+[probe] inner conjI GoalNode children: ['1.1.1.1', '1.1.1.2']
+--------------------------------------------------
+After inner conjI (2 expected; 3 if leak present)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ((1 :: int) = (1 :: int) ∧ (2 :: int) = (2 :: int)) ∧ (3 :: int) = (3 :: int)
+proof:
+  - step id: 1
+    thought: Outer conjI: split ((1=1)∧(2=2)) ∧ (3=3)
+    operation: Inference Rule
+    rule:
+      - conjI: ?P ⟶ ?Q ⟶ ?P ∧ ?Q
+    derived subgoals:
+      - goal id: 1.1
+        goal: (1 :: int) = (1 :: int) ∧ (2 :: int) = (2 :: int)
+        proof:
+          - step id: 1.1.1
+            thought: Inner conjI on first subgoal: split (1=1) ∧ (2=2)
+            operation: Inference Rule
+            rule:
+              - conjI: ?P ⟶ ?Q ⟶ ?P ∧ ?Q
+            derived subgoals:
+              - goal id: 1.1.1.1
+                goal: (1 :: int) = (1 :: int)
+                proof: empty
+                Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1.1.1` to provide the proof.
+              - goal id: 1.1.1.2
+                goal: (2 :: int) = (2 :: int)
+                proof: empty
+                Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1.2.1` to provide the proof.
+      - goal id: 1.2
+        goal: (3 :: int) = (3 :: int)
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.1` to provide the proof.

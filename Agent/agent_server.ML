@@ -270,6 +270,14 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
             |> Config.put Minilang.counter_mode "none"
             |> Config.put Minilang.INTRO_split_conj true
             |> Config.put Minilang.INTRO_mk_block true
+            (* Keep `transparent_intro` off so `CONSIDER' = CONSIDER'i ∘
+               TRANSPARENT_INTRO'` does NOT invoke INTRO' internally.  If it
+               did, INTRO'' would emit a second `Goals` for the same
+               CONSIDER op and break the Python SubgoalMaker invariant that
+               every operation emits `Goals` exactly once.  Default is
+               already `false` (library/proof.ML:389); we set it explicitly
+               as belt-and-suspenders. *)
+            |> Config.put Minilang.transparent_intro false
             |> Config.put Minilang.auto_deconflict_bound true
             |> Config.put Minilang.high_auto_mode true
             |> Config.put Minilang.auto_calculation false

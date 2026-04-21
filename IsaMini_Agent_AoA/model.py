@@ -1192,6 +1192,19 @@ class Minilang_State:
         self.name = name
         self.prooftree = prooftree
         self.messages : list[Message] = [] # the messages received during executing the operation that assigns to this state
+        # Count of new subgoals that the operation producing this state opened
+        # as direct children.  Populated from a `Goals_Msg` emitted by the ML
+        # side (uniform across all SubgoalMaker-producing ops: RULE/INTRO/
+        # CASE_SPLIT/INDUCT/CONSIDER/etc.).  `None` means the operation did
+        # not emit a `Goals` (e.g. SPECIALIZE / CHAINING / LET / local DEFINE /
+        # state clone with no SKIP emission).  `0` means the operation emitted
+        # `Goals []` — explicitly "no new subgoal opened" (e.g. HAMMER closing
+        # the goal, or INTRO no-op).  SubgoalMaker reads this to decide how
+        # many child GoalNodes to create, replacing the tree-based
+        # `top_goals()` count which leaked outer siblings (the bug reported
+        # in tests Intro_no_intro_bindings / InferenceRule_in_CaseSplit /
+        # Nested_InferenceRule_Leak).
+        self.new_subgoals_count : int | None = None
     def initialized(self) -> bool:
         return self.prooftree is not None
     def prooftree_of(self) -> ML_ProofTree:
@@ -1249,6 +1262,16 @@ class Minilang_State:
             msgs = [unpack_message(msg) for msg in msgs]
             assign_to.prooftree = unpack_MLPT(tree)
             assign_to.messages = msgs
+            goals_msgs = [m for m in msgs if isinstance(m, Goals_Msg)]
+            match goals_msgs:
+                case []:
+                    assign_to.new_subgoals_count = None
+                case [gm]:
+                    assign_to.new_subgoals_count = len(gm.goals)
+                case _:
+                    raise InternalError(
+                        f"Expected at most one Goals_Msg per operation, "
+                        f"got {len(goals_msgs)} for {opr.command}")
         else:
             raise NotImplementedError("Here we should implement the execution of a list of Minilang operations")
             #msgs = opr(self, assign_to)
@@ -1273,9 +1296,13 @@ class Minilang_State:
             if assign_to is None:
                 assign_to = Minilang_State(self.connection, type(self).assign_name(), None)
             assign_to.messages = list(self.messages)
+            assign_to.new_subgoals_count = self.new_subgoals_count
             return assign_to
         ret = await self.execute(Minilang_Operation.SKIP(), assign_to)
         ret.messages = self.messages
+        # Preserve the original state's new_subgoals_count — the clone
+        # represents the same snapshot; SKIP's own emit (if any) is irrelevant.
+        ret.new_subgoals_count = self.new_subgoals_count
         return ret
     async def reset(self) -> None:
         """Remove this state from the Isabelle state table and mark as uninitialized."""
@@ -1284,6 +1311,7 @@ class Minilang_State:
         except:
             pass
         self.prooftree = None
+        self.new_subgoals_count = None
     # def search_fact(self, dnf_criterions: list[list[Search_Criterion]]) -> FactRef:
     #     fact_ref_and_props = self.connection.callback("IsaMini.lookup_fact",
     #                                                    (self.name, dnf_criterions))
@@ -2127,6 +2155,81 @@ class Interaction_InstantiateSchematics(Interaction):
             raise Interaction_BadAnswer(
                 f"Instantiation rejected by Isabelle:\n{err}")
         return insts
+
+
+class Interaction_MapCase(Interaction):
+    """Ask the agent to pick which supplied `case_name`'s body should
+    attach to an actual Isabelle case, when the agent's supplied
+    `case_name`s did not line up exactly with the cases produced by the
+    induction / case-split rule.
+
+    Fires once per unresolved actual case, from a GoalNode on first
+    refresh, when its own `case_name` is absent from the parent's
+    `_proofs_by_case` dict but the dict still has unclaimed candidates.
+
+    Reuses the `indexes` field: at most one index picked from
+    `supplied_options`; empty = drop the body (equivalent to saying
+    "none of my supplied bodies belong to this actual case").
+    Returns the selected supplied name, or None."""
+    # No search needed — restrict the fork to the answer tool only.
+    fork_allowed_tools = [TOOL_ANSWER]
+
+    def __init__(self,
+                 actual_case: str,
+                 supplied_options: list[str],
+                 kind: Literal["case-split", "induction"],
+                 case_vars: 'list[Var] | None',
+                 case_hyps: 'list[Hyp] | None',
+                 goal: 'Goal | None',
+                 ctxt_before: Context):
+        self.actual_case = actual_case
+        self.supplied_options = supplied_options
+        self.kind = kind
+        self.case_vars = case_vars
+        self.case_hyps = case_hyps
+        self.goal = goal
+        self.ctxt_before = ctxt_before
+
+    async def prompt(self, indent: int, file: MyIO) -> None:
+        print_indent(indent, file)
+        file.write(
+            f"The {self.kind} operation produced a case `{self.actual_case}` "
+            f"(as follows) that does not match any `case_name` you supplied.\n")
+        # Render the case context (vars + hyps + goal) — mirrors
+        # `GoalNode._print_header` so the agent sees this case exactly as
+        # it would in a normal goal view.
+        if self.goal is None:
+            print_indent(indent + 1, file)
+            file.write("goal: unknown, evaluation pending\n")
+        else:
+            g = self.goal
+            if self.case_vars or self.case_hyps:
+                merged_vars = {v[0]: v[1] for v in (self.case_vars or [])} | g.context.vars
+                merged_hyps = {h[0]: h[1] for h in (self.case_hyps or [])} | g.context.hyps
+                g = Goal(Context(merged_vars, merged_hyps), g.conclusion)
+            print_goal(g, indent + 1, True, file, self.ctxt_before)
+        print_indent(indent, file)
+        file.write("Is any of your supplied proof intended for this case?\n")
+        for i, name in enumerate(self.supplied_options):
+            print_indent(indent + 1, file)
+            file.write(f"{i}. {name}\n")
+        print_indent(indent, file)
+        file.write("Answer with its index if so, or with empty `indexes` to "
+                   "leave this case without a proof for now.\n")
+
+    async def answer(self, answer: Answer) -> str | None:
+        _reject_fields(answer, allow={"indexes"},
+                       hint="Select one supplied case_name by `indexes` "
+                            "(at most one), or answer with empty `indexes` "
+                            "to drop.")
+        if not answer.indexes:
+            return None
+        if len(answer.indexes) > 1:
+            raise Interaction_BadAnswer(
+                "Select at most one supplied case_name.")
+        idx = answer.indexes[0]
+        _check_index(idx, len(self.supplied_options))
+        return self.supplied_options[idx]
 
 
 ### The Abstract Model
@@ -3711,11 +3814,33 @@ class GoalNode(StdBlock):
         # Induction `proofs`), resolve it now that the case_name is known.
         # The matched entry is popped so the parent can later inspect the
         # dict to report any case_names that never matched.
+        #
+        # If exact match fails but the dict still has candidates, the
+        # agent's supplied names probably just didn't line up with the
+        # actual Isabelle case names — fork an `Interaction_MapCase` to
+        # let the agent pick the intended supplied body (or drop). The
+        # dict reference is self-nulled afterwards so this GoalNode only
+        # asks once per refresh cycle.
         if (self._pending_auto_proof is None
                 and self._pending_auto_proof_by_case is not None
                 and consider_case_msgs):
             cn = consider_case_msgs[0].case
             body = self._pending_auto_proof_by_case.pop(cn, None)
+            if body is None and self._pending_auto_proof_by_case:
+                kind: Literal["case-split", "induction"] = (
+                    "induction" if isinstance(self.parent, Induction)
+                    else "case-split")
+                interaction = Interaction_MapCase(
+                    actual_case=cn,
+                    supplied_options=list(self._pending_auto_proof_by_case.keys()),
+                    kind=kind,
+                    case_vars=self.case_vars,
+                    case_hyps=self.case_hyps,
+                    goal=self.goal(),
+                    ctxt_before=self._ctxt_before_me())
+                picked = await self.session.fork_interaction(interaction)
+                if picked is not None:
+                    body = self._pending_auto_proof_by_case.pop(picked)
             if body is not None:
                 self._pending_auto_proof = body
             self._pending_auto_proof_by_case = None
@@ -3913,23 +4038,30 @@ class SubgoalMaker(GoalContainer, StdBlock):
         raise InternalError("The given argument is not a child of this node")
     def _new_goal_node(self, goal_index: int, ml_state: Minilang_State) -> GoalNode:
         return GoalNode(NodeConfig(str(goal_index+self._initial_goal_index), ml_state, self), False, True, None)
-    def _on_regenerating_goals(self, goals: list[Goal]) -> None:
+    def _on_regenerating_goals(self, count: int) -> None:
         pass
     def _should_open_proof_block(self, s0: Minilang_State) -> _OpenSubgoalBlock:
         """Decide whether this refresh opens a subgoal block, and if so
         whether the enclosing parent block is also closed via `_close_by`.
 
         Default (Intro/InferenceRule/Branch/CaseSplit/Induction): open a
-        block iff the state has more than one top-level goal; if so, also
-        close the parent proof line (subgoals become its tail, siblings
-        after this node become meaningless).
+        block iff the ML side reported that this operation opened more
+        than one new subgoal (via the `Goals` reporter message, surfaced
+        as `Minilang_State.new_subgoals_count`).  If so, also close the
+        parent proof line (subgoals become its tail, siblings after this
+        node become meaningless).
+
+        `None` (operation emitted no `Goals`) is treated as "don't open a
+        block" — applies to state-clone paths and operations that don't
+        alter the goal stack structure.
 
         `Define` overrides this to base the decision on reporter messages
         indicating whether the deferred pat-completeness / termination
         block has been pushed onto the minilang stack; when it opens,
         it does NOT close the parent line (its block is internal and
         bracketed by an END opcode)."""
-        if len(s0.prooftree_of().top_goals()) > 1:
+        n = s0.new_subgoals_count
+        if n is not None and n > 1:
             return _OpenSubgoalBlock.YES_AND_CLOSE_PARENT_BLOCK
         return _OpenSubgoalBlock.NO
     async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
@@ -3943,12 +4075,12 @@ class SubgoalMaker(GoalContainer, StdBlock):
             raise InternalError("The prooftree of the state after beginning is not initialized, meaning the node is not refreshed")
         decision = self._should_open_proof_block(s0)
         if decision != _OpenSubgoalBlock.NO:
-            goals = s0.prooftree.top_goals()
+            goals_count = s0.new_subgoals_count or 0
             # TODO: try to reuse the existing subnodes instead of discarding them.
-            if not self._first_time and len(goals) == len(self.sub_nodes):
+            if not self._first_time and goals_count == len(self.sub_nodes):
                 pass
             else:
-                self._on_regenerating_goals(goals)
+                self._on_regenerating_goals(goals_count)
                 if (decision == _OpenSubgoalBlock.YES_AND_CLOSE_PARENT_BLOCK
                         and self.parent is not None):
                     self.parent._close_by(self)
@@ -3959,7 +4091,7 @@ class SubgoalMaker(GoalContainer, StdBlock):
                         Warning.Position.FOOTER)
                 self.sub_nodes = []
                 ml_state = await s0.clone(None)
-                for i in range(len(goals)):
+                for i in range(goals_count):
                     new_node = self._new_goal_node(i, ml_state)
                     self.sub_nodes.append(new_node)
                     # Advance to the next sibling GoalNode by cheating
@@ -3967,7 +4099,7 @@ class SubgoalMaker(GoalContainer, StdBlock):
                     # states are later overwritten with the real
                     # linear chain when each GoalNode's footer runs
                     # its own NEXT.
-                    if i < len(goals) - 1:
+                    if i < goals_count - 1:
                         ml_state = await ml_state.sorry_next(None, None)
         else:
             if self.sub_nodes:
@@ -4210,6 +4342,18 @@ class CaseSplit_Like(SubgoalMaker):
             False, True,
             auto_proof_by_case=self._proofs_by_case,
         )
+    async def _refresh_footer(self) -> FailureReason | None:
+        fail = await super()._refresh_footer()
+        if self._proofs_by_case:
+            cases_list = ", ".join(f"`{n}`" for n in self._proofs_by_case)
+            kind = "induction" if isinstance(self, Induction) else "case-split"
+            plural = len(self._proofs_by_case) > 1
+            s = "s" if plural else ""
+            verb = "are" if plural else "is"
+            msg = (f"The case{s} {cases_list} {verb} not found in the "
+                   f"resulting cases of the {kind} and {verb} thus dropped.")
+            self.warnings.append(Warning(Warning.Position.FOOTER, msg))
+        return fail
     def _rename_var(self, old_name: varname, new_name: varname) -> 'Node | None':
         if self.sub_nodes:
             return super()._rename_var(old_name, new_name)
@@ -4298,7 +4442,7 @@ class CaseSplit_Like(SubgoalMaker):
     #     node.case_vars = consider_case_msg.vars
     #     node.case_hyps = consider_case_msg.hyps
     #     return node
-    def _on_regenerating_goals(self, goals: list[Goal]) -> None:
+    def _on_regenerating_goals(self, count: int) -> None:
         self.case_name = None
         self.case_vars = None
         self.case_hyps = None
@@ -5819,7 +5963,12 @@ class Intro(SubgoalMaker):
         is_init = self._first_time
         old_bindings = self.bindings
         s = self._state_after_beginning()
-        old_goals = s.prooftree.top_goals() if s.prooftree is not None else None
+        # Use `new_subgoals_count` (from the Goals message) rather than
+        # `top_goals()` on the prooftree — the latter leaks outer-block
+        # siblings when Intro sits inside a CaseSplit case (see bug fixed
+        # by the SubgoalMaker refactor).  For term-level changes with the
+        # same count, the `bindings != old_bindings` check below covers it.
+        old_subgoals_count = s.new_subgoals_count
         fail = await super()._refresh_the_beginning_opr()
         if fail is None:
             self.running_time += 1
@@ -5873,9 +6022,9 @@ class Intro(SubgoalMaker):
         if not is_init:
             if self.bindings != old_bindings:
                 self.changed = True
-            if fail is None and old_goals is not None:
-                new_goals = self._state_after_beginning().prooftree_of().top_goals()
-                if new_goals != old_goals:
+            if fail is None and old_subgoals_count is not None:
+                new_subgoals_count = self._state_after_beginning().new_subgoals_count
+                if new_subgoals_count != old_subgoals_count:
                     self.changed = True
         return fail
     def _fixed_vars_at_me(self, ret: Vars) -> Vars:
@@ -6185,14 +6334,19 @@ class Induction(CaseSplit_Like):
     async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
         is_init = self._first_time
         old_variables = list(self.variables)
-        if is_init:
-            try:
-                _, frees, _ = await self.ml_state.check_term(self.target_isabelle_term)
-            except InternalError_UnparsedTerm as e:
-                return FailureReason(
-                    f"Syntax error in induction target `{e.term}`: {e.reason}")
-            # Remove free variables appearing in target_isabelle_term from variables list
-            self.variables[:] = [var for var in self.variables if IsaTerm.from_agent(var["name"]) not in frees]
+        try:
+            _, frees, _ = await self.ml_state.check_term(self.target_isabelle_term)
+        except InternalError_UnparsedTerm as e:
+            return FailureReason(
+                f"Syntax error in induction target `{e.term}`: {e.reason}")
+        # Free variables appearing in the induction target must not be
+        # passed as `arbitrary:` to the ML induction tactic — this triggers
+        # a degenerate HO-unification solution that yields an IH with
+        # schematic variables disconnected from the induction case variable
+        # (see Test/Induct_HO_Unif_Probe.thy and the Induction_AmendTargetFree
+        # regression). The stripping is unconditional: the ML contract
+        # forbids target-in-arbitrary on both fresh fill and amend.
+        self.variables[:] = [var for var in self.variables if IsaTerm.from_agent(var["name"]) not in frees]
         if not self._rule_resolved:
             arbitrary = [v["name"] for v in self.variables if v["status"] == "generalized"]
             fail = await self._resolve_rule(

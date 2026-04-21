@@ -1,0 +1,447 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - f: nat ⇒ nat
+  - p: nat
+premises:
+  - h0: f ?x = ?x² + ?x + p
+  - h1: int ?k ≤ ⌊sqrt (real p / (3 :: real))⌋ ⟶ prime (f ?k)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∀i≤p - (2 :: nat). prime (f i)
+proof:
+  - step id: 1
+    operation: Intro
+    fixing variables:
+      - i: nat
+    assuming premises:
+      - premise0: i ≤ p - (2 :: nat)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  prime (f i)
+--------------------------------------------------
+After Intro + Induction
+--------------------------------------------------
+variables:
+  - f: nat ⇒ nat
+  - p: nat
+premises:
+  - h0: f ?x = ?x² + ?x + p
+  - h1: int ?k ≤ ⌊sqrt (real p / (3 :: real))⌋ ⟶ prime (f ?k)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∀i≤p - (2 :: nat). prime (f i)
+proof:
+  - step id: 1
+    operation: Intro
+    fixing variables:
+      - i: nat
+    assuming premises:
+      - premise0: i ≤ p - (2 :: nat)
+  - step id: 2
+    thought: Strong induction on i
+    operation: Induction
+    target term: i
+    fixing variables:
+      - n: nat
+    assuming premises:
+      - premise0: n ≤ p - (2 :: nat)
+      - 1.IH: ∀m<n. m ≤ p - (2 :: nat) ⟶ prime (f m)
+    cases: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  prime (f n)
+--------------------------------------------------
+After Branch setup + close small case
+--------------------------------------------------
+variables:
+  - f: nat ⇒ nat
+  - p: nat
+premises:
+  - h0: f ?x = ?x² + ?x + p
+  - h1: int ?k ≤ ⌊sqrt (real p / (3 :: real))⌋ ⟶ prime (f ?k)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∀i≤p - (2 :: nat). prime (f i)
+proof:
+  - step id: 1
+    operation: Intro
+    fixing variables:
+      - i: nat
+    assuming premises:
+      - premise0: i ≤ p - (2 :: nat)
+  - step id: 2
+    thought: Strong induction on i
+    operation: Induction
+    target term: i
+    fixing variables:
+      - n: nat
+    assuming premises:
+      - premise0: n ≤ p - (2 :: nat)
+      - 1.IH: ∀m<n. m ≤ p - (2 :: nat) ⟶ prime (f m)
+    cases: empty
+  - step id: 3
+    thought: Case split on whether n ≤ sqrt(p/3)
+    operation: Branch
+    cases:
+      - goal id: 3.0
+        thought: We first show exhaustiveness of the case split
+        goal: int n ≤ ⌊sqrt (real p / (3 :: real))⌋ ∨ ¬ int n ≤ ⌊sqrt (real p / (3 :: real))⌋
+        proof:
+          - step id: 3.0.1
+            operation: Obvious
+      - goal id: 3.1
+        premises:
+          - small: int n ≤ ⌊sqrt (real p / (3 :: real))⌋
+        goal: prime (f n)
+        proof:
+          - step id: 3.1.1
+            operation: Obvious
+            with facts:
+              - h1: int ?k ≤ ⌊sqrt (real p / (3 :: real))⌋ ⟶ prime (f ?k)
+              - small: int n ≤ ⌊sqrt (real p / (3 :: real))⌋
+      - goal id: 3.2
+        premises:
+          - large: ¬ int n ≤ ⌊sqrt (real p / (3 :: real))⌋
+        goal: prime (f n)
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3.2.1` to provide the proof.
+--------------------------------------------------
+After case 3.2 setup (Rewrite + 7 Haves)
+--------------------------------------------------
+variables:
+  - f: nat ⇒ nat
+  - p: nat
+premises:
+  - h0: f ?x = ?x² + ?x + p
+  - h1: int ?k ≤ ⌊sqrt (real p / (3 :: real))⌋ ⟶ prime (f ?k)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∀i≤p - (2 :: nat). prime (f i)
+proof:
+  - step id: 1
+    operation: Intro
+    fixing variables:
+      - i: nat
+    assuming premises:
+      - premise0: i ≤ p - (2 :: nat)
+  - step id: 2
+    thought: Strong induction on i
+    operation: Induction
+    target term: i
+    fixing variables:
+      - n: nat
+    assuming premises:
+      - premise0: n ≤ p - (2 :: nat)
+      - 1.IH: ∀m<n. m ≤ p - (2 :: nat) ⟶ prime (f m)
+    cases: empty
+  - step id: 3
+    thought: Case split on whether n ≤ sqrt(p/3)
+    operation: Branch
+    cases:
+      - goal id: 3.0
+        thought: We first show exhaustiveness of the case split
+        goal: int n ≤ ⌊sqrt (real p / (3 :: real))⌋ ∨ ¬ int n ≤ ⌊sqrt (real p / (3 :: real))⌋
+        proof:
+          - step id: 3.0.1
+            operation: Obvious
+      - goal id: 3.1
+        premises:
+          - small: int n ≤ ⌊sqrt (real p / (3 :: real))⌋
+        goal: prime (f n)
+        proof:
+          - step id: 3.1.1
+            operation: Obvious
+            with facts:
+              - h1: int ?k ≤ ⌊sqrt (real p / (3 :: real))⌋ ⟶ prime (f ?k)
+              - small: int n ≤ ⌊sqrt (real p / (3 :: real))⌋
+      - goal id: 3.2
+        premises:
+          - large: ¬ int n ≤ ⌊sqrt (real p / (3 :: real))⌋
+        goal: prime (f n)
+        proof:
+          - step id: 3.2.1
+            thought: unfold f n using h0
+            operation: Rewrite
+            using:
+              - h0: f ?x = ?x² + ?x + p
+              - system simplifiers
+            targets:
+              - the goal
+            goal changes into:
+              prime (n² + n + p)
+          - step id: 3.2.2
+            thought: p is prime from h1 with k=0
+            operation: Have
+            statement:
+              english: p is prime
+              isabelle: prime p
+            name: prime_p
+            proof:
+              - step id: 3.2.2.1
+                thought: instantiate h1 with k=0
+                operation: Derive
+                rule:
+                  - h1: int ?k ≤ ⌊sqrt (real p / (3 :: real))⌋ ⟶ prime (f ?k)
+                instantiations:
+                  - ?k = (0::nat)
+                resulting facts:
+                  - h1_0: int (0 :: nat) ≤ ⌊sqrt (real p / (3 :: real))⌋ ⟶ prime (f (0 :: nat))
+              - step id: 3.2.2.2
+                operation: Obvious
+                with facts:
+                  - h1_0: int (0 :: nat) ≤ ⌊sqrt (real p / (3 :: real))⌋ ⟶ prime (f (0 :: nat))
+                  - h0: f ?x = ?x² + ?x + p
+          - step id: 3.2.3
+            thought: p ≥ 2 since it is prime
+            operation: Have
+            statement:
+              english: p ≥ 2
+              isabelle: p ≥ (2::nat)
+            name: pge2
+            proof:
+              - step id: 3.2.3.1
+                operation: Obvious
+                with facts:
+                  - prime_p: prime p
+                  - prime_ge_2_nat: prime ?p ⟶ (2 :: nat) ≤ ?p
+          - step id: 3.2.4
+            thought: sqrt(p/3) < real n from large + floor_less_iff
+            operation: Have
+            statement:
+              english: sqrt(p/3) < real n
+              isabelle: sqrt (real p / (3::real)) < real n
+            name: sqrt_lt
+            proof:
+              - step id: 3.2.4.1
+                operation: Obvious
+                with facts:
+                  - large: ¬ int n ≤ ⌊sqrt (real p / (3 :: real))⌋
+                  - floor_less_iff: (⌊?x⌋ < ?z) = (?x < of_int ?z)
+          - step id: 3.2.5
+            thought: squaring sqrt(p/3) < real n gives p/3 < n^2
+            operation: Have
+            statement:
+              english: p/3 < real n^2
+              isabelle: real p / (3::real) < (real n)^2
+            name: p_third_lt
+            proof:
+              - step id: 3.2.5.1
+                operation: Obvious
+                with facts:
+                  - sqrt_lt: sqrt (real p / (3 :: real)) < real n
+                  - pge2: (2 :: nat) ≤ p
+          - step id: 3.2.6
+            thought: multiply by 3 to get p < 3n^2
+            operation: Have
+            statement:
+              english: p < 3n^2
+              isabelle: p < (3::nat) * n^2
+            name: n_big
+            proof:
+              - step id: 3.2.6.1
+                operation: Obvious
+                with facts:
+                  - p_third_lt: real p / (3 :: real) < (real n)²
+          - step id: 3.2.7
+            thought: n ≥ 1 since 3n^2 > p ≥ 2
+            operation: Have
+            statement:
+              english: n ≥ 1
+              isabelle: n ≥ (1::nat)
+            name: nge1
+            proof:
+              - step id: 3.2.7.1
+                operation: Obvious
+                with facts:
+                  - n_big: p < (3 :: nat) * n²
+                  - pge2: (2 :: nat) ≤ p
+          - step id: 3.2.8
+            thought: fn > 1
+            operation: Have
+            statement:
+              english: n^2 + n + p > 1
+              isabelle: n^2 + n + p > (1::nat)
+            name: fn_gt1
+            proof:
+              - step id: 3.2.8.1
+                operation: Obvious
+                with facts:
+                  - pge2: (2 :: nat) ≤ p
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3.2.9` to provide the proof for the following goal.
+        pending proof goal:
+          prime (n² + n + p)
+is_error: False
+--------------------------------------------------
+After fill(3.2.9, InferenceRule ccontr + Intro splice)
+--------------------------------------------------
+variables:
+  - f: nat ⇒ nat
+  - p: nat
+premises:
+  - h0: f ?x = ?x² + ?x + p
+  - h1: int ?k ≤ ⌊sqrt (real p / (3 :: real))⌋ ⟶ prime (f ?k)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∀i≤p - (2 :: nat). prime (f i)
+proof:
+  - step id: 1
+    operation: Intro
+    fixing variables:
+      - i: nat
+    assuming premises:
+      - premise0: i ≤ p - (2 :: nat)
+  - step id: 2
+    thought: Strong induction on i
+    operation: Induction
+    target term: i
+    fixing variables:
+      - n: nat
+    assuming premises:
+      - premise0: n ≤ p - (2 :: nat)
+      - 1.IH: ∀m<n. m ≤ p - (2 :: nat) ⟶ prime (f m)
+    cases: empty
+  - step id: 3
+    thought: Case split on whether n ≤ sqrt(p/3)
+    operation: Branch
+    cases:
+      - goal id: 3.0
+        thought: We first show exhaustiveness of the case split
+        goal: int n ≤ ⌊sqrt (real p / (3 :: real))⌋ ∨ ¬ int n ≤ ⌊sqrt (real p / (3 :: real))⌋
+        proof:
+          - step id: 3.0.1
+            operation: Obvious
+      - goal id: 3.1
+        premises:
+          - small: int n ≤ ⌊sqrt (real p / (3 :: real))⌋
+        goal: prime (f n)
+        proof:
+          - step id: 3.1.1
+            operation: Obvious
+            with facts:
+              - h1: int ?k ≤ ⌊sqrt (real p / (3 :: real))⌋ ⟶ prime (f ?k)
+              - small: int n ≤ ⌊sqrt (real p / (3 :: real))⌋
+      - goal id: 3.2
+        premises:
+          - large: ¬ int n ≤ ⌊sqrt (real p / (3 :: real))⌋
+        goal: prime (f n)
+        proof:
+          - step id: 3.2.1
+            thought: unfold f n using h0
+            operation: Rewrite
+            using:
+              - h0: f ?x = ?x² + ?x + p
+              - system simplifiers
+            targets:
+              - the goal
+            goal changes into:
+              prime (n² + n + p)
+          - step id: 3.2.2
+            thought: p is prime from h1 with k=0
+            operation: Have
+            statement:
+              english: p is prime
+              isabelle: prime p
+            name: prime_p
+            proof:
+              - step id: 3.2.2.1
+                thought: instantiate h1 with k=0
+                operation: Derive
+                rule:
+                  - h1: int ?k ≤ ⌊sqrt (real p / (3 :: real))⌋ ⟶ prime (f ?k)
+                instantiations:
+                  - ?k = (0::nat)
+                resulting facts:
+                  - h1_0: int (0 :: nat) ≤ ⌊sqrt (real p / (3 :: real))⌋ ⟶ prime (f (0 :: nat))
+              - step id: 3.2.2.2
+                operation: Obvious
+                with facts:
+                  - h1_0: int (0 :: nat) ≤ ⌊sqrt (real p / (3 :: real))⌋ ⟶ prime (f (0 :: nat))
+                  - h0: f ?x = ?x² + ?x + p
+          - step id: 3.2.3
+            thought: p ≥ 2 since it is prime
+            operation: Have
+            statement:
+              english: p ≥ 2
+              isabelle: p ≥ (2::nat)
+            name: pge2
+            proof:
+              - step id: 3.2.3.1
+                operation: Obvious
+                with facts:
+                  - prime_p: prime p
+                  - prime_ge_2_nat: prime ?p ⟶ (2 :: nat) ≤ ?p
+          - step id: 3.2.4
+            thought: sqrt(p/3) < real n from large + floor_less_iff
+            operation: Have
+            statement:
+              english: sqrt(p/3) < real n
+              isabelle: sqrt (real p / (3::real)) < real n
+            name: sqrt_lt
+            proof:
+              - step id: 3.2.4.1
+                operation: Obvious
+                with facts:
+                  - large: ¬ int n ≤ ⌊sqrt (real p / (3 :: real))⌋
+                  - floor_less_iff: (⌊?x⌋ < ?z) = (?x < of_int ?z)
+          - step id: 3.2.5
+            thought: squaring sqrt(p/3) < real n gives p/3 < n^2
+            operation: Have
+            statement:
+              english: p/3 < real n^2
+              isabelle: real p / (3::real) < (real n)^2
+            name: p_third_lt
+            proof:
+              - step id: 3.2.5.1
+                operation: Obvious
+                with facts:
+                  - sqrt_lt: sqrt (real p / (3 :: real)) < real n
+                  - pge2: (2 :: nat) ≤ p
+          - step id: 3.2.6
+            thought: multiply by 3 to get p < 3n^2
+            operation: Have
+            statement:
+              english: p < 3n^2
+              isabelle: p < (3::nat) * n^2
+            name: n_big
+            proof:
+              - step id: 3.2.6.1
+                operation: Obvious
+                with facts:
+                  - p_third_lt: real p / (3 :: real) < (real n)²
+          - step id: 3.2.7
+            thought: n ≥ 1 since 3n^2 > p ≥ 2
+            operation: Have
+            statement:
+              english: n ≥ 1
+              isabelle: n ≥ (1::nat)
+            name: nge1
+            proof:
+              - step id: 3.2.7.1
+                operation: Obvious
+                with facts:
+                  - n_big: p < (3 :: nat) * n²
+                  - pge2: (2 :: nat) ≤ p
+          - step id: 3.2.8
+            thought: fn > 1
+            operation: Have
+            statement:
+              english: n^2 + n + p > 1
+              isabelle: n^2 + n + p > (1::nat)
+            name: fn_gt1
+            proof:
+              - step id: 3.2.8.1
+                operation: Obvious
+                with facts:
+                  - pge2: (2 :: nat) ≤ p
+          - step id: 3.2.9
+            thought: Proof by contradiction
+            operation: Inference Rule
+            rule:
+              - ccontr: (¬ ?P ⟶ False) ⟶ ?P
+            derived goal:
+              ¬ prime (n² + n + p) ⟶ False
+          - step id: 3.2.10
+            thought: assume ¬ prime (n² + n + p)
+            operation: Intro
+            assuming premises:
+              - nprime: ¬ prime (n² + n + p)
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3.2.11` to provide the proof for the following goal.
+        pending proof goal:
+          False

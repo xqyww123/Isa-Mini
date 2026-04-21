@@ -2,20 +2,22 @@
 Initial YAML
 --------------------------------------------------
 variables:
+  - Q: bool ⇒ bool
   - b: bool
   - P: bool ⇒ bool
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: P b
+goal: P b ∨ Q b
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After CaseSplit
 --------------------------------------------------
 variables:
+  - Q: bool ⇒ bool
   - b: bool
   - P: bool ⇒ bool
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: P b
+goal: P b ∨ Q b
 proof:
   - step id: 1
     thought: Case split on boolean b
@@ -25,53 +27,26 @@ proof:
       - goal id: 1.True
         premises:
           - True.prem0: b
-        goal: P True
+        goal: P True ∨ Q True
         proof: empty
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.1` to provide the proof.
       - goal id: 1.False
         premises:
           - False.prem0: ¬ b
-        goal: P False
+        goal: P False ∨ Q False
         proof: empty
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.1` to provide the proof.
-[probe] 1.True.ml_state.top_goals() count=2
-[probe]   [0] P True
-[probe]   [1] P b
+[probe] InferenceRule._state_after_beginning.top_goals() count=2: P True, P b ∨ Q b
+[probe] InferenceRule sub_nodes ids: []
 --------------------------------------------------
-edit_message: Intro under 1.True
---------------------------------------------------
-Filled step 1.True.1.
-Outline:
-  step 1: CaseSplit b (line 0)
-    - 1.True (line 0)
-      premises:
-        - True.prem0: b
-      step 1.True.1: Intro (line 0)
-      Error: Unfinished Proof (line 30). Call command `edit` with action `fill` and target step `1.True.2`
-      goal: P True
-    - 1.False (line 0)
-      premises:
-        - False.prem0: ¬ b
-      Error: Unfinished Proof (line 36). Fill step `1.False.1`
-      goal: P False
----------------
---------------------------------------------------
-Intro node print (1.True.1)
---------------------------------------------------
-- step id: 1.True.1
-  thought: Rename the case hypothesis
-  operation: Intro
-[probe] Intro._state_after_beginning.top_goals() count=2
-[probe]   [0] P True
-[probe]   [1] P b
---------------------------------------------------
-Full tree after Intro
+After InferenceRule (expect spurious 2nd sibling-leak subgoal)
 --------------------------------------------------
 variables:
+  - Q: bool ⇒ bool
   - b: bool
   - P: bool ⇒ bool
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: P b
+goal: P b ∨ Q b
 proof:
   - step id: 1
     thought: Case split on boolean b
@@ -81,17 +56,21 @@ proof:
       - goal id: 1.True
         premises:
           - True.prem0: b
-        goal: P True
+        goal: P True ∨ Q True
         proof:
           - step id: 1.True.1
-            thought: Rename the case hypothesis
-            operation: Intro
+            thought: Apply disjI1 (produces exactly 1 subgoal from disjunction)
+            operation: Inference Rule
+            rule:
+              - disjI1: ?P ⟶ ?P ∨ ?Q
+            derived goal:
+              P True
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.2` to provide the proof for the following goal.
         pending proof goal:
           P True
       - goal id: 1.False
         premises:
           - False.prem0: ¬ b
-        goal: P False
+        goal: P False ∨ Q False
         proof: empty
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.1` to provide the proof.

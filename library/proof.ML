@@ -14,6 +14,13 @@ val context_of  : state -> Proof.context
 val leading_proof_sequent_of : state -> thm
 val equiv_proof_state : state * state -> bool
 val num_goals   : state -> int
+val goals_of'   : thm -> term list  (* extract the list of subgoal terms
+                                       from a (possibly-protected) proof
+                                       state theorem — walks through the
+                                       nested `HOL.GOAL` wrappers that
+                                       `protect_goals` produces, whereas
+                                       `Thm.prems_of` would stop at the
+                                       outer `Pure.imp` chain *)
 val map_context : (Proof.context -> Proof.context) -> state -> state
 val schematic_vars_of_leading_goal : state -> (indexname * typ) list
 
@@ -668,6 +675,8 @@ fun print_state ((_,SK),_,_) = print_stack SK
 fun cat_tree (PROP (items, goal)) (PROP (items', _)) = PROP (cat_items items items', goal)
   | cat_tree (BUNDL (items, goal)) (PROP (items', _)) = BUNDL (cat_items items items', goal)
   | cat_tree T (BUNDL (items', goals)) = BUNDL (items', cat_tree T (hd goals) :: tl goals)
+  | cat_tree (BLOCK T) U = BLOCK (cat_tree T U)
+  | cat_tree T (BLOCK U) = BLOCK (cat_tree T U)
 
 fun atomize_tree ctxt (PROP (items, goal)) = PROP (items, Object_Logic.atomize_term ctxt goal)
   | atomize_tree ctxt (BUNDL (items, goal)) = BUNDL (items, map (atomize_tree ctxt) goal)
@@ -1516,7 +1525,16 @@ fun raw_apply msg report tac timeout (ctxt, HHF (st, facts) :: L) =
                | NONE      => Seq.pull (tac (ctxt, st)) )
         of NONE => raise OPR_FAIL (PROOF_FAIL, msg)
          | SOME (Seq.Result (ctxt', st'), _) =>
-            let val new_goals = Thm.prems_of st'
+            (* Emit only the NEW subgoals introduced by this tactic
+               application (which always targets subgoal 1), not the full
+               prems list. If the pre-state `st` had K prems and the rule
+               adds M prems in place of subgoal 1, st' has K-1+M prems
+               with the M new ones at positions 1..M. Dropping the K-1
+               siblings is crucial for correct child-count reporting when
+               the tactic runs inside an outer subgoal context (e.g.
+               nested InferenceRule). *)
+            let val n_new = Thm.nprems_of st' - Thm.nprems_of st + 1
+                val new_goals = take n_new (Thm.prems_of st')
              in report (Goals new_goals)
               ; (ctxt', HHF (protect_goals st', facts) :: L)
             end
@@ -2997,7 +3015,13 @@ fun RULE' [] raw_facts (SK as (ctxt, _)) =
                #> Config.get ctxt auto_deconflict_bound ? deconflict_bound_names_thm ctxt)
      |> Seq.pull
      |> (fn SOME (st', _) =>
-              let val new_goals = Thm.prems_of st'
+              (* Emit only the newly-opened subgoals (M = new prems from
+                 rule), not the whole prems list, so nested RULE
+                 applications get a child count aligned with "subgoals
+                 this rule opened" — not "all remaining prems on the top
+                 HHF".  Mirrors the same fix in `raw_apply` above. *)
+              let val n_new = Thm.nprems_of st' - Thm.nprems_of st + 1
+                  val new_goals = take n_new (Thm.prems_of st')
                in get_reporter () (Goals new_goals)
                 ; (ctxt, HHF (protect_goals st', items) :: SK)
               end
@@ -3524,8 +3548,15 @@ fun CONSIDER'i raw_dnf (ctxt0, HHF (st0, items0) :: S) =
 
       val goal0= map (#1 o #4) conj_clauses
               |> foldr1 (fn (A,B) => \<^Const>\<open>disj\<close> $ A $ B)
-              |> (fn X => HOLogic.Trueprop $ X) 
-      val _ = get_reporter () (Goals [goal0])
+              |> (fn X => HOLogic.Trueprop $ X)
+      (* CONSIDER opens 1 + N subgoals as user-facing children:
+         - goal0: the exhaustiveness disjunction (prove this first)
+         - N case bodies: prove the original goal under each case's assumption
+         Each case body's goal term is the original leading goal of `st0`.
+         Emit all N+1 so the Python SubgoalMaker's Goals-based child count
+         matches the actual stack structure. *)
+      val case_body = fst (Logic.dest_implies (Thm.prop_of st0))
+      val _ = get_reporter () (Goals (goal0 :: map (K case_body) conj_clauses))
       val goal = goal0
               |> Thm.cterm_of params_ctxt
               |> Goal.init
@@ -4707,13 +4738,20 @@ fun run_phase_2 outer_ctxt lthy2 {term_goal, term_afterqed}
              BUNDL (outer_items,
                     [BLOCK t, print_stack [HHF (outer_st, outer_items)]])
            val _ = get_reporter () (Internal TERMINATION_PROOF_OPENED)
+           (* Emit `Goals` with the actual residual termination subgoal
+              terms so consumers (Python SubgoalMaker, translator's
+              `(*goal: ...*)` annotations) see both the correct count
+              and the correct contents.  Use `goals_of'` because `init_st`
+              is in Minilang's protected form (`protect_goals` nests
+              subgoals inside `HOL.GOAL` wrappers); `Thm.prems_of` would
+              only walk the outer `Pure.imp` chain and under-count. *)
+           val _ = get_reporter () (Goals (goals_of' init_st))
          in
            (lthy_for_user,
             HHF (init_st, empty_items)
             :: ENDBLK T_END
             :: MAGIC (term_cb, term_prt, NO_PARAM)
             :: SK)
-           |> report_goal
          end)
 
 (* Does a pattern match any subterm of the given term? *)
@@ -4920,13 +4958,16 @@ fun FUN_by_fun_ext fixes specs config metric_strs open_on_fail
           BUNDL (outer_items,
                  [BLOCK t, print_stack [HHF (outer_st, outer_items)]])
         val _ = get_reporter () (Internal PAT_COMPLETENESS_PROOF_OPENED)
+        (* Same rationale as the termination-partial branch: emit the
+           actual residual pat-completeness goal terms via `goals_of'`
+           on the protected `pat_state_for_stack`. *)
+        val _ = get_reporter () (Goals (goals_of' pat_state_for_stack))
       in
         (lthy_for_user,
          HHF (pat_state_for_stack, empty_items)
          :: ENDBLK T_END
          :: MAGIC (pat_cb, pat_prt, NO_PARAM)
          :: SK)
-        |> report_goal
       end
   end
 

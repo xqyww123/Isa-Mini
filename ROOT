@@ -9,6 +9,7 @@ session Minilang_Test in Test = Minilang +
     Fun_In_Proof_Test
     Fun_Termination_Examples
     Inductive_Cases_Simps_Demo
+    Induct_HO_Unif_Probe
 
 session Minilang_Translator in translator = Minilang +
   sessions

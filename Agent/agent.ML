@@ -340,6 +340,16 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (split_conj: 
           auto_introduced = ([], []),
           final = ([], [])
         }))
+        (* Also emit `Goals` so the Python side's unified count-based
+           block-opening check in `SubgoalMaker` sees "no new subgoals
+           opened" for this no-op Intro.  Use `goals_of'` (not
+           `Thm.prems_of`) because the state may be in Minilang's
+           protected form with nested `HOL.GOAL` wrappers, where
+           `prems_of` would only walk the outer `Pure.imp` chain.  We
+           `take 1` — the state is unchanged, so it's semantically one
+           "unchanged leading goal", matching `report_goal`. *)
+        val _ = Minilang.get_reporter ()
+                  (Minilang.Goals (Minilang.goals_of' st |> take 1))
       in (([], []), s) end
     else
       let
@@ -477,7 +487,21 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (split_conj: 
           final = (var_bindings_final, prem_bindings_final)
         }))
 
-        (* Step 11: Return results *)
+        (* Step 11: Emit `Goals` with the actual subgoal terms Intro
+           opened as direct children.  The state stored on the stack is
+           in Minilang's protected form — `protect_goals` nests
+           successive subgoals inside `HOL.GOAL` wrappers — so
+           `Thm.prems_of` would only walk the outer `Pure.imp` chain
+           and under-count.  `Minilang.goals_of'` walks through the
+           nested GOALs and returns the correct list of terms.  Done at
+           AUTO_INTRO (the agent-facing boundary) rather than inside
+           INTRO'' to prevent double-emit when INTRO'' is called
+           internally by SIMPLIFY / CRUSH / TRANSPARENT_INTRO'. *)
+        val _ = Minilang.get_reporter ()
+                  (Minilang.Goals (Minilang.goals_of'
+                                     (Minilang.leading_proof_sequent_of s')))
+
+        (* Step 12: Return results *)
       in
         ((var_bindings_final, prem_bindings_final), s')
       end
@@ -1098,12 +1122,41 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
         in s' end
     | SKIP => s
 
-local 
+local
 val keywords = Thy_Header.get_keywords @{theory Pure}
+
+(* Qualified fact names whose first segment is numeric -- e.g. "1.IH"
+   from `nat_less_induct`'s `Rule_Cases.extract_case` -- tokenize as
+   three separate tokens [Nat "1", ".", Ident "IH"] (scan_longid needs
+   both segments to be identifiers), so Parse.thm consumes only "1"
+   and leaves ".IH" unconsumed. Fold such <Nat> "." <seg> ("." <seg>)*
+   runs into a single Str token so Parse.thm's name-position path
+   accepts them, while attribute [...] and selector (...) groups after
+   the name remain untouched. *)
+fun merge_qualified_nat_names toks =
+  let
+    fun is_dot t = Token.content_of t = "."
+    fun is_name_seg t = member (op =)
+          [Token.Ident, Token.Long_Ident, Token.Nat] (Token.kind_of t)
+    fun scan (acc, t :: u :: rest) =
+          if is_dot t andalso is_name_seg u
+          then scan (acc ^ "." ^ Token.content_of u, rest)
+          else (acc, t :: u :: rest)
+      | scan (acc, rest) = (acc, rest)
+    fun walk (t :: u :: rest) =
+          if Token.kind_of t = Token.Nat andalso is_dot u
+          then
+            let val (name, rest') = scan (Token.content_of t, u :: rest)
+             in Token.make_string (name, Token.pos_of t) :: walk rest' end
+          else t :: walk (u :: rest)
+      | walk xs = xs
+  in walk toks end
+
 fun read_fact src =
   let val symbols = Input.source_explode (Input.string src)
       val toks = Token.tokenize keywords {strict = true} symbols
               |> filter Token.is_proper
+              |> merge_qualified_nat_names
    in case Scan.read Token.stopper Parse.thm toks
         of SOME fact => fact
          | NONE => error ("Cannot parse \"" ^ src ^ "\" as a fact reference")
