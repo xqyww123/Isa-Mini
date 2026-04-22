@@ -2,75 +2,66 @@
 Initial YAML
 --------------------------------------------------
 variables:
-  - Q: bool ⇒ bool
   - b: bool
   - P: bool ⇒ bool
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: P b ∨ Q b
+goal: P b
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
-After CaseSplit
+After fill with wrong names (both dropped)
 --------------------------------------------------
 variables:
-  - Q: bool ⇒ bool
   - b: bool
   - P: bool ⇒ bool
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: P b ∨ Q b
+goal: P b
 proof:
   - step id: 1
-    thought: Case split on boolean b
+    thought: case-split on b with wrong names (to be amended)
     operation: CaseSplit
     target term: b
     cases:
       - goal id: 1.True
         premises:
           - True.prem0: b
-        goal: P True ∨ Q True
+        goal: P True
         proof: empty
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.1` to provide the proof.
       - goal id: 1.False
         premises:
           - False.prem0: ¬ b
-        goal: P False ∨ Q False
+        goal: P False
         proof: empty
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.1` to provide the proof.
-[probe] InferenceRule: new_subgoals_count=1, display_goals_count=1
-[probe] InferenceRule sub_nodes ids: []
+    notice:
+      - The cases `wrong1`, `wrong2` are not found in the resulting cases of the case-split and are thus dropped.
 --------------------------------------------------
-After InferenceRule (expect spurious 2nd sibling-leak subgoal)
+After amend with correct names
 --------------------------------------------------
 variables:
-  - Q: bool ⇒ bool
   - b: bool
   - P: bool ⇒ bool
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: P b ∨ Q b
+goal: P b
 proof:
   - step id: 1
-    thought: Case split on boolean b
+    thought: case-split on b with correct names
     operation: CaseSplit
     target term: b
     cases:
       - goal id: 1.True
         premises:
           - True.prem0: b
-        goal: P True ∨ Q True
-        proof:
-          - step id: 1.True.1
-            thought: Apply disjI1 (produces exactly 1 subgoal from disjunction)
-            operation: Inference Rule
-            rule:
-              - disjI1: ?P ⟶ ?P ∨ ?Q
-            derived goal:
-              P True
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.2` to provide the proof for the following goal.
-        pending proof goal:
-          P True
+        goal: P True
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.1` to provide the proof.
       - goal id: 1.False
         premises:
           - False.prem0: ¬ b
-        goal: P False ∨ Q False
+        goal: P False
         proof: empty
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.1` to provide the proof.
+    notice:
+      - The cases `True`, `False` are not found in the resulting cases of the case-split and are thus dropped.
+Interactions after amend: 0 (expected 0)

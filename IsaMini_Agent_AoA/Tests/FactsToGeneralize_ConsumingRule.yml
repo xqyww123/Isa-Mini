@@ -1,0 +1,77 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+variables:
+  - k: int
+  - i: int
+  - Q: int ⇒ bool
+goal: True
+proof: empty
+--------------------------------------------------
+After Have h
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+variables:
+  - k: int
+  - i: int
+  - Q: int ⇒ bool
+goal: True
+proof:
+  - step id: 1
+    thought: local fact about induction target i
+    operation: Have
+    statement:
+      english: zero is at most i
+      isabelle: (0::int) \<le> i
+    name: h
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: int) ≤ i
+--------------------------------------------------
+After Induction (consumes=1 rule + facts_to_generalize)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+variables:
+  - k: int
+  - i: int
+  - Q: int ⇒ bool
+goal: True
+proof:
+  - step id: 1
+    thought: local fact about induction target i
+    operation: Have
+    statement:
+      english: zero is at most i
+      isabelle: (0::int) \<le> i
+    name: h
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: int) ≤ i
+  - step id: 2
+    thought: int_le_induct with schematic ?k and carried fact h
+    operation: Induction
+    target term: i
+    facts to generalize: h
+    cases:
+      - goal id: 2.base
+        goal: i ≤ k
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.base.1` to provide the proof.
+      - goal id: 2.Prem0
+        goal: True
+        proof: empty
+      - goal id: 2.Prem1
+        premises:
+          - Prem1.prem0: i ≤ k
+          - Prem1.prem1: (0 :: int) ≤ i ⟶ True
+        goal: True
+        proof: empty
+
+Observed interaction: rule=int_le_induct
+  schematic_vars: [['?k', 'int']]
+  consume_premises: ['i \\<le> ?k']
+
+All case-hyp names across induct subtree: ['h', 'h', 'Prem1.prem0', 'Prem1.prem1']

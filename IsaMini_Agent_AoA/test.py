@@ -23,7 +23,7 @@ class TestCase(ABC):
         self.file = file
         self.line = line
     @abstractmethod
-    async def run(self, connection: Connection, log_dir: str, global_context: Context, ptree: ML_ProofTree) -> Root:
+    async def run(self, connection: Connection, log_dir: str, global_context: Context, ptree: tuple['Goal | None', int]) -> Root:
         raise NotImplementedError("Subclass must implement run method")
 
 type _TestOpr = Callable[[Root, MyIO], Union[None, Awaitable[None]]]
@@ -32,7 +32,7 @@ class ModelTestCase(TestCase):
     def __init__(self, name : str, file: str, line: int, opr: _TestOpr):
         super().__init__(name, file, line)
         self.opr = opr
-    async def run(self, connection: Connection, log_dir: str, global_context: Context, ptree: ML_ProofTree) -> Root:
+    async def run(self, connection: Connection, log_dir: str, global_context: Context, ptree: tuple['Goal | None', int]) -> Root:
         def show_colored_diff(actual: str, expected_path: str, test_name: str):
             """Write actual to a temp file and display colored diff against expected."""
             with tempfile.NamedTemporaryFile(mode='w', suffix='.actual.yaml', delete=False) as actual_file:
@@ -1164,16 +1164,13 @@ async def _test_Intro_no_intro_bindings(root: Root, file: MyIO):
     })])
     print_header("After CaseSplit", file)
     root.print(0, file)
-    # === DEBUG PROBE: verify whether 1.True's ml_state carries both cases' top_goals ===
+    # === DEBUG PROBE ===
     true_goal = root.locate_node("1.True")
-    pt = true_goal.ml_state.prooftree
-    if pt is not None:
-        tgs = pt.top_goals()
-        file.write(f"[probe] 1.True.ml_state.top_goals() count={len(tgs)}\n")
-        for i, g in enumerate(tgs):
-            file.write(f"[probe]   [{i}] {g.conclusion.unicode}\n")
-    else:
-        file.write("[probe] 1.True.ml_state.prooftree is None\n")
+    s = true_goal.ml_state
+    file.write(f"[probe] 1.True: display_goals_count={s.display_goals_count}")
+    if s.leading_goal:
+        file.write(f", leading={s.leading_goal.conclusion.unicode}")
+    file.write("\n")
     # Step 1.True.1: Intro with a fact_binding. Empirically verified via
     # `ml_state.need_intro(...)` probe that both need_intro(True) and
     # need_intro(False) return False at `1.True` (the case hypothesis is
@@ -1192,24 +1189,10 @@ async def _test_Intro_no_intro_bindings(root: Root, file: MyIO):
     print_header("Intro node print (1.True.1)", file)
     intro_node = root.locate_node("1.True.1")
     intro_node.print(0, file)
-    # === DEBUG PROBE: Intro's _state_after_beginning top_goals ===
+    # === DEBUG PROBE ===
     sab = intro_node._state_after_beginning()
-    pt = sab.prooftree
-    if pt is not None:
-        tgs = pt.top_goals()
-        file.write(f"[probe] Intro._state_after_beginning.top_goals() count={len(tgs)}\n")
-        for i, g in enumerate(tgs):
-            file.write(f"[probe]   [{i}] {g.conclusion.unicode}\n")
-    else:
-        file.write("[probe] Intro._state_after_beginning.prooftree is None\n")
-    # Also check each of Intro's sub_nodes' ml_state
-    for child in intro_node.sub_nodes:
-        cpt = child.ml_state.prooftree
-        if cpt is not None:
-            tgs = cpt.top_goals()
-            file.write(f"[probe] Intro.sub[{child.id}].ml_state.top_goals() count={len(tgs)}: ")
-            file.write(", ".join(g.conclusion.unicode for g in tgs))
-            file.write("\n")
+    file.write(f"[probe] Intro: new_subgoals_count={sab.new_subgoals_count}, display_goals_count={sab.display_goals_count}\n")
+    file.write(f"[probe] Intro sub_nodes: {[c.id for c in cast(NonLeaf_Node, intro_node).sub_nodes]}\n")
     print_header("Full tree after Intro", file)
     root.print(0, file)
 
@@ -1253,17 +1236,10 @@ async def _test_InferenceRule_in_CaseSplit(root: Root, file: MyIO):
         "thought": "Apply disjI1 (produces exactly 1 subgoal from disjunction)",
         "rule": {"refer_by": "name", "name": "disjI1"}
     })])
-    # === DEBUG PROBE: confirm the sibling leak on the InferenceRule node ===
+    # === DEBUG PROBE ===
     ir_node = root.locate_node("1.True.1")
     sab = ir_node._state_after_beginning()
-    pt = sab.prooftree
-    if pt is not None:
-        tgs = pt.top_goals()
-        file.write(f"[probe] InferenceRule._state_after_beginning.top_goals() count={len(tgs)}: ")
-        file.write(", ".join(g.conclusion.unicode for g in tgs))
-        file.write("\n")
-    else:
-        file.write("[probe] InferenceRule._state_after_beginning.prooftree is None\n")
+    file.write(f"[probe] InferenceRule: new_subgoals_count={sab.new_subgoals_count}, display_goals_count={sab.display_goals_count}\n")
     file.write(f"[probe] InferenceRule sub_nodes ids: {[c.id for c in cast(NonLeaf_Node, ir_node).sub_nodes]}\n")
     print_header("After InferenceRule (expect spurious 2nd sibling-leak subgoal)", file)
     root.print(0, file)
@@ -1310,12 +1286,7 @@ async def _test_Nested_InferenceRule_Leak(root: Root, file: MyIO):
     })])
     inner_ir = root.locate_node("1.1.1")
     sab = inner_ir._state_after_beginning()
-    pt = sab.prooftree
-    if pt is not None:
-        tgs = pt.top_goals()
-        file.write(f"[probe] inner conjI._state_after_beginning.top_goals() count={len(tgs)}: ")
-        file.write(", ".join(g.conclusion.unicode for g in tgs))
-        file.write("\n")
+    file.write(f"[probe] inner conjI: new_subgoals_count={sab.new_subgoals_count}, display_goals_count={sab.display_goals_count}\n")
     inner_kids = [c.id for c in cast(NonLeaf_Node, inner_ir).sub_nodes
                   if type(c).__name__ == "GoalNode"]
     file.write(f"[probe] inner conjI GoalNode children: {inner_kids}\n")
@@ -3928,6 +3899,123 @@ async def _test_FactsToGeneralize_Filter(root: Root, file: MyIO):
         "expected unfound warning for `bogus_name`"
 
 
+@model_test("FactsToGeneralize_ConsumingRule",
+            "Test_FactsToGeneralize_ConsumingRule.thy", 36)
+async def _test_FactsToGeneralize_ConsumingRule(root: Root, file: MyIO):
+    """Combined coverage: `facts_to_generalize` path interoperates with a
+    consumes >= 1 induction rule.
+
+    Scenario:
+      - Outer fixes: `i k :: int`, `Q :: int \\<Rightarrow> bool`; goal `True`.
+      - Step 1: `Have h: \"0 \\<le> i\"` — a local fact mentioning the
+        induction target `i`.
+      - Step 2: `Induction i rule: int_le_induct` with
+        `facts_to_generalize = [h]`.
+
+    `int_le_induct` has consumes = 1 with a schematic `?k` in the
+    consume premise `?i \\<le> ?k`. After the target instantiates `?i`
+    to `i`, `?k` remains schematic, triggering
+    `Interaction_InstantiateSchematics`; this test stubs that
+    interaction to answer `?k = k`. Under
+    `consumes_policy = \"subgoals\"` (the agent session default), the
+    consume premise is NOT discharged — it surfaces as a Prem0
+    subgoal.
+
+    What this verifies:
+      1. The schematic-instantiation interaction is actually forked
+         for a consumes >= 1 rule, and its `rule_name` / `schematic_vars`
+         payload matches expectations.
+      2. `facts_to_generalize` survives across a consumes >= 1 rule —
+         i.e. the TAG-wrapped conjunction routed through the
+         dedicated `Method.insert_tac` channel (proof.ML:INDUCT')
+         is NOT eaten by `Rule_Cases.consume`, and `update_tampered`
+         restores the fact under its original name `h` in the
+         induction case context.
+
+    This is the agent-level companion of `Consumes_Validation_Test.thy`:
+    together they guard both the ML-level insertion channel and the
+    full agent end-to-end path against regressions in the
+    `consumes >= 1` + `facts_to_generalize` combination.
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Step 1: introduce a local fact whose prop mentions `i` (the
+    # induction target). This is the fact we expect to see restored
+    # by name in the induction case context.
+    await root.fill("1", [Have.gen_single({
+        "thought": "local fact about induction target i",
+        "statement": {
+            "english": "zero is at most i",
+            "isabelle": r"(0::int) \<le> i",
+        },
+        "name": "h",
+    })])
+    print_header("After Have h", file)
+    root.print(0, file)
+
+    # Stub the interaction channel: when the agent session forks an
+    # InstantiateSchematics for int_le_induct, answer ?k = k.
+    observed_interaction: 'list[Interaction_InstantiateSchematics]' = []
+    async def stub_fork(interaction):
+        if isinstance(interaction, Interaction_InstantiateSchematics):
+            observed_interaction.append(interaction)
+            return await interaction.answer(Answer(instantiations=[("?k", "k")]))
+        raise InternalError(
+            f"Unexpected interaction forked: {type(interaction).__name__}")
+    root.session.fork_interaction = stub_fork
+
+    # Step 2: Induction on i via int_le_induct, carrying `h` through.
+    root.session.age += 1
+    await root.fill("2", [Induction.gen_single({
+        "thought": "int_le_induct with schematic ?k and carried fact h",
+        "target_isabelle_term": "i",
+        "rule": {"refer_by": "name", "name": "int_le_induct"},
+        "variables": [
+            {"name": "i", "status": "generalized"},
+            {"name": "k", "status": "fixed"},
+            {"name": "Q", "status": "fixed"},
+        ],
+        "facts_to_generalize": [{"refer_by": "name", "name": "h"}],
+    })])
+    print_header("After Induction (consumes=1 rule + facts_to_generalize)", file)
+    root.print(0, file)
+
+    # Assertion 1: schematic instantiation interaction was triggered
+    # exactly once, for the expected rule, with `?k` as the sole var.
+    assert len(observed_interaction) == 1, (
+        f"Expected exactly one InstantiateSchematics fork, got "
+        f"{len(observed_interaction)}")
+    interaction = observed_interaction[0]
+    file.write(f"\nObserved interaction: rule={interaction.rule_name}\n")
+    file.write(f"  schematic_vars: {interaction.schematic_vars}\n")
+    file.write(f"  consume_premises: {interaction.consume_premises}\n")
+    assert interaction.rule_name == "int_le_induct", (
+        f"Expected rule_name=int_le_induct, got {interaction.rule_name!r}")
+    sv_names = [n for n, _ in interaction.schematic_vars]
+    assert sv_names == ["?k"], (
+        f"Expected schematic_vars=[?k], got {sv_names}")
+
+    # Assertion 2: `h` restored by original name in some case context.
+    induct_node = root.locate_node("2")
+    all_hyp_names: list[str] = []
+    def collect(node):
+        case_hyps = getattr(node, "case_hyps", None)
+        if case_hyps:
+            for hname, _ in case_hyps:
+                all_hyp_names.append(
+                    hname.unicode if hasattr(hname, "unicode") else str(hname))
+        for sub in getattr(node, "sub_nodes", []) or []:
+            collect(sub)
+    collect(induct_node)
+    file.write(f"\nAll case-hyp names across induct subtree: {all_hyp_names}\n")
+    assert "h" in all_hyp_names, (
+        f"`h` should be restored by its original name in the induction "
+        f"case context; found case_hyps = {all_hyp_names}. If `h` is "
+        f"missing, the `facts_to_generalize` → TAG-wrap → "
+        f"`update_tampered` round-trip broke under consumes >= 1.")
+
+
 @model_test("HOL_TAG_Leak", "Test_HOL_TAG_Leak.thy", 31)
 async def _test_HOL_TAG_Leak(root: Root, file: MyIO):
     """REGRESSION: HOL.TAG leaks into the induction hypothesis presented
@@ -4815,6 +4903,208 @@ async def _test_CaseSplit_MapCaseDrop(root: Root, file: MyIO):
     })])
     print_header("After CaseSplit with dropped supplied", file)
     root.print(0, file, show_warnings=True)
+
+
+@model_test("CaseSplit_MapCaseMixedPick", "Test_CaseSplit_MapCaseMixedPick.thy", 8)
+async def _test_CaseSplit_MapCaseMixedPick(root: Root, file: MyIO):
+    """Mixed path: one supplied case_name matches exactly (`True`), one is
+    wrong (`xxx`). Only ONE interaction should fire (for `False`); the
+    stub picks index 0 to map `xxx → False`. Verifies the exact-match
+    path and the interaction path coexist cleanly."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    interaction_count = [0]
+    async def stub_fork(interaction):
+        interaction_count[0] += 1
+        assert isinstance(interaction, Interaction_MapCase), \
+            f"unexpected interaction type {type(interaction).__name__}"
+        print_header(f"Interaction Prompt for actual case `{interaction.actual_case}`", file)
+        await interaction.prompt(0, file)
+        return await interaction.answer(Answer(indexes=[0]))
+    root.session.fork_interaction = stub_fork
+
+    root.session.age += 1
+    await root.fill("1", [CaseSplit.gen_single({
+        "thought": "case-split on boolean b: one exact match, one mismatch",
+        "target_isabelle_term": "b",
+        "rule": "default",
+        "proofs": [
+            {"case_name": "True", "body": [{"operation": "Obvious", "facts": []}]},
+            {"case_name": "xxx",  "body": [{"operation": "Obvious", "facts": []}]},
+        ],
+    })])
+    print_header("After CaseSplit (mixed exact + mapped)", file)
+    root.print(0, file, show_warnings=True)
+    file.write(f"Interactions fired: {interaction_count[0]}\n")
+    assert interaction_count[0] == 1, \
+        f"expected exactly 1 interaction (for the mismatched `xxx`), got {interaction_count[0]}"
+
+
+@model_test("CaseSplit_MapCaseMixedDrop", "Test_CaseSplit_MapCaseMixedDrop.thy", 8)
+async def _test_CaseSplit_MapCaseMixedDrop(root: Root, file: MyIO):
+    """Mixed drop path: one exact match (`True`), one mismatch (`xxx`),
+    stub drops the interaction. Expected: True gets body, False has no
+    body, FOOTER warning lists `xxx` as dropped."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    async def stub_fork(interaction):
+        assert isinstance(interaction, Interaction_MapCase), \
+            f"unexpected interaction type {type(interaction).__name__}"
+        print_header(f"Interaction Prompt for actual case `{interaction.actual_case}`", file)
+        await interaction.prompt(0, file)
+        return await interaction.answer(Answer(indexes=[]))
+    root.session.fork_interaction = stub_fork
+
+    root.session.age += 1
+    await root.fill("1", [CaseSplit.gen_single({
+        "thought": "case-split on boolean b: one exact match, one dropped mismatch",
+        "target_isabelle_term": "b",
+        "rule": "default",
+        "proofs": [
+            {"case_name": "True", "body": [{"operation": "Obvious", "facts": []}]},
+            {"case_name": "xxx",  "body": [{"operation": "Obvious", "facts": []}]},
+        ],
+    })])
+    print_header("After CaseSplit (exact + dropped)", file)
+    root.print(0, file, show_warnings=True)
+
+
+@model_test("Induction_MapCase", "Test_Induction_MapCase.thy", 8)
+async def _test_Induction_MapCase(root: Root, file: MyIO):
+    """Induction with wrong supplied case_names. Verifies:
+      - MapCase fires from within an Induction (not CaseSplit) context
+      - prompt shows `induction` as the {kind}
+      - IH (Cons.IH) shows up in the rendered case context
+      - two interactions fire (one per actual case), both mapped"""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    async def stub_fork(interaction):
+        assert isinstance(interaction, Interaction_MapCase), \
+            f"unexpected interaction type {type(interaction).__name__}"
+        assert interaction.kind == "induction", \
+            f"expected kind=induction, got {interaction.kind!r}"
+        print_header(f"Interaction Prompt for actual case `{interaction.actual_case}`", file)
+        await interaction.prompt(0, file)
+        return await interaction.answer(Answer(indexes=[0]))
+    root.session.fork_interaction = stub_fork
+
+    root.session.age += 1
+    await root.fill("1", [Induction.gen_single({
+        "thought": "induction on l with wrong case_names",
+        "target_isabelle_term": "l",
+        "variables": [{"name": "l", "status": "fixed"}],
+        "rule": "default",
+        "proofs": [
+            {"case_name": "nil_case",  "body": [{"operation": "Obvious", "facts": []}]},
+            {"case_name": "cons_case", "body": [{"operation": "Obvious", "facts": []}]},
+        ],
+    })])
+    print_header("After Induction with mapped case_names", file)
+    root.print(0, file, show_warnings=True)
+
+
+@model_test("CaseSplit_MapCaseSingleton", "Test_CaseSplit_MapCaseSingleton.thy", 8)
+async def _test_CaseSplit_MapCaseSingleton(root: Root, file: MyIO):
+    """When `proofs` has exactly one entry, `_singleton_splice` splices
+    the body as siblings of the CaseSplit at parse time (see model.py
+    `CaseSplit_Like._singleton_splice`). This bypasses `_proofs_by_case`
+    entirely — the case_name is never checked and MapCase does NOT fire
+    even if the name is wrong. This test goes through the MCP parse
+    path (`_edit_tool_logic`) so the splice triggers."""
+    from .mcp_http_server import _edit_tool_logic
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    interaction_count = [0]
+    async def stub_fork(interaction):
+        interaction_count[0] += 1
+        file.write(f"UNEXPECTED interaction fired: {type(interaction).__name__}\n")
+        return await interaction.answer(Answer(indexes=[]))
+    root.session.fork_interaction = stub_fork
+
+    root.session.age += 1
+    result, is_error = await _edit_tool_logic(
+        root.session,
+        {"target_step": "1", "action": "fill", "proof_operations": [
+            {"operation": "CaseSplit",
+             "thought": "case-split on b with ONE wrong-named body (triggers splice)",
+             "target_isabelle_term": "b",
+             "rule": "default",
+             "proofs": [
+                {"case_name": "wrong", "body": [{"operation": "Obvious", "facts": []}]},
+             ]},
+        ]})
+    file.write(f"is_error: {is_error}\n")
+    print_header("After CaseSplit singleton splice", file)
+    root.print(0, file, show_warnings=True)
+    file.write(f"Interactions fired: {interaction_count[0]} (expected 0 — splice bypasses MapCase)\n")
+    # Diagnostic: walk the tree to see where the Obvious went after splice.
+    def walk(node, depth=0):
+        file.write(f"{'  '*depth}- {type(node).__name__} id={getattr(node, 'id', '?')!r} "
+                   f"warnings={len(getattr(node, 'warnings', []))} "
+                   f"subs={len(getattr(node, 'sub_nodes', []))}\n")
+        for w in getattr(node, 'warnings', []):
+            wtext = w.printer if isinstance(w.printer, str) else '<printer>'
+            file.write(f"{'  '*(depth+1)}  [W:{w.position.name}] {wtext[:100]}\n")
+        for c in getattr(node, 'sub_nodes', []):
+            walk(c, depth+1)
+    file.write("=== tree walk ===\n")
+    walk(root)
+
+
+@model_test("CaseSplit_MapCaseAmend", "Test_CaseSplit_MapCaseAmend.thy", 8)
+async def _test_CaseSplit_MapCaseAmend(root: Root, file: MyIO):
+    """Fill a CaseSplit with wrong-named supplieds (dropped via
+    interaction), then amend the same step with correct case_names.
+    Verifies:
+      - initial fill produces a FOOTER warning for the dropped supplieds
+      - amend replaces the node; the new instance has no residue, no
+        warning, and proofs attach via exact match (no interaction)"""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    amend_interaction_count = [0]
+    async def drop_stub(interaction):
+        assert isinstance(interaction, Interaction_MapCase)
+        return await interaction.answer(Answer(indexes=[]))
+    async def amend_stub(interaction):
+        amend_interaction_count[0] += 1
+        file.write(f"UNEXPECTED interaction after amend: {type(interaction).__name__}\n")
+        return await interaction.answer(Answer(indexes=[]))
+
+    root.session.fork_interaction = drop_stub
+    root.session.age += 1
+    await root.fill("1", [CaseSplit.gen_single({
+        "thought": "case-split on b with wrong names (to be amended)",
+        "target_isabelle_term": "b",
+        "rule": "default",
+        "proofs": [
+            {"case_name": "wrong1", "body": [{"operation": "Obvious", "facts": []}]},
+            {"case_name": "wrong2", "body": [{"operation": "Obvious", "facts": []}]},
+        ],
+    })])
+    print_header("After fill with wrong names (both dropped)", file)
+    root.print(0, file, show_warnings=True)
+
+    root.session.fork_interaction = amend_stub
+    root.session.age += 1
+    await root.amend("1", [CaseSplit.gen_single({
+        "thought": "case-split on b with correct names",
+        "target_isabelle_term": "b",
+        "rule": "default",
+        "proofs": [
+            {"case_name": "True",  "body": [{"operation": "Obvious", "facts": []}]},
+            {"case_name": "False", "body": [{"operation": "Obvious", "facts": []}]},
+        ],
+    })])
+    print_header("After amend with correct names", file)
+    root.print(0, file, show_warnings=True)
+    file.write(f"Interactions after amend: {amend_interaction_count[0]} (expected 0)\n")
+    assert amend_interaction_count[0] == 0, \
+        f"amend should not fire any interaction when all names match exactly"
 
 
 @model_test("NestedHaveProof", "Test_NestedHaveProof.thy", 8)

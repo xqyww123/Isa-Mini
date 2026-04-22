@@ -34,9 +34,7 @@ proof:
         goal: P False
         proof: empty
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.1` to provide the proof.
-[probe] 1.True.ml_state.top_goals() count=2
-[probe]   [0] P True
-[probe]   [1] P b
+[probe] 1.True: display_goals_count=1, leading=P True
 --------------------------------------------------
 edit_message: Intro under 1.True
 --------------------------------------------------
@@ -61,9 +59,8 @@ Intro node print (1.True.1)
 - step id: 1.True.1
   thought: Rename the case hypothesis
   operation: Intro
-[probe] Intro._state_after_beginning.top_goals() count=2
-[probe]   [0] P True
-[probe]   [1] P b
+[probe] Intro: new_subgoals_count=1, display_goals_count=1
+[probe] Intro sub_nodes: []
 --------------------------------------------------
 Full tree after Intro
 --------------------------------------------------

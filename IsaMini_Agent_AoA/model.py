@@ -896,98 +896,6 @@ def unpack_message(data) -> Message:
         case _:
             raise Exception(f"BUG bad message kind: {data}")
 
-### Minilang Proof Tree
-
-class ML_ProofTree:
-    def children(self) -> list['ML_ProofTree']:
-        raise NotImplementedError("children must be implemented by subclass")
-    def top_goal(self) -> Goal:
-        raise NotImplementedError("top_goal must be implemented by subclass")
-    def top_goal_or_none(self) -> 'Goal | None':
-        """Return the top goal, or None if the proof tree is solved (SOLVED_TREE)."""
-        raise NotImplementedError("top_goal_or_none must be implemented by subclass")
-    def top_goals(self) -> list[Goal]:
-        """
-        The goals of the leftest internal node
-        """
-        raise NotImplementedError("top_goals must be implemented by subclass")
-
-class MLPT_Goal(ML_ProofTree):
-    def __init__(self, goal: Goal):
-        self.goal = goal
-    def children(self) -> list[ML_ProofTree]:
-        return []
-    def top_goal(self) -> Goal:
-        return self.goal
-    def top_goal_or_none(self) -> 'Goal | None':
-        return self.goal
-    def top_goals(self) -> list[Goal]:
-        return [self.goal]
-    def __str__(self) -> str:
-        return str(self.goal)
-    def __eq__(self, other) -> bool:
-        if not isinstance(other, MLPT_Goal):
-            return False
-        return self.goal == other.goal
-
-class MLPT_Bundle(ML_ProofTree):
-    def __init__(self, context : Context, subs : list[ML_ProofTree]):
-        self.context = context
-        self.subs = subs
-    def children(self) -> list[ML_ProofTree]:
-        return self.subs
-    def top_goal(self) -> Goal:
-        return self.subs[0].top_goal()
-    def top_goal_or_none(self) -> 'Goal | None':
-        if not self.subs:
-            return None  # SOLVED_TREE
-        return self.subs[0].top_goal_or_none()
-    def top_goals(self) -> list[Goal]:
-        if all(isinstance(sub, MLPT_Goal) for sub in self.subs):
-            return [cast(MLPT_Goal, sub).goal for sub in self.subs]
-        else:
-            left = self.subs[0]
-            if isinstance(left, MLPT_Goal):
-                raise InternalError("The leftest internal's children should all be goals")
-            return left.top_goals()
-    def __str__(self) -> str:
-        subs_str = ", ".join(repr(s) for s in self.subs)
-        return f"({self.context} ⊢ [{subs_str}])"
-    def __eq__(self, other) -> bool:
-        if not isinstance(other, MLPT_Bundle):
-            return False
-        return self.context == other.context and self.subs == other.subs
-
-class MLPT_Block(ML_ProofTree):
-    def __init__(self, sub : ML_ProofTree):
-        self.sub = sub
-    def children(self) -> list[ML_ProofTree]:
-        return [self.sub]
-    def top_goal(self) -> Goal:
-        return self.sub.top_goal()
-    def top_goal_or_none(self) -> 'Goal | None':
-        return self.sub.top_goal_or_none()
-    def top_goals(self) -> list[Goal]:
-        return self.sub.top_goals()
-    def __str__(self) -> str:
-        return f"{{{self.sub}}}"
-    def __eq__(self, other) -> bool:
-        if not isinstance(other, MLPT_Block):
-            return False
-        return self.sub == other.sub
-
-def unpack_MLPT(data) -> ML_ProofTree:
-    (kind, x) = data
-    match kind:
-        case 0:
-            return MLPT_Goal(Goal.unpack(x))
-        case 1:
-            return MLPT_Bundle(Context.unpack(x[0]), [unpack_MLPT(sub) for sub in x[1]])
-        case 2:
-            return MLPT_Block(unpack_MLPT(x))
-        case _:
-            raise Exception(f"BUG bad MLPT kind: {kind}")
-
 ### Search Facts by Patterns
 
 class Search_Criterion:
@@ -1202,30 +1110,30 @@ type Extended_Minilang_Operation = Minilang_Operation | list[Minilang_Operation]
 
 
 class Minilang_State:
-    def __init__(self, connection: Connection, name: str, prooftree : ML_ProofTree | None):
+    def __init__(self, connection: Connection, name: str):
         self.connection = connection
         self.name = name
-        self.prooftree = prooftree
-        self.messages : list[Message] = [] # the messages received during executing the operation that assigns to this state
-        # Count of new subgoals that the operation producing this state opened
-        # as direct children.  Populated from a `Goals_Msg` emitted by the ML
-        # side (uniform across all SubgoalMaker-producing ops: RULE/INTRO/
-        # CASE_SPLIT/INDUCT/CONSIDER/etc.).  `None` means the operation did
-        # not emit a `Goals` (e.g. SPECIALIZE / CHAINING / LET / local DEFINE /
-        # state clone with no SKIP emission).  `0` means the operation emitted
-        # `Goals []` — explicitly "no new subgoal opened" (e.g. HAMMER closing
-        # the goal, or INTRO no-op).  SubgoalMaker reads this to decide how
-        # many child GoalNodes to create, replacing the tree-based
-        # `top_goals()` count which leaked outer siblings (the bug reported
-        # in tests Intro_no_intro_bindings / InferenceRule_in_CaseSplit /
-        # Nested_InferenceRule_Leak).
+        self.messages : list[Message] = []
+        # The leading (first) proof goal with its context (vars/hyps
+        # from the top HHF's items), or None if the proof is solved.
+        # Replaces the full MLPT proof tree — Python only ever accessed
+        # top_goal() / top_goal_or_none() from the tree.
+        self.leading_goal: Goal | None = None
+        # Total number of goals in the current state's top HHF.
+        # Used for display paths (has_pending_goal, should_I_show_pending_goal,
+        # Root init).  This is the "display count" — may include siblings
+        # from outer operations in nested contexts.  NOT used for
+        # SubgoalMaker block-opening (that uses new_subgoals_count).
+        self.display_goals_count: int = 0
+        # Count of new subgoals that the operation producing this state
+        # opened as direct children.  Populated from a `Goals_Msg` emitted
+        # by the ML side.  `None` = op didn't emit Goals (SPECIALIZE etc.);
+        # `0` = op emitted Goals with count 0 (HAMMER closing, INTRO no-op).
+        # SubgoalMaker reads this for block-opening decisions.
         self.new_subgoals_count : int | None = None
+        self._initialized: bool = False
     def initialized(self) -> bool:
-        return self.prooftree is not None
-    def prooftree_of(self) -> ML_ProofTree:
-        if self.prooftree is None:
-            raise InternalError("Prooftree is not initialized")
-        return self.prooftree
+        return self._initialized
     def __str__(self) -> str:
         return f"Minilang_State({self.name})"
     def __repr__(self) -> str:
@@ -1239,14 +1147,26 @@ class Minilang_State:
     def assign(cls, connection : 'Connection | Minilang_State'):
         if isinstance(connection, Minilang_State):
             connection = connection.connection
-        return Minilang_State(connection, cls.assign_name(), None)
+        return Minilang_State(connection, cls.assign_name())
+    @staticmethod
+    def _unpack_flat_goal(data) -> tuple['Goal | None', int]:
+        """Unpack the flat goal representation from the ML RPC.
+        Wire format: tag 0 = solved (no goal); tag 1 = (items, term, count)."""
+        match data:
+            case 0:
+                return (None, 0)
+            case (1, (items_data, conclusion_str), count):
+                context = Context.unpack(items_data)
+                return (Goal(context, IsaTerm.from_isabelle(conclusion_str)), count)
+            case _:
+                raise InternalError(f"Bad flat goal data: {data!r}")
+
     async def execute(self, opr: Extended_Minilang_Operation, assign_to: 'Minilang_State | None') -> 'Minilang_State':
         if assign_to is None:
-            assign_to = Minilang_State(self.connection, type(self).assign_name(), None)
+            assign_to = Minilang_State(self.connection, type(self).assign_name())
         if isinstance(opr, Minilang_Operation):
             dest_name = assign_to.name
             session = the_session()
-            # Log proof operation
             session.log_proof_operation(
                 step="execute",
                 operation=opr.command,
@@ -1259,7 +1179,7 @@ class Minilang_State:
             session.on_operation_start(self.name, opr.command, opr.arg)
             now = time()
             try:
-                (msgs, tree) = await self.connection.callback("IsaMini.proof_opr",
+                (msgs, flat_goal) = await self.connection.callback("IsaMini.proof_opr",
                                                         (self.name, dest_name, (opr.command, opr.arg)))
             except IsabelleError as err:
                 session.on_operation_end(self.name, opr.command, opr.arg,
@@ -1275,7 +1195,9 @@ class Minilang_State:
             session.on_operation_end(self.name, opr.command, opr.arg,
                 EvaluationStatus.Success(time() - now))
             msgs = [unpack_message(msg) for msg in msgs]
-            assign_to.prooftree = unpack_MLPT(tree)
+            (assign_to.leading_goal, assign_to.display_goals_count) = \
+                Minilang_State._unpack_flat_goal(flat_goal)
+            assign_to._initialized = True
             assign_to.messages = msgs
             goals_msgs = [m for m in msgs if isinstance(m, Goals_Msg)]
             match goals_msgs:
@@ -1309,14 +1231,12 @@ class Minilang_State:
     async def clone(self, assign_to: 'Minilang_State | None') -> 'Minilang_State':
         if not self.initialized():
             if assign_to is None:
-                assign_to = Minilang_State(self.connection, type(self).assign_name(), None)
+                assign_to = Minilang_State(self.connection, type(self).assign_name())
             assign_to.messages = list(self.messages)
             assign_to.new_subgoals_count = self.new_subgoals_count
             return assign_to
         ret = await self.execute(Minilang_Operation.SKIP(), assign_to)
         ret.messages = self.messages
-        # Preserve the original state's new_subgoals_count — the clone
-        # represents the same snapshot; SKIP's own emit (if any) is irrelevant.
         ret.new_subgoals_count = self.new_subgoals_count
         return ret
     async def reset(self) -> None:
@@ -1325,7 +1245,9 @@ class Minilang_State:
             await self.connection.callback("IsaMini.reset_state", self.name)
         except:
             pass
-        self.prooftree = None
+        self.leading_goal = None
+        self.display_goals_count = 0
+        self._initialized = False
         self.new_subgoals_count = None
     # def search_fact(self, dnf_criterions: list[list[Search_Criterion]]) -> FactRef:
     #     fact_ref_and_props = self.connection.callback("IsaMini.lookup_fact",
@@ -3407,33 +3329,30 @@ class StdBlock(NonLeaf_Node):
         ...
     def has_pending_goal(self) -> bool:
         """Whether this goal node still has unproven proof obligations.
-        Returns False when prooftree is absent, has no goals,
+        Returns False when state is uninitialized, has no goals,
         or only has the 'True' artifact from conjunction splitting."""
-        ptree = self._state_before_ending_.prooftree
-        if ptree is None:
+        s = self._state_before_ending_
+        if not s.initialized():
             return False
-        goals = ptree.top_goals()
-        return bool(goals) and goals[0].conclusion != "True"
+        lg = s.leading_goal
+        return lg is not None and lg.conclusion != "True"
     def should_I_show_pending_goal(self) -> tuple[Goal, step] | None:
         if not self.has_pending_goal():
             return None
         to_fill = self._id_of_openning_prf_to_fill()
         if to_fill is None:
             return None
-        ptree = self._state_before_ending_.prooftree
-        assert ptree is not None  # guaranteed by has_pending_goal() above
-        goals = ptree.top_goals()
-        if len(goals) > 1 and not self._allow_multi_goal:
+        s = self._state_before_ending_
+        if s.display_goals_count > 1 and not self._allow_multi_goal:
             raise InternalError("The open goals of StdBlock should not exceed one. "
             "To express multiple goals, you should use a StdBlock whose children are GoalNodes. See Rule as an example.")
-        return (goals[0], to_fill)
+        return (cast(Goal, s.leading_goal), to_fill)
     def _should_print_footer_pending_goal(self) -> bool:
         return True
     def _print_footer(self, indent: int, file: MyIO, show_warnings: bool = False) -> None:
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.FOOTER])
         if self.opening():
-            ptree = self._state_before_ending_.prooftree
-            if ptree is None:
+            if not self._state_before_ending_.initialized():
                 print_indent(indent, file)
                 file.write("Error: Evaluation cancelled due to failures above\n")
             else:
@@ -3454,8 +3373,7 @@ class StdBlock(NonLeaf_Node):
     def unfinished_nodes(self, ret: set['Node']) -> None:
         super().unfinished_nodes(ret)
         if self.opening():
-            ptree = self._state_before_ending_.prooftree
-            if ptree is None or self.has_pending_goal():
+            if not self._state_before_ending_.initialized() or self.has_pending_goal():
                 ret.add(self)
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         return ("proof", indent+1)
@@ -3508,15 +3426,13 @@ class StdBlock(NonLeaf_Node):
         if super().does_quickview_need_detail():
             return True
         if self.opening():
-            ptree = self._state_before_ending_.prooftree
-            if ptree is None or self.should_I_show_pending_goal() is not None:
+            if not self._state_before_ending_.initialized() or self.should_I_show_pending_goal() is not None:
                 return True
         return False
     def quickview(self, indent: int, file: MyIO) -> int:
         indent = super().quickview(indent, file)
         if self.opening():
-            ptree = self._state_before_ending_.prooftree
-            if ptree is None:
+            if not self._state_before_ending_.initialized():
                 print_indent(indent, file)
                 file.write("Error: Evaluation pending\n")
                 self._prev_pending_goal = None
@@ -3768,10 +3684,7 @@ class GoalNode(StdBlock):
     def titled_id(self) -> str:
         return self.id
     def goal(self) -> Goal | None:
-        ptree = self.ml_state.prooftree
-        if ptree is None:
-            return None
-        return ptree.top_goal()
+        return self.ml_state.leading_goal
     def id_of_goal(self) -> step | None:
         if self.is_single_goal:
             if self.parent is not None:
@@ -4103,8 +4016,8 @@ class SubgoalMaker(GoalContainer, StdBlock):
         if fail is not None:
             return fail
         s0 = self._state_after_beginning()
-        if s0.prooftree is None:
-            raise InternalError("The prooftree of the state after beginning is not initialized, meaning the node is not refreshed")
+        if not s0.initialized():
+            raise InternalError("The state after beginning is not initialized, meaning the node is not refreshed")
         decision = self._should_open_proof_block(s0)
         if decision != _OpenSubgoalBlock.NO:
             goals_count = s0.new_subgoals_count or 0
@@ -5349,10 +5262,10 @@ class Rewrite(Leaf):
             print_fact_bindings(self.bindings[1], indent, file, "resulting premises")
             self._prev_bindings = self.bindings
         if self.status.status == EvaluationStatus.Status.SUCCESS:
-            result_goal = self.resulting_state().prooftree_of().top_goal_or_none()
+            result_goal = self.resulting_state().leading_goal
             if result_goal is None:
                 cur: Goal | str = "solved"
-            elif (prev_goal := self.ml_state.prooftree_of().top_goal_or_none()) is not None \
+            elif (prev_goal := self.ml_state.leading_goal) is not None \
                     and result_goal.conclusion != prev_goal.conclusion:
                 cur = result_goal
             else:
@@ -5401,11 +5314,11 @@ class Rewrite(Leaf):
             print_fact_bindings(self.bindings[1], indent, file, "resulting premises")
 
         if self.status.status == EvaluationStatus.Status.SUCCESS:
-            result_goal = self.resulting_state().prooftree_of().top_goal_or_none()
+            result_goal = self.resulting_state().leading_goal
             if result_goal is None:
                 print_indent(indent, file)
                 file.write("goal is solved.\n")
-            elif (prev_goal := self.ml_state.prooftree_of().top_goal_or_none()) is not None \
+            elif (prev_goal := self.ml_state.leading_goal) is not None \
                     and result_goal.conclusion != prev_goal.conclusion:
                 print_indent(indent, file)
                 file.write("goal changes into:\n")
@@ -5491,7 +5404,7 @@ class Rewrite(Leaf):
         elif self.ml_state.initialized():
             self.using = await self.ml_state.refresh_facts(self.using)
         old_bindings = self.bindings
-        old_goal = (self.resulting_state().prooftree_of().top_goal_or_none()
+        old_goal = (self.resulting_state().leading_goal
                     if self.status.status == EvaluationStatus.Status.SUCCESS
                     else None)
         # Execute the operation via parent Leaf implementation
@@ -5576,7 +5489,7 @@ class Rewrite(Leaf):
             if self.bindings != old_bindings:
                 self.changed = True
             if self.status.status == EvaluationStatus.Status.SUCCESS and old_goal is not None:
-                new_goal = self.resulting_state().prooftree_of().top_goal_or_none()
+                new_goal = self.resulting_state().leading_goal
                 if new_goal != old_goal:
                     self.changed = True
 
@@ -6177,12 +6090,11 @@ class InferenceRule(SubgoalMaker):
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
         if len(self.sub_nodes) <= 1:
             s0 = self._state_after_beginning()
-            if s0.prooftree is not None:
-                goal = s0.prooftree.top_goal_or_none()
-                if goal is not None:
-                    print_indent(indent, file)
-                    file.write("derived goal:\n")
-                    print_goal(goal, indent+1, False, file, self._ctxt_before_me())
+            goal = s0.leading_goal
+            if goal is not None:
+                print_indent(indent, file)
+                file.write("derived goal:\n")
+                print_goal(goal, indent+1, False, file, self._ctxt_before_me())
     def beginning_opr(self) -> 'Minilang_Operation | FailureReason':
         if isinstance(self.rule_ref, IsabelleFact_Unfound):
             return FailureReason(f"Inference rule fact \"{self.rule_ref.name().unicode}\" not found")
@@ -6583,9 +6495,13 @@ class GlobalEnv(StdBlock):
             child.unfinished_nodes(ret)
 
 class Root(GoalContainer, StdBlock):
-    def __init__(self, context_and_ptree: tuple[Context, ML_ProofTree], connection: Connection, session: 'Session'):
-        (context, ptree) = context_and_ptree
-        ml_state0 = Minilang_State(connection, '$init', ptree)
+    def __init__(self, context_and_flat_goal: tuple[Context, tuple['Goal | None', int]],
+                 connection: Connection, session: 'Session'):
+        (context, (leading_goal, goals_count)) = context_and_flat_goal
+        ml_state0 = Minilang_State(connection, '$init')
+        ml_state0.leading_goal = leading_goal
+        ml_state0.display_goals_count = goals_count
+        ml_state0._initialized = True
         super().__init__(NodeConfig("$root", ml_state0, None), "", [])
         self.context = context
         self.session = session
@@ -6596,10 +6512,9 @@ class Root(GoalContainer, StdBlock):
     async def _refresh_me_alone(self):
         if self._first_time:
             ml_state = await self.ml_state.skip(None)
-            # Get number of goals from prooftree
-            if ml_state.prooftree is None:
-                raise ValueError("Root: ml_state.prooftree is None, cannot get top_goals")
-            self.num_goals = len(ml_state.prooftree.top_goals())
+            if not ml_state.initialized():
+                raise ValueError("Root: ml_state not initialized after skip")
+            self.num_goals = ml_state.display_goals_count
             is_single_goal = self.num_goals == 1
             for i in range(self.num_goals):
                 if is_single_goal:

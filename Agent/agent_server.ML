@@ -140,16 +140,18 @@ fun minilang_items_packer ctxt =
             (* local_facts is already flattened as (string * term) list *)
          in {vars = vars, hyps = local_facts}
         end)
-fun minilang_tree_packer ctxt =
-  let val term_packer = packString o MiniLang_Agent.string_of_term ctxt
-      val item_packer = minilang_items_packer ctxt
-      fun pack (Minilang.PROP (items, goal)) =
-            packPair (packInt, packPair (item_packer, term_packer)) (0, (items, goal))
-        | pack (Minilang.BUNDL (items, trees)) =
-            packPair (packInt, packPair (item_packer, packList pack)) (1, (items, trees))
-        | pack (Minilang.BLOCK tree) =
-            packPair (packInt, pack) (2, tree)
-   in pack
+(* Flat goal packer — replaces the recursive `minilang_tree_packer`.
+   Sends just (option(items, leading_goal_term), goals_count) instead
+   of the full PROP/BUNDL/BLOCK tree.  Python only needs the leading
+   goal (for display) and the count (for display + Root init). *)
+fun minilang_flat_goal_packer ctxt =
+  let val item_packer = minilang_items_packer ctxt
+      val term_packer = packString o MiniLang_Agent.string_of_term ctxt
+   in fn (SOME (items, leading_goal), count) =>
+        packTuple3 (packInt, packPair (item_packer, term_packer), packInt)
+                    (1, (items, leading_goal), count)
+       | (NONE, _) =>
+        packInt 0
   end
 
 fun minilang_message_packer ctxt =
@@ -320,8 +322,8 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
       val proof_opr_callback = {
         name = "IsaMini.proof_opr",
         arg_schema = unpackTuple3 (unpackString, unpackString, MiniLang_Agent.xcmd_unpacker),
-        ret_schema = (fn (ctxt, msgs, tree) =>
-          packPair (minilang_message_packer ctxt, minilang_tree_packer ctxt) (msgs, tree)),
+        ret_schema = (fn (ctxt, msgs, flat_goal) =>
+          packPair (minilang_message_packer ctxt, minilang_flat_goal_packer ctxt) (msgs, flat_goal)),
         function = (fn (from, to, opr) =>
           let val _ = Minilang.set_reporter listen_report
               val s0 = get_state from
@@ -331,7 +333,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
               val ctxt' = Minilang.context_of s1
               val msgs = clean_report ()
               val _ = state := Symtab.update (to, s1) (!state)
-           in (ctxt', msgs, Minilang.print_state s1)
+           in (ctxt', msgs, Minilang.leading_goal_data s1)
           end handle Minilang.OPR_FAIL (Minilang.PROOF_FAIL, msg) =>
               error (REPL.trim_makrup msg)
             | Minilang.OPR_FAIL (Minilang.INVALID_OPR, msg) =>
@@ -664,8 +666,10 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         function = (fn state_id =>
           let val s = get_state state_id
               val context = Context.Proof (Minilang.context_of s)
-              val tree = Minilang.print_state s
-              val ((_, facts), _) = Minilang.context_of_leading_goal tree
+              val (goal_opt, _) = Minilang.leading_goal_data s
+              val facts = case goal_opt of
+                  SOME ((_, facts), _) => facts
+                | NONE => []
               val names = map fst facts
               val entities = map Universal_Key.Named_Theorem names
               val keys = map (Universal_Key.key_of (SOME thm_cache) context) entities
@@ -967,7 +971,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
       }
 
       (* Build AoA command with local callbacks *)
-      val s0_ptree = Minilang.print_state s0
+      val s0_flat_goal = Minilang.leading_goal_data s0
       val {constants, theorems, types, classes, locales,
            introduction_rules, elimination_rules,
            induction_rules, case_split_rules} =
@@ -978,8 +982,8 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
             let val log_dir = Config.get ctxt AoA_log_dir
                 val retrieval_forking = Config.get ctxt AoA_retrieval_forking
                 val interactive_retrieval = Config.get ctxt AoA_interactive_retrieval
-            in packTuple7 (context_packer ctxt, minilang_tree_packer ctxt, packString, packString, packString, packString, packString)
-                          (global_context, s0_ptree, driver, log_dir, invocation_id, retrieval_forking, interactive_retrieval)
+            in packTuple7 (context_packer ctxt, minilang_flat_goal_packer ctxt, packString, packString, packString, packString, packString)
+                          (global_context, s0_flat_goal, driver, log_dir, invocation_id, retrieval_forking, interactive_retrieval)
             end),
         ret_schema = unpackTuple3 (unpackList MiniLang_Agent.xcmd_unpacker,
                                    unpackOption unpackString,

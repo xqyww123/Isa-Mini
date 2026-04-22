@@ -41,7 +41,7 @@ async def IsaMini_AoA(data: tuple[Any, Any, str, str, str, str, str], connection
         actual_log_path = ""
 
     global_context = Context.unpack(global_context)
-    ptree = unpack_MLPT(ptree)
+    ptree = Minilang_State._unpack_flat_goal(ptree)
     is_test = driver.startswith("test.")
     if is_test:
         # Run specific test associated with the driver

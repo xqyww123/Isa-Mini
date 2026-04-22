@@ -1,0 +1,57 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - l: 'a list
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: rev (rev l) = l
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+Interaction Prompt for actual case `Nil`
+--------------------------------------------------
+The induction operation produced a case `Nil` (as follows) that does not match any `case_name` you supplied.
+  goal: rev (rev []) = []
+Is any of your supplied proof intended for this case?
+  0. nil_case
+  1. cons_case
+Answer with its index if so, or with empty `indexes` to leave this case without a proof for now.
+--------------------------------------------------
+Interaction Prompt for actual case `Cons`
+--------------------------------------------------
+The induction operation produced a case `Cons` (as follows) that does not match any `case_name` you supplied.
+  variables:
+    - a: 'a
+  premises:
+    - Cons.IH: rev (rev l) = l
+  goal: True
+Is any of your supplied proof intended for this case?
+  0. cons_case
+Answer with its index if so, or with empty `indexes` to leave this case without a proof for now.
+--------------------------------------------------
+After Induction with mapped case_names
+--------------------------------------------------
+variables:
+  - l: 'a list
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: rev (rev l) = l
+proof:
+  - step id: 1
+    thought: induction on l with wrong case_names
+    operation: Induction
+    target term: l
+    cases:
+      - goal id: 1.Nil
+        goal: rev (rev []) = []
+        proof:
+          - step id: 1.Nil.1
+            operation: Obvious
+      - goal id: 1.Cons
+        variables:
+          - a: 'a
+        premises:
+          - Cons.IH: rev (rev l) = l
+        goal: True
+        proof:
+          - step id: 1.Cons.1
+            operation: Obvious

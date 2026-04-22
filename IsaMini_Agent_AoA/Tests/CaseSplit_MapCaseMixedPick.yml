@@ -1,0 +1,57 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - b: bool
+  - P: bool ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P b
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+Interaction Prompt for actual case `False`
+--------------------------------------------------
+The case-split operation produced a case `False` (as follows) that does not match any `case_name` you supplied.
+  premises:
+    - False.prem0: ¬ b
+  goal: P False
+Is any of your supplied proof intended for this case?
+  0. xxx
+Answer with its index if so, or with empty `indexes` to leave this case without a proof for now.
+--------------------------------------------------
+After CaseSplit (mixed exact + mapped)
+--------------------------------------------------
+variables:
+  - b: bool
+  - P: bool ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P b
+proof:
+  - step id: 1
+    thought: case-split on boolean b: one exact match, one mismatch
+    operation: CaseSplit
+    target term: b
+    cases:
+      - goal id: 1.True
+        premises:
+          - True.prem0: b
+        goal: P True
+        proof:
+          - step id: 1.True.1
+            operation: Obvious
+            Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.1` to replace it with a proof.
+        pending proof goal:
+          P True
+      - goal id: 1.False
+        premises:
+          - False.prem0: ¬ b
+        goal: P False
+        proof:
+          - step id: 1.False.1
+            operation: Obvious
+            Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.1` to replace it with a proof.
+        pending proof goal:
+          P False
+Interactions fired: 1

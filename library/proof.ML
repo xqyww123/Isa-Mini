@@ -21,6 +21,7 @@ val goals_of'   : thm -> term list  (* extract the list of subgoal terms
                                        `protect_goals` produces, whereas
                                        `Thm.prems_of` would stop at the
                                        outer `Pure.imp` chain *)
+val leading_goal_data : state -> (items * term) option * int
 val map_context : (Proof.context -> Proof.context) -> state -> state
 val schematic_vars_of_leading_goal : state -> (indexname * typ) list
 
@@ -616,6 +617,16 @@ val goals_of =
        | tm => collect tm
   end
 val goals_of' = goals_of o Thm.prop_of
+
+(* Extract (leading_goal_items * leading_goal_term, goals_count) from a state.
+   Returns (NONE, 0) for solved / empty states.  Used by the agent RPC
+   packer as a flat replacement for the full `print_state` tree. *)
+fun leading_goal_data ((_, SK), _, _) =
+      (case SK of
+         HHF (st, items) :: _ =>
+           if no_goal' st then (NONE, 0)
+           else (SOME (items, hd (goals_of' st)), num_goals_of' st)
+       | _ => (NONE, 0))
 
 (* Extract all schematic variables from the leading proof goal *)
 fun schematic_vars_of_leading_goal ((_, HHF (st, _) :: _), _, _) =
