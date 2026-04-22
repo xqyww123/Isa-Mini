@@ -33,6 +33,7 @@ proof:
     thought: strong induction on i, generalize i, keep p fixed
     operation: Induction
     target term: i
+    facts to generalize: premise0
     fixing variables:
       - n: nat
     assuming premises:

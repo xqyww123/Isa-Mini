@@ -159,8 +159,14 @@ fun minilang_message_packer ctxt =
       fun pack (Minilang.New_Items items) =
             packPair (packInt, minilang_items_packer) (0, items)
         | pack (Minilang.Goals goals) =
-            packPair (packInt, packList packString)
-                     (1, map string_of_term goals)
+            (* Python side only reads the count (for SubgoalMaker's
+               `new_subgoals_count`), not the term texts.  Packing just
+               the length avoids calling `string_of_term` on every goal
+               (expensive for large terms) and shrinks wire size.  The
+               full `term list` is still kept on the ML side — the
+               translator still consumes it via `item_reporter` for its
+               `(*goal: …*)` diagnostic annotations. *)
+            packPair (packInt, packInt) (1, length goals)
         | pack (Minilang.Consider_Case (kase, items)) =
             packPair (packInt, packPair (packString, minilang_items_packer)) (2, (kase, items))
         | pack (Minilang.Newly_Fixed vars) =
@@ -289,13 +295,14 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
              * in those premises trigger an instantiation prompt on the
              * Python side before induction runs. *)
             |> Config.put Minilang.consumes_policy "subgoals"
-            (* Auto-insert: local facts mentioning the inducted /
-             * generalized free variables get wrapped and inserted into
-             * the goal before induction runs, then restored as named
-             * facts inside each case's context. Saves the agent from
-             * having to enumerate them (the Induction tool arg has no
-             * `using` field — see Phase-3 scope notes). *)
-            |> Config.put Minilang.induct_auto_insert_facts true
+            (* Auto-insert is disabled on the agent path: the Induction
+             * tool arg carries an explicit `facts_to_generalize` field,
+             * giving the LLM control over which local facts flow into
+             * the induction hypothesis. Letting auto-insert also fire
+             * would silently expand that set and mask over-selection
+             * mistakes. The ML-level mechanism in library/proof.ML
+             * stays intact for non-agent callers. *)
+            |> Config.put Minilang.induct_auto_insert_facts false
             |> Config.put Phi_Sledgehammer_Solver.try_parallel_smt_cvc5 true
 
       val global_context = global_context_of (ctxt, sequent)
@@ -417,7 +424,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         name = "IsaMini.retrieve_entity",
         arg_schema = unpackPair (unpackString,
           unpackList (unpackPair (Universal_Key.unpack_entity_kind, unpackString))),
-        ret_schema = packList (packOption (packTuple4 (packString, packList packString, packList packString, packList packString))),
+        ret_schema = packList (packOption (packTuple5 (packString, packList packString, packList packString, packList packString, packBool))),
         function = (fn (state_id, entities) =>
           let val s0 = get_state state_id
               val ctxt = Minilang.context_of s0
@@ -425,6 +432,14 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
               val SOT = MiniLang_Agent.string_of_term ctxt
               val SOTy = MiniLang_Agent.string_of_type ctxt
               val facts = Proof_Context.facts_of ctxt
+              (* `global_facts` enumerates only facts visible at the
+               * theory level; a `full_name` that does NOT resolve here
+               * must have come from the local proof context (assms, IH,
+               * named `have`, locale-internal fixes). Used to classify
+               * theorem-kind retrievals as local vs global — the
+               * `facts_to_generalize` field on the Induction tool
+               * filters out globals. *)
+              val global_facts = Global_Theory.facts_of thy
               val const_space = Proof_Context.const_space ctxt
               val consts = Proof_Context.consts_of ctxt
               val type_space = Proof_Context.type_space ctxt
@@ -448,11 +463,15 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                            val abbrevs = distinct (op =) (maps
                                 (abbreviations_in_term ctxt consts
                                   o Thm.prop_of o Thm.transfer thy) thms')
+                           val is_local =
+                              not (is_some (Facts.lookup (Context.Theory thy)
+                                              global_facts full_name))
                        in if null thms' then NONE
                           else SOME (short_name,
                                      map (SOT o Thm.prop_of o Thm.transfer thy) thms',
                                      thm_roles thms',
-                                     abbrevs)
+                                     abbrevs,
+                                     is_local)
                        end
                    | NONE => NONE
                 end
@@ -465,13 +484,13 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                         val T = Consts.the_constraint consts name
                         val abbrevs = if is_some (try (Consts.the_abbreviation consts) name)
                                       then [name] else []
-                    in SOME (short, [SOTy T], [], abbrevs) end
+                    in SOME (short, [SOTy T], [], abbrevs, false) end
                 | retrieve (Universal_Key.TypeK, name) =
-                    SOME (Name_Space.extern ctxt type_space name, [], [], [])
+                    SOME (Name_Space.extern ctxt type_space name, [], [], [], false)
                 | retrieve (Universal_Key.ClassK, name) =
-                    SOME (Name_Space.extern ctxt class_space name, [], [], [])
+                    SOME (Name_Space.extern ctxt class_space name, [], [], [], false)
                 | retrieve (Universal_Key.LocaleK, name) =
-                    SOME (Name_Space.extern ctxt locale_space name, [], [], [])
+                    SOME (Name_Space.extern ctxt locale_space name, [], [], [], false)
           in map (fn e => retrieve e handle ERROR _ => NONE | TYPE _ => NONE) entities end),
         timeout = NONE
       }
@@ -808,6 +827,54 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         timeout = NONE
       }
 
+      (* Filter for the `facts_to_generalize` field of the Induction
+       * tool. Given a list of fact full-names and the list of
+       * generalized-variable names (induction target's frees ∪
+       * `arbitrary`), returns `(kept, dropped)` where `dropped` are the
+       * facts whose prop has no Free occurrence of any generalized
+       * variable — they cannot be carried through induction and are
+       * filtered out with a warning. Shape mirrors the dirty-frees
+       * computation in library/proof.ML:2829–2837 (auto-insert
+       * mechanism), but here the fact set is agent-supplied instead of
+       * swept from the whole proof context. *)
+      val filter_generalize_facts_callback = {
+        name = "IsaMini.filter_generalize_facts",
+        arg_schema = unpackTuple3 (
+          unpackString,                             (* state_id *)
+          unpackList unpackString,                  (* fact full-names *)
+          unpackList unpackString                   (* generalized var names *)
+        ),
+        ret_schema = packPair (packList packString, packList packString),
+        function = (fn (state_id, fact_names, gen_var_names) =>
+          let val s0 = get_state state_id
+              val ctxt = Minilang.context_of s0
+              (* Python sends external names (e.g. "n"). Frees inside
+               * fact props carry the internal name that `add_fixes`
+               * assigned (e.g. "n__"). Translate each external name
+               * via `Variable.lookup_fixed`; names that aren't fixed
+               * in this context (lookup returns NONE) stay as-is so
+               * we still match any bound schematic or imported Free. *)
+              val dirty_names =
+                fold (fn nm => fn acc =>
+                        case Variable.lookup_fixed ctxt nm of
+                          SOME internal => internal :: acc
+                        | NONE => nm :: acc)
+                     gen_var_names []
+              fun mentions_gen_var thms =
+                let val dirty = member (op =) dirty_names
+                    fun has_dirty (Free (n, _)) = dirty n
+                      | has_dirty _ = false
+                 in exists (Term.exists_subterm has_dirty o Thm.prop_of) thms
+                end
+              fun keeps name =
+                case \<^try>\<open>Proof_Context.get_thms ctxt name\<close> of
+                  NONE => false           (* unresolved — treat as drop *)
+                | SOME thms => mentions_gen_var thms
+              val (kept, dropped) = List.partition keeps fact_names
+          in (kept, dropped) end),
+        timeout = NONE
+      }
+
       (* Pre-flight validation for schematic-variable instantiation of an
        * induction / case-split rule. Takes the rule name and a list of
        * (var_name, term_string) pairs; attempts the structured
@@ -934,6 +1001,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
           mk_callback abbreviation_defs_callback,
           mk_callback analyze_induct_callback,
           mk_callback analyze_case_split_callback,
+          mk_callback filter_generalize_facts_callback,
           mk_callback validate_instantiation_callback,
           mk_callback contextual_thms_callback,
           mk_callback validate_prove_in_time_callback,

@@ -63,6 +63,7 @@ proof:
         thought: strong induction on n, generalize n, keep p and f fixed
         operation: Induction
         target term: n :: nat
+        facts to generalize: premise0
         fixing variables:
           - n: nat
         assuming premises:

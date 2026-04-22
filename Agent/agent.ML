@@ -27,7 +27,12 @@ datatype ('term, 'thm, 'fact) command =
   | CASE_SPLIT of 'term (*target*) * Minilang.opt_var_names
                 * 'thm option (*rule*)
   | INDUCT   of 'term (*target*) * Minilang.opt_var_names
-              * 'term list (*arbitrary*) * 'thm option (*rule*)
+              * 'term list (*arbitrary*)
+              * 'fact list (*facts_to_generalize: in xcmd a raw name string; in
+                            icmd a resolved `Facts.ref * Token.src list` — the
+                            standard agent fact-ref path (see `read_fact`).
+                            Supports `h`, `h(i)`, `h(1-3)`, `h[attr]`. *)
+              * 'thm option (*rule*)
   | NEXT_OR_END of ('term, 'fact) extended_fact list (*add lemmas*) * Minilang.opt_var_names
   | NEXT     of ('term, 'fact) extended_fact list (*add lemmas*) * Minilang.opt_var_names
   | END      of ('term, 'fact) extended_fact list (*add lemmas*)
@@ -169,7 +174,12 @@ datatype ('term, 'thm, 'fact) command =
   | CASE_SPLIT of 'term (*target*) * Minilang.opt_var_names
                 * 'thm option (*rule*)
   | INDUCT   of 'term (*target*) * Minilang.opt_var_names
-              * 'term list (*arbitrary*) * 'thm option (*rule*)
+              * 'term list (*arbitrary*)
+              * 'fact list (*facts_to_generalize: in xcmd a raw name string; in
+                            icmd a resolved `Facts.ref * Token.src list` — the
+                            standard agent fact-ref path (see `read_fact`).
+                            Supports `h`, `h(i)`, `h(1-3)`, `h[attr]`. *)
+              * 'thm option (*rule*)
   | NEXT_OR_END of ('term, 'fact) extended_fact list (*add lemmas*) * Minilang.opt_var_names
   | NEXT     of ('term, 'fact) extended_fact list (*add lemmas*) * Minilang.opt_var_names
   | END      of ('term, 'fact) extended_fact list (*add lemmas*)
@@ -965,16 +975,32 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
         with_resolved_refs (mk_counter ()) s facts (fn s' => fn refs =>
           Minilang.RULE refs [] s')
     | CASE_SPLIT (target, vars, rule) =>
-        Minilang.CASE_SPLIT (false, ([[SOME target]], rule)) vars
-          {using = [], insertion = []} s
-    | INDUCT (target, vars, arbitrary, rule) =>
+        Minilang.CASE_SPLIT (false, ([[SOME target]], rule)) vars [] s
+    | INDUCT (target, vars, arbitrary, gen_fact_refs, rule) =>
         let val ctxt = Minilang.context_of s
             val vs = map (fn Free nt => nt
                            | x => error ("The `arbitrary` argument must be variables, but (" ^
                                          string_of_term ctxt x ^ ") is given.")) arbitrary
+            (* `gen_fact_refs` is the resolved icmd-level fact list
+             * (`Facts.ref * Token.src list` — see the datatype at the
+             * top of this file), produced by `check_command_i`'s call
+             * to `read_fact`. We evaluate each one to thms via the
+             * standard `Attrib.eval_thms`, which respects every
+             * selector form Parse.thm accepts (`h`, `h(1)`, `h(2-4)`,
+             * `h[attr]`) — index-selection is handled inside by
+             * `Facts.interval`. `Facts.string_of_ref` round-trips the
+             * ref back to the display string, so the binding we hand
+             * to `update_tampered` matches what items-channel
+             * rendering (via flatten_facts) would show. *)
+            val named_insertion =
+              map (fn (ref_, _) =>
+                    let val name = Facts.string_of_ref ref_
+                        val thms = Attrib.eval_thms ctxt [(ref_, [])]
+                    in (name, thms) end)
+                  gen_fact_refs
         in Minilang.INDUCT
                     (false, ([[SOME (NONE, (target, false))]], (([vs], []), Option.map single rule))) vars
-                    {using = [], insertion = []} s
+                    {using = [], insertion = named_insertion} s
         end
     | NEXT_OR_END (lemmas, vars) =>
         with_resolved_override (mk_counter ()) s lemmas (fn s' => fn ovr =>
@@ -1222,11 +1248,17 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
           val target' = read_term ctxt target
        in CASE_SPLIT (target', vars, rule')
       end
-  | check_command_i s (INDUCT (target, vars, arbitrary, rule)) =
+  | check_command_i s (INDUCT (target, vars, arbitrary, gen_fact_names, rule)) =
       let val ctxt = Minilang.context_of s
           val (target' :: arbitrary') = read_terms ctxt (target :: arbitrary)
           val rule' = Option.map (chk_single ctxt rule o read_thms ctxt) rule
-       in INDUCT (target', vars, arbitrary', rule')
+          (* Parse each facts_to_generalize name string into a
+           * Facts.ref (via the standard Parse.thm path). Supports
+           * `h`, `h(i)`, `h(i-j)`, `h[attr]`. Defensive "local."
+           * strip matches items-channel naming. *)
+          val gen_fact_refs =
+            map (read_fact o Minilang_Aux.simp_fact_name') gen_fact_names
+       in INDUCT (target', vars, arbitrary', gen_fact_refs, rule')
       end
   | check_command_i s (NEXT_OR_END (facts, vars)) =
       let val ctxt = Minilang.context_of s

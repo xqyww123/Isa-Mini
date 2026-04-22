@@ -1,0 +1,110 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+variables:
+  - p: nat
+goal: True
+proof: empty
+--------------------------------------------------
+After Have trivial_fact
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+variables:
+  - p: nat
+goal: True
+proof:
+  - step id: 1
+    thought: unrelated local fact, prop has no free vars
+    operation: Have
+    statement:
+      english: zero is less than one
+      isabelle: (0::nat) < 1
+    name: trivial_fact
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: nat) < (1 :: nat)
+--------------------------------------------------
+After Have gen
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+variables:
+  - p: nat
+goal: True
+proof:
+  - step id: 1
+    thought: unrelated local fact, prop has no free vars
+    operation: Have
+    statement:
+      english: zero is less than one
+      isabelle: (0::nat) < 1
+    name: trivial_fact
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: nat) < (1 :: nat)
+  - step id: 2
+    thought: sub-lemma to induct on
+    operation: Have
+    statement:
+      english: for every n at most p, True holds
+      isabelle: \<And>n::nat. n \<le> p \<Longrightarrow> True
+    name: gen
+    proof:
+      - step id: 2.1
+        operation: Intro
+        fixing variables:
+          - n: nat
+        assuming premises:
+          - premise0: n ≤ p
+--------------------------------------------------
+After Induction (expect 3 filter warnings)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+variables:
+  - p: nat
+goal: True
+proof:
+  - step id: 1
+    thought: unrelated local fact, prop has no free vars
+    operation: Have
+    statement:
+      english: zero is less than one
+      isabelle: (0::nat) < 1
+    name: trivial_fact
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: nat) < (1 :: nat)
+  - step id: 2
+    thought: sub-lemma to induct on
+    operation: Have
+    statement:
+      english: for every n at most p, True holds
+      isabelle: \<And>n::nat. n \<le> p \<Longrightarrow> True
+    name: gen
+    proof:
+      - step id: 2.1
+        operation: Intro
+        fixing variables:
+          - n: nat
+        assuming premises:
+          - premise0: n ≤ p
+      - step id: 2.2
+        thought: induct on n with four kinds of facts_to_generalize
+        operation: Induction
+        target term: n :: nat
+        facts to generalize: premise0
+        fixing variables:
+          - n: nat
+        assuming premises:
+          - premise0: n ≤ p
+          - 1.IH: ∀m<n. m ≤ p ⟶ True
+        cases: empty
+
+Surviving facts_to_generalize (full names): ['premise0']
+Warnings (sorted):
+  - Fact `bogus_name` in `facts_to_generalize` was not found; skipped.
+  - Fact `nat_less_induct` in `facts_to_generalize` is a global theorem; only local proof-context facts can be carried through induction — skipped.
+  - Fact `trivial_fact` in `facts_to_generalize` does not mention any generalized variable; it would not be affected by induction — skipped.

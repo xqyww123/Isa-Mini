@@ -310,6 +310,11 @@
           },
           "type": "array"
         },
+        "facts_to_generalize": {
+          "description": "facts to generalize along with the generalized variables",
+          "type": "array",
+          "items": { "$ref": "#/$defs/FactByName" }
+        },
         "proofs": {
           "type": "array",
           "items": {

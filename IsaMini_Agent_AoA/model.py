@@ -184,11 +184,15 @@ class IsabelleFact(ABC):
 
 class IsabelleFact_Presented(IsabelleFact, IsabelleEntity):
     """A resolved fact with full information from Isabelle. `kind` must be
-    theorem-like (see _THEOREM_KINDS)."""
-    __slots__ = ('fact',)
+    theorem-like (see _THEOREM_KINDS). `is_local` is True iff the fact
+    lives only in the current proof context (assms, IH, named `have`),
+    not in the global theory namespace — used by the Induction tool's
+    `facts_to_generalize` filter."""
+    __slots__ = ('fact', 'is_local')
     def __init__(self, full_name: 'full_name', short_name: 'short_name', fact: Fact, expression: list[term],
                  kind: EntityKind = EntityKind.THEOREM, roles: list[str] = [],
-                 abbreviation_names: 'list[full_name]' = []):
+                 abbreviation_names: 'list[full_name]' = [],
+                 is_local: bool = False):
         assert kind in _THEOREM_KINDS, \
             f"IsabelleFact_Presented requires a theorem-like kind, got {kind}"
         self.full_name = full_name
@@ -198,6 +202,7 @@ class IsabelleFact_Presented(IsabelleFact, IsabelleEntity):
         self.kind = kind
         self.roles = roles
         self.abbreviation_names = abbreviation_names
+        self.is_local = is_local
     def name(self) -> 'short_name':
         return self.short_name
     def print(self, indent: int, file: MyIO) -> None:
@@ -739,12 +744,17 @@ class New_Item_Msg(Message):
         return cls(Context.unpack(data))
 
 class Goals_Msg(Message):
-    def __init__(self, goals: list[str]) -> None:
+    """The number of new subgoals opened by the operation that produced
+    this state.  The ML side still carries the full `term list` (used
+    by the translator's `(*goal: …*)` annotations) but the RPC packer
+    sends only the length — Python only needs the count (to drive
+    `SubgoalMaker.new_subgoals_count`)."""
+    def __init__(self, count: int) -> None:
         super().__init__()
-        self.goals = goals  # List of pretty-printed goal strings (empty list if no goals)
+        self.count = count
     @classmethod
     def unpack(cls, data) -> 'Goals_Msg':
-        # data is List String - empty list means no goals
+        # data is an int — see agent_server.ML's packer
         return cls(data)
 
 class Consider_Case_Msg(Message):
@@ -1160,11 +1170,16 @@ class Minilang_Operation(NamedTuple):
             (ascii_of_unicode(target), _pack_varnames(vars),
              ascii_of_unicode(rule) if rule is not None else None))
     @staticmethod
-    def INDUCT(target: xterm, vars: list[varname_spec] | None, arbitrary: list[xvarname], rule: str | None) -> 'Minilang_Operation':
+    def INDUCT(target: xterm, vars: list[varname_spec] | None, arbitrary: list[xvarname],
+               facts_to_generalize: list[str], rule: str | None) -> 'Minilang_Operation':
         # `rule` is the raw Isabelle rule source; see CASE_SPLIT above.
+        # `facts_to_generalize` is a list of local-fact full names that ML
+        # resolves via Proof_Context.get_thms and passes as `insertion` to
+        # INDUCT' (so they are generalized alongside `arbitrary`).
         return Minilang_Operation("INDUCT",
             (ascii_of_unicode(target), _pack_varnames(vars),
              [ascii_of_unicode(t) for t in arbitrary],
+             list(facts_to_generalize),
              ascii_of_unicode(rule) if rule is not None else None))
     @staticmethod
     def SPECIALIZE(
@@ -1267,7 +1282,7 @@ class Minilang_State:
                 case []:
                     assign_to.new_subgoals_count = None
                 case [gm]:
-                    assign_to.new_subgoals_count = len(gm.goals)
+                    assign_to.new_subgoals_count = gm.count
                 case _:
                     raise InternalError(
                         f"Expected at most one Goals_Msg per operation, "
@@ -1354,10 +1369,11 @@ class Minilang_State:
                 if result is None:
                     out[idx] = IsabelleFact_Unfound(fact)
                 else:
-                    short_name, exprs, roles, _ = result
+                    short_name, exprs, roles, _, is_local = result
                     out[idx] = IsabelleFact_Presented(
                         full_name=query_name, short_name=short_name,
-                        fact=fact, expression=exprs, roles=roles)
+                        fact=fact, expression=exprs, roles=roles,
+                        is_local=is_local)
         return out
     async def refresh_facts(self, facts: list[IsabelleFact]) -> list[IsabelleFact]:
         """Re-validate cached Presented/Unfound facts against the current
@@ -1387,11 +1403,11 @@ class Minilang_State:
             if result is None:
                 out[idx] = IsabelleFact_Unfound(original_fact)
             else:
-                short_name, exprs, roles, _ = result
+                short_name, exprs, roles, _, is_local = result
                 out[idx] = IsabelleFact_Presented(
                     full_name=query_name, short_name=short_name,
                     fact=original_fact, expression=exprs,
-                    kind=kind, roles=roles)
+                    kind=kind, roles=roles, is_local=is_local)
         return out
     async def semantic_knn(self, query: str | None, k: int,
                      kinds: list[EntityKind],
@@ -1491,14 +1507,15 @@ class Minilang_State:
                 exprs: list[term] = []
                 roles: list[str] = []
                 abbrev_names: 'list[full_name]' = []
+                is_local = False
             else:
-                sname, exprs, roles, abbrev_names = info
+                sname, exprs, roles, abbrev_names, is_local = info
             if rec.kind in _THEOREM_KINDS:
                 entity: IsabelleEntity = IsabelleFact_Presented(
                     full_name=rec.name, short_name=sname,
                     fact=FactByName(refer_by="name", name=sname.ascii),
                     expression=exprs, kind=rec.kind, roles=roles,
-                    abbreviation_names=abbrev_names)
+                    abbreviation_names=abbrev_names, is_local=is_local)
             else:
                 entity = IsabelleEntity(
                     full_name=rec.name, short_name=sname,
@@ -1532,18 +1549,32 @@ class Minilang_State:
         result = await self.connection.callback("IsaMini.need_intro", (self.name, consider_conj))
         return result
     async def _retrieve_entity(self, entities: list[tuple[EntityKind, str]]
-        ) -> list[tuple[short_name, list[term], list[str], list[full_name]] | None]:
+        ) -> list[tuple[short_name, list[term], list[str], list[full_name], bool] | None]:
         """Retrieve entity info by kind and name (short or full).
-        Returns list of (short_name, extra_strings, roles, abbreviation_names) or None per entity.
+        Returns list of (short_name, extra_strings, roles, abbreviation_names, is_local) or None per entity.
         extra_strings: propositions for theorems/rules, [type] for constants, [] for others.
         roles: list of system rule set tags ('simp', 'intro', 'elim') for theorems, [] for others.
-        abbreviation_names: full names of abbreviation constants involved in the entity."""
+        abbreviation_names: full names of abbreviation constants involved in the entity.
+        is_local: True iff the entity is a theorem visible only in the current proof context
+                  (not in the global theory namespace); always False for non-theorem kinds."""
         args = [(int(kind), name) for kind, name in entities]
         results = await self.connection.callback(
             "IsaMini.retrieve_entity", (self.name, args))
         return [(IsaTerm.from_isabelle(r[0]), [IsaTerm.from_isabelle(e) for e in r[1]], list(r[2]),
-                 list(r[3]))
+                 list(r[3]), bool(r[4]))
                 if r is not None else None for r in results]
+    async def filter_generalize_facts(self, fact_full_names: list[str],
+                                       gen_var_names: list[str]
+                                       ) -> tuple[list[str], list[str]]:
+        """Partition `fact_full_names` into (kept, dropped) where `dropped`
+        are facts whose prop has no Free occurrence of any name in
+        `gen_var_names`. Used by the Induction tool's `facts_to_generalize`
+        field to reject facts that would be unaffected by generalization.
+        Mirrors the dirty-frees filter at library/proof.ML:2829–2837."""
+        kept, dropped = await self.connection.callback(
+            "IsaMini.filter_generalize_facts",
+            (self.name, list(fact_full_names), list(gen_var_names)))
+        return (list(kept), list(dropped))
     async def check_term(self, term_str: xterm) -> tuple[typ, Vars, Vars]:
         """
         Parse and check a term string using Syntax.read_term.
@@ -1790,11 +1821,12 @@ async def _try_resolve_as_named_fact(
     results = await state._retrieve_entity([(EntityKind.THEOREM, name)])
     result = results[0]
     if result is not None:
-        short_name, exprs, roles, abbrev = result
+        short_name, exprs, roles, abbrev, is_local = result
         return IsabelleFact_Presented(
             full_name=name, short_name=short_name,
             fact=FactByName(refer_by="name", name=name),
-            expression=exprs, roles=roles, abbreviation_names=abbrev)
+            expression=exprs, roles=roles, abbreviation_names=abbrev,
+            is_local=is_local)
     return None
 
 _retrieval_db_conn: sqlite3.Connection | None = None
@@ -6316,6 +6348,7 @@ class Induction_ToolArg(TypedDict):
     target_isabelle_term: xterm
     rule: NotRequired[Literal["default"] | FactByName | FactByDescription]
     variables: list[Induction_ToolArg_Variable]
+    facts_to_generalize: NotRequired[list[FactByName]]
     proofs: NotRequired[list[Proof_PerCase] | None]
 
 @proof_operation("Induction", Induction_ToolArg)
@@ -6328,12 +6361,20 @@ class Induction(CaseSplit_Like):
         self.rule_spec: 'Literal["default"] | FactByName | FactByDescription' = \
             arg.get("rule", "default")
         self.variables = arg["variables"]
+        # Agent-supplied local facts that should be generalized alongside
+        # the `arbitrary` variables (routed into induct_facts.insertion on
+        # the ML side). Raw list is kept so refresh can re-validate after
+        # amend; resolved refs hold only the surviving local facts that
+        # mention at least one generalized variable.
+        self._raw_facts_to_generalize: list[FactByName] = list(arg.get("facts_to_generalize") or [])
+        self.fact_refs_to_generalize: list[IsabelleFact_Presented] = []
         self._proofs_by_case = proofs_by_case
     def quickview_title(self) -> str:
         return f"Induction {self.target_isabelle_term}"
     async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
         is_init = self._first_time
         old_variables = list(self.variables)
+        old_gen_fact_names = [r.full_name for r in self.fact_refs_to_generalize]
         try:
             _, frees, _ = await self.ml_state.check_term(self.target_isabelle_term)
         except InternalError_UnparsedTerm as e:
@@ -6353,6 +6394,11 @@ class Induction(CaseSplit_Like):
                 self.rule_spec, self.target_isabelle_term, arbitrary, "induction")
             if fail is not None:
                 return fail
+        # Resolve `facts_to_generalize` BEFORE super() so the kept full
+        # names are visible to `beginning_opr()` when the parent class
+        # runs the INDUCT operation. Drop unfound / global / dirty-var-
+        # irrelevant entries with warnings.
+        await self._resolve_facts_to_generalize(frees)
         fail = await super()._refresh_the_beginning_opr()
         if fail is None:
             vars = self._all_fixed_vars_before_me({})
@@ -6391,7 +6437,59 @@ class Induction(CaseSplit_Like):
                 self.variables.extend({"name": v.unicode, "status": "fixed"} for v in new_var_names)
         if not is_init and self.variables != old_variables:
             self.changed = True
+        new_gen_fact_names = [r.full_name for r in self.fact_refs_to_generalize]
+        if not is_init and new_gen_fact_names != old_gen_fact_names:
+            self.changed = True
         return fail
+    async def _resolve_facts_to_generalize(self, target_frees: Vars) -> None:
+        """Fetch `facts_to_generalize` entries, partition by locality and
+        dirty-var relevance, emit warnings for each drop, and cache the
+        survivors on `self.fact_refs_to_generalize`. `target_frees` is the
+        set of free variables in the induction target (reused from the
+        caller's check_term)."""
+        self.fact_refs_to_generalize = []
+        if not self._raw_facts_to_generalize:
+            return
+        fetched = cast(list[IsabelleFact],
+                       await self.ml_state.fetch_facts(self._raw_facts_to_generalize))
+        local_candidates: list[IsabelleFact_Presented] = []
+        for f in fetched:
+            if isinstance(f, IsabelleFact_Unfound):
+                self.warnings.append(Warning(
+                    Warning.Position.HEADER,
+                    f"Fact `{f.name().unicode}` in `facts_to_generalize` was not found; skipped."))
+            elif isinstance(f, IsabelleFact_Presented):
+                if not f.is_local:
+                    self.warnings.append(Warning(
+                        Warning.Position.HEADER,
+                        f"Fact `{f.short_name.unicode}` in `facts_to_generalize` is a global "
+                        f"theorem; only local proof-context facts can be carried through "
+                        f"induction — skipped."))
+                else:
+                    local_candidates.append(f)
+        if not local_candidates:
+            return
+        # Dirty-var set mirrors library/proof.ML:2829–2832: free variables
+        # of the induction target plus the `arbitrary` (generalized) vars.
+        # Names are compared against Free-var names in Isabelle prop_of,
+        # which are ASCII, so convert xvarname (unicode) accordingly.
+        gen_var_names: list[str] = list({
+            *(ascii_of_unicode(var["name"]) for var in self.variables
+              if var["status"] == "generalized"),
+            *(v.ascii for v in target_frees),
+        })
+        candidate_full_names = [c.full_name for c in local_candidates]
+        kept, dropped = await self.ml_state.filter_generalize_facts(
+            candidate_full_names, gen_var_names)
+        name_to_ref = {c.full_name: c for c in local_candidates}
+        for n in dropped:
+            ref = name_to_ref.get(n)
+            display = ref.short_name.unicode if ref is not None else n
+            self.warnings.append(Warning(
+                Warning.Position.HEADER,
+                f"Fact `{display}` in `facts_to_generalize` does not mention any "
+                f"generalized variable; it would not be affected by induction — skipped."))
+        self.fact_refs_to_generalize = [name_to_ref[n] for n in kept if n in name_to_ref]
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         return ('cases', indent+1)
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
@@ -6405,6 +6503,9 @@ class Induction(CaseSplit_Like):
         if any(var["status"] == "generalized" for var in self.variables):
             print_indent(indent, file)
             file.write(f"generalized variables: {string_of_and_list([var["name"] for var in self.variables if var["status"] == "generalized"])}\n")
+        if self.fact_refs_to_generalize:
+            print_indent(indent, file)
+            file.write(f"facts to generalize: {string_of_and_list([r.short_name.unicode for r in self.fact_refs_to_generalize])}\n")
         super()._print_header(indent, file)
         self._print_evaluation_status(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
@@ -6413,6 +6514,7 @@ class Induction(CaseSplit_Like):
             self.target_isabelle_term,
             cast(list[varname_spec] | None, self._case_vars_of_child(0)),
             [var["name"] for var in self.variables if var["status"] == "generalized"],
+            [r.full_name for r in self.fact_refs_to_generalize],
             self._resolved_rule_str)
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         return FailureReason(f"Induction failed because: {"\n".join(err.errors)}")

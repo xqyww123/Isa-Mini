@@ -126,17 +126,22 @@ val potential_defs_of_const : Proof.context -> string -> (string * thm) list
 val UNFOLD : thm list -> operation
 val UNFOLD_CMD : command
 
-(* INDUCT / CASE_SPLIT facts are split into two roles:
+(* INDUCT facts are split into two roles:
  *   using     : facts intended to discharge the rule's major premises
  *               (the `consumes` count). Required: |using| >= consumes.
  *               When `strict_consumes_check` is true, also |using| <= consumes.
- *   insertion : facts to be inserted as goal premises before induction
- *               (via the same `more_facts` path that auto-insert uses).
- *               No role in rule's consume discharge.
- * Minilang / Agent callers put everything in `using`; `insertion` is an
- * ML-level extension point (currently only the internal auto-insert
- * mechanism uses it — see induct_auto_insert_facts). *)
-type induct_facts = {using: thm list, insertion: thm list}
+ *   insertion : named facts to be wrapped with HOL.TAG + conjI, inserted
+ *               as a goal premise via a dedicated `Method.insert_tac`
+ *               call (NOT via `induction_tac`'s `facts` parameter, so
+ *               `Rule_Cases.consume` never touches them), and restored
+ *               in each case's context under their original name by
+ *               `update_tampered`. Each entry is (name, thm list) —
+ *               matching Isabelle's multi-thm fact shape. Auto-insert
+ *               populates this from the context scan; agent
+ *               `facts_to_generalize` populates it from explicit names;
+ *               the two sources are merged in INDUCT' with explicit
+ *               entries overriding same-named auto entries. *)
+type induct_facts = {using: thm list, insertion: (string * thm list) list}
 
 val INDUCT : bool * ((binding option * (term * bool)) option list list *
               (((string * typ) list list * term option list) * thm list option))
@@ -146,9 +151,14 @@ val INDUCT : bool * ((binding option * (term * bool)) option list list *
 val INDUCT'' : Token.src * opt_var_names * fact list -> operation
 val INDUCT_CMD : command
 
+(* CASE_SPLIT only takes `using` facts — no insertion slot. (If a case
+ * analysis ever needs a named-facts TAG channel like INDUCT's, follow
+ * the INDUCT' pattern rather than reinstating `using @ insertion`,
+ * which is unsafe because `Rule_Cases.consume` would swallow the
+ * insertion tail.) *)
 val CASE_SPLIT   : bool * (term option list list * thm option)
                 -> opt_var_names
-                -> induct_facts
+                -> thm list
                 -> operation
 val CASE_SPLIT'' : Token.src * opt_var_names * fact list -> operation
 val CASE_SPLIT_CMD : command
@@ -2641,7 +2651,7 @@ fun pick_case_split_rule ctxt opt_rule insts facts =
 (* Structure-side type declarations matching the signature. SML requires
  * the structure to repeat concrete `type t = ty` bindings even when the
  * signature already specifies them. *)
-type induct_facts = {using: thm list, insertion: thm list}
+type induct_facts = {using: thm list, insertion: (string * thm list) list}
 type induct_analysis =
   {rule: thm,
    rule_name: string option,
@@ -2822,44 +2832,75 @@ fun INDUCT' (no_simp, (insts, ((arbitrary, taking), opt_rule))) first_vars
              | NONE => NONE
         else effective_opt_rule
 
-      val (tamper_facts, tamper_fact') =
+      (* Dirty-var set — free variables of the induction targets ∪
+       * `arbitrary` vars. A thm in an insertion fact is "dirty" iff
+       * its prop mentions at least one of these as a Free — i.e. the
+       * thm will be affected by generalization. Shared by both
+       * auto-insert (scans context) and explicit insertion (agent
+       * `facts_to_generalize`). *)
+      val dirty_frees = fold (fold (fn NONE => I
+                                     | SOME (_, (X, _)) => Term.add_frees X)) insts []
+                     |> fold (curry (merge (op =))) arbitrary
+      val dirty = member (op =) dirty_frees
+      fun mark_dirty th =
+        (Term.exists_subterm (fn Free f => dirty f | _ => false) (Thm.prop_of th), th)
+
+      (* Explicit insertion from callers (e.g. agent `facts_to_generalize`).
+       * Already carries name ↔ thm list pairing. Each thm gets a
+       * per-thm dirty bit; facts with zero dirty thms are dropped
+       * (they would contribute nothing to the TAG conjunction). *)
+      val explicit_tamper =
+        map (apsnd (map mark_dirty)) insertion
+        |> filter (exists fst o snd)
+      val explicit_names = map fst explicit_tamper
+      val explicit_fact' =
+        maps (map_filter (fn (true, x) => SOME x | _ => NONE) o snd) explicit_tamper
+
+      (* Auto-insert: scan leading goal's local facts and mark dirty.
+       * Merge strategy: explicit wins — auto entries sharing a name
+       * with any explicit entry are dropped so we never double-wrap
+       * the same fact. *)
+      val (auto_tamper, auto_fact') =
         if Config.get ctxt induct_auto_insert_facts
         then let
             val ((_, facts), _) = context_of_leading_goal (print_stack SK)
             val facts = map (fn (name, _) => (name, Proof_Context.get_thms ctxt name)) facts
-
-            val dirty_frees = fold (fold (fn NONE => I
-                                           | SOME (_, (X, _)) => Term.add_frees X)) insts []
-                           |> fold (curry (merge (op =))) arbitrary
-            val dirty = member (op =) dirty_frees
-
-            val tamper_facts = map (apsnd (map (` ( Term.exists_subterm (fn Free f => dirty f
-                                                                          | _ => false)
-                                                  o Thm.prop_of)))) facts
-                            |> filter (exists fst o snd)
-         in (tamper_facts,
-             maps (map_filter (fn (true, x) => SOME x | _ => NONE) o snd) tamper_facts)
+            val tf = map (apsnd (map mark_dirty)) facts
+                  |> filter (exists fst o snd)
+                  |> filter_out (fn (n, _) => member (op =) explicit_names n)
+         in (tf, maps (map_filter (fn (true, x) => SOME x | _ => NONE) o snd) tf)
         end
         else ([], [])
+
+      val tamper_facts = auto_tamper @ explicit_tamper
+      val tamper_fact' = auto_fact' @ explicit_fact'
 
       val IH_map = Unsynchronized.ref []
       val diff = case effective_opt_rule of NONE => 0
                     | SOME rules => length rules - 1
-      (* The effective fact list passed to induction_tac combines:
-       *   1. `using`       — driven by user; first `consumes` are discharged
-       *                      by Rule_Cases.consume, rest flow to more_facts.
-       *   2. tampered-wrapped theorem (only if using is empty AND auto-insert
-       *                      fired) — preserves name recovery via update_tampered.
-       *   3. `insertion`   — always appended; go to more_facts → Method.insert_tac.
-       *)
+      (* `wrapped` is the single TAG+conjI-packed thm (empty list if
+       * there are no dirty insertion atoms). It is inserted into the
+       * goal via a DEDICATED `Method.insert_tac` call BEFORE
+       * induction_tac runs, so `Rule_Cases.consume` inside
+       * induction_tac never sees it. induction_tac receives only
+       * `using`; its arbitrary_tac will still generalize the inserted
+       * wrapped premise because it is now part of the goal. Post-
+       * induction, the tagged wrapped premise surfaces in each case's
+       * assumptions, gets filtered out by CASES' (is_tagged_Trueprop)
+       * and routed to `update_tampered` for named restoration. *)
       fun tac (ctxt, st) =
         let val st' = pop_n_goals (diff + 1) st
-            val main_facts =
-              if null using
-              then if null tamper_fact' then [] else [wraps ctxt tamper_fact']
-              else using
-         in induction_tac IH_map (not no_simp) insts arbitrary taking effective_opt_rule
-              (main_facts @ insertion) 1 (ctxt, st')
+            val wrapped =
+              if null tamper_fact' then [] else [wraps ctxt tamper_fact']
+            (* `Method.insert_tac ... 1 : tactic` returns thm Seq.seq;
+             * `induction_tac ... 1 : context_tactic` takes
+             * (ctxt, st) and returns context_state Seq.result Seq.seq.
+             * Seq.maps chains them: for each st'' produced by
+             * insert_tac, run induction_tac in the same context. *)
+         in Seq.maps (fn st'' =>
+              induction_tac IH_map (not no_simp) insts arbitrary taking
+                            effective_opt_rule using 1 (ctxt, st''))
+             (Method.insert_tac ctxt wrapped 1 st')
         end
 
       fun update_tampered ctxt th =
@@ -2884,7 +2925,7 @@ fun INDUCT' (no_simp, (insts, ((arbitrary, taking), opt_rule))) first_vars
     ; ret
   end
 
-fun CASE_SPLIT' (no_simp, (insts, opt_rule)) vars ({using, insertion} : induct_facts) (ctxt, SK) =
+fun CASE_SPLIT' (no_simp, (insts, opt_rule)) vars (using : thm list) (ctxt, SK) =
   let
       (* Pre-execution: pick the case-split rule and validate that the user
        * supplied enough `using` facts to discharge its major premises.
@@ -2921,11 +2962,7 @@ fun CASE_SPLIT' (no_simp, (insts, opt_rule)) vars ({using, insertion} : induct_f
              | NONE => NONE
         else effective_opt_rule
 
-      (* Combine using + insertion: first `consumes` of `using` are discharged
-       * by Rule_Cases.consume, the rest flow through `more_facts` into
-       * Method.insert_tac. Insertion is always appended after using. *)
-      val facts' = using @ insertion
-      val tac = Induct.cases_context_tactic (not no_simp) insts effective_opt_rule facts' 1
+      val tac = Induct.cases_context_tactic (not no_simp) insts effective_opt_rule using 1
    in CASES' 0 (K (K [])) tac vars (ctxt, SK)
   end
 
@@ -2952,8 +2989,7 @@ val CASE_SPLIT_CMD = CONTEXTUAL_CMD (fn ctxt =>
          case_synt (Context.Proof ctxt) -- OPT_VARS -- Scan.optional WITH_CLAUSE []
       >> (fn (((no_simp, (insts, opt_rule)), vars), raw_facts) =>
         let val facts = Attrib.eval_thms ctxt raw_facts
-         in CASE_SPLIT (no_simp, (insts, opt_rule)) vars
-              {using = facts, insertion = []}
+         in CASE_SPLIT (no_simp, (insts, opt_rule)) vars facts
         end ) )
 fun CASE_SPLIT'' (args, vars, raw_facts) s =
   let val ctxt = context_of s
@@ -2962,7 +2998,7 @@ fun CASE_SPLIT'' (args, vars, raw_facts) s =
                  else args @ [Token.eof]
       val (args', _) = case_synt (Context.Proof ctxt) toks
       val facts = Attrib.eval_thms ctxt raw_facts
-   in timed_OPR 10 (CASE_SPLIT' args' vars {using = facts, insertion = []}) s
+   in timed_OPR 10 (CASE_SPLIT' args' vars facts) s
   end
 
 

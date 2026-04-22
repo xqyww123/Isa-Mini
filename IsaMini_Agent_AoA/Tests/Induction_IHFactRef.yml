@@ -54,6 +54,7 @@ proof:
         thought: strong induction on n, generalize n, keep p fixed
         operation: Induction
         target term: n :: nat
+        facts to generalize: premise0
         fixing variables:
           - n: nat
         assuming premises:
@@ -88,6 +89,7 @@ proof:
         thought: strong induction on n, generalize n, keep p fixed
         operation: Induction
         target term: n :: nat
+        facts to generalize: premise0
         fixing variables:
           - n: nat
         assuming premises:

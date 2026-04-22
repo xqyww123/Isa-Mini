@@ -132,11 +132,12 @@ val unpacker =
                         unpack_opt_var_names,
                         unpackOption unpackString
                      )
-     | "INDUCT"   => apfst INDUCT   o unpackTuple4 (
-                        unpackString,
-                        unpack_opt_var_names,
-                        unpackList unpackString,
-                        unpackOption unpackString
+     | "INDUCT"   => apfst INDUCT   o unpackTuple5 (
+                        unpackString,                (* target *)
+                        unpack_opt_var_names,        (* vars *)
+                        unpackList unpackString,     (* arbitrary *)
+                        unpackList unpackString,     (* facts_to_generalize *)
+                        unpackOption unpackString    (* rule *)
                      )
      | "ATP"      => apfst (fn (facts, vars) => NEXT_OR_END (facts, vars))
                       o unpackPair (unpackList unpack_extended_fact, unpack_opt_var_names)
@@ -190,7 +191,10 @@ fun packer (SIMPLIFY data) =
       packPair (packString, packTuple3 (packString, pack_opt_var_names, packOption packString))
         ("CASE_SPLIT", data)
   | packer (INDUCT data) =
-      packPair (packString, packTuple4 (packString, pack_opt_var_names, packList packString, packOption packString))
+      packPair (packString, packTuple5 (packString, pack_opt_var_names,
+                                         packList packString,
+                                         packList packString,
+                                         packOption packString))
         ("INDUCT", data)
   | packer (NEXT_OR_END data) =
       packPair (packString, packPair (packList pack_extended_fact, pack_opt_var_names))
