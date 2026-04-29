@@ -1,0 +1,84 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - m: nat
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (∃(k :: nat). k = m) ⟶ m = m
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: ∃(k :: nat). k = m
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  m = m
+--------------------------------------------------
+After Obtain
+--------------------------------------------------
+variables:
+  - m: nat
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (∃(k :: nat). k = m) ⟶ m = m
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: ∃(k :: nat). k = m
+  - step id: 2
+    thought: unpack the existential
+    operation: Obtain
+    variables:
+      - k: nat
+    constraint:
+      name: k_def
+      english: the existential witness
+      isabelle: k = m
+    proof:
+      - step id: 2.1
+        operation: Obvious
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  m = m
+--------------------------------------------------
+After Obvious with k_def
+--------------------------------------------------
+variables:
+  - m: nat
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (∃(k :: nat). k = m) ⟶ m = m
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: ∃(k :: nat). k = m
+  - step id: 2
+    thought: unpack the existential
+    operation: Obtain
+    variables:
+      - k: nat
+    constraint:
+      name: k_def
+      english: the existential witness
+      isabelle: k = m
+    proof:
+      - step id: 2.1
+        operation: Obvious
+  - step id: 3
+    operation: Obvious
+    with facts:
+      - k_def: k = m
+--------------------------------------------------
+After deleting Obtain
+--------------------------------------------------
+variables:
+  - m: nat
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (∃(k :: nat). k = m) ⟶ m = m
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: ∃(k :: nat). k = m
+  - step id: 3
+    operation: Obvious

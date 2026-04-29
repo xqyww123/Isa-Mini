@@ -4819,7 +4819,10 @@ class Obvious(Leaf):
             for w in unfound_warnings + pit_warnings:
                 self.warnings.append(Warning(Warning.Position.FOOTER, w))
         elif self.ml_state.initialized():
-            self.fact_refs = await self.ml_state.refresh_facts(self.fact_refs)
+            refreshed = await self.ml_state.refresh_facts(self.fact_refs)
+            self.fact_refs, unfound_warnings = _filter_unfound(refreshed)
+            for w in unfound_warnings:
+                self.warnings.append(Warning(Warning.Position.FOOTER, w))
         await super()._refresh_me_alone()
         if self.parent is not None:
             if self.status.status == EvaluationStatus.Status.SUCCESS:
@@ -4827,7 +4830,8 @@ class Obvious(Leaf):
             elif self.status.status == EvaluationStatus.Status.FAILURE:
                 self.parent._is_trivial = False
     def the_operation(self) -> 'Minilang_Operation | FailureReason':
-        return Minilang_Operation.HAMMER(self.fact_refs if self.fact_refs is not None else [], 30)
+        facts = self.fact_refs if self.fact_refs is not None else []
+        return Minilang_Operation.HAMMER(facts, 30)
     def _on_edit_failure(self, outcome: 'EditOutcome') -> 'tuple[EditFailureBehavior, EditOutcome]':
         if self.status.status == EvaluationStatus.Status.FAILURE:
             # Multi-op batches skip auto-revert so the agent sees
@@ -4915,7 +4919,10 @@ class Chaining(Leaf):
             else:
                 self.fact_refs = []  # the_operation will report "requires at least one fact"
         elif self.ml_state.initialized():
-            self.fact_refs = await self.ml_state.refresh_facts(self.fact_refs)
+            refreshed = await self.ml_state.refresh_facts(self.fact_refs)
+            self.fact_refs, unfound_warnings = _filter_unfound(refreshed)
+            for w in unfound_warnings:
+                self.warnings.append(Warning(Warning.Position.FOOTER, w))
         await super()._refresh_me_alone()
         if self.status.status == EvaluationStatus.Status.SUCCESS:
             messages = self.resulting_state().messages
@@ -4927,7 +4934,11 @@ class Chaining(Leaf):
     def the_operation(self) -> 'Minilang_Operation | FailureReason':
         if not self._raw_facts:
             return FailureReason("Chaining requires at least one fact")
-        return Minilang_Operation.CHAINING(self.chain_name, self.fact_refs if self.fact_refs is not None else [])
+        facts = self.fact_refs if self.fact_refs is not None else []
+        unfound = [f for f in facts if isinstance(f, IsabelleFact_Unfound)]
+        if unfound:
+            return FailureReason("\n".join(f"Fact \"{f.name().unicode}\" not found" for f in unfound))
+        return Minilang_Operation.CHAINING(self.chain_name, facts)
 
     def _on_edit_failure(self, outcome: 'EditOutcome') -> 'tuple[EditFailureBehavior, EditOutcome]':
         if self.status.status == EvaluationStatus.Status.FAILURE:

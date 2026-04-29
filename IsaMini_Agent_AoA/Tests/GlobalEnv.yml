@@ -96,7 +96,6 @@ Outline:
       goal changes into:
         (0 :: int) * (0 :: int) = (0 :: int)
     Error: Unfinished Proof. Fill step `2`
-    goal: (0 :: int) * (0 :: int) = (0 :: int)
 ---------------
 Amend global.1: id=global.1, local_step=1, is_error=False
 Amended Have status: success
