@@ -1,0 +1,50 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - m: nat
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (∃(k :: nat). k = m) ⟶ True
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: ∃(k :: nat). k = m
+--------------------------------------------------
+After Obtain (no proof — sorry path)
+--------------------------------------------------
+variables:
+  - m: nat
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (∃(k :: nat). k = m) ⟶ True
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: ∃(k :: nat). k = m
+  - step id: 2
+    thought: unpack the existential
+    operation: Obtain
+    variables:
+      - k: nat
+    constraint:
+      name: k_def
+      english: the existential witness
+      isabelle: k = m
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
+    pending proof goal:
+      ∃(k1 :: nat). k1 = m
+--------------------------------------------------
+Quickview
+--------------------------------------------------
+step 1: Intro (line 0)
+  assuming premises:
+    - premise0: ∃(k :: nat). k = m
+step 2: Obtain k (line 0)
+  Error: Unfinished Proof (line 35). Call command `edit` with action `fill` and target step `2.1`
+  goal: ∃(k1 :: nat). k1 = m
+  obtained variables:
+    - k: nat
+  constraints:
+    - k_def: k = m

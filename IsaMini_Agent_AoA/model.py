@@ -5970,11 +5970,16 @@ class Obtain(StdBlock):
         fail = await super()._refresh_footer()
         if fail is not None:
             return fail
+        self._read_introduced()
+        return None
+    def _read_introduced(self) -> None:
         msgs = [m for m in self.resulting_state().messages
                 if isinstance(m, New_Item_Msg)]
         if msgs:
             self._introduced = msgs[0].items
-        return None
+    async def _skip_proof(self) -> None:
+        await super()._skip_proof()
+        self._read_introduced()
     def _fixed_vars_after_me(self, ret: Vars) -> Vars:
         ret.update(self._introduced.vars)
         return ret

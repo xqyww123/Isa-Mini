@@ -4256,6 +4256,58 @@ async def _test_Obtain_Fixed(root: Root, file: MyIO):
     root.quickview(0, file)
 
 
+@model_test("Obtain_Skip_Introduced", "Test_Obtain_Skip_Introduced.thy", 8)
+async def _test_Obtain_Skip_Introduced(root: Root, file: MyIO):
+    """Verify Obtain populates `_introduced` even on the sorry/skip path.
+
+    Same scenario as Obtain_Fixed (lemma `∃k::nat. k = m ⟹ True`), but
+    the Obtain is issued WITHOUT a sub-proof.  The block's END fails,
+    StdBlock._refresh_me_alone takes the sorry path (`_skip_proof`), and
+    Obtain._skip_proof must still read the New_Item_Msg so that
+    `_fixed_vars_after_me` / `_fixed_facts_after_me` expose the obtained
+    variables/constraints to subsequent siblings."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    await root.fill("2", [Obtain.gen_single({
+        "thought": "unpack the existential",
+        "variables": [{"name": "k", "type": "nat"}],
+        "constraints": [{"name": "k_def",
+                         "isabelle": "k = m",
+                         "english": "the existential witness"}],
+    })])
+    print_header("After Obtain (no proof — sorry path)", file)
+    root.print(0, file)
+
+    obtain_node = root.locate_node("2")
+    assert isinstance(obtain_node, Obtain), \
+        f"Expected Obtain at step 2, got {type(obtain_node).__name__}"
+
+    intro_vars = cast(Obtain, obtain_node)._introduced.vars
+    intro_hyps = cast(Obtain, obtain_node)._introduced.hyps
+    assert intro_vars, \
+        f"_introduced.vars empty after sorry path; expected `k`. got {intro_vars}"
+    assert intro_hyps, \
+        f"_introduced.hyps empty after sorry path; expected `k_def`. got {intro_hyps}"
+
+    var_names = {n.unicode for n in intro_vars}
+    assert "k" in var_names, \
+        f"expected `k` among obtained vars, got {var_names}"
+    hyp_names = {n.unicode for n in intro_hyps}
+    assert "k_def" in hyp_names, \
+        f"expected `k_def` among obtained hyps, got {hyp_names}"
+
+    vars_after = obtain_node._fixed_vars_after_me({})
+    hyps_after = obtain_node._fixed_facts_after_me({})
+    assert "k" in {n.unicode for n in vars_after}, \
+        f"_fixed_vars_after_me must expose `k` after sorry path, got {vars_after}"
+    assert "k_def" in {n.unicode for n in hyps_after}, \
+        f"_fixed_facts_after_me must expose `k_def` after sorry path, got {hyps_after}"
+
+    print_header("Quickview", file)
+    root.quickview(0, file)
+
+
 @model_test("UpstreamChangeResetsObvious", "Test_UpstreamChangeResetsObvious.thy", 11)
 async def _test_UpstreamChangeResetsObvious(root: Root, file: MyIO):
     """After Obvious fails, _is_trivial=False blocks retries.  Amending or
@@ -6738,6 +6790,53 @@ async def _test_AmendHaveToConjI(root: Root, file: MyIO):
             f"NonLeaf_Node._amend_from carried StdBlock body across without "
             f"kind awareness; SubgoalMaker should override _amend_from."
         )
+
+
+@model_test("DeleteObtainUnfound", "Test_DeleteObtainUnfound.thy", 8)
+async def _test_DeleteObtainUnfound(root: Root, file: MyIO):
+    """Reproduce: deleting an Obtain whose constraint facts are referenced
+    by a downstream Obvious step causes InternalError in pack().
+
+    After Obtain introduces a named constraint (k_def), a subsequent
+    Obvious step references it via facts:[k_def].  When the Obtain is
+    deleted, the Obvious is refreshed: refresh_facts() returns
+    IsabelleFact_Unfound for k_def, but Obvious.the_operation() calls
+    HAMMER(fact_refs) which calls pack() on the unfound fact, raising
+    InternalError instead of gracefully degrading to a failure status."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Step 2: Obtain k with constraint k_def: k = m
+    root.session.age += 1
+    await root.fill("2", [Obtain.gen_single({
+        "thought": "unpack the existential",
+        "variables": [{"name": "k", "type": "nat"}],
+        "constraints": [{"name": "k_def",
+                         "isabelle": "k = m",
+                         "english": "the existential witness"}],
+        "proof": [{"operation": "Obvious", "facts": []}],
+    })])
+    print_header("After Obtain", file)
+    root.print(0, file)
+
+    # Step 3: Obvious with facts:[k_def] — proves m = m using the
+    # constraint from the Obtain above.
+    root.session.age += 1
+    await root.fill("3", [Obvious.gen_single({
+        "facts": [{"refer_by": "name", "name": "k_def"}]
+    })])
+    print_header("After Obvious with k_def", file)
+    root.print(0, file)
+
+    # Now delete the Obtain (step 2).  The downstream Obvious (step 3,
+    # renumbered to step 2 after deletion) must be refreshed.  Its
+    # fact_refs include k_def which is no longer in scope.
+    # BUG: refresh_facts returns IsabelleFact_Unfound for k_def, but
+    # Obvious.the_operation() calls pack() on it → InternalError.
+    root.session.age += 1
+    await root.delete(["2"])
+    print_header("After deleting Obtain", file)
+    root.print(0, file)
 
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
