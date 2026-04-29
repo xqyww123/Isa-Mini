@@ -1,0 +1,71 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - p: 'a × 'b
+  - P: 'a × 'b ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P p
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After seeding Have at step 1
+--------------------------------------------------
+variables:
+  - p: 'a × 'b
+  - P: 'a × 'b ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P p
+proof:
+  - step id: 1
+    thought: seed
+    operation: Have
+    statement:
+      english: trivial
+      isabelle: True
+    name: h
+    proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+--------------------------------------------------
+MapCase for `Pair`
+--------------------------------------------------
+The case-split operation produced a case `Pair` (as follows) that does not match any `case_name` you supplied.
+  variables:
+    - a: 'a
+    - b: 'b
+  premises:
+    - Pair.prem0: p = (a, b)
+  goal: P (a, b)
+Is any of your supplied proof intended for this case?
+  0. replacement
+  1. the-existing-proof
+Answer with its index if so, or with empty `indexes` to leave this case without a proof for now.
+--------------------------------------------------
+After insert_before (stub replaced existing)
+--------------------------------------------------
+variables:
+  - p: 'a × 'b
+  - P: 'a × 'b ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P p
+proof:
+  - step id: 0A
+    thought: case-split on pair; agent replaces existing with supplied
+    operation: CaseSplit
+    target term: p
+    fixing variables:
+      - a: 'a
+      - b: 'b
+    assuming premises:
+      - Pair.prem0: p = (a, b)
+    cases: empty
+  - step id: 1
+    operation: Obvious
+    Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
+notice:
+  - Discarded because the CaseSplit/Induction body terminates the proof; no sibling should follow: step 1
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to replace it with a proof.
+pending proof goal:
+  premises:
+    - h: True
+  goal: P p

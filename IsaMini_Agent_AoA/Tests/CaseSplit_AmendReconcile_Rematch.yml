@@ -9,28 +9,7 @@ goal: P b
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
-Interaction Prompt for actual case `True`
---------------------------------------------------
-The case-split operation produced a case `True` (as follows) that does not match any `case_name` you supplied.
-  premises:
-    - True.prem0: b
-  goal: P True
-Is any of your supplied proof intended for this case?
-  0. new-t
-  1. new-f
-Answer with its index if so, or with empty `indexes` to leave this case without a proof for now.
---------------------------------------------------
-Interaction Prompt for actual case `False`
---------------------------------------------------
-The case-split operation produced a case `False` (as follows) that does not match any `case_name` you supplied.
-  premises:
-    - False.prem0: ¬ b
-  goal: P False
-Is any of your supplied proof intended for this case?
-  0. new-f
-Answer with its index if so, or with empty `indexes` to leave this case without a proof for now.
---------------------------------------------------
-After CaseSplit with mapped case_names
+After initial fill
 --------------------------------------------------
 variables:
   - b: bool
@@ -39,7 +18,7 @@ You can write global declarations by calling command `edit` with action `fill` a
 goal: P b
 proof:
   - step id: 1
-    thought: case-split on boolean b with wrong case_names
+    thought: initial fill with exact names True/False
     operation: CaseSplit
     target term: b
     cases:
@@ -65,6 +44,68 @@ proof:
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.1` to replace it with a proof.
         pending proof goal:
           P False
-GoalNode children count: 2
-  1.True: first sub = Obvious
-  1.False: first sub = Obvious
+--------------------------------------------------
+MapCase for `True`
+--------------------------------------------------
+The case-split operation produced a case `True` (as follows) that does not match any `case_name` you supplied.
+  premises:
+    - True.prem0: b
+  goal: P True
+Is any of your supplied proof intended for this case?
+  0. new-alt1
+  1. new-alt2
+  2. old-True
+Answer with its index if so, or with empty `indexes` to leave this case without a proof for now.
+--------------------------------------------------
+MapCase for `False`
+--------------------------------------------------
+The case-split operation produced a case `False` (as follows) that does not match any `case_name` you supplied.
+  premises:
+    - False.prem0: ¬ b
+  goal: P False
+Is any of your supplied proof intended for this case?
+  0. new-alt2
+  1. old-False
+Answer with its index if so, or with empty `indexes` to leave this case without a proof for now.
+--------------------------------------------------
+After amend (rematch: new- for True, old- for False)
+--------------------------------------------------
+variables:
+  - b: bool
+  - P: bool ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P b
+proof:
+  - step id: 1
+    thought: amend: all-different case_names
+    operation: CaseSplit
+    target term: b
+    cases:
+      - goal id: 1.True
+        premises:
+          - True.prem0: b
+        goal: P True
+        proof:
+          - step id: 1.True.1
+            thought: alt1-have
+            operation: Have
+            statement:
+              english: t
+              isabelle: True
+            name: h
+            proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.2` to provide the proof.
+      - goal id: 1.False
+        premises:
+          - False.prem0: ¬ b
+        goal: P False
+        proof:
+          - step id: 1.False.1
+            operation: Obvious
+            Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.1` to replace it with a proof.
+        pending proof goal:
+          P False
+    notice:
+      - The case `alt2` is not found in the resulting cases of the case-split and is thus dropped.
+Interactions fired: 2 (expected 2)

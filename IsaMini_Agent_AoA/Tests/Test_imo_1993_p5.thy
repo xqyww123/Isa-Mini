@@ -81,4 +81,34 @@ simproc_setup sqrt_prime_rat (\<open>sqrt (numeral n) \<in> \<rat>\<close>) =
 lemma "sqrt 23 \<notin> \<rat>"
   by simp
 
+
+typedecl state
+typedecl val
+datatype 'continue return = Valid 'continue | Invalid
+datatype thread = Thread \<open>state \<Rightarrow> ((val \<times> state) set \<times> (val \<Rightarrow> thread list)) return\<close>
+
+term thread.size_thread
+primrec depth :: \<open>thread \<Rightarrow> nat\<close>
+  where \<open>depth (Thread t1) = \<close>
+
+function bind :: \<open>thread \<Rightarrow> (val \<Rightarrow> thread) \<Rightarrow> thread\<close>
+  where \<open>bind (Thread t1) t2 = Thread (\<lambda>s.
+    case t1 s of Valid (S,f) \<Rightarrow> Valid (S, \<lambda>v. case f v of [] \<Rightarrow> [t2 v]
+                                                        | (t # ts) \<Rightarrow> (bind t t2) # ts)
+               | Invalid \<Rightarrow> Invalid)\<close>
+  apply auto
+  using thread.exhaust by blast
+termination 
+  apply auto
+
+thm thread.induct
+
+lemma \<open>P (th :: thread)\<close>
+  apply (induct th)
+  thm set_return
+
+
+
+
+
 end

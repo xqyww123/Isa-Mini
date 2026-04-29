@@ -474,6 +474,23 @@ async def _test_Rewrite_NoProgress(root: Root, file: MyIO):
     print_header("After Rewrite", file)
     root.print(0, file)
 
+@model_test("SuppressParentGoal", "Test_SuppressParentGoal.thy", 10)
+async def _test_SuppressParentGoal(root: Root, file: MyIO):
+    """When Rewrite changes the goal, quickview should show 'goal changes into'
+    in the Rewrite node but NOT duplicate the same goal in the parent's
+    'Error: Unfinished Proof' section."""
+    await root.fill("1", [Rewrite.gen_single({
+        "thought": "Rewrite the goal using h1",
+        "using": [{"refer_by": "name", "name": "h1"}],
+        "use system simplifiers": False,
+        "rewrite goal": True,
+        "rewrite premises": []
+    })])
+    print_header("Quickview after Rewrite (goal changed)", file)
+    root.quickview(0, file)
+    print_header("Quickview again (should not re-print)", file)
+    root.quickview(0, file)
+
 # @model_test("RewriteThenObviousFails", "Test_Rewrite_Then_Obvious_Fails.thy", 18)
 # async def _test_RewriteThenObviousFails(root: Root, file: MyIO):
 #     """Reproduce: a successful Rewrite as the last child followed by a
@@ -587,6 +604,45 @@ async def _test_Define_AutoProved(root: Root, file: MyIO):
     unfinished_nodes = set()
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+
+@model_test("Define_QuerySimps", "Test_Define_QuerySimps.thy", 8)
+async def _test_Define_QuerySimps(root: Root, file: MyIO):
+    """After defining a proof-local function, verify that its .simps
+    fact can be found via session.retrieval_state() and semantic_knn
+    exact_name lookup."""
+    from Isabelle_RPC_Host.universal_key import EntityKind
+
+    await root.fill("1", [Define.gen_single({
+        "thought": "Define doubling function",
+        "name": "double",
+        "type": r"nat \<Rightarrow> nat",
+        "equations": ["double n = n + n"],
+    })])
+    print_header("After Define", file)
+    root.print(0, file)
+
+    ml = root.session.retrieval_state()
+    file.write(f"retrieval_state: {ml.name}\n")
+
+    results, warnings = await ml.semantic_knn(
+        None, 1, [EntityKind.THEOREM], exact_name="double.simps")
+    file.write(f"Query double.simps: {len(results)} results, warnings={warnings}\n")
+    assert len(results) > 0, \
+        f"Expected double.simps to be found after proof-local Define, got: {warnings}"
+    file.write(f"  Found: {results[0].entity.short_name.unicode}\n")
+
+    await root.fill("2", [Witness.gen_single({
+        "thought": "Use double as witness",
+        "witness": "double",
+    })])
+    await root.fill("3", [Obvious.gen_single({"facts": []})])
+    print_header("After proof complete", file)
+    root.print(0, file)
+
+    unfinished_nodes = set()
+    root.unfinished_nodes(unfinished_nodes)
+    file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+    assert len(unfinished_nodes) == 0, "Expected proof to be complete"
 
 @model_test("Define_Manual", "Test_Define_Manual.thy", 16)
 async def _test_Define_Manual(root: Root, file: MyIO):
@@ -1882,6 +1938,46 @@ async def _test_semantic_knn_lexerr(root: Root, file: MyIO):
     assert len(warnings) > 0, "Expected warning about parse failure"
     for w in warnings:
         assert '\x05' not in w and '\x06' not in w, f"YXML not stripped: {w!r}"
+
+
+@model_test("SemanticKNN_induction_rule",
+            "Test_SemanticKNN_induction_rule.thy", 8)
+async def _test_semantic_knn_induction_rule(root: Root, file: MyIO):
+    """semantic_knn with INDUCTION_RULE kind triggers Match exception in retrieve callback.
+    Reproduces agent log 2026-04-26: query with kinds=['induction rule'] caused
+    'exception Match raised (line 483 of agent_server.ML)' because the retrieve
+    function in agent_server.ML has no case for InductionRuleK or CaseSplitRuleK."""
+    from Isabelle_RPC_Host.universal_key import EntityKind
+    ml = root.ml_state
+
+    def _pp(r) -> str:
+        expr = ', '.join(e.unicode for e in r.entity.expression)
+        return f"{r.entity.kind.label} {r.entity.short_name.unicode}: {expr}" if expr else f"{r.entity.kind.label} {r.entity.short_name.unicode}"
+
+    # 1. INDUCTION_RULE kind — this crashes with Match before the fix
+    results_ind, warnings_ind = await ml.semantic_knn(
+        "induction on natural numbers", 5, [EntityKind.INDUCTION_RULE])
+    file.write(f"Induction rules: {len(results_ind)} results, {len(warnings_ind)} warnings\n")
+    for r in results_ind:
+        file.write(f"  {r.score:.3f} {_pp(r)}\n")
+    assert len(results_ind) > 0, "Expected at least one induction rule for nat"
+
+    # 2. CASE_SPLIT_RULE kind — same missing case in retrieve
+    results_cs, warnings_cs = await ml.semantic_knn(
+        "case split on list", 5, [EntityKind.CASE_SPLIT_RULE])
+    file.write(f"Case-split rules: {len(results_cs)} results, {len(warnings_cs)} warnings\n")
+    for r in results_cs:
+        file.write(f"  {r.score:.3f} {_pp(r)}\n")
+    assert len(results_cs) > 0, "Expected at least one case-split rule for list"
+
+    # 3. Mixed kinds including INDUCTION_RULE alongside THEOREM
+    results_mix, warnings_mix = await ml.semantic_knn(
+        "induction on natural numbers", 5,
+        [EntityKind.INDUCTION_RULE, EntityKind.THEOREM])
+    file.write(f"Mixed (induction+theorem): {len(results_mix)} results, {len(warnings_mix)} warnings\n")
+    for r in results_mix:
+        file.write(f"  {r.score:.3f} {_pp(r)}\n")
+    assert len(results_mix) > 0, "Expected results from mixed kind query"
 
 
 @model_test("IntroSplitConj", "Test_IntroSplitConj.thy", 10)
@@ -5107,6 +5203,526 @@ async def _test_CaseSplit_MapCaseAmend(root: Root, file: MyIO):
         f"amend should not fire any interaction when all names match exactly"
 
 
+@model_test("CaseSplit_ReservedName_Rejected",
+            "Test_CaseSplit_ReservedName_Rejected.thy", 8)
+async def _test_CaseSplit_ReservedName_Rejected(root: Root, file: MyIO):
+    """Parse-time validation: a supplied `case_name` that equals
+    `CASE_EXISTING` or starts with `new-` / `old-` is rejected with a
+    path-annotated `ArgumentError`."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    for bad_name in (CASE_EXISTING, "new-foo", "old-bar"):
+        try:
+            Parse_Op_List([
+                {"operation": "CaseSplit", "thought": "reserved",
+                 "target_isabelle_term": "b", "rule": "default",
+                 "proofs": [{"case_name": bad_name,
+                             "body": [{"operation": "Obvious", "facts": []}]}]},
+            ], "proof_operations")
+            file.write(f"UNEXPECTED: `{bad_name}` accepted\n")
+            assert False, f"reserved name `{bad_name}` should have been rejected"
+        except AoA_Error as e:
+            msg = str(e)
+            file.write(f"`{bad_name}` rejected: reserved-mention={'reserved' in msg}\n")
+            assert "reserved" in msg, msg
+            assert bad_name in msg, msg
+    file.write("all reserved-name patterns rejected.\n")
+
+
+@model_test("CaseSplit_AmendReconcile_ExactMatch",
+            "Test_CaseSplit_AmendReconcile_ExactMatch.thy", 8)
+async def _test_CaseSplit_AmendReconcile_ExactMatch(root: Root, file: MyIO):
+    """Amend-reconcile with matching case_names: new bodies silently
+    replace the inherited GoalNodes' sub-trees without firing any
+    MapCase interaction."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    interaction_count = [0]
+    async def count_stub(interaction):
+        interaction_count[0] += 1
+        file.write(f"UNEXPECTED interaction: {type(interaction).__name__}\n")
+        return await interaction.answer(Answer(indexes=[]))
+    root.session.fork_interaction = count_stub
+
+    root.session.age += 1
+    await root.fill("1", [CaseSplit.gen_single({
+        "thought": "initial case-split (exact names)",
+        "target_isabelle_term": "b", "rule": "default",
+        "proofs": [
+            {"case_name": "True",  "body": [{"operation": "Obvious", "facts": []}]},
+            {"case_name": "False", "body": [{"operation": "Obvious", "facts": []}]},
+        ],
+    })])
+    print_header("After initial fill (True/False)", file)
+    root.print(0, file, show_warnings=True)
+
+    root.session.age += 1
+    await root.amend("1", [CaseSplit.gen_single({
+        "thought": "amend: same names, different body",
+        "target_isabelle_term": "b", "rule": "default",
+        "proofs": [
+            {"case_name": "True",
+             "body": [{"operation": "Have", "thought": "t-have",
+                       "statement": {"english": "trivial", "isabelle": "True"},
+                       "name": "h"}]},
+            {"case_name": "False",
+             "body": [{"operation": "Have", "thought": "f-have",
+                       "statement": {"english": "trivial", "isabelle": "True"},
+                       "name": "h"}]},
+        ],
+    })])
+    print_header("After amend (silent replace)", file)
+    root.print(0, file, show_warnings=True)
+    file.write(f"Interactions fired: {interaction_count[0]} (expected 0)\n")
+    assert interaction_count[0] == 0, \
+        "Exact-name amend should silently replace bodies; no MapCase"
+
+
+@model_test("CaseSplit_AmendReconcile_Rematch",
+            "Test_CaseSplit_AmendReconcile_Rematch.thy", 8)
+async def _test_CaseSplit_AmendReconcile_Rematch(root: Root, file: MyIO):
+    """Amend-reconcile with all-different case_names: fires MapCase
+    once per inherited GoalNode.  Stub picks `new-*` for the first
+    GN and `old-*` for the second to exercise both apply branches."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    interaction_count = [0]
+    async def pick_stub(interaction):
+        interaction_count[0] += 1
+        assert isinstance(interaction, Interaction_MapCase)
+        print_header(f"MapCase for `{interaction.actual_case}`", file)
+        await interaction.prompt(0, file)
+        # Pick index 0 (first option: the first remaining new-*).
+        # The options list for each goal has the new-* options first,
+        # then (if applicable) own old-* last.  Index 0 is a new-* pick.
+        if interaction.actual_case == "True":
+            return await interaction.answer(Answer(indexes=[0]))   # pick new-*
+        # For the second goal ('False'), pick the last option which is
+        # the own old-* (keep existing body).
+        last_idx = len(interaction.supplied_options) - 1
+        assert interaction.supplied_options[last_idx].startswith("old-")
+        return await interaction.answer(Answer(indexes=[last_idx]))
+    root.session.fork_interaction = pick_stub
+
+    root.session.age += 1
+    await root.fill("1", [CaseSplit.gen_single({
+        "thought": "initial fill with exact names True/False",
+        "target_isabelle_term": "b", "rule": "default",
+        "proofs": [
+            {"case_name": "True",  "body": [{"operation": "Obvious", "facts": []}]},
+            {"case_name": "False", "body": [{"operation": "Obvious", "facts": []}]},
+        ],
+    })])
+    print_header("After initial fill", file)
+    root.print(0, file, show_warnings=True)
+
+    root.session.age += 1
+    await root.amend("1", [CaseSplit.gen_single({
+        "thought": "amend: all-different case_names",
+        "target_isabelle_term": "b", "rule": "default",
+        "proofs": [
+            {"case_name": "alt1",
+             "body": [{"operation": "Have", "thought": "alt1-have",
+                       "statement": {"english": "t", "isabelle": "True"},
+                       "name": "h"}]},
+            {"case_name": "alt2",
+             "body": [{"operation": "Have", "thought": "alt2-have",
+                       "statement": {"english": "t", "isabelle": "True"},
+                       "name": "h"}]},
+        ],
+    })])
+    print_header("After amend (rematch: new- for True, old- for False)", file)
+    root.print(0, file, show_warnings=True)
+    file.write(f"Interactions fired: {interaction_count[0]} (expected 2)\n")
+    assert interaction_count[0] == 2, \
+        f"expected 2 MapCase interactions (one per GN), got {interaction_count[0]}"
+
+
+@model_test("CaseSplit_AmendReconcile_Drop",
+            "Test_CaseSplit_AmendReconcile_Drop.thy", 8)
+async def _test_CaseSplit_AmendReconcile_Drop(root: Root, file: MyIO):
+    """Amend-reconcile where the agent drops every mismatched GN via
+    MapCase.  Each GN ends up with its inherited sub-tree cleared and
+    no new body attached.  The un-picked supplied bodies surface in the
+    FOOTER 'not found' warning."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    interaction_count = [0]
+    async def drop_stub(interaction):
+        interaction_count[0] += 1
+        assert isinstance(interaction, Interaction_MapCase)
+        return await interaction.answer(Answer(indexes=[]))   # drop
+    root.session.fork_interaction = drop_stub
+
+    root.session.age += 1
+    await root.fill("1", [CaseSplit.gen_single({
+        "thought": "initial",
+        "target_isabelle_term": "b", "rule": "default",
+        "proofs": [
+            {"case_name": "True",  "body": [{"operation": "Obvious", "facts": []}]},
+            {"case_name": "False", "body": [{"operation": "Obvious", "facts": []}]},
+        ],
+    })])
+    print_header("After initial fill", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.amend("1", [CaseSplit.gen_single({
+        "thought": "amend: different names; stub drops all",
+        "target_isabelle_term": "b", "rule": "default",
+        "proofs": [
+            {"case_name": "xxx",
+             "body": [{"operation": "Obvious", "facts": []}]},
+            {"case_name": "yyy",
+             "body": [{"operation": "Obvious", "facts": []}]},
+        ],
+    })])
+    print_header("After amend (all dropped)", file)
+    root.print(0, file, show_warnings=True)
+    file.write(f"Interactions fired: {interaction_count[0]}\n")
+
+
+@model_test("CaseSplit_Pair_N1_OverSupply",
+            "Test_CaseSplit_Pair_N1_OverSupply.thy", 8)
+async def _test_CaseSplit_Pair_N1_OverSupply(root: Root, file: MyIO):
+    """`case_tac` on a pair type produces exactly one runtime case
+    (the `Pair` constructor).  Agent supplies TWO named bodies; the
+    MapCase fires once for the single runtime case, stub picks the
+    first option.  The other supplied name is dropped with a FOOTER
+    `not found` warning."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    interaction_count = [0]
+    async def pick_stub(interaction):
+        interaction_count[0] += 1
+        assert isinstance(interaction, Interaction_MapCase)
+        print_header(f"MapCase for `{interaction.actual_case}`", file)
+        await interaction.prompt(0, file)
+        return await interaction.answer(Answer(indexes=[0]))
+    root.session.fork_interaction = pick_stub
+
+    root.session.age += 1
+    await root.fill("1", [CaseSplit.gen_single({
+        "thought": "case-split on pair; over-supply two bodies",
+        "target_isabelle_term": "p", "rule": "default",
+        "proofs": [
+            {"case_name": "alpha",
+             "body": [{"operation": "Obvious", "facts": []}]},
+            {"case_name": "beta",
+             "body": [{"operation": "Obvious", "facts": []}]},
+        ],
+    })])
+    print_header("After splice (N==1, over-supply)", file)
+    root.print(0, file, show_warnings=True)
+    file.write(f"Interactions fired: {interaction_count[0]} (expected 1)\n")
+    assert interaction_count[0] == 1, \
+        f"expected 1 MapCase (single runtime case), got {interaction_count[0]}"
+
+
+@model_test("CaseSplit_Pair_N1_Keep",
+            "Test_CaseSplit_Pair_N1_Keep.thy", 8)
+async def _test_CaseSplit_Pair_N1_Keep(root: Root, file: MyIO):
+    """Insert_before an existing proof step with a CaseSplit-with-proofs
+    on N==1 (pair).  Stub picks the `the_existing_proof` option, so
+    the existing siblings are preserved; the supplied body is dropped
+    with a FOOTER warning."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    # First seed the proof with one Obvious step, then insert_before it.
+    root.session.age += 1
+    await root.fill("1", [Have.gen_single({
+        "thought": "seed", "name": "h",
+        "statement": {"english": "trivial", "isabelle": "True"}})])
+    print_header("After seeding Have at step 1", file)
+    root.print(0, file)
+
+    interaction_count = [0]
+    async def keep_stub(interaction):
+        interaction_count[0] += 1
+        assert isinstance(interaction, Interaction_MapCase)
+        print_header(f"MapCase for `{interaction.actual_case}`", file)
+        await interaction.prompt(0, file)
+        # Find the "existing proof" sentinel option and pick it.
+        try:
+            idx = interaction.supplied_options.index(CASE_EXISTING)
+        except ValueError:
+            assert False, f"`{CASE_EXISTING}` not offered — siblings-after missing?"
+        return await interaction.answer(Answer(indexes=[idx]))
+    root.session.fork_interaction = keep_stub
+
+    root.session.age += 1
+    await root.insert_before("1", [CaseSplit.gen_single({
+        "thought": "case-split on pair; agent picks 'keep existing'",
+        "target_isabelle_term": "p", "rule": "default",
+        "proofs": [
+            {"case_name": "nope",
+             "body": [{"operation": "Obvious", "facts": []}]},
+        ],
+    })])
+    print_header("After insert_before (stub kept existing)", file)
+    root.print(0, file, show_warnings=True)
+    file.write(f"Interactions fired: {interaction_count[0]} (expected 1)\n")
+    assert interaction_count[0] == 1
+
+
+@model_test("CaseSplit_Pair_N1_Replace",
+            "Test_CaseSplit_Pair_N1_Replace.thy", 8)
+async def _test_CaseSplit_Pair_N1_Replace(root: Root, file: MyIO):
+    """Same setup as Keep, but the stub picks the supplied body:
+    existing siblings are truncated with a warning, and the supplied
+    body is spliced as the new parent-sibling after the CaseSplit."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    await root.fill("1", [Have.gen_single({
+        "thought": "seed", "name": "h",
+        "statement": {"english": "trivial", "isabelle": "True"}})])
+    print_header("After seeding Have at step 1", file)
+    root.print(0, file)
+
+    interaction_count = [0]
+    async def replace_stub(interaction):
+        interaction_count[0] += 1
+        assert isinstance(interaction, Interaction_MapCase)
+        print_header(f"MapCase for `{interaction.actual_case}`", file)
+        await interaction.prompt(0, file)
+        # Pick first option (a new-* supplied body).
+        return await interaction.answer(Answer(indexes=[0]))
+    root.session.fork_interaction = replace_stub
+
+    root.session.age += 1
+    await root.insert_before("1", [CaseSplit.gen_single({
+        "thought": "case-split on pair; agent replaces existing with supplied",
+        "target_isabelle_term": "p", "rule": "default",
+        "proofs": [
+            {"case_name": "replacement",
+             "body": [{"operation": "Obvious", "facts": []}]},
+        ],
+    })])
+    print_header("After insert_before (stub replaced existing)", file)
+    root.print(0, file, show_warnings=True)
+
+
+@model_test("CaseSplit_Pair_N1_MidProof",
+            "Test_CaseSplit_Pair_N1_MidProof.thy", 8)
+async def _test_CaseSplit_Pair_N1_MidProof(root: Root, file: MyIO):
+    """`case_tac` on pair WITHOUT supplied proofs — acts as a mid-proof
+    transformation step.  No interaction should fire; the seeded
+    sibling(s) after it stay put (no truncate, no splice)."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    await root.fill("1", [Have.gen_single({
+        "thought": "seed", "name": "h",
+        "statement": {"english": "trivial", "isabelle": "True"}})])
+    print_header("After seeding Have at step 1", file)
+    root.print(0, file)
+
+    interaction_count = [0]
+    async def unexpected_stub(interaction):
+        interaction_count[0] += 1
+        file.write(f"UNEXPECTED interaction: {type(interaction).__name__}\n")
+        return await interaction.answer(Answer(indexes=[]))
+    root.session.fork_interaction = unexpected_stub
+
+    root.session.age += 1
+    await root.insert_before("1", [CaseSplit.gen_single({
+        "thought": "case-split on pair as mid-proof transform; no proofs",
+        "target_isabelle_term": "p", "rule": "default",
+        # No `proofs` — CaseSplit just transforms the current goal.
+    })])
+    print_header("After insert_before (no-proofs; siblings untouched)", file)
+    root.print(0, file, show_warnings=True)
+    file.write(f"Interactions fired: {interaction_count[0]} (expected 0)\n")
+    assert interaction_count[0] == 0
+
+
+@model_test("CaseSplit_NestedCaseNameShadow",
+            "Test_CaseSplit_NestedCaseNameShadow.thy", 8)
+async def _test_CaseSplit_NestedCaseNameShadow(root: Root, file: MyIO):
+    """Regression test for the nested-induction case_name shadowing
+    encountered in the production log at
+    ``log/AoA/DC0408929_17A6CF6/interaction.yaml`` (lines ~1244-1281).
+
+    Setup: outer Induction on ``n`` opens a "Suc" case (binding
+    ``Suc.IH`` etc.).  The body of that "Suc" case starts a fresh inner
+    Induction on the same variable name ``n``.  Isabelle disambiguates
+    the inner case binding to avoid shadowing the outer one — the
+    inner case ends up named ``Suc1`` (with ``Suc1.IH``), not ``Suc``.
+
+    Fix verified: ``CaseSplit_Like._orchestrate_rematch`` runs a
+    second pre-process pass that strips trailing digits from the
+    runtime case_name and retries an exact lookup against the supplied
+    dict.  ``Suc1`` → strip → ``Suc`` matches the supplied entry; the
+    body is installed silently and NO ``Interaction_MapCase`` fires.
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    interactions_seen: list[tuple[str, str, list[str]]] = []
+    async def stub_fork(interaction):
+        if isinstance(interaction, Interaction_MapCase):
+            interactions_seen.append(
+                (interaction.kind, interaction.actual_case,
+                 list(interaction.supplied_options)))
+            file.write(
+                f"UNEXPECTED MapCase fired: kind={interaction.kind} "
+                f"actual_case={interaction.actual_case!r} "
+                f"options={list(interaction.supplied_options)}\n")
+            return await interaction.answer(Answer(indexes=[]))
+        file.write(
+            f"Other (non-MapCase) interaction: "
+            f"{type(interaction).__name__}\n")
+        return await interaction.answer(Answer(indexes=[]))
+    root.session.fork_interaction = stub_fork
+
+    root.session.age += 1
+    await root.fill("1", [Induction.gen_single({
+        "thought": "outer induction on n",
+        "target_isabelle_term": "n",
+        "variables": [
+            {"name": "n", "status": "fixed"},
+            {"name": "P", "status": "fixed"},
+        ],
+        "rule": "default",
+        "proofs": [
+            {"case_name": "0",
+             "body": [{"operation": "Obvious", "facts": []}]},
+            {"case_name": "Suc",
+             "body": [
+                 {"operation": "Induction",
+                  "thought": "inner induction on the same variable n",
+                  "target_isabelle_term": "n",
+                  "variables": [
+                      {"name": "n", "status": "fixed"},
+                      {"name": "P", "status": "fixed"},
+                  ],
+                  "rule": "default",
+                  "proofs": [
+                      {"case_name": "0",
+                       "body": [{"operation": "Obvious", "facts": []}]},
+                      {"case_name": "Suc",
+                       "body": [{"operation": "Obvious", "facts": []}]},
+                  ]},
+             ]},
+        ],
+    })])
+    print_header("After nested induction (outer Suc body has inner Induction)",
+                 file)
+    root.print(0, file, show_warnings=True)
+    file.write(f"\nMapCase interactions fired: {len(interactions_seen)} "
+               f"(expected 0 — fuzzy match handles `Suc1`→`Suc`)\n")
+    assert interactions_seen == [], \
+        f"Fuzzy match regressed: MapCase fired for {interactions_seen}"
+
+
+@model_test("CaseSplit_NestedSkolem",
+            "Test_CaseSplit_NestedSkolem.thy", 8)
+async def _test_CaseSplit_NestedSkolem(root: Root, file: MyIO):
+    """Regression test for skolemized variable names in nested CaseSplits.
+
+    When two CaseSplits happen on variables of the same type (both nat),
+    the inner CaseSplit's Suc case introduces a predecessor variable that
+    collides with the outer one. Isabelle's Variable.add_fixes_binding
+    skolemizes it (appending ``__``), producing names like ``nat__`` that
+    are invalid in user-facing terms — ``Name.reject_internal`` /
+    ``Name.reject_skolem`` raises "Bad name" when the agent tries to use
+    them in a Have or Suffices statement.
+
+    This test reproduces the bug from the production log at
+    ``log/AoA/DCAE54855_17D7672/interaction.yaml`` (lines ~4366-4605).
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Step 1: CaseSplit on n
+    await root.fill("1", [CaseSplit.gen_single({
+        "thought": "Case split on n",
+        "target_isabelle_term": "n"
+    })])
+    print_header("After CaseSplit on n", file)
+    root.print(0, file)
+
+    # Step 2: Inside the Suc case of n, CaseSplit on m.
+    # The Suc case introduces a predecessor variable named `nat` (from the type).
+    # The inner CaseSplit on m also wants to introduce `nat` as its predecessor,
+    # causing a naming conflict.
+    root.session.age += 1
+    await root.fill("1.Suc.1", [CaseSplit.gen_single({
+        "thought": "Case split on m inside Suc case of n",
+        "target_isabelle_term": "m"
+    })])
+    print_header("After nested CaseSplit on m (inside Suc of n)", file)
+    root.print(0, file)
+
+    # Step 3: Inspect the inner Suc case for skolemized variable names.
+    # After CaseSplit m inside CaseSplit n's Suc case, the inner Suc case
+    # is at path 1.Suc.1.Suc1.
+    inner_suc = root.locate_node("1.Suc.1.Suc1")
+    goal = inner_suc.goal()
+    skolem_vars = []
+    skolem_in_conclusion = False
+    if goal is not None:
+        for var_name in goal.context.vars:
+            name_str = var_name.unicode if hasattr(var_name, 'unicode') else repr(var_name)
+            if name_str.endswith("__"):
+                skolem_vars.append(name_str)
+        conclusion_str = goal.conclusion.unicode if hasattr(goal.conclusion, 'unicode') else repr(goal.conclusion)
+        if "__" in conclusion_str:
+            skolem_in_conclusion = True
+            file.write(f"BUG: Goal conclusion contains skolemized name: {conclusion_str}\n")
+    if inner_suc.case_vars:
+        for (vname, vtype) in inner_suc.case_vars:
+            name_str = vname.unicode if hasattr(vname, 'unicode') else str(vname)
+            if name_str.endswith("__"):
+                skolem_vars.append(name_str)
+    if inner_suc.case_hyps:
+        for (hname, hterm) in inner_suc.case_hyps:
+            hname_str = hname.unicode if hasattr(hname, 'unicode') else repr(hname)
+            term_str = hterm.unicode if hasattr(hterm, 'unicode') else repr(hterm)
+            if "__" in term_str:
+                file.write(f"BUG: Premise '{hname_str}' contains skolemized name: {term_str}\n")
+    file.write(f"Skolemized variable names found: {skolem_vars}\n")
+
+    # Step 4: Try to use a variable from the inner goal in a Have statement.
+    # If the goal contains a skolemized variable like `nat__`, using it in
+    # a Have statement will trigger "Bad name" from Isabelle.
+    if goal is not None:
+        conclusion_str = goal.conclusion.unicode if hasattr(goal.conclusion, 'unicode') else str(goal.conclusion)
+        # Try a Have that references the conclusion (which may contain nat__)
+        root.session.age += 1
+        outcome = await root.fill("1.Suc.1.Suc1.1", [Have.gen_single({
+            "thought": "Restate part of the goal",
+            "statement": {
+                "english": "restating the goal conclusion",
+                "isabelle": conclusion_str
+            },
+            "name": "htest"
+        })])
+        if outcome.failure is not None:
+            file.write(f"Have with goal conclusion failed: {outcome.failure}\n")
+            if "Bad name" in str(outcome.failure):
+                file.write("CONFIRMED BUG: 'Bad name' error from skolemized variable name\n")
+        else:
+            file.write("Have with goal conclusion succeeded (no skolem issue)\n")
+
+    print_header("Final state", file)
+    root.print(0, file)
+
+    if skolem_vars or skolem_in_conclusion:
+        parts = []
+        if skolem_vars:
+            parts.append(f"variable names: {skolem_vars}")
+        if skolem_in_conclusion:
+            parts.append(f"goal conclusion: {conclusion_str}")
+        raise TestFailed(
+            f"Skolemized names leaked to agent ({', '.join(parts)}). "
+            "Agent cannot reference these in statements (Isabelle rejects them with 'Bad name').")
+
+
 @model_test("NestedHaveProof", "Test_NestedHaveProof.thy", 8)
 async def _test_NestedHaveProof(root: Root, file: MyIO):
     """A single-item batch where the item's `proof` field carries a nested
@@ -5792,6 +6408,264 @@ async def _test_CcontrIntroMatch(root: Root, file: MyIO):
     assert intro_node.status.status == EvaluationStatus.Status.SUCCESS, (
         f"3.2.10 Intro expected SUCCESS after the cat_tree BLOCK patch, "
         f"got {intro_node.status.status.value}")
+
+
+@model_test("Unfold_LocalDef", "Test_Unfold_LocalDef.thy", 12)
+async def _test_Unfold_LocalDef(root: Root, file: MyIO):
+    """Regression test: Unfold on a proof-local function defined via Define.
+
+    Before the fix, potential_defs_of raised IsabelleError("term_head_not_const")
+    because the ML callback only accepted Const heads, not Free heads.
+    After the fix, the callback also accepts Free heads and looks up
+    the local .simps facts registered by FUN.
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Step 1-2: Define `double` locally, then Witness it.
+    await root.fill("1", [
+        Define.gen_single({
+            "thought": "Define double as a witness",
+            "name": "double",
+            "type": r"nat \<Rightarrow> nat",
+            "equations": ["double n = n + n"],
+        }),
+        Witness.gen_single({
+            "thought": "Provide the locally-defined double as witness",
+            "witness": "double",
+        }),
+    ])
+    print_header("After Define + Witness", file)
+    root.print(0, file)
+
+    # Step 3: Unfold the locally-defined function.
+    # Before the fix this raised IsabelleError("term_head_not_const").
+    _outcome = await root.fill("3", [Unfold.gen_single({
+        "thought": "Unfold the locally-defined double",
+        "targets": ["double"],
+    })])
+    is_error = _outcome.failure is not None and _outcome.failure.is_error
+    file.write(f"Unfold is_error: {is_error}\n")
+    if _outcome.failure:
+        file.write(f"Unfold failure: {_outcome.failure}\n")
+
+    print_header("After Unfold", file)
+    root.print(0, file)
+
+
+@model_test("Unfold_LocalDef_Nested", "Test_Unfold_LocalDef_Nested.thy", 10)
+async def _test_Unfold_LocalDef_Nested(root: Root, file: MyIO):
+    """Reproduce the original zv bug: Define at top level, Intro splits
+    the conjunction, then Unfold inside a nested case block.
+    This matches the original agent log where Unfold failed with
+    'No definitions found for: zv' inside a nested Intro block."""
+    from Isabelle_RPC_Host.universal_key import EntityKind
+
+    # Step 1: Define double, Step 2: Witness double
+    await root.fill("1", [
+        Define.gen_single({
+            "thought": "Define double",
+            "name": "double",
+            "type": r"nat \<Rightarrow> nat",
+            "equations": ["double n = n + n"],
+        }),
+        Witness.gen_single({
+            "thought": "Witness double",
+            "witness": "double",
+        }),
+    ])
+
+    # Step 3: Intro with split_conj to create nested cases
+    await root.fill("3", [Intro.gen_single({
+        "thought": "Split conjunction",
+        "split_conj": True,
+    })])
+    print_header("After Define + Witness + Intro", file)
+    root.print(0, file)
+
+    # Step 3.1.1: Unfold double inside the FIRST case block (nested!)
+    _outcome = await root.fill("3.1.1", [Unfold.gen_single({
+        "thought": "Unfold double in nested case",
+        "targets": ["double"],
+    })])
+    is_error = _outcome.failure is not None and _outcome.failure.is_error
+    file.write(f"Unfold in nested case is_error: {is_error}\n")
+    if _outcome.failure:
+        file.write(f"Unfold failure: {_outcome.failure}\n")
+
+    print_header("After nested Unfold", file)
+    root.print(0, file)
+
+
+@model_test("HaveLeakSibling", "Test_HaveLeakSibling.thy", 8)
+async def _test_HaveLeakSibling(root: Root, file: MyIO):
+    """Regression: Have facts from one conjunct must not leak into sibling cases.
+
+    Split (1+1=2) ∧ (2+2=4) via Intro+split_conj.  In case 1.1, prove a Have
+    named 'helper', close the case, then inspect case 1.2's quickview.  The
+    named fact 'helper' must NOT appear as a premise of case 1.2.
+    """
+    print_header("Initial State", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("1", [Intro.gen_single({
+        "thought": "Split conjunction",
+        "split_conj": True
+    })])
+    print_header("After split", file)
+    root.quickview(0, file)
+
+    # Case 1.1: (1+1=2).  Introduce a named Have, prove it, then close.
+    root.session.age += 1
+    await root.fill("1.1.1", [Have.gen_single({
+        "thought": "Trivial helper",
+        "statement": {"english": "one plus one is two", "isabelle": r"(1::nat) + 1 = 2"},
+        "name": "helper",
+    })])
+    root.session.age += 1
+    await root.fill("1.1.1.1", [Obvious.gen_single({"facts": []})])
+    root.session.age += 1
+    await root.fill("1.1.2", [Obvious.gen_single({
+        "facts": [{"refer_by": "name", "name": "helper"}]
+    })])
+    print_header("After closing case 1.1 with Have 'helper'", file)
+    root.quickview(0, file)
+
+    # Check: case 1.2's quickview must NOT show 'helper' as a premise.
+    gn_1_2 = root.locate_node("1.2")
+    goal = gn_1_2.goal()
+    if goal is not None:
+        suppressed = gn_1_2._ctxt_before_me()
+        visible_hyps = {k: v for k, v in goal.context.hyps.items()
+                        if k not in suppressed.hyps}
+        leaked = [k for k in visible_hyps if k.unicode == "helper"]
+        if leaked:
+            file.write(f"BUG: 'helper' leaked into case 1.2 premises: {visible_hyps}\n")
+            raise TestFailed("Have fact 'helper' from case 1.1 leaked into sibling case 1.2")
+        else:
+            file.write("OK: no Have facts leaked into sibling case\n")
+    else:
+        file.write("WARNING: case 1.2 has no goal (already solved?)\n")
+
+    print_header("Final state", file)
+    root.print(0, file)
+
+
+@model_test("AmendInductionDiscardedCtxt", "Test_AmendInductionDiscardedCtxt.thy", 8)
+async def _test_AmendInductionDiscardedCtxt(root: Root, file: MyIO):
+    """Regression: amending an Induction node with a rule that changes the
+    number of cases (e.g. nat.induct → less_induct) discards the old
+    GoalNode sub-nodes into a warning.  Printing those discarded nodes
+    with show_warnings=True used to crash with
+        InternalError: The target node is not my children
+    because the discarded GoalNodes still had `parent` pointing at the
+    new Induction node, which no longer listed them in `sub_nodes`."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    await root.fill("1", [Induction.gen_single({
+        "thought": "default induction on n (nat.induct, 2 cases: 0, Suc)",
+        "target_isabelle_term": "n",
+        "variables": [{"name": "n", "status": "fixed"}],
+    })])
+    print_header("After fill (nat.induct, 2 cases)", file)
+    root.print(0, file)
+
+    await root.amend("1", [Induction.gen_single({
+        "thought": "amend to strong induction (less_induct, 1 case)",
+        "target_isabelle_term": "n",
+        "rule": {"refer_by": "name", "name": "less_induct"},
+        "variables": [{"name": "n", "status": "fixed"}],
+    })])
+    print_header("After amend (less_induct, 1 case) — show_warnings=True", file)
+    root.print(0, file, show_warnings=True)
+
+
+@model_test("SimpRoles", "Test_SimpRoles.thy", 12)
+async def _test_simp_roles(root: Root, file: MyIO):
+    """Bug repro: fun-defined .simps facts are marked [opaque] despite being
+    registered in the simplifier.  The root cause is in thm_roles
+    (agent_server.ML) which checks Thm.get_name_hint against a pre-computed
+    simp_rule_names set.
+
+    This test retrieves .simps facts both as a bundle and individually
+    (indexed), then asserts that the roles list includes "simp".
+    """
+    from Isabelle_RPC_Host.universal_key import EntityKind
+    ml = root.ml_state
+
+    file.write("=== Retrieve double.simps (bundle, no index) ===\n")
+    results = await ml._retrieve_entity([
+        (EntityKind.THEOREM, "double.simps"),
+    ])
+    for r in results:
+        if r is not None:
+            short_name, exprs, roles, abbrev_names, _is_local = r
+            file.write(f"  {short_name.unicode}: roles={roles}\n")
+            for e in exprs:
+                file.write(f"    {e.unicode}\n")
+        else:
+            file.write("  None\n")
+
+    file.write("=== Retrieve double.simps(1) ===\n")
+    results = await ml._retrieve_entity([
+        (EntityKind.THEOREM, "double.simps(1)"),
+    ])
+    for r in results:
+        if r is not None:
+            short_name, exprs, roles, abbrev_names, _is_local = r
+            file.write(f"  {short_name.unicode}: roles={roles}\n")
+            for e in exprs:
+                file.write(f"    {e.unicode}\n")
+        else:
+            file.write("  None\n")
+
+    file.write("=== Retrieve double.simps(2) ===\n")
+    results = await ml._retrieve_entity([
+        (EntityKind.THEOREM, "double.simps(2)"),
+    ])
+    for r in results:
+        if r is not None:
+            short_name, exprs, roles, abbrev_names, _is_local = r
+            file.write(f"  {short_name.unicode}: roles={roles}\n")
+            for e in exprs:
+                file.write(f"    {e.unicode}\n")
+        else:
+            file.write("  None\n")
+
+    file.write("=== Retrieve a known system simp rule: add_0 ===\n")
+    results = await ml._retrieve_entity([
+        (EntityKind.THEOREM, "add_0"),
+    ])
+    for r in results:
+        if r is not None:
+            short_name, exprs, roles, abbrev_names, _is_local = r
+            file.write(f"  {short_name.unicode}: roles={roles}\n")
+        else:
+            file.write("  None\n")
+
+    file.write("=== Retrieve a known intro rule: conjI ===\n")
+    results = await ml._retrieve_entity([
+        (EntityKind.THEOREM, "conjI"),
+    ])
+    for r in results:
+        if r is not None:
+            short_name, exprs, roles, abbrev_names, _is_local = r
+            file.write(f"  {short_name.unicode}: roles={roles}\n")
+        else:
+            file.write("  None\n")
+
+    file.write("=== Retrieve a known elim rule: conjE ===\n")
+    results = await ml._retrieve_entity([
+        (EntityKind.THEOREM, "conjE"),
+    ])
+    for r in results:
+        if r is not None:
+            short_name, exprs, roles, abbrev_names, _is_local = r
+            file.write(f"  {short_name.unicode}: roles={roles}\n")
+        else:
+            file.write("  None\n")
 
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None):

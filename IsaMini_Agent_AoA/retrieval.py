@@ -12,6 +12,7 @@ import os
 import re
 import sys
 from io import StringIO
+from typing import Any
 
 import jsoncomment
 
@@ -197,7 +198,8 @@ async def _format_fetched_entity(
         print_indent(indent + 1, buf)
         buf.write(f"{f.interpretation}\n")
     if def_info is True and session is not None:
-        def_info = await _get_def_for_fetched(session.root.ml_state.connection, f)
+        def_info = await _get_def_for_fetched(
+            session.retrieval_state().connection, f, ctxt=session.retrieval_state().name)
     if isinstance(def_info, tuple) and session is not None:
         source, cmd_pos = def_info
         if not _PROOF_COMMAND_RE.match(source):
@@ -212,7 +214,7 @@ async def _format_fetched_entity(
                 buf.write(f"where `{_trunc_expr(lhs)}` abbreviates `{_trunc_expr(rhs)}`\n")
     if potential_defs and session is not None and f.entity.kind == EntityKind.CONSTANT:
         try:
-            candidates = await session.root.ml_state.potential_defs_of([f.entity.short_name])
+            candidates = await session.retrieval_state().potential_defs_of([f.entity.short_name])
             if candidates:
                 seen = session.seen_entities
                 print_indent(indent + 1, buf)
@@ -344,12 +346,12 @@ async def _run_knn_for_query(
 
 
 async def _get_def_for_fetched(
-    connection, f: RetrievedEntity,
+    connection, f: RetrievedEntity, ctxt: Any = None,
 ) -> tuple[str, IsabellePosition] | None:
     """Fetch definition source for an entity. Returns None on failure."""
     try:
-        uk = await universal_key_of(connection, f.entity.kind, f.entity.full_name)
-        return await _get_definition_with_pos(connection, f.entity.kind, uk)
+        uk = await universal_key_of(connection, f.entity.kind, f.entity.full_name, ctxt=ctxt)
+        return await _get_definition_with_pos(connection, f.entity.kind, uk, ctxt=ctxt)
     except Exception:
         return None
 
@@ -364,7 +366,7 @@ async def _semantic_search_direct(
 ) -> str:
     """Run semantic search queries concurrently, returning formatted results.
     Each query carries its own ``k`` (see ``_query_k``)."""
-    ml_state = session.root.ml_state
+    ml_state = session.retrieval_state()
 
     # Run all queries concurrently (knn + entity retrieval in one step)
     knn_results = await asyncio.gather(
@@ -453,7 +455,7 @@ async def _semantic_search_with_filtering(session: Session, queries: list[dict])
     the list of entities it selected; the parent formats them into the final
     search result string.
     """
-    ml_state = session.root.ml_state
+    ml_state = session.retrieval_state()
     interactions: list[Interaction] = []
     for q in queries:
         try:
@@ -550,7 +552,7 @@ async def _semantic_search_extend_candidates(
 ) -> str:
     """Run semantic search queries and extend the active interaction's candidate list.
     Output uses the same format as the interaction prompt, with continuing indices."""
-    ml_state = session.root.ml_state
+    ml_state = session.retrieval_state()
 
     # Run all queries concurrently (knn + entity retrieval in one step)
     knn_results = await asyncio.gather(
@@ -594,19 +596,20 @@ async def _semantic_search_extend_candidates(
 # Tool Entry Points
 # ============================================================================
 
-async def _query_entity_core(connection, tag: EntityKind, name: str
+async def _query_entity_core(connection, tag: EntityKind, name: str,
+    ctxt: Any = None,
     ) -> tuple[str, bool, 'universal_key | None']:
     """Core query logic: resolve name, look up semantic record, format.
     Returns (formatted_text, is_error, uk_or_None). Needs only a connection, no Session.
     uk is returned for callers that need to fetch definition sources."""
     try:
-        uk = await universal_key_of(connection, tag, name)
+        uk = await universal_key_of(connection, tag, name, ctxt=ctxt)
         prefix = ""
     except UndefinedEntity:
         if "." in name:
             short = name.rsplit(".", 1)[1]
             try:
-                uk = await universal_key_of(connection, tag, short)
+                uk = await universal_key_of(connection, tag, short, ctxt=ctxt)
                 prefix = f"The {name} is undefined, but we find:\n"
             except Exception:
                 return (f'Undefined: "{name}". Try query.', True, None)
@@ -632,7 +635,7 @@ async def _query_entity_core(connection, tag: EntityKind, name: str
 
 async def _handle_exact_term_query(session: Session, term_str: str) -> str:
     """Handle an exact_term query: parse, show unfolded form, get head semantics."""
-    ml_state = session.root.ml_state
+    ml_state = session.retrieval_state()
     try:
         head_name, raw_display, normal_display = await ml_state.unfold_syntax(term_str)
     except InternalError_UnparsedTerm as e:
@@ -645,7 +648,7 @@ async def _handle_exact_term_query(session: Session, term_str: str) -> str:
 
     if head_name:
         text, is_error, _uk = await _query_entity_core(
-            ml_state.connection, EntityKind.CONSTANT, head_name)
+            ml_state.connection, EntityKind.CONSTANT, head_name, ctxt=ml_state.name)
         if not is_error:
             buf.write(f"Head {text}\n")
         else:

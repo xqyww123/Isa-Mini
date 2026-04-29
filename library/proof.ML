@@ -56,6 +56,7 @@ val INTRO_split_prem_conj : bool Config.T
 val INTRO_split_prem_conj_size_limit : int Config.T
 val INTRO_mk_block : bool Config.T
 val auto_deconflict_bound : bool Config.T
+val deconflict_case_fixes : bool Config.T
 val auto_calculation : bool Config.T
 val induct_auto_insert_facts : bool Config.T
 val consumes_policy : string Config.T
@@ -389,6 +390,7 @@ exception REPLACE_CMD of string * string
    on them. *)
 exception PAT_COMPLETENESS_PROOF_OPENED
 exception TERMINATION_PROOF_OPENED
+exception DROPPED_INSERTION_FACTS of string list
 
 end
 
@@ -413,6 +415,7 @@ val INTRO_split_prem_conj = Config.declare_bool ("Minilang.INTRO_split_prem_conj
 val INTRO_split_prem_conj_size_limit = Config.declare_int ("Minilang.INTRO_split_prem_conj_size_limit", \<^here>) (K 20)
 val INTRO_mk_block   = Config.declare_bool ("Minilang.INTRO_mk_block", \<^here>) (K false)
 val auto_deconflict_bound = Config.declare_bool ("Minilang.auto_deconflict_bound", \<^here>) (K false)
+val deconflict_case_fixes = Config.declare_bool ("Minilang.deconflict_case_fixes", \<^here>) (K false)
 val auto_calculation = Config.declare_bool ("Minilang.auto_calculation", \<^here>) (K true)
 
 fun chk_working_mode mode =
@@ -505,6 +508,8 @@ exception PAT_COMPLETENESS_PROOF_OPENED
    stack (only reachable via the ML-level FUN'' API with open_on_fail
    = true). *)
 exception TERMINATION_PROOF_OPENED
+
+exception DROPPED_INSERTION_FACTS of string list
 
 type stack = Proof.context * (frame list)
   (*invariant: the head must be an HHF*)
@@ -1671,15 +1676,20 @@ fun potential_defs_of_const ctxt const_name =
       end
       handle THM _ => thm
 
-    (* Verify that equation appears in conclusion with const as LHS head *)
+    fun check_head h = case h of Const (c, _) => c = const_name
+                                 | Free (c, _) => c = const_name
+                                 | _ => false
+
     fun is_definitional_eq thm =
       let
         fun check_lhs (Const (@{const_name HOL.eq}, _) $ lhs $ _) =
-              (case Term.head_of lhs of Const (c, _) => c = const_name | _ => false)
+              check_head (Term.head_of lhs)
           | check_lhs (Const (@{const_name Pure.eq}, _) $ lhs $ _) =
-              (case Term.head_of lhs of Const (c, _) => c = const_name | _ => false)
+              check_head (Term.head_of lhs)
           | check_lhs (@{const Trueprop} $ t) = check_lhs t
+          | check_lhs (Const (@{const_name Pure.all}, _) $ Abs (_, _, body)) = check_lhs body
           | check_lhs (Const (@{const_name HOL.All}, _) $ Abs (_, _, body)) = check_lhs body
+          | check_lhs (Const (@{const_name Pure.imp}, _) $ _ $ consequent) = check_lhs consequent
           | check_lhs (Const (@{const_name HOL.implies}, _) $ _ $ consequent) = check_lhs consequent
           | check_lhs _ = false
       in
@@ -2325,10 +2335,11 @@ fun CASES' diff ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, items0
                               let val name = Binding.name_of B
                                   val name = if Name.is_internal name then Name.dest_internal name
                                                                       else name
-                                  (*val (name, names) = if name = ""
-                                                      then variant_name "case" names
-                                                      else (name, names)*)
-                                  (*val (name, names) = variant_name name names*)
+                                  val (name, names) =
+                                    if Config.get ctxt deconflict_case_fixes
+                                       andalso Variable.is_fixed ctxt (Name.skolem name)
+                                    then variant_name name names
+                                    else (name, names)
                                in ((Binding.name name,T), names)
                               end ) fixes (Variable.names_of ctxt)
                               |> #1 ),
@@ -2863,6 +2874,10 @@ fun INDUCT' (no_simp, (insts, ((arbitrary, taking), opt_rule))) first_vars
       val explicit_tamper =
         map (apsnd (map mark_dirty)) insertion
         |> filter (exists fst o snd)
+      val dropped_insertion =
+        filter_out (member (op =) (map fst explicit_tamper)) (map fst insertion)
+      val _ = if null dropped_insertion then ()
+              else get_reporter () (Internal (DROPPED_INSERTION_FACTS dropped_insertion))
       val explicit_names = map fst explicit_tamper
       val explicit_fact' =
         maps (map_filter (fn (true, x) => SOME x | _ => NONE) o snd) explicit_tamper

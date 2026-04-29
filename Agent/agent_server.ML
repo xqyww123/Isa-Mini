@@ -197,6 +197,8 @@ fun minilang_message_packer ctxt =
              | MiniLang_Agent.DEFINE_RESULT (name, ty) =>
                  packPair (packInt, packPair (packString, packString))
                           (10, (name, ty))
+             | Minilang.DROPPED_INSERTION_FACTS names =>
+                 packPair (packInt, packList packString) (12, names)
              | _ => error "BUG #adli: unexpected Internal message")
    in packList pack o filter (fn Minilang.Internal (MiniLang_Agent.INTRO_BINDINGS _) => true
                                  | Minilang.Internal MiniLang_Agent.SIMPLIFY_FALLBACK_NOSYS => true
@@ -206,6 +208,7 @@ fun minilang_message_packer ctxt =
                                  | Minilang.Internal Minilang.PAT_COMPLETENESS_PROOF_OPENED => true
                                  | Minilang.Internal Minilang.TERMINATION_PROOF_OPENED => true
                                  | Minilang.Internal (MiniLang_Agent.DEFINE_RESULT _) => true
+                                 | Minilang.Internal (Minilang.DROPPED_INSERTION_FACTS _) => true
                                  | Minilang.Internal _ => false
                                  | _ => true)
   end
@@ -287,6 +290,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                as belt-and-suspenders. *)
             |> Config.put Minilang.transparent_intro false
             |> Config.put Minilang.auto_deconflict_bound true
+            |> Config.put Minilang.deconflict_case_fixes true
             |> Config.put Minilang.high_auto_mode true
             |> Config.put Minilang.auto_calculation false
             |> Config.put Printer.show_markup false
@@ -316,6 +320,13 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         case Symtab.lookup (!state) state_id of
           SOME s => s
         | NONE => error "beginning_state_not_found"
+
+      val agent_context_unpacker : Context_Callbacks.context_unpacker =
+        fn src =>
+          case MessagePackBinIO.Unpack.unpackOption MessagePackBinIO.Unpack.unpackString src of
+            (NONE, src') => (Context.Proof ctxt, src')
+          | (SOME sid, src') =>
+              (Context.Proof (Minilang.context_of (get_state sid)), src')
 
       (* Local callback definitions - all share state, counters, messages via closure *)
 
@@ -388,11 +399,19 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
          local additions made during the proof (e.g. local simp adds, using-facts).
          TODO: to track proof-local rule changes, the tables would need to be
          rebuilt per proof state from Minilang.context_of. *)
-      val simp_rule_names : Strhashtab.set =
-        Strhashtab.make_set (map fst (#simps (dest_ss (simpset_of ctxt))))
-      (* For intro/elim, Thm.get_name_hint is unreliable (classical_rule derivation
-         strips hints). Use iNet keyed by proposition for fast candidate retrieval,
-         then post-filter with aconv for exactness. *)
+
+      (* All three rule sets use iNet keyed by proposition + aconv post-filter.
+         Name-based matching is unreliable: the simpset stores rrule names from
+         add-time (via Thm.get_name_hint), which can differ from the fact-table
+         name after Global_Theory.name_thms unofficial2 renaming; classical_rule
+         derivation strips hints for intro/elim.  For simp, the rrule propositions
+         are meta-equalities produced by mksimps — at query time we apply mksimps
+         to the queried theorems before matching. *)
+      val simp_rule_net : term iNet.net =
+        fold (fn (_, thm) =>
+          let val p = Thm.prop_of thm
+          in iNet.insert_term_safe (op aconv) (p, p) end)
+          (#simps (dest_ss (simpset_of ctxt))) iNet.empty
       val (intro_rule_net : term iNet.net, elim_rule_net : term iNet.net) =
         let val cs = Classical.rep_cs (Classical.claset_of ctxt)
             fun build_net items =
@@ -405,9 +424,10 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
       fun in_rule_net net prop =
         exists (fn stored => prop aconv stored) (iNet.match_term net prop)
       fun thm_roles thms =
-        let val names = map Thm.get_name_hint thms
-            val props = map Thm.prop_of thms
-        in (if exists (Strhashtab.defined simp_rule_names) names then ["simp"] else []) @
+        let val props = map Thm.prop_of thms
+            val simp_props = maps (fn thm =>
+                  the_default [] (try (map Thm.prop_of o Raw_Simplifier.mksimps ctxt) thm)) thms
+        in (if exists (in_rule_net simp_rule_net) simp_props then ["simp"] else []) @
            (if exists (in_rule_net intro_rule_net) props then ["intro"] else []) @
            (if exists (in_rule_net elim_rule_net) props then ["elim"] else [])
         end
@@ -457,20 +477,20 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                     val full_name = Facts.intern facts base_name
                 in case Facts.lookup (Context.Proof ctxt) facts full_name of
                      SOME {thms, ...} =>
-                       let val thms' = select_thms thms idx_opt
+                       let val thms' = map (Thm.transfer thy) (select_thms thms idx_opt)
                            val base_extern = Facts.extern ctxt facts full_name
                            val short_name = case idx_opt of
                                  SOME i => Thm_Name.print (base_extern, i)
                                | NONE => base_extern
                            val abbrevs = distinct (op =) (maps
                                 (abbreviations_in_term ctxt consts
-                                  o Thm.prop_of o Thm.transfer thy) thms')
+                                  o Thm.prop_of) thms')
                            val is_local =
                               not (is_some (Facts.lookup (Context.Theory thy)
                                               global_facts full_name))
                        in if null thms' then NONE
                           else SOME (short_name,
-                                     map (SOT o Thm.prop_of o Thm.transfer thy) thms',
+                                     map (SOT o Thm.prop_of) thms',
                                      thm_roles thms',
                                      abbrevs,
                                      is_local)
@@ -480,6 +500,8 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
               fun retrieve (Universal_Key.TheoremK, name) = retrieve_thm name
                 | retrieve (Universal_Key.IntroductionRuleK, name) = retrieve_thm name
                 | retrieve (Universal_Key.EliminationRuleK, name) = retrieve_thm name
+                | retrieve (Universal_Key.InductionRuleK, name) = retrieve_thm name
+                | retrieve (Universal_Key.CaseSplitRuleK, name) = retrieve_thm name
                 | retrieve (Universal_Key.ConstantK, name) =
                     let val name = Consts.intern consts name
                         val short = Name_Space.extern ctxt const_space name
@@ -595,6 +617,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                 let val parsed_term = MiniLang_Agent.read_term ctxt term
                     val const_name = case Term.head_of parsed_term of
                                        Const (name, _) => name
+                                     | Free (name, _) => name
                                      | _ => error "term_head_not_const"
                     val defs = Minilang.potential_defs_of_const ctxt const_name
                  in map (fn (name, thm) =>
@@ -831,151 +854,45 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         timeout = NONE
       }
 
-      (* Filter for the `facts_to_generalize` field of the Induction
-       * tool. Given a list of fact full-names and the list of
-       * generalized-variable names (induction target's frees ∪
-       * `arbitrary`), returns `(kept, dropped)` where `dropped` are the
-       * facts whose prop has no Free occurrence of any generalized
-       * variable — they cannot be carried through induction and are
-       * filtered out with a warning. Shape mirrors the dirty-frees
-       * computation in library/proof.ML:2829–2837 (auto-insert
-       * mechanism), but here the fact set is agent-supplied instead of
-       * swept from the whole proof context. *)
-      val filter_generalize_facts_callback = {
-        name = "IsaMini.filter_generalize_facts",
-        arg_schema = unpackTuple3 (
-          unpackString,                             (* state_id *)
-          unpackList unpackString,                  (* fact full-names *)
-          unpackList unpackString                   (* generalized var names *)
-        ),
-        ret_schema = packPair (packList packString, packList packString),
-        function = (fn (state_id, fact_names, gen_var_names) =>
-          let val s0 = get_state state_id
-              val ctxt = Minilang.context_of s0
-              (* Python sends external names (e.g. "n"). Frees inside
-               * fact props carry the internal name that `add_fixes`
-               * assigned (e.g. "n__"). Translate each external name
-               * via `Variable.lookup_fixed`; names that aren't fixed
-               * in this context (lookup returns NONE) stay as-is so
-               * we still match any bound schematic or imported Free. *)
-              val dirty_names =
-                fold (fn nm => fn acc =>
-                        case Variable.lookup_fixed ctxt nm of
-                          SOME internal => internal :: acc
-                        | NONE => nm :: acc)
-                     gen_var_names []
-              fun mentions_gen_var thms =
-                let val dirty = member (op =) dirty_names
-                    fun has_dirty (Free (n, _)) = dirty n
-                      | has_dirty _ = false
-                 in exists (Term.exists_subterm has_dirty o Thm.prop_of) thms
-                end
-              fun keeps name =
-                case \<^try>\<open>Proof_Context.get_thms ctxt name\<close> of
-                  NONE => false           (* unresolved — treat as drop *)
-                | SOME thms => mentions_gen_var thms
-              val (kept, dropped) = List.partition keeps fact_names
-          in (kept, dropped) end),
-        timeout = NONE
-      }
-
       (* Pre-flight validation for schematic-variable instantiation of an
        * induction / case-split rule. Takes the rule name and a list of
        * (var_name, term_string) pairs; attempts the structured
-       * instantiation via Rule_Insts.where_rule. Returns SOME error_msg
-       * on any failure (syntax, type, or unknown schematic), NONE on
-       * success. Used by Interaction_InstantiateSchematics.answer to
-       * reject a bad instantiation before it poisons the INDUCT cache. *)
+       * instantiation via Rule_Insts.where_rule (with show_sorts enabled
+       * for informative error messages). Returns NONE on success, or
+       * SOME error_msg on failure. *)
       val validate_instantiation_callback = {
         name = "IsaMini.validate_instantiation",
         arg_schema = unpackTuple3 (
           unpackString,                                 (* state_id *)
           unpackString,                                 (* rule name *)
-          unpackList (unpackPair (unpackString, unpackString))
+          unpackList (unpackPair (unpackString, unpackString)) (* (var, term) instantiations *)
         ),
         ret_schema = packOption packString,
         function = (fn (state_id, rule_name, insts) =>
           let val s0 = get_state state_id
               val ctxt = Minilang.context_of s0
+                         |> Config.put show_sorts true
               val raw_rule = Proof_Context.get_thm ctxt rule_name
-              (* Var names come from Python as `"?k"` (or `"?k.3"`) —
-               * parse back to indexname via Lexicon.read_variable,
-               * which tolerates the leading `?`. *)
               fun parse_var v =
                 case Lexicon.read_variable v of
                   SOME ix => ix
                 | NONE => error ("Malformed schematic variable name: `" ^ v ^ "`")
-              (* Collect schematic vars of the rule with their expected
-               * types — used to pre-validate each instantiation term. *)
-              val rule_vars : typ Vartab.table =
-                Vartab.build (Vars.fold (fn ((ix, T), _) => Vartab.insert (K true) (ix, T))
-                                (Vars.build (Thm.fold_terms {hyps = false}
-                                               Vars.add_vars raw_rule)))
-              (* Per-var validation. Parse the term in the rule's
-               * context, get its inferred type, then Sign.typ_match
-               * against the schematic's expected type. TYPE_MATCH (the
-               * bare exception Rule_Insts.where_rule would otherwise
-               * raise later, with no message) is handled specifically
-               * here to emit a named, context-rich error. Any other
-               * exception (parse error, unknown name, …) falls through
-               * to the outer \<^try>. *)
-              val thy = Proof_Context.theory_of ctxt
-              val sotyp = MiniLang_Agent.string_of_type ctxt
-              fun validate_one (var_str, t_str) =
-                \<^try>\<open>
-                  let val ix = parse_var var_str
-                      val expected_ty =
-                        case Vartab.lookup rule_vars ix of
-                          SOME ty => ty
-                        | NONE =>
-                            error ("No schematic variable `" ^ var_str ^
-                                   "` in rule `" ^ rule_name ^ "`.")
-                      val parsed = Syntax.parse_term ctxt t_str
-                      val checked = Syntax.check_term ctxt parsed
-                      val actual_ty = Term.fastype_of checked
-                      val _ = Sign.typ_match thy (expected_ty, actual_ty)
-                                Vartab.empty
-                        handle Type.TYPE_MATCH =>
-                          error ("Type mismatch: variable `" ^ var_str ^
-                                 "` expects type `" ^ sotyp expected_ty ^
-                                 "`, but term `" ^ t_str ^
-                                 "` has type `" ^ sotyp actual_ty ^ "`.")
-                  in NONE end
-                  catch exn => SOME (var_str, Runtime.exn_message exn)
-                \<close>
-
-              (* Walk all instantiations; first failure wins. *)
-              fun first_failure [] = NONE
-                | first_failure (p :: rest) =
-                    (case validate_one p of
-                       NONE => first_failure rest
-                     | some => some)
+              val raw_insts =
+                map (fn (v, t) => ((parse_var v, Position.none), t)) insts
           in
-            case first_failure insts of
-              SOME (v, msg) =>
-                SOME ("Instantiation of `" ^ v ^ "` rejected:\n" ^ msg)
-            | NONE =>
-              (* All term types check out individually; final sweep via
-               * where_rule catches any remaining structural issue
-               * (e.g. unknown schematic name — though parse_var /
-               * lookup above already rejects that). *)
-              \<^try>\<open>
-                (Rule_Insts.where_rule ctxt
-                   (map (fn (v, t) => ((parse_var v, Position.none), t)) insts)
-                   [] raw_rule;
-                 NONE)
-                catch exn => SOME (Runtime.exn_message exn)
-              \<close>
+            (Rule_Insts.where_rule ctxt raw_insts [] raw_rule; NONE)
+            handle ERROR msg => SOME msg
           end),
         timeout = NONE
       }
 
       (* Build AoA command with local callbacks *)
       val s0_flat_goal = Minilang.leading_goal_data s0
+      val au = agent_context_unpacker
       val {constants, theorems, types, classes, locales,
            introduction_rules, elimination_rules,
            induction_rules, case_split_rules} =
-        Semantic_Store.make_entity_callbacks (Context.Proof ctxt)
+        Semantic_Store.make_entity_callbacks (Context.Proof ctxt) au
       val aoa_cmd = {
         name = "IsaMini.AoA",
         arg_schema = (fn (global_context, driver, invocation_id) =>
@@ -987,9 +904,9 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
             end),
         ret_schema = unpackTuple3 (unpackList MiniLang_Agent.xcmd_unpacker,
                                    unpackOption unpackString,
-                                   (fn src => let val ((i,cw,cr,o_,c), src') =
-                                      unpackTuple5 (unpackInt,unpackInt,unpackInt,unpackInt,unpackReal) src
-                                    in ({input=i,cache_write=cw,cache_read=cr,output=o_,cost=c}, src') end)),
+                                   (fn src => let val ((i,cw,cr,o_,c,tc), src') =
+                                      unpackTuple6 (unpackInt,unpackInt,unpackInt,unpackInt,unpackReal,unpackInt) src
+                                    in ({input=i,cache_write=cw,cache_read=cr,output=o_,cost=c,tool_calls=tc}, src') end)),
         timeout = NONE,
         callback = [
           mk_callback proof_opr_callback,
@@ -1005,23 +922,22 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
           mk_callback abbreviation_defs_callback,
           mk_callback analyze_induct_callback,
           mk_callback analyze_case_split_callback,
-          mk_callback filter_generalize_facts_callback,
           mk_callback validate_instantiation_callback,
           mk_callback contextual_thms_callback,
           mk_callback validate_prove_in_time_callback,
           mk_callback check_looping_rules_callback,
-          Universal_Key.make_universal_key_callback' (SOME thm_cache) (Context.Proof ctxt),
-          Config.make_config_lookup_callback (Context.Proof ctxt),
+          Universal_Key.make_universal_key_callback' (SOME thm_cache) au,
+          Config.make_config_lookup_callback au,
           constants, theorems, types, classes, locales,
           introduction_rules, elimination_rules,
           induction_rules, case_split_rules,
-          Context_Callbacks.make_theory_long_name_callback (Context.Proof ctxt),
-          Semantic_Store.make_interpret_theory_callback (Context.Proof ctxt)
+          Context_Callbacks.make_theory_long_name_callback au,
+          Semantic_Store.make_interpret_theory_callback au
         ]
       }
 
       val timer = Timer.startRealTimer ()
-      val (xcmds, s1o, {input, cache_write, cache_read, output, cost}) =
+      val (xcmds, s1o, {input, cache_write, cache_read, output, cost, tool_calls}) =
             call_command aoa_cmd (global_context, driver, invocation_id)
       val elapsed = Timer.checkRealTimer timer
       val _ = writeln (String.concat [
@@ -1030,6 +946,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         " cache_read=", Int.toString cache_read,
         " output=", Int.toString output,
         " cost=$", Real.fmt (StringCvt.FIX (SOME 4)) cost,
+        " tool_calls=", Int.toString tool_calls,
         " time=", Time.toString elapsed, "s"])
    in case s1o
    of SOME s1 => (
@@ -1182,12 +1099,13 @@ local open MessagePackBinIO.Pack MessagePackBinIO.Unpack in
 fun query_by_name (context : Context.generic) (kind : Universal_Key.entity_kind, name : string)
     : string * bool =
   let
+    val su = Context_Callbacks.static_context_unpacker context
     val cmd : (Universal_Key.entity_kind * string, string * bool)
               Remote_Procedure_Calling.command = {
       name = "IsaMini.query_by_name",
       arg_schema = packPair (Universal_Key.pack_entity_kind', packString),
       ret_schema = unpackPair (unpackString, unpackBool),
-      callback = [Universal_Key.make_universal_key_callback context],
+      callback = [Universal_Key.make_universal_key_callback su],
       timeout = NONE
     }
   in Remote_Procedure_Calling.call_command cmd (kind, name) end

@@ -1,0 +1,16 @@
+=== Retrieve double.simps (bundle, no index) ===
+  double.simps: roles=['simp']
+    double (0 :: nat) = (0 :: nat)
+    double (Suc ?n) = Suc (Suc (double ?n))
+=== Retrieve double.simps(1) ===
+  double.simps(1): roles=['simp']
+    double (0 :: nat) = (0 :: nat)
+=== Retrieve double.simps(2) ===
+  double.simps(2): roles=['simp']
+    double (Suc ?n) = Suc (Suc (double ?n))
+=== Retrieve a known system simp rule: add_0 ===
+  add_0: roles=['simp']
+=== Retrieve a known intro rule: conjI ===
+  conjI: roles=['intro']
+=== Retrieve a known elim rule: conjE ===
+  conjE: roles=['elim']

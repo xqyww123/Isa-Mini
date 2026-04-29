@@ -1,0 +1,56 @@
+--------------------------------------------------
+Initial State
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (1 :: nat) + (1 :: nat) = (2 :: nat) ∧ (2 :: nat) + (2 :: nat) = (4 :: nat)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After split
+--------------------------------------------------
+step 1: Intro (line 0)
+  - 1.1 (line 0)
+    Error: Unfinished Proof. Call command `edit` with action `fill` and target step `1.1.1`
+    goal: (1 :: nat) + (1 :: nat) = (2 :: nat)
+  - 1.2 (line 0)
+    Error: Unfinished Proof. Fill step `1.2.1`
+    goal: (2 :: nat) + (2 :: nat) = (4 :: nat)
+--------------------------------------------------
+After closing case 1.1 with Have 'helper'
+--------------------------------------------------
+step 1: Intro (line 0)
+  - 1.1 (done, line 0)
+  - 1.2 (line 0)
+    Error: Unfinished Proof. Fill step `1.2.1`
+OK: no Have facts leaked into sibling case
+--------------------------------------------------
+Final state
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (1 :: nat) + (1 :: nat) = (2 :: nat) ∧ (2 :: nat) + (2 :: nat) = (4 :: nat)
+proof:
+  - step id: 1
+    thought: Split conjunction
+    operation: Intro
+    goals:
+      - goal id: 1.1
+        goal: (1 :: nat) + (1 :: nat) = (2 :: nat)
+        proof:
+          - step id: 1.1.1
+            thought: Trivial helper
+            operation: Have
+            statement:
+              english: one plus one is two
+              isabelle: (1::nat) + 1 = 2
+            name: helper
+            proof:
+              - step id: 1.1.1.1
+                operation: Obvious
+          - step id: 1.1.2
+            operation: Obvious
+            with facts:
+              - helper: (1 :: nat) + (1 :: nat) = (2 :: nat)
+      - goal id: 1.2
+        goal: (2 :: nat) + (2 :: nat) = (4 :: nat)
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.1` to provide the proof.

@@ -18,6 +18,8 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import copy
+import json
 import os
 import sys
 import socket
@@ -58,9 +60,32 @@ def _load_schema(filename: str) -> dict:
     with open(os.path.join(_current_dir, "tools", filename), "r", encoding="utf-8") as f:
         return _json.load(f)
 
-_cc_edit_schema = _load_schema("cc_edit.jsonc")
+_cc_edit_schema_raw = _load_schema("cc_edit.jsonc")
 _cc_answer_schema = _load_schema("cc_answer.jsonc")
 _cc_delete_schema = _load_schema("cc_delete.jsonc")
+
+
+def _relax_edit_schema(schema: dict) -> dict:
+    """Derive a permissive variant of the edit tool schema.
+
+    Strips ``additionalProperties`` everywhere so extra fields (e.g.
+    ``thought`` on Obvious) pass client-side validation.  Allows
+    ``proof_operations`` to also be a string, working around a Claude API
+    constrained-decoding quirk that serialises deeply nested recursive
+    structures as a JSON-encoded string instead of an actual array.
+    """
+    relaxed = copy.deepcopy(schema)
+    relaxed.pop("additionalProperties", None)
+    for defn in relaxed.get("$defs", {}).values():
+        if isinstance(defn, dict):
+            defn.pop("additionalProperties", None)
+    po = relaxed.get("properties", {}).get("proof_operations")
+    if po and po.get("type") == "array":
+        po["type"] = ["array", "string"]
+    return relaxed
+
+
+_cc_edit_schema = _relax_edit_schema(_cc_edit_schema_raw)
 
 
 # ============================================================================
@@ -85,6 +110,14 @@ def _check_tool_permission(session: Session, tool_name: str) -> str | None:
 # ============================================================================
 
 async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
+    ops = args.get("proof_operations")
+    if isinstance(ops, str):
+        try:
+            parsed = json.loads(ops)
+            if isinstance(parsed, list):
+                args = {**args, "proof_operations": parsed}
+        except (json.JSONDecodeError, ValueError):
+            pass
     session.log_tool_call("mcp__proof__edit", args)
     try:
         step = args.get("target_step")

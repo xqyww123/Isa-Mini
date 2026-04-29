@@ -150,7 +150,7 @@ class ClaudeCode(Session):
         if not self._interactive_web_terminal:
             # Embedded mode: Agent SDK connects to HTTP server via URL
             self.options = ClaudeAgentOptions(
-                model="claude-opus-4-7",
+                model="claude-opus-4-6[1m]",
                 thinking={"type": "adaptive"},
                 cwd=self.working_dir,
                 permission_mode="default",
@@ -340,7 +340,10 @@ class ClaudeCode(Session):
                     }
 
         # 4. Passed all checks, allow execution
-        return { }
+        self.total_tool_calls += 1
+        if not tool.startswith('mcp__proof__'):
+            self.log_tool_call(tool, tool_input)
+        return {}
 
     async def _list_tools(self, client):
         """List all available tools to verify MCP tools are discoverable."""
@@ -669,9 +672,9 @@ class ClaudeCode(Session):
 
         mode = interaction.forking
         if mode == ForkingMode.FORKING_CHEAPER_NO_CTXT:
-            model = "claude-sonnet-4-6"
+            model = "claude-sonnet-4-6[1m]"
         else:
-            model = "claude-opus-4-7"
+            model = "claude-opus-4-6[1m]"
         if mode == ForkingMode.FORKING_WITH_CTXT:
             resume = self._conversation_id
             fork_session = True
@@ -703,11 +706,17 @@ class ClaudeCode(Session):
         try:
             async with ClaudeSDKClient(options=fork_options) as fork_client:
                 fork._client = fork_client
-                fork_prompt = (prompt_text +
-                    "\n\nForget the previous instructions. "
-                    "Your only task is to answer the question above "
-                    "and you MUST use the mcp__proof__answer tool to submit your answer. "
-                    "You MUST terminate immediately once answered.")
+                # Wording avoids "Forget the previous instructions" / "MUST" /
+                # "only task" — under FORKING_WITH_CTXT the fork resumes the
+                # parent conversation, and those phrases trip Claude's anti-
+                # injection training, leading the fork to ignore the prompt.
+                fork_prompt = (
+                    "Let's consider a sub-task forked from the context:\n"
+                    + prompt_text)
+                if "mcp__proof__answer" not in prompt_text:
+                    fork_prompt += (
+                        "\nAnswer the question above by calling the "
+                        "mcp__proof__answer tool.")
                 await fork_client.query(fork_prompt)
                 while True:
                     async for message in fork_client.receive_response():
@@ -729,12 +738,13 @@ class ClaudeCode(Session):
                         break
                     fork.log_interaction("fork", f"{tag} retrying: interaction not answered")
                     await fork_client.query(
-                        "You haven't submitted your answer. "
-                        "You MUST call the mcp__proof__answer tool to submit it.")
+                        "It looks like you haven't submitted your answer. "
+                        "Call mcp__proof__answer to submit it.")
             fork._client = None
         finally:
             if self._http_server is not None and fork._session_id is not None:
                 await self._http_server.unregister_session(fork._session_id)
+            self.total_tool_calls += fork.total_tool_calls
             await fork.close()
         assert fork.fork_pending is not None and fork.fork_pending.answer.done()
         return fork.fork_pending.answer.result()

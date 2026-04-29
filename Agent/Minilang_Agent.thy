@@ -18,6 +18,8 @@ method_setup aoa = \<open>
   Scan.succeed (K MiniLang_Agent_AoA.method)
 \<close>
 
+ML \<open>Token.unparse\<close>
+
 (* AoA-agent-specific INDUCT/CASE_SPLIT tuning (consumes_policy,
  * induct_auto_insert_facts, …) is applied per-session in agent_server.ML
  * via Config.put on the session context, not as a theory-level `declare`

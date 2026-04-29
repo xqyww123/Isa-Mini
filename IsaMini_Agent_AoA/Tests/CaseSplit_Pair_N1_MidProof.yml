@@ -1,0 +1,59 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - p: 'a × 'b
+  - P: 'a × 'b ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P p
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After seeding Have at step 1
+--------------------------------------------------
+variables:
+  - p: 'a × 'b
+  - P: 'a × 'b ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P p
+proof:
+  - step id: 1
+    thought: seed
+    operation: Have
+    statement:
+      english: trivial
+      isabelle: True
+    name: h
+    proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+--------------------------------------------------
+After insert_before (no-proofs; siblings untouched)
+--------------------------------------------------
+variables:
+  - p: 'a × 'b
+  - P: 'a × 'b ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P p
+proof:
+  - step id: 0A
+    thought: case-split on pair as mid-proof transform; no proofs
+    operation: CaseSplit
+    target term: p
+    fixing variables:
+      - a: 'a
+      - b: 'b
+    assuming premises:
+      - Pair.prem0: p = (a, b)
+    cases: empty
+  - step id: 1
+    thought: seed
+    operation: Have
+    statement:
+      english: trivial
+      isabelle: True
+    name: h
+    proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  P (a, b)
+Interactions fired: 0 (expected 0)

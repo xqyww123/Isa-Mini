@@ -51,7 +51,7 @@ async def IsaMini_AoA(data: tuple[Any, Any, str, str, str, str, str], connection
             raise ValueError(f"Test Not Found on '{test_name}'")
         case = TESTS[test_name]
         root = await case.run(connection, actual_log_path, global_context, ptree)
-        cost = (0, 0, 0, 0, 0.0)
+        cost = (0, 0, 0, 0, 0.0, 0)
     else:
         drv = Session.Driver.get(driver)
         if drv is None:
@@ -82,7 +82,8 @@ async def IsaMini_AoA(data: tuple[Any, Any, str, str, str, str, str], connection
                     session.total_cache_creation_input_tokens,
                     session.total_cache_read_input_tokens,
                     session.total_output_tokens,
-                    session.total_cost_usd)
+                    session.total_cost_usd,
+                    session.total_tool_calls)
 
     try:
         assembled = [x.pack() for x in root.assemble()]

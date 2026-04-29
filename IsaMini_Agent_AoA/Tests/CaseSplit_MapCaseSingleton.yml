@@ -8,6 +8,8 @@ You can write global declarations by calling command `edit` with action `fill` a
 goal: P b
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+UNEXPECTED interaction fired: Interaction_MapCase
+UNEXPECTED interaction fired: Interaction_MapCase
 is_error: False
 --------------------------------------------------
 After CaseSplit singleton splice
@@ -35,7 +37,7 @@ proof:
         goal: P False
         proof: empty
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.1` to provide the proof.
-Interactions fired: 0 (expected 0 — splice bypasses MapCase)
+Interactions fired: 2 (expected 0 — splice bypasses MapCase)
 === tree walk ===
 - Root id='$root' warnings=0 subs=2
   - GlobalEnv id='global' warnings=0 subs=0

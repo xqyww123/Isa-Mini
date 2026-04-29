@@ -9,7 +9,7 @@ goal: P b
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
-After fill with wrong names (both dropped)
+After initial fill (True/False)
 --------------------------------------------------
 variables:
   - b: bool
@@ -18,35 +18,7 @@ You can write global declarations by calling command `edit` with action `fill` a
 goal: P b
 proof:
   - step id: 1
-    thought: case-split on b with wrong names (to be amended)
-    operation: CaseSplit
-    target term: b
-    cases:
-      - goal id: 1.True
-        premises:
-          - True.prem0: b
-        goal: P True
-        proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.1` to provide the proof.
-      - goal id: 1.False
-        premises:
-          - False.prem0: ¬ b
-        goal: P False
-        proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.1` to provide the proof.
-    notice:
-      - The cases `wrong1`, `wrong2` are not found in the resulting cases of the case-split and are thus dropped.
---------------------------------------------------
-After amend with correct names
---------------------------------------------------
-variables:
-  - b: bool
-  - P: bool ⇒ bool
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: P b
-proof:
-  - step id: 1
-    thought: case-split on b with correct names
+    thought: initial case-split (exact names)
     operation: CaseSplit
     target term: b
     cases:
@@ -72,4 +44,46 @@ proof:
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.1` to replace it with a proof.
         pending proof goal:
           P False
-Interactions after amend: 0 (expected 0)
+--------------------------------------------------
+After amend (silent replace)
+--------------------------------------------------
+variables:
+  - b: bool
+  - P: bool ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P b
+proof:
+  - step id: 1
+    thought: amend: same names, different body
+    operation: CaseSplit
+    target term: b
+    cases:
+      - goal id: 1.True
+        premises:
+          - True.prem0: b
+        goal: P True
+        proof:
+          - step id: 1.True.1
+            thought: t-have
+            operation: Have
+            statement:
+              english: trivial
+              isabelle: True
+            name: h
+            proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.2` to provide the proof.
+      - goal id: 1.False
+        premises:
+          - False.prem0: ¬ b
+        goal: P False
+        proof:
+          - step id: 1.False.1
+            thought: f-have
+            operation: Have
+            statement:
+              english: trivial
+              isabelle: True
+            name: h
+            proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.2` to provide the proof.
+Interactions fired: 0 (expected 0)

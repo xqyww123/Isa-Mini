@@ -16,7 +16,7 @@ The case-split operation produced a case `False` (as follows) that does not matc
     - False.prem0: ¬ b
   goal: P False
 Is any of your supplied proof intended for this case?
-  0. xxx
+  0. new-xxx
 Answer with its index if so, or with empty `indexes` to leave this case without a proof for now.
 --------------------------------------------------
 After CaseSplit (exact + dropped)

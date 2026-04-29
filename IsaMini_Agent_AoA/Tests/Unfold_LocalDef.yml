@@ -1,0 +1,55 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∃(f :: nat ⇒ nat). f (2 :: nat) = (4 :: nat) ∧ f (3 :: nat) = (6 :: nat)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Define + Witness
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∃(f :: nat ⇒ nat). f (2 :: nat) = (4 :: nat) ∧ f (3 :: nat) = (6 :: nat)
+proof:
+  - step id: 1
+    thought: Define double as a witness
+    operation: Define
+    name: double
+    type: nat ⇒ nat
+    equations:
+      - double n = n + n
+    proof of termination: empty
+  - step id: 2
+    thought: Provide the locally-defined double as witness
+    operation: Witness
+    witness: double
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  double (2 :: nat) = (4 :: nat) ∧ double (3 :: nat) = (6 :: nat)
+Unfold is_error: False
+--------------------------------------------------
+After Unfold
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∃(f :: nat ⇒ nat). f (2 :: nat) = (4 :: nat) ∧ f (3 :: nat) = (6 :: nat)
+proof:
+  - step id: 1
+    thought: Define double as a witness
+    operation: Define
+    name: double
+    type: nat ⇒ nat
+    equations:
+      - double n = n + n
+    proof of termination: empty
+  - step id: 2
+    thought: Provide the locally-defined double as witness
+    operation: Witness
+    witness: double
+  - step id: 3
+    thought: Unfold the locally-defined double
+    operation: Unfold
+    targets:
+      - double
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `4` to provide the proof for the following goal.
+pending proof goal:
+  double (2 :: nat) = (4 :: nat) ∧ double (3 :: nat) = (6 :: nat)

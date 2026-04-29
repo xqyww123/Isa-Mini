@@ -1,0 +1,68 @@
+--------------------------------------------------
+After Define + Witness + Intro
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∃(f :: nat ⇒ nat). f (2 :: nat) = (4 :: nat) ∧ f (3 :: nat) = (6 :: nat)
+proof:
+  - step id: 1
+    thought: Define double
+    operation: Define
+    name: double
+    type: nat ⇒ nat
+    equations:
+      - double n = n + n
+    proof of termination: empty
+  - step id: 2
+    thought: Witness double
+    operation: Witness
+    witness: double
+  - step id: 3
+    thought: Split conjunction
+    operation: Intro
+    goals:
+      - goal id: 3.1
+        goal: double (2 :: nat) = (4 :: nat)
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3.1.1` to provide the proof.
+      - goal id: 3.2
+        goal: double (3 :: nat) = (6 :: nat)
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3.2.1` to provide the proof.
+Unfold in nested case is_error: False
+--------------------------------------------------
+After nested Unfold
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∃(f :: nat ⇒ nat). f (2 :: nat) = (4 :: nat) ∧ f (3 :: nat) = (6 :: nat)
+proof:
+  - step id: 1
+    thought: Define double
+    operation: Define
+    name: double
+    type: nat ⇒ nat
+    equations:
+      - double n = n + n
+    proof of termination: empty
+  - step id: 2
+    thought: Witness double
+    operation: Witness
+    witness: double
+  - step id: 3
+    thought: Split conjunction
+    operation: Intro
+    goals:
+      - goal id: 3.1
+        goal: double (2 :: nat) = (4 :: nat)
+        proof:
+          - step id: 3.1.1
+            thought: Unfold double in nested case
+            operation: Unfold
+            targets:
+              - double
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3.1.2` to provide the proof for the following goal.
+        pending proof goal:
+          double (2 :: nat) = (4 :: nat)
+      - goal id: 3.2
+        goal: double (3 :: nat) = (6 :: nat)
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3.2.1` to provide the proof.

@@ -1,0 +1,147 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - m: nat
+  - n: nat
+  - P: nat ⇒ nat ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P n m
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After CaseSplit on n
+--------------------------------------------------
+variables:
+  - m: nat
+  - n: nat
+  - P: nat ⇒ nat ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P n m
+proof:
+  - step id: 1
+    thought: Case split on n
+    operation: CaseSplit
+    target term: n
+    cases:
+      - goal id: 1.0
+        premises:
+          - 0.prem0: n = (0 :: nat)
+        goal: P (0 :: nat) m
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.0.1` to provide the proof.
+      - goal id: 1.Suc
+        variables:
+          - nat: nat
+        premises:
+          - Suc.prem0: n = Suc nat
+        goal: P (Suc nat) m
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Suc.1` to provide the proof.
+--------------------------------------------------
+After nested CaseSplit on m (inside Suc of n)
+--------------------------------------------------
+variables:
+  - m: nat
+  - n: nat
+  - P: nat ⇒ nat ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P n m
+proof:
+  - step id: 1
+    thought: Case split on n
+    operation: CaseSplit
+    target term: n
+    cases:
+      - goal id: 1.0
+        premises:
+          - 0.prem0: n = (0 :: nat)
+        goal: P (0 :: nat) m
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.0.1` to provide the proof.
+      - goal id: 1.Suc
+        variables:
+          - nat: nat
+        premises:
+          - Suc.prem0: n = Suc nat
+        goal: P (Suc nat) m
+        proof:
+          - step id: 1.Suc.1
+            thought: Case split on m inside Suc case of n
+            operation: CaseSplit
+            target term: m
+            cases:
+              - goal id: 1.Suc.1.0
+                premises:
+                  - 0.prem0: m = (0 :: nat)
+                goal: P (Suc nat) (0 :: nat)
+                proof: empty
+                Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Suc.1.0.1` to provide the proof.
+              - goal id: 1.Suc.1.Suc1
+                variables:
+                  - nat1: nat
+                premises:
+                  - Suc1.prem0: m = Suc nat1
+                goal: P (Suc nat) (Suc nat1)
+                proof: empty
+                Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Suc.1.Suc1.1` to provide the proof.
+Skolemized variable names found: []
+Have with goal conclusion succeeded (no skolem issue)
+--------------------------------------------------
+Final state
+--------------------------------------------------
+variables:
+  - m: nat
+  - n: nat
+  - P: nat ⇒ nat ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P n m
+proof:
+  - step id: 1
+    thought: Case split on n
+    operation: CaseSplit
+    target term: n
+    cases:
+      - goal id: 1.0
+        premises:
+          - 0.prem0: n = (0 :: nat)
+        goal: P (0 :: nat) m
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.0.1` to provide the proof.
+      - goal id: 1.Suc
+        variables:
+          - nat: nat
+        premises:
+          - Suc.prem0: n = Suc nat
+        goal: P (Suc nat) m
+        proof:
+          - step id: 1.Suc.1
+            thought: Case split on m inside Suc case of n
+            operation: CaseSplit
+            target term: m
+            cases:
+              - goal id: 1.Suc.1.0
+                premises:
+                  - 0.prem0: m = (0 :: nat)
+                goal: P (Suc nat) (0 :: nat)
+                proof: empty
+                Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Suc.1.0.1` to provide the proof.
+              - goal id: 1.Suc.1.Suc1
+                variables:
+                  - nat1: nat
+                premises:
+                  - Suc1.prem0: m = Suc nat1
+                goal: P (Suc nat) (Suc nat1)
+                proof:
+                  - step id: 1.Suc.1.Suc1.1
+                    thought: Restate part of the goal
+                    operation: Have
+                    statement:
+                      english: restating the goal conclusion
+                      isabelle: P (Suc nat) (Suc nat1)
+                    name: htest
+                    proof: empty
+                    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Suc.1.Suc1.1.1` to provide the proof for the following goal.
+                    pending proof goal:
+                      P (Suc nat) (Suc nat1)
+                Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Suc.1.Suc1.2` to provide the proof.
