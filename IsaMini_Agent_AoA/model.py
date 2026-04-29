@@ -2282,6 +2282,10 @@ class Node(ABC):
     id: 'step'
     line: int
     _changes_pending_goal = True
+    _the_single_printed_goal: 'Goal | None' = None
+    """Set by quickview when this node prints a single goal (e.g. Rewrite's
+    "goal changes into").  Used by the enclosing StdBlock to suppress
+    duplicated goal printing at the end of the block."""
 
     def __init__(self, config: NodeConfig, thought: str):
         """
@@ -2392,8 +2396,6 @@ class Node(ABC):
         return indent + 1
     def does_quickview_need_detail(self) -> bool:
         return self.changed or self.status.status != EvaluationStatus.Status.SUCCESS
-    def _suppress_parent_goal(self) -> bool:
-        return False
     def quickview(self, indent: int, file: MyIO) -> int:
         indent = self.quickview_header(indent, file)
         eval_key = (self.status.status,
@@ -3524,12 +3526,13 @@ class StdBlock(NonLeaf_Node):
                     self.session.showed_fill_hint = True
                 suppressed = self._ctxt_of_filling()
                 visible = goal.visible(suppressed)
-                last_success = None
+                already_printed = None
                 for child in reversed(self.sub_nodes):
-                    if child.status.status == EvaluationStatus.Status.SUCCESS:
-                        last_success = child
+                    if child._the_single_printed_goal is not None:
+                        already_printed = child
                         break
-                if last_success is not None and last_success._suppress_parent_goal():
+                if already_printed is not None \
+                        and already_printed._the_single_printed_goal.conclusion == goal.conclusion:
                     self._prev_pending_goal = visible
                 elif visible != self._prev_pending_goal:
                     print_goal(goal, indent, True, file, suppressed)
@@ -3943,6 +3946,32 @@ class SubgoalMaker(GoalContainer, StdBlock):
         super().__init__(*args, **kwargs)
         self._initial_goal_index : int = 1
         self._supplied_proofs: 'dict[str, proof] | None' = None
+
+    def _amend_from(self, old: 'Node') -> None:
+        # SubgoalMaker.sub_nodes are framework-managed GoalNodes (one per
+        # subgoal opened by the begin-op), not user proof steps. Carrying
+        # `old.sub_nodes` over wholesale — as `NonLeaf_Node._amend_from`
+        # does by default — only makes sense when `old` is the SAME
+        # SubgoalMaker subclass: its sub_nodes are then GoalNodes too,
+        # and `_refresh_the_beginning_opr`'s count-match path can keep or
+        # discard them coherently. For any other shape (StdBlock body,
+        # different SubgoalMaker subclass) the old children would
+        # violate the GoalNode invariant if retained, so we drop them
+        # with an explicit warning.
+        Node._amend_from(self, old)
+        if isinstance(old, type(self)) and isinstance(old, NonLeaf_Node):
+            self.sub_nodes[:] = old.sub_nodes
+            old.sub_nodes.clear()
+            for child in self.sub_nodes:
+                child.parent = self
+        elif isinstance(old, NonLeaf_Node) and old.sub_nodes:
+            self._warn_discarded_nodes(
+                list(old.sub_nodes),
+                "Amending to a different proof structure; previous child "
+                "proofs cannot be carried over and have been dropped",
+                Warning.Position.HEADER,
+            )
+            old.sub_nodes.clear()
 
     @classmethod
     def gen_single(cls, arg: Any, path: str = "<direct>") -> Parsed_Opr:
@@ -5506,9 +5535,9 @@ class Rewrite(Leaf):
                     print_goal(cur, indent+1, False, file, self._ctxt_at_me(),
                                truncate=True)
                 self._prev_result_goal = cur
+                if isinstance(cur, Goal):
+                    self._the_single_printed_goal = cur
         return indent
-    def _suppress_parent_goal(self) -> bool:
-        return self._prev_result_goal is not None
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
         self._print_thought(indent, file)

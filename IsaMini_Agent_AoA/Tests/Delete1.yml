@@ -57,7 +57,6 @@ step 2: Rewrite goal (line 22)
   goal changes into:
     y = z
 Error: Unfinished Proof (line 31). Call command `edit` with action `fill` and target step `3`
-goal: y = z
 --------------------------------------------------
 After deleting step 1 (Have)
 --------------------------------------------------
@@ -88,7 +87,7 @@ Overview
 --------------------------------------------------
 step 2: Rewrite goal (failed, line 22)
   Error: Fact "lem1" not found
-Error: Unfinished Proof (line 83). Fill step `3`
+Error: Unfinished Proof (line 82). Fill step `3`
 goal: x = z
 --------------------------------------------------
 After inserting Have before step 2
@@ -137,4 +136,3 @@ step 2: Rewrite goal (line 23)
   goal changes into:
     y + (0 :: int) = z
 Error: Unfinished Proof (line 32). Fill step `3`
-goal: y + (0 :: int) = z

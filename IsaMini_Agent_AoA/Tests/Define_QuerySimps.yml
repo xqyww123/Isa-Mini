@@ -15,7 +15,6 @@ proof:
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   ∃(f :: nat ⇒ nat). f (2 :: nat) = (4 :: nat)
-retrieval_state: $6
 Query double.simps: 1 results, warnings=[]
   Found: double.simps
 --------------------------------------------------

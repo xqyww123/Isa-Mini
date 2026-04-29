@@ -622,7 +622,6 @@ async def _test_Define_QuerySimps(root: Root, file: MyIO):
     root.print(0, file)
 
     ml = root.session.retrieval_state()
-    file.write(f"retrieval_state: {ml.name}\n")
 
     results, warnings = await ml.semantic_knn(
         None, 1, [EntityKind.THEOREM], exact_name="double.simps")
@@ -4083,7 +4082,7 @@ async def _test_FactsToGeneralize_ConsumingRule(root: Root, file: MyIO):
         f"Expected exactly one InstantiateSchematics fork, got "
         f"{len(observed_interaction)}")
     interaction = observed_interaction[0]
-    file.write(f"\nObserved interaction: rule={interaction.rule_name}\n")
+    file.write(f"\nObserved interaction: rule={interaction.rule_name.unicode}\n")
     file.write(f"  schematic_vars: {interaction.schematic_vars}\n")
     file.write(f"  consume_premises: {interaction.consume_premises}\n")
     assert interaction.rule_name == "int_le_induct", (

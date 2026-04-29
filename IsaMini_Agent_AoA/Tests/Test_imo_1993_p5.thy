@@ -1,7 +1,6 @@
 (*
   Authors: Wenda Li
 *)
-
 theory Test_imo_1993_p5
   imports
     "MathBench_Prover.MathBench_Prover"
@@ -13,8 +12,9 @@ theorem imo_1993_p5:
   "\<exists> f :: nat \<Rightarrow> nat. 
     (\<forall> a b. (a < b) \<longleftrightarrow> f a < f b) 
       \<and> f 1 = 2 \<and> (\<forall> n. f (f n) = f n + n)"
-  by  aoa
-
+                  
+  term term_of_class.term_of
+ML \<open>@{theory Code_Evaluation}\<close>
 
 (*
 term "prime (5::int)"

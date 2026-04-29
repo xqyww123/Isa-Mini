@@ -2335,17 +2335,9 @@ fun CASES' diff ADDITIONAL_NOTES safe_names tac first_vars (SK as (ctxt0, HHF (s
                               let val name = Binding.name_of B
                                   val name = if Name.is_internal name then Name.dest_internal name
                                                                       else name
-                                  val do_deconflict =
-                                    Config.get ctxt deconflict_case_fixes
-                                    andalso not (member (op =) safe_names name)
-                                  val _ = if Config.get ctxt deconflict_case_fixes
-                                          then File.append (Path.explode "/tmp/deconflict_debug.log")
-                                            ("CASES' fix: name=" ^ name
-                                             ^ " safe=" ^ String.concatWith "," safe_names
-                                             ^ " deconflict=" ^ Bool.toString do_deconflict ^ "\n")
-                                          else ()
                                   val (name, names) =
-                                    if do_deconflict
+                                    if Config.get ctxt deconflict_case_fixes
+                                       andalso not (member (op =) safe_names name)
                                     then variant_name name names
                                     else (name, names)
                                in ((Binding.name name,T), names)
@@ -2957,10 +2949,9 @@ fun INDUCT' (no_simp, (insts, ((arbitrary, taking), opt_rule))) first_vars
       val induct_safe_names =
             fold (fold (fn NONE => I
                          | SOME (_, (X, _)) =>
-                             fold (insert (op =) o Name.clean o fst) (Term.add_frees X [])))
+                             fold (insert (op =) o Variable.revert_fixed ctxt o fst)
+                                  (Term.add_frees X [])))
                  insts []
-      val _ = File.append (Path.explode "/tmp/deconflict_debug.log")
-                ("INDUCT' safe_names = [" ^ String.concatWith ", " induct_safe_names ^ "]\n")
       val ret = CASES' diff (maps o update_tampered) induct_safe_names tac first_vars (ctxt, SK)
    in get_reporter () (Internal (IH_MAP (!IH_map)))
     ; ret

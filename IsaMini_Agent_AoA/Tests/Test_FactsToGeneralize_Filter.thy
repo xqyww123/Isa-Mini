@@ -26,6 +26,28 @@ text \<open>
 lemma
   fixes p :: nat
   shows "True"
-  by aoa
+  by ao a
+
+lemma "P (n::nat) (b::nat)"
+proof (induct \<open>n + b\<close>)
+  case 0
+  then show ?case sorry
+next
+  case (Suc x)
+  then show ?case sorry
+qed
+  case 0
+  then show ?thesis sorry
+next
+  case (Suc nat)
+  then show ?thesis
+  proof (cases b)
+    case 0
+    then show ?thesis sorry
+  next
+    case (Suc nat)
+    then show ?thesis sorry
+  qed
+qed
 
 end
