@@ -1583,6 +1583,39 @@ async def _test_Rewrite_Targeted_Drop(root: Root, file: MyIO):
     file.write(f"success: {success}\n")
     file.write(f"reason: {reason.reason if isinstance(reason, FailureReason) else reason}\n")
 
+@model_test("Rewrite_QuantifiedGoal", "Test_Rewrite_QuantifiedGoal.thy", 28)
+async def _test_Rewrite_QuantifiedGoal(root: Root, file: MyIO):
+    """Regression test: applying a looping rewrite rule to a quantified goal
+    must not crash with 'fastype_of: Bound'.
+
+    Root cause: find_matching_subterms descends into Abs bodies via
+      collect (Abs (_, _, body)) acc = collect body acc
+    without substituting the bound variable, leaving dangling Bound indices.
+    Pattern.match then calls fastype_of on these subterms, which crashes."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    async def stub_fork(interaction):
+        print_header("Interaction Prompt", file)
+        await interaction.prompt(0, file)
+        assert isinstance(interaction, Interaction_SelectRewriteTargets)
+        num_matches = len(interaction.looping_rules[0][2]) if interaction.looping_rules else 0
+        return await interaction.answer(Answer(indexes=list(range(num_matches))))
+    root.session.fork_interaction = stub_fork
+    _outcome = await root.fill("1", [Rewrite.gen_single({
+        "thought": "Rewrite f y inside the existential using my_wrap",
+        "using": [{"refer_by": "name", "name": "my_wrap"}],
+        "use system simplifiers": False,
+        "rewrite goal": True,
+        "rewrite premises": []
+    })])
+    success = _outcome.failure is not None and _outcome.failure.is_error
+    reason = _outcome.failure
+    print_header("After Rewrite (quantified goal)", file)
+    root.print(0, file)
+    file.write(f"success: {success}\n")
+    file.write(f"reason: {reason.reason if isinstance(reason, FailureReason) else reason}\n")
+
 # class TestCase_Interactive_Unfold:
 #     pass
 
@@ -6276,6 +6309,23 @@ async def _test_InferenceRuleProofsPerSubgoal(root: Root, file: MyIO):
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
 
+@model_test("InferenceRule_Quickview", "Test_InferenceRuleBatch.thy", 8)
+async def _test_InferenceRule_Quickview(root: Root, file: MyIO):
+    """Bug: InferenceRule with N<=1 subgoals doesn't show derived goal in
+    quickview.  _print_header (full print) shows it, but quickview()
+    inherits the default Node.quickview which omits it.
+
+    Uses ccontr (N=1): derived goal should be `¬ P ⟶ False`."""
+    await root.fill("1", [InferenceRule.gen_single({
+        "thought": "proof by contradiction",
+        "rule": {"refer_by": "name", "name": "ccontr"},
+    })])
+    print_header("Full print (shows derived goal)", file)
+    root.print(0, file)
+    print_header("Quickview (should show derived goal too)", file)
+    root.quickview(0, file)
+
+
 # Disabled: YAML-diff check is unstable because several intermediate Obvious
 # steps depend on Sledgehammer/auto (notably 3.2.5.1 squaring sqrt(p/3) < n).
 # The cat_tree BLOCK patch it covers is exercised by the rest of the AoA
@@ -6837,6 +6887,51 @@ async def _test_DeleteObtainUnfound(root: Root, file: MyIO):
     await root.delete(["2"])
     print_header("After deleting Obtain", file)
     root.print(0, file)
+
+
+@model_test("SpliceHaveRefresh", "Test_SpliceHaveRefresh.thy", 8)
+async def _test_SpliceHaveRefresh(root: Root, file: MyIO):
+    """Reproduce bug: InferenceRule with 1 subgoal (N<=1 splice path) that
+    carries a nested proof body.  _truncate_siblings_for_splice replaces
+    parent.sub_nodes with a new list, so _splice_body's appends are invisible
+    to the parent's ongoing for-loop in _refresh_me_alone.  Result: spliced
+    children stay at EVALUATION_NOT_YET."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    # Have "\<not> False" proved by InferenceRule notI (1 subgoal → splice),
+    # with body = [Obvious] to close the subgoal "False ==> False".
+    await root.fill("1", [Have.gen_single({
+        "thought": "claim not False",
+        "statement": {"english": "not False", "isabelle": r"\<not> False"},
+        "name": "nf",
+        "proof": [
+            {"operation": "InferenceRule",
+             "thought": "apply notI",
+             "rule": {"refer_by": "name", "name": "notI"},
+             "proofs": [[
+                 {"operation": "Obvious", "facts": []}
+             ]]}
+        ]
+    })])
+    print_header("After Have with spliced InferenceRule proof", file)
+    root.print(0, file)
+    # Probe: check statuses of spliced children
+    have_node = root.locate_node("1")
+    assert isinstance(have_node, NonLeaf_Node)
+    file.write(f"Have sub_nodes count: {len(have_node.sub_nodes)}\n")
+    for child in have_node.sub_nodes:
+        file.write(f"  {child.id}: {type(child).__name__} status={child.status.status.name}\n")
+    # The bug: spliced children (after InferenceRule) have status FAILURE
+    # with reason "Not yet evaluated" instead of being properly refreshed.
+    spliced = [c for c in have_node.sub_nodes
+               if c.status == EVALUATION_NOT_YET]
+    if spliced:
+        file.write(f"BUG: {len(spliced)} node(s) never refreshed (EVALUATION_NOT_YET):\n")
+        for c in spliced:
+            file.write(f"  - {c.id} ({type(c).__name__})\n")
+    else:
+        file.write("OK: all children were refreshed\n")
 
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):

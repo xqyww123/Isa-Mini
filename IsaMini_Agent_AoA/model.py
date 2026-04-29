@@ -4081,7 +4081,7 @@ class SubgoalMaker(GoalContainer, StdBlock):
             return
         idx = next(i for i, c in enumerate(parent.sub_nodes) if c is self)
         discarded = parent.sub_nodes[idx + 1:]
-        parent.sub_nodes = parent.sub_nodes[:idx + 1]
+        del parent.sub_nodes[idx + 1:]
         if discarded:
             parent._warn_discarded_nodes(
                 discarded,
@@ -6311,6 +6311,7 @@ class InferenceRule(SubgoalMaker):
         self.rule: FactByName | FactByDescription | None = arg["rule"]
         self.rule_ref: IsabelleFact | None = None
         self._opening = False
+        self._prev_quickview_derived_goal: term | None = None
         if parsed_proofs is not None:
             self._supplied_proofs = {
                 str(i + self._initial_goal_index): p
@@ -6345,6 +6346,21 @@ class InferenceRule(SubgoalMaker):
         if self.rule_ref is not None:
             return f"Inference Rule {self.rule_ref.name().unicode}"
         return "Inference Rule"
+    def quickview(self, indent: int, file: MyIO) -> int:
+        indent = super().quickview(indent, file)
+        if len(self.sub_nodes) <= 1:
+            s0 = self._state_after_beginning()
+            goal = s0.leading_goal
+            if goal is not None:
+                conclusion = goal.conclusion
+                if conclusion != self._prev_quickview_derived_goal:
+                    conclusion_str = conclusion.unicode
+                    if len(conclusion_str) > AGENT_GOAL_CHAR_LIMIT:
+                        conclusion_str = _trunc_expr_base(conclusion_str, AGENT_GOAL_CHAR_LIMIT)
+                    print_indent(indent, file)
+                    file.write(f"derived goal: {conclusion_str}\n")
+                    self._prev_quickview_derived_goal = conclusion
+        return indent
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         self._print_thought(indent, file)
         print_indent(indent, file)
@@ -7058,6 +7074,8 @@ class Session:
         self.total_cache_creation_input_tokens: int = 0
         self.total_cache_read_input_tokens: int = 0
         self.total_tool_calls: int = 0
+        self.total_isabelle_time: float = 0.0
+        self.total_model_time: float = 0.0
         self.retrieval_forking_mode: ForkingMode = (
             parent.retrieval_forking_mode if parent is not None
             else retrieval_forking_mode)
@@ -7340,7 +7358,9 @@ class Session:
             f"cache_read={self.total_cache_read_input_tokens} "
             f"output={self.total_output_tokens} tokens, "
             f"cost=${self.total_cost_usd:.4f} "
-            f"tool_calls={self.total_tool_calls}")
+            f"tool_calls={self.total_tool_calls} "
+            f"isabelle_time={self.total_isabelle_time:.2f}s "
+            f"model_time={self.total_model_time:.2f}s")
 
     def log_proof(self):
         """
@@ -7416,7 +7436,7 @@ class Session:
 
     def on_operation_end(self, step_id: str, operation: str, args: Any, status: 'EvaluationStatus'):
         """Called after a Minilang operation completes (success or failure)."""
-        pass
+        self.total_isabelle_time += status.time
 
 
 class SessionConstructor(Protocol):

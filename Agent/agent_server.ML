@@ -702,6 +702,27 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         timeout = NONE
       }
 
+      (* Find all subterms of t that match pattern pat.
+         Returns a list of matching subterms (no duplicates by aconv).
+         Abs case substitutes Bound with Free to avoid fastype_of: Bound
+         crashes inside Pattern.match. *)
+      fun find_matching_subterms thy pat t =
+        let
+          fun try_match t =
+            (Pattern.match thy (pat, t) (Vartab.empty, Vartab.empty); true)
+            handle Pattern.MATCH => false
+          fun add_if_new t acc =
+            if exists (fn t' => Term.aconv (t, t')) acc then acc else t :: acc
+          fun collect (t as (f $ x)) acc =
+                let val acc' = collect f (collect x acc)
+                in if try_match t then add_if_new t acc' else acc' end
+            | collect (Abs (name, ty, body)) acc =
+                let val free = Free (name, ty)
+                in collect (Term.subst_bound (free, body)) acc end
+            | collect t acc =
+                if try_match t then add_if_new t acc else acc
+        in collect t [] end
+
       val check_looping_rules_callback = {
         name = "IsaMini.check_looping_rules",
         arg_schema = unpackTuple4 (
@@ -755,7 +776,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                           handle TERM _ => NONE) looping_rules
                         val matches = distinct (fn (a, b) => Term.aconv (a, b))
                           (flat (map (fn lhs =>
-                            flat (map (Minilang.find_matching_subterms thy lhs) search_terms)
+                            flat (map (find_matching_subterms thy lhs) search_terms)
                           ) lhss))
                         val rule_pretty = SOT (Thm.prop_of (hd thms))
                     in SOME (i, rule_pretty, map (fn t => (SOT t, t)) matches)
@@ -904,9 +925,9 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
             end),
         ret_schema = unpackTuple3 (unpackList MiniLang_Agent.xcmd_unpacker,
                                    unpackOption unpackString,
-                                   (fn src => let val ((i,cw,cr,o_,c,tc), src') =
-                                      unpackTuple6 (unpackInt,unpackInt,unpackInt,unpackInt,unpackReal,unpackInt) src
-                                    in ({input=i,cache_write=cw,cache_read=cr,output=o_,cost=c,tool_calls=tc}, src') end)),
+                                   (fn src => let val ((i,cw,cr,o_,c,tc,it,mt), src') =
+                                      unpackTuple8 (unpackInt,unpackInt,unpackInt,unpackInt,unpackReal,unpackInt,unpackReal,unpackReal) src
+                                    in ({input=i,cache_write=cw,cache_read=cr,output=o_,cost=c,tool_calls=tc,isabelle_time=it,model_time=mt}, src') end)),
         timeout = NONE,
         callback = [
           mk_callback proof_opr_callback,
@@ -937,7 +958,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
       }
 
       val timer = Timer.startRealTimer ()
-      val (xcmds, s1o, {input, cache_write, cache_read, output, cost, tool_calls}) =
+      val (xcmds, s1o, {input, cache_write, cache_read, output, cost, tool_calls, isabelle_time, model_time}) =
             call_command aoa_cmd (global_context, driver, invocation_id)
       val elapsed = Timer.checkRealTimer timer
       val _ = writeln (String.concat [
@@ -947,6 +968,8 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         " output=", Int.toString output,
         " cost=$", Real.fmt (StringCvt.FIX (SOME 4)) cost,
         " tool_calls=", Int.toString tool_calls,
+        " isabelle_time=", Real.fmt (StringCvt.FIX (SOME 2)) isabelle_time, "s",
+        " model_time=", Real.fmt (StringCvt.FIX (SOME 2)) model_time, "s",
         " time=", Time.toString elapsed, "s"])
    in case s1o
    of SOME s1 => (

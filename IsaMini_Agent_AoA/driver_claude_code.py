@@ -96,6 +96,7 @@ class ClaudeCode(Session):
             self._fork_name = "main"
 
         # Common to both modes
+        self._model_time_start: float | None = None
         self._session_id: str | None = None       # constant, set in initialize(), used for HTTP server registration
         self._conversation_id: str | None = None   # mutable, set by Agent SDK hook, used for fork resume
         self._fork_counter = 0
@@ -159,6 +160,12 @@ class ClaudeCode(Session):
                 hooks={
                     "PreToolUse": [
                         HookMatcher(matcher="*", hooks=[self.permission_control]),
+                    ],
+                    "PostToolUse": [
+                        HookMatcher(matcher="*", hooks=[self._resume_model_timer]),
+                    ],
+                    "PostToolUseFailure": [
+                        HookMatcher(matcher="*", hooks=[self._resume_model_timer]),
                     ],
                     "PreCompact": [
                         HookMatcher(matcher="*", hooks=[self.on_compact]),
@@ -340,9 +347,21 @@ class ClaudeCode(Session):
                     }
 
         # 4. Passed all checks, allow execution
+        if self._model_time_start is not None:
+            self.total_model_time += time() - self._model_time_start
+            self._model_time_start = None
         self.total_tool_calls += 1
         if not tool.startswith('mcp__proof__'):
             self.log_tool_call(tool, tool_input)
+        return {}
+
+    async def _resume_model_timer(
+        self,
+        hook_input: HookInput,
+        tool_use_id: str | None,
+        context: HookContext,
+    ) -> HookJSONOutput:
+        self._model_time_start = time()
         return {}
 
     async def _list_tools(self, client):
@@ -375,6 +394,7 @@ class ClaudeCode(Session):
             async with ClaudeSDKClient(options=self.options) as client:
                 self._client = client
                 await client.query(P.INITIAL_PROMPT)
+                self._model_time_start = time()
                 while True:
                     # Stream model outputs and log them in debug mode
                     async for message in client.receive_response():
@@ -389,6 +409,9 @@ class ClaudeCode(Session):
                                 if isinstance(thinking, str) and thinking:
                                     self.log_model_thinking(thinking)
                         if isinstance(message, ResultMessage):
+                            if self._model_time_start is not None:
+                                self.total_model_time += time() - self._model_time_start
+                                self._model_time_start = None
                             self._accumulate_cost(message)
                     unfinished_nodes = set()
                     self.root.unfinished_nodes(unfinished_nodes)
@@ -396,6 +419,7 @@ class ClaudeCode(Session):
                         retry_prompt = P.RETRY_PROMPT(unfinished_nodes)
                         self.log_retry(unfinished_nodes, retry_prompt)
                         await client.query(retry_prompt)
+                        self._model_time_start = time()
                     else:
                         break
         finally:
@@ -697,6 +721,12 @@ class ClaudeCode(Session):
                 "PreToolUse": [
                     HookMatcher(matcher="*", hooks=[fork.permission_control]),
                 ],
+                "PostToolUse": [
+                    HookMatcher(matcher="*", hooks=[fork._resume_model_timer]),
+                ],
+                "PostToolUseFailure": [
+                    HookMatcher(matcher="*", hooks=[fork._resume_model_timer]),
+                ],
                 "PreCompact": [
                     HookMatcher(matcher="*", hooks=[fork.on_compact]),
                 ],
@@ -718,6 +748,7 @@ class ClaudeCode(Session):
                         "\nAnswer the question above by calling the "
                         "mcp__proof__answer tool.")
                 await fork_client.query(fork_prompt)
+                fork._model_time_start = time()
                 while True:
                     async for message in fork_client.receive_response():
                         content = getattr(message, "content", None)
@@ -731,6 +762,9 @@ class ClaudeCode(Session):
                                 if isinstance(thinking, str) and thinking:
                                     fork.log_model_thinking(f"{tag} {thinking}")
                         if isinstance(message, ResultMessage):
+                            if fork._model_time_start is not None:
+                                fork.total_model_time += time() - fork._model_time_start
+                                fork._model_time_start = None
                             self._accumulate_cost(message)
                             fork.log_interaction("fork", f"{tag} completed: subtype={message.subtype}")
                     assert fork.fork_pending is not None
@@ -740,11 +774,14 @@ class ClaudeCode(Session):
                     await fork_client.query(
                         "It looks like you haven't submitted your answer. "
                         "Call mcp__proof__answer to submit it.")
+                    fork._model_time_start = time()
             fork._client = None
         finally:
             if self._http_server is not None and fork._session_id is not None:
                 await self._http_server.unregister_session(fork._session_id)
             self.total_tool_calls += fork.total_tool_calls
+            self.total_isabelle_time += fork.total_isabelle_time
+            self.total_model_time += fork.total_model_time
             await fork.close()
         assert fork.fork_pending is not None and fork.fork_pending.answer.done()
         return fork.fork_pending.answer.result()
@@ -780,6 +817,7 @@ class ClaudeCode(Session):
                 "state": "running"})
 
     def on_operation_end(self, step_id: str, operation: str, args: Any, status: EvaluationStatus):
+        super().on_operation_end(step_id, operation, args, status)
         if self._on_operation_status is not None and operation not in self._SKIP_STATUS_OPS:
             msg: dict[str, Any] = {
                 "type": "status", "step": step_id,

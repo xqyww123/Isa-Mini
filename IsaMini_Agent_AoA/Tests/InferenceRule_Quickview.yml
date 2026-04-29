@@ -1,0 +1,32 @@
+--------------------------------------------------
+Full print (shows derived goal)
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: proof by contradiction
+    operation: Inference Rule
+    rule:
+      - ccontr: (¬ ?P ⟶ False) ⟶ ?P
+    derived goal:
+      ¬ (0 :: int) ≤ x * x ⟶ False
+  - step id: 2
+    operation: Intro
+    assuming premises:
+      - premise0: ¬ (0 :: int) ≤ x * x
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  False
+--------------------------------------------------
+Quickview (should show derived goal too)
+--------------------------------------------------
+step 1: Inference Rule ccontr (line 0)
+  derived goal: ¬ (0 :: int) ≤ x * x ⟶ False
+step 2: Intro (line 0)
+  assuming premises:
+    - premise0: ¬ (0 :: int) ≤ x * x
+Error: Unfinished Proof (line 20). Call command `edit` with action `fill` and target step `3`
+goal: False

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# NOTE: Full test output is very long. Redirect to a file when running all tests:
+#   python test_AoA.py > /tmp/aoa_test_results.txt 2>&1
+# IMPORTANT: Never delete golden YAML in test cases (Tests/*.yml).
+#   You may edit them manually to update expected output if you are absolutely certain.
 import argparse
 import os
 import sys

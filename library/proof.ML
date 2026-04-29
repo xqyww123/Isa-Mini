@@ -337,10 +337,6 @@ val simp_rule_loops : theory -> term * term -> bool
    prover handles conditions of conditional rules. *)
 val thms_to_once_simprocs : Proof.context -> thm list -> simproc list
 
-(* Find all subterms of t that match pattern pat.
-   Returns a list of matching subterms (no duplicates by aconv). *)
-val find_matching_subterms : theory -> term -> term -> term list
-
 (* Create simprocs that fire only on specific target terms.
    Unlike thms_to_once_simprocs, these fire on ALL indicated targets, not just once.
    Each (thm, targets) pair produces simprocs whose proc checks aconv against targets. *)
@@ -4862,27 +4858,6 @@ fun thms_to_once_simprocs ctxt (thms: thm list) : simproc list =
             identifier = [] })
       end handle TERM _ => NONE
   in map_filter I (map_index mk_once meta_rules) end
-
-(* Find all subterms of t that match pattern pat.
-   Returns a list of matching subterms (no duplicates by aconv). *)
-fun find_matching_subterms thy pat t =
-  let
-    fun collect (t as (f $ x)) acc =
-          let val acc' = collect f (collect x acc)
-          in if (Pattern.match thy (pat, t) (Vartab.empty, Vartab.empty); true)
-                handle Pattern.MATCH => false
-             then if exists (fn t' => Term.aconv (t, t')) acc' then acc'
-                  else t :: acc'
-             else acc'
-          end
-      | collect (Abs (_, _, body)) acc = collect body acc
-      | collect t acc =
-          if (Pattern.match thy (pat, t) (Vartab.empty, Vartab.empty); true)
-             handle Pattern.MATCH => false
-          then if exists (fn t' => Term.aconv (t, t')) acc then acc
-               else t :: acc
-          else acc
-  in collect t [] end
 
 (* Create simprocs that fire only on specific target terms.
    Each firing consumes the matched target from a mutable list, so the simproc

@@ -1,0 +1,35 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ¬ False ∧ True
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Have with spliced InferenceRule proof
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ¬ False ∧ True
+proof:
+  - step id: 1
+    thought: claim not False
+    operation: Have
+    statement:
+      english: not False
+      isabelle: \<not> False
+    name: nf
+    proof:
+      - step id: 1.1
+        thought: apply notI
+        operation: Inference Rule
+        rule:
+          - notI: (?P ⟶ False) ⟶ ¬ ?P
+        derived goal:
+          False ⟶ False
+      - step id: 1.2
+        operation: Obvious
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+Have sub_nodes count: 2
+  1.1: InferenceRule status=SUCCESS
+  1.2: Obvious status=SUCCESS
+OK: all children were refreshed
