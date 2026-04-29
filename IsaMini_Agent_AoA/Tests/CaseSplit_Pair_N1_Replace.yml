@@ -63,7 +63,7 @@ proof:
     operation: Obvious
     Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
 notice:
-  - Discarded because the CaseSplit/Induction body terminates the proof; no sibling should follow: step 1
+  - Discarded because the operation's body terminates the proof; no sibling should follow: step 1
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to replace it with a proof.
 pending proof goal:
   premises:

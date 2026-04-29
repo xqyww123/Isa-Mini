@@ -6668,6 +6668,79 @@ async def _test_simp_roles(root: Root, file: MyIO):
             file.write("  None\n")
 
 
+@model_test("AmendHaveToConjI", "Test_AmendHaveToConjI.thy", 8)
+async def _test_AmendHaveToConjI(root: Root, file: MyIO):
+    """Reproduce: SubgoalMaker.sub_nodes type-invariant violated after amend.
+
+    The base NonLeaf_Node._amend_from transplants old.sub_nodes wholesale
+    into the new node — but for SubgoalMaker (InferenceRule / Intro /
+    Branch / Induction / CaseSplit_Like), sub_nodes are *framework-managed
+    GoalNodes*, one per subgoal produced by the begin-op, not user-written
+    proof steps. The transfer is therefore type-incoherent for any
+    StdBlock → SubgoalMaker amend.
+
+    SubgoalMaker._refresh_the_beginning_opr (model.py:3992) tries to
+    rebuild GoalNodes only when the count differs (warn-discard branch);
+    when the inherited count happens to match the new subgoal count, the
+    `pass` branch silently keeps the wrong-typed children.
+
+    Setup: parent goal is `True ∧ True`. Step 1 is filled as a Have on a
+    meta-quantified intermediate (`⋀x::nat. x = x`), which causes
+    `_attach_proof` to inject an auto-Intro plus the user-supplied
+    Obvious — Have ends up with 2 sub_nodes ([Intro, Obvious]). The
+    amend swaps Have for InferenceRule(conjI), which produces 2 subgoals
+    on the parent — count match (2 == 2). After refresh, the
+    InferenceRule's sub_nodes still hold the inherited [Intro, Obvious]
+    instead of two GoalNodes.
+
+    The user's note "SubgoalMaker should also override _amend_from" was
+    pointing at this: the carry-over only makes sense when sub_nodes
+    are user proof steps; SubgoalMaker should stash the inherited
+    children for rematch-aware re-attachment, not transplant them.
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("1", [Have.gen_single({
+        "thought": "irrelevant intermediate",
+        "statement": {
+            "english": "for all x::nat, x = x",
+            "isabelle": r"\<And>x::nat. x = x",
+        },
+        "name": "h",
+        "proof": [{"operation": "Obvious", "facts": []}],
+    })])
+    print_header("After Have(...) with body", file)
+    root.print(0, file)
+    have_step = root.locate_node("1")
+    file.write(f"Have type: {type(have_step).__name__}\n")
+    file.write(f"Have sub_nodes types: {[type(c).__name__ for c in have_step.sub_nodes]}\n")
+    file.write(f"Have status: {have_step.status.status.value}\n")
+
+    root.session.age += 1
+    outcome = await root.amend("1", [InferenceRule.gen_single({
+        "thought": "switch to conjI",
+        "rule": {"refer_by": "name", "name": "conjI"},
+    })])
+    amended = outcome.committed[0] if outcome.committed else None
+    print_header("After amend Have -> InferenceRule(conjI)", file)
+    root.print(0, file)
+    if amended is None:
+        raise TestFailed(f"Amend produced no committed node; outcome={outcome}")
+    file.write(f"Amended type: {type(amended).__name__}\n")
+    file.write(f"Amended sub_nodes types: {[type(c).__name__ for c in amended.sub_nodes]}\n")
+    file.write(f"Amended status: {amended.status.status.value}\n")
+
+    bad = [type(c).__name__ for c in amended.sub_nodes if not isinstance(c, GoalNode)]
+    if bad:
+        raise TestFailed(
+            f"BUG: SubgoalMaker.sub_nodes contains non-GoalNode children: {bad}. "
+            f"NonLeaf_Node._amend_from carried StdBlock body across without "
+            f"kind awareness; SubgoalMaker should override _amend_from."
+        )
+
+
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None):
     import msgpack as mp
     from IsaREPL import Client

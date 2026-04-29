@@ -2248,7 +2248,7 @@ fun make_case term =
   end
 
 
-fun CASES' diff ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, items00) :: _)) =
+fun CASES' diff ADDITIONAL_NOTES safe_names tac first_vars (SK as (ctxt0, HHF (st00, items00) :: _)) =
   apply' "Fail to apply the case-split operation."
          (get_reporter()) tac NONE SK
     |> (fn (ctxt, SK as HHF (rule, items0) :: REMAIN_SK) =>
@@ -2337,7 +2337,7 @@ fun CASES' diff ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, items0
                                                                       else name
                                   val (name, names) =
                                     if Config.get ctxt deconflict_case_fixes
-                                       andalso Variable.is_fixed ctxt (Name.skolem name)
+                                       andalso not (member (op =) safe_names name)
                                     then variant_name name names
                                     else (name, names)
                                in ((Binding.name name,T), names)
@@ -2425,7 +2425,7 @@ fun CASES' diff ADDITIONAL_NOTES tac first_vars (SK as (ctxt0, HHF (st00, items0
           ctxt (Drule.dummy_thm, ([],[]), REMAIN_SK, CASE_NAME first_vars)
    end
      | _ => raise BROKEN_INVARIANT)
-  | CASES' _ _ _ _ _ = raise BROKEN_INVARIANT
+  | CASES' _ _ _ _ _ _ = raise BROKEN_INVARIANT
 
 (* Syntax *)
 
@@ -2946,7 +2946,12 @@ fun INDUCT' (no_simp, (insts, ((arbitrary, taking), opt_rule))) first_vars
             val tamper_facts'' = burrow tamper_facts ths
          in map (fn (B,ths) => ((mk_binding B, []), [(ths,[])]) ) tamper_facts''
         end
-      val ret = CASES' diff (maps o update_tampered) tac first_vars (ctxt, SK)
+      val induct_safe_names =
+            fold (fold (fn NONE => I
+                         | SOME (_, (X, _)) =>
+                             fold (insert (op =) o Name.clean o fst) (Term.add_frees X [])))
+                 insts []
+      val ret = CASES' diff (maps o update_tampered) induct_safe_names tac first_vars (ctxt, SK)
    in get_reporter () (Internal (IH_MAP (!IH_map)))
     ; ret
   end
@@ -2989,7 +2994,7 @@ fun CASE_SPLIT' (no_simp, (insts, opt_rule)) vars (using : thm list) (ctxt, SK) 
         else effective_opt_rule
 
       val tac = Induct.cases_context_tactic (not no_simp) insts effective_opt_rule using 1
-   in CASES' 0 (K (K [])) tac vars (ctxt, SK)
+   in CASES' 0 (K (K [])) [] tac vars (ctxt, SK)
   end
 
 val INDUCT = timed_OPR 10 ooo INDUCT'

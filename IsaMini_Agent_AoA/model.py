@@ -2540,26 +2540,65 @@ class Node(ABC):
         `EditOutcome.failure` and stops the batch.  After each commit,
         if the inserted node's status is FAILURE, invokes
         `_on_edit_failure`; the returned `EditFailureBehavior` decides
-        whether the batch continues, stops, or stops-and-reverts."""
+        whether the batch continues, stops, or stops-and-reverts.
+
+        Optimization: per-node refresh skips the cascade
+        (`_refresh_all_after_me`); one cascade runs after the batch."""
         outcome = EditOutcome(operation=op, request=gns)
         if self.parent is None:
             raise InternalError("Cannot insert_before_me on a parentless node")
         if not gns:
             return outcome
         parent = self.parent
-        for i, gn in enumerate(gns):
-            try:
-                node = await parent._insert_before_child(self, gn)
-            except GoalIsNontrivial as e:
-                e.operation = op
-                e.unapplied_oprs = list(gns[i:])
-                e.is_error = len(outcome.committed) == 0
-                outcome.failure = e
-                return outcome
-            behavior, _ = await outcome.commit_and_hook(
-                parent._can_continue_before_child(node), node)
-            if behavior is not EditFailureBehavior.CONTINUE:
-                return outcome
+        result = await parent._insert_before_child(self, gns)
+        if result.error is not None and not result.created:
+            e = result.error
+            e.operation = op
+            e.unapplied_oprs = list(gns)
+            e.is_error = True
+            outcome.failure = e
+            return outcome
+        cascade_from: Node | None = None
+        for i, node in enumerate(result.created):
+            can_continue = parent._can_continue_before_child(node)
+            cancelled = False
+            if can_continue:
+                await node._refresh_me_alone()
+            else:
+                await node._cancel()
+                cancelled = True
+            outcome.committed.append(node)
+            if cancelled or node.status.status != EvaluationStatus.Status.FAILURE:
+                if not cancelled:
+                    cascade_from = node
+                continue
+            behavior, _ = node._on_edit_failure(outcome)
+            if behavior is EditFailureBehavior.TERMINATE_AND_REVERT:
+                for j in range(len(result.created) - 1, i, -1):
+                    parent._remove_child(result.created[j])
+                rp = node._delete_me()
+                await rp._refresh_me_alone()
+                if rp.parent is not None:
+                    await rp._refresh_all_after_me()
+                outcome.committed.pop()
+                cascade_from = None
+                break
+            elif behavior is EditFailureBehavior.TERMINATE:
+                for j in range(len(result.created) - 1, i, -1):
+                    parent._remove_child(result.created[j])
+                await node._refresh_all_after_me()
+                cascade_from = None
+                break
+            else:
+                cascade_from = node
+        if cascade_from is not None:
+            await cascade_from._refresh_all_after_me()
+        if result.error is not None:
+            e = result.error
+            e.operation = op
+            e.unapplied_oprs = list(gns[result.stopped_at:])
+            e.is_error = len(outcome.committed) == 0
+            outcome.failure = e
         return outcome
     async def insert_before(
         self, step: step, gns: 'list[Parsed_Opr]',
@@ -2933,6 +2972,11 @@ class NonLeaf_Node(Node):
     _closed_by: Node | None # Some proof operation (e.g. Branch) may close a block, preventing all later appending to this block.
     sub_nodes: list['Node']
 
+    class _InsertBatchResult(NamedTuple):
+        created: 'list[Node]'
+        stopped_at: 'int | None'
+        error: 'GoalIsNontrivial | None'
+
     def __init__(self, config: NodeConfig, thought: str, sub_nodes: list['Node']):
         super().__init__(config, thought)
         self.sub_nodes = sub_nodes
@@ -2995,40 +3039,65 @@ class NonLeaf_Node(Node):
             if can_continue:
                 if self.parent is not None:
                     await self.parent._refresh_all_children_after(self, can_continue)
-    async def _insert_before_child(self, before: 'Node', gn: Parsed_Opr) -> 'Node':
-        """
-        invalidates the status of all nodes including and after the `before`
-        """
+    def _local_step_of_next_proof_step(self) -> local_step:
+        if self.sub_nodes:
+            return incr_id_major(self.sub_nodes[-1].local_step)
+        else:
+            return "1"
+    async def _insert_before_child(self, before: 'Node', gns: 'list[Parsed_Opr]') -> '_InsertBatchResult':
+        """Batch-insert `gns` as siblings immediately before `before`.
+        Invalidates the status of `before` and all nodes after it (once).
+        Catches `GoalIsNontrivial` from node construction; already-created
+        nodes are kept in the tree."""
+        if not gns:
+            return self._InsertBatchResult([], None, None)
+        insert_idx: int | None = None
         for i, child in enumerate(self.sub_nodes):
             if child is before:
-                if i == 0:
-                    segs = split_id_into_segs(child.local_step)
-                    if segs[-1] > 1:
-                        segs[-1] -= 1
-                    else:
-                        segs[-1] -= 1
-                        segs.append(1)
+                insert_idx = i
+                break
+        if insert_idx is None:
+            raise InternalError("Cannot find the target to insert-before in my children")
+        before_segs = split_id_into_segs(before.local_step)
+        created: list[Node] = []
+        stopped_at: int | None = None
+        error: GoalIsNontrivial | None = None
+        for k, gn in enumerate(gns):
+            if insert_idx + k == 0 and k == 0:
+                segs = list(before_segs)
+                if segs[-1] > 1:
+                    segs[-1] -= 1
+                else:
+                    segs[-1] -= 1
+                    segs.append(1)
+                new_id = cat_segs_into_id(segs)
+            else:
+                prev_step = created[k - 1].local_step if k > 0 else self.sub_nodes[insert_idx - 1].local_step
+                prev_id = split_id_into_segs(prev_step)
+                if len(prev_id) > len(before_segs):
+                    segs = prev_id[:len(before_segs) + 1]
+                    segs[-1] += 1
                     new_id = cat_segs_into_id(segs)
                 else:
-                    prev_id = split_id_into_segs(self.sub_nodes[i-1].local_step)
-                    next_id = split_id_into_segs(self.sub_nodes[i].local_step)
-                    if len(prev_id) > len(next_id):
-                        segs = prev_id[:len(next_id) + 1]
-                        segs[-1] += 1
-                        new_id = cat_segs_into_id(segs)
-                    else:
-                        new_id = cat_segs_into_id(prev_id + [1])
-                config = NodeConfig(new_id, await child.ml_state.clone(None), self)
+                    new_id = cat_segs_into_id(prev_id + [1])
+            config = NodeConfig(new_id, await before.ml_state.clone(None), self)
+            try:
                 node = gn.factory(config)
-                for x in self.sub_nodes:
-                    if x is node:
-                        raise InternalError("The target node to insert is already in my children")
-                self.sub_nodes.insert(i, node)
-                self._is_trivial = None
-                for sibling in self.sub_nodes[i+1:]:
-                    sibling._on_upstream_change()
-                return node
-        raise InternalError("Cannot find the target to insert-before in my children")
+            except GoalIsNontrivial as e:
+                stopped_at = k
+                error = e
+                break
+            created.append(node)
+        if created:
+            existing_ids = {id(x) for x in self.sub_nodes}
+            for node in created:
+                if id(node) in existing_ids:
+                    raise InternalError("The target node to insert is already in my children")
+            self.sub_nodes[insert_idx:insert_idx] = created
+            self._is_trivial = None
+            for sibling in self.sub_nodes[insert_idx + len(created):]:
+                sibling._on_upstream_change()
+        return self._InsertBatchResult(created, stopped_at, error)
     def _remove_child(self, child: Node) -> None:
         for i, c in enumerate(self.sub_nodes):
             if c is child:
@@ -3390,11 +3459,6 @@ class StdBlock(NonLeaf_Node):
                 ret.add(self)
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         return ("proof", indent+1)
-    def _local_step_of_next_proof_step(self) -> local_step:
-        if self.sub_nodes:
-            return incr_id_major(self.sub_nodes[-1].local_step)
-        else:
-            return "1"
     def _id_of_openning_prf_to_fill(self) -> step | None:
         if not self.opening():
             return None
@@ -3878,12 +3942,18 @@ class _OpenSubgoalBlock(Enum):
     YES = 1
     YES_AND_CLOSE_PARENT_BLOCK = 2
 
+PREFIX_NEW = "new-"
+PREFIX_OLD = "old-"
+CASE_EXISTING = "the-existing-proof"
+
+
 class SubgoalMaker(GoalContainer, StdBlock):
     def _should_print_done(self) -> bool:
         return bool(self.sub_nodes) and super()._should_print_done()
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._initial_goal_index : int = 1
+        self._supplied_proofs: 'dict[str, proof] | None' = None
 
     @classmethod
     def gen_single(cls, arg: Any, path: str = "<direct>") -> Parsed_Opr:
@@ -3896,13 +3966,6 @@ class SubgoalMaker(GoalContainer, StdBlock):
         `StdBlock.gen_single`'s `cls(cfg, arg, parsed_proof)` factory
         which doesn't match their `__init__` signatures."""
         return Parsed_Opr(cls=cls, factory=lambda cfg: cls(cfg, arg), raw=arg)
-
-    # Note: the parse-time `_singleton_splice` mechanism (previously used
-    # by CaseSplit/Induction/Intro/InferenceRule to inline a one-entry
-    # `proofs` body as parent-sibling) has been removed.  Splice decisions
-    # now live at refresh-time — `SubgoalMaker._chk_subgoal_proofs` /
-    # `_rematch` hooks let subclasses react to mismatches once runtime
-    # subgoal counts are known.  See `CaseSplit_Like._refresh_the_beginning_opr`.
 
     @abstractmethod
     def beginning_opr(self) -> 'Minilang_Operation | FailureReason':
@@ -3939,30 +4002,187 @@ class SubgoalMaker(GoalContainer, StdBlock):
     def _new_goal_node(self, goal_index: int, ml_state: Minilang_State) -> GoalNode:
         return GoalNode(NodeConfig(str(goal_index+self._initial_goal_index), ml_state, self), False, True, None)
 
+    # --- Proof orchestration hooks -----------------------------------------
+    # Subclasses override these to customize matching strategy and mismatch
+    # handling.  The orchestration skeleton `_orchestrate_proofs` calls them
+    # in order: _pre_match → _chk → _rematch loop → apply/splice.
+
+    def _pre_match_proofs(self) -> None:
+        """Match `_supplied_proofs` entries to GoalNodes by `local_step`.
+        Pops consumed entries.  Default: exact key match.
+        CaseSplit_Like adds a fuzzy suffix pass."""
+        assert self._supplied_proofs is not None
+        for gn in self.sub_nodes:
+            if not isinstance(gn, GoalNode):
+                continue
+            key = gn.local_step
+            if key is not None and key in self._supplied_proofs:
+                gn.sub_nodes.clear()
+                gn._pending_auto_proof = self._supplied_proofs.pop(key)
+
     async def _chk_subgoal_proofs(self) -> bool:
-        """Whether the pairing between runtime sub_nodes (GoalNodes) and
-        supplied proofs is coherent. Default: count match only. Override
-        in subclasses that also identify proofs by name/index (e.g.
-        `CaseSplit_Like` checks case_name correspondence)."""
+        """Whether (sub_nodes, supplied proofs) pairing is coherent.
+        Default: count match.  CaseSplit_Like additionally checks that
+        every GN has either a matching key or a `_pending_auto_proof`."""
         s0 = self._state_after_beginning()
         expected = s0.new_subgoals_count or 0
         return expected == len(self.sub_nodes)
 
     async def _rematch(self,
-        goals: dict[str, 'Goal'],
+        goal: 'Goal',
+        case_id: str,
         candidates: 'dict[str, proof | list[Node]]',
-    ) -> 'dict[str, str | None] | None':
-        """Resolve a mismatch between runtime subgoals and supplied
-        proofs. Returns a mapping from each goal's branch-id to a
-        picked candidate's branch-id (or None to drop the goal's
-        body). Return whole-None to drop everything (default).
-
-        Subclasses override to fire interactions (e.g. MapCase)
-        asking the agent to rematch. Keys are sentinel-prefixed
-        strings: plain supplied case_names / runtime case_names,
-        `"new-<name>"` / `"old-<name>"` for amend reconciliation,
-        or `"the_existing_proof"` for parent-sibling takeover."""
+    ) -> 'str | None':
+        """Per-goal rematch.  Called once per unmatched goal with the
+        remaining pickable candidates.  Returns the picked key, or None
+        to drop.  Default: drop.  CaseSplit_Like fires MapCase."""
         return None
+
+    def _splice_goal_key(self, s0: 'Minilang_State') -> str:
+        """Identifier for the single goal in the N<=1 splice path.
+        Default: `str(_initial_goal_index)`.
+        CaseSplit_Like: reads `Consider_Case_Msg.case`."""
+        return str(self._initial_goal_index)
+
+    def _unconsumed_proof_warning(self) -> str | None:
+        """Warning message for proofs remaining in `_supplied_proofs`
+        after orchestration.  None = no warning.  Called from the
+        generic `_refresh_footer`."""
+        if not self._supplied_proofs:
+            return None
+        keys = ", ".join(f"`{n}`" for n in self._supplied_proofs)
+        plural = len(self._supplied_proofs) > 1
+        s = "s" if plural else ""
+        verb = "were" if plural else "was"
+        return (f"The supplied proof{s} for subgoal{s} {keys} "
+                f"{verb} not used (no matching runtime subgoal).")
+
+    def _truncate_siblings_for_splice(self) -> None:
+        parent = self.parent
+        if parent is None:
+            return
+        idx = next(i for i, c in enumerate(parent.sub_nodes) if c is self)
+        discarded = parent.sub_nodes[idx + 1:]
+        parent.sub_nodes = parent.sub_nodes[:idx + 1]
+        if discarded:
+            parent._warn_discarded_nodes(
+                discarded,
+                "Discarded because the operation's body terminates "
+                "the proof; no sibling should follow",
+                Warning.Position.FOOTER)
+
+    async def _splice_body(self, body: 'proof', my_idx: int) -> None:
+        """Insert each op in `body` as a parent-sibling right after self."""
+        parent = self.parent
+        if parent is None or not body:
+            return
+        # CAUTION: mutating `parent.sub_nodes` while parent's StdBlock
+        # for-loop iterates it.  Python list iteration picks up items
+        # inserted past the current index — LOAD-BEARING.
+        if my_idx + 1 < len(parent.sub_nodes):
+            before = parent.sub_nodes[my_idx + 1]
+            await parent._insert_before_child(before, body)
+        else:
+            assert isinstance(parent, StdBlock)
+            for parsed_op in body:
+                local_step = parent._local_step_of_next_proof_step()
+                ml_state = await parent._state_before_ending_.clone(None)
+                config = NodeConfig(local_step, ml_state, parent)
+                new_node = parsed_op.factory(config)
+                parent.sub_nodes.append(new_node)
+
+    async def _orchestrate_proofs(self) -> None:
+        """Generic skeleton: match supplied proofs to runtime GoalNodes,
+        fire rematch for mismatches, splice for N<=1."""
+        assert self._supplied_proofs is not None
+        if self.sub_nodes:
+            # --- N>=2 path (block opened, GoalNodes exist) ---
+            self._pre_match_proofs()
+            if await self._chk_subgoal_proofs():
+                return
+            # Collect unmatched GNs
+            unmatched: list[GoalNode] = []
+            for gn in self.sub_nodes:
+                if not isinstance(gn, GoalNode):
+                    continue
+                if gn._pending_auto_proof is not None:
+                    continue
+                unmatched.append(gn)
+            if not unmatched:
+                return
+            # Build candidates: new-* from remaining supplied, old-* from inherited GNs
+            candidates: dict[str, proof | list[Node]] = {
+                f"{PREFIX_NEW}{k}": v for k, v in self._supplied_proofs.items()
+            }
+            for gn in unmatched:
+                if gn.sub_nodes:
+                    candidates[f"{PREFIX_OLD}{gn.local_step}"] = list(gn.sub_nodes)
+            # Per-goal rematch loop
+            remaining = dict(candidates)
+            for gn in unmatched:
+                case_id = gn.local_step
+                g = gn.goal()
+                if g is None:
+                    continue
+                own_old = f"{PREFIX_OLD}{case_id}"
+                options = {k: v for k, v in remaining.items()
+                           if not k.startswith(PREFIX_OLD) or k == own_old}
+                if not options:
+                    gn.sub_nodes.clear()
+                    continue
+                picked = await self._rematch(g, case_id, options)
+                if picked is None:
+                    gn.sub_nodes.clear()
+                elif picked == f"{PREFIX_OLD}{case_id}":
+                    pass
+                elif picked.startswith(PREFIX_NEW):
+                    new_name = picked[len(PREFIX_NEW):]
+                    new_body = self._supplied_proofs.pop(new_name, None)
+                    if new_body is not None:
+                        gn.sub_nodes.clear()
+                        gn._pending_auto_proof = new_body
+                    remaining.pop(picked, None)
+        else:
+            # --- N<=1 splice path (no block opened, no GoalNodes) ---
+            parent = self.parent
+            if parent is None:
+                return
+            s0 = self._state_after_beginning()
+            if s0.leading_goal is None:
+                return
+            my_idx = next(i for i, c in enumerate(parent.sub_nodes) if c is self)
+            goal_key = self._splice_goal_key(s0)
+            # Exact match shortcut
+            if goal_key in self._supplied_proofs:
+                body = self._supplied_proofs.pop(goal_key)
+                self._truncate_siblings_for_splice()
+                await self._splice_body(body, my_idx)
+                return
+            # Fuzzy match (for CaseSplit_Like suffix handling) is done
+            # inside _pre_match_proofs override — but N<=1 has no GNs
+            # so _pre_match_proofs doesn't apply.  Fall through to rematch.
+            candidates: dict[str, proof | list[Node]] = dict(self._supplied_proofs)
+            if my_idx + 1 < len(parent.sub_nodes):
+                candidates[CASE_EXISTING] = list(parent.sub_nodes[my_idx + 1:])
+            picked = await self._rematch(s0.leading_goal, goal_key, candidates)
+            if picked == CASE_EXISTING:
+                return
+            if picked is None:
+                self._truncate_siblings_for_splice()
+                return
+            body = self._supplied_proofs.pop(picked, None)
+            if body is None:
+                return
+            self._truncate_siblings_for_splice()
+            await self._splice_body(body, my_idx)
+
+    async def _refresh_footer(self) -> 'FailureReason | None':
+        fail = await super()._refresh_footer()
+        msg = self._unconsumed_proof_warning()
+        if msg:
+            self.warnings.append(Warning(Warning.Position.FOOTER, msg))
+        return fail
+
     def _on_regenerating_goals(self, count: int) -> None:
         pass
     def _should_open_proof_block(self, s0: Minilang_State) -> _OpenSubgoalBlock:
@@ -4047,20 +4267,13 @@ class SubgoalMaker(GoalContainer, StdBlock):
                 self.parent._open()
         if not is_init and len(self.sub_nodes) != old_n_subnodes:
             self.changed = True
+        if self._supplied_proofs:
+            await self._orchestrate_proofs()
         return None
     def _id_of_openning_prf_to_fill(self) -> step | None:
         return None
     def opening(self) -> bool:
         return False
-
-
-# Sentinel strings used by `CaseSplit_Like` rematch orchestration.  The
-# reserved-name validation in `CaseSplit_Like.gen_single` forbids any
-# agent-supplied `case_name` that equals `CASE_EXISTING` or starts with
-# `PREFIX_NEW` / `PREFIX_OLD`, so these cannot collide with user input.
-PREFIX_NEW = "new-"
-PREFIX_OLD = "old-"
-CASE_EXISTING = "the-existing-proof"
 
 
 class CaseSplit_Like(SubgoalMaker):
@@ -4073,13 +4286,6 @@ class CaseSplit_Like(SubgoalMaker):
     case_vars: list[Var] | None
     case_hyps: list[Hyp] | None
     case_name: str | None
-    # `_proofs_by_case`: case_name → proof body.  Populated from the
-    # agent-provided `proofs: list[Proof_PerCase]` at parse time.  Consumed
-    # by `_refresh_the_beginning_opr`'s orchestration (pre-process matches
-    # + rematch apply for mismatches).  Residue at refresh-footer time =
-    # case_names the agent wrote that did not match any actual subgoal and
-    # were not picked via rematch → reported as a FOOTER warning.
-    _proofs_by_case: 'dict[str, proof] | None'
     # Rule resolution cache. `_resolved_rule_str = None` means "no explicit
     # rule" (auto-pick on the ML side). Set once on the first refresh and
     # reused afterwards — re-amending the node is expected to replace the
@@ -4090,7 +4296,6 @@ class CaseSplit_Like(SubgoalMaker):
         super().__init__(*args, **kwargs)
         self.case_vars = None
         self.case_hyps = None
-        self._proofs_by_case = None
         self._resolved_rule_str = None
         self._rule_resolved = False
         # quickview dedup: remember what case_vars / case_hyps we last
@@ -4272,18 +4477,6 @@ class CaseSplit_Like(SubgoalMaker):
                 f"Expected at most one Consider_Case_Msg in ml_state.messages "
                 f"for GoalNode creation, got {len(msgs)}")
         return GoalNode(NodeConfig(local_step, ml_state, self), False, True)
-    async def _refresh_footer(self) -> FailureReason | None:
-        fail = await super()._refresh_footer()
-        if self._proofs_by_case:
-            cases_list = ", ".join(f"`{n}`" for n in self._proofs_by_case)
-            kind = "induction" if isinstance(self, Induction) else "case-split"
-            plural = len(self._proofs_by_case) > 1
-            s = "s" if plural else ""
-            verb = "are" if plural else "is"
-            msg = (f"The case{s} {cases_list} {verb} not found in the "
-                   f"resulting cases of the {kind} and {verb} thus dropped.")
-            self.warnings.append(Warning(Warning.Position.FOOTER, msg))
-        return fail
     def _rename_var(self, old_name: varname, new_name: varname) -> 'Node | None':
         if self.sub_nodes:
             return super()._rename_var(old_name, new_name)
@@ -4347,16 +4540,12 @@ class CaseSplit_Like(SubgoalMaker):
         fail = await super()._refresh_the_beginning_opr()
         if fail is not None:
             return fail
-        # Single-case-on-self setup (sub_nodes=[]): populate `self.case_name
-        # / case_vars / case_hyps` for `_print_header`'s display.  For the
-        # multi-case path (sub_nodes non-empty), each GoalNode owns its own
-        # case bindings (set by `_new_goal_node` + the GN's own refresh).
         if not self.sub_nodes:
             s = self._state_after_beginning()
             msgs = [m for m in s.messages if isinstance(m, Consider_Case_Msg)]
             match msgs:
                 case []:
-                    pass   # N==0 / no case — defensive
+                    pass
                 case [m0]:
                     self.case_name = m0.case
                     self.case_vars = m0.vars
@@ -4365,295 +4554,74 @@ class CaseSplit_Like(SubgoalMaker):
                     raise InternalError(
                         f"Expected at most one Consider_Case_Msg in Case's "
                         f"messages, got {len(msgs)}")
-        # Refresh-time rematch orchestration: fires when the agent supplied
-        # `proofs` and the (GoalNode, proof) pairing isn't coherent (either
-        # N==1 splice path, or N>=2 with name mismatch, or amend-inherited
-        # GNs whose bodies need rewire).  No-op when `_proofs_by_case` is
-        # None (agent didn't supply proofs — treat CaseSplit as a mid-proof
-        # transformation).
-        if self._proofs_by_case:
-            await self._orchestrate_rematch()
         if not is_init and (self.case_vars, self.case_hyps) != old_case:
             self.changed = True
         return None
 
-    # --- Orchestration + rematch hooks ------------------------------------
-    # `local_step` on a GoalNode child of a CaseSplit_Like stores the
-    # case_name (set by `_new_goal_node` via `_reset_local_step(msg.case)`).
-    # Every access to `gn.local_step` below treats it AS the case_name.
+    # --- CaseSplit_Like overrides of SubgoalMaker proof hooks ---------------
+
+    def _pre_match_proofs(self) -> None:
+        super()._pre_match_proofs()
+        # Fuzzy pass: handle Isabelle's case-name disambiguation suffix
+        # (e.g. nested induction renames inner `Suc` to `Suc1`).
+        assert self._supplied_proofs is not None
+        for gn in self.sub_nodes:
+            if not isinstance(gn, GoalNode):
+                continue
+            if gn._pending_auto_proof is not None:
+                continue
+            case_name = gn.local_step
+            stripped = case_name.rstrip("0123456789")
+            if stripped == case_name or not stripped:
+                continue
+            if stripped in self._supplied_proofs:
+                gn.sub_nodes.clear()
+                gn._pending_auto_proof = self._supplied_proofs.pop(stripped)
 
     async def _chk_subgoal_proofs(self) -> bool:
         if not await super()._chk_subgoal_proofs():
             return False
-        if self._proofs_by_case is None:
+        if self._supplied_proofs is None:
             return True
         for gn in self.sub_nodes:
             if not isinstance(gn, GoalNode):
                 continue
-            case_name = gn.local_step   # local_step is the case_name here
-            if case_name is None:
-                return False
-            if case_name in self._proofs_by_case:
+            case_name = gn.local_step
+            if case_name in self._supplied_proofs:
                 continue
-            # Fuzzy-matched GNs already had their body installed by
-            # `_orchestrate_rematch`'s pre-process — the supplied entry was
-            # popped (so case_name no longer in dict) but the GN now carries
-            # a `_pending_auto_proof`.  Treat that as coherent.
             if gn._pending_auto_proof is not None:
                 continue
             return False
         return True
 
-    async def _rematch(self,
-        goals: 'dict[str, Goal]',
-        candidates: 'dict[str, proof | list[Node]]',
-    ) -> 'dict[str, str | None] | None':
-        """Sequentially fire one `Interaction_MapCase` per goal.  Each
-        interaction shows the agent ONE goal and its applicable options
-        (remaining new-* candidates + optionally this goal's own old-*
-        or `CASE_EXISTING`).  Picked new-* names are consumed from the
-        shared pool so subsequent goals only see what's left.
+    async def _rematch(self, goal: 'Goal', case_id: str,
+                       candidates: 'dict[str, proof | list[Node]]') -> 'str | None':
+        options = [k for k in candidates
+                   if not k.startswith(PREFIX_OLD) or k == f"{PREFIX_OLD}{case_id}"]
+        if not options:
+            return None
+        interaction = Interaction_MapCase(
+            actual_case=case_id,
+            supplied_options=options,
+            kind=self._case_kind,
+            goal=goal,
+            ctxt_before=self._ctxt_before_me())
+        return await self.session.fork_interaction(interaction)
 
-        Usage invariant: when `CASE_EXISTING` appears in `candidates`,
-        `goals` has exactly one entry (N==1 splice path); consuming it
-        or not is therefore moot.  If a future caller breaks this
-        invariant, `CASE_EXISTING` would be re-offerable to multiple
-        goals — revisit then."""
-        result: dict[str, str | None] = {}
-        remaining = dict(candidates)   # local copy; consumed by new-* picks
-        for goal_branch, goal in goals.items():
-            own_old = f"{PREFIX_OLD}{goal_branch}"
-            # Options for THIS goal: every remaining candidate, EXCEPT
-            # other goals' old-* entries (those belong to specific GNs).
-            options = [k for k in remaining
-                       if not k.startswith(PREFIX_OLD) or k == own_old]
-            if not options:
-                result[goal_branch] = None
-                continue
-            interaction = Interaction_MapCase(
-                actual_case=goal_branch,
-                supplied_options=options,
-                kind=self._case_kind,
-                goal=goal,
-                ctxt_before=self._ctxt_before_me())
-            picked = await self.session.fork_interaction(interaction)
-            result[goal_branch] = picked
-            # Consume new-* picks from the shared pool; old-* / CASE_EXISTING
-            # don't represent globally-shared bodies (see invariant above).
-            if picked is not None and picked.startswith(PREFIX_NEW):
-                remaining.pop(picked, None)
-        return result
+    def _splice_goal_key(self, s0: 'Minilang_State') -> str:
+        msgs = [m for m in s0.messages if isinstance(m, Consider_Case_Msg)]
+        return msgs[0].case if msgs else "<transformed goal>"
 
-    def _truncate_siblings_for_splice(self) -> None:
-        """Truncate `parent.sub_nodes` beyond self + warn.  Does NOT set
-        `parent._closed_by` — we still need to insert the spliced body
-        after this."""
-        parent = self.parent
-        if parent is None:
-            return
-        idx = next(i for i, c in enumerate(parent.sub_nodes) if c is self)
-        discarded = parent.sub_nodes[idx + 1:]
-        parent.sub_nodes = parent.sub_nodes[:idx + 1]
-        if discarded:
-            # TODO(user): finalize wording for this warning.
-            parent._warn_discarded_nodes(
-                discarded,
-                "Discarded because the CaseSplit/Induction body terminates "
-                "the proof; no sibling should follow",
-                Warning.Position.FOOTER)
-
-    async def _splice_body(self, body: 'proof', my_idx: int) -> None:
-        """Insert each op in `body` as a parent-sibling, in order,
-        right after self.  Reuses `_insert_before_child` for local_step
-        + ml_state setup when a sibling already exists after self;
-        otherwise replicates the `append` pattern (compute local_step
-        via `_local_step_of_next_proof_step`, clone ml_state from
-        `_state_before_ending_`) and pushes onto `parent.sub_nodes`."""
-        parent = self.parent
-        if parent is None or not body:
-            return
-        # CAUTION: mutating `parent.sub_nodes` while parent's StdBlock
-        # for-loop (model.py:3261-3269 area) is iterating it.  Python
-        # list iteration picks up items inserted past the current index,
-        # so newly-inserted siblings will be refreshed in the same loop
-        # pass.  LOAD-BEARING — if the parent's loop structure changes,
-        # this breaks silently.
-        if my_idx + 1 < len(parent.sub_nodes):
-            before = parent.sub_nodes[my_idx + 1]
-            for parsed_op in body:
-                await parent._insert_before_child(before, parsed_op)
-        else:
-            for parsed_op in body:
-                local_step = parent._local_step_of_next_proof_step()
-                ml_state = await parent._state_before_ending_.clone(None)
-                config = NodeConfig(local_step, ml_state, parent)
-                new_node = parsed_op.factory(config)
-                parent.sub_nodes.append(new_node)
-
-    async def _orchestrate_rematch(self) -> None:
-        """Reconcile (GoalNodes, supplied proofs) at refresh-time.
-        Pre-processes exact case_name matches (silent replace), then
-        fires `_rematch` for any residual mismatch."""
-        # Pre-process: for every GN whose case_name matches a supplied
-        # entry, pop the body and install directly (via _pending_auto_proof
-        # + clear sub_nodes).  Handles BOTH:
-        #   (a) fresh GNs (just created) whose case_name is in dict —
-        #       gives them a body so the install block in their own
-        #       _refresh_me_alone attaches it;
-        #   (b) amend-inherited GNs (with stale sub_tree) whose case_name
-        #       matches — replaces old body with new body (fixes Bug 2).
-        # Matching case_names never fires MapCase (per user-confirmed
-        # design).
-        for gn in self.sub_nodes:
-            if not isinstance(gn, GoalNode):
-                continue
-            case_name = gn.local_step   # local_step is the case_name here
-            if case_name is None:
-                continue
-            if case_name in self._proofs_by_case:
-                new_body = self._proofs_by_case.pop(case_name)
-                gn.sub_nodes.clear()
-                gn._pending_auto_proof = new_body
-                # The GN's own `_refresh_me_alone` install block runs
-                # later in the parent's children for-loop and wires this
-                # body into `gn.sub_nodes`.
-        # Fuzzy pass: handle Isabelle's case-name disambiguation suffix
-        # (e.g. nested induction renames inner `Suc` to `Suc1` to avoid
-        # shadowing an outer `Suc.IH`). When a GN's runtime case_name has
-        # a trailing-digit suffix and the prefix exact-matches a still-
-        # unclaimed supplied case_name, treat that as the same case.
-        for gn in self.sub_nodes:
-            if not isinstance(gn, GoalNode):
-                continue
-            if gn._pending_auto_proof is not None:
-                continue   # already matched by exact pass
-            case_name = gn.local_step
-            if case_name is None:
-                continue
-            stripped = case_name.rstrip("0123456789")
-            if stripped == case_name or not stripped:
-                continue   # no digit suffix, or all-digits name
-            if stripped in self._proofs_by_case:
-                new_body = self._proofs_by_case.pop(stripped)
-                gn.sub_nodes.clear()
-                gn._pending_auto_proof = new_body
-        # If pre-process already consumed everything coherent, done.
-        if await self._chk_subgoal_proofs():
-            return
-        # Mismatch path: rematch.
-        parent = self.parent
-        if parent is None:
-            return
-        my_idx = next(i for i, c in enumerate(parent.sub_nodes) if c is self)
-        if self.sub_nodes:
-            await self._rematch_inherited_goalnodes()
-        else:
-            await self._rematch_single_goal_splice(parent, my_idx)
-
-    async def _rematch_inherited_goalnodes(self) -> None:
-        """Rematch path when `self.sub_nodes` is non-empty (fresh N≥2 name
-        mismatch or amend-inherited GNs)."""
-        unmatched: list[GoalNode] = []
-        for gn in self.sub_nodes:
-            if not isinstance(gn, GoalNode):
-                continue
-            # local_step on a CaseSplit_Like child GoalNode is the case_name.
-            if gn.local_step is None:
-                continue
-            if gn.local_step in self._proofs_by_case:
-                continue   # matched by pre-process (shouldn't happen)
-            if gn._pending_auto_proof is not None:
-                continue   # already installed
-            unmatched.append(gn)
-        if not unmatched:
-            return
-        goals: dict[str, Goal] = {}
-        for gn in unmatched:
-            g = gn.goal()
-            if g is not None:
-                goals[gn.local_step] = g
-        candidates: dict[str, proof | list[Node]] = {
-            f"{PREFIX_NEW}{k}": v for k, v in self._proofs_by_case.items()
-        }
-        for gn in unmatched:
-            # Only amend-inherited GNs carry a pre-existing sub-tree we'd
-            # offer as `old-*`. Snapshot it (copy) because `_apply` may
-            # clear `gn.sub_nodes` when the agent picks a different option.
-            if gn.sub_nodes:
-                candidates[f"{PREFIX_OLD}{gn.local_step}"] = list(gn.sub_nodes)
-        mapping = await self._rematch(goals, candidates) or {}
-        await self._apply_amend_rematch(unmatched, mapping)
-
-    async def _rematch_single_goal_splice(self,
-        parent: 'NonLeaf_Node', my_idx: int,
-    ) -> None:
-        """Rematch path for N==1 (no GNs): splice a body as parent-
-        sibling (or keep/drop existing siblings)."""
-        s0 = self._state_after_beginning()
-        if s0.leading_goal is None:
-            return   # degenerate — no goal to splice into
-        consider_msgs = [m for m in s0.messages
-                         if isinstance(m, Consider_Case_Msg)]
-        runtime_case = (consider_msgs[0].case if consider_msgs
-                        else "<transformed goal>")
-        # Exact match shortcut (no interaction).
-        if runtime_case in self._proofs_by_case:
-            await self._apply_splice_pick(my_idx, runtime_case)
-            return
-        goals = {runtime_case: s0.leading_goal}
-        candidates: dict[str, proof | list[Node]] = dict(self._proofs_by_case)
-        # Only offer `CASE_EXISTING` when pre-existing siblings-after-self
-        # actually exist (something to "keep" or "truncate").
-        if my_idx + 1 < len(parent.sub_nodes):
-            # Snapshot-copy to survive any later truncate/clear on parent.
-            candidates[CASE_EXISTING] = list(parent.sub_nodes[my_idx + 1:])
-        mapping = await self._rematch(goals, candidates) or {}
-        picked = mapping.get(runtime_case)
-        await self._apply_splice_decision(my_idx, picked)
-
-    async def _apply_amend_rematch(self,
-        unmatched: list['GoalNode'],
-        mapping: 'dict[str, str | None]',
-    ) -> None:
-        for gn in unmatched:
-            # local_step on a CaseSplit_Like child GoalNode is the case_name.
-            case_name = gn.local_step
-            picked = mapping.get(case_name)
-            if picked is None:
-                # Drop: clear any inherited sub-tree; no new body.
-                gn.sub_nodes.clear()
-            elif picked == f"{PREFIX_OLD}{case_name}":
-                # Keep GN's existing sub-tree as-is.
-                pass
-            elif picked.startswith(PREFIX_NEW):
-                new_name = picked[len(PREFIX_NEW):]
-                new_body = self._proofs_by_case.pop(new_name, None)
-                if new_body is None:
-                    continue   # defensive — should have been available
-                gn.sub_nodes.clear()
-                gn._pending_auto_proof = new_body
-            # (Any other value is ignored — defensive; shouldn't happen.)
-
-    async def _apply_splice_pick(self, my_idx: int, picked_name: str) -> None:
-        """Exact-match splice: pop body, truncate siblings, insert."""
-        body = self._proofs_by_case.pop(picked_name)
-        self._truncate_siblings_for_splice()
-        await self._splice_body(body, my_idx)
-
-    async def _apply_splice_decision(self, my_idx: int,
-                                     picked: 'str | None') -> None:
-        """Apply a MapCase result in the N==1 splice path."""
-        if picked == CASE_EXISTING:
-            return   # keep existing siblings; no splice
-        if picked is None:
-            self._truncate_siblings_for_splice()
-            return
-        # Picked is a supplied case_name.
-        body = self._proofs_by_case.pop(picked, None)
-        if body is None:
-            return
-        self._truncate_siblings_for_splice()
-        await self._splice_body(body, my_idx)
+    def _unconsumed_proof_warning(self) -> str | None:
+        if not self._supplied_proofs:
+            return None
+        cases_list = ", ".join(f"`{n}`" for n in self._supplied_proofs)
+        kind = "induction" if isinstance(self, Induction) else "case-split"
+        plural = len(self._supplied_proofs) > 1
+        s = "s" if plural else ""
+        verb = "are" if plural else "is"
+        return (f"The case{s} {cases_list} {verb} not found in the "
+                f"resulting cases of the {kind} and {verb} thus dropped.")
 
     def _on_regenerating_goals(self, count: int) -> None:
         self.case_name = None
@@ -6088,11 +6056,11 @@ class Intro(SubgoalMaker):
         self.running_time = 0
         self._pending_bindings = _pending_bindings
         self._prev_bindings: Bindings | None = None
-        # Per-subgoal positional PARSED proofs (same shape as
-        # InferenceRule's): `_proofs[i]` is the pre-parsed body applied to
-        # the i-th resulting subgoal's GoalNode.  Auto-injected Intros (in
-        # Have / GoalNode refresh paths) pass None.
-        self._proofs: 'list[proof] | None' = parsed_proofs
+        if parsed_proofs is not None:
+            self._supplied_proofs = {
+                str(i + self._initial_goal_index): p
+                for i, p in enumerate(parsed_proofs)
+            }
     @classmethod
     def gen_single(cls, arg: Intro_ToolArg,
                    path: str = "<direct>") -> Parsed_Opr:
@@ -6110,15 +6078,6 @@ class Intro(SubgoalMaker):
             _pending_bindings=pending, parsed_proofs=parsed_proofs)
         return Parsed_Opr(cls=cls, factory=factory, raw=arg)
 
-    def _new_goal_node(self, goal_index: int, ml_state: Minilang_State) -> GoalNode:
-        auto_proof: 'proof | None' = None
-        if self._proofs is not None and goal_index < len(self._proofs):
-            auto_proof = self._proofs[goal_index]
-        return GoalNode(
-            NodeConfig(str(goal_index + self._initial_goal_index), ml_state, self),
-            False, True,
-            auto_proof=auto_proof,
-        )
     def quickview(self, indent: int, file: MyIO) -> int:
         indent = super().quickview(indent, file)
         if self.bindings is not None and self.bindings != self._prev_bindings:
@@ -6318,11 +6277,11 @@ class InferenceRule(SubgoalMaker):
         self.rule: FactByName | FactByDescription | None = arg["rule"]
         self.rule_ref: IsabelleFact | None = None
         self._opening = False
-        # `_proofs[i]` is the pre-parsed proof body applied to the i-th
-        # resulting subgoal (positional).  The len==1 case is handled by
-        # singleton splice in `gen` — inlined as siblings, with
-        # `parsed_proofs=None` reaching here.
-        self._proofs: 'list[proof] | None' = parsed_proofs
+        if parsed_proofs is not None:
+            self._supplied_proofs = {
+                str(i + self._initial_goal_index): p
+                for i, p in enumerate(parsed_proofs)
+            }
 
     @classmethod
     def gen_single(cls, arg: InferenceRule_ToolArg,
@@ -6334,16 +6293,6 @@ class InferenceRule(SubgoalMaker):
         return Parsed_Opr(
             cls=cls, factory=lambda cfg: cls(cfg, arg, parsed_proofs),
             raw=arg)
-
-    def _new_goal_node(self, goal_index: int, ml_state: Minilang_State) -> GoalNode:
-        auto_proof: 'proof | None' = None
-        if self._proofs is not None and goal_index < len(self._proofs):
-            auto_proof = self._proofs[goal_index]
-        return GoalNode(
-            NodeConfig(str(goal_index + self._initial_goal_index), ml_state, self),
-            False, True,
-            auto_proof=auto_proof,
-        )
 
     async def _refresh_me_alone(self) -> None:
         if self.rule is not None and self.rule_ref is None:
@@ -6418,11 +6367,12 @@ class Branch(SubgoalMaker):
                  parsed_cases: 'list[proof | None] | None' = None):
         super().__init__(config, arg["thought"], [])
         self.cases = arg["cases"]
-        # Per-case pre-parsed proofs; `parsed_cases[i]` is the body for
-        # the i-th `cases` entry (1:1 with `self.cases`).  `None` entries
-        # mean "no proof provided for this case".
-        self._parsed_cases: 'list[proof | None] | None' = parsed_cases
         self._initial_goal_index = 0
+        if parsed_cases is not None:
+            self._supplied_proofs = {
+                str(i + 1): p for i, p in enumerate(parsed_cases)
+                if p is not None
+            } or None
     @classmethod
     def gen_single(cls, arg: Branch_ToolArg,
                    path: str = "<direct>") -> Parsed_Opr:
@@ -6451,13 +6401,6 @@ class Branch(SubgoalMaker):
         file.write("operation: Branch\n")
         self._print_evaluation_status(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
-    def _new_goal_node(self, goal_index: int, ml_state: Minilang_State) -> GoalNode:
-        case_index = goal_index - 1  # goal 0 = exhaustiveness, goals 1..N = cases
-        auto_proof: 'proof | None' = None
-        if self._parsed_cases is not None and 0 <= case_index < len(self._parsed_cases):
-            auto_proof = self._parsed_cases[case_index]
-        return GoalNode(NodeConfig(str(goal_index+self._initial_goal_index), ml_state, self), False, True,
-                        auto_proof=auto_proof)
     def beginning_opr(self) -> 'Minilang_Operation | FailureReason':
         if not self.cases:
             return FailureReason("Must specify at least one branching case.")
@@ -6508,7 +6451,7 @@ class CaseSplit(CaseSplit_Like):
         self.target_isabelle_term = arg["target_isabelle_term"]
         self.rule_spec: 'Literal["default"] | FactByName | FactByDescription' = \
             arg.get("rule", "default")
-        self._proofs_by_case = proofs_by_case
+        self._supplied_proofs = proofs_by_case
     def quickview_title(self) -> str:
         return f"CaseSplit {self.target_isabelle_term}"
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
@@ -6573,7 +6516,7 @@ class Induction(CaseSplit_Like):
         # mention at least one generalized variable.
         self._raw_facts_to_generalize: list[FactByName] = list(arg.get("facts_to_generalize") or [])
         self.fact_refs_to_generalize: list[IsabelleFact_Presented] = []
-        self._proofs_by_case = proofs_by_case
+        self._supplied_proofs = proofs_by_case
     def quickview_title(self) -> str:
         return f"Induction {self.target_isabelle_term}"
     async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
