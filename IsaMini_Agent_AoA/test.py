@@ -4894,7 +4894,7 @@ async def _test_CaseSplitNestedProofAllCases(root: Root, file: MyIO):
     body is attached to the matching GoalNode at refresh time, resolved via
     the case_name surfaced through `Consider_Case_Msg`.  The goal `P b`
     isn't actually provable, so the attached Obvious is expected to FAIL;
-    the assertion checks the STRUCTURE (auto_proof landed as the GoalNode's
+    the assertion checks the STRUCTURE (pending_proof landed as the GoalNode's
     first sub_node, one per case)."""
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -4917,7 +4917,7 @@ async def _test_CaseSplitNestedProofAllCases(root: Root, file: MyIO):
         kind0 = type(cast(NonLeaf_Node, gn).sub_nodes[0]).__name__ if cast(NonLeaf_Node, gn).sub_nodes else "none"
         file.write(f"  {gn.id}: first sub = {kind0}\n")
         assert cast(NonLeaf_Node, gn).sub_nodes, (
-            f"GoalNode {gn.id} empty — per-case auto_proof did not apply "
+            f"GoalNode {gn.id} empty — per-case pending_proof did not apply "
             f"(case_name lookup probably failed)")
 
 
@@ -6189,7 +6189,7 @@ async def _test_InferenceRuleBatch_MultiSubgoal(root: Root, file: MyIO):
 async def _test_InferenceRuleProofsPerSubgoal(root: Root, file: MyIO):
     """InferenceRule with `proofs: [[Obv1], [Obv2]]` (two entries): splice
     does NOT fire (len != 1).  At refresh time, each `proofs[i]` is applied
-    positionally as `auto_proof` on the i-th GoalNode child of the
+    positionally as `pending_proof` on the i-th GoalNode child of the
     InferenceRule.  `conjI` splits `P ∧ Q` into two subgoals, each
     discharged by its own Obvious."""
     from .mcp_http_server import _edit_tool_logic
@@ -6741,7 +6741,7 @@ async def _test_AmendHaveToConjI(root: Root, file: MyIO):
         )
 
 
-async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None):
+async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
     import msgpack as mp
     from IsaREPL import Client
     _budget = (
@@ -6772,6 +6772,11 @@ async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | No
             print(f"Running test [{i+1}/{case_num}] {test_case.name}")
             abs_file_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "Tests", test_case.file))
             await repl.file(abs_file_path, test_case.line, 0, cache_position=False, use_cache=False)
+            if sh_timeout is not None:
+                try:
+                    await repl.config([f'auto_sledgehammer_params = "timeout = {sh_timeout}"'])
+                except REPLFail:
+                    pass
             await repl.run_app('Minilang.AoA')
             invocation_id = f"{mode}.{test_case.name}"
             await repl._write((invocation_id, f"{mode}.{test_case.name}", (_cfg, _budget), None))

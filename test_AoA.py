@@ -25,6 +25,12 @@ parser.add_argument(
     default=None,
     help="Skip test cases whose name contains any of these substrings (comma-separated)",
 )
+parser.add_argument(
+    "--sh-timeout",
+    type=int,
+    default=10,
+    help="Sledgehammer timeout in seconds (default: 10)",
+)
 args = parser.parse_args()
 if args.filter is not None:
     os.environ["TEST_FILTER"] = args.filter
@@ -34,7 +40,7 @@ rpc_addr = "127.0.0.1:27182"
 logger = Isabelle_RPC_Host.mk_logger_(rpc_addr, None)
 
 async def run_tests():
-    await run_all_tests(args.repl_addr, logger=logger)
+    await run_all_tests(args.repl_addr, logger=logger, sh_timeout=args.sh_timeout)
 
 def run_server():
     Isabelle_RPC_Host.launch_server_(rpc_addr, logger, debugging=True)

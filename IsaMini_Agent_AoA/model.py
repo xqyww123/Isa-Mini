@@ -3744,7 +3744,7 @@ class GoalNode(StdBlock):
     case_hyps: list[Hyp] | None
 
     def __init__(self, config: NodeConfig, is_single_goal: bool, show_goal: bool,
-                 auto_proof: 'proof | None' = None):
+                 pending_proof: 'proof | None' = None):
         super().__init__(config, "", [])
         self.is_single_goal = is_single_goal
         self.show_goal = show_goal
@@ -3754,12 +3754,7 @@ class GoalNode(StdBlock):
         self.case_hyps = None
         self._prev_quickview_context: tuple[Vars, Hyps] | None = None
         self._prev_quickview_conclusion: term | None = None
-        # `_pending_auto_proof` is the pre-parsed proof body to install as
-        # sub_nodes on first refresh (via the install block in
-        # `_refresh_me_alone`). Populated by the PARENT SubgoalMaker's
-        # refresh-time orchestration (CaseSplit_Like rematch / direct pop)
-        # or by the `auto_proof` ctor arg (Branch / InferenceRule / Intro).
-        self._pending_auto_proof: 'proof | None' = auto_proof
+        self._pending_proof: 'proof | None' = pending_proof
     @property
     def titled_id(self) -> str:
         return self.id
@@ -3835,18 +3830,12 @@ class GoalNode(StdBlock):
                 raise InternalError(f"Expected exactly one Consider_Case_Msg in Case's messages, got {len(consider_case_msgs)}")
         if not is_init and (self.case_vars, self.case_hyps) != old_case:
             self.changed = True
-        # `_pending_auto_proof` may have been populated by the parent
-        # SubgoalMaker's refresh-time orchestration (e.g.
-        # `CaseSplit_Like._refresh_the_beginning_opr` sets it after
-        # matching a case or via rematch) or by the `auto_proof` ctor
-        # argument (Branch / InferenceRule / Intro). The install block
-        # below turns it into sub_nodes.
-        #
-        # Attach auto_proof subproof (pre-parsed list[Parsed_Opr]) before
-        # Intro fallback.
-        if self._pending_auto_proof is not None and not self.sub_nodes:
-            gns = self._pending_auto_proof
-            self._pending_auto_proof = None
+        # `_pending_proof` may have been populated by the parent
+        # Install `_pending_proof` (set by SubgoalMaker orchestration)
+        # as sub_nodes, with auto-Intro injection if needed.
+        if self._pending_proof is not None and not self.sub_nodes:
+            gns = self._pending_proof
+            self._pending_proof = None
             first_cls = gns[0].cls if gns else None
             # Q7: auto-Intro injection unless the first Parsed_Opr is Intro.
             if (first_cls is not Intro
@@ -3910,7 +3899,7 @@ class GoalNode(StdBlock):
                         self._prev_quickview_context = visible
                     conclusion = goal.conclusion
                     pending = self.should_I_show_pending_goal()
-                    if pending is None or pending[0].conclusion != conclusion:
+                    if self.does_quickview_need_detail() and (pending is None or pending[0].conclusion != conclusion):
                         if conclusion != self._prev_quickview_conclusion:
                             conclusion_str = conclusion.unicode
                             if len(conclusion_str) > AGENT_GOAL_CHAR_LIMIT:
@@ -4018,12 +4007,12 @@ class SubgoalMaker(GoalContainer, StdBlock):
             key = gn.local_step
             if key is not None and key in self._supplied_proofs:
                 gn.sub_nodes.clear()
-                gn._pending_auto_proof = self._supplied_proofs.pop(key)
+                gn._pending_proof = self._supplied_proofs.pop(key)
 
     async def _chk_subgoal_proofs(self) -> bool:
         """Whether (sub_nodes, supplied proofs) pairing is coherent.
         Default: count match.  CaseSplit_Like additionally checks that
-        every GN has either a matching key or a `_pending_auto_proof`."""
+        every GN has either a matching key or a `_pending_proof`."""
         s0 = self._state_after_beginning()
         expected = s0.new_subgoals_count or 0
         return expected == len(self.sub_nodes)
@@ -4105,7 +4094,7 @@ class SubgoalMaker(GoalContainer, StdBlock):
             for gn in self.sub_nodes:
                 if not isinstance(gn, GoalNode):
                     continue
-                if gn._pending_auto_proof is not None:
+                if gn._pending_proof is not None:
                     continue
                 unmatched.append(gn)
             if not unmatched:
@@ -4140,7 +4129,7 @@ class SubgoalMaker(GoalContainer, StdBlock):
                     new_body = self._supplied_proofs.pop(new_name, None)
                     if new_body is not None:
                         gn.sub_nodes.clear()
-                        gn._pending_auto_proof = new_body
+                        gn._pending_proof = new_body
                     remaining.pop(picked, None)
         else:
             # --- N<=1 splice path (no block opened, no GoalNodes) ---
@@ -4568,7 +4557,7 @@ class CaseSplit_Like(SubgoalMaker):
         for gn in self.sub_nodes:
             if not isinstance(gn, GoalNode):
                 continue
-            if gn._pending_auto_proof is not None:
+            if gn._pending_proof is not None:
                 continue
             case_name = gn.local_step
             stripped = case_name.rstrip("0123456789")
@@ -4576,7 +4565,7 @@ class CaseSplit_Like(SubgoalMaker):
                 continue
             if stripped in self._supplied_proofs:
                 gn.sub_nodes.clear()
-                gn._pending_auto_proof = self._supplied_proofs.pop(stripped)
+                gn._pending_proof = self._supplied_proofs.pop(stripped)
 
     async def _chk_subgoal_proofs(self) -> bool:
         if not await super()._chk_subgoal_proofs():
@@ -4589,7 +4578,7 @@ class CaseSplit_Like(SubgoalMaker):
             case_name = gn.local_step
             if case_name in self._supplied_proofs:
                 continue
-            if gn._pending_auto_proof is not None:
+            if gn._pending_proof is not None:
                 continue
             return False
         return True
