@@ -23,8 +23,11 @@ Amended step 1.
 Outline:
   step 1: Suffices (line 0)
     step 1.1: Have inner (done, line 0)
-    Error: Unfinished Proof. Fill step `1.2`
-    goal: (0 :: int) ≤ x * x ⟶ (0 :: int) ≤ x * x
+    step 1.2: Intro (line 0)
+      assuming premises:
+        - premise0: (0 :: int) ≤ x * x
+    Error: Unfinished Proof. Fill step `1.3`
+    goal: (0 :: int) ≤ x * x
   Error: Unfinished Proof (line 9). Fill step `2`
 ---------------
 Q6 redirect into last-provided-node's body verified.

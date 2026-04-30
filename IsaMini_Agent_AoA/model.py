@@ -2239,6 +2239,7 @@ class EditOutcome:
         self,
         can_continue: bool,
         node: 'Node',
+        auto_intro: bool,
     ) -> 'tuple[EditFailureBehavior, bool]':
         """Post-attach bookkeeping shared by `append` / `insert_before_me`:
         refresh the newly-attached `node`, add it to `committed`, run
@@ -2249,7 +2250,7 @@ class EditOutcome:
         in the tree)."""
         cancelled = False
         if can_continue:
-            await node._refresh_me_alone()
+            await node._refresh_me_alone(auto_intro=auto_intro)
         else:
             await node._cancel()
             cancelled = True
@@ -2261,7 +2262,7 @@ class EditOutcome:
         behavior, _ = node._on_edit_failure(self)
         if behavior is EditFailureBehavior.TERMINATE_AND_REVERT:
             rp = node._delete_me()
-            await rp._refresh_me_alone()
+            await rp._refresh_me_alone(auto_intro=False)
             if rp.parent is not None:
                 await rp._refresh_all_after_me()
             self.committed.pop()
@@ -2306,6 +2307,7 @@ class Node(ABC):
         self.changed : bool = False
         self._kind : str = "step"
         self._first_time = True
+        self._has_considered_auto_intro = False
         self._is_trivial: bool | None = None
         self.age = self.session.age
         self.line = 0
@@ -2518,13 +2520,16 @@ class Node(ABC):
         Assembling all the abstract tree model into the final sequence of Minilang operations
         """
         ...
-    async def _refresh_me_alone(self) -> None:
+    async def _refresh_me_alone(self, auto_intro: bool) -> None:
         """
         must update self.status
         Convention: Any node must be up to date after calling any public Node method
         """
         self.age = self.session.age
         self._first_time = False
+    async def _auto_intro_after_me(self) -> None:
+        if self.parent is not None:
+            await self.parent._auto_Intro_after_child(self)
     async def _refresh_all_after_me(self) -> None:
         """
         refreshing the status of all the nodes excluding and after the `self`
@@ -2565,7 +2570,7 @@ class Node(ABC):
             can_continue = parent._can_continue_before_child(node)
             cancelled = False
             if can_continue:
-                await node._refresh_me_alone()
+                await node._refresh_me_alone(auto_intro=False)
             else:
                 await node._cancel()
                 cancelled = True
@@ -2579,7 +2584,7 @@ class Node(ABC):
                 for j in range(len(result.created) - 1, i, -1):
                     parent._remove_child(result.created[j])
                 rp = node._delete_me()
-                await rp._refresh_me_alone()
+                await rp._refresh_me_alone(auto_intro=False)
                 if rp.parent is not None:
                     await rp._refresh_all_after_me()
                 outcome.committed.pop()
@@ -2697,7 +2702,7 @@ class Node(ABC):
                 node._is_trivial = None
                 break
         if rp is not None:
-            await rp._refresh_me_alone()
+            await rp._refresh_me_alone(auto_intro=False)
             if rp.parent is not None:
                 await rp._refresh_all_after_me()
         return await node.append(gns, op=op)
@@ -2745,14 +2750,14 @@ class Node(ABC):
         if ret is None:
             raise CannotRename_VariableNotFound(old_name, new_name)
         else:
-            await ret._refresh_me_alone()
+            await ret._refresh_me_alone(auto_intro=False)
             await ret._refresh_all_after_me()
     async def rename_fact(self, old_name: str, new_name: str) -> None:
         ret = self._rename_fact(old_name, new_name)
         if ret is None:
             raise CannotRename_FactNotFound(old_name, new_name)
         else:
-            await ret._refresh_me_alone()
+            await ret._refresh_me_alone(auto_intro=False)
             await ret._refresh_all_after_me()
     def _print_fixed_vars_and_facts(self, indent: int, file: MyIO) -> None:
         fixed_vars = self._fixed_vars_at_me({})
@@ -2826,7 +2831,7 @@ class Node(ABC):
         # Refresh each point, skip if already refreshed this session age
         for rp in refresh_points:
             if rp.age < self.session.age:
-                await rp._refresh_me_alone()
+                await rp._refresh_me_alone(auto_intro=False)
                 if rp.parent is not None:
                     await rp._refresh_all_after_me()
         return not_found
@@ -2881,7 +2886,7 @@ class Node(ABC):
                             parent.sub_nodes[i] = old
                             old.parent = parent
                             if parent._can_continue_before_child(old):
-                                await old._refresh_me_alone()
+                                await old._refresh_me_alone(auto_intro=False)
                             else:
                                 await old._cancel()
                             await old._refresh_all_after_me()
@@ -2901,7 +2906,7 @@ class Node(ABC):
         old_self = self
         rp = old_self._delete_me()
         if rp is not None:
-            await rp._refresh_me_alone()
+            await rp._refresh_me_alone(auto_intro=False)
             if rp.parent is not None:
                 await rp._refresh_all_after_me()
         if next_sibling is not None:
@@ -2947,9 +2952,9 @@ class Leaf(Node):
             raise InternalError(f"Cannot assemble a node with failed operation: {op.reason}")
         output.append(op)
         return output
-    async def _refresh_me_alone(self) -> None:
+    async def _refresh_me_alone(self, auto_intro: bool) -> None:
         now = time()
-        await super()._refresh_me_alone()
+        await super()._refresh_me_alone(auto_intro)
         op = self.the_operation()
         if isinstance(op, FailureReason):
             self.status = EvaluationStatus.Failure(time() - now, op)
@@ -2959,6 +2964,10 @@ class Leaf(Node):
             self.status = EvaluationStatus.Success(time() - now)
         except IsabelleError as err:
             self.status = EvaluationStatus.Failure(time() - now, FailureReason(''.join(err.errors)))
+            return
+        if auto_intro and not self._has_considered_auto_intro:
+            self._has_considered_auto_intro = True
+            await self._auto_intro_after_me()
 
     async def append(
         self, gns: 'list[Parsed_Opr]',
@@ -3029,7 +3038,7 @@ class NonLeaf_Node(Node):
                         can_continue = can_continue_i
                 else:
                     if can_continue:
-                        await child._refresh_me_alone()
+                        await child._refresh_me_alone(auto_intro=True)
                         can_continue = child.status.status == EvaluationStatus.Status.SUCCESS
                     else:
                         await child._cancel()
@@ -3041,6 +3050,35 @@ class NonLeaf_Node(Node):
             if can_continue:
                 if self.parent is not None:
                     await self.parent._refresh_all_children_after(self, can_continue)
+    async def _auto_Intro_after_child(self, child: 'Node') -> None:
+        child_idx: int | None = None
+        for i, c in enumerate(self.sub_nodes):
+            if c is child:
+                child_idx = i
+                break
+        if child_idx is None:
+            return
+        next_idx = child_idx + 1
+        if next_idx < len(self.sub_nodes) and isinstance(self.sub_nodes[next_idx], Intro):
+            return
+        if not await child.resulting_state().need_intro(False):
+            return
+        if next_idx < len(self.sub_nodes):
+            child_segs = split_id_into_segs(child.local_step)
+            next_segs = split_id_into_segs(self.sub_nodes[next_idx].local_step)
+            if len(child_segs) > len(next_segs):
+                segs = child_segs[:len(next_segs) + 1]
+                segs[-1] += 1
+                new_id = cat_segs_into_id(segs)
+            else:
+                new_id = cat_segs_into_id(child_segs + [1])
+        else:
+            new_id = self._local_step_of_next_proof_step()
+        ml_state = await child.resulting_state().clone(None)
+        config = NodeConfig(new_id, ml_state, self)
+        intro = Intro(config, "", None, False)
+        self.sub_nodes.insert(next_idx, intro)
+        await intro._refresh_me_alone(auto_intro=True)
     def _local_step_of_next_proof_step(self) -> local_step:
         if self.sub_nodes:
             return incr_id_major(self.sub_nodes[-1].local_step)
@@ -3211,7 +3249,7 @@ class NonLeaf_Node(Node):
                     sibling._on_upstream_change()
                 new_node._amend_from(child)
                 if self._can_continue_before_child(new_node):
-                    await new_node._refresh_me_alone()
+                    await new_node._refresh_me_alone(auto_intro=False)
                 else:
                     await new_node._cancel()
                 await new_node._refresh_all_after_me()
@@ -3352,7 +3390,7 @@ class StdBlock(NonLeaf_Node):
         return None
     async def _skip_proof(self) -> None:
         await self._state_after_beginning().sorry_end_all(None, self.resulting_state())
-    async def _refresh_me_alone(self):
+    async def _refresh_me_alone(self, auto_intro: bool):
         begin_opr = self.beginning_opr()
         now = time()
         reason: FailureReason | None = None
@@ -3369,11 +3407,11 @@ class StdBlock(NonLeaf_Node):
                 can_continue = False
         else:
             await self.ml_state.clone(self._state_after_beginning())
-        await super()._refresh_me_alone()
+        await super()._refresh_me_alone(auto_intro)
         failed_child: Node | None = None
         for child in self.sub_nodes:
             if can_continue:
-                await child._refresh_me_alone()
+                await child._refresh_me_alone(auto_intro=True)
                 can_continue = child.status.status == EvaluationStatus.Status.SUCCESS
                 if not can_continue:
                     reason = self._child_refresh_failure_err_msgs(child)
@@ -3390,8 +3428,6 @@ class StdBlock(NonLeaf_Node):
         elif head_succeeded:
             self._body_subnodes_succeeded = False
             if failed_child is not None:
-                # Populate _state_before_ending_ with the last successful state
-                # (= the failing child's ml_state, which is the state before it ran)
                 await failed_child.ml_state.clone(self._state_before_ending_)
             await self._skip_proof()
             self.status = EvaluationStatus.Success(time() - now, reason)
@@ -3399,6 +3435,9 @@ class StdBlock(NonLeaf_Node):
             self._body_subnodes_succeeded = False
             assert reason is not None
             self.status = EvaluationStatus.Failure(time() - now, reason)
+        if auto_intro and not self._has_considered_auto_intro and self.status.status == EvaluationStatus.Status.SUCCESS:
+            self._has_considered_auto_intro = True
+            await self._auto_intro_after_me()
     def _ctxt_of_filling(self) -> Context:
         vars = self._all_fixed_vars_before_me({})
         hyps = self._all_fixed_facts_before_me({})
@@ -3674,7 +3713,7 @@ class StdBlock(NonLeaf_Node):
             self.sub_nodes.append(node)
             self._is_trivial = None
             behavior, cancelled = await outcome.commit_and_hook(
-                self._can_continue_before_child(node), node)
+                self._can_continue_before_child(node), node, auto_intro=False)
             if behavior is not EditFailureBehavior.CONTINUE:
                 return outcome
             # Q7: skip auto-Intro injection if the user's next item is
@@ -3696,7 +3735,7 @@ class StdBlock(NonLeaf_Node):
                     self._is_trivial = None
                     await outcome.commit_and_hook(
                         self._can_continue_before_child(auto_node),
-                        auto_node)
+                        auto_node, auto_intro=False)
         return outcome
 
 
@@ -3818,7 +3857,7 @@ class GoalNode(StdBlock):
             return indent
         else:
             return super()._print_step_id(indent, file, update_line)
-    async def _refresh_me_alone(self):
+    async def _refresh_me_alone(self, auto_intro: bool):
         is_init = self._first_time
         old_case = (self.case_vars, self.case_hyps)
         consider_case_msgs = [m for m in self.ml_state.messages if isinstance(m, Consider_Case_Msg)]
@@ -3861,7 +3900,9 @@ class GoalNode(StdBlock):
             config = NodeConfig(local_step, ml_state, self)
             intro = Intro(config, "", None, False)
             self.sub_nodes.append(intro)
-        return await super()._refresh_me_alone()
+        return await super()._refresh_me_alone(auto_intro)
+    async def _auto_intro_after_me(self) -> None:
+        pass
     def _fixed_vars_at_me(self, ret: Vars) -> Vars:
         goal = self.goal()
         if goal is not None:
@@ -4807,7 +4848,7 @@ class Obvious(Leaf):
         self._print_evaluation_status(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
         return indent
-    async def _refresh_me_alone(self) -> None:
+    async def _refresh_me_alone(self, auto_intro: bool) -> None:
         if self.fact_refs is None:
             if self._raw_facts:
                 fetched = cast(list[IsabelleFact], await self.ml_state.fetch_facts(self._raw_facts))
@@ -4823,7 +4864,7 @@ class Obvious(Leaf):
             self.fact_refs, unfound_warnings = _filter_unfound(refreshed)
             for w in unfound_warnings:
                 self.warnings.append(Warning(Warning.Position.FOOTER, w))
-        await super()._refresh_me_alone()
+        await super()._refresh_me_alone(auto_intro)
         if self.parent is not None:
             if self.status.status == EvaluationStatus.Status.SUCCESS:
                 self.parent._is_trivial = True
@@ -4908,7 +4949,7 @@ class Chaining(Leaf):
                 [Warning.Position.HEADER, Warning.Position.FOOTER])
         return indent
 
-    async def _refresh_me_alone(self) -> None:
+    async def _refresh_me_alone(self, auto_intro: bool) -> None:
         if self.fact_refs is None:
             if self._raw_facts:
                 fetched = cast(list[IsabelleFact], await self.ml_state.fetch_facts(self._raw_facts))
@@ -4923,7 +4964,7 @@ class Chaining(Leaf):
             self.fact_refs, unfound_warnings = _filter_unfound(refreshed)
             for w in unfound_warnings:
                 self.warnings.append(Warning(Warning.Position.FOOTER, w))
-        await super()._refresh_me_alone()
+        await super()._refresh_me_alone(auto_intro)
         if self.status.status == EvaluationStatus.Status.SUCCESS:
             messages = self.resulting_state().messages
             for m in messages:
@@ -5230,7 +5271,7 @@ class Unfold(Leaf):
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
         return indent
 
-    async def _refresh_me_alone(self) -> None:
+    async def _refresh_me_alone(self, auto_intro: bool) -> None:
         if self.fact_refs is None:
             all_defs = await self.ml_state.potential_defs_of(
                 [IsaTerm.from_agent(t) for t in self.targets])
@@ -5243,7 +5284,7 @@ class Unfold(Leaf):
                     Interaction_ChooseDef(self.targets, all_defs, state=self.ml_state))
         elif self.ml_state.initialized():
             self.fact_refs = await self.ml_state.refresh_facts(self.fact_refs)
-        await super()._refresh_me_alone()
+        await super()._refresh_me_alone(auto_intro)
 
     def _on_edit_failure(self, outcome: 'EditOutcome') -> 'tuple[EditFailureBehavior, EditOutcome]':
         if self.status.status == EvaluationStatus.Status.FAILURE:
@@ -5319,7 +5360,7 @@ class Derive(Leaf):
             self._prev_result_facts = self.result_facts
         return indent
 
-    async def _refresh_me_alone(self) -> None:
+    async def _refresh_me_alone(self, auto_intro: bool) -> None:
         if self.rule_ref is None or self.discharge_refs is None:
             all_refs = [self.rule] + self.discharging_facts
             fetched = cast(list[IsabelleFact], await self.ml_state.fetch_facts(all_refs))
@@ -5330,7 +5371,7 @@ class Derive(Leaf):
                 [self.rule_ref, *self.discharge_refs])
             self.rule_ref = refreshed[0]
             self.discharge_refs = refreshed[1:]
-        await super()._refresh_me_alone()
+        await super()._refresh_me_alone(auto_intro)
         if self.status.status == EvaluationStatus.Status.SUCCESS:
             messages = self.resulting_state().messages
             for m in messages:
@@ -5645,7 +5686,7 @@ class Rewrite(Leaf):
             bindings
         )
 
-    async def _refresh_me_alone(self) -> None:
+    async def _refresh_me_alone(self, auto_intro: bool) -> None:
         is_init = self._first_time
         if self.using is None:
             fetched = cast(list[IsabelleFact], await self.ml_state.fetch_facts(self._raw_using))
@@ -5675,7 +5716,7 @@ class Rewrite(Leaf):
                     if self.status.status == EvaluationStatus.Status.SUCCESS
                     else None)
         # Execute the operation via parent Leaf implementation
-        await super()._refresh_me_alone()
+        await super()._refresh_me_alone(auto_intro)
 
         # If operation succeeded, extract bindings and track changes
         if self.status.status == EvaluationStatus.Status.SUCCESS:
@@ -6142,14 +6183,14 @@ class Intro(SubgoalMaker):
                     file.write(f"- {f}\n")
         self._print_evaluation_status(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
-    async def _refresh_me_alone(self):
+    async def _refresh_me_alone(self, auto_intro: bool):
         if self._pending_bindings is not None:
             var_bindings, fact_bindings = self._pending_bindings
             self.bindings = await self.ml_state.compute_bindings(
                 [IsaTerm.from_agent(n) for n in var_bindings],
                 [IsaTerm.from_agent(n) for n in fact_bindings])
             self._pending_bindings = None
-        await super()._refresh_me_alone()
+        await super()._refresh_me_alone(auto_intro)
     def beginning_opr(self) -> Minilang_Operation:
         return Minilang_Operation.INTRO(self.bindings, self.split_conj)
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
@@ -6329,7 +6370,7 @@ class InferenceRule(SubgoalMaker):
             cls=cls, factory=lambda cfg: cls(cfg, arg, parsed_proofs),
             raw=arg)
 
-    async def _refresh_me_alone(self) -> None:
+    async def _refresh_me_alone(self, auto_intro: bool) -> None:
         if self.rule is not None and self.rule_ref is None:
             fetched = await self.ml_state.fetch_facts([self.rule])
             result = fetched[0]
@@ -6341,7 +6382,7 @@ class InferenceRule(SubgoalMaker):
                 self.rule_ref = selected[0]
         elif self.rule_ref is not None and self.ml_state.initialized():
             [self.rule_ref] = await self.ml_state.refresh_facts([self.rule_ref])
-        await super()._refresh_me_alone()
+        await super()._refresh_me_alone(auto_intro)
     def quickview_title(self) -> str:
         if self.rule_ref is not None:
             return f"Inference Rule {self.rule_ref.name().unicode}"
@@ -6717,6 +6758,8 @@ class GlobalEnv(StdBlock):
             raise InternalError("The parent of a GlobalEnv must be a Root")
         super().__init__(config, "", [])
         self.id = "global"
+    async def _auto_intro_after_me(self) -> None:
+        pass
     def id_of_goal(self) -> step | None:
         return None
     def beginning_opr(self) -> None:
@@ -6783,7 +6826,7 @@ class Root(GoalContainer, StdBlock):
         self.sub_nodes.append(self.global_env)
         self.final_ml_state = Minilang_State.assign(ml_state0)
         self._closed_by = self
-    async def _refresh_me_alone(self):
+    async def _refresh_me_alone(self, auto_intro: bool):
         if self._first_time:
             ml_state = await self.ml_state.skip(None)
             if not ml_state.initialized():
@@ -6801,7 +6844,7 @@ class Root(GoalContainer, StdBlock):
                 if i < self.num_goals - 1:
                     ml_state = await ml_state.sorry_next(None, None)
             #self.final_ml_state = ml_state
-        await super()._refresh_me_alone()
+        await super()._refresh_me_alone(auto_intro)
     async def _refresh_all_children_after(self, after: 'Node | Literal["end"]', can_continue_i: bool) -> None:
         # GoalContainer blocks cross-child propagation because each subgoal is
         # independent in AoA — that's correct for changes initiated *from* a
@@ -6811,7 +6854,7 @@ class Root(GoalContainer, StdBlock):
         # all GoalNodes. Override to allow that one direction only.
         if after is self.global_env:
             for child in self.sub_nodes[1:]:
-                await child._refresh_me_alone()
+                await child._refresh_me_alone(auto_intro=True)
             # Root has no parent, no upward recursion.
             return None
         # Otherwise (after is a GoalNode or "end"): keep GoalContainer's
@@ -7254,7 +7297,7 @@ class Session:
             raise InternalError("The session is already initialized.")
         self.root = root
         self.working_block = root
-        await root._refresh_me_alone()
+        await root._refresh_me_alone(auto_intro=True)
 
     def retrieval_state(self) -> Minilang_State:
         if self.working_block is not None:
