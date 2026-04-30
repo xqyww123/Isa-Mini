@@ -244,7 +244,7 @@ async def _answer_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             return (exp.new_prompt, False)
 
         pending.answer.set_result(result)
-        session.log_interaction("mcp__proof__answer", "interaction answered")
+        session.log_interaction("mcp__proof__answer", f"interaction answered: {result}")
         session.log_tool_response("mcp__proof__answer", f"[INTERACTION RESOLVED] {result}")
         if not session.is_major:
             await session.interrupt()

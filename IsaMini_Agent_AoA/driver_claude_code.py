@@ -747,6 +747,7 @@ class ClaudeCode(Session):
                     fork_prompt += (
                         "\nAnswer the question above by calling the "
                         "mcp__proof__answer tool.")
+                fork.log_interaction("fork", f"{tag} prompt:\n{prompt_text}")
                 await fork_client.query(fork_prompt)
                 fork._model_time_start = time()
                 while True:
