@@ -11,10 +11,6 @@ theorem imo_1990_p3:
   assumes "2 \<le> n"
     and "n^2 dvd 2^n + 1"
   shows "n = 3"
-  by  a oa
-
-lemma False if x: False
-  using x by auto_sledgehammer
-  using x by metis
+  by  aoa
 
 end

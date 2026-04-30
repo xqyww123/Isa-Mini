@@ -3988,23 +3988,43 @@ class SubgoalMaker(GoalContainer, StdBlock):
         self._initial_goal_index : int = 1
         self._supplied_proofs: 'dict[str, proof] | None' = None
 
+    @staticmethod
+    def _node_to_parsed_opr(node: 'Node') -> Parsed_Opr:
+        def factory(config: NodeConfig) -> 'Node':
+            node.parent = config.parent
+            node.ml_state = config.ml_state
+            node.local_step = config.local_step
+            node._recompute_id()
+            node.warnings = []
+            node._first_time = True
+            node._has_considered_auto_intro = False
+            return node
+        return Parsed_Opr(cls=type(node), factory=factory, raw={})
+
     def _amend_from(self, old: 'Node') -> None:
         # SubgoalMaker.sub_nodes are framework-managed GoalNodes (one per
-        # subgoal opened by the begin-op), not user proof steps. Carrying
-        # `old.sub_nodes` over wholesale — as `NonLeaf_Node._amend_from`
-        # does by default — only makes sense when `old` is the SAME
-        # SubgoalMaker subclass: its sub_nodes are then GoalNodes too,
-        # and `_refresh_the_beginning_opr`'s count-match path can keep or
-        # discard them coherently. For any other shape (StdBlock body,
-        # different SubgoalMaker subclass) the old children would
-        # violate the GoalNode invariant if retained, so we drop them
-        # with an explicit warning.
+        # subgoal opened by the begin-op), not user proof steps.  Rather
+        # than transplanting the old GoalNodes wholesale, we extract each
+        # GoalNode's proof body as pseudo Parsed_Oprs and inject them
+        # into `_supplied_proofs`.  The normal `_refresh_the_beginning_opr`
+        # regeneration then creates fresh GoalNodes, and
+        # `_orchestrate_proofs` matches the inherited proofs to the new
+        # subgoals via the existing _pre_match / _rematch /
+        # Interaction_MapCase mechanism.
         Node._amend_from(self, old)
         if isinstance(old, type(self)) and isinstance(old, NonLeaf_Node):
-            self.sub_nodes[:] = old.sub_nodes
+            inherited: 'dict[str, proof]' = {}
+            for gn in old.sub_nodes:
+                if isinstance(gn, GoalNode) and gn.sub_nodes:
+                    inherited[gn.local_step] = [
+                        self._node_to_parsed_opr(n) for n in gn.sub_nodes]
+            if inherited:
+                if self._supplied_proofs is None:
+                    self._supplied_proofs = inherited
+                else:
+                    for k, v in inherited.items():
+                        self._supplied_proofs.setdefault(k, v)
             old.sub_nodes.clear()
-            for child in self.sub_nodes:
-                child.parent = self
         elif isinstance(old, NonLeaf_Node) and old.sub_nodes:
             self._warn_discarded_nodes(
                 list(old.sub_nodes),
