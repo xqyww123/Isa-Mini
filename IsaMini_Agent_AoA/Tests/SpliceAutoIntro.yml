@@ -1,0 +1,44 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+is_error: False
+--------------------------------------------------
+After InferenceRule ccontr with spliced body [Have, Obvious]
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: proof by contradiction
+    operation: Inference Rule
+    rule:
+      - ccontr: (¬ ?P ⟶ False) ⟶ ?P
+    derived goal:
+      ¬ (0 :: int) ≤ x * x ⟶ False
+  - step id: 1A
+    operation: Intro
+    assuming premises:
+      - premise0: ¬ (0 :: int) ≤ x * x
+  - step id: 2
+    thought: trivial claim
+    operation: Have
+    statement:
+      english: True
+      isabelle: True
+    name: h
+    proof:
+      - step id: 2.1
+        operation: Obvious
+  - step id: 3
+    operation: Obvious
+sibling kinds: ['InferenceRule', 'Intro', 'Have', 'Obvious']
+node after InferenceRule: Intro
+last node: Obvious

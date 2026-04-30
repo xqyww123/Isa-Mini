@@ -2570,7 +2570,7 @@ class Node(ABC):
             can_continue = parent._can_continue_before_child(node)
             cancelled = False
             if can_continue:
-                await node._refresh_me_alone(auto_intro=False)
+                await node._refresh_me_alone(auto_intro=True)
             else:
                 await node._cancel()
                 cancelled = True
@@ -3073,6 +3073,8 @@ class NonLeaf_Node(Node):
             else:
                 new_id = cat_segs_into_id(child_segs + [1])
         else:
+            if not self.opening():
+                return
             new_id = self._local_step_of_next_proof_step()
         ml_state = await child.resulting_state().clone(None)
         config = NodeConfig(new_id, ml_state, self)
@@ -3249,7 +3251,7 @@ class NonLeaf_Node(Node):
                     sibling._on_upstream_change()
                 new_node._amend_from(child)
                 if self._can_continue_before_child(new_node):
-                    await new_node._refresh_me_alone(auto_intro=False)
+                    await new_node._refresh_me_alone(auto_intro=True)
                 else:
                     await new_node._cancel()
                 await new_node._refresh_all_after_me()
@@ -3676,10 +3678,10 @@ class StdBlock(NonLeaf_Node):
         `_on_edit_failure`; the returned `EditFailureBehavior` decides
         whether the batch continues, stops, or stops-and-reverts.
 
-        Auto-Intro is injected after each successfully committed node
-        when the block is still opening and the resulting state needs
-        an Intro (Q7: skipped when the user's next item is already an
-        Intro)."""
+        Auto-Intro injection is delegated to the ``_auto_intro_after_me``
+        mechanism inside ``_refresh_me_alone`` (via ``auto_intro=True``).
+        When the user's next item is already an Intro, ``auto_intro`` is
+        set to False to suppress auto-injection."""
         outcome = EditOutcome(operation=op, request=gns)
         def _block_closed(unapplied: 'list[Parsed_Opr]') -> CannotEdit_BlockClosed:
             return CannotEdit_BlockClosed(
@@ -3712,30 +3714,13 @@ class StdBlock(NonLeaf_Node):
                 continue
             self.sub_nodes.append(node)
             self._is_trivial = None
-            behavior, cancelled = await outcome.commit_and_hook(
-                self._can_continue_before_child(node), node, auto_intro=False)
-            if behavior is not EditFailureBehavior.CONTINUE:
-                return outcome
-            # Q7: skip auto-Intro injection if the user's next item is
-            # already an Intro.
             next_is_intro = (i + 1 < len(gns)
                              and gns[i + 1].cls is Intro)
-            if not cancelled and not next_is_intro and self.opening():
-                next_state = node.resulting_state()
-                if await next_state.need_intro(False):
-                    auto_gn = Parsed_Opr(
-                        cls=Intro,
-                        factory=lambda config: Intro(config, "", None, False),
-                        raw={})
-                    auto_local = self._local_step_of_next_proof_step()
-                    auto_state = await self._state_before_ending_.clone(None)
-                    auto_config = NodeConfig(auto_local, auto_state, self)
-                    auto_node = auto_gn.factory(auto_config)
-                    self.sub_nodes.append(auto_node)
-                    self._is_trivial = None
-                    await outcome.commit_and_hook(
-                        self._can_continue_before_child(auto_node),
-                        auto_node, auto_intro=False)
+            behavior, cancelled = await outcome.commit_and_hook(
+                self._can_continue_before_child(node), node,
+                auto_intro=not next_is_intro)
+            if behavior is not EditFailureBehavior.CONTINUE:
+                return outcome
         return outcome
 
 
@@ -4822,6 +4807,21 @@ def _split_fetched(fetched: 'list[IsabelleFact | Interaction_RetrieveForProof]'
     return resolved, interactions, resolve_indices
 
 
+def _fetched_to_facts(fetched: 'list[IsabelleFact | Interaction_RetrieveForProof]') -> list[IsabelleFact]:
+    """Convert fetch_facts results to a pure IsabelleFact list for callers
+    that don't support interactive resolution (Obvious, Chaining, Derive,
+    Rewrite).  Interaction_RetrieveForProof entries become IsabelleFact_Unfound
+    so that downstream _filter_unfound handles them uniformly."""
+    out: list[IsabelleFact] = []
+    for item in fetched:
+        if isinstance(item, IsabelleFact):
+            out.append(item)
+        else:
+            out.append(IsabelleFact_Unfound(
+                cast(Fact, {"refer_by": "description", "english": item.query})))
+    return out
+
+
 #### Obvious
 
 class Obvious_ToolArg(TypedDict):
@@ -4871,7 +4871,7 @@ class Obvious(Leaf):
     async def _refresh_me_alone(self, auto_intro: bool) -> None:
         if self.fact_refs is None:
             if self._raw_facts:
-                fetched = cast(list[IsabelleFact], await self.ml_state.fetch_facts(self._raw_facts))
+                fetched = _fetched_to_facts(await self.ml_state.fetch_facts(self._raw_facts))
                 facts, unfound_warnings = _filter_unfound(fetched)
             else:
                 facts = []
@@ -4972,7 +4972,7 @@ class Chaining(Leaf):
     async def _refresh_me_alone(self, auto_intro: bool) -> None:
         if self.fact_refs is None:
             if self._raw_facts:
-                fetched = cast(list[IsabelleFact], await self.ml_state.fetch_facts(self._raw_facts))
+                fetched = _fetched_to_facts(await self.ml_state.fetch_facts(self._raw_facts))
                 facts, unfound_warnings = _filter_unfound(fetched)
                 self.fact_refs, pit_warnings = await _filter_unprovable(facts, self.ml_state)
                 for w in unfound_warnings + pit_warnings:
@@ -5383,7 +5383,7 @@ class Derive(Leaf):
     async def _refresh_me_alone(self, auto_intro: bool) -> None:
         if self.rule_ref is None or self.discharge_refs is None:
             all_refs = [self.rule] + self.discharging_facts
-            fetched = cast(list[IsabelleFact], await self.ml_state.fetch_facts(all_refs))
+            fetched = _fetched_to_facts(await self.ml_state.fetch_facts(all_refs))
             self.rule_ref = fetched[0]
             self.discharge_refs = fetched[1:]
         elif self.ml_state.initialized():
@@ -5709,7 +5709,7 @@ class Rewrite(Leaf):
     async def _refresh_me_alone(self, auto_intro: bool) -> None:
         is_init = self._first_time
         if self.using is None:
-            fetched = cast(list[IsabelleFact], await self.ml_state.fetch_facts(self._raw_using))
+            fetched = _fetched_to_facts(await self.ml_state.fetch_facts(self._raw_using))
             facts, unfound_warnings = _filter_unfound(fetched)
             self.using, pit_warnings = await _filter_unprovable(facts, self.ml_state)
             for w in unfound_warnings + pit_warnings:

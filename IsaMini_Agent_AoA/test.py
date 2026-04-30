@@ -6934,6 +6934,78 @@ async def _test_SpliceHaveRefresh(root: Root, file: MyIO):
         file.write("OK: all children were refreshed\n")
 
 
+@model_test("ObviousDescriptionFact", "Test_ObviousDescriptionFact.thy", 8)
+async def _test_ObviousDescriptionFact(root: Root, file: MyIO):
+    """Regression: Obvious with FactByDescription must not crash.
+    FactByDescription is not in Obvious's schema, but LLMs can violate
+    schemas. fetch_facts returns Interaction_RetrieveForProof for such
+    facts, which lacks .pack() — previously crashed in HAMMER().
+    The description fact should be filtered out with a warning."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    await root.fill("1", [Obvious.gen_single({
+        "facts": [
+            {"refer_by": "description", "english": "nonneg square"},
+        ]
+    })])
+    print_header("After Obvious with description fact", file)
+    root.print(0, file)
+
+
+@model_test("SpliceAutoIntro", "Test_SpliceAutoIntro.thy", 8)
+async def _test_SpliceAutoIntro(root: Root, file: MyIO):
+    """InferenceRule ccontr (N=1 splice) with a proof body [Have, Obvious].
+    The splice inserts body ops as parent siblings.  The derived goal from
+    ccontr is a meta-implication (¬ P ⟹ False), so auto-Intro must be
+    injected between the InferenceRule and the first body node.
+
+    Bug: append() passes auto_intro=False to commit_and_hook, so the new
+    auto-Intro mechanism never fires for the InferenceRule.  Q7 fires but
+    creates a SPURIOUS Intro at the end instead of between InferenceRule
+    and the first body node."""
+    from .mcp_http_server import _edit_tool_logic
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    result, is_error = await _edit_tool_logic(
+        root.session,
+        {"target_step": "1", "action": "fill", "proof_operations": [
+            {"operation": "InferenceRule",
+             "thought": "proof by contradiction",
+             "rule": {"refer_by": "name", "name": "ccontr"},
+             "proofs": [[
+                 {"operation": "Have",
+                  "thought": "trivial claim",
+                  "statement": {"english": "True", "isabelle": "True"},
+                  "name": "h",
+                  "proof": [{"operation": "Obvious", "facts": []}]},
+                 {"operation": "Obvious", "facts": []},
+             ]]},
+        ]})
+    file.write(f"is_error: {is_error}\n")
+    print_header("After InferenceRule ccontr with spliced body [Have, Obvious]", file)
+    root.print(0, file)
+    ir = root.locate_node("1")
+    parent = ir.parent
+    assert parent is not None and isinstance(parent, NonLeaf_Node)
+    kinds = [type(c).__name__ for c in parent.sub_nodes]
+    file.write(f"sibling kinds: {kinds}\n")
+    # The node immediately after InferenceRule must be an auto-Intro
+    # (consuming the meta-premise from ccontr's derived goal).
+    ir_idx = next(i for i, c in enumerate(parent.sub_nodes) if c is ir)
+    next_node = parent.sub_nodes[ir_idx + 1]
+    file.write(f"node after InferenceRule: {type(next_node).__name__}\n")
+    assert isinstance(next_node, Intro), (
+        f"Expected auto-Intro immediately after InferenceRule, "
+        f"got {type(next_node).__name__}")
+    # No spurious Intro appended at the end by Q7.
+    last_node = parent.sub_nodes[-1]
+    file.write(f"last node: {type(last_node).__name__}\n")
+    assert not isinstance(last_node, Intro), (
+        f"Spurious Intro at the end (step {last_node.id})")
+
+
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
     import msgpack as mp
     from IsaREPL import Client

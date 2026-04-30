@@ -46,11 +46,13 @@ proof:
     thought: amend to strong induction (less_induct, 1 case)
     operation: Induction
     target term: n
+    fixing variables:
+      - n: nat
+    assuming premises:
+      - less.IH: ?y < n ⟶ P ?y
     notice:
       - The variable P are not classified as fixed or generalized; fixed is assumed. Change this by calling the `edit` tool with action `amend` and target step `1`
     cases: empty
-    notice:
-      - Since this operation no longer opens a proof block, the following previously held proof steps are discarded: 1.0, 1.Suc
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   P n
