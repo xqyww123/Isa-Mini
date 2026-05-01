@@ -1,0 +1,36 @@
+--------------------------------------------------
+Initial
+--------------------------------------------------
+variables:
+  - n: nat
+  - P: nat ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P n
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Induction with case_variables
+--------------------------------------------------
+variables:
+  - n: nat
+  - P: nat ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P n
+proof:
+  - step id: 1
+    thought: Induction on n with custom variable names
+    operation: Induction
+    target term: n
+    Error: The variable P appear in the induction context but are not classified in the 'variables' argument. You should indicate whether each is 'arbitrary' (generalized during induction) or 'fixed' (held constant).
+    cases:
+      - goal id: 1.0
+        goal: P (0 :: nat)
+        Error: the evaluation is cancelled due to failures in preceding nodes
+        proof: empty
+        Error: Evaluation cancelled due to failures above
+      - goal id: 1.Suc
+        goal: unknown, evaluation pending
+        Error: the evaluation is cancelled due to failures in preceding nodes
+        proof: empty
+        Error: Evaluation cancelled due to failures above
+Suc case_vars: not yet set (status=cancelled)

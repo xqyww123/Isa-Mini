@@ -30,6 +30,7 @@ exception OPR_FAIL of fail_reason * string
 
 type with_clause = (bool (*with or without*) * string (*name*) * thm) list
 type opt_var_names  = string option list option
+type opt_case_and_var_names = (string option * string option list) option
 type opt_prem_names = string option list option
 
 (* options *)
@@ -57,6 +58,7 @@ val INTRO_split_prem_conj_size_limit : int Config.T
 val INTRO_mk_block : bool Config.T
 val auto_deconflict_bound : bool Config.T
 val deconflict_case_fixes : bool Config.T
+val interactive_cases : bool Config.T
 val auto_calculation : bool Config.T
 val induct_auto_insert_facts : bool Config.T
 val consumes_policy : string Config.T
@@ -76,11 +78,15 @@ val conclude : Proof.context -> state -> thm
 val is_finished : state -> bool
 val ready_to_finish : state -> bool
 
+val has_pending_interaction : state -> bool
+val pending_interaction_cases : state -> string list option
+
 (*Thread local*)
 datatype message = New_Items of items
                  | Goals     of term list
                  | Consider_Case of string * items
                  | Newly_Fixed of (string * typ) list (*external_name * raw type*)
+                 | Interaction of exn
                  | Internal of exn
 val set_reporter : (message (*new items*) -> unit) -> unit
 val get_reporter : unit -> (message (*new items*) -> unit)
@@ -164,6 +170,10 @@ val CASE_SPLIT   : bool * (term option list list * thm option)
                 -> operation
 val CASE_SPLIT'' : Token.src * opt_var_names * fact list -> operation
 val CASE_SPLIT_CMD : command
+
+exception WHICH_CASE of string list
+val OPEN_CASE : string -> string list -> operation
+val OPEN_CASE_CMD : command
 
 (* Analysis of an INDUCT / CASE_SPLIT invocation without executing the tactic.
  * Reports the picked rule and the premise shapes the user's `using` facts
@@ -412,6 +422,7 @@ val INTRO_split_prem_conj_size_limit = Config.declare_int ("Minilang.INTRO_split
 val INTRO_mk_block   = Config.declare_bool ("Minilang.INTRO_mk_block", \<^here>) (K false)
 val auto_deconflict_bound = Config.declare_bool ("Minilang.auto_deconflict_bound", \<^here>) (K false)
 val deconflict_case_fixes = Config.declare_bool ("Minilang.deconflict_case_fixes", \<^here>) (K false)
+val interactive_cases = Config.declare_bool ("Minilang.interactive_cases", \<^here>) (K false)
 val auto_calculation = Config.declare_bool ("Minilang.auto_calculation", \<^here>) (K true)
 
 fun chk_working_mode mode =
@@ -485,15 +496,18 @@ type param = exn
 datatype endblk_type = T_END | T_NXT
 datatype frame = HHF   of thm (*a local_facts bundle node, represented as a Hereditary Harrop Formula*)
                         * items
-               | MAGIC of (Proof.context -> thm * items * frame list * param -> Proof.context * frame list)
+               | MAGIC of (param * (unit -> Pretty.T)) option (*interaction: SOME = pause for OPEN_CASE*)
+                        * (Proof.context -> thm * items * frame list * param -> Proof.context * frame list)
                         * (param -> tree -> tree)
                         * param
                | ENDBLK of endblk_type
 
 type opt_var_names  = string option list option
+type opt_case_and_var_names = (string option * string option list) option
 type opt_prem_names = string option list option
 exception NO_PARAM
-exception CASE_NAME of opt_var_names
+exception CASE_NAME of opt_case_and_var_names
+exception WHICH_CASE of string list
 
 (* Emitted when FUN leaves a residual pat-completeness goal on the minilang
    stack for the user to discharge interactively (only reachable via the
@@ -508,7 +522,7 @@ exception TERMINATION_PROOF_OPENED
 exception DROPPED_INSERTION_FACTS of string list
 
 type stack = Proof.context * (frame list)
-  (*invariant: the head must be an HHF*)
+  (*invariant: the head must be an HHF or an interactive MAGIC (SOME _,_,_,_)*)
 
 type state = stack              (*current stack*)
            * stack Symtab.table (*history*)
@@ -516,6 +530,16 @@ type state = stack              (*current stack*)
 
 type operation = state -> state
 type command = operation parser
+
+fun has_pending_interaction ((_, SK), _, _) : bool =
+  case SK of
+    MAGIC (SOME _, _, _, _) :: _ => true
+  | _ => false
+
+fun pending_interaction_cases ((_, SK), _, _) : string list option =
+  case SK of
+    MAGIC (SOME (WHICH_CASE case_names, _), _, _, _) :: _ => SOME case_names
+  | _ => NONE
 
 fun context_of (((ctxt,_), _, _) : state) = ctxt
 fun leading_proof_sequent_of (((_, HHF (seq, _) :: _), _, _) : state) = seq
@@ -679,7 +703,7 @@ fun print_stack [] = SOLVED_TREE
                     val nodes = map (fn goal => PROP (([],[]), goal)) goals
                  in prt (BUNDL (items, t::nodes)) L
                 end
-            | prt t (MAGIC (_, PRT, param) :: L) = prt (PRT param t) L
+            | prt t (MAGIC (_, _, PRT, param) :: L) = prt (PRT param t) L
             | prt t (ENDBLK _ :: L) = prt t L
           fun prt0 (HHF (st, items)) =
               if no_goal' st
@@ -772,6 +796,7 @@ fun stack_top_no_subgoal (_, HHF (st, _) :: _) = no_subgoal' st
   | stack_top_no_subgoal _ = false
 
 fun stack_is_ready_to_finish (_, HHF (st, _) :: _) = Thm.no_prems st
+  | stack_is_ready_to_finish (_, MAGIC (SOME _, _, _, _) :: _) = false
   | stack_is_ready_to_finish _ = raise BROKEN_INVARIANT
 fun ready_to_finish (s as (SK,_,_)) = stack_is_ready_to_finish SK andalso not (is_finished s)
 
@@ -782,6 +807,7 @@ datatype message = New_Items of items
                  | Goals     of term list
                  | Consider_Case of string * items
                  | Newly_Fixed of (string * typ) list (*external_name * raw type*)
+                 | Interaction of param
                  | Internal of exn
 val reporter = Thread_Data.var () : (message -> unit) Thread_Data.var
 val default_reporter = K ()
@@ -794,12 +820,21 @@ fun get_reporter () =
      | SOME r => r
 
 fun report_goal (ctxt, SK) = (
-          (case SK of HHF (st, _) :: _ =>
-             (case try Logic.dest_implies (Thm.prop_of st)
-                of SOME (goal, _) => get_reporter () (Goals [goal])
-                 | NONE => get_reporter () (Goals []))
-              | _ => raise BROKEN_INVARIANT )
+          (case SK of
+             HHF (st, _) :: _ =>
+               (case try Logic.dest_implies (Thm.prop_of st)
+                  of SOME (goal, _) => get_reporter () (Goals [goal])
+                   | NONE => get_reporter () (Goals []))
+           | MAGIC (SOME (question, _), _, _, _) :: _ =>
+               get_reporter () (Interaction question)
+           | _ => raise BROKEN_INVARIANT )
           ; (ctxt, SK) )
+
+fun report_interaction (_, SK) =
+  case SK of
+    MAGIC (SOME (question, _), _, _, _) :: _ =>
+      get_reporter () (Interaction question)
+  | _ => ()
 
 (** Basic Operations **)
 
@@ -1206,11 +1241,15 @@ fun maintain (c,[]) = (c,[])
       then (case L
               of [] => origin
                | (HHF _ :: _) => raise BROKEN_INVARIANT
-                    (* maintain (ctxt, HHF (MP ctxt st1 st, cat_items items items') :: L') *)
-               | (MAGIC (cb,_,param) :: L') =>
+               | (MAGIC (SOME (q, p), cb, prt, param) :: L') =>
+                    (ctxt, MAGIC (SOME (q, p),
+                                  fn c => fn (_, _, sk, par) => cb c (st, items, sk, par),
+                                  prt, param) :: L')
+               | (MAGIC (NONE, cb, _, param) :: L') =>
                     (case cb ctxt (st, items, L', param) of (ctxt', S) => maintain (ctxt', S) )
                | ENDBLK _ :: _ => origin )
       else origin
+  | maintain (origin as (_, MAGIC (SOME _, _, _, _) :: _)) = origin
   | maintain (_, MAGIC _ :: _) = raise BROKEN_INVARIANT
   | maintain (_, ENDBLK _ :: _) = raise BROKEN_INVARIANT
 
@@ -1471,18 +1510,19 @@ fun INTRO'' F mode split_conj_opt bs (origin as (ctxt, HHF (st0, items) :: L)) =
                       | _ => raise BROKEN_INVARIANT
                     end
                fun CB ctxt'' (st'',_,S, CASE_NAME bs) =
-                let val st'3 = singleton (Proof_Context.export ctxt'' ctxt') st''
+                let val var_names = Option.map #2 bs
+                    val st'3 = singleton (Proof_Context.export ctxt'' ctxt') st''
                  in (ctxt, HHF (
                            Subgoal.retrofit ctxt'' ctxt (#params foc) (#asms foc) 1 st'3 st
                         |> Seq.hd
                         |> conclude_goal,
                       ([],[])) :: S)
-                 |> mode = ALL_SUBGOALS ? (#2 o INTRO'' F mode split_conj_opt bs)
+                 |> mode = ALL_SUBGOALS ? (#2 o INTRO'' F mode split_conj_opt var_names)
                 end
                  | CB _ _ = raise BROKEN_INVARIANT
                val result_state = if num_goals_of' st0 > 1
-                                  then (ctxt', HHF (st'', items') :: ENDBLK T_NXT :: MAGIC (CB,PRT,CASE_NAME NONE) :: L)
-                                  else (ctxt', HHF (st'', items') :: MAGIC (CB,PRT,CASE_NAME NONE) :: L)
+                                  then (ctxt', HHF (st'', items') :: ENDBLK T_NXT :: MAGIC (NONE, CB,PRT,CASE_NAME NONE) :: L)
+                                  else (ctxt', HHF (st'', items') :: MAGIC (NONE, CB,PRT,CASE_NAME NONE) :: L)
             in (items', result_state)
            end
       else (empty_items, origin)
@@ -1538,6 +1578,7 @@ fun TRANSPARENT_INTRO' (origin as (ctxt, HHF (st, _) :: _)) =
          has_prems_universal_vars (fst (Logic.dest_implies (Thm.prop_of st)))
       then #2 (INTRO' SINGLE_GOAL NONE NONE NONE NONE origin)
       else origin
+  | TRANSPARENT_INTRO' (origin as (_, MAGIC (SOME _, _, _, _) :: _)) = origin
   | TRANSPARENT_INTRO' _ = raise BROKEN_INVARIANT
 
 
@@ -2302,13 +2343,28 @@ fun CASES' diff ADDITIONAL_NOTES safe_names smart_rename tac first_vars (SK as (
                   |> not initial ? ( powerful_MP ctxt rule
                                   #> not (null cases) ? conclude_goal )
                  end
+
          in case cases
          of [] =>
             (ctxt, HHF (rule', items0) :: SK)
-          | ((name, kase) :: remaining_cases) =>
-        let val opt_case_name = case param of CASE_NAME param => param
-                                            | NO_PARAM => NONE
-                                            | _ => raise BROKEN_INVARIANT
+          | _ =>
+        let val (selected_case_name, opt_case_name) =
+                  case param of
+                    CASE_NAME (SOME (cn, vn)) => (cn, if null vn then NONE else SOME vn)
+                  | CASE_NAME NONE => (NONE, NONE)
+                  | NO_PARAM => (NONE, NONE)
+                  | _ => raise BROKEN_INVARIANT
+            val ((name, kase), remaining_cases) =
+                  case selected_case_name of
+                    NONE => (hd cases, tl cases)
+                  | SOME cn =>
+                      (case List.partition (fn (n,_) => n = cn) cases of
+                         ([(n,k)], rest) => ((n,k), rest)
+                       | ([], _) => raise OPR_FAIL (INVALID_OPR,
+                           "Case '" ^ cn ^ "' not found among: " ^
+                           String.concatWith ", " (map #1 cases))
+                       | _ => raise OPR_FAIL (INVALID_OPR,
+                           "Ambiguous case name '" ^ cn ^ "'"))
             (* val name = if Char.isAlpha (String.sub (name, 0)) then name
                        else "case_" ^ name *)
             val kase = case kase
@@ -2362,7 +2418,6 @@ fun CASES' diff ADDITIONAL_NOTES safe_names smart_rename tac first_vars (SK as (
             val Rule_Cases.Case {fixes, cases, binds, ...} = kase
             val _ = if null cases then () else error "XQY: Unsupported! #1"
 
-            
             val (asms, ctxt) = Proof_Context.apply_case kase ctxt
 
             val goalx =
@@ -2417,21 +2472,38 @@ fun CASES' diff ADDITIONAL_NOTES safe_names smart_rename tac first_vars (SK as (
                             of [_] => cat_tree T (print_stack [HHF (st00, items00)])
                              | _ => cat_tree (BUNDL (empty_items, T :: tl siblings))
                                              (print_stack [HHF (st00, items00)])
+            val next_interaction =
+              if Config.get ctxt interactive_cases andalso not (null remaining_cases)
+              then SOME (WHICH_CASE (map #1 remaining_cases),
+                         fn () => Pretty.str "Select next case and binding variables")
+              else NONE
          in report (New_Items items')
           ; report (Consider_Case (Binding.name_of binding, items'))
           ; if null remaining_cases
          then (ctxt, ( HHF (goalx, items')
-                 :: MAGIC (CB false rule' remaining_cases (tl siblings), PRT, NO_PARAM)
+                 :: MAGIC (NONE, CB false rule' remaining_cases (tl siblings), PRT, NO_PARAM)
                  :: SK))
          else (ctxt, ( HHF (goalx, items')
                  :: ENDBLK T_NXT
-                 :: MAGIC (CB false rule' remaining_cases (tl siblings), PRT, NO_PARAM)
+                 :: MAGIC (next_interaction, CB false rule' remaining_cases (tl siblings), PRT, NO_PARAM)
                  :: SK))
         end )
         end
         end
-    in CB true rule cases siblings
-          ctxt (Drule.dummy_thm, ([],[]), REMAIN_SK, CASE_NAME first_vars)
+    in if Config.get ctxt0 interactive_cases andalso not (null cases)
+       then let val case_names = map #1 cases
+                val interaction = SOME (WHICH_CASE case_names,
+                                        fn () => Pretty.str "Select a case and binding variables")
+                fun PRT_init _ T = cat_tree T (print_stack [HHF (st00, items00)])
+             in get_reporter () (Interaction (WHICH_CASE case_names))
+              ; maintain (ctxt, MAGIC (interaction,
+                                       CB true rule cases siblings,
+                                       PRT_init,
+                                       CASE_NAME NONE) :: REMAIN_SK)
+            end
+       else CB true rule cases siblings
+              ctxt (Drule.dummy_thm, ([],[]), REMAIN_SK,
+                    CASE_NAME (Option.map (pair NONE) first_vars))
    end
      | _ => raise BROKEN_INVARIANT)
   | CASES' _ _ _ _ _ _ _ = raise BROKEN_INVARIANT
@@ -3143,7 +3215,7 @@ fun HAVE'' _ _ _ (ctxt, []) = (ctxt, [])
              in AP (ctxt,name,items,G,S,lem)
             end
           fun PRT _ t = BUNDL (items, [t, print_stack [HHF (G,([],[]))]])
-       in (ctxt, HHF (goal, ([],[])) :: ENDBLK T_END :: MAGIC (CB, PRT, NO_PARAM) :: S)
+       in (ctxt, HHF (goal, ([],[])) :: ENDBLK T_END :: MAGIC (NONE, CB, PRT, NO_PARAM) :: S)
       end
   | HAVE'' _ _ _ _ = raise BROKEN_INVARIANT
 
@@ -3209,7 +3281,7 @@ fun gen_HAVE' mkG shows (ctxt0, HHF (st,items) :: S) =
           val items' = ([], fakes |> map (apsnd (map Thm.prop_of)) |> flatten_facts)
 
           fun PRT _ t = BUNDL (items, [BLOCK t, print_stack [HHF (st, items')]])
-       in (ctxt01, HHF (goal, ([],[])) :: ENDBLK T_END :: MAGIC (CB, PRT, NO_PARAM) :: S)
+       in (ctxt01, HHF (goal, ([],[])) :: ENDBLK T_END :: MAGIC (NONE, CB, PRT, NO_PARAM) :: S)
       end
   | gen_HAVE' _ _ _ = raise BROKEN_INVARIANT
 
@@ -3358,7 +3430,7 @@ fun SUFFICES' prep_prop raw_prop (ctxt0, HHF (st0, items0) :: S) =
 
   in (ctxt_setup, HHF (impl_goal, ([],[]))
           :: ENDBLK T_END
-          :: MAGIC (CB, PRT, NO_PARAM)
+          :: MAGIC (NONE, CB, PRT, NO_PARAM)
           :: S)
   end
   | SUFFICES' _ _ _ = raise BROKEN_INVARIANT
@@ -3688,7 +3760,7 @@ fun CONSIDER'i raw_dnf (ctxt0, HHF (st0, items0) :: S) =
                           :: (case remain_clauses
                                 of [] => S
                                  |  _ =>    ENDBLK T_NXT
-                                         :: MAGIC (CB false (tl sgs) remain_clauses,
+                                         :: MAGIC (NONE, CB false (tl sgs) remain_clauses,
                                                    PRT0 (tl sgs),
                                                    NO_PARAM)
                                          :: S))
@@ -3697,7 +3769,7 @@ fun CONSIDER'i raw_dnf (ctxt0, HHF (st0, items0) :: S) =
    in (ctxt_rule,
           HHF (goal,([],[]))
        :: ENDBLK (case conj_clauses of [_] => T_END | _ => T_NXT)
-       :: MAGIC (CB true subgoals conj_clauses, PRT0 subgoals, NO_PARAM) :: S)
+       :: MAGIC (NONE, CB true subgoals conj_clauses, PRT0 subgoals, NO_PARAM) :: S)
   end
   | CONSIDER'i _ _ = raise BROKEN_INVARIANT
 
@@ -3971,9 +4043,13 @@ fun gen_NXT' param (F : stack -> stack) on_end stack =
       of HHF s :: ENDBLK T_NXT :: SK' =>
           ( get_reporter () (Internal (REPLACE_CMD ("NEXT", "NEXT")))
           ; case SK' of
-              MAGIC (CB, PRT, _) :: SK'' =>
-                maintain (ctxt, HHF s :: MAGIC (CB, PRT, param) :: SK'')
-                  |> report_goal
+              MAGIC (interaction, CB, PRT, _) :: SK'' =>
+                let val interaction' =
+                      case (interaction, param) of
+                        (SOME (WHICH_CASE _, _), CASE_NAME (SOME _)) => NONE
+                      | _ => interaction
+                    val result = maintain (ctxt, HHF s :: MAGIC (interaction', CB, PRT, param) :: SK'')
+                 in report_interaction result; report_goal result end
             | _ => maintain (ctxt, HHF s :: SK') |> report_goal )
        | HHF _ :: ENDBLK T_END :: _ => on_end ()
        | _ => raise BROKEN_INVARIANT
@@ -4022,9 +4098,13 @@ fun gen_END_or_NXT' param F stack =
           let val opr = case T' of T_NXT => "NEXT" | T_END => "END"
            in get_reporter () (Internal (REPLACE_CMD (opr, opr)))
             ; case (T', SK')
-                of (T_NXT, MAGIC (CB, PRT, _) :: SK'') =>
-                        maintain (ctxt, HHF s :: MAGIC (CB, PRT, param) :: SK'')
-                     |> report_goal
+                of (T_NXT, MAGIC (interaction, CB, PRT, _) :: SK'') =>
+                        let val interaction' =
+                              case (interaction, param) of
+                                (SOME (WHICH_CASE _, _), CASE_NAME (SOME _)) => NONE
+                              | _ => interaction
+                            val result = maintain (ctxt, HHF s :: MAGIC (interaction', CB, PRT, param) :: SK'')
+                         in report_interaction result; report_goal result end
                  | _ => maintain (ctxt, HHF s :: SK')
                      |> report_goal
           end
@@ -4039,8 +4119,8 @@ fun END_or_NXT' param SH_override ID stack =
   end
 
 fun END SH_override = OPR_ID (END' NO_PARAM SH_override)
-fun NXT param SH_override = OPR_ID (NXT' (CASE_NAME param) SH_override)
-fun END_or_NXT param SH_override = OPR_ID (END_or_NXT' (CASE_NAME param) SH_override)
+fun NXT param SH_override = OPR_ID (NXT' (CASE_NAME (Option.map (pair NONE) param)) SH_override)
+fun END_or_NXT param SH_override = OPR_ID (END_or_NXT' (CASE_NAME (Option.map (pair NONE) param)) SH_override)
 val END_CMD  = orverride_parser >> END
 val NXT_CMD  = (fn toks => (OPT_VARS -- orverride_parser >> uncurry NXT ) toks)
 
@@ -4061,7 +4141,7 @@ fun SORRY_i (ctxt, HHF (s,facts) :: S) =
   | SORRY_i _ = raise BROKEN_INVARIANT
 
 fun END_or_NXT'_by_SORRY param = gen_END_or_NXT' param SORRY_i
-fun END_or_NXT_by_SORRY param = OPR (END_or_NXT'_by_SORRY (CASE_NAME param))
+fun END_or_NXT_by_SORRY param = OPR (END_or_NXT'_by_SORRY (CASE_NAME (Option.map (pair NONE) param)))
 val END_or_NXT_by_SORRY_CMD = OPT_VARS >> (fn x => END_or_NXT_by_SORRY x)
 
 (* Explicit sorry variants: SORRY_NEXT advances to the next subgoal
@@ -4073,7 +4153,7 @@ fun SORRY_NEXT (param : opt_var_names) : operation =
         raise OPR_FAIL (INVALID_OPR,
           "SORRY_NEXT closed the last goal of an END block. " ^
           "Use SORRY_END_ALL to close the entire block.")
-  in OPR (gen_NXT' (CASE_NAME param) SORRY_i on_end) end
+  in OPR (gen_NXT' (CASE_NAME (Option.map (pair NONE) param)) SORRY_i on_end) end
 val SORRY_NEXT_CMD : command = OPT_VARS >> SORRY_NEXT
 
 fun SORRY_END_ALL (_ : opt_var_names) : operation =
@@ -4084,6 +4164,28 @@ val SORRY_END_ALL_CMD : command = OPT_VARS >> SORRY_END_ALL
    Analogous to HAMMER but using cheat_tac instead of a prover. *)
 val SORRY_ONLY : operation = OPR SORRY_i
 val SORRY_ONLY_CMD : command = Scan.succeed SORRY_ONLY
+
+(** OPEN_CASE **)
+
+fun OPEN_CASE' case_name var_names ((ctxt, SK), his, ID) =
+  let val new_param = CASE_NAME (SOME (
+        if case_name = "" then NONE else SOME case_name,
+        map (fn "_" => NONE | v => SOME v) var_names))
+  in (case SK of
+      MAGIC (SOME _, CB, _, _) :: L =>
+        CB ctxt (Drule.dummy_thm, empty_items, L, new_param)
+        |> maintain
+    | _ => raise OPR_FAIL (INVALID_OPR, "No pending case interaction"))
+    |> report_goal
+    |> (fn SK' => (SK', his, ID + 1))
+  end
+
+fun OPEN_CASE case_name var_names (s : state) : state =
+  OPEN_CASE' case_name var_names s
+
+val OPEN_CASE_CMD : command =
+  Parse.name -- Scan.repeat Parse.name
+  >> (fn (case_name, var_names) => OPEN_CASE case_name var_names)
 
 (** LET **)
 
@@ -4410,7 +4512,7 @@ fun OPEN_MODULE' interp expr (lthy, HHF (st, items) :: SK) =
    in (ctxtp,
        HHF (#goal (Proof.raw_goal ps), empty_items)
        :: ENDBLK T_END
-       :: MAGIC (CB, PRT, NO_PARAM)
+       :: MAGIC (NONE, CB, PRT, NO_PARAM)
        :: SK)
    |> report_goal
   end
@@ -4832,7 +4934,7 @@ fun run_phase_2 outer_ctxt lthy2 {term_goal, term_afterqed}
            (lthy_for_user,
             HHF (init_st, empty_items)
             :: ENDBLK T_END
-            :: MAGIC (term_cb, term_prt, NO_PARAM)
+            :: MAGIC (NONE, term_cb, term_prt, NO_PARAM)
             :: SK)
          end)
 
@@ -5027,7 +5129,7 @@ fun FUN_by_fun_ext fixes specs config metric_strs open_on_fail
         (lthy_for_user,
          HHF (pat_state_for_stack, empty_items)
          :: ENDBLK T_END
-         :: MAGIC (pat_cb, pat_prt, NO_PARAM)
+         :: MAGIC (NONE, pat_cb, pat_prt, NO_PARAM)
          :: SK)
       end
   end
@@ -5170,7 +5272,8 @@ val CMDS = Symtab.make [
       ("SORRY" ,  END_or_NXT_by_SORRY_CMD),
       ("SORRY_NEXT",    SORRY_NEXT_CMD),
       ("SORRY_END_ALL", SORRY_END_ALL_CMD),
-      ("SORRY_ONLY",    SORRY_ONLY_CMD)
+      ("SORRY_ONLY",    SORRY_ONLY_CMD),
+      ("OPEN_CASE",     OPEN_CASE_CMD)
     ]
 
 val keywords = let open Keyword
@@ -5245,7 +5348,8 @@ val keywords = let open Keyword
            (("FUN_DEBUG", \<^here>), command_spec (prf_decl, [])),
            (("CONFIG",\<^here>), command_spec (prf_decl, [])),
            (("STEP",  \<^here>), command_spec (prf_decl, [])),
-           (("CHAINING", \<^here>), command_spec (prf_decl, []))
+           (("CHAINING", \<^here>), command_spec (prf_decl, [])),
+           (("OPEN_CASE", \<^here>), command_spec (prf_goal, []))
          ]
      end
 

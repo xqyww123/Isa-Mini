@@ -170,6 +170,7 @@ val unpacker =
                         unpackList unpackString
                      )
      | "SKIP"     => apfst (K SKIP) o unpackUnit
+     | "OPEN_CASE" => apfst OPEN_CASE o unpackPair (unpackString, unpackList unpackString)
      | cmd => error("Unknown operation " ^ cmd)
   ) #> apfst snd
 
@@ -243,6 +244,8 @@ fun packer (SIMPLIFY data) =
                             packList packString))
         ("DEFINE", data)
   | packer SKIP = packPair (packString, packUnit) ("SKIP", ())
+  | packer (OPEN_CASE (cn, vn)) =
+      packPair (packString, packPair (packString, packList packString)) ("OPEN_CASE", (cn, vn))
 (* | packer (ROLLBACK data) = packPair (packString, packInt) ("ROLLBACK", data) *)
 
 end

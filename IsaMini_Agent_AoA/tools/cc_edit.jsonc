@@ -262,6 +262,11 @@
             "additionalProperties": false,
             "properties": {
               "case_name": { "type": "string" },
+              "case_variables": {
+                "description": "names for the variables bound by this case. Omit to use default names",
+                "type": "array",
+                "items": { "type": "string" }
+              },
               "body": {
                 "type": "array",
                 "items": { "$ref": "#/$defs/Operation" }
@@ -322,6 +327,11 @@
             "additionalProperties": false,
             "properties": {
               "case_name": { "type": "string" },
+              "case_variables": {
+                "description": "names for the variables bound by this case. Omit to use default names",
+                "type": "array",
+                "items": { "type": "string" }
+              },
               "body": {
                 "type": "array",
                 "items": { "$ref": "#/$defs/Operation" }

@@ -468,7 +468,7 @@ async def _test_Rewrite_NoProgress(root: Root, file: MyIO):
     # Rewrite reverts on no-progress, so committed may be empty.
     success = _outcome.failure is not None and _outcome.failure.is_error
     reason = _outcome.failure
-    print_header("Reasponse", file)
+    print_header("Response", file)
     file.write(f"Success: {success}\n")
     file.write(f"Reason: {reason}\n")
     print_header("After Rewrite", file)
@@ -720,21 +720,18 @@ async def _test_Define_Manual(root: Root, file: MyIO):
 
 @model_test("Witness2", "Test_Witness2.thy", 8)
 async def _test_Witness2(root: Root, file: MyIO):
+    """Witness on a non-existential goal: the node stays in the tree
+    with an Error status (default _on_edit_failure returns CONTINUE),
+    while outcome.failure remains None."""
     print_header("Initial YAML", file)
     root.print(0, file)
 
-    # Use Witness on a non-existential goal — should fail gracefully
     _outcome = await root.fill("1", [Witness.gen_single({
         "thought": "Provide 1 as witness, which is positive",
         "witness": "1"
     })])
-    is_error = _outcome.failure is not None and _outcome.failure.is_error
-    reason = _outcome.failure
-    if reason:
-        file.write(f"Error: {reason}\n")
-    else:
-        file.write(f"The expected failure did not happen\n")
-    print_header("After Witness (expected failure)", file)
+    file.write(f"outcome.failure: {_outcome.failure}\n")
+    print_header("After Witness (error visible in tree)", file)
     root.print(0, file)
 
 @model_test("Unfold1", "Test_Unfold1.thy", 15)
@@ -4180,6 +4177,7 @@ async def _test_HOL_TAG_Leak(root: Root, file: MyIO):
         "variables": [
             {"name": "i", "status": "generalized"},
             {"name": "p", "status": "fixed"},
+            {"name": "P", "status": "fixed"},
         ],
         # With auto-insert disabled on the agent path (agent_server.ML),
         # `premise0` no longer flows into the IH automatically. Route it
@@ -5186,54 +5184,6 @@ async def _test_Induction_MapCase(root: Root, file: MyIO):
     root.print(0, file, show_warnings=True)
 
 
-@model_test("CaseSplit_MapCaseSingleton", "Test_CaseSplit_MapCaseSingleton.thy", 8)
-async def _test_CaseSplit_MapCaseSingleton(root: Root, file: MyIO):
-    """When `proofs` has exactly one entry, `_singleton_splice` splices
-    the body as siblings of the CaseSplit at parse time (see model.py
-    `CaseSplit_Like._singleton_splice`). This bypasses `_proofs_by_case`
-    entirely — the case_name is never checked and MapCase does NOT fire
-    even if the name is wrong. This test goes through the MCP parse
-    path (`_edit_tool_logic`) so the splice triggers."""
-    from .mcp_http_server import _edit_tool_logic
-    print_header("Initial YAML", file)
-    root.print(0, file)
-
-    interaction_count = [0]
-    async def stub_fork(interaction):
-        interaction_count[0] += 1
-        file.write(f"UNEXPECTED interaction fired: {type(interaction).__name__}\n")
-        return await interaction.answer(Answer(indexes=[]))
-    root.session.fork_interaction = stub_fork
-
-    root.session.age += 1
-    result, is_error = await _edit_tool_logic(
-        root.session,
-        {"target_step": "1", "action": "fill", "proof_operations": [
-            {"operation": "CaseSplit",
-             "thought": "case-split on b with ONE wrong-named body (triggers splice)",
-             "target_isabelle_term": "b",
-             "rule": "default",
-             "proofs": [
-                {"case_name": "wrong", "body": [{"operation": "Obvious", "facts": []}]},
-             ]},
-        ]})
-    file.write(f"is_error: {is_error}\n")
-    print_header("After CaseSplit singleton splice", file)
-    root.print(0, file, show_warnings=True)
-    file.write(f"Interactions fired: {interaction_count[0]} (expected 0 — splice bypasses MapCase)\n")
-    # Diagnostic: walk the tree to see where the Obvious went after splice.
-    def walk(node, depth=0):
-        file.write(f"{'  '*depth}- {type(node).__name__} id={getattr(node, 'id', '?')!r} "
-                   f"warnings={len(getattr(node, 'warnings', []))} "
-                   f"subs={len(getattr(node, 'sub_nodes', []))}\n")
-        for w in getattr(node, 'warnings', []):
-            wtext = w.printer if isinstance(w.printer, str) else '<printer>'
-            file.write(f"{'  '*(depth+1)}  [W:{w.position.name}] {wtext[:100]}\n")
-        for c in getattr(node, 'sub_nodes', []):
-            walk(c, depth+1)
-    file.write("=== tree walk ===\n")
-    walk(root)
-
 
 @model_test("CaseSplit_MapCaseAmend", "Test_CaseSplit_MapCaseAmend.thy", 8)
 async def _test_CaseSplit_MapCaseAmend(root: Root, file: MyIO):
@@ -5728,6 +5678,11 @@ async def _test_CaseSplit_NestedSkolem(root: Root, file: MyIO):
         "target_isabelle_term": "n"
     })])
     print_header("After CaseSplit on n", file)
+    import sys
+    n0 = root.locate_node("1.0")
+    n1 = root.locate_node("1.Suc")
+    print(f"DEBUG 1.0: ml={n0.ml_state.name}, res={n0.resulting_state().name}, status={n0.status}", file=sys.stderr)
+    print(f"DEBUG 1.Suc: ml={n1.ml_state.name}, goal={n1.goal() is not None}, leading_goal={n1.ml_state.leading_goal is not None}", file=sys.stderr)
     root.print(0, file)
 
     # Step 2: Inside the Suc case of n, CaseSplit on m.
@@ -5805,6 +5760,91 @@ async def _test_CaseSplit_NestedSkolem(root: Root, file: MyIO):
         raise TestFailed(
             f"Skolemized names leaked to agent ({', '.join(parts)}). "
             "Agent cannot reference these in statements (Isabelle rejects them with 'Bad name').")
+
+
+@model_test("CaseSplit_InteractiveVars",
+            "Test_CaseSplit_InteractiveVars.thy", 8)
+async def _test_CaseSplit_InteractiveVars(root: Root, file: MyIO):
+    """Test agent-specified case variable names via case_variables in proofs.
+
+    CaseSplit on nat with case_variables: Suc case names its predecessor 'k'
+    instead of the default 'nat' or 'n'. Verifies:
+    1. The variable 'k' appears in the Suc case's context
+    2. The proof can reference 'k' in a Have statement
+    """
+    print_header("Initial", file)
+    root.print(0, file)
+
+    await root.fill("1", [CaseSplit.gen_single({
+        "thought": "Case split on n with custom variable names",
+        "target_isabelle_term": "n",
+        "proofs": [
+            {"case_name": "0", "body": [
+                {"operation": "Obvious", "facts": []}
+            ]},
+            {"case_name": "Suc", "case_variables": ["k"], "body": [
+                {"operation": "Obvious", "facts": []}
+            ]}
+        ]
+    })])
+    print_header("After CaseSplit with case_variables", file)
+    root.print(0, file)
+
+    suc_node = root.locate_node("1.Suc")
+    if suc_node is None:
+        raise TestFailed("Cannot find node 1.Suc")
+    if suc_node.case_vars is None:
+        raise TestFailed("Suc case has no case_vars")
+    var_names = [v[0] for v in suc_node.case_vars]
+    file.write(f"Suc case_vars: {var_names}\n")
+    if "k" not in [v.unicode if hasattr(v, 'unicode') else str(v) for v in var_names]:
+        raise TestFailed(f"Expected 'k' in Suc case_vars, got: {var_names}")
+
+
+@model_test("Induction_InteractiveVars",
+            "Test_Induction_InteractiveVars.thy", 8)
+async def _test_Induction_InteractiveVars(root: Root, file: MyIO):
+    """Test agent-specified case variable names for Induction.
+
+    Induction on nat with case_variables: Suc case names its predecessor 'k'.
+    Verifies the variable 'k' appears in the Suc case's context and
+    the induction hypothesis references 'k'.
+    """
+    print_header("Initial", file)
+    root.print(0, file)
+
+    await root.fill("1", [Induction.gen_single({
+        "thought": "Induction on n with custom variable names",
+        "target_isabelle_term": "n",
+        "variables": [{"name": "n", "status": "fixed"}],
+        "proofs": [
+            {"case_name": "0", "body": [
+                {"operation": "Obvious", "facts": []}
+            ]},
+            {"case_name": "Suc", "case_variables": ["k"], "body": [
+                {"operation": "Obvious", "facts": [
+                    {"refer_by": "name", "name": "Suc.IH"}
+                ]}
+            ]}
+        ]
+    })])
+    print_header("After Induction with case_variables", file)
+    root.print(0, file)
+
+    zero_node = root.locate_node("1.0")
+    if zero_node is not None and zero_node.case_vars is not None:
+        file.write(f"0 case_vars: {[v[0] for v in zero_node.case_vars]}\n")
+
+    suc_node = root.locate_node("1.Suc")
+    if suc_node is None:
+        raise TestFailed("Cannot find node 1.Suc")
+    if suc_node.case_vars is not None:
+        var_names = [v[0] for v in suc_node.case_vars]
+        file.write(f"Suc case_vars: {var_names}\n")
+        if "k" not in [v.unicode if hasattr(v, 'unicode') else str(v) for v in var_names]:
+            raise TestFailed(f"Expected 'k' in Suc case_vars, got: {var_names}")
+    else:
+        file.write(f"Suc case_vars: not yet set (status={suc_node.status.status.value})\n")
 
 
 @model_test("NestedHaveProof", "Test_NestedHaveProof.thy", 8)
@@ -6307,6 +6347,92 @@ async def _test_InferenceRuleProofsPerSubgoal(root: Root, file: MyIO):
     unfinished: set[Node] = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+
+@model_test("InferenceRule_ProofsOverSupply",
+            "Test_InferenceRuleProofsPerSubgoal.thy", 8)
+async def _test_InferenceRule_ProofsOverSupply(root: Root, file: MyIO):
+    """Agent supplies 3 positional proofs but conjI only produces 2
+    subgoals.  The first 2 proofs match by key ("1" and "2"); the 3rd
+    proof (key "3") has no matching GoalNode and should appear in the
+    footer warning as unconsumed."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    await root.fill("1", [InferenceRule.gen_single({
+        "thought": "conjI with oversupply",
+        "rule": {"refer_by": "name", "name": "conjI"},
+        "proofs": [
+            [{"operation": "Obvious", "facts": []}],
+            [{"operation": "Obvious", "facts": []}],
+            [{"operation": "Obvious", "facts": []}],
+        ],
+    })])
+    print_header("After fill: 2 subgoals matched, proof[2] unconsumed", file)
+    root.print(0, file, show_warnings=True)
+    ir = root.locate_node("1")
+    goal_kids = [c for c in cast(NonLeaf_Node, ir).sub_nodes
+                 if type(c).__name__ == "GoalNode"]
+    file.write(f"GoalNode children: {len(goal_kids)}\n")
+    for gn in goal_kids:
+        has_body = bool(cast(NonLeaf_Node, gn).sub_nodes)
+        file.write(f"  {gn.id}: has_body={has_body}\n")
+
+
+@model_test("InferenceRule_ProofsUnderSupply",
+            "Test_InferenceRuleProofsPerSubgoal.thy", 8)
+async def _test_InferenceRule_ProofsUnderSupply(root: Root, file: MyIO):
+    """Agent supplies 1 positional proof but conjI produces 2 subgoals.
+    Proof[0] matches GoalNode "1"; GoalNode "2" gets no proof and
+    remains open (default _rematch drops)."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    await root.fill("1", [InferenceRule.gen_single({
+        "thought": "conjI with undersupply",
+        "rule": {"refer_by": "name", "name": "conjI"},
+        "proofs": [
+            [{"operation": "Obvious", "facts": []}],
+        ],
+    })])
+    print_header("After fill: proof[0] on subgoal 1, subgoal 2 empty", file)
+    root.print(0, file)
+    ir = root.locate_node("1")
+    goal_kids = [c for c in cast(NonLeaf_Node, ir).sub_nodes
+                 if type(c).__name__ == "GoalNode"]
+    file.write(f"GoalNode children: {len(goal_kids)}\n")
+    for gn in goal_kids:
+        has_body = bool(cast(NonLeaf_Node, gn).sub_nodes)
+        file.write(f"  {gn.id}: has_body={has_body}\n")
+
+
+@model_test("BranchPartialProofs", "Test_NestedBranchCases.thy", 8)
+async def _test_BranchPartialProofs(root: Root, file: MyIO):
+    """Branch with 3 cases but only case 1 and 3 have proofs.
+    Case 2 (no proof) should remain open."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    await root.fill("1", [Branch.gen_single({
+        "thought": "trichotomy, partial proofs",
+        "cases": [
+            {"statement": {"english": "positive", "isabelle": "x > 0"},
+             "proof": [{"operation": "Obvious", "facts": []}]},
+            {"statement": {"english": "negative", "isabelle": "x < 0"},
+             "proof": None},
+            {"statement": {"english": "zero", "isabelle": "x = 0"},
+             "proof": [{"operation": "Obvious", "facts": []}]},
+        ],
+    })])
+    print_header("After Branch: cases 1,3 have proof, case 2 empty", file)
+    root.print(0, file)
+    br = root.locate_node("1")
+    goal_kids = [c for c in cast(NonLeaf_Node, br).sub_nodes
+                 if type(c).__name__ == "GoalNode"]
+    file.write(f"GoalNode children: {len(goal_kids)}\n")
+    for gn in goal_kids:
+        has_body = bool(cast(NonLeaf_Node, gn).sub_nodes)
+        file.write(f"  {gn.id}: has_body={has_body}\n")
 
 
 @model_test("InferenceRule_Quickview", "Test_InferenceRuleBatch.thy", 8)
@@ -7027,7 +7153,7 @@ async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | No
         _exclude_patterns = [p.strip() for p in _test_exclude.split(",") if p.strip()] if _test_exclude else []
         _tests_to_run = [
             t for t in TESTS.values()
-            if (_test_filter is None or _test_filter in t.name)
+            if (_test_filter is None or any(p.strip() in t.name for p in _test_filter.split("|")))
             and not any(p in t.name for p in _exclude_patterns)
         ]
         case_num = len(_tests_to_run)

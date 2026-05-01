@@ -32,6 +32,10 @@ proof:
       - ccontr: (¬ ?P ⟶ False) ⟶ ?P
     derived goal:
       a ≠ a ⟶ False
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+  - step id: 2
+    operation: Intro
+    assuming premises:
+      - premise0: a ≠ a
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
-  a ≠ a ⟶ False
+  False

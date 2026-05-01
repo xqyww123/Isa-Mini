@@ -35,10 +35,10 @@ proof:
     target term: i
     facts to generalize: premise0
     fixing variables:
-      - n: nat
+      - i: nat
     assuming premises:
-      - premise0: n ≤ p
-      - 1.IH: ∀m<n. m ≤ p ⟶ P m
+      - premise0: i ≤ p
+      - 1.IH: ∀m<i. m ≤ p ⟶ P m
     Error: The variable P appear in the induction context but are not classified in the 'variables' argument. You should indicate whether each is 'arbitrary' (generalized during induction) or 'fixed' (held constant).
     cases: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.

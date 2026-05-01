@@ -59,6 +59,7 @@ datatype ('term, 'thm, 'fact) command =
               * string option (*type expression, NONE = let Isabelle infer*)
               * string list (*equation clauses*)
               * string list (*BY_METRIC measures, [] = none*)
+  | OPEN_CASE of string (*case_name*) * string list (*var_names*)
   | SKIP
 
 type xcmd = (string, string, string) command
@@ -206,6 +207,7 @@ datatype ('term, 'thm, 'fact) command =
               * string option (*type expression, NONE = let Isabelle infer*)
               * string list (*equation clauses*)
               * string list (*BY_METRIC measures, [] = none*)
+  | OPEN_CASE of string (*case_name*) * string list (*var_names*)
   | SKIP
 
 type xcmd = (string, string, string) command
@@ -612,9 +614,8 @@ fun compute_bindings (s:Minilang.state)
 
 (* Check if the leading proof goal needs INTRO (i.e., has quantified variables or premises) *)
 fun check_need_intro consider_conj (s:Minilang.state) : bool =
-  let val st = Minilang.leading_proof_sequent_of s
-   in Minilang.need_intro consider_conj st
-  end
+  if Minilang.has_pending_interaction s then false
+  else Minilang.need_intro consider_conj (Minilang.leading_proof_sequent_of s)
 
 fun AUTO_SIMPLIFY
     (counters: counters)
@@ -943,7 +944,12 @@ val auto_apply_attrib : attribute =
     end)
 
 fun interpret_i (config as (cfg, budget, counters)) cmd s =
-  case cmd of
+  let val _ = case cmd of OPEN_CASE _ => () | SKIP => ()
+        | _ => if Minilang.has_pending_interaction s
+               then raise Minilang.OPR_FAIL (Minilang.INVALID_OPR,
+                      "A case interaction is pending. Use OPEN_CASE to select a case.")
+               else ()
+  in case cmd of
       SIMPLIFY (simp_facts_with_targets, use_system_simps, premise_names, simplify_goal, user_bindings_opt) =>
         let val ctxt = Minilang.context_of s
             val counter = mk_counter ()
@@ -1146,7 +1152,10 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
           val _ = Minilang.get_reporter ()
                     (Minilang.Internal (DEFINE_RESULT (name, ty_str)))
         in s' end
+    | OPEN_CASE (case_name, var_names) =>
+        Minilang.OPEN_CASE case_name var_names s
     | SKIP => s
+  end
 
 local
 val keywords = Thy_Header.get_keywords @{theory Pure}
@@ -1300,6 +1309,7 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
       in CHAINING (name_opt, map (check_extended_fact ctxt) facts) end
   | check_command_i _ (DEFINE d) = DEFINE d
     (* strings passthrough — Minilang.FUN'' parses them internally *)
+  | check_command_i _ (OPEN_CASE oc) = OPEN_CASE oc
   | check_command_i _ SKIP = SKIP
 
 fun check_command s x = check_command_i s x

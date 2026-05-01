@@ -8,9 +8,9 @@ You can write global declarations by calling command `edit` with action `fill` a
 goal: P = Q
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
-The expected failure did not happen
+outcome.failure: None
 --------------------------------------------------
-After Witness (expected failure)
+After Witness (error visible in tree)
 --------------------------------------------------
 variables:
   - Q: bool

@@ -174,6 +174,12 @@ fun minilang_message_packer ctxt =
         | pack (Minilang.Newly_Fixed vars) =
             packPair (packInt, packList (packPair (packString, packString)))
                      (6, map (apsnd string_of_type) vars)
+        | pack (Minilang.Interaction question) =
+            (case question of
+               Minilang.WHICH_CASE case_names =>
+                 packPair (packInt, packPair (packString, packList packString))
+                          (13, ("WHICH_CASE", case_names))
+             | _ => packPair (packInt, packUnit) (13, ()))
         | pack (Minilang.Internal exn) =
             (case exn of
                MiniLang_Agent.INTRO_BINDINGS {missing, auto_introduced, final} =>
@@ -291,6 +297,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
             |> Config.put Minilang.transparent_intro false
             |> Config.put Minilang.auto_deconflict_bound true
             |> Config.put Minilang.deconflict_case_fixes true
+            |> Config.put Minilang.interactive_cases true
             |> Config.put Minilang.high_auto_mode true
             |> Config.put Minilang.auto_calculation false
             |> Config.put Printer.show_markup false
@@ -309,7 +316,6 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
              * mistakes. The ML-level mechanism in library/proof.ML
              * stays intact for non-agent callers. *)
             |> Config.put Minilang.induct_auto_insert_facts false
-            |> Config.put Phi_Sledgehammer_Solver.try_parallel_smt_cvc5 true
 
       val global_context = global_context_of (ctxt, sequent)
       val s0 = Minilang.INIT ctxt sequent
@@ -367,6 +373,24 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         ret_schema = packUnit,
         function = (fn state_id =>
           (state := Symtab.delete_safe state_id (!state); ())),
+        timeout = NONE
+      }
+
+      val has_pending_interaction_callback = {
+        name = "IsaMini.has_pending_interaction",
+        arg_schema = unpackString,
+        ret_schema = packBool,
+        function = (fn state_id =>
+          Minilang.has_pending_interaction (get_state state_id)),
+        timeout = NONE
+      }
+
+      val pending_interaction_cases_callback = {
+        name = "IsaMini.pending_interaction_cases",
+        arg_schema = unpackString,
+        ret_schema = packOption (packList packString),
+        function = (fn state_id =>
+          Minilang.pending_interaction_cases (get_state state_id)),
         timeout = NONE
       }
 
@@ -932,6 +956,8 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         callback = [
           mk_callback proof_opr_callback,
           mk_callback reset_state_callback,
+          mk_callback has_pending_interaction_callback,
+          mk_callback pending_interaction_cases_callback,
           mk_callback lookup_fact_callback,
           mk_callback retrieve_entity_callback,
           mk_callback compute_bindings_callback,

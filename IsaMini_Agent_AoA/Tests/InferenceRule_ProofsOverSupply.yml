@@ -1,0 +1,34 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (1 :: int) = (1 :: int) ∧ (2 :: int) = (2 :: int)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After fill: 2 subgoals matched, proof[2] unconsumed
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (1 :: int) = (1 :: int) ∧ (2 :: int) = (2 :: int)
+proof:
+  - step id: 1
+    thought: conjI with oversupply
+    operation: Inference Rule
+    rule:
+      - conjI: ?P ⟶ ?Q ⟶ ?P ∧ ?Q
+    derived subgoals:
+      - goal id: 1.1
+        goal: (1 :: int) = (1 :: int)
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+      - goal id: 1.2
+        goal: (2 :: int) = (2 :: int)
+        proof:
+          - step id: 1.2.1
+            operation: Obvious
+    notice:
+      - The supplied proof for subgoal `3` was not used (no matching runtime subgoal).
+GoalNode children: 2
+  1.1: has_body=True
+  1.2: has_body=True

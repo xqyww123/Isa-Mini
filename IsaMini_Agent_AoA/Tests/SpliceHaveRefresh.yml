@@ -26,10 +26,15 @@ proof:
           - notI: (?P ⟶ False) ⟶ ¬ ?P
         derived goal:
           False ⟶ False
+      - step id: 1.1A
+        operation: Intro
+        assuming premises:
+          - premise0: False
       - step id: 1.2
         operation: Obvious
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
-Have sub_nodes count: 2
+Have sub_nodes count: 3
   1.1: InferenceRule status=SUCCESS
+  1.1A: Intro status=SUCCESS
   1.2: Obvious status=SUCCESS
 OK: all children were refreshed
