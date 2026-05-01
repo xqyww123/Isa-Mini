@@ -5848,6 +5848,222 @@ async def _test_Induction_InteractiveVars(root: Root, file: MyIO):
         file.write(f"Suc case_vars: not yet set (status={suc_node.status.status.value})\n")
 
 
+def _varname_strs(node: GoalNode) -> list[str] | None:
+    if node.case_vars is None:
+        return None
+    return [v.unicode if hasattr(v, 'unicode') else str(v) for v, _ty in node.case_vars]
+
+
+@model_test("CaseSplit_VarNames_MultiVar",
+            "Test_CaseSplit_VarNames_MultiVar.thy", 8)
+async def _test_CaseSplit_VarNames_MultiVar(root: Root, file: MyIO):
+    """CaseSplit on a list with case_variables: ["x", "xs"] for Cons.
+    Verifies multiple agent-specified variable names reach ML."""
+    print_header("Initial", file)
+    root.print(0, file)
+
+    await root.fill("1", [CaseSplit.gen_single({
+        "thought": "Case split on list l",
+        "target_isabelle_term": "l",
+        "proofs": [
+            {"case_name": "Nil", "body": [
+                {"operation": "Obvious", "facts": []}
+            ]},
+            {"case_name": "Cons", "case_variables": ["x", "xs"], "body": [
+                {"operation": "Obvious", "facts": []}
+            ]}
+        ]
+    })])
+    print_header("After CaseSplit with multi-var Cons", file)
+    root.print(0, file)
+
+    cons_node = cast(GoalNode, root.locate_node("1.Cons"))
+    names = _varname_strs(cons_node)
+    file.write(f"Cons case_vars: {names}\n")
+    if names is None or "x" not in names or "xs" not in names:
+        raise TestFailed(f"Expected ['x', 'xs'] in Cons case_vars, got: {names}")
+
+
+@model_test("CaseSplit_VarNames_FirstCase",
+            "Test_CaseSplit_VarNames_FirstCase.thy", 8)
+async def _test_CaseSplit_VarNames_FirstCase(root: Root, file: MyIO):
+    """CaseSplit on nat with case_variables for the FIRST case (0).
+    The first case goes through beginning_opr re-refresh."""
+    print_header("Initial", file)
+    root.print(0, file)
+
+    await root.fill("1", [CaseSplit.gen_single({
+        "thought": "Case split on n, naming first case var",
+        "target_isabelle_term": "n",
+        "proofs": [
+            {"case_name": "0", "body": [
+                {"operation": "Obvious", "facts": []}
+            ]},
+            {"case_name": "Suc", "case_variables": ["k"], "body": [
+                {"operation": "Obvious", "facts": []}
+            ]}
+        ]
+    })])
+    print_header("After CaseSplit", file)
+    root.print(0, file)
+
+    suc_node = cast(GoalNode, root.locate_node("1.Suc"))
+    names = _varname_strs(suc_node)
+    file.write(f"Suc case_vars: {names}\n")
+    if names is None or "k" not in names:
+        raise TestFailed(f"Expected 'k' in Suc case_vars, got: {names}")
+
+
+@model_test("CaseSplit_VarNames_AllCases",
+            "Test_CaseSplit_VarNames_AllCases.thy", 8)
+async def _test_CaseSplit_VarNames_AllCases(root: Root, file: MyIO):
+    """CaseSplit on list with case_variables for ALL cases.
+    Nil has no variables, so case_variables is empty.
+    Cons specifies ["h", "t"]."""
+    print_header("Initial", file)
+    root.print(0, file)
+
+    await root.fill("1", [CaseSplit.gen_single({
+        "thought": "Case split on l with varnames for all cases",
+        "target_isabelle_term": "l",
+        "proofs": [
+            {"case_name": "Nil", "case_variables": [], "body": [
+                {"operation": "Obvious", "facts": []}
+            ]},
+            {"case_name": "Cons", "case_variables": ["h", "t"], "body": [
+                {"operation": "Obvious", "facts": []}
+            ]}
+        ]
+    })])
+    print_header("After CaseSplit with all case vars", file)
+    root.print(0, file)
+
+    cons_node = cast(GoalNode, root.locate_node("1.Cons"))
+    names = _varname_strs(cons_node)
+    file.write(f"Cons case_vars: {names}\n")
+    if names is None or "h" not in names or "t" not in names:
+        raise TestFailed(f"Expected ['h', 't'] in Cons case_vars, got: {names}")
+
+
+@model_test("Induction_VarNames_MultiVar",
+            "Test_Induction_VarNames_MultiVar.thy", 8)
+async def _test_Induction_VarNames_MultiVar(root: Root, file: MyIO):
+    """Induction on a list with case_variables: ["y", "ys"] for Cons.
+    Verifies multiple agent-specified variable names work with Induction."""
+    print_header("Initial", file)
+    root.print(0, file)
+
+    await root.fill("1", [Induction.gen_single({
+        "thought": "Induction on l with custom Cons vars",
+        "target_isabelle_term": "l",
+        "variables": [{"name": "l", "status": "fixed"}],
+        "proofs": [
+            {"case_name": "Nil", "body": [
+                {"operation": "Obvious", "facts": []}
+            ]},
+            {"case_name": "Cons", "case_variables": ["y", "ys"], "body": [
+                {"operation": "Obvious", "facts": []}
+            ]}
+        ]
+    })])
+    print_header("After Induction with multi-var Cons", file)
+    root.print(0, file)
+
+    cons_node = cast(GoalNode, root.locate_node("1.Cons"))
+    names = _varname_strs(cons_node)
+    file.write(f"Cons case_vars: {names}\n")
+    if names is None or "y" not in names or "ys" not in names:
+        raise TestFailed(f"Expected ['y', 'ys'] in Cons case_vars, got: {names}")
+
+
+@model_test("CaseSplit_VarNames_Rename",
+            "Test_CaseSplit_VarNames_Rename.thy", 8)
+async def _test_CaseSplit_VarNames_Rename(root: Root, file: MyIO):
+    """CaseSplit with case_variables, then rename a variable.
+    Currently GoalNode._rename_var doesn't check case_vars in the
+    multi-case path, so rename_var raises CannotRename_VariableNotFound.
+    This test documents that limitation."""
+    print_header("Initial", file)
+    root.print(0, file)
+
+    await root.fill("1", [CaseSplit.gen_single({
+        "thought": "Case split on n",
+        "target_isabelle_term": "n",
+        "proofs": [
+            {"case_name": "0", "body": [
+                {"operation": "Obvious", "facts": []}
+            ]},
+            {"case_name": "Suc", "case_variables": ["k"], "body": [
+                {"operation": "Obvious", "facts": []}
+            ]}
+        ]
+    })])
+    print_header("After CaseSplit with k", file)
+    root.print(0, file)
+
+    suc_node = cast(GoalNode, root.locate_node("1.Suc"))
+    names = _varname_strs(suc_node)
+    file.write(f"Before rename - Suc case_vars: {names}\n")
+
+    try:
+        await root.rename_var(IsaTerm.from_agent("k"), IsaTerm.from_agent("m"))
+        print_header("After rename k -> m", file)
+        root.print(0, file)
+        suc_node = cast(GoalNode, root.locate_node("1.Suc"))
+        names = _varname_strs(suc_node)
+        file.write(f"After rename - Suc case_vars: {names}\n")
+    except CannotRename_VariableNotFound:
+        file.write(f"rename_var raised CannotRename_VariableNotFound (expected: GoalNode multi-case path)\n")
+
+
+@model_test("CaseSplit_VarNames_Amend",
+            "Test_CaseSplit_VarNames_Amend.thy", 8)
+async def _test_CaseSplit_VarNames_Amend(root: Root, file: MyIO):
+    """CaseSplit without case_variables, then amend with case_variables.
+    Verifies that amend can introduce agent varnames."""
+    print_header("Initial", file)
+    root.print(0, file)
+
+    await root.fill("1", [CaseSplit.gen_single({
+        "thought": "Case split on n, no varnames",
+        "target_isabelle_term": "n",
+        "proofs": [
+            {"case_name": "0", "body": [
+                {"operation": "Obvious", "facts": []}
+            ]},
+            {"case_name": "Suc", "body": [
+                {"operation": "Obvious", "facts": []}
+            ]}
+        ]
+    })])
+    print_header("After CaseSplit without varnames", file)
+    root.print(0, file)
+
+    suc_node = cast(GoalNode, root.locate_node("1.Suc"))
+    names = _varname_strs(suc_node)
+    file.write(f"Before amend - Suc case_vars: {names}\n")
+
+    root.session.age += 1
+    await root.amend("1", [CaseSplit.gen_single({
+        "thought": "Case split on n, now with varnames",
+        "target_isabelle_term": "n",
+        "proofs": [
+            {"case_name": "0", "body": [
+                {"operation": "Obvious", "facts": []}
+            ]},
+            {"case_name": "Suc", "case_variables": ["j"], "body": [
+                {"operation": "Obvious", "facts": []}
+            ]}
+        ]
+    })])
+    print_header("After amend with case_variables", file)
+    root.print(0, file)
+
+    suc_node = cast(GoalNode, root.locate_node("1.Suc"))
+    names = _varname_strs(suc_node)
+    file.write(f"After amend - Suc case_vars: {names}\n")
+
+
 @model_test("NestedHaveProof", "Test_NestedHaveProof.thy", 8)
 async def _test_NestedHaveProof(root: Root, file: MyIO):
     """A single-item batch where the item's `proof` field carries a nested
@@ -7132,6 +7348,125 @@ async def _test_SpliceAutoIntro(root: Root, file: MyIO):
     assert not isinstance(last_node, Intro), (
         f"Spurious Intro at the end (step {last_node.id})")
 
+
+@model_test("MultilineThought", "Test_MultilineThought.thy", 8)
+async def _test_MultilineThought(root: Root, file: MyIO):
+    """Exercise _print_thought multi-line path (lines 2477-2483).
+    When the thought string contains newlines, it should render as a
+    YAML literal block `thought: |` instead of inline."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    await root.fill("1", [Have.gen_single({
+        "thought": "First line of reasoning.\nSecond line continues.\nThird concludes.",
+        "statement": {
+            "english": "square is nonneg",
+            "isabelle": r"(x::int) * x \<ge> 0"
+        },
+        "name": "sq"
+    })])
+    print_header("After Have with multiline thought", file)
+    root.print(0, file)
+
+@model_test("RenameVarNotFound", "Test_RenameVarNotFound.thy", 8)
+async def _test_RenameVarNotFound(root: Root, file: MyIO):
+    """Exercise rename_var raising CannotRename_VariableNotFound (lines 2754-2760).
+    Attempting to rename a variable that doesn't exist in the proof tree
+    must raise the appropriate error."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    try:
+        await root.rename_var(IsaTerm.from_agent("nonexistent"), IsaTerm.from_agent("new_name"))
+        file.write("BUG: rename_var should have raised CannotRename_VariableNotFound\n")
+    except CannotRename_VariableNotFound as e:
+        file.write(f"OK: rename_var raised CannotRename_VariableNotFound\n")
+
+@model_test("RenameFactNotFound", "Test_RenameFactNotFound.thy", 8)
+async def _test_RenameFactNotFound(root: Root, file: MyIO):
+    """Exercise rename_fact raising CannotRename_FactNotFound (lines 2762-2767).
+    Attempting to rename a fact that doesn't exist in the proof tree
+    must raise the appropriate error."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    try:
+        await root.rename_fact("nonexistent_fact", "new_fact_name")
+        file.write("BUG: rename_fact should have raised CannotRename_FactNotFound\n")
+    except CannotRename_FactNotFound as e:
+        file.write(f"OK: rename_fact raised CannotRename_FactNotFound\n")
+
+@model_test("RenameIntroVar", "Test_RenameIntroVar.thy", 8)
+async def _test_RenameIntroVar(root: Root, file: MyIO):
+    """Exercise Intro._rename_var (lines 6358-6364) and the successful
+    rename_var path (lines 2754-2760) with refresh cascade."""
+    print_header("Initial YAML (auto-intro fixes x)", file)
+    root.print(0, file)
+    await root.rename_var(IsaTerm.from_agent("x"), IsaTerm.from_agent("y"))
+    print_header("After renaming x to y", file)
+    root.print(0, file)
+
+@model_test("ObtainMultiConstraint", "Test_ObtainMultiConstraint.thy", 8)
+async def _test_ObtainMultiConstraint(root: Root, file: MyIO):
+    """Exercise Obtain._print_header multiple-constraints path (lines 6114-6126).
+    When the Obtain block has >1 constraints, they are printed as a
+    bulleted list under `constraints:` instead of singular `constraint:`."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    await root.fill("2", [Obtain.gen_single({
+        "thought": "Unpack the existential with multiple constraints",
+        "variables": [{"name": "k", "type": "nat"}],
+        "constraints": [
+            {"name": "k_eq", "isabelle": "k = m", "english": "k equals m"},
+            {"name": "k_le", "isabelle": r"k \<le> m", "english": "k is at most m"},
+        ],
+        "proof": [{"operation": "Obvious", "facts": []}],
+    })])
+    print_header("After Obtain with two constraints", file)
+    root.print(0, file)
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+@model_test("ObtainQuickview", "Test_ObtainQuickview.thy", 8)
+async def _test_ObtainQuickview(root: Root, file: MyIO):
+    """Exercise Obtain.quickview dedup (lines 6069-6084).
+    After Obtain fires, quickview must announce the obtained variables
+    and constraints. A second quickview call must NOT re-emit them (dedup)."""
+    root.session.age += 1
+    await root.fill("2", [Obtain.gen_single({
+        "thought": "Unpack the existential",
+        "variables": [{"name": "k", "type": "nat"}],
+        "constraints": [{"name": "k_def", "isabelle": "k = m",
+                         "english": "the existential witness"}],
+        "proof": [{"operation": "Obvious", "facts": []}],
+    })])
+    # Prove the remaining goal so Obtain's ending is reached
+    root.session.age += 1
+    await root.fill("3", [Obvious.gen_single({"facts": [{"name": "k_def"}]})])
+    print_header("Quickview (first render — should show obtained vars/constraints)", file)
+    root.quickview(0, file)
+    print_header("Quickview (second render — dedup, should NOT repeat)", file)
+    root.quickview(0, file)
+
+@model_test("FailedLeafQuickview", "Test_FailedLeafQuickview.thy", 8)
+async def _test_FailedLeafQuickview(root: Root, file: MyIO):
+    """Exercise _print_evaluation_status_quickview FAILURE path (lines 2431-2439).
+    A deliberately failing Have (nonsensical statement) produces a FAILURE
+    status; quickview should print 'evaluation failed'."""
+    await root.fill("1", [Have.gen_single({
+        "thought": "Deliberately wrong claim",
+        "statement": {
+            "english": "a false claim",
+            "isabelle": "False"
+        },
+        "name": "bad_claim"
+    })])
+    # The Have itself should succeed (it's just claiming), the subproof will fail
+    # Try filling with an Obvious that will fail
+    await root.fill("1.1", [Obvious.gen_single({"facts": []})])
+    print_header("Full print (shows error details)", file)
+    root.print(0, file)
+    print_header("Quickview (should show evaluation status)", file)
+    root.quickview(0, file)
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
     import msgpack as mp

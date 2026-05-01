@@ -1,0 +1,26 @@
+--------------------------------------------------
+Initial YAML (auto-intro fixes x)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∀(x :: nat). x = x
+proof:
+  - step id: 1
+    operation: Intro
+    fixing variables:
+      - x: nat
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  x = x
+--------------------------------------------------
+After renaming x to y
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∀(x :: nat). x = x
+proof:
+  - step id: 1
+    operation: Intro
+    fixing variables:
+      - y: nat    (renamed from "x")
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  y = y

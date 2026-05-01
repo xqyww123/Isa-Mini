@@ -1,57 +1,36 @@
 --------------------------------------------------
-Initial YAML
+Initial
 --------------------------------------------------
 variables:
-  - n: nat
-  - P: nat ⇒ bool
+  - l: nat list
+  - P: nat list ⇒ bool
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: P n
+goal: P l
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
-After fill (nat.induct, 2 cases)
+After Induction with multi-var Cons
 --------------------------------------------------
 variables:
-  - n: nat
-  - P: nat ⇒ bool
+  - l: nat list
+  - P: nat list ⇒ bool
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: P n
+goal: P l
 proof:
   - step id: 1
-    thought: default induction on n (nat.induct, 2 cases: 0, Suc)
+    thought: Induction on l with custom Cons vars
     operation: Induction
-    target term: n
+    target term: l
     Error: The variable P appear in the induction context but are not classified in the 'variables' argument. You should indicate whether each is 'arbitrary' (generalized during induction) or 'fixed' (held constant).
     cases:
-      - goal id: 1.0
-        goal: P (0 :: nat)
+      - goal id: 1.Nil
+        goal: P []
         Error: the evaluation is cancelled due to failures in preceding nodes
         proof: empty
         Error: Evaluation cancelled due to failures above
-      - goal id: 1.Suc
+      - goal id: 1.Cons
         goal: unknown, evaluation pending
         Error: the evaluation is cancelled due to failures in preceding nodes
         proof: empty
         Error: Evaluation cancelled due to failures above
---------------------------------------------------
-After amend (less_induct, 1 case) — show_warnings=True
---------------------------------------------------
-variables:
-  - n: nat
-  - P: nat ⇒ bool
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: P n
-proof:
-  - step id: 1
-    thought: amend to strong induction (less_induct, 1 case)
-    operation: Induction
-    target term: n
-    fixing variables:
-      - n: nat
-    assuming premises:
-      - less.IH: ?y < n ⟶ P ?y
-    notice:
-      - The variable P are not classified as fixed or generalized; fixed is assumed. Change this by calling the `edit` tool with action `amend` and target step `1`
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
-pending proof goal:
-  P n
+Cons case_vars: ['y', 'ys']

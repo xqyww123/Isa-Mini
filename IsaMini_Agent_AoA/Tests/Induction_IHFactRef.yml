@@ -60,7 +60,6 @@ proof:
         assuming premises:
           - premise0: n < p
           - 1.IH: ∀m<n. m < p ⟶ True
-        cases: empty
 
 Displayed hyp names under case 1: ['premise0', '1.IH']
 --------------------------------------------------
@@ -95,7 +94,6 @@ proof:
         assuming premises:
           - premise0: n < p
           - 1.IH: ∀m<n. m < p ⟶ True
-        cases: empty
       - step id: 1.3
         operation: Obvious
         with facts:

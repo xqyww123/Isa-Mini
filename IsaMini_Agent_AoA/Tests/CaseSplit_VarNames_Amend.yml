@@ -1,0 +1,88 @@
+--------------------------------------------------
+Initial
+--------------------------------------------------
+variables:
+  - n: nat
+  - P: nat ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P n
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After CaseSplit without varnames
+--------------------------------------------------
+variables:
+  - n: nat
+  - P: nat ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P n
+proof:
+  - step id: 1
+    thought: Case split on n, no varnames
+    operation: CaseSplit
+    target term: n
+    cases:
+      - goal id: 1.0
+        premises:
+          - 0.prem0: n = (0 :: nat)
+        goal: P (0 :: nat)
+        proof:
+          - step id: 1.0.1
+            operation: Obvious
+            Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.0.1` to replace it with a proof.
+        pending proof goal:
+          P (0 :: nat)
+      - goal id: 1.Suc
+        variables:
+          - nat: nat
+        premises:
+          - Suc.prem0: n = Suc nat
+        goal: P (Suc nat)
+        proof:
+          - step id: 1.Suc.1
+            operation: Obvious
+            Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Suc.1` to replace it with a proof.
+        pending proof goal:
+          P (Suc nat)
+Before amend - Suc case_vars: ['nat']
+--------------------------------------------------
+After amend with case_variables
+--------------------------------------------------
+variables:
+  - n: nat
+  - P: nat ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P n
+proof:
+  - step id: 1
+    thought: Case split on n, now with varnames
+    operation: CaseSplit
+    target term: n
+    cases:
+      - goal id: 1.0
+        premises:
+          - 0.prem0: n = (0 :: nat)
+        goal: P (0 :: nat)
+        proof:
+          - step id: 1.0.1
+            operation: Obvious
+            Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.0.1` to replace it with a proof.
+        pending proof goal:
+          P (0 :: nat)
+      - goal id: 1.Suc
+        variables:
+          - j: nat
+        premises:
+          - Suc.prem0: n = Suc j
+        goal: P (Suc j)
+        proof:
+          - step id: 1.Suc.1
+            operation: Obvious
+            Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Suc.1` to replace it with a proof.
+        pending proof goal:
+          P (Suc j)
+After amend - Suc case_vars: ['j']

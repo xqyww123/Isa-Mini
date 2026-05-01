@@ -101,7 +101,6 @@ proof:
         assuming premises:
           - premise0: n ≤ p
           - 1.IH: ∀m<n. m ≤ p ⟶ True
-        cases: empty
 
 Surviving facts_to_generalize (full names): ['premise0']
 Warnings (sorted):

@@ -49,7 +49,6 @@ proof:
     assuming premises:
       - premise0: i ≤ p - (2 :: nat)
       - less.IH: ?y < i ⟶ ?y ≤ p - (2 :: nat) ⟶ Q (f ?y)
-    cases: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
   Q (f i)
@@ -82,7 +81,6 @@ proof:
     assuming premises:
       - premise0: i ≤ p - (2 :: nat)
       - less.IH: ?y < i ⟶ ?y ≤ p - (2 :: nat) ⟶ Q (f ?y)
-    cases: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
   Q (f i)

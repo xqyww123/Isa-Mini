@@ -3741,11 +3741,13 @@ class GoalContainer(NonLeaf_Node):
             if c is child:
                 return i < len(self.sub_nodes) - 1
         raise InternalError("The given argument is not a child of this node")
+    def _case_vars_of_child(self, child_ind: int) -> list[varname_spec] | None:
+        return None
     def _ending_opr_of_child(self, child : Node) -> Minilang_Operation | None:
         for i, c in enumerate(self.sub_nodes):
             if c is child:
                 if i < len(self.sub_nodes) - 1:
-                    return Minilang_Operation.NEXT(None)
+                    return Minilang_Operation.NEXT(self._case_vars_of_child(i+1))
                 else:
                     return None
         raise InternalError("The given argument is not a child of this node")
@@ -3753,7 +3755,7 @@ class GoalContainer(NonLeaf_Node):
         for i, c in enumerate(self.sub_nodes):
             if c is child:
                 if i < len(self.sub_nodes) - 1:
-                    await child._state_after_beginning().sorry_next(None, child.resulting_state())
+                    await child._state_after_beginning().sorry_next(self._case_vars_of_child(i+1), child.resulting_state())
                 else:
                     # Last child: cheat one subgoal in place (no NEXT/END)
                     # so that child.resulting_state() (= parent._state_before_ending_)
@@ -3777,7 +3779,7 @@ class GoalNode(StdBlock):
     case_hyps: list[Hyp] | None
 
     def __init__(self, config: NodeConfig, is_single_goal: bool, show_goal: bool,
-                 pending_proof: 'proof_with_case_vars | None' = None):
+                 pending_proof: 'proof | None' = None):
         super().__init__(config, "", [])
         self.is_single_goal = is_single_goal
         self.show_goal = show_goal
@@ -3787,7 +3789,7 @@ class GoalNode(StdBlock):
         self.case_hyps = None
         self._prev_quickview_context: tuple[Vars, Hyps] | None = None
         self._prev_quickview_conclusion: term | None = None
-        self._pending_proof: 'proof_with_case_vars | None' = pending_proof
+        self._pending_proof: 'proof | None' = pending_proof
     @property
     def titled_id(self) -> str:
         return self.id
@@ -3867,10 +3869,8 @@ class GoalNode(StdBlock):
         # Install `_pending_proof` (set by SubgoalMaker orchestration)
         # as sub_nodes, with auto-Intro injection if needed.
         if self._pending_proof is not None and not self.sub_nodes:
-            agent_cv, gns = self._pending_proof
+            gns = self._pending_proof
             self._pending_proof = None
-            if agent_cv is not None and self.case_vars is None:
-                self.case_vars = [(v, IsaTerm.from_agent("")) for v in agent_cv]
             first_cls = gns[0].cls if gns else None
             # Q7: auto-Intro injection unless the first Parsed_Opr is Intro.
             if (first_cls is not Intro
@@ -4044,21 +4044,6 @@ class SubgoalMaker(GoalContainer, StdBlock):
         # uses `ending_opr()` (not `has_ending_opr()`) to decide
         # whether to run a closing opr, so both must agree.
         return None
-    def _case_vars_of_child(self, child_ind: int) -> list[varname_spec] | None:
-        return None
-    def _ending_opr_of_child(self, child : Node) -> Minilang_Operation | None:
-        # Override GoalContainer's default to route NEXT through
-        # `_case_vars_of_child`, so CaseSplit_Like can attach case
-        # variables to the NEXT operation. Non-last children emit
-        # NEXT, the last child emits None (the block as a whole
-        # emits its own END if needed — see has_ending_opr above).
-        for i, c in enumerate(self.sub_nodes):
-            if c is child:
-                if i < len(self.sub_nodes) - 1:
-                    return Minilang_Operation.NEXT(self._case_vars_of_child(i+1))
-                else:
-                    return None
-        raise InternalError("The given argument is not a child of this node")
     def _new_goal_node(self, goal_index: int, ml_state: Minilang_State) -> GoalNode:
         return GoalNode(NodeConfig(str(goal_index+self._initial_goal_index), ml_state, self), False, True, None)
 
@@ -4078,7 +4063,10 @@ class SubgoalMaker(GoalContainer, StdBlock):
             key = gn.local_step
             if key is not None and key in self._supplied_proofs:
                 gn.sub_nodes.clear()
-                gn._pending_proof = self._supplied_proofs.pop(key)
+                agent_cv, body = self._supplied_proofs.pop(key)
+                if agent_cv is not None and gn.case_vars is None:
+                    gn.case_vars = [(v, IsaTerm.from_agent("")) for v in agent_cv]
+                gn._pending_proof = body
 
     async def _chk_subgoal_proofs(self) -> bool:
         """Whether (sub_nodes, supplied proofs) pairing is coherent.
@@ -4199,13 +4187,19 @@ class SubgoalMaker(GoalContainer, StdBlock):
                     entry = self._supplied_proofs.pop(picked, None)
                     if entry is not None:
                         gn.sub_nodes.clear()
-                        gn._pending_proof = entry
+                        agent_cv, body = entry
+                        if agent_cv is not None and gn.case_vars is None:
+                            gn.case_vars = [(v, IsaTerm.from_agent("")) for v in agent_cv]
+                        gn._pending_proof = body
                 elif picked.startswith(PREFIX_NEW):
                     new_name = picked[len(PREFIX_NEW):]
                     entry = self._supplied_proofs.pop(new_name, None)
                     if entry is not None:
                         gn.sub_nodes.clear()
-                        gn._pending_proof = entry
+                        agent_cv, body = entry
+                        if agent_cv is not None and gn.case_vars is None:
+                            gn.case_vars = [(v, IsaTerm.from_agent("")) for v in agent_cv]
+                        gn._pending_proof = body
                     if picked in remaining:
                         remaining.remove(picked)
             self._cleanup_inherited_proofs()
@@ -4553,6 +4547,10 @@ class CaseSplit_Like(SubgoalMaker):
                         self.case_vars[i] = (new_name, v[1])
                         return self
             return None
+    def _title_of_children(self, indent: int) -> tuple[str | None, int]:
+        if not self.sub_nodes:
+            return (None, indent)
+        return ('cases', indent+1)
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False) -> None:
         # Only the single-subgoal path ever populates `case_vars` /
         # `case_hyps` on `self` (multi-subgoal has them on each child
@@ -4606,6 +4604,16 @@ class CaseSplit_Like(SubgoalMaker):
         fail = await super()._refresh_the_beginning_opr()
         if fail is not None:
             return fail
+        if (self.sub_nodes
+                and isinstance(self.sub_nodes[0], GoalNode)
+                and self.sub_nodes[0].case_vars is not None):
+            opr = self.beginning_opr()
+            if isinstance(opr, Minilang_Operation):
+                try:
+                    await self.ml_state.execute(opr, self._state_after_beginning())
+                    await self._state_after_beginning().clone(self.sub_nodes[0].ml_state)
+                except IsabelleError:
+                    pass
         if not self.sub_nodes:
             s = self._state_after_beginning()
             msgs = [m for m in s.messages if isinstance(m, Consider_Case_Msg)]
@@ -4642,7 +4650,10 @@ class CaseSplit_Like(SubgoalMaker):
                 continue
             if stripped in self._supplied_proofs:
                 gn.sub_nodes.clear()
-                gn._pending_proof = self._supplied_proofs.pop(stripped)
+                agent_cv, body = self._supplied_proofs.pop(stripped)
+                if agent_cv is not None and gn.case_vars is None:
+                    gn.case_vars = [(v, IsaTerm.from_agent("")) for v in agent_cv]
+                gn._pending_proof = body
 
     async def _chk_subgoal_proofs(self) -> bool:
         if not await super()._chk_subgoal_proofs():
@@ -6573,8 +6584,6 @@ class CaseSplit(CaseSplit_Like):
         self._supplied_proofs = proofs_by_case
     def quickview_title(self) -> str:
         return f"CaseSplit {self.target_isabelle_term}"
-    def _title_of_children(self, indent: int) -> tuple[str | None, int]:
-        return ('cases', indent+1)
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         self._print_thought(indent, file)
         print_indent(indent, file)
@@ -6745,8 +6754,6 @@ class Induction(CaseSplit_Like):
                         f"induction — skipped."))
                 else:
                     self.fact_refs_to_generalize.append(f)
-    def _title_of_children(self, indent: int) -> tuple[str | None, int]:
-        return ('cases', indent+1)
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         self._print_thought(indent, file)
         print_indent(indent, file)

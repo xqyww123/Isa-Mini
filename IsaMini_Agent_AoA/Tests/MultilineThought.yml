@@ -1,0 +1,32 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Have with multiline thought
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: |
+      First line of reasoning.
+      Second line continues.
+      Third concludes.
+    operation: Have
+    statement:
+      english: square is nonneg
+      isabelle: (x::int) * x \<ge> 0
+    name: sq
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: int) ≤ x * x
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.

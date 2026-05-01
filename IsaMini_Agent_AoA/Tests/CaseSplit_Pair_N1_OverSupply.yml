@@ -40,7 +40,6 @@ proof:
       - b: 'b
     assuming premises:
       - Pair.prem0: p = (a, b)
-    cases: empty
     notice:
       - The case `beta` is not found in the resulting cases of the case-split and is thus dropped.
   - step id: 2

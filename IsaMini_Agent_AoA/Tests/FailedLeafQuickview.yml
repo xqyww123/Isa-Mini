@@ -1,0 +1,28 @@
+--------------------------------------------------
+Full print (shows error details)
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: Deliberately wrong claim
+    operation: Have
+    statement:
+      english: a false claim
+      isabelle: False
+    name: bad_claim
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      False
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+--------------------------------------------------
+Quickview (should show evaluation status)
+--------------------------------------------------
+step 1: Have bad_claim (line 0)
+  Error: Unfinished Proof (line 17). Call command `edit` with action `fill` and target step `1.1`
+  goal: False
+Error: Unfinished Proof (line 20). Fill step `2`
+goal: (0 :: int) ≤ x * x

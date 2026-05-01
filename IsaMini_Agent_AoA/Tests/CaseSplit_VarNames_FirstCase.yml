@@ -9,7 +9,7 @@ goal: P n
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
-After CaseSplit with case_variables
+After CaseSplit
 --------------------------------------------------
 variables:
   - n: nat
@@ -18,7 +18,7 @@ You can write global declarations by calling command `edit` with action `fill` a
 goal: P n
 proof:
   - step id: 1
-    thought: Case split on n with custom variable names
+    thought: Case split on n, naming first case var
     operation: CaseSplit
     target term: n
     cases:
@@ -46,4 +46,4 @@ proof:
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Suc.1` to replace it with a proof.
         pending proof goal:
           P (Suc k)
-Suc case_vars: [IsaTerm('k')]
+Suc case_vars: ['k']

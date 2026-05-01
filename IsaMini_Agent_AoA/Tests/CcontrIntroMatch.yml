@@ -46,7 +46,6 @@ proof:
     assuming premises:
       - premise0: n ≤ p - (2 :: nat)
       - 1.IH: ∀m<n. m ≤ p - (2 :: nat) ⟶ prime (f m)
-    cases: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
   prime (f n)
@@ -77,7 +76,6 @@ proof:
     assuming premises:
       - premise0: n ≤ p - (2 :: nat)
       - 1.IH: ∀m<n. m ≤ p - (2 :: nat) ⟶ prime (f m)
-    cases: empty
   - step id: 3
     thought: Case split on whether n ≤ sqrt(p/3)
     operation: Branch
@@ -131,7 +129,6 @@ proof:
     assuming premises:
       - premise0: n ≤ p - (2 :: nat)
       - 1.IH: ∀m<n. m ≤ p - (2 :: nat) ⟶ prime (f m)
-    cases: empty
   - step id: 3
     thought: Case split on whether n ≤ sqrt(p/3)
     operation: Branch
@@ -296,7 +293,6 @@ proof:
     assuming premises:
       - premise0: n ≤ p - (2 :: nat)
       - 1.IH: ∀m<n. m ≤ p - (2 :: nat) ⟶ prime (f m)
-    cases: empty
   - step id: 3
     thought: Case split on whether n ≤ sqrt(p/3)
     operation: Branch

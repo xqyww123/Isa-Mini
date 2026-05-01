@@ -2,45 +2,45 @@
 Initial YAML
 --------------------------------------------------
 variables:
-  - P: nat ⇒ bool
-  - p: nat
-  - i: nat
+  - m: nat
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: i ≤ p ⟶ P i
+goal: (∃(k :: nat). k = m ∧ k ≤ m) ⟶ m = m
 proof:
   - step id: 1
     operation: Intro
     assuming premises:
-      - premise0: i ≤ p
+      - premise0: ∃(k :: nat). k = m ∧ k ≤ m
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
-  P i
+  m = m
 --------------------------------------------------
-After Induction (HOL.TAG should leak into IH)
+After Obtain with two constraints
 --------------------------------------------------
 variables:
-  - P: nat ⇒ bool
-  - p: nat
-  - i: nat
+  - m: nat
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: i ≤ p ⟶ P i
+goal: (∃(k :: nat). k = m ∧ k ≤ m) ⟶ m = m
 proof:
   - step id: 1
     operation: Intro
     assuming premises:
-      - premise0: i ≤ p
+      - premise0: ∃(k :: nat). k = m ∧ k ≤ m
   - step id: 2
-    thought: strong induction on i, generalize i, keep p fixed
-    operation: Induction
-    target term: i
-    facts to generalize: premise0
-    fixing variables:
-      - i: nat
-    assuming premises:
-      - premise0: i ≤ p
-      - 1.IH: ∀m<i. m ≤ p ⟶ P m
+    thought: Unpack the existential with multiple constraints
+    operation: Obtain
+    variables:
+      - k: nat
+    constraints:
+      - name: k_eq
+        english: k equals m
+        isabelle: k = m
+      - name: k_le
+        english: k is at most m
+        isabelle: k \<le> m
+    proof:
+      - step id: 2.1
+        operation: Obvious
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
-  P i
-
-Leaked HOL.TAG hyps: 0
+  m = m
+Unfinished nodes: 1

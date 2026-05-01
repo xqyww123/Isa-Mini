@@ -44,7 +44,6 @@ proof:
       - b: 'b
     assuming premises:
       - Pair.prem0: p = (a, b)
-    cases: empty
   - step id: 1
     thought: seed
     operation: Have

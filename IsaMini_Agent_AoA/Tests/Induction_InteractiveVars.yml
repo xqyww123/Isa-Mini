@@ -33,4 +33,4 @@ proof:
         Error: the evaluation is cancelled due to failures in preceding nodes
         proof: empty
         Error: Evaluation cancelled due to failures above
-Suc case_vars: not yet set (status=cancelled)
+Suc case_vars: [IsaTerm('k')]

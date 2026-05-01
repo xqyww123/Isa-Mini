@@ -58,7 +58,6 @@ proof:
       - b: 'b
     assuming premises:
       - Pair.prem0: p = (a, b)
-    cases: empty
   - step id: 1
     operation: Obvious
     Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
