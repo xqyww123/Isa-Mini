@@ -65,54 +65,36 @@
       "title": "FactByName",
       "additionalProperties": false,
       "properties": {
-        "refer_by": {
-          "type": "string",
-          "const": "name"
-        },
         "name": {
           "type": "string",
           "description": "the exact name of the fact in Isabelle/HOL"
         }
       },
-      "required": [ "refer_by", "name" ],
+      "required": [ "name" ],
       "type": "object"
     },
     "FactByProposition": {
       "title": "FactByProposition",
       "additionalProperties": false,
       "properties": {
-        "refer_by": {
-          "type": "string",
-          "const": "proposition"
-        },
         "proposition": {
           "description": "an Isabelle proposition with all literal numbers annotated with their types, to be proven in time",
           "type": "string"
         }
       },
-      "required": [
-        "refer_by",
-        "proposition"
-      ],
+      "required": [ "proposition" ],
       "type": "object"
     },
     "FactByDescription": {
       "title": "FactByDescription",
       "additionalProperties": false,
       "properties": {
-        "refer_by": {
-          "type": "string",
-          "const": "description"
-        },
         "english": {
           "description": "an English description of the fact to search for",
           "type": "string"
         }
       },
-      "required": [
-        "refer_by",
-        "english"
-      ],
+      "required": [ "english" ],
       "type": "object"
     },
     "Obvious": {

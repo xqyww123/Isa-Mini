@@ -120,18 +120,22 @@ class Explicit_Var(TypedDict):
     type: NotRequired[xtyp | None]
 
 class FactByProposition(TypedDict):
-    refer_by: Literal["proposition"]
     proposition: xterm
 
 class FactByDescription(TypedDict):
-    refer_by: Literal["description"]
     english: str
 
 class FactByName(TypedDict):
-    refer_by: Literal["name"]
     name: xname
 
 type Fact = FactByName | FactByProposition | FactByDescription
+
+def fact_kind(fact: Fact) -> Literal["name", "proposition", "description"]:
+    if "name" in fact:
+        return "name"
+    if "proposition" in fact:
+        return "proposition"
+    return "description"
 
 class FailureReason(NamedTuple):
     """A human-readable failure reason, used in Interaction.answer() returns
@@ -238,7 +242,7 @@ class IsabelleFact_Unfound(IsabelleFact):
     def __init__(self, fact: Fact):
         self.fact = fact
     def name(self) -> 'short_name | term':
-        match self.fact["refer_by"]:
+        match fact_kind(self.fact):
             case "name": return IsaTerm.from_agent(cast(FactByName, self.fact)["name"])
             case "proposition": return IsaTerm.from_agent(cast(FactByProposition, self.fact)["proposition"])
             case "description": return IsaTerm.from_agent(cast(FactByDescription, self.fact)["english"])
@@ -1287,16 +1291,16 @@ class Minilang_State:
         name_indices: list[int] = []
         name_queries: list[str] = []
         for i, fact in enumerate(facts):
-            if fact["refer_by"] == "proposition":
+            if "name" in fact:
+                name_indices.append(i)
+                name_queries.append(fact["name"])
+            elif "proposition" in fact:
                 prop = cast(FactByProposition, fact)["proposition"]
                 out[i] = IsabelleFact_ProveInTime(IsaTerm.from_agent(prop))
-            elif fact["refer_by"] == "description":
+            else:
                 desc = " ".join(cast(FactByDescription, fact)["english"].split())
                 out[i] = Interaction_RetrieveForProof(
                     state=self, query=desc, kinds=[EntityKind.THEOREM])
-            else:
-                name_indices.append(i)
-                name_queries.append(fact["name"])
         # Batch resolve all FactByName
         if name_queries:
             entities = [(EntityKind.THEOREM, name) for name in name_queries]
@@ -1453,7 +1457,7 @@ class Minilang_State:
             if rec.kind in _THEOREM_KINDS:
                 entity: IsabelleEntity = IsabelleFact_Presented(
                     full_name=rec.name, short_name=sname,
-                    fact=FactByName(refer_by="name", name=sname.ascii),
+                    fact=FactByName(name=sname.ascii),
                     expression=exprs, kind=rec.kind, roles=roles,
                     abbreviation_names=abbrev_names, is_local=is_local)
             else:
@@ -1567,7 +1571,7 @@ class Minilang_State:
             (self.name, [n.ascii for n in constant_names]))
         return [IsabelleFact_Presented(full_name=full_name,
                         short_name=IsaTerm.from_isabelle(sname),
-                        fact=FactByName(refer_by="name", name=sname),
+                        fact=FactByName(name=sname),
                         expression=[IsaTerm.from_isabelle(prop)]) for full_name, sname, prop in result]
 
     async def abbreviation_defs(self, full_names: list[str]) -> list[tuple[term, term] | None]:
@@ -1757,7 +1761,7 @@ async def _try_resolve_as_named_fact(
         short_name, exprs, roles, abbrev, is_local = result
         return IsabelleFact_Presented(
             full_name=name, short_name=short_name,
-            fact=FactByName(refer_by="name", name=name),
+            fact=FactByName(name=name),
             expression=exprs, roles=roles, abbreviation_names=abbrev,
             is_local=is_local)
     return None
@@ -2028,7 +2032,7 @@ class Interaction_RetrieveForProof(Interaction_Retrieve):
             session.log_retrieval(self.query, ["unfound"])
             if self.single_choice:
                 return [IsabelleFact_Unfound(
-                    FactByDescription(refer_by="description", english=self.query))]
+                    FactByDescription(english=self.query))]
             return []
         return await super().answer(answer)
 
@@ -4507,9 +4511,9 @@ class CaseSplit_Like(SubgoalMaker):
         # 1. rule_spec → rule_name
         if rule_spec == "default":
             rule_name: str | None = None
-        elif rule_spec["refer_by"] == "name":
+        elif "name" in rule_spec:
             rule_name = rule_spec["name"]
-        elif rule_spec["refer_by"] == "description":
+        elif "english" in rule_spec:
             desc = rule_spec["english"]
             entity_kind = (EntityKind.INDUCTION_RULE if kind == "induction"
                            else EntityKind.CASE_SPLIT_RULE)
@@ -4804,7 +4808,7 @@ def _print_raw_fact(fact: 'Fact', indent: int, file: MyIO) -> None:
     """Print a raw, unresolved fact reference. Used as a fallback when
     fact_refs is None (refresh not yet run or cancelled)."""
     print_indent(indent, file)
-    match fact["refer_by"]:
+    match fact_kind(fact):
         case "name":
             file.write(f"- name: {cast(FactByName, fact)['name']} (pending)\n")
         case "proposition":
@@ -4883,7 +4887,7 @@ def _fetched_to_facts(fetched: 'list[IsabelleFact | Interaction_RetrieveForProof
             out.append(item)
         else:
             out.append(IsabelleFact_Unfound(
-                cast(Fact, {"refer_by": "description", "english": item.query})))
+                cast(Fact, {"english": item.query})))
     return out
 
 

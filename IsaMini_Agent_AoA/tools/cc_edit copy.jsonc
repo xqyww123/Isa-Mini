@@ -65,26 +65,18 @@
       "title": "FactByName",
       "additionalProperties": false,
       "properties": {
-        "refer_by": {
-          "type": "string",
-          "const": "name"
-        },
-        "name": { 
+        "name": {
           "type": "string",
           "description": "the exact name of the fact in Isabelle/HOL. If unsure, use FactByStatement instead"
         }
       },
-      "required": [ "refer_by", "name" ],
+      "required": [ "name" ],
       "type": "object"
     },
     "FactByStatement": {
       "title": "FactByStatement",
       "additionalProperties": false,
       "properties": {
-        "refer_by": {
-          "type": "string",
-          "const": "statement"
-        },
         "statement": {
           "description": "the statement of the fact in English",
           "type": "string"
@@ -101,10 +93,7 @@
         //   "type": "array"
         // }
       },
-      "required": [
-        "refer_by",
-        "statement"
-      ],
+      "required": [ "statement" ],
       "type": "object"
     },
     "Fact": {

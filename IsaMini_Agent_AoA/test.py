@@ -62,7 +62,7 @@ class ModelTestCase(TestCase):
                 with open(correct_yaml_path, 'r') as f:
                     if buffer.getvalue() != f.read():
                         show_colored_diff(buffer.getvalue(), correct_yaml_path, self.name)
-                        raise TestFailed(f"Test Faild on '{self.name}'")
+                        raise TestFailed(f"Test Failed on '{self.name}'")
             else:
                 self.write_expected_yaml(buffer.getvalue())
         return root
@@ -208,7 +208,7 @@ async def _test_InferenceRuleSolvesGoal(root: Root, file: MyIO):
     # This exercises the empty-BUNDL code path in InferenceRule._print_header.
     await root.fill("1", [InferenceRule.gen_single({
         "thought": "Apply reflexivity",
-        "rule": {"refer_by": "name", "name": "refl"}
+        "rule": {"name": "refl"}
     })])
     print_header("After InferenceRule (goal fully solved)", file)
     root.print(0, file)
@@ -296,7 +296,7 @@ async def _test_ResetLocalStepCascade(root: Root, file: MyIO):
     })])
     await root.fill("1.Nil.1", [Obvious.gen_single({"facts": []})])
     await root.fill("1.Cons.1", [Obvious.gen_single({
-        "facts": [{"refer_by": "name", "name": "Cons.IH"}]
+        "facts": [{"name": "Cons.IH"}]
     })])
     print_header("After seed (cases Nil/Cons, each with an Obvious child)", file)
     root.print(0, file)
@@ -332,7 +332,7 @@ async def _test_Induction(root: Root, file: MyIO):
     print_header("Obvious", file)
     root.print(0, file)
     await root.fill("1.Cons.1", [Obvious.gen_single({
-        "facts": [{"refer_by": "name", "name": "Cons.IH"}]
+        "facts": [{"name": "Cons.IH"}]
     })])
     print_header("Obvious", file)
     root.print(0, file)
@@ -373,7 +373,7 @@ async def _test_Rewrite1(root: Root, file: MyIO):
     # Use Rewrite to simplify the premises h1 and h2
     await root.fill("1", [Rewrite.gen_single({
         "thought": "Rewrite the premises to simplify the equations",
-        "using": [{"refer_by": "name", "name": "h1"}],
+        "using": [{"name": "h1"}],
         "use system simplifiers": True,
         "rewrite goal": False,
         "rewrite premises": ["h2"]
@@ -391,7 +391,7 @@ async def _test_Rewrite2(root: Root, file: MyIO):
     # Use Rewrite to simplify the premises h1 and h2
     await root.fill("1", [Rewrite.gen_single({
         "thought": "Rewrite the premises to simplify the equations",
-        "using": [{"refer_by": "name", "name": "h1"}],
+        "using": [{"name": "h1"}],
         "use system simplifiers": True,
         "rewrite goal": False,
         "rewrite premises": ["h2"]
@@ -423,7 +423,7 @@ async def _test_Rewrite3(root: Root, file: MyIO):
     root.print(0, file)
     await root.fill("2", [Rewrite.gen_single({
         "thought": "Rewrite the premises to simplify the equations",
-        "using": [{"refer_by": "name", "name": "lem1"}],
+        "using": [{"name": "lem1"}],
         "use system simplifiers": False,
         "rewrite goal": True,
         "rewrite premises": []
@@ -460,7 +460,7 @@ async def _test_Rewrite_NoProgress(root: Root, file: MyIO):
     # Rewrite h1 using foo_def — completely irrelevant, should make no progress
     _outcome = await root.fill("1", [Rewrite.gen_single({
         "thought": "Attempt rewrite with irrelevant rule",
-        "using": [{"refer_by": "name", "name": "foo_def"}],
+        "using": [{"name": "foo_def"}],
         "use system simplifiers": False,
         "rewrite goal": False,
         "rewrite premises": ["h1"]
@@ -481,7 +481,7 @@ async def _test_SuppressParentGoal(root: Root, file: MyIO):
     'Error: Unfinished Proof' section."""
     await root.fill("1", [Rewrite.gen_single({
         "thought": "Rewrite the goal using h1",
-        "using": [{"refer_by": "name", "name": "h1"}],
+        "using": [{"name": "h1"}],
         "use system simplifiers": False,
         "rewrite goal": True,
         "rewrite premises": []
@@ -516,7 +516,7 @@ async def _test_SuppressParentGoal(root: Root, file: MyIO):
 #     root.session.age += 1
 #     node1, is_error1, reason1 = await root.fill("1", Rewrite.gen_single({
 #         "thought": "Rewrite the goal using h",
-#         "using": [{"refer_by": "name", "name": "h"}],
+#         "using": [{"name": "h"}],
 #         "use system simplifiers": False,
 #         "rewrite goal": True,
 #         "rewrite premises": []
@@ -783,7 +783,7 @@ async def _test_Delete1(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("2", [Rewrite.gen_single({
         "thought": "rewrite",
-        "using": [{"refer_by": "name", "name": "lem1"}],
+        "using": [{"name": "lem1"}],
         "use system simplifiers": False,
         "rewrite goal": True,
         "rewrite premises": []
@@ -892,7 +892,7 @@ async def _test_Delete1(root: Root, file: MyIO):
 async def _test_ReferFactByProposition(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
-    fullname = await root.ml_state.fetch_facts([{"refer_by": "name", "name": "notI"}])
+    fullname = await root.ml_state.fetch_facts([{"name": "notI"}])
     file.write(f"Fullname of notI: {fullname}\n")
     return
 
@@ -903,10 +903,10 @@ async def _test_RetrieveFact(root: Root, file: MyIO):
     root.print(0, file)
     # 1. Test fetch_facts with all three fact types
     fetched = await root.ml_state.fetch_facts([
-        {"refer_by": "name", "name": "log_nat_power"},           # → IsabelleFact_Presented
-        {"refer_by": "name", "name": "nonexistent_lemma"},        # → IsabelleFact_Unfound
-        {"refer_by": "proposition", "proposition": "(8::nat) = 2^3"},  # → IsabelleFact_ProveInTime
-        {"refer_by": "description", "english": "8 = 2^3"},       # → Interaction_RetrieveForProof
+        {"name": "log_nat_power"},           # → IsabelleFact_Presented
+        {"name": "nonexistent_lemma"},        # → IsabelleFact_Unfound
+        {"proposition": "(8::nat) = 2^3"},  # → IsabelleFact_ProveInTime
+        {"english": "8 = 2^3"},       # → Interaction_RetrieveForProof
     ])
     for i, f in enumerate(fetched):
         file.write(f"  fetch_facts[{i}]: {type(f).__name__}\n")
@@ -918,8 +918,8 @@ async def _test_RetrieveFact(root: Root, file: MyIO):
     root.session.age += 1
     gn = Obvious.gen_single({
         "facts": [
-            {"refer_by": "proposition", "proposition": "(8::nat) = 2^3"},
-            {"refer_by": "name", "name": "log_nat_power"},
+            {"proposition": "(8::nat) = 2^3"},
+            {"name": "log_nat_power"},
         ]
     })
     _outcome = await root.fill("2", [gn])
@@ -938,8 +938,8 @@ async def _test_RetrieveFact2(root: Root, file: MyIO):
     root.print(0, file)
     # 1. Test fetch_facts with FactByDescription → Interaction_RetrieveForProof
     fetched = await root.ml_state.fetch_facts([
-        {"refer_by": "name", "name": "log_nat_power"},           # → IsabelleFact_Presented
-        {"refer_by": "description", "english": "8 = 2^3"},       # → Interaction_RetrieveForProof
+        {"name": "log_nat_power"},           # → IsabelleFact_Presented
+        {"english": "8 = 2^3"},       # → Interaction_RetrieveForProof
     ])
     for i, f in enumerate(fetched):
         file.write(f"  fetch_facts[{i}]: {type(f).__name__}\n")
@@ -966,7 +966,7 @@ async def _test_RetrieveFact2(root: Root, file: MyIO):
 
     _outcome = await root.fill("2", [InferenceRule.gen_single({
         "thought": "test description-based retrieval",
-        "rule": {"refer_by": "description", "english": "8 = 2^3"},
+        "rule": {"english": "8 = 2^3"},
     })])
     node = _outcome.committed[0] if _outcome.committed else None
     assert node is not None
@@ -992,7 +992,7 @@ async def _test_Obvious_partial_solve(root: Root, file: MyIO):
     })])
     # Step 1.1: Obvious with log_pow_cancel
     root.session.age += 1
-    await root.fill("1.1", [Obvious.gen_single({"facts": [{"refer_by": "name", "name": "log_pow_cancel"}]})])
+    await root.fill("1.1", [Obvious.gen_single({"facts": [{"name": "log_pow_cancel"}]})])
     # Step 2: Have h3: log 8 x = log 2 x / 3
     root.session.age += 1
     await root.fill("2", [Have.gen_single({
@@ -1006,8 +1006,8 @@ async def _test_Obvious_partial_solve(root: Root, file: MyIO):
     # Step 2.1: Obvious with log_base_change and h2
     root.session.age += 1
     await root.fill("2.1", [Obvious.gen_single({"facts": [
-        {"refer_by": "name", "name": "log_base_change"},
-        {"refer_by": "name", "name": "h2"}
+        {"name": "log_base_change"},
+        {"name": "h2"}
     ]})])
     # Step 3: Have h4: log 8 (log 2 x) = log 2 (log 2 x) / 3
     root.session.age += 1
@@ -1025,8 +1025,8 @@ async def _test_Obvious_partial_solve(root: Root, file: MyIO):
     # leaving subgoals that trigger an unexpected Intro at step 3.2
     root.session.age += 1
     await root.fill("3.1", [Obvious.gen_single({"facts": [
-        {"refer_by": "name", "name": "log_base_change"},
-        {"refer_by": "name", "name": "h2"}
+        {"name": "log_base_change"},
+        {"name": "h2"}
     ]})])
     print_header("After step 3.1 (unexpected Intro at 3.2)", file)
     root.print(0, file)
@@ -1051,9 +1051,9 @@ async def _test_Hammer_ProveInTime(root: Root, file: MyIO):
     # Step 1.1: Obvious with a ProveInTime fact (by proposition), a library fact, and a local premise
     root.session.age += 1
     await root.fill("1.1", [Obvious.gen_single({"facts": [
-        {"refer_by": "proposition", "proposition": "(8::real) = (2::real) ^ (3::nat)"},
-        {"refer_by": "name", "name": "log_base_pow"},
-        {"refer_by": "name", "name": "h0"},
+        {"proposition": "(8::real) = (2::real) ^ (3::nat)"},
+        {"name": "log_base_pow"},
+        {"name": "h0"},
     ]})])
     print_header("After Obvious with ProveInTime", file)
     root.print(0, file)
@@ -1091,8 +1091,8 @@ async def _test_Simplify_stuck(root: Root, file: MyIO):
     await root.fill("1.2", [Rewrite.gen_single({
         "thought": "Rewrite 8 as 2^3 in the goal using h8, then apply log_base_pow",
         "using": [
-            {"refer_by": "name", "name": "h8"},
-            {"refer_by": "name", "name": "log_base_pow"}
+            {"name": "h8"},
+            {"name": "log_base_pow"}
         ],
         "use system simplifiers": True,
         "rewrite goal": True,
@@ -1135,8 +1135,8 @@ async def _test_Simplify_no_intro_bindings(root: Root, file: MyIO):
     await root.fill("1.2", [Rewrite.gen_single({
         "thought": "Rewrite 8 as 2^3 using h8eq, then apply log_base_pow",
         "using": [
-            {"refer_by": "name", "name": "h8eq"},
-            {"refer_by": "name", "name": "log_base_pow"}
+            {"name": "h8eq"},
+            {"name": "log_base_pow"}
         ],
         "use system simplifiers": True,
         "rewrite goal": True,
@@ -1174,8 +1174,8 @@ async def _test_Simplify_no_intro_bindings(root: Root, file: MyIO):
     await root.fill("2.1.1", [Rewrite.gen_single({
         "thought": "Rewrite 8 as 2^3 using h8eq and apply log_base_pow",
         "using": [
-            {"refer_by": "name", "name": "h8eq"},
-            {"refer_by": "name", "name": "log_base_pow"}
+            {"name": "h8eq"},
+            {"name": "log_base_pow"}
         ],
         "use system simplifiers": False,
         "rewrite goal": True,
@@ -1242,7 +1242,7 @@ async def _test_Intro_no_intro_bindings(root: Root, file: MyIO):
     intro_node = root.locate_node("1.True.1")
     intro_node.print(0, file)
     # === DEBUG PROBE ===
-    sab = intro_node._state_after_beginning()
+    sab = cast(StdBlock, intro_node)._state_after_beginning()
     file.write(f"[probe] Intro: new_subgoals_count={sab.new_subgoals_count}, display_goals_count={sab.display_goals_count}\n")
     file.write(f"[probe] Intro sub_nodes: {[c.id for c in cast(NonLeaf_Node, intro_node).sub_nodes]}\n")
     print_header("Full tree after Intro", file)
@@ -1286,11 +1286,11 @@ async def _test_InferenceRule_in_CaseSplit(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1.True.1", [InferenceRule.gen_single({
         "thought": "Apply disjI1 (produces exactly 1 subgoal from disjunction)",
-        "rule": {"refer_by": "name", "name": "disjI1"}
+        "rule": {"name": "disjI1"}
     })])
     # === DEBUG PROBE ===
     ir_node = root.locate_node("1.True.1")
-    sab = ir_node._state_after_beginning()
+    sab = cast(StdBlock, ir_node)._state_after_beginning()
     file.write(f"[probe] InferenceRule: new_subgoals_count={sab.new_subgoals_count}, display_goals_count={sab.display_goals_count}\n")
     file.write(f"[probe] InferenceRule sub_nodes ids: {[c.id for c in cast(NonLeaf_Node, ir_node).sub_nodes]}\n")
     print_header("After InferenceRule (expect spurious 2nd sibling-leak subgoal)", file)
@@ -1322,7 +1322,7 @@ async def _test_Nested_InferenceRule_Leak(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1", [InferenceRule.gen_single({
         "thought": "Outer conjI: split ((1=1)∧(2=2)) ∧ (3=3)",
-        "rule": {"refer_by": "name", "name": "conjI"}
+        "rule": {"name": "conjI"}
     })])
     print_header("After outer conjI (expect 2 child GoalNodes: 1.1, 1.2)", file)
     root.print(0, file)
@@ -1334,10 +1334,10 @@ async def _test_Nested_InferenceRule_Leak(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1.1.1", [InferenceRule.gen_single({
         "thought": "Inner conjI on first subgoal: split (1=1) ∧ (2=2)",
-        "rule": {"refer_by": "name", "name": "conjI"}
+        "rule": {"name": "conjI"}
     })])
     inner_ir = root.locate_node("1.1.1")
-    sab = inner_ir._state_after_beginning()
+    sab = cast(StdBlock, inner_ir)._state_after_beginning()
     file.write(f"[probe] inner conjI: new_subgoals_count={sab.new_subgoals_count}, display_goals_count={sab.display_goals_count}\n")
     inner_kids = [c.id for c in cast(NonLeaf_Node, inner_ir).sub_nodes
                   if type(c).__name__ == "GoalNode"]
@@ -1390,7 +1390,7 @@ async def _test_HaveAutoApply(root: Root, file: MyIO):
     # must be passed explicitly because it is not in the default simpset.
     root.session.age += 1
     await root.fill("1.1", [Obvious.gen_single({
-        "facts": [{"refer_by": "name", "name": "myf_def"}]
+        "facts": [{"name": "myf_def"}]
     })])
     print_header("After proving Have sub-goal", file)
     root.print(0, file)
@@ -1428,8 +1428,8 @@ async def _test_Rewrite_Contradictory_Premise(root: Root, file: MyIO):
     _outcome = await root.fill("1", [Rewrite.gen_single({
         "thought": "Rewrite premise using definitions to derive contradiction",
         "using": [
-            {"refer_by": "name", "name": "MyConst1_def"},
-            {"refer_by": "name", "name": "MyConst2_def"}
+            {"name": "MyConst1_def"},
+            {"name": "MyConst2_def"}
         ],
         "use system simplifiers": True,
         "rewrite goal": False,
@@ -1478,7 +1478,7 @@ async def _test_Rewrite_NO_SIMP_Leak(root: Root, file: MyIO):
     # negation. The NO_SIMP(False) conclusion should NOT leak into premises.
     _outcome = await root.fill("1", [Rewrite.gen_single({
         "thought": "Rewrite h using is_nonzero_def to expose double negation",
-        "using": [{"refer_by": "name", "name": "is_nonzero_def"}],
+        "using": [{"name": "is_nonzero_def"}],
         "use system simplifiers": False,
         "rewrite goal": False,
         "rewrite premises": ["h"]
@@ -1511,7 +1511,7 @@ async def _test_Rewrite_Once_Simproc(root: Root, file: MyIO):
     root.session.fork_interaction = stub_fork
     _outcome = await root.fill("1", [Rewrite.gen_single({
         "thought": "Rewrite using my_wrap to unfold f into g(f(...))",
-        "using": [{"refer_by": "name", "name": "my_wrap"}],
+        "using": [{"name": "my_wrap"}],
         "use system simplifiers": False,
         "rewrite goal": True,
         "rewrite premises": []
@@ -1540,7 +1540,7 @@ async def _test_Rewrite_Targeted(root: Root, file: MyIO):
     root.session.fork_interaction = stub_fork
     _outcome = await root.fill("1", [Rewrite.gen_single({
         "thought": "Rewrite f a using my_wrap, leave f b alone",
-        "using": [{"refer_by": "name", "name": "my_wrap"}],
+        "using": [{"name": "my_wrap"}],
         "use system simplifiers": False,
         "rewrite goal": True,
         "rewrite premises": []
@@ -1568,7 +1568,7 @@ async def _test_Rewrite_Targeted_Drop(root: Root, file: MyIO):
     root.session.fork_interaction = stub_fork
     _outcome = await root.fill("1", [Rewrite.gen_single({
         "thought": "Attempt rewrite with looping rule, then dismiss",
-        "using": [{"refer_by": "name", "name": "my_wrap"}],
+        "using": [{"name": "my_wrap"}],
         "use system simplifiers": False,
         "rewrite goal": True,
         "rewrite premises": []
@@ -1601,7 +1601,7 @@ async def _test_Rewrite_QuantifiedGoal(root: Root, file: MyIO):
     root.session.fork_interaction = stub_fork
     _outcome = await root.fill("1", [Rewrite.gen_single({
         "thought": "Rewrite f y inside the existential using my_wrap",
-        "using": [{"refer_by": "name", "name": "my_wrap"}],
+        "using": [{"name": "my_wrap"}],
         "use system simplifiers": False,
         "rewrite goal": True,
         "rewrite premises": []
@@ -1651,11 +1651,11 @@ async def _test_imo_1966_p5(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1.1", [Obvious.gen_single({
         "facts": [
-            {"refer_by": "name", "name": "h6"},
-            {"refer_by": "name", "name": "h7"},
-            {"refer_by": "name", "name": "assms(1)"},
-            {"refer_by": "name", "name": "assms(2)"},
-            {"refer_by": "name", "name": "assms(3)"}
+            {"name": "h6"},
+            {"name": "h7"},
+            {"name": "assms(1)"},
+            {"name": "assms(2)"},
+            {"name": "assms(3)"}
         ]
     })])
     print_header("After failed Obvious on eq1", file)
@@ -1691,8 +1691,8 @@ async def _test_imo_1966_p5(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1.1.1", [Obvious.gen_single({
         "facts": [
-            {"refer_by": "name", "name": "assms(1)"},
-            {"refer_by": "name", "name": "assms(2)"}
+            {"name": "assms(1)"},
+            {"name": "assms(2)"}
         ]
     })])
     print_header("After proving a1_gt_a3", file)
@@ -1717,8 +1717,8 @@ async def _test_imo_1966_p5(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1.2.1", [Obvious.gen_single({
         "facts": [
-            {"refer_by": "name", "name": "a1_gt_a3"},
-            {"refer_by": "name", "name": "assms(3)"}
+            {"name": "a1_gt_a3"},
+            {"name": "assms(3)"}
         ]
     })])
     print_header("After proving a1_gt_a4", file)
@@ -2319,7 +2319,7 @@ async def _test_prove_in_time_parse_error(root: Root, file: MyIO):
     root.session.age += 1
     try:
         await root.fill("1", [Obvious.gen_single({"facts": [
-            {"refer_by": "proposition", "proposition": stmt_ascii}
+            {"proposition": stmt_ascii}
         ]})])
         file.write("Obvious created (should have failure status)\n")
         node = root.locate_node("1")
@@ -2535,9 +2535,9 @@ async def _test_Derive1(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1", [Derive.gen_single({
         "thought": "Instantiate h2 with x=0 and discharge with h1",
-        "rule": {"refer_by": "name", "name": "h2"},
+        "rule": {"name": "h2"},
         "instantiations": [{"name": "x", "value": "0"}],
-        "discharging_facts": [{"refer_by": "name", "name": "h1"}],
+        "discharging_facts": [{"name": "h1"}],
         "result_name": "derived_Q0"
     })])
     print_header("After Derive", file)
@@ -2545,7 +2545,7 @@ async def _test_Derive1(root: Root, file: MyIO):
     # Close goal using the derived fact — may already be auto-proved
     root.session.age += 1
     _outcome = await root.fill("2", [Obvious.gen_single({
-        "facts": [{"refer_by": "name", "name": "derived_Q0"}]
+        "facts": [{"name": "derived_Q0"}]
     })])
     if _outcome.failure is not None:
         file.write(
@@ -2567,8 +2567,8 @@ async def _test_Derive2(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1", [Derive.gen_single({
         "thought": "Discharge h2 with h1 via modus ponens",
-        "rule": {"refer_by": "name", "name": "h2"},
-        "discharging_facts": [{"refer_by": "name", "name": "h1"}],
+        "rule": {"name": "h2"},
+        "discharging_facts": [{"name": "h1"}],
         "result_name": "mp_result"
     })])
     print_header("After Derive", file)
@@ -2576,7 +2576,7 @@ async def _test_Derive2(root: Root, file: MyIO):
     # Close goal using the named result
     root.session.age += 1
     await root.fill("2", [Obvious.gen_single({
-        "facts": [{"refer_by": "name", "name": "mp_result"}]
+        "facts": [{"name": "mp_result"}]
     })])
     print_header("After Obvious", file)
     root.print(0, file)
@@ -2593,7 +2593,7 @@ async def _test_Derive3(root: Root, file: MyIO):
     root.session.age += 1
     _outcome = await root.fill("1", [Derive.gen_single({
         "thought": "Try to use a nonexistent rule",
-        "rule": {"refer_by": "name", "name": "nonexistent_rule"},
+        "rule": {"name": "nonexistent_rule"},
         "result_name": "should_fail"
     })])
     is_error = _outcome.failure is not None and _outcome.failure.is_error
@@ -2615,9 +2615,9 @@ async def _test_Derive4(root: Root, file: MyIO):
     root.session.age += 1
     _outcome = await root.fill("1", [Derive.gen_single({
         "thought": "Derive h2 with x = 1 - 1, discharge with h1 (P 0) — should fail: no unifiers",
-        "rule": {"refer_by": "name", "name": "h2"},
+        "rule": {"name": "h2"},
         "instantiations": [{"name": "x", "value": "1 - (1::nat)"}],
-        "discharging_facts": [{"refer_by": "name", "name": "h1"}],
+        "discharging_facts": [{"name": "h1"}],
         "result_name": "bad_result"
     })])
     is_error = _outcome.failure is not None and _outcome.failure.is_error
@@ -2647,10 +2647,10 @@ async def _test_Derive5(root: Root, file: MyIO):
     start = time()
     _outcome = await root.fill("1", [Derive.gen_single({
         "thought": "Apply mult_mod_cancel_left — h1 lacks ?n*?a pattern, OF will fail",
-        "rule": {"refer_by": "name", "name": "mult_mod_cancel_left"},
+        "rule": {"name": "mult_mod_cancel_left"},
         "discharging_facts": [
-            {"refer_by": "name", "name": "h1"},
-            {"refer_by": "name", "name": "h2"}
+            {"name": "h1"},
+            {"name": "h2"}
         ],
         "result_name": "should_fail"
     })])
@@ -2681,10 +2681,10 @@ async def _test_Derive6(root: Root, file: MyIO):
     start = time()
     _outcome = await root.fill("1", [Derive.gen_single({
         "thought": "Apply mult_mod_cancel_left on nat — type mismatch, OF will fail",
-        "rule": {"refer_by": "name", "name": "mult_mod_cancel_left"},
+        "rule": {"name": "mult_mod_cancel_left"},
         "discharging_facts": [
-            {"refer_by": "name", "name": "h1"},
-            {"refer_by": "name", "name": "h2"}
+            {"name": "h1"},
+            {"name": "h2"}
         ],
         "result_name": "should_fail"
     })])
@@ -2716,10 +2716,10 @@ async def _test_Derive7(root: Root, file: MyIO):
     root.session.age += 1
     _outcome = await root.fill("1", [Derive.gen_single({
         "thought": "mult_mod_cancel_left on nat — type mismatch expected",
-        "rule": {"refer_by": "name", "name": "mult_mod_cancel_left"},
+        "rule": {"name": "mult_mod_cancel_left"},
         "discharging_facts": [
-            {"refer_by": "name", "name": "h1"},
-            {"refer_by": "name", "name": "h2"}
+            {"name": "h1"},
+            {"name": "h2"}
         ],
         "result_name": "should_fail_type"
     })])
@@ -2766,7 +2766,7 @@ async def _test_GlobalEnv(root: Root, file: MyIO):
     file.write(f"Added have1: id={have1.id}, local_step={have1.local_step}, status={have1.status.status.value}\n")
     root.session.age += 1
     _obv_outcome = await have1.append([Obvious.gen_single({
-        "facts": [{"refer_by": "name", "name": "h1"}]
+        "facts": [{"name": "h1"}]
     })])
     print_header("edit_message: Obvious under t1", file)
     file.write(await _P.edit_message(root, _obv_outcome, root.session))
@@ -2791,7 +2791,7 @@ async def _test_GlobalEnv(root: Root, file: MyIO):
     root.session.age += 1
     _outcome = await root.fill("1", [Rewrite.gen_single({
         "thought": "Rewrite the goal using the (broken) global equation t1",
-        "using": [{"refer_by": "name", "name": "t1"}],
+        "using": [{"name": "t1"}],
         "use system simplifiers": False,
         "rewrite goal": True,
         "rewrite premises": []
@@ -2958,7 +2958,7 @@ async def _test_GlobalEnv_happy(root: Root, file: MyIO):
     # Discharge the subgoal using h1 (trivially true since h1 IS y = x)
     root.session.age += 1
     [obv1] = (await have1.append([Obvious.gen_single({
-        "facts": [{"refer_by": "name", "name": "h1"}]
+        "facts": [{"name": "h1"}]
     })])).committed
     file.write(f"Obvious in have1: status={obv1.status.status.value}\n")
     print_header("After ADD global Have (g_eq) + prove", file)
@@ -2977,7 +2977,7 @@ async def _test_GlobalEnv_happy(root: Root, file: MyIO):
     root.session.age += 1
     _outcome = await root.fill("1", [Rewrite.gen_single({
         "thought": "Rewrite the goal using the global equation g_eq",
-        "using": [{"refer_by": "name", "name": "g_eq"}],
+        "using": [{"name": "g_eq"}],
         "use system simplifiers": False,
         "rewrite goal": True,
         "rewrite premises": []
@@ -3098,7 +3098,7 @@ async def _test_GlobalEnvFill(root: Root, file: MyIO):
     # Prove the global Have
     root.session.age += 1
     [obv] = (await ret.append([Obvious.gen_single({
-        "facts": [{"refer_by": "name", "name": "h1"}]
+        "facts": [{"name": "h1"}]
     })])).committed
     file.write(f"Obvious in global Have: status={obv.status.status.value}\n")
     print_header("After proving global Have", file)
@@ -3128,8 +3128,8 @@ async def _test_Chaining(root: Root, file: MyIO):
         "thought": "Chain ab and bc by transitivity to derive a <= c",
         "name": "ac",
         "facts": [
-            {"refer_by": "name", "name": "ab"},
-            {"refer_by": "name", "name": "bc"},
+            {"name": "ab"},
+            {"name": "bc"},
         ],
     })])
     print_header("After Chaining (named)", file)
@@ -3137,7 +3137,7 @@ async def _test_Chaining(root: Root, file: MyIO):
 
     # Close the main goal using the chained fact.
     await root.fill("2", [Obvious.gen_single({
-        "facts": [{"refer_by": "name", "name": "ac"}],
+        "facts": [{"name": "ac"}],
     })])
     print_header("After Obvious using ac", file)
     root.print(0, file)
@@ -3393,7 +3393,7 @@ async def _test_fact_name_resolution(root: Root, file: MyIO):
     # shortcut and returns step1.ml_state — the pre-Have state.
     root.session.age += 1
     _outcome = await root.amend("2", [Obvious.gen_single({
-        "facts": [{"refer_by": "name", "name": "x_gt_1"}]
+        "facts": [{"name": "x_gt_1"}]
     })])
     step2_new = _outcome.committed[0] if _outcome.committed else None
     assert step2_new is not None
@@ -3635,7 +3635,7 @@ async def _test_Induction_IHRename(root: Root, file: MyIO):
     await root.fill("1.2", [Induction.gen_single({
         "thought": "strong induction on n, generalize n, keep p and f fixed",
         "target_isabelle_term": "n :: nat",
-        "rule": {"refer_by": "name", "name": "nat_less_induct"},
+        "rule": {"name": "nat_less_induct"},
         "variables": [
             {"name": "f", "status": "fixed"},
             {"name": "p", "status": "fixed"},
@@ -3645,7 +3645,7 @@ async def _test_Induction_IHRename(root: Root, file: MyIO):
         # so the IH reads `∀m<n. m ≤ p - 2 ⟶ f m < p` (matching the
         # pre-auto-insert-off behavior that this reproducer was written
         # against).
-        "facts_to_generalize": [{"refer_by": "name", "name": "premise0"}],
+        "facts_to_generalize": [{"name": "premise0"}],
     })])
     print_header("After Induction (IH should use `n`, not internal variant)", file)
     root.print(0, file)
@@ -3737,7 +3737,7 @@ async def _test_Induction_AmendTargetFree(root: Root, file: MyIO):
         "thought": "strong induction on i; init call "
                    "(is_init=True strips i even if listed)",
         "target_isabelle_term": "i",
-        "rule": {"refer_by": "name", "name": "less_induct"},
+        "rule": {"name": "less_induct"},
         "variables": [
             {"name": "i", "status": "generalized"},
             {"name": "f", "status": "fixed"},
@@ -3747,7 +3747,7 @@ async def _test_Induction_AmendTargetFree(root: Root, file: MyIO):
         # Carry the auto-Intro's `premise0` (`i \<le> p - 2`) through
         # induction so the IH preserves the pre-auto-insert-off shape
         # that this regression was originally filed against.
-        "facts_to_generalize": [{"refer_by": "name", "name": "premise0"}],
+        "facts_to_generalize": [{"name": "premise0"}],
     })])
     print_header("After fill step 2 (init path --- is_init=True strips i)", file)
     root.print(0, file)
@@ -3762,14 +3762,14 @@ async def _test_Induction_AmendTargetFree(root: Root, file: MyIO):
     await root.amend("2", [Induction.gen_single({
         "thought": "amend: re-list i as generalized; replay the bug path",
         "target_isabelle_term": "i",
-        "rule": {"refer_by": "name", "name": "less_induct"},
+        "rule": {"name": "less_induct"},
         "variables": [
             {"name": "i", "status": "generalized"},
             {"name": "f", "status": "fixed"},
             {"name": "p", "status": "fixed"},
             {"name": "Q", "status": "fixed"},
         ],
-        "facts_to_generalize": [{"refer_by": "name", "name": "premise0"}],
+        "facts_to_generalize": [{"name": "premise0"}],
     })])
     print_header("After amend step 2 (amend path --- must still strip i)", file)
     root.print(0, file)
@@ -3874,14 +3874,14 @@ async def _test_Induction_IHFactRef(root: Root, file: MyIO):
     await root.fill("1.2", [Induction.gen_single({
         "thought": "strong induction on n, generalize n, keep p fixed",
         "target_isabelle_term": "n :: nat",
-        "rule": {"refer_by": "name", "name": "nat_less_induct"},
+        "rule": {"name": "nat_less_induct"},
         "variables": [
             {"name": "p", "status": "fixed"},
             {"name": "n", "status": "generalized"},
         ],
         # Carry the Intro's `premise0` (`n < p`) through induction so
         # the IH is strengthened to `∀m<n. m < p ⟶ True`.
-        "facts_to_generalize": [{"refer_by": "name", "name": "premise0"}],
+        "facts_to_generalize": [{"name": "premise0"}],
     })])
     print_header("After Induction (case 1 produced with hyp `1.IH`)", file)
     root.print(0, file)
@@ -3905,7 +3905,7 @@ async def _test_Induction_IHFactRef(root: Root, file: MyIO):
     # flow that fails in the live log.
     root.session.age += 1
     _outcome = await root.fill("1.3", [Obvious.gen_single({
-        "facts": [{"refer_by": "name", "name": "1.IH"}],
+        "facts": [{"name": "1.IH"}],
     })])
     is_error = _outcome.failure is not None and _outcome.failure.is_error
     reason = _outcome.failure
@@ -3985,16 +3985,16 @@ async def _test_FactsToGeneralize_Filter(root: Root, file: MyIO):
     await root.fill("2.2", [Induction.gen_single({
         "thought": "induct on n with four kinds of facts_to_generalize",
         "target_isabelle_term": "n :: nat",
-        "rule": {"refer_by": "name", "name": "nat_less_induct"},
+        "rule": {"name": "nat_less_induct"},
         "variables": [
             {"name": "p", "status": "fixed"},
             {"name": "n", "status": "generalized"},
         ],
         "facts_to_generalize": [
-            {"refer_by": "name", "name": "premise0"},
-            {"refer_by": "name", "name": "trivial_fact"},
-            {"refer_by": "name", "name": "nat_less_induct"},
-            {"refer_by": "name", "name": "bogus_name"},
+            {"name": "premise0"},
+            {"name": "trivial_fact"},
+            {"name": "nat_less_induct"},
+            {"name": "bogus_name"},
         ],
     })])
     print_header("After Induction (expect 3 filter warnings)", file)
@@ -4004,7 +4004,7 @@ async def _test_FactsToGeneralize_Filter(root: Root, file: MyIO):
 
     # Survivors — the facts that ML should actually receive as
     # insertion. Assertion: only `premise0`.
-    kept_full_names = [r.full_name for r in induct_node.fact_refs_to_generalize]
+    kept_full_names = [r.full_name for r in cast(Induction, induct_node).fact_refs_to_generalize]
     file.write(f"\nSurviving facts_to_generalize (full names): {kept_full_names}\n")
     assert kept_full_names == ["premise0"], (
         f"Expected only `premise0` to survive the filter; got {kept_full_names}")
@@ -4095,13 +4095,13 @@ async def _test_FactsToGeneralize_ConsumingRule(root: Root, file: MyIO):
     await root.fill("2", [Induction.gen_single({
         "thought": "int_le_induct with schematic ?k and carried fact h",
         "target_isabelle_term": "i",
-        "rule": {"refer_by": "name", "name": "int_le_induct"},
+        "rule": {"name": "int_le_induct"},
         "variables": [
             {"name": "i", "status": "generalized"},
             {"name": "k", "status": "fixed"},
             {"name": "Q", "status": "fixed"},
         ],
-        "facts_to_generalize": [{"refer_by": "name", "name": "h"}],
+        "facts_to_generalize": [{"name": "h"}],
     })])
     print_header("After Induction (consumes=1 rule + facts_to_generalize)", file)
     root.print(0, file)
@@ -4173,7 +4173,7 @@ async def _test_HOL_TAG_Leak(root: Root, file: MyIO):
     await root.fill("2", [Induction.gen_single({
         "thought": "strong induction on i, generalize i, keep p fixed",
         "target_isabelle_term": "i",
-        "rule": {"refer_by": "name", "name": "nat_less_induct"},
+        "rule": {"name": "nat_less_induct"},
         "variables": [
             {"name": "i", "status": "generalized"},
             {"name": "p", "status": "fixed"},
@@ -4185,7 +4185,7 @@ async def _test_HOL_TAG_Leak(root: Root, file: MyIO):
         # carries `m ≤ p ⟶ P m` — the same IH shape that used to trip
         # the original TAG-unwrap bug. Assertion below guards against
         # regressions where HOL.TAG leaks via the insertion path too.
-        "facts_to_generalize": [{"refer_by": "name", "name": "premise0"}],
+        "facts_to_generalize": [{"name": "premise0"}],
     })])
     print_header("After Induction (HOL.TAG should leak into IH)", file)
     root.print(0, file)
@@ -4462,12 +4462,12 @@ async def _test_NamedFactResolution(root: Root, file: MyIO):
     cand_a = IsabelleFact_Presented(
         full_name="Test_NamedFactResolution.NF_XXX_def",
         short_name=IsaTerm.from_isabelle("NF_XXX_def"),
-        fact=FactByName(refer_by="name", name="NF_XXX_def"),
+        fact=FactByName(name="NF_XXX_def"),
         expression=[IsaTerm.from_isabelle("NF_XXX ?a ?b = ?a + ?b")])
     cand_b = IsabelleFact_Presented(
         full_name="Test_NamedFactResolution.NF_XXX_alt",
         short_name=IsaTerm.from_isabelle("NF_XXX_alt"),
-        fact=FactByName(refer_by="name", name="NF_XXX_alt"),
+        fact=FactByName(name="NF_XXX_alt"),
         expression=[IsaTerm.from_isabelle("NF_XXX ?a ?b = ?b + ?a")])
     inter3 = Interaction_ChooseDef(["NF_XXX"], [cand_a, cand_b], state=ml_state)
     result3 = await inter3.answer(Answer(name="NF_XXX_def"))
@@ -4631,7 +4631,7 @@ async def _test_AmendLeafToNonLeaf(root: Root, file: MyIO):
     try:
         await root.amend("1", [InferenceRule.gen_single({
             "thought": "Switch to proof by contradiction.",
-            "rule": {"refer_by": "name", "name": "ccontr"},
+            "rule": {"name": "ccontr"},
         })])
     except AttributeError as e:
         raise TestFailed(
@@ -5682,7 +5682,7 @@ async def _test_CaseSplit_NestedSkolem(root: Root, file: MyIO):
     n0 = root.locate_node("1.0")
     n1 = root.locate_node("1.Suc")
     print(f"DEBUG 1.0: ml={n0.ml_state.name}, res={n0.resulting_state().name}, status={n0.status}", file=sys.stderr)
-    print(f"DEBUG 1.Suc: ml={n1.ml_state.name}, goal={n1.goal() is not None}, leading_goal={n1.ml_state.leading_goal is not None}", file=sys.stderr)
+    print(f"DEBUG 1.Suc: ml={n1.ml_state.name}, goal={cast(GoalNode, n1).goal() is not None}, leading_goal={n1.ml_state.leading_goal is not None}", file=sys.stderr)
     root.print(0, file)
 
     # Step 2: Inside the Suc case of n, CaseSplit on m.
@@ -5700,10 +5700,11 @@ async def _test_CaseSplit_NestedSkolem(root: Root, file: MyIO):
     # Step 3: Inspect the inner Suc case for skolemized variable names.
     # After CaseSplit m inside CaseSplit n's Suc case, the inner Suc case
     # is at path 1.Suc.1.Suc1.
-    inner_suc = root.locate_node("1.Suc.1.Suc1")
+    inner_suc = cast(GoalNode, root.locate_node("1.Suc.1.Suc1"))
     goal = inner_suc.goal()
     skolem_vars = []
     skolem_in_conclusion = False
+    conclusion_str = ""
     if goal is not None:
         for var_name in goal.context.vars:
             name_str = var_name.unicode if hasattr(var_name, 'unicode') else repr(var_name)
@@ -5790,7 +5791,7 @@ async def _test_CaseSplit_InteractiveVars(root: Root, file: MyIO):
     print_header("After CaseSplit with case_variables", file)
     root.print(0, file)
 
-    suc_node = root.locate_node("1.Suc")
+    suc_node = cast(GoalNode, root.locate_node("1.Suc"))
     if suc_node is None:
         raise TestFailed("Cannot find node 1.Suc")
     if suc_node.case_vars is None:
@@ -5823,7 +5824,7 @@ async def _test_Induction_InteractiveVars(root: Root, file: MyIO):
             ]},
             {"case_name": "Suc", "case_variables": ["k"], "body": [
                 {"operation": "Obvious", "facts": [
-                    {"refer_by": "name", "name": "Suc.IH"}
+                    {"name": "Suc.IH"}
                 ]}
             ]}
         ]
@@ -5831,11 +5832,11 @@ async def _test_Induction_InteractiveVars(root: Root, file: MyIO):
     print_header("After Induction with case_variables", file)
     root.print(0, file)
 
-    zero_node = root.locate_node("1.0")
+    zero_node = cast(GoalNode, root.locate_node("1.0"))
     if zero_node is not None and zero_node.case_vars is not None:
         file.write(f"0 case_vars: {[v[0] for v in zero_node.case_vars]}\n")
 
-    suc_node = root.locate_node("1.Suc")
+    suc_node = cast(GoalNode, root.locate_node("1.Suc"))
     if suc_node is None:
         raise TestFailed("Cannot find node 1.Suc")
     if suc_node.case_vars is not None:
@@ -5886,7 +5887,7 @@ async def _test_BatchFill_HaveObvious(root: Root, file: MyIO):
              "name": "aux",
              "proof": [{"operation": "Obvious", "facts": []}]},
             {"operation": "Obvious",
-             "facts": [{"refer_by": "name", "name": "aux"}]},
+             "facts": [{"name": "aux"}]},
         ]})
     print_header("edit_message: batch fill [Have(proof:[Obvious]), Obvious]", file)
     file.write(result)
@@ -5932,7 +5933,7 @@ async def _test_ComplexEditFlow(root: Root, file: MyIO):
              "name": "aux",
              "proof": [{"operation": "Obvious", "facts": []}]},
             {"operation": "Obvious",
-             "facts": [{"refer_by": "name", "name": "aux"}]},
+             "facts": [{"name": "aux"}]},
         ]})
     print_header("[2] batch fill [Have(nested), Obvious(using aux)]", file)
     file.write(result)
@@ -6219,7 +6220,7 @@ async def _test_InferenceRuleBatch(root: Root, file: MyIO):
         {"target_step": "1", "action": "fill", "proof_operations": [
             {"operation": "InferenceRule",
              "thought": "proof by contradiction",
-             "rule": {"refer_by": "name", "name": "ccontr"}},
+             "rule": {"name": "ccontr"}},
             {"operation": "Obvious", "facts": []},
         ]})
     file.write(f"is_error: {is_error}\n")
@@ -6265,7 +6266,7 @@ async def _test_InferenceRuleBatch_MultiSubgoal(root: Root, file: MyIO):
         {"target_step": "1", "action": "fill", "proof_operations": [
             {"operation": "InferenceRule",
              "thought": "split conjunction via conjI",
-             "rule": {"refer_by": "name", "name": "conjI"}},
+             "rule": {"name": "conjI"}},
             # These two are agent's mistake — they cannot be siblings after
             # a block-closing SubgoalMaker.  Expected to be aggregated into
             # `session.warnings` as unapplied.
@@ -6325,7 +6326,7 @@ async def _test_InferenceRuleProofsPerSubgoal(root: Root, file: MyIO):
         {"target_step": "1", "action": "fill", "proof_operations": [
             {"operation": "InferenceRule",
              "thought": "split ∧ via conjI",
-             "rule": {"refer_by": "name", "name": "conjI"},
+             "rule": {"name": "conjI"},
              "proofs": [
                  [{"operation": "Obvious", "facts": []}],
                  [{"operation": "Obvious", "facts": []}],
@@ -6361,7 +6362,7 @@ async def _test_InferenceRule_ProofsOverSupply(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1", [InferenceRule.gen_single({
         "thought": "conjI with oversupply",
-        "rule": {"refer_by": "name", "name": "conjI"},
+        "rule": {"name": "conjI"},
         "proofs": [
             [{"operation": "Obvious", "facts": []}],
             [{"operation": "Obvious", "facts": []}],
@@ -6390,7 +6391,7 @@ async def _test_InferenceRule_ProofsUnderSupply(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1", [InferenceRule.gen_single({
         "thought": "conjI with undersupply",
-        "rule": {"refer_by": "name", "name": "conjI"},
+        "rule": {"name": "conjI"},
         "proofs": [
             [{"operation": "Obvious", "facts": []}],
         ],
@@ -6444,7 +6445,7 @@ async def _test_InferenceRule_Quickview(root: Root, file: MyIO):
     Uses ccontr (N=1): derived goal should be `¬ P ⟶ False`."""
     await root.fill("1", [InferenceRule.gen_single({
         "thought": "proof by contradiction",
-        "rule": {"refer_by": "name", "name": "ccontr"},
+        "rule": {"name": "ccontr"},
     })])
     print_header("Full print (shows derived goal)", file)
     root.print(0, file)
@@ -6489,7 +6490,7 @@ async def _test_CcontrIntroMatch(root: Root, file: MyIO):
     await root.fill("2", [Induction.gen_single({
         "thought": "Strong induction on i",
         "target_isabelle_term": "i",
-        "rule": {"refer_by": "name", "name": "nat_less_induct"},
+        "rule": {"name": "nat_less_induct"},
         "variables": [
             {"name": "i", "status": "generalized"},
             {"name": "f", "status": "fixed"},
@@ -6518,8 +6519,8 @@ async def _test_CcontrIntroMatch(root: Root, file: MyIO):
     # Discharge case 3.1 (small)
     root.session.age += 1
     await root.fill("3.1.1", [Obvious.gen_single({
-        "facts": [{"refer_by": "name", "name": "h1"},
-                  {"refer_by": "name", "name": "small"}]
+        "facts": [{"name": "h1"},
+                  {"name": "small"}]
     })])
     print_header("After Branch setup + close small case", file)
     root.print(0, file)
@@ -6528,7 +6529,7 @@ async def _test_CcontrIntroMatch(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("3.2.1", [Rewrite.gen_single({
         "thought": "unfold f n using h0",
-        "using": [{"refer_by": "name", "name": "h0"}],
+        "using": [{"name": "h0"}],
         "use system simplifiers": True,
         "rewrite goal": True,
         "rewrite premises": [],
@@ -6541,12 +6542,12 @@ async def _test_CcontrIntroMatch(root: Root, file: MyIO):
         "proof": [
             {"operation": "Derive",
              "thought": "instantiate h1 with k=0",
-             "rule": {"refer_by": "name", "name": "h1"},
+             "rule": {"name": "h1"},
              "instantiations": [{"name": "?k", "value": "(0::nat)"}],
              "result_name": "h1_0"},
             {"operation": "Obvious",
-             "facts": [{"refer_by": "name", "name": "h1_0"},
-                       {"refer_by": "name", "name": "h0"}]},
+             "facts": [{"name": "h1_0"},
+                       {"name": "h0"}]},
         ],
     })])
     root.session.age += 1
@@ -6555,8 +6556,8 @@ async def _test_CcontrIntroMatch(root: Root, file: MyIO):
         "name": "pge2",
         "statement": {"english": "p ≥ 2", "isabelle": "p ≥ (2::nat)"},
         "proof": [{"operation": "Obvious",
-                   "facts": [{"refer_by": "name", "name": "prime_p"},
-                             {"refer_by": "name", "name": "prime_ge_2_nat"}]}],
+                   "facts": [{"name": "prime_p"},
+                             {"name": "prime_ge_2_nat"}]}],
     })])
     root.session.age += 1
     await root.fill("3.2.4", [Have.gen_single({
@@ -6565,8 +6566,8 @@ async def _test_CcontrIntroMatch(root: Root, file: MyIO):
         "statement": {"english": "sqrt(p/3) < real n",
                       "isabelle": "sqrt (real p / (3::real)) < real n"},
         "proof": [{"operation": "Obvious",
-                   "facts": [{"refer_by": "name", "name": "large"},
-                             {"refer_by": "name", "name": "floor_less_iff"}]}],
+                   "facts": [{"name": "large"},
+                             {"name": "floor_less_iff"}]}],
     })])
     root.session.age += 1
     await root.fill("3.2.5", [Have.gen_single({
@@ -6575,8 +6576,8 @@ async def _test_CcontrIntroMatch(root: Root, file: MyIO):
         "statement": {"english": "p/3 < real n^2",
                       "isabelle": "real p / (3::real) < (real n)^2"},
         "proof": [{"operation": "Obvious",
-                   "facts": [{"refer_by": "name", "name": "sqrt_lt"},
-                             {"refer_by": "name", "name": "pge2"}]}],
+                   "facts": [{"name": "sqrt_lt"},
+                             {"name": "pge2"}]}],
     })])
     root.session.age += 1
     await root.fill("3.2.6", [Have.gen_single({
@@ -6585,7 +6586,7 @@ async def _test_CcontrIntroMatch(root: Root, file: MyIO):
         "statement": {"english": "p < 3n^2",
                       "isabelle": "p < (3::nat) * n^2"},
         "proof": [{"operation": "Obvious",
-                   "facts": [{"refer_by": "name", "name": "p_third_lt"}]}],
+                   "facts": [{"name": "p_third_lt"}]}],
     })])
     root.session.age += 1
     await root.fill("3.2.7", [Have.gen_single({
@@ -6593,8 +6594,8 @@ async def _test_CcontrIntroMatch(root: Root, file: MyIO):
         "name": "nge1",
         "statement": {"english": "n ≥ 1", "isabelle": "n ≥ (1::nat)"},
         "proof": [{"operation": "Obvious",
-                   "facts": [{"refer_by": "name", "name": "n_big"},
-                             {"refer_by": "name", "name": "pge2"}]}],
+                   "facts": [{"name": "n_big"},
+                             {"name": "pge2"}]}],
     })])
     root.session.age += 1
     await root.fill("3.2.8", [Have.gen_single({
@@ -6603,7 +6604,7 @@ async def _test_CcontrIntroMatch(root: Root, file: MyIO):
         "statement": {"english": "n^2 + n + p > 1",
                       "isabelle": "n^2 + n + p > (1::nat)"},
         "proof": [{"operation": "Obvious",
-                   "facts": [{"refer_by": "name", "name": "pge2"}]}],
+                   "facts": [{"name": "pge2"}]}],
     })])
     print_header("After case 3.2 setup (Rewrite + 7 Haves)", file)
     root.print(0, file)
@@ -6616,7 +6617,7 @@ async def _test_CcontrIntroMatch(root: Root, file: MyIO):
         {"target_step": "3.2.9", "action": "fill", "proof_operations": [
             {"operation": "InferenceRule",
              "thought": "Proof by contradiction",
-             "rule": {"refer_by": "name", "name": "ccontr"},
+             "rule": {"name": "ccontr"},
              "proofs": [[
                  {"operation": "Intro",
                   "thought": "assume ¬ prime (n² + n + p)",
@@ -6754,13 +6755,13 @@ async def _test_HaveLeakSibling(root: Root, file: MyIO):
     await root.fill("1.1.1.1", [Obvious.gen_single({"facts": []})])
     root.session.age += 1
     await root.fill("1.1.2", [Obvious.gen_single({
-        "facts": [{"refer_by": "name", "name": "helper"}]
+        "facts": [{"name": "helper"}]
     })])
     print_header("After closing case 1.1 with Have 'helper'", file)
     root.quickview(0, file)
 
     # Check: case 1.2's quickview must NOT show 'helper' as a premise.
-    gn_1_2 = root.locate_node("1.2")
+    gn_1_2 = cast(GoalNode, root.locate_node("1.2"))
     goal = gn_1_2.goal()
     if goal is not None:
         suppressed = gn_1_2._ctxt_before_me()
@@ -6802,7 +6803,7 @@ async def _test_AmendInductionDiscardedCtxt(root: Root, file: MyIO):
     await root.amend("1", [Induction.gen_single({
         "thought": "amend to strong induction (less_induct, 1 case)",
         "target_isabelle_term": "n",
-        "rule": {"refer_by": "name", "name": "less_induct"},
+        "rule": {"name": "less_induct"},
         "variables": [{"name": "n", "status": "fixed"}],
     })])
     print_header("After amend (less_induct, 1 case) — show_warnings=True", file)
@@ -6940,7 +6941,7 @@ async def _test_AmendHaveToConjI(root: Root, file: MyIO):
     })])
     print_header("After Have(...) with body", file)
     root.print(0, file)
-    have_step = root.locate_node("1")
+    have_step = cast(NonLeaf_Node, root.locate_node("1"))
     file.write(f"Have type: {type(have_step).__name__}\n")
     file.write(f"Have sub_nodes types: {[type(c).__name__ for c in have_step.sub_nodes]}\n")
     file.write(f"Have status: {have_step.status.status.value}\n")
@@ -6948,9 +6949,9 @@ async def _test_AmendHaveToConjI(root: Root, file: MyIO):
     root.session.age += 1
     outcome = await root.amend("1", [InferenceRule.gen_single({
         "thought": "switch to conjI",
-        "rule": {"refer_by": "name", "name": "conjI"},
+        "rule": {"name": "conjI"},
     })])
-    amended = outcome.committed[0] if outcome.committed else None
+    amended = cast(NonLeaf_Node, outcome.committed[0]) if outcome.committed else None
     print_header("After amend Have -> InferenceRule(conjI)", file)
     root.print(0, file)
     if amended is None:
@@ -6999,7 +7000,7 @@ async def _test_DeleteObtainUnfound(root: Root, file: MyIO):
     # constraint from the Obtain above.
     root.session.age += 1
     await root.fill("3", [Obvious.gen_single({
-        "facts": [{"refer_by": "name", "name": "k_def"}]
+        "facts": [{"name": "k_def"}]
     })])
     print_header("After Obvious with k_def", file)
     root.print(0, file)
@@ -7034,7 +7035,7 @@ async def _test_SpliceHaveRefresh(root: Root, file: MyIO):
         "proof": [
             {"operation": "InferenceRule",
              "thought": "apply notI",
-             "rule": {"refer_by": "name", "name": "notI"},
+             "rule": {"name": "notI"},
              "proofs": [[
                  {"operation": "Obvious", "facts": []}
              ]]}
@@ -7072,7 +7073,7 @@ async def _test_ObviousDescriptionFact(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1", [Obvious.gen_single({
         "facts": [
-            {"refer_by": "description", "english": "nonneg square"},
+            {"english": "nonneg square"},
         ]
     })])
     print_header("After Obvious with description fact", file)
@@ -7099,7 +7100,7 @@ async def _test_SpliceAutoIntro(root: Root, file: MyIO):
         {"target_step": "1", "action": "fill", "proof_operations": [
             {"operation": "InferenceRule",
              "thought": "proof by contradiction",
-             "rule": {"refer_by": "name", "name": "ccontr"},
+             "rule": {"name": "ccontr"},
              "proofs": [[
                  {"operation": "Have",
                   "thought": "trivial claim",
@@ -7153,7 +7154,7 @@ async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | No
         _exclude_patterns = [p.strip() for p in _test_exclude.split(",") if p.strip()] if _test_exclude else []
         _tests_to_run = [
             t for t in TESTS.values()
-            if (_test_filter is None or any(p.strip() in t.name for p in _test_filter.split("|")))
+            if (_test_filter is None or any(p.strip() in t.name for p in _test_filter.replace(",", "|").split("|")))
             and not any(p in t.name for p in _exclude_patterns)
         ]
         case_num = len(_tests_to_run)
