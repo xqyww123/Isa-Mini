@@ -879,13 +879,6 @@ class Induction_Dropped_Facts_Msg(Message):
         super().__init__()
         self.dropped_names = dropped_names
 
-class Interaction_Msg(Message):
-    """Emitted when CASES' pauses at an interactive MAGIC frame,
-    listing the available case names for the agent to choose from."""
-    def __init__(self, case_names: list[str]) -> None:
-        super().__init__()
-        self.case_names = case_names
-
 def unpack_message(data) -> Message:
     match data:
         case (0, x):
@@ -914,10 +907,6 @@ def unpack_message(data) -> Message:
             return Simplify_Targets_Stale_Msg.unpack(names)
         case (12, names):
             return Induction_Dropped_Facts_Msg(names)
-        case (13, ("WHICH_CASE", case_names)):
-            return Interaction_Msg(case_names)
-        case (13, _):
-            return Interaction_Msg([])
         case _:
             raise Exception(f"BUG bad message kind: {data}")
 
@@ -1107,9 +1096,6 @@ class Minilang_Operation(NamedTuple):
              [ascii_of_unicode(t) for t in arbitrary],
              list(facts_to_generalize),
              rule.ascii if rule is not None else None))
-    @staticmethod
-    def OPEN_CASE(case_name: str, variables: list[str] | None) -> 'Minilang_Operation':
-        return Minilang_Operation("OPEN_CASE", (case_name, variables or []))
     @staticmethod
     def SPECIALIZE(
         name: str,
@@ -1493,11 +1479,6 @@ class Minilang_State:
         """
         result = await self.connection.callback("IsaMini.need_intro", (self.name, consider_conj))
         return result
-    async def has_pending_interaction(self) -> bool:
-        result = await self.connection.callback("IsaMini.has_pending_interaction", self.name)
-        return result
-    async def pending_interaction_cases(self) -> list[str] | None:
-        return await self.connection.callback("IsaMini.pending_interaction_cases", self.name)
     async def _retrieve_entity(self, entities: list[tuple[EntityKind, str]]
         ) -> list[tuple[short_name, list[term], list[str], list[full_name], bool] | None]:
         """Retrieve entity info by kind and name (short or full).
@@ -3811,7 +3792,7 @@ class GoalNode(StdBlock):
     def titled_id(self) -> str:
         return self.id
     def goal(self) -> Goal | None:
-        return self._state_after_beginning().leading_goal
+        return self.ml_state.leading_goal
     def id_of_goal(self) -> step | None:
         if self.is_single_goal:
             if self.parent is not None:
@@ -3823,15 +3804,6 @@ class GoalNode(StdBlock):
     def _should_print_footer_pending_goal(self) -> bool:
         return not all(isinstance(c, (Have, Obtain)) for c in self.sub_nodes)
     def beginning_opr(self) -> 'Minilang_Operation | None':
-        has_interaction = any(isinstance(m, Interaction_Msg) for m in self.ml_state.messages)
-        if has_interaction:
-            case_name = self.local_step
-            agent_vars: list[str] | None = None
-            if self._pending_proof is not None:
-                cv, _ = self._pending_proof
-                if cv is not None:
-                    agent_vars = [v.ascii for v in cv]
-            return Minilang_Operation.OPEN_CASE(case_name, agent_vars)
         return None
     def ending_opr(self) -> Minilang_Operation | None:
         if not isinstance(self.parent, GoalContainer):
@@ -3846,18 +3818,7 @@ class GoalNode(StdBlock):
             raise InternalError("The parent of a GoalNode is not a GoalContainer")
         return await self.parent._skip_child_proof(self)
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
-        return FailureReason(f"Failed to open case: {'; '.join(err.errors)}")
-    async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
-        result = await super()._refresh_the_beginning_opr()
-        if result is not None:
-            return result
-        sab = self._state_after_beginning()
-        msgs = [m for m in sab.messages if isinstance(m, Consider_Case_Msg)]
-        if msgs:
-            self._reset_local_step(msgs[0].case)
-            self.case_vars = msgs[0].vars
-            self.case_hyps = msgs[0].hyps
-        return None
+        raise InternalError("A GoalNode doesn't have a beginning operation")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
         return FailureReason("Fail to prove the goal because one of the following proof steps fails.")
     def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
@@ -4719,9 +4680,6 @@ class CaseSplit_Like(SubgoalMaker):
         msgs = [m for m in s0.messages if isinstance(m, Consider_Case_Msg)]
         if msgs:
             return (msgs[0].case, g) if g is not None else None
-        interaction_msgs = [m for m in s0.messages if isinstance(m, Interaction_Msg)]
-        if interaction_msgs and interaction_msgs[0].case_names:
-            return (interaction_msgs[0].case_names[0], g) if g is not None else None
         if g is None:
             return None
         return ("<transformed goal>", g)
