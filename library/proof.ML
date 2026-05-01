@@ -3933,6 +3933,7 @@ val CHAINING_CMD =
 (** HAMMER **)
 
 fun conclude_SK (ctxt, HHF (st, itms) :: S) = (ctxt, HHF (conclude_goal st, itms) :: S)
+  | conclude_SK (ctxt, MAGIC (SOME question, A, B, C) :: S) = maintain (ctxt, MAGIC (NONE, A, B, C) :: S)
   | conclude_SK _ = raise BROKEN_INVARIANT
 
 exception SH_PRF of string
@@ -4138,6 +4139,8 @@ fun SORRY_i (ctxt, HHF (s,facts) :: S) =
      in (ctxt, HHF (s', facts) :: S)
      |> maintain
     end
+  | SORRY_i (ctxt, MAGIC (SOME _, A, B, C) :: S) =
+      SORRY_i (maintain (ctxt, MAGIC (NONE, A, B, C) :: S))
   | SORRY_i _ = raise BROKEN_INVARIANT
 
 fun END_or_NXT'_by_SORRY param = gen_END_or_NXT' param SORRY_i
