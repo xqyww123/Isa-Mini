@@ -68,6 +68,11 @@
         "name": {
           "type": "string",
           "description": "the exact name of the fact in Isabelle/HOL"
+        },
+        "instantiations": {
+          "description": "optional instantiations for ∀-quantified or schematic variables",
+          "items": { "$ref": "#/$defs/Instantiation" },
+          "type": "array"
         }
       },
       "required": [ "name" ],

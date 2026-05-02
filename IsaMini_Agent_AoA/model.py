@@ -126,8 +126,13 @@ class FactByProposition(TypedDict):
 class FactByDescription(TypedDict):
     english: str
 
+class Instantiation(TypedDict):
+    name: str
+    value: xterm
+
 class FactByName(TypedDict):
     name: xname
+    instantiations: NotRequired[list[Instantiation]]
 
 type Fact = FactByName | FactByProposition | FactByDescription
 
@@ -137,6 +142,17 @@ def fact_kind(fact: Fact) -> Literal["name", "proposition", "description"]:
     if "proposition" in fact:
         return "proposition"
     return "description"
+
+def _where_suffix(fact: Fact) -> str:
+    if "name" not in fact:
+        return ""
+    insts = cast(FactByName, fact).get("instantiations", [])
+    if not insts:
+        return ""
+    where_parts = " and ".join(
+        f"{i['name']} = \N{SINGLE LEFT-POINTING ANGLE QUOTATION MARK}{i['value']}\N{SINGLE RIGHT-POINTING ANGLE QUOTATION MARK}"
+        for i in insts)
+    return f"[where {where_parts}]"
 
 class FailureReason(NamedTuple):
     """A human-readable failure reason, used in Interaction.answer() returns
@@ -209,20 +225,27 @@ class IsabelleFact_Presented(IsabelleFact, IsabelleEntity):
         self.abbreviation_names = abbreviation_names
         self.is_local = is_local
     def name(self) -> 'short_name':
+        suffix = _where_suffix(self.fact)
+        if suffix:
+            return IsaTerm.from_agent(self.short_name.unicode + suffix)
         return self.short_name
     def print(self, indent: int, file: MyIO) -> None:
         print_indent(indent, file)
+        display_name = self.short_name.unicode + _where_suffix(self.fact)
         if len(self.expression) == 1:
-            file.write(f"- {self.short_name.unicode}: {self.expression[0].unicode}\n")
+            file.write(f"- {display_name}: {self.expression[0].unicode}\n")
         elif len(self.expression) > 1:
-            file.write(f"- {self.short_name.unicode}:\n")
+            file.write(f"- {display_name}:\n")
             for expr in self.expression:
                 print_indent(indent + 1, file)
                 file.write(f"  {expr.unicode}\n")
         else:
-            file.write(f"- {self.short_name.unicode}\n")
+            file.write(f"- {display_name}\n")
     def pack(self) -> tuple[int, str]:
-        return (0, self.full_name)
+        suffix = _where_suffix(self.fact)
+        if suffix:
+            suffix = ascii_of_unicode(suffix)
+        return (0, self.full_name + suffix)
 
 class IsabelleFact_ProveInTime(IsabelleFact):
     """A fact to be proven just-in-time by Isabelle."""
@@ -244,7 +267,7 @@ class IsabelleFact_Unfound(IsabelleFact):
         self.fact = fact
     def name(self) -> 'short_name | term':
         match fact_kind(self.fact):
-            case "name": return IsaTerm.from_agent(cast(FactByName, self.fact)["name"])
+            case "name": return IsaTerm.from_agent(cast(FactByName, self.fact)["name"] + _where_suffix(self.fact))
             case "proposition": return IsaTerm.from_agent(cast(FactByProposition, self.fact)["proposition"])
             case "description": return IsaTerm.from_agent(cast(FactByDescription, self.fact)["english"])
     def print(self, indent: int, file: MyIO) -> None:
@@ -5357,10 +5380,6 @@ class Unfold(Leaf):
 
 
 #### Derive
-
-class Instantiation(TypedDict):
-    name: str     # variable name (e.g., "x", "n")
-    value: xterm  # Isabelle term string (e.g., "Suc 0")
 
 class Derive_ToolArg(TypedDict):
     thought: str

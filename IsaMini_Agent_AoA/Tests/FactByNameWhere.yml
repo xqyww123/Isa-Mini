@@ -1,0 +1,26 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - P: nat ⇒ bool
+premises:
+  - h: ∀(x :: nat). P x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P (0 :: nat)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Obvious with FactByName[where]
+--------------------------------------------------
+variables:
+  - P: nat ⇒ bool
+premises:
+  - h: ∀(x :: nat). P x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: P (0 :: nat)
+proof:
+  - step id: 1
+    operation: Obvious
+    with facts:
+      - h[where x = ‹0 :: nat›]: ∀(x :: nat). P x
+Unfinished nodes: 0
