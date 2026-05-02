@@ -12,7 +12,7 @@ theorem imo_1987_p6:
   assumes h0 : "\<And>x. f x = x^2 + x + p"
     and h1 : "\<And>(k::nat). (k\<le>floor(sqrt (p/3))) \<Longrightarrow> prime (f k)"
   shows "\<And>i. (i \<le> p - 2) \<Longrightarrow> prime (f i)"
-  by aoa
+  by  aoa
 
 term \<open>HOL.implies\<close>
 

@@ -3050,6 +3050,57 @@ async def _test_GlobalEnv_happy(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
+@model_test("GlobalEnv_DoneQuickview", "Test_GlobalEnv_DoneQuickview.thy", 11)
+async def _test_GlobalEnv_DoneQuickview(root: Root, file: MyIO):
+    """Bug reproduction: when all global declarations are proved and
+    `reset_changed` clears every `changed` flag, the next quickview
+    should still show global lemma headers (e.g. "step global.1: Have
+    g_eq (done, ...)") instead of collapsing `global declarations:` to
+    an empty section.
+
+    Root cause: NonLeaf_Node.quickview (line ~3260) returns early with
+    just the header when `does_quickview_need_detail()` is False,
+    skipping all children entirely."""
+
+    # --- Step 1: Add a global Have and prove it ---
+    root.session.age += 1
+    [have1] = (await root.global_env.append([Have.gen_single({
+        "thought": "Restate h1 as a global rewrite rule",
+        "statement": {"english": "y equals x", "isabelle": "y = x"},
+        "name": "g_eq",
+    })])).committed
+    root.session.age += 1
+    await have1.append([Obvious.gen_single({"facts": [{"name": "h1"}]})])
+
+    # --- Step 2: Prove the body via Rewrite using g_eq ---
+    root.session.age += 1
+    _outcome = await root.fill("1", [Rewrite.gen_single({
+        "thought": "Rewrite using g_eq",
+        "using": [{"name": "g_eq"}],
+        "use system simplifiers": False,
+        "rewrite goal": True,
+        "rewrite premises": []
+    })])
+
+    # --- Step 3: edit_message — calls quickview then reset_changed ---
+    print_header("edit_message (completes everything)", file)
+    file.write(await _P.edit_message(root, _outcome, root.session))
+    file.write("---------------\n")
+
+    # --- Step 4: quickview AFTER reset_changed ---
+    # At this point all nodes are SUCCESS and changed=False.
+    # The bug: global.1 (g_eq) disappears entirely from quickview.
+    print_header("Quickview after reset_changed (BUG REPRODUCTION)", file)
+    root.quickview(0, file)
+
+    # --- Step 5: Verify whether g_eq appears ---
+    qv_buf = MyIO(io.StringIO())
+    root.quickview(0, qv_buf)
+    qv_text = qv_buf.getvalue()
+    file.write(f"\nQuickview text contains 'g_eq': {'g_eq' in qv_text}\n")
+    file.write(f"Quickview text contains 'global.1': {'global.1' in qv_text}\n")
+    file.write(f"Expected: both True (global Have headers should remain visible)\n")
+
 @model_test("GlobalEnvFill", "Test_GlobalEnvFill.thy", 11)
 async def _test_GlobalEnvFill(root: Root, file: MyIO):
     """Bug 3 regression test: verify that `root.fill("global.1", ...)`

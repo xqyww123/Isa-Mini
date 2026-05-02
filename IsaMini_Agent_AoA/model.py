@@ -6874,6 +6874,8 @@ class GlobalEnv(StdBlock):
         print_indent(indent, file)
         file.write("global declarations:\n")
         return indent + 1
+    def does_quickview_need_detail(self) -> bool:
+        return bool(self.sub_nodes)
     def should_I_show_pending_goal(self) -> tuple[Goal, step] | None:
         return None
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
@@ -7449,9 +7451,10 @@ class Session:
                   lambda: [f"[AOA] {message}"], message=message)
 
     def warn_AoA_opr(self, message: str):
-        """Log an AoA warning to interaction.yaml."""
-        self._log(self.interaction_log_file, "AOA_WARNING",
-                  lambda: [f"[AOA_WARN] {message}"], message=message)
+        """Log an AoA warning to interaction.yaml and logger at WARNING level."""
+        self._log(self.interaction_log_file, "AOA_WARNING", None, message=message)
+        if self.logger is not None:
+            self.logger.warning(f"[AOA_WARN] {message}")
 
     def log_interaction(self, tool_name: str, prompt: str):
         """Log interaction prompt to interaction.yaml."""

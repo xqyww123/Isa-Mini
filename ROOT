@@ -31,3 +31,17 @@ session Minilang_Agent in Agent = Minilang +
     Semantic_Embedding
   theories
     Minilang_Agent
+
+session Infra_Filter_Test in Test_InfraFilter = "HOL-Analysis" +
+  sessions
+    Performant_Isabelle_ML
+    "HOL-Algebra"
+    "HOL-Number_Theory"
+    Lifting_the_Exponent
+    Gauss_Jordan
+    Polynomial_Factorization
+    Catalan_Numbers
+    Bernoulli
+    Bell_Numbers_Spivey
+  theories
+    Test_LTE_InfraFilter

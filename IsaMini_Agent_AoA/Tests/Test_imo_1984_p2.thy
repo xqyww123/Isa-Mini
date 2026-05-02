@@ -14,5 +14,5 @@ theorem imo_1984_p2:
     and h3 : "\<not> (7 dvd (a+b))"
     and h4 : "(7^7) dvd ((a+b)^7 - a^7 - b^7)"
   shows "19 \<le> a + b"
-  sorry
+  by aoa
 end

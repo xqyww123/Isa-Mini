@@ -12,6 +12,10 @@ from .model import *
 from . import prompts as P
 from .mcp_http_server import ProofMCPHTTPServer
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, HookMatcher, ResultMessage
+try:
+    from claude_agent_sdk import RateLimitEvent
+except ImportError:
+    RateLimitEvent = None
 
 from claude_agent_sdk.types import (
     HookInput,
@@ -21,6 +25,20 @@ from claude_agent_sdk.types import (
 )
 from io import StringIO
 import Isabelle_Semantic_Embedding
+
+_COMPACT_HEADROOM = 13_000
+
+def _model_context_window(model: str) -> int:
+    m = re.search(r'\[(\d+)([mk])\]', model)
+    if m:
+        num, unit = int(m.group(1)), m.group(2)
+        return num * (1_000_000 if unit == 'm' else 1_000)
+    return 200_000
+
+def _auto_compact_window(model: str, threshold_pct: float) -> int:
+    ctx = _model_context_window(model)
+    return max(100_000, min(1_000_000, int(ctx * threshold_pct) + _COMPACT_HEADROOM))
+
 
 def _serialize_args(args: Any) -> Any:
     """Best-effort JSON-serializable representation of Minilang operation arguments."""
@@ -54,6 +72,8 @@ class ClaudeCode(Session):
         'ToolSearch'
     ]
     FORK_WHITELIST = [t for t in TOOL_WHITELIST if t not in ('mcp__proof__edit', 'mcp__proof__delete')]
+    COMPACT_THRESHOLD = 0.85
+    FORK_COMPACT_THRESHOLD = 0.99
     _TOOL_NAME_MAP: dict[str, str] = {
         "answer": "mcp__proof__answer",
         "query": "mcp__proof__query",
@@ -150,16 +170,18 @@ class ClaudeCode(Session):
 
         if not self._interactive_web_terminal:
             # Embedded mode: Agent SDK connects to HTTP server via URL
+            main_model = "claude-opus-4-6[1m]"
             self.options = ClaudeAgentOptions(
-                model="claude-opus-4-6[1m]",
+                model=main_model,
                 thinking={"type": "adaptive"},
                 system_prompt=P.SYSTEM_PROMPT,
                 cwd=self.working_dir,
                 permission_mode="default",
                 allowed_tools=self.TOOL_WHITELIST,
                 mcp_servers={"proof": {"type": "http", "url": self._mcp_url}},
-                cli_path=shutil.which("claude"),
                 env={"CLAUDE_CODE_ATTRIBUTION_HEADER": "0"},
+                settings=json.dumps({"autoCompactWindow":
+                    _auto_compact_window(main_model, self.COMPACT_THRESHOLD)}),
                 extra_args={"exclude-dynamic-system-prompt-sections": None},
                 hooks={
                     "PreToolUse": [
@@ -390,6 +412,14 @@ class ClaudeCode(Session):
         if "Rate limit" in text:
             raise self._RateLimitError()
 
+    def _check_rate_limit_event(self, event) -> None:
+        if event.rate_limit_info.status == "rejected":
+            raise self._ReachLimitError()
+
+    def _check_result_error(self, message: 'ResultMessage') -> None:
+        if message.is_error and message.result:
+            self._check_error_text(message.result)
+
     async def _run_embedded(self):
         """Run using the Claude Agent SDK (embedded mode)."""
         if self._client is not None:
@@ -402,6 +432,9 @@ class ClaudeCode(Session):
                 while True:
                     # Stream model outputs and log them in debug mode
                     async for message in client.receive_response():
+                        if RateLimitEvent is not None and isinstance(message, RateLimitEvent):
+                            self._check_rate_limit_event(message)
+                            continue
                         content = getattr(message, "content", None)
                         if isinstance(content, list):
                             for block in content:
@@ -417,6 +450,7 @@ class ClaudeCode(Session):
                                 self.total_model_time += time() - self._model_time_start
                                 self._model_time_start = None
                             self._accumulate_cost(message)
+                            self._check_result_error(message)
                     unfinished_nodes = set()
                     self.root.unfinished_nodes(unfinished_nodes)
                     if unfinished_nodes:
@@ -722,8 +756,9 @@ class ClaudeCode(Session):
                            if interaction.fork_allowed_tools is not None
                            else self.TOOL_WHITELIST),
             mcp_servers={"proof": {"type": "http", "url": fork_url}},
-            cli_path=shutil.which("claude"),
             env={"CLAUDE_CODE_ATTRIBUTION_HEADER": "0"},
+            settings=json.dumps({"autoCompactWindow":
+                _auto_compact_window(model, self.FORK_COMPACT_THRESHOLD)}),
             extra_args={"exclude-dynamic-system-prompt-sections": None},
             hooks={
                 "PreToolUse": [
@@ -760,6 +795,9 @@ class ClaudeCode(Session):
                 fork._model_time_start = time()
                 while True:
                     async for message in fork_client.receive_response():
+                        if RateLimitEvent is not None and isinstance(message, RateLimitEvent):
+                            self._check_rate_limit_event(message)
+                            continue
                         content = getattr(message, "content", None)
                         if isinstance(content, list):
                             for block in content:
@@ -775,6 +813,7 @@ class ClaudeCode(Session):
                                 fork.total_model_time += time() - fork._model_time_start
                                 fork._model_time_start = None
                             self._accumulate_cost(message)
+                            self._check_result_error(message)
                             fork.log_interaction("fork", f"{tag} completed: subtype={message.subtype}")
                     assert fork.fork_pending is not None
                     if fork.fork_pending.answer.done():
