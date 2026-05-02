@@ -7507,6 +7507,32 @@ async def _test_FactByNameOF(root: Root, file: MyIO):
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
 
+@model_test("QuickviewCollapse", "Test_QuickviewCollapse.thy", 8)
+async def _test_QuickviewCollapse(root: Root, file: MyIO):
+    """When 5+ consecutive sibling steps are done and unchanged,
+    quickview should collapse them: first, '...', second-to-last, last."""
+    # Fill 6 trivially-provable Have steps
+    for i, (name, stmt) in enumerate([
+        ("h1", "(1::nat) > 0"),
+        ("h2", "(2::nat) > 0"),
+        ("h3", "(3::nat) > 0"),
+        ("h4", "(4::nat) > 0"),
+        ("h5", "(5::nat) > 0"),
+        ("h6", "(6::nat) > 0"),
+    ], start=1):
+        root.session.age += 1
+        await root.fill(str(i), [Have.gen_single({
+            "thought": f"claim {name}",
+            "statement": {"english": f"{name}", "isabelle": stmt},
+            "name": name,
+        })])
+        root.session.age += 1
+        await root.fill(f"{i}.1", [Obvious.gen_single({"facts": []})])
+    root.reset_changed()
+    root.reset()
+    print_header("Quickview with 6 done steps (should collapse)", file)
+    root.quickview(0, file)
+
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
     import msgpack as mp
     from IsaREPL import Client

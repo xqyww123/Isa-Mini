@@ -3260,8 +3260,28 @@ class NonLeaf_Node(Node):
         if not self.does_quickview_need_detail():
             return self.quickview_header(indent, file)
         indent = super().quickview(indent, file)
-        for child in self.sub_nodes:
-            child.quickview(indent, file)
+        children = self.sub_nodes
+        i = 0
+        while i < len(children):
+            child = children[i]
+            if not child.changed and not child.does_quickview_need_detail():
+                run_start = i
+                i += 1
+                while i < len(children) and not children[i].changed and not children[i].does_quickview_need_detail():
+                    i += 1
+                run_len = i - run_start
+                if run_len >= 5:
+                    children[run_start].quickview(indent, file)
+                    print_indent(indent, file)
+                    file.write("...\n")
+                    children[i - 2].quickview(indent, file)
+                    children[i - 1].quickview(indent, file)
+                else:
+                    for j in range(run_start, i):
+                        children[j].quickview(indent, file)
+            else:
+                child.quickview(indent, file)
+                i += 1
         return indent
     def _rename_var(self, old_name: varname, new_name: varname) -> 'Node | None':
         for child in self.sub_nodes:
