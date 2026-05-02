@@ -37,6 +37,9 @@ session Infra_Filter_Test in Test_InfraFilter = "HOL-Analysis" +
     Performant_Isabelle_ML
     "HOL-Algebra"
     "HOL-Number_Theory"
+    "HOL-IMP"
+    "HOL-Data_Structures"
+    "HOL-Computational_Algebra"
     Lifting_the_Exponent
     Gauss_Jordan
     Polynomial_Factorization

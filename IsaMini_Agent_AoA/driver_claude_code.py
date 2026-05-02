@@ -462,10 +462,6 @@ class ClaudeCode(Session):
                         break
         finally:
             self._client = None
-        # Reconcile token counts from JSONL session logs (the single source of
-        # truth that captures main session, driver-managed forks, and any
-        # Agent-tool sub-agents), same as standalone mode.
-        self._read_cost_from_session_log()
         self.log_proof()
 
     async def _run_standalone(self):
@@ -632,9 +628,10 @@ class ClaudeCode(Session):
             self.log_cost(f"No session logs found in: {project_dir}")
             return
 
-        # Collect last usage per (session_file, requestId) to deduplicate
-        # streaming records from the same API call.
-        usage_by_request: dict[tuple[str, str], dict] = {}
+        # Deduplicate by requestId alone — fork_session=True copies parent
+        # history into the fork JSONL, so the same requestId appears in multiple
+        # files.  Keep the last record per requestId (final output_tokens).
+        usage_by_request: dict[str, dict] = {}
         for session_log in jsonl_files:
             try:
                 with open(session_log) as f:
@@ -648,13 +645,10 @@ class ClaudeCode(Session):
                         rid = record.get("requestId")
                         usage = (record.get("message") or {}).get("usage")
                         if rid and usage:
-                            usage_by_request[(session_log.name, rid)] = usage
+                            usage_by_request[rid] = usage
             except Exception as e:
                 self.log_cost(f"Failed to read session log {session_log.name}: {e}")
 
-        # Reset counters — fork costs were accumulated via _accumulate_cost during
-        # execution, but the same data is in the fork JSONL files.  Reading all
-        # JSONL files provides a single, consistent source of truth.
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.total_cache_creation_input_tokens = 0

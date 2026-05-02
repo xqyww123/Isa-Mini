@@ -2,14 +2,45 @@ theory Test_LTE_InfraFilter
   imports
     "Lifting_the_Exponent.LTE"
     "Performant_Isabelle_ML.Performant_Isabelle_ML"
+    (* Number theory / algebra *)
     "HOL-Number_Theory.Number_Theory"
     "HOL-Algebra.Ring"
+    "HOL-Algebra.Group"
+    "HOL-Algebra.IntRing"
+    "HOL-Computational_Algebra.Factorial_Ring"
+    (* Analysis *)
+    "HOL-Analysis.Derivative"
+    "HOL-Analysis.Measure_Space"
+    "HOL-Analysis.Brouwer_Fixpoint"
+    (* Core HOL *)
+    "HOL.List"
+    "HOL.Map"
+    "HOL.Finite_Set"
+    "HOL.Complete_Lattices"
+    "HOL.Wellfounded"
+    "HOL.Equiv_Relations"
+    "HOL.Zorn"
+    "HOL.Binomial"
+    "HOL.GCD"
+    "HOL.Topological_Spaces"
+    "HOL.Real_Vector_Spaces"
+    (* HOL-Library *)
+    "HOL-Library.Multiset"
+    "HOL-Library.FSet"
+    "HOL-Library.Finite_Map"
+    (* IMP language semantics *)
+    "HOL-IMP.Small_Step"
+    "HOL-IMP.Compiler"
+    (* Data structures *)
+    "HOL-Data_Structures.AVL_Set"
+    "HOL-Data_Structures.RBT_Set"
+    "HOL-Data_Structures.Tree_Map"
+    (* AFP *)
     "Catalan_Numbers.Catalan_Numbers"
     "Bernoulli.Bernoulli"
     "Bell_Numbers_Spivey.Bell_Numbers"
     "Polynomial_Factorization.Gauss_Lemma"
     "Gauss_Jordan.Rank"
-    "HOL-Analysis.Derivative"
 begin
 
 ML_file \<open>../../Semantic_Embedding/Tools/infra_filter.ML\<close>
@@ -96,6 +127,7 @@ let
         val thy_is_infra = #is_infra_thm thy_filters
         val thy_fact_space = Facts.space_of thy_global_facts
 
+        val thy_new_facts = filter (fn (_, thms) => not (null thms)) thy_new_facts
         val (infra_facts, non_infra_facts) = List.partition
           (fn (name, thms) => List.all (fn thm => thy_is_infra (name, thm)) thms)
           thy_new_facts
@@ -139,19 +171,25 @@ let
       in () end
 
   val test_theories = [
-    "LTE",
-    "Cong",
-    "Residues",
-    "Totient",
-    "Fib",
-    "Euler_Criterion",
-    "Catalan_Numbers",
-    "Bernoulli",
-    "Bell_Numbers",
-    "Gauss_Lemma",
-    "Rank",
-    "Derivative",
-    "Ring"
+    (* Number theory / algebra *)
+    "LTE", "Cong", "Residues", "Totient", "Fib", "Euler_Criterion",
+    "Gauss_Lemma", "Factorial_Ring",
+    (* HOL-Algebra *)
+    "Ring", "Group", "IntRing",
+    (* Analysis *)
+    "Derivative", "Measure_Space", "Brouwer_Fixpoint",
+    (* Core HOL *)
+    "List", "Map", "Finite_Set", "Complete_Lattices", "Wellfounded",
+    "Equiv_Relations", "Zorn", "Binomial", "GCD",
+    "Topological_Spaces", "Real_Vector_Spaces",
+    (* HOL-Library *)
+    "Multiset", "FSet", "Finite_Map",
+    (* IMP language semantics *)
+    "Small_Step", "Compiler",
+    (* Data structures *)
+    "AVL_Set", "RBT_Set", "Tree_Map",
+    (* AFP *)
+    "Catalan_Numbers", "Bernoulli", "Bell_Numbers", "Rank"
   ]
 
   val _ = log "====== Broad InfraFilter Diagnostic ======"
