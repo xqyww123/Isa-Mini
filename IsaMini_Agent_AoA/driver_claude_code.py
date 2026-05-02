@@ -158,7 +158,9 @@ class ClaudeCode(Session):
                 permission_mode="default",
                 allowed_tools=self.TOOL_WHITELIST,
                 mcp_servers={"proof": {"type": "http", "url": self._mcp_url}},
+                cli_path=shutil.which("claude"),
                 env={"CLAUDE_CODE_ATTRIBUTION_HEADER": "0"},
+                extra_args={"exclude-dynamic-system-prompt-sections": None},
                 hooks={
                     "PreToolUse": [
                         HookMatcher(matcher="*", hooks=[self.permission_control]),
@@ -720,7 +722,9 @@ class ClaudeCode(Session):
                            if interaction.fork_allowed_tools is not None
                            else self.TOOL_WHITELIST),
             mcp_servers={"proof": {"type": "http", "url": fork_url}},
+            cli_path=shutil.which("claude"),
             env={"CLAUDE_CODE_ATTRIBUTION_HEADER": "0"},
+            extra_args={"exclude-dynamic-system-prompt-sections": None},
             hooks={
                 "PreToolUse": [
                     HookMatcher(matcher="*", hooks=[fork.permission_control]),
