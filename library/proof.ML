@@ -3452,7 +3452,7 @@ fun SPECIALIZE' prep_thms prep_insts opt_name raw_rules raw_insts raw_facts
        the discharge via insert_tac + fast_mepo_tac. *)
     val facts = prep_thms ctxt raw_facts
     val result = if null facts then rule'
-                 else Minilang_Aux.xOF true ctxt facts rule'
+                 else Minilang_Aux.xOF true ctxt (map SOME facts) rule'
                       handle THM _ =>
                         raise OPR_FAIL (INVALID_OPR,
                           case Unify_Diagnostic.diagnose_of_failure ctxt rule' facts of

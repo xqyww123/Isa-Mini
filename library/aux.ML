@@ -12,7 +12,7 @@ val induction_tac:
     (string * typ) list list -> term option list -> thm list option ->
     thm list -> int -> context_tactic
 
-val xOF : bool -> Proof.context -> thm list -> thm -> thm
+val xOF : bool -> Proof.context -> thm option list -> thm -> thm
 val xof : Proof.context -> string option list * string option list ->
     (binding * string option * mixfix) list -> thm -> thm
 
@@ -213,8 +213,9 @@ fun discharge_all _ _ rule [] = rule
 
 in
 
-fun xOF prove_discharge ctxt thms st =
+fun xOF prove_discharge ctxt opt_thms st =
   let open Conv
+      val thms = map (fn NONE => Drule.asm_rl | SOME th => th) opt_thms
       val LEN = length thms
       fun rulify N ctxt ctm =
         if N <= Logic.count_prems (Thm.term_of ctm)
