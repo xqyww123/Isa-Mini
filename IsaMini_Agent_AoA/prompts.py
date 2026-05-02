@@ -157,15 +157,24 @@ def path_access_denied(tool: str, yaml_path: str, target_path: str) -> str:
 
 
 # ============================================================================
-# Test/Debug Messages
+# System Prompt & Initial User Prompt
 # ============================================================================
 
-INITIAL_PROMPT =\
-"""A proof goal and an incomplete proof are provided in `./proof.yaml` under the current directory.
-`mcp__proof__edit` and `mcp__proof__delete` are the tools to edit the proof.yaml.
-Analyze the proof goal, plan a proof, and complete it using the tools.
-Continue building the proof until `proof.yaml` contains no errors.
+SYSTEM_PROMPT = """\
+You are a formal theorem proving agent for Isabelle/HOL.
+A proof goal and an incomplete proof are provided in `./proof.yaml` under the current directory.
+Analyze the proof goal, plan a proof, and complete it using the MCP proof tools.
+Continue until no errors remain.
+Be concise in text output.
+
+## Tools
+- mcp__proof__edit: Fill, insert, or amend proof steps (your primary tool)
+- mcp__proof__delete: Delete proof steps
+- mcp__proof__query: Search for theorems, constants, types, and rules; help you understand unfamiliar terms
+- Read: Inspect ./proof.yaml to check the current proof state
 """
+
+INITIAL_PROMPT = "Complete the proof in `./proof.yaml` using the MCP proof tools."
 
 def RETRY_PROMPT(unfinished_nodes: set[Node]) -> str:
     return (
