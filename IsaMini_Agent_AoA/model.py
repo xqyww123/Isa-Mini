@@ -133,6 +133,7 @@ class Instantiation(TypedDict):
 class FactByName(TypedDict):
     name: xname
     instantiations: NotRequired[list[Instantiation]]
+    discharge_premises: NotRequired[list['FactByName | None']]
 
 type Fact = FactByName | FactByProposition | FactByDescription
 
@@ -153,6 +154,23 @@ def _where_suffix(fact: Fact) -> str:
         f"{i['name']} = \N{SINGLE LEFT-POINTING ANGLE QUOTATION MARK}{i['value']}\N{SINGLE RIGHT-POINTING ANGLE QUOTATION MARK}"
         for i in insts)
     return f"[where {where_parts}]"
+
+def _of_suffix(fact: Fact) -> str:
+    if "name" not in fact:
+        return ""
+    discharge = cast(FactByName, fact).get("discharge_premises", [])
+    if not discharge:
+        return ""
+    of_parts = []
+    for item in discharge:
+        if item is None:
+            of_parts.append("_")
+        else:
+            of_parts.append(item["name"] + _where_suffix(item) + _of_suffix(item))
+    return "[OF " + " ".join(of_parts) + "]"
+
+def _fact_suffix(fact: Fact) -> str:
+    return _where_suffix(fact) + _of_suffix(fact)
 
 class FailureReason(NamedTuple):
     """A human-readable failure reason, used in Interaction.answer() returns
@@ -225,13 +243,13 @@ class IsabelleFact_Presented(IsabelleFact, IsabelleEntity):
         self.abbreviation_names = abbreviation_names
         self.is_local = is_local
     def name(self) -> 'short_name':
-        suffix = _where_suffix(self.fact)
+        suffix = _fact_suffix(self.fact)
         if suffix:
             return IsaTerm.from_agent(self.short_name.unicode + suffix)
         return self.short_name
     def print(self, indent: int, file: MyIO) -> None:
         print_indent(indent, file)
-        display_name = self.short_name.unicode + _where_suffix(self.fact)
+        display_name = self.short_name.unicode + _fact_suffix(self.fact)
         if len(self.expression) == 1:
             file.write(f"- {display_name}: {self.expression[0].unicode}\n")
         elif len(self.expression) > 1:
@@ -242,7 +260,7 @@ class IsabelleFact_Presented(IsabelleFact, IsabelleEntity):
         else:
             file.write(f"- {display_name}\n")
     def pack(self) -> tuple[int, str]:
-        suffix = _where_suffix(self.fact)
+        suffix = _fact_suffix(self.fact)
         if suffix:
             suffix = ascii_of_unicode(suffix)
         return (0, self.full_name + suffix)
@@ -267,7 +285,7 @@ class IsabelleFact_Unfound(IsabelleFact):
         self.fact = fact
     def name(self) -> 'short_name | term':
         match fact_kind(self.fact):
-            case "name": return IsaTerm.from_agent(cast(FactByName, self.fact)["name"] + _where_suffix(self.fact))
+            case "name": return IsaTerm.from_agent(cast(FactByName, self.fact)["name"] + _fact_suffix(self.fact))
             case "proposition": return IsaTerm.from_agent(cast(FactByProposition, self.fact)["proposition"])
             case "description": return IsaTerm.from_agent(cast(FactByDescription, self.fact)["english"])
     def print(self, indent: int, file: MyIO) -> None:
@@ -1423,18 +1441,19 @@ class Minilang_State:
                 domain = Semantic_Vector_Store.ContextAll
             store: Semantic_Vector_Store = await self.connection.semantic_vector_store()  # type: ignore
             if query is not None:
-                raw_results, warnings = await store.lookup(query, k, kinds, domain,
+                raw_results, warnings_raw = await store.lookup(query, k, kinds, domain,
                                        term_patterns=term_patterns,
                                        type_patterns=type_patterns,
                                        theories_include=theories_include,
                                        name_contains=name_contains,
                                        target_type=target_type,
                                        ctxt=self.name)
+                warnings = [pretty_unicode(w) for w in warnings_raw]
                 scored_recs = [(score, rec) for score, rec in raw_results]
             else:
                 # Pattern-only search: get filtered entities, look up records, no ranking
                 from Isabelle_RPC_Host.context import entities_of
-                entries, warnings = await entities_of(self.connection, kinds,
+                entries, warnings_raw = await entities_of(self.connection, kinds,
                                          term_patterns=term_patterns,
                                          type_patterns=type_patterns,
                                          theories_include=theories_include,
@@ -1442,6 +1461,7 @@ class Minilang_State:
                                          limit=k,
                                          target_type=target_type,
                                          ctxt=self.name)
+                warnings = [pretty_unicode(w) for w in warnings_raw]
                 scored_recs = []
                 for uk, name, _ in entries:
                     rec = Semantic_DB[uk]

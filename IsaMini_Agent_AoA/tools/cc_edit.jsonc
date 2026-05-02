@@ -73,6 +73,16 @@
           "description": "optional instantiations for ∀-quantified or schematic variables",
           "items": { "$ref": "#/$defs/Instantiation" },
           "type": "array"
+        },
+        "discharge_premises": {
+          "description": "optional list of facts to discharge the premises of this rule left-to-right; use null to skip a premise position",
+          "items": {
+            "oneOf": [
+              { "$ref": "#/$defs/FactByName" },
+              { "type": "null" }
+            ]
+          },
+          "type": "array"
         }
       },
       "required": [ "name" ],

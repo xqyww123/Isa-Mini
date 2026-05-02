@@ -7486,6 +7486,27 @@ async def _test_FactByNameWhere(root: Root, file: MyIO):
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
 
+@model_test("FactByNameOF", "Test_FactByNameOF.thy", 10)
+async def _test_FactByNameOF(root: Root, file: MyIO):
+    """Test FactByName with [OF ...] discharge through the full pipeline."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    outcome = await root.fill("1", [Obvious.gen_single({
+        "facts": [
+            {"name": "rule", "discharge_premises": [None, {"name": "hb"}]},
+            {"name": "ha"}
+        ]
+    })])
+    if outcome.failure is not None:
+        file.write(f"Fill failed: {outcome.failure}\n")
+    print_header("After Obvious with FactByName[OF _ hb] + ha", file)
+    root.print(0, file)
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
     import msgpack as mp
     from IsaREPL import Client

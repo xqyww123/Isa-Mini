@@ -1,0 +1,37 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - C: bool
+premises:
+  - ha: A
+  - hb: B
+  - rule: A ⟶ B ⟶ C
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+variables:
+  - B: bool
+  - A: bool
+goal: C
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Obvious with FactByName[OF _ hb] + ha
+--------------------------------------------------
+variables:
+  - C: bool
+premises:
+  - ha: A
+  - hb: B
+  - rule: A ⟶ B ⟶ C
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+variables:
+  - B: bool
+  - A: bool
+goal: C
+proof:
+  - step id: 1
+    operation: Obvious
+    with facts:
+      - rule[OF _ hb]: A ⟶ B ⟶ C
+      - ha: A
+Unfinished nodes: 0

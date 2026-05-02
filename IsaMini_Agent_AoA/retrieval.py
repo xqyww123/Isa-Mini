@@ -16,6 +16,7 @@ from typing import Any
 
 import jsoncomment
 
+from Isabelle_RPC_Host import pretty_unicode
 from Isabelle_RPC_Host.position import IsabellePosition
 from Isabelle_RPC_Host.universal_key import universal_key, universal_key_of, UndefinedEntity
 from Isabelle_Semantic_Embedding.semantics import (
@@ -639,9 +640,9 @@ async def _handle_exact_term_query(session: Session, term_str: str) -> str:
     try:
         head_name, raw_display, normal_display = await ml_state.unfold_syntax(term_str)
     except InternalError_UnparsedTerm as e:
-        return f"Failed to parse term: {e.reason}"
+        return f"Failed to parse term: {pretty_unicode(e.reason)}"
     except IsabelleError as e:
-        return f"Error: {'; '.join(e.errors)}"
+        return f"Error: {'; '.join(pretty_unicode(err) for err in e.errors)}"
 
     buf = StringIO()
     buf.write(f"{normal_display} ≡ {raw_display}\n")
@@ -689,7 +690,7 @@ async def _query_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
 
         return ("\n\n".join(results), False)
     except IsabelleError as e:
-        error_msg = '; '.join(e.errors)
+        error_msg = '; '.join(pretty_unicode(err) for err in e.errors)
         session.log_tool_response("mcp__proof__query", f"ERROR: {error_msg}")
         return (error_msg, True)
     except Exception as e:

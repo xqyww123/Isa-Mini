@@ -718,7 +718,7 @@ class ClaudeCode(Session):
             permission_mode="default",
             allowed_tools=([self._internal_tool_name(t) for t in interaction.fork_allowed_tools]
                            if interaction.fork_allowed_tools is not None
-                           else self.FORK_WHITELIST),
+                           else self.TOOL_WHITELIST),
             mcp_servers={"proof": {"type": "http", "url": fork_url}},
             env={"CLAUDE_CODE_ATTRIBUTION_HEADER": "0"},
             hooks={

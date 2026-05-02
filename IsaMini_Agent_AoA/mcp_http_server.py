@@ -32,6 +32,7 @@ from mcp.server.lowlevel import Server as MCPServer
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import Tool, ToolAnnotations, TextContent, CallToolResult
 
+from Isabelle_RPC_Host import pretty_unicode
 from .model import (
     _session_var, Session,
     InteractionExpanded,
@@ -166,7 +167,7 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         session.log_proof_tree_snapshot(f"after_{action}_step_{step}")
         return (response, is_error)
     except IsabelleError as e:
-        error_msg = f"Isabelle error: {'; '.join(e.errors)}"
+        error_msg = f"Isabelle error: {'; '.join(pretty_unicode(err) for err in e.errors)}"
         session.log_tool_response("mcp__proof__edit", f"ERROR: {error_msg}")
         return (error_msg, True)
     except Exception as e:
@@ -202,7 +203,7 @@ async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         session.log_proof_tree_snapshot("after_delete")
         return (response, False)
     except IsabelleError as e:
-        error_msg = f"Isabelle error: {'; '.join(e.errors)}"
+        error_msg = f"Isabelle error: {'; '.join(pretty_unicode(err) for err in e.errors)}"
         session.log_tool_response("mcp__proof__delete", f"ERROR: {error_msg}")
         return (error_msg, True)
     except Exception as e:
@@ -250,7 +251,7 @@ async def _answer_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             await session.interrupt()
         return (str(result), False)
     except IsabelleError as e:
-        error_msg = f"Isabelle error: {'; '.join(e.errors)}"
+        error_msg = f"Isabelle error: {'; '.join(pretty_unicode(err) for err in e.errors)}"
         session.log_tool_response("mcp__proof__answer", f"ERROR: {error_msg}")
         return (error_msg, True)
     except Exception as e:
