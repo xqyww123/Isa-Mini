@@ -1,0 +1,40 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ¬ ¬ True
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Contradiction on ¬ ¬ True
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ¬ ¬ True
+proof:
+  - step id: 1
+    operation: Contradiction
+    hypothesis_name: h
+    assuming hypothesis:
+      - h: ¬ True
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  premises:
+    - h: ¬ True
+  goal: False
+status: SUCCESS
+hypothesis: h = ¬ True
+--------------------------------------------------
+After closing False
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ¬ ¬ True
+proof:
+  - step id: 1
+    operation: Contradiction
+    hypothesis_name: h
+    assuming hypothesis:
+      - h: ¬ True
+  - step id: 2
+    operation: Obvious
+    with facts:
+      - h: ¬ True

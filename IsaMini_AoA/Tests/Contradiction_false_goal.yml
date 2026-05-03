@@ -1,0 +1,65 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: False ⟶ False
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: False
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  False
+--------------------------------------------------
+After Intro
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: False ⟶ False
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: False
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  False
+--------------------------------------------------
+After Contradiction on False
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: False ⟶ False
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: False
+  - step id: 2
+    operation: Contradiction
+    hypothesis_name: absurd
+    assuming hypothesis:
+      - absurd: ¬ False
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  premises:
+    - absurd: ¬ False
+  goal: False
+status: SUCCESS
+hypothesis: absurd = ¬ False
+--------------------------------------------------
+After closing
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: False ⟶ False
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: False
+  - step id: 2
+    operation: Contradiction
+    hypothesis_name: absurd
+    assuming hypothesis:
+      - absurd: ¬ False
+  - step id: 3
+    operation: Obvious

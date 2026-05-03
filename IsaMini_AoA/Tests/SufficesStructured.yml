@@ -1,0 +1,104 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (∀(n :: nat). n ≤ n * n) ⟶ (3 :: nat) ≤ (3 :: nat) * (3 :: nat)
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: ∀(n :: nat). n ≤ n * n
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  (3 :: nat) ≤ (3 :: nat) * (3 :: nat)
+--------------------------------------------------
+After Intro
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (∀(n :: nat). n ≤ n * n) ⟶ (3 :: nat) ≤ (3 :: nat) * (3 :: nat)
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: ∀(n :: nat). n ≤ n * n
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  (3 :: nat) ≤ (3 :: nat) * (3 :: nat)
+--------------------------------------------------
+After Suffices with for_any
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (∀(n :: nat). n ≤ n * n) ⟶ (3 :: nat) ≤ (3 :: nat) * (3 :: nat)
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: ∀(n :: nat). n ≤ n * n
+  - step id: 2
+    thought: It suffices to show the universal statement
+    operation: Suffices
+    statement:
+      english: n*n >= n for any natural n
+      for_any:
+        n: nat
+      conclusion: n * n \<ge> n
+    notice: Need to show the provided statement implies the goal
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
+    pending proof goal:
+      (∀(n :: nat). n ≤ n * n) ⟶ (3 :: nat) ≤ (3 :: nat) * (3 :: nat)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  variables:
+    - n: nat
+  goal: n ≤ n * n
+--------------------------------------------------
+After proving implication
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (∀(n :: nat). n ≤ n * n) ⟶ (3 :: nat) ≤ (3 :: nat) * (3 :: nat)
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: ∀(n :: nat). n ≤ n * n
+  - step id: 2
+    thought: It suffices to show the universal statement
+    operation: Suffices
+    statement:
+      english: n*n >= n for any natural n
+      for_any:
+        n: nat
+      conclusion: n * n \<ge> n
+    proof:
+      - step id: 2.1
+        operation: Obvious
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  variables:
+    - n: nat
+  goal: n ≤ n * n
+--------------------------------------------------
+After closing suffices goal
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (∀(n :: nat). n ≤ n * n) ⟶ (3 :: nat) ≤ (3 :: nat) * (3 :: nat)
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: ∀(n :: nat). n ≤ n * n
+  - step id: 2
+    thought: It suffices to show the universal statement
+    operation: Suffices
+    statement:
+      english: n*n >= n for any natural n
+      for_any:
+        n: nat
+      conclusion: n * n \<ge> n
+    proof:
+      - step id: 2.1
+        operation: Obvious
+  - step id: 3
+    operation: Obvious
+Unfinished nodes: 0

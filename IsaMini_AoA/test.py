@@ -2467,6 +2467,84 @@ async def _test_SufficesObviousProof(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
+@model_test("HaveStructured", "Test_HaveStructured.thy", 8)
+async def _test_HaveStructured(root: Root, file: MyIO):
+    """Have with explicit for_any: the ML layer fixes variables via
+    Specification.schematic_theorem_cmd, so the proof goal is the clean
+    conclusion without needing a separate Intro."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("1", [Have.gen_single({
+        "thought": "Prove a general lemma with explicit variable binding",
+        "statement": {
+            "english": "n plus 1 is greater than n for any natural n",
+            "for_any": [{"name": "n", "type": "nat"}],
+            "conclusion": "n + 1 > n"
+        },
+        "name": "succ_gt",
+    })])
+    print_header("After Have with for_any", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("1.1", [Obvious.gen_single({"facts": []})])
+    print_header("After proving Have sub-goal", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("2", [Obvious.gen_single({
+        "facts": [{"name": "succ_gt"}]
+    })])
+    print_header("After closing outer goal", file)
+    root.print(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+@model_test("SufficesStructured", "Test_SufficesStructured.thy", 8)
+async def _test_SufficesStructured(root: Root, file: MyIO):
+    """Suffices with explicit for_any and premises: the ML layer builds the
+    HOL proposition, and INTRO' in the CB auto-introduces after the implication
+    is proven, yielding a clean goal."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("1", [Intro.gen_single({
+        "thought": "introduce the universal quantifier"
+    })])
+    print_header("After Intro", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("2", [Suffices.gen_single({
+        "thought": "It suffices to show the universal statement",
+        "statement": {
+            "english": "n*n >= n for any natural n",
+            "for_any": [{"name": "n", "type": "nat"}],
+            "conclusion": r"n * n \<ge> n"
+        },
+    })])
+    print_header("After Suffices with for_any", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("2.1", [Obvious.gen_single({"facts": []})])
+    print_header("After proving implication", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("3", [Obvious.gen_single({"facts": []})])
+    print_header("After closing suffices goal", file)
+    root.print(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 @model_test("InductionObviousProof", "Test_ObviousProof_Induction.thy", 8)
 async def _test_InductionObviousProof(root: Root, file: MyIO):
     """Test that Induction with proof='Obvious' auto-creates Obvious in all case GoalNodes."""
@@ -7665,6 +7743,63 @@ async def _test_Contradiction_ccontr(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("2", [Obvious.gen_single({"facts": [{"name": "neg_hyp"}]})])
     print_header("After Obvious to close False", file)
+    root.print(0, file)
+
+@model_test("Contradiction_double_neg", "Test_Contradiction_double_neg.thy", 6)
+async def _test_Contradiction_double_neg(root: Root, file: MyIO):
+    """Nested negation: goal ¬ ¬ True uses notI (¬-led).
+    Hypothesis is ¬ True, goal becomes False."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    await root.fill("1", [Contradiction.gen_single({
+        "hypothesis_name": "h",
+    })])
+    print_header("After Contradiction on ¬ ¬ True", file)
+    root.print(0, file)
+    contra_node = root.locate_node("1")
+    assert isinstance(contra_node, Contradiction)
+    file.write(f"status: {contra_node.status.status.name}\n")
+    if contra_node.bindings:
+        for fb in contra_node.bindings[1]:
+            file.write(f"hypothesis: {fb.name.unicode} = {fb.pretty.unicode}\n")
+    # Prove False: h is "¬ True", use it
+    root.session.age += 1
+    await root.fill("2", [Obvious.gen_single({"facts": [{"name": "h"}]})])
+    print_header("After closing False", file)
+    root.print(0, file)
+
+@model_test("Contradiction_false_goal", "Test_Contradiction_false_goal.thy", 6)
+async def _test_Contradiction_false_goal(root: Root, file: MyIO):
+    """Degenerate: goal is False (after Intro consumes the ⟹ premise).
+    Contradiction uses ccontr, hypothesis becomes ¬ False, goal stays False.
+    This is a valid but pointless use — verify it doesn't crash."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    # First do Intro to consume "False ⟹ False" into premise + goal False
+    root.session.age += 1
+    await root.fill("1", [Intro.gen_single({
+        "thought": "introduce premise",
+    })])
+    print_header("After Intro", file)
+    root.print(0, file)
+    # Now Contradiction on goal False
+    root.session.age += 1
+    await root.fill("2", [Contradiction.gen_single({
+        "hypothesis_name": "absurd",
+    })])
+    print_header("After Contradiction on False", file)
+    root.print(0, file)
+    contra_node = root.locate_node("2")
+    assert isinstance(contra_node, Contradiction)
+    file.write(f"status: {contra_node.status.status.name}\n")
+    if contra_node.bindings:
+        for fb in contra_node.bindings[1]:
+            file.write(f"hypothesis: {fb.name.unicode} = {fb.pretty.unicode}\n")
+    # Close with Obvious using the original premise (False from Intro)
+    root.session.age += 1
+    await root.fill("3", [Obvious.gen_single({"facts": []})])
+    print_header("After closing", file)
     root.print(0, file)
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
