@@ -56,7 +56,7 @@
             "minimum": 1,
             "maximum": 50,
             "default": 15,
-            "description": "Number of top results to return for this query. Raise it when exploring broadly, lower it when you only need the closest match."
+            "description": "Number of top results to return for this query. Entries already shown in earlier results are skipped, so the actual count may be lower."
           },
           "exact_name": {
             "type": "string",

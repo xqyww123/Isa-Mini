@@ -1314,6 +1314,7 @@ class Minilang_State:
         - FactByProposition: directly → IsabelleFact_ProveInTime
         - FactByDescription: → Interaction_RetrieveForProof (needs interaction)
         Callers passing only FactByName|FactByProposition can safely cast to list[IsabelleFact]."""
+        facts = [f for f in facts if f is not None]
         out: list[IsabelleFact | Interaction_RetrieveForProof] = [None] * len(facts)  # type: ignore
         # Collect FactByName indices for batch lookup
         name_indices: list[int] = []
@@ -4915,7 +4916,8 @@ class Obvious(Leaf):
         if config.parent is not None and config.parent._is_trivial is False:
             raise GoalIsNontrivial(config.parent)
         super().__init__(config, "")
-        self._raw_facts: list[FactByName | FactByProposition] = arg["facts"]
+        self._raw_facts: list[FactByName | FactByProposition] = [
+            f for f in arg["facts"] if f is not None]
         self.fact_refs: list[IsabelleFact] | None = None
 
     @classmethod
@@ -5005,7 +5007,8 @@ class Chaining(Leaf):
     def __init__(self, config: NodeConfig, arg: Chaining_ToolArg):
         super().__init__(config, "")
         self.chain_name: str | None = arg.get("name")
-        self._raw_facts: list[FactByName | FactByProposition] = arg["facts"]
+        self._raw_facts: list[FactByName | FactByProposition] = [
+            f for f in arg["facts"] if f is not None]
         self.fact_refs: list[IsabelleFact] | None = None
         self.result_facts: list[tuple[varname, term]] | None = None
         """(fact_name, pretty_expression) pairs for facts derived by CHAINING,
@@ -5433,8 +5436,10 @@ class Derive(Leaf):
     def __init__(self, config: NodeConfig, arg: Derive_ToolArg):
         super().__init__(config, arg["thought"])
         self.rule: FactByName = arg["rule"]
-        self.instantiations: list[Instantiation] = arg.get("instantiations", [])
-        self.discharging_facts: list[FactByName] = arg.get("discharging_facts", [])
+        self.instantiations: list[Instantiation] = [
+            x for x in arg.get("instantiations", []) if x is not None]
+        self.discharging_facts: list[FactByName] = [
+            f for f in arg.get("discharging_facts", []) if f is not None]
         self.result_name: str = arg["result_name"]
         self.rule_ref: IsabelleFact | None = None
         self.discharge_refs: list[IsabelleFact] | None = None
@@ -5644,7 +5649,8 @@ class Rewrite(Leaf):
         self.use_system_simplifiers: bool = arg["use system simplifiers"]
         self.rewrite_goal: bool = arg["rewrite goal"]
         self.rewrite_premises: list[str] = arg["rewrite premises"]
-        self._raw_using: list[FactByName | FactByProposition] = arg["using"]
+        self._raw_using: list[FactByName | FactByProposition] = [
+            f for f in arg["using"] if f is not None]
         self.using: list[IsabelleFact] | None = None
         self.fact_targets: list[list[lambda_term] | None] | None = None
         self.bindings: Bindings | None = None
@@ -6701,7 +6707,8 @@ class Induction(CaseSplit_Like):
         # the ML side). Raw list is kept so refresh can re-validate after
         # amend; resolved refs hold only the surviving local facts that
         # mention at least one generalized variable.
-        self._raw_facts_to_generalize: list[FactByName] = list(arg.get("facts_to_generalize") or [])
+        self._raw_facts_to_generalize: list[FactByName] = [
+            f for f in (arg.get("facts_to_generalize") or []) if f is not None]
         self.fact_refs_to_generalize: list[IsabelleFact_Presented] = []
         self._supplied_proofs = proofs_by_case
     def quickview_title(self) -> str:
