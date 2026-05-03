@@ -10,11 +10,9 @@ lemma conj_test:
   by Agen tAoA
 
 
-setup \<open>Config.put_global Minilang.INTRO_split_conj true\<close>
-
 lemma \<open>True \<and> True\<close>
   apply (min_script \<open>
-  INTRO
+  SPLIT_CONJS
   NEXT NEXT END
 \<close>)
 

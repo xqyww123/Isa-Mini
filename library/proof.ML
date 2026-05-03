@@ -51,7 +51,6 @@ val mini_use_improved_SH : bool Config.T
 val strict_end: bool Config.T
     (*If enabled, the NEXT and END will not apply SH but require the proof goals are all solved*)
 val counter_mode : string Config.T
-val INTRO_split_conj : bool Config.T
 val INTRO_split_prem_conj : bool Config.T
 val INTRO_split_prem_conj_size_limit : int Config.T
 val INTRO_mk_block : bool Config.T
@@ -90,14 +89,18 @@ val cat_items : items -> items -> items
 val get_local_facts : state -> local_facts
 
 datatype intros_mode = ALL_SUBGOALS | SINGLE_GOAL
-val INTRO : intros_mode -> bool option -> bool option
+val INTRO : intros_mode -> bool option
          -> opt_var_names -> opt_prem_names
          -> state -> items * state
 val INTRO_CMD : command
 val TRANSPARENT_INTRO : operation
 
+val is_conj_goal : thm -> bool
+val SPLIT_CONJS : operation
+val SPLIT_CONJS_CMD : command
+
 (* Helper functions for INTRO *)
-val need_intro : bool -> thm -> bool
+val need_intro : thm -> bool
 val strip_meta_and_hol_hhf : term -> (string * typ) list * term list * term
 val deep_destruct_prem : Proof.context -> thm -> thm list
 val deep_destruct_term : Proof.context -> term -> term list
@@ -412,7 +415,6 @@ val transparent_intro = Attrib.setup_config_bool \<^binding>\<open>transparent_i
 val high_auto_mode = Attrib.setup_config_bool \<^binding>\<open>high_auto_mode\<close> (K false)
 val strict_end = Config.declare_bool ("Minilang.strict_end", \<^here>) (K false)
 val counter_mode = Config.declare_string ("Minilang.counter_mode", \<^here>) (K "consecutive")
-val INTRO_split_conj = Config.declare_bool ("Minilang.INTRO_split_conj", \<^here>) (K false)
 val INTRO_split_prem_conj = Config.declare_bool ("Minilang.INTRO_split_prem_conj", \<^here>) (K true)
 val INTRO_split_prem_conj_size_limit = Config.declare_int ("Minilang.INTRO_split_prem_conj_size_limit", \<^here>) (K 20)
 val INTRO_mk_block   = Config.declare_bool ("Minilang.INTRO_mk_block", \<^here>) (K false)
@@ -1221,13 +1223,12 @@ fun maintain (c,[]) = (c,[])
   | maintain (_, ENDBLK _ :: _) = raise BROKEN_INVARIANT
 
 
-fun need_intro consider_conj st =
+fun need_intro st =
   let fun need' (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ _) = true
         | need' (Const(\<^const_name>\<open>Pure.all\<close>, _) $ _) = true
         | need' (Const(\<^const_name>\<open>Trueprop\<close>, _) $ X) = need' X
         | need' (Const(\<^const_name>\<open>HOL.All\<close>, _) $ _) = true
         | need' (Const(\<^const_name>\<open>HOL.implies\<close>, _) $ _ $ _) = true
-        | need' (Const(\<^const_name>\<open>HOL.conj\<close>, _) $ _ $ _) = consider_conj
         | need' _ = false
    in case Thm.prop_of st
         of (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ G $ _) => need' G
@@ -1426,6 +1427,23 @@ fun split_conjs sequent =
    else mk_rule num RS sequent
   end
 
+fun is_conj_goal st =
+  let fun chk (Const(\<^const_name>\<open>Trueprop\<close>, _) $ X) = chk X
+        | chk (Const(\<^const_name>\<open>HOL.conj\<close>, _) $ _ $ _) = true
+        | chk (Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs (_, _, X)) = chk X
+        | chk (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ X) = chk X
+        | chk _ = false
+   in case Thm.prop_of st
+        of (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ G $ _) => chk G
+         | _ => false
+  end
+
+fun SPLIT_CONJS' (ctxt, HHF (st, items) :: L) =
+    if is_conj_goal st
+    then (ctxt, HHF (protect_goals (split_conjs st), items) :: L)
+    else raise OPR_FAIL (INVALID_OPR, "SPLIT_CONJS: the leading goal is not a conjunction")
+  | SPLIT_CONJS' _ = raise BROKEN_INVARIANT
+
 (* INTRO'' performs introduction rules (allI and impI) on the current goal.
    Parameters:
    - F: Processing function that handles the focused subgoal.
@@ -1439,10 +1457,9 @@ fun split_conjs sequent =
         If SOME bindings, uses the provided names for introduced quantified variables.
         If NONE, uses default variable names from the goal.
 *)
-fun INTRO'' F mode split_conj_opt bs (origin as (ctxt, HHF (st0, items) :: L)) =
-    let val do_split_conj = case split_conj_opt of SOME b => b | NONE => Config.get ctxt INTRO_split_conj
-    in if Thm.no_prems st0 then (empty_items, origin)
-    else if need_intro do_split_conj st0
+fun INTRO'' F mode bs (origin as (ctxt, HHF (st0, items) :: L)) =
+    if Thm.no_prems st0 then (empty_items, origin)
+    else if need_intro st0
       then let val st = st0
                      |> Seq.REPEAT (Thm.biresolution NONE true
                               [(false, Thms.allI), (false, Thms.impI)] 1)
@@ -1466,7 +1483,6 @@ fun INTRO'' F mode split_conj_opt bs (origin as (ctxt, HHF (st0, items) :: L)) =
                val _ = get_reporter () (New_Items items')
                val mode_mk_block = Config.get ctxt INTRO_mk_block
                val st'' = st''m
-                    |> do_split_conj ? (protect_goals o split_conjs)
                fun PRT _ t0 =
                     let val t = if mode_mk_block then BLOCK t0 else t0
                      in case print_stack [(HHF (st0, items))]
@@ -1483,7 +1499,7 @@ fun INTRO'' F mode split_conj_opt bs (origin as (ctxt, HHF (st0, items) :: L)) =
                         |> Seq.hd
                         |> conclude_goal,
                       ([],[])) :: S)
-                 |> mode = ALL_SUBGOALS ? (#2 o INTRO'' F mode split_conj_opt bs)
+                 |> mode = ALL_SUBGOALS ? (#2 o INTRO'' F mode bs)
                 end
                  | CB _ _ = raise BROKEN_INVARIANT
                val result_state = if num_goals_of' st0 > 1
@@ -1492,10 +1508,9 @@ fun INTRO'' F mode split_conj_opt bs (origin as (ctxt, HHF (st0, items) :: L)) =
             in (items', result_state)
            end
       else (empty_items, origin)
-    end
-  | INTRO'' _ _ _ _ _ = raise BROKEN_INVARIANT
+  | INTRO'' _ _ _ _ = raise BROKEN_INVARIANT
 
-fun INTRO' mode split_conj_opt split_prem_conj_opt bs premise_names s =
+fun INTRO' mode split_prem_conj_opt bs premise_names s =
   let val _ = if mode = ALL_SUBGOALS andalso is_some premise_names
               then raise OPR_FAIL (INVALID_OPR, "premise_names must be NONE in ALL_SUBGOALS mode")
               else ()
@@ -1550,13 +1565,13 @@ fun INTRO' mode split_conj_opt split_prem_conj_opt bs premise_names s =
                 #> pair (map2 (fn bind => fn (_, cterm) => (bind, Thm.typ_of_cterm cterm)) binds (#params foc)))
          |> pair st
         end
-   in INTRO'' F mode split_conj_opt bs s
+   in INTRO'' F mode bs s
   end
 
 fun TRANSPARENT_INTRO' (origin as (ctxt, HHF (st, _) :: _)) =
       if Config.get ctxt transparent_intro andalso
          has_prems_universal_vars (fst (Logic.dest_implies (Thm.prop_of st)))
-      then #2 (INTRO' SINGLE_GOAL NONE NONE NONE NONE origin)
+      then #2 (INTRO' SINGLE_GOAL NONE NONE NONE origin)
       else origin
   | TRANSPARENT_INTRO' _ = raise BROKEN_INVARIANT
 
@@ -1623,6 +1638,9 @@ fun timed_OPR_with_ret t f s
   = Timeout.apply (Time.fromSeconds t) (OPR_with_ret f) s
     handle Timeout.TIMEOUT _ => raise OPR_FAIL (PROOF_FAIL, "Timeout")
          | Exn.Interrupt_Breakdown => raise OPR_FAIL (PROOF_FAIL, "Timeout")
+
+val SPLIT_CONJS = timed_OPR 5 SPLIT_CONJS'
+val SPLIT_CONJS_CMD = Scan.succeed (timed_OPR 5 SPLIT_CONJS')
 
 fun CONTEXTUAL_CMD (parser : Proof.context -> command)
                    (toks : Token.src)
@@ -1851,11 +1869,11 @@ fun TRY_STANDARD SK =
               (K ()) (CONTEXT_TACTIC (Classical.standard_tac (#1 SK) [])) NONE SK
   else SK
 
-fun INTRO mode sco spco bs pn = timed_OPR_with_ret 5000 (INTRO' mode sco spco bs pn)
+fun INTRO mode spco bs pn = timed_OPR_with_ret 5000 (INTRO' mode spco bs pn)
 val INTRO_CMD = (OPT_VARS -- OPT_PREMS)
-        >> (fn args => fn s => #2 (timed_OPR_with_ret 2 (uncurry (INTRO' SINGLE_GOAL NONE NONE) args) s))
+        >> (fn args => fn s => #2 (timed_OPR_with_ret 2 (uncurry (INTRO' SINGLE_GOAL NONE) args) s))
 val INTRO_ALL_CMD = (OPT_VARS -- OPT_PREMS)
-        >> (fn args => fn s => #2 (timed_OPR_with_ret 2 (uncurry (INTRO' ALL_SUBGOALS NONE NONE) args) s))
+        >> (fn args => fn s => #2 (timed_OPR_with_ret 2 (uncurry (INTRO' ALL_SUBGOALS NONE) args) s))
 val TRANSPARENT_INTRO = OPR_NO_INCR TRANSPARENT_INTRO'
 
 local
@@ -2012,7 +2030,7 @@ fun SIMP' _ _ (ctxt, []) = (ctxt, [])
 
 fun CRUSH' prep_with (vars, raw_with_lems) SK0 =
      SIMP' prep_with raw_with_lems SK0
-  |> SKIP_SUCCESS (#2 o INTRO' ALL_SUBGOALS NONE NONE vars NONE)
+  |> SKIP_SUCCESS (#2 o INTRO' ALL_SUBGOALS NONE vars NONE)
   |> report_goal
 
 
@@ -2170,7 +2188,7 @@ fun SIMPLIFY_GOAL_AND_PREMISES'
 
     (* 11. Call INTRO' with the generated premise names and variable names *)
     val (items_from_intro, (ctxt_after_intro, HHF (st_after_intro, items_after_intro) :: S_after_intro)) =
-      INTRO' SINGLE_GOAL NONE NONE var_names_for_intro (SOME premise_names_for_intro)
+      INTRO' SINGLE_GOAL NONE var_names_for_intro (SOME premise_names_for_intro)
              (ctxt_with_counter, HHF (st_protected_for_intro, items) :: S)
 
     (* 12. Unwrap NO_SIMP from the goal conclusion *)
@@ -3378,7 +3396,7 @@ fun SUFFICES' intro_bindings prep_prop raw_prop (ctxt0, HHF (st0, items0) :: S) 
       in case intro_bindings of
            NONE => state_after
          | SOME (var_names, prem_names) =>
-             #2 (INTRO' SINGLE_GOAL NONE NONE var_names prem_names state_after)
+             #2 (INTRO' SINGLE_GOAL NONE var_names prem_names state_after)
       end
 
     fun PRT _ t = BUNDL (items0, [BLOCK t, print_stack [HHF (st0, empty_items)]])
@@ -5254,6 +5272,7 @@ val CMDS = Symtab.make [
       ("SIMPLIFY", SIMPLIFY_CMD),
       ("INTRO",   INTRO_CMD),
       ("ALL_INTRO",INTRO_ALL_CMD),
+      ("SPLIT_CONJS", SPLIT_CONJS_CMD),
       ("HAMMER",  HAMMER_CMD),
       ("PRINT",   PRINT_CMD),
       ("RULE",    RULE_CMD),
@@ -5335,6 +5354,7 @@ val keywords = let open Keyword
            (("SIMPLIFY", \<^here>), command_spec (prf_goal, [])),
            (("INTRO", \<^here>), command_spec (prf_goal, [])),
            (("ALL_INTRO", \<^here>), command_spec (prf_goal, [])),
+           (("SPLIT_CONJS", \<^here>), command_spec (prf_goal, [])),
            (("HAMMER",\<^here>), command_spec (prf_goal, [])),
            (("PRINT", \<^here>), command_spec (diag,     [])),
            (("RULE",  \<^here>), command_spec (prf_decl, [])),

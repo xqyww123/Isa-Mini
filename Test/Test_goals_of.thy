@@ -50,8 +50,8 @@ local
   val s1 = mk_state "P \<and> Q \<and> R"
   val _ = test_state "T1_single(P\<and>Q\<and>R)" s1
 
-  (* ===== Test 2: After INTRO with split_conj=true ===== *)
-  val (_, s2) = Minilang.INTRO Minilang.SINGLE_GOAL (SOME true) NONE NONE NONE s1
+  (* ===== Test 2: After SPLIT_CONJS ===== *)
+  val s2 = Minilang.SPLIT_CONJS s1
   val _ = test_state "T2_split(P\<and>Q\<and>R)" s2
 
   (* ===== Test 3: Single non-conj goal ===== *)
@@ -60,17 +60,17 @@ local
 
   (* ===== Test 4: Goal with quantifiers after INTRO ===== *)
   val s4 = mk_state "\<forall>x::nat. P x"
-  val (_, s4') = Minilang.INTRO Minilang.SINGLE_GOAL NONE NONE NONE NONE s4
+  val (_, s4') = Minilang.INTRO Minilang.SINGLE_GOAL NONE NONE NONE s4
   val _ = test_state "T4_after_intro(forall)" s4'
 
   (* ===== Test 5: Goal with implication after INTRO ===== *)
   val s5 = mk_state "A \<longrightarrow> B"
-  val (_, s5') = Minilang.INTRO Minilang.SINGLE_GOAL NONE NONE NONE NONE s5
+  val (_, s5') = Minilang.INTRO Minilang.SINGLE_GOAL NONE NONE NONE s5
   val _ = test_state "T5_after_intro(imp)" s5'
 
   (* ===== Test 6: 4-conj split ===== *)
   val s6 = mk_state "A \<and> B \<and> C \<and> D"
-  val (_, s6') = Minilang.INTRO Minilang.SINGLE_GOAL (SOME true) NONE NONE NONE s6
+  val s6' = Minilang.SPLIT_CONJS s6
   val _ = test_state "T6_split_4conj" s6'
 
 in

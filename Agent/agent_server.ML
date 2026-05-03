@@ -280,7 +280,6 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
       val ctxt = ctxt0
             |> Config.put Minilang.strict_end true
             |> Config.put Minilang.counter_mode "none"
-            |> Config.put Minilang.INTRO_split_conj true
             |> Config.put Minilang.INTRO_mk_block true
             (* Keep `transparent_intro` off so `CONSIDER' = CONSIDER'i ∘
                TRANSPARENT_INTRO'` does NOT invoke INTRO' internally.  If it
@@ -535,9 +534,9 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         name = "IsaMini.need_intro",
         arg_schema = unpackPair (unpackString, unpackBool),
         ret_schema = packBool,
-        function = (fn (state_id, consider_conj) =>
+        function = (fn (state_id, _) =>
           let val s0 = get_state state_id
-           in MiniLang_Agent.check_need_intro consider_conj s0
+           in MiniLang_Agent.check_need_intro s0
           end),
         timeout = NONE
       }

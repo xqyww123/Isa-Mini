@@ -83,7 +83,15 @@ let
     ("Multiset.rel_mset", false),
     ("Multiset.pred_mset", false),
     ("FSet.fimage", false),
-    ("FSet.fset_member", true) (* hidden name *)
+    ("FSet.fset_member", true), (* hidden name *)
+    (* Should pass (BNF preserved, even if hidden in name space) *)
+    ("List.pred_list", false),
+    ("List.rel_list", false),
+    ("Sum_Type.pred_sum", false),
+    ("Sum_Type.rel_sum", false),
+    ("Sum_Type.sum.Inl", false),
+    ("Sum_Type.sum.Inr", false),
+    ("Product_Type.prod.Pair", false)
   ]
 
   val _ = log "====== is_infra_const verification test ======"
@@ -101,6 +109,307 @@ let
   val _ = if Synchronized.value all_pass
           then log "ALL TESTS PASSED"
           else log "SOME TESTS FAILED"
+  val _ = flush ()
+in () end
+\<close>
+
+ML \<open>
+let
+  val out_path = Path.explode "~/.isabelle/Isabelle2024/log/infra_filter_broad_test.log"
+  val lines : string list Synchronized.var = Synchronized.var "log_lines" []
+  fun log s = Synchronized.change lines (fn ls => ls @ [s])
+  fun flush () =
+    File.write out_path (String.concatWith "\n" (Synchronized.value lines) ^ "\n")
+
+  val context = Context.Proof \<^context>
+  val thy = Proof_Context.theory_of \<^context>
+  val {is_infra_const, is_infra_thm, is_infra_type, is_infra_class, is_infra_locale, ...} =
+    Infra_Filter.gen_infra_filters context
+
+  val consts = Sign.consts_of thy
+  val all_const_names = #constants (Consts.dest consts) |> map fst
+  val const_space = Consts.space_of consts
+
+  val _ = log "====== Broad infra_filter test ======"
+  val _ = log ""
+
+  (* --- Constants --- *)
+  val _ = log "=== CONSTANTS ==="
+  val total_consts = length all_const_names
+  val (infra_consts, pass_consts) = List.partition is_infra_const all_const_names
+  val n_infra = length infra_consts
+  val n_pass = length pass_consts
+  val _ = log (String.concat ["Total: ", Int.toString total_consts,
+    "  Infra: ", Int.toString n_infra,
+    "  Pass: ", Int.toString n_pass,
+    "  Ratio: ", Int.toString (100 * n_infra div total_consts), "%"])
+
+  (* Break down infra consts by reason *)
+  val _ = log ""
+  val _ = log "--- Infra constant breakdown (first matching reason) ---"
+  val fact_space = Facts.space_of (Global_Theory.facts_of thy)
+  fun is_hidden space name =
+    Long_Name.is_hidden (Name_Space.intern space name)
+  val n_concealed = length (filter (fn n => Name_Space.is_concealed const_space n) all_const_names)
+  val n_hidden = length (filter (fn n => is_hidden const_space n) all_const_names)
+  val _ = log (String.concat ["  concealed: ", Int.toString n_concealed])
+  val _ = log (String.concat ["  hidden: ", Int.toString n_hidden])
+
+  (* Spot-check: lift_definition constants that should NOT be filtered *)
+  val _ = log ""
+  val _ = log "--- Spot-check: known lift_definition constants ---"
+  val lift_consts = [
+    "Multiset.multiset.count",
+    "Finite_Map.fmap.fmlookup",
+    "Finite_Map.fmap.fmran",
+    "Finite_Map.fmap.fmdom",
+    "Finite_Map.fmap.fmran'",
+    "Finite_Map.fmap.fmdom'",
+    "Finite_Map.fmap.fmempty",
+    "Finite_Map.fmap.fmupd",
+    "Finite_Map.fmap.fmadd",
+    "Finite_Map.fmap.fmmap",
+    "Finite_Map.fmap.fmfilter",
+    "Finite_Map.fmap.fmdrop",
+    "Finite_Map.fmap.fmrestrict_set",
+    "Finite_Map.fmap.fmrestrict_fset",
+    "Product_Type.prod.swap",
+    "FSet.fset.fset",
+    "FSet.fset.fBall",
+    "FSet.fset.fBex",
+    "FSet.bot_fset",
+    "FSet.less_eq_fset",
+    "Multiset.multiset.mset_set",
+    "Multiset.multiset.set_mset"
+  ]
+  val _ = map (fn name =>
+    let val result = is_infra_const name
+        val status = if result then "FILTERED (unexpected?)" else "pass"
+    in log (String.concat ["  ", status, "  ", name]) end) lift_consts
+
+  (* Spot-check: BNF infra constants that SHOULD be filtered *)
+  val _ = log ""
+  val _ = log "--- Spot-check: known BNF infra constants ---"
+  val bnf_infra_consts = [
+    "List.list.size_list",
+    "List.list.size_list_inst.size_list",
+    "Sum_Type.sum.size_sum",
+    "Product_Type.prod.size_prod",
+    "Option.option.size_option"
+  ]
+  val _ = map (fn name =>
+    let val result = is_infra_const name
+        val status = if result then "filtered" else "PASS (unexpected?)"
+    in log (String.concat ["  ", status, "  ", name]) end) bnf_infra_consts
+
+  (* Spot-check: preserved BNF constants that should NOT be filtered *)
+  val _ = log ""
+  val _ = log "--- Spot-check: preserved BNF constants (constructors, case, map, pred, rel) ---"
+  val preserved_consts = [
+    "List.list.Nil", "List.list.Cons", "List.list.case_list",
+    "List.map", "List.set", "List.pred_list", "List.rel_list",
+    "Option.option.None", "Option.option.Some", "Option.option.case_option",
+    "Option.map_option", "Option.pred_option", "Option.rel_option",
+    "Sum_Type.sum.Inl", "Sum_Type.sum.Inr", "Sum_Type.sum.case_sum",
+    "Sum_Type.map_sum", "Sum_Type.pred_sum", "Sum_Type.rel_sum",
+    "Product_Type.prod.Pair", "Product_Type.prod.case_prod",
+    "BNF_Def.map_prod", "BNF_Def.pred_prod", "BNF_Def.rel_prod",
+    "Multiset.image_mset", "Multiset.rel_mset", "Multiset.pred_mset",
+    "FSet.fimage"
+  ]
+  val _ = map (fn name =>
+    let val result = is_infra_const name
+        val status = if result then "FILTERED (unexpected?)" else "pass"
+    in log (String.concat ["  ", status, "  ", name]) end) preserved_consts
+
+  (* Spot-check: Abs_/Rep_ constants that SHOULD be filtered *)
+  val _ = log ""
+  val _ = log "--- Spot-check: Abs_/Rep_ typedef morphisms ---"
+  val absrep_consts = [
+    "Product_Type.prod.Abs_prod", "Product_Type.prod.Rep_prod",
+    "Multiset.multiset.Abs_multiset", "Multiset.multiset.Rep_multiset",
+    "FSet.fset.Abs_fset", "FSet.fset.Rep_fset",
+    "Sum_Type.sum.Abs_sum", "Sum_Type.sum.Rep_sum",
+    "Option.option.Abs_option", "Option.option.Rep_option",
+    "List.list.Abs_list", "List.list.Rep_list"
+  ]
+  val _ = map (fn name =>
+    let val result = is_infra_const name
+        val status = if result then "filtered" else "PASS (unexpected?)"
+    in log (String.concat ["  ", status, "  ", name]) end) absrep_consts
+
+  (* --- Sample: passed constants under ADT prefixes --- *)
+  val _ = log ""
+  val _ = log "--- Passed constants under common ADT type prefixes (sample) ---"
+  val type_prefixes = ["List.list.", "Product_Type.prod.", "Sum_Type.sum.",
+    "Option.option.", "Multiset.multiset.", "FSet.fset.", "Finite_Map.fmap.",
+    "Set.set.", "Nat.nat.", "Int.int."]
+  val _ = map (fn pfx =>
+    let val under = filter (fn n => String.isPrefix pfx n) pass_consts
+        val _ = log (String.concat ["  ", pfx, "* : ", Int.toString (length under), " passed"])
+        val _ = map (fn n => log (String.concat ["    ", n])) (List.take (under, Int.min (10, length under)))
+        val _ = if length under > 10 then log "    ..." else ()
+    in () end) type_prefixes
+
+  (* --- Theorems --- *)
+  val _ = log ""
+  val _ = log "=== THEOREMS ==="
+  val all_facts = Facts.dest_static true [] (Proof_Context.facts_of \<^context>)
+  val total_thms_count = Synchronized.var "total_thms" 0
+  val infra_thms_count = Synchronized.var "infra_thms" 0
+  val pass_thms_count = Synchronized.var "pass_thms" 0
+  val _ = map (fn (name, thms) =>
+    map (fn thm =>
+      let val _ = Synchronized.change total_thms_count (fn n => n + 1)
+      in if is_infra_thm (name, thm)
+         then Synchronized.change infra_thms_count (fn n => n + 1)
+         else Synchronized.change pass_thms_count (fn n => n + 1)
+      end) thms) all_facts
+  val total_t = Synchronized.value total_thms_count
+  val infra_t = Synchronized.value infra_thms_count
+  val pass_t = Synchronized.value pass_thms_count
+  val _ = log (String.concat ["Total: ", Int.toString total_t,
+    "  Infra: ", Int.toString infra_t,
+    "  Pass: ", Int.toString pass_t,
+    "  Ratio: ", Int.toString (if total_t > 0 then 100 * infra_t div total_t else 0), "%"])
+
+  (* --- Types --- *)
+  val _ = log ""
+  val _ = log "=== TYPES ==="
+  val type_space = Sign.type_space thy
+  val all_type_names = Name_Space.get_names type_space
+  val (infra_types, pass_types) = List.partition is_infra_type all_type_names
+  val _ = log (String.concat ["Total: ", Int.toString (length all_type_names),
+    "  Infra: ", Int.toString (length infra_types),
+    "  Pass: ", Int.toString (length pass_types),
+    "  Ratio: ", Int.toString (100 * length infra_types div length all_type_names), "%"])
+
+  (* --- Classes --- *)
+  val _ = log ""
+  val _ = log "=== CLASSES ==="
+  val class_space = Sign.class_space thy
+  val all_class_names = Name_Space.get_names class_space
+  val (infra_classes, pass_classes) = List.partition is_infra_class all_class_names
+  val _ = log (String.concat ["Total: ", Int.toString (length all_class_names),
+    "  Infra: ", Int.toString (length infra_classes),
+    "  Pass: ", Int.toString (length pass_classes),
+    "  Ratio: ", Int.toString (if length all_class_names > 0 then 100 * length infra_classes div length all_class_names else 0), "%"])
+
+  (* --- Locales --- *)
+  val _ = log ""
+  val _ = log "=== LOCALES ==="
+  val locale_space = Locale.locale_space thy
+  val all_locale_names = Name_Space.get_names locale_space
+  val (infra_locales, pass_locales) = List.partition is_infra_locale all_locale_names
+  val _ = log (String.concat ["Total: ", Int.toString (length all_locale_names),
+    "  Infra: ", Int.toString (length infra_locales),
+    "  Pass: ", Int.toString (length pass_locales),
+    "  Ratio: ", Int.toString (if length all_locale_names > 0 then 100 * length infra_locales div length all_locale_names else 0), "%"])
+
+  (* --- Diagnostic: WHY are specific constants filtered? --- *)
+  val _ = log ""
+  val _ = log "=== DIAGNOSTIC: filter reasons for suspicious constants ==="
+
+  val internal_prefixes = ["Lifting.", "BNF_Def.", "Transfer.", "BNF_Cardinal_Order_Relation.",
+        "HOL.equal", "ATP.", "Code_Evaluation."]
+
+  fun diagnose_const name =
+    let
+      fun check tests =
+        case tests of
+          [] => "UNKNOWN"
+        | (label, test) :: rest => if test () then label else check rest
+      val reason = check [
+        ("concealed", fn () => Name_Space.is_concealed const_space name),
+        ("hidden", fn () => is_hidden const_space name),
+        ("internal_prefix", fn () => exists (fn pfx => String.isPrefix pfx name) internal_prefixes),
+        ("has_class_variant", fn () =>
+          let val all_cn = #constants (Consts.dest consts) |> map fst
+              val has_cv = exists (fn cname =>
+                if String.isSubstring "_class." cname then
+                  let val qual = Long_Name.qualifier cname
+                      val base = Long_Name.base_name cname
+                  in if String.isSuffix "_class" qual then
+                       String.concat [
+                         String.substring (qual, 0, size qual - 6), ".", base] = name
+                     else false
+                  end
+                else false) all_cn
+          in has_cv end),
+        ("quotient_typedef_infra", fn () => false),
+        ("Abs_Rep_name", fn () =>
+          let val base = Long_Name.base_name name
+          in String.isPrefix "Abs_" base orelse String.isPrefix "Rep_" base end),
+        ("adt_prefix+bnf_pos+not_preserved", fn () => false)
+      ]
+    in reason end
+
+  val suspicious = [
+    "Finite_Map.fmap.fmran", "Finite_Map.fmap.fmdom",
+    "Finite_Map.fmap.fmdom'", "Finite_Map.fmap.fmempty",
+    "Finite_Map.fmap.fmupd", "Finite_Map.fmap.fmadd",
+    "Finite_Map.fmap.fmfilter", "Finite_Map.fmap.fmdrop",
+    "Finite_Map.fmap.fmrestrict_set", "Finite_Map.fmap.fmrestrict_fset",
+    "FSet.fset.fBall", "FSet.fset.fBex",
+    "FSet.bot_fset", "FSet.less_eq_fset",
+    "Multiset.multiset.mset_set", "Multiset.multiset.set_mset",
+    "List.pred_list", "List.rel_list",
+    "Sum_Type.sum.Inl", "Sum_Type.sum.Inr",
+    "Sum_Type.pred_sum", "Sum_Type.rel_sum",
+    "Product_Type.prod.Pair",
+    "BNF_Def.map_prod", "BNF_Def.pred_prod", "BNF_Def.rel_prod"
+  ]
+  val _ = map (fn name =>
+    log (String.concat ["  ", name, " => ", diagnose_const name])) suspicious
+
+  (* Diagnostic: what names does BNF register for list and sum? *)
+  val _ = log ""
+  val _ = log "--- BNF registered names for List.list ---"
+  val _ = (case BNF_Def.bnf_of \<^context> "List.list" of
+      NONE => log "  BNF not found!"
+    | SOME bnf =>
+        let val map_n = fst (Term.dest_Const (BNF_Def.map_of_bnf bnf))
+            val pred_n = fst (Term.dest_Const (BNF_Def.pred_of_bnf bnf))
+            val rel_n = fst (Term.dest_Const (BNF_Def.rel_of_bnf bnf))
+            val set_ns = map (fst o Term.dest_Const) (BNF_Def.sets_of_bnf bnf)
+        in log (String.concat ["  map: ", map_n]);
+           log (String.concat ["  pred: ", pred_n]);
+           log (String.concat ["  rel: ", rel_n]);
+           map (fn s => log (String.concat ["  set: ", s])) set_ns; ()
+        end)
+  val _ = log "--- BNF registered names for Sum_Type.sum ---"
+  val _ = (case BNF_Def.bnf_of \<^context> "Sum_Type.sum" of
+      NONE => log "  BNF not found!"
+    | SOME bnf =>
+        let val pred_n = fst (Term.dest_Const (BNF_Def.pred_of_bnf bnf))
+            val rel_n = fst (Term.dest_Const (BNF_Def.rel_of_bnf bnf))
+        in log (String.concat ["  pred: ", pred_n]);
+           log (String.concat ["  rel: ", rel_n])
+        end)
+  val _ = log "--- BNF registered names for Product_Type.prod ---"
+  val _ = (case BNF_Def.bnf_of \<^context> "Product_Type.prod" of
+      NONE => log "  BNF not found!"
+    | SOME bnf =>
+        let val map_n = fst (Term.dest_Const (BNF_Def.map_of_bnf bnf))
+            val pred_n = fst (Term.dest_Const (BNF_Def.pred_of_bnf bnf))
+            val rel_n = fst (Term.dest_Const (BNF_Def.rel_of_bnf bnf))
+        in log (String.concat ["  map: ", map_n]);
+           log (String.concat ["  pred: ", pred_n]);
+           log (String.concat ["  rel: ", rel_n])
+        end)
+  val _ = log "--- ctr_sugar constructor names for Sum_Type.sum ---"
+  val _ = (case Ctr_Sugar.ctr_sugar_of \<^context> "Sum_Type.sum" of
+      NONE => log "  ctr_sugar not found!"
+    | SOME cs =>
+        (map (fn c => log (String.concat ["  ctr: ", fst (Term.dest_Const c)])) (#ctrs cs); ()))
+  val _ = log "--- ctr_sugar constructor names for Product_Type.prod ---"
+  val _ = (case Ctr_Sugar.ctr_sugar_of \<^context> "Product_Type.prod" of
+      NONE => log "  ctr_sugar not found!"
+    | SOME cs =>
+        (map (fn c => log (String.concat ["  ctr: ", fst (Term.dest_Const c)])) (#ctrs cs); ()))
+
+  val _ = log ""
+  val _ = log "====== END ======"
   val _ = flush ()
 in () end
 \<close>

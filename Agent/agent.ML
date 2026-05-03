@@ -44,7 +44,8 @@ datatype ('term, 'thm, 'fact) command =
   | SORRY_END_ALL of Minilang.opt_var_names
   | SORRY_ONLY
   | HAMMER   of ('term, 'fact) extended_fact list (*with facts*) * int (*timeout in seconds*)
-  | INTRO    of bindings option * bool (*split_conj*)
+  | INTRO    of bindings option
+  | SPLIT_CONJS
   | SIMPLIFY of (('term, 'fact) extended_fact * term list option) list (*simp facts with optional targets*)
               * bool (*use_system_simps*)
               * string list (*premise_names*) * bool (*simplify_goal*)
@@ -92,7 +93,7 @@ exception SPECIALIZE_RESULT of (string * string) list
 exception DEFINE_RESULT of string * string
 
 val compute_bindings : Minilang.state -> string list -> string list -> bindings
-val check_need_intro : bool -> Minilang.state -> bool
+val check_need_intro : Minilang.state -> bool
 
 (* Classify a proven theorem and register it into the automatic reasoners
    (simpset / classical intro/elim set / splitter) that apply. Used by
@@ -192,7 +193,8 @@ datatype ('term, 'thm, 'fact) command =
   | SORRY_END_ALL of Minilang.opt_var_names
   | SORRY_ONLY
   | HAMMER   of ('term, 'fact) extended_fact list (*with facts*) * int (*timeout in seconds*)
-  | INTRO    of bindings option * bool (*split_conj*)
+  | INTRO    of bindings option
+  | SPLIT_CONJS
   | SIMPLIFY of (('term, 'fact) extended_fact * term list option) list (*simp facts with optional targets*)
               * bool (*use_system_simps*)
               * string list (*premise_names*) * bool (*simplify_goal*)
@@ -320,7 +322,7 @@ fun get_witness_types s =
    in extract_leading_ex_types goal
   end
 
-fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (split_conj: bool)
+fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option)
                (s:Minilang.state)
   : bindings * Minilang.state =
   let
@@ -335,7 +337,7 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (split_conj: 
     val report_missing = is_some opt_bindings
   in
     (* Step 1: Check if INTRO is applicable *)
-    if not (Minilang.need_intro split_conj st) then
+    if not (Minilang.need_intro st) then
       let
         (* No leading ⋀/⟹/∀/⟶ to introduce: nothing is bound. Still emit
            INTRO_BINDINGS so the Python side's invariant (exactly one per
@@ -440,7 +442,7 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (split_conj: 
            INTRO_split_prem_conj is on, and flatten_facts produces
            base(1..N) entries in facts'. *)
         val ((params', facts'), s') =
-          Minilang.INTRO Minilang.SINGLE_GOAL (SOME split_conj) NONE
+          Minilang.INTRO Minilang.SINGLE_GOAL NONE
                          minilang_var_names (SOME prem_names_for_intro) s
 
         (* Step 6: Extract context from the new state *)
@@ -518,6 +520,13 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (split_conj: 
       end
   end
 
+fun AUTO_SPLIT_CONJS (s: Minilang.state) : Minilang.state =
+  let val s' = Minilang.SPLIT_CONJS s
+      val _ = Minilang.get_reporter ()
+                (Minilang.Goals (Minilang.goals_of'
+                                   (Minilang.leading_proof_sequent_of s')))
+  in s' end
+
 (* Compute bindings for the leading proof goal by binding provided names in order.
    When Minilang.INTRO_split_prem_conj is on (the default for the agent) and a
    prem is conj-shaped, a single provided name expands into multiple entries
@@ -532,7 +541,7 @@ fun compute_bindings (s:Minilang.state)
     val st = Minilang.leading_proof_sequent_of s
   in
     (* Check if there's a quantified goal *)
-    if not (Minilang.need_intro false st) then
+    if not (Minilang.need_intro st) then
       ([], [])
     else
       let
@@ -612,9 +621,9 @@ fun compute_bindings (s:Minilang.state)
   end
 
 (* Check if the leading proof goal needs INTRO (i.e., has quantified variables or premises) *)
-fun check_need_intro consider_conj (s:Minilang.state) : bool =
+fun check_need_intro (s:Minilang.state) : bool =
   let val st = Minilang.leading_proof_sequent_of s
-   in Minilang.need_intro consider_conj st
+   in Minilang.need_intro st
   end
 
 fun AUTO_SIMPLIFY
@@ -1075,8 +1084,9 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
              | Minilang.OPR_FAIL (Minilang.PROOF_FAIL, _) =>
           raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL,
             "Automatic proof fails. The goal is non-trivial and a step-by-step proof is required."))
-    | INTRO (opt_bindings, split_conj) =>
-        #2 (AUTO_INTRO counters opt_bindings split_conj s)
+    | INTRO opt_bindings =>
+        #2 (AUTO_INTRO counters opt_bindings s)
+    | SPLIT_CONJS => AUTO_SPLIT_CONJS s
     | SPECIALIZE (name, rule_fact, insts, discharge_facts) =>
         let val ctxt = Minilang.context_of s
             val rule_thms = resolve_to_thms (mk_counter ()) ctxt [rule_fact]
@@ -1290,6 +1300,7 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
       let val ctxt = Minilang.context_of s
       in HAMMER (map (check_extended_fact ctxt) facts, timeout) end
   | check_command_i _ (INTRO opt_bindings) = INTRO opt_bindings
+  | check_command_i _ SPLIT_CONJS = SPLIT_CONJS
   | check_command_i s (SPECIALIZE (name, rule_fact, insts, discharge_facts)) =
       let val ctxt = Minilang.context_of s
           val (names, raws) = ListPair.unzip insts
