@@ -37,8 +37,14 @@ datatype ('term, 'thm, 'fact) command =
   | NEXT     of ('term, 'fact) extended_fact list (*add lemmas*) * Minilang.opt_var_names
   | END      of ('term, 'fact) extended_fact list (*add lemmas*)
   | BRANCH   of (string option * string) list
-  | HAVE     of string (*name*) * 'term (*statement*) * bool (*auto_apply*)
-  | SUFFICES of 'term
+  | HAVE     of string (*name*)
+             * (string * string option) list (*fixes: var_name × type_string_opt*)
+             * (string option * string) list (*assumes: premise_name_opt × prop_string*)
+             * string (*conclusion*)
+             * bool (*auto_apply*)
+  | SUFFICES of (string * string option) list (*fixes*)
+             * (string option * string) list (*assumes*)
+             * string (*conclusion*)
   | OBTAIN   of (string * string option) list (*vars*) * (string option * string) list (*constraints*)
   | SORRY_NEXT    of Minilang.opt_var_names
   | SORRY_END_ALL of Minilang.opt_var_names
@@ -61,6 +67,7 @@ datatype ('term, 'thm, 'fact) command =
               * string list (*equation clauses*)
               * string list (*BY_METRIC measures, [] = none*)
   | SKIP
+  | CONTRADICTION of string (*hypothesis_binding_name*)
 
 type xcmd = (string, string, string) command
 type icmd = (term, thm, Facts.ref * Token.src list) command
@@ -186,8 +193,14 @@ datatype ('term, 'thm, 'fact) command =
   | NEXT     of ('term, 'fact) extended_fact list (*add lemmas*) * Minilang.opt_var_names
   | END      of ('term, 'fact) extended_fact list (*add lemmas*)
   | BRANCH   of (string option * string) list
-  | HAVE     of string (*name*) * 'term (*statement*) * bool (*auto_apply*)
-  | SUFFICES of 'term
+  | HAVE     of string (*name*)
+             * (string * string option) list (*fixes: var_name × type_string_opt*)
+             * (string option * string) list (*assumes: premise_name_opt × prop_string*)
+             * string (*conclusion*)
+             * bool (*auto_apply*)
+  | SUFFICES of (string * string option) list (*fixes*)
+             * (string option * string) list (*assumes*)
+             * string (*conclusion*)
   | OBTAIN   of (string * string option) list (*vars*) * (string option * string) list (*constraints*)
   | SORRY_NEXT    of Minilang.opt_var_names
   | SORRY_END_ALL of Minilang.opt_var_names
@@ -210,6 +223,7 @@ datatype ('term, 'thm, 'fact) command =
               * string list (*equation clauses*)
               * string list (*BY_METRIC measures, [] = none*)
   | SKIP
+  | CONTRADICTION of string (*hypothesis_binding_name*)
 
 type xcmd = (string, string, string) command
 type icmd = (term, thm, Facts.ref * Token.src list) command
@@ -1033,15 +1047,37 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
             val _ = Synchronized.change prem_ctr (K final_counter)
         in Minilang.CONSIDER brs s
         end
-    | HAVE (name, goal, auto_apply) =>
-        let val attr_srcs = if auto_apply
-              then [Token.make_src ("mini_auto_apply", Position.none) []]
-              else []
-         in Minilang.HAVE'' [] []
-              [((Binding.name name, attr_srcs), [(goal, [])])] s
+    | HAVE (name, fixes, assumes, conclusion, auto_apply) =>
+        let val prem_ctr = #prem_counter counters
+            val counter_start = Synchronized.value prem_ctr
+            val (named_assumes, final_counter) = fold_map (fn (name_opt, prop) => fn ctr =>
+                  let val (nm, ctr') = case name_opt of
+                          SOME n => (n, ctr)
+                        | NONE => ("premise" ^ string_of_int ctr, ctr + 1)
+                  in (((Binding.name nm, []), [(prop, [])]), ctr')
+                  end) assumes counter_start
+            val _ = Synchronized.change prem_ctr (K final_counter)
+            val attr_srcs = if auto_apply
+                  then [Token.make_src ("mini_auto_apply", Position.none) []]
+                  else []
+            val fixes' = map (fn (n, T) => (Binding.name n, T, NoSyn)) fixes
+            val shows = [((Binding.name name, attr_srcs), [(conclusion, [])])]
+         in Minilang.HAVE fixes' named_assumes shows s
         end
-    | SUFFICES goal =>
-        Minilang.SUFFICES'' [] [] [((Binding.empty, []), [(goal, [])])] s
+    | SUFFICES (fixes, assumes, conclusion) =>
+        let val prem_ctr = #prem_counter counters
+            val counter_start = Synchronized.value prem_ctr
+            val (named_assumes, final_counter) = fold_map (fn (name_opt, prop) => fn ctr =>
+                  let val (nm, ctr') = case name_opt of
+                          SOME n => (n, ctr)
+                        | NONE => ("premise" ^ string_of_int ctr, ctr + 1)
+                  in (((Binding.name nm, []), [(prop, [])]), ctr')
+                  end) assumes counter_start
+            val _ = Synchronized.change prem_ctr (K final_counter)
+            val fixes' = map (fn (n, T) => (Binding.name n, T, NoSyn)) fixes
+            val shows = [((Binding.empty, []), [(conclusion, [])])]
+         in Minilang.SUFFICES fixes' named_assumes shows s
+        end
     | OBTAIN (vars, constraints) =>
         let val prem_ctr = #prem_counter counters
             val counter_start = Synchronized.value prem_ctr
@@ -1158,6 +1194,34 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
                     (Minilang.Internal (DEFINE_RESULT (name, ty_str)))
         in s' end
     | SKIP => s
+    | CONTRADICTION hyp_name =>
+        let
+          val st = Minilang.leading_proof_sequent_of s
+          val goal = Logic.strip_imp_concl (Thm.major_prem_of st)
+          val is_neg = (case goal of
+              Const(\<^const_name>\<open>Trueprop\<close>, _) $
+                (Const(\<^const_name>\<open>Not\<close>, _) $ _) => true
+            | _ => false)
+          val rule_name = if is_neg then "notI" else "ccontr"
+          val rule_ref = (Facts.Named ((rule_name, Position.none), NONE), [])
+          val s' = Minilang.RULE [rule_ref] [] s
+          val ((params', facts'), s'') =
+                Minilang.INTRO Minilang.SINGLE_GOAL
+                               NONE (SOME [SOME hyp_name]) s'
+          val ctxt'' = Minilang.context_of s''
+          val var_bindings = map (fn (name, ty) =>
+                {internal_name = name, external_name = name,
+                 typ_pretty = string_of_type ctxt'' ty}) params'
+          val prem_bindings = map (fn (name, prop) =>
+                {internal_term = prop, external_name = name,
+                 pretty = string_of_term ctxt'' prop}) facts'
+          val _ = Minilang.get_reporter ()
+                    (Minilang.Internal (INTRO_BINDINGS {
+                        missing = ([], []),
+                        auto_introduced = ([], []),
+                        final = (var_bindings, prem_bindings)
+                    }))
+        in s'' end
 
 local
 val keywords = Thy_Header.get_keywords @{theory Pure}
@@ -1284,14 +1348,8 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
       let val ctxt = Minilang.context_of s
       in END (map (check_extended_fact ctxt) facts) end
   | check_command_i _ (BRANCH brs) = BRANCH brs (*name_opt * string passthrough*)
-  | check_command_i s (HAVE (name, goal, auto_apply)) =
-      let val ctxt = Minilang.context_of s
-       in HAVE (name, read_prop ctxt goal, auto_apply)
-      end
-  | check_command_i s (SUFFICES goal) =
-      let val ctxt = Minilang.context_of s
-       in SUFFICES (read_prop ctxt goal)
-      end
+  | check_command_i _ (HAVE data) = HAVE data
+  | check_command_i _ (SUFFICES data) = SUFFICES data
   | check_command_i _ (OBTAIN vc) = OBTAIN vc (*name_opt * string passthrough*)
   | check_command_i _ (SORRY_NEXT vars) = SORRY_NEXT vars
   | check_command_i _ (SORRY_END_ALL vars) = SORRY_END_ALL vars
@@ -1316,6 +1374,7 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
   | check_command_i _ (DEFINE d) = DEFINE d
     (* strings passthrough — Minilang.FUN'' parses them internally *)
   | check_command_i _ SKIP = SKIP
+  | check_command_i _ (CONTRADICTION hyp) = CONTRADICTION hyp
 
 fun check_command s x = check_command_i s x
     handle ERROR msg => raise Minilang.OPR_FAIL (Minilang.TERMLANG, msg)
