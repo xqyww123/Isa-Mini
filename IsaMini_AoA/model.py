@@ -3109,7 +3109,7 @@ class NonLeaf_Node(Node):
         if child_idx is None:
             return
         next_idx = child_idx + 1
-        if next_idx < len(self.sub_nodes) and isinstance(self.sub_nodes[next_idx], Intro):
+        if any(isinstance(s, (Intro, Induction)) for s in self.sub_nodes[next_idx:]):
             return
         if not await child.resulting_state().need_intro(False):
             return
@@ -3695,9 +3695,8 @@ class StdBlock(NonLeaf_Node):
             self.sub_nodes = []
             gns = list(self._proof)
             self._proof = None
-            first_cls = gns[0].cls if gns else None
             if (auto_intro
-                    and first_cls is not Intro
+                    and not any(gn.cls is Intro or gn.cls is Induction for gn in gns)
                     and await self._state_after_beginning().need_intro(False)):
                 local_step = self._local_step_of_next_proof_step()
                 ml_state = await self._state_after_beginning().clone(None)
@@ -3784,11 +3783,12 @@ class StdBlock(NonLeaf_Node):
                 continue
             self.sub_nodes.append(node)
             self._is_trivial = None
-            next_is_intro = (i + 1 < len(gns)
-                             and gns[i + 1].cls is Intro)
+            has_later_intro_or_induction = any(
+                gn.cls is Intro or gn.cls is Induction
+                for gn in gns[i + 1:])
             behavior, cancelled = await outcome.commit_and_hook(
                 self._can_continue_before_child(node), node,
-                auto_intro=not next_is_intro)
+                auto_intro=not has_later_intro_or_induction)
             if behavior is not EditFailureBehavior.CONTINUE:
                 return outcome
         return outcome
@@ -3935,9 +3935,7 @@ class GoalNode(StdBlock):
         if self._pending_proof is not None and not self.sub_nodes:
             gns = self._pending_proof
             self._pending_proof = None
-            first_cls = gns[0].cls if gns else None
-            # Q7: auto-Intro injection unless the first Parsed_Opr is Intro.
-            if (first_cls is not Intro
+            if (not any(gn.cls is Intro or gn.cls is Induction for gn in gns)
                     and await self.ml_state.need_intro(False)):
                 local_step = self._local_step_of_next_proof_step()
                 ml_state = await self.ml_state.clone(None)
