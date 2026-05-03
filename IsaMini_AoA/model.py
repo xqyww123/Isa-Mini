@@ -3129,6 +3129,7 @@ class NonLeaf_Node(Node):
         ml_state = await child.resulting_state().clone(None)
         config = NodeConfig(new_id, ml_state, self)
         intro = Intro(config, "", None, False)
+        self.session.auto_intro_nodes.append(intro)
         self.sub_nodes.insert(next_idx, intro)
         await intro._refresh_me_alone(auto_intro=True)
     def _local_step_of_next_proof_step(self) -> local_step:
@@ -3701,7 +3702,9 @@ class StdBlock(NonLeaf_Node):
                 local_step = self._local_step_of_next_proof_step()
                 ml_state = await self._state_after_beginning().clone(None)
                 config = NodeConfig(local_step, ml_state, self)
-                self.sub_nodes.append(Intro(config, "", None, False))
+                intro = Intro(config, "", None, False)
+                self.sub_nodes.append(intro)
+                self.session.auto_intro_nodes.append(intro)
             for gn in gns:
                 local_step = self._local_step_of_next_proof_step()
                 ml_state = await self._state_after_beginning().clone(None)
@@ -3733,7 +3736,9 @@ class StdBlock(NonLeaf_Node):
             local_step = self._local_step_of_next_proof_step()
             ml_state = await self._state_after_beginning().clone(None)
             config = NodeConfig(local_step, ml_state, self)
-            self.sub_nodes.append(Intro(config, "", None, False))
+            intro = Intro(config, "", None, False)
+            self.sub_nodes.append(intro)
+            self.session.auto_intro_nodes.append(intro)
         return None
     async def append(
         self, gns: 'list[Parsed_Opr]',
@@ -3940,7 +3945,9 @@ class GoalNode(StdBlock):
                 local_step = self._local_step_of_next_proof_step()
                 ml_state = await self.ml_state.clone(None)
                 config = NodeConfig(local_step, ml_state, self)
-                self.sub_nodes.append(Intro(config, "", None, False))
+                intro = Intro(config, "", None, False)
+                self.sub_nodes.append(intro)
+                self.session.auto_intro_nodes.append(intro)
             for gn in gns:
                 local_step = self._local_step_of_next_proof_step()
                 ml_state = await self.ml_state.clone(None)
@@ -3955,6 +3962,7 @@ class GoalNode(StdBlock):
             config = NodeConfig(local_step, ml_state, self)
             intro = Intro(config, "", None, False)
             self.sub_nodes.append(intro)
+            self.session.auto_intro_nodes.append(intro)
         return await super()._refresh_me_alone(auto_intro)
     async def _auto_intro_after_me(self) -> None:
         pass
@@ -4433,6 +4441,8 @@ class CaseSplit_Like(SubgoalMaker):
         non-list `body`, and duplicate `case_name`s — all with
         path-annotated errors."""
         raw = arg.get("proofs")
+        if raw == "GivenLater":
+            raw = None
         proofs_by_case: 'dict[str, proof_with_case_vars] | None' = None
         if raw is not None and raw != []:
             if not isinstance(raw, list):
@@ -5792,7 +5802,9 @@ class Rewrite(Leaf):
             for w in unfound_warnings + pit_warnings:
                 self.warnings.append(Warning(Warning.Position.FOOTER, w))
             # Check for looping rules and fork interaction if needed
-            fact_names = [f.short_name.ascii for f in self.using
+            # Send full fact references (including [where ...] attributes) so
+            # the ML side resolves the same instantiated theorems that SIMPLIFY uses.
+            fact_names = [f.pack()[1] for f in self.using
                           if isinstance(f, IsabelleFact_Presented)]
             if fact_names:
                 looping_info = await self.ml_state.check_looping_rules(
@@ -7207,6 +7219,7 @@ class Session:
         self.fork_pending: 'Fork_Pending | None' = None
         self.working_block: 'NonLeaf_Node | None' = None
         self.warnings: list[str] = []
+        self.auto_intro_nodes: list['Intro'] = []
         self.total_cost_usd: float = 0.0
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0

@@ -204,6 +204,14 @@ val HAVE_CMD : command
 
 val SUFFICES : string -> operation
 val SUFFICES'' : term -> operation
+val SUFFICES_STRUCTURED : (binding * string option * mixfix) list
+    -> (Attrib.binding * (string * string list) list) list
+    -> (Attrib.binding * (string * string list) list) list
+    -> operation
+val SUFFICES_STRUCTURED'' : (binding * typ option * mixfix) list
+    -> (Attrib.binding * (term * term list) list) list
+    -> (Attrib.binding * (term * term list) list) list
+    -> operation
 val SUFFICES_CMD : command
 
 val INST_VAR : (indexname * string) list -> operation
@@ -3242,6 +3250,12 @@ val HAVE_CMD =
           tolerate_typ (HAVE fixes assumes shows)
                        (fn s => HAVE fixes (remove_typ_ass assumes) (remove_typ_ass shows) s) )
 
+fun atomize_term ctxt =
+      Object_Logic.atomize_term ctxt
+  #> (fn X => if Term.fastype_of X = \<^Type>\<open>bool\<close>
+              then X
+              else raise OPR_FAIL (INVALID_OPR, "Fail to atomize the proposition into HOL"))
+
 (** SUFFICES **)
 
 (* Check if a term contains schematic variables *)
@@ -3369,7 +3383,49 @@ fun gen_SUFFICES prep_prop raw_prop =
 val SUFFICES   = gen_SUFFICES Syntax.read_prop
 val SUFFICES'' = gen_SUFFICES (K I)
 
-val SUFFICES_CMD = Parse.prop >> SUFFICES
+fun gen_SUFFICES_structured mk_stmt raw_fixes raw_assumes raw_shows =
+  timed_OPR 8 (
+     TRANSPARENT_INTRO'
+  #> (fn (ctxt0, SK) =>
+    let
+        val raw_assume_propss = map snd raw_assumes
+        val raw_show_propss = map snd raw_shows
+
+        val ({vars, propss, ...}, params_ctxt) =
+              mk_stmt raw_fixes (raw_assume_propss @ raw_show_propss) ctxt0
+
+        val fixes = map #2 vars
+        val (premss, conclss) = chop (length raw_assumes) propss
+
+        val concl_terms = flat conclss
+        val concl = case concl_terms of
+              [t] => t
+            | ts => HOLogic.mk_Trueprop (
+                      foldr1 HOLogic.mk_conj (map HOLogic.dest_Trueprop ts))
+
+        val closed = Logic.close_prop fixes (flat premss) concl
+        val hol_prop = atomize_term params_ctxt closed
+
+        val newly_fixed =
+            Variable.add_newly_fixed params_ctxt ctxt0 closed []
+        val _ = if null newly_fixed then ()
+                else get_reporter ()
+                       (Newly_Fixed (map (apfst (Variable.revert_fixed params_ctxt))
+                                         newly_fixed))
+
+    in SUFFICES' (K I) hol_prop (ctxt0, SK)
+    end ))
+
+val SUFFICES_STRUCTURED   = gen_SUFFICES_structured Proof_Context.read_stmt
+val SUFFICES_STRUCTURED'' = gen_SUFFICES_structured Proof_Context.cert_stmt
+
+val SUFFICES_CMD =
+    Parse_Spec.statement -- Parse_Spec.if_statement -- Parse.for_fixes
+ >> (fn ((shows, assumes), fixes) =>
+      tolerate_typ
+        (SUFFICES_STRUCTURED fixes assumes shows)
+        (fn s => SUFFICES_STRUCTURED fixes (remove_typ_ass assumes)
+                   (remove_typ_ass shows) s))
 
 (** INST_VAR **)
 
@@ -3500,12 +3556,6 @@ val SPECIALIZE_CMD =
   end
 
 (** CONSIDER **)
-
-fun atomize_term ctxt =
-      Object_Logic.atomize_term ctxt
-  #> (fn X => if Term.fastype_of X = \<^Type>\<open>bool\<close>
-              then X
-              else raise OPR_FAIL (INVALID_OPR, "Fail to atomize the proposition into HOL"))
 
 (*can be cached*)
 fun mk_consider_rule ctxt DNF_SPEC =

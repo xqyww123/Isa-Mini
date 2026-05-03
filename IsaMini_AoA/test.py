@@ -1613,7 +1613,7 @@ async def _test_Rewrite_QuantifiedGoal(root: Root, file: MyIO):
     file.write(f"success: {success}\n")
     file.write(f"reason: {reason.reason if isinstance(reason, FailureReason) else reason}\n")
 
-@model_test("Rewrite_Targeted_Where", "Test_Rewrite_Targeted_Where.thy", 13)
+@model_test("Rewrite_Targeted_Where", "Test_Rewrite_Targeted_Where.thy", 16)
 async def _test_Rewrite_Targeted_Where(root: Root, file: MyIO):
     """Regression: looping rule with [where ...] instantiation must still fire.
 
@@ -1633,10 +1633,10 @@ async def _test_Rewrite_Targeted_Where(root: Root, file: MyIO):
         return await interaction.answer(Answer(indexes=list(range(num_matches))))
     root.session.fork_interaction = stub_fork
     _outcome = await root.fill("1", [Rewrite.gen_single({
-        "thought": "Apply my_looping with P instantiated to a specific predicate",
+        "thought": "Apply my_looping with x instantiated to a",
         "using": [{"name": "my_looping",
-                   "instantiations": [{"name": "?P",
-                                       "value": "\\<lambda>n. (n::nat) > 0"}]}],
+                   "instantiations": [{"name": "?x",
+                                       "value": "a::nat"}]}],
         "use system simplifiers": False,
         "rewrite goal": True,
         "rewrite premises": []

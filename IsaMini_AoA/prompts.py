@@ -37,6 +37,22 @@ def _headline(outcome: 'model.EditOutcome') -> str:
     return f"{verb} step {c[0].id}-{c[-1].id}.\n"
 
 
+def _render_auto_intro_warning(session: 'model.Session', file: MyIO) -> None:
+    if not session.auto_intro_nodes:
+        return
+    live = [n for n in session.auto_intro_nodes if n.parent is not None and n in n.parent.sub_nodes]
+    session.auto_intro_nodes.clear()
+    if not live:
+        return
+    ids = ', '.join(n.id for n in live)
+    noun = "steps" if len(live) > 1 else "step"
+    file.write(
+        f"Note: {noun} {ids} {'were' if len(live) > 1 else 'was'} "
+        f"auto-introduced. You may delete {'them' if len(live) > 1 else 'it'} "
+        f"using mcp__proof__delete if unhelpful.\n"
+    )
+
+
 async def edit_message(
     root: Root,
     outcome: 'model.EditOutcome',
@@ -71,6 +87,7 @@ async def edit_message(
         file.write("Outline:\n")
         root.quickview(1, file)
         root.reset_changed()
+        _render_auto_intro_warning(session, file)
         unfinished = set()
         root.unfinished_nodes(unfinished)
         if not unfinished:
@@ -96,6 +113,7 @@ async def deleted_steps_message(steps: list[str], root: Root, session: 'model.Se
     file.write("Outline:\n")
     root.quickview(1, file)
     root.reset_changed()
+    _render_auto_intro_warning(session, file)
     unfinished = set()
     root.unfinished_nodes(unfinished)
     if not unfinished:

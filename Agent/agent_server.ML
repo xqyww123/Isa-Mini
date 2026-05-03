@@ -742,9 +742,9 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
               val thy = Proof_Context.theory_of ctxt
               val SOT = MiniLang_Agent.string_of_term ctxt
 
-              (* Resolve fact names to thms *)
+              (* Resolve fact names to thms (supports [where ...] attributes) *)
               val facts_thms = map (fn name =>
-                Proof_Context.get_thms ctxt name
+                MiniLang_Agent.read_thms ctxt name
                 handle ERROR _ => []) fact_names
 
               (* Get target terms to search in *)

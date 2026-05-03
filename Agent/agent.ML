@@ -114,6 +114,7 @@ val read_terms : Proof.context -> string list -> term list
 val read_terms_with_type : Proof.context -> (typ * string) list -> term list
 val read_prop : Proof.context -> string -> term
 val read_props : Proof.context -> string list -> term list
+val read_thms : Proof.context -> string -> thm list
 
 end
 
@@ -1203,6 +1204,9 @@ fun check_extended_fact ctxt (FactByName name) = FactByName (read_fact name)
   | check_extended_fact ctxt (FactInTime stmt) = FactInTime (read_prop ctxt stmt)
 
 in
+
+val read_thms = read_thms
+
 fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, bindings_opt)) =
       let val ctxt = Minilang.context_of s
       in SIMPLIFY (map (fn (fact, targets) => (check_extended_fact ctxt fact, targets)) facts_with_targets,
