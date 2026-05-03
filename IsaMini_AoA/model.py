@@ -7140,7 +7140,7 @@ def _parse_positional_proofs(
     splice themselves).  Returns `None` if `raw is None` OR `raw == []`
     — an empty `proofs` list is normalized to 'no proofs provided' so
     `proofs: []` behaves identically to `proofs: None` downstream."""
-    if raw is None or raw == []:
+    if raw is None or raw == [] or raw == "GivenLater":
         return None
     if not isinstance(raw, list):
         raise ArgumentError({},

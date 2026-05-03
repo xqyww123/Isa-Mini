@@ -150,10 +150,7 @@
         "thought": { "$ref": "#/$defs/Thought" },
         "statement": { "$ref": "#/$defs/Statement" },
         "name": { "type": "string", "description": "binding of the lemma" },
-        "proof": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/Operation" }
-        },
+        "proof": { "$ref": "#/$defs/Proof" },
         "auto_apply": {
           "type": "boolean",
           "default": false,
@@ -187,10 +184,7 @@
           "type": "array",
           "items": { "$ref": "#/$defs/NamedStatement" }
         },
-        "proof": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/Operation" }
-        }
+        "proof": { "$ref": "#/$defs/Proof" }
       },
       "required": [
         "operation",
@@ -215,10 +209,7 @@
             "type": "object",
             "properties": {
               "statement": { "$ref": "#/$defs/NamedStatement" },
-              "proof": {
-                "type": "array",
-                "items": { "$ref": "#/$defs/Operation" }
-              }
+              "proof": { "$ref": "#/$defs/Proof" }
             },
             "required": [ "statement" ]
           },
@@ -264,10 +255,7 @@
                 "type": "array",
                 "items": { "type": "string" }
               },
-              "body": {
-                "type": "array",
-                "items": { "$ref": "#/$defs/Operation" }
-              }
+              "body": { "$ref": "#/$defs/Proof" }
             },
             "required": [ "case_name", "body" ]
           }
@@ -344,13 +332,7 @@
             { "$ref": "#/$defs/FactByDescription" }
           ]
         },
-        "proofs": {
-          "type": "array",
-          "items": {
-            "type": "array",
-            "items": { "$ref": "#/$defs/Operation" }
-          }
-        }
+        "proofs": { "$ref": "#/$defs/GivenLater" }
       },
       "required": [
         "operation",
@@ -417,10 +399,7 @@
         "statement": {
           "$ref": "#/$defs/Statement"
         },
-        "proof": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/Operation" }
-        }
+        "proof": { "$ref": "#/$defs/Proof" }
       },
       "required": [
         "operation",
@@ -504,10 +483,7 @@
         },
         "proofs": {
           "type": "array",
-          "items": {
-            "type": "array",
-            "items": { "$ref": "#/$defs/Operation" }
-          }
+          "items": { "$ref": "#/$defs/Proof" }
         }
       },
       "required": [
@@ -640,6 +616,12 @@
         "equations"
       ],
       "type": "object"
+    },
+    "Proof": {
+      "title": "Proof",
+      "description": "a sequence of proof operations",
+      "type": "array",
+      "items": { "$ref": "#/$defs/Operation" }
     },
     "Operation": {
       "anyOf": [

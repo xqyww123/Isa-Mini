@@ -76,6 +76,24 @@ lemma "A \<longrightarrow> A \<and> A"
     END WITH h
   \<close>)
 
+section \<open>SUFFICES with multi-prop named group: h(1) h(2)\<close>
+
+lemma "A \<longrightarrow> B \<longrightarrow> A \<and> B"
+  by (min_script \<open>
+    SUFFICES "A \<and> B" if h: "A" "B"
+      END
+    END WITH h(1) h(2)
+  \<close>)
+
+section \<open>SUFFICES with mixed named and unnamed if groups\<close>
+
+lemma "A \<longrightarrow> B \<longrightarrow> A \<and> B"
+  by (min_script \<open>
+    SUFFICES "A \<and> B" if h: "A" and "B"
+      END
+    END WITH h assm0
+  \<close>)
+
 section \<open>SUFFICES bare inside a nested proof\<close>
 
 lemma "A \<Longrightarrow> B \<Longrightarrow> A \<and> B"
@@ -83,6 +101,15 @@ lemma "A \<Longrightarrow> B \<Longrightarrow> A \<and> B"
     SUFFICES "A \<and> B"
       END
     RULE NEXT END
+  \<close>)
+
+section \<open>SUFFICES with nontrivial sufficiency proof\<close>
+
+lemma "A \<and> B \<longrightarrow> B"
+  by (min_script \<open>
+    SUFFICES "B" if h: "A" "B"
+      END
+    END WITH h(2)
   \<close>)
 
 end

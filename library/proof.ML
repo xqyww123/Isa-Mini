@@ -1527,10 +1527,24 @@ fun INTRO' mode split_conj_opt split_prem_conj_opt bs premise_names s =
                     end
                   ) (map_index I (#prems foc)) counter_val
                 ) (#context foc)
-            (* Filter out bindings with empty names *)
+            (* Filter out bindings with empty names, then group same-named
+               entries so that e.g. two premises both named "h" become a
+               single note_thmss entry with two thms — yielding h(1), h(2)
+               via flatten_facts instead of shadowing. *)
             val bindings_filtered = filter (fn ((b, _), _) => Binding.name_of b <> "") bindings
+            val bindings_grouped =
+              fold_rev (fn entry as ((b, attrs), thms_attrs) => fn acc =>
+                let val name = Binding.name_of b
+                in case acc of
+                     ((b', attrs'), thms_attrs') :: rest =>
+                       if name = Binding.name_of b'
+                       then ((b', attrs'), thms_attrs @ thms_attrs') :: rest
+                       else entry :: acc
+                   | [] => [entry]
+                end
+              ) bindings_filtered []
          in ctxt
-         |> Proof_Context.note_thmss "" bindings_filtered
+         |> Proof_Context.note_thmss "" bindings_grouped
          |> apfst (map (apsnd (map Thm.prop_of))
                 #> flatten_facts
                 #> pair (map2 (fn bind => fn (_, cterm) => (bind, Thm.typ_of_cterm cterm)) binds (#params foc)))
@@ -3412,21 +3426,16 @@ fun gen_SUFFICES mk_stmt raw_fixes raw_assumes raw_shows =
                        (Newly_Fixed (map (apfst (Variable.revert_fixed params_ctxt))
                                          newly_fixed))
 
-        val _ = List.app (fn (_, props) =>
-              if length props > 1
-              then raise OPR_FAIL (INVALID_OPR,
-                "SUFFICES: each premise must be a single proposition, \
-                \use separate 'and' clauses instead")
-              else ()) raw_assumes
-
         val intro_var_names =
             if null raw_fixes then NONE
             else SOME (map (fn (b, _, _) => SOME (Binding.name_of b)) raw_fixes)
 
         val intro_prem_names =
-            let val names = map (fn ((b, _), _) =>
-                  if Binding.is_empty b then NONE
-                  else SOME (Binding.name_of b)
+            let val names = maps (fn ((b, _), props) =>
+                  if Binding.is_empty b then replicate (length props) NONE
+                  else let val base = Binding.name_of b
+                       in replicate (length props) (SOME base)
+                       end
                 ) raw_assumes
             in if null names then NONE else SOME names
             end
