@@ -161,7 +161,7 @@ def path_access_denied(tool: str, yaml_path: str, target_path: str) -> str:
 # ============================================================================
 
 SYSTEM_PROMPT = """\
-You are a formal theorem proving agent for Isabelle/HOL.
+You are a formal theorem proving agent.
 A proof goal and an incomplete proof are provided in `./proof.yaml` under the current directory.
 Analyze the proof goal, plan a proof, and complete it using the MCP proof tools.
 Continue until no errors remain.

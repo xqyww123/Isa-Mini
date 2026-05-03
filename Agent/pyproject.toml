@@ -3,7 +3,7 @@ requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "IsaMini_Agent_AoA"
+name = "IsaMini_AoA"
 version = "0.1.0"
 description = "Isabelle Proof Agent over Minilang, All over Abstraction"
 readme = "README.md"
@@ -21,10 +21,10 @@ dependencies = ["msgpack", "Isabelle_RPC_Host", "claude-agent-sdk>=0.1.72"]
 "Homepage" = "https://github.com/xqyww123/Isa-Mini"
 
 [tool.setuptools.packages.find]
-include = ["IsaMini_Agent_AoA", "IsaMini_Agent_AoA.*"]
+include = ["IsaMini_AoA", "IsaMini_AoA.*"]
 
 # Include data files in the package
 [tool.setuptools.package-data]
-IsaMini_Agent_AoA = [
+IsaMini_AoA = [
     "tools/*.json"
 ]

@@ -263,6 +263,7 @@ end
 
 fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
   let open MessagePackBinIO.Pack MessagePackBinIO.Unpack Remote_Procedure_Calling
+      val _ = Remote_Procedure_Calling.load ["IsaMini_AoA"]
 
       (* Shared state for all callbacks *)
       val counters = {
@@ -1015,14 +1016,22 @@ fun AoA_REPL_App (cin, cout, toplevel) =
                           ; ret
                         end
 
-      val (invocation_id, driver, cfg, log_dir_override) =
-            read (unpackTuple4 (unpackString, unpackString,
-                    unpackPair (unpackCfg, unpackBudget), unpackOption unpackString))
+      val (invocation_id, driver, cfg, log_dir_override,
+           retrieval_forking_override, interactive_retrieval_override) =
+            read (unpackTuple6 (unpackString, unpackString,
+                    unpackPair (unpackCfg, unpackBudget), unpackOption unpackString,
+                    unpackOption unpackString, unpackOption unpackString))
       val transition = Toplevel.empty
             |> Toplevel.proof (
                   Proof.refine_primitive (fn ctxt => fn sequent =>
                     let val ctxt = case log_dir_override
                                     of SOME dir => Config.put AoA_log_dir dir ctxt
+                                     | NONE => ctxt
+                        val ctxt = case retrieval_forking_override
+                                    of SOME v => Config.put AoA_retrieval_forking v ctxt
+                                     | NONE => ctxt
+                        val ctxt = case interactive_retrieval_override
+                                    of SOME v => Config.put AoA_interactive_retrieval v ctxt
                                      | NONE => ctxt
                         val start_time = Timing.start ()
                      in \<^try>\<open>
