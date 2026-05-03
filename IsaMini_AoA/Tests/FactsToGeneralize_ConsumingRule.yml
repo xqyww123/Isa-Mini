@@ -23,7 +23,7 @@ proof:
     operation: Have
     statement:
       english: zero is at most i
-      isabelle: (0::int) \<le> i
+      conclusion: (0::int) \<le> i
     name: h
     proof: empty
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
@@ -44,7 +44,7 @@ proof:
     operation: Have
     statement:
       english: zero is at most i
-      isabelle: (0::int) \<le> i
+      conclusion: (0::int) \<le> i
     name: h
     proof: empty
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.

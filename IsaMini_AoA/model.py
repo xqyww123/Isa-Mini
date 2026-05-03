@@ -1071,11 +1071,25 @@ class Minilang_Operation(NamedTuple):
     def END() -> 'Minilang_Operation':
         return Minilang_Operation("END", [])
     @staticmethod
-    def HAVE(name: str, statement: xterm, auto_apply: bool) -> 'Minilang_Operation':
-        return Minilang_Operation("HAVE", (name, ascii_of_unicode(statement), auto_apply))
+    def HAVE(name: str, fixes: 'list[tuple[str, str | None]]',
+             assumes: 'list[tuple[str | None, str]]',
+             conclusion: xterm, auto_apply: bool) -> 'Minilang_Operation':
+        return Minilang_Operation("HAVE", (
+            name,
+            [(n, ascii_of_unicode(t) if t else None) for n, t in fixes],
+            [(n, ascii_of_unicode(t)) for n, t in assumes],
+            ascii_of_unicode(conclusion),
+            auto_apply
+        ))
     @staticmethod
-    def SUFFICES(statement: xterm) -> 'Minilang_Operation':
-        return Minilang_Operation("SUFFICES", ascii_of_unicode(statement))
+    def SUFFICES(fixes: 'list[tuple[str, str | None]]',
+                 assumes: 'list[tuple[str | None, str]]',
+                 conclusion: xterm) -> 'Minilang_Operation':
+        return Minilang_Operation("SUFFICES", (
+            [(n, ascii_of_unicode(t) if t else None) for n, t in fixes],
+            [(n, ascii_of_unicode(t)) for n, t in assumes],
+            ascii_of_unicode(conclusion)
+        ))
     @staticmethod
     def OBTAIN(variables: list[Explicit_Var], constraints: list[tuple[str | None, xterm]]) -> 'Minilang_Operation':
         vars = [(v["name"], ascii_of_unicode(v["type"]) if "type" in v else None) for v in variables]
@@ -1153,6 +1167,9 @@ class Minilang_Operation(NamedTuple):
     @staticmethod
     def SKIP() -> 'Minilang_Operation':
         return Minilang_Operation("SKIP", None)
+    @staticmethod
+    def CONTRADICTION(hypothesis_name: str) -> 'Minilang_Operation':
+        return Minilang_Operation("CONTRADICTION", hypothesis_name)
 
 type Extended_Minilang_Operation = Minilang_Operation | list[Minilang_Operation]
 
@@ -4809,9 +4826,15 @@ def proof_operation(operation: str, toolarg_typed_dict: type[Any]):
         return cls
     return decorator
 
+class PremiseBinding(TypedDict):
+    name: str
+    term: xterm
+
 class Statement(TypedDict):
     english: str
-    isabelle: xterm
+    for_any: NotRequired[list[Explicit_Var]]
+    premises: NotRequired[list[PremiseBinding]]
+    conclusion: xterm
 
 class NamedStatement(TypedDict):
     english: str
@@ -4822,7 +4845,7 @@ def print_statement(self: Statement, indent: int, file: MyIO):
     print_indent(indent, file)
     file.write(f"- english: {self["english"]}\n")
     print_indent(indent, file)
-    file.write(f"  isabelle: {self["isabelle"]}\n")
+    file.write(f"  conclusion: {self["conclusion"]}\n")
 
 ### Concrete Models
 
@@ -5965,7 +5988,9 @@ class Have(StdBlock):
         self.statement = arg["statement"]
         self.name = arg["name"]
         self.auto_apply = arg.get("auto_apply", False)
-        # Populated from `Newly_Fixed_Vars_Msg` after the HAVE op runs.
+        self._input_for_any: list[Explicit_Var] = self.statement.get("for_any", [])
+        self._input_premises: list[PremiseBinding] = self.statement.get("premises", [])
+        # Merged for_any: user-specified + any additional implicit fixes from ML
         self.for_any: list[tuple[varname, typ]] = []
         self._prev_for_any: list[tuple[varname, typ]] = []
         # Pre-parsed subproof body (list[Parsed_Opr]); consumed by
@@ -5995,14 +6020,20 @@ class Have(StdBlock):
         file.write(f"statement:\n")
         print_indent(indent+1, file)
         file.write(f"english: {self.statement['english']}\n")
-        print_indent(indent+1, file)
-        file.write(f"isabelle: {self.statement['isabelle']}\n")
         if self.for_any:
-            print_indent(indent, file)
+            print_indent(indent+1, file)
             file.write("for_any:\n")
             for name, typ in self.for_any:
-                print_indent(indent+1, file)
+                print_indent(indent+2, file)
                 file.write(f"{name.unicode}: {typ.unicode}\n")
+        if self._input_premises:
+            print_indent(indent+1, file)
+            file.write("premises:\n")
+            for p in self._input_premises:
+                print_indent(indent+2, file)
+                file.write(f"{p['name']}: {p['term']}\n")
+        print_indent(indent+1, file)
+        file.write(f"conclusion: {self.statement['conclusion']}\n")
         print_indent(indent, file)
         file.write(f"name: {self.name}\n")
         if self.auto_apply:
@@ -6011,15 +6042,25 @@ class Have(StdBlock):
         self._print_evaluation_status(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
     def beginning_opr(self) -> Minilang_Operation | None:
-        return Minilang_Operation.HAVE(self.name, self.statement['isabelle'], self.auto_apply)
+        fixes = [(v["name"], v.get("type")) for v in self._input_for_any]
+        assumes = [(p["name"], p["term"]) for p in self._input_premises]
+        return Minilang_Operation.HAVE(
+            self.name, fixes, assumes,
+            self.statement['conclusion'], self.auto_apply)
     async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
         fail = await super()._refresh_the_beginning_opr()
         if fail is not None:
             return fail
+        user_for_any: list[tuple[varname, typ]] = [
+            (IsaTerm.from_agent(v["name"]),
+             IsaTerm.from_agent(v.get("type") or ""))
+            for v in self._input_for_any]
         msgs = [m for m in self._state_after_beginning().messages
                 if isinstance(m, Newly_Fixed_Vars_Msg)]
-        if msgs:
-            self.for_any = msgs[0].vars
+        implicit_for_any = msgs[0].vars if msgs else []
+        user_names = {v["name"] for v in self._input_for_any}
+        extra = [(n, t) for n, t in implicit_for_any if n.unicode not in user_names]
+        self.for_any = user_for_any + extra
         return await self._attach_proof(auto_intro=True)
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         return FailureReason(f"Fail to claim the intermediate subgoal because: {"\n".join(err.errors)}")
@@ -6031,7 +6072,7 @@ class Have(StdBlock):
         else:
             return FailureReason("The statement is nontrivial. Detailed proofs are required to establish this statement.")
     def _fixed_facts_after_me(self, ret: Hyps) -> Hyps:
-        ret[IsaTerm.from_agent(self.name)] = IsaTerm.from_agent(self.statement['isabelle'])
+        ret[IsaTerm.from_agent(self.name)] = IsaTerm.from_agent(self.statement['conclusion'])
         return ret
 
 #### Suffices
@@ -6047,11 +6088,24 @@ class Suffices(StdBlock):
                  parsed_proof: 'proof | None' = None):
         super().__init__(config, arg["thought"], [])
         self.statement = arg["statement"]
+        self._input_for_any: list[Explicit_Var] = self.statement.get("for_any", [])
+        self._input_premises: list[PremiseBinding] = self.statement.get("premises", [])
+        self.for_any: list[tuple[varname, typ]] = []
         self._proof: 'proof | None' = parsed_proof
     async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
         fail = await super()._refresh_the_beginning_opr()
         if fail is not None:
             return fail
+        user_for_any: list[tuple[varname, typ]] = [
+            (IsaTerm.from_agent(v["name"]),
+             IsaTerm.from_agent(v.get("type") or ""))
+            for v in self._input_for_any]
+        msgs = [m for m in self._state_after_beginning().messages
+                if isinstance(m, Newly_Fixed_Vars_Msg)]
+        implicit_for_any = msgs[0].vars if msgs else []
+        user_names = {v["name"] for v in self._input_for_any}
+        extra = [(n, t) for n, t in implicit_for_any if n.unicode not in user_names]
+        self.for_any = user_for_any + extra
         return await self._attach_proof(auto_intro=False)
     def quickview(self, indent: int, file: MyIO) -> int:
         indent = super().quickview(indent, file)
@@ -6068,15 +6122,29 @@ class Suffices(StdBlock):
         file.write(f"statement:\n")
         print_indent(indent+1, file)
         file.write(f"english: {self.statement['english']}\n")
+        if self.for_any:
+            print_indent(indent+1, file)
+            file.write("for_any:\n")
+            for name, typ in self.for_any:
+                print_indent(indent+2, file)
+                file.write(f"{name.unicode}: {typ.unicode}\n")
+        if self._input_premises:
+            print_indent(indent+1, file)
+            file.write("premises:\n")
+            for p in self._input_premises:
+                print_indent(indent+2, file)
+                file.write(f"{p['name']}: {p['term']}\n")
         print_indent(indent+1, file)
-        file.write(f"isabelle: {self.statement['isabelle']}\n")
+        file.write(f"conclusion: {self.statement['conclusion']}\n")
         self._print_evaluation_status(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
         if not self.sub_nodes:
             print_indent(indent, file)
             file.write(f"notice: Need to show the provided statement implies the goal\n")
     def beginning_opr(self) -> Minilang_Operation | None:
-        return Minilang_Operation.SUFFICES(self.statement['isabelle'])
+        fixes = [(v["name"], v.get("type")) for v in self._input_for_any]
+        assumes = [(p["name"], p["term"]) for p in self._input_premises]
+        return Minilang_Operation.SUFFICES(fixes, assumes, self.statement['conclusion'])
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         return FailureReason(f"Fail to apply 'it suffices to show' because: {"\n".join(err.errors)}")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
@@ -6548,6 +6616,44 @@ class InferenceRule(SubgoalMaker):
             return (None, indent-1)
         else:
             return ("derived subgoals", indent+1)
+
+### Contradiction
+
+class Contradiction_ToolArg(TypedDict):
+    hypothesis_name: str
+
+@proof_operation("Contradiction", Contradiction_ToolArg)
+class Contradiction(Leaf):
+    def __init__(self, config: NodeConfig, arg: Contradiction_ToolArg):
+        super().__init__(config, "")
+        self.hypothesis_name: str = arg["hypothesis_name"]
+        self.bindings: Bindings | None = None
+
+    def the_operation(self) -> 'Minilang_Operation | FailureReason':
+        return Minilang_Operation.CONTRADICTION(self.hypothesis_name)
+
+    async def _refresh_me_alone(self, auto_intro: bool) -> None:
+        await super()._refresh_me_alone(auto_intro)
+        if self.status.status == EvaluationStatus.Status.SUCCESS:
+            intro_msgs = [m for m in self.resulting_state().messages
+                          if isinstance(m, Intro_Bindings_Msg)]
+            if intro_msgs:
+                self.bindings = intro_msgs[0].final
+
+    def quickview_title(self) -> str:
+        return f"Contradiction (hypothesis: {self.hypothesis_name})"
+
+    def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
+        indent = super().print(indent, file, update_line, show_warnings=show_warnings)
+        print_indent(indent, file)
+        file.write("operation: Contradiction\n")
+        print_indent(indent, file)
+        file.write(f"hypothesis_name: {self.hypothesis_name}\n")
+        if self.bindings is not None:
+            print_fact_bindings(self.bindings[1], indent, file, "assuming hypothesis")
+        self._print_evaluation_status(indent, file)
+        if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
+        return indent
 
 ### Branch
 

@@ -32,7 +32,7 @@ proof:
     operation: Have
     statement:
       english: x equals y
-      isabelle: x = y
+      conclusion: x = y
     name: lem1
     proof:
       - step id: 1.1
@@ -58,7 +58,7 @@ proof:
     operation: Have
     statement:
       english: x equals y
-      isabelle: x = y
+      conclusion: x = y
     name: lem1
     proof:
       - step id: 1.1
@@ -68,7 +68,7 @@ proof:
     operation: Have
     statement:
       english: invalid
-      isabelle: 1 1 1
+      conclusion: 1 1 1
     name: bad
     Error: |
       Fail to claim the intermediate subgoal because: Syntax Error in Term Language.
@@ -106,7 +106,7 @@ proof:
     operation: Have
     statement:
       english: x equals y
-      isabelle: x = y
+      conclusion: x = y
     name: lem1
     proof:
       - step id: 1.1
@@ -116,7 +116,7 @@ proof:
     operation: Have
     statement:
       english: invalid
-      isabelle: 1 1 1
+      conclusion: 1 1 1
     name: bad
     Error: |
       Fail to claim the intermediate subgoal because: Syntax Error in Term Language.
@@ -157,7 +157,7 @@ proof:
     operation: Have
     statement:
       english: x equals y
-      isabelle: x = y
+      conclusion: x = y
     name: lem1
     proof:
       - step id: 1.1
@@ -167,7 +167,7 @@ proof:
     operation: Have
     statement:
       english: invalid
-      isabelle: 1 1 1
+      conclusion: 1 1 1
     name: bad
     Error: |
       Fail to claim the intermediate subgoal because: Syntax Error in Term Language.
@@ -189,7 +189,7 @@ proof:
     operation: Have
     statement:
       english: x equals z
-      isabelle: x = z
+      conclusion: x = z
     name: lem2
     Error: the evaluation is cancelled due to failures in preceding nodes
     proof: empty
@@ -220,7 +220,7 @@ proof:
     operation: Have
     statement:
       english: x equals y
-      isabelle: x = y
+      conclusion: x = y
     name: lem1
     proof:
       - step id: 1.1
@@ -230,7 +230,7 @@ proof:
     operation: Have
     statement:
       english: y equals x
-      isabelle: y = x
+      conclusion: y = x
     name: lem_fixed
     proof: empty
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
@@ -241,7 +241,7 @@ proof:
     operation: Have
     statement:
       english: x equals z
-      isabelle: x = z
+      conclusion: x = z
     name: lem2
     proof: empty
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2A.1` to provide the proof for the following goal.

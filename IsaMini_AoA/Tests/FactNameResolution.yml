@@ -24,7 +24,7 @@ proof:
     operation: Have
     statement:
       english: x is greater than 1
-      isabelle: x > 1
+      conclusion: x > 1
     name: x_gt_1
     proof:
       - step id: 1.1
@@ -48,7 +48,7 @@ proof:
     operation: Have
     statement:
       english: x is greater than 1
-      isabelle: x > 1
+      conclusion: x > 1
     name: x_gt_1
     proof:
       - step id: 1.1

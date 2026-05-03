@@ -16,7 +16,7 @@ proof:
     operation: Have
     statement:
       english: not False
-      isabelle: \<not> False
+      conclusion: \<not> False
     name: nf
     proof:
       - step id: 1.1

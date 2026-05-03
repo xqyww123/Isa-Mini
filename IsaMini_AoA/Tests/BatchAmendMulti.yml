@@ -20,7 +20,7 @@ proof:
     operation: Have
     statement:
       english: orig
-      isabelle: x * x \<ge> 0
+      conclusion: x * x \<ge> 0
     name: orig
     proof:
       - step id: 1.1
@@ -40,7 +40,7 @@ proof:
     operation: Have
     statement:
       english: r1
-      isabelle: x * x \<ge> 0
+      conclusion: x * x \<ge> 0
     name: r1
     proof:
       - step id: 1.1
@@ -50,7 +50,7 @@ proof:
     operation: Have
     statement:
       english: r2
-      isabelle: x * x \<ge> 0
+      conclusion: x * x \<ge> 0
     name: r2
     proof:
       - step id: 2.1

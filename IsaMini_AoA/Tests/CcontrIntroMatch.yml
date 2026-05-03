@@ -169,7 +169,7 @@ proof:
             operation: Have
             statement:
               english: p is prime
-              isabelle: prime p
+              conclusion: prime p
             name: prime_p
             proof:
               - step id: 3.2.2.1
@@ -191,7 +191,7 @@ proof:
             operation: Have
             statement:
               english: p ≥ 2
-              isabelle: p ≥ (2::nat)
+              conclusion: p ≥ (2::nat)
             name: pge2
             proof:
               - step id: 3.2.3.1
@@ -204,7 +204,7 @@ proof:
             operation: Have
             statement:
               english: sqrt(p/3) < real n
-              isabelle: sqrt (real p / (3::real)) < real n
+              conclusion: sqrt (real p / (3::real)) < real n
             name: sqrt_lt
             proof:
               - step id: 3.2.4.1
@@ -217,7 +217,7 @@ proof:
             operation: Have
             statement:
               english: p/3 < real n^2
-              isabelle: real p / (3::real) < (real n)^2
+              conclusion: real p / (3::real) < (real n)^2
             name: p_third_lt
             proof:
               - step id: 3.2.5.1
@@ -230,7 +230,7 @@ proof:
             operation: Have
             statement:
               english: p < 3n^2
-              isabelle: p < (3::nat) * n^2
+              conclusion: p < (3::nat) * n^2
             name: n_big
             proof:
               - step id: 3.2.6.1
@@ -242,7 +242,7 @@ proof:
             operation: Have
             statement:
               english: n ≥ 1
-              isabelle: n ≥ (1::nat)
+              conclusion: n ≥ (1::nat)
             name: nge1
             proof:
               - step id: 3.2.7.1
@@ -255,7 +255,7 @@ proof:
             operation: Have
             statement:
               english: n^2 + n + p > 1
-              isabelle: n^2 + n + p > (1::nat)
+              conclusion: n^2 + n + p > (1::nat)
             name: fn_gt1
             proof:
               - step id: 3.2.8.1
@@ -333,7 +333,7 @@ proof:
             operation: Have
             statement:
               english: p is prime
-              isabelle: prime p
+              conclusion: prime p
             name: prime_p
             proof:
               - step id: 3.2.2.1
@@ -355,7 +355,7 @@ proof:
             operation: Have
             statement:
               english: p ≥ 2
-              isabelle: p ≥ (2::nat)
+              conclusion: p ≥ (2::nat)
             name: pge2
             proof:
               - step id: 3.2.3.1
@@ -368,7 +368,7 @@ proof:
             operation: Have
             statement:
               english: sqrt(p/3) < real n
-              isabelle: sqrt (real p / (3::real)) < real n
+              conclusion: sqrt (real p / (3::real)) < real n
             name: sqrt_lt
             proof:
               - step id: 3.2.4.1
@@ -381,7 +381,7 @@ proof:
             operation: Have
             statement:
               english: p/3 < real n^2
-              isabelle: real p / (3::real) < (real n)^2
+              conclusion: real p / (3::real) < (real n)^2
             name: p_third_lt
             proof:
               - step id: 3.2.5.1
@@ -394,7 +394,7 @@ proof:
             operation: Have
             statement:
               english: p < 3n^2
-              isabelle: p < (3::nat) * n^2
+              conclusion: p < (3::nat) * n^2
             name: n_big
             proof:
               - step id: 3.2.6.1
@@ -406,7 +406,7 @@ proof:
             operation: Have
             statement:
               english: n ≥ 1
-              isabelle: n ≥ (1::nat)
+              conclusion: n ≥ (1::nat)
             name: nge1
             proof:
               - step id: 3.2.7.1
@@ -419,7 +419,7 @@ proof:
             operation: Have
             statement:
               english: n^2 + n + p > 1
-              isabelle: n^2 + n + p > (1::nat)
+              conclusion: n^2 + n + p > (1::nat)
             name: fn_gt1
             proof:
               - step id: 3.2.8.1

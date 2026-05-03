@@ -20,7 +20,7 @@ proof:
     operation: Have
     statement:
       english: x squared is non-negative
-      isabelle: (0::int) \<le> x * x
+      conclusion: (0::int) \<le> x * x
     name: lem1
     proof: empty
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.

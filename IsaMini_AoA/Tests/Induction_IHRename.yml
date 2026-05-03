@@ -23,7 +23,7 @@ proof:
     operation: Have
     statement:
       english: for every n, if n is at most p-2 then f n is less than p
-      isabelle: \<And>n::nat. n \<le> p - 2 \<Longrightarrow> f n < p
+      conclusion: \<And>n::nat. n \<le> p - 2 \<Longrightarrow> f n < p
     name: gen
     proof:
       - step id: 1.1
@@ -50,7 +50,7 @@ proof:
     operation: Have
     statement:
       english: for every n, if n is at most p-2 then f n is less than p
-      isabelle: \<And>n::nat. n \<le> p - 2 \<Longrightarrow> f n < p
+      conclusion: \<And>n::nat. n \<le> p - 2 \<Longrightarrow> f n < p
     name: gen
     proof:
       - step id: 1.1

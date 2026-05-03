@@ -30,7 +30,7 @@ proof:
     operation: Have
     statement:
       english: log base 8 of x equals log base 2 of x divided by 3
-      isabelle: log (8::real) x = log 2 x / 3
+      conclusion: log (8::real) x = log 2 x / 3
     name: h2
     proof:
       - step id: 1.1
@@ -38,7 +38,7 @@ proof:
         operation: Have
         statement:
           english: 8 equals 2 to the power 3
-          isabelle: (8::real) = 2 ^ 3
+          conclusion: (8::real) = 2 ^ 3
         name: h8eq
         proof:
           - step id: 1.1.1
@@ -74,7 +74,7 @@ proof:
     operation: Have
     statement:
       english: log base 8 of x equals log base 2 of x divided by 3
-      isabelle: log (8::real) x = log 2 x / 3
+      conclusion: log (8::real) x = log 2 x / 3
     name: h2
     proof:
       - step id: 1.1
@@ -82,7 +82,7 @@ proof:
         operation: Have
         statement:
           english: 8 equals 2 to the power 3
-          isabelle: (8::real) = 2 ^ 3
+          conclusion: (8::real) = 2 ^ 3
         name: h8eq
         proof:
           - step id: 1.1.1
@@ -104,7 +104,7 @@ proof:
     operation: Have
     statement:
       english: log base 2 of (log base 2 of x divided by 3) equals log base 2 of (log base 2 of x) divided by 3
-      isabelle: log (2::real) (log 2 x / 3) = log 2 (log 2 x) / 3
+      conclusion: log (2::real) (log 2 x / 3) = log 2 (log 2 x) / 3
     name: h3
     proof:
       - step id: 2.1
@@ -112,7 +112,7 @@ proof:
         operation: Have
         statement:
           english: log base 8 of (log base 2 of x) equals log base 2 of (log base 2 of x) divided by 3
-          isabelle: log (8::real) (log 2 x) = log 2 (log 2 x) / 3
+          conclusion: log (8::real) (log 2 x) = log 2 (log 2 x) / 3
         name: h2b
         proof: empty
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1.1` to provide the proof for the following goal.

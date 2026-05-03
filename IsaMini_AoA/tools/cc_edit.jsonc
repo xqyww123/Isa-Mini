@@ -29,14 +29,32 @@
           "type": "string",
           "description": "the statement in English"
         },
-        "isabelle": {
+        "for_any": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Variable" },
+          "description": "universally quantified variables to fix"
+        },
+        "premises": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string", "description": "binding name for the premise" },
+              "term": { "type": "string", "description": "Isabelle/HOL term with all literal numbers annotated with types" }
+            },
+            "required": ["name", "term"]
+          },
+          "description": "named premises to assume"
+        },
+        "conclusion": {
           "type": "string",
-          "description": "the corresponding Isabelle statement with all literal numbers annotated with their types"
+          "description": "Isabelle/HOL term with all literal numbers annotated with types"
         }
       },
       "required": [
         "english",
-        "isabelle"
+        "conclusion"
       ],
       "type": "object",
       "additionalProperties": false
@@ -315,10 +333,30 @@
       ],
       "type": "object"
     },
+    "Contradiction": {
+      "additionalProperties": false,
+      "title": "Contradiction",
+      "description": "proof by contradiction",
+      "properties": {
+        "operation": {
+          "const": "Contradiction",
+          "type": "string"
+        },
+        "hypothesis_name": {
+          "type": "string",
+          "description": "name for the contradictory hypothesis"
+        }
+      },
+      "required": [
+        "operation",
+        "hypothesis_name"
+      ],
+      "type": "object"
+    },
     "InferenceRule": {
       "title": "InferenceRule",
       "additionalProperties": false,
-      "description": "instruct an inference rule, e.g., proof by contradiction, or proving equality by antisymmetry.",
+      "description": "instruct an inference rule, e.g., proving equality by antisymmetry.",
       "properties": {
         "operation": {
           "const": "InferenceRule",
@@ -635,6 +673,7 @@
         { "$ref": "#/$defs/Unfold" },
         { "$ref": "#/$defs/Witness" },
         { "$ref": "#/$defs/InferenceRule" },
+        { "$ref": "#/$defs/Contradiction" },
         { "$ref": "#/$defs/Suffices" },
         { "$ref": "#/$defs/Intro" },
         { "$ref": "#/$defs/Derive" },

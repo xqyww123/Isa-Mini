@@ -31,7 +31,7 @@ proof:
     operation: Have
     statement:
       english: aux a
-      isabelle: x * x \<ge> 0
+      conclusion: x * x \<ge> 0
     name: aux_a
     proof:
       - step id: 0A.1
@@ -41,7 +41,7 @@ proof:
     operation: Have
     statement:
       english: aux b
-      isabelle: x * x \<ge> 0
+      conclusion: x * x \<ge> 0
     name: aux_b
     proof:
       - step id: 0B.1

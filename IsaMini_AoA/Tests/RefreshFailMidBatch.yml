@@ -21,7 +21,7 @@ proof:
     operation: Have
     statement:
       english: false
-      isabelle: (0::int) = (1::int)
+      conclusion: (0::int) = (1::int)
     name: bad
     proof:
       - step id: 1.1
@@ -38,7 +38,7 @@ proof:
     operation: Have
     statement:
       english: later
-      isabelle: x * x \<ge> 0
+      conclusion: x * x \<ge> 0
     name: later
     proof:
       - step id: 2.1

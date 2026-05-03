@@ -6,8 +6,6 @@ theory Test_imo_2006_p3 imports
   MathBench_Prover.MathBench_Prover Minilang_Agent.Minilang_Agent
 begin
 declare [[auto_interpret_for_embedding=false]]
-simproc_setup eval_lcm ("primes_upto n") =
-  \<open>K Eval_Simproc.eval_ground\<close>
 
 theorem imo_2006_p3:
   fixes a b c ::real

@@ -16,9 +16,9 @@ proof:
     operation: Have
     statement:
       english: myf n equals n plus 7
-      isabelle: myf n = n + 7
-    for_any:
-      n: nat
+      for_any:
+        n: nat
+      conclusion: myf n = n + 7
     name: myf_eq
     auto_apply: true
     proof: empty
@@ -37,9 +37,9 @@ proof:
     operation: Have
     statement:
       english: myf n equals n plus 7
-      isabelle: myf n = n + 7
-    for_any:
-      n: nat
+      for_any:
+        n: nat
+      conclusion: myf n = n + 7
     name: myf_eq
     auto_apply: true
     proof:
@@ -59,9 +59,9 @@ proof:
     operation: Have
     statement:
       english: myf n equals n plus 7
-      isabelle: myf n = n + 7
-    for_any:
-      n: nat
+      for_any:
+        n: nat
+      conclusion: myf n = n + 7
     name: myf_eq
     auto_apply: true
     proof:

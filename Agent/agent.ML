@@ -1206,7 +1206,7 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
           val rule_ref = (Facts.Named ((rule_name, Position.none), NONE), [])
           val s' = Minilang.RULE [rule_ref] [] s
           val ((params', facts'), s'') =
-                Minilang.INTRO Minilang.SINGLE_GOAL
+                Minilang.INTRO Minilang.SINGLE_GOAL NONE
                                NONE (SOME [SOME hyp_name]) s'
           val ctxt'' = Minilang.context_of s''
           val var_bindings = map (fn (name, ty) =>

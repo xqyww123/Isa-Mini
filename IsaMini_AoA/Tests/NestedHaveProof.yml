@@ -20,7 +20,7 @@ proof:
     operation: Have
     statement:
       english: x*x nonneg
-      isabelle: x * x \<ge> 0
+      conclusion: x * x \<ge> 0
     name: h1
     proof:
       - step id: 1.1

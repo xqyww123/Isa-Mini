@@ -32,7 +32,7 @@ proof:
     operation: Have
     statement:
       english: x squared plus 1 is greater than 0
-      isabelle: x = y
+      conclusion: x = y
     name: lem1
     proof:
       - step id: 1.1
@@ -57,7 +57,7 @@ proof:
     operation: Have
     statement:
       english: x squared plus 1 is greater than 0
-      isabelle: x = y
+      conclusion: x = y
     name: lem1
     proof:
       - step id: 1.1
@@ -93,7 +93,7 @@ proof:
     operation: Have
     statement:
       english: x squared plus 1 is greater than 0
-      isabelle: x = y * 1
+      conclusion: x = y * 1
     name: lem1
     proof:
       - step id: 1.1
@@ -129,7 +129,7 @@ proof:
     operation: Have
     statement:
       english: x squared plus 1 is greater than 0
-      isabelle: x = y * 2
+      conclusion: x = y * 2
     name: lem1
     proof:
       - step id: 1.1

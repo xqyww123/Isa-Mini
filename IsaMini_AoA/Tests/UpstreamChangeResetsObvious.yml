@@ -28,7 +28,7 @@ proof:
     operation: Have
     statement:
       english: True
-      isabelle: True
+      conclusion: True
     name: triv
     proof:
       - step id: 1.1
@@ -51,7 +51,7 @@ proof:
     operation: Have
     statement:
       english: True
-      isabelle: True
+      conclusion: True
     name: triv
     proof:
       - step id: 1.1
@@ -61,7 +61,7 @@ proof:
     operation: Have
     statement:
       english: False
-      isabelle: False
+      conclusion: False
     name: bad
     proof: empty
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
@@ -85,7 +85,7 @@ proof:
     operation: Have
     statement:
       english: True
-      isabelle: True
+      conclusion: True
     name: triv
     proof:
       - step id: 1.1
@@ -95,7 +95,7 @@ proof:
     operation: Have
     statement:
       english: False
-      isabelle: False
+      conclusion: False
     name: bad
     proof: empty
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
@@ -121,7 +121,7 @@ proof:
     operation: Have
     statement:
       english: x + y = 3
-      isabelle: x + y = 3
+      conclusion: x + y = 3
     name: sum
     proof:
       - step id: 1.1
@@ -131,7 +131,7 @@ proof:
     operation: Have
     statement:
       english: False
-      isabelle: False
+      conclusion: False
     name: bad
     proof: empty
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
@@ -156,7 +156,7 @@ proof:
     operation: Have
     statement:
       english: x + y = 3
-      isabelle: x + y = 3
+      conclusion: x + y = 3
     name: sum
     proof:
       - step id: 1.1
@@ -166,7 +166,7 @@ proof:
     operation: Have
     statement:
       english: False
-      isabelle: False
+      conclusion: False
     name: bad
     proof: empty
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
@@ -191,7 +191,7 @@ proof:
     operation: Have
     statement:
       english: x + y = 3
-      isabelle: x + y = 3
+      conclusion: x + y = 3
     name: sum
     proof:
       - step id: 1.1
@@ -201,7 +201,7 @@ proof:
     operation: Have
     statement:
       english: True
-      isabelle: True
+      conclusion: True
     name: ins
     proof: empty
   - step id: 2
@@ -209,7 +209,7 @@ proof:
     operation: Have
     statement:
       english: False
-      isabelle: False
+      conclusion: False
     name: bad
     proof: empty
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
@@ -234,7 +234,7 @@ proof:
     operation: Have
     statement:
       english: x + y = 3
-      isabelle: x + y = 3
+      conclusion: x + y = 3
     name: sum
     proof:
       - step id: 1.1
@@ -244,7 +244,7 @@ proof:
     operation: Have
     statement:
       english: True
-      isabelle: True
+      conclusion: True
     name: ins
     proof: empty
   - step id: 2
@@ -252,7 +252,7 @@ proof:
     operation: Have
     statement:
       english: False
-      isabelle: False
+      conclusion: False
     name: bad
     proof: empty
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.

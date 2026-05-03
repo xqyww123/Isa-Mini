@@ -16,7 +16,7 @@ proof:
     operation: Have
     statement:
       english: log base 2 of 8 equals 3
-      isabelle: log (2::real) (8::real) = (3::real)
+      conclusion: log (2::real) (8::real) = (3::real)
     name: h2
     proof:
       - step id: 1.1
@@ -28,7 +28,7 @@ proof:
     operation: Have
     statement:
       english: log base 8 of x equals log base 2 of x divided by 3
-      isabelle: log (8::real) x = log (2::real) x / (3::real)
+      conclusion: log (8::real) x = log (2::real) x / (3::real)
     name: h3
     proof:
       - step id: 2.1
@@ -41,7 +41,7 @@ proof:
     operation: Have
     statement:
       english: log base 8 of (log base 2 of x) equals log base 2 of (log base 2 of x) divided by 3
-      isabelle: log (8::real) (log (2::real) x) = log (2::real) (log (2::real) x) / (3::real)
+      conclusion: log (8::real) (log (2::real) x) = log (2::real) (log (2::real) x) / (3::real)
     name: h4
     proof: empty
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3.1` to provide the proof for the following goal.
@@ -66,7 +66,7 @@ proof:
     operation: Have
     statement:
       english: log base 2 of 8 equals 3
-      isabelle: log (2::real) (8::real) = (3::real)
+      conclusion: log (2::real) (8::real) = (3::real)
     name: h2
     proof:
       - step id: 1.1
@@ -78,7 +78,7 @@ proof:
     operation: Have
     statement:
       english: log base 8 of x equals log base 2 of x divided by 3
-      isabelle: log (8::real) x = log (2::real) x / (3::real)
+      conclusion: log (8::real) x = log (2::real) x / (3::real)
     name: h3
     proof:
       - step id: 2.1
@@ -91,7 +91,7 @@ proof:
     operation: Have
     statement:
       english: log base 8 of (log base 2 of x) equals log base 2 of (log base 2 of x) divided by 3
-      isabelle: log (8::real) (log (2::real) x) = log (2::real) (log (2::real) x) / (3::real)
+      conclusion: log (8::real) (log (2::real) x) = log (2::real) (log (2::real) x) / (3::real)
     name: h4
     proof:
       - step id: 3.1

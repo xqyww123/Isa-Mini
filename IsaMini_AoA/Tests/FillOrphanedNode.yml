@@ -25,7 +25,7 @@ proof:
     operation: Have
     statement:
       english: bad
-      isabelle: 1 1 1
+      conclusion: 1 1 1
     name: bad
     Error: |
       Fail to claim the intermediate subgoal because: Syntax Error in Term Language.
@@ -59,7 +59,7 @@ proof:
     operation: Have
     statement:
       english: bad
-      isabelle: 1 1 1
+      conclusion: 1 1 1
     name: bad
     Error: |
       Fail to claim the intermediate subgoal because: Syntax Error in Term Language.
@@ -97,7 +97,7 @@ proof:
     operation: Have
     statement:
       english: x is positive
-      isabelle: x > 0
+      conclusion: x > 0
     name: x_pos
     proof: empty
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
@@ -119,7 +119,7 @@ proof:
     operation: Have
     statement:
       english: x is positive
-      isabelle: x > 0
+      conclusion: x > 0
     name: x_pos
     proof:
       - step id: 1.1

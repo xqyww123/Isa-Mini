@@ -20,7 +20,7 @@ proof:
     operation: Have
     statement:
       english: refl
-      isabelle: \<forall>(a::int). a = a
+      conclusion: \<forall>(a::int). a = a
     name: refl
     proof:
       - step id: 1.1

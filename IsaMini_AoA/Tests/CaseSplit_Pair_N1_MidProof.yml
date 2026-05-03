@@ -22,7 +22,7 @@ proof:
     operation: Have
     statement:
       english: trivial
-      isabelle: True
+      conclusion: True
     name: h
     proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
@@ -49,7 +49,7 @@ proof:
     operation: Have
     statement:
       english: trivial
-      isabelle: True
+      conclusion: True
     name: h
     proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.

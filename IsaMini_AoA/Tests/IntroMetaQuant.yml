@@ -26,7 +26,7 @@ proof:
     operation: Have
     statement:
       english: product of positives is positive
-      isabelle: \<And>(a::int) b. a > 0 \<Longrightarrow> b > 0 \<Longrightarrow> a * b > 0
+      conclusion: \<And>(a::int) b. a > 0 \<Longrightarrow> b > 0 \<Longrightarrow> a * b > 0
     name: pos_mult
     proof:
       - step id: 2.1
@@ -58,7 +58,7 @@ proof:
     operation: Have
     statement:
       english: product of positives is positive
-      isabelle: \<And>(a::int) b. a > 0 \<Longrightarrow> b > 0 \<Longrightarrow> a * b > 0
+      conclusion: \<And>(a::int) b. a > 0 \<Longrightarrow> b > 0 \<Longrightarrow> a * b > 0
     name: pos_mult
     proof:
       - step id: 2.1
@@ -91,7 +91,7 @@ proof:
     operation: Have
     statement:
       english: product of positives is positive
-      isabelle: \<And>(a::int) b. a > 0 \<Longrightarrow> b > 0 \<Longrightarrow> a * b > 0
+      conclusion: \<And>(a::int) b. a > 0 \<Longrightarrow> b > 0 \<Longrightarrow> a * b > 0
     name: pos_mult
     proof:
       - step id: 2.1

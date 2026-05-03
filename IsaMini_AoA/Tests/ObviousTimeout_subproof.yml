@@ -20,7 +20,7 @@ proof:
     operation: Have
     statement:
       english: x times x equals x squared
-      isabelle: x * x = x^2
+      conclusion: x * x = x^2
     name: sq
     proof:
       - step id: 1.1
@@ -39,7 +39,7 @@ proof:
     operation: Have
     statement:
       english: x times x equals x squared
-      isabelle: x * x = x^2
+      conclusion: x * x = x^2
     name: sq
     proof:
       - step id: 1.1

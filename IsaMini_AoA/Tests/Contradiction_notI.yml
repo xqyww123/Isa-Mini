@@ -1,0 +1,45 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ¬ False
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Contradiction (notI path)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ¬ False
+proof:
+  - step id: 1
+    operation: Contradiction
+    hypothesis_name: neg_hyp
+    assuming hypothesis:
+      - neg_hyp: False
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  premises:
+    - neg_hyp: False
+  goal: False
+step 1: Contradiction (hypothesis: neg_hyp) (line 0)
+Error: Unfinished Proof (line 19). Call command `edit` with action `fill` and target step `2`
+premises:
+  - neg_hyp: False
+goal: False
+status: SUCCESS
+bindings: ([], [FactBinding(expr=[8, [[3, ['HOL.Trueprop', [0, ['fun', [[0, ['HOL.bool', []]], [0, ['prop', []]]]]]]], [3, ['HOL.False', [0, ['HOL.bool', []]]]]]], name=IsaTerm('neg_hyp'), pretty=IsaTerm('False'))])
+--------------------------------------------------
+After Obvious to close False
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ¬ False
+proof:
+  - step id: 1
+    operation: Contradiction
+    hypothesis_name: neg_hyp
+    assuming hypothesis:
+      - neg_hyp: False
+  - step id: 2
+    operation: Obvious
+    with facts:
+      - neg_hyp: False

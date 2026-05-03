@@ -104,14 +104,14 @@ async def _test_sqrt2(root: Root, file: MyIO):
     print_header("Setting the inference rule", file)
     root.print(0, file)
     await goal.append([Obtain.gen_single({"thought": "I don't know", "variables": [{"name": "m", "type": "nat"}, {"name": "n", "type": "nat"}],
-            "constraints": [{"isabelle": "¦sqrt 2¦ = m / n", "english": "some fancy explanation"}]})])
+            "constraints": [{"conclusion": "¦sqrt 2¦ = m / n", "english": "some fancy explanation"}]})])
     print_header("Obtain m n", file)
     root.print(0, file)
     #node = root.locate_node("2.1") # not appear
     await root.fill("2.1", [Obvious.gen_single({"facts": []})])
     print_header("Obvious", file)
     root.print(0, file)
-    await root.fill("3", [Have.gen_single({"thought": "I don't know", "statement": {"english": "some fancy explanation", "isabelle": "m^2 = (sqrt 2)^2 * n^2"}, "name": "helper_lemma"})])
+    await root.fill("3", [Have.gen_single({"thought": "I don't know", "statement": {"english": "some fancy explanation", "conclusion": "m^2 = (sqrt 2)^2 * n^2"}, "name": "helper_lemma"})])
     await root.fill("3.1", [Obvious.gen_single({"facts": []})])
     print_header("Have", file)
     root.print(0, file)
@@ -349,7 +349,7 @@ async def _test_Suffices(root: Root, file: MyIO):
         "thought": "It suffices to show a stronger statement",
         "statement": {
             "english": "x squared plus 1 is greater than 0",
-            "isabelle": "x * x + 1 > 0"
+            "conclusion": "x * x + 1 > 0"
         }
     })])
     print_header("After Suffices", file)
@@ -414,7 +414,7 @@ async def _test_Rewrite3(root: Root, file: MyIO):
         "thought": "I don't know",
         "statement": {
             "english": "x squared plus 1 is greater than 0",
-            "isabelle": "x = y"
+            "conclusion": "x = y"
         },
         "name": "lem1"
     })])
@@ -434,7 +434,7 @@ async def _test_Rewrite3(root: Root, file: MyIO):
         "thought": "I don't know!!!",
         "statement": {
             "english": "x squared plus 1 is greater than 0",
-            "isabelle": "x = y * 1"
+            "conclusion": "x = y * 1"
         },
         "name": "lem1"
     })])
@@ -444,7 +444,7 @@ async def _test_Rewrite3(root: Root, file: MyIO):
         "thought": "I don't know!!!",
         "statement": {
             "english": "x squared plus 1 is greater than 0",
-            "isabelle": "x = y * 2"
+            "conclusion": "x = y * 2"
         },
         "name": "lem1"
     })])
@@ -775,7 +775,7 @@ async def _test_Delete1(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1", [Have.gen_single({
         "thought": "helper",
-        "statement": {"english": "x equals y plus 0", "isabelle": "x = y"},
+        "statement": {"english": "x equals y plus 0", "conclusion": "x = y"},
         "name": "lem1"
     })])
     root.session.age += 1
@@ -807,7 +807,7 @@ async def _test_Delete1(root: Root, file: MyIO):
     root.session.age += 1
     await root.insert_before("2", [Have.gen_single({
         "thought": "re-add helper",
-        "statement": {"english": "x equals y plus 0", "isabelle": "x = y + 0"},
+        "statement": {"english": "x equals y plus 0", "conclusion": "x = y + 0"},
         "name": "lem1"
     })])
     print_header("After inserting Have before step 2", file)
@@ -987,7 +987,7 @@ async def _test_Obvious_partial_solve(root: Root, file: MyIO):
         "name": "h2",
         "statement": {
             "english": "log base 2 of 8 equals 3",
-            "isabelle": "log (2::real) (8::real) = (3::real)"
+            "conclusion": "log (2::real) (8::real) = (3::real)"
         }
     })])
     # Step 1.1: Obvious with log_pow_cancel
@@ -1000,7 +1000,7 @@ async def _test_Obvious_partial_solve(root: Root, file: MyIO):
         "name": "h3",
         "statement": {
             "english": "log base 8 of x equals log base 2 of x divided by 3",
-            "isabelle": "log (8::real) x = log (2::real) x / (3::real)"
+            "conclusion": "log (8::real) x = log (2::real) x / (3::real)"
         }
     })])
     # Step 2.1: Obvious with log_base_change and h2
@@ -1016,7 +1016,7 @@ async def _test_Obvious_partial_solve(root: Root, file: MyIO):
         "name": "h4",
         "statement": {
             "english": "log base 8 of (log base 2 of x) equals log base 2 of (log base 2 of x) divided by 3",
-            "isabelle": "log (8::real) (log (2::real) x) = log (2::real) (log (2::real) x) / (3::real)"
+            "conclusion": "log (8::real) (log (2::real) x) = log (2::real) (log (2::real) x) / (3::real)"
         }
     })])
     print_header("Before step 3.1", file)
@@ -1043,7 +1043,7 @@ async def _test_Hammer_ProveInTime(root: Root, file: MyIO):
         "name": "h_log8",
         "statement": {
             "english": "log base 8 of x equals (log base 2 of x) / 3",
-            "isabelle": "log (8::real) x = log (2::real) x / 3"
+            "conclusion": "log (8::real) x = log (2::real) x / 3"
         }
     })])
     print_header("After Have h_log8", file)
@@ -1069,7 +1069,7 @@ async def _test_Simplify_stuck(root: Root, file: MyIO):
         "name": "h2",
         "statement": {
             "english": "log base 8 of x equals log base 2 of x divided by 3",
-            "isabelle": "log (8::real) x = log (2::real) x / 3"
+            "conclusion": "log (8::real) x = log (2::real) x / 3"
         }
     })])
     print_header("After Have h2", file)
@@ -1080,7 +1080,7 @@ async def _test_Simplify_stuck(root: Root, file: MyIO):
         "name": "h8",
         "statement": {
             "english": "8 equals 2 to the power 3",
-            "isabelle": "(8::real) = (2::real) ^ 3"
+            "conclusion": "(8::real) = (2::real) ^ 3"
         }
     })])
     root.session.age += 1
@@ -1114,7 +1114,7 @@ async def _test_Simplify_no_intro_bindings(root: Root, file: MyIO):
         "name": "h2",
         "statement": {
             "english": "log base 8 of x equals log base 2 of x divided by 3",
-            "isabelle": "log (8::real) x = log 2 x / 3"
+            "conclusion": "log (8::real) x = log 2 x / 3"
         }
     })])
     # Step 1.1: Have h8eq (inside h2's proof)
@@ -1124,7 +1124,7 @@ async def _test_Simplify_no_intro_bindings(root: Root, file: MyIO):
         "name": "h8eq",
         "statement": {
             "english": "8 equals 2 to the power 3",
-            "isabelle": "(8::real) = 2 ^ 3"
+            "conclusion": "(8::real) = 2 ^ 3"
         }
     })])
     # Step 1.1.1: Obvious (proves h8eq)
@@ -1154,7 +1154,7 @@ async def _test_Simplify_no_intro_bindings(root: Root, file: MyIO):
         "name": "h3",
         "statement": {
             "english": "log base 2 of (log base 2 of x divided by 3) equals log base 2 of (log base 2 of x) divided by 3",
-            "isabelle": "log (2::real) (log 2 x / 3) = log 2 (log 2 x) / 3"
+            "conclusion": "log (2::real) (log 2 x / 3) = log 2 (log 2 x) / 3"
         }
     })])
     # Step 2.1: Have h2b (inside h3's proof)
@@ -1164,7 +1164,7 @@ async def _test_Simplify_no_intro_bindings(root: Root, file: MyIO):
         "name": "h2b",
         "statement": {
             "english": "log base 8 of (log base 2 of x) equals log base 2 of (log base 2 of x) divided by 3",
-            "isabelle": "log (8::real) (log 2 x) = log 2 (log 2 x) / 3"
+            "conclusion": "log (8::real) (log 2 x) = log 2 (log 2 x) / 3"
         }
     })])
     # Step 2.1.1: Rewrite using h8eq + log_base_pow with no system simplifiers
@@ -1352,7 +1352,7 @@ async def _test_Have1(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1", [Have.gen_single({
         "thought": "helper",
-        "statement": {"english": "x squared is non-negative", "isabelle": r"(0::int) \<le> x * x"},
+        "statement": {"english": "x squared is non-negative", "conclusion": r"(0::int) \<le> x * x"},
         "name": "lem1"
     })])
     print_header("After Have", file)
@@ -1378,7 +1378,7 @@ async def _test_HaveAutoApply(root: Root, file: MyIO):
         "thought": "Derive a simp rule for myf so the outer goal becomes trivial",
         "statement": {
             "english": "myf n equals n plus 7",
-            "isabelle": r"myf n = n + 7"
+            "conclusion": r"myf n = n + 7"
         },
         "name": "myf_eq",
         "auto_apply": True,
@@ -1671,7 +1671,7 @@ async def _test_imo_1966_p5(root: Root, file: MyIO):
         "name": "eq1",
         "statement": {
             "english": "x(1) equals x(2) + x(3) + x(4)",
-            "isabelle": "x (1::nat) = x (2::nat) + x (3::nat) + x (4::nat)"
+            "conclusion": "x (1::nat) = x (2::nat) + x (3::nat) + x (4::nat)"
         }
     })])
     print_header("After filling Have eq1", file)
@@ -1719,7 +1719,7 @@ async def _test_imo_1966_p5(root: Root, file: MyIO):
         "name": "a1_gt_a3",
         "statement": {
             "english": "a(1) is greater than a(3)",
-            "isabelle": "a (1::nat) > a (3::nat)"
+            "conclusion": "a (1::nat) > a (3::nat)"
         }
     })])
     # Prove a1_gt_a3 with Obvious — should succeed
@@ -1745,7 +1745,7 @@ async def _test_imo_1966_p5(root: Root, file: MyIO):
         "name": "a1_gt_a4",
         "statement": {
             "english": "a(1) is greater than a(4)",
-            "isabelle": "a (1::nat) > a (4::nat)"
+            "conclusion": "a (1::nat) > a (4::nat)"
         }
     })])
     # Prove a1_gt_a4 with Obvious — should succeed
@@ -2227,7 +2227,7 @@ async def _test_ForeNodeFail(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1", [Have.gen_single({
         "thought": "helper",
-        "statement": {"english": "x equals y", "isabelle": "x = y"},
+        "statement": {"english": "x equals y", "conclusion": "x = y"},
         "name": "lem1"
     })])
     await root.fill("1.1", [Obvious.gen_single({"facts": []})])
@@ -2238,7 +2238,7 @@ async def _test_ForeNodeFail(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("2", [Have.gen_single({
         "thought": "intentionally bad step",
-        "statement": {"english": "invalid", "isabelle": "1 1 1"},
+        "statement": {"english": "invalid", "conclusion": "1 1 1"},
         "name": "bad"
     })])
     step2 = root.locate_node("2")
@@ -2260,7 +2260,7 @@ async def _test_ForeNodeFail(root: Root, file: MyIO):
     root.session.age += 1
     _outcome = await root.insert_before("3", [Have.gen_single({
         "thought": "inserted step",
-        "statement": {"english": "x equals z", "isabelle": "x = z"},
+        "statement": {"english": "x equals z", "conclusion": "x = z"},
         "name": "lem2"
     })])
     inserted = _outcome.committed[0] if _outcome.committed else None
@@ -2275,7 +2275,7 @@ async def _test_ForeNodeFail(root: Root, file: MyIO):
     root.session.age += 1
     await root.amend("2", [Have.gen_single({
         "thought": "fixed step",
-        "statement": {"english": "y equals x", "isabelle": "y = x"},
+        "statement": {"english": "y equals x", "conclusion": "y = x"},
         "name": "lem_fixed"
     })])
     step2_fixed = root.locate_node("2")
@@ -2393,7 +2393,7 @@ async def _test_ObviousProofFail(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1", [Have.gen_single({
         "thought": "trivial identity",
-        "statement": {"english": "x equals x", "isabelle": "x = x"},
+        "statement": {"english": "x equals x", "conclusion": "x = x"},
         "name": "lem1",
     })])
     print_header("After Have x=x (Obvious succeeds)", file)
@@ -2403,7 +2403,7 @@ async def _test_ObviousProofFail(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("2", [Have.gen_single({
         "thought": "this is false",
-        "statement": {"english": "x equals x plus one", "isabelle": "x = x + 1"},
+        "statement": {"english": "x equals x plus one", "conclusion": "x = x + 1"},
         "name": "bad",
     })])
     print_header("After Have x=x+1 (Obvious fails)", file)
@@ -2429,7 +2429,7 @@ async def _test_HaveObviousProof(root: Root, file: MyIO):
         "thought": "x times x is non-negative because x times x equals x squared",
         "statement": {
             "english": "x times x equals x squared",
-            "isabelle": "x * x = x^2"
+            "conclusion": "x * x = x^2"
         },
         "name": "sq",
     })])
@@ -2457,7 +2457,7 @@ async def _test_SufficesObviousProof(root: Root, file: MyIO):
         "thought": "It suffices to show a stronger statement",
         "statement": {
             "english": "x squared plus 1 is greater than 0",
-            "isabelle": "x * x + 1 > 0"
+            "conclusion": "x * x + 1 > 0"
         },
     })])
     print_header("After Suffices with proof=Obvious", file)
@@ -2543,7 +2543,7 @@ async def _test_ObviousTimeout_subproof(root: Root, file: MyIO):
         "thought": "x squared is non-negative",
         "statement": {
             "english": "x times x equals x squared",
-            "isabelle": "x * x = x^2"
+            "conclusion": "x * x = x^2"
         },
         "name": "sq",
         "proof": [{"operation": "Obvious", "facts": [], "timeout": 15}]
@@ -2791,7 +2791,7 @@ async def _test_GlobalEnv(root: Root, file: MyIO):
     root.session.age += 1
     _have_outcome = await root.global_env.append([Have.gen_single({
         "thought": "Restate h1 as a global rewrite rule",
-        "statement": {"english": "P", "isabelle": "P"},
+        "statement": {"english": "P", "conclusion": "P"},
         "name": "t1",
     })])
     [have1] = _have_outcome.committed
@@ -2858,7 +2858,7 @@ async def _test_GlobalEnv(root: Root, file: MyIO):
     root.session.age += 1
     _outcome = await root.amend("global.1", [Have.gen_single({
         "thought": "Amended: replace unprovable y=x with the equation x=0 (= h1)",
-        "statement": {"english": "x equals zero", "isabelle": "x = 0"},
+        "statement": {"english": "x equals zero", "conclusion": "x = 0"},
         "name": "t1",
     })])
     print_header("edit_message: AMEND global.1 (recovery)", file)
@@ -2901,7 +2901,7 @@ async def _test_GlobalEnv_BodyDone(root: Root, file: MyIO):
     root.session.age += 1
     _outcome = await root.global_env.append([Have.gen_single({
         "thought": "Unprovable bare proposition — no Obvious under it",
-        "statement": {"english": "P", "isabelle": "P"},
+        "statement": {"english": "P", "conclusion": "P"},
         "name": "g1",
     })])
     print_header("edit_message: ADD global g1 (unfinished)", file)
@@ -2922,7 +2922,7 @@ async def _test_GlobalEnv_BodyDone(root: Root, file: MyIO):
         root.session.age += 1
         _outcome = await root.global_env.append([Have.gen_single({
             "thought": f"Another unfinished global Have {name}",
-            "statement": {"english": "P", "isabelle": "P"},
+            "statement": {"english": "P", "conclusion": "P"},
             "name": name,
         })])
         print_header(f"edit_message: ADD global {name} (unfinished)", file)
@@ -2944,7 +2944,7 @@ async def _test_GlobalEnv_BodyUnfilled(root: Root, file: MyIO):
         root.session.age += 1
         _outcome = await root.global_env.append([Have.gen_single({
             "thought": f"Unfinished global Have {name}",
-            "statement": {"english": "P", "isabelle": "P"},
+            "statement": {"english": "P", "conclusion": "P"},
             "name": name,
         })])
         print_header(f"edit_message: ADD global {name} (unfinished)", file)
@@ -2956,7 +2956,7 @@ async def _test_GlobalEnv_BodyUnfilled(root: Root, file: MyIO):
     root.session.age += 1
     _outcome = await root.amend("global.2", [Have.gen_single({
         "thought": "Amended g2 statement (still unfinished)",
-        "statement": {"english": "Q", "isabelle": "Q"},
+        "statement": {"english": "Q", "conclusion": "Q"},
         "name": "g2",
     })])
     print_header("edit_message: AMEND global.2", file)
@@ -2986,7 +2986,7 @@ async def _test_GlobalEnv_happy(root: Root, file: MyIO):
     root.session.age += 1
     [have1] = (await root.global_env.append([Have.gen_single({
         "thought": "Restate h1 as a global rewrite rule",
-        "statement": {"english": "y equals x", "isabelle": "y = x"},
+        "statement": {"english": "y equals x", "conclusion": "y = x"},
         "name": "g_eq",
     })])).committed
     file.write(f"Added have1: id={have1.id}, local_step={have1.local_step}, status={have1.status.status.value}\n")
@@ -3057,7 +3057,7 @@ async def _test_GlobalEnv_happy(root: Root, file: MyIO):
     root.session.age += 1
     _outcome = await root.amend("global.1", [Have.gen_single({
         "thought": "Amended: reverse orientation of the equation",
-        "statement": {"english": "x equals y", "isabelle": "x = y"},
+        "statement": {"english": "x equals y", "conclusion": "x = y"},
         "name": "g_eq",
     })])
     amended = _outcome.committed[0] if _outcome.committed else None
@@ -3101,7 +3101,7 @@ async def _test_GlobalEnv_DoneQuickview(root: Root, file: MyIO):
     root.session.age += 1
     [have1] = (await root.global_env.append([Have.gen_single({
         "thought": "Restate h1 as a global rewrite rule",
-        "statement": {"english": "y equals x", "isabelle": "y = x"},
+        "statement": {"english": "y equals x", "conclusion": "y = x"},
         "name": "g_eq",
     })])).committed
     root.session.age += 1
@@ -3170,7 +3170,7 @@ async def _test_GlobalEnvFill(root: Root, file: MyIO):
     root.session.age += 1
     _outcome = await root.fill("global.1", [Have.gen_single({
         "thought": "global declaration via fill",
-        "statement": {"english": "x is zero", "isabelle": "x = 0"},
+        "statement": {"english": "x is zero", "conclusion": "x = 0"},
         "name": "g1",
     })])
     ret = _outcome.committed[0] if _outcome.committed else None
@@ -3250,7 +3250,7 @@ async def _test_FillOrphanedNode(root: Root, file: MyIO):
     root.session.age += 1
     _outcome = await root.fill("1", [Have.gen_single({
         "thought": "intentionally bad",
-        "statement": {"english": "bad", "isabelle": "1 1 1"},
+        "statement": {"english": "bad", "conclusion": "1 1 1"},
         "name": "bad"
     })])
     # Have does not override _on_edit_failure, so outcome.is_error stays
@@ -3281,7 +3281,7 @@ async def _test_FillOrphanedNode(root: Root, file: MyIO):
     root.session.age += 1
     _outcome = await root.fill("1", [Have.gen_single({
         "thought": "valid helper",
-        "statement": {"english": "x is positive", "isabelle": "x > 0"},
+        "statement": {"english": "x is positive", "conclusion": "x > 0"},
         "name": "x_pos"
     })])
     is_error3 = _outcome.failure is not None and _outcome.failure.is_error
@@ -3460,7 +3460,7 @@ async def _test_fact_name_resolution(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1", [Have.gen_single({
         "thought": "intermediate step",
-        "statement": {"english": "x is greater than 1", "isabelle": "x > 1"},
+        "statement": {"english": "x is greater than 1", "conclusion": "x > 1"},
         "name": "x_gt_1"
     })])
     # Prove the Have subgoal.
@@ -3541,7 +3541,7 @@ async def _test_IntroMetaQuant(root: Root, file: MyIO):
         "thought": "Auxiliary: product of positives is positive",
         "statement": {
             "english": "product of positives is positive",
-            "isabelle": r"\<And>(a::int) b. a > 0 \<Longrightarrow> b > 0 \<Longrightarrow> a * b > 0"
+            "conclusion": r"\<And>(a::int) b. a > 0 \<Longrightarrow> b > 0 \<Longrightarrow> a * b > 0"
         },
         "name": "pos_mult"
     })])
@@ -3708,7 +3708,7 @@ async def _test_Induction_IHRename(root: Root, file: MyIO):
         "thought": "sub-lemma to induct on",
         "statement": {
             "english": "for every n, if n is at most p-2 then f n is less than p",
-            "isabelle": r"\<And>n::nat. n \<le> p - 2 \<Longrightarrow> f n < p"
+            "conclusion": r"\<And>n::nat. n \<le> p - 2 \<Longrightarrow> f n < p"
         },
         "name": "gen"
     })])
@@ -3949,7 +3949,7 @@ async def _test_Induction_IHFactRef(root: Root, file: MyIO):
         "thought": "sub-lemma for strong induction",
         "statement": {
             "english": "for every n, n < p implies True",
-            "isabelle": r"\<And>n::nat. n < p \<Longrightarrow> True",
+            "conclusion": r"\<And>n::nat. n < p \<Longrightarrow> True",
         },
         "name": "h",
     })])
@@ -4042,7 +4042,7 @@ async def _test_FactsToGeneralize_Filter(root: Root, file: MyIO):
         "thought": "unrelated local fact, prop has no free vars",
         "statement": {
             "english": "zero is less than one",
-            "isabelle": "(0::nat) < 1",
+            "conclusion": "(0::nat) < 1",
         },
         "name": "trivial_fact",
     })])
@@ -4055,7 +4055,7 @@ async def _test_FactsToGeneralize_Filter(root: Root, file: MyIO):
         "thought": "sub-lemma to induct on",
         "statement": {
             "english": "for every n at most p, True holds",
-            "isabelle": r"\<And>n::nat. n \<le> p \<Longrightarrow> True",
+            "conclusion": r"\<And>n::nat. n \<le> p \<Longrightarrow> True",
         },
         "name": "gen",
     })])
@@ -4158,7 +4158,7 @@ async def _test_FactsToGeneralize_ConsumingRule(root: Root, file: MyIO):
         "thought": "local fact about induction target i",
         "statement": {
             "english": "zero is at most i",
-            "isabelle": r"(0::int) \<le> i",
+            "conclusion": r"(0::int) \<le> i",
         },
         "name": "h",
     })])
@@ -4437,7 +4437,7 @@ async def _test_UpstreamChangeResetsObvious(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1", [Have.gen_single({
         "thought": "trivial helper",
-        "statement": {"english": "True", "isabelle": "True"},
+        "statement": {"english": "True", "conclusion": "True"},
         "name": "triv",
     })])
     root.session.age += 1
@@ -4449,7 +4449,7 @@ async def _test_UpstreamChangeResetsObvious(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("2", [Have.gen_single({
         "thought": "impossible statement",
-        "statement": {"english": "False", "isabelle": "False"},
+        "statement": {"english": "False", "conclusion": "False"},
         "name": "bad",
     })])
     print_header("After step 2 (Have False, open proof)", file)
@@ -4475,7 +4475,7 @@ async def _test_UpstreamChangeResetsObvious(root: Root, file: MyIO):
     root.session.age += 1
     await root.amend("1", [Have.gen_single({
         "thought": "amended helper",
-        "statement": {"english": "x + y = 3", "isabelle": "x + y = 3"},
+        "statement": {"english": "x + y = 3", "conclusion": "x + y = 3"},
         "name": "sum",
     })])
     step2 = root.locate_node("2")
@@ -4498,7 +4498,7 @@ async def _test_UpstreamChangeResetsObvious(root: Root, file: MyIO):
     root.session.age += 1
     await root.insert_before("2", [Have.gen_single({
         "thought": "inserted step",
-        "statement": {"english": "True", "isabelle": "True"},
+        "statement": {"english": "True", "conclusion": "True"},
         "name": "ins",
     })])
     step2 = root.locate_node("2")
@@ -4748,15 +4748,15 @@ async def _test_DeepNestedProof(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1", [Have.gen_single({
         "thought": "L1",
-        "statement": {"english": "L1", "isabelle": r"x * x \<ge> 0"},
+        "statement": {"english": "L1", "conclusion": r"x * x \<ge> 0"},
         "name": "L1",
         "proof": [
             {"operation": "Have", "thought": "L2",
-             "statement": {"english": "L2", "isabelle": r"x * x \<ge> 0"},
+             "statement": {"english": "L2", "conclusion": r"x * x \<ge> 0"},
              "name": "L2",
              "proof": [
                  {"operation": "Have", "thought": "L3",
-                  "statement": {"english": "L3", "isabelle": r"x * x \<ge> 0"},
+                  "statement": {"english": "L3", "conclusion": r"x * x \<ge> 0"},
                   "name": "L3",
                   "proof": [
                       {"operation": "Obvious", "facts": []},
@@ -4795,7 +4795,7 @@ async def _test_AmendQ6Preservation(root: Root, file: MyIO):
     root.session.age += 1
     _seed_outcome = await root.fill("1", [Have.gen_single({
         "thought": "outer",
-        "statement": {"english": "outer", "isabelle": r"x * x \<ge> 0"},
+        "statement": {"english": "outer", "conclusion": r"x * x \<ge> 0"},
         "name": "outer",
         "proof": [{"operation": "Obvious", "facts": []}],
     })])
@@ -4809,10 +4809,10 @@ async def _test_AmendQ6Preservation(root: Root, file: MyIO):
     root.session.age += 1
     _amend_outcome = await root.amend("1", [Suffices.gen_single({
         "thought": "replace outer Have with Suffices + nested Have",
-        "statement": {"english": "repl", "isabelle": r"x * x \<ge> 0"},
+        "statement": {"english": "repl", "conclusion": r"x * x \<ge> 0"},
         "proof": [
             {"operation": "Have", "thought": "inner no-proof",
-             "statement": {"english": "inner", "isabelle": r"x * x \<ge> 0"},
+             "statement": {"english": "inner", "conclusion": r"x * x \<ge> 0"},
              "name": "inner"},
         ],
     })])
@@ -4844,11 +4844,11 @@ async def _test_RefreshFailMidBatch(root: Root, file: MyIO):
         root.session,
         {"target_step": "1", "action": "fill", "proof_operations": [
             {"operation": "Have", "thought": "bad aux (false)",
-             "statement": {"english": "false", "isabelle": r"(0::int) = (1::int)"},
+             "statement": {"english": "false", "conclusion": r"(0::int) = (1::int)"},
              "name": "bad",
              "proof": [{"operation": "Obvious", "facts": []}]},
             {"operation": "Have", "thought": "later aux",
-             "statement": {"english": "later", "isabelle": r"x * x \<ge> 0"},
+             "statement": {"english": "later", "conclusion": r"x * x \<ge> 0"},
              "name": "later",
              "proof": [{"operation": "Obvious", "facts": []}]},
             {"operation": "Obvious", "facts": []},
@@ -4899,11 +4899,11 @@ async def _test_CommitGroupBMidBatch(root: Root, file: MyIO):
             # parse time — we need the commit-time path to fire, not the
             # parse-time one.
             {"operation": "Have", "thought": "misplaced aux a",
-             "statement": {"english": "trivial", "isabelle": "(1::int) = 1"},
+             "statement": {"english": "trivial", "conclusion": "(1::int) = 1"},
              "name": "aux_a",
              "proof": [{"operation": "Obvious", "facts": []}]},
             {"operation": "Have", "thought": "misplaced aux b",
-             "statement": {"english": "trivial", "isabelle": "(2::int) = 2"},
+             "statement": {"english": "trivial", "conclusion": "(2::int) = 2"},
              "name": "aux_b",
              "proof": [{"operation": "Obvious", "facts": []}]},
         ]})
@@ -4927,7 +4927,7 @@ async def _test_AutoIntroQ7Skip(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1", [Have.gen_single({
         "thought": "outer Have wrapping ∀-stmt",
-        "statement": {"english": "refl", "isabelle": r"\<forall>(a::int). a = a"},
+        "statement": {"english": "refl", "conclusion": r"\<forall>(a::int). a = a"},
         "name": "refl",
         "proof": [
             {"operation": "Intro", "thought": "agent's explicit Intro"},
@@ -4954,7 +4954,7 @@ async def _test_AutoIntroQ7Inject(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1", [Have.gen_single({
         "thought": "outer Have; agent forgot to Intro first",
-        "statement": {"english": "refl", "isabelle": r"\<forall>(a::int). a = a"},
+        "statement": {"english": "refl", "conclusion": r"\<forall>(a::int). a = a"},
         "name": "refl",
         "proof": [{"operation": "Obvious", "facts": []}],
     })])
@@ -4977,7 +4977,7 @@ async def _test_AmendSingleKeepsChildren(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1", [Have.gen_single({
         "thought": "initial",
-        "statement": {"english": "init", "isabelle": r"x * x \<ge> 0"},
+        "statement": {"english": "init", "conclusion": r"x * x \<ge> 0"},
         "name": "orig",
         "proof": [{"operation": "Obvious", "facts": []}],
     })])
@@ -4990,7 +4990,7 @@ async def _test_AmendSingleKeepsChildren(root: Root, file: MyIO):
     root.session.age += 1
     await root.amend("1", [Suffices.gen_single({
         "thought": "Suffices with no proof — should inherit",
-        "statement": {"english": "repl", "isabelle": r"x * x \<ge> 0"},
+        "statement": {"english": "repl", "conclusion": r"x * x \<ge> 0"},
     })])
     print_header("After single-item amend; inherited children should remain", file)
     root.print(0, file)
@@ -5013,11 +5013,11 @@ async def _test_ValidatorNestedPath(root: Root, file: MyIO):
     try:
         Parse_Op_List([
             {"operation": "Have", "thought": "L1",
-             "statement": {"english": "L1", "isabelle": r"x * x \<ge> 0"},
+             "statement": {"english": "L1", "conclusion": r"x * x \<ge> 0"},
              "name": "L1",
              "proof": [
                  {"operation": "Have", "thought": "L2",
-                  "statement": {"english": "L2", "isabelle": r"x * x \<ge> 0"},
+                  "statement": {"english": "L2", "conclusion": r"x * x \<ge> 0"},
                   "name": "L2",
                   "proof": [
                       {"operation": "Obvious"},  # missing facts
@@ -5037,7 +5037,7 @@ async def _test_ValidatorNestedPath(root: Root, file: MyIO):
     try:
         Parse_Op_List([
             {"operation": "Have", "thought": "outer",
-             "statement": {"english": "o", "isabelle": r"x * x \<ge> 0"},
+             "statement": {"english": "o", "conclusion": r"x * x \<ge> 0"},
              "name": "o",
              "proof": [
                  {"operation": "Obvious", "facts": []},
@@ -5383,11 +5383,11 @@ async def _test_CaseSplit_AmendReconcile_ExactMatch(root: Root, file: MyIO):
         "proofs": [
             {"case_name": "True",
              "body": [{"operation": "Have", "thought": "t-have",
-                       "statement": {"english": "trivial", "isabelle": "True"},
+                       "statement": {"english": "trivial", "conclusion": "True"},
                        "name": "h"}]},
             {"case_name": "False",
              "body": [{"operation": "Have", "thought": "f-have",
-                       "statement": {"english": "trivial", "isabelle": "True"},
+                       "statement": {"english": "trivial", "conclusion": "True"},
                        "name": "h"}]},
         ],
     })])
@@ -5444,11 +5444,11 @@ async def _test_CaseSplit_AmendReconcile_Rematch(root: Root, file: MyIO):
         "proofs": [
             {"case_name": "alt1",
              "body": [{"operation": "Have", "thought": "alt1-have",
-                       "statement": {"english": "t", "isabelle": "True"},
+                       "statement": {"english": "t", "conclusion": "True"},
                        "name": "h"}]},
             {"case_name": "alt2",
              "body": [{"operation": "Have", "thought": "alt2-have",
-                       "statement": {"english": "t", "isabelle": "True"},
+                       "statement": {"english": "t", "conclusion": "True"},
                        "name": "h"}]},
         ],
     })])
@@ -5555,7 +5555,7 @@ async def _test_CaseSplit_Pair_N1_Keep(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1", [Have.gen_single({
         "thought": "seed", "name": "h",
-        "statement": {"english": "trivial", "isabelle": "True"}})])
+        "statement": {"english": "trivial", "conclusion": "True"}})])
     print_header("After seeding Have at step 1", file)
     root.print(0, file)
 
@@ -5599,7 +5599,7 @@ async def _test_CaseSplit_Pair_N1_Replace(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1", [Have.gen_single({
         "thought": "seed", "name": "h",
-        "statement": {"english": "trivial", "isabelle": "True"}})])
+        "statement": {"english": "trivial", "conclusion": "True"}})])
     print_header("After seeding Have at step 1", file)
     root.print(0, file)
 
@@ -5637,7 +5637,7 @@ async def _test_CaseSplit_Pair_N1_MidProof(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1", [Have.gen_single({
         "thought": "seed", "name": "h",
-        "statement": {"english": "trivial", "isabelle": "True"}})])
+        "statement": {"english": "trivial", "conclusion": "True"}})])
     print_header("After seeding Have at step 1", file)
     root.print(0, file)
 
@@ -5824,7 +5824,7 @@ async def _test_CaseSplit_NestedSkolem(root: Root, file: MyIO):
             "thought": "Restate part of the goal",
             "statement": {
                 "english": "restating the goal conclusion",
-                "isabelle": conclusion_str
+                "conclusion": conclusion_str
             },
             "name": "htest"
         })])
@@ -6160,7 +6160,7 @@ async def _test_NestedHaveProof(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1", [Have.gen_single({
         "thought": "auxiliary restating of the goal",
-        "statement": {"english": "x*x nonneg", "isabelle": r"x * x \<ge> 0"},
+        "statement": {"english": "x*x nonneg", "conclusion": r"x * x \<ge> 0"},
         "name": "h1",
         "proof": [{"operation": "Obvious", "facts": []}],
     })])
@@ -6185,7 +6185,7 @@ async def _test_BatchFill_HaveObvious(root: Root, file: MyIO):
         root.session,
         {"target_step": "1", "action": "fill", "proof_operations": [
             {"operation": "Have", "thought": "restate goal as aux",
-             "statement": {"english": "x*x nonneg", "isabelle": r"x * x \<ge> 0"},
+             "statement": {"english": "x*x nonneg", "conclusion": r"x * x \<ge> 0"},
              "name": "aux",
              "proof": [{"operation": "Obvious", "facts": []}]},
             {"operation": "Obvious",
@@ -6231,7 +6231,7 @@ async def _test_ComplexEditFlow(root: Root, file: MyIO):
         root.session,
         {"target_step": "1", "action": "fill", "proof_operations": [
             {"operation": "Have", "thought": "restate goal",
-             "statement": {"english": "nonneg", "isabelle": r"x * x \<ge> 0"},
+             "statement": {"english": "nonneg", "conclusion": r"x * x \<ge> 0"},
              "name": "aux",
              "proof": [{"operation": "Obvious", "facts": []}]},
             {"operation": "Obvious",
@@ -6259,7 +6259,7 @@ async def _test_ComplexEditFlow(root: Root, file: MyIO):
         root.session,
         {"target_step": "1", "action": "amend", "proof_operations": [
             {"operation": "Have", "thought": "unprovable replacement",
-             "statement": {"english": "false", "isabelle": "(1::int) = 2"},
+             "statement": {"english": "false", "conclusion": "(1::int) = 2"},
              "name": "bad",
              "proof": [{"operation": "Obvious", "facts": []}]},
         ]})
@@ -6273,7 +6273,7 @@ async def _test_ComplexEditFlow(root: Root, file: MyIO):
         root.session,
         {"target_step": "1", "action": "amend", "proof_operations": [
             {"operation": "Have", "thought": "renamed aux",
-             "statement": {"english": "nonneg", "isabelle": r"x * x \<ge> 0"},
+             "statement": {"english": "nonneg", "conclusion": r"x * x \<ge> 0"},
              "name": "aux2",
              "proof": [{"operation": "Obvious", "facts": []}]},
         ]})
@@ -6287,11 +6287,11 @@ async def _test_ComplexEditFlow(root: Root, file: MyIO):
         root.session,
         {"target_step": "1", "action": "insert_before", "proof_operations": [
             {"operation": "Have", "thought": "ins1",
-             "statement": {"english": "h1", "isabelle": r"x * x \<ge> 0"},
+             "statement": {"english": "h1", "conclusion": r"x * x \<ge> 0"},
              "name": "h1",
              "proof": [{"operation": "Obvious", "facts": []}]},
             {"operation": "Have", "thought": "ins2",
-             "statement": {"english": "h2", "isabelle": r"x * x \<ge> 0"},
+             "statement": {"english": "h2", "conclusion": r"x * x \<ge> 0"},
              "name": "h2",
              "proof": [{"operation": "Obvious", "facts": []}]},
         ]})
@@ -6319,11 +6319,11 @@ async def _test_BatchInsertBefore(root: Root, file: MyIO):
         root.session,
         {"target_step": "1", "action": "insert_before", "proof_operations": [
             {"operation": "Have", "thought": "first aux",
-             "statement": {"english": "aux a", "isabelle": r"x * x \<ge> 0"},
+             "statement": {"english": "aux a", "conclusion": r"x * x \<ge> 0"},
              "name": "aux_a",
              "proof": [{"operation": "Obvious", "facts": []}]},
             {"operation": "Have", "thought": "second aux",
-             "statement": {"english": "aux b", "isabelle": r"x * x \<ge> 0"},
+             "statement": {"english": "aux b", "conclusion": r"x * x \<ge> 0"},
              "name": "aux_b",
              "proof": [{"operation": "Obvious", "facts": []}]},
         ]})
@@ -6348,7 +6348,7 @@ async def _test_AmendMultiSequence(root: Root, file: MyIO):
         root.session,
         {"target_step": "1", "action": "fill", "proof_operations": [
             {"operation": "Have", "thought": "seed aux",
-             "statement": {"english": "nonneg", "isabelle": r"x * x \<ge> 0"},
+             "statement": {"english": "nonneg", "conclusion": r"x * x \<ge> 0"},
              "name": "seed",
              "proof": [{"operation": "Obvious", "facts": []}]},
         ]})
@@ -6364,15 +6364,15 @@ async def _test_AmendMultiSequence(root: Root, file: MyIO):
         root.session,
         {"target_step": "1", "action": "amend", "proof_operations": [
             {"operation": "Have", "thought": "replacement A",
-             "statement": {"english": "rA", "isabelle": r"x * x \<ge> 0"},
+             "statement": {"english": "rA", "conclusion": r"x * x \<ge> 0"},
              "name": "rA",
              "proof": [{"operation": "Obvious", "facts": []}]},
             {"operation": "Have", "thought": "replacement B",
-             "statement": {"english": "rB", "isabelle": r"x * x \<ge> 0"},
+             "statement": {"english": "rB", "conclusion": r"x * x \<ge> 0"},
              "name": "rB",
              "proof": [{"operation": "Obvious", "facts": []}]},
             {"operation": "Have", "thought": "replacement C",
-             "statement": {"english": "rC", "isabelle": r"x * x \<ge> 0"},
+             "statement": {"english": "rC", "conclusion": r"x * x \<ge> 0"},
              "name": "rC",
              "proof": [{"operation": "Obvious", "facts": []}]},
         ]})
@@ -6388,11 +6388,11 @@ async def _test_AmendMultiSequence(root: Root, file: MyIO):
         root.session,
         {"target_step": "2", "action": "amend", "proof_operations": [
             {"operation": "Have", "thought": "mid replacement 1",
-             "statement": {"english": "m1", "isabelle": r"x * x \<ge> 0"},
+             "statement": {"english": "m1", "conclusion": r"x * x \<ge> 0"},
              "name": "m1",
              "proof": [{"operation": "Obvious", "facts": []}]},
             {"operation": "Have", "thought": "mid replacement 2",
-             "statement": {"english": "m2", "isabelle": r"x * x \<ge> 0"},
+             "statement": {"english": "m2", "conclusion": r"x * x \<ge> 0"},
              "name": "m2",
              "proof": [{"operation": "Obvious", "facts": []}]},
         ]})
@@ -6413,7 +6413,7 @@ async def _test_BatchAmendMulti(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1", [Have.gen_single({
         "thought": "original",
-        "statement": {"english": "orig", "isabelle": r"x * x \<ge> 0"},
+        "statement": {"english": "orig", "conclusion": r"x * x \<ge> 0"},
         "name": "orig",
         "proof": [{"operation": "Obvious", "facts": []}],
     })])
@@ -6425,11 +6425,11 @@ async def _test_BatchAmendMulti(root: Root, file: MyIO):
         root.session,
         {"target_step": "1", "action": "amend", "proof_operations": [
             {"operation": "Have", "thought": "replacement 1",
-             "statement": {"english": "r1", "isabelle": r"x * x \<ge> 0"},
+             "statement": {"english": "r1", "conclusion": r"x * x \<ge> 0"},
              "name": "r1",
              "proof": [{"operation": "Obvious", "facts": []}]},
             {"operation": "Have", "thought": "replacement 2",
-             "statement": {"english": "r2", "isabelle": r"x * x \<ge> 0"},
+             "statement": {"english": "r2", "conclusion": r"x * x \<ge> 0"},
              "name": "r2",
              "proof": [{"operation": "Obvious", "facts": []}]},
         ]})
@@ -6573,7 +6573,7 @@ async def _test_InferenceRuleBatch_MultiSubgoal(root: Root, file: MyIO):
             # a block-closing SubgoalMaker.  Expected to be aggregated into
             # `session.warnings` as unapplied.
             {"operation": "Have", "thought": "misplaced aux",
-             "statement": {"english": "aux", "isabelle": "(1::int) = (1::int)"},
+             "statement": {"english": "aux", "conclusion": "(1::int) = (1::int)"},
              "name": "aux",
              "proof": [{"operation": "Obvious", "facts": []}]},
             {"operation": "Obvious", "facts": []},
@@ -6840,7 +6840,7 @@ async def _test_CcontrIntroMatch(root: Root, file: MyIO):
     await root.fill("3.2.2", [Have.gen_single({
         "thought": "p is prime from h1 with k=0",
         "name": "prime_p",
-        "statement": {"english": "p is prime", "isabelle": "prime p"},
+        "statement": {"english": "p is prime", "conclusion": "prime p"},
         "proof": [
             {"operation": "Derive",
              "thought": "instantiate h1 with k=0",
@@ -6856,7 +6856,7 @@ async def _test_CcontrIntroMatch(root: Root, file: MyIO):
     await root.fill("3.2.3", [Have.gen_single({
         "thought": "p ≥ 2 since it is prime",
         "name": "pge2",
-        "statement": {"english": "p ≥ 2", "isabelle": "p ≥ (2::nat)"},
+        "statement": {"english": "p ≥ 2", "conclusion": "p ≥ (2::nat)"},
         "proof": [{"operation": "Obvious",
                    "facts": [{"name": "prime_p"},
                              {"name": "prime_ge_2_nat"}]}],
@@ -6866,7 +6866,7 @@ async def _test_CcontrIntroMatch(root: Root, file: MyIO):
         "thought": "sqrt(p/3) < real n from large + floor_less_iff",
         "name": "sqrt_lt",
         "statement": {"english": "sqrt(p/3) < real n",
-                      "isabelle": "sqrt (real p / (3::real)) < real n"},
+                      "conclusion": "sqrt (real p / (3::real)) < real n"},
         "proof": [{"operation": "Obvious",
                    "facts": [{"name": "large"},
                              {"name": "floor_less_iff"}]}],
@@ -6876,7 +6876,7 @@ async def _test_CcontrIntroMatch(root: Root, file: MyIO):
         "thought": "squaring sqrt(p/3) < real n gives p/3 < n^2",
         "name": "p_third_lt",
         "statement": {"english": "p/3 < real n^2",
-                      "isabelle": "real p / (3::real) < (real n)^2"},
+                      "conclusion": "real p / (3::real) < (real n)^2"},
         "proof": [{"operation": "Obvious",
                    "facts": [{"name": "sqrt_lt"},
                              {"name": "pge2"}]}],
@@ -6886,7 +6886,7 @@ async def _test_CcontrIntroMatch(root: Root, file: MyIO):
         "thought": "multiply by 3 to get p < 3n^2",
         "name": "n_big",
         "statement": {"english": "p < 3n^2",
-                      "isabelle": "p < (3::nat) * n^2"},
+                      "conclusion": "p < (3::nat) * n^2"},
         "proof": [{"operation": "Obvious",
                    "facts": [{"name": "p_third_lt"}]}],
     })])
@@ -6894,7 +6894,7 @@ async def _test_CcontrIntroMatch(root: Root, file: MyIO):
     await root.fill("3.2.7", [Have.gen_single({
         "thought": "n ≥ 1 since 3n^2 > p ≥ 2",
         "name": "nge1",
-        "statement": {"english": "n ≥ 1", "isabelle": "n ≥ (1::nat)"},
+        "statement": {"english": "n ≥ 1", "conclusion": "n ≥ (1::nat)"},
         "proof": [{"operation": "Obvious",
                    "facts": [{"name": "n_big"},
                              {"name": "pge2"}]}],
@@ -6904,7 +6904,7 @@ async def _test_CcontrIntroMatch(root: Root, file: MyIO):
         "thought": "fn > 1",
         "name": "fn_gt1",
         "statement": {"english": "n^2 + n + p > 1",
-                      "isabelle": "n^2 + n + p > (1::nat)"},
+                      "conclusion": "n^2 + n + p > (1::nat)"},
         "proof": [{"operation": "Obvious",
                    "facts": [{"name": "pge2"}]}],
     })])
@@ -7050,7 +7050,7 @@ async def _test_HaveLeakSibling(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1.1.1", [Have.gen_single({
         "thought": "Trivial helper",
-        "statement": {"english": "one plus one is two", "isabelle": r"(1::nat) + 1 = 2"},
+        "statement": {"english": "one plus one is two", "conclusion": r"(1::nat) + 1 = 2"},
         "name": "helper",
     })])
     root.session.age += 1
@@ -7236,7 +7236,7 @@ async def _test_AmendHaveToConjI(root: Root, file: MyIO):
         "thought": "irrelevant intermediate",
         "statement": {
             "english": "for all x::nat, x = x",
-            "isabelle": r"\<And>x::nat. x = x",
+            "conclusion": r"\<And>x::nat. x = x",
         },
         "name": "h",
         "proof": [{"operation": "Obvious", "facts": []}],
@@ -7332,7 +7332,7 @@ async def _test_SpliceHaveRefresh(root: Root, file: MyIO):
     # with body = [Obvious] to close the subgoal "False ==> False".
     await root.fill("1", [Have.gen_single({
         "thought": "claim not False",
-        "statement": {"english": "not False", "isabelle": r"\<not> False"},
+        "statement": {"english": "not False", "conclusion": r"\<not> False"},
         "name": "nf",
         "proof": [
             {"operation": "InferenceRule",
@@ -7406,7 +7406,7 @@ async def _test_SpliceAutoIntro(root: Root, file: MyIO):
              "proofs": [[
                  {"operation": "Have",
                   "thought": "trivial claim",
-                  "statement": {"english": "True", "isabelle": "True"},
+                  "statement": {"english": "True", "conclusion": "True"},
                   "name": "h",
                   "proof": [{"operation": "Obvious", "facts": []}]},
                  {"operation": "Obvious", "facts": []},
@@ -7446,7 +7446,7 @@ async def _test_MultilineThought(root: Root, file: MyIO):
         "thought": "First line of reasoning.\nSecond line continues.\nThird concludes.",
         "statement": {
             "english": "square is nonneg",
-            "isabelle": r"(x::int) * x \<ge> 0"
+            "conclusion": r"(x::int) * x \<ge> 0"
         },
         "name": "sq"
     })])
@@ -7521,7 +7521,7 @@ async def _test_ObtainQuickview(root: Root, file: MyIO):
     await root.fill("2", [Obtain.gen_single({
         "thought": "Unpack the existential",
         "variables": [{"name": "k", "type": "nat"}],
-        "constraints": [{"name": "k_def", "isabelle": "k = m",
+        "constraints": [{"name": "k_def", "conclusion": "k = m",
                          "english": "the existential witness"}],
         "proof": [{"operation": "Obvious", "facts": []}],
     })])
@@ -7542,7 +7542,7 @@ async def _test_FailedLeafQuickview(root: Root, file: MyIO):
         "thought": "Deliberately wrong claim",
         "statement": {
             "english": "a false claim",
-            "isabelle": "False"
+            "conclusion": "False"
         },
         "name": "bad_claim"
     })])
@@ -7609,7 +7609,7 @@ async def _test_QuickviewCollapse(root: Root, file: MyIO):
         root.session.age += 1
         await root.fill(str(i), [Have.gen_single({
             "thought": f"claim {name}",
-            "statement": {"english": f"{name}", "isabelle": stmt},
+            "statement": {"english": f"{name}", "conclusion": stmt},
             "name": name,
         })])
         root.session.age += 1
@@ -7618,6 +7618,54 @@ async def _test_QuickviewCollapse(root: Root, file: MyIO):
     root.reset()
     print_header("Quickview with 6 done steps (should collapse)", file)
     root.quickview(0, file)
+
+@model_test("Contradiction_notI", "Test_Contradiction_notI.thy", 6)
+async def _test_Contradiction_notI(root: Root, file: MyIO):
+    """Contradiction on a ¬-led goal uses notI internally.
+    Goal: ¬ False. Contradiction assumes False as hypothesis, goal becomes False.
+    Obvious closes it because False is in the premises."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    await root.fill("1", [Contradiction.gen_single({
+        "hypothesis_name": "neg_hyp",
+    })])
+    print_header("After Contradiction (notI path)", file)
+    root.print(0, file)
+    root.quickview(0, file)
+    contra_node = root.locate_node("1")
+    assert isinstance(contra_node, Contradiction)
+    file.write(f"status: {contra_node.status.status.name}\n")
+    file.write(f"bindings: {contra_node.bindings}\n")
+    # Now prove the resulting False goal
+    root.session.age += 1
+    await root.fill("2", [Obvious.gen_single({"facts": [{"name": "neg_hyp"}]})])
+    print_header("After Obvious to close False", file)
+    root.print(0, file)
+
+@model_test("Contradiction_ccontr", "Test_Contradiction_ccontr.thy", 6)
+async def _test_Contradiction_ccontr(root: Root, file: MyIO):
+    """Contradiction on a non-¬ goal uses ccontr internally.
+    Goal: True. Contradiction assumes ¬ True as hypothesis, goal becomes False.
+    We derive False from ¬ True."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    await root.fill("1", [Contradiction.gen_single({
+        "hypothesis_name": "neg_hyp",
+    })])
+    print_header("After Contradiction (ccontr path)", file)
+    root.print(0, file)
+    root.quickview(0, file)
+    contra_node = root.locate_node("1")
+    assert isinstance(contra_node, Contradiction)
+    file.write(f"status: {contra_node.status.status.name}\n")
+    file.write(f"bindings: {contra_node.bindings}\n")
+    # Prove False: neg_hyp is "¬ True", Rewrite with neg_hyp to turn False into ¬ True, then Obvious
+    root.session.age += 1
+    await root.fill("2", [Obvious.gen_single({"facts": [{"name": "neg_hyp"}]})])
+    print_header("After Obvious to close False", file)
+    root.print(0, file)
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
     import msgpack as mp

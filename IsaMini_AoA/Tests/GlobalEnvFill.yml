@@ -25,7 +25,7 @@ thought: global declaration via fill
 operation: Have
 statement:
   english: x is zero
-  isabelle: x = 0
+  conclusion: x = 0
 name: g1
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `global.1.1` to provide the proof for the following goal.
@@ -48,7 +48,7 @@ thought: global declaration via fill
 operation: Have
 statement:
   english: x is zero
-  isabelle: x = 0
+  conclusion: x = 0
 name: g1
 proof:
   - step id: global.1.1

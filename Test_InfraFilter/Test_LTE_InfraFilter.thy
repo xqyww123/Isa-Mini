@@ -83,15 +83,7 @@ let
     ("Multiset.rel_mset", false),
     ("Multiset.pred_mset", false),
     ("FSet.fimage", false),
-    ("FSet.fset_member", true), (* hidden name *)
-    (* Should pass (BNF preserved, even if hidden in name space) *)
-    ("List.pred_list", false),
-    ("List.rel_list", false),
-    ("Sum_Type.pred_sum", false),
-    ("Sum_Type.rel_sum", false),
-    ("Sum_Type.sum.Inl", false),
-    ("Sum_Type.sum.Inr", false),
-    ("Product_Type.prod.Pair", false)
+    ("FSet.fset_member", true) (* hidden name *)
   ]
 
   val _ = log "====== is_infra_const verification test ======"
@@ -161,26 +153,11 @@ let
   val lift_consts = [
     "Multiset.multiset.count",
     "Finite_Map.fmap.fmlookup",
-    "Finite_Map.fmap.fmran",
-    "Finite_Map.fmap.fmdom",
     "Finite_Map.fmap.fmran'",
-    "Finite_Map.fmap.fmdom'",
-    "Finite_Map.fmap.fmempty",
-    "Finite_Map.fmap.fmupd",
-    "Finite_Map.fmap.fmadd",
     "Finite_Map.fmap.fmmap",
-    "Finite_Map.fmap.fmfilter",
-    "Finite_Map.fmap.fmdrop",
-    "Finite_Map.fmap.fmrestrict_set",
-    "Finite_Map.fmap.fmrestrict_fset",
+    "Finite_Map.fmap.fmrel",
     "Product_Type.prod.swap",
-    "FSet.fset.fset",
-    "FSet.fset.fBall",
-    "FSet.fset.fBex",
-    "FSet.bot_fset",
-    "FSet.less_eq_fset",
-    "Multiset.multiset.mset_set",
-    "Multiset.multiset.set_mset"
+    "FSet.fset.fset"
   ]
   val _ = map (fn name =>
     let val result = is_infra_const name
@@ -202,18 +179,23 @@ let
         val status = if result then "filtered" else "PASS (unexpected?)"
     in log (String.concat ["  ", status, "  ", name]) end) bnf_infra_consts
 
-  (* Spot-check: preserved BNF constants that should NOT be filtered *)
+  (* Spot-check: preserved BNF constants (names from BNF registration) *)
   val _ = log ""
-  val _ = log "--- Spot-check: preserved BNF constants (constructors, case, map, pred, rel) ---"
+  val _ = log "--- Spot-check: BNF-registered preserved constants ---"
   val preserved_consts = [
+    (* List BNF *)
     "List.list.Nil", "List.list.Cons", "List.list.case_list",
-    "List.map", "List.set", "List.pred_list", "List.rel_list",
+    "List.list.map", "List.list.list_all", "List.list.list_all2", "List.list.set",
+    (* Option BNF *)
     "Option.option.None", "Option.option.Some", "Option.option.case_option",
     "Option.map_option", "Option.pred_option", "Option.rel_option",
-    "Sum_Type.sum.Inl", "Sum_Type.sum.Inr", "Sum_Type.sum.case_sum",
-    "Sum_Type.map_sum", "Sum_Type.pred_sum", "Sum_Type.rel_sum",
-    "Product_Type.prod.Pair", "Product_Type.prod.case_prod",
-    "BNF_Def.map_prod", "BNF_Def.pred_prod", "BNF_Def.rel_prod",
+    (* Sum BNF *)
+    "Sum_Type.Inl", "Sum_Type.Inr", "Sum_Type.sum.case_sum",
+    "Sum_Type.map_sum",
+    (* Prod BNF *)
+    "Product_Type.Pair", "Product_Type.prod.case_prod",
+    "Product_Type.map_prod",
+    (* Multiset/FSet lifted *)
     "Multiset.image_mset", "Multiset.rel_mset", "Multiset.pred_mset",
     "FSet.fimage"
   ]
@@ -344,69 +326,15 @@ let
       ]
     in reason end
 
-  val suspicious = [
-    "Finite_Map.fmap.fmran", "Finite_Map.fmap.fmdom",
-    "Finite_Map.fmap.fmdom'", "Finite_Map.fmap.fmempty",
-    "Finite_Map.fmap.fmupd", "Finite_Map.fmap.fmadd",
-    "Finite_Map.fmap.fmfilter", "Finite_Map.fmap.fmdrop",
-    "Finite_Map.fmap.fmrestrict_set", "Finite_Map.fmap.fmrestrict_fset",
-    "FSet.fset.fBall", "FSet.fset.fBex",
-    "FSet.bot_fset", "FSet.less_eq_fset",
-    "Multiset.multiset.mset_set", "Multiset.multiset.set_mset",
-    "List.pred_list", "List.rel_list",
-    "Sum_Type.sum.Inl", "Sum_Type.sum.Inr",
-    "Sum_Type.pred_sum", "Sum_Type.rel_sum",
-    "Product_Type.prod.Pair",
-    "BNF_Def.map_prod", "BNF_Def.pred_prod", "BNF_Def.rel_prod"
-  ]
-  val _ = map (fn name =>
-    log (String.concat ["  ", name, " => ", diagnose_const name])) suspicious
-
-  (* Diagnostic: what names does BNF register for list and sum? *)
-  val _ = log ""
-  val _ = log "--- BNF registered names for List.list ---"
-  val _ = (case BNF_Def.bnf_of \<^context> "List.list" of
-      NONE => log "  BNF not found!"
-    | SOME bnf =>
-        let val map_n = fst (Term.dest_Const (BNF_Def.map_of_bnf bnf))
-            val pred_n = fst (Term.dest_Const (BNF_Def.pred_of_bnf bnf))
-            val rel_n = fst (Term.dest_Const (BNF_Def.rel_of_bnf bnf))
-            val set_ns = map (fst o Term.dest_Const) (BNF_Def.sets_of_bnf bnf)
-        in log (String.concat ["  map: ", map_n]);
-           log (String.concat ["  pred: ", pred_n]);
-           log (String.concat ["  rel: ", rel_n]);
-           map (fn s => log (String.concat ["  set: ", s])) set_ns; ()
-        end)
-  val _ = log "--- BNF registered names for Sum_Type.sum ---"
-  val _ = (case BNF_Def.bnf_of \<^context> "Sum_Type.sum" of
-      NONE => log "  BNF not found!"
-    | SOME bnf =>
-        let val pred_n = fst (Term.dest_Const (BNF_Def.pred_of_bnf bnf))
-            val rel_n = fst (Term.dest_Const (BNF_Def.rel_of_bnf bnf))
-        in log (String.concat ["  pred: ", pred_n]);
-           log (String.concat ["  rel: ", rel_n])
-        end)
-  val _ = log "--- BNF registered names for Product_Type.prod ---"
-  val _ = (case BNF_Def.bnf_of \<^context> "Product_Type.prod" of
-      NONE => log "  BNF not found!"
-    | SOME bnf =>
-        let val map_n = fst (Term.dest_Const (BNF_Def.map_of_bnf bnf))
-            val pred_n = fst (Term.dest_Const (BNF_Def.pred_of_bnf bnf))
-            val rel_n = fst (Term.dest_Const (BNF_Def.rel_of_bnf bnf))
-        in log (String.concat ["  map: ", map_n]);
-           log (String.concat ["  pred: ", pred_n]);
-           log (String.concat ["  rel: ", rel_n])
-        end)
-  val _ = log "--- ctr_sugar constructor names for Sum_Type.sum ---"
-  val _ = (case Ctr_Sugar.ctr_sugar_of \<^context> "Sum_Type.sum" of
-      NONE => log "  ctr_sugar not found!"
-    | SOME cs =>
-        (map (fn c => log (String.concat ["  ctr: ", fst (Term.dest_Const c)])) (#ctrs cs); ()))
-  val _ = log "--- ctr_sugar constructor names for Product_Type.prod ---"
-  val _ = (case Ctr_Sugar.ctr_sugar_of \<^context> "Product_Type.prod" of
-      NONE => log "  ctr_sugar not found!"
-    | SOME cs =>
-        (map (fn c => log (String.concat ["  ctr: ", fst (Term.dest_Const c)])) (#ctrs cs); ()))
+  (* Diagnostic: hidden constants from Consts.dest that are filtered *)
+  val hidden_filtered = filter (fn n =>
+    is_infra_const n andalso is_hidden const_space n
+    andalso not (Name_Space.is_concealed const_space n)) all_const_names
+  val _ = log (String.concat ["  Hidden (non-concealed) constants filtered: ",
+    Int.toString (length hidden_filtered)])
+  val _ = map (fn n => log (String.concat ["    ", n]))
+    (List.take (hidden_filtered, Int.min (30, length hidden_filtered)))
+  val _ = if length hidden_filtered > 30 then log "    ..." else ()
 
   val _ = log ""
   val _ = log "====== END ======"

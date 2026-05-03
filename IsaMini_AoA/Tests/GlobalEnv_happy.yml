@@ -31,7 +31,7 @@ thought: Restate h1 as a global rewrite rule
 operation: Have
 statement:
   english: y equals x
-  isabelle: y = x
+  conclusion: y = x
 name: g_eq
 proof:
   - step id: global.1.1
@@ -65,7 +65,7 @@ thought: Restate h1 as a global rewrite rule
 operation: Have
 statement:
   english: y equals x
-  isabelle: y = x
+  conclusion: y = x
 name: g_eq
 proof:
   - step id: global.1.1
@@ -99,7 +99,7 @@ thought: Restate h1 as a global rewrite rule
 operation: Have
 statement:
   english: y equals x
-  isabelle: y = x
+  conclusion: y = x
 name: g_eq
 proof:
   - step id: global.1.1
@@ -131,7 +131,7 @@ thought: Amended: reverse orientation of the equation
 operation: Have
 statement:
   english: x equals y
-  isabelle: x = y
+  conclusion: x = y
 name: g_eq
 proof:
   - step id: global.1.1

@@ -138,7 +138,7 @@ proof:
                     operation: Have
                     statement:
                       english: restating the goal conclusion
-                      isabelle: P (Suc nat) (Suc nat1)
+                      conclusion: P (Suc nat) (Suc nat1)
                     name: htest
                     proof: empty
                     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Suc.1.Suc1.1.1` to provide the proof for the following goal.

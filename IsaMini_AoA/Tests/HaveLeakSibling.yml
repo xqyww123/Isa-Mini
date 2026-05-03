@@ -41,7 +41,7 @@ proof:
             operation: Have
             statement:
               english: one plus one is two
-              isabelle: (1::nat) + 1 = 2
+              conclusion: (1::nat) + 1 = 2
             name: helper
             proof:
               - step id: 1.1.1.1

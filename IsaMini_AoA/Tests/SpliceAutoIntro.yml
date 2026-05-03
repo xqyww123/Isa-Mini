@@ -32,7 +32,7 @@ proof:
     operation: Have
     statement:
       english: True
-      isabelle: True
+      conclusion: True
     name: h
     proof:
       - step id: 2.1

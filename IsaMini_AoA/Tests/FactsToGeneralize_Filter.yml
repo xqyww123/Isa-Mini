@@ -19,7 +19,7 @@ proof:
     operation: Have
     statement:
       english: zero is less than one
-      isabelle: (0::nat) < 1
+      conclusion: (0::nat) < 1
     name: trivial_fact
     proof: empty
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
@@ -38,7 +38,7 @@ proof:
     operation: Have
     statement:
       english: zero is less than one
-      isabelle: (0::nat) < 1
+      conclusion: (0::nat) < 1
     name: trivial_fact
     proof: empty
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
@@ -49,7 +49,7 @@ proof:
     operation: Have
     statement:
       english: for every n at most p, True holds
-      isabelle: \<And>n::nat. n \<le> p \<Longrightarrow> True
+      conclusion: \<And>n::nat. n \<le> p \<Longrightarrow> True
     name: gen
     proof:
       - step id: 2.1
@@ -71,7 +71,7 @@ proof:
     operation: Have
     statement:
       english: zero is less than one
-      isabelle: (0::nat) < 1
+      conclusion: (0::nat) < 1
     name: trivial_fact
     proof: empty
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
@@ -82,7 +82,7 @@ proof:
     operation: Have
     statement:
       english: for every n at most p, True holds
-      isabelle: \<And>n::nat. n \<le> p \<Longrightarrow> True
+      conclusion: \<And>n::nat. n \<le> p \<Longrightarrow> True
     name: gen
     proof:
       - step id: 2.1

@@ -20,7 +20,7 @@ proof:
     operation: Have
     statement:
       english: x times x equals x squared
-      isabelle: x * x = x^2
+      conclusion: x * x = x^2
     name: sq
     proof: empty
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
@@ -40,7 +40,7 @@ proof:
     operation: Have
     statement:
       english: x times x equals x squared
-      isabelle: x * x = x^2
+      conclusion: x * x = x^2
     name: sq
     proof: empty
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.

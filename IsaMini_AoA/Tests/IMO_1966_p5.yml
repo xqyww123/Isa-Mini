@@ -43,7 +43,7 @@ proof:
     operation: Have
     statement:
       english: x(1) equals x(2) + x(3) + x(4)
-      isabelle: x (1::nat) = x (2::nat) + x (3::nat) + x (4::nat)
+      conclusion: x (1::nat) = x (2::nat) + x (3::nat) + x (4::nat)
     name: eq1
     proof: empty
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
@@ -79,7 +79,7 @@ proof:
     operation: Have
     statement:
       english: x(1) equals x(2) + x(3) + x(4)
-      isabelle: x (1::nat) = x (2::nat) + x (3::nat) + x (4::nat)
+      conclusion: x (1::nat) = x (2::nat) + x (3::nat) + x (4::nat)
     name: eq1
     proof:
       - step id: 1.1
@@ -118,7 +118,7 @@ proof:
     operation: Have
     statement:
       english: x(1) equals x(2) + x(3) + x(4)
-      isabelle: x (1::nat) = x (2::nat) + x (3::nat) + x (4::nat)
+      conclusion: x (1::nat) = x (2::nat) + x (3::nat) + x (4::nat)
     name: eq1
     proof: empty
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
@@ -154,7 +154,7 @@ proof:
     operation: Have
     statement:
       english: x(1) equals x(2) + x(3) + x(4)
-      isabelle: x (1::nat) = x (2::nat) + x (3::nat) + x (4::nat)
+      conclusion: x (1::nat) = x (2::nat) + x (3::nat) + x (4::nat)
     name: eq1
     proof:
       - step id: 1.1
@@ -162,7 +162,7 @@ proof:
         operation: Have
         statement:
           english: a(1) is greater than a(3)
-          isabelle: a (1::nat) > a (3::nat)
+          conclusion: a (1::nat) > a (3::nat)
         name: a1_gt_a3
         proof:
           - step id: 1.1.1
@@ -203,7 +203,7 @@ proof:
     operation: Have
     statement:
       english: x(1) equals x(2) + x(3) + x(4)
-      isabelle: x (1::nat) = x (2::nat) + x (3::nat) + x (4::nat)
+      conclusion: x (1::nat) = x (2::nat) + x (3::nat) + x (4::nat)
     name: eq1
     proof:
       - step id: 1.1
@@ -211,7 +211,7 @@ proof:
         operation: Have
         statement:
           english: a(1) is greater than a(3)
-          isabelle: a (1::nat) > a (3::nat)
+          conclusion: a (1::nat) > a (3::nat)
         name: a1_gt_a3
         proof:
           - step id: 1.1.1
@@ -224,7 +224,7 @@ proof:
         operation: Have
         statement:
           english: a(1) is greater than a(4)
-          isabelle: a (1::nat) > a (4::nat)
+          conclusion: a (1::nat) > a (4::nat)
         name: a1_gt_a4
         proof:
           - step id: 1.2.1

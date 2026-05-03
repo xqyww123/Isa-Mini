@@ -33,7 +33,7 @@ proof:
     constraint:
       name: k_def
       english: the existential witness
-      isabelle: k = m
+      conclusion: k = m
     proof:
       - step id: 2.1
         operation: Obvious
@@ -60,7 +60,7 @@ proof:
     constraint:
       name: k_def
       english: the existential witness
-      isabelle: k = m
+      conclusion: k = m
     proof:
       - step id: 2.1
         operation: Obvious

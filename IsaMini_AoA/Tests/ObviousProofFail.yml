@@ -20,7 +20,7 @@ proof:
     operation: Have
     statement:
       english: x equals x
-      isabelle: x = x
+      conclusion: x = x
     name: lem1
     proof: empty
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
@@ -40,7 +40,7 @@ proof:
     operation: Have
     statement:
       english: x equals x
-      isabelle: x = x
+      conclusion: x = x
     name: lem1
     proof: empty
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
@@ -51,7 +51,7 @@ proof:
     operation: Have
     statement:
       english: x equals x plus one
-      isabelle: x = x + 1
+      conclusion: x = x + 1
     name: bad
     proof: empty
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.

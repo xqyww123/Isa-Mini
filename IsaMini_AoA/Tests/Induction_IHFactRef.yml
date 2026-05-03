@@ -19,7 +19,7 @@ proof:
     operation: Have
     statement:
       english: for every n, n < p implies True
-      isabelle: \<And>n::nat. n < p \<Longrightarrow> True
+      conclusion: \<And>n::nat. n < p \<Longrightarrow> True
     name: h
     proof:
       - step id: 1.1
@@ -41,7 +41,7 @@ proof:
     operation: Have
     statement:
       english: for every n, n < p implies True
-      isabelle: \<And>n::nat. n < p \<Longrightarrow> True
+      conclusion: \<And>n::nat. n < p \<Longrightarrow> True
     name: h
     proof:
       - step id: 1.1
@@ -75,7 +75,7 @@ proof:
     operation: Have
     statement:
       english: for every n, n < p implies True
-      isabelle: \<And>n::nat. n < p \<Longrightarrow> True
+      conclusion: \<And>n::nat. n < p \<Longrightarrow> True
     name: h
     proof:
       - step id: 1.1

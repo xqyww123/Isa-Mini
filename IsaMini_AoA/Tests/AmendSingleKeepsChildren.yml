@@ -20,7 +20,7 @@ proof:
     operation: Have
     statement:
       english: init
-      isabelle: x * x \<ge> 0
+      conclusion: x * x \<ge> 0
     name: orig
     proof:
       - step id: 1.1
@@ -39,7 +39,7 @@ proof:
     operation: Suffices
     statement:
       english: repl
-      isabelle: x * x \<ge> 0
+      conclusion: x * x \<ge> 0
     proof:
       - step id: 1.1
         operation: Obvious

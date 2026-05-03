@@ -148,8 +148,16 @@ val unpacker =
      | "SORRY_END_ALL" => apfst SORRY_END_ALL o unpack_opt_var_names
      | "SORRY_ONLY"   => apfst (K SORRY_ONLY) o unpackUnit
      | "BRANCH"   => apfst BRANCH   o unpackList (unpackPair (unpackOption unpackString, unpackString))
-     | "HAVE"     => apfst HAVE     o unpackTuple3 (unpackString, unpackString, unpackBool)
-     | "SUFFICES" => apfst SUFFICES o unpackString
+     | "HAVE"     => apfst HAVE     o unpackTuple5 (
+                        unpackString,
+                        unpackList (unpackPair (unpackString, unpackOption unpackString)),
+                        unpackList (unpackPair (unpackOption unpackString, unpackString)),
+                        unpackString,
+                        unpackBool)
+     | "SUFFICES" => apfst SUFFICES o unpackTuple3 (
+                        unpackList (unpackPair (unpackString, unpackOption unpackString)),
+                        unpackList (unpackPair (unpackOption unpackString, unpackString)),
+                        unpackString)
      | "OBTAIN"   => apfst OBTAIN   o unpackPair (
                           unpackList (unpackPair (unpackString, unpackOption unpackString)),
                           unpackList (unpackPair (unpackOption unpackString, unpackString)))
@@ -177,6 +185,7 @@ val unpacker =
                         unpackList unpackString
                      )
      | "SKIP"     => apfst (K SKIP) o unpackUnit
+     | "CONTRADICTION" => apfst CONTRADICTION o unpackString
      | cmd => error("Unknown operation " ^ cmd)
   ) #> apfst snd
 
@@ -212,10 +221,18 @@ fun packer (SIMPLIFY data) =
   | packer (END data) = packPair (packString, packList pack_extended_fact) ("END", data)
   | packer (BRANCH data) =
       packPair (packString, packList (packPair (packOption packString, packString))) ("BRANCH", data)
-  | packer (HAVE data) =
-      packPair (packString, packTuple3 (packString, packString, packBool)) ("HAVE", data)
-  | packer (SUFFICES data) =
-      packPair (packString, packString) ("SUFFICES", data)
+  | packer (HAVE (name, fixes, assumes, conclusion, auto_apply)) =
+      packPair (packString, packTuple5 (
+          packString,
+          packList (packPair (packString, packOption packString)),
+          packList (packPair (packOption packString, packString)),
+          packString,
+          packBool)) ("HAVE", (name, fixes, assumes, conclusion, auto_apply))
+  | packer (SUFFICES (fixes, assumes, conclusion)) =
+      packPair (packString, packTuple3 (
+          packList (packPair (packString, packOption packString)),
+          packList (packPair (packOption packString, packString)),
+          packString)) ("SUFFICES", (fixes, assumes, conclusion))
   | packer (OBTAIN data) =
       packPair (packString, packPair (
           packList (packPair (packString, packOption packString)),
@@ -251,6 +268,8 @@ fun packer (SIMPLIFY data) =
                             packList packString))
         ("DEFINE", data)
   | packer SKIP = packPair (packString, packUnit) ("SKIP", ())
+  | packer (CONTRADICTION data) =
+      packPair (packString, packString) ("CONTRADICTION", data)
 (* | packer (ROLLBACK data) = packPair (packString, packInt) ("ROLLBACK", data) *)
 
 end

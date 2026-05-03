@@ -20,7 +20,7 @@ proof:
     operation: Suffices
     statement:
       english: x squared plus 1 is greater than 0
-      isabelle: x * x + 1 > 0
+      conclusion: x * x + 1 > 0
     notice: Need to show the provided statement implies the goal
     proof: empty
     Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.

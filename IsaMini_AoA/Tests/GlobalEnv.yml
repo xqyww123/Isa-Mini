@@ -59,7 +59,7 @@ thought: Restate h1 as a global rewrite rule
 operation: Have
 statement:
   english: P
-  isabelle: P
+  conclusion: P
 name: t1
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `global.1.1` to provide the proof for the following goal.
