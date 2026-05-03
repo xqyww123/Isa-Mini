@@ -5557,11 +5557,6 @@ class Derive(Leaf):
             "Derive.the_operation called before first refresh resolved refs"
         if isinstance(self.rule_ref, IsabelleFact_Unfound):
             return FailureReason(f"Rule fact \"{self.rule_ref.name().unicode}\" not found")
-        if not self.instantiations and not self.discharge_refs:
-            return FailureReason(
-                "Derive operation must provide at least one of: `instantiations` "
-                "(to instantiate a variable in the rule) or `discharging_facts` "
-                "(to discharge a premise of the rule).")
         unfound = [f for f in self.discharge_refs if isinstance(f, IsabelleFact_Unfound)]
         if unfound:
             return FailureReason("\n".join(f"Fact \"{f.name().unicode}\" not found" for f in unfound))

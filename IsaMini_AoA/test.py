@@ -1613,6 +1613,41 @@ async def _test_Rewrite_QuantifiedGoal(root: Root, file: MyIO):
     file.write(f"success: {success}\n")
     file.write(f"reason: {reason.reason if isinstance(reason, FailureReason) else reason}\n")
 
+@model_test("Rewrite_Targeted_Where", "Test_Rewrite_Targeted_Where.thy", 13)
+async def _test_Rewrite_Targeted_Where(root: Root, file: MyIO):
+    """Regression: looping rule with [where ...] instantiation must still fire.
+
+    check_looping_rules uses the uninstantiated rule to find matching subterms,
+    but the actual SIMPLIFY uses the instantiated rule. The targeted simproc's
+    lhss pattern (from the instantiated LHS) must still hit the selected target.
+    Without the fix, the simproc misses and reports 'no progress'."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    async def stub_fork(interaction):
+        print_header("Interaction Prompt", file)
+        await interaction.prompt(0, file)
+        assert isinstance(interaction, Interaction_SelectRewriteTargets)
+        num_matches = len(interaction.looping_rules[0][2]) if interaction.looping_rules else 0
+        file.write(f"num_matches: {num_matches}\n")
+        return await interaction.answer(Answer(indexes=list(range(num_matches))))
+    root.session.fork_interaction = stub_fork
+    _outcome = await root.fill("1", [Rewrite.gen_single({
+        "thought": "Apply my_looping with P instantiated to a specific predicate",
+        "using": [{"name": "my_looping",
+                   "instantiations": [{"name": "?P",
+                                       "value": "\\<lambda>n. (n::nat) > 0"}]}],
+        "use system simplifiers": False,
+        "rewrite goal": True,
+        "rewrite premises": []
+    })])
+    print_header("After Rewrite", file)
+    root.print(0, file)
+    if _outcome.failure is not None:
+        file.write(f"FAILURE: {_outcome.failure}\n")
+    else:
+        file.write("SUCCESS\n")
+
 # class TestCase_Interactive_Unfold:
 #     pass
 
@@ -7622,7 +7657,7 @@ async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | No
                     pass
             await repl.run_app('Minilang.AoA')
             invocation_id = f"{mode}.{test_case.name}"
-            await repl._write((invocation_id, f"{mode}.{test_case.name}", (_cfg, _budget), None))
+            await repl._write((invocation_id, f"{mode}.{test_case.name}", (_cfg, _budget), None, None, None))
             try:
                 (status, elapsed, cpu_time) = Client._parse_control_(await repl._feed_and_unpack())
             except REPLFail as e:

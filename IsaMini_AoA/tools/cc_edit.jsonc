@@ -157,7 +157,7 @@
         "auto_apply": {
           "type": "boolean",
           "default": false,
-          "description": "if turned on, the proven statement will applied automatically by the system simplifier and reasoner"
+          "description": "register the proven lemma to the system simplifier and reasoners, to benefit subsequent proofs"
         }
       },
       "required": [
