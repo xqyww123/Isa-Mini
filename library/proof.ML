@@ -202,13 +202,11 @@ val HAVE'' : (binding * typ option * mixfix) list
         -> operation
 val HAVE_CMD : command
 
-val SUFFICES : string -> operation
-val SUFFICES'' : term -> operation
-val SUFFICES_STRUCTURED : (binding * string option * mixfix) list
+val SUFFICES : (binding * string option * mixfix) list
     -> (Attrib.binding * (string * string list) list) list
     -> (Attrib.binding * (string * string list) list) list
     -> operation
-val SUFFICES_STRUCTURED'' : (binding * typ option * mixfix) list
+val SUFFICES'' : (binding * typ option * mixfix) list
     -> (Attrib.binding * (term * term list) list) list
     -> (Attrib.binding * (term * term list) list) list
     -> operation
@@ -3314,7 +3312,7 @@ fun apply_suffices_rule st impl_lem ctxt =
                   "Failed to apply suffices rule - goal might not match")
   end
 
-fun SUFFICES' prep_prop raw_prop (ctxt0, HHF (st0, items0) :: S) =
+fun SUFFICES' intro_bindings prep_prop raw_prop (ctxt0, HHF (st0, items0) :: S) =
   let
     (* Extract the current goal *)
     val goals = goals_of' st0
@@ -3361,8 +3359,12 @@ fun SUFFICES' prep_prop raw_prop (ctxt0, HHF (st0, items0) :: S) =
 
         (* Apply the implication backward to replace G with P *)
         val new_st = apply_suffices_rule st0 impl_lem ctxt0
+        val state_after = (ctxt0, HHF (new_st, items0) :: SK')
 
-      in (ctxt0, HHF (new_st, items0) :: SK')
+      in case intro_bindings of
+           NONE => state_after
+         | SOME (var_names, prem_names) =>
+             #2 (INTRO' SINGLE_GOAL NONE NONE var_names prem_names state_after)
       end
 
     fun PRT _ t = BUNDL (items0, [BLOCK t, print_stack [HHF (st0, empty_items)]])
@@ -3375,15 +3377,9 @@ fun SUFFICES' prep_prop raw_prop (ctxt0, HHF (st0, items0) :: S) =
           :: MAGIC (CB, PRT, NO_PARAM)
           :: S)
   end
-  | SUFFICES' _ _ _ = raise BROKEN_INVARIANT
+  | SUFFICES' _ _ _ _ = raise BROKEN_INVARIANT
 
-fun gen_SUFFICES prep_prop raw_prop =
-  timed_OPR 8 (TRANSPARENT_INTRO' #> SUFFICES' prep_prop raw_prop)
-
-val SUFFICES   = gen_SUFFICES Syntax.read_prop
-val SUFFICES'' = gen_SUFFICES (K I)
-
-fun gen_SUFFICES_structured mk_stmt raw_fixes raw_assumes raw_shows =
+fun gen_SUFFICES mk_stmt raw_fixes raw_assumes raw_shows =
   timed_OPR 8 (
      TRANSPARENT_INTRO'
   #> (fn (ctxt0, SK) =>
@@ -3398,6 +3394,9 @@ fun gen_SUFFICES_structured mk_stmt raw_fixes raw_assumes raw_shows =
         val (premss, conclss) = chop (length raw_assumes) propss
 
         val concl_terms = flat conclss
+        val _ = if null concl_terms
+                then raise OPR_FAIL (INVALID_OPR, "SUFFICES requires at least one conclusion")
+                else ()
         val concl = case concl_terms of
               [t] => t
             | ts => HOLogic.mk_Trueprop (
@@ -3413,18 +3412,64 @@ fun gen_SUFFICES_structured mk_stmt raw_fixes raw_assumes raw_shows =
                        (Newly_Fixed (map (apfst (Variable.revert_fixed params_ctxt))
                                          newly_fixed))
 
-    in SUFFICES' (K I) hol_prop (ctxt0, SK)
+        val _ = List.app (fn (_, props) =>
+              if length props > 1
+              then raise OPR_FAIL (INVALID_OPR,
+                "SUFFICES: each premise must be a single proposition, \
+                \use separate 'and' clauses instead")
+              else ()) raw_assumes
+
+        val intro_var_names =
+            if null raw_fixes then NONE
+            else SOME (map (fn (b, _, _) => SOME (Binding.name_of b)) raw_fixes)
+
+        val intro_prem_names =
+            let val names = map (fn ((b, _), _) =>
+                  if Binding.is_empty b then NONE
+                  else SOME (Binding.name_of b)
+                ) raw_assumes
+            in if null names then NONE else SOME names
+            end
+
+        val intro_bindings =
+            if null raw_fixes andalso null raw_assumes then NONE
+            else SOME (intro_var_names, intro_prem_names)
+
+        val _ = case intro_bindings of NONE => ()
+              | SOME (var_names, prem_names) =>
+          let fun count (Const(\<^const_name>\<open>Trueprop\<close>, _) $ t) = count t
+                | count (Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs(_, _, body)) =
+                    apfst (fn n => n + 1) (count body)
+                | count (Const(\<^const_name>\<open>HOL.implies\<close>, _) $ _ $ body) =
+                    apsnd (fn n => n + 1) (count body)
+                | count _ = (0, 0)
+              val (nq, np) = count hol_prop
+              val nv = length (the_default [] var_names)
+              val nn = length (the_default [] prem_names)
+              val _ = if nv > 0 andalso nq <> nv
+                      then raise OPR_FAIL (INVALID_OPR,
+                        "SUFFICES: expected " ^ string_of_int nq ^
+                        " variable binding(s) but got " ^ string_of_int nv)
+                      else ()
+              val _ = if nn > 0 andalso np <> nn
+                      then raise OPR_FAIL (INVALID_OPR,
+                        "SUFFICES: expected " ^ string_of_int np ^
+                        " premise binding(s) but got " ^ string_of_int nn)
+                      else ()
+          in () end
+
+    in SUFFICES' intro_bindings (K I) hol_prop (ctxt0, SK)
     end ))
 
-val SUFFICES_STRUCTURED   = gen_SUFFICES_structured Proof_Context.read_stmt
-val SUFFICES_STRUCTURED'' = gen_SUFFICES_structured Proof_Context.cert_stmt
+val SUFFICES   = gen_SUFFICES Proof_Context.read_stmt
+val SUFFICES'' = gen_SUFFICES Proof_Context.cert_stmt
 
 val SUFFICES_CMD =
     Parse_Spec.statement -- Parse_Spec.if_statement -- Parse.for_fixes
  >> (fn ((shows, assumes), fixes) =>
       tolerate_typ
-        (SUFFICES_STRUCTURED fixes assumes shows)
-        (fn s => SUFFICES_STRUCTURED fixes (remove_typ_ass assumes)
+        (SUFFICES fixes assumes shows)
+        (fn s => SUFFICES fixes (remove_typ_ass assumes)
                    (remove_typ_ass shows) s))
 
 (** INST_VAR **)

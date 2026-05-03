@@ -1032,7 +1032,7 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
               [((Binding.name name, attr_srcs), [(goal, [])])] s
         end
     | SUFFICES goal =>
-        Minilang.SUFFICES'' goal s
+        Minilang.SUFFICES'' [] [] [((Binding.empty, []), [(goal, [])])] s
     | OBTAIN (vars, constraints) =>
         let val prem_ctr = #prem_counter counters
             val counter_start = Synchronized.value prem_ctr
