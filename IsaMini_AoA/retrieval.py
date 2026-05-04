@@ -388,7 +388,7 @@ async def _semantic_search_direct(
         lines: list[str] = ["No new relevant entities found." if seen else "No relevant entities found."]
         lines.extend(_format_warn_lines(queries, per_query_warnings))
         result = "\n".join(lines)
-        session.log_tool_response("mcp__proof__query", result)
+        session.log_tool_response(session.tool_name(TOOL_SEARCH), result)
         return result
 
     # Batch-fetch abbreviation definitions for unseen abbreviations
@@ -425,7 +425,7 @@ async def _semantic_search_direct(
         query_str = "; ".join(_format_query_header(q) for q in queries)
         session.log_retrieval(query_str, retrieved, quiet=True)
     result = buf.getvalue().rstrip('\n')
-    session.log_tool_response("mcp__proof__query", result)
+    session.log_tool_response(session.tool_name(TOOL_SEARCH), result)
     return result
 
 
@@ -656,12 +656,12 @@ async def _handle_exact_term_query(session: Session, term_str: str) -> str:
             buf.write(f"Head {head_name}\n")
 
     result = buf.getvalue().rstrip('\n')
-    session.log_tool_response("mcp__proof__query", result)
+    session.log_tool_response(session.tool_name(TOOL_SEARCH), result)
     return result
 
 
 async def _query_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
-    session.log_tool_call("mcp__proof__query", args)
+    session.log_tool_call(session.tool_name(TOOL_SEARCH), args)
     try:
         queries = args["queries"] if BATCHED_SEMANTIC_SEARCH else [args]
 
@@ -691,8 +691,8 @@ async def _query_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         return ("\n\n".join(results), False)
     except IsabelleError as e:
         error_msg = '; '.join(pretty_unicode(err) for err in e.errors)
-        session.log_tool_response("mcp__proof__query", f"ERROR: {error_msg}")
+        session.log_tool_response(session.tool_name(TOOL_SEARCH), f"ERROR: {error_msg}")
         return (error_msg, True)
     except Exception as e:
-        session.log_tool_response("mcp__proof__query", f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
+        session.log_tool_response(session.tool_name(TOOL_SEARCH), f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
         sys.exit(1)

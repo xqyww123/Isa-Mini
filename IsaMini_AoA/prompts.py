@@ -6,6 +6,7 @@ All user-facing messages, error messages, and prompt texts are defined here.
 from typing import Any
 from . import model
 from .model import Node, NonLeaf_Node, Root, Parsed_Opr, FailureReason
+from .model import tn, TOOL_EDIT, TOOL_DELETE, TOOL_SEARCH, TOOL_ANSWER
 from io import StringIO
 from .helper import MyIO
 
@@ -49,7 +50,7 @@ def _render_auto_intro_warning(session: 'model.Session', file: MyIO) -> None:
     file.write(
         f"Note: {noun} {ids} {'were' if len(live) > 1 else 'was'} "
         f"auto-introduced. You may delete {'them' if len(live) > 1 else 'it'} "
-        f"using mcp__proof__delete if unhelpful.\n"
+        f"using {tn(TOOL_DELETE)} if unhelpful.\n"
     )
 
 
@@ -131,7 +132,7 @@ def invalid_action_error(action: str) -> str:
     return (
         f"Invalid action: {action}. "
         f"Must be one of: 'fill', 'insert_before', or 'amend'. "
-        f"Use the 'mcp__proof__delete' tool to delete steps."
+        f"Use the '{tn(TOOL_DELETE)}' tool to delete steps."
     )
 
 
@@ -144,12 +145,14 @@ def tool_not_allowed_base(tool: str) -> str:
     return f"Tool `{tool}` is not allowed."
 
 
-EDIT_TOOL_USE_MCP_FOR_PROOF_YAML = " You should use the `mcp__proof__edit` tool to edit proof.yaml."
+def edit_tool_use_mcp_for_proof_yaml() -> str:
+    return f" You should use the `{tn(TOOL_EDIT)}` tool to edit proof.yaml."
 
-EDIT_TOOL_ONLY_PROOF_YAML = (
-    " You cannot modify any files except proof.yaml, "
-    "and you must use the `mcp__proof__edit` tool to edit it."
-)
+def edit_tool_only_proof_yaml() -> str:
+    return (
+        f" You cannot modify any files except proof.yaml, "
+        f"and you must use the `{tn(TOOL_EDIT)}` tool to edit it."
+    )
 
 ASK_USER_QUESTION_REJECTION = (
     " You cannot ask the user any questions. "
@@ -178,25 +181,26 @@ def path_access_denied(tool: str, yaml_path: str, target_path: str) -> str:
 # System Prompt & Initial User Prompt
 # ============================================================================
 
-SYSTEM_PROMPT = """\
-You are a formal theorem proving agent.
-A proof goal and an incomplete proof are provided in `./proof.yaml` under the current directory.
-Analyze the proof goal, plan a proof, and complete it using the MCP proof tools.
-Continue until no errors remain.
-Be concise in text output.
-
-## Tools
-- mcp__proof__edit: Fill, insert, or amend proof steps (your primary tool)
-- mcp__proof__delete: Delete proof steps
-- mcp__proof__query: Search for theorems, constants, types, and rules; help you understand unfamiliar terms
-- Read: Inspect ./proof.yaml to check the current proof state
-"""
+def system_prompt() -> str:
+    return (
+        "You are a formal theorem proving agent.\n"
+        "A proof goal and an incomplete proof are provided in `./proof.yaml` under the current directory.\n"
+        "Analyze the proof goal, plan a proof, and complete it using the MCP proof tools.\n"
+        "Continue until no errors remain.\n"
+        "Be concise in text output.\n"
+        "\n"
+        "## Tools\n"
+        f"- {tn(TOOL_EDIT)}: Fill, insert, or amend proof steps (your primary tool)\n"
+        f"- {tn(TOOL_DELETE)}: Delete proof steps\n"
+        f"- {tn(TOOL_SEARCH)}: Search for theorems, constants, types, and rules; help you understand unfamiliar terms\n"
+        "- Read: Inspect ./proof.yaml to check the current proof state\n"
+    )
 
 INITIAL_PROMPT = "Complete the proof in `./proof.yaml` using the MCP proof tools."
 
 def RETRY_PROMPT(unfinished_nodes: set[Node]) -> str:
     return (
     f"Steps {', '.join([node.id for node in unfinished_nodes])} are incomplete. "
-    "You must call the `mcp__proof__edit` tool to complete the steps. "
+    f"You must call the `{tn(TOOL_EDIT)}` tool to complete the steps. "
     "Continue building the proof until `proof.yaml` contains no remaining errors."
 )

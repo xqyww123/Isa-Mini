@@ -65,6 +65,4 @@ notice:
   - Discarded because the operation's body terminates the proof; no sibling should follow: step 1
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to replace it with a proof.
 pending proof goal:
-  premises:
-    - h: True
-  goal: P p
+  P (a, b)

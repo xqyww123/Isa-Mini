@@ -47,5 +47,5 @@ proof:
     Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to replace it with a proof.
 pending proof goal:
-  P p
+  P (a, b)
 Interactions fired: 1 (expected 1)

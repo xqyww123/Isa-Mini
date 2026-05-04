@@ -1644,6 +1644,48 @@ async def _test_Rewrite_Targeted_Where(root: Root, file: MyIO):
     else:
         file.write("SUCCESS\n")
 
+@model_test("Rewrite_InternalError", "Test_Rewrite_InternalError.thy", 21)
+async def _test_Rewrite_InternalError(root: Root, file: MyIO):
+    """Bug reproduction: when SIMPLIFY hits an internal Isabelle exception
+    (e.g. THM type-conflict from a simproc), the raw ML exception trace
+    leaks into the agent-facing error message.
+
+    Root cause chain:
+      1. agent_server.ML's error handler doesn't catch THM (only OPR_FAIL,
+         ERROR, FACT_IN_TIME_FAIL, Auto_Fail).
+      2. Leaf._refresh_me_alone stores the raw error as FailureReason.
+      3. Rewrite._on_edit_failure propagates it into CannotEdit_EvaluationFailed.
+      4. edit_message renders str(failure) verbatim to the agent.
+
+    The test theory defines a simproc that throws THM when the simplifier
+    encounters 'trigger_thm_err _', simulating the real-world scenario
+    where the HOL simplifier hits a type-instantiation conflict."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    outcome = await root.fill("1", [Rewrite.gen_single({
+        "thought": "Try system simplifiers",
+        "using": [],
+        "use system simplifiers": True,
+        "rewrite goal": True,
+        "rewrite premises": []
+    })])
+
+    print_header("Outcome", file)
+    failure = outcome.failure
+    file.write(f"has_failure: {failure is not None}\n")
+    file.write(f"is_error: {failure.is_error if failure else None}\n")
+    file.write(f"committed_count: {len(outcome.committed)}\n")
+    if failure:
+        reason_str = str(failure)
+        file.write(f"failure_message:\n{reason_str}\n")
+        raw_exception_leaked = ("exception THM" in reason_str
+                                or "raised (line" in reason_str)
+        file.write(f"raw_exception_leaked: {raw_exception_leaked}\n")
+
+    print_header("After Rewrite attempt", file)
+    root.print(0, file)
+
 # class TestCase_Interactive_Unfold:
 #     pass
 

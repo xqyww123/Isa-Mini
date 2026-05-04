@@ -1748,8 +1748,11 @@ INTERACTIVE_RETRIEVAL_MAP = {m.value: m for m in InteractiveRetrievalMode}
 
 # Abstract tool identifiers (driver-agnostic)
 type tool = str
+TOOL_EDIT:   tool = "edit"
+TOOL_DELETE: tool = "delete"
 TOOL_ANSWER: tool = "answer"
 TOOL_SEARCH: tool = "query"
+ALL_PROOF_TOOLS: tuple[tool, ...] = (TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER, TOOL_SEARCH)
 
 class Interaction:
     forking: ForkingMode = ForkingMode.FORKING_WITH_CTXT
@@ -3364,6 +3367,7 @@ class StdBlock(NonLeaf_Node):
     # `proof` field set this in __init__; consumed by `_attach_proof` on
     # first refresh.
     _proof: 'proof | None'
+    _body_affects_siblings = False
     def __init__(self, config: NodeConfig, thought: str, sub_nodes: list['Node']):
         super().__init__(config, thought, sub_nodes)
         self._proof = None
@@ -3480,6 +3484,48 @@ class StdBlock(NonLeaf_Node):
         return None
     async def _skip_proof(self) -> None:
         await self._state_after_beginning().sorry_end_all(None, self.resulting_state())
+    async def _refresh_all_children_after(self, after: 'Node | Literal["end"]', can_continue_i: bool) -> None:
+        can_continue: bool | None = None
+        failed_child: Node | None = None
+        if after == "end":
+            can_continue = True
+        else:
+            for child in self.sub_nodes:
+                if can_continue is None:
+                    if child is after:
+                        can_continue = can_continue_i
+                        if not can_continue_i:
+                            failed_child = child
+                else:
+                    if can_continue:
+                        await child._refresh_me_alone(auto_intro=True)
+                        if child.status.status != EvaluationStatus.Status.SUCCESS:
+                            can_continue = False
+                            failed_child = child
+                    else:
+                        await child._cancel()
+        if can_continue is None:
+            raise InternalError("Cannot find the target to refresh in my children")
+        footer_reason: FailureReason | None = None
+        if can_continue:
+            footer_reason = await self._refresh_footer()
+            if footer_reason is not None:
+                can_continue = False
+        if self.status.status != EvaluationStatus.Status.FAILURE:
+            if can_continue:
+                self._body_subnodes_succeeded = True
+                self.status = EvaluationStatus.Success(0)
+            else:
+                self._body_subnodes_succeeded = False
+                if failed_child is not None:
+                    await failed_child.ml_state.clone(self._state_before_ending_)
+                    reason = self._child_refresh_failure_err_msgs(failed_child)
+                else:
+                    reason = footer_reason
+                self.status = EvaluationStatus.Success(0, reason)
+        if can_continue and self._body_affects_siblings:
+            if self.parent is not None:
+                await self.parent._refresh_all_children_after(self, can_continue)
     async def _refresh_me_alone(self, auto_intro: bool):
         begin_opr = self.beginning_opr()
         now = time()
@@ -5354,7 +5400,7 @@ class Interaction_ChooseDef(Interaction):
         for i, ref in enumerate(self.candidate_defs):
             print_indent(indent+1, file)
             file.write(f"{i}. {ref.full_name}: {', '.join(e.unicode for e in ref.expression)}\n")
-        file.write("Select definition(s) to use in unfolding. Call `mcp__proof__answer` with `indexes`, or the `name` of a definition, or leave empty to skip.\n")
+        file.write(f"Select definition(s) to use in unfolding. Call `{tn(TOOL_ANSWER)}` with `indexes`, or the `name` of a definition, or leave empty to skip.\n")
     async def answer(self, answer: Answer) -> list[IsabelleFact]:
         """Priority: name > indexes. `statement` is rejected (use Have/Obvious
         instead if you want to prove-in-time)."""
@@ -6963,6 +7009,7 @@ class Induction(CaseSplit_Like):
 ### Top Root
 
 class GlobalEnv(StdBlock):
+    _body_affects_siblings = True
     def __init__(self, config: NodeConfig):
         if not isinstance(config.parent, Root):
             raise InternalError("The parent of a GlobalEnv must be a Root")
@@ -7269,6 +7316,10 @@ _session_var: contextvars.ContextVar['Session'] = contextvars.ContextVar('_sessi
 def the_session() -> 'Session':
     return _session_var.get()
 
+def tn(t: tool) -> str:
+    """Resolve abstract tool id to driver-specific name via the current session."""
+    return the_session().tool_name(t)
+
 
 # Custom string representer for literal block style on multiline strings
 def _str_representer(dumper, data):
@@ -7466,9 +7517,14 @@ class Session:
         await self.close()
         return False
 
-    def _internal_tool_name(self, t: tool) -> str:
-        """Translate abstract tool id to driver-specific internal name."""
-        raise NotImplementedError("subclass must override _internal_tool_name")
+    def tool_name(self, t: tool) -> str:
+        """Translate abstract tool id to the name the LLM sees.
+        Base implementation returns identity; drivers override."""
+        return t
+
+    def is_proof_tool(self, external_name: str) -> bool:
+        """Check whether an external tool name corresponds to a proof tool."""
+        return any(self.tool_name(t) == external_name for t in ALL_PROOF_TOOLS)
 
     async def close(self):
         """Clean up the session and release resources.

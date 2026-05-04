@@ -50,38 +50,25 @@ def _serialize_args(args: Any) -> Any:
 
 @agent_driver("ClaudeCode")
 class ClaudeCode(Session):
-    TOOL_WHITELIST = [
-        'Read',
-        'Grep',
-        'Write',
-        'Edit',
-        'Skill',
-        'Agent',
-        'TaskCreate',
-        'TaskGet',
-        'TaskList',
-        'TaskUpdate',
-        'WebFetch',
-        'WebSearch',
-        'ExitPlanMode',
-        'MCPSearch',
-        'mcp__proof__edit',
-        'mcp__proof__delete',
-        'mcp__proof__answer',
-        'mcp__proof__query',
-        'ToolSearch'
+    _NON_PROOF_TOOLS = [
+        'Read', 'Grep', 'Write', 'Edit', 'Skill', 'Agent',
+        'TaskCreate', 'TaskGet', 'TaskList', 'TaskUpdate',
+        'WebFetch', 'WebSearch', 'ExitPlanMode', 'MCPSearch', 'ToolSearch',
     ]
-    FORK_WHITELIST = [t for t in TOOL_WHITELIST if t not in ('mcp__proof__edit', 'mcp__proof__delete')]
-    COMPACT_THRESHOLD = 0.85
-    FORK_COMPACT_THRESHOLD = 0.99
     _TOOL_NAME_MAP: dict[str, str] = {
         "answer": "mcp__proof__answer",
-        "query": "mcp__proof__query",
-        "edit": "mcp__proof__edit",
+        "query":  "mcp__proof__query",
+        "edit":   "mcp__proof__edit",
         "delete": "mcp__proof__delete",
     }
+    TOOL_WHITELIST = _NON_PROOF_TOOLS + list(_TOOL_NAME_MAP.values())
+    FORK_WHITELIST = _NON_PROOF_TOOLS + [
+        v for k, v in _TOOL_NAME_MAP.items() if k not in (TOOL_EDIT, TOOL_DELETE)
+    ]
+    COMPACT_THRESHOLD = 0.85
+    FORK_COMPACT_THRESHOLD = 0.99
 
-    def _internal_tool_name(self, t: str) -> str:
+    def tool_name(self, t: str) -> str:
         return self._TOOL_NAME_MAP.get(t, t)
 
     working_dir: str
@@ -174,7 +161,7 @@ class ClaudeCode(Session):
             self.options = ClaudeAgentOptions(
                 model=main_model,
                 thinking={"type": "adaptive"},
-                system_prompt=P.SYSTEM_PROMPT,
+                system_prompt=P.system_prompt(),
                 cwd=self.working_dir,
                 permission_mode="default",
                 allowed_tools=self.TOOL_WHITELIST,
@@ -249,9 +236,9 @@ class ClaudeCode(Session):
             # Check if editing proof.yaml
             target_file = tool_input.get('file_path', '')
             if target_file.endswith('proof.yaml') or 'proof.yaml' in target_file:
-                reason += P.EDIT_TOOL_USE_MCP_FOR_PROOF_YAML
+                reason += P.edit_tool_use_mcp_for_proof_yaml()
             else:
-                reason += P.EDIT_TOOL_ONLY_PROOF_YAML
+                reason += P.edit_tool_only_proof_yaml()
         elif tool == "AskUserQuestion":
             reason += P.ASK_USER_QUESTION_REJECTION
         elif tool == "Bash":
@@ -300,7 +287,7 @@ class ClaudeCode(Session):
 
         # 2. Check proof MCP tool interaction state.
         # Only forks assigned to answer an interaction may call the ``answer`` tool.
-        if tool == "mcp__proof__answer" and (
+        if tool == self.tool_name(TOOL_ANSWER) and (
                 self.fork_pending is None or self.fork_pending.answer.done()):
             return {
                 "continue_": False,
@@ -357,7 +344,7 @@ class ClaudeCode(Session):
                             "hookSpecificOutput": {
                                 "hookEventName": "PreToolUse",
                                 "permissionDecision": "deny",
-                                "permissionDecisionReason": f"Cannot use {tool} on proof.yaml. Use the mcp__proof__edit tool instead.",
+                                "permissionDecisionReason": f"Cannot use {tool} on proof.yaml. Use the {self.tool_name(TOOL_EDIT)} tool instead.",
                             },
                         }
                     # Allow Read and Grep for proof.yaml
@@ -377,7 +364,7 @@ class ClaudeCode(Session):
             self.total_model_time += time() - self._model_time_start
             self._model_time_start = None
         self.total_tool_calls += 1
-        if not tool.startswith('mcp__proof__'):
+        if not self.is_proof_tool(tool):
             self.log_tool_call(tool, tool_input)
         return {}
 
@@ -481,7 +468,7 @@ class ClaudeCode(Session):
             json.dump(self._http_server.mcp_config_json(self._session_id), f)
 
         # Write launcher script with permission settings mirroring embedded mode:
-        # - proof.yaml: Read/Grep only (Write/Edit denied — must use mcp__proof__edit)
+        # - proof.yaml: Read/Grep only (Write/Edit denied — must use proof edit tool)
         # - .claude/plans/: all operations allowed
         # - Bash: denied
         # - Interaction state: handled by _check_tool_permission in mcp_http_server
@@ -695,7 +682,7 @@ class ClaudeCode(Session):
 
         Short-circuits via ``ImmediateAnswer`` from ``prompt()`` without
         spawning a subprocess. Otherwise runs a forked ``ClaudeCode`` session
-        whose ``mcp__proof__answer`` tool resolves the interaction. Concurrent
+        whose ``answer`` tool resolves the interaction. Concurrent
         callers (e.g. ``asyncio.gather(*fork_interaction(i) for i in ...)``)
         each get their own fork. All fork body work runs in a fresh
         ``contextvars`` context so the per-call ``_session_var`` does not
@@ -741,12 +728,12 @@ class ClaudeCode(Session):
         fork_options = ClaudeAgentOptions(
             model=model,
             thinking={"type": "adaptive"},
-            system_prompt=P.SYSTEM_PROMPT,
+            system_prompt=P.system_prompt(),
             resume=resume,
             fork_session=fork_session,
             cwd=self.working_dir,
             permission_mode="default",
-            allowed_tools=([self._internal_tool_name(t) for t in interaction.fork_allowed_tools]
+            allowed_tools=([self.tool_name(t) for t in interaction.fork_allowed_tools]
                            if interaction.fork_allowed_tools is not None
                            else self.TOOL_WHITELIST),
             mcp_servers={"proof": {"type": "http", "url": fork_url}},
@@ -780,10 +767,11 @@ class ClaudeCode(Session):
                 fork_prompt = (
                     "Let's consider a sub-task forked from the context:\n"
                     + prompt_text)
-                if "mcp__proof__answer" not in prompt_text:
+                answer_tool = self.tool_name(TOOL_ANSWER)
+                if answer_tool not in prompt_text:
                     fork_prompt += (
-                        "\nAnswer the question above by calling the "
-                        "mcp__proof__answer tool.")
+                        f"\nAnswer the question above by calling the "
+                        f"{answer_tool} tool.")
                 fork.log_interaction("fork", f"{tag} prompt:\n{prompt_text}")
                 await fork_client.query(fork_prompt)
                 fork._model_time_start = time()
@@ -815,7 +803,7 @@ class ClaudeCode(Session):
                     fork.log_interaction("fork", f"{tag} retrying: interaction not answered")
                     await fork_client.query(
                         "It looks like you haven't submitted your answer. "
-                        "Call mcp__proof__answer to submit it.")
+                        f"Call {self.tool_name(TOOL_ANSWER)} to submit it.")
                     fork._model_time_start = time()
             fork._client = None
         finally:

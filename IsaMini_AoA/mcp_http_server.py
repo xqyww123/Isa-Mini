@@ -40,6 +40,7 @@ from .model import (
     CannotDelete_Root,
     EvaluationStatus,
     Parse_Op_List, normalize_answer, Interaction_BadAnswer,
+    TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER,
 )
 import yaml as _yaml
 from .retrieval import (
@@ -119,22 +120,23 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
                 args = {**args, "proof_operations": parsed}
         except (json.JSONDecodeError, ValueError):
             pass
-    session.log_tool_call("mcp__proof__edit", args)
+    _tn = session.tool_name(TOOL_EDIT)
+    session.log_tool_call(_tn, args)
     try:
         step = args.get("target_step")
         action = args.get("action")
         ops_list = args.get("proof_operations")
         if not isinstance(step, str) or not step:
             error_msg = "target_step must be a non-empty string"
-            session.log_tool_response("mcp__proof__edit", f"ERROR: {error_msg}")
+            session.log_tool_response(_tn, f"ERROR: {error_msg}")
             return (error_msg, True)
         if not isinstance(action, str):
             error_msg = "action must be a string"
-            session.log_tool_response("mcp__proof__edit", f"ERROR: {error_msg}")
+            session.log_tool_response(_tn, f"ERROR: {error_msg}")
             return (error_msg, True)
         if not isinstance(ops_list, list) or not ops_list:
             error_msg = "proof_operations must be a non-empty array of proof operations"
-            session.log_tool_response("mcp__proof__edit", f"ERROR: {error_msg}")
+            session.log_tool_response(_tn, f"ERROR: {error_msg}")
             return (error_msg, True)
         # Parse atomically: validation, splice, and Parsed_Opr construction
         # all happen in one pass — on any failure, no tree mutation has
@@ -143,7 +145,7 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             gns = Parse_Op_List(ops_list, "proof_operations")
         except AoA_Error as e:
             error_msg = str(e)
-            session.log_tool_response("mcp__proof__edit", f"ERROR: {error_msg}")
+            session.log_tool_response(_tn, f"ERROR: {error_msg}")
             return (error_msg, True)
 
         root = session.root
@@ -157,28 +159,29 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
                 outcome = await root.amend(step, gns)
             case _:
                 error_msg = P.invalid_action_error(action)
-                session.log_tool_response("mcp__proof__edit", f"ERROR: {error_msg}")
+                session.log_tool_response(_tn, f"ERROR: {error_msg}")
                 return (error_msg, True)
 
         session.refresh_YAML()
         response = await P.edit_message(root, outcome, session)
         is_error = outcome.failure is not None and outcome.failure.is_error
-        session.log_tool_response("mcp__proof__edit", response)
+        session.log_tool_response(_tn, response)
         session.log_proof_tree_snapshot(f"after_{action}_step_{step}")
         return (response, is_error)
     except IsabelleError as e:
         error_msg = f"Isabelle error: {'; '.join(pretty_unicode(err) for err in e.errors)}"
-        session.log_tool_response("mcp__proof__edit", f"ERROR: {error_msg}")
+        session.log_tool_response(_tn, f"ERROR: {error_msg}")
         return (error_msg, True)
     except Exception as e:
         session.log_tool_response(
-            "mcp__proof__edit",
+            _tn,
             f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
         sys.exit(1)
 
 
 async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
-    session.log_tool_call("mcp__proof__delete", args)
+    _tn = session.tool_name(TOOL_DELETE)
+    session.log_tool_call(_tn, args)
     try:
         session.root.session.age += 1
         steps = args["target_steps"]
@@ -187,7 +190,7 @@ async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             if len(not_found) == len(steps):
                 noun = "step" if len(not_found) == 1 else "steps"
                 error_msg = f"Error: {noun} {', '.join(not_found)} not found."
-                session.log_tool_response("mcp__proof__delete", f"ERROR: {error_msg}")
+                session.log_tool_response(_tn, f"ERROR: {error_msg}")
                 return (error_msg, True)
             deleted = [s for s in steps if s not in not_found]
             session.refresh_YAML()
@@ -197,17 +200,17 @@ async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
                 response += f"\nWarning: {noun} {', '.join(not_found)} not found and skipped."
         except AoA_Error as e:
             error_msg = str(e)
-            session.log_tool_response("mcp__proof__delete", f"ERROR: {error_msg}")
+            session.log_tool_response(_tn, f"ERROR: {error_msg}")
             return (error_msg, True)
-        session.log_tool_response("mcp__proof__delete", response)
+        session.log_tool_response(_tn, response)
         session.log_proof_tree_snapshot("after_delete")
         return (response, False)
     except IsabelleError as e:
         error_msg = f"Isabelle error: {'; '.join(pretty_unicode(err) for err in e.errors)}"
-        session.log_tool_response("mcp__proof__delete", f"ERROR: {error_msg}")
+        session.log_tool_response(_tn, f"ERROR: {error_msg}")
         return (error_msg, True)
     except Exception as e:
-        session.log_tool_response("mcp__proof__delete", f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
+        session.log_tool_response(_tn, f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
         sys.exit(1)
 
 
@@ -219,12 +222,13 @@ async def _answer_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     On ``InteractionExpanded``: returns the new prompt so the same fork
     re-submits with the expanded list.
     """
-    session.log_tool_call("mcp__proof__answer", args)
+    _tn = session.tool_name(TOOL_ANSWER)
+    session.log_tool_call(_tn, args)
     try:
         pending = session.fork_pending
         if pending is None or pending.answer.done():
             error_msg = "No pending interaction to answer"
-            session.log_tool_response("mcp__proof__answer", f"ERROR: {error_msg}")
+            session.log_tool_response(_tn, f"ERROR: {error_msg}")
             return (error_msg, True)
 
         normalized = normalize_answer(
@@ -237,25 +241,25 @@ async def _answer_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             result = await pending.interaction.answer(normalized)
         except Interaction_BadAnswer as e:
             error_msg = str(e)
-            session.log_tool_response("mcp__proof__answer", f"BAD ANSWER: {error_msg}")
+            session.log_tool_response(_tn, f"BAD ANSWER: {error_msg}")
             return (error_msg, True)
         except InteractionExpanded as exp:
             session.log_tool_response(
-                "mcp__proof__answer", f"[INTERACTION PROMPT]\n{exp.new_prompt}")
+                _tn, f"[INTERACTION PROMPT]\n{exp.new_prompt}")
             return (exp.new_prompt, False)
 
         pending.answer.set_result(result)
-        session.log_interaction("mcp__proof__answer", f"interaction answered: {result}")
-        session.log_tool_response("mcp__proof__answer", f"[INTERACTION RESOLVED] {result}")
+        session.log_interaction(_tn, f"interaction answered: {result}")
+        session.log_tool_response(_tn, f"[INTERACTION RESOLVED] {result}")
         if not session.is_major:
             await session.interrupt()
         return (str(result), False)
     except IsabelleError as e:
         error_msg = f"Isabelle error: {'; '.join(pretty_unicode(err) for err in e.errors)}"
-        session.log_tool_response("mcp__proof__answer", f"ERROR: {error_msg}")
+        session.log_tool_response(_tn, f"ERROR: {error_msg}")
         return (error_msg, True)
     except Exception as e:
-        session.log_tool_response("mcp__proof__answer", f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
+        session.log_tool_response(_tn, f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
         sys.exit(1)
 
 

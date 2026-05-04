@@ -10,7 +10,7 @@ text \<open>
   external display name (``n``) shown in the same step's
   ``fixing variables`` header.
 
-  Observed (from log ``mcp__proof__edit target_step='5.2'``)::
+  Observed (from log ``edit target_step='5.2'``)::
 
     step 5: Have gen
       step 5.1: Intro
