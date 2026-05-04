@@ -3,6 +3,7 @@ from Isabelle_RPC_Host import isabelle_remote_procedure, Connection
 from .model import *
 from typing import Any
 from . import driver_claude_code
+from . import driver_openai
 import sys
 import io
 import os

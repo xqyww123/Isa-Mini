@@ -6,7 +6,7 @@ All user-facing messages, error messages, and prompt texts are defined here.
 from typing import Any
 from . import model
 from .model import Node, NonLeaf_Node, Root, Parsed_Opr, FailureReason
-from .model import tn, TOOL_EDIT, TOOL_DELETE, TOOL_SEARCH, TOOL_ANSWER
+from .model import tn, TOOL_EDIT, TOOL_DELETE, TOOL_SEARCH, TOOL_ANSWER, TOOL_READ
 from io import StringIO
 from .helper import MyIO
 
@@ -193,10 +193,18 @@ def system_prompt() -> str:
         f"- {tn(TOOL_EDIT)}: Fill, insert, or amend proof steps (your primary tool)\n"
         f"- {tn(TOOL_DELETE)}: Delete proof steps\n"
         f"- {tn(TOOL_SEARCH)}: Search for theorems, constants, types, and rules; help you understand unfamiliar terms\n"
-        "- Read: Inspect ./proof.yaml to check the current proof state\n"
+        f"- {tn(TOOL_READ)}: Read `proof.yaml`. Use only when necessary.\n"
     )
 
-INITIAL_PROMPT = "Complete the proof in `./proof.yaml` using the MCP proof tools."
+def INITIAL_PROMPT(root: Root) -> str:
+    buf = StringIO()
+    root.print(0, MyIO(buf), update_line=True, show_warnings=True)
+    return (
+        "Complete the following proof using the MCP proof tools.\n"
+        + buf.getvalue()
+        + "You can always read `proof.yaml` to review the full proof state "
+        "if you lose track of any details.\n"
+    )
 
 def RETRY_PROMPT(unfinished_nodes: set[Node]) -> str:
     return (

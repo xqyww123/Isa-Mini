@@ -11,7 +11,7 @@ definition "trigger_thm_err (x::nat) \<equiv> (x > 0)"
    This simulates the kind of internal exception (THM type-conflict) that
    the Isabelle simplifier can raise on certain goals in richer sessions
    (e.g. AFP-1-PISA). *)
-simproc_setup trigger_thm_err_simproc ("trigger_thm_err _") = \<open>
+simproc_setup trigger_thm_err_simproc ("trigger_thm_err x") = \<open>
   K (K (fn _ => raise THM ("simulated internal error", 0, [])))
 \<close>
 

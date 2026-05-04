@@ -104,7 +104,7 @@ async def _test_sqrt2(root: Root, file: MyIO):
     print_header("Setting the inference rule", file)
     root.print(0, file)
     await goal.append([Obtain.gen_single({"thought": "I don't know", "variables": [{"name": "m", "type": "nat"}, {"name": "n", "type": "nat"}],
-            "constraints": [{"conclusion": "¦sqrt 2¦ = m / n", "english": "some fancy explanation"}]})])
+            "constraints": [{"conclusion": "¦sqrt 2¦ = m / n", "english": "some fancy explanation", "name": "sqrt2_eq"}]})])
     print_header("Obtain m n", file)
     root.print(0, file)
     #node = root.locate_node("2.1") # not appear
@@ -123,9 +123,9 @@ async def _test_branch(root: Root, file: MyIO):
     await root.fill("1", [Branch.gen_single({
         "thought": "I don't know",
         "cases": [
-            {"statement": {"english": "in case x is positive", "isabelle": "x > 0"}},
-            {"statement": {"english": "in case x is negative", "isabelle": "x < 0"}},
-            {"statement": {"english": "in case x is zero", "isabelle": "x = 0"}},
+            {"statement": {"english": "in case x is positive", "isabelle": "x > 0", "name": "pos"}},
+            {"statement": {"english": "in case x is negative", "isabelle": "x < 0", "name": "neg"}},
+            {"statement": {"english": "in case x is zero", "isabelle": "x = 0", "name": "zero"}},
         ]
     })])
     print_header("Branch", file)
@@ -4541,6 +4541,54 @@ async def _test_Obtain_Skip_Introduced(root: Root, file: MyIO):
     root.quickview(0, file)
 
 
+@model_test("Obtain_Rewrite_Scope", "Test_Obtain_Rewrite_Scope.thy", 8)
+async def _test_Obtain_Rewrite_Scope(root: Root, file: MyIO):
+    """Regression test: Obtain constraint with explicit name must survive
+    predecessor re-refresh during fill-replacement.
+
+    Previously, auto-named constraints (counter-based) drifted on
+    re-execution because prem_counter is a shared Synchronized.var.
+    Fix: NamedStatement now requires an explicit `name`, so the ML side
+    always receives SOME name and never touches the counter."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Batch fill: Obtain (explicit name) + Obvious (will fail)
+    await root.fill("2", [
+        Obtain.gen_single({
+            "thought": "unpack the existential",
+            "variables": [{"name": "k", "type": "nat"}],
+            "constraints": [{"isabelle": "k = m",
+                             "english": "the existential witness",
+                             "name": "k_def"}],
+            "proof": [{"operation": "Obvious", "facts": []}],
+        }),
+        Obvious.gen_single({"facts": []}),
+    ])
+    print_header("After batch fill (Obtain + Obvious)", file)
+    root.print(0, file)
+
+    # Replace the failed Obvious (step 3) with a Rewrite using k_def.
+    # This triggers predecessor re-refresh of the Obtain.
+    root.session.age += 1
+    outcome = await root.fill("3", [Rewrite.gen_single({
+        "thought": "Rewrite using k_def",
+        "using": [{"name": "k_def"}],
+        "use system simplifiers": False,
+        "rewrite goal": True,
+        "rewrite premises": []
+    })])
+    print_header("After Rewrite using k_def", file)
+    root.print(0, file)
+
+    if outcome.failure:
+        failure_str = str(outcome.failure)
+        file.write(f"FAILURE: {failure_str}\n")
+        fact_not_found = "not found" in failure_str.lower()
+        file.write(f"fact_not_found: {fact_not_found}\n")
+    else:
+        file.write("SUCCESS\n")
+
 @model_test("UpstreamChangeResetsObvious", "Test_UpstreamChangeResetsObvious.thy", 11)
 async def _test_UpstreamChangeResetsObvious(root: Root, file: MyIO):
     """After Obvious fails, _is_trivial=False blocks retries.  Amending or
@@ -6564,11 +6612,11 @@ async def _test_NestedBranchCases(root: Root, file: MyIO):
     await root.fill("1", [Branch.gen_single({
         "thought": "trichotomy on x",
         "cases": [
-            {"statement": {"english": "positive", "isabelle": "x > 0"},
+            {"statement": {"english": "positive", "isabelle": "x > 0", "name": "pos"},
              "proof": [{"operation": "Obvious", "facts": []}]},
-            {"statement": {"english": "negative", "isabelle": "x < 0"},
+            {"statement": {"english": "negative", "isabelle": "x < 0", "name": "neg"},
              "proof": [{"operation": "Obvious", "facts": []}]},
-            {"statement": {"english": "zero", "isabelle": "x = 0"},
+            {"statement": {"english": "zero", "isabelle": "x = 0", "name": "zero"},
              "proof": [{"operation": "Obvious", "facts": []}]},
         ],
     })])
@@ -6835,11 +6883,11 @@ async def _test_BranchPartialProofs(root: Root, file: MyIO):
     await root.fill("1", [Branch.gen_single({
         "thought": "trichotomy, partial proofs",
         "cases": [
-            {"statement": {"english": "positive", "isabelle": "x > 0"},
+            {"statement": {"english": "positive", "isabelle": "x > 0", "name": "pos"},
              "proof": [{"operation": "Obvious", "facts": []}]},
-            {"statement": {"english": "negative", "isabelle": "x < 0"},
+            {"statement": {"english": "negative", "isabelle": "x < 0", "name": "neg"},
              "proof": None},
-            {"statement": {"english": "zero", "isabelle": "x = 0"},
+            {"statement": {"english": "zero", "isabelle": "x = 0", "name": "zero"},
              "proof": [{"operation": "Obvious", "facts": []}]},
         ],
     })])
@@ -7836,6 +7884,45 @@ async def _test_Contradiction_false_goal(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("3", [Obvious.gen_single({"facts": []})])
     print_header("After closing", file)
+    root.print(0, file)
+
+@model_test("ForkDeletesRefreshingNode", "Test_Unfold1.thy", 15)
+async def _test_ForkDeletesRefreshingNode(root: Root, file: MyIO):
+    """Reproduce crash: fork sub-agent deletes the node being refreshed.
+
+    Scenario from production: fill(step, [Unfold]) triggers fork_interaction
+    inside Unfold._refresh_me_alone to choose among multiple definitions.
+    The fork sub-agent answers the interaction but then continues running
+    and deletes the Unfold node from the tree. When fork_interaction returns,
+    Unfold._refresh_me_alone calls super()._refresh_me_alone which calls
+    resulting_state(), but the node is no longer in parent.sub_nodes.
+    This raises InternalError("The target node is not my children").
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    async def stub_delete_during_fork(interaction):
+        answer = await interaction.answer(Answer(indexes=[0]))
+        # Simulate the fork sub-agent deleting the Unfold node (step 1)
+        # while it is still mid-refresh.  In production this happened when
+        # the fork sub-agent saw "Error: Not yet evaluated" on the Unfold
+        # node and decided to delete it and try a different approach.
+        root.session.age += 1
+        await root.delete(["1"])
+        return answer
+
+    root.session.fork_interaction = stub_delete_during_fork
+    try:
+        root.session.age += 1
+        await root.fill("1", [Unfold.gen_single({
+            "thought": "Unfold the goal",
+            "targets": ["XXX"],
+        })])
+        file.write("BUG: expected InternalError but fill succeeded\n")
+    except InternalError as e:
+        file.write(f"Caught expected error: {e}\n")
+
+    print_header("After fill", file)
     root.print(0, file)
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):

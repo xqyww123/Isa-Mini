@@ -1,0 +1,81 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - k: 'a
+  - P: 'a ⇒ bool
+  - m: nat
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (∃(k1 :: nat). k1 = m) ⟶ P k
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: ∃(k1 :: nat). k1 = m
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  P k
+--------------------------------------------------
+After batch fill (Obtain + Obvious)
+--------------------------------------------------
+variables:
+  - k: 'a
+  - P: 'a ⇒ bool
+  - m: nat
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (∃(k1 :: nat). k1 = m) ⟶ P k
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: ∃(k1 :: nat). k1 = m
+  - step id: 2
+    thought: unpack the existential
+    operation: Obtain
+    variables:
+      - k: nat
+    constraint:
+      name: k_def
+      english: the existential witness
+      conclusion: k = m
+    proof:
+      - step id: 2.1
+        operation: Obvious
+  - step id: 3
+    operation: Obvious
+    Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to replace it with a proof.
+pending proof goal:
+  P k
+--------------------------------------------------
+After Rewrite using k_def
+--------------------------------------------------
+variables:
+  - k: 'a
+  - P: 'a ⇒ bool
+  - m: nat
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (∃(k1 :: nat). k1 = m) ⟶ P k
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: ∃(k1 :: nat). k1 = m
+  - step id: 2
+    thought: unpack the existential
+    operation: Obtain
+    variables:
+      - k: nat
+    constraint:
+      name: k_def
+      english: the existential witness
+      conclusion: k = m
+    proof:
+      - step id: 2.1
+        operation: Obvious
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  P k
+FAILURE: Cannot fill a node with id 3
+The simplification made no progress.
+fact_not_found: False

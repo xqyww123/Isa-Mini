@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "properties": {
+    "step_id": {
+      "type": "string",
+      "description": "The step ID to read (e.g. 'step_1.2'). The view starts 10 lines before this step."
+    },
+    "line": {
+      "type": "integer",
+      "description": "The line number to start reading from. Ignored if step_id is provided."
+    },
+    "range": {
+      "type": "integer",
+      "description": "Number of lines to read from the starting position. Default: 50.",
+      "default": 50
+    }
+  },
+  "additionalProperties": false
+}

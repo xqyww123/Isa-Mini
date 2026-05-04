@@ -1036,15 +1036,10 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
         with_resolved_override (mk_counter ()) s lemmas (fn s' => fn ovr =>
           Minilang.END ovr s')
     | BRANCH branches =>
-        let val prem_ctr = #prem_counter counters
-            val counter_start = Synchronized.value prem_ctr
-            val (brs, final_counter) = fold_map (fn (name_opt, br) => fn ctr =>
-                  let val (name, ctr') = case name_opt of
-                          SOME n => (n, ctr)
-                        | NONE => ("premise" ^ string_of_int ctr, ctr + 1)
-                  in (([], ([], [], [((Binding.name name, []), [(br, [])])])), ctr')
-                  end) branches counter_start
-            val _ = Synchronized.change prem_ctr (K final_counter)
+        let val brs = map (fn (SOME name, br) =>
+                  ([], ([], [], [((Binding.name name, []), [(br, [])])]))
+                | (NONE, _) => error "Branch case name is required"
+              ) branches
         in Minilang.CONSIDER brs s
         end
     | HAVE (name, fixes, assumes, conclusion, auto_apply) =>
@@ -1079,15 +1074,10 @@ fun interpret_i (config as (cfg, budget, counters)) cmd s =
          in Minilang.SUFFICES fixes' named_assumes shows s
         end
     | OBTAIN (vars, constraints) =>
-        let val prem_ctr = #prem_counter counters
-            val counter_start = Synchronized.value prem_ctr
-            val (named_constraints, final_counter) = fold_map (fn (name_opt, goal) => fn ctr =>
-                  let val (name, ctr') = case name_opt of
-                          SOME n => (n, ctr)
-                        | NONE => ("premise" ^ string_of_int ctr, ctr + 1)
-                  in (((Binding.name name, []), [(goal, [])]), ctr')
-                  end) constraints counter_start
-            val _ = Synchronized.change prem_ctr (K final_counter)
+        let val named_constraints = map (fn (SOME name, goal) =>
+                  ((Binding.name name, []), [(goal, [])])
+                | (NONE, _) => error "Obtain constraint name is required"
+              ) constraints
             val arg = [(map (fn (v,T) => (Binding.name v, T, NoSyn)) vars,
                        ([], [], named_constraints))]
         in Minilang.CONSIDER arg s

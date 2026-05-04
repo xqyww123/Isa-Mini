@@ -37,10 +37,10 @@ from .model import (
     _session_var, Session,
     InteractionExpanded,
     AoA_Error, ArgumentError, IsabelleError,
-    CannotDelete_Root,
+    CannotDelete_Root, NodeNotFound,
     EvaluationStatus,
     Parse_Op_List, normalize_answer, Interaction_BadAnswer,
-    TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER,
+    TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER, TOOL_READ, ALL_PROOF_TOOLS,
 )
 import yaml as _yaml
 from .retrieval import (
@@ -65,6 +65,7 @@ def _load_schema(filename: str) -> dict:
 _cc_edit_schema_raw = _load_schema("cc_edit.jsonc")
 _cc_answer_schema = _load_schema("cc_answer.jsonc")
 _cc_delete_schema = _load_schema("cc_delete.jsonc")
+_cc_read_schema = _load_schema("cc_read.jsonc")
 
 
 def _relax_edit_schema(schema: dict) -> dict:
@@ -100,10 +101,17 @@ def _check_tool_permission(session: Session, tool_name: str) -> str | None:
     Only the fork session assigned to answer an interaction may call the
     ``answer`` tool. The parent session never has a pending interaction
     because all interactions are delegated to forks via ``fork_interaction``.
+
+    Fork sessions are additionally restricted to the tools declared in
+    ``interaction.fork_allowed_tools`` — typically ``answer`` + ``query``.
     """
     if tool_name == "answer" and (
             session.fork_pending is None or session.fork_pending.answer.done()):
         return "No pending interaction."
+    if session.fork_pending is not None and tool_name in ALL_PROOF_TOOLS:
+        allowed = session.fork_pending.interaction.fork_allowed_tools
+        if tool_name not in allowed:
+            return f"Tool '{tool_name}' is not allowed in this fork interaction."
     return None
 
 
@@ -263,6 +271,65 @@ async def _answer_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         sys.exit(1)
 
 
+async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
+    """Read proof.yaml around a step_id or line number."""
+    _tn = session.tool_name(TOOL_READ)
+    session.log_tool_call(_tn, args)
+    session.refresh_YAML()
+
+    step_id = args.get("step_id")
+    line_num = args.get("line")
+    range_lines = args.get("range", 50)
+
+    if step_id is None and line_num is None:
+        yaml_path: str | None = getattr(session, "YAML_path", None)
+        if yaml_path is None:
+            return ("proof.yaml path not configured.", True)
+        try:
+            with open(yaml_path, encoding="utf-8") as f:
+                all_lines = f.readlines()
+        except FileNotFoundError:
+            return ("proof.yaml not found.", True)
+        if len(all_lines) > 100:
+            error_msg = (
+                f"proof.yaml is {len(all_lines)} lines. "
+                "Provide step_id or line number to read a specific section.")
+            session.log_tool_response(_tn, f"ERROR: {error_msg}")
+            return (error_msg, True)
+        result = "".join(f"{i+1:4d} | {ln}" for i, ln in enumerate(all_lines))
+        session.log_tool_response(_tn, result)
+        return (result, False)
+
+    if step_id is not None:
+        try:
+            node = session.root.locate_node(step_id)
+            line_num = node.line
+        except NodeNotFound:
+            error_msg = f"Step '{step_id}' not found."
+            session.log_tool_response(_tn, f"ERROR: {error_msg}")
+            return (error_msg, True)
+
+    assert line_num is not None
+    yaml_path: str | None = getattr(session, "YAML_path", None)
+    if yaml_path is None:
+        return ("proof.yaml path not configured.", True)
+
+    start = max(1, line_num - 10)
+    end = start + range_lines
+    try:
+        with open(yaml_path, encoding="utf-8") as f:
+            all_lines = f.readlines()
+    except FileNotFoundError:
+        error_msg = "proof.yaml not found."
+        session.log_tool_response(_tn, f"ERROR: {error_msg}")
+        return (error_msg, True)
+
+    selected = all_lines[start - 1 : end]
+    result = "".join(f"{start + i:4d} | {ln}" for i, ln in enumerate(selected))
+    session.log_tool_response(_tn, result)
+    return (result, False)
+
+
 # ============================================================================
 # Per-Session MCP Server Creation
 # ============================================================================
@@ -295,6 +362,10 @@ def _create_mcp_server(session: Session, extra_sdk_tools: list | None = None) ->
         Tool(name="query",
              description="Search for Isabelle entities by semantic similarity, patterns, or exact name/term. Use exact_name to look up definitions; use exact_term to unfold fancy syntax and retrieve semantic explanations; use long_description and filters for discovery.",
              inputSchema=_cc_query_schema,
+             annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)),
+        Tool(name="read",
+             description="Read `proof.yaml`. Use only when necessary.",
+             inputSchema=_cc_read_schema,
              annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)),
     ]
 
@@ -363,6 +434,8 @@ def _create_mcp_server(session: Session, extra_sdk_tools: list | None = None) ->
                     result, is_error = await _answer_tool_logic(session, arguments)
             case "query":
                 result, is_error = await _query_tool_logic(session, arguments)
+            case "read":
+                result, is_error = await _read_tool_logic(session, arguments)
             case _:
                 handler = extra_handlers.get(name)
                 if handler is not None:

@@ -1,0 +1,32 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: nat
+premises:
+  - h: (0 :: nat) < x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: trigger_thm_err x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+Outcome
+--------------------------------------------------
+has_failure: True
+is_error: True
+committed_count: 0
+failure_message:
+Cannot fill a node with id 1
+exception THM 0 raised (line 15 of "/home/qiyuan/Current/MLML/contrib/Isa-Mini/IsaMini_AoA/Tests/Test_Rewrite_InternalError.thy"): simulated internal error
+raw_exception_leaked: True
+--------------------------------------------------
+After Rewrite attempt
+--------------------------------------------------
+variables:
+  - x: nat
+premises:
+  - h: (0 :: nat) < x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: trigger_thm_err x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.

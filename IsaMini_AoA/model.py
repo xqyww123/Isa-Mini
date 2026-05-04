@@ -1752,11 +1752,12 @@ TOOL_EDIT:   tool = "edit"
 TOOL_DELETE: tool = "delete"
 TOOL_ANSWER: tool = "answer"
 TOOL_SEARCH: tool = "query"
-ALL_PROOF_TOOLS: tuple[tool, ...] = (TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER, TOOL_SEARCH)
+TOOL_READ:   tool = "read"
+ALL_PROOF_TOOLS: tuple[tool, ...] = (TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER, TOOL_SEARCH, TOOL_READ)
 
 class Interaction:
     forking: ForkingMode = ForkingMode.FORKING_WITH_CTXT
-    fork_allowed_tools: list[tool] | None = None  # None = use session default
+    fork_allowed_tools: list[tool] = [TOOL_ANSWER, TOOL_SEARCH]
     async def prompt(self, indent: int, file: MyIO) -> None:
         raise NotImplementedError("`prompt` must be implemented by subclass")
     async def answer(self, answer: Answer) -> Any:
@@ -1872,7 +1873,7 @@ class Interaction_Retrieve(Interaction):
             self.forking = ForkingMode.FORKING_WITH_CTXT
         else:
             self.forking = session.retrieval_forking_mode
-        # Tool access in forks: YES = answer only, YES_RECURSIVE = full access (None = default)
+        # Tool access in forks: YES = answer only, YES_RECURSIVE = answer + query (default)
         if session.interactive_retrieval == InteractiveRetrievalMode.YES:
             self.fork_allowed_tools = [TOOL_ANSWER]
 
@@ -3707,6 +3708,7 @@ class StdBlock(NonLeaf_Node):
                         already_printed = child
                         break
                 if already_printed is not None \
+                        and already_printed._the_single_printed_goal is not None \
                         and already_printed._the_single_printed_goal.conclusion == goal.conclusion:
                     self._prev_pending_goal = visible
                 elif visible != self._prev_pending_goal:
@@ -4885,7 +4887,7 @@ class Statement(TypedDict):
 class NamedStatement(TypedDict):
     english: str
     isabelle: xterm
-    name: NotRequired[xvarname]
+    name: xname
 
 def print_statement(self: Statement, indent: int, file: MyIO):
     print_indent(indent, file)
@@ -6089,7 +6091,7 @@ class Have(StdBlock):
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
     def beginning_opr(self) -> Minilang_Operation | None:
         fixes = [(v["name"], v.get("type")) for v in self._input_for_any]
-        assumes = [(p["name"], p["term"]) for p in self._input_premises]
+        assumes: list[tuple[str | None, str]] = [(p["name"], p["term"]) for p in self._input_premises]
         return Minilang_Operation.HAVE(
             self.name, fixes, assumes,
             self.statement['conclusion'], self.auto_apply)
@@ -6189,7 +6191,7 @@ class Suffices(StdBlock):
             file.write(f"notice: Need to show the provided statement implies the goal\n")
     def beginning_opr(self) -> Minilang_Operation | None:
         fixes = [(v["name"], v.get("type")) for v in self._input_for_any]
-        assumes = [(p["name"], p["term"]) for p in self._input_premises]
+        assumes: list[tuple[str | None, str]] = [(p["name"], p["term"]) for p in self._input_premises]
         return Minilang_Operation.SUFFICES(fixes, assumes, self.statement['conclusion'])
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         return FailureReason(f"Fail to apply 'it suffices to show' because: {"\n".join(err.errors)}")
@@ -6324,7 +6326,7 @@ class Obtain(StdBlock):
     def beginning_opr(self) -> 'Minilang_Operation | FailureReason | None':
         if not self.variables:
             return FailureReason("Must specify at least one variable to obtain.")
-        return Minilang_Operation.OBTAIN(self.variables, [(c.get("name"), c["isabelle"]) for c in self.constraints])
+        return Minilang_Operation.OBTAIN(self.variables, [(c["name"], c["isabelle"]) for c in self.constraints])
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         return FailureReason(f"Fail to claim the existential subgoal because: {"\n".join(err.errors)}")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
@@ -6754,7 +6756,7 @@ class Branch(SubgoalMaker):
     def beginning_opr(self) -> 'Minilang_Operation | FailureReason':
         if not self.cases:
             return FailureReason("Must specify at least one branching case.")
-        return Minilang_Operation.BRANCH([(case["statement"].get("name"), case["statement"]["isabelle"]) for case in self.cases])
+        return Minilang_Operation.BRANCH([(case["statement"]["name"], case["statement"]["isabelle"]) for case in self.cases])
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         return FailureReason(f"Fail to anlysis the proof goal by cases because: {"\n".join(err.errors)}")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
