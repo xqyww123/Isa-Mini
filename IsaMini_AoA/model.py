@@ -6294,37 +6294,24 @@ class Intro_ToolArg(TypedDict):
     thought: str
     variable_bindings: NotRequired[list[xvarname]]
     fact_bindings: NotRequired[list[xvarname]]
-    proofs: NotRequired[list[raw_proof] | None]
 
 @proof_operation("Intro", Intro_ToolArg)
-class Intro(SubgoalMaker):
-    def __init__(self, config: NodeConfig, thought: str, bindings: Bindings | None,
-                 _pending_bindings: tuple[list, list] | None = None,
-                 parsed_proofs: 'list[proof] | None' = None):
-        super().__init__(config, thought, [])
+class Intro(Leaf):
+    def __init__(self, config: NodeConfig, thought: str, bindings: Bindings | None = None,
+                 _pending_bindings: tuple[list, list] | None = None):
+        super().__init__(config, thought)
         self.bindings = bindings
         self.running_time = 0
         self._pending_bindings = _pending_bindings
         self._prev_bindings: Bindings | None = None
-        if parsed_proofs is not None:
-            self._supplied_proofs = {
-                str(i + self._initial_goal_index): (None, p)
-                for i, p in enumerate(parsed_proofs)
-            }
     @classmethod
     def gen_single(cls, arg: Intro_ToolArg,
                    path: str = "<direct>") -> Parsed_Opr:
-        """Non-splice path (positional `proofs`, or no `proofs`): unpack
-        ToolArg fields, parse `proofs` into `list[proof]`, build factory."""
         var_bindings = arg.get("variable_bindings", [])
         fact_bindings = arg.get("fact_bindings", [])
         pending = (var_bindings, fact_bindings) if var_bindings or fact_bindings else None
         thought = arg["thought"]
-        parsed_proofs = _parse_positional_proofs(
-            arg.get("proofs"), f"{path}.proofs")
-        factory = lambda cfg: Intro(
-            cfg, thought, None,
-            _pending_bindings=pending, parsed_proofs=parsed_proofs)
+        factory = lambda cfg: Intro(cfg, thought, None, _pending_bindings=pending)
         return Parsed_Opr(cls=cls, factory=factory, raw=arg)
 
     def quickview(self, indent: int, file: MyIO) -> int:
@@ -6334,7 +6321,8 @@ class Intro(SubgoalMaker):
             print_fact_bindings(self.bindings[1], indent, file, "assuming premises")
             self._prev_bindings = self.bindings
         return indent
-    def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
+    def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
+        indent = super().print(indent, file, update_line, show_warnings=show_warnings)
         self._print_thought(indent, file)
         print_indent(indent, file)
         file.write("operation: Intro\n")
@@ -6356,42 +6344,24 @@ class Intro(SubgoalMaker):
                     print_indent(indent + 1, file)
                     file.write(f"- {f}\n")
         self._print_evaluation_status(indent, file)
-        if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
+        if show_warnings:
+            self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
+        return indent
+    def the_operation(self) -> Minilang_Operation:
+        return Minilang_Operation.INTRO(self.bindings)
     async def _refresh_me_alone(self, auto_intro: bool):
+        is_init = self._first_time
         if self._pending_bindings is not None:
             var_bindings, fact_bindings = self._pending_bindings
             self.bindings = await self.ml_state.compute_bindings(
                 [IsaTerm.from_agent(n) for n in var_bindings],
                 [IsaTerm.from_agent(n) for n in fact_bindings])
             self._pending_bindings = None
-        await super()._refresh_me_alone(auto_intro)
-    def beginning_opr(self) -> Minilang_Operation:
-        return Minilang_Operation.INTRO(self.bindings)
-    def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
-        return FailureReason(f"Fail to introduce the variables and premises because: {"\n".join(err.errors)}")
-    def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
-        return FailureReason(f"Subgoal {child.id} fails to be proven.")
-    def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
-        raise InternalError("An Intro doesn't have an ending operation")
-    def _title_of_children(self, indent: int) -> tuple[str | None, int]:
-        if len(self.sub_nodes) <= 1:
-            return (None, indent-1)
-        else:
-            return ("goals", indent+1)
-    async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
-        is_init = self._first_time
         old_bindings = self.bindings
-        s = self._state_after_beginning()
-        # Use `new_subgoals_count` (from the Goals message) rather than
-        # `top_goals()` on the prooftree — the latter leaks outer-block
-        # siblings when Intro sits inside a CaseSplit case (see bug fixed
-        # by the SubgoalMaker refactor).  For term-level changes with the
-        # same count, the `bindings != old_bindings` check below covers it.
-        old_subgoals_count = s.new_subgoals_count
-        fail = await super()._refresh_the_beginning_opr()
-        if fail is None:
+        await super()._refresh_me_alone(auto_intro)
+        if self.status.status == EvaluationStatus.Status.SUCCESS:
             self.running_time += 1
-            messages = self._state_after_beginning().messages
+            messages = self.resulting_state().messages
             intro_bindings_msgs = [m for m in messages if isinstance(m, Intro_Bindings_Msg)]
             match intro_bindings_msgs:
                 case [intro_bindings_msg]:
@@ -6441,11 +6411,6 @@ class Intro(SubgoalMaker):
         if not is_init:
             if self.bindings != old_bindings:
                 self.changed = True
-            if fail is None and old_subgoals_count is not None:
-                new_subgoals_count = self._state_after_beginning().new_subgoals_count
-                if new_subgoals_count != old_subgoals_count:
-                    self.changed = True
-        return fail
     def _fixed_vars_at_me(self, ret: Vars) -> Vars:
         if self.bindings is not None:
             for var in self.bindings[0]:
@@ -6457,15 +6422,9 @@ class Intro(SubgoalMaker):
                 ret[fact.name] = fact.pretty
         return ret
     def _fixed_vars_after_me(self, ret: Vars) -> Vars:
-        if self.sub_nodes:
-            return ret
-        else:
-            return self._fixed_vars_at_me(ret)
+        return self._fixed_vars_at_me(ret)
     def _fixed_facts_after_me(self, ret: Hyps) -> Hyps:
-        if self.sub_nodes:
-            return ret
-        else:
-            return self._fixed_facts_at_me(ret)
+        return self._fixed_facts_at_me(ret)
     def _rename_var(self, old_name: varname, new_name: varname) -> 'Node | None':
         if self.bindings is not None:
             for i, var in enumerate(self.bindings[0]):

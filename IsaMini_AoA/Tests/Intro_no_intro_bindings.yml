@@ -60,7 +60,6 @@ Intro node print (1.True.1)
   thought: Rename the case hypothesis
   operation: Intro
 [probe] Intro: new_subgoals_count=1, display_goals_count=1
-[probe] Intro sub_nodes: []
 --------------------------------------------------
 Full tree after Intro
 --------------------------------------------------

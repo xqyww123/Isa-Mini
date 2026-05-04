@@ -1239,9 +1239,8 @@ async def _test_Intro_no_intro_bindings(root: Root, file: MyIO):
     intro_node = root.locate_node("1.True.1")
     intro_node.print(0, file)
     # === DEBUG PROBE ===
-    sab = cast(StdBlock, intro_node)._state_after_beginning()
-    file.write(f"[probe] Intro: new_subgoals_count={sab.new_subgoals_count}, display_goals_count={sab.display_goals_count}\n")
-    file.write(f"[probe] Intro sub_nodes: {[c.id for c in cast(NonLeaf_Node, intro_node).sub_nodes]}\n")
+    rs = intro_node.resulting_state()
+    file.write(f"[probe] Intro: new_subgoals_count={rs.new_subgoals_count}, display_goals_count={rs.display_goals_count}\n")
     print_header("Full tree after Intro", file)
     root.print(0, file)
 

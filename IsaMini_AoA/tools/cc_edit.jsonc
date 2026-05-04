@@ -513,10 +513,6 @@
           "description": "names for the leading premises, in order; omit or truncate to leave trailing premises auto-numbered",
           "items": { "type": "string" },
           "type": "array"
-        },
-        "proofs": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/Proof" }
         }
       },
       "required": [
