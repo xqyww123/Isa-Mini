@@ -29,5 +29,6 @@ Outline:
     Error: Unfinished Proof. Fill step `1.3`
     goal: (0 :: int) ≤ x * x
   Error: Unfinished Proof (line 9). Fill step `2`
+Note: step 1.2 was auto-introduced. You may delete it using mcp__proof__delete if unhelpful.
 ---------------
 Q6 redirect into last-provided-node's body verified.

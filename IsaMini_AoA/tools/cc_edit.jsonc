@@ -497,7 +497,7 @@
     "Intro": {
       "additionalProperties": false,
       "title": "Intro",
-      "description": "introduce universal quantification and premises from the proof goal; can also split conjunctions into subgoals",
+      "description": "introduce universal quantification and premises from the proof goal",
       "properties": {
         "operation": {
           "const": "Intro",
@@ -514,11 +514,27 @@
           "items": { "type": "string" },
           "type": "array"
         },
-        "split_conj": {
-          "type": "boolean",
-          "default": false,
-          "description": "whether to split conjunctions in the goal after introduction"
+        "proofs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Proof" }
+        }
+      },
+      "required": [
+        "operation",
+        "thought"
+      ],
+      "type": "object"
+    },
+    "SplitConjs": {
+      "additionalProperties": false,
+      "title": "SplitConjs",
+      "description": "split a conjunctive goal (A ∧ B ∧ ...) into separate subgoals, one per conjunct",
+      "properties": {
+        "operation": {
+          "const": "SplitConjs",
+          "type": "string"
         },
+        "thought": { "$ref": "#/$defs/Thought" },
         "proofs": {
           "type": "array",
           "items": { "$ref": "#/$defs/Proof" }
@@ -676,6 +692,7 @@
         { "$ref": "#/$defs/Contradiction" },
         { "$ref": "#/$defs/Suffices" },
         { "$ref": "#/$defs/Intro" },
+        { "$ref": "#/$defs/SplitConjs" },
         { "$ref": "#/$defs/Derive" },
         { "$ref": "#/$defs/Chaining" },
         { "$ref": "#/$defs/Define" }

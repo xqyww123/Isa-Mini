@@ -178,7 +178,7 @@ async def _test_EquivDerive(root: Root, file: MyIO):
     print_header("Inference Rule", file)
     root.print(0, file)
 
-@model_test("IntroConj", "Test_IntroConj.thy", 6)
+@model_test("IntroConj", "Test_IntroConj.thy", 8)
 async def _test_IntroConj(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -189,7 +189,7 @@ async def _test_IntroConj(root: Root, file: MyIO):
     print_header("Inference Rule", file)
     root.print(0, file)
 
-@model_test("IntroConj_short", "Test_IntroConj_short.thy", 6)
+@model_test("IntroConj_short", "Test_IntroConj_short.thy", 8)
 async def _test_IntroConj_short(root: Root, file: MyIO):
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -263,18 +263,16 @@ async def _test_CaseSplit_Quickview(root: Root, file: MyIO):
 @model_test("GoalCtxQuickview", "Test_GoalCtxQuickview.thy", 8)
 async def _test_GoalCtxQuickview(root: Root, file: MyIO):
     """Test that quickview prints goal.context.vars even when case_vars is None.
-    After Intro+split_conj on '∀x::nat. P x ∧ Q x', the fixed variable x
+    After SplitConjs on '∀x::nat. P x ∧ Q x', the fixed variable x
     appears in each GoalNode's goal.context.vars but NOT in case_vars (since
-    these GoalNodes come from IntroSplitConj, not CaseSplit).
+    these GoalNodes come from SplitConjs, not CaseSplit).
 
-    The leading ⋀x triggers the framework's auto-Intro at step 1 (fixes x,
-    split_conj=False) which leaves a single residual goal `P x ∧ Q x` and
-    does not open a sub-proof block. We apply the manual split_conj at the
-    next step (2) on that residual."""
+    The leading ⋀x triggers the framework's auto-Intro at step 1 (fixes x)
+    which leaves a single residual goal `P x ∧ Q x` and does not open a
+    sub-proof block. We apply SplitConjs at step 2 on that residual."""
     root.session.age += 1
-    await root.fill("2", [Intro.gen_single({
+    await root.fill("2", [SplitConjs.gen_single({
         "thought": "Split conjunction",
-        "split_conj": True
     })])
     print_header("Full print", file)
     root.print(0, file)
@@ -976,7 +974,7 @@ async def _test_RetrieveFact2(root: Root, file: MyIO):
     root.print(0, file)
     return
 
-@model_test("Obvious_partial_solve", "Test_Obvious_partial_solve.thy", 11)
+@model_test("Obvious_partial_solve", "Test_Obvious_partial_solve.thy", 13)
 async def _test_Obvious_partial_solve(root: Root, file: MyIO):
     """Reproduces HAMMER partially solving a goal, leaving subgoals that cause
     an unexpected Intro node to be auto-appended."""
@@ -1031,7 +1029,7 @@ async def _test_Obvious_partial_solve(root: Root, file: MyIO):
     print_header("After step 3.1 (unexpected Intro at 3.2)", file)
     root.print(0, file)
 
-@model_test("Hammer_ProveInTime", "Test_Hammer_ProveInTime.thy", 11)
+@model_test("Hammer_ProveInTime", "Test_Hammer_ProveInTime.thy", 13)
 async def _test_Hammer_ProveInTime(root: Root, file: MyIO):
     """Reproduces OutOfData error when HAMMER uses a ProveInTime fact."""
     print_header("Initial YAML", file)
@@ -1058,7 +1056,7 @@ async def _test_Hammer_ProveInTime(root: Root, file: MyIO):
     print_header("After Obvious with ProveInTime", file)
     root.print(0, file)
 
-@model_test("Simplify_stuck", "Test_Simplify_stuck.thy", 11)
+@model_test("Simplify_stuck", "Test_Simplify_stuck.thy", 13)
 async def _test_Simplify_stuck(root: Root, file: MyIO):
     """Reproduces stuck SIMPLIFY when rewriting with local + library facts inside a Have block."""
     print_header("Initial YAML", file)
@@ -1101,7 +1099,7 @@ async def _test_Simplify_stuck(root: Root, file: MyIO):
     print_header("After Rewrite", file)
     root.print(0, file)
 
-@model_test("Simplify_no_intro_bindings", "Test_Simplify_no_intro_bindings.thy", 11)
+@model_test("Simplify_no_intro_bindings", "Test_Simplify_no_intro_bindings.thy", 13)
 async def _test_Simplify_no_intro_bindings(root: Root, file: MyIO):
     """Reproduces 'Expected exactly one Intro_Bindings_Msg, got 0' when Rewrite
     references a local fact (h8eq) that is out of scope."""
@@ -1188,12 +1186,11 @@ async def _test_Simplify_no_intro_bindings(root: Root, file: MyIO):
 async def _test_Intro_no_intro_bindings(root: Root, file: MyIO):
     """Reproduces 'Expected exactly one Intro_Bindings_Msg in Intro's messages, got 0'.
 
-    Root cause: `AUTO_INTRO` (contrib/Isa-Mini/Agent/agent.ML:326-329) short-
-    circuits on `not (Minilang.need_intro split_conj st)` and returns
+    Root cause: `AUTO_INTRO` (contrib/Isa-Mini/Agent/agent.ML) short-
+    circuits on `not (Minilang.need_intro st)` and returns
     `(([], []), s)` without calling `Minilang.get_reporter () (INTRO_BINDINGS ...)`.
-    `need_intro` (contrib/Isa-Mini/library/proof.ML:1187) is false when the
-    leading goal has no outer Pure.imp / Pure.all / HOL.All / HOL.implies
-    (nor HOL.conj when split_conj is on). The Python side
+    `need_intro` is false when the leading goal has no outer
+    Pure.imp / Pure.all / HOL.All / HOL.implies. The Python side
     (model.py:5817, `Intro._refresh_the_beginning_opr`) then finds zero
     `Intro_Bindings_Msg` and raises `InternalError`.
 
@@ -2046,21 +2043,21 @@ async def _test_semantic_knn_induction_rule(root: Root, file: MyIO):
 
 @model_test("IntroSplitConj", "Test_IntroSplitConj.thy", 10)
 async def _test_intro_split_conj(root: Root, file: MyIO):
-    """Test Intro with split_conj=True splits P ∧ Q ∧ R into separate subgoals."""
+    """Test SplitConjs splits P ∧ Q ∧ R into separate subgoals.
+    The goal P ∧ Q ∧ R is a pure conjunction (premises are in the HHF context),
+    so no auto-Intro fires. SplitConjs goes directly at step 1."""
     print_header("Initial State", file)
     root.print(0, file)
     print_header("Overview", file)
     root.quickview(0, file)
 
-    # After auto-Intro (step 1) introduces premises P, Q, R,
-    # the remaining goal is P ∧ Q ∧ R.
-    # Apply Intro with split_conj=True to split the conjunction.
+    # The goal is already P ∧ Q ∧ R (premises handled by HHF context).
+    # Apply SplitConjs at step 1 to split the conjunction.
     root.session.age += 1
-    await root.fill("1", [Intro.gen_single({
+    await root.fill("1", [SplitConjs.gen_single({
         "thought": "Split conjunction into separate subgoals",
-        "split_conj": True
     })])
-    print_header("After Intro split_conj=True", file)
+    print_header("After SplitConjs", file)
     root.print(0, file)
     print_header("Overview after split", file)
     root.quickview(0, file)
@@ -2289,7 +2286,7 @@ async def _test_ForeNodeFail(root: Root, file: MyIO):
     root.print(0, file)
 
 
-@model_test("ProveInTime_ParseError", "Test_ProveInTime_ParseError.thy", 6)
+@model_test("ProveInTime_ParseError", "Test_ProveInTime_ParseError.thy", 8)
 async def _test_prove_in_time_parse_error(root: Root, file: MyIO):
     """Reproduce: Obvious with an IsabelleFact_ProveInTime containing invalid
     Isabelle syntax (as from a fork answering with bad text) should fail
@@ -7083,10 +7080,9 @@ async def _test_Unfold_LocalDef_Nested(root: Root, file: MyIO):
         }),
     ])
 
-    # Step 3: Intro with split_conj to create nested cases
-    await root.fill("3", [Intro.gen_single({
+    # Step 3: SplitConjs to create nested cases
+    await root.fill("3", [SplitConjs.gen_single({
         "thought": "Split conjunction",
-        "split_conj": True,
     })])
     print_header("After Define + Witness + Intro", file)
     root.print(0, file)
@@ -7109,7 +7105,7 @@ async def _test_Unfold_LocalDef_Nested(root: Root, file: MyIO):
 async def _test_HaveLeakSibling(root: Root, file: MyIO):
     """Regression: Have facts from one conjunct must not leak into sibling cases.
 
-    Split (1+1=2) ∧ (2+2=4) via Intro+split_conj.  In case 1.1, prove a Have
+    Split (1+1=2) ∧ (2+2=4) via SplitConjs.  In case 1.1, prove a Have
     named 'helper', close the case, then inspect case 1.2's quickview.  The
     named fact 'helper' must NOT appear as a premise of case 1.2.
     """
@@ -7117,9 +7113,8 @@ async def _test_HaveLeakSibling(root: Root, file: MyIO):
     root.print(0, file)
 
     root.session.age += 1
-    await root.fill("1", [Intro.gen_single({
+    await root.fill("1", [SplitConjs.gen_single({
         "thought": "Split conjunction",
-        "split_conj": True
     })])
     print_header("After split", file)
     root.quickview(0, file)
@@ -7599,7 +7594,7 @@ async def _test_ObtainQuickview(root: Root, file: MyIO):
     await root.fill("2", [Obtain.gen_single({
         "thought": "Unpack the existential",
         "variables": [{"name": "k", "type": "nat"}],
-        "constraints": [{"name": "k_def", "conclusion": "k = m",
+        "constraints": [{"name": "k_def", "isabelle": "k = m",
                          "english": "the existential witness"}],
         "proof": [{"operation": "Obvious", "facts": []}],
     })])
@@ -7697,7 +7692,7 @@ async def _test_QuickviewCollapse(root: Root, file: MyIO):
     print_header("Quickview with 6 done steps (should collapse)", file)
     root.quickview(0, file)
 
-@model_test("Contradiction_notI", "Test_Contradiction_notI.thy", 6)
+@model_test("Contradiction_notI", "Test_Contradiction_notI.thy", 8)
 async def _test_Contradiction_notI(root: Root, file: MyIO):
     """Contradiction on a ¬-led goal uses notI internally.
     Goal: ¬ False. Contradiction assumes False as hypothesis, goal becomes False.
@@ -7721,7 +7716,7 @@ async def _test_Contradiction_notI(root: Root, file: MyIO):
     print_header("After Obvious to close False", file)
     root.print(0, file)
 
-@model_test("Contradiction_ccontr", "Test_Contradiction_ccontr.thy", 6)
+@model_test("Contradiction_ccontr", "Test_Contradiction_ccontr.thy", 8)
 async def _test_Contradiction_ccontr(root: Root, file: MyIO):
     """Contradiction on a non-¬ goal uses ccontr internally.
     Goal: True. Contradiction assumes ¬ True as hypothesis, goal becomes False.
@@ -7745,7 +7740,7 @@ async def _test_Contradiction_ccontr(root: Root, file: MyIO):
     print_header("After Obvious to close False", file)
     root.print(0, file)
 
-@model_test("Contradiction_double_neg", "Test_Contradiction_double_neg.thy", 6)
+@model_test("Contradiction_double_neg", "Test_Contradiction_double_neg.thy", 8)
 async def _test_Contradiction_double_neg(root: Root, file: MyIO):
     """Nested negation: goal ¬ ¬ True uses notI (¬-led).
     Hypothesis is ¬ True, goal becomes False."""
@@ -7769,7 +7764,7 @@ async def _test_Contradiction_double_neg(root: Root, file: MyIO):
     print_header("After closing False", file)
     root.print(0, file)
 
-@model_test("Contradiction_false_goal", "Test_Contradiction_false_goal.thy", 6)
+@model_test("Contradiction_false_goal", "Test_Contradiction_false_goal.thy", 8)
 async def _test_Contradiction_false_goal(root: Root, file: MyIO):
     """Degenerate: goal is False (after Intro consumes the ⟹ premise).
     Contradiction uses ccontr, hypothesis becomes ¬ False, goal stays False.

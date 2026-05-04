@@ -18,7 +18,7 @@ proof:
     witness: double
   - step id: 3
     thought: Split conjunction
-    operation: Intro
+    operation: SplitConjs
     goals:
       - goal id: 3.1
         goal: double (2 :: nat) = (4 :: nat)
@@ -49,7 +49,7 @@ proof:
     witness: double
   - step id: 3
     thought: Split conjunction
-    operation: Intro
+    operation: SplitConjs
     goals:
       - goal id: 3.1
         goal: double (2 :: nat) = (4 :: nat)

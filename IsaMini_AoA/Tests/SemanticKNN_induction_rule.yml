@@ -1,9 +1,9 @@
 Induction rules: 5 results, 0 warnings
   0.818 induction rule nat_induct: ?P (0 :: nat) ⟶ (∀(n1 :: nat). ?P n1 ⟶ ?P (Suc n1)) ⟶ ?P ?n
+  0.782 induction rule natural_of_nat_induct: (∀(y :: nat). y ∈ UNIV ⟶ ?P (natural_of_nat y)) ⟶ ?P ?x
   0.782 induction rule nat_less_induct: (∀(n1 :: nat). (∀m<(n1 :: nat). ?P m) ⟶ ?P n1) ⟶ ?P ?n
+  0.765 induction rule nat_of_natural_induct: ?y ∈ UNIV ⟶ (∀(x :: natural). ?P (nat_of_natural x)) ⟶ ?P ?y
   0.763 induction rule Nat.inducts: Nat ?x ⟶ ?P Zero_Rep ⟶ (∀(i :: ind). Nat i ⟶ ?P i ⟶ ?P (Suc_Rep i)) ⟶ ?P ?x
-  0.749 induction rule diff_induct: (∀(x :: nat). ?P x (0 :: nat)) ⟶ (∀(y :: nat). ?P (0 :: nat) (Suc y)) ⟶ (∀x (y :: nat). ?P x y ⟶ ?P (Suc x) (Suc y)) ⟶ ?P ?m ?n
-  0.749 induction rule Nats_induct: ?x ∈ ℕ ⟶ (∀(n1 :: nat). ?P (of_nat n1)) ⟶ ?P ?x
 Case-split rules: 5 results, 0 warnings
   0.732 case-split rule lists.cases: ?a ∈ lists ?A ⟶ (?a = [] ⟶ ?P) ⟶ (∀a (l :: ?'a list). ?a = a # l ⟶ a ∈ ?A ⟶ l ∈ lists ?A ⟶ ?P) ⟶ ?P
   0.712 case-split rule listsp.cases: listsp ?A ?a ⟶ (?a = [] ⟶ ?P) ⟶ (∀a (l :: ?'a list). ?a = a # l ⟶ ?A a ⟶ listsp ?A l ⟶ ?P) ⟶ ?P
@@ -14,5 +14,5 @@ Mixed (induction+theorem): 5 results, 0 warnings
   0.818 induction rule nat_induct: ?P (0 :: nat) ⟶ (∀(n1 :: nat). ?P n1 ⟶ ?P (Suc n1)) ⟶ ?P ?n
   0.806 lemma natural.induct: ?P (0 :: natural) ⟶ (∀(natural :: natural). ?P natural ⟶ ?P (Code_Numeral.Suc natural)) ⟶ ?P ?natural
   0.795 lemma nat.induct: ?P (0 :: nat) ⟶ (∀(nat :: nat). ?P nat ⟶ ?P (Suc nat)) ⟶ ?P ?nat
+  0.782 induction rule natural_of_nat_induct: (∀(y :: nat). y ∈ UNIV ⟶ ?P (natural_of_nat y)) ⟶ ?P ?x
   0.782 induction rule nat_less_induct: (∀(n1 :: nat). (∀m<(n1 :: nat). ?P m) ⟶ ?P n1) ⟶ ?P ?n
-  0.780 lemma nat_induct: ?P (0 :: nat) ⟶ (∀(n1 :: nat). ?P n1 ⟶ ?P (Suc n1)) ⟶ ?P ?n

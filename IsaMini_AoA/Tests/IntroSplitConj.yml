@@ -19,7 +19,7 @@ Overview
 Error: Unfinished Proof (line 15). Call command `edit` with action `fill` and target step `1`
 goal: P ∧ Q ∧ R
 --------------------------------------------------
-After Intro split_conj=True
+After SplitConjs
 --------------------------------------------------
 variables:
   - R: bool
@@ -34,7 +34,7 @@ goal: P ∧ Q ∧ R
 proof:
   - step id: 1
     thought: Split conjunction into separate subgoals
-    operation: Intro
+    operation: SplitConjs
     goals:
       - goal id: 1.1
         goal: P
@@ -51,7 +51,7 @@ proof:
 --------------------------------------------------
 Overview after split
 --------------------------------------------------
-step 1: Intro (line 0)
+step 1: SplitConjs (line 0)
   - 1.1 (line 0)
     Error: Unfinished Proof (line 42). Fill step `1.1.1`
     goal: P
@@ -77,7 +77,7 @@ goal: P ∧ Q ∧ R
 proof:
   - step id: 1
     thought: Split conjunction into separate subgoals
-    operation: Intro
+    operation: SplitConjs
     goals:
       - goal id: 1.1
         goal: P

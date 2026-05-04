@@ -2,6 +2,8 @@ theory Test_Hammer_ProveInTime imports
   Complex_Main Minilang_Agent.Minilang_Agent
 begin
 
+declare [[agent_AoA_driver="test.Hammer_ProveInTime"]]
+
 theorem aime_1988_p3:
   fixes x :: real
   assumes h0 : "0 < x"

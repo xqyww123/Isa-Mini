@@ -1104,11 +1104,8 @@ class Minilang_Operation(NamedTuple):
     def CHAINING(name: str | None, fact_refs: 'list[IsabelleFact]') -> 'Minilang_Operation':
         return Minilang_Operation("CHAINING", (name, [r.pack() for r in fact_refs]))
     @staticmethod
-    def INTRO(bindings: Bindings | None, split: bool) -> 'Minilang_Operation':
+    def INTRO(bindings: Bindings | None) -> 'Minilang_Operation':
         if bindings is not None:
-            # Convert IsaTerm fields back to ASCII strings for RPC serialization.
-            # fact_bindings' expr packs as a (term, int option) pair to match the ML
-            # prem_name.internal_term schema.
             var_bindings = [(vb.internal_varname.ascii, vb.external_varname.ascii, vb.type.ascii)
                            for vb in bindings[0]]
             fact_bindings = [(fb.expr, fb.name.ascii, fb.pretty.ascii)
@@ -1116,7 +1113,10 @@ class Minilang_Operation(NamedTuple):
             packed_bindings: Any = (var_bindings, fact_bindings)
         else:
             packed_bindings = None
-        return Minilang_Operation("INTRO", (packed_bindings, split))
+        return Minilang_Operation("INTRO", (packed_bindings, False))
+    @staticmethod
+    def SPLIT_CONJS() -> 'Minilang_Operation':
+        return Minilang_Operation("SPLIT_CONJS", None)
     @staticmethod
     def SIMPLIFY(facts_with_targets: 'list[tuple[IsabelleFact, list[lambda_term] | None]]', use_system_simps: bool, premise_names: list[str], simplify_goal: bool, bindings: tuple[list[tuple[str, str, str]], list[tuple[lambda_term, str, str]]] | None) -> 'Minilang_Operation':
         packed_facts = [(r.pack(), targets) for r, targets in facts_with_targets]
@@ -3145,7 +3145,7 @@ class NonLeaf_Node(Node):
             new_id = self._local_step_of_next_proof_step()
         ml_state = await child.resulting_state().clone(None)
         config = NodeConfig(new_id, ml_state, self)
-        intro = Intro(config, "", None, False)
+        intro = Intro(config, "", None)
         self.session.auto_intro_nodes.append(intro)
         self.sub_nodes.insert(next_idx, intro)
         await intro._refresh_me_alone(auto_intro=True)
@@ -3719,7 +3719,7 @@ class StdBlock(NonLeaf_Node):
                 local_step = self._local_step_of_next_proof_step()
                 ml_state = await self._state_after_beginning().clone(None)
                 config = NodeConfig(local_step, ml_state, self)
-                intro = Intro(config, "", None, False)
+                intro = Intro(config, "", None)
                 self.sub_nodes.append(intro)
                 self.session.auto_intro_nodes.append(intro)
             for gn in gns:
@@ -3753,7 +3753,7 @@ class StdBlock(NonLeaf_Node):
             local_step = self._local_step_of_next_proof_step()
             ml_state = await self._state_after_beginning().clone(None)
             config = NodeConfig(local_step, ml_state, self)
-            intro = Intro(config, "", None, False)
+            intro = Intro(config, "", None)
             self.sub_nodes.append(intro)
             self.session.auto_intro_nodes.append(intro)
         return None
@@ -3962,7 +3962,7 @@ class GoalNode(StdBlock):
                 local_step = self._local_step_of_next_proof_step()
                 ml_state = await self.ml_state.clone(None)
                 config = NodeConfig(local_step, ml_state, self)
-                intro = Intro(config, "", None, False)
+                intro = Intro(config, "", None)
                 self.sub_nodes.append(intro)
                 self.session.auto_intro_nodes.append(intro)
             for gn in gns:
@@ -3977,7 +3977,7 @@ class GoalNode(StdBlock):
             local_step = self._local_step_of_next_proof_step()
             ml_state = await self.ml_state.clone(None)
             config = NodeConfig(local_step, ml_state, self)
-            intro = Intro(config, "", None, False)
+            intro = Intro(config, "", None)
             self.sub_nodes.append(intro)
             self.session.auto_intro_nodes.append(intro)
         return await super()._refresh_me_alone(auto_intro)
@@ -6259,7 +6259,7 @@ class Obtain(StdBlock):
                 print_indent(indent+1, file)
                 file.write(f"english: {constraint['english']}\n")
                 print_indent(indent+1, file)
-                file.write(f"isabelle: {constraint['isabelle']}\n")
+                file.write(f"conclusion: {constraint['isabelle']}\n")
             case _:
                 print_indent(indent, file)
                 file.write(f"constraints:\n")
@@ -6272,7 +6272,7 @@ class Obtain(StdBlock):
                     else:
                         file.write(f"- english: {constraint['english']}\n")
                     print_indent(indent+1, file)
-                    file.write(f"  isabelle: {constraint['isabelle']}\n")
+                    file.write(f"  conclusion: {constraint['isabelle']}\n")
         self._print_evaluation_status(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
     def beginning_opr(self) -> 'Minilang_Operation | FailureReason | None':
@@ -6294,17 +6294,15 @@ class Intro_ToolArg(TypedDict):
     thought: str
     variable_bindings: NotRequired[list[xvarname]]
     fact_bindings: NotRequired[list[xvarname]]
-    split_conj: NotRequired[bool]
     proofs: NotRequired[list[raw_proof] | None]
 
 @proof_operation("Intro", Intro_ToolArg)
 class Intro(SubgoalMaker):
-    def __init__(self, config: NodeConfig, thought: str, bindings: Bindings | None, split_conj: bool,
+    def __init__(self, config: NodeConfig, thought: str, bindings: Bindings | None,
                  _pending_bindings: tuple[list, list] | None = None,
                  parsed_proofs: 'list[proof] | None' = None):
         super().__init__(config, thought, [])
         self.bindings = bindings
-        self.split_conj = split_conj
         self.running_time = 0
         self._pending_bindings = _pending_bindings
         self._prev_bindings: Bindings | None = None
@@ -6321,12 +6319,11 @@ class Intro(SubgoalMaker):
         var_bindings = arg.get("variable_bindings", [])
         fact_bindings = arg.get("fact_bindings", [])
         pending = (var_bindings, fact_bindings) if var_bindings or fact_bindings else None
-        split_conj = arg.get("split_conj", False)
         thought = arg["thought"]
         parsed_proofs = _parse_positional_proofs(
             arg.get("proofs"), f"{path}.proofs")
         factory = lambda cfg: Intro(
-            cfg, thought, None, split_conj,
+            cfg, thought, None,
             _pending_bindings=pending, parsed_proofs=parsed_proofs)
         return Parsed_Opr(cls=cls, factory=factory, raw=arg)
 
@@ -6369,7 +6366,7 @@ class Intro(SubgoalMaker):
             self._pending_bindings = None
         await super()._refresh_me_alone(auto_intro)
     def beginning_opr(self) -> Minilang_Operation:
-        return Minilang_Operation.INTRO(self.bindings, self.split_conj)
+        return Minilang_Operation.INTRO(self.bindings)
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         return FailureReason(f"Fail to introduce the variables and premises because: {"\n".join(err.errors)}")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
@@ -6469,34 +6466,6 @@ class Intro(SubgoalMaker):
             return ret
         else:
             return self._fixed_facts_at_me(ret)
-    def _all_fixed_facts_before_a_child(self, child: Node, ret: Hyps) -> Hyps:
-        # Conjunction-split subgoals share a single HHF on the ML side, so
-        # Have facts from one case leak into siblings' Isabelle context.
-        # Walk into preceding GoalNode siblings to collect their internal
-        # facts, making them suppressed in the sibling's quickview.
-        self._all_fixed_facts_before_me(ret)
-        self._fixed_facts_at_me(ret)
-        for c in self.sub_nodes:
-            if c is child:
-                return ret
-            elif self.split_conj and isinstance(c, GoalNode):
-                for gc in c.sub_nodes:
-                    gc._fixed_facts_after_me(ret)
-            else:
-                c._fixed_facts_after_me(ret)
-        raise InternalError("The target node is not my children")
-    def _all_fixed_vars_before_a_child(self, child: Node, ret: Vars) -> Vars:
-        self._all_fixed_vars_before_me(ret)
-        self._fixed_vars_at_me(ret)
-        for c in self.sub_nodes:
-            if c is child:
-                return ret
-            elif self.split_conj and isinstance(c, GoalNode):
-                for gc in c.sub_nodes:
-                    gc._fixed_vars_after_me(ret)
-            else:
-                c._fixed_vars_after_me(ret)
-        raise InternalError("The target node is not my children")
     def _rename_var(self, old_name: varname, new_name: varname) -> 'Node | None':
         if self.bindings is not None:
             for i, var in enumerate(self.bindings[0]):
@@ -6511,6 +6480,76 @@ class Intro(SubgoalMaker):
                     self.bindings[1][i] = FactBinding(fact.expr, IsaTerm.from_agent(new_name), fact.pretty)
                     return self
         return super()._rename_fact(old_name, new_name)
+
+
+#### SplitConjs
+
+class SplitConjs_ToolArg(TypedDict):
+    thought: str
+    proofs: NotRequired[list[raw_proof] | None]
+
+@proof_operation("SplitConjs", SplitConjs_ToolArg)
+class SplitConjs(SubgoalMaker):
+    def __init__(self, config: NodeConfig, thought: str,
+                 parsed_proofs: 'list[proof] | None' = None):
+        super().__init__(config, thought, [])
+        if parsed_proofs is not None:
+            self._supplied_proofs = {
+                str(i + self._initial_goal_index): (None, p)
+                for i, p in enumerate(parsed_proofs)
+            }
+    @classmethod
+    def gen_single(cls, arg: SplitConjs_ToolArg,
+                   path: str = "<direct>") -> Parsed_Opr:
+        parsed_proofs = _parse_positional_proofs(
+            arg.get("proofs"), f"{path}.proofs")
+        thought = arg["thought"]
+        return Parsed_Opr(
+            cls=cls, factory=lambda cfg: cls(cfg, thought, parsed_proofs),
+            raw=arg)
+    def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
+        self._print_thought(indent, file)
+        print_indent(indent, file)
+        file.write("operation: SplitConjs\n")
+        self._print_evaluation_status(indent, file)
+        if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
+    def beginning_opr(self) -> Minilang_Operation:
+        return Minilang_Operation.SPLIT_CONJS()
+    def _beginning_opr_err_msgs(self, err: IsabelleError) -> FailureReason:
+        return FailureReason(f"Failed to split conjunctive goal: {'\n'.join(err.errors)}")
+    def _child_refresh_failure_err_msgs(self, child: Node) -> FailureReason:
+        return FailureReason(f"Subgoal {child.id} fails to be proven.")
+    def _ending_opr_err_msgs(self, err: IsabelleError) -> FailureReason:
+        raise InternalError("A SplitConjs doesn't have an ending operation")
+    def _title_of_children(self, indent: int) -> tuple[str | None, int]:
+        if len(self.sub_nodes) <= 1:
+            return (None, indent-1)
+        else:
+            return ("goals", indent+1)
+    def _all_fixed_facts_before_a_child(self, child: Node, ret: Hyps) -> Hyps:
+        self._all_fixed_facts_before_me(ret)
+        self._fixed_facts_at_me(ret)
+        for c in self.sub_nodes:
+            if c is child:
+                return ret
+            elif isinstance(c, GoalNode):
+                for gc in c.sub_nodes:
+                    gc._fixed_facts_after_me(ret)
+            else:
+                c._fixed_facts_after_me(ret)
+        raise InternalError("The target node is not my children")
+    def _all_fixed_vars_before_a_child(self, child: Node, ret: Vars) -> Vars:
+        self._all_fixed_vars_before_me(ret)
+        self._fixed_vars_at_me(ret)
+        for c in self.sub_nodes:
+            if c is child:
+                return ret
+            elif isinstance(c, GoalNode):
+                for gc in c.sub_nodes:
+                    gc._fixed_vars_after_me(ret)
+            else:
+                c._fixed_vars_after_me(ret)
+        raise InternalError("The target node is not my children")
 
 
 #### InferenceRule

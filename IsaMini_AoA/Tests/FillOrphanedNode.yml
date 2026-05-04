@@ -28,8 +28,7 @@ proof:
       conclusion: 1 1 1
     name: bad
     Error: |
-      Fail to claim the intermediate subgoal because: Syntax Error in Term Language.
-      Type unification failed: No type arity fun :: one
+      Fail to claim the intermediate subgoal because: Type unification failed: No type arity fun :: one
       
       Type error in application: operator not of function type
       
@@ -62,8 +61,7 @@ proof:
       conclusion: 1 1 1
     name: bad
     Error: |
-      Fail to claim the intermediate subgoal because: Syntax Error in Term Language.
-      Type unification failed: No type arity fun :: one
+      Fail to claim the intermediate subgoal because: Type unification failed: No type arity fun :: one
       
       Type error in application: operator not of function type
       
