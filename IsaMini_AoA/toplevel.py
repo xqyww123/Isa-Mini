@@ -5,6 +5,7 @@ from typing import Any
 from . import driver_claude_code
 from . import driver_openai
 from . import driver_codex
+from . import driver_api
 import sys
 import io
 import os

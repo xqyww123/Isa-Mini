@@ -331,6 +331,93 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
 
 
 # ============================================================================
+# ToolExecutor — Direct In-Process Tool Dispatch
+# ============================================================================
+
+_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
+    "edit":   {"description": "Edit the proof.yaml file", "schema": _cc_edit_schema},
+    "delete": {"description": "Delete proof steps", "schema": _cc_delete_schema},
+    "answer": {"description": "Answer a pending question", "schema": _cc_answer_schema},
+    "query":  {"description": "Search for Isabelle entities by semantic similarity, patterns, or exact name/term. Use exact_name to look up definitions; use exact_term to unfold fancy syntax and retrieve semantic explanations; use long_description and filters for discovery.",
+               "schema": _cc_query_schema},
+    "read":   {"description": "Read `proof.yaml`. Use only when necessary.", "schema": _cc_read_schema},
+}
+
+
+class ToolExecutor:
+    """Direct in-process tool dispatch. Used by both MCP server and APIDriver."""
+
+    _SEARCH_HINT = (
+        "\n\n---\n"
+        "Hint: You've spent a while searching. What you need might not be "
+        "in the library. Consider shifting focus to writing the proof."
+    )
+    _SEARCH_HINT_THRESHOLD = 180  # seconds
+    _BATCH_CANCEL_MSG = "Cancelled: a prior edit/delete in this batch failed. Review the error before continuing."
+
+    def __init__(self, session: Session):
+        self._session = session
+        self._tool_lock = asyncio.Lock()
+        self._last_mutate_fail_time: float = 0.0
+
+    async def execute(self, name: str, arguments: dict) -> tuple[str, bool]:
+        """Execute a tool call. Returns (result_text, is_error).
+
+        Handles permission checks, serialization locks, cooldown logic,
+        and the search hint — same semantics as the MCP call_tool handler.
+        """
+        session = self._session
+        _session_var.set(session)
+
+        perm_error = _check_tool_permission(session, name)
+        if perm_error:
+            return (perm_error, True)
+
+        is_error = False
+        match name:
+            case "edit":
+                async with self._tool_lock:
+                    ops = arguments.get("proof_operations") if isinstance(arguments, dict) else None
+                    is_batch = isinstance(ops, list) and len(ops) > 1
+                    if not is_batch and time() - self._last_mutate_fail_time < 0.7:
+                        result, is_error = self._BATCH_CANCEL_MSG, True
+                    else:
+                        result, is_error = await _edit_tool_logic(session, arguments)
+                        if is_error and not is_batch:
+                            self._last_mutate_fail_time = time()
+                session.last_proof_op_time = time()
+            case "delete":
+                async with self._tool_lock:
+                    if time() - self._last_mutate_fail_time < 0.7:
+                        result, is_error = self._BATCH_CANCEL_MSG, True
+                    else:
+                        result, is_error = await _delete_tool_logic(session, arguments)
+                        if is_error:
+                            self._last_mutate_fail_time = time()
+                session.last_proof_op_time = time()
+            case "answer":
+                async with self._tool_lock:
+                    result, is_error = await _answer_tool_logic(session, arguments)
+            case "query":
+                result, is_error = await _query_tool_logic(session, arguments)
+            case "read":
+                result, is_error = await _read_tool_logic(session, arguments)
+            case _:
+                return (f"Unknown tool: {name}", True)
+
+        if name == "query" and not is_error:
+            if time() - session.last_proof_op_time >= self._SEARCH_HINT_THRESHOLD:
+                result += self._SEARCH_HINT
+
+        return (result, is_error)
+
+    @staticmethod
+    def tool_schemas() -> dict[str, dict[str, Any]]:
+        """Return {name: {"description": ..., "schema": ...}} for all built-in tools."""
+        return _TOOL_SCHEMAS
+
+
+# ============================================================================
 # Per-Session MCP Server Creation
 # ============================================================================
 
@@ -342,8 +429,7 @@ def _create_mcp_server(session: Session, extra_sdk_tools: list | None = None) ->
     and registered alongside the built-in proof tools.
     """
     server = MCPServer(f"proof-{id(session)}")
-    tool_lock = asyncio.Lock()  # serialize tool calls per session
-    _last_mutate_fail_time: float = 0.0
+    executor = ToolExecutor(session)
 
     # Build tool list: built-in + extras
     tools: list[Tool] = [
@@ -385,74 +471,31 @@ def _create_mcp_server(session: Session, extra_sdk_tools: list | None = None) ->
     async def list_tools() -> list[Tool]:
         return tools
 
-    _SEARCH_HINT = (
-        "\n\n---\n"
-        "Hint: You've spent a while searching. What you need might not be "
-        "in the library. Consider shifting focus to writing the proof."
-    )
-    _SEARCH_HINT_THRESHOLD = 180  # seconds
-
     @server.call_tool()
     async def call_tool(name: str, arguments: dict) -> CallToolResult:
-        nonlocal _last_mutate_fail_time
         _session_var.set(session)
 
-        # Permission check (both modes)
+        # Permission check
         perm_error = _check_tool_permission(session, name)
         if perm_error:
             return CallToolResult(
                 content=[TextContent(type="text", text=perm_error)], isError=True)
 
-        is_error = False
-        _BATCH_CANCEL_MSG = "Cancelled: a prior edit/delete in this batch failed. Review the error before continuing."
-        match name:
-            case "edit":
-                async with tool_lock:
-                    # A multi-item edit batch is one intended unit; bypass the
-                    # 0.7s spam-cooldown so a single submitted batch is never
-                    # self-aborted against its own tail.
-                    ops = arguments.get("proof_operations") if isinstance(arguments, dict) else None
-                    is_batch = isinstance(ops, list) and len(ops) > 1
-                    if not is_batch and time() - _last_mutate_fail_time < 0.7:
-                        result, is_error = _BATCH_CANCEL_MSG, True
-                    else:
-                        result, is_error = await _edit_tool_logic(session, arguments)
-                        if is_error and not is_batch:
-                            _last_mutate_fail_time = time()
-                session.last_proof_op_time = time()
-            case "delete":
-                async with tool_lock:
-                    if time() - _last_mutate_fail_time < 0.7:
-                        result, is_error = _BATCH_CANCEL_MSG, True
-                    else:
-                        result, is_error = await _delete_tool_logic(session, arguments)
-                        if is_error:
-                            _last_mutate_fail_time = time()
-                session.last_proof_op_time = time()
-            case "answer":
-                async with tool_lock:
-                    result, is_error = await _answer_tool_logic(session, arguments)
-            case "query":
-                result, is_error = await _query_tool_logic(session, arguments)
-            case "read":
-                result, is_error = await _read_tool_logic(session, arguments)
-            case _:
-                handler = extra_handlers.get(name)
-                if handler is not None:
-                    ret = await handler(arguments)
-                    content = ret.get("content", [])
-                    return CallToolResult(
-                        content=[TextContent(type="text", text=c.get("text", "")) for c in content])
-                return CallToolResult(
-                    content=[TextContent(type="text", text=f"Unknown tool: {name}")], isError=True)
+        # Built-in tools: delegate to executor
+        if name in _TOOL_SCHEMAS:
+            result, is_error = await executor.execute(name, arguments)
+            return CallToolResult(
+                content=[TextContent(type="text", text=result)], isError=is_error)
 
-        # Append search hint if agent has been searching without proof progress
-        if name == "query" and not is_error:
-            if time() - session.last_proof_op_time >= _SEARCH_HINT_THRESHOLD:
-                result += _SEARCH_HINT
-
+        # Extra SDK tools
+        handler = extra_handlers.get(name)
+        if handler is not None:
+            ret = await handler(arguments)
+            content = ret.get("content", [])
+            return CallToolResult(
+                content=[TextContent(type="text", text=c.get("text", "")) for c in content])
         return CallToolResult(
-            content=[TextContent(type="text", text=result)], isError=is_error)
+            content=[TextContent(type="text", text=f"Unknown tool: {name}")], isError=True)
 
     return server
 

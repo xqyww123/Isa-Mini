@@ -21,4 +21,4 @@ dependencies = ["msgpack"]
 "Homepage" = "https://github.com/xqyww123/Isa-Proof-Shell"
 
 [tool.setuptools.packages.find]
-include = ["Isa_Mini", "Isa_Mini.*"]
+include = ["IsaMini", "IsaMini.*"]
