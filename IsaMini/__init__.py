@@ -1,1 +1,1 @@
-from .IsaMini import Mini
+from .REPL import REPL

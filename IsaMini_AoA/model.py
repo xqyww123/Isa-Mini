@@ -5,7 +5,8 @@ from io import StringIO
 from pathlib import Path
 from .helper import split_id_into_segs, cat_segs_into_id, incr_id_major, incr_id_minor, MyIO
 from .linked_list import Cons, LinkedList, from_iterable, iterate, concat
-from typing import Any, Awaitable, ClassVar, Iterable, Mapping, NamedTuple, Protocol, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired, Annotated
+import types as _types
+from typing import Any, Awaitable, ClassVar, Iterable, Mapping, NamedTuple, Protocol, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired, Annotated, TypeAliasType, Union, get_type_hints, get_origin, get_args, is_typeddict
 from Isabelle_RPC_Host import Connection, IsabelleError, pretty_unicode, ascii_of_unicode
 from Isabelle_RPC_Host.position import IsabellePosition
 from Isabelle_RPC_Host.universal_key import (
@@ -690,19 +691,79 @@ class ArgumentError_UnparsedTerm(ArgumentError):
         """
         return ArgumentError_UnparsedTerm(arg, internal_error.term, internal_error.reason)
 
-def _check_tool_arg_keys(toolarg_typed_dict: type, data: ToolCall_arg, operation: str) -> None:
-    """
-    Ensure that `data` contains all required keys defined by the TypedDict `toolarg_typed_dict`.
-    Raises ArgumentError if any required key is missing.
-    """
-    required_keys = getattr(
-        toolarg_typed_dict,
-        "__required_keys__",
-        set(getattr(toolarg_typed_dict, "__annotations__", {}).keys()),
-    )
-    missing = [k for k in required_keys if k not in data]
+VALIDATORS: dict[type, Callable[[Any, str], Any]] = {}
+
+def validator(typ: type):
+    """Decorator to register a custom validator for a type."""
+    def decorator(fn: Callable[[Any, str], Any]):
+        VALIDATORS[typ] = fn
+        return fn
+    return decorator
+
+def _is_union_origin(origin) -> bool:
+    return origin is Union or origin is _types.UnionType
+
+def validate(typ: type, data: Any, path: str) -> Any:
+    """Validate and normalize `data` against `typ`. Returns canonical form."""
+    if isinstance(typ, TypeAliasType):
+        return validate(typ.__value__, data, path)
+    if typ in VALIDATORS:
+        return VALIDATORS[typ](data, path)
+    if is_typeddict(typ):
+        return _validate_typed_dict(typ, data, path)
+    origin = get_origin(typ)
+    if origin is list:
+        return _validate_list(get_args(typ)[0], data, path)
+    if _is_union_origin(origin):
+        return _validate_union(get_args(typ), data, path)
+    return data
+
+def _validate_typed_dict(typ: type, data: Any, path: str) -> Any:
+    if not isinstance(data, dict):
+        raise ArgumentError({}, f"{path}: expected an object, got {type(data).__name__}")
+    required = getattr(typ, "__required_keys__",
+        set(getattr(typ, "__annotations__", {}).keys()))
+    missing = [k for k in required if k not in data]
     if missing:
-        raise ArgumentError_MissingRequiredKeys(data, operation, missing)
+        raise ArgumentError_MissingRequiredKeys(data, path, missing)
+    try:
+        hints = get_type_hints(typ, globalns=globals(), include_extras=False)
+    except Exception:
+        return data
+    for key, field_type in hints.items():
+        if key in data:
+            data[key] = validate(field_type, data[key], f"{path}.{key}")
+    return data
+
+def _validate_list(elem_type: type, data: Any, path: str) -> Any:
+    if not isinstance(data, list):
+        raise ArgumentError({}, f"{path}: expected an array, got {type(data).__name__}")
+    for i, item in enumerate(data):
+        data[i] = validate(elem_type, item, f"{path}[{i}]")
+    return data
+
+def _validate_union(args: tuple[type, ...], data: Any, path: str) -> Any:
+    none_types = [a for a in args if a is type(None)]
+    real_types = [a for a in args if a is not type(None)]
+    if none_types and data is None:
+        return None
+    if len(real_types) == 1:
+        return validate(real_types[0], data, path)
+    for t in real_types:
+        if get_origin(t) is Literal:
+            if data in get_args(t):
+                return data
+    non_literal = [t for t in real_types if get_origin(t) is not Literal]
+    for t in non_literal:
+        try:
+            return validate(t, data, path)
+        except (ArgumentError, KeyError, TypeError, ValueError):
+            pass
+    for t in non_literal:
+        if t in (str, int, bool, float):
+            if isinstance(data, t):
+                return data
+    return data
 
 ## Minilang Runtime
 ### Evaluation Status
@@ -4884,6 +4945,16 @@ class Statement(TypedDict):
     premises: NotRequired[list[PremiseBinding]]
     conclusion: xterm
 
+@validator(Statement)
+def _validate_statement(data: Any, path: str) -> Statement:
+    if isinstance(data, str):
+        data = {"english": "", "conclusion": data}
+    if not isinstance(data, dict):
+        raise ArgumentError({}, f"{path}: expected an object or string, got {type(data).__name__}")
+    if "conclusion" not in data and "isabelle" in data:
+        data["conclusion"] = data.pop("isabelle")
+    return _validate_typed_dict(Statement, data, path)
+
 class NamedStatement(TypedDict):
     english: str
     isabelle: xterm
@@ -7252,7 +7323,7 @@ def Parse_Nodes(
     if meta is None:
         raise ArgumentError_UnknownProofOperation(data)
     op_path = f"{path} ({operation})"
-    _check_tool_arg_keys(meta.toolarg_typed_dict, data, op_path)
+    data = validate(meta.toolarg_typed_dict, data, op_path)
     return meta.cls.gen(cast(Any, data), remaining.tail, op_path)
 
 
@@ -7519,10 +7590,49 @@ class Session:
         await self.close()
         return False
 
-    @property
-    def has_system_prompt(self) -> bool:
-        """Whether the driver supplies a custom system prompt via a dedicated channel."""
-        return True
+    def system_prompt(self) -> str | None:
+        """Return the system prompt, or None if the driver folds it into the initial message."""
+        return (
+            "You are a formal theorem proving agent.\n"
+            "A proof goal and an incomplete proof are provided in `./proof.yaml` under the current directory.\n"
+            "Analyze the proof goal, plan a proof, and complete it using the MCP proof tools.\n"
+            "Continue until no errors remain.\n"
+            "Be concise in text output.\n"
+            "\n"
+            "## Tools\n"
+            f"- {self.tool_name(TOOL_EDIT)}: Fill, insert, or amend proof steps (your primary tool)\n"
+            f"- {self.tool_name(TOOL_DELETE)}: Delete proof steps\n"
+            f"- {self.tool_name(TOOL_SEARCH)}: Search for theorems, constants, types, and rules; help you understand unfamiliar terms\n"
+            f"- {self.tool_name(TOOL_READ)}: Read `proof.yaml`. Use only when necessary.\n"
+        )
+
+    def initial_prompt(self) -> str:
+        """Return the initial user message to start the proof session."""
+        buf = StringIO()
+        self.root.print(0, MyIO(buf), update_line=True, show_warnings=True)
+        proof_state = buf.getvalue()
+        if self.system_prompt() is not None:
+            return (
+                "Complete the following proof using the MCP proof tools.\n"
+                + proof_state
+                + "\n`proof.yaml` contains the full proof state, but read it only when you lose track of it."
+            )
+        else:
+            return (
+                "An incomplete proof is provided as follows\n"
+                + proof_state
+                + f"Analyze the proof goal, plan a proof, and complete it using tools `{self.tool_name(TOOL_EDIT)}` and `{self.tool_name(TOOL_DELETE)}`.\n"
+                "Continue building the proof until no error remains.\n"
+                "`proof.yaml` contains the full proof state, but read it only when you lose track of it."
+            )
+
+    def retry_prompt(self, unfinished_nodes: set['Node']) -> str:
+        """Return the retry message when proof steps remain incomplete."""
+        return (
+            f"Steps {', '.join([node.id for node in unfinished_nodes])} are incomplete. "
+            f"You must call the `{self.tool_name(TOOL_EDIT)}` tool to complete the steps. "
+            "Continue building the proof until `proof.yaml` contains no remaining errors."
+        )
 
     def tool_name(self, t: tool) -> str:
         """Translate abstract tool id to the name the LLM sees.

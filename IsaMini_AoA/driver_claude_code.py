@@ -161,7 +161,7 @@ class ClaudeCode(Session):
             self.options = ClaudeAgentOptions(
                 model=main_model,
                 thinking={"type": "adaptive"},
-                system_prompt=P.system_prompt(),
+                system_prompt=self.system_prompt(),
                 cwd=self.working_dir,
                 permission_mode="default",
                 allowed_tools=self.TOOL_WHITELIST,
@@ -414,7 +414,7 @@ class ClaudeCode(Session):
         try:
             async with ClaudeSDKClient(options=self.options) as client:
                 self._client = client
-                await client.query(P.INITIAL_PROMPT(self.root))
+                await client.query(self.initial_prompt())
                 self._model_time_start = time()
                 while True:
                     # Stream model outputs and log them in debug mode
@@ -441,7 +441,7 @@ class ClaudeCode(Session):
                     unfinished_nodes = set()
                     self.root.unfinished_nodes(unfinished_nodes)
                     if unfinished_nodes:
-                        retry_prompt = P.RETRY_PROMPT(unfinished_nodes)
+                        retry_prompt = self.retry_prompt(unfinished_nodes)
                         self.log_retry(unfinished_nodes, retry_prompt)
                         await client.query(retry_prompt)
                         self._model_time_start = time()
@@ -513,7 +513,7 @@ class ClaudeCode(Session):
                     f"--strict-mcp-config "
                     f"--allowed-tools {shlex.quote(allowed)} "
                     f"--settings {shlex.quote(settings)} "
-                    f"-- {shlex.quote(P.INITIAL_PROMPT(self.root))} "
+                    f"-- {shlex.quote(self.initial_prompt())} "
                     f"2>{shlex.quote(error_log)}\n")
             f.write(f"echo \"EXIT CODE: $?\" >> {shlex.quote(error_log)}\n")
         os.chmod(launcher_path, 0o755)
@@ -728,7 +728,7 @@ class ClaudeCode(Session):
         fork_options = ClaudeAgentOptions(
             model=model,
             thinking={"type": "adaptive"},
-            system_prompt=P.system_prompt(),
+            system_prompt=self.system_prompt(),
             resume=resume,
             fork_session=fork_session,
             cwd=self.working_dir,

@@ -14,7 +14,7 @@ from time import time
 import platformdirs
 
 from .model import *
-from . import prompts as P
+
 from .mcp_http_server import ProofMCPHTTPServer
 
 
@@ -81,9 +81,8 @@ class Codex_Driver(Session):
                 "(use loop.create_task with context=contextvars.copy_context())")
         return cls(parent=parent)
 
-    @property
-    def has_system_prompt(self) -> bool:
-        return False
+    def system_prompt(self) -> str | None:
+        return None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -207,7 +206,7 @@ class Codex_Driver(Session):
     # ------------------------------------------------------------------
 
     async def _run_main_loop(self):
-        prompt = P.INITIAL_PROMPT(self.root)
+        prompt = self.initial_prompt()
         codex_session_id: str | None = None
 
         while True:
@@ -234,7 +233,7 @@ class Codex_Driver(Session):
             unfinished: set[Node] = set()
             self.root.unfinished_nodes(unfinished)
             if unfinished:
-                prompt = P.RETRY_PROMPT(unfinished)
+                prompt = self.retry_prompt(unfinished)
                 self.log_retry(unfinished, prompt)
             else:
                 break

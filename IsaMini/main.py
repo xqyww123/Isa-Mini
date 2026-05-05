@@ -7,7 +7,7 @@ import readline
 import rich
 from rich.console import Console
 
-from IsaMini import Mini
+from IsaMini import REPL as Mini
 import re
 import json
 

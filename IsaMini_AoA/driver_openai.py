@@ -22,7 +22,7 @@ from agents.mcp import MCPServerStreamableHttp
 from agents.retry import ModelRetrySettings
 
 from .model import *
-from . import prompts as P
+
 from .mcp_http_server import ProofMCPHTTPServer
 
 
@@ -152,7 +152,7 @@ class OpenAI_Driver(Session):
         return Agent(
             name="prover",
             model=model or self._model,
-            instructions=P.system_prompt(),
+            instructions=self.system_prompt(),
             mcp_servers=[mcp],
             model_settings=ModelSettings(
                 truncation="auto",
@@ -169,7 +169,7 @@ class OpenAI_Driver(Session):
         mcp = self._make_mcp(self._mcp_url)
         agent = self._make_agent(mcp)
         hooks = self._make_hooks()
-        prompt: str | None = P.INITIAL_PROMPT(self.root)
+        prompt: str | None = self.initial_prompt()
         last_response_id: str | None = None
 
         try:
@@ -201,7 +201,7 @@ class OpenAI_Driver(Session):
                     unfinished: set[Node] = set()
                     self.root.unfinished_nodes(unfinished)
                     if unfinished:
-                        prompt = P.RETRY_PROMPT(unfinished)
+                        prompt = self.retry_prompt(unfinished)
                         self.log_retry(unfinished, prompt)
                     else:
                         break

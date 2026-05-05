@@ -1,12 +1,11 @@
 """
-Centralized prompt strings and templates for ClaudeCode driver.
-All user-facing messages, error messages, and prompt texts are defined here.
+Tool response messages, error messages, and rejection texts.
+System/initial/retry prompts are methods on Session (model.py).
 """
 
-from typing import Any
 from . import model
-from .model import Node, NonLeaf_Node, Root, Parsed_Opr, FailureReason
-from .model import tn, TOOL_EDIT, TOOL_DELETE, TOOL_SEARCH, TOOL_ANSWER, TOOL_READ
+from .model import NonLeaf_Node, Root
+from .model import tn, TOOL_EDIT, TOOL_DELETE
 from io import StringIO
 from .helper import MyIO
 
@@ -177,50 +176,3 @@ def path_access_denied(tool: str, yaml_path: str, target_path: str) -> str:
     )
 
 
-# ============================================================================
-# System Prompt & Initial User Prompt
-# ============================================================================
-
-def system_prompt() -> str:
-    return (
-        "You are a formal theorem proving agent.\n"
-        "A proof goal and an incomplete proof are provided in `./proof.yaml` under the current directory.\n"
-        "Analyze the proof goal, plan a proof, and complete it using the MCP proof tools.\n"
-        "Continue until no errors remain.\n"
-        "Be concise in text output.\n"
-        "\n"
-        "## Tools\n"
-        f"- {tn(TOOL_EDIT)}: Fill, insert, or amend proof steps (your primary tool)\n"
-        f"- {tn(TOOL_DELETE)}: Delete proof steps\n"
-        f"- {tn(TOOL_SEARCH)}: Search for theorems, constants, types, and rules; help you understand unfamiliar terms\n"
-        f"- {tn(TOOL_READ)}: Read `proof.yaml`. Use only when necessary.\n"
-    )
-
-def INITIAL_PROMPT(root: Root) -> str:
-    from .model import the_session
-    session = the_session()
-    if session.has_system_prompt:
-        buf = StringIO()
-        root.print(0, MyIO(buf), update_line=True, show_warnings=True)
-        return (
-            "Complete the following proof using the MCP proof tools.\n"
-            + buf.getvalue()
-            + "\n`proof.yaml` contains the full proof state, but read it only when you lose track of it."
-        )
-    else:
-        buf = StringIO()
-        root.print(0, MyIO(buf), update_line=True, show_warnings=True)
-        return (
-            "An incomplete proof is provided as follows\n"
-            + buf.getvalue() +
-            f"Analyze the proof goal, plan a proof, and complete it using tools `{tn(TOOL_EDIT)}` and `{tn(TOOL_DELETE)}`.\n"
-            "Continue building the proof until no error remains.\n"
-            "`proof.yaml` contains the full proof state, but read it only when you lose track of it."
-        )
-
-def RETRY_PROMPT(unfinished_nodes: set[Node]) -> str:
-    return (
-    f"Steps {', '.join([node.id for node in unfinished_nodes])} are incomplete. "
-    f"You must call the `{tn(TOOL_EDIT)}` tool to complete the steps. "
-    "Continue building the proof until `proof.yaml` contains no remaining errors."
-)

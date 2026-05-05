@@ -24,7 +24,7 @@ from typing import Any
 import openai
 
 from .model import *
-from . import prompts as P
+
 from .mcp_http_server import ToolExecutor
 from .helper import MyIO
 
@@ -359,8 +359,8 @@ class APIDriver(Session):
     async def _run_loop(self):
         assert self._executor is not None
         self._messages = [
-            {"role": "system", "content": P.system_prompt()},
-            {"role": "user", "content": P.INITIAL_PROMPT(self.root)},
+            {"role": "system", "content": self.system_prompt()},
+            {"role": "user", "content": self.initial_prompt()},
         ]
         tools = self._provider.format_tools(self._executor.tool_schemas())
 
@@ -395,7 +395,7 @@ class APIDriver(Session):
                 self.root.unfinished_nodes(unfinished)
                 if not unfinished:
                     break
-                retry = P.RETRY_PROMPT(unfinished)
+                retry = self.retry_prompt(unfinished)
                 self._messages.append({"role": "user", "content": retry})
                 self.log_retry(unfinished, retry)
 
@@ -460,9 +460,9 @@ class APIDriver(Session):
 
         self.refresh_YAML()
         new_messages = [
-            {"role": "system", "content": P.system_prompt()},
+            {"role": "system", "content": self.system_prompt()},
             {"role": "user", "content":
-                P.INITIAL_PROMPT(self.root) + "\n\nPrevious progress:\n" + summary},
+                self.initial_prompt() + "\n\nPrevious progress:\n" + summary},
         ]
         self.log_AoA_opr(f"Compacted. Summary: {summary[:200]}...")
         return new_messages
@@ -500,7 +500,7 @@ class APIDriver(Session):
         if mode == ForkingMode.FORKING_WITH_CTXT:
             fork_messages = list(self._messages)
         else:
-            fork_messages = [{"role": "system", "content": P.system_prompt()}]
+            fork_messages = [{"role": "system", "content": self.system_prompt()}]
 
         fork_prompt = "Let's consider a sub-task forked from the context:\n" + prompt_text
         if "answer" not in prompt_text:

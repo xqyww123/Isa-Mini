@@ -132,9 +132,11 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     session.log_tool_call(_tn, args)
     try:
         step = args.get("target_step")
+        if step is not None:
+            step = str(step)
         action = args.get("action")
         ops_list = args.get("proof_operations")
-        if not isinstance(step, str) or not step:
+        if not step:
             error_msg = "target_step must be a non-empty string"
             session.log_tool_response(_tn, f"ERROR: {error_msg}")
             return (error_msg, True)
@@ -192,7 +194,7 @@ async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     session.log_tool_call(_tn, args)
     try:
         session.root.session.age += 1
-        steps = args["target_steps"]
+        steps = [str(s) for s in args["target_steps"]]
         try:
             not_found = await session.root.delete(steps)
             if len(not_found) == len(steps):
@@ -278,8 +280,12 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     session.refresh_YAML()
 
     step_id = args.get("step_id")
+    if step_id is not None:
+        step_id = str(step_id)
     line_num = args.get("line")
-    range_lines = args.get("range", 50)
+    if line_num is not None:
+        line_num = int(line_num)
+    range_lines = int(args.get("range", 50))
 
     if step_id is None and line_num is None:
         yaml_path: str | None = getattr(session, "YAML_path", None)

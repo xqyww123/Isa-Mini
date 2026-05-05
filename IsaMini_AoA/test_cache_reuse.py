@@ -22,7 +22,6 @@ from dataclasses import dataclass
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, HookMatcher, ResultMessage
 from claude_agent_sdk.types import HookInput, HookContext, HookJSONOutput
 
-from . import prompts as P
 
 
 @dataclass
@@ -66,13 +65,14 @@ async def run_test():
         f.write("goal: \"1 + 1 = (2::nat)\"\nproof:\n  - step_1: _\n")
 
     print(f"Working directory: {work_dir}")
-    print(f"System prompt length: {len(P.SYSTEM_PROMPT)} chars")
+    base_system_prompt = "You are a formal theorem proving agent. Complete the proof."
+    print(f"System prompt length: {len(base_system_prompt)} chars")
     print()
 
     # Pad system prompt to exceed 1024-token minimum for prompt caching.
     # Claude requires the cacheable prefix to be at least 1024 tokens.
     padding = "\n# Reference\n" + ("Isabelle/HOL is a generic proof assistant. " * 200)
-    test_system_prompt = P.SYSTEM_PROMPT + padding
+    test_system_prompt = base_system_prompt + padding
 
     # --- Phase 1: Main session (build up cache) ---
     print("=== Phase 1: Main session ===")

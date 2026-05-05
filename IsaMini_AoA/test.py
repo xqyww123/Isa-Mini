@@ -5053,9 +5053,9 @@ async def _test_CommitGroupBMidBatch(root: Root, file: MyIO):
         {"target_step": "1", "action": "fill", "proof_operations": [
             {"operation": "Branch", "thought": "trichotomy closes the proof line",
              "cases": [
-                 {"statement": {"english": "positive", "isabelle": "x > 0"}},
-                 {"statement": {"english": "zero", "isabelle": "x = 0"}},
-                 {"statement": {"english": "negative", "isabelle": "x < 0"}},
+                 {"statement": {"english": "positive", "isabelle": "x > 0", "name": "positive"}},
+                 {"statement": {"english": "zero", "isabelle": "x = 0", "name": "zero"}},
+                 {"statement": {"english": "negative", "isabelle": "x < 0", "name": "negative"}},
              ]},
             # These two cannot be siblings after a block-closing SubgoalMaker.
             # Aggregated into session.warnings.  Wrapped in Have (instead of

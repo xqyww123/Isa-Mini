@@ -1,6 +1,6 @@
 import IsaREPL as REPL
 
-class Mini:
+class REPL:
     """
     A REPL client for Isabelle/Mini
     """
@@ -11,8 +11,8 @@ class Mini:
         await self.repl.run_app("Minilang-REPL")
         await self.repl._write((self.hasty, self.mode, self.SH_params))
         version = REPL.Client._parse_control_ (await self.repl._feed_and_unpack())
-        if version != Mini.VERSION:
-            raise Exception(f"Mini: incompatible client version {Mini.VERSION} of Server {version}")
+        if version != REPL.VERSION:
+            raise Exception(f"Mini: incompatible client version {REPL.VERSION} of Server {version}")
 
     async def __turn_off (self):
         if self.pos:
@@ -170,26 +170,26 @@ class Mini:
                 return {
                     'vars' : data[1][0],
                     'facts': data[1][1],
-                    'goal' : [Mini.parse_prooftree(x) for x in data[2]]
+                    'goal' : [REPL.parse_prooftree(x) for x in data[2]]
                 }
             case 2:
                 # a block
                 return {
-                    'block': Mini.parse_prooftree(data[1])
+                    'block': REPL.parse_prooftree(data[1])
                 }
     @staticmethod
     def parse_eval_return (response):
         data, status = response
         return {
-            'new_items': Mini.parse_item (data[0]),
+            'new_items': REPL.parse_item (data[0]),
             'new_case' : data[1],
-            'state'    : Mini.parse_prooftree (data[2]),
+            'state'    : REPL.parse_prooftree (data[2]),
             'finished' : status
         }
 
     async def pretty_eval (self, src):
         ret = await self.eval (src)
-        return Mini.parse_eval_return (ret)
+        return REPL.parse_eval_return (ret)
 
     async def print(self):
         if not self.pos:
