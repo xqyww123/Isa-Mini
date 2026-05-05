@@ -1720,6 +1720,16 @@ class Minilang_State:
                 EvaluationStatus.Failure(time() - now, FailureReason(''.join(err.errors))))
             raise
 
+    async def concat_statement(self, fixes: list[tuple[str, str]],
+                               assumes: list[str], concl: str) -> str:
+        """Assemble for_any + premises + conclusion into a single Isabelle term string."""
+        result = await self.connection.callback("IsaMini.concat_statement",
+            (self.name,
+             [(n, ascii_of_unicode(t)) for n, t in fixes],
+             [ascii_of_unicode(a) for a in assumes],
+             ascii_of_unicode(concl)))
+        return pretty_unicode(result)
+
 ### Interaction
 
 # Structured answer object carried by every interaction reply. Each
@@ -4939,28 +4949,65 @@ class PremiseBinding(TypedDict):
     name: str
     term: xterm
 
-class Statement(TypedDict):
+class LongStatement(TypedDict):
     english: str
     for_any: NotRequired[list[Explicit_Var]]
     premises: NotRequired[list[PremiseBinding]]
     conclusion: xterm
 
-@validator(Statement)
-def _validate_statement(data: Any, path: str) -> Statement:
+@validator(LongStatement)
+def _validate_long_statement(data: Any, path: str) -> LongStatement:
     if isinstance(data, str):
         data = {"english": "", "conclusion": data}
     if not isinstance(data, dict):
         raise ArgumentError({}, f"{path}: expected an object or string, got {type(data).__name__}")
     if "conclusion" not in data and "isabelle" in data:
         data["conclusion"] = data.pop("isabelle")
-    return _validate_typed_dict(Statement, data, path)
+    return _validate_typed_dict(LongStatement, data, path)
 
-class NamedStatement(TypedDict):
+Statement = LongStatement
+
+class ShortStatement(TypedDict):
     english: str
     isabelle: xterm
-    name: xname
 
-def print_statement(self: Statement, indent: int, file: MyIO):
+@validator(ShortStatement)
+def _validate_short_statement(data: Any, path: str) -> ShortStatement:
+    if isinstance(data, str):
+        data = {"english": "", "isabelle": data}
+    if not isinstance(data, dict):
+        raise ArgumentError({}, f"{path}: expected an object or string, got {type(data).__name__}")
+    if "conclusion" in data and "isabelle" not in data:
+        data["_long_form"] = True
+        data["_for_any"] = data.pop("for_any", [])
+        data["_premises"] = data.pop("premises", [])
+        data["isabelle"] = data.pop("conclusion")
+        data.setdefault("english", "")
+    elif "isabelle" not in data and "conclusion" in data:
+        data["isabelle"] = data.pop("conclusion")
+    return _validate_typed_dict(ShortStatement, data, path)
+
+NamedStatement = ShortStatement
+
+class ConstraintBinding(TypedDict):
+    name: xname
+    statement: ShortStatement
+
+@validator(ConstraintBinding)
+def _validate_constraint_binding(data: Any, path: str) -> ConstraintBinding:
+    if not isinstance(data, dict):
+        raise ArgumentError({}, f"{path}: expected an object, got {type(data).__name__}")
+    if "statement" not in data and "isabelle" in data:
+        name = data.pop("name", None)
+        stmt = {"english": data.pop("english", ""), "isabelle": data.pop("isabelle")}
+        if name is None and "name" in stmt:
+            name = stmt.pop("name")
+        data["statement"] = stmt
+        if name is not None:
+            data["name"] = name
+    return _validate_typed_dict(ConstraintBinding, data, path)
+
+def print_statement(self: LongStatement, indent: int, file: MyIO):
     print_indent(indent, file)
     file.write(f"- english: {self["english"]}\n")
     print_indent(indent, file)
@@ -6279,7 +6326,7 @@ class Suffices(StdBlock):
 class Obtain_ToolArg(TypedDict):
     thought: str
     variables: list[Explicit_Var]
-    constraints: list[NamedStatement]
+    constraints: list[ConstraintBinding]
     proof: NotRequired[raw_proof | None]
 
 @proof_operation("Obtain", Obtain_ToolArg)
@@ -6305,6 +6352,13 @@ class Obtain(StdBlock):
         # `_prev_bindings`).
         self._prev_quickview_introduced: Context | None = None
     async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
+        for c in self.constraints:
+            stmt = c["statement"]
+            if stmt.get("_long_form"):
+                fixes = [(v["name"], v.get("type") or "") for v in stmt.pop("_for_any", [])]  # type: ignore[misc]
+                premises = [p["term"] for p in stmt.pop("_premises", [])]  # type: ignore[misc]
+                stmt["isabelle"] = await self.ml_state.concat_statement(fixes, premises, stmt["isabelle"])
+                del stmt["_long_form"]  # type: ignore[misc]
         fail = await super()._refresh_the_beginning_opr()
         if fail is not None:
             return fail
@@ -6372,32 +6426,28 @@ class Obtain(StdBlock):
             case [constraint]:
                 print_indent(indent, file)
                 file.write(f"constraint:\n")
-                if "name" in constraint:
-                    print_indent(indent+1, file)
-                    file.write(f"name: {constraint['name']}\n")
                 print_indent(indent+1, file)
-                file.write(f"english: {constraint['english']}\n")
+                file.write(f"name: {constraint['name']}\n")
                 print_indent(indent+1, file)
-                file.write(f"conclusion: {constraint['isabelle']}\n")
+                file.write(f"english: {constraint['statement']['english']}\n")
+                print_indent(indent+1, file)
+                file.write(f"conclusion: {constraint['statement']['isabelle']}\n")
             case _:
                 print_indent(indent, file)
                 file.write(f"constraints:\n")
                 for constraint in self.constraints:
                     print_indent(indent+1, file)
-                    if "name" in constraint:
-                        file.write(f"- name: {constraint['name']}\n")
-                        print_indent(indent+1, file)
-                        file.write(f"  english: {constraint['english']}\n")
-                    else:
-                        file.write(f"- english: {constraint['english']}\n")
+                    file.write(f"- name: {constraint['name']}\n")
                     print_indent(indent+1, file)
-                    file.write(f"  conclusion: {constraint['isabelle']}\n")
+                    file.write(f"  english: {constraint['statement']['english']}\n")
+                    print_indent(indent+1, file)
+                    file.write(f"  conclusion: {constraint['statement']['isabelle']}\n")
         self._print_evaluation_status(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
     def beginning_opr(self) -> 'Minilang_Operation | FailureReason | None':
         if not self.variables:
             return FailureReason("Must specify at least one variable to obtain.")
-        return Minilang_Operation.OBTAIN(self.variables, [(c["name"], c["isabelle"]) for c in self.constraints])
+        return Minilang_Operation.OBTAIN(self.variables, [(c["name"], c["statement"]["isabelle"]) for c in self.constraints])
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         return FailureReason(f"Fail to claim the existential subgoal because: {"\n".join(err.errors)}")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
@@ -6775,8 +6825,17 @@ class Contradiction(Leaf):
 ### Branch
 
 class Branch_Case_ToolArg(TypedDict):
-    statement: NamedStatement
+    name: xname
+    statement: ShortStatement
     proof: NotRequired[raw_proof | None]
+
+@validator(Branch_Case_ToolArg)
+def _validate_branch_case(data: Any, path: str) -> Branch_Case_ToolArg:
+    if not isinstance(data, dict):
+        raise ArgumentError({}, f"{path}: expected an object, got {type(data).__name__}")
+    if "name" not in data and isinstance(data.get("statement"), dict) and "name" in data["statement"]:
+        data["name"] = data["statement"].pop("name")
+    return _validate_typed_dict(Branch_Case_ToolArg, data, path)
 class Branch_ToolArg(TypedDict):
     thought: str
     cases: list[Branch_Case_ToolArg]
@@ -6811,6 +6870,7 @@ class Branch(SubgoalMaker):
                 raise ArgumentError(arg,
                     f"{case_path}: expected an object, got "
                     f"{type(case).__name__}")
+            cases[ci] = case = validate(Branch_Case_ToolArg, case, case_path)
             parsed_cases.append(
                 _parse_optional_raw_proof(case.get("proof"), f"{case_path}.proof"))
         return Parsed_Opr(
@@ -6827,7 +6887,7 @@ class Branch(SubgoalMaker):
     def beginning_opr(self) -> 'Minilang_Operation | FailureReason':
         if not self.cases:
             return FailureReason("Must specify at least one branching case.")
-        return Minilang_Operation.BRANCH([(case["statement"]["name"], case["statement"]["isabelle"]) for case in self.cases])
+        return Minilang_Operation.BRANCH([(case["name"], case["statement"]["isabelle"]) for case in self.cases])
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         return FailureReason(f"Fail to anlysis the proof goal by cases because: {"\n".join(err.errors)}")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
@@ -6835,6 +6895,13 @@ class Branch(SubgoalMaker):
     def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         raise InternalError("A Branch doesn't have an ending operation")
     async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
+        for case in self.cases:
+            stmt = case["statement"]
+            if stmt.get("_long_form"):
+                fixes = [(v["name"], v.get("type") or "") for v in stmt.pop("_for_any", [])]  # type: ignore[misc]
+                premises = [p["term"] for p in stmt.pop("_premises", [])]  # type: ignore[misc]
+                stmt["isabelle"] = await self.ml_state.concat_statement(fixes, premises, stmt["isabelle"])
+                del stmt["_long_form"]  # type: ignore[misc]
         fail = await super()._refresh_the_beginning_opr()
         if fail is None:
             if not self.sub_nodes[0].thought:

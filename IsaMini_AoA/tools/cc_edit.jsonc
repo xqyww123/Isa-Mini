@@ -22,8 +22,8 @@
       "title": "Variable",
       "type": "object"
     },
-    "Statement": {
-      "title": "Statement",
+    "LongStatement": {
+      "title": "LongStatement",
       "properties": {
         "english": {
           "type": "string",
@@ -59,8 +59,8 @@
       "type": "object",
       "additionalProperties": false
     },
-    "NamedStatement": {
-      "title": "NamedStatement",
+    "ShortStatement": {
+      "title": "ShortStatement",
       "properties": {
         "english": {
           "type": "string",
@@ -69,13 +69,9 @@
         "isabelle": {
           "type": "string",
           "description": "the corresponding Isabelle statement with all literal numbers annotated with their types"
-        },
-        "name": {
-          "type": "string",
-          "description": "binding name for this statement"
         }
       },
-      "required": ["english", "isabelle", "name"],
+      "required": ["english", "isabelle"],
       "type": "object",
       "additionalProperties": false
     },
@@ -166,7 +162,7 @@
           "type": "string"
         },
         "thought": { "$ref": "#/$defs/Thought" },
-        "statement": { "$ref": "#/$defs/Statement" },
+        "statement": { "$ref": "#/$defs/LongStatement" },
         "name": { "type": "string", "description": "binding of the lemma" },
         "proof": { "$ref": "#/$defs/Proof" },
         "auto_apply": {
@@ -200,7 +196,15 @@
         },
         "constraints": {
           "type": "array",
-          "items": { "$ref": "#/$defs/NamedStatement" }
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string", "description": "binding name for the constraint" },
+              "statement": { "$ref": "#/$defs/ShortStatement" }
+            },
+            "required": ["name", "statement"]
+          }
         },
         "proof": { "$ref": "#/$defs/Proof" }
       },
@@ -226,10 +230,11 @@
           "items": {
             "type": "object",
             "properties": {
-              "statement": { "$ref": "#/$defs/NamedStatement" },
+              "name": { "type": "string", "description": "binding name for this case" },
+              "statement": { "$ref": "#/$defs/ShortStatement" },
               "proof": { "$ref": "#/$defs/Proof" }
             },
-            "required": [ "statement" ]
+            "required": [ "name", "statement" ]
           },
           "type": "array"
         }
@@ -435,7 +440,7 @@
           "$ref": "#/$defs/Thought"
         },
         "statement": {
-          "$ref": "#/$defs/Statement"
+          "$ref": "#/$defs/LongStatement"
         },
         "proof": { "$ref": "#/$defs/Proof" }
       },

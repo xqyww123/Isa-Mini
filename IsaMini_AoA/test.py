@@ -6648,9 +6648,9 @@ async def _test_BatchCase1Reject(root: Root, file: MyIO):
     ops2 = [
         {"operation": "Branch", "thought": "trichotomy",
          "cases": [
-             {"statement": {"english": "p", "isabelle": "x > 0"}},
-             {"statement": {"english": "z", "isabelle": "x = 0"}},
-             {"statement": {"english": "n", "isabelle": "x < 0"}},
+             {"statement": {"english": "p", "isabelle": "x > 0", "name": "p"}},
+             {"statement": {"english": "z", "isabelle": "x = 0", "name": "z"}},
+             {"statement": {"english": "n", "isabelle": "x < 0", "name": "n"}},
          ]},
         {"operation": "Obvious", "facts": []},
     ]
