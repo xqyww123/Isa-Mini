@@ -64,7 +64,7 @@ _cc_query_schema = _load_schema(
 
 
 def _query_k(q: dict) -> int:
-    k = q.get("k", DEFAULT_QUERY_K)
+    k = q.get("number", DEFAULT_QUERY_K)
     if not isinstance(k, int) or k < 1:
         return DEFAULT_QUERY_K
     return min(k, MAX_QUERY_K)

@@ -51,12 +51,12 @@
             "description": "Induction/case-split rules only: restrict to rules whose induction/case target has this type. Wildcards (_, 'a, ?a) allowed.",
             "default": ""
           },
-          "k": {
+          "number": {
             "type": "integer",
             "minimum": 1,
             "maximum": 50,
             "default": 15,
-            "description": "Number of top results to return for this query. Entries already shown in earlier results are skipped, so the actual count may be lower."
+            "description": "Number of top results to return for this query. Entries already shown in earlier results are skipped, so gradually increase this number to explore more."
           },
           "exact_name": {
             "type": "string",

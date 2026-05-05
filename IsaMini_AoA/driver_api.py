@@ -127,7 +127,9 @@ class OpenAIProvider(Provider):
 
     def __init__(self, model: str, api_key: str | None = None,
                  base_url: str | None = None, cache_key: str | None = None,
-                 default_context_window: int = 128_000):
+                 default_context_window: int = 128_000,
+                 temperature: float = 0.3,
+                 extra_params: dict[str, Any] | None = None):
         self._model = model
         self._client = openai.AsyncOpenAI(
             api_key=api_key or os.environ.get("OPENAI_API_KEY"),
@@ -135,11 +137,14 @@ class OpenAIProvider(Provider):
         )
         self._cache_key = cache_key
         self._default_context_window = default_context_window
+        self._temperature = temperature
+        self._extra_params = extra_params or {}
 
     async def chat(self, messages: list[dict], tools: list[dict]) -> ProviderResponse:
         params: dict[str, Any] = {
             "model": self._model,
             "messages": messages,
+            "temperature": self._temperature,
         }
         if tools:
             params["tools"] = tools
@@ -147,6 +152,9 @@ class OpenAIProvider(Provider):
             params.setdefault("extra_body", {})
             params["extra_body"]["prompt_cache_key"] = self._cache_key
             params["extra_body"]["prompt_cache_retention"] = "24h"
+        if self._extra_params:
+            params.setdefault("extra_body", {})
+            params["extra_body"].update(self._extra_params)
 
         response = await self._client.chat.completions.create(**params)
         choice = response.choices[0]
@@ -227,6 +235,8 @@ class K2ThinkProvider(OpenAIProvider):
             base_url=base_url,
             cache_key=None,
             default_context_window=context_window,
+            temperature=0.2,
+            extra_params={"think_budget_tokens": 100_000},
         )
 
     async def chat(self, messages: list[dict], tools: list[dict]) -> ProviderResponse:

@@ -91,7 +91,7 @@
         "discharge_premises": {
           "description": "optional list of facts to discharge the premises of this rule left-to-right; use null to skip a premise position",
           "items": {
-            "oneOf": [
+            "anyOf": [
               { "$ref": "#/$defs/FactByName" },
               { "type": "null" }
             ]

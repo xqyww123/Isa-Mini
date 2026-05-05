@@ -24,17 +24,6 @@ method_setup aoa = \<open>
  * here — so non-AoA Minilang users of this theory keep the stock
  * defaults. *)
 
-lemma multiplicity_int_nat: ‹multiplicity (int x) (int y) = multiplicity x y›
-proof -
-  have t1: "int x ^ n dvd int y = (x ^ n dvd y)" for n
-    using of_nat_dvd_iff by force
-  show ?thesis
-    unfolding multiplicity_def
-    by (auto simp: t1)
-qed
-
-
-
 
 (*
 ML \<open>

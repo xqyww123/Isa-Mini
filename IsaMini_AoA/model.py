@@ -763,7 +763,7 @@ def _validate_union(args: tuple[type, ...], data: Any, path: str) -> Any:
         if t in (str, int, bool, float):
             if isinstance(data, t):
                 return data
-    return data
+    raise ArgumentError({}, f"{path}: value does not match any variant of the union type, got {type(data).__name__}: {repr(data)[:80]}")
 
 ## Minilang Runtime
 ### Evaluation Status
@@ -2462,6 +2462,14 @@ class Node(ABC):
         self._is_trivial = None
 
     @classmethod
+    def _validate_arg(cls, arg: Any, path: str) -> Any:
+        """Validate arg against this class's registered ToolArg TypedDict."""
+        meta = next((m for m in OPERATION_REGISTRY.values() if m.cls is cls), None)
+        if meta is not None:
+            return validate(meta.toolarg_typed_dict, arg, path)
+        return arg
+
+    @classmethod
     def gen_single(
         cls,
         arg: Any,
@@ -2478,6 +2486,7 @@ class Node(ABC):
         time.  Path is only used for error messages when parsing nested
         fields; it has a default for direct/test invocations like
         `Obvious.gen_single({"facts": []})`."""
+        arg = cls._validate_arg(arg, path)
         return Parsed_Opr(cls=cls, factory=lambda cfg: cls(cfg, arg), raw=arg)
 
     @classmethod
@@ -3062,7 +3071,11 @@ class Node(ABC):
         self._first_time = False
     async def amend(self, id: step, gns: 'list[Parsed_Opr]') -> 'EditOutcome':
         """Replace the node at `id` with nodes built from `gns`.  Returns
-        an `EditOutcome` — never raises AoA_Error."""
+        an `EditOutcome` — never raises AoA_Error.
+
+        When the target node is not found, falls back to `fill` if `id`
+        matches the fill-position of its parent block (handles the common
+        case where a prior fill+revert deleted the node)."""
         op = EditOperation.AMEND
         outcome = EditOutcome(operation=op, request=gns)
         if not gns:
@@ -3070,9 +3083,13 @@ class Node(ABC):
         try:
             old_node = self.locate_node(id)
         except NodeNotFound:
-            outcome.failure = CannotEdit_NodeNotFound(
-                target_step=id, operation=op, unapplied_oprs=list(gns), is_error=True)
-            return outcome
+            fill_outcome = await self.fill(id, gns)
+            if fill_outcome.failure is not None:
+                outcome.failure = CannotEdit_NodeNotFound(
+                    target_step=id, operation=op,
+                    unapplied_oprs=list(gns), is_error=True)
+                return outcome
+            return fill_outcome
         if old_node.parent is not None and isinstance(old_node.parent, NonLeaf_Node):
             the_session().working_block = old_node.parent
         sub_outcome, _ = await old_node.amend_me(gns, op=op)
@@ -3463,6 +3480,7 @@ class StdBlock(NonLeaf_Node):
         `(config, arg, parsed_proof)`, not the generic `type[StdBlock]`
         which it infers (StdBlock's own `__init__` is
         `(config, thought, sub_nodes)`)."""
+        arg = cls._validate_arg(arg, path)
         parsed = _parse_optional_raw_proof(arg.get("proof"), f"{path}.proof")
         return Parsed_Opr(
             cls=cls,
@@ -4954,6 +4972,12 @@ class LongStatement(TypedDict):
     for_any: NotRequired[list[Explicit_Var]]
     premises: NotRequired[list[PremiseBinding]]
     conclusion: xterm
+
+@validator(FactByName)
+def _validate_fact_by_name(data: Any, path: str) -> FactByName:
+    if isinstance(data, str):
+        data = {"name": data}
+    return _validate_typed_dict(FactByName, data, path)
 
 @validator(LongStatement)
 def _validate_long_statement(data: Any, path: str) -> LongStatement:
@@ -6858,6 +6882,7 @@ class Branch(SubgoalMaker):
     @classmethod
     def gen_single(cls, arg: Branch_ToolArg,
                    path: str = "<direct>") -> Parsed_Opr:
+        arg = cls._validate_arg(arg, path)
         cases = arg.get("cases")
         if not isinstance(cases, list):
             raise ArgumentError(arg,
@@ -6870,7 +6895,6 @@ class Branch(SubgoalMaker):
                 raise ArgumentError(arg,
                     f"{case_path}: expected an object, got "
                     f"{type(case).__name__}")
-            cases[ci] = case = validate(Branch_Case_ToolArg, case, case_path)
             parsed_cases.append(
                 _parse_optional_raw_proof(case.get("proof"), f"{case_path}.proof"))
         return Parsed_Opr(

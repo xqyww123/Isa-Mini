@@ -1,0 +1,46 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: int
+premises:
+  - h: (0 :: int) ≤ x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+[1] fill [Have(sq)] — creates step 1
+--------------------------------------------------
+Filled step 1.
+Outline:
+  step 1: Have sq (done, line 0)
+  Error: Unfinished Proof (line 11). Call command `edit` with action `fill` and target step `2`
+  goal: (0 :: int) ≤ x * x
+is_error: False
+--------------------------------------------------
+[2] delete step 1 — simulates revert
+--------------------------------------------------
+variables:
+  - x: int
+premises:
+  - h: (0 :: int) ≤ x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+[3] amend step 1 — fallback to fill, succeeds
+--------------------------------------------------
+Filled step 1.
+Outline:
+  done
+Congratulations! All goals are proven.
+is_error: False
+--------------------------------------------------
+[4] amend '999' — genuinely not found
+--------------------------------------------------
+Amended nothing.
+Cannot amend the node 999
+The node is not found.
+is_error: True

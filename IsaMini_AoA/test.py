@@ -7925,6 +7925,64 @@ async def _test_ForkDeletesRefreshingNode(root: Root, file: MyIO):
     print_header("After fill", file)
     root.print(0, file)
 
+@model_test("AmendFallbackFill", "Test_AmendFallbackFill.thy", 11)
+async def _test_AmendFallbackFill(root: Root, file: MyIO):
+    """Amend on a not-found node falls back to fill when the step_id
+    matches the fill-position of its parent block.
+
+    Scenario: a node is deleted (simulating what happens after
+    TERMINATE_AND_REVERT). Then amend on the deleted step_id should
+    fall back to fill and succeed."""
+    from .mcp_http_server import _edit_tool_logic
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # (1) Fill step 1 with a Have statement — creates node at step 1.
+    root.session.age += 1
+    result1, is_error1 = await _edit_tool_logic(
+        root.session,
+        {"target_step": "1", "action": "fill", "proof_operations": [
+            {"operation": "Have", "thought": "restate",
+             "statement": {"english": "nonneg", "conclusion": r"x * x \<ge> 0"},
+             "name": "sq",
+             "proof": [{"operation": "Obvious", "facts": [{"name": "h"}]}]},
+        ]})
+    print_header("[1] fill [Have(sq)] — creates step 1", file)
+    file.write(result1)
+    file.write(f"is_error: {is_error1}\n")
+
+    # (2) Delete step 1 — simulates the revert that happens after
+    # a failed Obvious via TERMINATE_AND_REVERT.
+    root.session.age += 1
+    await root.delete(["1"])
+    print_header("[2] delete step 1 — simulates revert", file)
+    root.print(0, file)
+
+    # (3) Amend step 1 — node no longer exists. With the fallback,
+    # this delegates to fill and succeeds.
+    root.session.age += 1
+    result3, is_error3 = await _edit_tool_logic(
+        root.session,
+        {"target_step": "1", "action": "amend", "proof_operations": [
+            {"operation": "Obvious", "facts": [{"name": "h"}]},
+        ]})
+    print_header("[3] amend step 1 — fallback to fill, succeeds", file)
+    file.write(result3)
+    file.write(f"is_error: {is_error3}\n")
+
+    # (4) Amend a truly non-existent node (no valid fill position) —
+    # should still fail with NodeNotFound.
+    root.session.age += 1
+    result4, is_error4 = await _edit_tool_logic(
+        root.session,
+        {"target_step": "999", "action": "amend", "proof_operations": [
+            {"operation": "Obvious", "facts": []},
+        ]})
+    print_header("[4] amend '999' — genuinely not found", file)
+    file.write(result4)
+    file.write(f"is_error: {is_error4}\n")
+
+
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
     import msgpack as mp
     from IsaREPL import Client

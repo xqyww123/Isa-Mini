@@ -298,8 +298,8 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             return ("proof.yaml not found.", True)
         if len(all_lines) > 100:
             error_msg = (
-                f"proof.yaml is {len(all_lines)} lines. "
-                "Provide step_id or line number to read a specific section.")
+                f"The proof contains {len(all_lines)} lines. "
+                "Provide `step_id` or `line number` to read a specific section.")
             session.log_tool_response(_tn, f"ERROR: {error_msg}")
             return (error_msg, True)
         result = "".join(f"{i+1:4d} | {ln}" for i, ln in enumerate(all_lines))
@@ -311,7 +311,7 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             node = session.root.locate_node(step_id)
             line_num = node.line
         except NodeNotFound:
-            error_msg = f"Step '{step_id}' not found."
+            error_msg = f"Step '{step_id}' not found. Read the proof by line number instead."
             session.log_tool_response(_tn, f"ERROR: {error_msg}")
             return (error_msg, True)
 
@@ -344,7 +344,10 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "edit":   {"description": "Edit the proof.yaml file", "schema": _cc_edit_schema},
     "delete": {"description": "Delete proof steps", "schema": _cc_delete_schema},
     "answer": {"description": "Answer a pending question", "schema": _cc_answer_schema},
-    "query":  {"description": "Search for Isabelle entities by semantic similarity, patterns, or exact name/term. Use exact_name to look up definitions; use exact_term to unfold fancy syntax and retrieve semantic explanations; use long_description and filters for discovery.",
+    "query":  {"description": "Search for Isabelle entities by semantic similarity, patterns, or exact name/term. "
+                "Use exact_name to look up definitions; "
+                "use exact_term to unfold fancy syntax and retrieve semantic explanations; "
+                "use long_description and filters for discovery.",
                "schema": _cc_query_schema},
     "read":   {"description": "Read `proof.yaml`. Use only when necessary.", "schema": _cc_read_schema},
 }
