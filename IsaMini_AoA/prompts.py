@@ -197,14 +197,26 @@ def system_prompt() -> str:
     )
 
 def INITIAL_PROMPT(root: Root) -> str:
-    buf = StringIO()
-    root.print(0, MyIO(buf), update_line=True, show_warnings=True)
-    return (
-        "Complete the following proof using the MCP proof tools.\n"
-        + buf.getvalue()
-        + "You can always read `proof.yaml` to review the full proof state "
-        "if you lose track of any details.\n"
-    )
+    from .model import the_session
+    session = the_session()
+    if session.has_system_prompt:
+        buf = StringIO()
+        root.print(0, MyIO(buf), update_line=True, show_warnings=True)
+        return (
+            "Complete the following proof using the MCP proof tools.\n"
+            + buf.getvalue()
+            + "\n`proof.yaml` contains the full proof state, but read it only when you lose track of it."
+        )
+    else:
+        buf = StringIO()
+        root.print(0, MyIO(buf), update_line=True, show_warnings=True)
+        return (
+            "An incomplete proof is provided as follows\n"
+            + buf.getvalue() +
+            f"Analyze the proof goal, plan a proof, and complete it using tools `{tn(TOOL_EDIT)}` and `{tn(TOOL_DELETE)}`.\n"
+            "Continue building the proof until no error remains.\n"
+            "`proof.yaml` contains the full proof state, but read it only when you lose track of it."
+        )
 
 def RETRY_PROMPT(unfinished_nodes: set[Node]) -> str:
     return (

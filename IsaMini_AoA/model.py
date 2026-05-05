@@ -7519,6 +7519,11 @@ class Session:
         await self.close()
         return False
 
+    @property
+    def has_system_prompt(self) -> bool:
+        """Whether the driver supplies a custom system prompt via a dedicated channel."""
+        return True
+
     def tool_name(self, t: tool) -> str:
         """Translate abstract tool id to the name the LLM sees.
         Base implementation returns identity; drivers override."""
