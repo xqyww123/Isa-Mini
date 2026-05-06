@@ -1846,7 +1846,7 @@ TOOL_EDIT:   tool = "edit"
 TOOL_DELETE: tool = "delete"
 TOOL_ANSWER: tool = "answer"
 TOOL_SEARCH: tool = "query"
-TOOL_READ:   tool = "read"
+TOOL_READ:   tool = "recall"
 TOOL_QUIT:   tool = "quit"
 ALL_PROOF_TOOLS: tuple[tool, ...] = (TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER, TOOL_SEARCH, TOOL_READ, TOOL_QUIT)
 
@@ -7730,12 +7730,12 @@ class Session:
             f"- {self.tool_name(TOOL_EDIT)}: Fill, insert, or amend proof steps (your primary tool)\n"
             f"- {self.tool_name(TOOL_DELETE)}: Delete proof steps\n"
             f"- {self.tool_name(TOOL_SEARCH)}: Search for theorems, constants, types, and rules; help you understand unfamiliar terms\n"
-            f"- {self.tool_name(TOOL_READ)}: Read `proof.yaml`. Use only when necessary.\n"
-            f"- {self.tool_name(TOOL_QUIT)}: Concede failure and abandon the proof. Use only after all strategies have been exhausted.\n"
-            "\n"
-            "Exhaust all strategies before giving up. "
-            "If you conclude the goal is a false statement, or no viable proof path remains, "
-            f"call `{self.tool_name(TOOL_QUIT)}`.\n"
+            f"- {self.tool_name(TOOL_READ)}: Recall proof state from `proof.yaml`. Use only when you have lost track.\n"
+            # f"- {self.tool_name(TOOL_QUIT)}: Concede failure and abandon the proof. Use only after all strategies have been exhausted.\n"
+            # "\n"
+            # "Exhaust all strategies before giving up. "
+            # "If you conclude the goal is a false statement, or no viable proof path remains, "
+            # f"call `{self.tool_name(TOOL_QUIT)}`.\n"
         )
 
     def initial_prompt(self) -> str:
@@ -7758,7 +7758,7 @@ class Session:
                 "Exhaust all strategies before giving up. "
                 "If you conclude the goal is a false statement, or no viable proof path remains, "
                 f"call `{self.tool_name(TOOL_QUIT)}`.\n"
-                "`proof.yaml` contains the full proof state, but read it only when you lose track of it."
+                "`proof.yaml` contains the full proof state, but recall it only when you lose track of it."
             )
 
     def retry_prompt(self, unfinished_nodes: set['Node']) -> str:

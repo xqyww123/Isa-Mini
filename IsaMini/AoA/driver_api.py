@@ -21,6 +21,7 @@ from io import StringIO
 from time import time
 from typing import Any
 
+import anthropic
 import httpx
 import openai
 from google import genai
@@ -49,6 +50,7 @@ class Usage:
     input_tokens: int
     output_tokens: int
     cached_tokens: int
+    cache_creation_tokens: int = 0
 
 
 @dataclass
@@ -276,6 +278,107 @@ class OpenAIChatProvider(OpenAIBase):
 OpenAIProvider = OpenAIChatProvider
 
 
+class OpenAIResponsesProvider(OpenAIBase):
+    """Responses protocol (/v1/responses)."""
+
+    def _msgs_to_input(self, messages: list[Msg]) -> tuple[str | None, list[Any]]:
+        """Convert Msg list → (instructions, input_items)."""
+        instructions: str | None = None
+        items: list[Any] = []
+        for m in messages:
+            match m:
+                case SystemMsg(content=c):
+                    instructions = c
+                case UserMsg(content=c):
+                    items.append({"role": "user", "content": c})
+                case AssistantMsg(native=n) if n is not None:
+                    items.extend(n)
+                case AssistantMsg(response=r):
+                    if r.content:
+                        items.append({"role": "assistant", "content": r.content})
+                case ToolResultMsg(call_id=cid, content=c):
+                    items.append({"type": "function_call_output",
+                                  "call_id": cid, "output": c})
+        return instructions, items
+
+    async def chat(self, messages: list[Msg], tools: list[dict]) -> ProviderResponse:
+        instructions, input_items = self._msgs_to_input(messages)
+        params: dict[str, Any] = {
+            "model": self._model,
+            "input": input_items,
+        }
+        if instructions is not None:
+            params["instructions"] = instructions
+        if self._reasoning_effort is not None:
+            params["reasoning"] = {"effort": self._reasoning_effort}
+        if self._temperature is not None:
+            params["temperature"] = self._temperature
+        if tools:
+            params["tools"] = tools
+        if self._cache_key:
+            params["prompt_cache_key"] = self._cache_key
+        if self._extra_params:
+            params.setdefault("extra_body", {})
+            params["extra_body"].update(self._extra_params)
+        params["store"] = False
+        params["include"] = ["reasoning.encrypted_content"]
+
+        response = await self._client.responses.create(**params)
+
+        thinking_parts: list[str] = []
+        text_parts: list[str] = []
+        tool_calls: list[ToolCall] = []
+        output_items = list(response.output) if response.output else []
+
+        for item in output_items:
+            if item.type == "reasoning":
+                if hasattr(item, 'summary') and item.summary:
+                    for s in item.summary:
+                        if hasattr(s, 'text') and s.text:
+                            thinking_parts.append(s.text)
+            elif item.type == "function_call":
+                tool_calls.append(ToolCall(
+                    id=item.call_id or "",
+                    name=item.name or "",
+                    arguments=item.arguments if item.arguments else "{}"))
+            elif item.type == "message":
+                for part in (item.content or []):
+                    if hasattr(part, 'text') and part.text:
+                        text_parts.append(part.text)
+
+        um = response.usage
+        cached = 0
+        if um:
+            details = getattr(um, 'input_tokens_details', None)
+            if details:
+                cached = getattr(details, 'cached_tokens', 0) or 0
+
+        usage = Usage(
+            input_tokens=(um.input_tokens or 0) if um else 0,
+            output_tokens=(um.output_tokens or 0) if um else 0,
+            cached_tokens=cached,
+        )
+
+        self._last_output_items = output_items
+
+        return ProviderResponse(
+            content="\n".join(text_parts) if text_parts else None,
+            thinking="\n".join(thinking_parts) if thinking_parts else None,
+            tool_calls=tool_calls,
+            usage=usage,
+        )
+
+    def format_tools(self, tool_info: dict[str, dict[str, Any]]) -> list[dict]:
+        return [{"type": "function",
+                 "name": name,
+                 "description": info["description"],
+                 "parameters": info["schema"],
+                 } for name, info in tool_info.items()]
+
+    def format_assistant_msg(self, response: ProviderResponse) -> AssistantMsg:
+        return AssistantMsg(response=response, native=self._last_output_items)
+
+
 # ============================================================================
 # K2-Think Provider
 # ============================================================================
@@ -463,6 +566,182 @@ class GeminiProvider(Provider):
     def pricing(self) -> dict[str, float]:
         return self._PRICING.get(self._model,
             {"input": 1.25e-6, "cached": 0.3125e-6, "output": 10.00e-6})
+
+
+# ============================================================================
+# Anthropic Provider
+# ============================================================================
+
+class AnthropicProvider(Provider):
+    """Provider for Anthropic Claude models via the Messages API."""
+
+    _CONTEXT_WINDOWS: dict[str, int] = {
+        "claude-opus-4-6": 1_048_576,
+        "claude-sonnet-4-6": 1_048_576,
+    }
+
+    _PRICING: dict[str, dict[str, float]] = {
+        "claude-opus-4-6":   {"input": 5.00e-6, "cache_write": 10.00e-6, "cached": 0.50e-6, "output": 25.00e-6},
+        "claude-sonnet-4-6": {"input": 3.00e-6, "cache_write": 3.75e-6,  "cached": 0.30e-6, "output": 15.00e-6},
+    }
+
+    def __init__(self, model: str, api_key: str | None = None,
+                 thinking_budget: int = 32_768,
+                 default_context_window: int = 1_048_576):
+        self._model = model
+        self._client = anthropic.AsyncAnthropic(
+            api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"),
+        )
+        self._thinking_budget = thinking_budget
+        self._default_context_window = default_context_window
+        self._last_response: Any = None
+
+    async def chat(self, messages: list[Msg], tools: list[dict]) -> ProviderResponse:
+        system_blocks: list[dict] | None = None
+        api_messages: list[dict] = []
+
+        for m in messages:
+            match m:
+                case SystemMsg(content=c):
+                    system_blocks = [
+                        {"type": "text", "text": c,
+                         "cache_control": {"type": "ephemeral"}}
+                    ]
+                case UserMsg(content=c):
+                    api_messages.append(
+                        {"role": "user", "content": [{"type": "text", "text": c}]})
+                case AssistantMsg(native=n) if n is not None:
+                    api_messages.append(n)
+                case AssistantMsg(response=r):
+                    content_blocks: list[dict] = []
+                    if r.content:
+                        content_blocks.append({"type": "text", "text": r.content})
+                    for tc in r.tool_calls:
+                        content_blocks.append({
+                            "type": "tool_use", "id": tc.id,
+                            "name": tc.name,
+                            "input": json.loads(tc.arguments),
+                        })
+                    api_messages.append({"role": "assistant", "content": content_blocks})
+                case ToolResultMsg(call_id=cid, content=c):
+                    block = {"type": "tool_result", "tool_use_id": cid,
+                             "content": [{"type": "text", "text": c}]}
+                    if (api_messages and api_messages[-1]["role"] == "user"
+                            and isinstance(api_messages[-1]["content"], list)
+                            and api_messages[-1]["content"]
+                            and api_messages[-1]["content"][0].get("type") == "tool_result"):
+                        api_messages[-1]["content"].append(block)
+                    else:
+                        api_messages.append({"role": "user", "content": [block]})
+
+        params: dict[str, Any] = {
+            "model": self._model,
+            "max_tokens": 128_000,
+            "messages": api_messages,
+        }
+        if system_blocks is not None:
+            params["system"] = system_blocks
+        if tools:
+            params["tools"] = tools
+        if self._thinking_budget > 0:
+            params["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": self._thinking_budget,
+            }
+
+        try:
+            async with self._client.messages.stream(
+                    **params,
+                    extra_headers={"anthropic-beta": "interleaved-thinking-2025-05-14"}) as stream:
+                response = await stream.get_final_message()
+        except anthropic.RateLimitError as e:
+            dummy_req = httpx.Request("POST", "https://api.anthropic.com/")
+            msg_text = str(e)
+            if "quota" in msg_text.lower():
+                msg_text = f"insufficient_quota: {msg_text}"
+            raise openai.RateLimitError(
+                message=msg_text,
+                response=httpx.Response(429, text=msg_text, request=dummy_req),
+                body=None) from e
+        except anthropic.APIStatusError as e:
+            if e.status_code in (402, 529):
+                dummy_req = httpx.Request("POST", "https://api.anthropic.com/")
+                raise openai.RateLimitError(
+                    message=f"insufficient_quota: {e}",
+                    response=httpx.Response(e.status_code, text=str(e), request=dummy_req),
+                    body=None) from e
+            raise
+
+        self._last_response = response
+
+        thinking_parts: list[str] = []
+        text_parts: list[str] = []
+        tool_calls: list[ToolCall] = []
+
+        for block in response.content:
+            if block.type == "thinking":
+                thinking_parts.append(block.thinking)
+            elif block.type == "text":
+                text_parts.append(block.text)
+            elif block.type == "tool_use":
+                tool_calls.append(ToolCall(
+                    id=block.id,
+                    name=block.name,
+                    arguments=json.dumps(block.input),
+                ))
+
+        u = response.usage
+        usage = Usage(
+            input_tokens=u.input_tokens,
+            output_tokens=u.output_tokens,
+            cached_tokens=getattr(u, 'cache_read_input_tokens', 0) or 0,
+            cache_creation_tokens=getattr(u, 'cache_creation_input_tokens', 0) or 0,
+        )
+
+        return ProviderResponse(
+            content="\n".join(text_parts) if text_parts else None,
+            thinking="\n".join(thinking_parts) if thinking_parts else None,
+            tool_calls=tool_calls,
+            usage=usage,
+        )
+
+    def format_tools(self, tool_info: dict[str, dict[str, Any]]) -> list[dict]:
+        return [{
+            "name": name,
+            "description": info["description"],
+            "input_schema": info["schema"],
+        } for name, info in tool_info.items()]
+
+    def format_assistant_msg(self, response: ProviderResponse) -> AssistantMsg:
+        resp = self._last_response
+        content_blocks: list[dict] = []
+        for block in resp.content:
+            if block.type == "thinking":
+                tb: dict[str, Any] = {"type": "thinking", "thinking": block.thinking}
+                if hasattr(block, 'signature') and block.signature:
+                    tb["signature"] = block.signature
+                content_blocks.append(tb)
+            elif block.type == "text":
+                content_blocks.append({"type": "text", "text": block.text})
+            elif block.type == "tool_use":
+                content_blocks.append({
+                    "type": "tool_use", "id": block.id,
+                    "name": block.name, "input": block.input,
+                })
+        native = {"role": "assistant", "content": content_blocks}
+        return AssistantMsg(response=response, native=native)
+
+    @property
+    def context_window(self) -> int:
+        return self._CONTEXT_WINDOWS.get(self._model, self._default_context_window)
+
+    @property
+    def model_name(self) -> str:
+        return self._model
+
+    def pricing(self) -> dict[str, float]:
+        return self._PRICING.get(self._model,
+            {"input": 5.00e-6, "cache_write": 10.00e-6, "cached": 0.50e-6, "output": 25.00e-6})
 
 
 # ============================================================================
@@ -797,12 +1076,17 @@ class APIDriver(Session):
         self.total_input_tokens += usage.input_tokens
         self.total_output_tokens += usage.output_tokens
         self.total_cache_read_input_tokens += usage.cached_tokens
+        self.total_cache_creation_input_tokens += usage.cache_creation_tokens
 
     def _compute_cost(self):
         p = self._provider.pricing()
-        non_cached = max(0, self.total_input_tokens - self.total_cache_read_input_tokens)
+        non_cached = max(0, self.total_input_tokens
+                         - self.total_cache_read_input_tokens
+                         - self.total_cache_creation_input_tokens)
+        cache_write_rate = p.get("cache_write", p["input"])
         self.total_cost_usd = (
             non_cached * p["input"]
+            + self.total_cache_creation_input_tokens * cache_write_rate
             + self.total_cache_read_input_tokens * p["cached"]
             + self.total_output_tokens * p["output"]
         )
@@ -818,7 +1102,7 @@ class APIDriver_ChatGPT(APIDriver):
     FORK_CHEAPER_MODEL = "gpt-5.5"
 
     def __init__(self, *args, **kwargs):
-        provider = OpenAIProvider(
+        provider = OpenAIResponsesProvider(
             model=self.DEFAULT_MODEL,
             cache_key=f"proof-{uuid.uuid4().hex[:8]}",
             reasoning_effort="high",
@@ -827,7 +1111,7 @@ class APIDriver_ChatGPT(APIDriver):
 
     def _fork_provider(self, mode: ForkingMode) -> Provider:
         if mode == ForkingMode.FORKING_CHEAPER_NO_CTXT and self.FORK_CHEAPER_MODEL:
-            return OpenAIProvider(
+            return OpenAIResponsesProvider(
                 model=self.FORK_CHEAPER_MODEL,
                 cache_key=None,
             )
@@ -866,3 +1150,15 @@ class APIDriver_GeminiPro(APIDriver):
                 thinking_budget=0,
             )
         return self._provider
+
+
+@agent_driver("Claude")
+class APIDriver_Claude(APIDriver):
+    DEFAULT_MODEL = "claude-opus-4-6"
+
+    def __init__(self, *args, **kwargs):
+        provider = AnthropicProvider(
+            model=self.DEFAULT_MODEL,
+            thinking_budget=100_000,
+        )
+        super().__init__(*args, provider=provider, **kwargs)

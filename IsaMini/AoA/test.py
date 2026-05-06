@@ -8001,6 +8001,54 @@ async def _test_AmendFallbackFill(root: Root, file: MyIO):
     file.write(f"is_error: {is_error4}\n")
 
 
+@model_test("HavePowerParsing", "Test_HavePowerParsing.thy", 11)
+async def _test_HavePowerParsing(root: Root, file: MyIO):
+    """Reproduce: Have with a complex ^-expression fails with
+    'Inner syntax error at ") ^ 2"'. Simple ^-expressions in earlier
+    Have steps succeed; the bug is specific to complex nested ones."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Step 1: simple Have with ^ — should succeed
+    root.session.age += 1
+    await root.fill("1", [Have.gen_single({
+        "thought": "factor",
+        "statement": {
+            "english": "factored form",
+            "conclusion": "a * b * (a^2 - b^2) + b * c * (b^2 - c^2) + c * a * (c^2 - a^2) = (a - b) * (b - c) * (a - c) * (a + b + c)"
+        },
+        "name": "factor"
+    })])
+    print_header("After simple Have with ^", file)
+    root.print(0, file)
+
+    # Step 2: another simple Have with ^ — should succeed
+    root.session.age += 1
+    await root.fill("2", [Have.gen_single({
+        "thought": "nonneg remainder",
+        "statement": {
+            "english": "nonneg",
+            "conclusion": "0 <= (a^2 + b^2 + c^2) - (a + b + c)^2 / (3::real)"
+        },
+        "name": "R_nonneg"
+    })])
+    print_header("After second simple Have with ^", file)
+    root.print(0, file)
+
+    # Step 3: complex Have with ^ — this is where the bug manifests
+    root.session.age += 1
+    await root.fill("3", [Have.gen_single({
+        "thought": "discriminant identity",
+        "statement": {
+            "english": "identity",
+            "conclusion": "((a^2 + b^2 + c^2) - (a + b + c)^2 / (3::real))^3 - 2 * ((a - b) * (b - c) * (a - c))^2 = (2::real) / 27 * (a - 2 * b + c)^2 * (2 * a - b - c)^2 * (a + b - 2 * c)^2"
+        },
+        "name": "disc_id"
+    })])
+    print_header("After complex Have with ^ (bug repro)", file)
+    root.print(0, file)
+
+
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
     import msgpack as mp
     from IsaREPL import Client

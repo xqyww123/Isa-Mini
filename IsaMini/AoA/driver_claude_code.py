@@ -60,6 +60,7 @@ class ClaudeCode(Session):
         "query":  "mcp__proof__query",
         "edit":   "mcp__proof__edit",
         "delete": "mcp__proof__delete",
+        "recall": "Read",
     }
     TOOL_WHITELIST = _NON_PROOF_TOOLS + list(_TOOL_NAME_MAP.values())
     FORK_WHITELIST = _NON_PROOF_TOOLS + [

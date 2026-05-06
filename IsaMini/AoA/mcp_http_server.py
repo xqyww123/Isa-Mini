@@ -65,7 +65,7 @@ def _load_schema(filename: str) -> dict:
 _cc_edit_schema_raw = _load_schema("cc_edit.jsonc")
 _cc_answer_schema = _load_schema("cc_answer.jsonc")
 _cc_delete_schema = _load_schema("cc_delete.jsonc")
-_cc_read_schema = _load_schema("cc_read.jsonc")
+_cc_read_schema = _load_schema("cc_recall.jsonc")
 _cc_quit_schema = _load_schema("cc_quit.jsonc")
 
 
@@ -389,7 +389,7 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
 
     step_id = args.get("step_id")
     if step_id is not None:
-        step_id = str(step_id)
+        step_id = str(step_id).strip() or None
     line_num = args.get("line")
     if line_num is not None:
         line_num = int(line_num)
@@ -477,9 +477,8 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "use exact_term to unfold fancy syntax and retrieve semantic explanations; "
                 "use long_description and filters for discovery.",
                "schema": _cc_query_schema, "annotations": _RO},
-    "read":   {"description": "Read `proof.yaml`. Use only when necessary.", "schema": _cc_read_schema, "annotations": _RO},
-    "quit":   {"description": "Concede failure and abandon the proof. Use only after all strategies have been exhausted.",
-               "schema": _cc_quit_schema, "annotations": _ACT},
+    "recall": {"description": "Recall proof state from `proof.yaml`. Use only when you have lost track.", "schema": _cc_read_schema, "annotations": _RO},
+    "quit":   {"description": "Concede failure and abandon the proof.", "schema": _cc_quit_schema, "annotations": _ACT},
 }
 
 
@@ -539,7 +538,7 @@ class ToolExecutor:
                     result, is_error = await _answer_tool_logic(session, arguments)
             case "query":
                 result, is_error = await _query_tool_logic(session, arguments)
-            case "read":
+            case "recall":
                 result, is_error = await _read_tool_logic(session, arguments)
             case "quit":
                 result, is_error = await _quit_tool_logic(session, arguments)
