@@ -14,13 +14,13 @@ from time import time
 import platformdirs
 
 from .model import *
-
+from . import prompts as P
 from .mcp_http_server import ProofMCPHTTPServer
 
 
 @agent_driver("Codex")
 class Codex_Driver(Session):
-    DEFAULT_MODEL = "gpt-5.3-codex"
+    DEFAULT_MODEL = "gpt-5.5"
 
     _PRICING: dict[str, dict[str, float]] = {
         "gpt-5.5":      {"input": 5.00e-6, "cached": 0.50e-6, "output": 15.00e-6},
@@ -80,9 +80,6 @@ class Codex_Driver(Session):
                 "_make_fork must be called in a fresh context "
                 "(use loop.create_task with context=contextvars.copy_context())")
         return cls(parent=parent)
-
-    def system_prompt(self) -> str | None:
-        return None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -206,7 +203,7 @@ class Codex_Driver(Session):
     # ------------------------------------------------------------------
 
     async def _run_main_loop(self):
-        prompt = self.initial_prompt()
+        prompt = P.INITIAL_PROMPT(self.root)
         codex_session_id: str | None = None
 
         while True:
@@ -232,8 +229,8 @@ class Codex_Driver(Session):
 
             unfinished: set[Node] = set()
             self.root.unfinished_nodes(unfinished)
-            if unfinished and self.root.quit_info is None:
-                prompt = self.retry_prompt(unfinished)
+            if unfinished:
+                prompt = P.RETRY_PROMPT(unfinished)
                 self.log_retry(unfinished, prompt)
             else:
                 break
@@ -266,7 +263,6 @@ class Codex_Driver(Session):
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            limit=16 * 1024 * 1024,
         )
         self._exec_process = proc
 

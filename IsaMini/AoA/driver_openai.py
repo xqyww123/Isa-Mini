@@ -200,7 +200,7 @@ class OpenAI_Driver(Session):
                     self._forkable_response_id = last_response_id
                     unfinished: set[Node] = set()
                     self.root.unfinished_nodes(unfinished)
-                    if unfinished:
+                    if unfinished and self.root.quit_info is None:
                         prompt = self.retry_prompt(unfinished)
                         self.log_retry(unfinished, prompt)
                     else:

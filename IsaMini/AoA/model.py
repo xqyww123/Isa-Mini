@@ -1847,7 +1847,8 @@ TOOL_DELETE: tool = "delete"
 TOOL_ANSWER: tool = "answer"
 TOOL_SEARCH: tool = "query"
 TOOL_READ:   tool = "read"
-ALL_PROOF_TOOLS: tuple[tool, ...] = (TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER, TOOL_SEARCH, TOOL_READ)
+TOOL_QUIT:   tool = "quit"
+ALL_PROOF_TOOLS: tuple[tool, ...] = (TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER, TOOL_SEARCH, TOOL_READ, TOOL_QUIT)
 
 class Interaction:
     forking: ForkingMode = ForkingMode.FORKING_WITH_CTXT
@@ -7282,6 +7283,7 @@ class Root(GoalContainer, StdBlock):
         self.global_env = GlobalEnv(NodeConfig("global", Minilang_State.assign(ml_state0), self))
         self.sub_nodes.append(self.global_env)
         self.final_ml_state = Minilang_State.assign(ml_state0)
+        self.quit_info: tuple[str, str] | None = None
         self._closed_by = self
     async def _refresh_me_alone(self, auto_intro: bool):
         if self._first_time:
@@ -7729,6 +7731,11 @@ class Session:
             f"- {self.tool_name(TOOL_DELETE)}: Delete proof steps\n"
             f"- {self.tool_name(TOOL_SEARCH)}: Search for theorems, constants, types, and rules; help you understand unfamiliar terms\n"
             f"- {self.tool_name(TOOL_READ)}: Read `proof.yaml`. Use only when necessary.\n"
+            f"- {self.tool_name(TOOL_QUIT)}: Concede failure and abandon the proof. Use only after all strategies have been exhausted.\n"
+            "\n"
+            "Exhaust all strategies before giving up. "
+            "If you conclude the goal is a false statement, or no viable proof path remains, "
+            f"call `{self.tool_name(TOOL_QUIT)}`.\n"
         )
 
     def initial_prompt(self) -> str:
@@ -7748,6 +7755,9 @@ class Session:
                 + proof_state
                 + f"Analyze the proof goal, plan a proof, and complete it using tools `{self.tool_name(TOOL_EDIT)}` and `{self.tool_name(TOOL_DELETE)}`.\n"
                 "Continue building the proof until no error remains.\n"
+                "Exhaust all strategies before giving up. "
+                "If you conclude the goal is a false statement, or no viable proof path remains, "
+                f"call `{self.tool_name(TOOL_QUIT)}`.\n"
                 "`proof.yaml` contains the full proof state, but read it only when you lose track of it."
             )
 

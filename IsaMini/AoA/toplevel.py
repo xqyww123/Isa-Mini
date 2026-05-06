@@ -2,10 +2,19 @@ from re import I
 from Isabelle_RPC_Host import isabelle_remote_procedure, Connection
 from .model import *
 from typing import Any
+import logging as _logging
+_logger = _logging.getLogger(__name__)
+
+def _try_import_driver(name: str):
+    try:
+        __import__(f"{__package__}.{name}")
+    except ImportError as e:
+        _logger.info(f"Driver {name} not loaded (missing dependency: {e.name})")
+
 from . import driver_claude_code
-from . import driver_openai
-from . import driver_codex
-from . import driver_api
+_try_import_driver("driver_openai")
+_try_import_driver("driver_codex")
+_try_import_driver("driver_api")
 import sys
 import io
 import os
@@ -97,9 +106,10 @@ async def IsaMini_AoA(data: tuple[Any, Any, str, str, str, str, str], connection
             raise
         assembled = []
     if root.is_proof_finished():
-        return (assembled, root.final_ml_state.name, cost)
+        return (assembled, root.final_ml_state.name, cost, None, None)
     else:
-        return (assembled, None, cost)
+        reason, detail = root.quit_info or ("resource_exhausted", None)
+        return (assembled, None, cost, reason, detail)
     # Finally, we return the constructed proof
 
 

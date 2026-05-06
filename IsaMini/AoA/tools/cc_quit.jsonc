@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "properties": {
+    "reason": {
+      "type": "string",
+      "enum": ["stuck", "false_statement"],
+      "description": "Why the proof cannot be completed: 'stuck' if no viable strategy remains, 'false_statement' if the goal appears unprovable"
+    },
+    "detail": { "type": "string" }
+  },
+  "required": ["reason", "detail"],
+  "additionalProperties": false
+}

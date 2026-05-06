@@ -8041,13 +8041,17 @@ async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | No
             invocation_id = f"{mode}.{test_case.name}"
             await repl._write((invocation_id, f"{mode}.{test_case.name}", (_cfg, _budget), None, None, None))
             try:
-                (status, elapsed, cpu_time) = Client._parse_control_(await repl._feed_and_unpack())
+                (status, elapsed, cpu_time, detail) = Client._parse_control_(await repl._feed_and_unpack())
             except REPLFail as e:
                 print(f"\033[91mTest {test_case.name} error: {e}\033[0m")
                 continue
-            if status == "success" or status == "agent_gives_up":
+            detail_suffix = f": {detail}" if detail else ""
+            if status == "success":
                 passed += 1
-                print(f"\033[92mTest {test_case.name} passed (status={status}), elapsed: {elapsed}ms, cpu_time: {cpu_time}ms\033[0m")
+                print(f"\033[92mTest {test_case.name} passed, elapsed: {elapsed}ms, cpu_time: {cpu_time}ms\033[0m")
+            elif status in ("stuck", "false_statement", "resource_exhausted"):
+                passed += 1
+                print(f"\033[92mTest {test_case.name} passed (status={status}{detail_suffix}), elapsed: {elapsed}ms, cpu_time: {cpu_time}ms\033[0m")
             else:
-                print(f"\033[91mTest {test_case.name} failed (status={status}), elapsed: {elapsed}ms, cpu_time: {cpu_time}ms\033[0m")
+                print(f"\033[91mTest {test_case.name} failed (status={status}{detail_suffix}), elapsed: {elapsed}ms, cpu_time: {cpu_time}ms\033[0m")
         print(f"\n{passed}/{case_num} tests passed")

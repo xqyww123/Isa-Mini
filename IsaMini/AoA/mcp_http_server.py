@@ -40,7 +40,7 @@ from .model import (
     CannotDelete_Root, NodeNotFound,
     EvaluationStatus,
     Parse_Op_List, normalize_answer, Interaction_BadAnswer,
-    TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER, TOOL_READ, ALL_PROOF_TOOLS,
+    TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER, TOOL_READ, TOOL_QUIT, ALL_PROOF_TOOLS,
 )
 import yaml as _yaml
 from .retrieval import (
@@ -66,6 +66,7 @@ _cc_edit_schema_raw = _load_schema("cc_edit.jsonc")
 _cc_answer_schema = _load_schema("cc_answer.jsonc")
 _cc_delete_schema = _load_schema("cc_delete.jsonc")
 _cc_read_schema = _load_schema("cc_read.jsonc")
+_cc_quit_schema = _load_schema("cc_quit.jsonc")
 
 
 def _relax_edit_schema(schema: dict) -> dict:
@@ -443,20 +444,42 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     return (result, False)
 
 
+async def _quit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
+    _tn = session.tool_name(TOOL_QUIT)
+    session.log_tool_call(_tn, args)
+    reason = args.get("reason", "stuck")
+    detail = args.get("detail", "")
+    if reason not in ("stuck", "false_statement"):
+        msg = f"Invalid reason: {reason!r}. Must be 'stuck' or 'false_statement'."
+        session.log_tool_response(_tn, f"ERROR: {msg}")
+        return (msg, True)
+    session.root.quit_info = (reason, detail)
+    msg = f"Proof attempt abandoned ({reason})."
+    session.log_tool_response(_tn, msg)
+    await session.interrupt()
+    return (msg, False)
+
+
 # ============================================================================
 # ToolExecutor — Direct In-Process Tool Dispatch
 # ============================================================================
 
+_RO  = ToolAnnotations(readOnlyHint=True,  destructiveHint=False, openWorldHint=False)
+_MUT = ToolAnnotations(readOnlyHint=False, destructiveHint=True,  openWorldHint=False)
+_ACT = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False)
+
 _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
-    "edit":   {"description": "Edit the proof.yaml file", "schema": _cc_edit_schema},
-    "delete": {"description": "Delete proof steps", "schema": _cc_delete_schema},
-    "answer": {"description": "Answer a pending question", "schema": _cc_answer_schema},
+    "edit":   {"description": "Edit the proof.yaml file", "schema": _cc_edit_schema, "annotations": _MUT},
+    "delete": {"description": "Delete proof steps", "schema": _cc_delete_schema, "annotations": _MUT},
+    "answer": {"description": "Answer a pending question", "schema": _cc_answer_schema, "annotations": _ACT},
     "query":  {"description": "Search for Isabelle entities by semantic similarity, patterns, or exact name/term. "
                 "Use exact_name to look up definitions; "
                 "use exact_term to unfold fancy syntax and retrieve semantic explanations; "
                 "use long_description and filters for discovery.",
-               "schema": _cc_query_schema},
-    "read":   {"description": "Read `proof.yaml`. Use only when necessary.", "schema": _cc_read_schema},
+               "schema": _cc_query_schema, "annotations": _RO},
+    "read":   {"description": "Read `proof.yaml`. Use only when necessary.", "schema": _cc_read_schema, "annotations": _RO},
+    "quit":   {"description": "Concede failure and abandon the proof. Use only after all strategies have been exhausted.",
+               "schema": _cc_quit_schema, "annotations": _ACT},
 }
 
 
@@ -518,6 +541,8 @@ class ToolExecutor:
                 result, is_error = await _query_tool_logic(session, arguments)
             case "read":
                 result, is_error = await _read_tool_logic(session, arguments)
+            case "quit":
+                result, is_error = await _quit_tool_logic(session, arguments)
             case _:
                 return (f"Unknown tool: {name}", True)
 
@@ -549,26 +574,9 @@ def _create_mcp_server(session: Session, extra_sdk_tools: list | None = None) ->
 
     # Build tool list: built-in + extras
     tools: list[Tool] = [
-        Tool(name="edit",
-             description="Edit the proof.yaml file",
-             inputSchema=_cc_edit_schema,
-             annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=False)),
-        Tool(name="delete",
-             description="Delete proof steps",
-             inputSchema=_cc_delete_schema,
-             annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=False)),
-        Tool(name="answer",
-             description="Answer a pending question",
-             inputSchema=_cc_answer_schema,
-             annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False)),
-        Tool(name="query",
-             description="Search for Isabelle entities by semantic similarity, patterns, or exact name/term. Use exact_name to look up definitions; use exact_term to unfold fancy syntax and retrieve semantic explanations; use long_description and filters for discovery.",
-             inputSchema=_cc_query_schema,
-             annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)),
-        Tool(name="read",
-             description="Read `proof.yaml`. Use only when necessary.",
-             inputSchema=_cc_read_schema,
-             annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)),
+        Tool(name=name, description=t["description"],
+             inputSchema=t["schema"], annotations=t["annotations"])
+        for name, t in _TOOL_SCHEMAS.items()
     ]
 
     # Extract schema/handler from SdkMcpTool extras

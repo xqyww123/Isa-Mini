@@ -60,19 +60,44 @@ class ProviderResponse:
 
 
 # ============================================================================
+# Message Abstraction
+# ============================================================================
+
+@dataclass
+class SystemMsg:
+    content: str
+
+@dataclass
+class UserMsg:
+    content: str
+
+@dataclass
+class AssistantMsg:
+    response: ProviderResponse
+    native: Any = None
+
+@dataclass
+class ToolResultMsg:
+    call_id: str
+    name: str
+    content: str
+
+Msg = SystemMsg | UserMsg | AssistantMsg | ToolResultMsg
+
+
+# ============================================================================
 # Provider ABC
 # ============================================================================
 
 class Provider(ABC):
     """Format-agnostic LLM provider interface.
 
-    The ABC uses generic list[dict] for messages and tools so that future
-    non-OpenAI providers (Anthropic, Gemini) can implement the same interface
-    with completely different HTTP backends and message formats.
+    Each provider converts ``list[Msg]`` to its native format inside
+    ``chat()``.  The driver never inspects message internals.
     """
 
     @abstractmethod
-    async def chat(self, messages: list[dict], tools: list[dict]) -> ProviderResponse:
+    async def chat(self, messages: list[Msg], tools: list[dict]) -> ProviderResponse:
         ...
 
     @abstractmethod
@@ -81,13 +106,8 @@ class Provider(ABC):
         ...
 
     @abstractmethod
-    def format_tool_result(self, tool_call_id: str, content: str) -> dict:
-        """Format a tool result message for the conversation history."""
-        ...
-
-    @abstractmethod
-    def format_assistant_msg(self, response: ProviderResponse) -> dict:
-        """Build the assistant message dict to append to history."""
+    def format_assistant_msg(self, response: ProviderResponse) -> AssistantMsg:
+        """Build an AssistantMsg to append to history."""
         ...
 
     @property
@@ -110,8 +130,8 @@ class Provider(ABC):
 # OpenAI-Compatible Provider
 # ============================================================================
 
-class OpenAIProvider(Provider):
-    """Provider for any OpenAI-compatible endpoint (ChatGPT, K2-Think, DeepSeek, etc.)."""
+class OpenAIBase(Provider):
+    """Shared config for OpenAI-family providers."""
 
     _CONTEXT_WINDOWS: dict[str, int] = {
         "gpt-4.1": 1_048_576,
@@ -148,10 +168,48 @@ class OpenAIProvider(Provider):
         self._reasoning_effort = reasoning_effort
         self._extra_params = extra_params or {}
 
-    async def chat(self, messages: list[dict], tools: list[dict]) -> ProviderResponse:
+    @property
+    def context_window(self) -> int:
+        return self._CONTEXT_WINDOWS.get(self._model, self._default_context_window)
+
+    @property
+    def model_name(self) -> str:
+        return self._model
+
+    def pricing(self) -> dict[str, float]:
+        return self._PRICING.get(self._model, {"input": 2.00e-6, "cached": 0.50e-6, "output": 8.00e-6})
+
+
+class OpenAIChatProvider(OpenAIBase):
+    """Chat completions protocol (/v1/chat/completions)."""
+
+    def _msgs_to_dicts(self, messages: list[Msg]) -> list[dict]:
+        out: list[dict] = []
+        for m in messages:
+            match m:
+                case SystemMsg(content=c):
+                    out.append({"role": "system", "content": c})
+                case UserMsg(content=c):
+                    out.append({"role": "user", "content": c})
+                case AssistantMsg(native=n) if n is not None:
+                    out.append(n)
+                case AssistantMsg(response=r):
+                    msg: dict[str, Any] = {"role": "assistant", "content": r.content}
+                    if r.tool_calls:
+                        msg["tool_calls"] = [
+                            {"id": tc.id, "type": "function",
+                             "function": {"name": tc.name, "arguments": tc.arguments}}
+                            for tc in r.tool_calls
+                        ]
+                    out.append(msg)
+                case ToolResultMsg(call_id=cid, content=c):
+                    out.append({"role": "tool", "tool_call_id": cid, "content": c})
+        return out
+
+    async def chat(self, messages: list[Msg], tools: list[dict]) -> ProviderResponse:
         params: dict[str, Any] = {
             "model": self._model,
-            "messages": messages,
+            "messages": self._msgs_to_dicts(messages),
         }
         if self._temperature is not None:
             params["temperature"] = self._temperature
@@ -204,10 +262,7 @@ class OpenAIProvider(Provider):
             "parameters": info["schema"],
         }} for name, info in tool_info.items()]
 
-    def format_tool_result(self, tool_call_id: str, content: str) -> dict:
-        return {"role": "tool", "tool_call_id": tool_call_id, "content": content}
-
-    def format_assistant_msg(self, response: ProviderResponse) -> dict:
+    def format_assistant_msg(self, response: ProviderResponse) -> AssistantMsg:
         msg: dict[str, Any] = {"role": "assistant", "content": response.content}
         if response.tool_calls:
             msg["tool_calls"] = [
@@ -215,18 +270,10 @@ class OpenAIProvider(Provider):
                  "function": {"name": tc.name, "arguments": tc.arguments}}
                 for tc in response.tool_calls
             ]
-        return msg
+        return AssistantMsg(response=response, native=msg)
 
-    @property
-    def context_window(self) -> int:
-        return self._CONTEXT_WINDOWS.get(self._model, self._default_context_window)
 
-    @property
-    def model_name(self) -> str:
-        return self._model
-
-    def pricing(self) -> dict[str, float]:
-        return self._PRICING.get(self._model, {"input": 2.00e-6, "cached": 0.50e-6, "output": 8.00e-6})
+OpenAIProvider = OpenAIChatProvider
 
 
 # ============================================================================
@@ -250,7 +297,7 @@ class K2ThinkProvider(OpenAIProvider):
             extra_params={"think_budget_tokens": 32_768},
         )
 
-    async def chat(self, messages: list[dict], tools: list[dict]) -> ProviderResponse:
+    async def chat(self, messages: list[Msg], tools: list[dict]) -> ProviderResponse:
         resp = await super().chat(messages, tools)
         if resp.content:
             m = self._THINK_RE.match(resp.content)
@@ -258,16 +305,6 @@ class K2ThinkProvider(OpenAIProvider):
                 resp.thinking = m.group(1).strip()
                 resp.content = resp.content[m.end():].strip() or None
         return resp
-
-    def format_assistant_msg(self, response: ProviderResponse) -> dict:
-        msg: dict[str, Any] = {"role": "assistant", "content": response.content}
-        if response.tool_calls:
-            msg["tool_calls"] = [
-                {"id": tc.id, "type": "function",
-                 "function": {"name": tc.name, "arguments": tc.arguments}}
-                for tc in response.tool_calls
-            ]
-        return msg
 
     def pricing(self) -> dict[str, float]:
         return {"input": 0.0, "cached": 0.0, "output": 0.0}
@@ -306,31 +343,26 @@ class GeminiProvider(Provider):
         self._call_id_to_name: dict[str, str] = {}
         self._call_id_counter = 0
 
-    async def chat(self, messages: list[dict], tools: list[dict]) -> ProviderResponse:
+    async def chat(self, messages: list[Msg], tools: list[dict]) -> ProviderResponse:
         system_instruction: str | None = None
-        msg_start = 0
-        if messages and messages[0].get("role") == "system":
-            system_instruction = messages[0]["content"]
-            msg_start = 1
-
         contents: list[genai_types.Content] = []
-        for msg in messages[msg_start:]:
-            gc = msg.get("_gemini_content")
-            if gc is not None:
-                contents.append(gc)
-            elif msg["role"] == "user":
-                contents.append(genai_types.Content(
-                    role="user", parts=[genai_types.Part(text=msg["content"])]))
-            elif msg["role"] == "assistant":
-                contents.append(genai_types.Content(
-                    role="model", parts=[genai_types.Part(text=msg.get("content") or "")]))
-            elif msg["role"] == "tool":
-                tc_id = msg["tool_call_id"]
-                name = self._call_id_to_name.get(tc_id, "unknown")
-                contents.append(genai_types.Content(
-                    role="user",
-                    parts=[genai_types.Part.from_function_response(
-                        name=name, response={"result": msg["content"]})]))
+        for m in messages:
+            match m:
+                case SystemMsg(content=c):
+                    system_instruction = c
+                case UserMsg(content=c):
+                    contents.append(genai_types.Content(
+                        role="user", parts=[genai_types.Part(text=c)]))
+                case AssistantMsg(native=n) if n is not None:
+                    contents.append(n)
+                case AssistantMsg(response=r):
+                    contents.append(genai_types.Content(
+                        role="model", parts=[genai_types.Part(text=r.content or "")]))
+                case ToolResultMsg(name=name, content=c):
+                    contents.append(genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part.from_function_response(
+                            name=name, response={"result": c})]))
 
         merged: list[genai_types.Content] = []
         for c in contents:
@@ -417,22 +449,8 @@ class GeminiProvider(Provider):
         ) for name, info in tool_info.items()]
         return [genai_types.Tool(function_declarations=decls)]  # type: ignore[list-item]
 
-    def format_tool_result(self, tool_call_id: str, content: str) -> dict:
-        name = self._call_id_to_name.get(tool_call_id, "unknown")
-        return {
-            "role": "tool",
-            "tool_call_id": tool_call_id,
-            "_gemini_content": genai_types.Content(
-                role="user",
-                parts=[genai_types.Part.from_function_response(
-                    name=name, response={"result": content})]),
-        }
-
-    def format_assistant_msg(self, response: ProviderResponse) -> dict:
-        msg: dict[str, Any] = {"role": "assistant", "content": response.content}
-        if self._last_response_content is not None:
-            msg["_gemini_content"] = self._last_response_content
-        return msg
+    def format_assistant_msg(self, response: ProviderResponse) -> AssistantMsg:
+        return AssistantMsg(response=response, native=self._last_response_content)
 
     @property
     def context_window(self) -> int:
@@ -467,7 +485,7 @@ class APIDriver(Session):
                  parent: 'APIDriver | None' = None, **kwargs):
         super().__init__(*args, parent=parent, **kwargs)
         self._provider = provider
-        self._messages: list[dict] = []
+        self._messages: list[Msg] = []
         self._interrupted = False
         self._executor: ToolExecutor | None = None
         self._fork_counter = 0
@@ -551,16 +569,17 @@ class APIDriver(Session):
     # Main Agent Loop
     # ------------------------------------------------------------------
 
-    def _system_messages(self) -> list[dict]:
+    def _initial_messages(self) -> list[Msg]:
+        msgs: list[Msg] = []
         sp = self.system_prompt()
-        return [{"role": "system", "content": sp}] if sp is not None else []
+        if sp is not None:
+            msgs.append(SystemMsg(sp))
+        msgs.append(UserMsg(self.initial_prompt()))
+        return msgs
 
     async def _run_loop(self):
         assert self._executor is not None
-        self._messages = [
-            *self._system_messages(),
-            {"role": "user", "content": self.initial_prompt()},
-        ]
+        self._messages = self._initial_messages()
         tools = self._provider.format_tools(self._executor.tool_schemas())
 
         while not self._interrupted:
@@ -588,14 +607,16 @@ class APIDriver(Session):
                 results = await self._execute_tool_calls(response.tool_calls)
                 for tc, (text, _is_error) in results:
                     self._messages.append(
-                        self._provider.format_tool_result(tc.id, text))
+                        ToolResultMsg(call_id=tc.id, name=tc.name, content=text))
+                if self.root.quit_info is not None:
+                    break
             else:
                 unfinished: set[Node] = set()
                 self.root.unfinished_nodes(unfinished)
                 if not unfinished:
                     break
                 retry = self.retry_prompt(unfinished)
-                self._messages.append({"role": "user", "content": retry})
+                self._messages.append(UserMsg(retry))
                 self.log_retry(unfinished, retry)
 
             if self._should_compact(response.usage):
@@ -638,10 +659,9 @@ class APIDriver(Session):
         total = usage.input_tokens + usage.output_tokens
         return total > self._provider.context_window * self.COMPACTION_THRESHOLD
 
-    async def _compact(self, messages: list[dict], tools: list[dict]) -> list[dict]:
-        # TODO: polish prompt wording
-        messages.append({"role": "user", "content":
-            "Please summarize your current proof strategy and progress so far."})
+    async def _compact(self, messages: list[Msg], tools: list[dict]) -> list[Msg]:
+        messages.append(UserMsg(
+            "Please summarize your current proof strategy and progress so far."))
         try:
             summary_resp = await self._provider.chat(messages, [])
         except Exception:
@@ -658,11 +678,12 @@ class APIDriver(Session):
         self.showed_fill_hint = False
 
         self.refresh_YAML()
-        new_messages = [
-            *self._system_messages(),
-            {"role": "user", "content":
-                self.initial_prompt() + "\n\nPrevious progress:\n" + summary},
-        ]
+        new_messages: list[Msg] = []
+        sp = self.system_prompt()
+        if sp is not None:
+            new_messages.append(SystemMsg(sp))
+        new_messages.append(UserMsg(
+            self.initial_prompt() + "\n\nPrevious progress:\n" + summary))
         self.log_AoA_opr(f"Compacted. Summary: {summary[:200]}...")
         return new_messages
 
@@ -697,14 +718,17 @@ class APIDriver(Session):
 
         mode = interaction.forking
         if mode == ForkingMode.FORKING_WITH_CTXT:
-            fork_messages = list(self._messages)
+            fork_messages: list[Msg] = list(self._messages)
         else:
-            fork_messages = [*self._system_messages()]
+            fork_messages: list[Msg] = []
+            sp = self.system_prompt()
+            if sp is not None:
+                fork_messages.append(SystemMsg(sp))
 
         fork_prompt = "Let's consider a sub-task forked from the context:\n" + prompt_text
         if "answer" not in prompt_text:
             fork_prompt += "\nAnswer the question above by calling the answer tool."
-        fork_messages.append({"role": "user", "content": fork_prompt})
+        fork_messages.append(UserMsg(fork_prompt))
 
         allowed = interaction.fork_allowed_tools
         all_schemas = fork._executor.tool_schemas()
@@ -744,7 +768,7 @@ class APIDriver(Session):
                         args = json.loads(tc.arguments)
                         result, is_error = await fork._executor.execute(tc.name, args)
                         fork_messages.append(
-                            fork_provider.format_tool_result(tc.id, result))
+                            ToolResultMsg(call_id=tc.id, name=tc.name, content=result))
                         fork.total_tool_calls += 1
 
                 assert fork.fork_pending is not None
@@ -753,8 +777,8 @@ class APIDriver(Session):
                     break
 
                 if not resp.tool_calls:
-                    fork_messages.append({"role": "user", "content":
-                        "Call the answer tool to submit your answer."})
+                    fork_messages.append(UserMsg(
+                        "Call the answer tool to submit your answer."))
                     fork.log_interaction("fork", f"{tag} retrying: no tool calls")
         finally:
             self.total_tool_calls += fork.total_tool_calls

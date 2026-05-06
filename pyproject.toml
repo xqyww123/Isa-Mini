@@ -15,13 +15,25 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
-dependencies = ["msgpack"]
+dependencies = [
+    "msgpack>=1.1.2",
+    "Isabelle_RPC_Host>=0.2.0",
+    "Isabelle_Semantic_Embedding>=0.1.0",
+    "PyYAML>=6.0.3",
+    "platformdirs>=4.9.4",
+    "jsoncomment>=0.4.2",
+    "claude-agent-sdk>=0.1.72",
+]
 
 [project.optional-dependencies]
-agent = ["Isabelle_RPC_Host", "claude-agent-sdk>=0.1.72"]
+openai = ["openai>=2.33.0", "openai-agents>=0.15.1"]
+api = ["openai>=2.33.0", "httpx>=0.28.1", "google-genai>=1.75.0"]
+mcp = ["uvicorn>=0.41.0", "mcp>=1.26.0"]
+web = ["aiohttp>=3.13.5"]
+all = ["IsaMini[openai,api,mcp,web]"]
 
 [project.urls]
-"Homepage" = "https://github.com/xqyww123/Isa-Proof-Shell"
+"Homepage" = "https://github.com/xqyww123/Isa-Mini"
 
 [tool.setuptools.packages.find]
 include = ["IsaMini", "IsaMini.*"]

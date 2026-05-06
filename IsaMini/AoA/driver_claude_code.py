@@ -440,7 +440,7 @@ class ClaudeCode(Session):
                             self._check_result_error(message)
                     unfinished_nodes = set()
                     self.root.unfinished_nodes(unfinished_nodes)
-                    if unfinished_nodes:
+                    if unfinished_nodes and self.root.quit_info is None:
                         retry_prompt = self.retry_prompt(unfinished_nodes)
                         self.log_retry(unfinished_nodes, retry_prompt)
                         await client.query(retry_prompt)

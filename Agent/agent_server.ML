@@ -27,6 +27,8 @@ end
 
 structure MiniLang_Agent_AoA : MINILANG_AGENT_AoA = struct
 
+exception Agent_Give_Up of string * string
+
 type driver = string
 val default_driver = "ClaudeCode"
 
@@ -922,11 +924,13 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
             in packTuple7 (context_packer ctxt, minilang_flat_goal_packer ctxt, packString, packString, packString, packString, packString)
                           (global_context, s0_flat_goal, driver, log_dir, invocation_id, retrieval_forking, interactive_retrieval)
             end),
-        ret_schema = unpackTuple3 (unpackList MiniLang_Agent.xcmd_unpacker,
+        ret_schema = unpackTuple5 (unpackList MiniLang_Agent.xcmd_unpacker,
                                    unpackOption unpackString,
                                    (fn src => let val ((i,cw,cr,o_,c,tc,it,mt), src') =
                                       unpackTuple8 (unpackInt,unpackInt,unpackInt,unpackInt,unpackReal,unpackInt,unpackReal,unpackReal) src
-                                    in ({input=i,cache_write=cw,cache_read=cr,output=o_,cost=c,tool_calls=tc,isabelle_time=it,model_time=mt}, src') end)),
+                                    in ({input=i,cache_write=cw,cache_read=cr,output=o_,cost=c,tool_calls=tc,isabelle_time=it,model_time=mt}, src') end),
+                                   unpackOption unpackString,
+                                   unpackOption unpackString),
         timeout = NONE,
         callback = [
           mk_callback proof_opr_callback,
@@ -957,7 +961,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
       }
 
       val timer = Timer.startRealTimer ()
-      val (xcmds, s1o, {input, cache_write, cache_read, output, cost, tool_calls, isabelle_time, model_time}) =
+      val (xcmds, s1o, {input, cache_write, cache_read, output, cost, tool_calls, isabelle_time, model_time}, reason, detail) =
             call_command aoa_cmd (global_context, driver, invocation_id)
       val elapsed = Timer.checkRealTimer timer
       val _ = writeln (String.concat [
@@ -986,7 +990,10 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
          end
         else error "Internal Error: the proof state returned by the Agent is not finished"
     | NONE => error "Internal Error: the state returned by the Agent is not found"
-  ) | NONE => error "Agent gives up"
+  ) | NONE =>
+        (case reason
+          of SOME r => raise Agent_Give_Up (r, the_default "" detail)
+           | NONE => error "Agent gives up (protocol error: missing reason)")
   end
 
 
@@ -1033,13 +1040,17 @@ fun AoA_REPL_App (cin, cout, toplevel) =
                                     of SOME v => Config.put AoA_interactive_retrieval v ctxt
                                      | NONE => ctxt
                         val start_time = Timing.start ()
+                        val pack_result =
+                              packTuple4 (packString, packInt, packInt,
+                                          packOption packString)
                      in \<^try>\<open>
                         let val (_, seq) = AoA_RPC (driver, cfg, invocation_id) (ctxt, sequent)
                             val time = Timing.result start_time
-                         in REPL_Server.output cout (packTuple3 (packString, packInt, packInt))
+                         in REPL_Server.output cout pack_result
                                  ( "success",
                                    Time.toMilliseconds (#elapsed time),
-                                   Time.toMilliseconds (#cpu time)
+                                   Time.toMilliseconds (#cpu time),
+                                   NONE
                                  )
                           ; BinIO.StreamIO.flushOut cout
                           ; seq
@@ -1053,28 +1064,32 @@ fun AoA_REPL_App (cin, cout, toplevel) =
                             end
                           | Remote_Procedure_Calling.Remote_Calling_Failure {message, ...} =>
                             let val time = Timing.result start_time
-                             in REPL_Server.output cout (packTuple3 (packString, packInt, packInt))
+                             in REPL_Server.output cout pack_result
                                    ( "remote_error",
                                      Time.toMilliseconds (#elapsed time),
-                                     Time.toMilliseconds (#cpu time)
+                                     Time.toMilliseconds (#cpu time),
+                                     NONE
+                                   )
+                              ; BinIO.StreamIO.flushOut cout
+                              ; sequent
+                            end
+                          | Agent_Give_Up (reason, detail) =>
+                            let val time = Timing.result start_time
+                                val det = if detail = "" then NONE
+                                          else SOME detail
+                             in REPL_Server.output cout pack_result
+                                   ( reason,
+                                     Time.toMilliseconds (#elapsed time),
+                                     Time.toMilliseconds (#cpu time),
+                                     det
                                    )
                               ; BinIO.StreamIO.flushOut cout
                               ; sequent
                             end
                           | ERROR msg =>
-                            if msg = "Agent gives up"
-                            then let val time = Timing.result start_time
-                                  in REPL_Server.output cout (packTuple3 (packString, packInt, packInt))
-                                        ( "agent_gives_up",
-                                          Time.toMilliseconds (#elapsed time),
-                                          Time.toMilliseconds (#cpu time)
-                                        )
-                                   ; BinIO.StreamIO.flushOut cout
-                                   ; sequent
-                                 end
-                            else ( REPL_Server.output_err cout msg
-                                 ; BinIO.StreamIO.flushOut cout
-                                 ; raise (ERROR msg) )
+                            ( REPL_Server.output_err cout msg
+                            ; BinIO.StreamIO.flushOut cout
+                            ; raise (ERROR msg) )
                           | E => (
                                 REPL_Server.output_err cout (Runtime.exn_message E)
                               ; BinIO.StreamIO.flushOut cout

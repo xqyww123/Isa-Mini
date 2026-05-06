@@ -3,6 +3,9 @@
 #   python test_AoA.py > /tmp/aoa_test_results.txt 2>&1
 # IMPORTANT: Never delete golden YAML in test cases (Tests/*.yml).
 #   You may edit them manually to update expected output if you are absolutely certain.
+# NOTE: "remote_error" failures are actually mismatches against golden YAML, not RPC
+#   failures. After running tests, merge all diffs against golden YAMLs to a single
+#   file for review if any such diffs are present.
 import argparse
 import os
 import sys
