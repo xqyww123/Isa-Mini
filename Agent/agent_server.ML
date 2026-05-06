@@ -263,7 +263,7 @@ end
 
 fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
   let open MessagePackBinIO.Pack MessagePackBinIO.Unpack Remote_Procedure_Calling
-      val _ = Remote_Procedure_Calling.load ["IsaMini_AoA"]
+      val _ = Remote_Procedure_Calling.load ["IsaMini.AoA"]
 
       (* Shared state for all callbacks *)
       val counters = {

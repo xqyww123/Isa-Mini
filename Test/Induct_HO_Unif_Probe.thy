@@ -18,7 +18,7 @@ text \<open>Reproduces the HO-unification pathology observed in the AoA agent
   schematic variables disconnected from the induction case variable,
   making it logically vacuous as an induction hypothesis.
 
-  \<^bold>\<open>Root cause in the agent's path:\<close> \<^file>\<open>../IsaMini_AoA/model.py\<close>
+  \<^bold>\<open>Root cause in the agent's path:\<close> \<^file>\<open>../IsaMini/AoA/model.py\<close>
   line 6235 strips the target variable from \<open>self.variables\<close> only
   inside \<open>if is_init:\<close>. On \<open>amend\<close> (\<open>is_init = False\<close>) the target
   \<open>i\<close> stays in \<open>self.variables\<close> with status \<open>generalized\<close>, so

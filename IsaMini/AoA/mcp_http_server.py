@@ -91,6 +91,113 @@ def _relax_edit_schema(schema: dict) -> dict:
 _cc_edit_schema = _relax_edit_schema(_cc_edit_schema_raw)
 
 
+def _flatten_edit_schema(schema: dict) -> dict:
+    """Produce a Gemini-compatible edit schema: no $defs/$ref, no recursion.
+
+    Proof fields become ``anyOf: [{"const": "GivenLater"}, Obvious]``.
+    FactByName.discharge_premises items become ``{"type": "string"}``.
+    """
+    flat = copy.deepcopy(schema)
+    defs: dict[str, Any] = flat.pop("$defs", {})
+
+    for d in defs.values():
+        if isinstance(d, dict):
+            d.pop("additionalProperties", None)
+
+    flat_fact_by_name: dict | None = None
+
+    def _make_flat_fact_by_name() -> dict:
+        nonlocal flat_fact_by_name
+        if flat_fact_by_name is not None:
+            return copy.deepcopy(flat_fact_by_name)
+        fbn = copy.deepcopy(defs["FactByName"])
+        fbn.pop("additionalProperties", None)
+        props = fbn.get("properties", {})
+        if "instantiations" in props:
+            props["instantiations"]["items"] = _resolve(
+                props["instantiations"]["items"])
+        if "discharge_premises" in props:
+            props["discharge_premises"]["items"] = {
+                "anyOf": [{"type": "string"}, {"type": "null"}]
+            }
+        flat_fact_by_name = fbn
+        return copy.deepcopy(fbn)
+
+    def _make_flat_obvious() -> dict:
+        obv = copy.deepcopy(defs["Obvious"])
+        obv.pop("additionalProperties", None)
+        facts_items = obv.get("properties", {}).get("facts", {}).get("items")
+        if facts_items and "anyOf" in facts_items:
+            facts_items["anyOf"] = [
+                _resolve(alt) for alt in facts_items["anyOf"]
+            ]
+        return obv
+
+    def _make_flat_proof() -> dict:
+        return {"anyOf": [{"const": "GivenLater"}, _make_flat_obvious()]}
+
+    def _resolve_operation() -> dict:
+        """Inline the full Operation anyOf (all 16 operation types)."""
+        op_def = defs["Operation"]
+        return _resolve(copy.deepcopy(op_def), in_proof=False)
+
+    def _resolve(node: Any, in_proof: bool = False) -> Any:
+        if isinstance(node, dict):
+            ref = node.get("$ref")
+            if ref and isinstance(ref, str) and ref.startswith("#/$defs/"):
+                name = ref[len("#/$defs/"):]
+                if name == "Proof":
+                    return _make_flat_proof()
+                if name == "Operation":
+                    if in_proof:
+                        return _make_flat_proof()
+                    return _resolve_operation()
+                if name == "GivenLater":
+                    return copy.deepcopy(defs["GivenLater"])
+                if name == "FactByName":
+                    return _make_flat_fact_by_name()
+                if name in defs:
+                    resolved = copy.deepcopy(defs[name])
+                    if isinstance(resolved, dict):
+                        resolved.pop("additionalProperties", None)
+                    return _resolve(resolved, in_proof)
+                return node
+            return {k: _resolve(v, in_proof) for k, v in node.items()}
+        if isinstance(node, list):
+            return [_resolve(item, in_proof) for item in node]
+        return node
+
+    flat = _resolve(flat, in_proof=False)
+    flat.pop("additionalProperties", None)
+
+    po = flat.get("properties", {}).get("proof_operations")
+    if po and po.get("type") == "array":
+        po["type"] = ["array", "string"]
+
+    return flat
+
+
+_cc_edit_schema_flat = _flatten_edit_schema(_cc_edit_schema_raw)
+
+
+def _assert_no_refs(schema: dict) -> None:
+    """Import-time check: flat schema must contain no $ref or $defs."""
+    def _check(node: Any, path: str = "") -> None:
+        if isinstance(node, dict):
+            if "$ref" in node:
+                raise AssertionError(f"$ref found at {path}: {node['$ref']}")
+            if "$defs" in node:
+                raise AssertionError(f"$defs found at {path}")
+            for k, v in node.items():
+                _check(v, f"{path}.{k}")
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                _check(v, f"{path}[{i}]")
+    _check(schema)
+
+_assert_no_refs(_cc_edit_schema_flat)
+
+
 # ============================================================================
 # Permission Check (both modes)
 # ============================================================================

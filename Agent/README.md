@@ -30,7 +30,7 @@ Click `Run Python Debugger Using Launch Config`, then select `AoA Agent`.
 
 For more information, see [../.vscode/launch.json](../.vscode/launch.json).
 
-The entry point is [./debug_launcher.py](./debug_launcher.py) and [./IsaMini_AoA/toplevel.py](./IsaMini_AoA/toplevel.py).
+The entry point is [./debug_launcher.py](./debug_launcher.py) and [./IsaMini/AoA/toplevel.py](./IsaMini/AoA/toplevel.py).
 
 3. Run the agent over a proof goal
 ```

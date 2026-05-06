@@ -11,7 +11,7 @@ import time
 import traceback
 import asyncio
 import Isabelle_RPC_Host
-from IsaMini_AoA.test import run_all_tests
+from IsaMini.AoA.test import run_all_tests
 
 parser = argparse.ArgumentParser(description="Run IsaMini Agent AoA tests")
 parser.add_argument(

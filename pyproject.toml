@@ -17,8 +17,14 @@ classifiers = [
 ]
 dependencies = ["msgpack"]
 
+[project.optional-dependencies]
+agent = ["Isabelle_RPC_Host", "claude-agent-sdk>=0.1.72"]
+
 [project.urls]
 "Homepage" = "https://github.com/xqyww123/Isa-Proof-Shell"
 
 [tool.setuptools.packages.find]
 include = ["IsaMini", "IsaMini.*"]
+
+[tool.setuptools.package-data]
+"IsaMini.AoA" = ["tools/*.json"]

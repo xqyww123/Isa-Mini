@@ -1,0 +1,1908 @@
+{
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": [
+        "fill",
+        "insert_before",
+        "amend"
+      ],
+      "description": "fill: fill a proof operation into a blank; insert_before: insert a step before the target step; amend: modify the arguments of the target step"
+    },
+    "target_step": {
+      "type": "string",
+      "description": "id of the target step"
+    },
+    "proof_operations": {
+      "type": [
+        "array",
+        "string"
+      ],
+      "items": {
+        "anyOf": [
+          {
+            "title": "Obvious",
+            "description": "the goal holds trivially. Caution: this operation barely unfolds definitions unless you supply them in `facts`. This operation is SLOW!",
+            "properties": {
+              "operation": {
+                "const": "Obvious",
+                "type": "string"
+              },
+              "facts": {
+                "description": "helpful facts for proving the goal",
+                "items": {
+                  "anyOf": [
+                    {
+                      "title": "FactByName",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "description": "the exact name of the fact in Isabelle/HOL"
+                        },
+                        "instantiations": {
+                          "description": "optional instantiations for ∀-quantified or schematic variables",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "value": {
+                                "type": "string",
+                                "description": "an Isabelle term to substitute, with all literal numbers annotated with their types"
+                              }
+                            },
+                            "required": [
+                              "name",
+                              "value"
+                            ]
+                          },
+                          "type": "array"
+                        },
+                        "discharge_premises": {
+                          "description": "optional list of facts to discharge the premises of this rule left-to-right; use null to skip a premise position",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "type": "array"
+                        },
+                        "flip": {
+                          "type": "boolean",
+                          "description": "if true, reverses an equation (swaps LHS and RHS) so the simplifier rewrites in the opposite direction"
+                        }
+                      },
+                      "required": [
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "title": "FactByProposition",
+                      "properties": {
+                        "proposition": {
+                          "description": "an Isabelle proposition with all literal numbers annotated with their types, to be proven in time",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "proposition"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "operation",
+              "facts"
+            ],
+            "type": "object"
+          },
+          {
+            "title": "Have",
+            "description": "prove a lemma",
+            "properties": {
+              "operation": {
+                "const": "Have",
+                "type": "string"
+              },
+              "thought": {
+                "description": "A brief thought that justifies the chosen operation",
+                "type": "string"
+              },
+              "statement": {
+                "title": "LongStatement",
+                "properties": {
+                  "english": {
+                    "type": "string",
+                    "description": "the statement in English"
+                  },
+                  "for_any": {
+                    "type": "array",
+                    "items": {
+                      "properties": {
+                        "name": {
+                          "title": "Name",
+                          "type": "string"
+                        },
+                        "type": {
+                          "title": "Type",
+                          "type": "string",
+                          "description": "An Isabelle type expression. Leave empty (\"\") if unsure"
+                        }
+                      },
+                      "required": [
+                        "name"
+                      ],
+                      "title": "Variable",
+                      "type": "object"
+                    },
+                    "description": "universally quantified variables to fix"
+                  },
+                  "premises": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "description": "binding name for the premise"
+                        },
+                        "term": {
+                          "type": "string",
+                          "description": "Isabelle/HOL term with all literal numbers annotated with types"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "term"
+                      ]
+                    },
+                    "description": "named premises to assume"
+                  },
+                  "conclusion": {
+                    "type": "string",
+                    "description": "Isabelle/HOL term with all literal numbers annotated with types"
+                  }
+                },
+                "required": [
+                  "english",
+                  "conclusion"
+                ],
+                "type": "object"
+              },
+              "name": {
+                "type": "string",
+                "description": "binding of the lemma"
+              },
+              "proof": {
+                "anyOf": [
+                  {
+                    "const": "GivenLater"
+                  },
+                  {
+                    "title": "Obvious",
+                    "description": "the goal holds trivially. Caution: this operation barely unfolds definitions unless you supply them in `facts`. This operation is SLOW!",
+                    "properties": {
+                      "operation": {
+                        "const": "Obvious",
+                        "type": "string"
+                      },
+                      "facts": {
+                        "description": "helpful facts for proving the goal",
+                        "items": {
+                          "anyOf": [
+                            {
+                              "title": "FactByName",
+                              "properties": {
+                                "name": {
+                                  "type": "string",
+                                  "description": "the exact name of the fact in Isabelle/HOL"
+                                },
+                                "instantiations": {
+                                  "description": "optional instantiations for ∀-quantified or schematic variables",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "name": {
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "type": "string",
+                                        "description": "an Isabelle term to substitute, with all literal numbers annotated with their types"
+                                      }
+                                    },
+                                    "required": [
+                                      "name",
+                                      "value"
+                                    ]
+                                  },
+                                  "type": "array"
+                                },
+                                "discharge_premises": {
+                                  "description": "optional list of facts to discharge the premises of this rule left-to-right; use null to skip a premise position",
+                                  "items": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "type": "array"
+                                },
+                                "flip": {
+                                  "type": "boolean",
+                                  "description": "if true, reverses an equation (swaps LHS and RHS) so the simplifier rewrites in the opposite direction"
+                                }
+                              },
+                              "required": [
+                                "name"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "title": "FactByProposition",
+                              "properties": {
+                                "proposition": {
+                                  "description": "an Isabelle proposition with all literal numbers annotated with their types, to be proven in time",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "proposition"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "operation",
+                      "facts"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "auto_apply": {
+                "type": "boolean",
+                "default": false,
+                "description": "register the proven lemma to the system simplifier and reasoners, to benefit subsequent proofs"
+              }
+            },
+            "required": [
+              "operation",
+              "thought",
+              "statement",
+              "name"
+            ],
+            "type": "object"
+          },
+          {
+            "title": "Obtain",
+            "description": "introduce variables satisfying given constraints",
+            "properties": {
+              "operation": {
+                "const": "Obtain",
+                "type": "string"
+              },
+              "thought": {
+                "description": "A brief thought that justifies the chosen operation",
+                "type": "string"
+              },
+              "variables": {
+                "description": "fresh variables to introduce; no conflict with existing variables",
+                "items": {
+                  "properties": {
+                    "name": {
+                      "title": "Name",
+                      "type": "string"
+                    },
+                    "type": {
+                      "title": "Type",
+                      "type": "string",
+                      "description": "An Isabelle type expression. Leave empty (\"\") if unsure"
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ],
+                  "title": "Variable",
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "constraints": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "binding name for the constraint"
+                    },
+                    "statement": {
+                      "title": "ShortStatement",
+                      "properties": {
+                        "english": {
+                          "type": "string",
+                          "description": "the statement in English"
+                        },
+                        "isabelle": {
+                          "type": "string",
+                          "description": "the corresponding Isabelle statement with all literal numbers annotated with their types"
+                        }
+                      },
+                      "required": [
+                        "english",
+                        "isabelle"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "statement"
+                  ]
+                }
+              },
+              "proof": {
+                "anyOf": [
+                  {
+                    "const": "GivenLater"
+                  },
+                  {
+                    "title": "Obvious",
+                    "description": "the goal holds trivially. Caution: this operation barely unfolds definitions unless you supply them in `facts`. This operation is SLOW!",
+                    "properties": {
+                      "operation": {
+                        "const": "Obvious",
+                        "type": "string"
+                      },
+                      "facts": {
+                        "description": "helpful facts for proving the goal",
+                        "items": {
+                          "anyOf": [
+                            {
+                              "title": "FactByName",
+                              "properties": {
+                                "name": {
+                                  "type": "string",
+                                  "description": "the exact name of the fact in Isabelle/HOL"
+                                },
+                                "instantiations": {
+                                  "description": "optional instantiations for ∀-quantified or schematic variables",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "name": {
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "type": "string",
+                                        "description": "an Isabelle term to substitute, with all literal numbers annotated with their types"
+                                      }
+                                    },
+                                    "required": [
+                                      "name",
+                                      "value"
+                                    ]
+                                  },
+                                  "type": "array"
+                                },
+                                "discharge_premises": {
+                                  "description": "optional list of facts to discharge the premises of this rule left-to-right; use null to skip a premise position",
+                                  "items": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "type": "array"
+                                },
+                                "flip": {
+                                  "type": "boolean",
+                                  "description": "if true, reverses an equation (swaps LHS and RHS) so the simplifier rewrites in the opposite direction"
+                                }
+                              },
+                              "required": [
+                                "name"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "title": "FactByProposition",
+                              "properties": {
+                                "proposition": {
+                                  "description": "an Isabelle proposition with all literal numbers annotated with their types, to be proven in time",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "proposition"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "operation",
+                      "facts"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "operation",
+              "thought",
+              "variables",
+              "constraints"
+            ],
+            "type": "object"
+          },
+          {
+            "title": "Branch",
+            "description": "split the proof goal into cases",
+            "properties": {
+              "operation": {
+                "const": "Branch",
+                "type": "string"
+              },
+              "thought": {
+                "description": "A brief thought that justifies the chosen operation",
+                "type": "string"
+              },
+              "cases": {
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "binding name for this case"
+                    },
+                    "statement": {
+                      "title": "ShortStatement",
+                      "properties": {
+                        "english": {
+                          "type": "string",
+                          "description": "the statement in English"
+                        },
+                        "isabelle": {
+                          "type": "string",
+                          "description": "the corresponding Isabelle statement with all literal numbers annotated with their types"
+                        }
+                      },
+                      "required": [
+                        "english",
+                        "isabelle"
+                      ],
+                      "type": "object"
+                    },
+                    "proof": {
+                      "anyOf": [
+                        {
+                          "const": "GivenLater"
+                        },
+                        {
+                          "title": "Obvious",
+                          "description": "the goal holds trivially. Caution: this operation barely unfolds definitions unless you supply them in `facts`. This operation is SLOW!",
+                          "properties": {
+                            "operation": {
+                              "const": "Obvious",
+                              "type": "string"
+                            },
+                            "facts": {
+                              "description": "helpful facts for proving the goal",
+                              "items": {
+                                "anyOf": [
+                                  {
+                                    "title": "FactByName",
+                                    "properties": {
+                                      "name": {
+                                        "type": "string",
+                                        "description": "the exact name of the fact in Isabelle/HOL"
+                                      },
+                                      "instantiations": {
+                                        "description": "optional instantiations for ∀-quantified or schematic variables",
+                                        "items": {
+                                          "type": "object",
+                                          "properties": {
+                                            "name": {
+                                              "type": "string"
+                                            },
+                                            "value": {
+                                              "type": "string",
+                                              "description": "an Isabelle term to substitute, with all literal numbers annotated with their types"
+                                            }
+                                          },
+                                          "required": [
+                                            "name",
+                                            "value"
+                                          ]
+                                        },
+                                        "type": "array"
+                                      },
+                                      "discharge_premises": {
+                                        "description": "optional list of facts to discharge the premises of this rule left-to-right; use null to skip a premise position",
+                                        "items": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "type": "array"
+                                      },
+                                      "flip": {
+                                        "type": "boolean",
+                                        "description": "if true, reverses an equation (swaps LHS and RHS) so the simplifier rewrites in the opposite direction"
+                                      }
+                                    },
+                                    "required": [
+                                      "name"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "title": "FactByProposition",
+                                    "properties": {
+                                      "proposition": {
+                                        "description": "an Isabelle proposition with all literal numbers annotated with their types, to be proven in time",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "proposition"
+                                    ],
+                                    "type": "object"
+                                  }
+                                ]
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "operation",
+                            "facts"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "statement"
+                  ]
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "operation",
+              "thought",
+              "cases"
+            ],
+            "type": "object"
+          },
+          {
+            "title": "CaseSplit",
+            "description": "structural case analysis on the value of a target term",
+            "properties": {
+              "operation": {
+                "const": "CaseSplit",
+                "type": "string"
+              },
+              "thought": {
+                "description": "A brief thought that justifies the chosen operation",
+                "type": "string"
+              },
+              "target_isabelle_term": {
+                "type": "string"
+              },
+              "rule": {
+                "description": "case-split rule to apply. Omit (or set to \"default\") for auto-pick. Use FactByName when you know the rule's exact name; use FactByDescription to let the system retrieve matching rules.",
+                "anyOf": [
+                  {
+                    "const": "default"
+                  },
+                  {
+                    "title": "FactByName",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "description": "the exact name of the fact in Isabelle/HOL"
+                      },
+                      "instantiations": {
+                        "description": "optional instantiations for ∀-quantified or schematic variables",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "value": {
+                              "type": "string",
+                              "description": "an Isabelle term to substitute, with all literal numbers annotated with their types"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "value"
+                          ]
+                        },
+                        "type": "array"
+                      },
+                      "discharge_premises": {
+                        "description": "optional list of facts to discharge the premises of this rule left-to-right; use null to skip a premise position",
+                        "items": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "type": "array"
+                      },
+                      "flip": {
+                        "type": "boolean",
+                        "description": "if true, reverses an equation (swaps LHS and RHS) so the simplifier rewrites in the opposite direction"
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "title": "FactByDescription",
+                    "properties": {
+                      "english": {
+                        "description": "an English description of the fact to search for",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "english"
+                    ],
+                    "type": "object"
+                  }
+                ],
+                "default": "default"
+              },
+              "proofs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "case_name": {
+                      "type": "string"
+                    },
+                    "case_variables": {
+                      "description": "names for the variables bound by this case. Omit to use default names",
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "body": {
+                      "anyOf": [
+                        {
+                          "const": "GivenLater"
+                        },
+                        {
+                          "title": "Obvious",
+                          "description": "the goal holds trivially. Caution: this operation barely unfolds definitions unless you supply them in `facts`. This operation is SLOW!",
+                          "properties": {
+                            "operation": {
+                              "const": "Obvious",
+                              "type": "string"
+                            },
+                            "facts": {
+                              "description": "helpful facts for proving the goal",
+                              "items": {
+                                "anyOf": [
+                                  {
+                                    "title": "FactByName",
+                                    "properties": {
+                                      "name": {
+                                        "type": "string",
+                                        "description": "the exact name of the fact in Isabelle/HOL"
+                                      },
+                                      "instantiations": {
+                                        "description": "optional instantiations for ∀-quantified or schematic variables",
+                                        "items": {
+                                          "type": "object",
+                                          "properties": {
+                                            "name": {
+                                              "type": "string"
+                                            },
+                                            "value": {
+                                              "type": "string",
+                                              "description": "an Isabelle term to substitute, with all literal numbers annotated with their types"
+                                            }
+                                          },
+                                          "required": [
+                                            "name",
+                                            "value"
+                                          ]
+                                        },
+                                        "type": "array"
+                                      },
+                                      "discharge_premises": {
+                                        "description": "optional list of facts to discharge the premises of this rule left-to-right; use null to skip a premise position",
+                                        "items": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "type": "array"
+                                      },
+                                      "flip": {
+                                        "type": "boolean",
+                                        "description": "if true, reverses an equation (swaps LHS and RHS) so the simplifier rewrites in the opposite direction"
+                                      }
+                                    },
+                                    "required": [
+                                      "name"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "title": "FactByProposition",
+                                    "properties": {
+                                      "proposition": {
+                                        "description": "an Isabelle proposition with all literal numbers annotated with their types, to be proven in time",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "proposition"
+                                    ],
+                                    "type": "object"
+                                  }
+                                ]
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "operation",
+                            "facts"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "case_name",
+                    "body"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "operation",
+              "thought",
+              "target_isabelle_term"
+            ],
+            "type": "object"
+          },
+          {
+            "title": "Induction",
+            "description": "apply induction over the target Isabelle/HOL term",
+            "properties": {
+              "operation": {
+                "const": "Induction",
+                "type": "string"
+              },
+              "thought": {
+                "description": "A brief thought that justifies the chosen operation",
+                "type": "string"
+              },
+              "target_isabelle_term": {
+                "type": "string"
+              },
+              "rule": {
+                "description": "induction rule to apply. Omit (or set to \"default\") for auto-pick. Use FactByName when you know the rule's exact name; use FactByDescription to let the system retrieve matching rules by an English description (e.g. \"descending induction from k\").",
+                "anyOf": [
+                  {
+                    "const": "default"
+                  },
+                  {
+                    "title": "FactByName",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "description": "the exact name of the fact in Isabelle/HOL"
+                      },
+                      "instantiations": {
+                        "description": "optional instantiations for ∀-quantified or schematic variables",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "value": {
+                              "type": "string",
+                              "description": "an Isabelle term to substitute, with all literal numbers annotated with their types"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "value"
+                          ]
+                        },
+                        "type": "array"
+                      },
+                      "discharge_premises": {
+                        "description": "optional list of facts to discharge the premises of this rule left-to-right; use null to skip a premise position",
+                        "items": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "type": "array"
+                      },
+                      "flip": {
+                        "type": "boolean",
+                        "description": "if true, reverses an equation (swaps LHS and RHS) so the simplifier rewrites in the opposite direction"
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "title": "FactByDescription",
+                    "properties": {
+                      "english": {
+                        "description": "an English description of the fact to search for",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "english"
+                    ],
+                    "type": "object"
+                  }
+                ],
+                "default": "default"
+              },
+              "variables": {
+                "description": "for each variable in the context, indicate whether it is fixed or generalized (universally quantified) across the induction",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "fixed",
+                        "generalized"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "status"
+                  ]
+                },
+                "type": "array"
+              },
+              "facts_to_generalize": {
+                "description": "facts to generalize along with the generalized variables",
+                "type": "array",
+                "items": {
+                  "title": "FactByName",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "the exact name of the fact in Isabelle/HOL"
+                    },
+                    "instantiations": {
+                      "description": "optional instantiations for ∀-quantified or schematic variables",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "value": {
+                            "type": "string",
+                            "description": "an Isabelle term to substitute, with all literal numbers annotated with their types"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "value"
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    "discharge_premises": {
+                      "description": "optional list of facts to discharge the premises of this rule left-to-right; use null to skip a premise position",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    "flip": {
+                      "type": "boolean",
+                      "description": "if true, reverses an equation (swaps LHS and RHS) so the simplifier rewrites in the opposite direction"
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ],
+                  "type": "object"
+                }
+              },
+              "proofs": {
+                "const": "GivenLater",
+                "description": "Wait for the proof system to return the actual proof states before writing proofs."
+              }
+            },
+            "required": [
+              "operation",
+              "thought",
+              "target_isabelle_term",
+              "variables"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "rewrite goals and premises using equations, established facts, and system simplifiers",
+            "properties": {
+              "operation": {
+                "const": "Rewrite",
+                "type": "string"
+              },
+              "thought": {
+                "description": "A brief thought that justifies the chosen operation",
+                "type": "string"
+              },
+              "using": {
+                "description": "equations and facts to use for rewriting",
+                "items": {
+                  "anyOf": [
+                    {
+                      "title": "FactByName",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "description": "the exact name of the fact in Isabelle/HOL"
+                        },
+                        "instantiations": {
+                          "description": "optional instantiations for ∀-quantified or schematic variables",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "value": {
+                                "type": "string",
+                                "description": "an Isabelle term to substitute, with all literal numbers annotated with their types"
+                              }
+                            },
+                            "required": [
+                              "name",
+                              "value"
+                            ]
+                          },
+                          "type": "array"
+                        },
+                        "discharge_premises": {
+                          "description": "optional list of facts to discharge the premises of this rule left-to-right; use null to skip a premise position",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "type": "array"
+                        },
+                        "flip": {
+                          "type": "boolean",
+                          "description": "if true, reverses an equation (swaps LHS and RHS) so the simplifier rewrites in the opposite direction"
+                        }
+                      },
+                      "required": [
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "title": "FactByProposition",
+                      "properties": {
+                        "proposition": {
+                          "description": "an Isabelle proposition with all literal numbers annotated with their types, to be proven in time",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "proposition"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "use system simplifiers": {
+                "type": "boolean",
+                "default": true
+              },
+              "rewrite goal": {
+                "type": "boolean",
+                "default": true
+              },
+              "rewrite premises": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "names of premises to rewrite"
+              }
+            },
+            "required": [
+              "operation",
+              "thought",
+              "using",
+              "use system simplifiers",
+              "rewrite goal",
+              "rewrite premises"
+            ],
+            "title": "Rewrite",
+            "type": "object"
+          },
+          {
+            "description": "unfold definitions",
+            "properties": {
+              "operation": {
+                "const": "Unfold",
+                "title": "Operation",
+                "type": "string"
+              },
+              "thought": {
+                "description": "A brief thought that justifies the chosen operation",
+                "type": "string"
+              },
+              "targets": {
+                "description": "the target Isabelle terms to unfold, with all literal numbers annotated with their types",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "operation",
+              "thought",
+              "targets"
+            ],
+            "title": "Unfold",
+            "type": "object"
+          },
+          {
+            "description": "provide a witness to reduce a existential proof goal",
+            "properties": {
+              "operation": {
+                "const": "Witness",
+                "type": "string"
+              },
+              "thought": {
+                "description": "A brief thought that justifies the chosen operation",
+                "type": "string"
+              },
+              "witness": {
+                "description": "an Isabelle term with all literal numbers annotated with their types",
+                "type": "string"
+              }
+            },
+            "required": [
+              "operation",
+              "thought",
+              "witness"
+            ],
+            "title": "Witness",
+            "type": "object"
+          },
+          {
+            "title": "InferenceRule",
+            "description": "instruct an inference rule, e.g., proving equality by antisymmetry.",
+            "properties": {
+              "operation": {
+                "const": "InferenceRule",
+                "type": "string"
+              },
+              "thought": {
+                "description": "A brief thought that justifies the chosen operation",
+                "type": "string"
+              },
+              "rule": {
+                "anyOf": [
+                  {
+                    "title": "FactByName",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "description": "the exact name of the fact in Isabelle/HOL"
+                      },
+                      "instantiations": {
+                        "description": "optional instantiations for ∀-quantified or schematic variables",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "value": {
+                              "type": "string",
+                              "description": "an Isabelle term to substitute, with all literal numbers annotated with their types"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "value"
+                          ]
+                        },
+                        "type": "array"
+                      },
+                      "discharge_premises": {
+                        "description": "optional list of facts to discharge the premises of this rule left-to-right; use null to skip a premise position",
+                        "items": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "type": "array"
+                      },
+                      "flip": {
+                        "type": "boolean",
+                        "description": "if true, reverses an equation (swaps LHS and RHS) so the simplifier rewrites in the opposite direction"
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "title": "FactByDescription",
+                    "properties": {
+                      "english": {
+                        "description": "an English description of the fact to search for",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "english"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "proofs": {
+                "const": "GivenLater",
+                "description": "Wait for the proof system to return the actual proof states before writing proofs."
+              }
+            },
+            "required": [
+              "operation",
+              "thought",
+              "rule"
+            ],
+            "type": "object"
+          },
+          {
+            "title": "Contradiction",
+            "description": "proof by contradiction",
+            "properties": {
+              "operation": {
+                "const": "Contradiction",
+                "type": "string"
+              },
+              "hypothesis_name": {
+                "type": "string",
+                "description": "name for the contradictory hypothesis"
+              }
+            },
+            "required": [
+              "operation",
+              "hypothesis_name"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "to establish the current goal, it suffices to show an equivalent or stronger statement",
+            "properties": {
+              "operation": {
+                "const": "Suffices",
+                "type": "string"
+              },
+              "thought": {
+                "description": "A brief thought that justifies the chosen operation",
+                "type": "string"
+              },
+              "statement": {
+                "title": "LongStatement",
+                "properties": {
+                  "english": {
+                    "type": "string",
+                    "description": "the statement in English"
+                  },
+                  "for_any": {
+                    "type": "array",
+                    "items": {
+                      "properties": {
+                        "name": {
+                          "title": "Name",
+                          "type": "string"
+                        },
+                        "type": {
+                          "title": "Type",
+                          "type": "string",
+                          "description": "An Isabelle type expression. Leave empty (\"\") if unsure"
+                        }
+                      },
+                      "required": [
+                        "name"
+                      ],
+                      "title": "Variable",
+                      "type": "object"
+                    },
+                    "description": "universally quantified variables to fix"
+                  },
+                  "premises": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "description": "binding name for the premise"
+                        },
+                        "term": {
+                          "type": "string",
+                          "description": "Isabelle/HOL term with all literal numbers annotated with types"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "term"
+                      ]
+                    },
+                    "description": "named premises to assume"
+                  },
+                  "conclusion": {
+                    "type": "string",
+                    "description": "Isabelle/HOL term with all literal numbers annotated with types"
+                  }
+                },
+                "required": [
+                  "english",
+                  "conclusion"
+                ],
+                "type": "object"
+              },
+              "proof": {
+                "anyOf": [
+                  {
+                    "const": "GivenLater"
+                  },
+                  {
+                    "title": "Obvious",
+                    "description": "the goal holds trivially. Caution: this operation barely unfolds definitions unless you supply them in `facts`. This operation is SLOW!",
+                    "properties": {
+                      "operation": {
+                        "const": "Obvious",
+                        "type": "string"
+                      },
+                      "facts": {
+                        "description": "helpful facts for proving the goal",
+                        "items": {
+                          "anyOf": [
+                            {
+                              "title": "FactByName",
+                              "properties": {
+                                "name": {
+                                  "type": "string",
+                                  "description": "the exact name of the fact in Isabelle/HOL"
+                                },
+                                "instantiations": {
+                                  "description": "optional instantiations for ∀-quantified or schematic variables",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "name": {
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "type": "string",
+                                        "description": "an Isabelle term to substitute, with all literal numbers annotated with their types"
+                                      }
+                                    },
+                                    "required": [
+                                      "name",
+                                      "value"
+                                    ]
+                                  },
+                                  "type": "array"
+                                },
+                                "discharge_premises": {
+                                  "description": "optional list of facts to discharge the premises of this rule left-to-right; use null to skip a premise position",
+                                  "items": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "type": "array"
+                                },
+                                "flip": {
+                                  "type": "boolean",
+                                  "description": "if true, reverses an equation (swaps LHS and RHS) so the simplifier rewrites in the opposite direction"
+                                }
+                              },
+                              "required": [
+                                "name"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "title": "FactByProposition",
+                              "properties": {
+                                "proposition": {
+                                  "description": "an Isabelle proposition with all literal numbers annotated with their types, to be proven in time",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "proposition"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "operation",
+                      "facts"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "operation",
+              "thought",
+              "statement"
+            ],
+            "type": "object"
+          },
+          {
+            "title": "Intro",
+            "description": "introduce universal quantification and premises from the proof goal",
+            "properties": {
+              "operation": {
+                "const": "Intro",
+                "type": "string"
+              },
+              "thought": {
+                "description": "A brief thought that justifies the chosen operation",
+                "type": "string"
+              },
+              "variable_bindings": {
+                "description": "names for the leading universally quantified variables, in order; omit or truncate to leave trailing variables auto-named",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "fact_bindings": {
+                "description": "names for the leading premises, in order; omit or truncate to leave trailing premises auto-numbered",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "operation",
+              "thought"
+            ],
+            "type": "object"
+          },
+          {
+            "title": "SplitConjs",
+            "description": "split a conjunctive goal (A ∧ B ∧ ...) into separate subgoals, one per conjunct",
+            "properties": {
+              "operation": {
+                "const": "SplitConjs",
+                "type": "string"
+              },
+              "thought": {
+                "description": "A brief thought that justifies the chosen operation",
+                "type": "string"
+              },
+              "proofs": {
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    {
+                      "const": "GivenLater"
+                    },
+                    {
+                      "title": "Obvious",
+                      "description": "the goal holds trivially. Caution: this operation barely unfolds definitions unless you supply them in `facts`. This operation is SLOW!",
+                      "properties": {
+                        "operation": {
+                          "const": "Obvious",
+                          "type": "string"
+                        },
+                        "facts": {
+                          "description": "helpful facts for proving the goal",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "title": "FactByName",
+                                "properties": {
+                                  "name": {
+                                    "type": "string",
+                                    "description": "the exact name of the fact in Isabelle/HOL"
+                                  },
+                                  "instantiations": {
+                                    "description": "optional instantiations for ∀-quantified or schematic variables",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "name": {
+                                          "type": "string"
+                                        },
+                                        "value": {
+                                          "type": "string",
+                                          "description": "an Isabelle term to substitute, with all literal numbers annotated with their types"
+                                        }
+                                      },
+                                      "required": [
+                                        "name",
+                                        "value"
+                                      ]
+                                    },
+                                    "type": "array"
+                                  },
+                                  "discharge_premises": {
+                                    "description": "optional list of facts to discharge the premises of this rule left-to-right; use null to skip a premise position",
+                                    "items": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "type": "array"
+                                  },
+                                  "flip": {
+                                    "type": "boolean",
+                                    "description": "if true, reverses an equation (swaps LHS and RHS) so the simplifier rewrites in the opposite direction"
+                                  }
+                                },
+                                "required": [
+                                  "name"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "title": "FactByProposition",
+                                "properties": {
+                                  "proposition": {
+                                    "description": "an Isabelle proposition with all literal numbers annotated with their types, to be proven in time",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "proposition"
+                                ],
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "operation",
+                        "facts"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "required": [
+              "operation",
+              "thought"
+            ],
+            "type": "object"
+          },
+          {
+            "title": "Derive",
+            "description": "instantiate universal quantifiers in a rule and discharge its premises, deriving a new fact in one forward-reasoning step",
+            "properties": {
+              "operation": {
+                "const": "Derive",
+                "type": "string"
+              },
+              "thought": {
+                "description": "A brief thought that justifies the chosen operation",
+                "type": "string"
+              },
+              "rule": {
+                "title": "FactByName",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "the exact name of the fact in Isabelle/HOL"
+                  },
+                  "instantiations": {
+                    "description": "optional instantiations for ∀-quantified or schematic variables",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "type": "string",
+                          "description": "an Isabelle term to substitute, with all literal numbers annotated with their types"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "value"
+                      ]
+                    },
+                    "type": "array"
+                  },
+                  "discharge_premises": {
+                    "description": "optional list of facts to discharge the premises of this rule left-to-right; use null to skip a premise position",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "type": "array"
+                  },
+                  "flip": {
+                    "type": "boolean",
+                    "description": "if true, reverses an equation (swaps LHS and RHS) so the simplifier rewrites in the opposite direction"
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "type": "object"
+              },
+              "instantiations": {
+                "description": "instantiations for ∀-quantified or schematic variables",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string",
+                      "description": "an Isabelle term to substitute, with all literal numbers annotated with their types"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "value"
+                  ]
+                },
+                "type": "array",
+                "default": []
+              },
+              "discharging_facts": {
+                "description": "facts discharging the premises of the rule, left-to-right",
+                "items": {
+                  "title": "FactByName",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "the exact name of the fact in Isabelle/HOL"
+                    },
+                    "instantiations": {
+                      "description": "optional instantiations for ∀-quantified or schematic variables",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "value": {
+                            "type": "string",
+                            "description": "an Isabelle term to substitute, with all literal numbers annotated with their types"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "value"
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    "discharge_premises": {
+                      "description": "optional list of facts to discharge the premises of this rule left-to-right; use null to skip a premise position",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    "flip": {
+                      "type": "boolean",
+                      "description": "if true, reverses an equation (swaps LHS and RHS) so the simplifier rewrites in the opposite direction"
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ],
+                  "type": "object"
+                },
+                "type": "array",
+                "default": []
+              },
+              "result_name": {
+                "type": "string",
+                "description": "name to bind the resulting derived fact under"
+              }
+            },
+            "required": [
+              "operation",
+              "thought",
+              "rule",
+              "result_name"
+            ],
+            "type": "object"
+          },
+          {
+            "title": "Chaining",
+            "description": "chain facts via transitivity (example: deriving a ≤ c from a = b, b ≤ c)",
+            "properties": {
+              "operation": {
+                "const": "Chaining",
+                "type": "string"
+              },
+              "thought": {
+                "description": "A brief thought that justifies the chosen operation",
+                "type": "string"
+              },
+              "name": {
+                "type": "string",
+                "description": "binding name for the chained result"
+              },
+              "facts": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "title": "FactByName",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "description": "the exact name of the fact in Isabelle/HOL"
+                        },
+                        "instantiations": {
+                          "description": "optional instantiations for ∀-quantified or schematic variables",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "value": {
+                                "type": "string",
+                                "description": "an Isabelle term to substitute, with all literal numbers annotated with their types"
+                              }
+                            },
+                            "required": [
+                              "name",
+                              "value"
+                            ]
+                          },
+                          "type": "array"
+                        },
+                        "discharge_premises": {
+                          "description": "optional list of facts to discharge the premises of this rule left-to-right; use null to skip a premise position",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "type": "array"
+                        },
+                        "flip": {
+                          "type": "boolean",
+                          "description": "if true, reverses an equation (swaps LHS and RHS) so the simplifier rewrites in the opposite direction"
+                        }
+                      },
+                      "required": [
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "title": "FactByProposition",
+                      "properties": {
+                        "proposition": {
+                          "description": "an Isabelle proposition with all literal numbers annotated with their types, to be proven in time",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "proposition"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array",
+                "minItems": 1
+              }
+            },
+            "required": [
+              "operation",
+              "thought",
+              "facts"
+            ],
+            "type": "object"
+          },
+          {
+            "title": "Function",
+            "description": "define a (recursive) function",
+            "properties": {
+              "operation": {
+                "const": "Define",
+                "type": "string"
+              },
+              "thought": {
+                "description": "A brief thought that justifies the chosen operation",
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "description": "Isabelle type expression"
+              },
+              "equations": {
+                "items": {
+                  "type": "string",
+                  "description": "an Isabelle term with all literal numbers annotated with their types"
+                },
+                "type": "array"
+              },
+              "metric": {
+                "type": "array",
+                "description": "metric for proving recursion termination, one or more Isabelle terms of type `arg1's type × ... × argN's type → nat` demonstrating the recursion is strictly decreasing. Leave it empty to let Isabelle infer, which often works.",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "operation",
+              "thought",
+              "name",
+              "equations"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "minItems": 1,
+      "description": "ordered list of proof operations to apply at target_step. For action 'fill', the first operation fills the blank slot and subsequent operations append as successive siblings. For 'insert_before', operations are inserted contiguously before target_step in order. For 'amend' with a single operation, it replaces target_step (preserving its sub-steps via inheritance); with multiple operations, target_step is deleted and the list is inserted at that position."
+    }
+  },
+  "required": [
+    "action",
+    "target_step",
+    "proof_operations"
+  ]
+}

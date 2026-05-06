@@ -9,7 +9,7 @@ Requirements:
   - Network access to Claude API
 
 Usage:
-  python -m IsaMini_AoA.test_cache_reuse
+  python -m IsaMini.AoA.test_cache_reuse
 """
 
 import asyncio

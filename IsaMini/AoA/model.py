@@ -683,10 +683,17 @@ class ArgumentError_UnknownProofOperation(ArgumentError):
 
 class ArgumentError_MissingRequiredKeys(ArgumentError):
     def __init__(self, arg: ToolCall_arg, operation: str, missing: list[str]):
-        joined = ", ".join(sorted(missing))
+        sorted_missing = [f"`{k}`" for k in sorted(missing)]
+        if len(sorted_missing) >= 3:
+            joined = ", ".join(sorted_missing[:-1]) + ", and " + sorted_missing[-1]
+        elif len(sorted_missing) == 2:
+            joined = " and ".join(sorted_missing)
+        else:
+            joined = sorted_missing[0]
+        plural = "fields" if len(sorted_missing) > 1 else "field"
         super().__init__(
             arg,
-            f"Missing required field(s) for operation {operation}: {joined}",
+            f"Operation `{operation}` requires {plural} {joined}",
         )
 class ArgumentError_UnparsedTerm(ArgumentError):
     def __init__(self, arg: ToolCall_arg, term: str, reason: str):
@@ -708,15 +715,23 @@ def validator(typ: type):
         return fn
     return decorator
 
+@validator(raw_proof)
+def _validate_raw_proof(data: Any, path: str) -> Any:
+    if data == "GivenLater" or data is None:
+        return None
+    if isinstance(data, dict):
+        data = [data]
+    return _validate_list(raw_op, data, path)
+
 def _is_union_origin(origin) -> bool:
     return origin is Union or origin is _types.UnionType
 
 def validate(typ: type, data: Any, path: str) -> Any:
     """Validate and normalize `data` against `typ`. Returns canonical form."""
-    if isinstance(typ, TypeAliasType):
-        return validate(typ.__value__, data, path)
     if typ in VALIDATORS:
         return VALIDATORS[typ](data, path)
+    if isinstance(typ, TypeAliasType):
+        return validate(typ.__value__, data, path)
     if is_typeddict(typ):
         return _validate_typed_dict(typ, data, path)
     origin = get_origin(typ)
@@ -2233,9 +2248,17 @@ class Interaction_InstantiateSchematics(Interaction):
                 f"Missing instantiations for: {', '.join(sorted(missing))}.")
         extra = provided - required
         if extra:
+            sorted_extra = [f"`{v}`" for v in sorted(extra)]
+            if len(sorted_extra) >= 3:
+                joined = ", ".join(sorted_extra[:-1]) + ", and " + sorted_extra[-1]
+            elif len(sorted_extra) == 2:
+                joined = " and ".join(sorted_extra)
+            else:
+                joined = sorted_extra[0]
+            plural = "variables" if len(sorted_extra) > 1 else "variable"
             raise Interaction_BadAnswer(
-                f"Unknown schematic variable(s): {', '.join(sorted(extra))}. "
-                f"Expected one of: {', '.join(sorted(required))}.")
+                f"Unknown schematic {plural}: {joined}. "
+                f"Expected one of: {', '.join(f'`{v}`' for v in sorted(required))}.")
         insts = [(n, by_name[n]) for n, _ in self.schematic_vars]
         err: str | None = await self.state.connection.callback(
             "IsaMini.validate_instantiation",
@@ -5552,7 +5575,10 @@ class Interaction_ChooseDef(Interaction):
         for i, ref in enumerate(self.candidate_defs):
             print_indent(indent+1, file)
             file.write(f"{i}. {ref.full_name}: {', '.join(e.unicode for e in ref.expression)}\n")
-        file.write(f"Select definition(s) to use in unfolding. Call `{tn(TOOL_ANSWER)}` with `indexes`, or the `name` of a definition, or leave empty to skip.\n")
+        if len(self.candidate_defs) > 1:
+            file.write(f"Select definitions to use in unfolding. Call `{tn(TOOL_ANSWER)}` with `indexes`, or the `name` of a definition, or leave empty to skip.\n")
+        else:
+            file.write(f"Select this definition to use in unfolding. Call `{tn(TOOL_ANSWER)}` with `indexes`, or the `name` of a definition, or leave empty to skip.\n")
     async def answer(self, answer: Answer) -> list[IsabelleFact]:
         """Priority: name > indexes. `statement` is rejected (use Have/Obvious
         instead if you want to prove-in-time)."""

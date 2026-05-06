@@ -1,4 +1,4 @@
-"""Generic API driver for IsaMini_AoA.
+"""Generic API driver for IsaMini.AoA.
 
 Owns the agent loop directly, calling LLM chat completion APIs rather than
 delegating to an external agent framework. Supports any OpenAI-compatible
@@ -29,7 +29,7 @@ from google.genai import errors as genai_errors
 
 from .model import *
 
-from .mcp_http_server import ToolExecutor
+from .mcp_http_server import ToolExecutor, _cc_edit_schema_flat
 from .helper import MyIO
 
 
@@ -135,6 +135,7 @@ class OpenAIProvider(Provider):
                  base_url: str | None = None, cache_key: str | None = None,
                  default_context_window: int = 128_000,
                  temperature: float | None = None,
+                 reasoning_effort: str | None = None,
                  extra_params: dict[str, Any] | None = None):
         self._model = model
         self._client = openai.AsyncOpenAI(
@@ -144,6 +145,7 @@ class OpenAIProvider(Provider):
         self._cache_key = cache_key
         self._default_context_window = default_context_window
         self._temperature = temperature
+        self._reasoning_effort = reasoning_effort
         self._extra_params = extra_params or {}
 
     async def chat(self, messages: list[dict], tools: list[dict]) -> ProviderResponse:
@@ -153,6 +155,8 @@ class OpenAIProvider(Provider):
         }
         if self._temperature is not None:
             params["temperature"] = self._temperature
+        if self._reasoning_effort is not None:
+            params["reasoning_effort"] = self._reasoning_effort
         if tools:
             params["tools"] = tools
         if self._cache_key:
@@ -279,11 +283,15 @@ class GeminiProvider(Provider):
     _CONTEXT_WINDOWS: dict[str, int] = {
         "gemini-2.5-pro": 1_048_576,
         "gemini-2.5-flash": 1_048_576,
+        "gemini-3.1-pro-preview": 1_048_576,
+        "gemini-3-flash-preview": 1_048_576,
     }
 
     _PRICING: dict[str, dict[str, float]] = {
-        "gemini-2.5-pro":   {"input": 1.25e-6, "cached": 0.3125e-6, "output": 10.00e-6},
-        "gemini-2.5-flash": {"input": 0.15e-6, "cached": 0.0375e-6, "output": 0.60e-6},
+        "gemini-2.5-pro":           {"input": 1.25e-6, "cached": 0.3125e-6, "output": 10.00e-6},
+        "gemini-2.5-flash":         {"input": 0.15e-6, "cached": 0.0375e-6, "output": 0.60e-6},
+        "gemini-3.1-pro-preview":   {"input": 2.00e-6, "cached": 0.20e-6,   "output": 12.00e-6},
+        "gemini-3-flash-preview":   {"input": 0.50e-6, "cached": 0.05e-6,   "output": 3.00e-6},
     }
 
     def __init__(self, model: str, api_key: str | None = None,
@@ -404,7 +412,8 @@ class GeminiProvider(Provider):
         decls = [genai_types.FunctionDeclaration(
             name=name,
             description=info["description"],
-            parameters_json_schema=info["schema"],
+            parameters_json_schema=(
+                _cc_edit_schema_flat if name == "edit" else info["schema"]),
         ) for name, info in tool_info.items()]
         return [genai_types.Tool(function_declarations=decls)]  # type: ignore[list-item]
 
@@ -542,10 +551,14 @@ class APIDriver(Session):
     # Main Agent Loop
     # ------------------------------------------------------------------
 
+    def _system_messages(self) -> list[dict]:
+        sp = self.system_prompt()
+        return [{"role": "system", "content": sp}] if sp is not None else []
+
     async def _run_loop(self):
         assert self._executor is not None
         self._messages = [
-            {"role": "system", "content": self.system_prompt()},
+            *self._system_messages(),
             {"role": "user", "content": self.initial_prompt()},
         ]
         tools = self._provider.format_tools(self._executor.tool_schemas())
@@ -646,7 +659,7 @@ class APIDriver(Session):
 
         self.refresh_YAML()
         new_messages = [
-            {"role": "system", "content": self.system_prompt()},
+            *self._system_messages(),
             {"role": "user", "content":
                 self.initial_prompt() + "\n\nPrevious progress:\n" + summary},
         ]
@@ -686,7 +699,7 @@ class APIDriver(Session):
         if mode == ForkingMode.FORKING_WITH_CTXT:
             fork_messages = list(self._messages)
         else:
-            fork_messages = [{"role": "system", "content": self.system_prompt()}]
+            fork_messages = [*self._system_messages()]
 
         fork_prompt = "Let's consider a sub-task forked from the context:\n" + prompt_text
         if "answer" not in prompt_text:
@@ -784,6 +797,7 @@ class APIDriver_ChatGPT(APIDriver):
         provider = OpenAIProvider(
             model=self.DEFAULT_MODEL,
             cache_key=f"proof-{uuid.uuid4().hex[:8]}",
+            reasoning_effort="high",
         )
         super().__init__(*args, provider=provider, **kwargs)
 
@@ -811,8 +825,8 @@ class APIDriver_K2Think(APIDriver):
 
 @agent_driver("Gemini")
 class APIDriver_GeminiPro(APIDriver):
-    DEFAULT_MODEL = "gemini-2.5-pro"
-    FORK_CHEAPER_MODEL = "gemini-2.5-flash"
+    DEFAULT_MODEL = "gemini-3.1-pro-preview"
+    FORK_CHEAPER_MODEL = "gemini-3-flash-preview"
 
     def __init__(self, *args, **kwargs):
         provider = GeminiProvider(
