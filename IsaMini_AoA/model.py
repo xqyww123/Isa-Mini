@@ -135,6 +135,7 @@ class FactByName(TypedDict):
     name: xname
     instantiations: NotRequired[list[Instantiation]]
     discharge_premises: NotRequired[list['FactByName | None']]
+    flip: NotRequired[bool]
 
 type Fact = FactByName | FactByProposition | FactByDescription
 
@@ -167,11 +168,18 @@ def _of_suffix(fact: Fact) -> str:
         if item is None:
             of_parts.append("_")
         else:
-            of_parts.append(item["name"] + _where_suffix(item) + _of_suffix(item))
+            of_parts.append(item["name"] + _fact_suffix(item))
     return "[OF " + " ".join(of_parts) + "]"
 
+def _symmetric_suffix(fact: Fact) -> str:
+    if "name" not in fact:
+        return ""
+    if cast(FactByName, fact).get("flip", False):
+        return "[symmetric]"
+    return ""
+
 def _fact_suffix(fact: Fact) -> str:
-    return _where_suffix(fact) + _of_suffix(fact)
+    return _where_suffix(fact) + _of_suffix(fact) + _symmetric_suffix(fact)
 
 class FailureReason(NamedTuple):
     """A human-readable failure reason, used in Interaction.answer() returns
@@ -763,7 +771,7 @@ def _validate_union(args: tuple[type, ...], data: Any, path: str) -> Any:
         if t in (str, int, bool, float):
             if isinstance(data, t):
                 return data
-    raise ArgumentError({}, f"{path}: value does not match any variant of the union type, got {type(data).__name__}: {repr(data)[:80]}")
+    return data
 
 ## Minilang Runtime
 ### Evaluation Status

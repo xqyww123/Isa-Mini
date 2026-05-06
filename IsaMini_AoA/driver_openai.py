@@ -32,8 +32,8 @@ class OpenAI_Driver(Session):
     FORK_CHEAPER_MODEL = "gpt-4.1-mini"
 
     _PRICING: dict[str, dict[str, float]] = {
-        "gpt-5.5":      {"input": 5.00e-6, "cached": 0.50e-6, "output": 15.00e-6},
-        "gpt-5.4":      {"input": 2.50e-6, "cached": 0.25e-6, "output": 10.00e-6},
+        "gpt-5.5":      {"input": 5.00e-6, "cached": 0.50e-6, "output": 30.00e-6},
+        "gpt-5.4":      {"input": 2.50e-6, "cached": 0.25e-6, "output": 15.00e-6},
         "gpt-4.1":      {"input": 2.00e-6, "cached": 0.50e-6, "output": 8.00e-6},
         "gpt-4.1-mini": {"input": 0.40e-6, "cached": 0.10e-6, "output": 1.60e-6},
         "gpt-4.1-nano": {"input": 0.10e-6, "cached": 0.025e-6, "output": 0.40e-6},

@@ -97,6 +97,10 @@
             ]
           },
           "type": "array"
+        },
+        "flip": {
+          "type": "boolean",
+          "description": "if true, reverses an equation (swaps LHS and RHS) so the simplifier rewrites in the opposite direction"
         }
       },
       "required": [ "name" ],

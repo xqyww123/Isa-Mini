@@ -21,7 +21,11 @@ from io import StringIO
 from time import time
 from typing import Any
 
+import httpx
 import openai
+from google import genai
+from google.genai import types as genai_types
+from google.genai import errors as genai_errors
 
 from .model import *
 
@@ -118,6 +122,8 @@ class OpenAIProvider(Provider):
     }
 
     _PRICING: dict[str, dict[str, float]] = {
+        "gpt-5.5":      {"input": 5.00e-6, "cached": 0.50e-6, "output": 30.00e-6},
+        "gpt-5.4":      {"input": 2.50e-6, "cached": 0.25e-6, "output": 15.00e-6},
         "gpt-4.1":      {"input": 2.00e-6, "cached": 0.50e-6, "output": 8.00e-6},
         "gpt-4.1-mini": {"input": 0.40e-6, "cached": 0.10e-6, "output": 1.60e-6},
         "gpt-4.1-nano": {"input": 0.10e-6, "cached": 0.025e-6, "output": 0.40e-6},
@@ -128,7 +134,7 @@ class OpenAIProvider(Provider):
     def __init__(self, model: str, api_key: str | None = None,
                  base_url: str | None = None, cache_key: str | None = None,
                  default_context_window: int = 128_000,
-                 temperature: float = 0.3,
+                 temperature: float | None = None,
                  extra_params: dict[str, Any] | None = None):
         self._model = model
         self._client = openai.AsyncOpenAI(
@@ -144,8 +150,9 @@ class OpenAIProvider(Provider):
         params: dict[str, Any] = {
             "model": self._model,
             "messages": messages,
-            "temperature": self._temperature,
         }
+        if self._temperature is not None:
+            params["temperature"] = self._temperature
         if tools:
             params["tools"] = tools
         if self._cache_key:
@@ -236,7 +243,7 @@ class K2ThinkProvider(OpenAIProvider):
             cache_key=None,
             default_context_window=context_window,
             temperature=0.2,
-            extra_params={"think_budget_tokens": 100_000},
+            extra_params={"think_budget_tokens": 32_768},
         )
 
     async def chat(self, messages: list[dict], tools: list[dict]) -> ProviderResponse:
@@ -260,6 +267,175 @@ class K2ThinkProvider(OpenAIProvider):
 
     def pricing(self) -> dict[str, float]:
         return {"input": 0.0, "cached": 0.0, "output": 0.0}
+
+
+# ============================================================================
+# Gemini Provider
+# ============================================================================
+
+class GeminiProvider(Provider):
+    """Provider for Google Gemini models (2.5 Pro, 2.5 Flash, etc.)."""
+
+    _CONTEXT_WINDOWS: dict[str, int] = {
+        "gemini-2.5-pro": 1_048_576,
+        "gemini-2.5-flash": 1_048_576,
+    }
+
+    _PRICING: dict[str, dict[str, float]] = {
+        "gemini-2.5-pro":   {"input": 1.25e-6, "cached": 0.3125e-6, "output": 10.00e-6},
+        "gemini-2.5-flash": {"input": 0.15e-6, "cached": 0.0375e-6, "output": 0.60e-6},
+    }
+
+    def __init__(self, model: str, api_key: str | None = None,
+                 thinking_budget: int = 8192,
+                 default_context_window: int = 1_048_576):
+        self._model = model
+        self._client = genai.Client(
+            api_key=api_key or os.environ.get("GEMINI_API_KEY"))
+        self._async_models = self._client.aio.models
+        self._thinking_budget = thinking_budget
+        self._default_context_window = default_context_window
+        self._call_id_to_name: dict[str, str] = {}
+        self._call_id_counter = 0
+
+    async def chat(self, messages: list[dict], tools: list[dict]) -> ProviderResponse:
+        system_instruction: str | None = None
+        msg_start = 0
+        if messages and messages[0].get("role") == "system":
+            system_instruction = messages[0]["content"]
+            msg_start = 1
+
+        contents: list[genai_types.Content] = []
+        for msg in messages[msg_start:]:
+            gc = msg.get("_gemini_content")
+            if gc is not None:
+                contents.append(gc)
+            elif msg["role"] == "user":
+                contents.append(genai_types.Content(
+                    role="user", parts=[genai_types.Part(text=msg["content"])]))
+            elif msg["role"] == "assistant":
+                contents.append(genai_types.Content(
+                    role="model", parts=[genai_types.Part(text=msg.get("content") or "")]))
+            elif msg["role"] == "tool":
+                tc_id = msg["tool_call_id"]
+                name = self._call_id_to_name.get(tc_id, "unknown")
+                contents.append(genai_types.Content(
+                    role="user",
+                    parts=[genai_types.Part.from_function_response(
+                        name=name, response={"result": msg["content"]})]))
+
+        merged: list[genai_types.Content] = []
+        for c in contents:
+            if merged and merged[-1].role == c.role:
+                if merged[-1].parts is not None and c.parts is not None:
+                    merged[-1].parts.extend(c.parts)
+            else:
+                merged.append(c)
+
+        config_kwargs: dict[str, Any] = {}
+        if system_instruction is not None:
+            config_kwargs["system_instruction"] = system_instruction
+        if tools:
+            config_kwargs["tools"] = tools
+            config_kwargs["tool_config"] = genai_types.ToolConfig(
+                function_calling_config=genai_types.FunctionCallingConfig(
+                    mode=genai_types.FunctionCallingConfigMode.ANY))
+        if self._thinking_budget > 0:
+            config_kwargs["thinking_config"] = genai_types.ThinkingConfig(
+                thinking_budget=self._thinking_budget, include_thoughts=True)
+        config_kwargs["temperature"] = 0.6
+
+        config = genai_types.GenerateContentConfig(**config_kwargs)
+
+        try:
+            response = await self._async_models.generate_content(
+                model=self._model, contents=merged, config=config)
+        except genai_errors.ClientError as e:
+            if e.code == 429:
+                dummy_req = httpx.Request("POST", "https://generativelanguage.googleapis.com/")
+                msg_text = str(e)
+                if "quota" in msg_text.lower():
+                    msg_text = f"insufficient_quota: {msg_text}"
+                raise openai.RateLimitError(
+                    message=msg_text,
+                    response=httpx.Response(429, text=msg_text, request=dummy_req),
+                    body=None) from e
+            raise
+
+        thinking_parts: list[str] = []
+        text_parts: list[str] = []
+        tool_calls: list[ToolCall] = []
+        self._last_response_content: genai_types.Content | None = None
+
+        if response.candidates and response.candidates[0].content:
+            self._last_response_content = response.candidates[0].content
+            for part in (response.candidates[0].content.parts or []):
+                if part.thought and part.text:
+                    thinking_parts.append(part.text)
+                elif part.function_call:
+                    fc = part.function_call
+                    call_id = fc.id
+                    if not call_id:
+                        self._call_id_counter += 1
+                        call_id = f"gemini-call-{self._call_id_counter}"
+                    self._call_id_to_name[call_id] = fc.name or ""
+                    tool_calls.append(ToolCall(
+                        id=call_id,
+                        name=fc.name or "",
+                        arguments=json.dumps(fc.args) if fc.args else "{}"))
+                elif part.text:
+                    text_parts.append(part.text)
+
+        um = response.usage_metadata
+        usage = Usage(
+            input_tokens=(um.prompt_token_count or 0) if um else 0,
+            output_tokens=(um.candidates_token_count or 0) if um else 0,
+            cached_tokens=(um.cached_content_token_count or 0) if um else 0,
+        )
+
+        return ProviderResponse(
+            content="\n".join(text_parts) if text_parts else None,
+            thinking="\n".join(thinking_parts) if thinking_parts else None,
+            tool_calls=tool_calls,
+            usage=usage,
+        )
+
+    def format_tools(self, tool_info: dict[str, dict[str, Any]]) -> list[dict]:
+        decls = [genai_types.FunctionDeclaration(
+            name=name,
+            description=info["description"],
+            parameters_json_schema=info["schema"],
+        ) for name, info in tool_info.items()]
+        return [genai_types.Tool(function_declarations=decls)]  # type: ignore[list-item]
+
+    def format_tool_result(self, tool_call_id: str, content: str) -> dict:
+        name = self._call_id_to_name.get(tool_call_id, "unknown")
+        return {
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "_gemini_content": genai_types.Content(
+                role="user",
+                parts=[genai_types.Part.from_function_response(
+                    name=name, response={"result": content})]),
+        }
+
+    def format_assistant_msg(self, response: ProviderResponse) -> dict:
+        msg: dict[str, Any] = {"role": "assistant", "content": response.content}
+        if self._last_response_content is not None:
+            msg["_gemini_content"] = self._last_response_content
+        return msg
+
+    @property
+    def context_window(self) -> int:
+        return self._CONTEXT_WINDOWS.get(self._model, self._default_context_window)
+
+    @property
+    def model_name(self) -> str:
+        return self._model
+
+    def pricing(self) -> dict[str, float]:
+        return self._PRICING.get(self._model,
+            {"input": 1.25e-6, "cached": 0.3125e-6, "output": 10.00e-6})
 
 
 # ============================================================================
@@ -601,8 +777,8 @@ class APIDriver(Session):
 
 @agent_driver("ChatGPT")
 class APIDriver_ChatGPT(APIDriver):
-    DEFAULT_MODEL = "gpt-4.1"
-    FORK_CHEAPER_MODEL = "gpt-4.1-mini"
+    DEFAULT_MODEL = "gpt-5.5"
+    FORK_CHEAPER_MODEL = "gpt-5.5"
 
     def __init__(self, *args, **kwargs):
         provider = OpenAIProvider(
@@ -631,3 +807,24 @@ class APIDriver_K2Think(APIDriver):
             api_key=os.environ.get("K2_THINK_API_KEY"),
         )
         super().__init__(*args, provider=provider, **kwargs)
+
+
+@agent_driver("Gemini")
+class APIDriver_GeminiPro(APIDriver):
+    DEFAULT_MODEL = "gemini-2.5-pro"
+    FORK_CHEAPER_MODEL = "gemini-2.5-flash"
+
+    def __init__(self, *args, **kwargs):
+        provider = GeminiProvider(
+            model=self.DEFAULT_MODEL,
+            thinking_budget=8192,
+        )
+        super().__init__(*args, provider=provider, **kwargs)
+
+    def _fork_provider(self, mode: ForkingMode) -> Provider:
+        if mode == ForkingMode.FORKING_CHEAPER_NO_CTXT and self.FORK_CHEAPER_MODEL:
+            return GeminiProvider(
+                model=self.FORK_CHEAPER_MODEL,
+                thinking_budget=0,
+            )
+        return self._provider

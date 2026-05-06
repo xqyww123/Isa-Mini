@@ -7755,6 +7755,24 @@ async def _test_FactByNameOF(root: Root, file: MyIO):
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
 
+@model_test("FactByNameFlip", "Test_FactByNameFlip.thy", 10)
+async def _test_FactByNameFlip(root: Root, file: MyIO):
+    """Test FactByName with [symmetric] (flip) through the full pipeline."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    outcome = await root.fill("1", [Obvious.gen_single({
+        "facts": [{"name": "h", "flip": True}]
+    })])
+    if outcome.failure is not None:
+        file.write(f"Fill failed: {outcome.failure}\n")
+    print_header("After Obvious with flip", file)
+    root.print(0, file)
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+
 @model_test("QuickviewCollapse", "Test_QuickviewCollapse.thy", 8)
 async def _test_QuickviewCollapse(root: Root, file: MyIO):
     """When 5+ consecutive sibling steps are done and unchanged,
