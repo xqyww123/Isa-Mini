@@ -78,7 +78,11 @@ class ClaudeCode(Session):
     _fork_index: int | None
 
     def __init__(self, *args, parent: 'ClaudeCode | None' = None,
-                 interactive_web_terminal: bool = False, **kwargs):
+                 interactive_web_terminal: bool = False,
+                 argument: str | None = None, **kwargs):
+        if argument is not None:
+            raise DriverArgumentError(
+                f"Driver 'ClaudeCode' does not accept arguments, but got '{argument}'")
         super().__init__(*args, parent=parent, **kwargs)
         if parent is not None:
             # Fork mode: share parent's state
@@ -872,5 +876,8 @@ class ClaudeCode(Session):
 
 
 @agent_driver("ClaudeCode_Interactive")
-def _claude_code_interactive(logger, log_dir, **kwargs):
+def _claude_code_interactive(logger, log_dir, *, argument=None, **kwargs):
+    if argument is not None:
+        raise DriverArgumentError(
+            f"Driver 'ClaudeCode_Interactive' does not accept arguments, but got '{argument}'")
     return ClaudeCode(logger, log_dir, interactive_web_terminal=True, **kwargs)

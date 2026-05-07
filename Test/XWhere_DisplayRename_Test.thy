@@ -175,4 +175,274 @@ begin
   \<close>
 end
 
+
+section \<open>Corner cases\<close>
+
+subsection \<open>T6: Mixed schematic + display-renamed HOL \<forall> in one call\<close>
+
+text \<open>Schematic \<open>?Q\<close> + display-renamed \<open>n1\<close> (raw \<open>n\<close>) in one xwhere call.\<close>
+
+notepad
+begin
+  fix n :: nat
+
+  ML_val \<open>
+    let val ctxt = \<^context>
+        val thm = Minilang_Aux.xwhere ctxt
+              [((("Q", 0), Position.none), ("prop", "True")),
+               ((("n1", 0), Position.none), ("nat", "0 :: nat"))]
+              [] @{thm mixed_svar}
+        val prop = Thm.prop_of thm
+        val has_true = Term.exists_subterm
+          (fn \<^Const_>\<open>True\<close> => true | _ => false) prop
+        val has_zero = Term.exists_subterm
+          (fn Const (\<^const_name>\<open>Groups.zero\<close>, _) => true | _ => false) prop
+    in if has_true andalso has_zero
+       then writeln "T6 mixed schematic + display-renamed: ok"
+       else error ("T6 failed: " ^ Thm.string_of_thm ctxt thm)
+    end
+  \<close>
+end
+
+
+subsection \<open>T7: Mixed schematic + original HOL \<forall> in one call\<close>
+
+notepad
+begin
+  text \<open>No conflicting free \<rightarrow> display names = raw names.
+        Schematic \<open>?Q\<close> + original \<open>n\<close>.\<close>
+  ML_val \<open>
+    let val ctxt = \<^context>
+        val thm = Minilang_Aux.xwhere ctxt
+              [((("Q", 0), Position.none), ("prop", "True")),
+               ((("n", 0), Position.none), ("nat", "0 :: nat"))]
+              [] @{thm mixed_svar}
+        val prop = Thm.prop_of thm
+        val has_true = Term.exists_subterm
+          (fn \<^Const_>\<open>True\<close> => true | _ => false) prop
+        val has_zero = Term.exists_subterm
+          (fn Const (\<^const_name>\<open>Groups.zero\<close>, _) => true | _ => false) prop
+    in if has_true andalso has_zero
+       then writeln "T7 mixed schematic + original: ok"
+       else error ("T7 failed: " ^ Thm.string_of_thm ctxt thm)
+    end
+  \<close>
+end
+
+
+subsection \<open>T8: All HOL \<forall> vars renamed (both n and m clash)\<close>
+
+notepad
+begin
+  fix n m :: nat
+
+  ML_val \<open>
+    let val display = Minilang.deconflict_bound_names \<^context>
+              (Thm.prop_of @{thm forall_nm})
+        val s = Syntax.string_of_term
+              (Config.put Printer.show_question_marks true \<^context>) display
+    in writeln ("T8a display: " ^ s) end
+  \<close>
+
+  ML_val \<open>
+    let val ctxt = \<^context>
+        val display = Minilang.deconflict_bound_names ctxt
+              (Thm.prop_of @{thm forall_nm})
+        val s = Syntax.string_of_term
+              (Config.put Printer.show_question_marks true ctxt) display
+        (* Extract the display names from the string *)
+        val n_name = if String.isSubstring "n1" s then "n1" else "na"
+        val m_name = if String.isSubstring "m1" s then "m1" else
+                     if String.isSubstring "ma" s then "ma" else "m1"
+        val thm = Minilang_Aux.xwhere ctxt
+              [((( n_name, 0), Position.none), ("nat", "0 :: nat")),
+               (((m_name, 0), Position.none), ("nat", "1 :: nat"))]
+              [] @{thm forall_nm}
+        val prop = Thm.prop_of thm
+        val has_zero = Term.exists_subterm
+          (fn Const (\<^const_name>\<open>Groups.zero\<close>, _) => true | _ => false) prop
+        val has_one = Term.exists_subterm
+          (fn t => (case try HOLogic.dest_number t of SOME (_, 1) => true | _ => false)) prop
+    in if has_zero andalso has_one
+       then writeln ("T8b all-renamed (" ^ n_name ^ "," ^ m_name ^ "): ok")
+       else error ("T8b failed: " ^ Thm.string_of_thm ctxt thm)
+    end
+  \<close>
+end
+
+
+subsection \<open>T9: Nonexistent variable name \<rightarrow> error\<close>
+
+notepad
+begin
+  fix n :: nat
+
+  ML_val \<open>
+    let val raised = (Minilang_Aux.xwhere \<^context>
+              [((("bogus", 0), Position.none), ("nat", "0 :: nat"))]
+              [] @{thm forall_n}; false)
+              handle ERROR _ => true
+    in if raised then writeln "T9 nonexistent var: ok (errored)"
+       else error "T9: should have errored for nonexistent variable"
+    end
+  \<close>
+end
+
+
+subsection \<open>T10: HOL \<forall> nested inside implication\<close>
+
+text \<open>\<open>A \<longrightarrow> \<forall>n. P n\<close> — the \<forall> is inside an implication conclusion.\<close>
+
+lemma impl_forall: \<open>A \<longrightarrow> (\<forall>n :: nat. P n)\<close> for A P sorry
+
+notepad
+begin
+  fix n :: nat
+
+  ML_val \<open>
+    let val ctxt = \<^context>
+        val thm = Minilang_Aux.xwhere ctxt
+              [((("n1", 0), Position.none), ("nat", "0 :: nat"))]
+              [] @{thm impl_forall}
+        val prop = Thm.prop_of thm
+        val has_zero = Term.exists_subterm
+          (fn Const (\<^const_name>\<open>Groups.zero\<close>, _) => true | _ => false) prop
+    in if has_zero then writeln "T10 forall inside implication: ok"
+       else error ("T10 failed: " ^ Thm.string_of_thm ctxt thm)
+    end
+  \<close>
+end
+
+
+subsection \<open>T11: Pure.all wrapping HOL \<forall>\<close>
+
+text \<open>\<open>\<And>x. \<forall>n. P x n\<close> — Pure quantifier wrapping HOL quantifier.\<close>
+
+lemma pure_hol: \<open>\<And>x :: nat. \<forall>n :: nat. P x n\<close> for P sorry
+
+notepad
+begin
+  fix n :: nat
+
+  ML_val \<open>
+    let val ctxt = \<^context>
+        val thm = Minilang_Aux.xwhere ctxt
+              [((("n1", 0), Position.none), ("nat", "0 :: nat"))]
+              [] @{thm pure_hol}
+        val prop = Thm.prop_of thm
+        val has_zero = Term.exists_subterm
+          (fn Const (\<^const_name>\<open>Groups.zero\<close>, _) => true | _ => false) prop
+    in if has_zero then writeln "T11 Pure.all wrapping HOL.All: ok"
+       else error ("T11 failed: " ^ Thm.string_of_thm ctxt thm)
+    end
+  \<close>
+end
+
+
+subsection \<open>T12: Empty instantiation list (no-op)\<close>
+
+notepad
+begin
+  fix n :: nat
+
+  ML_val \<open>
+    let val ctxt = \<^context>
+        val thm0 = @{thm forall_n}
+        val thm1 = Minilang_Aux.xwhere ctxt [] [] thm0
+    in if Thm.prop_of thm0 aconv Thm.prop_of thm1
+       then writeln "T12 empty instantiation: ok (no-op)"
+       else error "T12: empty inst should be no-op"
+    end
+  \<close>
+end
+
+
+subsection \<open>T13: Chain of multiple implications before \<forall>\<close>
+
+text \<open>\<open>A \<longrightarrow> B \<longrightarrow> \<forall>n. P n\<close> — foralls must look past multiple \<longrightarrow>.\<close>
+
+lemma deep_impl: \<open>A \<longrightarrow> B \<longrightarrow> (\<forall>n :: nat. P n)\<close> for A B P sorry
+
+notepad
+begin
+  fix n :: nat
+
+  ML_val \<open>
+    let val ctxt = \<^context>
+        val thm = Minilang_Aux.xwhere ctxt
+              [((("n1", 0), Position.none), ("nat", "0 :: nat"))]
+              [] @{thm deep_impl}
+        val has_zero = Term.exists_subterm
+          (fn Const (\<^const_name>\<open>Groups.zero\<close>, _) => true | _ => false) (Thm.prop_of thm)
+    in if has_zero then writeln "T13 deep implication chain: ok"
+       else error ("T13 failed: " ^ Thm.string_of_thm ctxt thm)
+    end
+  \<close>
+end
+
+
+subsection \<open>T14: Rename to \<open>na\<close> (not \<open>n1\<close>) when \<open>n1\<close> is also taken\<close>
+
+notepad
+begin
+  fix n n1 :: nat
+
+  ML_val \<open>
+    let val display = Minilang.deconflict_bound_names \<^context>
+              (Thm.prop_of @{thm forall_n})
+        val s = Syntax.string_of_term
+              (Config.put Printer.show_question_marks true \<^context>) display
+    in writeln ("T14a display with n,n1 taken: " ^ s) end
+  \<close>
+
+  ML_val \<open>
+    let val ctxt = \<^context>
+        (* n and n1 are both taken, so deconflict should pick something else *)
+        val display = Minilang.deconflict_bound_names ctxt
+              (Thm.prop_of @{thm forall_n})
+        val s = Syntax.string_of_term
+              (Config.put Printer.show_question_marks true ctxt) display
+        (* Extract whatever name deconflict chose *)
+        val display_names = map fst (let
+              fun foralls (Const(\<^const_name>\<open>Trueprop\<close>, _) $ X) = foralls X
+                | foralls (Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs (name, T, X)) = (name, T) :: foralls X
+                | foralls _ = []
+              in foralls display end)
+        val dname = hd display_names
+        val thm = Minilang_Aux.xwhere ctxt
+              [(((dname, 0), Position.none), ("nat", "0 :: nat"))]
+              [] @{thm forall_n}
+        val has_zero = Term.exists_subterm
+          (fn Const (\<^const_name>\<open>Groups.zero\<close>, _) => true | _ => false) (Thm.prop_of thm)
+    in if has_zero
+       then writeln ("T14b rename to " ^ dname ^ ": ok")
+       else error ("T14b failed: " ^ Thm.string_of_thm ctxt thm)
+    end
+  \<close>
+end
+
+
+subsection \<open>T15: Theorem with premises (Pure.imp) wrapping HOL \<forall>\<close>
+
+text \<open>\<open>A \<Longrightarrow> \<forall>n. P n\<close> — Pure implication, not HOL.\<close>
+
+lemma pure_imp_forall: \<open>A \<Longrightarrow> \<forall>n :: nat. P n\<close> for A P sorry
+
+notepad
+begin
+  fix n :: nat
+
+  ML_val \<open>
+    let val ctxt = \<^context>
+        val thm = Minilang_Aux.xwhere ctxt
+              [((("n1", 0), Position.none), ("nat", "0 :: nat"))]
+              [] @{thm pure_imp_forall}
+        val has_zero = Term.exists_subterm
+          (fn Const (\<^const_name>\<open>Groups.zero\<close>, _) => true | _ => false) (Thm.prop_of thm)
+    in if has_zero then writeln "T15 Pure.imp + HOL.All: ok"
+       else error ("T15 failed: " ^ Thm.string_of_thm ctxt thm)
+    end
+  \<close>
+end
+
 end

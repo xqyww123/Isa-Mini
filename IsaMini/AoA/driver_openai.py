@@ -46,9 +46,9 @@ class OpenAI_Driver(Session):
     _fork_name: str
 
     def __init__(self, *args, parent: 'OpenAI_Driver | None' = None,
-                 model: str | None = None, **kwargs):
+                 model: str | None = None, argument: str | None = None, **kwargs):
         super().__init__(*args, parent=parent, **kwargs)
-        self._model = model or self.DEFAULT_MODEL
+        self._model = argument or model or self.DEFAULT_MODEL
         if parent is not None:
             self.working_dir = parent.working_dir
             self.YAML_path = parent.YAML_path

@@ -506,6 +506,10 @@ class AoA_Error(Exception):
     pass
 
 
+class DriverArgumentError(AoA_Error):
+    pass
+
+
 class OprError(AoA_Error):
     pass
 
@@ -7560,6 +7564,7 @@ class Session:
 
     def __init__(self, logger: logging.Logger | None = None, log_dir: str | Path = "",
                  parent: 'Session | None' = None,
+                 argument: str | None = None,
                  retrieval_forking_mode: ForkingMode = ForkingMode.FORKING_WITH_CTXT,
                  interactive_retrieval: InteractiveRetrievalMode = InteractiveRetrievalMode.YES,
                  timeout_seconds: float = 14400,
@@ -8062,6 +8067,7 @@ class Session:
 
 class SessionConstructor(Protocol):
     def __call__(self, logger: logging.Logger | None, log_dir: str | Path, *,
+                 argument: str | None = ...,
                  retrieval_forking_mode: ForkingMode = ...,
                  interactive_retrieval: InteractiveRetrievalMode = ...,
                  timeout_seconds: float = ...,

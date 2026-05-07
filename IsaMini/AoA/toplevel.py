@@ -25,6 +25,9 @@ class UnknownDriver(AoA_Error):
     def __init__(self, driver: str):
         super().__init__(f"Unknown driver: {driver}")
 
+_test_driver = object()
+Session.Driver["test"] = _test_driver  # type: ignore[assignment]
+
 
 @isabelle_remote_procedure("IsaMini.query_by_name")
 async def _query_by_name_rpc(arg: tuple[int, str], connection: Connection) -> tuple[str, bool]:
@@ -55,20 +58,27 @@ async def IsaMini_AoA(data: tuple[Any, Any, str, str, str, str, str, tuple[int, 
 
     global_context = Context.unpack(global_context)
     ptree = Minilang_State._unpack_flat_goal(ptree)
-    is_test = driver.startswith("test.")
-    if is_test:
-        # Run specific test associated with the driver
+    if "." in driver:
+        driver_name, argument = driver.split(".", 1)
+        argument = argument or None
+    else:
+        driver_name = driver
+        argument = None
+
+    drv = Session.Driver.get(driver_name)
+    if drv is None:
+        raise UnknownDriver(driver)
+
+    if drv is _test_driver:
         from .test import TESTS
-        test_name = driver[len("test."):]
-        if test_name not in TESTS:
-            raise ValueError(f"Test Not Found on '{test_name}'")
-        case = TESTS[test_name]
+        if argument is None or argument not in TESTS:
+            raise ValueError(f"Test Not Found on '{argument}'")
+        case = TESTS[argument]
         root = await case.run(connection, actual_log_path, global_context, ptree)
         cost = (0, 0, 0, 0, 0.0, 0, 0.0, 0.0)
+        is_test = True
     else:
-        drv = Session.Driver.get(driver)
-        if drv is None:
-            raise UnknownDriver(driver)
+        is_test = False
         logger = connection.server.logger
         retrieval_forking = FORKING_MODE_MAP.get(retrieval_forking_str)
         if retrieval_forking is None:
@@ -86,6 +96,7 @@ async def IsaMini_AoA(data: tuple[Any, Any, str, str, str, str, str, tuple[int, 
                     f"Known: {sorted(INTERACTIVE_RETRIEVAL_MAP)}")
             interactive_retrieval = InteractiveRetrievalMode.NO
         async with drv(connection.server.logger, actual_log_path,
+                       argument=argument,
                        retrieval_forking_mode=retrieval_forking,
                        interactive_retrieval=interactive_retrieval,
                        timeout_seconds=timeout_seconds,

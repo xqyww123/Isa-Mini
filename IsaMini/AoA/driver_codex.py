@@ -37,7 +37,10 @@ class Codex_Driver(Session):
     _fork_name: str
 
     def __init__(self, *args, parent: 'Codex_Driver | None' = None,
-                 model: str | None = None, **kwargs):
+                 model: str | None = None, argument: str | None = None, **kwargs):
+        if argument is not None:
+            raise DriverArgumentError(
+                f"Driver 'Codex' does not accept arguments, but got '{argument}'")
         super().__init__(*args, parent=parent, **kwargs)
         self._model = model or self.DEFAULT_MODEL
         if parent is not None:

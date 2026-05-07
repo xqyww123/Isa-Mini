@@ -1142,9 +1142,10 @@ class APIDriver_ChatGPT(APIDriver):
     DEFAULT_MODEL = "gpt-5.5"
     FORK_CHEAPER_MODEL = "gpt-5.5"
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, argument: str | None = None, **kwargs):
+        model = argument or self.DEFAULT_MODEL
         provider = OpenAIResponsesProvider(
-            model=self.DEFAULT_MODEL,
+            model=model,
             cache_key=f"proof-{uuid.uuid4().hex[:8]}",
             reasoning_effort="high",
         )
@@ -1163,10 +1164,11 @@ class APIDriver_ChatGPT(APIDriver):
 class APIDriver_K2Think(APIDriver):
     DEFAULT_MODEL = "moe-375b-mid3-final"
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, argument: str | None = None, **kwargs):
+        model = argument or self.DEFAULT_MODEL
         provider = K2ThinkProvider(
             base_url=os.environ.get("K2_BASE_URL", "http://16.78.75.185:8000/v1"),
-            model=self.DEFAULT_MODEL,
+            model=model,
             api_key=os.environ.get("K2_THINK_API_KEY"),
         )
         super().__init__(*args, provider=provider, **kwargs)
@@ -1177,9 +1179,10 @@ class APIDriver_GeminiPro(APIDriver):
     DEFAULT_MODEL = "gemini-3.1-pro-preview"
     FORK_CHEAPER_MODEL = "gemini-3-flash-preview"
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, argument: str | None = None, **kwargs):
+        model = argument or self.DEFAULT_MODEL
         provider = GeminiProvider(
-            model=self.DEFAULT_MODEL,
+            model=model,
             thinking_budget=8192,
         )
         super().__init__(*args, provider=provider, **kwargs)
@@ -1197,9 +1200,10 @@ class APIDriver_GeminiPro(APIDriver):
 class APIDriver_Claude(APIDriver):
     DEFAULT_MODEL = "claude-opus-4-6"
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, argument: str | None = None, **kwargs):
+        model = argument or self.DEFAULT_MODEL
         provider = AnthropicProvider(
-            model=self.DEFAULT_MODEL,
+            model=model,
             thinking_effort="high",
         )
         super().__init__(*args, provider=provider, **kwargs)
