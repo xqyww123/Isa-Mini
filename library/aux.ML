@@ -21,6 +21,8 @@ val xwhere : Proof.context ->
         (binding * string option * mixfix) list ->
           thm -> thm
 
+val deconflict_bound_names : Proof.context -> term -> term
+
 val inst_hol_alls : Proof.context -> (string * cterm) list -> thm -> thm
 val inst_universal_quantifiers : Proof.context -> (indexname * term) list -> thm -> thm
 val inst_universal_quantifiers' : Proof.context -> (indexname * string) list -> thm -> thm
@@ -323,28 +325,108 @@ fun inst_hol_alls ctxt insts thm =
      |> Drule.zero_var_indexes
   end
 
+(* Rename bound variables (Abs names) to avoid clashes with free variables
+   in the term, schematic variable base names, and names declared in the
+   proof context.  Pure display utility — does not change the theorem. *)
+fun deconflict_bound_names' ctxt term =
+  let
+    val free_names = Term.add_free_names term []
+    val var_names = Term.add_var_names term [] |> map fst
+    val initial_name_ctx = fold Name.declare free_names (Variable.names_of ctxt)
+                           |> fold Name.declare var_names
+    fun deconflict name_ctx (Abs (name, ty, body)) =
+          let val (name', name_ctx') = variant_name name name_ctx
+              val body' = deconflict name_ctx' body
+           in case (name' = name, body')
+           of (true , NONE) => NONE
+            | (true , SOME body) => SOME (Abs (name', ty, body))
+            | (false, NONE) => SOME (Abs (name', ty, body))
+            | (false, SOME body) => SOME (Abs (name', ty, body))
+          end
+      | deconflict name_ctx (f $ x) =
+          let val f' = deconflict name_ctx f
+              val x' = deconflict name_ctx x
+           in case (f', x')
+                of (SOME f, NONE) => SOME (f $ x)
+                 | (SOME f, SOME x) => SOME (f $ x)
+                 | (NONE, SOME x) => SOME (f $ x)
+                 | (NONE, NONE) => NONE
+          end
+      | deconflict _ _ = NONE
+   in deconflict initial_name_ctx term
+  end
+
+fun deconflict_bound_names ctxt term =
+  case deconflict_bound_names' ctxt term
+    of SOME ret => ret
+     | NONE => term
+
+(* Three-tier instantiation:
+   1. All inst names are schematic variables → Rule_Insts.where_rule directly
+   2. All non-schematic inst names match display-renamed HOL ∀ bound variables
+      (via deconflict_bound_names) → map back to raw names, lift ∀, where_rule
+   3. All non-schematic inst names match original HOL ∀ bound names →
+      lift ∀, where_rule
+   Each tier is all-or-nothing: either ALL non-schematic names resolve in
+   that tier, or it falls through to the next. *)
 fun xwhere ctxt inst0 fixes thm =
-  let val vs = Term.add_var_names (Thm.prop_of thm) []
+  let val concl = Thm.concl_of thm
+      val vs = Term.add_var_names (Thm.prop_of thm) []
       val inst = map (fn (idx_pos, (_, src)) => (idx_pos, src)) inst0
-   in if forall (fn ((name, _), _) => exists (fn name' => name' = name) vs) inst
-    then Rule_Insts.where_rule ctxt inst fixes thm
-    else let
+
       fun foralls (Const(\<^const_name>\<open>Trueprop\<close>, _) $ X) = foralls X
         | foralls (Const(\<^const_name>\<open>HOL.implies\<close>, _) $ _ $ X) = foralls X
         | foralls (Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs (name, T, X)) = (name, T) :: foralls X
         | foralls (Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs (_, _, X)) = foralls X
         | foralls (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ X) = foralls X
         | foralls _ = []
-      val hol_insts = foralls (Thm.concl_of thm)
-              |> map_filter (fn (name, T) =>
-                  if exists (fn (((name', 0), _), _) => name' = name
-                              | _ => false ) inst andalso
-                     not (exists (fn (name', _) => name' = name) vs)
+
+      val raw_hol_vars = foralls concl
+      val raw_hol_names = map fst raw_hol_vars
+
+      fun is_schematic name = exists (fn n => n = (name, 0)) vs
+      val non_schem = map_filter (fn (((name, _), _), _) =>
+            if is_schematic name then NONE else SOME name) inst
+
+      (* Lift named HOL ∀ vars to schematics, remap inst, apply where_rule.
+         rename_map: (inst_name → raw_hol_name) for non-schematic names *)
+      fun lift_and_where rename_map =
+        let val raw_names_to_lift = distinct (op =) (map snd rename_map)
+            val to_lift = map_filter (fn (name, T) =>
+                  if member (op =) raw_names_to_lift name
                   then SOME (name, Thm.var ((name, 0), Thm.ctyp_of ctxt T))
-                  else NONE)
-      val thm' = inst_hol_alls ctxt hol_insts thm
-   in Rule_Insts.where_rule ctxt inst fixes thm'
-  end
+                  else NONE) raw_hol_vars
+            val thm' = inst_hol_alls ctxt to_lift thm
+            val inst' = map (fn (((name, idx), pos), src) =>
+                  let val name' = case AList.lookup (op =) rename_map name of
+                                    SOME rn => rn | NONE => name
+                  in (((name', idx), pos), src) end) inst
+        in Rule_Insts.where_rule ctxt inst' fixes thm' end
+   in
+      if null non_schem then
+        (* Tier 1: all names are schematics *)
+        Rule_Insts.where_rule ctxt inst fixes thm
+      else let
+        (* Decide: do the non-schematic names match display-renamed or raw HOL ∀ names? *)
+        val display_hol_names = map fst (foralls (deconflict_bound_names ctxt concl))
+        val use_display = forall (member (op =) display_hol_names) non_schem
+        val use_raw     = forall (member (op =) raw_hol_names) non_schem
+      in
+        if use_display then
+          (* Tier 2: map display names → raw names *)
+          let val display_to_raw = ListPair.mapEq
+                    (fn (dn, (rn, _)) => (dn, rn))
+                    (display_hol_names, raw_hol_vars)
+              val rename_map = map (fn n =>
+                    (n, the (AList.lookup (op =) display_to_raw n))) non_schem
+          in lift_and_where rename_map end
+        else if use_raw then
+          (* Tier 3: use original names directly *)
+          lift_and_where (map (fn n => (n, n)) non_schem)
+        else
+          (* No tier matches — let standard where_rule produce the error *)
+          Rule_Insts.where_rule ctxt inst fixes thm
+      end
   end
 
 (* Instantiate universal quantifiers and schematic variables in a theorem by name.

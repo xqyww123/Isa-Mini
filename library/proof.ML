@@ -430,44 +430,13 @@ fun chk_working_mode mode =
 (* Deconflict bound variable names in a term to avoid shadowing.
    Always uses Variable.names_of ctxt as base to avoid conflicts with context names.
 *)
-fun deconflict_bound_names' ctxt term =
-  let
-    val free_names = Term.add_free_names term []
-    val initial_name_ctx = fold Name.declare free_names (Variable.names_of ctxt)
+val deconflict_bound_names = Minilang_Aux.deconflict_bound_names
 
-    fun deconflict name_ctx (Abs (name, ty, body)) =
-          let val (name', name_ctx') = variant_name name name_ctx
-              val body' = deconflict name_ctx' body
-           in case (name' = name, body')
-           of (true , NONE) => NONE
-            | (true , SOME body) => SOME (Abs (name', ty, body))
-            | (false, NONE) => SOME (Abs (name', ty, body))
-            | (false, SOME body) => SOME (Abs (name', ty, body))
-          end
-      | deconflict name_ctx (f $ x) =
-          let val f' = deconflict name_ctx f
-              val x' = deconflict name_ctx x
-           in case (f', x')
-                of (SOME f, NONE) => SOME (f $ x)
-                 | (SOME f, SOME x) => SOME (f $ x)
-                 | (NONE, SOME x) => SOME (f $ x)
-                 | (NONE, NONE) => NONE
-          end
-      | deconflict _ _ = NONE
-   in deconflict initial_name_ctx term
-  end
-
-fun deconflict_bound_names ctxt term =
-  case deconflict_bound_names' ctxt term
-    of SOME ret => ret
-     | NONE => term
-
-(* Apply bound name deconfliction to theorem *)
 fun deconflict_bound_names_thm ctxt thm =
   let val prop = Thm.prop_of thm
-   in case deconflict_bound_names' ctxt prop
-        of SOME prop' => Thm.renamed_prop prop' thm
-         | NONE => thm
+      val prop' = deconflict_bound_names ctxt prop
+   in if prop aconv prop' then thm
+      else Thm.renamed_prop prop' thm
   end
 
 

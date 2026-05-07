@@ -7561,7 +7561,10 @@ class Session:
     def __init__(self, logger: logging.Logger | None = None, log_dir: str | Path = "",
                  parent: 'Session | None' = None,
                  retrieval_forking_mode: ForkingMode = ForkingMode.FORKING_WITH_CTXT,
-                 interactive_retrieval: InteractiveRetrievalMode = InteractiveRetrievalMode.YES):
+                 interactive_retrieval: InteractiveRetrievalMode = InteractiveRetrievalMode.YES,
+                 timeout_seconds: float = 14400,
+                 max_tool_calls: int = 10000,
+                 max_retries: int = 8):
         """
         Args:
             logger: Python logger for runtime debug messages to the server log stream.
@@ -7570,6 +7573,9 @@ class Session:
             parent: Parent session for subsessions. None means this is a major session.
             retrieval_forking_mode: Forking strategy for interactive retrieval.
             interactive_retrieval: Whether to use fork-based interactive retrieval.
+            timeout_seconds: Wall-clock time limit for the session.
+            max_tool_calls: Maximum number of tool invocations.
+            max_retries: Maximum number of conversation retry turns.
         """
         self.parent = parent
         _session_var.set(self)
@@ -7592,6 +7598,17 @@ class Session:
         self.total_tool_calls: int = 0
         self.total_isabelle_time: float = 0.0
         self.total_model_time: float = 0.0
+        if parent is not None:
+            self.timeout_seconds = parent.timeout_seconds
+            self.max_tool_calls = parent.max_tool_calls
+            self.max_retries = parent.max_retries
+            self._budget_start_time = parent._budget_start_time
+        else:
+            self.timeout_seconds = timeout_seconds
+            self.max_tool_calls = max_tool_calls
+            self.max_retries = max_retries
+            self._budget_start_time: float | None = None
+        self._retry_count: int = 0
         self.retrieval_forking_mode: ForkingMode = (
             parent.retrieval_forking_mode if parent is not None
             else retrieval_forking_mode)
@@ -7917,6 +7934,31 @@ class Session:
                   unfinished_nodes=node_ids,
                   retry_prompt=retry_prompt)
 
+    def log_budget_exhausted(self, reason: str):
+        self._log(self.interaction_log_file, "BUDGET_EXHAUSTED",
+                  lambda: [f"[BUDGET] {reason}"], reason=reason)
+
+    def check_budget(self) -> bool:
+        """Check budget limits. If exceeded, set quit_info and return True."""
+        if not hasattr(self, 'root') or self.root.quit_info is not None:
+            return hasattr(self, 'root') and self.root.quit_info is not None
+
+        reason = None
+        if self._budget_start_time is not None:
+            elapsed = time() - self._budget_start_time
+            if elapsed > self.timeout_seconds:
+                reason = f"timeout ({elapsed:.0f}s > {self.timeout_seconds}s)"
+        if reason is None and self.total_tool_calls >= self.max_tool_calls:
+            reason = f"tool call limit ({self.total_tool_calls} >= {self.max_tool_calls})"
+        if reason is None and self._retry_count >= self.max_retries:
+            reason = f"retry limit ({self._retry_count} >= {self.max_retries})"
+
+        if reason is not None:
+            self.root.quit_info = ("resource_exhausted", reason)
+            self.log_budget_exhausted(reason)
+            return True
+        return False
+
     # Proof tree logging methods
     def log_proof_operation(self, step: str, operation: str, details: dict[str, Any]):
         """Log proof operation to proof_oprs.yaml."""
@@ -8021,7 +8063,10 @@ class Session:
 class SessionConstructor(Protocol):
     def __call__(self, logger: logging.Logger | None, log_dir: str | Path, *,
                  retrieval_forking_mode: ForkingMode = ...,
-                 interactive_retrieval: InteractiveRetrievalMode = ...) -> Session: ...
+                 interactive_retrieval: InteractiveRetrievalMode = ...,
+                 timeout_seconds: float = ...,
+                 max_tool_calls: int = ...,
+                 max_retries: int = ...) -> Session: ...
 
 def agent_driver(name : str):
     """Register a Session constructor (class or factory function) under ``name``."""

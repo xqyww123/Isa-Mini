@@ -206,6 +206,7 @@ class Codex_Driver(Session):
     # ------------------------------------------------------------------
 
     async def _run_main_loop(self):
+        self._budget_start_time = time()
         prompt = self.initial_prompt()
         codex_session_id: str | None = None
 
@@ -230,9 +231,14 @@ class Codex_Driver(Session):
 
             self._accumulate_usage(events.get("usage", {}))
 
+            if self.check_budget():
+                break
             unfinished: set[Node] = set()
             self.root.unfinished_nodes(unfinished)
             if unfinished and self.root.quit_info is None:
+                self._retry_count += 1
+                if self.check_budget():
+                    break
                 prompt = self.retry_prompt(unfinished)
                 self.log_retry(unfinished, prompt)
             else:

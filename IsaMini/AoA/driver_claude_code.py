@@ -412,6 +412,7 @@ class ClaudeCode(Session):
         """Run using the Claude Agent SDK (embedded mode)."""
         if self._client is not None:
             raise InternalError("_run_embedded called while already running")
+        self._budget_start_time = time()
         try:
             async with ClaudeSDKClient(options=self.options) as client:
                 self._client = client
@@ -439,9 +440,14 @@ class ClaudeCode(Session):
                                 self._model_time_start = None
                             self._accumulate_cost(message)
                             self._check_result_error(message)
+                    if self.check_budget():
+                        break
                     unfinished_nodes = set()
                     self.root.unfinished_nodes(unfinished_nodes)
                     if unfinished_nodes and self.root.quit_info is None:
+                        self._retry_count += 1
+                        if self.check_budget():
+                            break
                         retry_prompt = self.retry_prompt(unfinished_nodes)
                         self.log_retry(unfinished_nodes, retry_prompt)
                         await client.query(retry_prompt)
@@ -548,16 +554,22 @@ class ClaudeCode(Session):
         await self.root.ml_state.connection.writeln(
             f"Interactive proof session started. Open web terminal: {web_terminal_url}")
 
-        # Wait for either proof completion or tmux death
+        # Wait for either proof completion, tmux death, or budget timeout
+        self._budget_start_time = time()
         proof_task = asyncio.create_task(self._proof_complete.wait())
         monitor_task = asyncio.create_task(self._monitor_tmux(tmux_session))
 
         try:
             done, pending = await asyncio.wait(
                 [proof_task, monitor_task],
-                return_when=asyncio.FIRST_COMPLETED)
+                return_when=asyncio.FIRST_COMPLETED,
+                timeout=self.timeout_seconds)
             for t in pending:
                 t.cancel()
+            if not done:
+                self.root.quit_info = ("resource_exhausted",
+                                       f"timeout ({self.timeout_seconds}s)")
+                self.log_budget_exhausted(f"timeout ({self.timeout_seconds}s)")
         finally:
             self._proof_complete = None
             self._on_yaml_refresh = None

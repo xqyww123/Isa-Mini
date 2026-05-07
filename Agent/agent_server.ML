@@ -921,8 +921,13 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
             let val log_dir = Config.get ctxt AoA_log_dir
                 val retrieval_forking = Config.get ctxt AoA_retrieval_forking
                 val interactive_retrieval = Config.get ctxt AoA_interactive_retrieval
-            in packTuple7 (context_packer ctxt, minilang_flat_goal_packer ctxt, packString, packString, packString, packString, packString)
-                          (global_context, s0_flat_goal, driver, log_dir, invocation_id, retrieval_forking, interactive_retrieval)
+                val (_, budget) = cfg
+            in packTuple8 (context_packer ctxt, minilang_flat_goal_packer ctxt,
+                           packString, packString, packString, packString, packString,
+                           packTuple3 (packInt, packInt, packInt))
+                          (global_context, s0_flat_goal, driver, log_dir, invocation_id,
+                           retrieval_forking, interactive_retrieval,
+                           (#timeout_seconds budget, #max_tool_calls budget, #max_retries budget))
             end),
         ret_schema = unpackTuple5 (unpackList MiniLang_Agent.xcmd_unpacker,
                                    unpackOption unpackString,
@@ -1000,19 +1005,13 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
 (*** REPL App ***)
 
 local open MessagePackBinIO.Unpack
-val unpackBudget = unpackTuple4
-              (unpackInt, unpackOption unpackInt, unpackInt, unpackOption unpackInt)
-        #> apfst (fn (sl, tt, pN, QRL) => ({
-              step_limit = sl,
-              total_timeout = Option.map Time.fromSeconds tt,
-              parallel_runs = pN,
-              QUERY_RET_LIMIT = QRL
+val unpackBudget = unpackTuple3 (unpackInt, unpackInt, unpackInt)
+        #> apfst (fn (ts, mtc, mr) => ({
+              timeout_seconds = ts,
+              max_tool_calls = mtc,
+              max_retries = mr
            } : MiniLang_Agent.budget))
-val unpackCfg = unpackPair (unpackBool, unpackBool)
-        #> apfst (fn (drafting, gussing_num_typ) => ({
-              drafting = drafting,
-              gussing_num_typ = gussing_num_typ
-           } : MiniLang_Agent.cfg))
+val unpackCfg = unpackUnit
  in
 
 fun AoA_REPL_App (cin, cout, toplevel) =

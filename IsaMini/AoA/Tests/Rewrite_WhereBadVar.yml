@@ -7,9 +7,8 @@ You can write global declarations by calling command `edit` with action `fill` a
 goal: myf (myf n) = n + (2 :: nat)
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
-myf.simps expression: ['myf ?n = ?n + (1 :: nat)']
 --------------------------------------------------
-After Rewrite with displayed variable name
+After Rewrite with wrong variable name
 --------------------------------------------------
 variables:
   - n: nat

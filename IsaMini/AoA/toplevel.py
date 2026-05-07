@@ -37,9 +37,10 @@ async def _query_by_name_rpc(arg: tuple[int, str], connection: Connection) -> tu
     return (text, is_error)
 
 @isabelle_remote_procedure("IsaMini.AoA")
-async def IsaMini_AoA(data: tuple[Any, Any, str, str, str, str, str], connection: Connection):
+async def IsaMini_AoA(data: tuple[Any, Any, str, str, str, str, str, tuple[int, int, int]], connection: Connection):
     (global_context, ptree, driver, log_dir, invocation_id,
-     retrieval_forking_str, interactive_retrieval_str) = data
+     retrieval_forking_str, interactive_retrieval_str, budget_tuple) = data
+    timeout_seconds, max_tool_calls, max_retries = budget_tuple
 
     # Environment variable AoA_LOG_DIR overrides user-provided log_dir
     env_log_dir = os.environ.get('AoA_LOG_DIR')
@@ -86,7 +87,10 @@ async def IsaMini_AoA(data: tuple[Any, Any, str, str, str, str, str], connection
             interactive_retrieval = InteractiveRetrievalMode.NO
         async with drv(connection.server.logger, actual_log_path,
                        retrieval_forking_mode=retrieval_forking,
-                       interactive_retrieval=interactive_retrieval) as session:
+                       interactive_retrieval=interactive_retrieval,
+                       timeout_seconds=timeout_seconds,
+                       max_tool_calls=max_tool_calls,
+                       max_retries=max_retries) as session:
             root = Root((global_context, ptree), connection, session)
             await session.initialize(root)
             await session.run()

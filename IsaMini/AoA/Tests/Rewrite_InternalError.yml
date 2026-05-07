@@ -17,7 +17,7 @@ is_error: True
 committed_count: 0
 failure_message:
 Cannot fill a node with id 1
-exception THM 0 raised (line 15 of "/home/qiyuan/Current/MLML/contrib/Isa-Mini/IsaMini_AoA/Tests/Test_Rewrite_InternalError.thy"): simulated internal error
+exception THM 0 raised (line 15 of "/home/qiyuan/Current/MLML/contrib/Isa-Mini/IsaMini/AoA/Tests/Test_Rewrite_InternalError.thy"): simulated internal error
 raw_exception_leaked: True
 --------------------------------------------------
 After Rewrite attempt

@@ -166,6 +166,7 @@ class OpenAI_Driver(Session):
 
     async def _run_embedded(self):
         assert self._mcp_url is not None
+        self._budget_start_time = time()
         mcp = self._make_mcp(self._mcp_url)
         agent = self._make_agent(mcp)
         hooks = self._make_hooks()
@@ -198,9 +199,14 @@ class OpenAI_Driver(Session):
 
                     last_response_id = self._last_response_id
                     self._forkable_response_id = last_response_id
+                    if self.check_budget():
+                        break
                     unfinished: set[Node] = set()
                     self.root.unfinished_nodes(unfinished)
                     if unfinished and self.root.quit_info is None:
+                        self._retry_count += 1
+                        if self.check_budget():
+                            break
                         prompt = self.retry_prompt(unfinished)
                         self.log_retry(unfinished, prompt)
                     else:

@@ -746,10 +746,35 @@ class AnthropicProvider(Provider):
 # APIDriver — Generic Agent Loop
 # ============================================================================
 
+COMPACTION_PROMPT = """\
+You have written a partial proof for the initial proof goal.
+Please summarize your idea and the progress into the following sections.
+This summary will replace the conversation history above and serve as your \
+only context for continuing the proof — anything not included will be lost.
+
+Summary template:
+```
+## Proof Plan
+Your current proof strategy in detail — the overall approach and how the \
+remaining subgoals fit into it.
+
+## Attempts
+Approaches tried so far: what succeeded, what failed and why. \
+Explicitly note any dead ends that should not be retried.
+
+## Key Insights
+Important observations about the proof structure, useful lemmas or \
+facts discovered, type information, etc.
+
+## Next Steps
+What to do next based on current progress.
+```"""
+
 class APIDriver(Session):
     """Agent driver that owns the chat loop, calling Provider.chat() directly."""
 
     COMPACTION_THRESHOLD = 0.80
+    COMPACTION_RECENT_ROUNDS = 3
     DEFAULT_MODEL: str = ""
     FORK_CHEAPER_MODEL: str | None = None
 
@@ -856,6 +881,7 @@ class APIDriver(Session):
 
     async def _run_loop(self):
         assert self._executor is not None
+        self._budget_start_time = time()
         self._messages = self._initial_messages()
         tools = self._provider.format_tools(self._executor.tool_schemas())
 
@@ -887,10 +913,15 @@ class APIDriver(Session):
                         ToolResultMsg(call_id=tc.id, name=tc.name, content=text))
                 if self.root.quit_info is not None:
                     break
+                if self.check_budget():
+                    break
             else:
                 unfinished: set[Node] = set()
                 self.root.unfinished_nodes(unfinished)
                 if not unfinished:
+                    break
+                self._retry_count += 1
+                if self.check_budget():
                     break
                 retry = self.retry_prompt(unfinished)
                 self._messages.append(UserMsg(retry))
@@ -936,9 +967,20 @@ class APIDriver(Session):
         total = usage.input_tokens + usage.output_tokens
         return total > self._provider.context_window * self.COMPACTION_THRESHOLD
 
+    def _find_recent_start(self, messages: list[Msg]) -> int:
+        rounds_seen = 0
+        for i in range(len(messages) - 1, -1, -1):
+            if isinstance(messages[i], AssistantMsg):
+                rounds_seen += 1
+                if rounds_seen == self.COMPACTION_RECENT_ROUNDS:
+                    return i
+        return len(self._initial_messages())
+
     async def _compact(self, messages: list[Msg], tools: list[dict]) -> list[Msg]:
-        messages.append(UserMsg(
-            "Please summarize your current proof strategy and progress so far."))
+        recent_start = self._find_recent_start(messages)
+        recent_messages = messages[recent_start:]
+
+        messages.append(UserMsg(COMPACTION_PROMPT))
         try:
             summary_resp = await self._provider.chat(messages, [])
         except Exception:
@@ -961,6 +1003,7 @@ class APIDriver(Session):
             new_messages.append(SystemMsg(sp))
         new_messages.append(UserMsg(
             self.initial_prompt() + "\n\nPrevious progress:\n" + summary))
+        new_messages.extend(recent_messages)
         self.log_AoA_opr(f"Compacted. Summary: {summary[:200]}...")
         return new_messages
 

@@ -1,16 +1,12 @@
 signature MINILANG_AGENT = sig
 
 type budget = {
-      QUERY_RET_LIMIT: int option,
-      parallel_runs: int,
-      total_timeout: Time.time option,
-      step_limit: int
+      timeout_seconds: int,
+      max_tool_calls: int,
+      max_retries: int
   }
 
-type cfg = {
-      drafting: bool,
-      gussing_num_typ : bool
-  }
+type cfg = unit
 
 type var_name = {internal_name: string, external_name: string, typ_pretty: string}
 type prem_name = {internal_term: term, external_name: string, pretty: string}
@@ -129,25 +125,17 @@ end
 structure MiniLang_Agent : MINILANG_AGENT = struct
 
 type budget = {
-      QUERY_RET_LIMIT: int option,
-      parallel_runs: int,
-      total_timeout: Time.time option,
-      step_limit: int
+      timeout_seconds: int,
+      max_tool_calls: int,
+      max_retries: int
   }
 
-type cfg = {
-      drafting: bool,
-      gussing_num_typ : bool
-  }
+type cfg = unit
 
-val default_cfg : (cfg * budget) = ({
-      drafting = true,
-      gussing_num_typ = true
-    }, {
-      QUERY_RET_LIMIT = SOME 30,
-      parallel_runs = 1,
-      total_timeout = SOME (Time.fromSeconds 600),
-      step_limit = 30
+val default_cfg : cfg * budget = ((), {
+      timeout_seconds = 14400,
+      max_tool_calls = 10000,
+      max_retries = 8
     })
 
 type var_name = {internal_name: string, external_name: string, typ_pretty: string}
@@ -966,7 +954,7 @@ val auto_apply_attrib : attribute =
      in fold apply_kind kinds context
     end)
 
-fun interpret_i (config as (cfg, budget, counters)) cmd s =
+fun interpret_i (config as (_, _, counters)) cmd s =
   case cmd of
       SIMPLIFY (simp_facts_with_targets, use_system_simps, premise_names, simplify_goal, user_bindings_opt) =>
         let val ctxt = Minilang.context_of s

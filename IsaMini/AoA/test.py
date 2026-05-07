@@ -7820,39 +7820,39 @@ async def _test_FactByNameOF(root: Root, file: MyIO):
 
 @model_test("Rewrite_WhereBadVar", "Test_Rewrite_WhereBadVar.thy", 11)
 async def _test_Rewrite_WhereBadVar(root: Root, file: MyIO):
-    """Reproduce: schematic variable display name vs actual name mismatch.
+    """Reproduce: [where] with wrong variable name from display renaming.
 
-    myf.simps has schematic ?n. When the proof context already has a free
-    variable `n`, Isabelle's pretty-printer renames the schematic to ?n1
-    for display. The agent sees `n1` in the retrieved expression and uses
-    it in [where n1 = ...], but [where] operates on the original schematic
-    name ?n — so the instantiation fails."""
+    Root cause from real bug (DFDD2C266_1BB5E6E):
+    1. Function defined proof-locally → .simps has HOL ∀ (bound variable)
+    2. Free `n` already in scope → deconflict_bound_names renames
+       the bound variable from `n` to `n1` for display
+    3. Retrieval shows `∀(n1 :: nat). myf n1 = ...` (see retrieval.yaml)
+    4. LLM uses `n1` in [where n1 = ...]
+    5. [where] fails: 'No such variable in theorem: ?n1'
+       because the theorem's actual schematic is ?n, not ?n1
+
+    This test reproduces the final error: [where] with a variable name
+    that doesn't match the theorem's schematics."""
     print_header("Initial YAML", file)
     root.print(0, file)
-    # Fetch myf.simps to see how it's displayed when `n` is already in scope.
-    # The goal has free variable `n`, so schematic ?n in myf.simps should be
-    # renamed to ?n1 by the pretty-printer.
-    fetched = await root.ml_state.fetch_facts([{"name": "myf.simps"}])
-    for f in fetched:
-        if isinstance(f, IsabelleFact_Presented):
-            file.write(f"myf.simps expression: {[e.unicode for e in f.expression]}\n")
-    # Rewrite using the DISPLAYED variable name "n1" (from pretty-printer rename).
-    # This should fail because the actual schematic is ?n, not ?n1.
+    # Rewrite using myf.simps with WRONG variable name "n1" (actual is "n").
+    # This mirrors what happens when the LLM reads the display-renamed
+    # bound variable name from retrieval output.
     root.session.age += 1
     outcome = await root.fill("1", [Rewrite.gen_single({
-        "thought": "Unfold outer myf using displayed variable name",
+        "thought": "Unfold outer myf with variable name from display",
         "using": [{"name": "myf.simps",
                    "instantiations": [{"name": "n1", "value": "myf n"}]}],
         "use system simplifiers": False,
         "rewrite goal": True,
         "rewrite premises": []
     })])
-    print_header("After Rewrite with displayed variable name", file)
+    print_header("After Rewrite with wrong variable name", file)
     root.print(0, file)
     if outcome.failure is not None:
         file.write(f"FAILURE: {outcome.failure}\n")
     else:
-        file.write("Rewrite succeeded\n")
+        file.write("ERROR: Rewrite should have failed but succeeded\n")
 
 
 @model_test("FactByNameFlip", "Test_FactByNameFlip.thy", 10)
@@ -8135,15 +8135,11 @@ async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | No
     import msgpack as mp
     from IsaREPL import Client
     _budget = (
-        -1, #step_limit
-        600, #timeout
-        1, #parallel_runs
-        40, # query_ret_num
+        14400, #timeout_seconds
+        10000, #max_tool_calls
+        8, #max_retries
     )
-    _cfg = (
-        True, #drafting
-        True, #gussing_num_typ
-    )
+    _cfg = None  # unit
     async with Client(repl_addr, 'HOL', timeout=1200) as repl:
         await repl.load_theory(['Minilang_Agent.Minilang_Agent'])
         await repl.record_state("init")
