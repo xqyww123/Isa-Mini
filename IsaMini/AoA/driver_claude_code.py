@@ -365,7 +365,7 @@ class ClaudeCode(Session):
             self.total_model_time += time() - self._model_time_start
             self._model_time_start = None
         self.total_tool_calls += 1
-        if not self.is_proof_tool(tool):
+        if not self.is_proof_tool(tool) or tool == self.tool_name(TOOL_READ):
             self.log_tool_call(tool, tool_input)
         return {}
 
@@ -397,7 +397,7 @@ class ClaudeCode(Session):
     def _check_error_text(self, text: str) -> None:
         if text.startswith("You've hit your limit"):
             raise self._ReachLimitError()
-        if "Rate limit" in text:
+        if "Rate limit" in text or "Request rejected (429)" in text:
             raise self._RateLimitError()
 
     def _check_rate_limit_event(self, event) -> None:

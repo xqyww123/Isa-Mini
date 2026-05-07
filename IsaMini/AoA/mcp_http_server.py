@@ -40,7 +40,7 @@ from .model import (
     CannotDelete_Root, NodeNotFound,
     EvaluationStatus,
     Parse_Op_List, normalize_answer, Interaction_BadAnswer,
-    TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER, TOOL_READ, TOOL_QUIT, ALL_PROOF_TOOLS,
+    TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER, TOOL_READ, TOOL_SURRENDER, ALL_PROOF_TOOLS,
 )
 import yaml as _yaml
 from .retrieval import (
@@ -66,7 +66,7 @@ _cc_edit_schema_raw = _load_schema("cc_edit.jsonc")
 _cc_answer_schema = _load_schema("cc_answer.jsonc")
 _cc_delete_schema = _load_schema("cc_delete.jsonc")
 _cc_read_schema = _load_schema("cc_recall.jsonc")
-_cc_quit_schema = _load_schema("cc_quit.jsonc")
+_cc_surrender_schema = _load_schema("cc_surrender.jsonc")
 
 
 def _relax_edit_schema(schema: dict) -> dict:
@@ -231,11 +231,13 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     ops = args.get("proof_operations")
     if isinstance(ops, str):
         try:
-            parsed = json.loads(ops)
-            if isinstance(parsed, list):
-                args = {**args, "proof_operations": parsed}
+            ops = json.loads(ops)
         except (json.JSONDecodeError, ValueError):
             pass
+    if isinstance(ops, dict):
+        ops = [ops]
+    if ops is not args.get("proof_operations"):
+        args = {**args, "proof_operations": ops}
     _tn = session.tool_name(TOOL_EDIT)
     session.log_tool_call(_tn, args)
     try:
@@ -301,8 +303,21 @@ async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     _tn = session.tool_name(TOOL_DELETE)
     session.log_tool_call(_tn, args)
     try:
+        target_steps = args.get("target_steps")
+        if isinstance(target_steps, str):
+            try:
+                parsed = json.loads(target_steps)
+                target_steps = parsed if isinstance(parsed, list) else [target_steps]
+            except (json.JSONDecodeError, ValueError):
+                target_steps = [target_steps]
+        if isinstance(target_steps, int):
+            target_steps = [target_steps]
+        if not isinstance(target_steps, list) or not target_steps:
+            error_msg = "target_steps must be a non-empty array"
+            session.log_tool_response(_tn, f"ERROR: {error_msg}")
+            return (error_msg, True)
         session.root.session.age += 1
-        steps = [str(s) for s in args["target_steps"]]
+        steps = [str(s) for s in target_steps]
         try:
             not_found = await session.root.delete(steps)
             if len(not_found) == len(steps):
@@ -349,11 +364,33 @@ async def _answer_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             session.log_tool_response(_tn, f"ERROR: {error_msg}")
             return (error_msg, True)
 
+        indexes = args.get("indexes")
+        if isinstance(indexes, str):
+            try:
+                indexes = json.loads(indexes)
+            except (json.JSONDecodeError, ValueError):
+                indexes = None
+        if isinstance(indexes, int):
+            indexes = [indexes]
+        if indexes is not None and not isinstance(indexes, list):
+            indexes = None
+
+        instantiations = args.get("instantiations")
+        if isinstance(instantiations, str):
+            try:
+                instantiations = json.loads(instantiations)
+            except (json.JSONDecodeError, ValueError):
+                instantiations = None
+        if isinstance(instantiations, dict):
+            instantiations = [instantiations]
+        if instantiations is not None and not isinstance(instantiations, list):
+            instantiations = None
+
         normalized = normalize_answer(
-            args.get("indexes"),
+            indexes,
             args.get("name"),
             args.get("statement"),
-            args.get("instantiations"))
+            instantiations)
 
         try:
             result = await pending.interaction.answer(normalized)
@@ -419,7 +456,7 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             node = session.root.locate_node(step_id)
             line_num = node.line
         except NodeNotFound:
-            error_msg = f"Step '{step_id}' not found. Read the proof by line number instead."
+            error_msg = f"Step '{step_id}' doesn't exist. Read the proof by line number instead."
             session.log_tool_response(_tn, f"ERROR: {error_msg}")
             return (error_msg, True)
 
@@ -444,8 +481,8 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     return (result, False)
 
 
-async def _quit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
-    _tn = session.tool_name(TOOL_QUIT)
+async def _surrender_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
+    _tn = session.tool_name(TOOL_SURRENDER)
     session.log_tool_call(_tn, args)
     reason = args.get("reason", "stuck")
     detail = args.get("detail", "")
@@ -453,6 +490,13 @@ async def _quit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         msg = f"Invalid reason: {reason!r}. Must be 'stuck' or 'false_statement'."
         session.log_tool_response(_tn, f"ERROR: {msg}")
         return (msg, True)
+    if not session.surrender_warned:
+        session.surrender_warned = True
+        msg = ("You are a strong prover and you've been doing well. "
+               "Don't surrender yet — take a step back, rethink your approach, "
+               "and try again. You may be closer than you think.")
+        session.log_tool_response(_tn, msg)
+        return (msg, False)
     session.root.quit_info = (reason, detail)
     msg = f"Proof attempt abandoned ({reason})."
     session.log_tool_response(_tn, msg)
@@ -478,7 +522,8 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "use long_description and filters for discovery.",
                "schema": _cc_query_schema, "annotations": _RO},
     "recall": {"description": "Recall proof state from `proof.yaml`. Use only when you have lost track.", "schema": _cc_read_schema, "annotations": _RO},
-    "quit":   {"description": "Concede failure and abandon the proof.", "schema": _cc_quit_schema, "annotations": _ACT},
+    "surrender": {"description": "Concede failure and abandon the proof. Use only after all strategies have been exhausted.",
+                  "schema": _cc_surrender_schema, "annotations": _ACT},
 }
 
 
@@ -511,6 +556,9 @@ class ToolExecutor:
         if perm_error:
             return (perm_error, True)
 
+        if name != "surrender":
+            session.surrender_warned = False
+
         is_error = False
         match name:
             case "edit":
@@ -540,8 +588,8 @@ class ToolExecutor:
                 result, is_error = await _query_tool_logic(session, arguments)
             case "recall":
                 result, is_error = await _read_tool_logic(session, arguments)
-            case "quit":
-                result, is_error = await _quit_tool_logic(session, arguments)
+            case "surrender":
+                result, is_error = await _surrender_tool_logic(session, arguments)
             case _:
                 return (f"Unknown tool: {name}", True)
 

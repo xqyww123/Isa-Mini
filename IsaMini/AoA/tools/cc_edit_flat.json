@@ -1667,78 +1667,92 @@
                 "type": "object"
               },
               "instantiations": {
-                "description": "instantiations for ∀-quantified or schematic variables",
+                "description": "instantiations for ∀-quantified or schematic variables; use null to skip a position",
                 "items": {
-                  "type": "object",
-                  "properties": {
-                    "name": {
-                      "type": "string"
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "type": "string",
+                          "description": "an Isabelle term to substitute, with all literal numbers annotated with their types"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "value"
+                      ]
                     },
-                    "value": {
-                      "type": "string",
-                      "description": "an Isabelle term to substitute, with all literal numbers annotated with their types"
+                    {
+                      "type": "null"
                     }
-                  },
-                  "required": [
-                    "name",
-                    "value"
                   ]
                 },
                 "type": "array",
                 "default": []
               },
               "discharging_facts": {
-                "description": "facts discharging the premises of the rule, left-to-right",
+                "description": "facts discharging the premises of the rule, left-to-right; use null to skip a premise position",
                 "items": {
-                  "title": "FactByName",
-                  "properties": {
-                    "name": {
-                      "type": "string",
-                      "description": "the exact name of the fact in Isabelle/HOL"
-                    },
-                    "instantiations": {
-                      "description": "optional instantiations for ∀-quantified or schematic variables",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "name": {
-                            "type": "string"
-                          },
-                          "value": {
-                            "type": "string",
-                            "description": "an Isabelle term to substitute, with all literal numbers annotated with their types"
-                          }
+                  "anyOf": [
+                    {
+                      "title": "FactByName",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "description": "the exact name of the fact in Isabelle/HOL"
                         },
-                        "required": [
-                          "name",
-                          "value"
-                        ]
-                      },
-                      "type": "array"
-                    },
-                    "discharge_premises": {
-                      "description": "optional list of facts to discharge the premises of this rule left-to-right; use null to skip a premise position",
-                      "items": {
-                        "anyOf": [
-                          {
-                            "type": "string"
+                        "instantiations": {
+                          "description": "optional instantiations for ∀-quantified or schematic variables",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "value": {
+                                "type": "string",
+                                "description": "an Isabelle term to substitute, with all literal numbers annotated with their types"
+                              }
+                            },
+                            "required": [
+                              "name",
+                              "value"
+                            ]
                           },
-                          {
-                            "type": "null"
-                          }
-                        ]
+                          "type": "array"
+                        },
+                        "discharge_premises": {
+                          "description": "optional list of facts to discharge the premises of this rule left-to-right; use null to skip a premise position",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "type": "array"
+                        },
+                        "flip": {
+                          "type": "boolean",
+                          "description": "if true, reverses an equation (swaps LHS and RHS) so the simplifier rewrites in the opposite direction"
+                        }
                       },
-                      "type": "array"
+                      "required": [
+                        "name"
+                      ],
+                      "type": "object"
                     },
-                    "flip": {
-                      "type": "boolean",
-                      "description": "if true, reverses an equation (swaps LHS and RHS) so the simplifier rewrites in the opposite direction"
+                    {
+                      "type": "null"
                     }
-                  },
-                  "required": [
-                    "name"
-                  ],
-                  "type": "object"
+                  ]
                 },
                 "type": "array",
                 "default": []

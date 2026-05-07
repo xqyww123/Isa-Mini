@@ -89,7 +89,7 @@
           "type": "array"
         },
         "discharge_premises": {
-          "description": "optional list of facts to discharge the premises of this rule left-to-right; use null to skip a premise position",
+          "description": "facts to discharge the premises left-to-right; use null to skip a premise position",
           "items": {
             "anyOf": [
               { "$ref": "#/$defs/FactByName" },
@@ -582,14 +582,24 @@
           "description": "the rule or theorem to specialize"
         },
         "instantiations": {
-          "description": "instantiations for ∀-quantified or schematic variables",
-          "items": { "$ref": "#/$defs/Instantiation" },
+          "description": "instantiations for ∀-quantified or schematic variables; use null to skip a position",
+          "items": {
+            "anyOf": [
+              { "$ref": "#/$defs/Instantiation" },
+              { "type": "null" }
+            ]
+          },
           "type": "array",
           "default": []
         },
         "discharging_facts": {
-          "description": "facts discharging the premises of the rule, left-to-right",
-          "items": { "$ref": "#/$defs/FactByName" },
+          "description": "facts discharging the premises of the rule, left-to-right; use null to skip a premise position",
+          "items": {
+            "anyOf": [
+              { "$ref": "#/$defs/FactByName" },
+              { "type": "null" }
+            ]
+          },
           "type": "array",
           "default": []
         },

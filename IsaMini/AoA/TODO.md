@@ -44,3 +44,5 @@ proof:
           goal: P b a
 ```
 
+2. 实现 Tactic Opr Node：用 semantic embedding 来实现调用任何 tactics with arbitrary arguments
+

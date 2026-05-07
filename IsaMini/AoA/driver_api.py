@@ -586,13 +586,13 @@ class AnthropicProvider(Provider):
     }
 
     def __init__(self, model: str, api_key: str | None = None,
-                 thinking_budget: int = 32_768,
+                 thinking_effort: str = "high",
                  default_context_window: int = 1_048_576):
         self._model = model
         self._client = anthropic.AsyncAnthropic(
-            api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"),
+            api_key=api_key or os.environ.get("CLAUDE_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"),
         )
-        self._thinking_budget = thinking_budget
+        self._thinking_effort = thinking_effort
         self._default_context_window = default_context_window
         self._last_response: Any = None
 
@@ -643,11 +643,9 @@ class AnthropicProvider(Provider):
             params["system"] = system_blocks
         if tools:
             params["tools"] = tools
-        if self._thinking_budget > 0:
-            params["thinking"] = {
-                "type": "enabled",
-                "budget_tokens": self._thinking_budget,
-            }
+        if self._thinking_effort:
+            params["thinking"] = {"type": "adaptive"}
+            params["output_config"] = {"effort": self._thinking_effort}
 
         try:
             async with self._client.messages.stream(
@@ -1159,6 +1157,6 @@ class APIDriver_Claude(APIDriver):
     def __init__(self, *args, **kwargs):
         provider = AnthropicProvider(
             model=self.DEFAULT_MODEL,
-            thinking_budget=100_000,
+            thinking_effort="high",
         )
         super().__init__(*args, provider=provider, **kwargs)

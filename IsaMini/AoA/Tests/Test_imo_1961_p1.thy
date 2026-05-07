@@ -6,7 +6,8 @@ theory Test_imo_1961_p1 imports
 MathBench_Prover.MathBench_Prover Minilang_Agent.Minilang_Agent
 
 begin
-declare [[auto_interpret_for_embedding=false (*, agent_AoA_driver="K2-Think" *)]]
+
+declare [[auto_interpret_for_embedding=false, agent_AoA_driver="ChatGPT"]]
 theorem imo_1961_p1:
   fixes x y z a b :: real
   assumes h0 : "0 < x \<and> 0 < y \<and> 0 < z"

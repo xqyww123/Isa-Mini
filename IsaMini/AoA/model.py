@@ -263,9 +263,12 @@ class IsabelleFact_Presented(IsabelleFact, IsabelleEntity):
             file.write(f"- {display_name}: {self.expression[0].unicode}\n")
         elif len(self.expression) > 1:
             file.write(f"- {display_name}:\n")
-            for expr in self.expression:
+            for expr in self.expression[:MAX_EXPR_ITEMS]:
                 print_indent(indent + 1, file)
                 file.write(f"  {expr.unicode}\n")
+            if len(self.expression) > MAX_EXPR_ITEMS:
+                print_indent(indent + 1, file)
+                file.write(f"  ... ({len(self.expression)} facts total)\n")
         else:
             file.write(f"- {display_name}\n")
     def pack(self) -> tuple[int, str]:
@@ -373,7 +376,7 @@ def print_paragraph(indent: int, file: MyIO | StringIO, para: str):
                 file.write(line)
                 file.write("\n")
 
-MAX_EXPR_ITEMS = 5
+MAX_EXPR_ITEMS = 8
 
 def print_expression_list(indent: int, file: MyIO | StringIO,
                           expressions: list[term]) -> bool:
@@ -768,7 +771,7 @@ def _validate_list(elem_type: type, data: Any, path: str) -> Any:
 def _validate_union(args: tuple[type, ...], data: Any, path: str) -> Any:
     none_types = [a for a in args if a is type(None)]
     real_types = [a for a in args if a is not type(None)]
-    if none_types and data is None:
+    if none_types and (data is None or data == "GivenLater"):
         return None
     if len(real_types) == 1:
         return validate(real_types[0], data, path)
@@ -1847,8 +1850,8 @@ TOOL_DELETE: tool = "delete"
 TOOL_ANSWER: tool = "answer"
 TOOL_SEARCH: tool = "query"
 TOOL_READ:   tool = "recall"
-TOOL_QUIT:   tool = "quit"
-ALL_PROOF_TOOLS: tuple[tool, ...] = (TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER, TOOL_SEARCH, TOOL_READ, TOOL_QUIT)
+TOOL_SURRENDER: tool = "surrender"
+ALL_PROOF_TOOLS: tuple[tool, ...] = (TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER, TOOL_SEARCH, TOOL_READ, TOOL_SURRENDER)
 
 class Interaction:
     forking: ForkingMode = ForkingMode.FORKING_WITH_CTXT
@@ -5683,8 +5686,8 @@ class Unfold(Leaf):
 class Derive_ToolArg(TypedDict):
     thought: str
     rule: FactByName                                          # The rule to specialize
-    instantiations: NotRequired[list[Instantiation]]          # Variable instantiations (default: [])
-    discharging_facts: NotRequired[list[FactByName]]          # Facts to discharge premises (default: [])
+    instantiations: NotRequired[list[Instantiation | None]]    # Variable instantiations (default: []); null entries are skipped
+    discharging_facts: NotRequired[list[FactByName | None]]   # Facts to discharge premises (default: []); null entries skip a position
     result_name: str                                          # Name to bind the result under
 
 @proof_operation("Derive", Derive_ToolArg)
@@ -7499,11 +7502,16 @@ def _parse_positional_proofs(
     out: list[proof] = []
     for pi, body in enumerate(raw):
         body_path = f"{path}[{pi}]"
+        if body is None:
+            out.append([])
+            continue
         if not isinstance(body, list):
             raise ArgumentError({},
                 f"{body_path}: expected an array of proof operations, "
                 f"got {type(body).__name__}")
         out.append(Parse_Op_List(body, body_path))
+    if all(p == [] for p in out):
+        return None
     return out
 
 
@@ -7574,6 +7582,7 @@ class Session:
         self.fork_pending: 'Fork_Pending | None' = None
         self.working_block: 'NonLeaf_Node | None' = None
         self.warnings: list[str] = []
+        self.surrender_warned: bool = False
         self.auto_intro_nodes: list['Intro'] = []
         self.total_cost_usd: float = 0.0
         self.total_input_tokens: int = 0
@@ -7731,11 +7740,11 @@ class Session:
             f"- {self.tool_name(TOOL_DELETE)}: Delete proof steps\n"
             f"- {self.tool_name(TOOL_SEARCH)}: Search for theorems, constants, types, and rules; help you understand unfamiliar terms\n"
             f"- {self.tool_name(TOOL_READ)}: Recall proof state from `proof.yaml`. Use only when you have lost track.\n"
-            # f"- {self.tool_name(TOOL_QUIT)}: Concede failure and abandon the proof. Use only after all strategies have been exhausted.\n"
+            # f"- {self.tool_name(TOOL_SURRENDER)}: Concede failure and abandon the proof. Use only after all strategies have been exhausted.\n"
             # "\n"
             # "Exhaust all strategies before giving up. "
             # "If you conclude the goal is a false statement, or no viable proof path remains, "
-            # f"call `{self.tool_name(TOOL_QUIT)}`.\n"
+            # f"call `{self.tool_name(TOOL_SURRENDER)}`.\n"
         )
 
     def initial_prompt(self) -> str:
@@ -7757,16 +7766,21 @@ class Session:
                 "Continue building the proof until no error remains.\n"
                 "Exhaust all strategies before giving up. "
                 "If you conclude the goal is a false statement, or no viable proof path remains, "
-                f"call `{self.tool_name(TOOL_QUIT)}`.\n"
+                f"call `{self.tool_name(TOOL_SURRENDER)}`.\n"
                 "`proof.yaml` contains the full proof state, but recall it only when you lose track of it."
             )
 
     def retry_prompt(self, unfinished_nodes: set['Node']) -> str:
         """Return the retry message when proof steps remain incomplete."""
+        step_ids = [node.id for node in unfinished_nodes if node.id]
+        if step_ids:
+            steps_desc = f"Steps {', '.join(step_ids)} are incomplete. "
+        else:
+            steps_desc = "The proof is incomplete. "
         return (
-            f"Steps {', '.join([node.id for node in unfinished_nodes])} are incomplete. "
-            f"You must call the `{self.tool_name(TOOL_EDIT)}` tool to complete the steps. "
-            "Continue building the proof until `proof.yaml` contains no remaining errors."
+            steps_desc
+            + f"You must call the `{self.tool_name(TOOL_EDIT)}` tool to complete the steps. "
+            + "Continue building the proof until `proof.yaml` contains no remaining errors."
         )
 
     def tool_name(self, t: tool) -> str:

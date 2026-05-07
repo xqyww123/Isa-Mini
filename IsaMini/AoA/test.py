@@ -2886,6 +2886,69 @@ async def _test_Derive7(root: Root, file: MyIO):
     print_header("Final state", file)
     root.print(0, file)
 
+@model_test("Derive_NullGap", "Test_Specialize_NullGap.thy", 12)
+async def _test_Derive_NullGap(root: Root, file: MyIO):
+    """Null in discharging_facts must be accepted (skipped position).
+
+    The LLM may emit null to skip a premise position in discharging_facts.
+    Derive.__init__ already filters None, but validation rejects it before
+    __init__ runs because the TypedDict declares list[FactByName] without
+    Optional.  This test reproduces the bug from the log:
+        ERROR: Bad Argument
+        proof_operations[1] (Derive).discharging_facts[2]: expected an object, got NoneType
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # --- Sub-test 1: Parse_Op_List with None in discharging_facts ---
+    try:
+        Parse_Op_List([
+            {"operation": "Derive",
+             "thought": "null gap test",
+             "rule": {"name": "h2"},
+             "discharging_facts": [{"name": "h1"}, None],
+             "result_name": "r"}
+        ], "proof_operations")
+        file.write("Parse_Op_List: accepted (correct)\n")
+    except ArgumentError as e:
+        file.write(f"Parse_Op_List: REJECTED (bug): {e}\n")
+        raise TestFailed(
+            "Derive with None in discharging_facts rejected at parse time"
+        )
+
+    # --- Sub-test 2: gen_single with None in discharging_facts ---
+    try:
+        Derive.gen_single({
+            "thought": "null gap test via gen_single",
+            "rule": {"name": "h2"},
+            "discharging_facts": [{"name": "h1"}, None],
+            "result_name": "r2"
+        })
+        file.write("gen_single: accepted (correct)\n")
+    except ArgumentError as e:
+        file.write(f"gen_single: REJECTED (bug): {e}\n")
+        raise TestFailed(
+            "Derive.gen_single with None in discharging_facts rejected"
+        )
+
+    # --- Sub-test 3: end-to-end fill with None gap ---
+    # Derive h3 (Q 0 → R 0) discharging with [None, h1] — the None is
+    # skipped, h1 doesn't match the premise, so Derive fails gracefully.
+    root.session.age += 1
+    _outcome = await root.fill("1", [Derive.gen_single({
+        "thought": "Derive h3 with a null gap: [None, h1]",
+        "rule": {"name": "h3"},
+        "discharging_facts": [None, {"name": "h1"}],
+        "result_name": "derived_with_gap"
+    })])
+    print_header("After Derive with null gap", file)
+    root.print(0, file)
+    file.write(f"failure: {_outcome.failure}\n")
+    # Close the proof so the agent doesn't report resource_exhausted
+    root.session.age += 1
+    await root.fill("1" if _outcome.failure is not None else "2",
+                    [Obvious.gen_single({"facts": [{"name": "h1"}, {"name": "h2"}, {"name": "h3"}]})])
+
 @model_test("GlobalEnv", "Test_GlobalEnv.thy", 11)
 async def _test_GlobalEnv(root: Root, file: MyIO):
     """Corner case + recovery on `x = 0 ⟹ x * x = 0`:
@@ -7755,6 +7818,43 @@ async def _test_FactByNameOF(root: Root, file: MyIO):
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
 
+@model_test("Rewrite_WhereBadVar", "Test_Rewrite_WhereBadVar.thy", 11)
+async def _test_Rewrite_WhereBadVar(root: Root, file: MyIO):
+    """Reproduce: schematic variable display name vs actual name mismatch.
+
+    myf.simps has schematic ?n. When the proof context already has a free
+    variable `n`, Isabelle's pretty-printer renames the schematic to ?n1
+    for display. The agent sees `n1` in the retrieved expression and uses
+    it in [where n1 = ...], but [where] operates on the original schematic
+    name ?n — so the instantiation fails."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    # Fetch myf.simps to see how it's displayed when `n` is already in scope.
+    # The goal has free variable `n`, so schematic ?n in myf.simps should be
+    # renamed to ?n1 by the pretty-printer.
+    fetched = await root.ml_state.fetch_facts([{"name": "myf.simps"}])
+    for f in fetched:
+        if isinstance(f, IsabelleFact_Presented):
+            file.write(f"myf.simps expression: {[e.unicode for e in f.expression]}\n")
+    # Rewrite using the DISPLAYED variable name "n1" (from pretty-printer rename).
+    # This should fail because the actual schematic is ?n, not ?n1.
+    root.session.age += 1
+    outcome = await root.fill("1", [Rewrite.gen_single({
+        "thought": "Unfold outer myf using displayed variable name",
+        "using": [{"name": "myf.simps",
+                   "instantiations": [{"name": "n1", "value": "myf n"}]}],
+        "use system simplifiers": False,
+        "rewrite goal": True,
+        "rewrite premises": []
+    })])
+    print_header("After Rewrite with displayed variable name", file)
+    root.print(0, file)
+    if outcome.failure is not None:
+        file.write(f"FAILURE: {outcome.failure}\n")
+    else:
+        file.write("Rewrite succeeded\n")
+
+
 @model_test("FactByNameFlip", "Test_FactByNameFlip.thy", 10)
 async def _test_FactByNameFlip(root: Root, file: MyIO):
     """Test FactByName with [symmetric] (flip) through the full pipeline."""
@@ -8001,51 +8101,33 @@ async def _test_AmendFallbackFill(root: Root, file: MyIO):
     file.write(f"is_error: {is_error4}\n")
 
 
-@model_test("HavePowerParsing", "Test_HavePowerParsing.thy", 11)
+@model_test("HavePowerParsing", "Test_HavePowerParsing.thy", 10)
 async def _test_HavePowerParsing(root: Root, file: MyIO):
-    """Reproduce: Have with a complex ^-expression fails with
-    'Inner syntax error at ") ^ 2"'. Simple ^-expressions in earlier
-    Have steps succeed; the bug is specific to complex nested ones."""
+    """Isabelle inner syntax parser ambiguity: chaining three or more
+    `(expr)^n *` terms fails when `*` inside the parenthesized
+    sub-expressions has no surrounding spaces (e.g. `2*b` vs `2 * b`).
+    Adding spaces resolves the parser ambiguity."""
     print_header("Initial YAML", file)
     root.print(0, file)
 
-    # Step 1: simple Have with ^ — should succeed
+    # Three chained (expr)^2 terms WITH spaces — succeeds
     root.session.age += 1
     await root.fill("1", [Have.gen_single({
-        "thought": "factor",
-        "statement": {
-            "english": "factored form",
-            "conclusion": "a * b * (a^2 - b^2) + b * c * (b^2 - c^2) + c * a * (c^2 - a^2) = (a - b) * (b - c) * (a - c) * (a + b + c)"
-        },
-        "name": "factor"
+        "thought": "three terms spaced",
+        "statement": {"english": "", "conclusion": "(a - 2 * b + c)^2 * (2 * a - b - c)^2 * (a + b - 2 * c)^2 = (0::real)"},
+        "name": "three_terms_spaced"
     })])
-    print_header("After simple Have with ^", file)
+    print_header("three terms spaced (succeeds)", file)
     root.print(0, file)
 
-    # Step 2: another simple Have with ^ — should succeed
+    # Same three terms WITHOUT spaces — fails with inner syntax error
     root.session.age += 1
     await root.fill("2", [Have.gen_single({
-        "thought": "nonneg remainder",
-        "statement": {
-            "english": "nonneg",
-            "conclusion": "0 <= (a^2 + b^2 + c^2) - (a + b + c)^2 / (3::real)"
-        },
-        "name": "R_nonneg"
+        "thought": "three terms no-space",
+        "statement": {"english": "", "conclusion": "(a - 2*b + c)^2 * (2*a - b - c)^2 * (a + b - 2*c)^2 = (0::real)"},
+        "name": "three_terms_nospace"
     })])
-    print_header("After second simple Have with ^", file)
-    root.print(0, file)
-
-    # Step 3: complex Have with ^ — this is where the bug manifests
-    root.session.age += 1
-    await root.fill("3", [Have.gen_single({
-        "thought": "discriminant identity",
-        "statement": {
-            "english": "identity",
-            "conclusion": "((a^2 + b^2 + c^2) - (a + b + c)^2 / (3::real))^3 - 2 * ((a - b) * (b - c) * (a - c))^2 = (2::real) / 27 * (a - 2 * b + c)^2 * (2 * a - b - c)^2 * (a + b - 2 * c)^2"
-        },
-        "name": "disc_id"
-    })])
-    print_header("After complex Have with ^ (bug repro)", file)
+    print_header("three terms no-space (fails)", file)
     root.print(0, file)
 
 

@@ -14,6 +14,7 @@ import sys
 from io import StringIO
 from typing import Any
 
+import json
 import jsoncomment
 
 from Isabelle_RPC_Host import pretty_unicode
@@ -28,7 +29,7 @@ from Isabelle_Semantic_Embedding.semantics import (
 
 from .model import (
     Session, Minilang_State, MyIO, short_name,
-    Interaction, IsabelleError,
+    Interaction, IsabelleError, ArgumentError,
     EntityKind, print_indent, print_paragraph, print_expression_list,
     Interaction_Retrieve, RetrievedEntity, IsabelleEntity,
     _THEOREM_KINDS, AGENT_EXPR_LIMIT,
@@ -660,10 +661,55 @@ async def _handle_exact_term_query(session: Session, term_str: str) -> str:
     return result
 
 
+def _normalize_array_field(args: dict, field: str) -> dict:
+    """Normalize a field that should be a list of dicts, handling common LLM malformations.
+
+    Handles: JSON-encoded strings, single dict not wrapped in a list,
+    and individual list items that are JSON strings instead of dicts.
+    Raises ArgumentError on unrecoverable malformation.
+    Returns a shallow copy of args with the field normalized.
+    """
+    value = args.get(field)
+    if value is None:
+        raise ArgumentError(args, f"Missing required field: {field}")
+
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (json.JSONDecodeError, ValueError):
+            raise ArgumentError(args, f"'{field}' must be a JSON array, got an unparseable string")
+
+    if isinstance(value, dict):
+        value = [value]
+
+    if not isinstance(value, list):
+        raise ArgumentError(args, f"'{field}' must be an array, got {type(value).__name__}")
+
+    normalized: list[dict] = []
+    for i, item in enumerate(value):
+        if isinstance(item, str):
+            try:
+                item = json.loads(item)
+            except (json.JSONDecodeError, ValueError):
+                raise ArgumentError(args, f"'{field}[{i}]' must be an object, got an unparseable string")
+        if not isinstance(item, dict):
+            raise ArgumentError(args, f"'{field}[{i}]' must be an object, got {type(item).__name__}")
+        normalized.append(item)
+
+    if not normalized:
+        raise ArgumentError(args, f"'{field}' must be a non-empty array")
+
+    return {**args, field: normalized}
+
+
 async def _query_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     session.log_tool_call(session.tool_name(TOOL_SEARCH), args)
     try:
-        queries = args["queries"] if BATCHED_SEMANTIC_SEARCH else [args]
+        if BATCHED_SEMANTIC_SEARCH:
+            args = _normalize_array_field(args, "queries")
+            queries = args["queries"]
+        else:
+            queries = [args]
 
         # Separate exact_term queries from regular queries
         exact_term_queries = [q for q in queries if q.get("exact_term")]
@@ -689,6 +735,10 @@ async def _query_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
                 results.append(await _semantic_search_with_filtering(session, regular_queries))
 
         return ("\n\n".join(results), False)
+    except ArgumentError as e:
+        error_msg = str(e)
+        session.log_tool_response(session.tool_name(TOOL_SEARCH), f"ERROR: {error_msg}")
+        return (error_msg, True)
     except IsabelleError as e:
         error_msg = '; '.join(pretty_unicode(err) for err in e.errors)
         session.log_tool_response(session.tool_name(TOOL_SEARCH), f"ERROR: {error_msg}")
