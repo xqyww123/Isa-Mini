@@ -3496,6 +3496,7 @@ class StdBlock(NonLeaf_Node):
     # first refresh.
     _proof: 'proof | None'
     _body_affects_siblings = False
+    _can_host_inherited_children = True
     def __init__(self, config: NodeConfig, thought: str, sub_nodes: list['Node']):
         super().__init__(config, thought, sub_nodes)
         self._proof = None
@@ -3911,16 +3912,17 @@ class StdBlock(NonLeaf_Node):
                 self.sub_nodes.append(new_child)
             if inherited:
                 last = self.sub_nodes[-1] if self.sub_nodes else None
-                if isinstance(last, StdBlock):
+                if isinstance(last, StdBlock) and last._can_host_inherited_children:
                     for child in inherited:
                         child.parent = last
                     last.sub_nodes.extend(inherited)
                 else:
+                    noun = "sub-proof" if len(inherited) == 1 else "sub-proofs"
+                    verb = "has" if len(inherited) == 1 else "have"
                     self._warn_discarded_nodes(
                         inherited,
-                        "The last provided proof operation cannot host the "
-                        "previously inherited sub-proof steps; these inherited "
-                        "steps have been discarded",
+                        f"The edit changed the proof structure; "
+                        f"a previous {noun} {verb} been discarded",
                         Warning.Position.FOOTER)
             return None
         if (auto_intro
@@ -4237,6 +4239,7 @@ CASE_EXISTING = "the-existing-proof"
 
 
 class SubgoalMaker(GoalContainer, StdBlock):
+    _can_host_inherited_children = False
     def _should_print_done(self) -> bool:
         return bool(self.sub_nodes) and super()._should_print_done()
     def __init__(self, *args, **kwargs):
@@ -5442,7 +5445,7 @@ class Define(SubgoalMaker):
         self.name = arg["name"]
         self.type: str | None = arg.get("type")
         self.equations = list(arg["equations"])
-        self.metric = list(arg.get("metric", []))
+        self.metric = list(arg.get("metric") or [])
         # Set by _refresh_the_beginning_opr based on reporter messages
         # the ML side emits when FUN pushes a deferred block. Controls
         # whether the block has GoalNode children / ending END.
@@ -5700,9 +5703,9 @@ class Derive(Leaf):
         super().__init__(config, arg["thought"])
         self.rule: FactByName = arg["rule"]
         self.instantiations: list[Instantiation] = [
-            x for x in arg.get("instantiations", []) if x is not None]
+            x for x in (arg.get("instantiations") or []) if x is not None]
         self.discharging_facts: list[FactByName] = [
-            f for f in arg.get("discharging_facts", []) if f is not None]
+            f for f in (arg.get("discharging_facts") or []) if f is not None]
         self.result_name: str = arg["result_name"]
         self.rule_ref: IsabelleFact | None = None
         self.discharge_refs: list[IsabelleFact] | None = None
@@ -6220,8 +6223,8 @@ class Have(StdBlock):
         self.statement = arg["statement"]
         self.name = arg["name"]
         self.auto_apply = arg.get("auto_apply", False)
-        self._input_for_any: list[Explicit_Var] = self.statement.get("for_any", [])
-        self._input_premises: list[PremiseBinding] = self.statement.get("premises", [])
+        self._input_for_any: list[Explicit_Var] = self.statement.get("for_any") or []
+        self._input_premises: list[PremiseBinding] = self.statement.get("premises") or []
         # Merged for_any: user-specified + any additional implicit fixes from ML
         self.for_any: list[tuple[varname, typ]] = []
         self._prev_for_any: list[tuple[varname, typ]] = []
@@ -6320,8 +6323,8 @@ class Suffices(StdBlock):
                  parsed_proof: 'proof | None' = None):
         super().__init__(config, arg["thought"], [])
         self.statement = arg["statement"]
-        self._input_for_any: list[Explicit_Var] = self.statement.get("for_any", [])
-        self._input_premises: list[PremiseBinding] = self.statement.get("premises", [])
+        self._input_for_any: list[Explicit_Var] = self.statement.get("for_any") or []
+        self._input_premises: list[PremiseBinding] = self.statement.get("premises") or []
         self.for_any: list[tuple[varname, typ]] = []
         self._proof: 'proof | None' = parsed_proof
     async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
@@ -6542,8 +6545,8 @@ class Intro(Leaf):
     @classmethod
     def gen_single(cls, arg: Intro_ToolArg,
                    path: str = "<direct>") -> Parsed_Opr:
-        var_bindings = arg.get("variable_bindings", [])
-        fact_bindings = arg.get("fact_bindings", [])
+        var_bindings = arg.get("variable_bindings") or []
+        fact_bindings = arg.get("fact_bindings") or []
         pending = (var_bindings, fact_bindings) if var_bindings or fact_bindings else None
         thought = arg["thought"]
         factory = lambda cfg: Intro(cfg, thought, None, _pending_bindings=pending)

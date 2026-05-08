@@ -69,28 +69,6 @@ _cc_read_schema = _load_schema("cc_recall.jsonc")
 _cc_surrender_schema = _load_schema("cc_surrender.jsonc")
 
 
-def _relax_edit_schema(schema: dict) -> dict:
-    """Derive a permissive variant of the edit tool schema.
-
-    Strips ``additionalProperties`` everywhere so extra fields (e.g.
-    ``thought`` on Obvious) pass client-side validation.  Allows
-    ``proof_operations`` to also be a string, working around a Claude API
-    constrained-decoding quirk that serialises deeply nested recursive
-    structures as a JSON-encoded string instead of an actual array.
-    """
-    relaxed = copy.deepcopy(schema)
-    relaxed.pop("additionalProperties", None)
-    for defn in relaxed.get("$defs", {}).values():
-        if isinstance(defn, dict):
-            defn.pop("additionalProperties", None)
-    po = relaxed.get("properties", {}).get("proof_operations")
-    if po and po.get("type") == "array":
-        po["type"] = ["array", "string"]
-    return relaxed
-
-
-_cc_edit_schema = _relax_edit_schema(_cc_edit_schema_raw)
-
 
 def _flatten_edit_schema(schema: dict) -> dict:
     """Produce a Gemini-compatible edit schema: no $defs/$ref, no recursion.
@@ -430,7 +408,7 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     line_num = args.get("line")
     if line_num is not None:
         line_num = int(line_num)
-    range_lines = int(args.get("range", 50))
+    range_lines = int(args.get("range") or 50)
 
     if step_id is None and line_num is None:
         yaml_path: str | None = getattr(session, "YAML_path", None)
@@ -513,7 +491,7 @@ _MUT = ToolAnnotations(readOnlyHint=False, destructiveHint=True,  openWorldHint=
 _ACT = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False)
 
 _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
-    "edit":   {"description": "Edit the proof.yaml file", "schema": _cc_edit_schema, "annotations": _MUT},
+    "edit":   {"description": "Edit the proof.yaml file", "schema": _cc_edit_schema_raw, "annotations": _MUT},
     "delete": {"description": "Delete proof steps", "schema": _cc_delete_schema, "annotations": _MUT},
     "answer": {"description": "Answer a pending question", "schema": _cc_answer_schema, "annotations": _ACT},
     "query":  {"description": "Search for Isabelle entities by semantic similarity, patterns, or exact name/term. "

@@ -332,18 +332,18 @@ async def _run_knn_for_query(
 ) -> _KnnQueryResult:
     """Parse a query dict and run semantic_knn. Reads ``k`` from the query dict."""
     try:
-        kinds = [EntityKind.from_label(label) for label in q.get("kinds", ["constant"])]
+        kinds = [EntityKind.from_label(label) for label in (q.get("kinds") or ["constant"])]
     except KeyError as e:
         return ([], [], f"Invalid entity kind: {e}")
     exact_name = q.get("exact_name") or None
     fetched, warnings = await ml_state.semantic_knn(
         q.get("long_description") or None, _query_k(q), kinds,
-        term_patterns=q.get("term_patterns", []),
-        type_patterns=q.get("type_patterns", []),
-        theories_include=q.get("theories_include", []),
-        name_contains=q.get("name_contains", []),
+        term_patterns=q.get("term_patterns") or [],
+        type_patterns=q.get("type_patterns") or [],
+        theories_include=q.get("theories_include") or [],
+        name_contains=q.get("name_contains") or [],
         exact_name=exact_name,
-        target_type=q.get("target_type", "") or "")
+        target_type=q.get("target_type") or "")
     return (fetched, warnings, None)
 
 
@@ -461,18 +461,18 @@ async def _semantic_search_with_filtering(session: Session, queries: list[dict])
     interactions: list[Interaction] = []
     for q in queries:
         try:
-            kinds = [EntityKind.from_label(label) for label in q.get("kinds", ["constant"])]
+            kinds = [EntityKind.from_label(label) for label in (q.get("kinds") or ["constant"])]
         except KeyError:
             continue
         interaction = Interaction_RetrieveForSearch(
             state=ml_state, query=q.get("long_description", "") or "", kinds=kinds,
             initial_k=50,
             single_choice=False,
-            term_patterns=q.get("term_patterns", []),
-            type_patterns=q.get("type_patterns", []),
-            theories_include=q.get("theories_include", []),
-            name_contains=q.get("name_contains", []),
-            target_type=q.get("target_type", "") or "",
+            term_patterns=q.get("term_patterns") or [],
+            type_patterns=q.get("type_patterns") or [],
+            theories_include=q.get("theories_include") or [],
+            name_contains=q.get("name_contains") or [],
+            target_type=q.get("target_type") or "",
         )
         interactions.append(interaction)
 

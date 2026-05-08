@@ -7,11 +7,9 @@
     "Variable": {
       "properties": {
         "name": {
-          "title": "Name",
           "type": "string"
         },
         "type": {
-          "title": "Type",
           "type": "string",
           "description": "An Isabelle type expression. Leave empty (\"\") if unsure"
         }
@@ -19,11 +17,9 @@
       "required": [
         "name"
       ],
-      "title": "Variable",
       "type": "object"
     },
     "LongStatement": {
-      "title": "LongStatement",
       "properties": {
         "english": {
           "type": "string",
@@ -60,7 +56,6 @@
       "additionalProperties": false
     },
     "ShortStatement": {
-      "title": "ShortStatement",
       "properties": {
         "english": {
           "type": "string",
@@ -76,7 +71,6 @@
       "additionalProperties": false
     },
     "FactByName": {
-      "title": "FactByName",
       "additionalProperties": false,
       "properties": {
         "name": {
@@ -107,7 +101,6 @@
       "type": "object"
     },
     "FactByProposition": {
-      "title": "FactByProposition",
       "additionalProperties": false,
       "properties": {
         "proposition": {
@@ -119,7 +112,6 @@
       "type": "object"
     },
     "FactByDescription": {
-      "title": "FactByDescription",
       "additionalProperties": false,
       "properties": {
         "english": {
@@ -132,7 +124,6 @@
     },
     "Obvious": {
       "additionalProperties": false,
-      "title": "Obvious",
       "description": "the goal holds trivially. Caution: this operation barely unfolds definitions unless you supply them in `facts`. This operation is SLOW!",
       "properties": {
         "operation": {
@@ -158,7 +149,6 @@
     },
     "Have": {
       "additionalProperties": false,
-      "title": "Have",
       "description": "prove a lemma",
       "properties": {
         "operation": {
@@ -185,7 +175,6 @@
     },
     "Obtain": {
       "additionalProperties": false,
-      "title": "Obtain",
       "description": "introduce variables satisfying given constraints",
       "properties": {
         "operation": {
@@ -222,7 +211,6 @@
     },
     "Branch": {
       "additionalProperties": false,
-      "title": "Branch",
       "description": "split the proof goal into cases",
       "properties": {
         "operation": {
@@ -252,7 +240,6 @@
     },
     "CaseSplit": {
       "additionalProperties": false,
-      "title": "CaseSplit",
       "description": "structural case analysis on the value of a target term",
       "properties": {
         "operation": {
@@ -264,7 +251,7 @@
         "rule": {
           "description": "case-split rule to apply. Omit (or set to \"default\") for auto-pick. Use FactByName when you know the rule's exact name; use FactByDescription to let the system retrieve matching rules.",
           "anyOf": [
-            { "const": "default" },
+            { "type": "string", "const": "default" },
             { "$ref": "#/$defs/FactByName" },
             { "$ref": "#/$defs/FactByDescription" }
           ],
@@ -297,7 +284,6 @@
     },
     "Induction": {
       "additionalProperties": false,
-      "title": "Induction",
       "description": "apply induction over the target Isabelle/HOL term",
       "properties": {
         "operation": {
@@ -309,7 +295,7 @@
         "rule": {
           "description": "induction rule to apply. Omit (or set to \"default\") for auto-pick. Use FactByName when you know the rule's exact name; use FactByDescription to let the system retrieve matching rules by an English description (e.g. \"descending induction from k\").",
           "anyOf": [
-            { "const": "default" },
+            { "type": "string", "const": "default" },
             { "$ref": "#/$defs/FactByName" },
             { "$ref": "#/$defs/FactByDescription" }
           ],
@@ -344,7 +330,6 @@
     },
     "Contradiction": {
       "additionalProperties": false,
-      "title": "Contradiction",
       "description": "proof by contradiction",
       "properties": {
         "operation": {
@@ -363,7 +348,6 @@
       "type": "object"
     },
     "InferenceRule": {
-      "title": "InferenceRule",
       "additionalProperties": false,
       "description": "instruct an inference rule, e.g., proving equality by antisymmetry.",
       "properties": {
@@ -429,7 +413,6 @@
         "rewrite goal",
         "rewrite premises"
       ],
-      "title": "Rewrite",
       "type": "object"
     },
     "Suffices": {
@@ -461,7 +444,6 @@
       "properties": {
         "operation": {
           "const": "Unfold",
-          "title": "Operation",
           "type": "string"
         },
         "thought": { "$ref": "#/$defs/Thought" },
@@ -478,7 +460,6 @@
         "thought",
         "targets"
       ],
-      "title": "Unfold",
       "type": "object"
     },
     "Witness": {
@@ -500,12 +481,10 @@
         "thought",
         "witness"
       ],
-      "title": "Witness",
       "type": "object"
     },
     "Intro": {
       "additionalProperties": false,
-      "title": "Intro",
       "description": "introduce universal quantification and premises from the proof goal",
       "properties": {
         "operation": {
@@ -532,7 +511,6 @@
     },
     "SplitConjs": {
       "additionalProperties": false,
-      "title": "SplitConjs",
       "description": "split a conjunctive goal (A ∧ B ∧ ...) into separate subgoals, one per conjunct",
       "properties": {
         "operation": {
@@ -552,6 +530,7 @@
       "type": "object"
     },
     "GivenLater": {
+      "type": "string",
       "const": "GivenLater",
       "description": "Wait for the proof system to return the actual proof states before writing proofs."
     },
@@ -569,7 +548,6 @@
     },
     "Derive": {
       "additionalProperties": false,
-      "title": "Derive",
       "description": "instantiate universal quantifiers in a rule and discharge its premises, deriving a new fact in one forward-reasoning step",
       "properties": {
         "operation": {
@@ -578,8 +556,7 @@
         },
         "thought": { "$ref": "#/$defs/Thought" },
         "rule": {
-          "$ref": "#/$defs/FactByName",
-          "description": "the rule or theorem to specialize"
+          "$ref": "#/$defs/FactByName"
         },
         "instantiations": {
           "description": "instantiations for ∀-quantified or schematic variables; use null to skip a position",
@@ -618,7 +595,6 @@
     },
     "Chaining": {
       "additionalProperties": false,
-      "title": "Chaining",
       "description": "chain facts via transitivity (example: deriving a \u2264 c from a = b, b \u2264 c)",
       "properties": {
         "operation": {
@@ -650,7 +626,6 @@
     },
     "Define": {
       "additionalProperties": false,
-      "title": "Function",
       "description": "define a (recursive) function",
       "properties": {
         "operation": {
@@ -687,7 +662,6 @@
       "type": "object"
     },
     "Proof": {
-      "title": "Proof",
       "description": "a sequence of proof operations",
       "type": "array",
       "items": { "$ref": "#/$defs/Operation" }

@@ -1,0 +1,63 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∀a (b :: nat). a * b + (1 :: nat) dvd a² + b² ⟶ (∃(x :: nat). real (x²) = real (a² + b²) / real (a * b + (1 :: nat)))
+proof:
+  - step id: 1
+    operation: Intro
+    fixing variables:
+      - a: nat
+      - b: nat
+    assuming premises:
+      - premise0: a * b + (1 :: nat) dvd a² + b²
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  ∃(x :: nat). real (x²) = real (a² + b²) / real (a * b + (1 :: nat))
+--------------------------------------------------
+After Intro (a, b now fixed)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∀a (b :: nat). a * b + (1 :: nat) dvd a² + b² ⟶ (∃(x :: nat). real (x²) = real (a² + b²) / real (a * b + (1 :: nat)))
+proof:
+  - step id: 1
+    operation: Intro
+    fixing variables:
+      - a: nat
+      - b: nat
+    assuming premises:
+      - premise0: a * b + (1 :: nat) dvd a² + b²
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  ∃(x :: nat). real (x²) = real (a² + b²) / real (a * b + (1 :: nat))
+--------------------------------------------------
+After Have with for_any (duplicate a, b)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∀a (b :: nat). a * b + (1 :: nat) dvd a² + b² ⟶ (∃(x :: nat). real (x²) = real (a² + b²) / real (a * b + (1 :: nat)))
+proof:
+  - step id: 1
+    operation: Intro
+    fixing variables:
+      - a: nat
+      - b: nat
+    assuming premises:
+      - premise0: a * b + (1 :: nat) dvd a² + b²
+  - step id: 2
+    thought: Prove a helper lemma universally quantified over a and b
+    operation: Have
+    statement:
+      english: For all positive a,b with the divisibility, the quotient is a perfect square
+      premises:
+        ha: (0::nat) < a
+        hb: (0::nat) < b
+        hdvd: a * b + 1 dvd a^2 + b^2
+      conclusion: \<exists>x::nat. real (x^2) = real (a^2 + b^2) / real (a * b + 1)
+    name: main
+    Error: Fail to claim the intermediate subgoal because: Duplicate fixed variable(s): "a"
+    proof: empty
+    Error: Evaluation cancelled due to failures above
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  ∃(x :: nat). real (x²) = real (a² + b²) / real (a * b + (1 :: nat))
+Have status: failure

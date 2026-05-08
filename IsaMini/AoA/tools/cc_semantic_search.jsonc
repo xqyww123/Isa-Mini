@@ -20,36 +20,30 @@
           "long_description": {
             "type": "string",
             "description": "MUST wrap formulas in backticks (like `ln 1`). MUST be LONG",
-            "default": ""
           },
           "term_patterns": {
             "type": "array",
             "items": { "type": "string" },
             "description": "Constrain lemmas/rules to contain subterms matching each of the patterns. Use _ for wildcard and ?name for named wildcards (example: ?P ⟶ ?Q ⟶ ?P ∧ ?Q).",
-            "default": []
           },
           "type_patterns": {
             "type": "array",
             "items": { "type": "string" },
             "description": "Constrain results to involve types matching the patterns. Use _ for wildcard and ?name for named wildcards.",
-            "default": []
           },
           "theories_include": {
             "type": "array",
             "items": { "type": "string" },
             "description": "Constrain results to the given theories (short or full names).",
-            "default": []
           },
           "name_contains": {
             "type": "array",
             "items": { "type": "string" },
             "description": "Constrain entities' names to contain all of these substrings (case-insensitive).",
-            "default": []
           },
           "target_type": {
             "type": "string",
             "description": "Induction/case-split rules only: restrict to rules whose induction/case target has this type. Wildcards (_, 'a, ?a) allowed.",
-            "default": ""
           },
           "number": {
             "type": "integer",

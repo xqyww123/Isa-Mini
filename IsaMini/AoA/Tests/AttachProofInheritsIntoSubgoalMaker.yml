@@ -1,0 +1,89 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - n: nat
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: n + (0 :: nat) = n
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+global.1 has children: True
+--------------------------------------------------
+After global Have + Obvious
+--------------------------------------------------
+variables:
+  - n: nat
+- step id: global.1
+thought: Trivial helper
+operation: Have
+statement:
+  english: True
+  conclusion: True
+name: helper
+proof:
+  - step id: global.1.1
+    operation: Obvious
+You can write global declarations by calling command `edit` with action `fill` and target step `global.2`
+goal: n + (0 :: nat) = n
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Amend committed: True
+Amended node status: success
+Amended node warnings: 1
+--------------------------------------------------
+After amend (print)
+--------------------------------------------------
+variables:
+  - n: nat
+- step id: global.1
+thought: Prove by induction
+operation: Have
+statement:
+  english: for all m, m + 0 = m
+  for_any:
+    m: nat
+  conclusion: m + 0 = m
+name: helper
+proof:
+  - step id: global.1.1
+    thought: induct on m
+    operation: Induction
+    target term: m
+    Error: The variable n appear in the induction context but are not classified in the 'variables' argument. You should indicate whether each is 'arbitrary' (generalized during induction) or 'fixed' (held constant).
+    cases:
+      - goal id: global.1.1.0
+        goal: (0 :: nat) + (0 :: nat) = (0 :: nat)
+        Error: the evaluation is cancelled due to failures in preceding nodes
+        proof: empty
+        Error: Evaluation cancelled due to failures above
+      - goal id: global.1.1.Suc
+        goal: unknown, evaluation pending
+        Error: the evaluation is cancelled due to failures in preceding nodes
+        proof: empty
+        Error: Evaluation cancelled due to failures above
+notice:
+  - The edit changed the proof structure; a previous sub-proof has been discarded: step global.1.1
+You can write global declarations by calling command `edit` with action `fill` and target step `global.2`
+goal: n + (0 :: nat) = n
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After amend (quickview)
+--------------------------------------------------
+global declarations:
+  step global.1: Have helper (line 0)
+    notice:
+      - The edit changed the proof structure; a previous sub-proof has been discarded: step global.1.1
+    step global.1.1: Induction m (failed, line 0)
+      Error: The variable n appear in the induction context but are not classified in the 'variables' argument. You should indicate whether each is 'arbitrary' (generalized during induction) or 'fixed' (held constant).
+      - global.1.1.0 (line 0)
+        goal: (0 :: nat) + (0 :: nat) = (0 :: nat)
+        Error: the evaluation is cancelled due to failures in preceding nodes
+        Error: Evaluation pending
+      - global.1.1.Suc (line 0)
+        Error: the evaluation is cancelled due to failures in preceding nodes
+        Error: Evaluation pending
+    the statement is quantified over m
+proof:
+  Error: Unfinished Proof (line 69). Call command `edit` with action `fill` and target step `1`
+  goal: n + (0 :: nat) = n

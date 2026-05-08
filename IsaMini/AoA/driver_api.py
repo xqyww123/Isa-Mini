@@ -132,6 +132,64 @@ class Provider(ABC):
 # OpenAI-Compatible Provider
 # ============================================================================
 
+def _strictify_schema(schema: dict) -> dict:
+    """Transform a JSON Schema for OpenAI strict mode.
+
+    - ``additionalProperties: false`` on every object
+    - All properties listed in ``required``; optional ones made nullable
+    """
+    import copy
+    schema = copy.deepcopy(schema)
+
+    def _walk(node: Any) -> Any:
+        if isinstance(node, dict):
+            if "properties" in node and "type" not in node:
+                node["type"] = "object"
+            if "const" in node and "type" not in node:
+                v = node["const"]
+                if isinstance(v, str):
+                    node["type"] = "string"
+                elif isinstance(v, bool):
+                    node["type"] = "boolean"
+                elif isinstance(v, int):
+                    node["type"] = "integer"
+                elif isinstance(v, float):
+                    node["type"] = "number"
+            if node.get("type") == "object" and "properties" in node:
+                node["additionalProperties"] = False
+                props = node["properties"]
+                required = set(node.get("required") or [])
+                for prop_name in props:
+                    if prop_name not in required:
+                        _make_nullable(props, prop_name)
+                node["required"] = list(props.keys())
+            for v in node.values():
+                _walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                _walk(v)
+        return node
+
+    def _make_nullable(props: dict, name: str) -> None:
+        prop = props[name]
+        if not isinstance(prop, dict):
+            return
+        if "anyOf" in prop:
+            alts = prop["anyOf"]
+            if not any(a == {"type": "null"} for a in alts):
+                alts.append({"type": "null"})
+        elif "$ref" in prop or "const" in prop:
+            props[name] = {"anyOf": [prop, {"type": "null"}]}
+        elif "type" in prop:
+            t = prop["type"]
+            if isinstance(t, str) and t != "null":
+                prop["type"] = [t, "null"]
+            elif isinstance(t, list) and "null" not in t:
+                t.append("null")
+
+    return _walk(schema)
+
+
 class OpenAIBase(Provider):
     """Shared config for OpenAI-family providers."""
 
@@ -158,7 +216,8 @@ class OpenAIBase(Provider):
                  default_context_window: int = 128_000,
                  temperature: float | None = None,
                  reasoning_effort: str | None = None,
-                 extra_params: dict[str, Any] | None = None):
+                 extra_params: dict[str, Any] | None = None,
+                 strict_tools: bool = False):
         self._model = model
         self._client = openai.AsyncOpenAI(
             api_key=api_key or os.environ.get("OPENAI_API_KEY"),
@@ -166,6 +225,7 @@ class OpenAIBase(Provider):
         )
         self._cache_key = cache_key
         self._default_context_window = default_context_window
+        self._strict_tools = strict_tools
         self._temperature = temperature
         self._reasoning_effort = reasoning_effort
         self._extra_params = extra_params or {}
@@ -180,6 +240,11 @@ class OpenAIBase(Provider):
 
     def pricing(self) -> dict[str, float]:
         return self._PRICING.get(self._model, {"input": 2.00e-6, "cached": 0.50e-6, "output": 8.00e-6})
+
+    def _strict_schema(self, name: str, schema: dict) -> dict:
+        if name == "edit":
+            return _strictify_schema(_cc_edit_schema_flat)
+        return _strictify_schema(schema)
 
 
 class OpenAIChatProvider(OpenAIBase):
@@ -258,10 +323,12 @@ class OpenAIChatProvider(OpenAIBase):
         )
 
     def format_tools(self, tool_info: dict[str, dict[str, Any]]) -> list[dict]:
+        strict = self._strict_tools
         return [{"type": "function", "function": {
             "name": name,
             "description": info["description"],
-            "parameters": info["schema"],
+            "parameters": self._strict_schema(name, info["schema"]) if strict else info["schema"],
+            **({"strict": True} if strict else {}),
         }} for name, info in tool_info.items()]
 
     def format_assistant_msg(self, response: ProviderResponse) -> AssistantMsg:
@@ -369,10 +436,12 @@ class OpenAIResponsesProvider(OpenAIBase):
         )
 
     def format_tools(self, tool_info: dict[str, dict[str, Any]]) -> list[dict]:
+        strict = self._strict_tools
         return [{"type": "function",
                  "name": name,
                  "description": info["description"],
-                 "parameters": info["schema"],
+                 "parameters": self._strict_schema(name, info["schema"]) if strict else info["schema"],
+                 **({"strict": True} if strict else {}),
                  } for name, info in tool_info.items()]
 
     def format_assistant_msg(self, response: ProviderResponse) -> AssistantMsg:
@@ -495,7 +564,9 @@ class GeminiProvider(Provider):
                 model=self._model, contents=merged, config=config)
         except genai_errors.ClientError as e:
             if e.code == 429:
-                dummy_req = httpx.Request("POST", "https://generativelanguage.googleapis.com/")
+                dummy_req = httpx.Request("POST",
+                    self._client._api_client.get_read_only_http_options().get(
+                        'base_url', 'https://generativelanguage.googleapis.com/'))
                 msg_text = str(e)
                 if "quota" in msg_text.lower():
                     msg_text = f"insufficient_quota: {msg_text}"
@@ -647,29 +718,38 @@ class AnthropicProvider(Provider):
             params["thinking"] = {"type": "adaptive"}
             params["output_config"] = {"effort": self._thinking_effort}
 
-        try:
-            async with self._client.messages.stream(
-                    **params,
-                    extra_headers={"anthropic-beta": "interleaved-thinking-2025-05-14"}) as stream:
-                response = await stream.get_final_message()
-        except anthropic.RateLimitError as e:
-            dummy_req = httpx.Request("POST", "https://api.anthropic.com/")
-            msg_text = str(e)
-            if "quota" in msg_text.lower():
-                msg_text = f"insufficient_quota: {msg_text}"
-            raise openai.RateLimitError(
-                message=msg_text,
-                response=httpx.Response(429, text=msg_text, request=dummy_req),
-                body=None) from e
-        except anthropic.APIStatusError as e:
-            if e.status_code in (402, 529):
-                dummy_req = httpx.Request("POST", "https://api.anthropic.com/")
+        response = None
+        for _stream_attempt in range(3):
+            try:
+                async with self._client.messages.stream(
+                        **params,
+                        extra_headers={"anthropic-beta": "interleaved-thinking-2025-05-14"}) as stream:
+                    response = await stream.get_final_message()
+                break
+            except RuntimeError as e:
+                if "Unexpected event order" in str(e) and _stream_attempt < 2:
+                    await asyncio.sleep(1)
+                    continue
+                raise
+            except anthropic.RateLimitError as e:
+                dummy_req = httpx.Request("POST", str(self._client.base_url))
+                msg_text = str(e)
+                if "quota" in msg_text.lower():
+                    msg_text = f"insufficient_quota: {msg_text}"
                 raise openai.RateLimitError(
-                    message=f"insufficient_quota: {e}",
-                    response=httpx.Response(e.status_code, text=str(e), request=dummy_req),
+                    message=msg_text,
+                    response=httpx.Response(429, text=msg_text, request=dummy_req),
                     body=None) from e
-            raise
+            except anthropic.APIStatusError as e:
+                if e.status_code in (402, 529):
+                    dummy_req = httpx.Request("POST", str(self._client.base_url))
+                    raise openai.RateLimitError(
+                        message=f"insufficient_quota: {e}",
+                        response=httpx.Response(e.status_code, text=str(e), request=dummy_req),
+                        body=None) from e
+                raise
 
+        assert response is not None
         self._last_response = response
 
         thinking_parts: list[str] = []

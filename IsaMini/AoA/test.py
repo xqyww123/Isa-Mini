@@ -2082,6 +2082,64 @@ async def _test_semantic_knn_induction_rule(root: Root, file: MyIO):
     assert len(results_mix) > 0, "Expected results from mixed kind query"
 
 
+@model_test("QueryNullFields", "Test_QueryNullFields.thy", 8)
+async def _test_query_null_fields(root: Root, file: MyIO):
+    """query tool: LLM sends null for optional list/string fields.
+    Reproduces agent log 2026-05-08: theories_include=None, target_type=None,
+    exact_name=None, exact_term=None caused 'Failed to unpack callback argument'
+    because q.get("key", []) returns None when the key exists with value None.
+    Fix: use q.get("key") or [] instead."""
+    from .retrieval import _query_tool_logic
+
+    # Force direct search path (test session has no fork_interaction)
+    root.session.interactive_retrieval = InteractiveRetrievalMode.NO
+
+    # Exact args from the failing agent log
+    args = {'queries': [
+        {'kinds': ['lemma'],
+         'long_description': 'divisibility and square result',
+         'term_patterns': ['_ dvd _ + _'],
+         'type_patterns': ['nat'],
+         'theories_include': None,
+         'name_contains': ['dvd'],
+         'target_type': None,
+         'number': 20,
+         'exact_name': None,
+         'exact_term': None},
+        {'kinds': ['lemma'],
+         'long_description': 'quotient is a perfect square',
+         'term_patterns': None,
+         'type_patterns': None,
+         'theories_include': None,
+         'name_contains': None,
+         'target_type': None,
+         'number': 50,
+         'exact_name': None,
+         'exact_term': None},
+    ]}
+
+    result, is_error = await _query_tool_logic(root.session, args)
+    file.write(f"Result (is_error={is_error}):\n{result}\n")
+    assert not is_error, f"query with null fields must not error: {result}"
+
+    # Also test: kinds=None should default to ["constant"]
+    args_null_kinds = {'queries': [
+        {'kinds': None,
+         'long_description': 'addition on natural numbers',
+         'term_patterns': None,
+         'type_patterns': None,
+         'theories_include': None,
+         'name_contains': None,
+         'target_type': None,
+         'number': 5,
+         'exact_name': None,
+         'exact_term': None},
+    ]}
+    result2, is_error2 = await _query_tool_logic(root.session, args_null_kinds)
+    file.write(f"Null kinds result (is_error={is_error2}):\n{result2}\n")
+    assert not is_error2, f"query with null kinds must not error: {result2}"
+
+
 @model_test("IntroSplitConj", "Test_IntroSplitConj.thy", 10)
 async def _test_intro_split_conj(root: Root, file: MyIO):
     """Test SplitConjs splits P ∧ Q ∧ R into separate subgoals.
@@ -2541,6 +2599,47 @@ async def _test_HaveStructured(root: Root, file: MyIO):
     unfinished = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+@model_test("HaveDupFixed", "Test_HaveDupFixed.thy", 8)
+async def _test_HaveDupFixed(root: Root, file: MyIO):
+    """Reproduce: Have with for_any naming a variable that is already fixed
+    in the proof context (after Intro) triggers 'Duplicate fixed variable(s)'
+    from gen_HAVE's set_body-false path."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Step 1: Intro to fix a, b and the premise into the context.
+    root.session.age += 1
+    await root.fill("1", [Intro.gen_single({
+        "thought": "introduce universally quantified variables and premise"
+    })])
+    print_header("After Intro (a, b now fixed)", file)
+    root.print(0, file)
+
+    # Step 2: Have with for_any:[a, b] — these names collide with
+    # the already-fixed a, b from the Intro above.
+    root.session.age += 1
+    outcome = await root.fill("2", [Have.gen_single({
+        "thought": "Prove a helper lemma universally quantified over a and b",
+        "statement": {
+            "english": "For all positive a,b with the divisibility, the quotient is a perfect square",
+            "for_any": [{"name": "a", "type": "nat"}, {"name": "b", "type": "nat"}],
+            "premises": [
+                {"name": "ha", "term": "(0::nat) < a"},
+                {"name": "hb", "term": "(0::nat) < b"},
+                {"name": "hdvd", "term": "a * b + 1 dvd a^2 + b^2"}
+            ],
+            "conclusion": "\\<exists>x::nat. real (x^2) = real (a^2 + b^2) / real (a * b + 1)"
+        },
+        "name": "main",
+    })])
+    print_header("After Have with for_any (duplicate a, b)", file)
+    root.print(0, file)
+
+    have_node = root.locate_node("2")
+    file.write(f"Have status: {have_node.status.status.value}\n")
+    if outcome.failure:
+        file.write(f"Failure: {outcome.failure}\n")
 
 @model_test("SufficesStructured", "Test_SufficesStructured.thy", 8)
 async def _test_SufficesStructured(root: Root, file: MyIO):
@@ -8129,6 +8228,66 @@ async def _test_HavePowerParsing(root: Root, file: MyIO):
     })])
     print_header("three terms no-space (fails)", file)
     root.print(0, file)
+
+
+@model_test("AttachProofInheritsIntoSubgoalMaker", "Test_AttachProofInheritsIntoSubgoalMaker.thy", 10)
+async def _test_AttachProofInheritsIntoSubgoalMaker(root: Root, file: MyIO):
+    """Regression: _attach_proof places inherited children into a
+    SubgoalMaker (Induction/CaseSplit) via isinstance(last, StdBlock),
+    but SubgoalMaker expects only GoalNode children.  When Induction
+    refreshes, beginning_opr → _case_vars_of_child(0) raises
+    InternalError("The child of a CaseSplit_Like is not a GoalNode").
+
+    Trigger: amend a global Have (which has children from a previous
+    sub-proof) to a new Have whose proof body ends with Induction."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Step 1: global Have with inline proof=[Obvious] — the Obvious
+    # succeeds on "True", so the Have has sub_nodes = [Obvious].
+    root.session.age += 1
+    _outcome = await root.global_env.append([Have.gen_single({
+        "thought": "Trivial helper",
+        "statement": {"english": "True", "conclusion": "True"},
+        "name": "helper",
+        "proof": [{"operation": "Obvious", "facts": []}]
+    })])
+    have1 = _outcome.committed[0] if _outcome.committed else None
+    has_children = (isinstance(have1, NonLeaf_Node) and len(have1.sub_nodes) > 0) if have1 else False
+    file.write(f"global.1 has children: {has_children}\n")
+    print_header("After global Have + Obvious", file)
+    root.print(0, file)
+
+    # Step 2: Amend global.1 to a Have whose proof body ends with
+    # Induction.  Before fix: inherited Obvious placed into
+    # Induction.sub_nodes → InternalError.  After fix: discarded
+    # with warning (_can_host_inherited_children = False).
+    root.session.age += 1
+    _outcome = await root.amend("global.1", [Have.gen_single({
+        "thought": "Prove by induction",
+        "statement": {
+            "english": "for all m, m + 0 = m",
+            "for_any": [{"name": "m", "type": "nat"}],
+            "conclusion": "m + 0 = m",
+        },
+        "name": "helper",
+        "proof": [
+            {"operation": "Induction", "thought": "induct on m",
+             "target_isabelle_term": "m",
+             "variables": [{"name": "m", "status": "fixed"}]},
+        ]
+    })])
+    amended = _outcome.committed[0] if _outcome.committed else None
+    file.write(f"Amend committed: {amended is not None}\n")
+    if _outcome.failure:
+        file.write(f"Amend failure: {_outcome.failure}\n")
+    if amended:
+        file.write(f"Amended node status: {amended.status.status.value}\n")
+        file.write(f"Amended node warnings: {len(amended.warnings)}\n")
+    print_header("After amend (print)", file)
+    root.print(0, file, show_warnings=True)
+    print_header("After amend (quickview)", file)
+    root.quickview(0, file)
 
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
