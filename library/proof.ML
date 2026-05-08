@@ -3171,17 +3171,18 @@ val HAVE_CMD =
 
 fun gen_HAVE' mkG shows (ctxt0, HHF (st,items) :: S) =
       let
-          (* `set_body false` lets `prep_statement`'s built-in augment
-             implicitly fix free vars of `shows`; `ctxt0` stays as the
-             export reference so they get generalized on the way out. *)
-          val s01 = mkG (Variable.set_body false ctxt0)
-          val ctxt01 = Proof.context_of s01
+          val s01 = mkG ctxt0
+          val ctxt01_raw = Proof.context_of s01
           val goal = #goal (Proof.goal s01)
-                  |> init_goal ctxt01
+                  |> init_goal ctxt01_raw
 
-          (* Surface free vars that the augment in `prep_statement` just
-             implicitly fixed in `ctxt01`. The agent renders them as a
-             `for_any:` block. *)
+          (* Implicitly fix free vars of the goal (body-mode bypass,
+             same pattern as SUFFICES'). *)
+          val ctxt01 = ctxt01_raw
+              |> Variable.set_body false
+              |> Proof_Context.augment (Thm.prop_of goal)
+              |> Variable.restore_body ctxt01_raw
+
           val newly_fixed =
             Variable.add_newly_fixed ctxt01 ctxt0 (Thm.prop_of goal) []
           val _ =
@@ -3340,7 +3341,7 @@ fun SUFFICES' intro_bindings prep_prop raw_prop (ctxt0, HHF (st0, items0) :: S) 
     val impl_term = HOLogic.mk_imp (prop_P, goal_G_atom)
                  |> HOLogic.mk_Trueprop
 
-    (* Implicitly fix free vars of P (body-mode bypass, mirrors gen_HAVE'). *)
+    (* Implicitly fix free vars of P (body-mode bypass, same pattern as gen_HAVE'). *)
     val ctxt_setup = ctxt0
                   |> Variable.set_body false
                   |> Proof_Context.augment impl_term

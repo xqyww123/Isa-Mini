@@ -292,31 +292,53 @@ class OpenAIChatProvider(OpenAIBase):
             params.setdefault("extra_body", {})
             params["extra_body"].update(self._extra_params)
 
-        response = await self._client.chat.completions.create(**params)
-        choice = response.choices[0]
-        msg = choice.message
+        stream = await self._client.chat.completions.create(
+            **params, stream=True,
+            stream_options={"include_usage": True})
 
-        tool_calls: list[ToolCall] = []
-        if msg.tool_calls:
-            for tc in msg.tool_calls:
-                tool_calls.append(ToolCall(
-                    id=tc.id, name=tc.function.name,
-                    arguments=tc.function.arguments))
+        text_parts: list[str] = []
+        tc_map: dict[int, dict[str, str]] = {}
+        stream_usage: Any = None
+
+        async for chunk in stream:
+            if chunk.usage:
+                stream_usage = chunk.usage
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if delta.content:
+                text_parts.append(delta.content)
+            if delta.tool_calls:
+                for tcd in delta.tool_calls:
+                    idx = tcd.index
+                    if idx not in tc_map:
+                        tc_map[idx] = {"id": "", "name": "", "arguments": ""}
+                    if tcd.id:
+                        tc_map[idx]["id"] = tcd.id
+                    if tcd.function:
+                        if tcd.function.name:
+                            tc_map[idx]["name"] = tcd.function.name
+                        if tcd.function.arguments:
+                            tc_map[idx]["arguments"] += tcd.function.arguments
+
+        tool_calls: list[ToolCall] = [
+            ToolCall(id=v["id"], name=v["name"], arguments=v["arguments"])
+            for _, v in sorted(tc_map.items())]
 
         cached = 0
-        if response.usage:
-            details = getattr(response.usage, 'prompt_tokens_details', None)
+        if stream_usage:
+            details = getattr(stream_usage, 'prompt_tokens_details', None)
             if details:
                 cached = getattr(details, 'cached_tokens', 0) or 0
 
         usage = Usage(
-            input_tokens=response.usage.prompt_tokens if response.usage else 0,
-            output_tokens=response.usage.completion_tokens if response.usage else 0,
+            input_tokens=stream_usage.prompt_tokens if stream_usage else 0,
+            output_tokens=stream_usage.completion_tokens if stream_usage else 0,
             cached_tokens=cached,
         )
 
         return ProviderResponse(
-            content=msg.content,
+            content="".join(text_parts) if text_parts else None,
             thinking=None,
             tool_calls=tool_calls,
             usage=usage,
@@ -390,7 +412,13 @@ class OpenAIResponsesProvider(OpenAIBase):
         params["store"] = False
         params["include"] = ["reasoning.encrypted_content"]
 
-        response = await self._client.responses.create(**params)
+        stream = await self._client.responses.create(**params, stream=True)
+        response = None
+        async for event in stream:
+            if event.type == "response.completed":
+                response = event.response
+        if response is None:
+            raise RuntimeError("OpenAI responses stream ended without response.completed event")
 
         thinking_parts: list[str] = []
         text_parts: list[str] = []
@@ -410,8 +438,9 @@ class OpenAIResponsesProvider(OpenAIBase):
                     arguments=item.arguments if item.arguments else "{}"))
             elif item.type == "message":
                 for part in (item.content or []):
-                    if hasattr(part, 'text') and part.text:
-                        text_parts.append(part.text)
+                    t = getattr(part, 'text', None)
+                    if t:
+                        text_parts.append(t)
 
         um = response.usage
         cached = 0
@@ -560,7 +589,7 @@ class GeminiProvider(Provider):
         config = genai_types.GenerateContentConfig(**config_kwargs)
 
         try:
-            response = await self._async_models.generate_content(
+            stream = await self._async_models.generate_content_stream(
                 model=self._model, contents=merged, config=config)
         except genai_errors.ClientError as e:
             if e.code == 429:
@@ -579,28 +608,33 @@ class GeminiProvider(Provider):
         thinking_parts: list[str] = []
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
-        self._last_response_content: genai_types.Content | None = None
+        all_parts: list[genai_types.Part] = []
+        um: Any = None
 
-        if response.candidates and response.candidates[0].content:
-            self._last_response_content = response.candidates[0].content
-            for part in (response.candidates[0].content.parts or []):
-                if part.thought and part.text:
-                    thinking_parts.append(part.text)
-                elif part.function_call:
-                    fc = part.function_call
-                    call_id = fc.id
-                    if not call_id:
-                        self._call_id_counter += 1
-                        call_id = f"gemini-call-{self._call_id_counter}"
-                    self._call_id_to_name[call_id] = fc.name or ""
-                    tool_calls.append(ToolCall(
-                        id=call_id,
-                        name=fc.name or "",
-                        arguments=json.dumps(fc.args) if fc.args else "{}"))
-                elif part.text:
-                    text_parts.append(part.text)
+        async for chunk in stream:
+            if chunk.usage_metadata:
+                um = chunk.usage_metadata
+            if chunk.candidates and chunk.candidates[0].content:
+                for part in (chunk.candidates[0].content.parts or []):
+                    all_parts.append(part)
+                    if part.thought and part.text:
+                        thinking_parts.append(part.text)
+                    elif part.function_call:
+                        fc = part.function_call
+                        call_id = fc.id
+                        if not call_id:
+                            self._call_id_counter += 1
+                            call_id = f"gemini-call-{self._call_id_counter}"
+                        self._call_id_to_name[call_id] = fc.name or ""
+                        tool_calls.append(ToolCall(
+                            id=call_id,
+                            name=fc.name or "",
+                            arguments=json.dumps(fc.args) if fc.args else "{}"))
+                    elif part.text:
+                        text_parts.append(part.text)
 
-        um = response.usage_metadata
+        self._last_response_content = genai_types.Content(
+            role="model", parts=all_parts) if all_parts else None
         usage = Usage(
             input_tokens=(um.prompt_token_count or 0) if um else 0,
             output_tokens=(um.candidates_token_count or 0) if um else 0,
@@ -718,38 +752,85 @@ class AnthropicProvider(Provider):
             params["thinking"] = {"type": "adaptive"}
             params["output_config"] = {"effort": self._thinking_effort}
 
-        response = None
-        for _stream_attempt in range(3):
-            try:
-                async with self._client.messages.stream(
-                        **params,
-                        extra_headers={"anthropic-beta": "interleaved-thinking-2025-05-14"}) as stream:
-                    response = await stream.get_final_message()
-                break
-            except RuntimeError as e:
-                if "Unexpected event order" in str(e) and _stream_attempt < 2:
-                    await asyncio.sleep(1)
-                    continue
-                raise
-            except anthropic.RateLimitError as e:
+        try:
+            raw_stream = await self._client.messages.create(
+                    **params,
+                    stream=True,
+                    extra_headers={"anthropic-beta": "interleaved-thinking-2025-05-14"})
+        except anthropic.RateLimitError as e:
+            dummy_req = httpx.Request("POST", str(self._client.base_url))
+            msg_text = str(e)
+            if "quota" in msg_text.lower():
+                msg_text = f"insufficient_quota: {msg_text}"
+            raise openai.RateLimitError(
+                message=msg_text,
+                response=httpx.Response(429, text=msg_text, request=dummy_req),
+                body=None) from e
+        except anthropic.APIStatusError as e:
+            if e.status_code in (402, 529):
                 dummy_req = httpx.Request("POST", str(self._client.base_url))
-                msg_text = str(e)
-                if "quota" in msg_text.lower():
-                    msg_text = f"insufficient_quota: {msg_text}"
                 raise openai.RateLimitError(
-                    message=msg_text,
-                    response=httpx.Response(429, text=msg_text, request=dummy_req),
+                    message=f"insufficient_quota: {e}",
+                    response=httpx.Response(e.status_code, text=str(e), request=dummy_req),
                     body=None) from e
-            except anthropic.APIStatusError as e:
-                if e.status_code in (402, 529):
-                    dummy_req = httpx.Request("POST", str(self._client.base_url))
-                    raise openai.RateLimitError(
-                        message=f"insufficient_quota: {e}",
-                        response=httpx.Response(e.status_code, text=str(e), request=dummy_req),
-                        body=None) from e
-                raise
+            raise
 
-        assert response is not None
+        built_blocks: list[Any] = []
+        cur: dict[str, Any] = {}
+        json_parts: list[str] = []
+        usage_info: dict[str, int] = {}
+
+        async for event in raw_stream:
+            if event.type == "message_start":
+                if hasattr(event, 'message') and hasattr(event.message, 'usage'):
+                    u = event.message.usage
+                    for k in ("input_tokens", "output_tokens",
+                              "cache_read_input_tokens", "cache_creation_input_tokens"):
+                        usage_info[k] = getattr(u, k, 0) or 0
+            elif event.type == "content_block_start":
+                cur = event.content_block.model_dump()
+                json_parts = []
+            elif event.type == "content_block_delta":
+                delta = event.delta
+                if delta.type == "text_delta":
+                    cur["text"] = cur.get("text", "") + delta.text
+                elif delta.type == "thinking_delta":
+                    cur["thinking"] = cur.get("thinking", "") + delta.thinking
+                elif delta.type == "signature_delta":
+                    cur["signature"] = delta.signature
+                elif delta.type == "input_json_delta":
+                    if delta.partial_json:
+                        json_parts.append(delta.partial_json)
+            elif event.type == "content_block_stop":
+                if cur.get("type") == "tool_use" and json_parts:
+                    cur["input"] = json.loads("".join(json_parts))
+                btype = cur.get("type")
+                if btype == "thinking":
+                    built_blocks.append(anthropic.types.ThinkingBlock.model_construct(**cur))
+                elif btype == "text":
+                    built_blocks.append(anthropic.types.TextBlock.model_construct(**cur))
+                elif btype == "tool_use":
+                    built_blocks.append(anthropic.types.ToolUseBlock.model_construct(**cur))
+                cur = {}
+            elif event.type == "message_delta":
+                if hasattr(event, 'usage') and event.usage:
+                    u = event.usage
+                    for k in ("input_tokens", "output_tokens",
+                              "cache_read_input_tokens", "cache_creation_input_tokens"):
+                        v = getattr(u, k, None)
+                        if v:
+                            usage_info[k] = v
+
+        response = anthropic.types.Message.model_construct(
+            id="",
+            type="message",
+            role="assistant",
+            model=self._model,
+            content=built_blocks,
+            stop_reason="end_turn",
+            stop_sequence=None,
+            usage=anthropic.types.Usage.model_construct(_fields_set=None, **usage_info),
+        )
         self._last_response = response
 
         thinking_parts: list[str] = []

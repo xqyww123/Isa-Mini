@@ -65,5 +65,5 @@ proof:
   - step id: 2
     operation: Obvious
     with facts:
-      - succ_gt: ?n < ?n + (1 :: nat)
+      - succ_gt: ?n2 < ?n2 + (1 :: nat)
 Unfinished nodes: 0

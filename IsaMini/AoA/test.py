@@ -2641,6 +2641,45 @@ async def _test_HaveDupFixed(root: Root, file: MyIO):
     if outcome.failure:
         file.write(f"Failure: {outcome.failure}\n")
 
+@model_test("SufficesDupFixed", "Test_SufficesDupFixed.thy", 8)
+async def _test_SufficesDupFixed(root: Root, file: MyIO):
+    """Mirror of HaveDupFixed but with Suffices: for_any names a variable
+    already fixed by Intro. gen_SUFFICES uses read_stmt (body-mode fixes)
+    + separate augment, so it may or may not hit the same duplicate error."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Step 1: Intro to fix a, b and the premise.
+    root.session.age += 1
+    await root.fill("1", [Intro.gen_single({
+        "thought": "introduce universally quantified variables and premise"
+    })])
+    print_header("After Intro (a, b now fixed)", file)
+    root.print(0, file)
+
+    # Step 2: Suffices with for_any:[a, b] — same names as the fixed vars.
+    root.session.age += 1
+    outcome = await root.fill("2", [Suffices.gen_single({
+        "thought": "It suffices to show the universal statement",
+        "statement": {
+            "english": "For all positive a,b with divisibility, quotient is a square",
+            "for_any": [{"name": "a", "type": "nat"}, {"name": "b", "type": "nat"}],
+            "premises": [
+                {"name": "ha", "term": "(0::nat) < a"},
+                {"name": "hb", "term": "(0::nat) < b"},
+                {"name": "hdvd", "term": "a * b + 1 dvd a^2 + b^2"}
+            ],
+            "conclusion": "\\<exists>x::nat. real (x^2) = real (a^2 + b^2) / real (a * b + 1)"
+        },
+    })])
+    print_header("After Suffices with for_any (duplicate a, b)", file)
+    root.print(0, file)
+
+    suffices_node = root.locate_node("2")
+    file.write(f"Suffices status: {suffices_node.status.status.value}\n")
+    if outcome.failure:
+        file.write(f"Failure: {outcome.failure}\n")
+
 @model_test("SufficesStructured", "Test_SufficesStructured.thy", 8)
 async def _test_SufficesStructured(root: Root, file: MyIO):
     """Suffices with explicit for_any and premises: the ML layer builds the

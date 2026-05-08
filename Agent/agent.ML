@@ -1103,8 +1103,9 @@ fun interpret_i (config as (_, _, counters)) cmd s =
     | SPLIT_CONJS => AUTO_SPLIT_CONJS s
     | SPECIALIZE (name, rule_fact, insts, discharge_facts) =>
         let val ctxt = Minilang.context_of s
-            val rule_thms = resolve_to_thms (mk_counter ()) ctxt [rule_fact]
-            val discharge_thms = resolve_to_thms (mk_counter ()) ctxt discharge_facts
+            val counter = mk_counter ()
+            val rule_thms = resolve_to_thms counter ctxt [rule_fact]
+            val discharge_thms = resolve_to_thms counter ctxt discharge_facts
             (* "?x" or "?x.1" specifically targets a schematic variable (parsed via
                Lexicon.read_variable; error if not schematic);
                bare "x" is auto-classified by inst_universal_quantifiers

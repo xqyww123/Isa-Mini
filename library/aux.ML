@@ -331,9 +331,12 @@ fun inst_hol_alls ctxt insts thm =
 fun deconflict_bound_names' ctxt term =
   let
     val free_names = Term.add_free_names term []
-    val var_names = Term.add_var_names term [] |> map fst
-    val initial_name_ctx = fold Name.declare free_names (Variable.names_of ctxt)
-                           |> fold Name.declare var_names
+    val var_idxnames = Term.add_var_names term []
+    val var_display_names = map (fn xi =>
+        let val s = Term.string_of_vname' xi
+        in if String.isPrefix "?" s then unprefix "?" s else s end) var_idxnames
+    val initial_name_ctx = fold Name.declare free_names (Name.make_context [])
+                           |> fold Name.declare var_display_names
     fun deconflict name_ctx (Abs (name, ty, body)) =
           let val (name', name_ctx') = variant_name name name_ctx
               val body' = deconflict name_ctx' body
@@ -369,6 +372,9 @@ fun deconflict_bound_names ctxt term =
       lift ∀, where_rule
    Each tier is all-or-nothing: either ALL non-schematic names resolve in
    that tier, or it falls through to the next. *)
+fun display_of_indexname (x, 0) = x
+  | display_of_indexname xi = unprefix "?" (Term.string_of_vname xi)
+
 fun xwhere ctxt inst0 fixes thm =
   let val concl = Thm.concl_of thm
       val vs = Term.add_var_names (Thm.prop_of thm) []
@@ -384,12 +390,13 @@ fun xwhere ctxt inst0 fixes thm =
       val raw_hol_vars = foralls concl
       val raw_hol_names = map fst raw_hol_vars
 
-      fun is_schematic name = exists (fn n => n = (name, 0)) vs
-      val non_schem = map_filter (fn (((name, _), _), _) =>
-            if is_schematic name then NONE else SOME name) inst
+      fun is_schematic idx = member (op =) vs idx
+      val non_schem = map_filter (fn ((xi, _), _) =>
+            if is_schematic xi then NONE
+            else SOME (display_of_indexname xi)) inst
 
       (* Lift named HOL ∀ vars to schematics, remap inst, apply where_rule.
-         rename_map: (inst_name → raw_hol_name) for non-schematic names *)
+         rename_map: (display_name → raw_hol_name) for non-schematic names *)
       fun lift_and_where rename_map =
         let val raw_names_to_lift = distinct (op =) (map snd rename_map)
             val to_lift = map_filter (fn (name, T) =>
@@ -397,10 +404,12 @@ fun xwhere ctxt inst0 fixes thm =
                   then SOME (name, Thm.var ((name, 0), Thm.ctyp_of ctxt T))
                   else NONE) raw_hol_vars
             val thm' = inst_hol_alls ctxt to_lift thm
-            val inst' = map (fn (((name, idx), pos), src) =>
-                  let val name' = case AList.lookup (op =) rename_map name of
-                                    SOME rn => rn | NONE => name
-                  in (((name', idx), pos), src) end) inst
+            val inst' = map (fn entry as (((name, idx), pos), src) =>
+                  let val dn = display_of_indexname (name, idx)
+                  in case AList.lookup (op =) rename_map dn of
+                       SOME rn => (((rn, 0), pos), src)
+                     | NONE => entry
+                  end) inst
         in Rule_Insts.where_rule ctxt inst' fixes thm' end
    in
       if null non_schem then
@@ -461,19 +470,41 @@ fun inst_universal_quantifiers ctxt insts thm =
       | strip_hol_alls _ = []
     val hol_all_vars = strip_hol_alls (get_body prop)
 
-    fun classify ((idx as (name, _)), t) =
-      if exists (fn (idx', _) => idx = idx') schematic_vars
-      then (1, idx, t)
-      else if exists (fn (n, _) => n = name) pure_all_vars
-      then (2, idx, t)
-      else if exists (fn (n, _) => n = name) hol_all_vars
-      then (3, idx, t)
-      else error ("Variable " ^ Term.string_of_vname idx ^ " is not found in the rule")
+    (* Build name mappings: display_name → raw_name for bound vars.
+       Covers both raw names (identity) and display-renamed names
+       (via deconflict_bound_names). *)
+    val deconf_prop = deconflict_bound_names ctxt prop
+    val display_pure_names = map fst (strip_pure_alls deconf_prop)
+    val display_hol_names = map fst (strip_hol_alls (get_body deconf_prop))
+    val pure_name_map =
+        ListPair.zip (display_pure_names, map fst pure_all_vars) @
+        map (fn (n, _) => (n, n)) pure_all_vars
+        |> distinct (eq_fst (op =))
+    val hol_name_map =
+        ListPair.zip (display_hol_names, map fst hol_all_vars) @
+        map (fn (n, _) => (n, n)) hol_all_vars
+        |> distinct (eq_fst (op =))
+
+    fun classify ((idx, t)) =
+      let val dn = display_of_indexname idx
+      in if exists (fn (idx', _) => idx = idx') schematic_vars
+         then (1, idx, t)
+         else case AList.lookup (op =) pure_name_map dn of
+                SOME _ => (2, idx, t)
+              | NONE => case AList.lookup (op =) hol_name_map dn of
+                          SOME _ => (3, idx, t)
+                        | NONE => error ("Variable " ^ Term.string_of_vname idx ^
+                                         " is not found in the rule")
+      end
 
     val classified = map classify insts
     val schematic_insts = map_filter (fn (1, idx, t) => SOME (idx, t) | _ => NONE) classified
-    val pure_insts = map_filter (fn (2, (name,_), t) => SOME (name, t) | _ => NONE) classified
-    val hol_insts = map_filter (fn (3, (name,_), t) => SOME (name, t) | _ => NONE) classified
+    val pure_insts = map_filter (fn (2, idx, t) =>
+        SOME (the (AList.lookup (op =) pure_name_map (display_of_indexname idx)), t)
+      | _ => NONE) classified
+    val hol_insts = map_filter (fn (3, idx, t) =>
+        SOME (the (AList.lookup (op =) hol_name_map (display_of_indexname idx)), t)
+      | _ => NONE) classified
 
     (* === Phase 1: Instantiate outermost Pure.all variables === *)
     fun inst_pure insts thm =
