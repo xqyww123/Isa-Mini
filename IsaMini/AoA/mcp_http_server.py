@@ -488,22 +488,24 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         return (error_msg, True)
 
     total_lines = len(all_lines)
-    if node is not None and explicit_range is None:
-        node_end = _node_end_line(node, total_lines)
-        node_span = node_end - line_num + 1
-        if node_span < 30:
-            start = max(1, line_num - 10)
+    if node is not None:
+        if explicit_range is None:
+            node_end = _node_end_line(node, total_lines)
+            start = max(1, line_num - 5)
             end = min(node_end + 5, total_lines)
         else:
-            start = max(1, line_num - 10)
-            end = min(start + 39, total_lines)
+            start = max(1, line_num - 5)
+            end = start + range_lines
     else:
-        start = max(1, line_num - 10)
+        start = line_num
         end = start + range_lines
 
     selected = all_lines[start - 1 : end]
     end_line = start + len(selected) - 1
-    result = f"[Line {start}-{end_line}]\n" + "".join(selected)
+    if node is not None:
+        result = f"[Step {node.id} is at Line {line_num}, showing Line {start}-{end_line}]\n" + "".join(selected)
+    else:
+        result = f"[Line {start}-{end_line}]\n" + "".join(selected)
     session.log_tool_response(_tn, result)
     return (result, False)
 

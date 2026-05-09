@@ -612,19 +612,6 @@ class GoalIsNontrivial(CannotEdit):
         return f"{super().__str__()}\n{self._message}"
 
 
-class FactNotFound(OprError):
-    pass
-class FactNotFound_BySearch(FactNotFound):
-    def __init__(self, criterions: list[list['Search_Criterion']]):
-        self.criterions = criterions
-    def __str__(self) -> str:
-        return f"No fact found for the following criteria: {self.criterions}"
-class FactNotFound_ByName(FactNotFound):
-    def __init__(self, name: str):
-        self.name = name
-    def __str__(self) -> str:
-        return f"No fact found with name {self.name}"
-
 class InternalError(OprError):
     pass
 class InternalError_UnparsedTerm(InternalError):
@@ -1405,17 +1392,6 @@ class Minilang_State:
         self.display_goals_count = 0
         self._initialized = False
         self.new_subgoals_count = None
-    # def search_fact(self, dnf_criterions: list[list[Search_Criterion]]) -> FactRef:
-    #     fact_ref_and_props = self.connection.callback("IsaMini.lookup_fact",
-    #                                                    (self.name, dnf_criterions))
-    #     match fact_ref_and_props:
-    #         case []:
-    #             raise FactNotFound(dnf_criterions)
-    #         case [single]:
-    #             ref, _ = single
-    #             return ref
-    #         case _:
-    #             raise NotImplementedError("Here we should list all the options and ask the LLM to choose which one does it mean")
     async def fetch_facts(self, facts: Sequence[Fact]) -> 'list[IsabelleFact | Interaction_RetrieveForProof]':
         """Resolve a list of facts.
         - FactByName: batched RPC lookup → IsabelleFact_Presented or IsabelleFact_Unfound
