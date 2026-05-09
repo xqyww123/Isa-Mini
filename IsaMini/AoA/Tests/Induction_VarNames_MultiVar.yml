@@ -21,16 +21,28 @@ proof:
     thought: Induction on l with custom Cons vars
     operation: Induction
     target term: l
-    Error: The variable P appear in the induction context but are not classified in the 'variables' argument. You should indicate whether each is 'arbitrary' (generalized during induction) or 'fixed' (held constant).
     cases:
       - goal id: 1.Nil
         goal: P []
-        Error: the evaluation is cancelled due to failures in preceding nodes
-        proof: empty
-        Error: Evaluation cancelled due to failures above
+        proof:
+          - step id: 1.Nil.1
+            operation: Obvious
+            Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Nil.1` to replace it with a proof.
+        pending proof goal:
+          P []
       - goal id: 1.Cons
-        goal: unknown, evaluation pending
-        Error: the evaluation is cancelled due to failures in preceding nodes
-        proof: empty
-        Error: Evaluation cancelled due to failures above
+        variables:
+          - y: nat
+          - ys: nat list
+        premises:
+          - Cons.IH: P ys
+        goal: P (y # ys)
+        proof:
+          - step id: 1.Cons.1
+            operation: Obvious
+            Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Cons.1` to replace it with a proof.
+        pending proof goal:
+          P (y # ys)
 Cons case_vars: ['y', 'ys']
