@@ -1,0 +1,111 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: int
+premises:
+  - h: (0 :: int) ≤ x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+[1] fill Have(sq) — creates step 1 with open subgoal 1.1
+--------------------------------------------------
+Filled step 1.
+Outline:
+  step 1: Have sq
+    Error: Unfinished Proof. Call command `edit` with action `fill` and target step `1.1`
+    goal: (0 :: int) ≤ x * x
+  Error: Unfinished Proof (line 11). Fill step `2`
+  goal: (0 :: int) ≤ x * x
+is_error: False
+--------------------------------------------------
+[2] fill Obvious at 1.1 — closes step 1
+--------------------------------------------------
+Filled step 1.1.
+All proof goals of step 1 are completed.
+Outline:
+  step 1: Have sq (done)
+  Error: Unfinished Proof (line 19). Fill step `2`
+is_error: False
+--------------------------------------------------
+[3] delete step 1 — reverts tree
+--------------------------------------------------
+variables:
+  - x: int
+premises:
+  - h: (0 :: int) ≤ x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+[4] amend '1.1' — deep node after parent deleted
+--------------------------------------------------
+failure: True
+failure type: CannotEdit_NodeNotFound
+--------------------------------------------------
+[5] amend '7.2.3' — deeply nonexistent with Rewrite+Obvious
+--------------------------------------------------
+failure: True
+failure type: CannotEdit_NodeNotFound
+--------------------------------------------------
+[5a] fill Have(sq) — creates step 1
+--------------------------------------------------
+Filled step 1.
+Outline:
+  step 1: Have sq
+    Error: Unfinished Proof. Fill step `1.1`
+    goal: (0 :: int) ≤ x * x
+  Error: Unfinished Proof (line 42). Fill step `2`
+is_error: False
+--------------------------------------------------
+[5b] after fill+delete 1.1 — parent 1 still exists, child 1.1 gone
+--------------------------------------------------
+variables:
+  - x: int
+premises:
+  - h: (0 :: int) ≤ x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: outer lemma
+    operation: Have
+    statement:
+      english: nonneg
+      conclusion: x * x \<ge> 0
+    name: sq
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: int) ≤ x * x
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+--------------------------------------------------
+[5c] amend '1.1' — fill fallback processes Rewrite
+--------------------------------------------------
+failure: False
+committed: 1 node(s)
+--------------------------------------------------
+[6] fill step 1 after errors — tree consistency check
+--------------------------------------------------
+Filled step 1.
+Outline:
+  done
+Congratulations! All goals are proven.
+is_error: False
+--------------------------------------------------
+Final YAML
+--------------------------------------------------
+variables:
+  - x: int
+premises:
+  - h: (0 :: int) ≤ x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    operation: Obvious
+    with facts:
+      - h: (0 :: int) ≤ x

@@ -18,7 +18,7 @@ AGENT_EXPR_LIMIT = 200
 AGENT_GOAL_CHAR_LIMIT = 400
 
 LONG_GOAL_HINT = (
-    "note: resulting goal is unusually long, "
+    "note: the resulting goal is unusually long, "
     "which is often a sign of a wrong direction.\n"
 )
 
@@ -4055,7 +4055,9 @@ class GoalNode(StdBlock):
         self._pending_proof: 'proof | None' = pending_proof
     @property
     def titled_id(self) -> str:
-        return self.id
+        if self.id.startswith("goal"):
+            return self.id
+        return f"goal {self.id}"
     def goal(self) -> Goal | None:
         return self.ml_state.leading_goal
     def id_of_goal(self) -> step | None:
@@ -6341,7 +6343,7 @@ class Suffices(StdBlock):
         indent = super().quickview(indent, file)
         if not self.sub_nodes and not self.session.showed_suffices_notice:
             print_indent(indent, file)
-            file.write("notice: Need to show the provided statement implies the goal\n")
+            file.write("notice: show the provided statement implies the goal\n")
             self.session.showed_suffices_notice = True
         return indent
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):

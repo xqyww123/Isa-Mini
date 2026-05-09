@@ -1,0 +1,133 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+edit_message: Have h1
+--------------------------------------------------
+Filled step 1.
+Outline:
+  step 1: Have h1
+    Error: Unfinished Proof. Call command `edit` with action `fill` and target step `1.1`
+    goal: (0 :: int) ≤ x * x
+  Error: Unfinished Proof (line 9). Fill step `2`
+  goal: (0 :: int) ≤ x * x
+---------------
+--------------------------------------------------
+edit_message: fill 1.1 (should complete step 1)
+--------------------------------------------------
+Filled step 1.1.
+All proof goals of step 1 are completed.
+Outline:
+  step 1: Have h1 (done)
+  Error: Unfinished Proof (line 9). Fill step `2`
+---------------
+--------------------------------------------------
+edit_message: Have h2
+--------------------------------------------------
+Filled step 2.
+Outline:
+  step 1: Have h1 (done)
+  step 2: Have h2
+    Error: Unfinished Proof. Fill step `2.1`
+    goal: (0 :: int) ≤ x * x
+  Error: Unfinished Proof (line 9). Fill step `3`
+---------------
+--------------------------------------------------
+edit_message: Have h3 (nested in h2)
+--------------------------------------------------
+Filled step 2.1.
+Outline:
+  step 1: Have h1 (done)
+  step 2: Have h2
+    step 2.1: Have h3
+      Error: Unfinished Proof. Fill step `2.1.1`
+      goal: (0 :: int) ≤ x * x
+    Error: Unfinished Proof. Fill step `2.2`
+  Error: Unfinished Proof (line 9). Fill step `3`
+---------------
+--------------------------------------------------
+edit_message: fill 2.1.1 (should complete step 2.1 only)
+--------------------------------------------------
+Filled step 2.1.1.
+All proof goals of step 2.1 are completed.
+Outline:
+  step 1: Have h1 (done)
+  step 2: Have h2
+    step 2.1: Have h3 (done)
+    Error: Unfinished Proof. Fill step `2.2`
+  Error: Unfinished Proof (line 9). Fill step `3`
+---------------
+--------------------------------------------------
+edit_message: fill 2.2 (should complete step 2.2 AND cascade to step 2)
+--------------------------------------------------
+Filled step 2.2.
+All proof goals of step 2 are completed.
+Outline:
+  step 1: Have h1 (done)
+  step 2: Have h2 (done)
+  Error: Unfinished Proof (line 9). Fill step `3`
+---------------
+--------------------------------------------------
+edit_message: Have h4 (step 3)
+--------------------------------------------------
+Filled step 3.
+Outline:
+  step 1: Have h1 (done)
+  step 2: Have h2 (done)
+  step 3: Have h4
+    Error: Unfinished Proof. Fill step `3.1`
+    goal: (0 :: int) ≤ x * x
+  Error: Unfinished Proof (line 9). Fill step `4`
+---------------
+--------------------------------------------------
+edit_message: Have h5 (step 3.1, nested in h4)
+--------------------------------------------------
+Filled step 3.1.
+Outline:
+  step 1: Have h1 (done)
+  step 2: Have h2 (done)
+  step 3: Have h4
+    step 3.1: Have h5
+      Error: Unfinished Proof. Fill step `3.1.1`
+      goal: (0 :: int) ≤ x * x
+    Error: Unfinished Proof. Fill step `3.2`
+  Error: Unfinished Proof (line 9). Fill step `4`
+---------------
+--------------------------------------------------
+edit_message: fill 3.1.2 (h5's continuation)
+--------------------------------------------------
+Filled nothing.
+Cannot fill a node with id 3.1.2
+The target already exists. Fill does not overwrite existing successful steps.
+---------------
+--------------------------------------------------
+edit_message: fill 3.2 (h4's continuation)
+--------------------------------------------------
+Filled step 3.2.
+Outline:
+  step 1: Have h1 (done)
+  step 2: Have h2 (done)
+  step 3: Have h4
+    step 3.1: Have h5
+      Error: Unfinished Proof. Fill step `3.1.1`
+    step 3.2: Obvious
+  Error: Unfinished Proof (line 9). Fill step `4`
+---------------
+--------------------------------------------------
+edit_message: fill 3.1.1 (should complete step 3.1 AND step 3)
+--------------------------------------------------
+Filled step 3.1.1.
+All proof goals of step 3.1, step 3 are completed.
+Outline:
+  step 1: Have h1 (done)
+  step 2: Have h2 (done)
+  step 3: Have h4 (done)
+  Error: Unfinished Proof (line 9). Fill step `4`
+---------------
+Unfinished nodes: 1

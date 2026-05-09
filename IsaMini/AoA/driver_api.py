@@ -1204,6 +1204,23 @@ class APIDriver(Session):
         mode = interaction.forking
         if mode == ForkingMode.FORKING_WITH_CTXT:
             fork_messages: list[Msg] = list(self._messages)
+            # A fork triggered during tool execution (the typical case) runs
+            # while _execute_tool_calls has not yet appended ToolResultMsg
+            # entries.  The trailing AssistantMsg therefore contains
+            # function_calls with no matching results — the API rejects this
+            # with "No tool output found for function call".
+            # Fix: replace that AssistantMsg with a plain-text summary so the
+            # fork still sees what the main session intended to do.
+            if (fork_messages
+                    and isinstance(fork_messages[-1], AssistantMsg)
+                    and fork_messages[-1].response.tool_calls):
+                pending = fork_messages[-1].response.tool_calls
+                parts = [f"calling {tc.name} with arguments:\n{tc.arguments}"
+                         for tc in pending]
+                fork_messages[-1] = AssistantMsg(
+                    response=ProviderResponse(
+                        content="I am " + "\n".join(parts),
+                        thinking=None, tool_calls=[], usage=Usage(0, 0, 0)))
         else:
             fork_messages: list[Msg] = []
             sp = self.system_prompt()

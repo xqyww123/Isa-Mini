@@ -4,7 +4,7 @@ System/initial/retry prompts are methods on Session (model.py).
 """
 
 from . import model
-from .model import NonLeaf_Node, Root
+from .model import Node, NonLeaf_Node, Root
 from .model import tn, TOOL_EDIT, TOOL_DELETE
 from io import StringIO
 from .helper import MyIO
@@ -35,6 +35,29 @@ def _headline(outcome: 'model.EditOutcome') -> str:
     if len(c) == 1:
         return f"{verb} step {c[0].id}.\n"
     return f"{verb} step {c[0].id}-{c[-1].id}.\n"
+
+
+def _collect_completed_ancestors(committed: list[Node]) -> list[str]:
+    """Walk up from each committed node, collecting titled IDs of ancestors
+    whose proof goals are all completed.  Stops climbing at the first
+    ancestor that still has pending goals."""
+    completed_ids: list[str] = []
+    visited: set[int] = set()
+    for node in committed:
+        ancestor = node.parent
+        while (ancestor is not None
+               and isinstance(ancestor, NonLeaf_Node)
+               and id(ancestor) not in visited):
+            visited.add(id(ancestor))
+            if ancestor.should_I_show_pending_goal() is not None:
+                break
+            if ancestor.does_quickview_need_detail():
+                break
+            goal_id = ancestor.id_of_goal()
+            if goal_id is not None:
+                completed_ids.append(ancestor.titled_id)
+            ancestor = ancestor.parent
+    return completed_ids
 
 
 def _render_auto_intro_warning(session: 'model.Session', file: MyIO) -> None:
@@ -69,15 +92,13 @@ async def edit_message(
     if failure is not None and failure.is_error:
         file.write(str(failure))
         file.write("\n")
-    _p = outcome.committed[-1].parent if outcome.committed else None
-    parent_hint = _p if isinstance(_p, NonLeaf_Node) else None
     # Completion hint only for fill/amend; insert intentionally skips it.
-    if parent_hint is not None and outcome.operation is not model.EditOperation.INSERT:
-        goal_id = parent_hint.id_of_goal()
-        if (goal_id is not None
-                and parent_hint.should_I_show_pending_goal() is None
-                and not parent_hint.does_quickview_need_detail()):
-            file.write(f"All proof goals of {parent_hint.titled_id} are completed.\n")
+    if outcome.committed and outcome.operation is not model.EditOperation.INSERT:
+        completed_ids = _collect_completed_ancestors(outcome.committed)
+        if len(completed_ids) == 1:
+            file.write(f"All proof goals of {completed_ids[0]} are completed.\n")
+        elif completed_ids:
+            file.write(f"All proof goals of {', '.join(completed_ids)} are completed.\n")
     if session.warnings:
         file.write("Warnings:\n")
         for w in session.warnings:

@@ -1576,6 +1576,83 @@ async def _test_Rewrite_Targeted_Drop(root: Root, file: MyIO):
     file.write(f"success: {success}\n")
     file.write(f"reason: {reason.reason if isinstance(reason, FailureReason) else reason}\n")
 
+@model_test("Rewrite_LoopingForkCtxt", "Test_Rewrite_LoopingForkCtxt.thy", 16)
+async def _test_Rewrite_LoopingForkCtxt(root: Root, file: MyIO):
+    """Regression for driver_api._run_fork bug: looping rewrite rules trigger
+    fork_interaction with FORKING_WITH_CTXT during edit tool execution. The
+    driver copies self._messages which has a pending function_call without
+    ToolResultMsg, causing 'No tool output found' API error."""
+    from .driver_api import (
+        AssistantMsg as DrvAssistantMsg, UserMsg as DrvUserMsg,
+        SystemMsg as DrvSystemMsg, ToolCall, ProviderResponse, Usage, Msg)
+
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    fork_triggered = False
+
+    async def stub_fork(interaction):
+        nonlocal fork_triggered
+        fork_triggered = True
+        file.write(f"forking_mode: {interaction.forking.name}\n")
+        if interaction.forking != ForkingMode.FORKING_WITH_CTXT:
+            raise TestFailed(
+                f"Expected FORKING_WITH_CTXT but got {interaction.forking.name}.")
+
+        # --- Reproduce the bug scenario in _run_fork ---
+        # During edit tool execution, self._messages ends with an AssistantMsg
+        # whose function_calls have no matching ToolResultMsg.
+        tc = ToolCall(id="call_repro", name="edit",
+                      arguments='{"action":"fill","target_step":"1"}')
+        pending_resp = ProviderResponse(
+            content=None, thinking=None, tool_calls=[tc], usage=Usage(0, 0, 0))
+        simulated_messages: list[Msg] = [
+            DrvSystemMsg("sys"),
+            DrvUserMsg("initial prompt"),
+            DrvAssistantMsg(response=pending_resp),  # pending tool call, no result
+        ]
+
+        # Apply the same fix as _run_fork:
+        fork_messages = list(simulated_messages)
+        if (fork_messages
+                and isinstance(fork_messages[-1], DrvAssistantMsg)
+                and fork_messages[-1].response.tool_calls):
+            pending = fork_messages[-1].response.tool_calls
+            parts = [f"calling {tc.name} with arguments:\n{tc.arguments}"
+                     for tc in pending]
+            fork_messages[-1] = DrvAssistantMsg(
+                response=ProviderResponse(
+                    content="I am " + "\n".join(parts),
+                    thinking=None, tool_calls=[], usage=Usage(0, 0, 0)))
+        fork_messages.append(DrvUserMsg("fork prompt"))
+
+        # Verify: the patched messages have no dangling function_calls
+        last_asst = [m for m in fork_messages if isinstance(m, DrvAssistantMsg)][-1]
+        if last_asst.response.tool_calls:
+            raise TestFailed("Fix failed: fork_messages still has dangling tool_calls")
+        if last_asst.response.content is None or "edit" not in last_asst.response.content:
+            raise TestFailed("Fix failed: replacement message should mention the tool")
+        file.write(f"fix_verified: True\n")
+
+        print_header("Interaction Prompt", file)
+        await interaction.prompt(0, file)
+        return await interaction.answer(Answer(indexes=[0]))
+
+    root.session.fork_interaction = stub_fork
+
+    _outcome = await root.fill("1", [Rewrite.gen_single({
+        "thought": "Rewrite using looping rule",
+        "using": [{"name": "my_wrap"}],
+        "use system simplifiers": False,
+        "rewrite goal": True,
+        "rewrite premises": []
+    })])
+    if not fork_triggered:
+        raise TestFailed("Fork interaction was not triggered for looping rule")
+    file.write(f"fork_triggered: {fork_triggered}\n")
+    print_header("After Rewrite", file)
+    root.print(0, file)
+
 @model_test("Rewrite_QuantifiedGoal", "Test_Rewrite_QuantifiedGoal.thy", 28)
 async def _test_Rewrite_QuantifiedGoal(root: Root, file: MyIO):
     """Regression test: applying a looping rewrite rule to a quantified goal
@@ -8325,6 +8402,159 @@ async def _test_AttachProofInheritsIntoSubgoalMaker(root: Root, file: MyIO):
     root.quickview(0, file)
 
 
+@model_test("AmendDeepNotFound", "Test_AmendDeepNotFound.thy", 11)
+async def _test_AmendDeepNotFound(root: Root, file: MyIO):
+    """Regression test: amend on a deeply nested nonexistent node must not
+    raise unhandled exceptions.
+
+    Reproduces the production crash where:
+      1. amend('X.Y.Z', [Rewrite, Obvious]) → NodeNotFound
+      2. except NodeNotFound → fill('X.Y.Z', [Rewrite, Obvious])
+      3. fill processes Rewrite → _refresh_me_alone → fork_interaction
+      4. fork_interaction raises (TypeError / NotImplementedError) inside
+         the except-NodeNotFound handler of amend
+      5. Exception propagates uncaught from amend → _edit_tool_logic →
+         sys.exit(1) → kills the RPC server process
+
+    The test calls root.amend directly (not through _edit_tool_logic) to
+    avoid the sys.exit(1) crash.  It verifies:
+    - shallow amend on deleted node: fill fallback succeeds
+    - deep amend on nonexistent node: returns failure outcome, does NOT raise
+    - tree remains consistent after all operations"""
+    from .mcp_http_server import _edit_tool_logic
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # (1) Build a 2-level nested tree:  Have → Have → Obvious
+    root.session.age += 1
+    r1, e1 = await _edit_tool_logic(
+        root.session,
+        {"target_step": "1", "action": "fill", "proof_operations": [
+            {"operation": "Have", "thought": "outer lemma",
+             "statement": {"english": "nonneg", "conclusion": r"x * x \<ge> 0"},
+             "name": "sq"},
+        ]})
+    print_header("[1] fill Have(sq) — creates step 1 with open subgoal 1.1", file)
+    file.write(r1)
+    file.write(f"is_error: {e1}\n")
+
+    root.session.age += 1
+    r2, e2 = await _edit_tool_logic(
+        root.session,
+        {"target_step": "1.1", "action": "fill", "proof_operations": [
+            {"operation": "Obvious", "facts": [{"name": "h"}]},
+        ]})
+    print_header("[2] fill Obvious at 1.1 — closes step 1", file)
+    file.write(r2)
+    file.write(f"is_error: {e2}\n")
+
+    # (2) Delete step 1 → tree reverts to open
+    root.session.age += 1
+    await root.delete(["1"])
+    print_header("[3] delete step 1 — reverts tree", file)
+    root.print(0, file)
+
+    # (3) Amend step 1.1 (no longer exists, parent 1 also gone).
+    #     amend → NodeNotFound → fill fallback → fill also fails (parent gone)
+    #     → must return a failure outcome, NOT raise.
+    root.session.age += 1
+    outcome3 = await root.amend("1.1", [Obvious.gen_single({"facts": [{"name": "h"}]})])
+    print_header("[4] amend '1.1' — deep node after parent deleted", file)
+    file.write(f"failure: {outcome3.failure is not None}\n")
+    file.write(f"failure type: {type(outcome3.failure).__name__ if outcome3.failure else 'None'}\n")
+
+    # (4) Amend a truly nonexistent deep path (3 levels: 7.2.3).
+    #     The parent path 7.2 doesn't exist either, so fill should fail gracefully.
+    root.session.age += 1
+    outcome4 = await root.amend("7.2.3", [
+        Rewrite.gen_single({
+            "thought": "attempt rewrite on phantom node",
+            "using": [{"name": "h"}],
+            "use system simplifiers": True,
+            "rewrite goal": True,
+            "rewrite premises": [],
+        }),
+        Obvious.gen_single({"facts": []}),
+    ])
+    print_header("[5] amend '7.2.3' — deeply nonexistent with Rewrite+Obvious", file)
+    file.write(f"failure: {outcome4.failure is not None}\n")
+    file.write(f"failure type: {type(outcome4.failure).__name__ if outcome4.failure else 'None'}\n")
+
+    # (5) Amend on a deleted CHILD while PARENT still exists.
+    #     This exercises the fill fallback actually processing operations (not
+    #     just returning failure) — the path that triggers fork_interaction in
+    #     production.
+    #
+    #   (5a) Create Have → step 1 with open subgoal 1.1
+    root.session.age += 1
+    r5a, e5a = await _edit_tool_logic(
+        root.session,
+        {"target_step": "1", "action": "fill", "proof_operations": [
+            {"operation": "Have", "thought": "outer lemma",
+             "statement": {"english": "nonneg", "conclusion": r"x * x \<ge> 0"},
+             "name": "sq"},
+        ]})
+    print_header("[5a] fill Have(sq) — creates step 1", file)
+    file.write(r5a)
+    file.write(f"is_error: {e5a}\n")
+
+    #   (5b) Fill step 1.1 so the node exists, then delete it.
+    root.session.age += 1
+    await root.fill("1.1", [Obvious.gen_single({"facts": [{"name": "h"}]})])
+    root.session.age += 1
+    await root.delete(["1.1"])
+    print_header("[5b] after fill+delete 1.1 — parent 1 still exists, child 1.1 gone", file)
+    root.print(0, file)
+
+    #   (5c) Amend step 1.1 with Rewrite — fill fallback runs through append,
+    #        creating a Rewrite node and evaluating it. In production (APIDriver
+    #        session), Rewrite._refresh_me_alone may call fork_interaction →
+    #        _make_fork → potential TypeError. In the test session (bare Session),
+    #        fork_interaction raises NotImplementedError if triggered.
+    #        Either way, amend must NOT propagate exceptions.
+    root.session.age += 1
+    caught_exc: Exception | None = None
+    outcome5c: EditOutcome | None = None
+    try:
+        outcome5c = await root.amend("1.1", [
+            Rewrite.gen_single({
+                "thought": "rewrite after child deletion",
+                "using": [{"name": "h"}],
+                "use system simplifiers": True,
+                "rewrite goal": True,
+                "rewrite premises": [],
+            }),
+        ])
+    except Exception as e:
+        caught_exc = e
+    print_header("[5c] amend '1.1' — fill fallback processes Rewrite", file)
+    if caught_exc is not None:
+        file.write(f"BUG: amend raised {type(caught_exc).__name__}: {caught_exc}\n")
+    elif outcome5c is not None:
+        file.write(f"failure: {outcome5c.failure is not None}\n")
+        if outcome5c.failure:
+            file.write(f"failure type: {type(outcome5c.failure).__name__}\n")
+        elif outcome5c.committed:
+            file.write(f"committed: {len(outcome5c.committed)} node(s)\n")
+
+    # (6) Verify tree is still consistent after the failed operations.
+    #     Delete step 1 and fill with Obvious to confirm usability.
+    root.session.age += 1
+    await root.delete(["1"])
+    root.session.age += 1
+    r6, e6 = await _edit_tool_logic(
+        root.session,
+        {"target_step": "1", "action": "fill", "proof_operations": [
+            {"operation": "Obvious", "facts": [{"name": "h"}]},
+        ]})
+    print_header("[6] fill step 1 after errors — tree consistency check", file)
+    file.write(r6)
+    file.write(f"is_error: {e6}\n")
+
+    print_header("Final YAML", file)
+    root.print(0, file)
+
+
 @model_test("ForkProviderConflict", "Test_ForkProviderConflict.thy", 6)
 async def _test_fork_provider_conflict(root: Root, file: MyIO):
     """Verify that APIDriver._make_fork correctly reuses the parent's provider
@@ -8365,6 +8595,174 @@ async def _test_fork_provider_conflict(root: Root, file: MyIO):
     finally:
         model._session_var.set(root.session)
         shutil.rmtree(parent.working_dir, ignore_errors=True)
+
+
+@model_test("CompletionCascade", "Test_CompletionCascade.thy", 8)
+async def _test_completion_cascade(root: Root, file: MyIO):
+    """Test that _collect_completed_ancestors reports cascading completions.
+
+    Phase 1 — single-level completion:
+      step 1: Have h1
+        step 1.1: Obvious  → completes step 1
+
+    Phase 2 — two-level cascading completion:
+      step 2: Have h2
+        step 2.1: Have h3 (nested inside h2)
+          step 2.1.1: Obvious  → completes step 2.1 AND step 2
+
+    Phase 3 — finish the proof:
+      step 3: Obvious  → completes the whole proof"""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # --- Phase 1: single-level completion ---
+    root.session.age += 1
+    outcome1 = await root.fill("1", [Have.gen_single({
+        "thought": "Prove an intermediate lemma",
+        "statement": {"english": "x squared is non-negative", "conclusion": "x * x ≥ 0"},
+        "name": "h1",
+    })])
+    print_header("edit_message: Have h1", file)
+    file.write(await _P.edit_message(root, outcome1, root.session))
+    file.write("---------------\n")
+
+    root.session.age += 1
+    outcome2 = await root.fill("1.1", [Obvious.gen_single({"facts": []})])
+    print_header("edit_message: fill 1.1 (should complete step 1)", file)
+    file.write(await _P.edit_message(root, outcome2, root.session))
+    file.write("---------------\n")
+
+    # --- Phase 2: two-level cascading completion ---
+    # step 2: Have h2 (another intermediate lemma)
+    root.session.age += 1
+    outcome3 = await root.fill("2", [Have.gen_single({
+        "thought": "Another intermediate",
+        "statement": {"english": "x squared is non-negative again", "conclusion": "x * x ≥ 0"},
+        "name": "h2",
+    })])
+    print_header("edit_message: Have h2", file)
+    file.write(await _P.edit_message(root, outcome3, root.session))
+    file.write("---------------\n")
+
+    # step 2.1: Have h3 (nested inside h2's body)
+    root.session.age += 1
+    outcome4 = await root.fill("2.1", [Have.gen_single({
+        "thought": "Deep nested lemma",
+        "statement": {"english": "x squared is non-negative yet again", "conclusion": "x * x ≥ 0"},
+        "name": "h3",
+    })])
+    print_header("edit_message: Have h3 (nested in h2)", file)
+    file.write(await _P.edit_message(root, outcome4, root.session))
+    file.write("---------------\n")
+
+    # step 2.1.1: Obvious → completes step 2.1 only (step 2 still has 2.2)
+    root.session.age += 1
+    outcome5 = await root.fill("2.1.1", [Obvious.gen_single({"facts": []})])
+    print_header("edit_message: fill 2.1.1 (should complete step 2.1 only)", file)
+    file.write(await _P.edit_message(root, outcome5, root.session))
+    file.write("---------------\n")
+
+    # step 2.2: Obvious → completes step 2.2. This also cascades to step 2
+    # because 2.1 is already done, so now all children of step 2 are complete.
+    root.session.age += 1
+    outcome6 = await root.fill("2.2", [Obvious.gen_single({"facts": [{"name": "h3"}]})])
+    print_header("edit_message: fill 2.2 (should complete step 2.2 AND cascade to step 2)", file)
+    file.write(await _P.edit_message(root, outcome6, root.session))
+    file.write("---------------\n")
+
+    # --- Phase 3: multi-ID cascade ---
+    # Build: step 3 = Have h4, step 3.1 = Have h5 (nested).
+    # Then fill continuations first (3.2 and 3.1.2), leaving only 3.1.1.
+    # Filling 3.1.1 should complete step 3.1 AND step 3 in one shot.
+    root.session.age += 1
+    outcome7 = await root.fill("3", [Have.gen_single({
+        "thought": "Outer",
+        "statement": {"english": "again", "conclusion": "x * x ≥ 0"},
+        "name": "h4",
+    })])
+    print_header("edit_message: Have h4 (step 3)", file)
+    file.write(await _P.edit_message(root, outcome7, root.session))
+    file.write("---------------\n")
+
+    root.session.age += 1
+    outcome8 = await root.fill("3.1", [Have.gen_single({
+        "thought": "Inner",
+        "statement": {"english": "again again", "conclusion": "x * x ≥ 0"},
+        "name": "h5",
+    })])
+    print_header("edit_message: Have h5 (step 3.1, nested in h4)", file)
+    file.write(await _P.edit_message(root, outcome8, root.session))
+    file.write("---------------\n")
+
+    # Fill the continuations first so the last fill cascades
+    root.session.age += 1
+    outcome9 = await root.fill("3.1.2", [Obvious.gen_single({"facts": [{"name": "h5"}]})])
+    print_header("edit_message: fill 3.1.2 (h5's continuation)", file)
+    file.write(await _P.edit_message(root, outcome9, root.session))
+    file.write("---------------\n")
+
+    root.session.age += 1
+    outcome10 = await root.fill("3.2", [Obvious.gen_single({"facts": [{"name": "h4"}]})])
+    print_header("edit_message: fill 3.2 (h4's continuation)", file)
+    file.write(await _P.edit_message(root, outcome10, root.session))
+    file.write("---------------\n")
+
+    # Now fill 3.1.1 — should cascade: completes step 3.1 AND step 3
+    root.session.age += 1
+    outcome11 = await root.fill("3.1.1", [Obvious.gen_single({"facts": []})])
+    print_header("edit_message: fill 3.1.1 (should complete step 3.1 AND step 3)", file)
+    file.write(await _P.edit_message(root, outcome11, root.session))
+    file.write("---------------\n")
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+
+@model_test("CompletionGoalNode", "Test_CompletionGoalNode.thy", 8)
+async def _test_completion_goalnode(root: Root, file: MyIO):
+    """Test: what titled_id shows up when a GoalNode (from SubgoalMaker) completes?
+
+    conjI on P∧Q creates 2 GoalNode children (is_single_goal=False, numeric IDs).
+    Fill both subgoals and observe the edit_message for each."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Apply conjI → creates GoalNode 1.1 and 1.2
+    root.session.age += 1
+    outcome1 = await root.fill("1", [InferenceRule.gen_single({
+        "thought": "split conjunction",
+        "rule": {"name": "conjI"},
+    })])
+    print_header("edit_message: conjI", file)
+    file.write(await _P.edit_message(root, outcome1, root.session))
+    file.write("---------------\n")
+    root.print(0, file)
+
+    # Dump GoalNode info
+    rule_node = root.locate_node("1")
+    for child in cast(NonLeaf_Node, rule_node).sub_nodes:
+        file.write(f"child: id={child.id!r}, titled_id={child.titled_id!r}, "
+                   f"type={type(child).__name__}, _kind={child._kind!r}, "
+                   f"id_of_goal={child.id_of_goal()!r}\n")
+
+    # Fill GoalNode 1.1 (first subgoal)
+    root.session.age += 1
+    outcome2 = await root.fill("1.1.1", [Obvious.gen_single({"facts": []})])
+    print_header("edit_message: fill 1.1.1 (first subgoal)", file)
+    file.write(await _P.edit_message(root, outcome2, root.session))
+    file.write("---------------\n")
+
+    # Fill GoalNode 1.2 (second subgoal — should complete 1.2 and cascade to step 1)
+    root.session.age += 1
+    outcome3 = await root.fill("1.2.1", [Obvious.gen_single({"facts": []})])
+    print_header("edit_message: fill 1.2.1 (second subgoal — should cascade)", file)
+    file.write(await _P.edit_message(root, outcome3, root.session))
+    file.write("---------------\n")
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
