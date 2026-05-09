@@ -1106,23 +1106,13 @@ fun interpret_i (config as (_, _, counters)) cmd s =
             val counter = mk_counter ()
             val rule_thms = resolve_to_thms counter ctxt [rule_fact]
             val discharge_thms = resolve_to_thms counter ctxt discharge_facts
-            (* "?x" or "?x.1" specifically targets a schematic variable (parsed via
-               Lexicon.read_variable; error if not schematic);
-               bare "x" is auto-classified by inst_universal_quantifiers
-               (schematic > Pure.all > HOL.All). *)
-            val all_schematic_vars =
-                  maps (fn r => Term.add_var_names (Thm.prop_of r) []) rule_thms
             val insts' = map (fn (n, tm) =>
               if String.isPrefix "?" n then
-                let val idx = case Lexicon.read_variable n
-                      of SOME xi => xi
-                       | NONE => raise Minilang.OPR_FAIL (Minilang.INVALID_OPR,
-                                   "Specialize: cannot parse variable name " ^ quote n)
-                in if member (op =) all_schematic_vars idx then (idx, tm)
-                   else raise Minilang.OPR_FAIL (Minilang.INVALID_OPR,
-                               "Variable " ^ n ^ " is not found in the rule")
-                end
-              else ((n, 0), tm)) insts
+                case Lexicon.read_variable n of
+                  SOME xi => (Minilang_Aux.VN_IndexName xi, tm)
+                | NONE => raise Minilang.OPR_FAIL (Minilang.INVALID_OPR,
+                            "Specialize: cannot parse variable name " ^ quote n)
+              else (Minilang_Aux.VN_Name n, tm)) insts
             val facts_before = Minilang.get_local_facts s
             val s' = Minilang.SPECIALIZE'' (SOME name) rule_thms insts' discharge_thms s
                      handle ERROR msg => raise Minilang.OPR_FAIL (Minilang.INVALID_OPR,

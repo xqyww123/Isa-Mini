@@ -37,13 +37,23 @@ attribute_setup of = \<open>let
 
 
 attribute_setup "where" = \<open>let
+     val ident = Parse.token
+       (Parse.short_ident || Parse.long_ident || Parse.sym_ident || Parse.term_var ||
+         Parse.type_ident || Parse.type_var || Parse.number)
+     val var_name_parser =
+       (ident >> Token.content_of) :|-- (fn x =>
+         if String.isPrefix "?" x then
+           case Lexicon.read_variable x of
+             SOME xi => Scan.succeed (Minilang_Aux.VN_IndexName xi)
+           | NONE => Scan.fail
+         else Scan.succeed (Minilang_Aux.VN_Name x))
      fun peek parserX toks =
           let val (retX, toks') = parserX toks
            in ((Token.content_of (hd toks), retX), toks')
           end
      val named_insts =
           Parse.and_list1
-            (Parse.position Args.var -- 
+            (Parse.position var_name_parser --
                 (Args.$$$ "=" |-- peek (Parse.!!! Parse.embedded_inner_syntax) ))
             -- Parse.for_fixes
   in Scan.lift named_insts >> (fn args =>

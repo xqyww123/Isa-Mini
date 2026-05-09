@@ -7973,9 +7973,9 @@ async def _test_Rewrite_WhereBadVar(root: Root, file: MyIO):
     that doesn't match the theorem's schematics."""
     print_header("Initial YAML", file)
     root.print(0, file)
-    # Rewrite using myf.simps with WRONG variable name "n1" (actual is "n").
-    # This mirrors what happens when the LLM reads the display-renamed
-    # bound variable name from retrieval output.
+    # Rewrite using myf.simps with display-renamed variable name "n1".
+    # The schematic is actually ?n, but the printer shows ?n1 because
+    # Free n is in scope.  VN_Name "n1" should match via schematic_deconf_map.
     root.session.age += 1
     outcome = await root.fill("1", [Rewrite.gen_single({
         "thought": "Unfold outer myf with variable name from display",
@@ -7985,12 +7985,8 @@ async def _test_Rewrite_WhereBadVar(root: Root, file: MyIO):
         "rewrite goal": True,
         "rewrite premises": []
     })])
-    print_header("After Rewrite with wrong variable name", file)
+    print_header("After Rewrite with display-renamed variable", file)
     root.print(0, file)
-    if outcome.failure is not None:
-        file.write(f"FAILURE: {outcome.failure}\n")
-    else:
-        file.write("ERROR: Rewrite should have failed but succeeded\n")
 
 
 @model_test("FactByNameFlip", "Test_FactByNameFlip.thy", 10)

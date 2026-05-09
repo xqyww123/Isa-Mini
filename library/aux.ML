@@ -16,16 +16,18 @@ val xOF : bool -> Proof.context -> thm option list -> thm -> thm
 val xof : Proof.context -> string option list * string option list ->
     (binding * string option * mixfix) list -> thm -> thm
 
+datatype var_name = VN_IndexName of indexname | VN_Name of string
+
 val xwhere : Proof.context ->
-      ((indexname * Position.T) * (string * string)) list ->
+      ((var_name * Position.T) * (string * string)) list ->
         (binding * string option * mixfix) list ->
           thm -> thm
 
 val deconflict_bound_names : Proof.context -> term -> term
 
 val inst_hol_alls : Proof.context -> (string * cterm) list -> thm -> thm
-val inst_universal_quantifiers : Proof.context -> (indexname * term) list -> thm -> thm
-val inst_universal_quantifiers' : Proof.context -> (indexname * string) list -> thm -> thm
+val inst_universal_quantifiers : Proof.context -> (var_name * term) list -> thm -> thm
+val inst_universal_quantifiers' : Proof.context -> (var_name * string) list -> thm -> thm
 
 val print_toks : Token.src -> string list
 val trim_markup : string -> string
@@ -317,126 +319,85 @@ fun inst_hol_alls ctxt insts thm =
                   SOME ct => SOME ct
                 | NONE => NONE)
 
+    (* Instantiate a single outermost HOL ∀ in the conclusion using spec,
+       without bumping any schematic variable indices.
+       th has conclusion: ... ⟹ Trueprop(All(Abs(name, T, body)))
+       Result:            ... ⟹ Trueprop(body[0 := ct])              *)
+    fun spec_no_bump ct th =
+      let
+        (* Extract All(Abs(...)) from the conclusion, navigating past ⋀ and ⟹ *)
+        fun get_hol_all (Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs(_, _, b)) = get_hol_all b
+          | get_hol_all (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ b) = get_hol_all b
+          | get_hol_all (Const(\<^const_name>\<open>Trueprop\<close>, _) $
+              (all as Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs _)) = all
+          | get_hol_all t = raise TERM ("spec_no_bump: no HOL.All in conclusion", [t])
+        val all_term = get_hol_all (Thm.concl_of th)
+        val (allT, abs_body) = case all_term of
+            Const(_, allT) $ abs_body => (allT, abs_body)
+        val T = Term.domain_type (Term.domain_type allT)
+        (* Fully instantiate spec: 'a := T, ?P := abs_body, ?x := ct *)
+        val spec_inst = @{thm spec}
+          |> Thm.instantiate_beta
+              (TVars.make [((("'a", 0), \<^sort>\<open>type\<close>), Thm.ctyp_of ctxt T)],
+               Vars.make [((("P", 0), T --> \<^typ>\<open>bool\<close>), Thm.cterm_of ctxt abs_body),
+                          ((("x", 0), T), ct)])
+        (* spec_inst: Trueprop(All(abs_body)) ⟹ Trueprop(abs_body ct)
+           — fully ground, no schematics from spec remain *)
+        (* Compose: resolve spec_inst's premise using th's conclusion *)
+      in case Seq.pull (Thm.bicompose (SOME ctxt)
+              {flatten = true, match = false, incremented = false}
+              (false, th, Thm.nprems_of th) 1 spec_inst) of
+           SOME (result, _) => result
+         | NONE => raise THM ("spec_no_bump: bicompose failed", 0, [th, spec_inst])
+      end
+
   in Conv.fconv_rule (concl_conv (fn ctxt =>
           HOLogic.Trueprop_conv (swap_all alls ctxt)) ctxt) thm
-     |> fold (fn SOME ct => (fn th =>
-          th RS Drule.infer_instantiate ctxt [(("x", 0), Thm.incr_indexes_cterm 1 ct)] @{thm spec})
-               | NONE => I) alls
-     |> Drule.zero_var_indexes
+     |> fold (fn SOME ct => spec_no_bump ct | NONE => I) alls
   end
 
+datatype var_name = VN_IndexName of indexname | VN_Name of string
+
+fun display_of_indexname (x, 0) = x
+  | display_of_indexname xi = unprefix "?" (Term.string_of_vname xi)
+
 (* Rename bound variables (Abs names) to avoid clashes with free variables
-   in the term, schematic variable base names, and names declared in the
+   in the term, schematic variable display names, and names declared in the
    proof context.  Pure display utility — does not change the theorem. *)
 fun deconflict_bound_names' ctxt term =
   let
-    val free_names = Term.add_free_names term []
     val var_idxnames = Term.add_var_names term []
-    val var_display_names = map (fn xi =>
-        let val s = Term.string_of_vname' xi
-        in if String.isPrefix "?" s then unprefix "?" s else s end) var_idxnames
-    val initial_name_ctx = fold Name.declare free_names (Name.make_context [])
-                           |> fold Name.declare var_display_names
+    val var_display_names = map display_of_indexname var_idxnames
+    val initial_name_ctx = fold Name.declare var_display_names (Name.make_context [])
+    fun declare_all tab ctx = Symtab.fold (fn (n, _) => Name.declare n) tab ctx
     fun deconflict name_ctx (Abs (name, ty, body)) =
-          let val (name', name_ctx') = variant_name name name_ctx
-              val body' = deconflict name_ctx' body
-           in case (name' = name, body')
-           of (true , NONE) => NONE
-            | (true , SOME body) => SOME (Abs (name', ty, body))
-            | (false, NONE) => SOME (Abs (name', ty, body))
-            | (false, SOME body) => SOME (Abs (name', ty, body))
+          let val (body', body_names) = deconflict (Name.declare name name_ctx) body
+              val (name', _) = variant_name name (declare_all body_names name_ctx)
+              val changed = name' <> name orelse is_some body'
+              val body'' = the_default body body'
+           in (if changed then SOME (Abs (name', ty, body'')) else NONE,
+               Symtab.insert_set name' body_names)
           end
       | deconflict name_ctx (f $ x) =
-          let val f' = deconflict name_ctx f
-              val x' = deconflict name_ctx x
-           in case (f', x')
+          let val (f', f_names) = deconflict name_ctx f
+              val (x', x_names) = deconflict name_ctx x
+           in (case (f', x')
                 of (SOME f, NONE) => SOME (f $ x)
                  | (SOME f, SOME x) => SOME (f $ x)
                  | (NONE, SOME x) => SOME (f $ x)
-                 | (NONE, NONE) => NONE
+                 | (NONE, NONE) => NONE,
+               Symtab.merge (K true) (f_names, x_names))
           end
-      | deconflict _ _ = NONE
-   in deconflict initial_name_ctx term
+      | deconflict _ (Free (n, _)) = (NONE, Symtab.insert_set n Symtab.empty)
+      | deconflict _ (Var (xi, _)) = (NONE, Symtab.insert_set (display_of_indexname xi) Symtab.empty)
+      | deconflict _ _ = (NONE, Symtab.empty)
+   in #1 (deconflict initial_name_ctx term)
   end
 
 fun deconflict_bound_names ctxt term =
   case deconflict_bound_names' ctxt term
     of SOME ret => ret
      | NONE => term
-
-(* Three-tier instantiation:
-   1. All inst names are schematic variables → Rule_Insts.where_rule directly
-   2. All non-schematic inst names match display-renamed HOL ∀ bound variables
-      (via deconflict_bound_names) → map back to raw names, lift ∀, where_rule
-   3. All non-schematic inst names match original HOL ∀ bound names →
-      lift ∀, where_rule
-   Each tier is all-or-nothing: either ALL non-schematic names resolve in
-   that tier, or it falls through to the next. *)
-fun display_of_indexname (x, 0) = x
-  | display_of_indexname xi = unprefix "?" (Term.string_of_vname xi)
-
-fun xwhere ctxt inst0 fixes thm =
-  let val concl = Thm.concl_of thm
-      val vs = Term.add_var_names (Thm.prop_of thm) []
-      val inst = map (fn (idx_pos, (_, src)) => (idx_pos, src)) inst0
-
-      fun foralls (Const(\<^const_name>\<open>Trueprop\<close>, _) $ X) = foralls X
-        | foralls (Const(\<^const_name>\<open>HOL.implies\<close>, _) $ _ $ X) = foralls X
-        | foralls (Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs (name, T, X)) = (name, T) :: foralls X
-        | foralls (Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs (_, _, X)) = foralls X
-        | foralls (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ X) = foralls X
-        | foralls _ = []
-
-      val raw_hol_vars = foralls concl
-      val raw_hol_names = map fst raw_hol_vars
-
-      fun is_schematic idx = member (op =) vs idx
-      val non_schem = map_filter (fn ((xi, _), _) =>
-            if is_schematic xi then NONE
-            else SOME (display_of_indexname xi)) inst
-
-      (* Lift named HOL ∀ vars to schematics, remap inst, apply where_rule.
-         rename_map: (display_name → raw_hol_name) for non-schematic names *)
-      fun lift_and_where rename_map =
-        let val raw_names_to_lift = distinct (op =) (map snd rename_map)
-            val to_lift = map_filter (fn (name, T) =>
-                  if member (op =) raw_names_to_lift name
-                  then SOME (name, Thm.var ((name, 0), Thm.ctyp_of ctxt T))
-                  else NONE) raw_hol_vars
-            val thm' = inst_hol_alls ctxt to_lift thm
-            val inst' = map (fn entry as (((name, idx), pos), src) =>
-                  let val dn = display_of_indexname (name, idx)
-                  in case AList.lookup (op =) rename_map dn of
-                       SOME rn => (((rn, 0), pos), src)
-                     | NONE => entry
-                  end) inst
-        in Rule_Insts.where_rule ctxt inst' fixes thm' end
-   in
-      if null non_schem then
-        (* Tier 1: all names are schematics *)
-        Rule_Insts.where_rule ctxt inst fixes thm
-      else let
-        (* Decide: do the non-schematic names match display-renamed or raw HOL ∀ names? *)
-        val display_hol_names = map fst (foralls (deconflict_bound_names ctxt concl))
-        val use_display = forall (member (op =) display_hol_names) non_schem
-        val use_raw     = forall (member (op =) raw_hol_names) non_schem
-      in
-        if use_display then
-          (* Tier 2: map display names → raw names *)
-          let val display_to_raw = ListPair.mapEq
-                    (fn (dn, (rn, _)) => (dn, rn))
-                    (display_hol_names, raw_hol_vars)
-              val rename_map = map (fn n =>
-                    (n, the (AList.lookup (op =) display_to_raw n))) non_schem
-          in lift_and_where rename_map end
-        else if use_raw then
-          (* Tier 3: use original names directly *)
-          lift_and_where (map (fn n => (n, n)) non_schem)
-        else
-          (* No tier matches — let standard where_rule produce the error *)
-          Rule_Insts.where_rule ctxt inst fixes thm
-      end
-  end
 
 (* Instantiate universal quantifiers and schematic variables in a theorem by name.
    Handles three kinds of variables:
@@ -448,6 +409,18 @@ fun xwhere ctxt inst0 fixes thm =
 fun inst_universal_quantifiers ctxt insts thm =
   let
     val prop = Thm.prop_of thm
+
+    (* === Bump schematic indices in value terms to avoid capture ===
+       If any value term contains schematic variables, bump their indices
+       above the theorem's maxidx so they can't collide with the theorem's
+       own schematics during multi-phase instantiation. *)
+    val value_vars = fold (Term.add_vars o snd) insts []
+    val offset = if null value_vars then 0
+                 else Thm.maxidx_of thm + 1
+    val insts = if offset = 0 then insts
+                else map (fn (vn, t) => (vn, Logic.incr_indexes ([], offset) t)) insts
+    val bumped_vars = if offset = 0 then []
+                      else map (fn ((n, i), T) => ((n, i + offset), T)) value_vars
 
     (* === Classification === *)
 
@@ -470,41 +443,72 @@ fun inst_universal_quantifiers ctxt insts thm =
       | strip_hol_alls _ = []
     val hol_all_vars = strip_hol_alls (get_body prop)
 
-    (* Build name mappings: display_name → raw_name for bound vars.
-       Covers both raw names (identity) and display-renamed names
-       (via deconflict_bound_names). *)
+    (* Build name mappings, split into display and raw layers for VN_Name priority. *)
     val deconf_prop = deconflict_bound_names ctxt prop
     val display_pure_names = map fst (strip_pure_alls deconf_prop)
     val display_hol_names = map fst (strip_hol_alls (get_body deconf_prop))
-    val pure_name_map =
-        ListPair.zip (display_pure_names, map fst pure_all_vars) @
-        map (fn (n, _) => (n, n)) pure_all_vars
-        |> distinct (eq_fst (op =))
-    val hol_name_map =
-        ListPair.zip (display_hol_names, map fst hol_all_vars) @
-        map (fn (n, _) => (n, n)) hol_all_vars
-        |> distinct (eq_fst (op =))
+    val pure_display_map = ListPair.zip (display_pure_names, map fst pure_all_vars)
+    val hol_display_map = ListPair.zip (display_hol_names, map fst hol_all_vars)
+    val pure_raw_map = map (fn (n, _) => (n, n)) pure_all_vars
+    val hol_raw_map = map (fn (n, _) => (n, n)) hol_all_vars
+    (* Merged map for VN_IndexName (display entries first for priority) *)
+    val pure_name_map = pure_display_map @ pure_raw_map |> distinct (eq_fst (op =))
+    val hol_name_map = hol_display_map @ hol_raw_map |> distinct (eq_fst (op =))
 
-    fun classify ((idx, t)) =
-      let val dn = display_of_indexname idx
-      in if exists (fn (idx', _) => idx = idx') schematic_vars
-         then (1, idx, t)
-         else case AList.lookup (op =) pure_name_map dn of
-                SOME _ => (2, idx, t)
-              | NONE => case AList.lookup (op =) hol_name_map dn of
-                          SOME _ => (3, idx, t)
-                        | NONE => error ("Variable " ^ Term.string_of_vname idx ^
-                                         " is not found in the rule")
-      end
+    (* Deconflicted schematic display names: the printer renames schematics to
+       avoid context-fixed names and term Frees.  Replicate that here so that
+       VN_Name can match what the agent actually sees. *)
+    val sch_taken = fold (Name.declare o fst) (Term.add_frees prop [])
+                         (Variable.names_of ctxt)
+    val (_, schematic_deconf_map) = fold (fn ((n, i), _) => fn (ctx, acc) =>
+        let val dn = display_of_indexname (n, i)
+            val (dn', ctx') = variant_name dn ctx
+        in (ctx', if dn' = dn then acc else (dn', (n, i)) :: acc) end
+      ) schematic_vars (sch_taken, [])
 
-    val classified = map classify insts
-    val schematic_insts = map_filter (fn (1, idx, t) => SOME (idx, t) | _ => NONE) classified
-    val pure_insts = map_filter (fn (2, idx, t) =>
-        SOME (the (AList.lookup (op =) pure_name_map (display_of_indexname idx)), t)
-      | _ => NONE) classified
-    val hol_insts = map_filter (fn (3, idx, t) =>
-        SOME (the (AList.lookup (op =) hol_name_map (display_of_indexname idx)), t)
-      | _ => NONE) classified
+    (* Resolve a var_name to (phase, key) where
+       phase 1 key = indexname (schematic), phase 2/3 key = string (raw bound name) *)
+    datatype resolved = R_Schematic of indexname | R_Pure of string | R_HOL of string
+
+    fun resolve (VN_IndexName idx) =
+          if exists (fn (idx', _) => idx = idx') schematic_vars
+          then R_Schematic idx
+          else let val dn = display_of_indexname idx
+               in case AList.lookup (op =) pure_name_map dn of
+                    SOME raw => R_Pure raw
+                  | NONE => case AList.lookup (op =) hol_name_map dn of
+                              SOME raw => R_HOL raw
+                            | NONE => error ("Variable " ^ Term.string_of_vname idx ^
+                                             " is not found in the rule")
+               end
+      | resolve (VN_Name name) =
+          (* Priority: deconflicted bound display → schematic (deconf then raw) → original bound *)
+          case AList.lookup (op =) pure_display_map name of
+            SOME raw => R_Pure raw
+          | NONE =>
+          case AList.lookup (op =) hol_display_map name of
+            SOME raw => R_HOL raw
+          | NONE =>
+          case AList.lookup (op =) schematic_deconf_map name of
+            SOME idx => R_Schematic idx
+          | NONE =>
+          case find_first (fn ((n, i), _) => display_of_indexname (n, i) = name) schematic_vars of
+            SOME (idx, _) => R_Schematic idx
+          | NONE =>
+          case AList.lookup (op =) pure_raw_map name of
+            SOME raw => R_Pure raw
+          | NONE =>
+          case AList.lookup (op =) hol_raw_map name of
+            SOME raw => R_HOL raw
+          | NONE => error ("Variable " ^ quote name ^ " is not found in the rule")
+
+    val (schematic_insts, pure_insts, hol_insts) =
+      fold_rev (fn (vn, t) => fn (si, pi, hi) =>
+        case resolve vn of
+          R_Schematic idx => ((idx, t) :: si, pi, hi)
+        | R_Pure raw => (si, (raw, t) :: pi, hi)
+        | R_HOL raw => (si, pi, (raw, t) :: hi)
+      ) insts ([], [], [])
 
     (* === Phase 1: Instantiate outermost Pure.all variables === *)
     fun inst_pure insts thm =
@@ -531,9 +535,7 @@ fun inst_universal_quantifiers ctxt insts thm =
                         \variable:\n  " ^
                         String.translate (fn #"\n" => "\n  " | c => str c) msg)
 
-    (* === Phase 2: Instantiate schematic variables ===
-       Must happen before HOL.All phase, because inst_hol_alls uses RS which
-       bumps schematic variable indices. *)
+    (* === Phase 2: Instantiate schematic variables === *)
     fun inst_schematic insts thm =
       if null insts then thm
       else let
@@ -562,14 +564,47 @@ fun inst_universal_quantifiers ctxt insts thm =
                         \variable:\n  " ^
                         String.translate (fn #"\n" => "\n  " | c => str c) msg)
 
-  in thm3 end
+    (* === Unbump: restore original indices of value schematics === *)
+    val thm4 = if offset = 0 then thm3
+               else let
+                 val result_vars = Term.add_vars (Thm.prop_of thm3) []
+                 val unbump = map_filter (fn ((n, i), T) =>
+                     if exists (fn ((n', i'), T') => n = n' andalso i = i' andalso T = T')
+                              result_vars
+                     then SOME (((n, i), T), Thm.cterm_of ctxt (Var ((n, i - offset), T)))
+                     else NONE) bumped_vars
+               in if null unbump then thm3
+                  else Thm.instantiate (TVars.empty, Vars.make unbump) thm3
+               end
+
+  in thm4 end
 
 fun inst_universal_quantifiers' ctxt insts thm =
-  let val (idxs, raws) = ListPair.unzip insts
+  let val (vns, raws) = ListPair.unzip insts
       val terms = Syntax.read_terms (Proof_Context.set_mode Proof_Context.mode_pattern ctxt) raws
-   in inst_universal_quantifiers ctxt (idxs ~~ terms) thm
+   in inst_universal_quantifiers ctxt (vns ~~ terms) thm
   end
 
+fun xwhere ctxt inst0 fixes thm =
+  let
+    val raw_insts = map (fn ((vn, _), (_, src)) => (vn, src)) inst0
+    val (vns, ss) = ListPair.unzip raw_insts
+
+    (* Build eigen-context: declare theorem's tvars/vars for type inference,
+       then add user fixes from the `for` clause. *)
+    val tvars = TVars.build (Thm.fold_terms {hyps = false} TVars.add_tvars thm)
+    val vars = Vars.build (Thm.fold_terms {hyps = false} Vars.add_vars thm)
+    val (_, ctxt1) = ctxt
+      |> TVars.fold (Variable.declare_internal o Logic.mk_type o TVar o #1) tvars
+      |> Vars.fold (Variable.declare_internal o Var o #1) vars
+      |> Proof_Context.add_fixes_cmd fixes
+
+    val ts = Syntax.read_terms
+      (Proof_Context.set_mode Proof_Context.mode_pattern ctxt1) ss
+      |> Variable.export_terms ctxt1 ctxt
+
+    val insts = vns ~~ ts
+  in inst_universal_quantifiers ctxt insts thm end
 
 
 fun print_toks [] = []

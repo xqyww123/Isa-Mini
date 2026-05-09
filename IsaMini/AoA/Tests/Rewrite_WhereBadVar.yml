@@ -8,13 +8,22 @@ goal: myf (myf n) = n + (2 :: nat)
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
-After Rewrite with wrong variable name
+After Rewrite with display-renamed variable
 --------------------------------------------------
 variables:
   - n: nat
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: myf (myf n) = n + (2 :: nat)
-proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
-FAILURE: Cannot fill a node with id 1
-No such variable in theorem: "?n1"
+proof:
+  - step id: 1
+    thought: Unfold outer myf with variable name from display
+    operation: Rewrite
+    using:
+      - myf.simps[where n1 = ‹myf n›]: myf ?n = ?n + (1 :: nat)
+    targets:
+      - the goal
+    goal changes into:
+      myf n + (1 :: nat) = n + (2 :: nat)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  myf n + (1 :: nat) = n + (2 :: nat)

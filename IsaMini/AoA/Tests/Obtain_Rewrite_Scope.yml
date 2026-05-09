@@ -6,12 +6,12 @@ variables:
   - P: 'a ⇒ bool
   - m: nat
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: (∃(k1 :: nat). k1 = m) ⟶ P k
+goal: (∃(k :: nat). k = m) ⟶ P k
 proof:
   - step id: 1
     operation: Intro
     assuming premises:
-      - premise0: ∃(k1 :: nat). k1 = m
+      - premise0: ∃(k :: nat). k = m
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   P k
@@ -23,12 +23,12 @@ variables:
   - P: 'a ⇒ bool
   - m: nat
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: (∃(k1 :: nat). k1 = m) ⟶ P k
+goal: (∃(k :: nat). k = m) ⟶ P k
 proof:
   - step id: 1
     operation: Intro
     assuming premises:
-      - premise0: ∃(k1 :: nat). k1 = m
+      - premise0: ∃(k :: nat). k = m
   - step id: 2
     thought: unpack the existential
     operation: Obtain
@@ -55,12 +55,12 @@ variables:
   - P: 'a ⇒ bool
   - m: nat
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: (∃(k1 :: nat). k1 = m) ⟶ P k
+goal: (∃(k :: nat). k = m) ⟶ P k
 proof:
   - step id: 1
     operation: Intro
     assuming premises:
-      - premise0: ∃(k1 :: nat). k1 = m
+      - premise0: ∃(k :: nat). k = m
   - step id: 2
     thought: unpack the existential
     operation: Obtain

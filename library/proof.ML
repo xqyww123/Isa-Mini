@@ -219,8 +219,8 @@ val INST_VAR : (indexname * string) list -> operation
 val INST_VAR'' : (indexname * term) list -> operation
 val INST_VAR_CMD : command
 
-val SPECIALIZE   : string option -> fact list -> (indexname * string) list -> fact list -> operation
-val SPECIALIZE'' : string option -> thm list  -> (indexname * term) list   -> thm list  -> operation
+val SPECIALIZE   : string option -> fact list -> (Minilang_Aux.var_name * string) list -> fact list -> operation
+val SPECIALIZE'' : string option -> thm list  -> (Minilang_Aux.var_name * term) list   -> thm list  -> operation
 val SPECIALIZE_CMD : command
 
 val CONSIDER : (
@@ -3578,24 +3578,37 @@ fun gen_SPECIALIZE prep_thms prep_insts opt_name raw_rules raw_insts raw_facts =
   timed_OPR 8 (SPECIALIZE' prep_thms prep_insts opt_name raw_rules raw_insts raw_facts)
 
 fun read_inst_terms ctxt raw_insts =
-  let val (idxs, raws) = ListPair.unzip raw_insts
+  let val (vns, raws) = ListPair.unzip raw_insts
       val terms = Syntax.read_terms (Proof_Context.set_mode Proof_Context.mode_pattern ctxt) raws
-   in idxs ~~ terms end
+   in vns ~~ terms end
 
 val SPECIALIZE   = gen_SPECIALIZE Attrib.eval_thms read_inst_terms
 val SPECIALIZE'' = gen_SPECIALIZE (K I) (K I)
 
+local
+  val ident = Parse.token
+    (Parse.short_ident || Parse.long_ident || Parse.sym_ident || Parse.term_var ||
+      Parse.type_ident || Parse.type_var || Parse.number)
+  val var_name_parser =
+    (ident >> Token.content_of) :|-- (fn x =>
+      if String.isPrefix "?" x then
+        case Lexicon.read_variable x of
+          SOME xi => Scan.succeed (Minilang_Aux.VN_IndexName xi)
+        | NONE => Scan.fail
+      else Scan.succeed (Minilang_Aux.VN_Name x))
+in
 val SPECIALIZE_CMD =
   let open Parse
       val where_clause =
         Scan.optional (($$$ "where" || $$$ "WHERE")
-          |-- and_list1 (Args.var --| Args.$$$ "=" -- term)) []
+          |-- and_list1 (var_name_parser --| Args.$$$ "=" -- term)) []
       val with_clause =
         Scan.optional (($$$ "with" || $$$ "WITH") |-- thms1) []
    in Scan.option (name --| $$$ ":") -- thms1 -- where_clause -- with_clause
       >> (fn (((opt_name, rules), insts), facts) =>
             SPECIALIZE opt_name rules insts facts)
   end
+end
 
 (** CONSIDER **)
 
