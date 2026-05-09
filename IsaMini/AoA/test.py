@@ -8327,14 +8327,12 @@ async def _test_AttachProofInheritsIntoSubgoalMaker(root: Root, file: MyIO):
 
 @model_test("ForkProviderConflict", "Test_ForkProviderConflict.thy", 6)
 async def _test_fork_provider_conflict(root: Root, file: MyIO):
-    """Reproduce crash: APIDriver._make_fork passes provider= kwarg to subclass
-    __init__ which also constructs its own provider and forwards both to
-    super().__init__() → TypeError: multiple values for keyword argument 'provider'.
+    """Verify that APIDriver._make_fork correctly reuses the parent's provider
+    via the explicit provider= parameter in subclass __init__, rather than
+    creating a throwaway provider that conflicts with the one passed by _make_fork.
 
-    All concrete APIDriver subclasses (ChatGPT, Claude, Gemini, K2Think) have the
-    same __init__ pattern and are affected.  Uses a mock to avoid needing real
-    API keys."""
-    from .driver_api import APIDriver, Provider, ProviderResponse, AssistantMsg
+    Uses a mock subclass to avoid needing real API keys."""
+    from .driver_api import APIDriver, Provider
     import shutil
 
     class MockProvider(Provider):
@@ -8342,24 +8340,28 @@ async def _test_fork_provider_conflict(root: Root, file: MyIO):
         def context_window(self): return 1000
         @property
         def model_name(self): return "mock"
-        def pricing(self): return {"input": 0, "cached": 0, "output": 0}
+        def pricing(self): return {"input": 0.0, "cached": 0.0, "output": 0.0}
         def format_tools(self, tool_info): return []
         async def chat(self, messages, tools): raise NotImplementedError
         def format_assistant_msg(self, response): raise NotImplementedError
 
-    class BuggySubDriver(APIDriver):
+    class TestSubDriver(APIDriver):
         """Mirrors the __init__ pattern of all concrete APIDriver subclasses."""
-        def __init__(self, *args, argument=None, **kwargs):
-            provider = MockProvider()
+        def __init__(self, *args, provider: Provider | None = None,
+                     argument=None, **kwargs):
+            if provider is None:
+                provider = MockProvider()
             super().__init__(*args, provider=provider, **kwargs)
 
-    parent = BuggySubDriver()
+    parent = TestSubDriver()
+    parent.root = None  # normally set by initialize(); fork just copies it
     model._session_var.set(None)
     try:
-        fork = BuggySubDriver._make_fork(parent)
-        file.write("BUG: _make_fork should have raised TypeError\n")
+        fork = TestSubDriver._make_fork(parent)
+        file.write(f"_make_fork succeeded\n")
+        file.write(f"fork reuses parent provider: {fork._provider is parent._provider}\n")
     except TypeError as e:
-        file.write(f"Caught expected TypeError: {e}\n")
+        file.write(f"BUG: _make_fork raised TypeError: {e}\n")
     finally:
         model._session_var.set(root.session)
         shutil.rmtree(parent.working_dir, ignore_errors=True)
