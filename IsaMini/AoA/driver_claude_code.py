@@ -192,7 +192,7 @@ class ClaudeCode(Session):
             )
 
     async def run(self):
-        self.log_AoA_opr(f"Working directory: {self.working_dir}, Log directory: {self.log_dir}")
+        self.log_AoA_opr(f"Driver {self}, Working directory: {self.working_dir}, Log directory: {self.log_dir}")
         await self._run_with_retry()
 
     async def interrupt(self):

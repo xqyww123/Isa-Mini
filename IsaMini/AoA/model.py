@@ -7551,6 +7551,7 @@ class Session:
 
     # class variables
     Driver: dict[str, 'SessionConstructor'] = {}
+    _driver_name: ClassVar[str] = ""
 
     def __init__(self, logger: logging.Logger | None = None, log_dir: str | Path = "",
                  parent: 'Session | None' = None,
@@ -7654,6 +7655,9 @@ class Session:
     @property
     def is_major(self) -> bool:
         return self.parent is None
+
+    def __str__(self) -> str:
+        return self._driver_name
 
     def _setup_log_directory(self, log_dir: str | Path):
         """
@@ -8126,6 +8130,8 @@ def agent_driver(name : str):
     """Register a Session constructor (class or factory function) under ``name``."""
     def decorator[T: Type[Session] | SessionConstructor](constructor: T) -> T:
         Session.Driver[name] = constructor
+        if isinstance(constructor, type) and issubclass(constructor, Session):
+            constructor._driver_name = name  # type: ignore[attr-defined]
         return constructor
     return decorator
 

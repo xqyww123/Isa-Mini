@@ -45,6 +45,9 @@ class OpenAI_Driver(Session):
     _fork_counter: int
     _fork_name: str
 
+    def __str__(self) -> str:
+        return f"{self._driver_name}({self._model})"
+
     def __init__(self, *args, parent: 'OpenAI_Driver | None' = None,
                  model: str | None = None, argument: str | None = None, **kwargs):
         super().__init__(*args, parent=parent, **kwargs)
@@ -111,7 +114,7 @@ class OpenAI_Driver(Session):
                 self.debug_info(f"[CLEANUP] Failed to remove temporary directory {self.working_dir}: {e}")
 
     async def run(self):
-        self.log_AoA_opr(f"Working directory: {self.working_dir}, Log directory: {self.log_dir}")
+        self.log_AoA_opr(f"Driver {self}, Working directory: {self.working_dir}, Log directory: {self.log_dir}")
         await self._run_with_retry()
 
     async def interrupt(self):

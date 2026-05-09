@@ -944,6 +944,9 @@ class APIDriver(Session):
     _fork_counter: int
     _fork_name: str
 
+    def __str__(self) -> str:
+        return f"{self._driver_name}({self._provider.model_name})"
+
     def __init__(self, *args, provider: Provider,
                  parent: 'APIDriver | None' = None, **kwargs):
         super().__init__(*args, parent=parent, **kwargs)
@@ -987,7 +990,7 @@ class APIDriver(Session):
         self._executor = ToolExecutor(self)
 
     async def run(self):
-        self.log_AoA_opr(f"Working directory: {self.working_dir}, Log directory: {self.log_dir}")
+        self.log_AoA_opr(f"Driver {self}, Working directory: {self.working_dir}, Log directory: {self.log_dir}")
         await self._run_with_retry()
 
     async def interrupt(self):
