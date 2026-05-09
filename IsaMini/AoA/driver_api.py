@@ -1166,6 +1166,7 @@ class APIDriver(Session):
             self.initial_prompt() + "\n\nPrevious progress:\n" + summary))
         new_messages.extend(recent_messages)
         self.log_AoA_opr(f"Compacted. Summary: {summary[:200]}...")
+        self._log_meta("COMPACTION", summary=summary)
         return new_messages
 
     # ------------------------------------------------------------------
@@ -1279,6 +1280,11 @@ class APIDriver(Session):
         self.total_output_tokens += usage.output_tokens
         self.total_cache_read_input_tokens += usage.cached_tokens
         self.total_cache_creation_input_tokens += usage.cache_creation_tokens
+        self._log_meta("USAGE",
+                       input_tokens=usage.input_tokens,
+                       output_tokens=usage.output_tokens,
+                       cached_tokens=usage.cached_tokens,
+                       cache_creation_tokens=usage.cache_creation_tokens)
 
     def _compute_cost(self):
         p = self._provider.pricing()

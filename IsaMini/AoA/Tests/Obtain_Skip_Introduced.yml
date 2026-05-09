@@ -38,7 +38,7 @@ proof:
 --------------------------------------------------
 Quickview
 --------------------------------------------------
-step 1: Intro (line 0)
+step 1: Intro (line 6)
   assuming premises:
     - premise0: ∃(k :: nat). k = m
 step 2: Obtain k (line 0)

@@ -26,7 +26,7 @@ proof:
 --------------------------------------------------
 Quickview (should show x in subgoal context)
 --------------------------------------------------
-step 1: Intro (line 0)
+step 1: Intro (line 7)
   fixing variables:
     - x: nat
 step 2: SplitConjs (line 0)

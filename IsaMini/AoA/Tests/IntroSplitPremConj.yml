@@ -44,7 +44,7 @@ pending proof goal:
 --------------------------------------------------
 Overview
 --------------------------------------------------
-step 1: Intro (line 0)
+step 1: Intro (line 27)
   assuming premises:
     - premise0(1): A
     - premise0(2): B

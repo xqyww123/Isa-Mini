@@ -457,6 +457,19 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
                 return (error_msg, True)
             line_num = node.line
         except NodeNotFound:
+            yaml_path_fb: str | None = getattr(session, "YAML_path", None)
+            if yaml_path_fb is not None:
+                try:
+                    with open(yaml_path_fb, encoding="utf-8") as f:
+                        fb_lines = f.readlines()
+                    if len(fb_lines) <= 40:
+                        result = (f"WARNING: Step '{step_id}' doesn't exist.\n"
+                                  f"[Line 1-{len(fb_lines)}]\n"
+                                  + "".join(fb_lines))
+                        session.log_tool_response(_tn, result)
+                        return (result, False)
+                except FileNotFoundError:
+                    pass
             error_msg = f"Step '{step_id}' doesn't exist. Read the proof by line number instead."
             session.log_tool_response(_tn, f"ERROR: {error_msg}")
             return (error_msg, True)

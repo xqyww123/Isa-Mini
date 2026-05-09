@@ -98,7 +98,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   .tab-content .log-OPERATION_ERROR {{ color: #f44747; }}
   .tab-content .log-DEBUG {{ color: #666; }}
   .tab-content .log-INTERACTION {{ color: #ce9178; }}
-  .tab-content .log-RETRY {{ color: #d7ba7d; }}
+  .tab-content .log-PROMPT {{ color: #d7ba7d; }}
   .tab-content .retrieval-entry {{ margin: 6px 0; }}
   .tab-content .retrieval-query {{ color: #dcdcaa; font-weight: bold; }}
   .tab-content .retrieval-result {{ color: #4ec9b0; margin-left: 16px; }}

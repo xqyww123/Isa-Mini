@@ -263,6 +263,7 @@ class ClaudeCode(Session):
         self.seen_opaque_note = False
         self.root.session.showed_suffices_notice = False
         self.showed_fill_hint = False
+        self._log_meta("COMPACTION")
         return {}
 
     async def permission_control(
@@ -693,6 +694,9 @@ class ClaudeCode(Session):
             self.total_output_tokens += message.usage.get("output_tokens", 0)
             self.total_cache_creation_input_tokens += message.usage.get("cache_creation_input_tokens", 0)
             self.total_cache_read_input_tokens += message.usage.get("cache_read_input_tokens", 0)
+            self._log_meta("USAGE",
+                           total_cost_usd=message.total_cost_usd,
+                           **(message.usage or {}))
 
     async def fork_interaction(self, interaction: Interaction) -> Any:
         """Spawn a sub-agent to answer ``interaction`` and return its result.

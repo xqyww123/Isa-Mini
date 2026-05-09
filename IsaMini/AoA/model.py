@@ -2964,14 +2964,17 @@ class Node(ABC):
             for name, trm in fixed_facts.items():
                 print_indent(indent+1, file)
                 file.write(f"- {name.unicode}: {trm.unicode}\n")
-    def _warn_discarded_nodes(self, discarded_nodes: list['Node'], msg: str, position: Warning.Position) -> None:
+    def _warn_discarded_nodes(self, discarded_nodes: list['Node'], position: Warning.Position) -> None:
         ids = [node.titled_id for node in discarded_nodes]
+        n = len(discarded_nodes)
+        noun = "proof step" if n == 1 else "proof steps"
+        verb = "has" if n == 1 else "have"
+        msg = (f"Due to changes in the proof structure, "
+               f"previous {noun} {string_of_and_list(ids)} {verb} been discarded")
         def printer(indent: int, file: MyIO) -> int:
             print_indent(indent, file)
             file.write('- ')
             file.write(msg)
-            file.write(': ')
-            file.write(', '.join(ids))
             file.write('\n')
             return indent
         self.warnings.append(Warning(position, printer))
@@ -3208,9 +3211,7 @@ class NonLeaf_Node(Node):
                 if discarded_nodes:
                     self._warn_discarded_nodes(
                         discarded_nodes,
-                        f"Due to the change of the proof node {child.id}, the following nodes are truncated",
-                        Warning.Position.FOOTER
-                    )
+                        Warning.Position.FOOTER)
                 return
         raise InternalError("The target node is not my children")
     async def _refresh_footer(self) -> FailureReason | None:
@@ -3917,12 +3918,8 @@ class StdBlock(NonLeaf_Node):
                         child.parent = last
                     last.sub_nodes.extend(inherited)
                 else:
-                    noun = "sub-proof" if len(inherited) == 1 else "sub-proofs"
-                    verb = "has" if len(inherited) == 1 else "have"
                     self._warn_discarded_nodes(
                         inherited,
-                        f"The edit changed the proof structure; "
-                        f"a previous {noun} {verb} been discarded",
                         Warning.Position.FOOTER)
             return None
         if (auto_intro
@@ -4275,8 +4272,6 @@ class SubgoalMaker(GoalContainer, StdBlock):
         elif isinstance(old, NonLeaf_Node) and old.sub_nodes:
             self._warn_discarded_nodes(
                 list(old.sub_nodes),
-                "Amending to a different proof structure; previous child "
-                "proofs cannot be carried over and have been dropped",
                 Warning.Position.HEADER,
             )
             old.sub_nodes.clear()
@@ -4386,8 +4381,6 @@ class SubgoalMaker(GoalContainer, StdBlock):
         if discarded:
             parent._warn_discarded_nodes(
                 discarded,
-                "Discarded because the operation's body terminates "
-                "the proof; no sibling should follow",
                 Warning.Position.FOOTER)
 
     async def _splice_body(self, body: 'proof', my_idx: int) -> None:
@@ -4559,7 +4552,6 @@ class SubgoalMaker(GoalContainer, StdBlock):
                 if self.sub_nodes:
                     self._warn_discarded_nodes(
                         list(self.sub_nodes),
-                        "Due to changes in this operation's subgoal structure, the following previously held proof steps are discarded",
                         Warning.Position.FOOTER)
                 self.sub_nodes = []
                 ml_state = await s0.clone(None)
@@ -4572,7 +4564,6 @@ class SubgoalMaker(GoalContainer, StdBlock):
             if self.sub_nodes:
                 self._warn_discarded_nodes(
                     list(self.sub_nodes),
-                    "Since this operation no longer opens a proof block, the following previously held proof steps are discarded",
                     Warning.Position.FOOTER)
                 self.sub_nodes = []
             # Re-open the parent iff the parent is currently closed (by any
@@ -7554,6 +7545,9 @@ class Session:
     interaction_log_file: Any | None  # File handle for interaction.yaml
     proofs_log_file: Any | None       # File handle for proofs.yaml
     proof_oprs_log_file: Any | None   # File handle for proof_oprs.yaml
+    meta_log_path: Path | None
+    _meta_log_file: Any | None        # Raw file handle for meta.jsonl.zst
+    _meta_log_writer: Any | None      # zstandard stream writer
 
     # class variables
     Driver: dict[str, 'SessionConstructor'] = {}
@@ -7637,6 +7631,10 @@ class Session:
             self.proofs_log_file = parent.proofs_log_file
             self.proof_oprs_log_file = parent.proof_oprs_log_file
             self.retrieval_log_file = parent.retrieval_log_file
+            # Forks share meta writer; asyncio-concurrent (single thread), no lock needed
+            self.meta_log_path = parent.meta_log_path
+            self._meta_log_file = parent._meta_log_file
+            self._meta_log_writer = parent._meta_log_writer
         else:
             self.log_dir = None
             self.interaction_log_path = None
@@ -7647,6 +7645,9 @@ class Session:
             self.proofs_log_file = None
             self.proof_oprs_log_file = None
             self.retrieval_log_file = None
+            self.meta_log_path = None
+            self._meta_log_file = None
+            self._meta_log_writer = None
             if log_dir != "":
                 self._setup_log_directory(log_dir)
 
@@ -7703,6 +7704,17 @@ class Session:
         self.proof_oprs_log_file = open(self.proof_oprs_log_path, 'a', encoding='utf-8')
         self.retrieval_log_file = open(self.retrieval_log_path, 'a', encoding='utf-8')
 
+        # Open compressed meta log
+        import zstandard
+        self.meta_log_path = self.log_dir / "meta.jsonl.zst"
+        self._meta_log_file = open(self.meta_log_path, 'ab')
+        self._meta_log_writer = zstandard.ZstdCompressor(level=3).stream_writer(
+            self._meta_log_file, closefd=False, write_return_read=False)
+
+        import atexit
+        self._atexit_registered = True
+        atexit.register(self._atexit_close_meta)
+
         # Write initial session start markers
         session_start = {
             "event": "SESSION_START",
@@ -7712,6 +7724,7 @@ class Session:
         self._append_yaml(self.proofs_log_file, session_start)
         self._append_yaml(self.proof_oprs_log_file, session_start)
         self._append_yaml(self.retrieval_log_file, session_start)
+        self._log_meta("SESSION_START")
 
     def _append_yaml(self, file_handle: Any, data: dict[str, Any]):
         """
@@ -7734,6 +7747,28 @@ class Session:
                   width=120,        # Wider lines for readability
                   indent=2)         # Standard indentation
         file_handle.flush()  # Ensure data is written immediately
+
+    def _log_meta(self, event_type: str, **data):
+        """Append one JSON line to meta.jsonl.zst and flush immediately."""
+        if self._meta_log_writer is None:
+            return
+        import zstandard
+        entry = {"event": event_type, "ts": datetime.now().isoformat(), **data}
+        line = json.dumps(entry, ensure_ascii=False, default=str) + "\n"
+        self._meta_log_writer.write(line.encode("utf-8"))
+        self._meta_log_writer.flush(zstandard.FLUSH_FRAME)
+
+    def _atexit_close_meta(self):
+        """Safety net: close meta writer on interpreter exit."""
+        try:
+            if self._meta_log_writer is not None:
+                self._meta_log_writer.close()
+                self._meta_log_writer = None
+            if self._meta_log_file is not None:
+                self._meta_log_file.close()
+                self._meta_log_file = None
+        except Exception:
+            pass
 
     async def __aenter__(self) -> 'Session':
         """Enter the runtime context for this session."""
@@ -7837,6 +7872,17 @@ class Session:
                 self._append_yaml(self.retrieval_log_file, session_end)
                 self.retrieval_log_file.close()
                 self.retrieval_log_file = None
+            if self._meta_log_writer is not None:
+                self._log_meta("SESSION_END")
+                self._meta_log_writer.close()
+                self._meta_log_writer = None
+            if self._meta_log_file is not None:
+                self._meta_log_file.close()
+                self._meta_log_file = None
+            if getattr(self, '_atexit_registered', False):
+                import atexit
+                atexit.unregister(self._atexit_close_meta)
+                self._atexit_registered = False
 
         # Clean up the context session reference
         try:
@@ -7851,6 +7897,10 @@ class Session:
         self.root = root
         self.working_block = root
         await root._refresh_me_alone(auto_intro=True)
+        sp = self.system_prompt()
+        if sp is not None:
+            self._log_meta("SYS_PROMPT", text=sp)
+        self._log_meta("PROMPT", subtype="initial", text=self.initial_prompt())
 
     def retrieval_state(self) -> Minilang_State:
         if self.working_block is not None:
@@ -7874,6 +7924,7 @@ class Session:
                 **data
             }
             self._append_yaml(log_file_handle, log_entry)
+        self._log_meta(event_type, **data)
         if self.logger is not None and debug_messages is not None:
             for msg in debug_messages():
                 self.logger.debug(msg)
@@ -7929,11 +7980,12 @@ class Session:
     def log_retry(self, unfinished_nodes: set[Any], retry_prompt: str):
         """Log retry attempt to interaction.yaml."""
         node_ids = [str(node.id) for node in unfinished_nodes]
-        self._log(self.interaction_log_file, "RETRY",
-                  lambda: [f"[RETRY] Unfinished nodes: {[node.id for node in unfinished_nodes]}",
-                           f"[RETRY] Prompt: {retry_prompt}"],
-                  unfinished_nodes=node_ids,
-                  retry_prompt=retry_prompt)
+        self._log(self.interaction_log_file, "PROMPT",
+                  lambda: [f"[PROMPT] Unfinished nodes: {[node.id for node in unfinished_nodes]}",
+                           f"[PROMPT] {retry_prompt}"],
+                  subtype="retry",
+                  text=retry_prompt,
+                  unfinished_nodes=node_ids)
 
     def log_budget_exhausted(self, reason: str):
         self._log(self.interaction_log_file, "BUDGET_EXHAUSTED",

@@ -359,7 +359,13 @@ class OpenAI_Driver(Session):
             u: Usage = response.usage
             s.total_input_tokens += u.input_tokens
             s.total_output_tokens += u.output_tokens
+            cached = 0
             if u.input_tokens_details:
-                s.total_cache_read_input_tokens += u.input_tokens_details.cached_tokens
+                cached = u.input_tokens_details.cached_tokens
+                s.total_cache_read_input_tokens += cached
+            s._log_meta("USAGE",
+                        input_tokens=u.input_tokens,
+                        output_tokens=u.output_tokens,
+                        cached_tokens=cached)
             if response.response_id:
                 s._last_response_id = response.response_id

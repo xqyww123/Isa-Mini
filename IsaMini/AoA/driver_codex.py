@@ -343,6 +343,7 @@ class Codex_Driver(Session):
         self.total_input_tokens += usage.get("input_tokens", 0)
         self.total_output_tokens += usage.get("output_tokens", 0)
         self.total_cache_read_input_tokens += usage.get("cached_input_tokens", 0)
+        self._log_meta("USAGE", **usage)
 
     def _compute_cost(self):
         p = self._PRICING.get(self._model, self._PRICING["gpt-4.1"])
