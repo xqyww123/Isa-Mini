@@ -229,7 +229,7 @@ fun string_of_term ctxt =
               |> Config.put Printer.show_question_marks true
               |> Config.put Printer.show_brackets false
      in Object_Logic.atomize_term ctxt'
-     #> Minilang.deconflict_bound_names ctxt'
+     #> Minilang.deconflict_bound_names
      #> RPC_Pretty.print_term printing_cfg ctxt'
     end
 
@@ -279,12 +279,12 @@ fun release_par_error exn =
 fun read_term ctxt s =
   \<^try>\<open>Syntax.read_term ctxt s
    catch exn => release_par_error exn\<close>
-  |> Minilang.deconflict_bound_names ctxt
+  |> Minilang.deconflict_bound_names
 
 fun read_terms ctxt ss =
   \<^try>\<open>Syntax.read_terms ctxt ss
    catch exn => release_par_error exn\<close>
-  |> map (Minilang.deconflict_bound_names ctxt)
+  |> map (Minilang.deconflict_bound_names)
 
 fun read_terms_with_type ctxt ss =
   map (fn (typ, raw_tm) =>
@@ -296,12 +296,12 @@ fun read_terms_with_type ctxt ss =
 fun read_prop ctxt s =
   \<^try>\<open>Syntax.read_prop ctxt s
    catch exn => release_par_error exn\<close>
-  |> Minilang.deconflict_bound_names ctxt
+  |> Minilang.deconflict_bound_names
 
 fun read_props ctxt ss =
   \<^try>\<open>Syntax.read_props ctxt ss
    catch exn => release_par_error exn\<close>
-  |> map (Minilang.deconflict_bound_names ctxt)
+  |> map (Minilang.deconflict_bound_names)
 
 (* Extract types of leading existential quantifiers from a goal *)
 fun extract_leading_ex_types goal =
@@ -371,7 +371,7 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option)
         (* Step 2: Extract quantified variables and premises from goal *)
         val goal_term = Thm.prop_of st
                     |> Logic.dest_implies |> fst
-                    |> Minilang.deconflict_bound_names ctxt
+                    |> Minilang.deconflict_bound_names
         val (vars, prems0, _) = Minilang.strip_meta_and_hol_hhf goal_term
 
         (* strip_meta_and_hol_hhf leaves dangling Bound indices in prems;
@@ -549,7 +549,7 @@ fun compute_bindings (s:Minilang.state)
       let
         (* Extract quantified variables and premises from goal *)
         val goal_term = Thm.prop_of st |> Logic.dest_implies |> fst
-                     |> Minilang.deconflict_bound_names ctxt
+                     |> Minilang.deconflict_bound_names
         val (vars, prems0, _) = Minilang.strip_meta_and_hol_hhf goal_term
 
         (* strip_meta_and_hol_hhf strips Abs binders without substituting

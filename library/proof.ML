@@ -64,8 +64,8 @@ val chk_working_mode : string -> unit
 
 (* Bound name deconfliction *)
 
-val deconflict_bound_names : Proof.context -> term -> term
-val deconflict_bound_names_thm : Proof.context -> thm -> thm
+val deconflict_bound_names : term -> term
+val deconflict_bound_names_thm : thm -> thm
 
 (* Operations *)
 
@@ -432,9 +432,9 @@ fun chk_working_mode mode =
 *)
 val deconflict_bound_names = Minilang_Aux.deconflict_bound_names
 
-fun deconflict_bound_names_thm ctxt thm =
+fun deconflict_bound_names_thm thm =
   let val prop = Thm.prop_of thm
-      val prop' = deconflict_bound_names ctxt prop
+      val prop' = deconflict_bound_names prop
    in if prop aconv prop' then thm
       else Thm.renamed_prop prop' thm
   end
@@ -1946,7 +1946,7 @@ val install_relaxed_typ_parsing = Syntax_Phases.term_check ~10000 "minlang-flexi
 
 fun INIT c st =
   let val st0 = if Config.get c auto_deconflict_bound
-                then deconflict_bound_names_thm c st
+                then deconflict_bound_names_thm st
                 else st
       val facts = Proof_Context.facts_of c
       val facts' = if can Local_Theory.assert c
@@ -2101,7 +2101,7 @@ fun SIMPLIFY_GOAL_AND_PREMISES'
        handle Option.Option =>
          raise OPR_FAIL (PROOF_FAIL,
            "The simplification made no progress."))
-      |> Config.get ctxt auto_deconflict_bound ? deconflict_bound_names_thm ctxt
+      |> Config.get ctxt auto_deconflict_bound ? deconflict_bound_names_thm
     val st_simplified =
       case timeout of SOME t => Timeout.apply t do_clarsimp ()
                     | NONE => do_clarsimp ()
@@ -2234,7 +2234,12 @@ fun powerful_MP ctxt rule thA0 =
         THEN_ALL_NEW Thm.assumption (SOME ctxt)) 1
   |> Seq.pull
   |> (fn SOME (ret, _) => ret
-       | NONE => error "BUG: CASES' MP")
+       | NONE => error (String.concat [
+            "BUG: CASES' MP\nrule: ", Thm.string_of_thm ctxt rule,
+            "\nthA0: ", Thm.string_of_thm ctxt thA0,
+            "\nthA (protected): ", Thm.string_of_thm ctxt thA,
+            "\nrule (protected): ", Thm.string_of_thm ctxt
+              (Conv.fconv_rule (Conv.arg1_conv (protect_prop ctxt)) rule)]))
  end
 
 fun make_case term =
@@ -3101,7 +3106,7 @@ fun RULE' [] raw_facts (SK as (ctxt, _)) =
      in st
      |> Thm.biresolution NONE false rules 1
      |> Seq.map ( Thm.solve_constraints
-               #> Config.get ctxt auto_deconflict_bound ? deconflict_bound_names_thm ctxt)
+               #> Config.get ctxt auto_deconflict_bound ? deconflict_bound_names_thm)
      |> Seq.pull
      |> (fn SOME (st', _) =>
               (* Emit only the newly-opened subgoals (M = new prems from

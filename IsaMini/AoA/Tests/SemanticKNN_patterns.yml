@@ -66,7 +66,7 @@ Constants with name_contains=["ln"]: 1 results
 Pattern-only with limit=3, name_contains=["ln"]: 3 results
   lemma lnear_order_on_empty: linear_order_on {} {}
   lemma ln_2_less_1: ln (2 :: real) < (1 :: real)
-  lemma norm_summable_ln_series: norm ?z < (1 :: real) ⟶ summable (λ(n1 :: nat). norm (?z ^ n1 / of_nat n1))
+  lemma norm_summable_ln_series: norm ?z < (1 :: real) ⟶ summable (λ(n :: nat). norm (?z ^ n / of_nat n))
 Pattern-only with limit=1: 1 results
 Mixed valid/invalid theories: 5 results, 1 warnings
   Warning: Unknown theory "Nonexistent_Theory_XYZ" in theories_include; skipped

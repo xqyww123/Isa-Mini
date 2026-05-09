@@ -23,7 +23,7 @@ val xwhere : Proof.context ->
         (binding * string option * mixfix) list ->
           thm -> thm
 
-val deconflict_bound_names : Proof.context -> term -> term
+val deconflict_bound_names : term -> term
 
 val inst_hol_alls : Proof.context -> (string * cterm) list -> thm -> thm
 val inst_universal_quantifiers : Proof.context -> (var_name * term) list -> thm -> thm
@@ -364,7 +364,7 @@ fun display_of_indexname (x, 0) = x
 (* Rename bound variables (Abs names) to avoid clashes with free variables
    in the term, schematic variable display names, and names declared in the
    proof context.  Pure display utility — does not change the theorem. *)
-fun deconflict_bound_names' ctxt term =
+fun deconflict_bound_names' term =
   let
     val var_idxnames = Term.add_var_names term []
     val var_display_names = map display_of_indexname var_idxnames
@@ -394,8 +394,8 @@ fun deconflict_bound_names' ctxt term =
    in #1 (deconflict initial_name_ctx term)
   end
 
-fun deconflict_bound_names ctxt term =
-  case deconflict_bound_names' ctxt term
+fun deconflict_bound_names term =
+  case deconflict_bound_names' term
     of SOME ret => ret
      | NONE => term
 
@@ -444,7 +444,7 @@ fun inst_universal_quantifiers ctxt insts thm =
     val hol_all_vars = strip_hol_alls (get_body prop)
 
     (* Build name mappings, split into display and raw layers for VN_Name priority. *)
-    val deconf_prop = deconflict_bound_names ctxt prop
+    val deconf_prop = deconflict_bound_names prop
     val display_pure_names = map fst (strip_pure_alls deconf_prop)
     val display_hol_names = map fst (strip_hol_alls (get_body deconf_prop))
     val pure_display_map = ListPair.zip (display_pure_names, map fst pure_all_vars)

@@ -5,14 +5,14 @@ Induction rules: 5 results, 0 warnings
   0.765 induction rule nat_of_natural_induct: ?y ∈ UNIV ⟶ (∀(x :: natural). ?P (nat_of_natural x)) ⟶ ?P ?y
   0.763 induction rule Nat.inducts: Nat ?x ⟶ ?P Zero_Rep ⟶ (∀(i :: ind). Nat i ⟶ ?P i ⟶ ?P (Suc_Rep i)) ⟶ ?P ?x
 Case-split rules: 5 results, 0 warnings
-  0.732 case-split rule lists.cases: ?a ∈ lists ?A ⟶ (?a = [] ⟶ ?P) ⟶ (∀a (l :: ?'a list). ?a = a # l ⟶ a ∈ ?A ⟶ l ∈ lists ?A ⟶ ?P) ⟶ ?P
-  0.712 case-split rule listsp.cases: listsp ?A ?a ⟶ (?a = [] ⟶ ?P) ⟶ (∀a (l :: ?'a list). ?a = a # l ⟶ ?A a ⟶ listsp ?A l ⟶ ?P) ⟶ ?P
+  0.732 case-split rule lists.cases: ?a ∈ lists ?A ⟶ (?a = [] ⟶ ?P) ⟶ (∀a1 (l :: ?'a list). ?a = a1 # l ⟶ a1 ∈ ?A ⟶ l ∈ lists ?A ⟶ ?P) ⟶ ?P
+  0.712 case-split rule listsp.cases: listsp ?A ?a ⟶ (?a = [] ⟶ ?P) ⟶ (∀a1 (l :: ?'a list). ?a = a1 # l ⟶ ?A a1 ⟶ listsp ?A l ⟶ ?P) ⟶ ?P
   0.673 case-split rule ListMem.cases: ListMem ?a1.0 ?a2.0 ⟶ (∀x (xs :: ?'a list). ?a1.0 = x ⟶ ?a2.0 = x # xs ⟶ ?P) ⟶ (∀x xs (y :: ?'a). ?a1.0 = x ⟶ ?a2.0 = y # xs ⟶ ListMem x xs ⟶ ?P) ⟶ ?P
   0.655 case-split rule rev_cases: (?xs = [] ⟶ ?P) ⟶ (∀ys (y :: ?'a). ?xs = ys @ [y] ⟶ ?P) ⟶ ?P
   0.654 case-split rule listrel.cases: (?a1.0, ?a2.0) ∈ listrel ?r ⟶ (?a1.0 = [] ⟶ ?a2.0 = [] ⟶ ?P) ⟶ (∀x y xs (ys :: ?'b list). ?a1.0 = x # xs ⟶ ?a2.0 = y # ys ⟶ (x, y) ∈ ?r ⟶ (xs, ys) ∈ listrel ?r ⟶ ?P) ⟶ ?P
 Mixed (induction+theorem): 5 results, 0 warnings
   0.818 induction rule nat_induct: ?P (0 :: nat) ⟶ (∀(n1 :: nat). ?P n1 ⟶ ?P (Suc n1)) ⟶ ?P ?n
-  0.806 lemma natural.induct: ?P (0 :: natural) ⟶ (∀(natural :: natural). ?P natural ⟶ ?P (Code_Numeral.Suc natural)) ⟶ ?P ?natural
-  0.795 lemma nat.induct: ?P (0 :: nat) ⟶ (∀(nat :: nat). ?P nat ⟶ ?P (Suc nat)) ⟶ ?P ?nat
+  0.806 lemma natural.induct: ?P (0 :: natural) ⟶ (∀(natural1 :: natural). ?P natural1 ⟶ ?P (Code_Numeral.Suc natural1)) ⟶ ?P ?natural
+  0.795 lemma nat.induct: ?P (0 :: nat) ⟶ (∀(nat1 :: nat). ?P nat1 ⟶ ?P (Suc nat1)) ⟶ ?P ?nat
   0.782 induction rule natural_of_nat_induct: (∀(y :: nat). y ∈ UNIV ⟶ ?P (natural_of_nat y)) ⟶ ?P ?x
   0.782 induction rule nat_less_induct: (∀(n1 :: nat). (∀m<(n1 :: nat). ?P m) ⟶ ?P n1) ⟶ ?P ?n
