@@ -604,7 +604,9 @@ fun xwhere ctxt inst0 fixes thm =
       |> Variable.export_terms ctxt1 ctxt
 
     val insts = vns ~~ ts
-  in inst_universal_quantifiers ctxt insts thm end
+  in inst_universal_quantifiers ctxt insts thm
+     |> Rule_Cases.save thm
+  end
 
 
 fun print_toks [] = []

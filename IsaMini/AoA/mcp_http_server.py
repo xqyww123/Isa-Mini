@@ -34,7 +34,7 @@ from mcp.types import Tool, ToolAnnotations, TextContent, CallToolResult
 
 from Isabelle_RPC_Host import pretty_unicode
 from .model import (
-    _session_var, Session,
+    _session_var, Session, Node, NonLeaf_Node,
     InteractionExpanded,
     AoA_Error, ArgumentError, IsabelleError,
     CannotDelete_Root, NodeNotFound,
@@ -396,6 +396,20 @@ async def _answer_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         sys.exit(1)
 
 
+def _node_end_line(node: Node, total_lines: int) -> int:
+    """End line of a node's printed representation (1-indexed, inclusive)."""
+    parent = node.parent
+    if parent is None:
+        return total_lines
+    assert isinstance(parent, NonLeaf_Node)
+    idx = next(i for i, c in enumerate(parent.sub_nodes) if c is node)
+    if idx + 1 < len(parent.sub_nodes):
+        nxt = parent.sub_nodes[idx + 1]
+        if nxt.line > 0:
+            return nxt.line - 1
+    return _node_end_line(parent, total_lines)
+
+
 async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     """Read proof.yaml around a step_id or line number."""
     _tn = session.tool_name(TOOL_READ)
@@ -408,7 +422,8 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     line_num = args.get("line")
     if line_num is not None:
         line_num = int(line_num)
-    range_lines = int(args.get("range") or 50)
+    explicit_range = args.get("range")
+    range_lines = int(explicit_range or 50)
 
     if step_id is None and line_num is None:
         yaml_path: str | None = getattr(session, "YAML_path", None)
@@ -425,13 +440,21 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
                 "Provide `step_id` or `line number` to read a specific section.")
             session.log_tool_response(_tn, f"ERROR: {error_msg}")
             return (error_msg, True)
-        result = "".join(f"{i+1:4d} | {ln}" for i, ln in enumerate(all_lines))
+        end_line = len(all_lines)
+        result = f"[Line 1-{end_line}]\n" + "".join(all_lines)
         session.log_tool_response(_tn, result)
         return (result, False)
 
+    node = None
     if step_id is not None:
         try:
             node = session.root.locate_node(step_id)
+            if node.line == 0:
+                error_msg = (
+                    f"Step '{step_id}' has no line information (proof not yet printed). "
+                    "Read by line number instead.")
+                session.log_tool_response(_tn, f"ERROR: {error_msg}")
+                return (error_msg, True)
             line_num = node.line
         except NodeNotFound:
             error_msg = f"Step '{step_id}' doesn't exist. Read the proof by line number instead."
@@ -443,8 +466,6 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     if yaml_path is None:
         return ("proof.yaml path not configured.", True)
 
-    start = max(1, line_num - 10)
-    end = start + range_lines
     try:
         with open(yaml_path, encoding="utf-8") as f:
             all_lines = f.readlines()
@@ -453,8 +474,23 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         session.log_tool_response(_tn, f"ERROR: {error_msg}")
         return (error_msg, True)
 
+    total_lines = len(all_lines)
+    if node is not None and explicit_range is None:
+        node_end = _node_end_line(node, total_lines)
+        node_span = node_end - line_num + 1
+        if node_span < 30:
+            start = max(1, line_num - 10)
+            end = min(node_end + 5, total_lines)
+        else:
+            start = max(1, line_num - 10)
+            end = min(start + 39, total_lines)
+    else:
+        start = max(1, line_num - 10)
+        end = start + range_lines
+
     selected = all_lines[start - 1 : end]
-    result = "".join(f"{start + i:4d} | {ln}" for i, ln in enumerate(selected))
+    end_line = start + len(selected) - 1
+    result = f"[Line {start}-{end_line}]\n" + "".join(selected)
     session.log_tool_response(_tn, result)
     return (result, False)
 

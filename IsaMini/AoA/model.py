@@ -7129,19 +7129,12 @@ class Induction(CaseSplit_Like):
             var_names_as_isa = [IsaTerm.from_agent(var["name"]) for var in self.variables]
             new_var_names = [v for v in vars if v not in var_names_as_isa]
             if new_var_names:
-                if is_init:
-                    return FailureReason(
-                        f"The {titled_string_of_and_list(new_var_names, 'variable', 'variables')} "
-                        f"appear in the induction context but are not classified in the 'variables' argument. "
-                        f"You should indicate whether each is 'arbitrary' (generalized during induction) or "
-                        f"'fixed' (held constant).")
-                else:
-                    msg = (
-                        f"The {titled_string_of_and_list(new_var_names, 'variable', 'variables')} are not classified "
-                        "as fixed or generalized; fixed is assumed. "
-                        f"Change this by calling the `edit` tool with action `amend` and target step `{self.id}`"
-                    )
-                    self.warnings.append(Warning(Warning.Position.HEADER, msg))
+                msg = (
+                    f"The {titled_string_of_and_list(new_var_names, 'variable', 'variables')} are not classified "
+                    "as fixed or generalized; fixed is assumed. "
+                    f"Change this by calling the `edit` tool with action `amend` and target step `{self.id}`"
+                )
+                self.warnings.append(Warning(Warning.Position.HEADER, msg))
             not_used_vars = [var["name"] for var in self.variables if IsaTerm.from_agent(var["name"]) not in vars]
             if not_used_vars:
                 msg = (
