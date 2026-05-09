@@ -21,8 +21,8 @@ pending proof goal:
   premises:
     - neg_hyp: False
   goal: False
-step 1: Contradiction (hypothesis: neg_hyp) (line 0)
-Error: Unfinished Proof (line 19). Call command `edit` with action `fill` and target step `2`
+step 1: Contradiction (hypothesis: neg_hyp)
+Error: Unfinished Proof. Call command `edit` with action `fill` and target step `2`
 premises:
   - neg_hyp: False
 goal: False

@@ -2584,7 +2584,9 @@ class Node(ABC):
                 status_mark = "pending, "
             case _:
                 status_mark = ""
-        file.write(f"{self._kind} {self.id}: {self.quickview_title()} ({changed_mark}{status_mark}{done_mark}line {self.line})\n")
+        marks = f"{changed_mark}{status_mark}{done_mark}".rstrip(", ")
+        suffix = f" ({marks})" if marks else ""
+        file.write(f"{self._kind} {self.id}: {self.quickview_title()}{suffix}\n")
         return indent + 1
     def does_quickview_need_detail(self) -> bool:
         return self.changed or self.status.status != EvaluationStatus.Status.SUCCESS
@@ -4176,8 +4178,10 @@ class GoalNode(StdBlock):
             return indent
         else:
             done_mark = "done, " if self._should_print_done() else ""
+            marks = done_mark.rstrip(", ")
+            suffix = f" ({marks})" if marks else ""
             print_indent(indent, file)
-            file.write(f"- {self.id} ({done_mark}line {self.line})\n")
+            file.write(f"- {self.id}{suffix}\n")
             child_indent = indent + 1
             if self.show_goal:
                 goal = self.goal()

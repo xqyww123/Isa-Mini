@@ -376,17 +376,31 @@ async def _semantic_search_direct(
 
     seen = session.seen_entities
     per_query_warnings = _collect_query_warnings(knn_results)
-    # Collect new entities
+    # Collect new entities, tracking totals for the empty-result message
     new_items: list[RetrievedEntity] = []
+    total_found = 0
+    total_k = 0
+    encountered: set[short_name] = set()
     for q, (fetched, _warnings, _error) in zip(queries, knn_results):
-        for f in fetched[:_query_k(q)]:
+        k = _query_k(q)
+        total_k += k
+        for f in fetched[:k]:
+            if f.entity.short_name in encountered:
+                continue
+            encountered.add(f.entity.short_name)
+            total_found += 1
             if f.entity.short_name in seen:
                 continue
             new_items.append(f)
             seen.add(f.entity.short_name)
 
     if not new_items:
-        lines: list[str] = ["No new relevant entities found." if seen else "No relevant entities found."]
+        if total_found == 0:
+            lines: list[str] = ["No relevant entities found."]
+        elif total_found >= total_k:
+            lines: list[str] = [f"All top {total_k} relevant entities were already returned in previous queries."]
+        else:
+            lines: list[str] = [f"Found {total_found} relevant entities. All were already returned in previous queries."]
         lines.extend(_format_warn_lines(queries, per_query_warnings))
         result = "\n".join(lines)
         session.log_tool_response(session.tool_name(TOOL_SEARCH), result)

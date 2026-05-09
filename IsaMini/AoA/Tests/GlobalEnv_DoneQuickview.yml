@@ -4,7 +4,7 @@ edit_message (completes everything)
 Filled step 1.
 Outline:
   global declarations:
-    step global.1: Have g_eq (done, line 0)
+    step global.1: Have g_eq (done)
   proof:
     done
 Congratulations! All goals are proven.
@@ -13,7 +13,7 @@ Congratulations! All goals are proven.
 Quickview after reset_changed (BUG REPRODUCTION)
 --------------------------------------------------
 global declarations:
-  step global.1: Have g_eq (done, line 0)
+  step global.1: Have g_eq (done)
 proof:
   done
 

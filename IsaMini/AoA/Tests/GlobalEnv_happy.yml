@@ -13,7 +13,7 @@ Error: Unfinished Proof! Call command `edit` with action `fill` and target step 
 --------------------------------------------------
 Initial Overview
 --------------------------------------------------
-Error: Unfinished Proof (line 12). Call command `edit` with action `fill` and target step `1`
+Error: Unfinished Proof. Call command `edit` with action `fill` and target step `1`
 goal: x + y = x + x
 GlobalEnv children: 0
 Added have1: id=global.1, local_step=1, status=success
@@ -46,9 +46,9 @@ Error: Unfinished Proof! Call command `edit` with action `fill` and target step 
 Overview after ADD
 --------------------------------------------------
 global declarations:
-  step global.1: Have g_eq (done, line 0)
+  step global.1: Have g_eq (done)
 proof:
-  Error: Unfinished Proof (line 44). Fill step `1`
+  Error: Unfinished Proof. Fill step `1`
 GoalNode context hyps: ['g_eq', 'h1']
 g_eq visible to GoalNode via context: True
 Rewrite step 1 using g_eq: status=success, is_error=False
@@ -153,7 +153,7 @@ proof:
 Overview after AMEND
 --------------------------------------------------
 global declarations:
-  step global.1: Have g_eq (done, line 0)
+  step global.1: Have g_eq (done)
 proof:
   done
 Delete global.1 not_found: []
@@ -183,8 +183,8 @@ pending proof goal:
 --------------------------------------------------
 Final Overview
 --------------------------------------------------
-step 1: Rewrite goal (failed, line 0)
+step 1: Rewrite goal (failed)
   Error: Fact "g_eq" not found
-Error: Unfinished Proof (line 180). Fill step `2`
+Error: Unfinished Proof. Fill step `2`
 goal: x + y = x + x
 Unfinished nodes: 2

@@ -12,8 +12,8 @@ Error: Unfinished Proof! Call command `edit` with action `fill` and target step 
 --------------------------------------------------
 Filled step 1.
 Outline:
-  step 1: Have seed (done, line 0)
-  Error: Unfinished Proof (line 9). Call command `edit` with action `fill` and target step `2`
+  step 1: Have seed (done)
+  Error: Unfinished Proof. Call command `edit` with action `fill` and target step `2`
   goal: (0 :: int) ≤ x * x
 ---------------
 is_error: False
@@ -22,10 +22,10 @@ is_error: False
 --------------------------------------------------
 Amended step 1-3.
 Outline:
-  step 1: Have rA (done, line 0)
-  step 2: Have rB (done, line 0)
-  step 3: Have rC (done, line 0)
-  Error: Unfinished Proof (line 16). Fill step `4`
+  step 1: Have rA (done)
+  step 2: Have rB (done)
+  step 3: Have rC (done)
+  Error: Unfinished Proof. Fill step `4`
 ---------------
 is_error: False
 --------------------------------------------------
@@ -33,10 +33,10 @@ is_error: False
 --------------------------------------------------
 Amended step 1A-1B.
 Outline:
-  step 1: Have rA (done, line 0)
-  step 1A: Have m1 (done, line 0)
-  step 1B: Have m2 (done, line 0)
-  step 3: Have rC (done, line 0)
-  Error: Unfinished Proof (line 36). Fill step `4`
+  step 1: Have rA (done)
+  step 1A: Have m1 (done)
+  step 1B: Have m2 (done)
+  step 3: Have rC (done)
+  Error: Unfinished Proof. Fill step `4`
 ---------------
 is_error: False

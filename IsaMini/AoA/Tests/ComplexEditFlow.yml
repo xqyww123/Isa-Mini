@@ -37,8 +37,8 @@ is_error: True
 --------------------------------------------------
 Amended step 1.
 Outline:
-  step 1: Have bad (line 0)
-    step 1.1: Obvious (failed, line 0)
+  step 1: Have bad
+    step 1.1: Obvious (failed)
       Error: |
         Automatic proof fails on the subgoal:
           False
@@ -54,8 +54,8 @@ is_error: False
 --------------------------------------------------
 Amended step 1.
 Outline:
-  step 1: Have aux2 (done, line 0)
-  Error: Unfinished Proof (line 23). Fill step `2`
+  step 1: Have aux2 (done)
+  Error: Unfinished Proof. Fill step `2`
 ---------------
 is_error: False
 --------------------------------------------------
@@ -63,9 +63,9 @@ is_error: False
 --------------------------------------------------
 Inserted step 0A-0B.
 Outline:
-  step 0A: Have h1 (done, line 0)
-  step 0B: Have h2 (done, line 0)
-  step 1: Have aux2 (done, line 0)
-  Error: Unfinished Proof (line 16). Fill step `2`
+  step 0A: Have h1 (done)
+  step 0B: Have h2 (done)
+  step 1: Have aux2 (done)
+  Error: Unfinished Proof. Fill step `2`
 ---------------
 is_error: False

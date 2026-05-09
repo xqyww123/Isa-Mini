@@ -14,8 +14,8 @@ Error: Unfinished Proof! Call command `edit` with action `fill` and target step 
 --------------------------------------------------
 Filled step 1.
 Outline:
-  step 1: Have sq (done, line 0)
-  Error: Unfinished Proof (line 11). Call command `edit` with action `fill` and target step `2`
+  step 1: Have sq (done)
+  Error: Unfinished Proof. Call command `edit` with action `fill` and target step `2`
   goal: (0 :: int) ≤ x * x
 is_error: False
 --------------------------------------------------

@@ -44,7 +44,7 @@ pending proof goal:
 --------------------------------------------------
 Overview
 --------------------------------------------------
-step 1: Intro (line 27)
+step 1: Intro
   assuming premises:
     - premise0(1): A
     - premise0(2): B
@@ -54,7 +54,7 @@ step 1: Intro (line 27)
     - premise2(1): D ⟶ E
     - premise2(2): D ⟶ F
     - premise3: big1 ∧ big2 ∧ big3 ∧ big4 ∧ big5 ∧ big6 ∧ big7 ∧ big8 ∧ big9 ∧ big10 ∧ big11 ∧ big12 ⟶ G ∧ H
-Error: Unfinished Proof (line 41). Call command `edit` with action `fill` and target step `2`
+Error: Unfinished Proof. Call command `edit` with action `fill` and target step `2`
 goal: A ∧ B ∧ C ∧ P (SOME (x :: 'a). True) ∧ Q (SOME (x :: 'a). True) ∧ (D ⟶ E) ∧ (D ⟶ F)
 --------------------------------------------------
 After Obvious on 2

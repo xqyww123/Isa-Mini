@@ -13,12 +13,12 @@ edit_message: ADD global g1 (unfinished)
 Filled step global.1.
 Outline:
   global declarations:
-    step global.1: Have g1 (line 0)
+    step global.1: Have g1
       Error: Unfinished Proof. Call command `edit` with action `fill` and target step `global.1.1`
       goal: P
       the statement is quantified over P
   proof:
-    Error: Unfinished Proof (line 9). Fill step `1`
+    Error: Unfinished Proof. Fill step `1`
     goal: x = x
 ---------------
 --------------------------------------------------
@@ -27,7 +27,7 @@ edit_message: Obvious (discharge body)
 Filled step 1.
 Outline:
   global declarations:
-    step global.1: Have g1 (line 0)
+    step global.1: Have g1
       Error: Unfinished Proof. Fill step `global.1.1`
   proof:
     done
@@ -38,9 +38,9 @@ edit_message: ADD global g2 (unfinished)
 Filled step global.2.
 Outline:
   global declarations:
-    step global.1: Have g1 (line 0)
+    step global.1: Have g1
       Error: Unfinished Proof. Fill step `global.1.1`
-    step global.2: Have g2 (line 0)
+    step global.2: Have g2
       Error: Unfinished Proof. Fill step `global.2.1`
       goal: P
       the statement is quantified over P
@@ -53,11 +53,11 @@ edit_message: ADD global g3 (unfinished)
 Filled step global.3.
 Outline:
   global declarations:
-    step global.1: Have g1 (line 0)
+    step global.1: Have g1
       Error: Unfinished Proof. Fill step `global.1.1`
-    step global.2: Have g2 (line 0)
+    step global.2: Have g2
       Error: Unfinished Proof. Fill step `global.2.1`
-    step global.3: Have g3 (line 0)
+    step global.3: Have g3
       Error: Unfinished Proof. Fill step `global.3.1`
       goal: P
       the statement is quantified over P

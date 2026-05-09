@@ -23,10 +23,10 @@ pending proof goal:
 --------------------------------------------------
 Quickview (should show derived goal too)
 --------------------------------------------------
-step 1: Inference Rule ccontr (line 0)
+step 1: Inference Rule ccontr
   derived goal: ¬ (0 :: int) ≤ x * x ⟶ False
-step 2: Intro (line 0)
+step 2: Intro
   assuming premises:
     - premise0: ¬ (0 :: int) ≤ x * x
-Error: Unfinished Proof (line 20). Call command `edit` with action `fill` and target step `3`
+Error: Unfinished Proof. Call command `edit` with action `fill` and target step `3`
 goal: False

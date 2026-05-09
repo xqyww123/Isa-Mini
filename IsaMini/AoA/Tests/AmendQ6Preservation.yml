@@ -12,8 +12,8 @@ edit_message: seed Have { proof: [Obvious] }
 --------------------------------------------------
 Filled step 1.
 Outline:
-  step 1: Have outer (done, line 0)
-  Error: Unfinished Proof (line 9). Call command `edit` with action `fill` and target step `2`
+  step 1: Have outer (done)
+  Error: Unfinished Proof. Call command `edit` with action `fill` and target step `2`
   goal: (0 :: int) ≤ x * x
 ---------------
 --------------------------------------------------
@@ -21,14 +21,14 @@ edit_message: amend into Suffices; Q6 folds Obvious into inner Have
 --------------------------------------------------
 Amended step 1.
 Outline:
-  step 1: Suffices (line 0)
-    step 1.1: Have inner (done, line 0)
-    step 1.2: Intro (line 0)
+  step 1: Suffices
+    step 1.1: Have inner (done)
+    step 1.2: Intro
       assuming premises:
         - premise0: (0 :: int) ≤ x * x
     Error: Unfinished Proof. Fill step `1.3`
     goal: (0 :: int) ≤ x * x
-  Error: Unfinished Proof (line 9). Fill step `2`
+  Error: Unfinished Proof. Fill step `2`
 Note: step 1.2 was auto-introduced. You may delete it using delete if unhelpful.
 ---------------
 Q6 redirect into last-provided-node's body verified.

@@ -17,11 +17,11 @@ edit_message: ADD global Have t1
 Filled step global.1.
 Outline:
   global declarations:
-    step global.1: Have t1 (line 0)
+    step global.1: Have t1
       Error: Unfinished Proof. Call command `edit` with action `fill` and target step `global.1.1`
       goal: P
   proof:
-    Error: Unfinished Proof (line 12). Fill step `1`
+    Error: Unfinished Proof. Fill step `1`
     goal: x * x = (0 :: int) ∨ P
 ---------------
 Added have1: id=global.1, local_step=1, status=success
@@ -41,7 +41,7 @@ edit_message: Rewrite step 1 using broken t1
 Filled step 1.
 Outline:
   global declarations:
-    step global.1: Have t1 (line 0)
+    step global.1: Have t1
       Error: Unfinished Proof. Fill step `global.1.1`
   proof:
     done
@@ -83,11 +83,11 @@ edit_message: AMEND global.1 (recovery)
 Amended step global.1.
 Outline:
   global declarations:
-    step global.1: Have t1 (line 0)
+    step global.1: Have t1
       Error: Unfinished Proof. Fill step `global.1.1`
       goal: x = (0 :: int)
   proof:
-    step 1: Rewrite goal (changed, line 0)
+    step 1: Rewrite goal (changed)
       notice:
         - The proof goal has changed and new premises occur:
           - premise0

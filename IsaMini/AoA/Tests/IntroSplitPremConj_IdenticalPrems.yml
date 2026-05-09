@@ -20,13 +20,13 @@ pending proof goal:
 --------------------------------------------------
 Overview
 --------------------------------------------------
-step 1: Intro (line 7)
+step 1: Intro
   assuming premises:
     - premise0(1): A
     - premise0(2): B
     - premise1(1): A
     - premise1(2): B
-Error: Unfinished Proof (line 17). Call command `edit` with action `fill` and target step `2`
+Error: Unfinished Proof. Call command `edit` with action `fill` and target step `2`
 goal: A ∧ B
 --------------------------------------------------
 After Obvious on 2

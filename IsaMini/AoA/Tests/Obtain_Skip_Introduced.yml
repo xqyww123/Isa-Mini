@@ -38,11 +38,11 @@ proof:
 --------------------------------------------------
 Quickview
 --------------------------------------------------
-step 1: Intro (line 6)
+step 1: Intro
   assuming premises:
     - premise0: ∃(k :: nat). k = m
-step 2: Obtain k (line 0)
-  Error: Unfinished Proof (line 35). Call command `edit` with action `fill` and target step `2.1`
+step 2: Obtain k
+  Error: Unfinished Proof. Call command `edit` with action `fill` and target step `2.1`
   goal: ∃(k :: nat). k = m
   obtained variables:
     - k: nat
