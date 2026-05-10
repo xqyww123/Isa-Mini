@@ -1218,7 +1218,8 @@ class APIDriver(Session):
         new_messages.append(UserMsg(
             self.initial_prompt() + "\n\nPrevious progress:\n" + summary))
         new_messages.extend(recent_messages)
-        self.log_AoA_opr(f"Compacted. Summary: {summary[:200]}...")
+        est = self.estimate_tokens(new_messages)
+        self.log_AoA_opr(f"Compacted to ~{est} tokens ({len(new_messages)} messages). Summary: {summary[:200]}...")
         self._log_meta("COMPACTION", summary=summary)
         return new_messages
 
@@ -1399,6 +1400,21 @@ class APIDriver(Session):
                        cached_tokens=usage.cached_tokens,
                        cache_creation_tokens=usage.cache_creation_tokens)
 
+    def estimate_tokens(self, messages: list[Msg]) -> int:
+        total = 0
+        for m in messages:
+            match m:
+                case SystemMsg(content=c) | UserMsg(content=c) | ToolResultMsg(content=c):
+                    total += len(c)
+                case AssistantMsg(response=r):
+                    if r.content:
+                        total += len(r.content)
+                    if r.thinking:
+                        total += len(r.thinking)
+                    for tc in r.tool_calls:
+                        total += len(tc.name) + len(tc.arguments)
+        return total // 4
+
     def _compute_cost(self):
         p = self._provider.pricing()
         non_cached = max(0, self.total_input_tokens
@@ -1432,6 +1448,26 @@ class APIDriver_ChatGPT(APIDriver):
                 reasoning_effort="high",
             )
         super().__init__(*args, provider=provider, **kwargs)
+
+    def estimate_tokens(self, messages: list[Msg]) -> int:
+        import tiktoken
+        try:
+            enc = tiktoken.encoding_for_model(self._provider.model_name)
+        except KeyError:
+            enc = tiktoken.get_encoding("o200k_base")
+        total = 0
+        for m in messages:
+            match m:
+                case SystemMsg(content=c) | UserMsg(content=c) | ToolResultMsg(content=c):
+                    total += len(enc.encode(c))
+                case AssistantMsg(response=r):
+                    if r.content:
+                        total += len(enc.encode(r.content))
+                    if r.thinking:
+                        total += len(enc.encode(r.thinking))
+                    for tc in r.tool_calls:
+                        total += len(enc.encode(tc.name)) + len(enc.encode(tc.arguments))
+        return total
 
     # TEMPORARY: lowered from 0.80 * context_window (~102K) to 10K for compaction testing
     def _should_compact(self, usage: Usage) -> bool:

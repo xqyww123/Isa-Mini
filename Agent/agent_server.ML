@@ -12,9 +12,13 @@ val AoA_retrieval_forking: string Config.T
 type state_id = string
 type states = Minilang.state Symtab.table
 
+type agent_cost = {input: int, cache_write: int, cache_read: int, output: int,
+                   cost: real, tool_calls: int, isabelle_time: real, model_time: real}
+val zero_cost: agent_cost
+
 val AoA_RPC : driver * (MiniLang_Agent.cfg * MiniLang_Agent.budget) * string
            -> Proof.context * thm
-           -> MiniLang_Agent.xcmd list * thm (*acomplished proof sequent*)
+           -> MiniLang_Agent.xcmd list * thm * agent_cost
 
 val method : thm list -> context_state -> context_state Seq.result Seq.seq
 
@@ -27,7 +31,17 @@ end
 
 structure MiniLang_Agent_AoA : MINILANG_AGENT_AoA = struct
 
-exception Agent_Give_Up of string * string
+type agent_cost = {
+  input: int, cache_write: int, cache_read: int, output: int,
+  cost: real, tool_calls: int, isabelle_time: real, model_time: real
+}
+
+val zero_cost : agent_cost = {
+  input = 0, cache_write = 0, cache_read = 0, output = 0,
+  cost = 0.0, tool_calls = 0, isabelle_time = 0.0, model_time = 0.0
+}
+
+exception Agent_Give_Up of string * string * agent_cost
 
 type driver = string
 val default_driver = "ClaudeCode"
@@ -991,13 +1005,17 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                          | _ => false) xcmds
            then error "Internal Error: the returned proofs contains axiomatic sorry."
            else ()
-           ; (xcmds, Minilang.conclude ctxt s1')
+           ; (xcmds, Minilang.conclude ctxt s1',
+              {input=input, cache_write=cache_write, cache_read=cache_read, output=output,
+               cost=cost, tool_calls=tool_calls, isabelle_time=isabelle_time, model_time=model_time})
          end
         else error "Internal Error: the proof state returned by the Agent is not finished"
     | NONE => error "Internal Error: the state returned by the Agent is not found"
   ) | NONE =>
         (case reason
-          of SOME r => raise Agent_Give_Up (r, the_default "" detail)
+          of SOME r => raise Agent_Give_Up (r, the_default "" detail,
+                        {input=input, cache_write=cache_write, cache_read=cache_read, output=output,
+                         cost=cost, tool_calls=tool_calls, isabelle_time=isabelle_time, model_time=model_time})
            | NONE => error "Agent gives up (protocol error: missing reason)")
   end
 
@@ -1039,17 +1057,23 @@ fun AoA_REPL_App (cin, cout, toplevel) =
                                     of SOME v => Config.put AoA_interactive_retrieval v ctxt
                                      | NONE => ctxt
                         val start_time = Timing.start ()
+                        fun cost_tuple ({input, cache_write, cache_read, output,
+                                         cost, tool_calls, isabelle_time, model_time} : agent_cost) =
+                            (input, cache_write, cache_read, output, cost, tool_calls, isabelle_time, model_time)
                         val pack_result =
-                              packTuple4 (packString, packInt, packInt,
-                                          packOption packString)
+                              packTuple5 (packString, packInt, packInt,
+                                          packOption packString,
+                                          packTuple8 (packInt, packInt, packInt, packInt,
+                                                      packReal, packInt, packReal, packReal))
                      in \<^try>\<open>
-                        let val (_, seq) = AoA_RPC (driver, cfg, invocation_id) (ctxt, sequent)
+                        let val (_, seq, aoa_cost) = AoA_RPC (driver, cfg, invocation_id) (ctxt, sequent)
                             val time = Timing.result start_time
                          in REPL_Server.output cout pack_result
                                  ( "success",
                                    Time.toMilliseconds (#elapsed time),
                                    Time.toMilliseconds (#cpu time),
-                                   NONE
+                                   NONE,
+                                   cost_tuple aoa_cost
                                  )
                           ; BinIO.StreamIO.flushOut cout
                           ; seq
@@ -1067,12 +1091,13 @@ fun AoA_REPL_App (cin, cout, toplevel) =
                                    ( "remote_error",
                                      Time.toMilliseconds (#elapsed time),
                                      Time.toMilliseconds (#cpu time),
-                                     NONE
+                                     NONE,
+                                     cost_tuple zero_cost
                                    )
                               ; BinIO.StreamIO.flushOut cout
                               ; sequent
                             end
-                          | Agent_Give_Up (reason, detail) =>
+                          | Agent_Give_Up (reason, detail, aoa_cost) =>
                             let val time = Timing.result start_time
                                 val det = if detail = "" then NONE
                                           else SOME detail
@@ -1080,7 +1105,8 @@ fun AoA_REPL_App (cin, cout, toplevel) =
                                    ( reason,
                                      Time.toMilliseconds (#elapsed time),
                                      Time.toMilliseconds (#cpu time),
-                                     det
+                                     det,
+                                     cost_tuple aoa_cost
                                    )
                               ; BinIO.StreamIO.flushOut cout
                               ; sequent
@@ -1132,7 +1158,7 @@ fun method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
                 SOME st' => st'
               | NONE => sequent)
         in AoA_RPC (driver, MiniLang_Agent.default_cfg, invocation_id) (ctxt, sequent)
-           |> (fn (_, sequent') => SOME (Seq.Result (ctxt, sequent'), Seq.empty))
+           |> (fn (_, sequent', _) => SOME (Seq.Result (ctxt, sequent'), Seq.empty))
        end )
 
 
