@@ -325,6 +325,10 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
              * mistakes. The ML-level mechanism in library/proof.ML
              * stays intact for non-agent callers. *)
             |> Config.put Minilang.induct_auto_insert_facts false
+      val (agent_cfg, _) = cfg
+      val ctxt = case #auto_interpret_for_embedding agent_cfg of
+                    SOME v => Config.put Semantic_Store.auto_interpret_for_embedding v ctxt
+                  | NONE => ctxt
 
       val global_context = global_context_of (ctxt, sequent)
       val s0 = Minilang.INIT ctxt sequent
@@ -1029,7 +1033,8 @@ val unpackBudget = unpackTuple3 (unpackInt, unpackInt, unpackInt)
               max_tool_calls = mtc,
               max_retries = mr
            } : MiniLang_Agent.budget))
-val unpackCfg = unpackUnit
+val unpackCfg = unpackOption unpackBool
+        #> apfst (fn aie => {auto_interpret_for_embedding = aie} : MiniLang_Agent.cfg)
  in
 
 fun AoA_REPL_App (cin, cout, toplevel) =

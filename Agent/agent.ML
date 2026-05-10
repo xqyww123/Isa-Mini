@@ -6,7 +6,9 @@ type budget = {
       max_retries: int
   }
 
-type cfg = unit
+type cfg = {
+      auto_interpret_for_embedding: bool option
+  }
 
 type var_name = {internal_name: string, external_name: string, typ_pretty: string}
 type prem_name = {internal_term: term, external_name: string, pretty: string}
@@ -130,9 +132,11 @@ type budget = {
       max_retries: int
   }
 
-type cfg = unit
+type cfg = {
+      auto_interpret_for_embedding: bool option
+  }
 
-val default_cfg : cfg * budget = ((), {
+val default_cfg : cfg * budget = ({auto_interpret_for_embedding = NONE}, {
       timeout_seconds = 14400,
       max_tool_calls = 10000,
       max_retries = 8
