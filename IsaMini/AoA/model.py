@@ -6864,6 +6864,7 @@ class Contradiction(Leaf):
         super().__init__(config, "")
         self.hypothesis_name: str = arg["hypothesis_name"]
         self.bindings: Bindings | None = None
+        self._prev_bindings: Bindings | None = None
 
     def the_operation(self) -> 'Minilang_Operation | FailureReason':
         return Minilang_Operation.CONTRADICTION(self.hypothesis_name)

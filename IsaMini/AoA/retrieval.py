@@ -396,13 +396,13 @@ async def _semantic_search_direct(
 
     if not new_items:
         if total_found == 0:
-            lines: list[str] = ["No relevant entities found."]
+            no_new_lines: list[str] = ["No relevant entities found."]
         elif total_found >= total_k:
-            lines: list[str] = [f"All top {total_k} relevant entities were already returned in previous queries."]
+            no_new_lines = [f"All top {total_k} relevant entities were already returned in previous queries."]
         else:
-            lines: list[str] = [f"Found {total_found} relevant entities. All were already returned in previous queries."]
-        lines.extend(_format_warn_lines(queries, per_query_warnings))
-        result = "\n".join(lines)
+            no_new_lines = [f"Found {total_found} relevant entities. All were already returned in previous queries."]
+        no_new_lines.extend(_format_warn_lines(queries, per_query_warnings))
+        result = "\n".join(no_new_lines)
         session.log_tool_response(session.tool_name(TOOL_SEARCH), result)
         return result
 

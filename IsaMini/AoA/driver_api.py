@@ -1187,6 +1187,9 @@ class APIDriver(Session):
         return len(self._initial_messages())
 
     async def _compact(self, messages: list[Msg], tools: list[dict]) -> list[Msg]:
+        self.log_AoA_opr(
+            f"Compaction triggered: {len(messages)} messages, "
+            f"input={self.total_input_tokens} output={self.total_output_tokens}")
         recent_start = self._find_recent_start(messages)
         recent_messages = messages[recent_start:]
 
@@ -1429,6 +1432,11 @@ class APIDriver_ChatGPT(APIDriver):
                 reasoning_effort="high",
             )
         super().__init__(*args, provider=provider, **kwargs)
+
+    # TEMPORARY: lowered from 0.80 * context_window (~102K) to 10K for compaction testing
+    def _should_compact(self, usage: Usage) -> bool:
+        total = usage.input_tokens + usage.output_tokens
+        return total > 10_000
 
     def _fork_provider(self, mode: ForkingMode) -> Provider:
         if mode == ForkingMode.FORKING_CHEAPER_NO_CTXT and self.FORK_CHEAPER_MODEL:
