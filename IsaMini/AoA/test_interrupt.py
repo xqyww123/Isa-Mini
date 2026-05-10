@@ -1,10 +1,9 @@
 """
-Test: can Python detect when Isabelle interrupts a tactic?
+Test: does handle_client cancel the RPC handler when the connection drops?
 
-"test_sleep_forever" sleeps in a loop, logging each iteration.
-When ML catches the interrupt, it sends an error "Isabelle_Interrupt"
-before closing the connection.  The reader loop receives it and
-pushes it onto _user_channel, which we monitor alongside the sleep.
+"test_sleep_forever" just sleeps. When ML interrupts and closes the
+connection, handle_client detects _reader_task death and cancels us.
+We log what we receive.
 """
 
 import asyncio
@@ -19,31 +18,11 @@ async def test_sleep_forever(arg, connection: Connection):
     try:
         i = 0
         while True:
-            reader = connection._reader_task
-            sleep = asyncio.ensure_future(asyncio.sleep(2))
-
-            if reader is not None and not reader.done():
-                done, _ = await asyncio.wait(
-                    [sleep, reader],
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                if reader in done:
-                    sleep.cancel()
-                    logger.warning(
-                        f"[test_interrupt] READER DIED at iteration {i} "
-                        f"— interrupt detected!")
-                    return None
-            else:
-                await sleep
-
+            await asyncio.sleep(2)
             i += 1
             logger.warning(f"[test_interrupt] alive, iteration {i}")
-
     except asyncio.CancelledError:
-        logger.warning("[test_interrupt] CancelledError")
-        raise
-    except Exception as e:
-        logger.warning(f"[test_interrupt] {type(e).__name__}: {e}")
+        logger.warning("[test_interrupt] GOT CancelledError — interrupt propagated!")
         raise
     finally:
         logger.warning("[test_interrupt] handler exiting")

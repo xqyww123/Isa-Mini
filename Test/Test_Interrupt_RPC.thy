@@ -3,8 +3,6 @@ theory Test_Interrupt_RPC
 begin
 
 ML \<open>
-val _ = Remote_Procedure_Calling.load ["IsaMini.AoA.test_interrupt"]
-
 val sleep_cmd : (unit, unit) Remote_Procedure_Calling.command = {
   name = "test_sleep_forever",
   arg_schema = MessagePackBinIO.Pack.packUnit,

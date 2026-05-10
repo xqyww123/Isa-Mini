@@ -140,7 +140,11 @@ class Codex_Driver(Session):
 
     async def run(self):
         self.log_AoA_opr(f"Working directory: {self.working_dir}, Log directory: {self.log_dir}")
-        await self._run_with_retry()
+        try:
+            await self._run_with_retry()
+        except asyncio.CancelledError:
+            self.warn_AoA_opr("Cancelled (Isabelle interrupted)")
+            raise
 
     async def interrupt(self):
         if self._exec_process is not None:
