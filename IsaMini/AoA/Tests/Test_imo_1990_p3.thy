@@ -5,15 +5,12 @@
 theory Test_imo_1990_p3 imports
   MathBench_Prover.MathBench_Prover Minilang_Agent.Minilang_Agent
 begin
-declare [[auto_interpret_for_embedding=false, agent_AoA_driver="ChatGPT"]]
+declare [[auto_interpret_for_embedding=false, agent_AoA_driver="ClaudeCode"]]
 theorem imo_1990_p3:
   fixes n :: nat
   assumes "2 \<le> n"
     and "n^2 dvd 2^n + 1"
   shows "n = 3"
-  by aoa
+  by   aoa
 
-lemma \<open>multiplicity (int x) (int y) = multiplicity x y\<close>
-  unfolding multiplicity_def
-  apply (auto simp: )
 end

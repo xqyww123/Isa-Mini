@@ -1473,11 +1473,6 @@ class APIDriver_ChatGPT(APIDriver):
                         total += len(enc.encode(tc.name)) + len(enc.encode(tc.arguments))
         return total
 
-    # TEMPORARY: lowered from 0.80 * context_window (~102K) to 10K for compaction testing
-    def _should_compact(self, usage: Usage) -> bool:
-        total = usage.input_tokens + usage.output_tokens
-        return total > 10_000
-
     def _fork_provider(self, mode: ForkingMode) -> Provider:
         if mode == ForkingMode.FORKING_CHEAPER_NO_CTXT and self.FORK_CHEAPER_MODEL:
             return OpenAIResponsesProvider(
