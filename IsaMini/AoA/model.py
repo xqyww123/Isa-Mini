@@ -6877,8 +6877,24 @@ class Contradiction(Leaf):
             if intro_msgs:
                 self.bindings = intro_msgs[0].final
 
+    def _fixed_facts_at_me(self, ret: Hyps) -> Hyps:
+        if self.bindings is not None:
+            for fact in self.bindings[1]:
+                ret[fact.name] = fact.pretty
+        return ret
+
+    def _fixed_facts_after_me(self, ret: Hyps) -> Hyps:
+        return self._fixed_facts_at_me(ret)
+
     def quickview_title(self) -> str:
         return f"Contradiction (hypothesis: {self.hypothesis_name})"
+
+    def quickview(self, indent: int, file: MyIO) -> int:
+        indent = super().quickview(indent, file)
+        if self.bindings is not None and self.bindings != self._prev_bindings:
+            print_fact_bindings(self.bindings[1], indent, file, "assuming hypothesis")
+            self._prev_bindings = self.bindings
+        return indent
 
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
