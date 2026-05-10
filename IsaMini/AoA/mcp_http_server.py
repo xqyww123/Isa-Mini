@@ -516,7 +516,7 @@ async def _surrender_tool_logic(session: Session, args: dict) -> tuple[str, bool
     reason = args.get("reason", "stuck")
     detail = args.get("detail", "")
     if reason not in ("stuck", "false_statement"):
-        msg = f"Invalid reason: {reason!r}. Must be 'stuck' or 'false_statement'."
+        msg = f"Invalid reason: {reason!r}. Must be `stuck` or `false_statement`."
         session.log_tool_response(_tn, f"ERROR: {msg}")
         return (msg, True)
     if not session.surrender_warned:
@@ -777,6 +777,7 @@ class _SessionRouter:
                 session.seen_entities.clear()
                 session.seen_opaque_note = False
                 session.root.session.showed_suffices_notice = False
+                session.root.session.showed_cancelled_notice = False
             await send({
                 "type": "http.response.start",
                 "status": 200,

@@ -28,5 +28,5 @@ step 1: Inference Rule ccontr
 step 2: Intro
   assuming premises:
     - premise0: ¬ (0 :: int) ≤ x * x
-Error: Unfinished Proof. Call command `edit` with action `fill` and target step `3`
+Error: Unfinished Proof (line 20). Call command `edit` with action `fill` and target step `3`
 goal: False

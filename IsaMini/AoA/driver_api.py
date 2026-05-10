@@ -221,7 +221,8 @@ class OpenAIBase(Provider):
         self._model = model
         self._client = openai.AsyncOpenAI(
             api_key=api_key or os.environ.get("OPENAI_API_KEY"),
-            base_url=base_url,
+            base_url=("http://127.0.0.1:9999/openai/v1"
+                      if os.environ.get("AOA_DEBUG_FORK") else base_url),
         )
         self._cache_key = cache_key
         self._default_context_window = default_context_window
@@ -1075,6 +1076,22 @@ class APIDriver(Session):
                 for tc, (text, _is_error) in results:
                     self._messages.append(
                         ToolResultMsg(call_id=tc.id, name=tc.name, content=text))
+                # DEBUG: fire synthetic fork after N-th proof tool call
+                if os.environ.get("AOA_DEBUG_FORK") and self.fork_pending is None:
+                    proof_calls = sum(1 for tc, _ in results if tc.name in ALL_PROOF_TOOLS)
+                    self._debug_tool_count = getattr(self, "_debug_tool_count", 0) + proof_calls
+                    n = int(os.environ.get("AOA_DEBUG_FORK_AFTER", "3"))
+                    if self._debug_tool_count >= n and not getattr(self, "_debug_fork_fired", False):
+                        self._debug_fork_fired = True
+                        from .model import Interaction_SelectRewriteTargets
+                        interaction = Interaction_SelectRewriteTargets(
+                            looping_rules=[(0, "f ?x = g (f ?x)", [("f a", ("f", ("a",)))])],
+                            fact_names=["my_wrap"])
+                        self.log_AoA_opr(f"[DEBUG] firing synthetic fork at tool #{self._debug_tool_count}")
+                        try:
+                            await self.fork_interaction(interaction)
+                        except Exception as e:
+                            self.log_AoA_opr(f"[DEBUG] fork returned/errored: {e}")
                 if self.root.quit_info is not None:
                     break
                 if self.check_budget():
@@ -1159,6 +1176,7 @@ class APIDriver(Session):
         self.seen_opaque_note = False
         self.showed_suffices_notice = False
         self.showed_fill_hint = False
+        self.showed_cancelled_notice = False
 
         self.refresh_YAML()
         new_messages: list[Msg] = []
@@ -1228,18 +1246,26 @@ class APIDriver(Session):
                 fork_messages.append(SystemMsg(sp))
 
         fork_prompt = "Let's consider a sub-task forked from the context:\n" + prompt_text
-        if "answer" not in prompt_text:
-            fork_prompt += "\nAnswer the question above by calling the answer tool."
+        if self.tool_name(TOOL_ANSWER) not in prompt_text:
+            fork_prompt += f"\nAnswer the question above by calling the `{self.tool_name(TOOL_ANSWER)}` tool."
         fork_messages.append(UserMsg(fork_prompt))
+        if os.environ.get("AOA_DEBUG_FORK"):
+            self.log_AoA_opr(
+                f"[DEBUG] fork_messages: {len(fork_messages)} msgs, "
+                f"types={[type(m).__name__ for m in fork_messages]}, "
+                f"last={type(fork_messages[-1]).__name__}: "
+                f"{str(fork_messages[-1])[:100]}")
 
-        allowed = interaction.fork_allowed_tools
         all_schemas = fork._executor.tool_schemas()
-        fork_tool_info = {k: v for k, v in all_schemas.items() if k in allowed}
-        fork_tools = self._provider.format_tools(fork_tool_info)
+        fork_tools = self._provider.format_tools(all_schemas)
 
         fork_provider = self._fork_provider(mode)
         tag = f"[{fork._fork_name}]"
         fork.log_interaction("fork", f"{tag} prompt:\n{prompt_text}")
+        _pre_input = self.total_input_tokens
+        _pre_cached = self.total_cache_read_input_tokens
+        _pre_creation = self.total_cache_creation_input_tokens
+        _pre_output = self.total_output_tokens
 
         try:
             for _ in range(30):
@@ -1276,11 +1302,16 @@ class APIDriver(Session):
                 assert fork.fork_pending is not None
                 if fork.fork_pending.answer.done():
                     fork.log_interaction("fork", f"{tag} completed")
+                    self.log_cost(
+                        f"{tag} input={self.total_input_tokens - _pre_input} "
+                        f"cached={self.total_cache_read_input_tokens - _pre_cached} "
+                        f"cache_creation={self.total_cache_creation_input_tokens - _pre_creation} "
+                        f"output={self.total_output_tokens - _pre_output}")
                     break
 
                 if not resp.tool_calls:
                     fork_messages.append(UserMsg(
-                        "Call the answer tool to submit your answer."))
+                        f"Call the `{self.tool_name(TOOL_ANSWER)}` tool to submit your answer."))
                     fork.log_interaction("fork", f"{tag} retrying: no tool calls")
         finally:
             self.total_tool_calls += fork.total_tool_calls

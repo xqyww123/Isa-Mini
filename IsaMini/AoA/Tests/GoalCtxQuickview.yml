@@ -31,8 +31,8 @@ step 1: Intro
     - x: nat
 step 2: SplitConjs
   - 2.1
-    Error: Unfinished Proof. Call command `edit` with action `fill` and target step `2.1.1`
+    Error: Unfinished Proof (line 21). Call command `edit` with action `fill` and target step `2.1.1`
     goal: P x
   - 2.2
-    Error: Unfinished Proof. Fill step `2.2.1`
+    Error: Unfinished Proof (line 25). Fill step `2.2.1`
     goal: Q x

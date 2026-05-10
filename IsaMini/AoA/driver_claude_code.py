@@ -171,7 +171,12 @@ class ClaudeCode(Session):
                 permission_mode="default",
                 allowed_tools=self.TOOL_WHITELIST,
                 mcp_servers={"proof": {"type": "http", "url": self._mcp_url}},
-                env={"CLAUDE_CODE_ATTRIBUTION_HEADER": "0"},
+                env={
+                    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+                    # DEBUG: route through local API proxy for cache debugging
+                    **({"ANTHROPIC_BASE_URL": "http://127.0.0.1:9999"}
+                       if os.environ.get("AOA_DEBUG_FORK") else {}),
+                },
                 settings=json.dumps({"autoCompactWindow":
                     _auto_compact_window(main_model, self.COMPACT_THRESHOLD)}),
                 extra_args={"exclude-dynamic-system-prompt-sections": None},
@@ -263,6 +268,7 @@ class ClaudeCode(Session):
         self.seen_opaque_note = False
         self.root.session.showed_suffices_notice = False
         self.showed_fill_hint = False
+        self.root.session.showed_cancelled_notice = False
         self._log_meta("COMPACTION")
         return {}
 
@@ -350,7 +356,7 @@ class ClaudeCode(Session):
                             "hookSpecificOutput": {
                                 "hookEventName": "PreToolUse",
                                 "permissionDecision": "deny",
-                                "permissionDecisionReason": f"Cannot use {tool} on proof.yaml. Use the {self.tool_name(TOOL_EDIT)} tool instead.",
+                                "permissionDecisionReason": f"Cannot use `{tool}` on proof.yaml. Use the `{self.tool_name(TOOL_EDIT)}` tool instead.",
                             },
                         }
                     # Allow Read and Grep for proof.yaml
@@ -381,6 +387,23 @@ class ClaudeCode(Session):
         context: HookContext,
     ) -> HookJSONOutput:
         self._model_time_start = time()
+        # DEBUG: after N-th proof tool call, fire a synthetic fork interaction
+        if os.environ.get("AOA_DEBUG_FORK") and self.fork_pending is None:
+            tool = hook_input.get("tool_name", "") if isinstance(hook_input, dict) else ""
+            if self.is_proof_tool(tool):
+                self._debug_tool_count = getattr(self, "_debug_tool_count", 0) + 1
+                n = int(os.environ.get("AOA_DEBUG_FORK_AFTER", "2"))
+                if self._debug_tool_count == n:
+                    from .model import Interaction_SelectRewriteTargets
+                    dummy_matches = [("f a", ("f", ("a", )))]
+                    interaction = Interaction_SelectRewriteTargets(
+                        looping_rules=[(0, "f ?x = g (f ?x)", dummy_matches)],
+                        fact_names=["my_wrap"])
+                    self.log_AoA_opr(f"[DEBUG] firing synthetic fork at edit #{n}")
+                    try:
+                        await self.fork_interaction(interaction)
+                    except Exception as e:
+                        self.log_AoA_opr(f"[DEBUG] fork returned/errored: {e}")
         return {}
 
     async def _list_tools(self, client):
@@ -756,7 +779,11 @@ class ClaudeCode(Session):
             permission_mode="default",
             allowed_tools=self.TOOL_WHITELIST,
             mcp_servers={"proof": {"type": "http", "url": fork_url}},
-            env={"CLAUDE_CODE_ATTRIBUTION_HEADER": "0"},
+            env={
+                "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+                **({"ANTHROPIC_BASE_URL": "http://127.0.0.1:9999"}
+                   if os.environ.get("AOA_DEBUG_FORK") else {}),
+            },
             settings=json.dumps({"autoCompactWindow":
                 _auto_compact_window(model, self.FORK_COMPACT_THRESHOLD)}),
             extra_args={"exclude-dynamic-system-prompt-sections": None},
@@ -790,7 +817,7 @@ class ClaudeCode(Session):
                 if answer_tool not in prompt_text:
                     fork_prompt += (
                         f"\nAnswer the question above by calling the "
-                        f"{answer_tool} tool.")
+                        f"`{answer_tool}` tool.")
                 fork.log_interaction("fork", f"{tag} prompt:\n{prompt_text}")
                 await fork_client.query(fork_prompt)
                 fork._model_time_start = time()
@@ -822,7 +849,7 @@ class ClaudeCode(Session):
                     fork.log_interaction("fork", f"{tag} retrying: interaction not answered")
                     await fork_client.query(
                         "It looks like you haven't submitted your answer. "
-                        f"Call {self.tool_name(TOOL_ANSWER)} to submit it.")
+                        f"Call `{self.tool_name(TOOL_ANSWER)}` to submit it.")
                     fork._model_time_start = time()
             fork._client = None
         finally:

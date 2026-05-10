@@ -72,7 +72,7 @@ def _render_auto_intro_warning(session: 'model.Session', file: MyIO) -> None:
     file.write(
         f"Note: {noun} {ids} {'were' if len(live) > 1 else 'was'} "
         f"auto-introduced. You may delete {'them' if len(live) > 1 else 'it'} "
-        f"using {tn(TOOL_DELETE)} if unhelpful.\n"
+        f"using `{tn(TOOL_DELETE)}` if unhelpful.\n"
     )
 
 
@@ -151,8 +151,8 @@ def invalid_action_error(action: str) -> str:
     """Error message for invalid edit actions."""
     return (
         f"Invalid action: {action}. "
-        f"Must be one of: 'fill', 'insert_before', or 'amend'. "
-        f"Use the '{tn(TOOL_DELETE)}' tool to delete steps."
+        f"Must be one of: `fill`, `insert_before`, or `amend`. "
+        f"Use the `{tn(TOOL_DELETE)}` tool to delete steps."
     )
 
 

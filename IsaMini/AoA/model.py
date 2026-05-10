@@ -2196,18 +2196,16 @@ class Interaction_InstantiateSchematics(Interaction):
         file.write(
             f"The {kind_word} rule `{self.rule_name.unicode}` has "
             f"{'a schematic variable' if n_vars == 1 else f'{n_vars} schematic variables'} "
-            "that must be instantiated before the rule can be applied.\n")
-        print_indent(indent, file)
-        file.write("Consume premises (they become `Prem<i>` subgoals, "
-                   "or are discharged by `using` facts):\n")
-        for i, prem in enumerate(self.consume_premises):
-            print_indent(indent + 1, file)
-            file.write(f"{i}. {prem}\n")
-        print_indent(indent, file)
-        file.write("Schematic variables to instantiate:\n")
+            "that must be instantiated before the rule can be applied:\n")
         for name, typ in self.schematic_vars:
             print_indent(indent + 1, file)
             file.write(f"- {name} :: {typ}\n")
+        print_indent(indent, file)
+        noun = "variable appears" if n_vars == 1 else "variables appear"
+        file.write(f"The {noun} in the rule premises:\n")
+        for i, prem in enumerate(self.consume_premises):
+            print_indent(indent + 1, file)
+            file.write(f"{i}. {prem}\n")
         print_indent(indent, file)
         file.write("Answer with `instantiations`, a list of "
                    "{variable, term} objects. Each term must be a "
@@ -2409,7 +2407,8 @@ class EditOutcome:
         if can_continue:
             await node._refresh_me_alone(auto_intro=auto_intro)
         else:
-            await node._cancel()
+            failed_id = node.parent._failed_predecessor_id(node) if node.parent else None
+            await node._cancel(failed_id)
             cancelled = True
         if not cancelled:
             await node._refresh_all_after_me()
@@ -2464,6 +2463,7 @@ class Node(ABC):
         self.changed : bool = False
         self._kind : str = "step"
         self._first_time = True
+        self._cancelled_by: str | None = None
         self._has_considered_auto_intro = False
         self._is_trivial: bool | None = None
         self.age = self.session.age
@@ -2588,7 +2588,14 @@ class Node(ABC):
                 print_paragraph(indent, file, reason.reason)
             case EvaluationStatus.Status.CANCELLED:
                 print_indent(indent, file)
-                file.write("Error: the evaluation is cancelled due to failures in preceding nodes\n")
+                if self._cancelled_by:
+                    if not self.session.showed_cancelled_notice:
+                        file.write(f"Error: the evaluation is cancelled due to failure of step `{self._cancelled_by}`\n")
+                        self.session.showed_cancelled_notice = True
+                    else:
+                        file.write(f"Error: cancelled (step `{self._cancelled_by}` failed)\n")
+                else:
+                    file.write("Error: the evaluation is cancelled due to failures in preceding nodes\n")
     def _print_evaluation_status_quickview(self, indent: int, file: MyIO) -> None:
         match self.status.status:
             case EvaluationStatus.Status.SUCCESS:
@@ -2652,9 +2659,10 @@ class Node(ABC):
         else:
             return self.parent._resulting_state_of_child(self)
 
-    async def _cancel(self) -> None:
+    async def _cancel(self, cancelled_by: str | None = None) -> None:
         if self.status.status == EvaluationStatus.Status.CANCELLED:
             return
+        self._cancelled_by = cancelled_by
         self.status = EVALUATION_CACNCELLED
         await self.resulting_state().reset()
     def _on_edit_failure(
@@ -2740,7 +2748,7 @@ class Node(ABC):
             if can_continue:
                 await node._refresh_me_alone(auto_intro=True)
             else:
-                await node._cancel()
+                await node._cancel(parent._failed_predecessor_id(node))
                 cancelled = True
             outcome.committed.append(node)
             if cancelled or node.status.status != EvaluationStatus.Status.FAILURE:
@@ -3059,7 +3067,7 @@ class Node(ABC):
                             if parent._can_continue_before_child(old):
                                 await old._refresh_me_alone(auto_intro=False)
                             else:
-                                await old._cancel()
+                                await old._cancel(parent._failed_predecessor_id(old))
                             await old._refresh_all_after_me()
                             break
                     outcome.committed.pop()
@@ -3201,11 +3209,19 @@ class NonLeaf_Node(Node):
                     return True
                 return self.sub_nodes[i-1].status.status == EvaluationStatus.Status.SUCCESS
         raise InternalError("The target node is not my children")
+    def _failed_predecessor_id(self, child: 'Node') -> str | None:
+        for i, c in enumerate(self.sub_nodes):
+            if c is child:
+                if i > 0 and self.sub_nodes[i-1].status.status != EvaluationStatus.Status.SUCCESS:
+                    return self.sub_nodes[i-1].id
+                return None
+        return None
     async def _refresh_all_children_after(self, after: 'Node | Literal["end"]', can_continue_i: bool) -> None:
         """
         refreshing the status of all the nodes excluding and after the `after`
         """
         can_continue : bool | None = None
+        failed_id: str | None = None
         if after == "end":
             can_continue = True
         else:
@@ -3213,12 +3229,16 @@ class NonLeaf_Node(Node):
                 if can_continue is None:
                     if child is after:
                         can_continue = can_continue_i
+                        if not can_continue_i:
+                            failed_id = child.id
                 else:
                     if can_continue:
                         await child._refresh_me_alone(auto_intro=True)
-                        can_continue = child.status.status == EvaluationStatus.Status.SUCCESS
+                        if child.status.status != EvaluationStatus.Status.SUCCESS:
+                            can_continue = False
+                            failed_id = child.id
                     else:
-                        await child._cancel()
+                        await child._cancel(failed_id)
         if can_continue is None:
             raise InternalError("Cannot find the target to refresh in my children")
         else:
@@ -3451,7 +3471,7 @@ class NonLeaf_Node(Node):
                 if self._can_continue_before_child(new_node):
                     await new_node._refresh_me_alone(auto_intro=True)
                 else:
-                    await new_node._cancel()
+                    await new_node._cancel(self._failed_predecessor_id(new_node))
                 await new_node._refresh_all_after_me()
                 return new_node, child
         raise InternalError("The target node is not my children")
@@ -3505,13 +3525,13 @@ class StdBlock(NonLeaf_Node):
             cls=cls,
             factory=lambda cfg: cast(Any, cls)(cfg, arg, parsed),
             raw=arg)
-    async def _cancel(self) -> None:
+    async def _cancel(self, cancelled_by: str | None = None) -> None:
         if self.status.status == EvaluationStatus.Status.CANCELLED:
             return
-        await super()._cancel()
+        await super()._cancel(cancelled_by)
         await self._state_before_ending_.reset()
         for child in self.sub_nodes:
-            await child._cancel()
+            await child._cancel(cancelled_by)
     @abstractmethod
     def beginning_opr(self) -> 'Minilang_Operation | FailureReason | None':
         ...
@@ -3612,7 +3632,7 @@ class StdBlock(NonLeaf_Node):
                             can_continue = False
                             failed_child = child
                     else:
-                        await child._cancel()
+                        await child._cancel(failed_child.id if failed_child else None)
         if can_continue is None:
             raise InternalError("Cannot find the target to refresh in my children")
         footer_reason: FailureReason | None = None
@@ -3654,6 +3674,7 @@ class StdBlock(NonLeaf_Node):
             await self.ml_state.clone(self._state_after_beginning())
         await super()._refresh_me_alone(auto_intro)
         failed_child: Node | None = None
+        cancel_by: str | None = self.id if not can_continue else None
         for child in self.sub_nodes:
             if can_continue:
                 await child._refresh_me_alone(auto_intro=True)
@@ -3661,8 +3682,9 @@ class StdBlock(NonLeaf_Node):
                 if not can_continue:
                     reason = self._child_refresh_failure_err_msgs(child)
                     failed_child = child
+                    cancel_by = child.id
             else:
-                await child._cancel()
+                await child._cancel(cancel_by)
         if can_continue:
             reason = await self._refresh_footer()
             if reason is not None:
@@ -7603,6 +7625,7 @@ class Session:
         self.seen_abbreviations: set[str] = (
             set(parent.seen_abbreviations) if parent is not None else set())
         self.showed_fill_hint: bool = False
+        self.showed_cancelled_notice: bool = False
         if parent is not None:
             # Subsessions share parent's log files
             self.log_dir = parent.log_dir

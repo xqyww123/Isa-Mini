@@ -34,7 +34,7 @@ from .model import (
     Interaction_Retrieve, RetrievedEntity, IsabelleEntity,
     _THEOREM_KINDS, AGENT_EXPR_LIMIT,
     TOOL_SEARCH, InteractiveRetrievalMode,
-    InternalError_UnparsedTerm,
+    InternalError_UnparsedTerm, tn,
 )
 
 
@@ -459,7 +459,7 @@ class Interaction_RetrieveForSearch(Interaction_Retrieve):
         file.write(f"Select all relevant {title} from the following list:\n")
         await self._prompt_candidates(indent, file)
         if self.fork_allowed_tools is None or TOOL_SEARCH in self.fork_allowed_tools:
-            file.write("\nYou are encouraged to call the query tool "
+            file.write(f"\nYou are encouraged to call the `{tn(TOOL_SEARCH)}` tool "
                        "to find more if none of the above is relevant.\n")
         file.write("Answer with the indices of all relevant entries.\n")
 
