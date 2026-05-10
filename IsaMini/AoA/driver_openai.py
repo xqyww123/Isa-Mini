@@ -317,7 +317,7 @@ class OpenAI_Driver(Session):
 
                     fork.log_interaction("fork", f"{tag} retrying: interaction not answered")
                     fork_prompt = (
-                        "It looks like you haven't submitted your answer. "
+                        "You haven't submitted your answer. "
                         f"Call the `{self.tool_name(TOOL_ANSWER)}` tool to submit it.")
                     previous_response_id = fork._last_response_id
         finally:

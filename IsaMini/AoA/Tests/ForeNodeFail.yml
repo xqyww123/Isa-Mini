@@ -133,7 +133,7 @@ proof:
     Error: Evaluation cancelled due to failures above
   - step id: 3
     operation: Obvious
-    Error: the evaluation is cancelled due to failures in preceding nodes
+    Error: the evaluation is cancelled due to failure of step `2`
 Error: Evaluation cancelled due to failures above
 Inserted step status (insert_before after failed): cancelled
 --------------------------------------------------
@@ -188,12 +188,12 @@ proof:
       english: x equals z
       conclusion: x = z
     name: lem2
-    Error: the evaluation is cancelled due to failures in preceding nodes
+    Error: cancelled (step `2` failed)
     proof: empty
     Error: Evaluation cancelled due to failures above
   - step id: 3
     operation: Obvious
-    Error: the evaluation is cancelled due to failures in preceding nodes
+    Error: cancelled (step `2` failed)
 Error: Evaluation cancelled due to failures above
 Step 2 status after amend (should succeed): success
 Inserted step status after amend: success

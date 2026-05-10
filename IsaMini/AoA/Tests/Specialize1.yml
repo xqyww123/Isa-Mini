@@ -62,6 +62,6 @@ proof:
     Error: exception THM 1 raised (line 2601 of "thm.ML"): RSN: no unifiers
   - step id: 2
     operation: Obvious
-    Error: the evaluation is cancelled due to failures in preceding nodes
+    Error: the evaluation is cancelled due to failure of step `1`
 Error: Evaluation cancelled due to failures above
 Unfinished nodes: 3

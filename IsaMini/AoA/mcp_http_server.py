@@ -36,7 +36,7 @@ from Isabelle_RPC_Host import pretty_unicode
 from .model import (
     _session_var, Session, Node, NonLeaf_Node,
     InteractionExpanded,
-    AoA_Error, ArgumentError, IsabelleError,
+    AoA_Error, ArgumentError, IsabelleError, InternalError,
     CannotDelete_Root, NodeNotFound,
     EvaluationStatus,
     Parse_Op_List, normalize_answer, Interaction_BadAnswer,
@@ -193,11 +193,16 @@ def _check_tool_permission(session: Session, tool_name: str) -> str | None:
     """
     if tool_name == "answer" and (
             session.fork_pending is None or session.fork_pending.answer.done()):
-        return "No pending interaction."
+        answer_tn = session.tool_name(TOOL_ANSWER)
+        return f"No question pending. The `{answer_tn}` tool can only be used when there is a question for you to answer."
     if session.fork_pending is not None and tool_name in ALL_PROOF_TOOLS:
         allowed = session.fork_pending.interaction.fork_allowed_tools
         if tool_name not in allowed:
-            return f"Tool '{tool_name}' is not allowed in this fork interaction."
+            allowed_list = ", ".join(f"`{session.tool_name(t)}`" for t in allowed)
+            answer_tn = session.tool_name(TOOL_ANSWER)
+            return (f"Tool `{session.tool_name(tool_name)}` is not allowed. "
+                    f"Only {allowed_list} {'is' if len(allowed) == 1 else 'are'} available. "
+                    f"Use the `{answer_tn}` tool to submit your answer.")
     return None
 
 
@@ -291,7 +296,7 @@ async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         if isinstance(target_steps, int):
             target_steps = [target_steps]
         if not isinstance(target_steps, list) or not target_steps:
-            error_msg = "target_steps must be a non-empty array"
+            error_msg = "target_steps must be a non-empty array of strings"
             session.log_tool_response(_tn, f"ERROR: {error_msg}")
             return (error_msg, True)
         session.root.session.age += 1
@@ -338,7 +343,8 @@ async def _answer_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     try:
         pending = session.fork_pending
         if pending is None or pending.answer.done():
-            error_msg = "No pending interaction to answer"
+            answer_tn = session.tool_name(TOOL_ANSWER)
+            error_msg = f"No question pending. The `{answer_tn}` tool can only be used when there is a question for you to answer"
             session.log_tool_response(_tn, f"ERROR: {error_msg}")
             return (error_msg, True)
 
@@ -428,12 +434,12 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     if step_id is None and line_num is None:
         yaml_path: str | None = getattr(session, "YAML_path", None)
         if yaml_path is None:
-            return ("proof.yaml path not configured.", True)
+            raise InternalError("proof.yaml path not configured")
         try:
             with open(yaml_path, encoding="utf-8") as f:
                 all_lines = f.readlines()
         except FileNotFoundError:
-            return ("proof.yaml not found.", True)
+            raise InternalError(f"proof.yaml not found at {yaml_path}")
         if len(all_lines) > 100:
             error_msg = (
                 f"The proof contains {len(all_lines)} lines. "
@@ -477,15 +483,13 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     assert line_num is not None
     yaml_path: str | None = getattr(session, "YAML_path", None)
     if yaml_path is None:
-        return ("proof.yaml path not configured.", True)
+        raise InternalError("proof.yaml path not configured")
 
     try:
         with open(yaml_path, encoding="utf-8") as f:
             all_lines = f.readlines()
     except FileNotFoundError:
-        error_msg = "proof.yaml not found."
-        session.log_tool_response(_tn, f"ERROR: {error_msg}")
-        return (error_msg, True)
+        raise InternalError(f"proof.yaml not found at {yaml_path}")
 
     total_lines = len(all_lines)
     if node is not None:

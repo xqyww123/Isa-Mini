@@ -59,6 +59,7 @@ class ProviderResponse:
     thinking: str | None
     tool_calls: list[ToolCall]
     usage: Usage
+    response_id: str | None = None
 
 
 # ============================================================================
@@ -99,7 +100,8 @@ class Provider(ABC):
     """
 
     @abstractmethod
-    async def chat(self, messages: list[Msg], tools: list[dict]) -> ProviderResponse:
+    async def chat(self, messages: list[Msg], tools: list[dict],
+                   *, previous_response_id: str | None = None) -> ProviderResponse:
         ...
 
     @abstractmethod
@@ -221,8 +223,7 @@ class OpenAIBase(Provider):
         self._model = model
         self._client = openai.AsyncOpenAI(
             api_key=api_key or os.environ.get("OPENAI_API_KEY"),
-            base_url=("http://127.0.0.1:9999/openai/v1"
-                      if os.environ.get("AOA_DEBUG_FORK") else base_url),
+            base_url=base_url,
         )
         self._cache_key = cache_key
         self._default_context_window = default_context_window
@@ -274,7 +275,8 @@ class OpenAIChatProvider(OpenAIBase):
                     out.append({"role": "tool", "tool_call_id": cid, "content": c})
         return out
 
-    async def chat(self, messages: list[Msg], tools: list[dict]) -> ProviderResponse:
+    async def chat(self, messages: list[Msg], tools: list[dict],
+                   *, previous_response_id: str | None = None) -> ProviderResponse:
         params: dict[str, Any] = {
             "model": self._model,
             "messages": self._msgs_to_dicts(messages),
@@ -371,14 +373,18 @@ OpenAIProvider = OpenAIChatProvider
 class OpenAIResponsesProvider(OpenAIBase):
     """Responses protocol (/v1/responses)."""
 
-    def _msgs_to_input(self, messages: list[Msg]) -> tuple[str | None, list[Any]]:
-        """Convert Msg list → (instructions, input_items)."""
-        instructions: str | None = None
+    def _msgs_to_input(self, messages: list[Msg]) -> list[Any]:
+        """Convert Msg list → input_items.
+
+        SystemMsg is mapped to ``{"role": "developer"}`` so that it
+        persists in the stored conversation and enables prefix-based
+        prompt caching across ``previous_response_id`` chains.
+        """
         items: list[Any] = []
         for m in messages:
             match m:
                 case SystemMsg(content=c):
-                    instructions = c
+                    items.append({"role": "developer", "content": c})
                 case UserMsg(content=c):
                     items.append({"role": "user", "content": c})
                 case AssistantMsg(native=n) if n is not None:
@@ -389,16 +395,15 @@ class OpenAIResponsesProvider(OpenAIBase):
                 case ToolResultMsg(call_id=cid, content=c):
                     items.append({"type": "function_call_output",
                                   "call_id": cid, "output": c})
-        return instructions, items
+        return items
 
-    async def chat(self, messages: list[Msg], tools: list[dict]) -> ProviderResponse:
-        instructions, input_items = self._msgs_to_input(messages)
+    async def chat(self, messages: list[Msg], tools: list[dict],
+                   *, previous_response_id: str | None = None) -> ProviderResponse:
+        input_items = self._msgs_to_input(messages)
         params: dict[str, Any] = {
             "model": self._model,
             "input": input_items,
         }
-        if instructions is not None:
-            params["instructions"] = instructions
         if self._reasoning_effort is not None:
             params["reasoning"] = {"effort": self._reasoning_effort}
         if self._temperature is not None:
@@ -410,8 +415,11 @@ class OpenAIResponsesProvider(OpenAIBase):
         if self._extra_params:
             params.setdefault("extra_body", {})
             params["extra_body"].update(self._extra_params)
-        params["store"] = False
+        params["store"] = True
         params["include"] = ["reasoning.encrypted_content"]
+        params["prompt_cache_retention"] = "24h"
+        if previous_response_id is not None:
+            params["previous_response_id"] = previous_response_id
 
         stream = await self._client.responses.create(**params, stream=True)
         response = None
@@ -463,6 +471,7 @@ class OpenAIResponsesProvider(OpenAIBase):
             thinking="\n".join(thinking_parts) if thinking_parts else None,
             tool_calls=tool_calls,
             usage=usage,
+            response_id=response.id,
         )
 
     def format_tools(self, tool_info: dict[str, dict[str, Any]]) -> list[dict]:
@@ -499,8 +508,9 @@ class K2ThinkProvider(OpenAIProvider):
             extra_params={"think_budget_tokens": 32_768},
         )
 
-    async def chat(self, messages: list[Msg], tools: list[dict]) -> ProviderResponse:
-        resp = await super().chat(messages, tools)
+    async def chat(self, messages: list[Msg], tools: list[dict],
+                   *, previous_response_id: str | None = None) -> ProviderResponse:
+        resp = await super().chat(messages, tools, previous_response_id=previous_response_id)
         if resp.content:
             m = self._THINK_RE.match(resp.content)
             if m:
@@ -545,7 +555,8 @@ class GeminiProvider(Provider):
         self._call_id_to_name: dict[str, str] = {}
         self._call_id_counter = 0
 
-    async def chat(self, messages: list[Msg], tools: list[dict]) -> ProviderResponse:
+    async def chat(self, messages: list[Msg], tools: list[dict],
+                   *, previous_response_id: str | None = None) -> ProviderResponse:
         system_instruction: str | None = None
         contents: list[genai_types.Content] = []
         for m in messages:
@@ -702,7 +713,8 @@ class AnthropicProvider(Provider):
         self._default_context_window = default_context_window
         self._last_response: Any = None
 
-    async def chat(self, messages: list[Msg], tools: list[dict]) -> ProviderResponse:
+    async def chat(self, messages: list[Msg], tools: list[dict],
+                   *, previous_response_id: str | None = None) -> ProviderResponse:
         system_blocks: list[dict] | None = None
         api_messages: list[dict] = []
 
@@ -957,6 +969,8 @@ class APIDriver(Session):
         self._executor: ToolExecutor | None = None
         self._fork_counter = 0
         self._model_time_start: float | None = None
+        self._last_response_id: str | None = None
+        self._msgs_sent_through: int = 0
 
         if parent is not None:
             self.working_dir = parent.working_dir
@@ -1048,16 +1062,43 @@ class APIDriver(Session):
         assert self._executor is not None
         self._budget_start_time = time()
         self._messages = self._initial_messages()
+        self._last_response_id = None
+        self._msgs_sent_through = 0
         tools = self._provider.format_tools(self._executor.tool_schemas())
 
         while not self._interrupted:
+            if self._last_response_id is not None:
+                msgs_to_send = self._messages[self._msgs_sent_through:]
+            else:
+                msgs_to_send = self._messages
+
             self._model_time_start = time()
             try:
-                response = await self._provider.chat(self._messages, tools)
+                response = await self._provider.chat(
+                    msgs_to_send, tools,
+                    previous_response_id=self._last_response_id)
             except openai.RateLimitError as e:
                 if "insufficient_quota" in str(e):
                     raise self._QuotaError() from e
                 raise self._RateLimitError() from e
+            except (openai.BadRequestError, openai.NotFoundError) as e:
+                if self._last_response_id is not None:
+                    self.debug_info(
+                        f"previous_response_id failed ({e}), resending full history")
+                    self._last_response_id = None
+                    self._msgs_sent_through = 0
+                    try:
+                        response = await self._provider.chat(self._messages, tools)
+                    except openai.RateLimitError as e2:
+                        if "insufficient_quota" in str(e2):
+                            raise self._QuotaError() from e2
+                        raise self._RateLimitError() from e2
+                else:
+                    raise
+
+            if response.response_id is not None:
+                self._last_response_id = response.response_id
+                self._msgs_sent_through = len(self._messages) + 1
 
             if self._model_time_start is not None:
                 self.total_model_time += time() - self._model_time_start
@@ -1076,22 +1117,6 @@ class APIDriver(Session):
                 for tc, (text, _is_error) in results:
                     self._messages.append(
                         ToolResultMsg(call_id=tc.id, name=tc.name, content=text))
-                # DEBUG: fire synthetic fork after N-th proof tool call
-                if os.environ.get("AOA_DEBUG_FORK") and self.fork_pending is None:
-                    proof_calls = sum(1 for tc, _ in results if tc.name in ALL_PROOF_TOOLS)
-                    self._debug_tool_count = getattr(self, "_debug_tool_count", 0) + proof_calls
-                    n = int(os.environ.get("AOA_DEBUG_FORK_AFTER", "3"))
-                    if self._debug_tool_count >= n and not getattr(self, "_debug_fork_fired", False):
-                        self._debug_fork_fired = True
-                        from .model import Interaction_SelectRewriteTargets
-                        interaction = Interaction_SelectRewriteTargets(
-                            looping_rules=[(0, "f ?x = g (f ?x)", [("f a", ("f", ("a",)))])],
-                            fact_names=["my_wrap"])
-                        self.log_AoA_opr(f"[DEBUG] firing synthetic fork at tool #{self._debug_tool_count}")
-                        try:
-                            await self.fork_interaction(interaction)
-                        except Exception as e:
-                            self.log_AoA_opr(f"[DEBUG] fork returned/errored: {e}")
                 if self.root.quit_info is not None:
                     break
                 if self.check_budget():
@@ -1109,7 +1134,11 @@ class APIDriver(Session):
                 self.log_retry(unfinished, retry)
 
             if self._should_compact(response.usage):
-                self._messages = await self._compact(self._messages, tools)
+                compacted = await self._compact(self._messages, tools)
+                if compacted is not self._messages:
+                    self._last_response_id = None
+                    self._msgs_sent_through = 0
+                self._messages = compacted
 
         self._compute_cost()
         self.log_proof()
@@ -1220,41 +1249,57 @@ class APIDriver(Session):
         fork._executor = ToolExecutor(fork)
 
         mode = interaction.forking
+        fork_response_id: str | None = None
+
+        if self.tool_name(TOOL_ANSWER) not in prompt_text:
+            prompt_text += (
+                f"\nAnswer the question above by calling "
+                f"the `{self.tool_name(TOOL_ANSWER)}` tool.")
+
+        fork_messages: list[Msg]
         if mode == ForkingMode.FORKING_WITH_CTXT:
-            fork_messages: list[Msg] = list(self._messages)
-            # A fork triggered during tool execution (the typical case) runs
-            # while _execute_tool_calls has not yet appended ToolResultMsg
-            # entries.  The trailing AssistantMsg therefore contains
-            # function_calls with no matching results — the API rejects this
-            # with "No tool output found for function call".
-            # Fix: replace that AssistantMsg with a plain-text summary so the
-            # fork still sees what the main session intended to do.
-            if (fork_messages
-                    and isinstance(fork_messages[-1], AssistantMsg)
-                    and fork_messages[-1].response.tool_calls):
-                pending = fork_messages[-1].response.tool_calls
-                parts = [f"calling {tc.name} with arguments:\n{tc.arguments}"
-                         for tc in pending]
-                fork_messages[-1] = AssistantMsg(
-                    response=ProviderResponse(
-                        content="I am " + "\n".join(parts),
-                        thinking=None, tool_calls=[], usage=Usage(0, 0, 0)))
+            if self._last_response_id is not None:
+                fork_response_id = self._last_response_id
+                if (self._messages
+                        and isinstance(self._messages[-1], AssistantMsg)
+                        and self._messages[-1].response.tool_calls):
+                    # Pending function_calls: API requires fco before
+                    # new input.  Embed prompt directly in fco content.
+                    pending = self._messages[-1].response.tool_calls
+                    fork_messages = [
+                        ToolResultMsg(
+                            call_id=tc.id, name=tc.name,
+                            content=(prompt_text if i == 0
+                                     else "Tool execution in progress. "
+                                          "Please address the question above."))
+                        for i, tc in enumerate(pending)]
+                else:
+                    # No pending function_calls: send unsent messages
+                    # plus prompt as a normal user message.
+                    fork_messages = list(
+                        self._messages[self._msgs_sent_through:])
+                    fork_messages.append(UserMsg(prompt_text))
+            else:
+                # No stored response — fall back to message copy.
+                fork_messages = list(self._messages)
+                if (fork_messages
+                        and isinstance(fork_messages[-1], AssistantMsg)
+                        and fork_messages[-1].response.tool_calls):
+                    pending = fork_messages[-1].response.tool_calls
+                    for i, tc in enumerate(pending):
+                        fork_messages.append(ToolResultMsg(
+                            call_id=tc.id, name=tc.name,
+                            content=(prompt_text if i == 0
+                                     else "Tool execution in progress. "
+                                          "Please address the question above.")))
+                else:
+                    fork_messages.append(UserMsg(prompt_text))
         else:
-            fork_messages: list[Msg] = []
+            fork_messages = []
             sp = self.system_prompt()
             if sp is not None:
                 fork_messages.append(SystemMsg(sp))
-
-        fork_prompt = "Let's consider a sub-task forked from the context:\n" + prompt_text
-        if self.tool_name(TOOL_ANSWER) not in prompt_text:
-            fork_prompt += f"\nAnswer the question above by calling the `{self.tool_name(TOOL_ANSWER)}` tool."
-        fork_messages.append(UserMsg(fork_prompt))
-        if os.environ.get("AOA_DEBUG_FORK"):
-            self.log_AoA_opr(
-                f"[DEBUG] fork_messages: {len(fork_messages)} msgs, "
-                f"types={[type(m).__name__ for m in fork_messages]}, "
-                f"last={type(fork_messages[-1]).__name__}: "
-                f"{str(fork_messages[-1])[:100]}")
+            fork_messages.append(UserMsg(prompt_text))
 
         all_schemas = fork._executor.tool_schemas()
         fork_tools = self._provider.format_tools(all_schemas)
@@ -1267,17 +1312,31 @@ class APIDriver(Session):
         _pre_creation = self.total_cache_creation_input_tokens
         _pre_output = self.total_output_tokens
 
+        fork_msgs_sent_through: int = 0
+
         try:
             for _ in range(30):
                 if fork._interrupted:
                     break
+
+                if fork_response_id is not None:
+                    fork_msgs_to_send = fork_messages[fork_msgs_sent_through:]
+                else:
+                    fork_msgs_to_send = fork_messages
+
                 fork._model_time_start = time()
                 try:
-                    resp = await fork_provider.chat(fork_messages, fork_tools)
+                    resp = await fork_provider.chat(
+                        fork_msgs_to_send, fork_tools,
+                        previous_response_id=fork_response_id)
                 except openai.RateLimitError as e:
                     if "insufficient_quota" in str(e):
                         raise self._QuotaError() from e
                     raise self._RateLimitError() from e
+
+                if resp.response_id is not None:
+                    fork_response_id = resp.response_id
+                    fork_msgs_sent_through = len(fork_messages) + 1
 
                 if fork._model_time_start is not None:
                     fork.total_model_time += time() - fork._model_time_start
@@ -1294,7 +1353,7 @@ class APIDriver(Session):
                 if resp.tool_calls:
                     for tc in resp.tool_calls:
                         args = json.loads(tc.arguments)
-                        result, is_error = await fork._executor.execute(tc.name, args)
+                        result, _is_error = await fork._executor.execute(tc.name, args)
                         fork_messages.append(
                             ToolResultMsg(call_id=tc.id, name=tc.name, content=result))
                         fork.total_tool_calls += 1

@@ -5847,7 +5847,9 @@ class Interaction_SelectRewriteTargets(Interaction):
             file.write(f"Rule '{fact_name}' ({rule_pretty}) would cause infinite rewriting.\n")
             if matches:
                 print_indent(indent, file)
-                file.write("To use this rule safely, select which specific subterm(s) to rewrite:\n")
+                n = len(matches)
+                noun = "subterm" if n == 1 else "subterms"
+                file.write(f"To use this rule safely, select which specific {noun} to rewrite:\n")
                 for i, (pretty, _raw) in enumerate(matches):
                     print_indent(indent + 1, file)
                     file.write(f"{i}. {pretty}\n")
@@ -5855,7 +5857,10 @@ class Interaction_SelectRewriteTargets(Interaction):
                 print_indent(indent, file)
                 file.write("No matching subterms found in rewrite targets.\n")
             print_indent(indent, file)
-            file.write("Answer with the index(es) of the subterm(s) to rewrite, or leave empty to drop this rule.\n")
+            if matches and len(matches) == 1:
+                file.write("Answer with the index of the subterm to rewrite, or leave empty to drop this rule.\n")
+            else:
+                file.write("Answer with the indices of the subterms to rewrite, or leave empty to drop this rule.\n")
     async def answer(self, answer: Answer) -> list[tuple[int, list[lambda_term]]]:
         """Returns [(fact_index, [selected_raw_terms])] for each looping rule.
         Empty selection for a rule means drop it. Accepts `indexes` only."""
