@@ -61,11 +61,9 @@ class ClaudeCode(Session):
         "edit":   "mcp__proof__edit",
         "delete": "mcp__proof__delete",
         "recall": "Read",
+        "refute_or_surrender": "mcp__proof__refute_or_surrender",
     }
     TOOL_WHITELIST = _NON_PROOF_TOOLS + list(_TOOL_NAME_MAP.values())
-    FORK_WHITELIST = _NON_PROOF_TOOLS + [
-        v for k, v in _TOOL_NAME_MAP.items() if k not in (TOOL_EDIT, TOOL_DELETE)
-    ]
     COMPACT_THRESHOLD = 0.85
     FORK_COMPACT_THRESHOLD = 0.99
 
