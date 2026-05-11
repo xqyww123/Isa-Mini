@@ -781,10 +781,10 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
               val results = map_index (fn (i, thms) =>
                 let val meta_rules = maps (Raw_Simplifier.mksimps ctxt) thms
                     val looping_rules = filter (fn meta_eq =>
-                      let val (lhs, rhs) = Logic.dest_equals
-                              (Logic.strip_imp_concl (Thm.prop_of meta_eq))
-                      in Minilang.simp_rule_loops thy (lhs, rhs) end
-                      handle TERM _ => false) meta_rules
+                      Looping_Simp.simp_rule_may_loop
+                        {only_check_local = false, ignore_cond = false, local_ignore_cond = true}
+                        ctxt (Thm.prop_of meta_eq)
+                    ) meta_rules
                 in
                   if null looping_rules then NONE
                   else

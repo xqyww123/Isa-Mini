@@ -724,10 +724,9 @@ fun AUTO_SIMPLIFY
     (* Detect self-looping user rules among non-targeted simp_thms and partition them *)
     fun thm_loops thm =
       exists (fn meta_eq =>
-        let val (lhs, rhs) = Logic.dest_equals
-                (Logic.strip_imp_concl (Thm.prop_of meta_eq))
-        in Minilang.simp_rule_loops thy (lhs, rhs) end
-        handle TERM _ => false)
+        Looping_Simp.simp_rule_may_loop
+          {only_check_local = false, ignore_cond = false, local_ignore_cond = true}
+          ctxt (Thm.prop_of meta_eq))
       (Raw_Simplifier.mksimps ctxt thm)
     val (looping_thms, safe_thms) = List.partition thm_loops simp_thms
     val has_looping = not (null looping_thms)

@@ -8765,6 +8765,107 @@ async def _test_completion_goalnode(root: Root, file: MyIO):
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
 
+@model_test("aime_1987_p5", "Test_aime_1987_p5.thy", 11)
+async def _test_aime_1987_p5(root: Root, file: MyIO):
+    """Reproduce operation sequence from interaction e1256e5c2_1:
+    proving 3*(x^2*y^2)=588 from y^2+3*(x^2*y^2)=30*x^2+517 over integers.
+
+    Sequence:
+    1. Fill step 1: Have h1 with proof=[Rewrite using assms] → Rewrite fails (no progress)
+    2. Amend step 1.1 with Obvious(assms) → fails (non-trivial)
+    3. Delete step 1
+    4. Fill step 1: [Have h_ring (proof=Obvious), Have h_arith (proof=Obvious(assms))]
+       → h_ring Obvious fails, h_arith succeeds
+    5. Amend step 1.1 with Rewrite(algebra_simps) → triggers looping-rule interaction
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Step 1: Have h1 with inline proof = Rewrite using assms (fails: no progress)
+    root.session.age += 1
+    outcome1 = await root.fill("1", [Have.gen_single({
+        "thought": "From the premise, y²(1+3x²) = 30x²+517 = 10(1+3x²)+507, so (y²-10)(1+3x²) = 507",
+        "statement": {
+            "english": "(y squared minus 10) times (1 + 3 * x squared) equals 507",
+            "conclusion": "(y^2 - (10::int)) * ((1::int) + (3::int) * x^2) = (507::int)"
+        },
+        "name": "h1",
+        "proof": [{"operation": "Rewrite",
+                   "thought": "Rewrite using the premise to derive this algebraic identity",
+                   "using": [{"name": "assms"}],
+                   "use system simplifiers": True,
+                   "rewrite goal": True,
+                   "rewrite premises": []}]
+    })])
+    print_header("After fill step 1 (Have h1 + Rewrite proof)", file)
+    root.print(0, file)
+
+    # Step 2: Amend step 1.1 (the failed Rewrite) with Obvious
+    root.session.age += 1
+    outcome2 = await root.amend("1.1", [Obvious.gen_single({"facts": [{"name": "assms"}]})])
+    print_header("After amend step 1.1 (Obvious with assms)", file)
+    root.print(0, file)
+    file.write(f"amend_failure: {outcome2.failure}\n")
+
+    # Step 3: Delete step 1
+    root.session.age += 1
+    await root.delete(["1"])
+    print_header("After delete step 1", file)
+    root.print(0, file)
+
+    # Step 4: Fill step 1 with two Haves (h_ring and h_arith)
+    root.session.age += 1
+    outcome4 = await root.fill("1", [
+        Have.gen_single({
+            "thought": "Ring identity: expand the product",
+            "statement": {
+                "english": "Expanding (y^2-10)*(1+3*x^2) equals y^2 + 3*x^2*y^2 - 10 - 30*x^2",
+                "conclusion": "(y^2 - (10::int)) * ((1::int) + (3::int) * x^2) = y^2 + (3::int) * (x^2 * y^2) - (10::int) - (30::int) * x^2"
+            },
+            "name": "h_ring",
+            "proof": [{"operation": "Obvious", "facts": []}]
+        }),
+        Have.gen_single({
+            "thought": "From assms, y^2+3*x^2*y^2 = 30*x^2+517, so y^2+3*x^2*y^2-10-30*x^2 = 507",
+            "statement": {
+                "english": "y^2+3*x^2*y^2-10-30*x^2 = 507",
+                "conclusion": "y^2 + (3::int) * (x^2 * y^2) - (10::int) - (30::int) * x^2 = (507::int)"
+            },
+            "name": "h_arith",
+            "proof": [{"operation": "Obvious", "facts": [{"name": "assms"}]}]
+        }),
+    ])
+    print_header("After fill step 1 (two Haves: h_ring + h_arith)", file)
+    root.print(0, file)
+
+    # Step 5: Amend step 1.1 (h_ring's failed Obvious) with Rewrite using algebra_simps
+    async def stub_fork(interaction):
+        print_header("Interaction Prompt (looping rule)", file)
+        await interaction.prompt(0, file)
+        assert isinstance(interaction, Interaction_SelectRewriteTargets)
+        all_matches = interaction.looping_rules[0][2] if interaction.looping_rules else []
+        # Original interaction answered with index 2; fall back to index 0 or empty
+        if len(all_matches) > 2:
+            return await interaction.answer(Answer(indexes=[2]))
+        elif all_matches:
+            return await interaction.answer(Answer(indexes=[0]))
+        else:
+            return await interaction.answer(Answer())
+    root.session.fork_interaction = stub_fork
+
+    root.session.age += 1
+    outcome5 = await root.amend("1.1", [Rewrite.gen_single({
+        "thought": "Use algebra_simps to expand and simplify both sides of the ring identity",
+        "using": [{"name": "algebra_simps"}],
+        "use system simplifiers": True,
+        "rewrite goal": True,
+        "rewrite premises": []
+    })])
+    print_header("After amend step 1.1 (Rewrite with algebra_simps)", file)
+    root.print(0, file)
+    file.write(f"amend5_failure: {outcome5.failure}\n")
+
+
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
     import msgpack as mp
     from IsaREPL import Client
