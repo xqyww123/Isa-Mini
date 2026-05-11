@@ -173,6 +173,43 @@
       ],
       "type": "object"
     },
+    "SetupRewriting": {
+      "additionalProperties": false,
+      "description": "Configure the proof system to automatically rewrite any occurrence of `redex` into `residue`. Use this to evaluate/compute a function.",
+      "properties": {
+        "operation": { "const": "SetupRewriting", "type": "string" },
+        "thought": { "$ref": "#/$defs/Thought" },
+        "for_any": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Variable" },
+          "description": "universally quantified variables to fix"
+        },
+        "redex": {
+          "type": "string",
+          "description": "the term pattern to match (left-hand side of the equation)"
+        },
+        "residue": {
+          "type": "string",
+          "description": "the replacement term (right-hand side of the equation)"
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string", "description": "binding name for the condition (usable in proof block)" },
+              "term": { "type": "string", "description": "Isabelle/HOL term with all literal numbers annotated with types" }
+            },
+            "required": ["name", "term"]
+          },
+          "description": "Guards that control when the rewriting is applied. Essential for preventing infinite rewriting loops."
+        },
+        "proof": { "$ref": "#/$defs/Proof" }
+      },
+      "required": ["operation", "thought", "redex", "residue", "conditions"],
+      "type": "object"
+    },
     "Obtain": {
       "additionalProperties": false,
       "description": "introduce variables satisfying given constraints",
@@ -670,6 +707,7 @@
       "anyOf": [
         { "$ref": "#/$defs/Obvious" },
         { "$ref": "#/$defs/Have" },
+        { "$ref": "#/$defs/SetupRewriting" },
         { "$ref": "#/$defs/Obtain" },
         { "$ref": "#/$defs/Branch" },
         { "$ref": "#/$defs/CaseSplit" },

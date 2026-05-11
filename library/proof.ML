@@ -341,11 +341,6 @@ val matches_subterm_of : theory -> term -> term -> bool
    for the parts that vary (e.g., output of mksimps already has this). *)
 val simp_rule_loops : theory -> term * term -> bool
 
-(* Wrap a list of theorems into simprocs that each fire at most once.
-   Each call creates fresh one-shot flags. The simplifier's internal
-   prover handles conditions of conditional rules. *)
-val thms_to_once_simprocs : Proof.context -> thm list -> simproc list
-
 (* Create simprocs that fire only on specific target terms.
    Unlike thms_to_once_simprocs, these fire on ALL indicated targets, not just once.
    Each (thm, targets) pair produces simprocs whose proc checks aconv against targets. *)
@@ -4961,31 +4956,6 @@ fun matches_subterm_of thy pat (t as (f $ x)) =
 (* Check if a rewrite equation (lhs, rhs) would loop: the LHS pattern
    matches a subterm of the RHS. *)
 fun simp_rule_loops thy (lhs, rhs) = matches_subterm_of thy lhs rhs
-
-(* Wrap a list of theorems into simprocs that each fire at most once.
-   Each thm is decomposed via mksimps into meta-equations; each meta-equation
-   becomes a separate simproc with its own one-shot flag.
-   The simplifier's mk_procrule / rews handles matching, instantiation,
-   and condition-proving on the returned meta-equation. *)
-fun thms_to_once_simprocs ctxt (thms: thm list) : simproc list =
-  let
-    val meta_rules = maps (Raw_Simplifier.mksimps ctxt) thms
-    fun mk_once (i, rule) =
-      let
-        val fired = Unsynchronized.ref false
-        val (lhs, _) = Logic.dest_equals
-              (Logic.strip_imp_concl (Thm.prop_of rule))
-        fun proc _ _ =
-          if !fired then NONE
-          else (fired := true; SOME rule)
-      in
-        SOME (Simplifier.make_simproc ctxt
-          { name = "once_simproc_" ^ string_of_int i,
-            lhss = [lhs],
-            proc = K proc,
-            identifier = [] })
-      end handle TERM _ => NONE
-  in map_filter I (map_index mk_once meta_rules) end
 
 (* Create simprocs that fire only on specific target terms.
    Each firing consumes the matched target from a mutable list, so the simproc

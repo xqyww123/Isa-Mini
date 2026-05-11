@@ -186,6 +186,11 @@ val unpacker =
                      )
      | "SKIP"     => apfst (K SKIP) o unpackUnit
      | "CONTRADICTION" => apfst CONTRADICTION o unpackString
+     | "SETUP_REWRITING" => apfst SETUP_REWRITING o unpackTuple5 (
+                        unpackString,
+                        unpackList (unpackPair (unpackString, unpackOption unpackString)),
+                        unpackList (unpackPair (unpackOption unpackString, unpackString)),
+                        unpackString, unpackString)
      | cmd => error("Unknown operation " ^ cmd)
   ) #> apfst snd
 
@@ -270,6 +275,13 @@ fun packer (SIMPLIFY data) =
   | packer SKIP = packPair (packString, packUnit) ("SKIP", ())
   | packer (CONTRADICTION data) =
       packPair (packString, packString) ("CONTRADICTION", data)
+  | packer (SETUP_REWRITING (name, for_any, conditions, redex, residue)) =
+      packPair (packString, packTuple5 (
+          packString,
+          packList (packPair (packString, packOption packString)),
+          packList (packPair (packOption packString, packString)),
+          packString, packString))
+        ("SETUP_REWRITING", (name, for_any, conditions, redex, residue))
 (* | packer (ROLLBACK data) = packPair (packString, packInt) ("ROLLBACK", data) *)
 
 end

@@ -66,6 +66,10 @@ datatype ('term, 'thm, 'fact) command =
               * string list (*BY_METRIC measures, [] = none*)
   | SKIP
   | CONTRADICTION of string (*hypothesis_binding_name*)
+  | SETUP_REWRITING of string (*name, from Python*)
+                    * (string * string option) list (*for_any: var_name × type_string_opt*)
+                    * (string option * string) list (*conditions: name_opt × prop_string*)
+                    * string (*redex*) * string (*residue*)
 
 type xcmd = (string, string, string) command
 type icmd = (term, thm, Facts.ref * Token.src list) command
@@ -96,6 +100,7 @@ exception SPECIALIZE_RESULT of (string * string) list
 (* (function_name, pretty_type) — emitted after DEFINE so the Python side
    knows the inferred type when the user omitted the type field. *)
 exception DEFINE_RESULT of string * string
+exception SETUP_REWRITING_MAY_LOOP
 
 val compute_bindings : Minilang.state -> string list -> string list -> bindings
 val check_need_intro : Minilang.state -> bool
@@ -157,6 +162,7 @@ exception SIMPLIFY_TARGETS_STALE of string list
 (* (fact_name, pretty_printed_proposition) list — the derived facts produced by SPECIALIZE *)
 exception SPECIALIZE_RESULT of (string * string) list
 exception DEFINE_RESULT of string * string
+exception SETUP_REWRITING_MAY_LOOP
 
 type counters = {
     prem_counter: int Synchronized.var,
@@ -216,6 +222,10 @@ datatype ('term, 'thm, 'fact) command =
               * string list (*BY_METRIC measures, [] = none*)
   | SKIP
   | CONTRADICTION of string (*hypothesis_binding_name*)
+  | SETUP_REWRITING of string (*name, from Python*)
+                    * (string * string option) list (*for_any: var_name × type_string_opt*)
+                    * (string option * string) list (*conditions: name_opt × prop_string*)
+                    * string (*redex*) * string (*residue*)
 
 type xcmd = (string, string, string) command
 type icmd = (term, thm, Facts.ref * Token.src list) command
@@ -738,10 +748,10 @@ fun AUTO_SIMPLIFY
         (SOME naming_prems_fn) (SOME naming_vars_fn) simplify_timeout) s
 
     fun mk_base_simprocs () =
-      if has_looping then Minilang.thms_to_once_simprocs ctxt looping_thms
+      if has_looping then Looping_Simp.thms_to_once_simprocs ctxt looping_thms
       else []
 
-    fun mk_all_once () = Minilang.thms_to_once_simprocs ctxt simp_thms
+    fun mk_all_once () = Looping_Simp.thms_to_once_simprocs ctxt simp_thms
 
     val (((params', facts'), s'), fell_back_nosys, fell_back_once) =
       if use_system_simps
@@ -1194,6 +1204,56 @@ fun interpret_i (config as (_, _, counters)) cmd s =
                         final = (var_bindings, prem_bindings)
                     }))
         in s'' end
+    | SETUP_REWRITING (name, for_any, conditions, redex, residue) =>
+        let
+          val ctxt = Minilang.context_of s
+
+          (* Prepare and fix for_any variables — follow Specification.prep_decls pattern:
+             read_var parses type strings and declares constraints, add_fixes fixes them *)
+          val raw_vars = map (fn (n, T) => (Binding.name n, T, NoSyn)) for_any
+          val (vars, vars_ctxt) = fold_map Proof_Context.read_var raw_vars ctxt
+          val (_, fixes_ctxt) = Proof_Context.add_fixes vars vars_ctxt
+
+          (* Parse ALL terms together for consistent type inference *)
+          val cond_strs = map snd conditions
+          val (redex_term :: residue_term :: cond_terms_raw) =
+                read_terms fixes_ctxt (redex :: residue :: cond_strs)
+
+          (* Wrap boolean conditions in Trueprop; leave prop-typed ones as-is *)
+          val cond_terms = map (fn t =>
+                case fastype_of t of
+                  \<^Type>\<open>bool\<close> => HOLogic.mk_Trueprop t
+                | _ => t) cond_terms_raw
+
+          val equation = HOLogic.mk_Trueprop (HOLogic.mk_eq (redex_term, residue_term))
+
+          (* Looping check — before calling HAVE'', from parsed terms directly *)
+          val meta_eq_prop = Logic.mk_equals (redex_term, residue_term)
+          val may_loop = Looping_Simp.simp_rule_may_loop
+                {only_check_local = true, ignore_cond = true, local_ignore_cond = true}
+                fixes_ctxt meta_eq_prop
+          val _ = if may_loop then
+                    Minilang.get_reporter ()
+                      (Minilang.Internal SETUP_REWRITING_MAY_LOOP)
+                  else ()
+
+          (* Build named assumes from parsed conditions *)
+          val prem_ctr = #prem_counter counters
+          val counter_start = Synchronized.value prem_ctr
+          val (named_assumes, final_counter) =
+            fold_map (fn ((name_opt, _), cond_term) => fn ctr =>
+                let val (nm, ctr') = case name_opt of
+                        SOME n => (n, ctr)
+                      | NONE => ("premise" ^ string_of_int ctr, ctr + 1)
+                in (((Binding.name nm, []), [(cond_term, [])]), ctr')
+                end) (conditions ~~ cond_terms) counter_start
+          val _ = Synchronized.change prem_ctr (K final_counter)
+
+          val fixes' = vars
+          val attr_srcs = [Token.make_src ("Minilang_Agent.mini_auto_apply", Position.none) []]
+          val shows = [((Binding.name name, attr_srcs), [(equation, [])])]
+          val s' = Minilang.HAVE'' fixes' named_assumes shows s
+        in s' end
 
 local
 val keywords = Thy_Header.get_keywords @{theory Pure}
@@ -1347,6 +1407,7 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
     (* strings passthrough — Minilang.FUN'' parses them internally *)
   | check_command_i _ SKIP = SKIP
   | check_command_i _ (CONTRADICTION hyp) = CONTRADICTION hyp
+  | check_command_i _ (SETUP_REWRITING data) = SETUP_REWRITING data
 
 fun check_command s x = check_command_i s x
     handle ERROR msg => raise Minilang.OPR_FAIL (Minilang.TERMLANG, msg)

@@ -998,6 +998,10 @@ class Induction_Dropped_Facts_Msg(Message):
         super().__init__()
         self.dropped_names = dropped_names
 
+class SetupRewriting_MayLoop_Msg(Message):
+    """The rewriting rule may cause infinite looping in the simplifier."""
+    pass
+
 def unpack_message(data) -> Message:
     match data:
         case (0, x):
@@ -1026,6 +1030,8 @@ def unpack_message(data) -> Message:
             return Simplify_Targets_Stale_Msg.unpack(names)
         case (12, names):
             return Induction_Dropped_Facts_Msg(names)
+        case 13:
+            return SetupRewriting_MayLoop_Msg()
         case _:
             raise Exception(f"BUG bad message kind: {data}")
 
@@ -1158,6 +1164,17 @@ class Minilang_Operation(NamedTuple):
             [(n, ascii_of_unicode(t)) for n, t in assumes],
             ascii_of_unicode(conclusion),
             auto_apply
+        ))
+    @staticmethod
+    def SETUP_REWRITING(name: str, fixes: 'list[tuple[str, str | None]]',
+                        conditions: 'list[tuple[str | None, xterm]]',
+                        redex: xterm, residue: xterm) -> 'Minilang_Operation':
+        return Minilang_Operation("SETUP_REWRITING", (
+            name,
+            [(n, ascii_of_unicode(t) if t else None) for n, t in fixes],
+            [(n, ascii_of_unicode(t)) for n, t in conditions],
+            ascii_of_unicode(redex),
+            ascii_of_unicode(residue)
         ))
     @staticmethod
     def SUFFICES(fixes: 'list[tuple[str, str | None]]',
@@ -6310,6 +6327,112 @@ class Have(StdBlock):
         ret[IsaTerm.from_agent(self.name)] = IsaTerm.from_agent(self.statement['conclusion'])
         return ret
 
+#### SetupRewriting
+
+class SetupRewriting_ToolArg(TypedDict):
+    thought: str
+    for_any: NotRequired[list[Explicit_Var]]
+    redex: xterm
+    residue: xterm
+    conditions: list[PremiseBinding]
+    proof: NotRequired[raw_proof | None]
+
+@proof_operation("SetupRewriting", SetupRewriting_ToolArg)
+class SetupRewriting(StdBlock):
+    _changes_pending_goal = False
+    def __init__(self, config: NodeConfig, arg: SetupRewriting_ToolArg,
+                 parsed_proof: 'proof | None' = None):
+        super().__init__(config, arg["thought"], [])
+        self.redex: xterm = arg["redex"]
+        self.residue: xterm = arg["residue"]
+        self._input_conditions: list[PremiseBinding] = arg.get("conditions") or []
+        self._input_for_any: list[Explicit_Var] = arg.get("for_any") or []
+        self.for_any: list[tuple[varname, typ]] = []
+        self._prev_for_any: list[tuple[varname, typ]] = []
+        self._proof: 'proof | None' = parsed_proof
+        session = the_session()
+        session.setup_rewriting_counter += 1
+        self._internal_name = f"setup_rewriting__{session.setup_rewriting_counter}"
+    def quickview_title(self) -> str:
+        return "SetupRewriting"
+    def quickview(self, indent: int, file: MyIO) -> int:
+        indent = super().quickview(indent, file)
+        if self.for_any and self.for_any != self._prev_for_any:
+            names = [name.unicode for name, _ in self.for_any]
+            if len(names) == 1:
+                names_str = names[0]
+            elif len(names) == 2:
+                names_str = f"{names[0]} and {names[1]}"
+            else:
+                names_str = ", ".join(names[:-1]) + f", and {names[-1]}"
+            print_indent(indent, file)
+            file.write(f"the rule is quantified over {names_str}\n")
+            self._prev_for_any = self.for_any
+        return indent
+    def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
+        self._print_thought(indent, file)
+        print_indent(indent, file)
+        file.write("operation: SetupRewriting\n")
+        print_indent(indent, file)
+        file.write(f"redex: {self.redex}\n")
+        print_indent(indent, file)
+        file.write(f"residue: {self.residue}\n")
+        if self._input_conditions:
+            print_indent(indent, file)
+            file.write("conditions:\n")
+            for p in self._input_conditions:
+                print_indent(indent+1, file)
+                file.write(f"{p['name']}: {p['term']}\n")
+        else:
+            print_indent(indent, file)
+            file.write("conditions: []\n")
+        if self.for_any:
+            print_indent(indent, file)
+            file.write("for_any:\n")
+            for name, typ in self.for_any:
+                print_indent(indent+1, file)
+                file.write(f"{name.unicode}: {typ.unicode}\n")
+        self._print_evaluation_status(indent, file)
+        if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
+    def beginning_opr(self) -> Minilang_Operation | None:
+        fixes = [(v["name"], v.get("type")) for v in self._input_for_any]
+        conditions: list[tuple[str | None, str]] = [(p["name"], p["term"]) for p in self._input_conditions]
+        return Minilang_Operation.SETUP_REWRITING(
+            self._internal_name, fixes, conditions,
+            self.redex, self.residue)
+    async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
+        fail = await super()._refresh_the_beginning_opr()
+        if fail is not None:
+            return fail
+        user_for_any: list[tuple[varname, typ]] = [
+            (IsaTerm.from_agent(v["name"]),
+             IsaTerm.from_agent(v.get("type") or ""))
+            for v in self._input_for_any]
+        msgs = [m for m in self._state_after_beginning().messages
+                if isinstance(m, Newly_Fixed_Vars_Msg)]
+        implicit_for_any = msgs[0].vars if msgs else []
+        user_names = {v["name"] for v in self._input_for_any}
+        extra = [(n, t) for n, t in implicit_for_any if n.unicode not in user_names]
+        self.for_any = user_for_any + extra
+        loop_msgs = [m for m in self._state_after_beginning().messages
+                     if isinstance(m, SetupRewriting_MayLoop_Msg)]
+        if loop_msgs:
+            self.warnings.append(Warning(Warning.Position.HEADER,
+                "This rewriting rule may cause infinite looping. "
+                "Ensure the conditions are strong enough to prevent the rule from firing indefinitely."))
+        return await self._attach_proof(auto_intro=True)
+    def _beginning_opr_err_msgs(self, err: IsabelleError) -> FailureReason:
+        return FailureReason(f"Fail to claim the rewriting rule because: {chr(10).join(err.errors)}")
+    def _child_refresh_failure_err_msgs(self, child: Node) -> FailureReason:
+        return FailureReason("Fail to establish the rewriting rule because one of the following proof steps fails.")
+    def _ending_opr_err_msgs(self, err: IsabelleError) -> FailureReason:
+        if self.sub_nodes:
+            return FailureReason("Each of the following proof steps above is valid, but the rewriting equation doesn't trivially follow from these steps. Please provide more detailed proof steps.")
+        else:
+            return FailureReason("The rewriting equation is nontrivial. Detailed proofs are required.")
+    def _fixed_facts_after_me(self, ret: Hyps) -> Hyps:
+        return ret
+
 #### Suffices
 
 class Suffices_ToolArg(TypedDict):
@@ -7602,6 +7725,7 @@ class Session:
         self.parent = parent
         _session_var.set(self)
         self.age = 0
+        self.setup_rewriting_counter: int = 0
         self.last_proof_op_time: float = time()
         self.logger = logger or (parent.logger if parent else None)
         # On a fork, the interaction it is answering (plus its eventual

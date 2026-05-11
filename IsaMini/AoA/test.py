@@ -33,23 +33,18 @@ class ModelTestCase(TestCase):
         super().__init__(name, file, line)
         self.opr = opr
     async def run(self, connection: Connection, log_dir: str, global_context: Context, ptree: tuple['Goal | None', int]) -> Root:
-        def show_colored_diff(actual: str, expected_path: str, test_name: str):
-            """Write actual to a temp file and display colored diff against expected."""
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.actual.yaml', delete=False) as actual_file:
-                actual_file.write(actual)
-                actual_path = actual_file.name
-            try:
-                diff_result = subprocess.run(
-                    ['diff', '--color=always', '-u', expected_path, actual_path],
-                    capture_output=True,
-                    text=True
-                )
-                print(f"\n=== Diff for test '{test_name}' ===", file=sys.stderr)
-                print(diff_result.stdout, file=sys.stderr)
-                if diff_result.stderr:
-                    print(diff_result.stderr, file=sys.stderr)
-            finally:
-                os.unlink(actual_path)
+        def save_diff(actual: str, expected_path: str, test_name: str):
+            """Write actual output and unified diff next to the golden YAML."""
+            tests_dir = os.path.dirname(expected_path)
+            actual_path = os.path.join(tests_dir, test_name + '.actual.yml')
+            diff_path = os.path.join(tests_dir, test_name + '.diff')
+            with open(actual_path, 'w') as f:
+                f.write(actual)
+            diff_result = subprocess.run(
+                ['diff', '-u', expected_path, actual_path],
+                capture_output=True, text=True)
+            with open(diff_path, 'w') as f:
+                f.write(diff_result.stdout)
         async with Session(connection.server.logger, log_dir) as session:
             root = Root((global_context, ptree), connection, session)
             await session.initialize(root)
@@ -61,7 +56,7 @@ class ModelTestCase(TestCase):
             if correct_yaml_path is not None:
                 with open(correct_yaml_path, 'r') as f:
                     if buffer.getvalue() != f.read():
-                        show_colored_diff(buffer.getvalue(), correct_yaml_path, self.name)
+                        save_diff(buffer.getvalue(), correct_yaml_path, self.name)
                         raise TestFailed(f"Test Failed on '{self.name}'")
             else:
                 self.write_expected_yaml(buffer.getvalue())
@@ -1396,6 +1391,46 @@ async def _test_HaveAutoApply(root: Root, file: MyIO):
     # succeeds if `myf_eq` was auto-registered into the simpset by
     # `mini_auto_apply` — otherwise the system simpset has no way to unfold
     # `myf` and the goal cannot be reduced to `10 = 10`.
+    root.session.age += 1
+    ret = await root.fill("2", [Rewrite.gen_single({
+        "thought": "Close the outer goal using only the system simplifier",
+        "using": [],
+        "use system simplifiers": True,
+        "rewrite goal": True,
+        "rewrite premises": []
+    })])
+    print_header("After closing outer goal", file)
+    root.print(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+@model_test("SetupRewriting", "Test_SetupRewriting.thy", 10)
+async def _test_SetupRewriting(root: Root, file: MyIO):
+    """SetupRewriting proves a rewriting equation and auto-registers it as a
+    simp rule. The outer goal `myg 3 = 8` becomes trivial once `myg n = n + 5`
+    is in the simpset."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("1", [SetupRewriting.gen_single({
+        "thought": "Derive a simp rule for myg so the outer goal becomes trivial",
+        "redex": "myg n",
+        "residue": "n + (5::nat)",
+        "conditions": [],
+    })])
+    print_header("After SetupRewriting", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("1.1", [Obvious.gen_single({
+        "facts": [{"name": "myg_def"}]
+    })])
+    print_header("After proving SetupRewriting sub-goal", file)
+    root.print(0, file)
+
     root.session.age += 1
     ret = await root.fill("2", [Rewrite.gen_single({
         "thought": "Close the outer goal using only the system simplifier",
@@ -8902,7 +8937,7 @@ async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | No
             invocation_id = f"{mode}.{test_case.name}"
             await repl._write((invocation_id, f"{mode}.{test_case.name}", (_cfg, _budget), None, None, None))
             try:
-                (status, elapsed, cpu_time, detail) = Client._parse_control_(await repl._feed_and_unpack())
+                (status, elapsed, cpu_time, detail, _cost) = Client._parse_control_(await repl._feed_and_unpack())
             except REPLFail as e:
                 print(f"\033[91mTest {test_case.name} error: {e}\033[0m")
                 continue
