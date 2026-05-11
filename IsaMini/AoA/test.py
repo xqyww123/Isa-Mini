@@ -484,6 +484,40 @@ async def _test_SuppressParentGoal(root: Root, file: MyIO):
     print_header("Quickview again (should not re-print)", file)
     root.quickview(0, file)
 
+@model_test("Rewrite_DeleteSiblingNoChange", "Test_Rewrite_DeleteSiblingNoChange.thy", 10)
+async def _test_Rewrite_DeleteSiblingNoChange(root: Root, file: MyIO):
+    """Deleting a sibling after a Rewrite step must NOT mark the Rewrite as
+    'changed' when its produced goal hasn't actually changed.  Regression
+    test for false-positive caused by resulting_state() routing shift."""
+    # Step 1: Rewrite the goal using h1 — this changes the goal.
+    await root.fill("1", [Rewrite.gen_single({
+        "thought": "Rewrite goal using h1",
+        "using": [{"name": "h1"}],
+        "use system simplifiers": False,
+        "rewrite goal": True,
+        "rewrite premises": []
+    })])
+    print_header("Quickview after Rewrite", file)
+    root.quickview(0, file)
+    root.reset_changed()
+    # Step 2: Add a Have after the Rewrite and prove it.
+    root.session.age += 1
+    await root.fill("2", [Have.gen_single({
+        "thought": "helper fact",
+        "statement": {"english": "trivially true", "conclusion": "True"},
+        "name": "helper"
+    })])
+    root.session.age += 1
+    await root.fill("2.1", [Obvious.gen_single({"facts": []})])
+    print_header("Quickview after Have+Obvious", file)
+    root.quickview(0, file)
+    root.reset_changed()
+    # Delete the Have — Rewrite must NOT be marked (changed).
+    root.session.age += 1
+    await root.delete(["2"])
+    print_header("Quickview after deleting Have (Rewrite must not be changed)", file)
+    root.quickview(0, file)
+
 # @model_test("RewriteThenObviousFails", "Test_Rewrite_Then_Obvious_Fails.thy", 18)
 # async def _test_RewriteThenObviousFails(root: Root, file: MyIO):
 #     """Reproduce: a successful Rewrite as the last child followed by a

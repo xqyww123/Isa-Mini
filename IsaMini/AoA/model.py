@@ -5937,6 +5937,10 @@ class Rewrite(Leaf):
         self._prev_result_goal: Goal | None | str = None
         """Tracks the post-rewrite goal for quickview change detection.
         None = not yet shown, 'solved' = goal was solved, Goal = goal changed to."""
+        self._my_last_goal: Goal | None = None
+        """Goal produced by the last successful execution, for changed detection.
+        Unlike resulting_state().leading_goal, this is not affected by
+        sibling deletion re-routing resulting_state()."""
     def quickview_title(self) -> str:
         targets: list[str] = []
         if self.rewrite_goal:
@@ -6096,9 +6100,6 @@ class Rewrite(Leaf):
         elif self.ml_state.initialized():
             self.using = await self.ml_state.refresh_facts(self.using)
         old_bindings = self.bindings
-        old_goal = (self.resulting_state().leading_goal
-                    if self.status.status == EvaluationStatus.Status.SUCCESS
-                    else None)
         # Execute the operation via parent Leaf implementation
         await super()._refresh_me_alone(auto_intro)
 
@@ -6180,10 +6181,12 @@ class Rewrite(Leaf):
         if not is_init:
             if self.bindings != old_bindings:
                 self.changed = True
-            if self.status.status == EvaluationStatus.Status.SUCCESS and old_goal is not None:
+            if self.status.status == EvaluationStatus.Status.SUCCESS and self._my_last_goal is not None:
                 new_goal = self.resulting_state().leading_goal
-                if new_goal != old_goal:
+                if new_goal != self._my_last_goal:
                     self.changed = True
+        if self.status.status == EvaluationStatus.Status.SUCCESS:
+            self._my_last_goal = self.resulting_state().leading_goal
 
     def _rename_var(self, old_name: varname, new_name: varname) -> 'Node | None':
         if self.bindings is not None:
