@@ -1480,6 +1480,53 @@ async def _test_SetupRewriting(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
+@model_test("SetupRewriting_SimpNoProgress", "Test_SetupRewriting_SimpNoProgress.thy", 12)
+async def _test_SetupRewriting_SimpNoProgress(root: Root, file: MyIO):
+    """Reproduce: conditional SetupRewriting (f x -> x^2 - f(x-1)) is not
+    auto-registered into the simpset because classify_thm/chk_simp doesn't
+    handle meta-level implications (Pure.imp) produced by HAVE''.  The rule
+    exists as a named fact but never enters the simpset, so a subsequent
+    Rewrite that relies on system simplifiers sees 'no progress'.
+    Reproduces the failure from interaction e173f3e4f_1.
+
+    Root cause: chk_simp (sledgehammer_solver.ML dest_eq) traverses
+    HOL.implies but not Pure.imp.  HAVE'' wraps conditions as meta-level
+    premises (Pure.imp), so the conditional equation is invisible to
+    chk_simp and classify_thm never adds it as "simp".
+
+    Direct Isabelle confirms the conditional rule works fine:
+      by (simp add: rule h1)   -- succeeds even for 75-step unfolding
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("1", [SetupRewriting.gen_single({
+        "thought": "Derive rewriting rule f x = x^2 - f(x-1) from h0",
+        "for_any": [{"name": "x", "type": "int"}],
+        "redex": "f x",
+        "residue": "x ^ (2::nat) - f (x - (1::int))",
+        "conditions": [{"name": "cond", "term": "(3::int) ≤ x"}],
+        "proof": [{"operation": "Obvious", "facts": [{"name": "h0"}]}],
+    })])
+    print_header("After SetupRewriting", file)
+    root.print(0, file)
+
+    # Rewrite WITHOUT explicit setup_rewriting__1 — fails because
+    # the conditional rule was not auto-added to the simpset
+    root.session.age += 1
+    outcome = await root.fill("2", [Rewrite.gen_single({
+        "thought": "Apply setup_rewriting rule and h1 to compute f(5)",
+        "using": [{"name": "h1"}],
+        "use system simplifiers": True,
+        "rewrite goal": True,
+        "rewrite premises": [],
+    })])
+    print_header("After Rewrite (no explicit rule)", file)
+    file.write(f"Rewrite failed: {outcome.failure is not None}\n")
+    file.write(f"Failure reason: {outcome.failure}\n")
+    root.print(0, file)
+
 @model_test("Rewrite_Contradictory_Premise", "Test_Rewrite_Contradictory_Premise.thy", 13)
 async def _test_Rewrite_Contradictory_Premise(root: Root, file: MyIO):
     """Reproduces gconv_rule crash when Rewrite completely solves the goal

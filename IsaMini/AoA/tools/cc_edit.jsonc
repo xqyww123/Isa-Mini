@@ -707,7 +707,6 @@
       "anyOf": [
         { "$ref": "#/$defs/Obvious" },
         { "$ref": "#/$defs/Have" },
-        { "$ref": "#/$defs/SetupRewriting" },
         { "$ref": "#/$defs/Obtain" },
         { "$ref": "#/$defs/Branch" },
         { "$ref": "#/$defs/CaseSplit" },
@@ -722,7 +721,8 @@
         { "$ref": "#/$defs/SplitConjs" },
         { "$ref": "#/$defs/Derive" },
         { "$ref": "#/$defs/Chaining" },
-        { "$ref": "#/$defs/Define" }
+        { "$ref": "#/$defs/Define" },
+        { "$ref": "#/$defs/SetupRewriting" }
       ]
     }
   },

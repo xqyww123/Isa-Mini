@@ -1,0 +1,75 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - f: int ⇒ int
+premises:
+  - h0: ∀(x :: int). f x + f (x - (1 :: int)) = x²
+  - h1: f (2 :: int) = (5 :: int)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: f (5 :: int) = (13 :: int)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After SetupRewriting
+--------------------------------------------------
+variables:
+  - f: int ⇒ int
+premises:
+  - h0: ∀(x :: int). f x + f (x - (1 :: int)) = x²
+  - h1: f (2 :: int) = (5 :: int)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: f (5 :: int) = (13 :: int)
+proof:
+  - step id: 1
+    thought: Derive rewriting rule f x = x^2 - f(x-1) from h0
+    operation: SetupRewriting
+    redex: f x
+    residue: x ^ (2::nat) - f (x - (1::int))
+    conditions:
+      cond: (3::int) ≤ x
+    for_any:
+      x: int
+    proof:
+      - step id: 1.1
+        operation: Obvious
+        with facts:
+          - h0: ∀(x :: int). f x + f (x - (1 :: int)) = x²
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  premises:
+    - setup_rewriting__1: (3 :: int) ≤ ?x2 ⟶ f ?x2 = ?x2² - f (?x2 - (1 :: int))
+  goal: f (5 :: int) = (13 :: int)
+--------------------------------------------------
+After Rewrite (no explicit rule)
+--------------------------------------------------
+Rewrite failed: True
+Failure reason: Cannot fill a node with id 2
+The simplification made no progress.
+variables:
+  - f: int ⇒ int
+premises:
+  - h0: ∀(x :: int). f x + f (x - (1 :: int)) = x²
+  - h1: f (2 :: int) = (5 :: int)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: f (5 :: int) = (13 :: int)
+proof:
+  - step id: 1
+    thought: Derive rewriting rule f x = x^2 - f(x-1) from h0
+    operation: SetupRewriting
+    redex: f x
+    residue: x ^ (2::nat) - f (x - (1::int))
+    conditions:
+      cond: (3::int) ≤ x
+    for_any:
+      x: int
+    proof:
+      - step id: 1.1
+        operation: Obvious
+        with facts:
+          - h0: ∀(x :: int). f x + f (x - (1 :: int)) = x²
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  premises:
+    - setup_rewriting__1: (3 :: int) ≤ ?x2 ⟶ f ?x2 = ?x2² - f (?x2 - (1 :: int))
+  goal: f (5 :: int) = (13 :: int)

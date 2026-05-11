@@ -220,4 +220,11 @@ text \<open>What about the cleanup tactic \<open>Inductive.mk_cases_tac\<close> 
   the case obligations, then \<open>mk_cases_tac\<close> discharges the dead branches:\<close>
 *)
 
+no_notation BNF_Cardinal_Arithmetic.cprod (infixr "*c" 80)
+no_notation BNF_Cardinal_Arithmetic.csum (infixr "+c" 65)
+no_notation BNF_Cardinal_Arithmetic.cexp (infixr "^c" 90)
+no_notation BNF_Wellorder_Constructions.ordIso2 (infix "=o" 50)
+no_notation BNF_Wellorder_Constructions.ordLess2 (infix "=o" 50)
+no_notation BNF_Wellorder_Constructions.ordLeq2 (infix "<=o" 50)
+
 end
