@@ -1830,7 +1830,7 @@ TOOL_DELETE: tool = "delete"
 TOOL_ANSWER: tool = "answer"
 TOOL_SEARCH: tool = "query"
 TOOL_READ:   tool = "recall"
-TOOL_SURRENDER: tool = "surrender"
+TOOL_SURRENDER: tool = "refute_or_surrender"
 ALL_PROOF_TOOLS: tuple[tool, ...] = (TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER, TOOL_SEARCH, TOOL_READ, TOOL_SURRENDER)
 
 class Interaction:
@@ -7610,7 +7610,7 @@ class Session:
         self.fork_pending: 'Fork_Pending | None' = None
         self.working_block: 'NonLeaf_Node | None' = None
         self.warnings: list[str] = []
-        self.surrender_warned: bool = False
+        self.refute_or_surrender_warned: bool = False
         self.auto_intro_nodes: list['Intro'] = []
         self.total_cost_usd: float = 0.0
         self.total_input_tokens: int = 0
@@ -7817,6 +7817,8 @@ class Session:
             "A proof goal and an incomplete proof are provided in `./proof.yaml` under the current directory.\n"
             "Analyze the proof goal, plan a proof, and complete it using the MCP proof tools.\n"
             "Continue until no errors remain.\n"
+            "A proof goal can be buggy and thus unprovable — "
+            f"call `{self.tool_name(TOOL_SURRENDER)}` with your analysis if you believe so.\n"
             "Be concise in text output.\n"
             "\n"
             "## Tools\n"
@@ -7824,11 +7826,6 @@ class Session:
             f"- {self.tool_name(TOOL_DELETE)}: Delete proof steps\n"
             f"- {self.tool_name(TOOL_SEARCH)}: Search for theorems, constants, types, and rules; help you understand unfamiliar terms\n"
             f"- {self.tool_name(TOOL_READ)}: Recall proof state from `proof.yaml`. Use only when you have lost track.\n"
-            # f"- {self.tool_name(TOOL_SURRENDER)}: Concede failure and abandon the proof. Use only after all strategies have been exhausted.\n"
-            # "\n"
-            # "Exhaust all strategies before giving up. "
-            # "If you conclude the goal is a false statement, or no viable proof path remains, "
-            # f"call `{self.tool_name(TOOL_SURRENDER)}`.\n"
         )
 
     def initial_prompt(self) -> str:
@@ -7848,9 +7845,8 @@ class Session:
                 + proof_state
                 + f"Analyze the proof goal, plan a proof, and complete it using tools `{self.tool_name(TOOL_EDIT)}` and `{self.tool_name(TOOL_DELETE)}`.\n"
                 "Continue building the proof until no error remains.\n"
-                "Exhaust all strategies before giving up. "
-                "If you conclude the goal is a false statement, or no viable proof path remains, "
-                f"call `{self.tool_name(TOOL_SURRENDER)}`.\n"
+                "A proof goal can be buggy and thus unprovable — "
+                f"call `{self.tool_name(TOOL_SURRENDER)}` with your analysis if you believe so.\n"
                 "`proof.yaml` contains the full proof state, but recall it only when you lose track of it."
             )
 

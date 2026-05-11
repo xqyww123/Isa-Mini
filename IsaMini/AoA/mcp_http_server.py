@@ -514,24 +514,24 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     return (result, False)
 
 
-async def _surrender_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
+async def _refute_or_surrender_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     _tn = session.tool_name(TOOL_SURRENDER)
     session.log_tool_call(_tn, args)
-    reason = args.get("reason", "stuck")
+    reason = args.get("reason", "surrender")
     detail = args.get("detail", "")
-    if reason not in ("stuck", "false_statement"):
-        msg = f"Invalid reason: {reason!r}. Must be `stuck` or `false_statement`."
+    if reason not in ("refute", "surrender"):
+        msg = f"Invalid reason: {reason!r}. Must be `refute` or `surrender`."
         session.log_tool_response(_tn, f"ERROR: {msg}")
         return (msg, True)
-    if not session.surrender_warned:
-        session.surrender_warned = True
+    if reason == "surrender" and not session.refute_or_surrender_warned:
+        session.refute_or_surrender_warned = True
         msg = ("You are a strong prover and you've been doing well. "
-               "Don't surrender yet — take a step back, rethink your approach, "
+               "Don't give up yet — take a step back, rethink your approach, "
                "and try again. You may be closer than you think.")
         session.log_tool_response(_tn, msg)
         return (msg, False)
     session.root.quit_info = (reason, detail)
-    msg = f"Proof attempt abandoned ({reason})."
+    msg = f"Proof attempt concluded ({reason})."
     session.log_tool_response(_tn, msg)
     await session.interrupt()
     return (msg, False)
@@ -555,8 +555,8 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "use long_description and filters for discovery.",
                "schema": _cc_query_schema, "annotations": _RO},
     "recall": {"description": "Recall proof state from `proof.yaml`. Use only when you have lost track.", "schema": _cc_read_schema, "annotations": _RO},
-    "surrender": {"description": "Concede failure and abandon the proof. Use only after all strategies have been exhausted.",
-                  "schema": _cc_surrender_schema, "annotations": _ACT},
+    "refute_or_surrender": {"description": "Conclude the proof attempt. Use with reason 'refute' if the goal appears buggy or unprovable from the given premises, or 'surrender' if no viable strategy remains.",
+                            "schema": _cc_surrender_schema, "annotations": _ACT},
 }
 
 
@@ -589,8 +589,8 @@ class ToolExecutor:
         if perm_error:
             return (perm_error, True)
 
-        if name != "surrender":
-            session.surrender_warned = False
+        if name != "refute_or_surrender":
+            session.refute_or_surrender_warned = False
 
         is_error = False
         match name:
@@ -621,8 +621,8 @@ class ToolExecutor:
                 result, is_error = await _query_tool_logic(session, arguments)
             case "recall":
                 result, is_error = await _read_tool_logic(session, arguments)
-            case "surrender":
-                result, is_error = await _surrender_tool_logic(session, arguments)
+            case "refute_or_surrender":
+                result, is_error = await _refute_or_surrender_tool_logic(session, arguments)
             case _:
                 return (f"Unknown tool: {name}", True)
 

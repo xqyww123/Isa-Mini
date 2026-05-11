@@ -3,8 +3,8 @@
   "properties": {
     "reason": {
       "type": "string",
-      "enum": ["stuck", "false_statement"],
-      "description": "Why the proof cannot be completed: 'stuck' if no viable strategy remains, 'false_statement' if the goal appears unprovable"
+      "enum": ["refute", "surrender"],
+      "description": "Why the proof cannot be completed: 'refute' if the goal appears to be buggy or unprovable from the given premises (explain what is missing or wrong), 'surrender' if no viable strategy remains but the goal may still be provable"
     },
     "detail": { "type": "string" }
   },
