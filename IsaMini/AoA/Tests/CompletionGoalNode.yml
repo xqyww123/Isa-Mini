@@ -46,7 +46,7 @@ Outline:
   step 1: Inference Rule conjI
     - 1.1 (done)
     - 1.2
-      Error: Unfinished Proof (line 37). Fill step `1.2.1`
+      Error: Unfinished Proof. Fill step `1.2.1`
 ---------------
 --------------------------------------------------
 edit_message: fill 1.2.1 (second subgoal — should cascade)

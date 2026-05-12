@@ -43,9 +43,8 @@ pending proof goal:
 --------------------------------------------------
 After Rewrite (no explicit rule)
 --------------------------------------------------
-Rewrite failed: True
-Failure reason: Cannot fill a node with id 2
-The simplification made no progress.
+Rewrite failed: False
+Failure reason: None
 variables:
   - f: int ⇒ int
 premises:
@@ -68,8 +67,12 @@ proof:
         operation: Obvious
         with facts:
           - h0: ∀(x :: int). f x + f (x - (1 :: int)) = x²
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
-pending proof goal:
-  premises:
-    - setup_rewriting__1: (3 :: int) ≤ ?x2 ⟶ f ?x2 = ?x2² - f (?x2 - (1 :: int))
-  goal: f (5 :: int) = (13 :: int)
+  - step id: 2
+    thought: Apply setup_rewriting rule and h1 to compute f(5)
+    operation: Rewrite
+    using:
+      - h1: f (2 :: int) = (5 :: int)
+      - system simplifiers
+    targets:
+      - the goal
+    goal is solved.

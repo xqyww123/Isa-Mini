@@ -21,7 +21,7 @@ pending proof goal:
 step 1: Contradiction (hypothesis: neg_hyp)
   assuming hypothesis:
     - neg_hyp: ¬ True
-Error: Unfinished Proof (line 18). Call command `edit` with action `fill` and target step `2`
+Error: Unfinished Proof. Call command `edit` with action `fill` and target step `2`
 goal: False
 status: SUCCESS
 bindings: ([], [FactBinding(expr=[8, [[3, ['HOL.Trueprop', [0, ['fun', [[0, ['HOL.bool', []]], [0, ['prop', []]]]]]]], [8, [[3, ['HOL.Not', [0, ['fun', [[0, ['HOL.bool', []]], [0, ['HOL.bool', []]]]]]]], [3, ['HOL.True', [0, ['HOL.bool', []]]]]]]]], name=IsaTerm('neg_hyp'), pretty=IsaTerm('¬ True'))])

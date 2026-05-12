@@ -59,10 +59,8 @@ proof:
       english: 
       conclusion: (a - 2*b + c)^2 * (2*a - b - c)^2 * (a + b - 2*c)^2 = (0::real)
     name: three_terms_nospace
-    Error: |
-      Fail to claim the intermediate subgoal because: Inner syntax error
-      at ") ^ 2 = ( 0 :: real )"
-      Failed to parse prop
     proof: empty
-    Error: Evaluation cancelled due to failures above
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
+    pending proof goal:
+      (a - (2 :: real) * b + c)² * ((2 :: real) * a - b - c)² * (a + b - (2 :: real) * c)² = (0 :: real)
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof.

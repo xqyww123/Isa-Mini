@@ -7760,6 +7760,7 @@ class Session:
             self.max_retries = max_retries
             self._budget_start_time: float | None = None
         self._retry_count: int = 0
+        self._restart_requested: bool = False
         self.retrieval_forking_mode: ForkingMode = (
             parent.retrieval_forking_mode if parent is not None
             else retrieval_forking_mode)
@@ -8246,6 +8247,17 @@ class Session:
         self.showed_suffices_notice = False
         self.showed_fill_hint = False
         self.showed_cancelled_notice = False
+
+    async def request_restart(self):
+        """Request a context restart.  Sets a transient quit_info to break
+        driver loops, then interrupts.  Drivers check ``_restart_requested``
+        after loop exit and, if set, clear quit_info and re-enter with a
+        fresh ``initial_prompt()``."""
+        self._restart_requested = True
+        self._reset_view_state()
+        self.refute_or_surrender_warned = False
+        self.root.quit_info = ("restart", "")
+        await self.interrupt()
 
     async def interrupt(self):
         """Interrupt the agent's processing immediately.  Default no-op — the

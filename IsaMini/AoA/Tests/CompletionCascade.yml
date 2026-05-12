@@ -15,7 +15,7 @@ Outline:
   step 1: Have h1
     Error: Unfinished Proof. Call command `edit` with action `fill` and target step `1.1`
     goal: (0 :: int) ≤ x * x
-  Error: Unfinished Proof (line 9). Fill step `2`
+  Error: Unfinished Proof. Fill step `2`
   goal: (0 :: int) ≤ x * x
 ---------------
 --------------------------------------------------
@@ -25,7 +25,7 @@ Filled step 1.1.
 All proof goals of step 1 are completed.
 Outline:
   step 1: Have h1 (done)
-  Error: Unfinished Proof (line 9). Fill step `2`
+  Error: Unfinished Proof. Fill step `2`
 ---------------
 --------------------------------------------------
 edit_message: Have h2
@@ -36,7 +36,7 @@ Outline:
   step 2: Have h2
     Error: Unfinished Proof. Fill step `2.1`
     goal: (0 :: int) ≤ x * x
-  Error: Unfinished Proof (line 9). Fill step `3`
+  Error: Unfinished Proof. Fill step `3`
 ---------------
 --------------------------------------------------
 edit_message: Have h3 (nested in h2)
@@ -49,7 +49,7 @@ Outline:
       Error: Unfinished Proof. Fill step `2.1.1`
       goal: (0 :: int) ≤ x * x
     Error: Unfinished Proof. Fill step `2.2`
-  Error: Unfinished Proof (line 9). Fill step `3`
+  Error: Unfinished Proof. Fill step `3`
 ---------------
 --------------------------------------------------
 edit_message: fill 2.1.1 (should complete step 2.1 only)
@@ -61,7 +61,7 @@ Outline:
   step 2: Have h2
     step 2.1: Have h3 (done)
     Error: Unfinished Proof. Fill step `2.2`
-  Error: Unfinished Proof (line 9). Fill step `3`
+  Error: Unfinished Proof. Fill step `3`
 ---------------
 --------------------------------------------------
 edit_message: fill 2.2 (should complete step 2.2 AND cascade to step 2)
@@ -71,7 +71,7 @@ All proof goals of step 2 are completed.
 Outline:
   step 1: Have h1 (done)
   step 2: Have h2 (done)
-  Error: Unfinished Proof (line 9). Fill step `3`
+  Error: Unfinished Proof. Fill step `3`
 ---------------
 --------------------------------------------------
 edit_message: Have h4 (step 3)
@@ -83,7 +83,7 @@ Outline:
   step 3: Have h4
     Error: Unfinished Proof. Fill step `3.1`
     goal: (0 :: int) ≤ x * x
-  Error: Unfinished Proof (line 9). Fill step `4`
+  Error: Unfinished Proof. Fill step `4`
 ---------------
 --------------------------------------------------
 edit_message: Have h5 (step 3.1, nested in h4)
@@ -97,7 +97,7 @@ Outline:
       Error: Unfinished Proof. Fill step `3.1.1`
       goal: (0 :: int) ≤ x * x
     Error: Unfinished Proof. Fill step `3.2`
-  Error: Unfinished Proof (line 9). Fill step `4`
+  Error: Unfinished Proof. Fill step `4`
 ---------------
 --------------------------------------------------
 edit_message: fill 3.1.2 (h5's continuation)
@@ -117,7 +117,7 @@ Outline:
     step 3.1: Have h5
       Error: Unfinished Proof. Fill step `3.1.1`
     step 3.2: Obvious
-  Error: Unfinished Proof (line 9). Fill step `4`
+  Error: Unfinished Proof. Fill step `4`
 ---------------
 --------------------------------------------------
 edit_message: fill 3.1.1 (should complete step 3.1 AND step 3)
@@ -128,6 +128,6 @@ Outline:
   step 1: Have h1 (done)
   step 2: Have h2 (done)
   step 3: Have h4 (done)
-  Error: Unfinished Proof (line 9). Fill step `4`
+  Error: Unfinished Proof. Fill step `4`
 ---------------
 Unfinished nodes: 1

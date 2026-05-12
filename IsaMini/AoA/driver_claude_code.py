@@ -418,49 +418,59 @@ class ClaudeCode(Session):
         if self._client is not None:
             raise InternalError("_run_embedded called while already running")
         self._budget_start_time = time()
-        try:
-            async with ClaudeSDKClient(options=self.options) as client:
-                self._client = client
-                await client.query(self.initial_prompt())
-                self._model_time_start = time()
-                while True:
-                    # Stream model outputs and log them in debug mode
-                    async for message in client.receive_response():
-                        if RateLimitEvent is not None and isinstance(message, RateLimitEvent):
-                            self._check_rate_limit_event(message)
-                            continue
-                        content = getattr(message, "content", None)
-                        if isinstance(content, list):
-                            for block in content:
-                                text = getattr(block, "text", None)
-                                if isinstance(text, str) and text:
-                                    self._check_error_text(text)
-                                    self.log_model_output(text)
-                                thinking = getattr(block, "thinking", None)
-                                if isinstance(thinking, str) and thinking:
-                                    self.log_model_thinking(thinking)
-                        if isinstance(message, ResultMessage):
-                            if self._model_time_start is not None:
-                                self.total_model_time += time() - self._model_time_start
-                                self._model_time_start = None
-                            self._accumulate_cost(message)
-                            self._check_result_error(message)
-                    if self.check_budget():
-                        break
-                    unfinished_nodes = set()
-                    self.root.unfinished_nodes(unfinished_nodes)
-                    if unfinished_nodes and self.root.quit_info is None:
-                        self._retry_count += 1
+        while True:
+            try:
+                async with ClaudeSDKClient(options=self.options) as client:
+                    self._client = client
+                    self.refresh_YAML()
+                    await client.query(self.initial_prompt())
+                    self._model_time_start = time()
+                    while True:
+                        async for message in client.receive_response():
+                            if RateLimitEvent is not None and isinstance(message, RateLimitEvent):
+                                self._check_rate_limit_event(message)
+                                continue
+                            content = getattr(message, "content", None)
+                            if isinstance(content, list):
+                                for block in content:
+                                    text = getattr(block, "text", None)
+                                    if isinstance(text, str) and text:
+                                        self._check_error_text(text)
+                                        self.log_model_output(text)
+                                    thinking = getattr(block, "thinking", None)
+                                    if isinstance(thinking, str) and thinking:
+                                        self.log_model_thinking(thinking)
+                            if isinstance(message, ResultMessage):
+                                if self._model_time_start is not None:
+                                    self.total_model_time += time() - self._model_time_start
+                                    self._model_time_start = None
+                                self._accumulate_cost(message)
+                                self._check_result_error(message)
                         if self.check_budget():
                             break
-                        retry_prompt = self.retry_prompt(unfinished_nodes)
-                        self.log_retry(unfinished_nodes, retry_prompt)
-                        await client.query(retry_prompt)
-                        self._model_time_start = time()
-                    else:
-                        break
-        finally:
-            self._client = None
+                        unfinished_nodes = set()
+                        self.root.unfinished_nodes(unfinished_nodes)
+                        if unfinished_nodes and self.root.quit_info is None:
+                            self._retry_count += 1
+                            if self.check_budget():
+                                break
+                            retry_prompt = self.retry_prompt(unfinished_nodes)
+                            self.log_retry(unfinished_nodes, retry_prompt)
+                            await client.query(retry_prompt)
+                            self._model_time_start = time()
+                        else:
+                            break
+            finally:
+                self._client = None
+
+            if not self._restart_requested:
+                break
+
+            self._restart_requested = False
+            self.root.quit_info = None
+            self.log_AoA_opr("Context restarted")
+            self._log_meta("CONTEXT_RESTART")
+
         self.log_proof()
 
     async def _run_standalone(self):

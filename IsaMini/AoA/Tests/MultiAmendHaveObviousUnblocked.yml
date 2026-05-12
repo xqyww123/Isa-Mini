@@ -56,9 +56,9 @@ Outline:
     step 1.1: Have triv (done)
     step 1.2: Obvious (failed)
       Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
-    Error: Unfinished Proof (line 46). Call command `edit` with action `fill` and target step `1.2`
+    Error: Unfinished Proof. Call command `edit` with action `fill` and target step `1.2`
     goal: False
-  Error: Unfinished Proof (line 49). Fill step `2`
+  Error: Unfinished Proof. Fill step `2`
   goal: (0 :: int) ≤ x * x
 is_error: False
 --------------------------------------------------

@@ -62,7 +62,7 @@ proof:
     operation: Obvious
     Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
 notice:
-  - Discarded because the operation's body terminates the proof; no sibling should follow: step 1
+  - Due to changes in the proof structure, previous proof step step 1 has been discarded
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to replace it with a proof.
 pending proof goal:
   P (a, b)

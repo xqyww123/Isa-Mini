@@ -45,12 +45,12 @@ Outline:
       premises:
         - True.prem0: b
       step 1.True.1: Intro
-      Error: Unfinished Proof (line 30). Call command `edit` with action `fill` and target step `1.True.2`
+      Error: Unfinished Proof. Call command `edit` with action `fill` and target step `1.True.2`
       goal: P True
     - 1.False
       premises:
         - False.prem0: ¬ b
-      Error: Unfinished Proof (line 36). Fill step `1.False.1`
+      Error: Unfinished Proof. Fill step `1.False.1`
       goal: P False
 ---------------
 --------------------------------------------------

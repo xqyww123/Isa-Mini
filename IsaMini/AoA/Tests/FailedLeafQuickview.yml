@@ -22,7 +22,7 @@ Error: Unfinished Proof! Call command `edit` with action `fill` and target step 
 Quickview (should show evaluation status)
 --------------------------------------------------
 step 1: Have bad_claim
-  Error: Unfinished Proof (line 17). Call command `edit` with action `fill` and target step `1.1`
+  Error: Unfinished Proof. Call command `edit` with action `fill` and target step `1.1`
   goal: False
-Error: Unfinished Proof (line 20). Fill step `2`
+Error: Unfinished Proof. Fill step `2`
 goal: (0 :: int) ≤ x * x

@@ -1070,79 +1070,93 @@ class APIDriver(Session):
         self._msgs_sent_through = 0
         tools = self._provider.format_tools(self._executor.tool_schemas())
 
-        while not self._interrupted:
-            if self._last_response_id is not None:
-                msgs_to_send = self._messages[self._msgs_sent_through:]
-            else:
-                msgs_to_send = self._messages
-
-            self._model_time_start = time()
-            try:
-                response = await self._provider.chat(
-                    msgs_to_send, tools,
-                    previous_response_id=self._last_response_id)
-            except openai.RateLimitError as e:
-                if "insufficient_quota" in str(e):
-                    raise self._QuotaError() from e
-                raise self._RateLimitError() from e
-            except (openai.BadRequestError, openai.NotFoundError) as e:
+        while True:
+            while not self._interrupted:
                 if self._last_response_id is not None:
-                    self.debug_info(
-                        f"previous_response_id failed ({e}), resending full history")
-                    self._last_response_id = None
-                    self._msgs_sent_through = 0
-                    try:
-                        response = await self._provider.chat(self._messages, tools)
-                    except openai.RateLimitError as e2:
-                        if "insufficient_quota" in str(e2):
-                            raise self._QuotaError() from e2
-                        raise self._RateLimitError() from e2
+                    msgs_to_send = self._messages[self._msgs_sent_through:]
                 else:
-                    raise
+                    msgs_to_send = self._messages
 
-            if response.response_id is not None:
-                self._last_response_id = response.response_id
-                self._msgs_sent_through = len(self._messages) + 1
+                self._model_time_start = time()
+                try:
+                    response = await self._provider.chat(
+                        msgs_to_send, tools,
+                        previous_response_id=self._last_response_id)
+                except openai.RateLimitError as e:
+                    if "insufficient_quota" in str(e):
+                        raise self._QuotaError() from e
+                    raise self._RateLimitError() from e
+                except (openai.BadRequestError, openai.NotFoundError) as e:
+                    if self._last_response_id is not None:
+                        self.debug_info(
+                            f"previous_response_id failed ({e}), resending full history")
+                        self._last_response_id = None
+                        self._msgs_sent_through = 0
+                        try:
+                            response = await self._provider.chat(self._messages, tools)
+                        except openai.RateLimitError as e2:
+                            if "insufficient_quota" in str(e2):
+                                raise self._QuotaError() from e2
+                            raise self._RateLimitError() from e2
+                    else:
+                        raise
 
-            if self._model_time_start is not None:
-                self.total_model_time += time() - self._model_time_start
-                self._model_time_start = None
-            self._accumulate_usage(response.usage)
+                if response.response_id is not None:
+                    self._last_response_id = response.response_id
+                    self._msgs_sent_through = len(self._messages) + 1
 
-            if response.thinking:
-                self.log_model_thinking(response.thinking)
-            if response.content:
-                self.log_model_output(response.content)
+                if self._model_time_start is not None:
+                    self.total_model_time += time() - self._model_time_start
+                    self._model_time_start = None
+                self._accumulate_usage(response.usage)
 
-            self._messages.append(self._provider.format_assistant_msg(response))
+                if response.thinking:
+                    self.log_model_thinking(response.thinking)
+                if response.content:
+                    self.log_model_output(response.content)
 
-            if response.tool_calls:
-                results = await self._execute_tool_calls(response.tool_calls)
-                for tc, (text, _is_error) in results:
-                    self._messages.append(
-                        ToolResultMsg(call_id=tc.id, name=tc.name, content=text))
-                if self.root.quit_info is not None:
-                    break
-                if self.check_budget():
-                    break
-            else:
-                unfinished: set[Node] = set()
-                self.root.unfinished_nodes(unfinished)
-                if not unfinished:
-                    break
-                self._retry_count += 1
-                if self.check_budget():
-                    break
-                retry = self.retry_prompt(unfinished)
-                self._messages.append(UserMsg(retry))
-                self.log_retry(unfinished, retry)
+                self._messages.append(self._provider.format_assistant_msg(response))
 
-            if self._should_compact(response.usage):
-                compacted = await self._compact(self._messages, tools)
-                if compacted is not self._messages:
-                    self._last_response_id = None
-                    self._msgs_sent_through = 0
-                self._messages = compacted
+                if response.tool_calls:
+                    results = await self._execute_tool_calls(response.tool_calls)
+                    for tc, (text, _is_error) in results:
+                        self._messages.append(
+                            ToolResultMsg(call_id=tc.id, name=tc.name, content=text))
+                    if self.root.quit_info is not None:
+                        break
+                    if self.check_budget():
+                        break
+                else:
+                    unfinished: set[Node] = set()
+                    self.root.unfinished_nodes(unfinished)
+                    if not unfinished:
+                        break
+                    self._retry_count += 1
+                    if self.check_budget():
+                        break
+                    retry = self.retry_prompt(unfinished)
+                    self._messages.append(UserMsg(retry))
+                    self.log_retry(unfinished, retry)
+
+                if self._should_compact(response.usage):
+                    compacted = await self._compact(self._messages, tools)
+                    if compacted is not self._messages:
+                        self._last_response_id = None
+                        self._msgs_sent_through = 0
+                    self._messages = compacted
+
+            if not self._restart_requested:
+                break
+
+            self._restart_requested = False
+            self._interrupted = False
+            self.root.quit_info = None
+            self.refresh_YAML()
+            self._messages = self._initial_messages()
+            self._last_response_id = None
+            self._msgs_sent_through = 0
+            self.log_AoA_opr("Context restarted")
+            self._log_meta("CONTEXT_RESTART")
 
         self._compute_cost()
         self.log_proof()

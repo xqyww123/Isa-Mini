@@ -45,7 +45,7 @@ Outline:
         The goal is non-trivial and a step-by-step proof is required.
     Error: Unfinished Proof. Call command `edit` with action `fill` and target step `1.1`
     goal: (1 :: int) = (2 :: int)
-  Error: Unfinished Proof (line 23). Fill step `2`
+  Error: Unfinished Proof. Fill step `2`
   goal: (0 :: int) ≤ x * x
 ---------------
 is_error: False
@@ -55,7 +55,7 @@ is_error: False
 Amended step 1.
 Outline:
   step 1: Have aux2 (done)
-  Error: Unfinished Proof (line 16). Fill step `2`
+  Error: Unfinished Proof. Fill step `2`
 ---------------
 is_error: False
 --------------------------------------------------

@@ -196,6 +196,18 @@ class OpenAI_Driver(Session):
                         self.warn_AoA_opr("Max turns exceeded in single run segment")
                     except asyncio.CancelledError:
                         self.log_AoA_opr("Run cancelled (proof complete or interrupt)")
+                        if self._model_time_start is not None:
+                            self.total_model_time += time() - self._model_time_start
+                            self._model_time_start = None
+                        if self._restart_requested:
+                            self._restart_requested = False
+                            self.root.quit_info = None
+                            self.refresh_YAML()
+                            prompt = self.initial_prompt()
+                            last_response_id = None
+                            self.log_AoA_opr("Context restarted")
+                            self._log_meta("CONTEXT_RESTART")
+                            continue
                         break
                     finally:
                         self._runner_task = None

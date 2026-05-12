@@ -17,7 +17,7 @@ Outline:
   step 1: Have sq
     Error: Unfinished Proof. Call command `edit` with action `fill` and target step `1.1`
     goal: (0 :: int) ≤ x * x
-  Error: Unfinished Proof (line 11). Fill step `2`
+  Error: Unfinished Proof. Fill step `2`
   goal: (0 :: int) ≤ x * x
 is_error: False
 --------------------------------------------------
@@ -27,7 +27,7 @@ Filled step 1.1.
 All proof goals of step 1 are completed.
 Outline:
   step 1: Have sq (done)
-  Error: Unfinished Proof (line 19). Fill step `2`
+  Error: Unfinished Proof. Fill step `2`
 is_error: False
 --------------------------------------------------
 [3] delete step 1 — reverts tree
@@ -58,7 +58,7 @@ Outline:
   step 1: Have sq
     Error: Unfinished Proof. Fill step `1.1`
     goal: (0 :: int) ≤ x * x
-  Error: Unfinished Proof (line 42). Fill step `2`
+  Error: Unfinished Proof. Fill step `2`
 is_error: False
 --------------------------------------------------
 [5b] after fill+delete 1.1 — parent 1 still exists, child 1.1 gone

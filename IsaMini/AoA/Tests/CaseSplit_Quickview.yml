@@ -34,7 +34,7 @@ step 1: CaseSplit l
   - 1.Nil
     premises:
       - Nil.prem0: l = []
-    Error: Unfinished Proof (line 20). Call command `edit` with action `fill` and target step `1.Nil.1`
+    Error: Unfinished Proof. Call command `edit` with action `fill` and target step `1.Nil.1`
     goal: P []
   - 1.Cons
     variables:
@@ -42,5 +42,5 @@ step 1: CaseSplit l
       - list: 'a list
     premises:
       - Cons.prem0: l = a # list
-    Error: Unfinished Proof (line 29). Fill step `1.Cons.1`
+    Error: Unfinished Proof. Fill step `1.Cons.1`
     goal: P (a # list)

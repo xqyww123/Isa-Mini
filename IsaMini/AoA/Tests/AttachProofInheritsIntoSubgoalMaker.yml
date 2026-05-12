@@ -80,7 +80,7 @@ global declarations:
       notice:
         - The variable n are not classified as fixed or generalized; fixed is assumed. Change this by calling the `edit` tool with action `amend` and target step `global.1.1`
       - global.1.1.0
-        Error: Unfinished Proof (line 58). Call command `edit` with action `fill` and target step `global.1.1.0.1`
+        Error: Unfinished Proof. Call command `edit` with action `fill` and target step `global.1.1.0.1`
         goal: (0 :: nat) + (0 :: nat) = (0 :: nat)
       - global.1.1.Suc (done)
         variables:
@@ -89,5 +89,5 @@ global declarations:
           - Suc.IH: m + (0 :: nat) = m
     the statement is quantified over m
 proof:
-  Error: Unfinished Proof (line 71). Fill step `1`
+  Error: Unfinished Proof. Fill step `1`
   goal: n + (0 :: nat) = n

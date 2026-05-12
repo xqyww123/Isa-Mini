@@ -5,5 +5,5 @@ step 1: Have h1 (done)
 ...
 step 5: Have h5 (done)
 step 6: Have h6 (done)
-Error: Unfinished Proof (line 4). Call command `edit` with action `fill` and target step `7`
+Error: Unfinished Proof. Call command `edit` with action `fill` and target step `7`
 goal: (0 :: nat) < (10 :: nat)

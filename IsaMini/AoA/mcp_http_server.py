@@ -529,13 +529,19 @@ async def _refute_or_surrender_tool_logic(session: Session, args: dict) -> tuple
         msg = f"Invalid reason: {reason!r}. Must be `refute` or `surrender`."
         session.log_tool_response(_tn, f"ERROR: {msg}")
         return (msg, True)
-    if reason == "surrender" and not session.refute_or_surrender_warned:
-        session.refute_or_surrender_warned = True
-        msg = ("You are a strong prover and you've been doing well. "
-               "Don't give up yet — take a step back, rethink your approach, "
-               "and try again. You may be closer than you think.")
+    if reason == "surrender":
+        session._retry_count += 1
+        if session._retry_count >= session.max_retries:
+            session.root.quit_info = ("surrender", detail)
+            msg = f"Proof attempt concluded ({reason})."
+            session.log_tool_response(_tn, msg)
+            await session.interrupt()
+            return (msg, False)
+        msg = "Restarting session with fresh context."
         session.log_tool_response(_tn, msg)
+        await session.request_restart()
         return (msg, False)
+    # reason == "refute"
     session.root.quit_info = (reason, detail)
     msg = f"Proof attempt concluded ({reason})."
     session.log_tool_response(_tn, msg)
