@@ -275,6 +275,8 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         error_msg = f"Isabelle error: {'; '.join(pretty_unicode(err) for err in e.errors)}"
         session.log_tool_response(_tn, f"ERROR: {error_msg}")
         return (error_msg, True)
+    except (ConnectionError, EOFError):
+        raise asyncio.CancelledError("connection lost")
     except Exception as e:
         session.log_tool_response(
             _tn,
@@ -325,6 +327,8 @@ async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         error_msg = f"Isabelle error: {'; '.join(pretty_unicode(err) for err in e.errors)}"
         session.log_tool_response(_tn, f"ERROR: {error_msg}")
         return (error_msg, True)
+    except (ConnectionError, EOFError):
+        raise asyncio.CancelledError("connection lost")
     except Exception as e:
         session.log_tool_response(_tn, f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
         sys.exit(1)
@@ -397,6 +401,8 @@ async def _answer_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         error_msg = f"Isabelle error: {'; '.join(pretty_unicode(err) for err in e.errors)}"
         session.log_tool_response(_tn, f"ERROR: {error_msg}")
         return (error_msg, True)
+    except (ConnectionError, EOFError):
+        raise asyncio.CancelledError("connection lost")
     except Exception as e:
         session.log_tool_response(_tn, f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
         sys.exit(1)
