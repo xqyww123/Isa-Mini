@@ -82,6 +82,8 @@ class ClaudeCode(Session):
             raise DriverArgumentError(
                 f"Driver 'ClaudeCode' does not accept arguments, but got '{argument}'")
         super().__init__(*args, parent=parent, **kwargs)
+        if parent is None:
+            self.quickview_line_numbers = True
         if parent is not None:
             # Fork mode: share parent's state
             self.working_dir = parent.working_dir
@@ -260,12 +262,7 @@ class ClaudeCode(Session):
         context: HookContext,
     ) -> HookJSONOutput:
         """Clear view caches before context compaction so the agent re-discovers entities."""
-        self.seen_commands.clear()
-        self.seen_entities.clear()
-        self.seen_opaque_note = False
-        self.root.session.showed_suffices_notice = False
-        self.showed_fill_hint = False
-        self.root.session.showed_cancelled_notice = False
+        self._reset_view_state()
         self._log_meta("COMPACTION")
         return {}
 

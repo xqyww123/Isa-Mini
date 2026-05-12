@@ -131,7 +131,7 @@
           "type": "string"
         },
         "facts": {
-          "description": "helpful facts for proving the goal",
+          "description": "helpful facts for proving the goal. Instantiations and discharging premises can be helpful.",
           "items": {
             "anyOf": [
               { "$ref": "#/$defs/FactByName" },

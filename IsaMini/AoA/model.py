@@ -2577,7 +2577,8 @@ class Node(ABC):
                 status_mark = "pending, "
             case _:
                 status_mark = ""
-        marks = f"{changed_mark}{status_mark}{done_mark}".rstrip(", ")
+        line_mark = f"line {self.line}, " if self.session.quickview_line_numbers else ""
+        marks = f"{changed_mark}{status_mark}{done_mark}{line_mark}".rstrip(", ")
         suffix = f" ({marks})" if marks else ""
         file.write(f"{self._kind} {self.id}: {self.quickview_title()}{suffix}\n")
         return indent + 1
@@ -3345,13 +3346,13 @@ class NonLeaf_Node(Node):
                 error = e
                 break
             created.append(node)
+            self._is_trivial = None
         if created:
             existing_ids = {id(x) for x in self.sub_nodes}
             for node in created:
                 if id(node) in existing_ids:
                     raise InternalError("The target node to insert is already in my children")
             self.sub_nodes[insert_idx:insert_idx] = created
-            self._is_trivial = None
             for sibling in self.sub_nodes[insert_idx + len(created):]:
                 sibling._on_upstream_change()
         return self._InsertBatchResult(created, stopped_at, error)
@@ -3841,7 +3842,7 @@ class StdBlock(NonLeaf_Node):
             elif (goal_and_step := self.should_I_show_pending_goal()) is not None:
                 goal, step_to_fill = goal_and_step
                 print_indent(indent, file)
-                line_hint = f" (line {self.open_pending_proof_line})" if self.open_pending_proof_line is not None else ""
+                line_hint = f" (line {self.open_pending_proof_line})" if self.open_pending_proof_line is not None and self.session.quickview_line_numbers else ""
                 if self.session.showed_fill_hint:
                     file.write(f"Error: Unfinished Proof{line_hint}. Fill step `{step_to_fill}`\n")
                 else:
@@ -4195,7 +4196,8 @@ class GoalNode(StdBlock):
             return indent
         else:
             done_mark = "done, " if self._should_print_done() else ""
-            marks = done_mark.rstrip(", ")
+            line_mark = f"line {self.line}, " if self.session.quickview_line_numbers else ""
+            marks = f"{done_mark}{line_mark}".rstrip(", ")
             suffix = f" ({marks})" if marks else ""
             print_indent(indent, file)
             file.write(f"- {self.id}{suffix}\n")
@@ -7775,6 +7777,8 @@ class Session:
             set(parent.seen_abbreviations) if parent is not None else set())
         self.showed_fill_hint: bool = False
         self.showed_cancelled_notice: bool = False
+        self.quickview_line_numbers: bool = (
+            parent.quickview_line_numbers if parent is not None else False)
         if parent is not None:
             # Subsessions share parent's log files
             self.log_dir = parent.log_dir
@@ -8230,6 +8234,18 @@ class Session:
                   lambda: [f"[DEBUG] {msg}"], message=msg)
     async def run(self):
         raise NotImplementedError("`run` must be implemented by subclass")
+
+    def _reset_view_state(self):
+        """Reset UI-hint and deduplication state so the agent re-discovers
+        entities and re-emits one-shot notices.  Called on compaction and
+        context restart."""
+        self.seen_entities.clear()
+        self.seen_commands.clear()
+        self.seen_opaque_note = False
+        self.seen_abbreviations.clear()
+        self.showed_suffices_notice = False
+        self.showed_fill_hint = False
+        self.showed_cancelled_notice = False
 
     async def interrupt(self):
         """Interrupt the agent's processing immediately.  Default no-op — the

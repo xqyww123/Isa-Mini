@@ -1207,12 +1207,7 @@ class APIDriver(Session):
         summary = summary_resp.content or ""
         self._accumulate_usage(summary_resp.usage)
 
-        self.seen_commands.clear()
-        self.seen_entities.clear()
-        self.seen_opaque_note = False
-        self.showed_suffices_notice = False
-        self.showed_fill_hint = False
-        self.showed_cancelled_notice = False
+        self._reset_view_state()
 
         self.refresh_YAML()
         new_messages: list[Msg] = []

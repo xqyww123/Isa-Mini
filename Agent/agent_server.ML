@@ -723,27 +723,6 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         timeout = NONE
       }
 
-      (* Find all subterms of t that match pattern pat.
-         Returns a list of matching subterms (no duplicates by aconv).
-         Abs case substitutes Bound with Free to avoid fastype_of: Bound
-         crashes inside Pattern.match. *)
-      fun find_matching_subterms thy pat t =
-        let
-          fun try_match t =
-            (Pattern.match thy (pat, t) (Vartab.empty, Vartab.empty); true)
-            handle Pattern.MATCH => false
-          fun add_if_new t acc =
-            if exists (fn t' => Term.aconv (t, t')) acc then acc else t :: acc
-          fun collect (t as (f $ x)) acc =
-                let val acc' = collect f (collect x acc)
-                in if try_match t then add_if_new t acc' else acc' end
-            | collect (Abs (name, ty, body)) acc =
-                let val free = Free (name, ty)
-                in collect (Term.subst_bound (free, body)) acc end
-            | collect t acc =
-                if try_match t then add_if_new t acc else acc
-        in collect t [] end
-
       val check_looping_rules_callback = {
         name = "IsaMini.check_looping_rules",
         arg_schema = unpackTuple4 (
@@ -797,7 +776,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                           handle TERM _ => NONE) looping_rules
                         val matches = distinct (fn (a, b) => Term.aconv (a, b))
                           (flat (map (fn lhs =>
-                            flat (map (find_matching_subterms thy lhs) search_terms)
+                            flat (map (PLPR_Pattern.find_matching_subterms thy [] lhs) search_terms)
                           ) lhss))
                         val rule_pretty = SOT (Thm.prop_of (hd thms))
                     in SOME (i, rule_pretty, map (fn t => (SOT t, t)) matches)

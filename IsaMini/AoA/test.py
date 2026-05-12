@@ -45,6 +45,11 @@ class ModelTestCase(TestCase):
                 capture_output=True, text=True)
             with open(diff_path, 'w') as f:
                 f.write(diff_result.stdout)
+        tests_dir = os.path.join(os.path.dirname(__file__), 'Tests')
+        for ext in ('.diff', '.actual.yml'):
+            stale = os.path.join(tests_dir, self.name + ext)
+            if os.path.exists(stale):
+                os.remove(stale)
         async with Session(connection.server.logger, log_dir) as session:
             root = Root((global_context, ptree), connection, session)
             await session.initialize(root)
@@ -5074,6 +5079,67 @@ async def _test_UpstreamChangeResetsObvious(root: Root, file: MyIO):
     root.print(0, file)
 
 
+@model_test("MultiAmendHaveObviousUnblocked", "Test_MultiAmendHaveObviousUnblocked.thy", 8)
+async def _test_MultiAmendHaveObviousUnblocked(root: Root, file: MyIO):
+    """Multi-amend [Have, Obvious] via _insert_before_child must NOT be
+    blocked by a stale _is_trivial=False left over from a prior failed
+    Obvious.  The Have step changes the proof state, so the subsequent
+    Obvious should be allowed to construct and evaluate.
+
+    Scenario: fill step 1 with Have(False), fill 1.1 with Obvious (fails,
+    sets _is_trivial=False on the 1-block), then multi-amend 1.1 with
+    [Have(True), Obvious(using it)]."""
+    from .mcp_http_server import _edit_tool_logic
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Step 1: Have(False) — creates a subgoal that Obvious can't solve.
+    root.session.age += 1
+    await root.fill("1", [Have.gen_single({
+        "thought": "introduce unprovable subgoal",
+        "statement": {"english": "False", "conclusion": "False"},
+        "name": "absurd",
+    })])
+    print_header("[1] Have False — open subgoal", file)
+    root.print(0, file)
+
+    # Step 1.1: Obvious on the False subgoal — must fail.
+    root.session.age += 1
+    await root.fill("1.1", [Obvious.gen_single({"facts": []})])
+    step1 = root.locate_node("1")
+    assert step1._is_trivial is False, \
+        f"Expected _is_trivial=False after Obvious failure, got {step1._is_trivial}"
+    print_header("[2] fill 1.1 with Obvious — fails, _is_trivial=False", file)
+    root.print(0, file)
+
+    # Multi-amend step 1.1 with [Have(True), Obvious].
+    # amend_me sees len(gns)==2 → delete 1.1, then _insert_before_child
+    # inserts [Have, Obvious] at the former slot.
+    # BUG (before fix): _is_trivial=False on step-1 block rejects the Obvious
+    # during construction via GoalIsNontrivial, even though the Have changes
+    # the proof state.
+    root.session.age += 1
+    result, is_error = await _edit_tool_logic(
+        root.session,
+        {"target_step": "1.1", "action": "amend", "proof_operations": [
+            {"operation": "Have", "thought": "trivial truth",
+             "statement": {"english": "True", "conclusion": "True"},
+             "name": "triv",
+             "proof": [{"operation": "Obvious", "facts": []}]},
+            {"operation": "Obvious",
+             "facts": [{"name": "triv"}]},
+        ]})
+    print_header("[3] multi-amend 1.1 → [Have(True), Obvious] — must not be blocked", file)
+    file.write(result)
+    file.write(f"is_error: {is_error}\n")
+
+    # The Obvious should have been created (not rejected by GoalIsNontrivial).
+    assert not is_error, \
+        f"Expected is_error=False (Obvious should not be blocked), got is_error={is_error}"
+    print_header("Final state", file)
+    root.print(0, file)
+
+
 @model_test("NamedFactResolution", "Test_NamedFactResolution.thy", 13)
 async def _test_NamedFactResolution(root: Root, file: MyIO):
     """Test that Interaction_RetrieveForProof and Interaction_ChooseDef
@@ -8200,6 +8266,28 @@ async def _test_FactByNameFlip(root: Root, file: MyIO):
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
 
+@model_test("RewriteFlipForall", "Test_RewriteFlipForall.thy", 10)
+async def _test_RewriteFlipForall(root: Root, file: MyIO):
+    """Rewrite with flip=True on a universally quantified equation (∀z. f z = z+1)
+    should not crash with 'symmetric: no unifiers'. Reproduces the bug where
+    [symmetric] is appended to the fact name but Isabelle's symmetric rule
+    cannot apply because the top-level connective is ∀, not =."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    outcome = await root.fill("1", [Rewrite.gen_single({
+        "thought": "Rewrite the goal using h flipped",
+        "using": [{"name": "h", "flip": True}],
+        "use system simplifiers": False,
+        "rewrite goal": True,
+        "rewrite premises": []
+    })])
+    if outcome.failure is not None:
+        file.write(f"Fill failed: {outcome.failure}\n")
+    print_header("After Rewrite with flip on forall-quantified fact", file)
+    root.print(0, file)
+
+
 @model_test("QuickviewCollapse", "Test_QuickviewCollapse.thy", 8)
 async def _test_QuickviewCollapse(root: Root, file: MyIO):
     """When 5+ consecutive sibling steps are done and unchanged,
@@ -8329,6 +8417,61 @@ async def _test_Contradiction_false_goal(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("3", [Obvious.gen_single({"facts": []})])
     print_header("After closing", file)
+    root.print(0, file)
+
+@model_test("Contradiction_Derive", "Test_Contradiction_Derive.thy", 11)
+async def _test_Contradiction_Derive(root: Root, file: MyIO):
+    """Reproduce fastype_of: Bound bug — Derive (SPECIALIZE) with HOL ∀
+    instantiation + premise discharge inside a Contradiction block.
+
+    Goal: n = 2520 with hypotheses:
+      h0: ∀n. f n = (∑k | k dvd n. 1) / real n powr (1/3)
+      h1: ∀p. p ≠ n → f p < f n
+    Contradiction introduces neg: n ≠ 2520.
+    Derive tries to instantiate h1 with p=2520 and discharge using neg.
+    The discharge requires proving '2520 ≠ n' from 'n ≠ 2520' (argument swap)."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    # Step 1: Contradiction — assumes neg: n ≠ 2520, goal becomes False
+    root.session.age += 1
+    await root.fill("1", [Contradiction.gen_single({
+        "hypothesis_name": "neg",
+    })])
+    print_header("After Contradiction", file)
+    root.print(0, file)
+    # Step 2a: Derive from h1 with p=2520, NO discharge — isolate instantiation
+    root.session.age += 1
+    _outcome = await root.fill("2", [Derive.gen_single({
+        "thought": "Instantiate h1 with p=2520 (no discharge)",
+        "rule": {"name": "h1"},
+        "instantiations": [{"name": "p", "value": "(2520::nat)"}],
+        "result_name": "inst_h1"
+    })])
+    is_error_a = _outcome.failure is not None and _outcome.failure.is_error
+    reason_a = _outcome.failure
+    print_header("After Derive (no discharge)", file)
+    file.write(f"Is error: {is_error_a}\n")
+    if reason_a is not None:
+        file.write(f"Reason: {reason_a}\n")
+    root.print(0, file)
+    # Delete and retry with discharge
+    root.session.age += 1
+    await root.delete(["2"])
+    # Step 2b: Derive from h1 with p=2520 WITH discharge
+    root.session.age += 1
+    _outcome = await root.fill("2", [Derive.gen_single({
+        "thought": "Instantiate h1 with p=2520 and discharge using neg",
+        "rule": {"name": "h1"},
+        "instantiations": [{"name": "p", "value": "(2520::nat)"}],
+        "discharging_facts": [{"name": "neg"}],
+        "result_name": "ineq"
+    })])
+    is_error_b = _outcome.failure is not None and _outcome.failure.is_error
+    reason_b = _outcome.failure
+    print_header("After Derive (with discharge)", file)
+    file.write(f"Is error: {is_error_b}\n")
+    if reason_b is not None:
+        file.write(f"Reason: {reason_b}\n")
     root.print(0, file)
 
 @model_test("ForkDeletesRefreshingNode", "Test_Unfold1.thy", 15)

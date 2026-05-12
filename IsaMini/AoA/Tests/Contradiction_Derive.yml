@@ -1,0 +1,99 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - n: nat
+premises:
+  - h0: ∀(n :: nat). f n = (∑k | k dvd (n :: nat). (1 :: real)) / real n
+  - h1: ∀(p :: nat). p ≠ n ⟶ f p < f n
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+variables:
+  - f: nat ⇒ real
+goal: n = (2520 :: nat)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Contradiction
+--------------------------------------------------
+variables:
+  - n: nat
+premises:
+  - h0: ∀(n :: nat). f n = (∑k | k dvd (n :: nat). (1 :: real)) / real n
+  - h1: ∀(p :: nat). p ≠ n ⟶ f p < f n
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+variables:
+  - f: nat ⇒ real
+goal: n = (2520 :: nat)
+proof:
+  - step id: 1
+    operation: Contradiction
+    hypothesis_name: neg
+    assuming hypothesis:
+      - neg: n ≠ (2520 :: nat)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  False
+--------------------------------------------------
+After Derive (no discharge)
+--------------------------------------------------
+Is error: False
+variables:
+  - n: nat
+premises:
+  - h0: ∀(n :: nat). f n = (∑k | k dvd (n :: nat). (1 :: real)) / real n
+  - h1: ∀(p :: nat). p ≠ n ⟶ f p < f n
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+variables:
+  - f: nat ⇒ real
+goal: n = (2520 :: nat)
+proof:
+  - step id: 1
+    operation: Contradiction
+    hypothesis_name: neg
+    assuming hypothesis:
+      - neg: n ≠ (2520 :: nat)
+  - step id: 2
+    thought: Instantiate h1 with p=2520 (no discharge)
+    operation: Derive
+    rule:
+      - h1: ∀(p :: nat). p ≠ n ⟶ f p < f n
+    instantiations:
+      - p = (2520::nat)
+    resulting facts:
+      - inst_h1: (2520 :: nat) ≠ n ⟶ f (2520 :: nat) < f n
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  False
+--------------------------------------------------
+After Derive (with discharge)
+--------------------------------------------------
+Is error: False
+variables:
+  - n: nat
+premises:
+  - h0: ∀(n :: nat). f n = (∑k | k dvd (n :: nat). (1 :: real)) / real n
+  - h1: ∀(p :: nat). p ≠ n ⟶ f p < f n
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+variables:
+  - f: nat ⇒ real
+goal: n = (2520 :: nat)
+proof:
+  - step id: 1
+    operation: Contradiction
+    hypothesis_name: neg
+    assuming hypothesis:
+      - neg: n ≠ (2520 :: nat)
+  - step id: 2
+    thought: Instantiate h1 with p=2520 and discharge using neg
+    operation: Derive
+    rule:
+      - h1: ∀(p :: nat). p ≠ n ⟶ f p < f n
+    instantiations:
+      - p = (2520::nat)
+    discharging facts:
+      - neg: n ≠ (2520 :: nat)
+    resulting facts:
+      - ineq: f (2520 :: nat) < f n
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  False

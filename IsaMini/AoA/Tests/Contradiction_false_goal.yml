@@ -41,9 +41,7 @@ proof:
       - absurd: ¬ False
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
-  premises:
-    - absurd: ¬ False
-  goal: False
+  False
 status: SUCCESS
 hypothesis: absurd = ¬ False
 --------------------------------------------------

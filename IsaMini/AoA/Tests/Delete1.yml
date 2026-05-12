@@ -132,7 +132,7 @@ Overview
 step 1: Have lem1
   Error: Unfinished Proof (line 20). Fill step `1.1`
   goal: x = y + (0 :: int)
-step 2: Rewrite goal
+step 2: Rewrite goal (changed)
   goal changes into:
     y + (0 :: int) = z
 Error: Unfinished Proof (line 32). Fill step `3`

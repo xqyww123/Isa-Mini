@@ -9,9 +9,9 @@ Error: Unfinished Proof! Call command `edit` with action `fill` and target step 
 Interaction Prompt
 --------------------------------------------------
 Rule 'my_wrap' (f ?x = g (f ?x)) would cause infinite rewriting.
-To use this rule safely, select which specific subterm(s) to rewrite:
+To use this rule safely, select which specific subterm to rewrite:
   0. f y
-Answer with the index(es) of the subterm(s) to rewrite, or leave empty to drop this rule.
+Answer with the index of the subterm to rewrite, or leave empty to drop this rule.
 --------------------------------------------------
 After Rewrite (quantified goal)
 --------------------------------------------------
