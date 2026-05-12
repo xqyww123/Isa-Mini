@@ -4215,7 +4215,7 @@ class GoalNode(StdBlock):
                     visible_vars = {k: v for k, v in merged_vars.items() if k not in suppressed.vars}
                     visible_hyps = {k: v for k, v in merged_hyps.items() if k not in suppressed.hyps}
                     visible = (visible_vars, visible_hyps)
-                    if visible != self._prev_quickview_context:
+                    if visible != self._prev_quickview_context and self.does_quickview_need_detail():
                         print_vars(merged_vars.items(), child_indent, file, suppressed.vars)
                         print_hyps(merged_hyps.items(), child_indent, file, suppressed.hyps)
                         self._prev_quickview_context = visible
@@ -7714,7 +7714,7 @@ class Session:
                  interactive_retrieval: InteractiveRetrievalMode = InteractiveRetrievalMode.YES,
                  timeout_seconds: float = 14400,
                  max_tool_calls: int = 10000,
-                 max_retries: int = 8):
+                 max_retries: int = 5):
         """
         Args:
             logger: Python logger for runtime debug messages to the server log stream.
@@ -7960,27 +7960,45 @@ class Session:
             f"- {self.tool_name(TOOL_READ)}: Recall proof state from `proof.yaml`. Use only when you have lost track.\n"
         )
 
+    INITIAL_PROMPT_GOAL_LINE_LIMIT = 20
+
     def initial_prompt(self) -> str:
         """Return the initial user message to start the proof session."""
         buf = StringIO()
         self.root.print(0, MyIO(buf), update_line=True, show_warnings=True)
         proof_state = buf.getvalue()
+        inline = proof_state.count('\n') < self.INITIAL_PROMPT_GOAL_LINE_LIMIT
         if self.system_prompt() is not None:
-            return (
-                "Complete the following proof using the MCP proof tools.\n"
-                + proof_state
-                + "\n`proof.yaml` contains the full proof state, but read it only when you lose track of it."
-            )
+            if inline:
+                return (
+                    "Complete the following proof using the MCP proof tools.\n"
+                    + proof_state
+                    + "\n`proof.yaml` contains the full proof state, but read it only when you lose track of it."
+                )
+            else:
+                return (
+                    "Complete the proof using the MCP proof tools.\n"
+                    "The proof state is in `proof.yaml` — read it to see the goal and current proof."
+                )
         else:
-            return (
-                "An incomplete proof is provided as follows\n"
-                + proof_state
-                + f"Analyze the proof goal, plan a proof, and complete it using tools `{self.tool_name(TOOL_EDIT)}` and `{self.tool_name(TOOL_DELETE)}`.\n"
-                "Continue building the proof until no error remains.\n"
-                "A proof goal can be buggy and thus unprovable — "
-                f"call `{self.tool_name(TOOL_SURRENDER)}` with your analysis if you believe so.\n"
-                "`proof.yaml` contains the full proof state, but recall it only when you lose track of it."
-            )
+            if inline:
+                return (
+                    "An incomplete proof is provided as follows\n"
+                    + proof_state
+                    + f"Analyze the proof goal, plan a proof, and complete it using tools `{self.tool_name(TOOL_EDIT)}` and `{self.tool_name(TOOL_DELETE)}`.\n"
+                    "Continue building the proof until no error remains.\n"
+                    "A proof goal can be buggy and thus unprovable — "
+                    f"call `{self.tool_name(TOOL_SURRENDER)}` with your analysis if you believe so.\n"
+                    "`proof.yaml` contains the full proof state, but recall it only when you lose track of it."
+                )
+            else:
+                return (
+                    "An incomplete proof is provided in `proof.yaml` — read it to see the goal and current proof.\n"
+                    f"Analyze the proof goal, plan a proof, and complete it using tools `{self.tool_name(TOOL_EDIT)}` and `{self.tool_name(TOOL_DELETE)}`.\n"
+                    "Continue building the proof until no error remains.\n"
+                    "A proof goal can be buggy and thus unprovable — "
+                    f"call `{self.tool_name(TOOL_SURRENDER)}` with your analysis if you believe so."
+                )
 
     def retry_prompt(self, unfinished_nodes: set['Node']) -> str:
         """Return the retry message when proof steps remain incomplete."""

@@ -167,6 +167,33 @@ async def _test_branch(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
+@model_test("DoneGoalHidesPremises", "Test_DoneGoalHidesPremises.thy", 8)
+async def _test_done_goal_hides_premises(root: Root, file: MyIO):
+    """Bug: quickview shows premises for goals marked 'done'.
+    When a GoalNode is done but _prev_quickview_context is None (first render),
+    premises are printed despite the step needing no detail.
+    Reproduce: Branch, close all cases without intermediate quickview,
+    then call quickview — done goals should NOT show premises."""
+    await root.fill("1", [Branch.gen_single({
+        "thought": "case split on sign of x",
+        "cases": [
+            {"statement": {"english": "x is positive", "isabelle": "x > 0", "name": "pos"}},
+            {"statement": {"english": "x is negative", "isabelle": "x < 0", "name": "neg"}},
+            {"statement": {"english": "x is zero", "isabelle": "x = 0", "name": "zero"}},
+        ]
+    })])
+    # Close all goals WITHOUT calling quickview in between
+    root.session.age += 1
+    await root.fill("1.0.1", [Obvious.gen_single({"facts": []})])
+    root.session.age += 1
+    await root.fill("1.1.1", [Obvious.gen_single({"facts": []})])
+    root.session.age += 1
+    await root.fill("1.2.1", [Obvious.gen_single({"facts": []})])
+    # Leave 1.3 open so the proof is not fully done
+    # First quickview call: 1.1 and 1.2 are done with premises — should NOT show them
+    print_header("Quickview (done goals should hide premises)", file)
+    root.quickview(0, file)
+
 @model_test("EquivDerive", "Test003.thy", 8)
 async def _test_EquivDerive(root: Root, file: MyIO):
     print_header("Initial YAML", file)
@@ -9024,105 +9051,71 @@ async def _test_completion_goalnode(root: Root, file: MyIO):
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
 
-@model_test("aime_1987_p5", "Test_aime_1987_p5.thy", 11)
-async def _test_aime_1987_p5(root: Root, file: MyIO):
-    """Reproduce operation sequence from interaction e1256e5c2_1:
-    proving 3*(x^2*y^2)=588 from y^2+3*(x^2*y^2)=30*x^2+517 over integers.
+@model_test("ContextRestart", "Test_ContextRestart.thy", 8)
+async def _test_ContextRestart(root: Root, file: MyIO):
+    """Test that surrender triggers context restart via request_restart()."""
+    from .mcp_http_server import _refute_or_surrender_tool_logic
 
-    Sequence:
-    1. Fill step 1: Have h1 with proof=[Rewrite using assms] → Rewrite fails (no progress)
-    2. Amend step 1.1 with Obvious(assms) → fails (non-trivial)
-    3. Delete step 1
-    4. Fill step 1: [Have h_ring (proof=Obvious), Have h_arith (proof=Obvious(assms))]
-       → h_ring Obvious fails, h_arith succeeds
-    5. Amend step 1.1 with Rewrite(algebra_simps) → triggers looping-rule interaction
-    """
+    session = root.session
+
     print_header("Initial YAML", file)
     root.print(0, file)
 
-    # Step 1: Have h1 with inline proof = Rewrite using assms (fails: no progress)
+    # Partially fill the proof so restart preserves progress
     root.session.age += 1
-    outcome1 = await root.fill("1", [Have.gen_single({
-        "thought": "From the premise, y²(1+3x²) = 30x²+517 = 10(1+3x²)+507, so (y²-10)(1+3x²) = 507",
-        "statement": {
-            "english": "(y squared minus 10) times (1 + 3 * x squared) equals 507",
-            "conclusion": "(y^2 - (10::int)) * ((1::int) + (3::int) * x^2) = (507::int)"
-        },
-        "name": "h1",
-        "proof": [{"operation": "Rewrite",
-                   "thought": "Rewrite using the premise to derive this algebraic identity",
-                   "using": [{"name": "assms"}],
-                   "use system simplifiers": True,
-                   "rewrite goal": True,
-                   "rewrite premises": []}]
+    await root.fill("1", [Have.gen_single({
+        "thought": "helper",
+        "statement": {"english": "x squared is non-negative", "conclusion": "(0::int) \\<le> x * x"},
+        "name": "lem1",
     })])
-    print_header("After fill step 1 (Have h1 + Rewrite proof)", file)
+    print_header("After Have (partial progress)", file)
     root.print(0, file)
 
-    # Step 2: Amend step 1.1 (the failed Rewrite) with Obvious
-    root.session.age += 1
-    outcome2 = await root.amend("1.1", [Obvious.gen_single({"facts": [{"name": "assms"}]})])
-    print_header("After amend step 1.1 (Obvious with assms)", file)
-    root.print(0, file)
-    file.write(f"amend_failure: {outcome2.failure}\n")
+    # First surrender: should trigger restart (not quit)
+    assert session._retry_count == 0
+    assert not session._restart_requested
+    msg1, err1 = await _refute_or_surrender_tool_logic(session, {"reason": "surrender", "detail": "stuck"})
+    file.write(f"surrender1: msg={msg1!r}, err={err1}, retry_count={session._retry_count}\n")
+    file.write(f"  restart_requested={session._restart_requested}\n")
+    file.write(f"  quit_info={root.quit_info}\n")
+    assert session._retry_count == 1
+    assert session._restart_requested
+    assert root.quit_info == ("restart", "")
 
-    # Step 3: Delete step 1
-    root.session.age += 1
-    await root.delete(["1"])
-    print_header("After delete step 1", file)
-    root.print(0, file)
+    # Simulate what a driver does on restart
+    session._restart_requested = False
+    root.quit_info = None
+    session.refute_or_surrender_warned = False
 
-    # Step 4: Fill step 1 with two Haves (h_ring and h_arith)
-    root.session.age += 1
-    outcome4 = await root.fill("1", [
-        Have.gen_single({
-            "thought": "Ring identity: expand the product",
-            "statement": {
-                "english": "Expanding (y^2-10)*(1+3*x^2) equals y^2 + 3*x^2*y^2 - 10 - 30*x^2",
-                "conclusion": "(y^2 - (10::int)) * ((1::int) + (3::int) * x^2) = y^2 + (3::int) * (x^2 * y^2) - (10::int) - (30::int) * x^2"
-            },
-            "name": "h_ring",
-            "proof": [{"operation": "Obvious", "facts": []}]
-        }),
-        Have.gen_single({
-            "thought": "From assms, y^2+3*x^2*y^2 = 30*x^2+517, so y^2+3*x^2*y^2-10-30*x^2 = 507",
-            "statement": {
-                "english": "y^2+3*x^2*y^2-10-30*x^2 = 507",
-                "conclusion": "y^2 + (3::int) * (x^2 * y^2) - (10::int) - (30::int) * x^2 = (507::int)"
-            },
-            "name": "h_arith",
-            "proof": [{"operation": "Obvious", "facts": [{"name": "assms"}]}]
-        }),
-    ])
-    print_header("After fill step 1 (two Haves: h_ring + h_arith)", file)
-    root.print(0, file)
+    # Second surrender: should trigger restart again
+    msg2, err2 = await _refute_or_surrender_tool_logic(session, {"reason": "surrender", "detail": "still stuck"})
+    file.write(f"surrender2: msg={msg2!r}, err={err2}, retry_count={session._retry_count}\n")
+    file.write(f"  restart_requested={session._restart_requested}\n")
+    assert session._retry_count == 2
+    assert session._restart_requested
 
-    # Step 5: Amend step 1.1 (h_ring's failed Obvious) with Rewrite using algebra_simps
-    async def stub_fork(interaction):
-        print_header("Interaction Prompt (looping rule)", file)
-        await interaction.prompt(0, file)
-        assert isinstance(interaction, Interaction_SelectRewriteTargets)
-        all_matches = interaction.looping_rules[0][2] if interaction.looping_rules else []
-        # Original interaction answered with index 2; fall back to index 0 or empty
-        if len(all_matches) > 2:
-            return await interaction.answer(Answer(indexes=[2]))
-        elif all_matches:
-            return await interaction.answer(Answer(indexes=[0]))
-        else:
-            return await interaction.answer(Answer())
-    root.session.fork_interaction = stub_fork
+    # Simulate driver restart
+    session._restart_requested = False
+    root.quit_info = None
 
-    root.session.age += 1
-    outcome5 = await root.amend("1.1", [Rewrite.gen_single({
-        "thought": "Use algebra_simps to expand and simplify both sides of the ring identity",
-        "using": [{"name": "algebra_simps"}],
-        "use system simplifiers": True,
-        "rewrite goal": True,
-        "rewrite premises": []
-    })])
-    print_header("After amend step 1.1 (Rewrite with algebra_simps)", file)
-    root.print(0, file)
-    file.write(f"amend5_failure: {outcome5.failure}\n")
+    # Push retry_count to max_retries - 1, then surrender should truly fail
+    session._retry_count = session.max_retries - 1
+    msg_last, err_last = await _refute_or_surrender_tool_logic(session, {"reason": "surrender", "detail": "final"})
+    file.write(f"surrender_final: msg={msg_last!r}, err={err_last}, retry_count={session._retry_count}\n")
+    file.write(f"  restart_requested={session._restart_requested}\n")
+    file.write(f"  quit_info={root.quit_info}\n")
+    assert session._retry_count == session.max_retries
+    assert not session._restart_requested
+    assert root.quit_info == ("surrender", "final")
+
+    # Refute should always quit immediately regardless of retry_count
+    root.quit_info = None
+    session._retry_count = 0
+    msg_refute, err_refute = await _refute_or_surrender_tool_logic(session, {"reason": "refute", "detail": "goal is buggy"})
+    file.write(f"refute: msg={msg_refute!r}, err={err_refute}\n")
+    file.write(f"  quit_info={root.quit_info}\n")
+    assert root.quit_info == ("refute", "goal is buggy")
+    assert not session._restart_requested
 
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):

@@ -1,0 +1,12 @@
+--------------------------------------------------
+Quickview (done goals should hide premises)
+--------------------------------------------------
+step 1: Branch
+  - 1.0 (done)
+  - 1.1 (done)
+  - 1.2 (done)
+  - 1.3
+    premises:
+      - zero: x = (0 :: int)
+    Error: Unfinished Proof. Call command `edit` with action `fill` and target step `1.3.1`
+    goal: (0 :: int) ≤ x * x

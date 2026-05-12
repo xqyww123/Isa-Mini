@@ -1,0 +1,39 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Have (partial progress)
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: helper
+    operation: Have
+    statement:
+      english: x squared is non-negative
+      conclusion: (0::int) \<le> x * x
+    name: lem1
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: int) ≤ x * x
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+surrender1: msg='Restarting session with fresh context.', err=False, retry_count=1
+  restart_requested=True
+  quit_info=('restart', '')
+surrender2: msg='Restarting session with fresh context.', err=False, retry_count=2
+  restart_requested=True
+surrender_final: msg='Proof attempt concluded (surrender).', err=False, retry_count=8
+  restart_requested=False
+  quit_info=('surrender', 'final')
+refute: msg='Proof attempt concluded (refute).', err=False
+  quit_info=('refute', 'goal is buggy')
