@@ -4,6 +4,12 @@ theory Minilang_Agent
 begin
 (* declare [[ML_debugger]] *)
 ML_file "helper.ML"
+
+attribute_setup xsymmetric = \<open>
+  Scan.succeed (Thm.rule_attribute [] (fn context => fn th =>
+    Minilang_Helper.xsymmetric (Context.proof_of context) th))
+\<close> "recursive symmetric that enters quantifiers and connectives"
+
 ML_file "agent.ML"
 (* ML_file "agent.old.ML" *)
 (* ML_file "model_AoA.ML" *)

@@ -175,7 +175,7 @@ def _symmetric_suffix(fact: Fact) -> str:
     if "name" not in fact:
         return ""
     if cast(FactByName, fact).get("flip", False):
-        return "[symmetric]"
+        return "[xsymmetric]"
     return ""
 
 def _fact_suffix(fact: Fact) -> str:

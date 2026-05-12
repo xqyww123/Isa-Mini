@@ -2,27 +2,28 @@
 Initial YAML
 --------------------------------------------------
 variables:
-  - a: nat
-  - b: nat
+  - f: nat ⇒ nat
 premises:
-  - h: a = b
+  - h: ∀(z :: nat). f z = z + (1 :: nat)
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: b = a
+goal: (3 :: nat) + (1 :: nat) = f (3 :: nat)
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
-After Obvious with flip
+After Rewrite with flip on forall-quantified fact
 --------------------------------------------------
 variables:
-  - a: nat
-  - b: nat
+  - f: nat ⇒ nat
 premises:
-  - h: a = b
+  - h: ∀(z :: nat). f z = z + (1 :: nat)
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
-goal: b = a
+goal: (3 :: nat) + (1 :: nat) = f (3 :: nat)
 proof:
   - step id: 1
-    operation: Obvious
-    with facts:
-      - h[xsymmetric]: a = b
-Unfinished nodes: 0
+    thought: Rewrite the goal using h flipped
+    operation: Rewrite
+    using:
+      - h[xsymmetric]: ∀(z :: nat). f z = z + (1 :: nat)
+    targets:
+      - the goal
+    goal is solved.
