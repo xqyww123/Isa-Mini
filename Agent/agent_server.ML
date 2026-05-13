@@ -1084,7 +1084,7 @@ fun AoA_REPL_App (cin, cout, toplevel) =
                                    ( "remote_error",
                                      Time.toMilliseconds (#elapsed time),
                                      Time.toMilliseconds (#cpu time),
-                                     NONE,
+                                     SOME message,
                                      cost_tuple zero_cost
                                    )
                               ; BinIO.StreamIO.flushOut cout
