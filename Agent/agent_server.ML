@@ -13,7 +13,8 @@ type state_id = string
 type states = Minilang.state Symtab.table
 
 type agent_cost = {input: int, cache_write: int, cache_read: int, output: int,
-                   cost: real, tool_calls: int, isabelle_time: real, model_time: real}
+                   cost: real, tool_calls: int, isabelle_time: real, model_time: real,
+                   quota_wait_time: real}
 val zero_cost: agent_cost
 
 val AoA_RPC : driver * (MiniLang_Agent.cfg * MiniLang_Agent.budget) * string
@@ -33,12 +34,14 @@ structure MiniLang_Agent_AoA : MINILANG_AGENT_AoA = struct
 
 type agent_cost = {
   input: int, cache_write: int, cache_read: int, output: int,
-  cost: real, tool_calls: int, isabelle_time: real, model_time: real
+  cost: real, tool_calls: int, isabelle_time: real, model_time: real,
+  quota_wait_time: real
 }
 
 val zero_cost : agent_cost = {
   input = 0, cache_write = 0, cache_read = 0, output = 0,
-  cost = 0.0, tool_calls = 0, isabelle_time = 0.0, model_time = 0.0
+  cost = 0.0, tool_calls = 0, isabelle_time = 0.0, model_time = 0.0,
+  quota_wait_time = 0.0
 }
 
 exception Agent_Give_Up of string * string * agent_cost
@@ -930,9 +933,9 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
             end),
         ret_schema = unpackTuple5 (unpackList MiniLang_Agent.xcmd_unpacker,
                                    unpackOption unpackString,
-                                   (fn src => let val ((i,cw,cr,o_,c,tc,it,mt), src') =
-                                      unpackTuple8 (unpackInt,unpackInt,unpackInt,unpackInt,unpackReal,unpackInt,unpackReal,unpackReal) src
-                                    in ({input=i,cache_write=cw,cache_read=cr,output=o_,cost=c,tool_calls=tc,isabelle_time=it,model_time=mt}, src') end),
+                                   (fn src => let val ((i,cw,cr,o_,c,tc,it,mt,qwt), src') =
+                                      unpackTuple9 (unpackInt,unpackInt,unpackInt,unpackInt,unpackReal,unpackInt,unpackReal,unpackReal,unpackReal) src
+                                    in ({input=i,cache_write=cw,cache_read=cr,output=o_,cost=c,tool_calls=tc,isabelle_time=it,model_time=mt,quota_wait_time=qwt}, src') end),
                                    unpackOption unpackString,
                                    unpackOption unpackString),
         timeout = NONE,
@@ -965,7 +968,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
       }
 
       val timer = Timer.startRealTimer ()
-      val (xcmds, s1o, {input, cache_write, cache_read, output, cost, tool_calls, isabelle_time, model_time}, reason, detail) =
+      val (xcmds, s1o, {input, cache_write, cache_read, output, cost, tool_calls, isabelle_time, model_time, quota_wait_time}, reason, detail) =
             call_command aoa_cmd (global_context, driver, invocation_id)
       val elapsed = Timer.checkRealTimer timer
       val _ = writeln (String.concat [
@@ -977,6 +980,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         " tool_calls=", Int.toString tool_calls,
         " isabelle_time=", Real.fmt (StringCvt.FIX (SOME 2)) isabelle_time, "s",
         " model_time=", Real.fmt (StringCvt.FIX (SOME 2)) model_time, "s",
+        " quota_wait_time=", Real.fmt (StringCvt.FIX (SOME 2)) quota_wait_time, "s",
         " time=", Time.toString elapsed, "s"])
    in case s1o
    of SOME s1 => (
@@ -992,7 +996,8 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
            else ()
            ; (xcmds, Minilang.conclude ctxt s1',
               {input=input, cache_write=cache_write, cache_read=cache_read, output=output,
-               cost=cost, tool_calls=tool_calls, isabelle_time=isabelle_time, model_time=model_time})
+               cost=cost, tool_calls=tool_calls, isabelle_time=isabelle_time, model_time=model_time,
+               quota_wait_time=quota_wait_time})
          end
         else error "Internal Error: the proof state returned by the Agent is not finished"
     | NONE => error "Internal Error: the state returned by the Agent is not found"
@@ -1000,7 +1005,8 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         (case reason
           of SOME r => raise Agent_Give_Up (r, the_default "" detail,
                         {input=input, cache_write=cache_write, cache_read=cache_read, output=output,
-                         cost=cost, tool_calls=tool_calls, isabelle_time=isabelle_time, model_time=model_time})
+                         cost=cost, tool_calls=tool_calls, isabelle_time=isabelle_time, model_time=model_time,
+                         quota_wait_time=quota_wait_time})
            | NONE => error "Agent gives up (protocol error: missing reason)")
   end
 
@@ -1044,13 +1050,14 @@ fun AoA_REPL_App (cin, cout, toplevel) =
                                      | NONE => ctxt
                         val start_time = Timing.start ()
                         fun cost_tuple ({input, cache_write, cache_read, output,
-                                         cost, tool_calls, isabelle_time, model_time} : agent_cost) =
-                            (input, cache_write, cache_read, output, cost, tool_calls, isabelle_time, model_time)
+                                         cost, tool_calls, isabelle_time, model_time,
+                                         quota_wait_time} : agent_cost) =
+                            (input, cache_write, cache_read, output, cost, tool_calls, isabelle_time, model_time, quota_wait_time)
                         val pack_result =
                               packTuple5 (packString, packInt, packInt,
                                           packOption packString,
-                                          packTuple8 (packInt, packInt, packInt, packInt,
-                                                      packReal, packInt, packReal, packReal))
+                                          packTuple9 (packInt, packInt, packInt, packInt,
+                                                      packReal, packInt, packReal, packReal, packReal))
                      in \<^try>\<open>
                         let val (_, seq, aoa_cost) = AoA_RPC (driver, cfg, invocation_id) (ctxt, sequent)
                             val time = Timing.result start_time

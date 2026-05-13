@@ -196,6 +196,7 @@ class OpenAIBase(Provider):
     """Shared config for OpenAI-family providers."""
 
     _CONTEXT_WINDOWS: dict[str, int] = {
+        "gpt-5.5-pro": 1_050_000,
         "gpt-4.1": 1_048_576,
         "gpt-4.1-mini": 1_048_576,
         "gpt-4.1-nano": 1_048_576,
@@ -204,6 +205,7 @@ class OpenAIBase(Provider):
     }
 
     _PRICING: dict[str, dict[str, float]] = {
+        "gpt-5.5-pro":  {"input": 30.00e-6, "cached": 30.00e-6, "output": 180.00e-6},
         "gpt-5.5":      {"input": 5.00e-6, "cached": 0.50e-6, "output": 30.00e-6},
         "gpt-5.4":      {"input": 2.50e-6, "cached": 0.25e-6, "output": 15.00e-6},
         "gpt-4.1":      {"input": 2.00e-6, "cached": 0.50e-6, "output": 8.00e-6},
@@ -1045,7 +1047,9 @@ class APIDriver(Session):
                 return
             except self._QuotaError:
                 self.warn_AoA_opr("Quota exhausted, waiting 20min to retry")
+                t0 = time()
                 await asyncio.sleep(1200)
+                self.total_quota_wait_time += time() - t0
             except self._RateLimitError:
                 self.warn_AoA_opr("API rate limit, waiting 2s to retry")
                 await asyncio.sleep(2)
@@ -1393,6 +1397,7 @@ class APIDriver(Session):
             self.total_tool_calls += fork.total_tool_calls
             self.total_isabelle_time += fork.total_isabelle_time
             self.total_model_time += fork.total_model_time
+            self.total_quota_wait_time += fork.total_quota_wait_time
             await fork.close()
 
         assert fork.fork_pending is not None and fork.fork_pending.answer.done()
@@ -1446,6 +1451,20 @@ class APIDriver(Session):
 # Concrete Driver Registrations
 # ============================================================================
 
+def _parse_effort_suffix(argument: str | None, default_model: str
+                         ) -> tuple[str, str]:
+    """Parse ``"model-effort"`` into ``(model, effort)``.
+
+    Recognised suffixes: ``-high``, ``-medium``, ``-low``.
+    Default effort when no suffix is given: ``"medium"``.
+    """
+    raw = argument or default_model
+    for suffix in ("-high", "-medium", "-low"):
+        if raw.endswith(suffix):
+            return raw[: -len(suffix)], suffix[1:]
+    return raw, "medium"
+
+
 @agent_driver("ChatGPT")
 class APIDriver_ChatGPT(APIDriver):
     DEFAULT_MODEL = "gpt-5.5"
@@ -1454,13 +1473,18 @@ class APIDriver_ChatGPT(APIDriver):
     def __init__(self, *args, provider: Provider | None = None,
                  argument: str | None = None, **kwargs):
         if provider is None:
-            model = argument or self.DEFAULT_MODEL
+            model, effort = _parse_effort_suffix(argument, self.DEFAULT_MODEL)
             provider = OpenAIResponsesProvider(
                 model=model,
                 cache_key=f"proof-{uuid.uuid4().hex[:8]}",
-                reasoning_effort="high",
+                reasoning_effort=effort,
             )
         super().__init__(*args, provider=provider, **kwargs)
+
+    def __str__(self) -> str:
+        prov = self._provider
+        effort = f"-{prov._reasoning_effort}" if isinstance(prov, OpenAIBase) and prov._reasoning_effort else ""
+        return f"{self._driver_name}({prov.model_name}{effort})"
 
     def estimate_tokens(self, messages: list[Msg]) -> int:
         import tiktoken
@@ -1484,9 +1508,13 @@ class APIDriver_ChatGPT(APIDriver):
 
     def _fork_provider(self, mode: ForkingMode) -> Provider:
         if mode == ForkingMode.FORKING_CHEAPER_NO_CTXT and self.FORK_CHEAPER_MODEL:
+            parent_prov = self._provider
+            effort = (parent_prov._reasoning_effort
+                      if isinstance(parent_prov, OpenAIBase) else None)
             return OpenAIResponsesProvider(
                 model=self.FORK_CHEAPER_MODEL,
                 cache_key=None,
+                reasoning_effort=effort,
             )
         return self._provider
 

@@ -35,7 +35,7 @@ from mcp.types import Tool, ToolAnnotations, TextContent, CallToolResult
 from Isabelle_RPC_Host import pretty_unicode
 from .model import (
     _session_var, Session, Node, NonLeaf_Node,
-    InteractionExpanded,
+    IsaTerm, InteractionExpanded,
     AoA_Error, ArgumentError, IsabelleError, InternalError,
     CannotDelete_Root, NodeNotFound,
     EvaluationStatus,
@@ -392,11 +392,12 @@ async def _answer_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             return (exp.new_prompt, False)
 
         pending.answer.set_result(result)
-        session.log_interaction(_tn, f"interaction answered: {result}")
-        session.log_tool_response(_tn, f"[INTERACTION RESOLVED] {result}")
+        result_str = result.unicode if isinstance(result, IsaTerm) else str(result)
+        session.log_interaction(_tn, f"interaction answered: {result_str}")
+        session.log_tool_response(_tn, f"[INTERACTION RESOLVED] {result_str}")
         if not session.is_major:
             await session.interrupt()
-        return (str(result), False)
+        return (result_str, False)
     except IsabelleError as e:
         error_msg = f"Isabelle error: {'; '.join(pretty_unicode(err) for err in e.errors)}"
         session.log_tool_response(_tn, f"ERROR: {error_msg}")

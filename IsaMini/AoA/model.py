@@ -7749,6 +7749,7 @@ class Session:
         self.total_tool_calls: int = 0
         self.total_isabelle_time: float = 0.0
         self.total_model_time: float = 0.0
+        self.total_quota_wait_time: float = 0.0
         if parent is not None:
             self.timeout_seconds = parent.timeout_seconds
             self.max_tool_calls = parent.max_tool_calls
@@ -8211,7 +8212,8 @@ class Session:
             f"cost=${self.total_cost_usd:.4f} "
             f"tool_calls={self.total_tool_calls} "
             f"isabelle_time={self.total_isabelle_time:.2f}s "
-            f"model_time={self.total_model_time:.2f}s")
+            f"model_time={self.total_model_time:.2f}s "
+            f"quota_wait_time={self.total_quota_wait_time:.2f}s")
 
     def log_proof(self):
         """

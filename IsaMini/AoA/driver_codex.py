@@ -203,7 +203,9 @@ class Codex_Driver(Session):
                 return
             except self._QuotaError:
                 self.warn_AoA_opr("Quota exhausted, waiting 20min to retry")
+                t0 = time()
                 await asyncio.sleep(1200)
+                self.total_quota_wait_time += time() - t0
             except self._RateLimitError:
                 self.warn_AoA_opr("Rate limit, waiting 2s to retry")
                 await asyncio.sleep(2)
@@ -407,6 +409,7 @@ class Codex_Driver(Session):
             self.total_tool_calls += fork.total_tool_calls
             self.total_isabelle_time += fork.total_isabelle_time
             self.total_model_time += fork.total_model_time
+            self.total_quota_wait_time += fork.total_quota_wait_time
             await fork.close()
 
         assert fork.fork_pending is not None and fork.fork_pending.answer.done()

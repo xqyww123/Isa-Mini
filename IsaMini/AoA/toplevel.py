@@ -75,7 +75,7 @@ async def IsaMini_AoA(data: tuple[Any, Any, str, str, str, str, str, tuple[int, 
             raise ValueError(f"Test Not Found on '{argument}'")
         case = TESTS[argument]
         root = await case.run(connection, actual_log_path, global_context, ptree)
-        cost = (0, 0, 0, 0, 0.0, 0, 0.0, 0.0)
+        cost = (0, 0, 0, 0, 0.0, 0, 0.0, 0.0, 0.0)
         is_test = True
     else:
         is_test = False
@@ -112,7 +112,8 @@ async def IsaMini_AoA(data: tuple[Any, Any, str, str, str, str, str, tuple[int, 
                     session.total_cost_usd,
                     session.total_tool_calls,
                     session.total_isabelle_time,
-                    session.total_model_time)
+                    session.total_model_time,
+                    session.total_quota_wait_time)
 
     try:
         assembled = [x.pack() for x in root.assemble()]

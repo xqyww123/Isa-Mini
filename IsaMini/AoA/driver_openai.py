@@ -32,6 +32,7 @@ class OpenAI_Driver(Session):
     FORK_CHEAPER_MODEL = "gpt-4.1-mini"
 
     _PRICING: dict[str, dict[str, float]] = {
+        "gpt-5.5-pro":  {"input": 30.00e-6, "cached": 30.00e-6, "output": 180.00e-6},
         "gpt-5.5":      {"input": 5.00e-6, "cached": 0.50e-6, "output": 30.00e-6},
         "gpt-5.4":      {"input": 2.50e-6, "cached": 0.25e-6, "output": 15.00e-6},
         "gpt-4.1":      {"input": 2.00e-6, "cached": 0.50e-6, "output": 8.00e-6},
@@ -138,7 +139,9 @@ class OpenAI_Driver(Session):
                 return
             except self._QuotaError:
                 self.warn_AoA_opr("Quota exhausted, waiting 20min to retry")
+                t0 = time()
                 await asyncio.sleep(1200)
+                self.total_quota_wait_time += time() - t0
             except self._RateLimitError:
                 self.warn_AoA_opr("API rate limit, waiting 2s to retry")
                 await asyncio.sleep(2)
@@ -342,6 +345,7 @@ class OpenAI_Driver(Session):
             self.total_tool_calls += fork.total_tool_calls
             self.total_isabelle_time += fork.total_isabelle_time
             self.total_model_time += fork.total_model_time
+            self.total_quota_wait_time += fork.total_quota_wait_time
             await fork.close()
 
         assert fork.fork_pending is not None and fork.fork_pending.answer.done()
