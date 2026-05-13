@@ -15,6 +15,8 @@ from . import driver_claude_code
 _try_import_driver("driver_openai")
 _try_import_driver("driver_codex")
 _try_import_driver("driver_api")
+_try_import_driver("driver_gemini")
+_try_import_driver("driver_anthropic")
 import sys
 import io
 import os

@@ -3211,7 +3211,7 @@ class NonLeaf_Node(Node):
             if c is child:
                 self._closed_by = child
                 discarded_nodes = self.sub_nodes[i+1:]
-                self.sub_nodes = self.sub_nodes[:i+1]
+                del self.sub_nodes[i+1:]
                 if discarded_nodes:
                     self._warn_discarded_nodes(
                         discarded_nodes,

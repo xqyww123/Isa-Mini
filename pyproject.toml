@@ -28,7 +28,10 @@ dependencies = [
 
 [project.optional-dependencies]
 openai = ["openai>=2.33.0", "openai-agents>=0.15.1"]
-api = ["openai>=2.33.0", "httpx>=0.28.1", "google-genai>=1.75.0"]
+openai-api = ["openai>=2.33.0", "httpx>=0.28.1"]
+gemini = ["google-genai>=1.75.0", "httpx>=0.28.1"]
+anthropic = ["anthropic>=0.52.0", "httpx>=0.28.1"]
+api = ["IsaMini[openai-api,gemini,anthropic]"]
 mcp = ["uvicorn>=0.41.0", "mcp>=1.26.0"]
 web = ["aiohttp>=3.13.5"]
 all = ["IsaMini[openai,api,mcp,web]"]

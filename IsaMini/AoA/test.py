@@ -7761,6 +7761,46 @@ async def _test_AmendInductionDiscardedCtxt(root: Root, file: MyIO):
     root.print(0, file, show_warnings=True)
 
 
+@model_test("AmendInductionNested", "Test_AmendInductionNested.thy", 8)
+async def _test_AmendInductionNested(root: Root, file: MyIO):
+    """Reproduce crash from production log e2130bcea_59:
+    A batch fill with a Have whose nested proof contains
+    [Intro, Induction, Obvious]. During StdBlock._refresh_me_alone,
+    the for-loop iterates self.sub_nodes. When the Induction child
+    refreshes and creates >1 subgoals, _close_by replaces
+    self.sub_nodes with a truncated new list. But the for-loop still
+    holds the OLD list reference and advances to the Obvious child
+    (discarded from the new list). The Obvious calls
+    resulting_state() → parent._resulting_state_of_child(self) →
+    searches the NEW sub_nodes → not found →
+    InternalError("The target node is not my children").
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("1", [Have.gen_single({
+        "thought": "helper lemma by induction",
+        "statement": {
+            "english": "sum identity",
+            "conclusion": r"(\<Sum>i\<le>n. i) = n * (n + 1) div 2",
+        },
+        "name": "helper",
+        "proof": [
+            {"operation": "Intro", "thought": "intro"},
+            {"operation": "Induction",
+             "thought": "induction on n",
+             "target_isabelle_term": "n",
+             "variables": [{"name": "n", "status": "fixed"}],
+             "proofs": "GivenLater"},
+            {"operation": "Obvious", "facts": []},
+        ],
+    })])
+
+    print_header("After fill", file)
+    root.print(0, file)
+
+
 @model_test("SimpRoles", "Test_SimpRoles.thy", 12)
 async def _test_simp_roles(root: Root, file: MyIO):
     """Bug repro: fun-defined .simps facts are marked [opaque] despite being
