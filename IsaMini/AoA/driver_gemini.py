@@ -112,27 +112,34 @@ class GeminiProvider(Provider):
         all_parts: list[genai_types.Part] = []
         um: Any = None
 
-        async for chunk in stream:
-            if chunk.usage_metadata:
-                um = chunk.usage_metadata
-            if chunk.candidates and chunk.candidates[0].content:
-                for part in (chunk.candidates[0].content.parts or []):
-                    all_parts.append(part)
-                    if part.thought and part.text:
-                        thinking_parts.append(part.text)
-                    elif part.function_call:
-                        fc = part.function_call
-                        call_id = fc.id
-                        if not call_id:
-                            self._call_id_counter += 1
-                            call_id = f"gemini-call-{self._call_id_counter}"
-                        self._call_id_to_name[call_id] = fc.name or ""
-                        tool_calls.append(ToolCall(
-                            id=call_id,
-                            name=fc.name or "",
-                            arguments=json.dumps(fc.args) if fc.args else "{}"))
-                    elif part.text:
-                        text_parts.append(part.text)
+        try:
+            async for chunk in stream:
+                if chunk.usage_metadata:
+                    um = chunk.usage_metadata
+                if chunk.candidates and chunk.candidates[0].content:
+                    for part in (chunk.candidates[0].content.parts or []):
+                        all_parts.append(part)
+                        if part.thought and part.text:
+                            thinking_parts.append(part.text)
+                        elif part.function_call:
+                            fc = part.function_call
+                            call_id = fc.id
+                            if not call_id:
+                                self._call_id_counter += 1
+                                call_id = f"gemini-call-{self._call_id_counter}"
+                            self._call_id_to_name[call_id] = fc.name or ""
+                            tool_calls.append(ToolCall(
+                                id=call_id,
+                                name=fc.name or "",
+                                arguments=json.dumps(fc.args) if fc.args else "{}"))
+                        elif part.text:
+                            text_parts.append(part.text)
+        except genai_errors.ClientError as e:
+            if e.code == 429:
+                raise _TransientError(str(e)) from e
+            raise
+        except genai_errors.ServerError as e:
+            raise _TransientError(str(e)) from e
 
         self._last_response_content = genai_types.Content(
             role="model", parts=all_parts) if all_parts else None

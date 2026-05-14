@@ -6920,8 +6920,11 @@ class InferenceRule(SubgoalMaker):
             else:
                 # FactByDescription → delegate to a sub-agent
                 selected = await the_session().fork_interaction(result)
-                self.rule_ref = selected[0]
-        elif self.rule_ref is not None and self.ml_state.initialized():
+                if selected:
+                    self.rule_ref = selected[0]
+                else:
+                    self.rule_ref = IsabelleFact_Unfound(self.rule)
+        elif not isinstance(self.rule_ref, (type(None), IsabelleFact_Unfound)) and self.ml_state.initialized():
             [self.rule_ref] = await self.ml_state.refresh_facts([self.rule_ref])
         await super()._refresh_me_alone(auto_intro)
     def quickview_title(self) -> str:

@@ -116,46 +116,53 @@ class AnthropicProvider(Provider):
         json_parts: list[str] = []
         usage_info: dict[str, int] = {}
 
-        async for event in raw_stream:
-            if event.type == "message_start":
-                if hasattr(event, 'message') and hasattr(event.message, 'usage'):
-                    u = event.message.usage
-                    for k in ("input_tokens", "output_tokens",
-                              "cache_read_input_tokens", "cache_creation_input_tokens"):
-                        usage_info[k] = getattr(u, k, 0) or 0
-            elif event.type == "content_block_start":
-                cur = event.content_block.model_dump()
-                json_parts = []
-            elif event.type == "content_block_delta":
-                delta = event.delta
-                if delta.type == "text_delta":
-                    cur["text"] = cur.get("text", "") + delta.text
-                elif delta.type == "thinking_delta":
-                    cur["thinking"] = cur.get("thinking", "") + delta.thinking
-                elif delta.type == "signature_delta":
-                    cur["signature"] = delta.signature
-                elif delta.type == "input_json_delta":
-                    if delta.partial_json:
-                        json_parts.append(delta.partial_json)
-            elif event.type == "content_block_stop":
-                if cur.get("type") == "tool_use" and json_parts:
-                    cur["input"] = json.loads("".join(json_parts))
-                btype = cur.get("type")
-                if btype == "thinking":
-                    built_blocks.append(anthropic.types.ThinkingBlock.model_construct(**cur))
-                elif btype == "text":
-                    built_blocks.append(anthropic.types.TextBlock.model_construct(**cur))
-                elif btype == "tool_use":
-                    built_blocks.append(anthropic.types.ToolUseBlock.model_construct(**cur))
-                cur = {}
-            elif event.type == "message_delta":
-                if hasattr(event, 'usage') and event.usage:
-                    u = event.usage
-                    for k in ("input_tokens", "output_tokens",
-                              "cache_read_input_tokens", "cache_creation_input_tokens"):
-                        v = getattr(u, k, None)
-                        if v:
-                            usage_info[k] = v
+        try:
+            async for event in raw_stream:
+                if event.type == "message_start":
+                    if hasattr(event, 'message') and hasattr(event.message, 'usage'):
+                        u = event.message.usage
+                        for k in ("input_tokens", "output_tokens",
+                                  "cache_read_input_tokens", "cache_creation_input_tokens"):
+                            usage_info[k] = getattr(u, k, 0) or 0
+                elif event.type == "content_block_start":
+                    cur = event.content_block.model_dump()
+                    json_parts = []
+                elif event.type == "content_block_delta":
+                    delta = event.delta
+                    if delta.type == "text_delta":
+                        cur["text"] = cur.get("text", "") + delta.text
+                    elif delta.type == "thinking_delta":
+                        cur["thinking"] = cur.get("thinking", "") + delta.thinking
+                    elif delta.type == "signature_delta":
+                        cur["signature"] = delta.signature
+                    elif delta.type == "input_json_delta":
+                        if delta.partial_json:
+                            json_parts.append(delta.partial_json)
+                elif event.type == "content_block_stop":
+                    if cur.get("type") == "tool_use" and json_parts:
+                        cur["input"] = json.loads("".join(json_parts))
+                    btype = cur.get("type")
+                    if btype == "thinking":
+                        built_blocks.append(anthropic.types.ThinkingBlock.model_construct(**cur))
+                    elif btype == "text":
+                        built_blocks.append(anthropic.types.TextBlock.model_construct(**cur))
+                    elif btype == "tool_use":
+                        built_blocks.append(anthropic.types.ToolUseBlock.model_construct(**cur))
+                    cur = {}
+                elif event.type == "message_delta":
+                    if hasattr(event, 'usage') and event.usage:
+                        u = event.usage
+                        for k in ("input_tokens", "output_tokens",
+                                  "cache_read_input_tokens", "cache_creation_input_tokens"):
+                            v = getattr(u, k, None)
+                            if v:
+                                usage_info[k] = v
+        except anthropic.APIStatusError as e:
+            if e.status_code >= 500 or e.status_code == 529:
+                raise _TransientError(str(e)) from e
+            raise
+        except anthropic.APIConnectionError as e:
+            raise _TransientError(str(e)) from e
 
         response = anthropic.types.Message.model_construct(
             id="",

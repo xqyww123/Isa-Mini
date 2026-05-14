@@ -310,26 +310,31 @@ class OpenAIChatProvider(OpenAIBase):
         tc_map: dict[int, dict[str, str]] = {}
         stream_usage: Any = None
 
-        async for chunk in stream:
-            if chunk.usage:
-                stream_usage = chunk.usage
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
-            if delta.content:
-                text_parts.append(delta.content)
-            if delta.tool_calls:
-                for tcd in delta.tool_calls:
-                    idx = tcd.index
-                    if idx not in tc_map:
-                        tc_map[idx] = {"id": "", "name": "", "arguments": ""}
-                    if tcd.id:
-                        tc_map[idx]["id"] = tcd.id
-                    if tcd.function:
-                        if tcd.function.name:
-                            tc_map[idx]["name"] = tcd.function.name
-                        if tcd.function.arguments:
-                            tc_map[idx]["arguments"] += tcd.function.arguments
+        try:
+            async for chunk in stream:
+                if chunk.usage:
+                    stream_usage = chunk.usage
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    text_parts.append(delta.content)
+                if delta.tool_calls:
+                    for tcd in delta.tool_calls:
+                        idx = tcd.index
+                        if idx not in tc_map:
+                            tc_map[idx] = {"id": "", "name": "", "arguments": ""}
+                        if tcd.id:
+                            tc_map[idx]["id"] = tcd.id
+                        if tcd.function:
+                            if tcd.function.name:
+                                tc_map[idx]["name"] = tcd.function.name
+                            if tcd.function.arguments:
+                                tc_map[idx]["arguments"] += tcd.function.arguments
+        except openai.APIError as e:
+            if isinstance(e, openai.APIStatusError) and e.status_code < 500 and not isinstance(e, openai.RateLimitError):
+                raise
+            raise _TransientError(str(e)) from e
 
         tool_calls: list[ToolCall] = [
             ToolCall(id=v["id"], name=v["name"], arguments=v["arguments"])
@@ -457,6 +462,10 @@ class OpenAIResponsesProvider(OpenAIBase):
                     response = event.response
         except httpx.ReadTimeout:
             response = await self._resubmit_background(params)
+        except openai.APIError as e:
+            if isinstance(e, openai.APIStatusError) and e.status_code < 500 and not isinstance(e, openai.RateLimitError):
+                raise
+            raise _TransientError(str(e)) from e
         finally:
             await stream.close()
         if response is None:
