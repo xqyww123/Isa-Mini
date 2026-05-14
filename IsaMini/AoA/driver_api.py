@@ -24,6 +24,7 @@ from typing import Any
 import openai
 
 from .model import *
+from .language_model_driver import LMDriver, _TransientError, _QuotaError
 
 from .mcp_http_server import ToolExecutor, _cc_edit_schema_flat
 from .helper import MyIO
@@ -292,9 +293,16 @@ class OpenAIChatProvider(OpenAIBase):
             params.setdefault("extra_body", {})
             params["extra_body"].update(self._extra_params)
 
-        stream = await self._client.chat.completions.create(
-            **params, stream=True,
-            stream_options={"include_usage": True})
+        try:
+            stream = await self._client.chat.completions.create(
+                **params, stream=True,
+                stream_options={"include_usage": True})
+        except openai.RateLimitError as e:
+            if "insufficient_quota" in str(e):
+                raise _QuotaError(str(e)) from e
+            raise _TransientError(str(e)) from e
+        except openai.APIError as e:
+            raise _TransientError(str(e)) from e
 
         text_parts: list[str] = []
         tc_map: dict[int, dict[str, str]] = {}
@@ -418,7 +426,21 @@ class OpenAIResponsesProvider(OpenAIBase):
         if previous_response_id is not None:
             params["previous_response_id"] = previous_response_id
 
-        stream = await self._client.responses.create(**params, stream=True)
+        try:
+            stream = await self._client.responses.create(**params, stream=True)
+        except (openai.BadRequestError, openai.NotFoundError) as e:
+            if previous_response_id is not None:
+                params.pop("previous_response_id", None)
+                stream = await self._client.responses.create(**params, stream=True)
+            else:
+                raise
+        except openai.RateLimitError as e:
+            if "insufficient_quota" in str(e):
+                raise _QuotaError(str(e)) from e
+            raise _TransientError(str(e)) from e
+        except openai.APIError as e:
+            raise _TransientError(str(e)) from e
+
         response = None
         async for event in stream:
             if event.type == "response.completed":
@@ -547,7 +569,7 @@ facts discovered, type information, etc.
 What to do next based on current progress.
 ```"""
 
-class APIDriver(Session):
+class APIDriver(LMDriver):
     """Agent driver that owns the chat loop, calling Provider.chat() directly."""
 
     COMPACTION_THRESHOLD = 0.80
@@ -607,14 +629,6 @@ class APIDriver(Session):
             root.print(0, MyIO(f), update_line=True, show_warnings=True)
         self._executor = ToolExecutor(self)
 
-    async def run(self):
-        self.log_AoA_opr(f"Driver {self}, Working directory: {self.working_dir}, Log directory: {self.log_dir}")
-        try:
-            await self._run_with_retry()
-        except asyncio.CancelledError:
-            self.warn_AoA_opr("Cancelled (Isabelle interrupted)")
-            raise
-
     async def interrupt(self):
         self._interrupted = True
 
@@ -632,30 +646,6 @@ class APIDriver(Session):
             self.root.print(0, MyIO(f), update_line=True, show_warnings=True)
 
     # ------------------------------------------------------------------
-    # Retry Logic
-    # ------------------------------------------------------------------
-
-    class _RateLimitError(Exception):
-        pass
-
-    class _QuotaError(Exception):
-        pass
-
-    async def _run_with_retry(self):
-        while True:
-            try:
-                await self._run_loop()
-                return
-            except self._QuotaError:
-                self.warn_AoA_opr("Quota exhausted, waiting 20min to retry")
-                t0 = time()
-                await asyncio.sleep(1200)
-                self.total_quota_wait_time += time() - t0
-            except self._RateLimitError:
-                self.warn_AoA_opr("API rate limit, waiting 2s to retry")
-                await asyncio.sleep(2)
-
-    # ------------------------------------------------------------------
     # Main Agent Loop
     # ------------------------------------------------------------------
 
@@ -667,7 +657,7 @@ class APIDriver(Session):
         msgs.append(UserMsg(self.initial_prompt()))
         return msgs
 
-    async def _run_loop(self):
+    async def _run_main(self):
         assert self._executor is not None
         self._budget_start_time = time()
         self._messages = self._initial_messages()
@@ -683,28 +673,10 @@ class APIDriver(Session):
                     msgs_to_send = self._messages
 
                 self._model_time_start = time()
-                try:
-                    response = await self._provider.chat(
+                response = await self._retry_transient(
+                    lambda: self._provider.chat(
                         msgs_to_send, tools,
-                        previous_response_id=self._last_response_id)
-                except openai.RateLimitError as e:
-                    if "insufficient_quota" in str(e):
-                        raise self._QuotaError() from e
-                    raise self._RateLimitError() from e
-                except (openai.BadRequestError, openai.NotFoundError) as e:
-                    if self._last_response_id is not None:
-                        self.debug_info(
-                            f"previous_response_id failed ({e}), resending full history")
-                        self._last_response_id = None
-                        self._msgs_sent_through = 0
-                        try:
-                            response = await self._provider.chat(self._messages, tools)
-                        except openai.RateLimitError as e2:
-                            if "insufficient_quota" in str(e2):
-                                raise self._QuotaError() from e2
-                            raise self._RateLimitError() from e2
-                    else:
-                        raise
+                        previous_response_id=self._last_response_id))
 
                 if response.response_id is not None:
                     self._last_response_id = response.response_id
@@ -949,14 +921,10 @@ class APIDriver(Session):
                     fork_msgs_to_send = fork_messages
 
                 fork._model_time_start = time()
-                try:
-                    resp = await fork_provider.chat(
+                resp = await self._retry_transient(
+                    lambda: fork_provider.chat(
                         fork_msgs_to_send, fork_tools,
-                        previous_response_id=fork_response_id)
-                except openai.RateLimitError as e:
-                    if "insufficient_quota" in str(e):
-                        raise self._QuotaError() from e
-                    raise self._RateLimitError() from e
+                        previous_response_id=fork_response_id))
 
                 if resp.response_id is not None:
                     fork_response_id = resp.response_id
@@ -997,14 +965,11 @@ class APIDriver(Session):
                         f"Call the `{self.tool_name(TOOL_ANSWER)}` tool to submit your answer."))
                     fork.log_interaction("fork", f"{tag} retrying: no tool calls")
               break
-            except self._QuotaError:
+            except _QuotaError:
                 self.warn_AoA_opr(f"{tag} Quota exhausted, waiting 20min to retry")
                 t0 = time()
                 await asyncio.sleep(1200)
                 self.total_quota_wait_time += time() - t0
-            except self._RateLimitError:
-                self.warn_AoA_opr(f"{tag} API rate limit, waiting 2s to retry")
-                await asyncio.sleep(2)
         finally:
             self.total_tool_calls += fork.total_tool_calls
             self.total_isabelle_time += fork.total_isabelle_time

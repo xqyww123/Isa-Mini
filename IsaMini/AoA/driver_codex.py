@@ -14,12 +14,13 @@ from time import time
 import platformdirs
 
 from .model import *
+from .language_model_driver import LMDriver, _TransientError, _QuotaError
 
 from .mcp_http_server import ProofMCPHTTPServer
 
 
 @agent_driver("Codex")
-class Codex_Driver(Session):
+class Codex_Driver(LMDriver):
     DEFAULT_MODEL = "gpt-5.3-codex"
 
     _PRICING: dict[str, dict[str, float]] = {
@@ -138,13 +139,8 @@ class Codex_Driver(Session):
             except OSError:
                 pass
 
-    async def run(self):
+    def _on_start_run(self):
         self.log_AoA_opr(f"Working directory: {self.working_dir}, Log directory: {self.log_dir}")
-        try:
-            await self._run_with_retry()
-        except asyncio.CancelledError:
-            self.warn_AoA_opr("Cancelled (Isabelle interrupted)")
-            raise
 
     async def interrupt(self):
         if self._exec_process is not None:
@@ -182,39 +178,7 @@ class Codex_Driver(Session):
             raise InternalError(f"Codex session JSONL not found for {session_id}")
         return matches[0]
 
-    # ------------------------------------------------------------------
-    # Error types
-    # ------------------------------------------------------------------
-
-    class _RateLimitError(Exception):
-        pass
-
-    class _QuotaError(Exception):
-        pass
-
-    # ------------------------------------------------------------------
-    # Retry wrapper
-    # ------------------------------------------------------------------
-
-    async def _run_with_retry(self):
-        while True:
-            try:
-                await self._run_main_loop()
-                return
-            except self._QuotaError:
-                self.warn_AoA_opr("Quota exhausted, waiting 20min to retry")
-                t0 = time()
-                await asyncio.sleep(1200)
-                self.total_quota_wait_time += time() - t0
-            except self._RateLimitError:
-                self.warn_AoA_opr("Rate limit, waiting 2s to retry")
-                await asyncio.sleep(2)
-
-    # ------------------------------------------------------------------
-    # Main loop
-    # ------------------------------------------------------------------
-
-    async def _run_main_loop(self):
+    async def _run_main(self):
         self._budget_start_time = time()
         prompt = self.initial_prompt()
         codex_session_id: str | None = None
@@ -331,9 +295,9 @@ class Codex_Driver(Session):
                     case "turn.failed":
                         err = obj.get("error", {}).get("message", "")
                         if "rate limit" in err.lower() or "429" in err:
-                            raise self._RateLimitError()
+                            raise _TransientError(err)
                         if "insufficient_quota" in err or "402" in err:
-                            raise self._QuotaError()
+                            raise _QuotaError(err)
                         self.warn_AoA_opr(f"Turn failed: {err}")
             await proc.wait()
         finally:
@@ -406,14 +370,11 @@ class Codex_Driver(Session):
                     await self._run_fork_with_backup(
                         fork, fork_url, fork_prompt, tag)
                 break
-            except self._QuotaError:
+            except _QuotaError:
                 self.warn_AoA_opr(f"{tag} Quota exhausted, waiting 20min to retry")
                 t0 = time()
                 await asyncio.sleep(1200)
                 self.total_quota_wait_time += time() - t0
-            except self._RateLimitError:
-                self.warn_AoA_opr(f"{tag} Rate limit, waiting 2s to retry")
-                await asyncio.sleep(2)
         finally:
             if self._http_server is not None and fork._session_id is not None:
                 await self._http_server.unregister_session(fork._session_id)

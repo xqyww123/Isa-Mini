@@ -9,6 +9,7 @@ import shlex
 import tempfile
 import shutil
 from .model import *
+from .language_model_driver import LMDriver, _TransientError, _QuotaError
 from . import prompts as P
 from .mcp_http_server import ProofMCPHTTPServer
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, HookMatcher, ResultMessage
@@ -49,7 +50,7 @@ def _serialize_args(args: Any) -> Any:
         return str(args)
 
 @agent_driver("ClaudeCode")
-class ClaudeCode(Session):
+class ClaudeCode(LMDriver):
     _NON_PROOF_TOOLS = [
         'Read', 'Grep', 'Write', 'Edit', 'Skill', 'Agent',
         'TaskCreate', 'TaskGet', 'TaskList', 'TaskUpdate',
@@ -191,14 +192,6 @@ class ClaudeCode(Session):
                 },
             )
 
-    async def run(self):
-        self.log_AoA_opr(f"Driver {self}, Working directory: {self.working_dir}, Log directory: {self.log_dir}")
-        try:
-            await self._run_with_retry()
-        except asyncio.CancelledError:
-            self.warn_AoA_opr("Cancelled (Isabelle interrupted)")
-            raise
-
     async def interrupt(self):
         if self._interactive_web_terminal and self._proof_complete is not None:
             if self._on_operation_status is not None:
@@ -211,18 +204,7 @@ class ClaudeCode(Session):
         if self._interactive_web_terminal:
             await self._run_standalone()
             return
-        while True:
-            try:
-                await self._run_embedded()
-                return
-            except self._ReachLimitError:
-                self.warn_AoA_opr("Usage limit reached, waiting 20min to retry")
-                t0 = time()
-                await asyncio.sleep(1200)
-                self.total_quota_wait_time += time() - t0
-            except self._RateLimitError:
-                self.warn_AoA_opr("API rate limit, waiting 2s to retry")
-                await asyncio.sleep(2)
+        await super()._run_with_retry()
 
     async def close(self):
         """Clean up the session and remove the temporary directory."""
@@ -396,29 +378,24 @@ class ClaudeCode(Session):
                     if isinstance(text, str) and text:
                         self.debug_info(f"[TOOLS LIST] {text}")
 
-    class _ReachLimitError(Exception):
-        pass
-    class _RateLimitError(Exception):
-        pass
-
     def _check_error_text(self, text: str) -> None:
         if text.startswith("You've hit your limit"):
-            raise self._ReachLimitError()
+            raise _QuotaError(text)
         if "Rate limit" in text or "Request rejected (429)" in text:
-            raise self._RateLimitError()
+            raise _TransientError(text)
 
     def _check_rate_limit_event(self, event) -> None:
         if event.rate_limit_info.status == "rejected":
-            raise self._ReachLimitError()
+            raise _QuotaError("Rate limit rejected")
 
     def _check_result_error(self, message: 'ResultMessage') -> None:
         if message.is_error and message.result:
             self._check_error_text(message.result)
 
-    async def _run_embedded(self):
+    async def _run_main(self):
         """Run using the Claude Agent SDK (embedded mode)."""
         if self._client is not None:
-            raise InternalError("_run_embedded called while already running")
+            raise InternalError("_run_main called while already running")
         self._budget_start_time = time()
         while True:
             try:
@@ -838,14 +815,11 @@ class ClaudeCode(Session):
                     fork._model_time_start = time()
               fork._client = None
               break
-            except self._ReachLimitError:
-                self.warn_AoA_opr(f"{tag} Usage limit reached, waiting 20min to retry")
+            except _QuotaError:
+                self.warn_AoA_opr(f"{tag} Quota exhausted, waiting 20min to retry")
                 t0 = time()
                 await asyncio.sleep(1200)
                 self.total_quota_wait_time += time() - t0
-            except self._RateLimitError:
-                self.warn_AoA_opr(f"{tag} API rate limit, waiting 2s to retry")
-                await asyncio.sleep(2)
         finally:
             if self._http_server is not None and fork._session_id is not None:
                 await self._http_server.unregister_session(fork._session_id)

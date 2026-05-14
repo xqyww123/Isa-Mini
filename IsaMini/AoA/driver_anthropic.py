@@ -7,10 +7,9 @@ import os
 from typing import Any
 
 import anthropic
-import httpx
-import openai
 
 from .model import *
+from .language_model_driver import _TransientError, _QuotaError
 from .driver_api import (
     Provider, ToolCall, Usage, ProviderResponse,
     Msg, SystemMsg, UserMsg, AssistantMsg, ToolResultMsg,
@@ -100,22 +99,17 @@ class AnthropicProvider(Provider):
                     stream=True,
                     extra_headers={"anthropic-beta": "interleaved-thinking-2025-05-14"})
         except anthropic.RateLimitError as e:
-            dummy_req = httpx.Request("POST", str(self._client.base_url))
-            msg_text = str(e)
-            if "quota" in msg_text.lower():
-                msg_text = f"insufficient_quota: {msg_text}"
-            raise openai.RateLimitError(
-                message=msg_text,
-                response=httpx.Response(429, text=msg_text, request=dummy_req),
-                body=None) from e
+            if "quota" in str(e).lower():
+                raise _QuotaError(str(e)) from e
+            raise _TransientError(str(e)) from e
         except anthropic.APIStatusError as e:
             if e.status_code in (402, 529):
-                dummy_req = httpx.Request("POST", str(self._client.base_url))
-                raise openai.RateLimitError(
-                    message=f"insufficient_quota: {e}",
-                    response=httpx.Response(e.status_code, text=str(e), request=dummy_req),
-                    body=None) from e
+                raise _QuotaError(str(e)) from e
+            if e.status_code >= 500:
+                raise _TransientError(str(e)) from e
             raise
+        except anthropic.APIConnectionError as e:
+            raise _TransientError(str(e)) from e
 
         built_blocks: list[Any] = []
         cur: dict[str, Any] = {}

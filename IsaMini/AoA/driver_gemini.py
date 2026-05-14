@@ -6,13 +6,12 @@ import json
 import os
 from typing import Any
 
-import httpx
-import openai
 from google import genai
 from google.genai import types as genai_types
 from google.genai import errors as genai_errors
 
 from .model import *
+from .language_model_driver import _TransientError, _QuotaError
 from .driver_api import (
     Provider, ToolCall, Usage, ProviderResponse,
     Msg, SystemMsg, UserMsg, AssistantMsg, ToolResultMsg,
@@ -100,17 +99,12 @@ class GeminiProvider(Provider):
                 model=self._model, contents=merged, config=config)
         except genai_errors.ClientError as e:
             if e.code == 429:
-                dummy_req = httpx.Request("POST",
-                    self._client._api_client.get_read_only_http_options().get(
-                        'base_url', 'https://generativelanguage.googleapis.com/'))
-                msg_text = str(e)
-                if "quota" in msg_text.lower():
-                    msg_text = f"insufficient_quota: {msg_text}"
-                raise openai.RateLimitError(
-                    message=msg_text,
-                    response=httpx.Response(429, text=msg_text, request=dummy_req),
-                    body=None) from e
+                if "quota" in str(e).lower():
+                    raise _QuotaError(str(e)) from e
+                raise _TransientError(str(e)) from e
             raise
+        except genai_errors.ServerError as e:
+            raise _TransientError(str(e)) from e
 
         thinking_parts: list[str] = []
         text_parts: list[str] = []

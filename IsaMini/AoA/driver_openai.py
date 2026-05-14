@@ -22,12 +22,13 @@ from agents.mcp import MCPServerStreamableHttp
 from agents.retry import ModelRetrySettings
 
 from .model import *
+from .language_model_driver import LMDriver, _TransientError, _QuotaError
 
 from .mcp_http_server import ProofMCPHTTPServer
 
 
 @agent_driver("OpenAI")
-class OpenAI_Driver(Session):
+class OpenAI_Driver(LMDriver):
     DEFAULT_MODEL = "gpt-5.5"
     FORK_CHEAPER_MODEL = "gpt-4.1-mini"
 
@@ -114,37 +115,9 @@ class OpenAI_Driver(Session):
             except Exception as e:
                 self.debug_info(f"[CLEANUP] Failed to remove temporary directory {self.working_dir}: {e}")
 
-    async def run(self):
-        self.log_AoA_opr(f"Driver {self}, Working directory: {self.working_dir}, Log directory: {self.log_dir}")
-        try:
-            await self._run_with_retry()
-        except asyncio.CancelledError:
-            self.warn_AoA_opr("Cancelled (Isabelle interrupted)")
-            raise
-
     async def interrupt(self):
         if self._runner_task is not None:
             self._runner_task.cancel()
-
-    class _RateLimitError(Exception):
-        pass
-
-    class _QuotaError(Exception):
-        pass
-
-    async def _run_with_retry(self):
-        while True:
-            try:
-                await self._run_embedded()
-                return
-            except self._QuotaError:
-                self.warn_AoA_opr("Quota exhausted, waiting 20min to retry")
-                t0 = time()
-                await asyncio.sleep(1200)
-                self.total_quota_wait_time += time() - t0
-            except self._RateLimitError:
-                self.warn_AoA_opr("API rate limit, waiting 2s to retry")
-                await asyncio.sleep(2)
 
     def _make_hooks(self) -> '_ProverHooks':
         return OpenAI_Driver._ProverHooks(self)
@@ -174,7 +147,7 @@ class OpenAI_Driver(Session):
             ),
         )
 
-    async def _run_embedded(self):
+    async def _run_main(self):
         assert self._mcp_url is not None
         self._budget_start_time = time()
         mcp = self._make_mcp(self._mcp_url)
@@ -237,8 +210,10 @@ class OpenAI_Driver(Session):
             import openai as _openai
             if isinstance(e, _openai.RateLimitError):
                 if "insufficient_quota" in str(e):
-                    raise self._QuotaError() from e
-                raise self._RateLimitError() from e
+                    raise _QuotaError(str(e)) from e
+                raise _TransientError(str(e)) from e
+            if isinstance(e, _openai.APIError):
+                raise _TransientError(str(e)) from e
             raise
 
         self._compute_cost()
@@ -342,14 +317,11 @@ class OpenAI_Driver(Session):
                         f"Call the `{self.tool_name(TOOL_ANSWER)}` tool to submit it.")
                     previous_response_id = fork._last_response_id
               break
-            except self._QuotaError:
+            except _QuotaError:
                 self.warn_AoA_opr(f"{tag} Quota exhausted, waiting 20min to retry")
                 t0 = time()
                 await asyncio.sleep(1200)
                 self.total_quota_wait_time += time() - t0
-            except self._RateLimitError:
-                self.warn_AoA_opr(f"{tag} API rate limit, waiting 2s to retry")
-                await asyncio.sleep(2)
         finally:
             if self._http_server is not None and fork._session_id is not None:
                 await self._http_server.unregister_session(fork._session_id)
