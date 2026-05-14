@@ -466,6 +466,8 @@ class OpenAIResponsesProvider(OpenAIBase):
             if isinstance(e, openai.APIStatusError) and e.status_code < 500 and not isinstance(e, openai.RateLimitError):
                 raise
             raise _TransientError(str(e)) from e
+        except httpx.TransportError as e:
+            raise _TransientError(str(e)) from e
         finally:
             await stream.close()
         if response is None:

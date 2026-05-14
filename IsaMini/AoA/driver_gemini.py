@@ -6,6 +6,7 @@ import json
 import os
 from typing import Any
 
+import httpx
 from google import genai
 from google.genai import types as genai_types
 from google.genai import errors as genai_errors
@@ -139,6 +140,8 @@ class GeminiProvider(Provider):
                 raise _TransientError(str(e)) from e
             raise
         except genai_errors.ServerError as e:
+            raise _TransientError(str(e)) from e
+        except httpx.TransportError as e:
             raise _TransientError(str(e)) from e
 
         self._last_response_content = genai_types.Content(

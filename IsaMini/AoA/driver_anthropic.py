@@ -7,6 +7,7 @@ import os
 from typing import Any
 
 import anthropic
+import httpx
 
 from .model import *
 from .language_model_driver import _TransientError, _QuotaError
@@ -162,6 +163,8 @@ class AnthropicProvider(Provider):
                 raise _TransientError(str(e)) from e
             raise
         except anthropic.APIConnectionError as e:
+            raise _TransientError(str(e)) from e
+        except httpx.TransportError as e:
             raise _TransientError(str(e)) from e
 
         response = anthropic.types.Message.model_construct(
