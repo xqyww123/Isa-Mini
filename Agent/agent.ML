@@ -1090,6 +1090,7 @@ fun interpret_i (config as (_, _, counters)) cmd s =
     | SORRY_ONLY =>
         Minilang.SORRY_ONLY s
     | HAMMER (facts, timeout) => (
+        Timeout.apply (Time.fromSeconds 300) (fn () =>
         with_resolved_override (mk_counter ()) s facts (fn s' => fn ovr =>
           let val ctxt = Minilang.context_of s'
               val improved_SH = Config.get ctxt Minilang.mini_use_improved_SH
@@ -1098,8 +1099,11 @@ fun interpret_i (config as (_, _, counters)) cmd s =
               val prover = fn id => Phi_Sledgehammer_Solver.auto_raw
                              improved_SH override' id (SOME (Time.fromSeconds timeout))
           in Minilang.HAMMER prover s'
-          end)
-        handle Phi_Sledgehammer_Solver.Auto_Fail reason =>
+          end)) ()
+        handle Timeout.TIMEOUT _ =>
+          raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL,
+            "Automatic proof timed out (5 min). The goal is non-trivial and a step-by-step proof is required.")
+             | Phi_Sledgehammer_Solver.Auto_Fail reason =>
           let val msg = case reason
                 of Phi_Sledgehammer_Solver.Subgoal_Fail sub =>
                      "Automatic proof fails on the subgoal:\n  " ^
