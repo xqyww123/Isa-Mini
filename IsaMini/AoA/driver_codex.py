@@ -400,9 +400,20 @@ class Codex_Driver(Session):
         fork.log_interaction("fork", f"{tag} prompt:\n{prompt_text}")
 
         try:
-            async with self._fork_lock:
-                await self._run_fork_with_backup(
-                    fork, fork_url, fork_prompt, tag)
+          while True:
+            try:
+                async with self._fork_lock:
+                    await self._run_fork_with_backup(
+                        fork, fork_url, fork_prompt, tag)
+                break
+            except self._QuotaError:
+                self.warn_AoA_opr(f"{tag} Quota exhausted, waiting 20min to retry")
+                t0 = time()
+                await asyncio.sleep(1200)
+                self.total_quota_wait_time += time() - t0
+            except self._RateLimitError:
+                self.warn_AoA_opr(f"{tag} Rate limit, waiting 2s to retry")
+                await asyncio.sleep(2)
         finally:
             if self._http_server is not None and fork._session_id is not None:
                 await self._http_server.unregister_session(fork._session_id)

@@ -789,7 +789,9 @@ class ClaudeCode(Session):
         )
         tag = f"[{fork._fork_name}]"
         try:
-            async with ClaudeSDKClient(options=fork_options) as fork_client:
+          while True:
+            try:
+              async with ClaudeSDKClient(options=fork_options) as fork_client:
                 fork._client = fork_client
                 # Wording avoids "Forget the previous instructions" / "MUST" /
                 # "only task" — under FORKING_WITH_CTXT the fork resumes the
@@ -834,7 +836,16 @@ class ClaudeCode(Session):
                         "It looks like you haven't submitted your answer. "
                         f"Call `{self.tool_name(TOOL_ANSWER)}` to submit it.")
                     fork._model_time_start = time()
-            fork._client = None
+              fork._client = None
+              break
+            except self._ReachLimitError:
+                self.warn_AoA_opr(f"{tag} Usage limit reached, waiting 20min to retry")
+                t0 = time()
+                await asyncio.sleep(1200)
+                self.total_quota_wait_time += time() - t0
+            except self._RateLimitError:
+                self.warn_AoA_opr(f"{tag} API rate limit, waiting 2s to retry")
+                await asyncio.sleep(2)
         finally:
             if self._http_server is not None and fork._session_id is not None:
                 await self._http_server.unregister_session(fork._session_id)

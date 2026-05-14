@@ -937,7 +937,9 @@ class APIDriver(Session):
         fork_msgs_sent_through: int = 0
 
         try:
-            for _ in range(30):
+          while True:
+            try:
+              for _ in range(30):
                 if fork._interrupted:
                     break
 
@@ -994,6 +996,15 @@ class APIDriver(Session):
                     fork_messages.append(UserMsg(
                         f"Call the `{self.tool_name(TOOL_ANSWER)}` tool to submit your answer."))
                     fork.log_interaction("fork", f"{tag} retrying: no tool calls")
+              break
+            except self._QuotaError:
+                self.warn_AoA_opr(f"{tag} Quota exhausted, waiting 20min to retry")
+                t0 = time()
+                await asyncio.sleep(1200)
+                self.total_quota_wait_time += time() - t0
+            except self._RateLimitError:
+                self.warn_AoA_opr(f"{tag} API rate limit, waiting 2s to retry")
+                await asyncio.sleep(2)
         finally:
             self.total_tool_calls += fork.total_tool_calls
             self.total_isabelle_time += fork.total_isabelle_time

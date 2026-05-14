@@ -308,7 +308,9 @@ class OpenAI_Driver(Session):
         fork.log_interaction("fork", f"{tag} prompt:\n{prompt_text}")
 
         try:
-            async with fork_mcp:
+          while True:
+            try:
+              async with fork_mcp:
                 while True:
                     fork._model_time_start = time()
                     try:
@@ -339,6 +341,15 @@ class OpenAI_Driver(Session):
                         "You haven't submitted your answer. "
                         f"Call the `{self.tool_name(TOOL_ANSWER)}` tool to submit it.")
                     previous_response_id = fork._last_response_id
+              break
+            except self._QuotaError:
+                self.warn_AoA_opr(f"{tag} Quota exhausted, waiting 20min to retry")
+                t0 = time()
+                await asyncio.sleep(1200)
+                self.total_quota_wait_time += time() - t0
+            except self._RateLimitError:
+                self.warn_AoA_opr(f"{tag} API rate limit, waiting 2s to retry")
+                await asyncio.sleep(2)
         finally:
             if self._http_server is not None and fork._session_id is not None:
                 await self._http_server.unregister_session(fork._session_id)
