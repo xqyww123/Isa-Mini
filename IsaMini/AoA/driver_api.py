@@ -429,12 +429,12 @@ class OpenAIResponsesProvider(OpenAIBase):
             params["previous_response_id"] = previous_response_id
 
         try:
-            stream = await self._client.responses.create(**params, stream=True, background=True)
+            stream = await self._client.responses.create(**params, stream=True)
         except (openai.BadRequestError, openai.NotFoundError) as e:
             if previous_response_id is not None:
                 params.pop("previous_response_id", None)
                 try:
-                    stream = await self._client.responses.create(**params, stream=True, background=True)
+                    stream = await self._client.responses.create(**params, stream=True)
                 except openai.RateLimitError as e2:
                     if "insufficient_quota" in str(e2):
                         raise _QuotaError(str(e2)) from e2
@@ -451,17 +451,12 @@ class OpenAIResponsesProvider(OpenAIBase):
             raise _TransientError(str(e)) from e
 
         response = None
-        response_id = None
         try:
             async for event in stream:
-                if event.type == "response.created":
-                    response_id = event.response.id
-                elif event.type == "response.completed":
+                if event.type == "response.completed":
                     response = event.response
         except httpx.ReadTimeout:
-            if response_id is None:
-                raise _TransientError("Stream read timeout before response was created")
-            response = await self._poll_response(response_id)
+            response = await self._resubmit_background(params)
         finally:
             await stream.close()
         if response is None:
@@ -512,26 +507,28 @@ class OpenAIResponsesProvider(OpenAIBase):
             response_id=response.id,
         )
 
-    async def _poll_response(self, response_id: str):
-        """Fall back to polling after a streaming read timeout."""
+    async def _resubmit_background(self, params: dict[str, Any]):
+        """Re-submit request in background mode after a streaming timeout."""
+        params.pop("stream", None)
+        resp = await self._client.responses.create(**params, background=True)
+        response_id = resp.id
         _POLL_INTERVAL = 2
         _MAX_POLL = 3600
         elapsed = 0.0
-        while True:
-            try:
-                resp = await self._client.responses.retrieve(response_id)
-            except (httpx.TimeoutException, openai.APIConnectionError, openai.NotFoundError):
-                resp = None
-            if resp is not None and resp.status not in ("queued", "in_progress"):
-                if resp.status == "completed":
-                    return resp
-                raise _TransientError(
-                    f"Response {response_id} finished with status '{resp.status}'")
+        while resp.status in ("queued", "in_progress"):
             await asyncio.sleep(_POLL_INTERVAL)
             elapsed += _POLL_INTERVAL
             if elapsed >= _MAX_POLL:
                 raise _TransientError(
-                    f"Polling response {response_id} timed out after {_MAX_POLL}s")
+                    f"Background response {response_id} timed out after {_MAX_POLL}s")
+            try:
+                resp = await self._client.responses.retrieve(response_id)
+            except (httpx.TimeoutException, openai.APIConnectionError, openai.NotFoundError):
+                pass
+        if resp.status == "completed":
+            return resp
+        raise _TransientError(
+            f"Background response {response_id} finished with status '{resp.status}'")
 
     def format_tools(self, tool_info: dict[str, dict[str, Any]]) -> list[dict]:
         strict = self._strict_tools
