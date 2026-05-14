@@ -375,6 +375,9 @@ class Codex_Driver(LMDriver):
                 t0 = time()
                 await asyncio.sleep(1200)
                 self.total_quota_wait_time += time() - t0
+            except _TransientError as e:
+                self.warn_AoA_opr(f"{tag} Transient API error, retrying in 2s: {e}")
+                await asyncio.sleep(2)
         finally:
             if self._http_server is not None and fork._session_id is not None:
                 await self._http_server.unregister_session(fork._session_id)

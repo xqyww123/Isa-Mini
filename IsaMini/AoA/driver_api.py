@@ -431,7 +431,14 @@ class OpenAIResponsesProvider(OpenAIBase):
         except (openai.BadRequestError, openai.NotFoundError) as e:
             if previous_response_id is not None:
                 params.pop("previous_response_id", None)
-                stream = await self._client.responses.create(**params, stream=True)
+                try:
+                    stream = await self._client.responses.create(**params, stream=True)
+                except openai.RateLimitError as e2:
+                    if "insufficient_quota" in str(e2):
+                        raise _QuotaError(str(e2)) from e2
+                    raise _TransientError(str(e2)) from e2
+                except openai.APIError as e2:
+                    raise _TransientError(str(e2)) from e2
             else:
                 raise
         except openai.RateLimitError as e:
@@ -970,6 +977,9 @@ class APIDriver(LMDriver):
                 t0 = time()
                 await asyncio.sleep(1200)
                 self.total_quota_wait_time += time() - t0
+            except _TransientError as e:
+                self.warn_AoA_opr(f"{tag} Transient API error, retrying in 2s: {e}")
+                await asyncio.sleep(2)
         finally:
             self.total_tool_calls += fork.total_tool_calls
             self.total_isabelle_time += fork.total_isabelle_time
