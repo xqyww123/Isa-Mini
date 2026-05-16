@@ -22,6 +22,12 @@ LONG_GOAL_HINT = (
     "which is often a sign of a wrong direction.\n"
 )
 
+def _clean_warning(w: str) -> str:
+    s = pretty_unicode(w)
+    if s.startswith("Ambiguous input"):
+        return s.split('\n', 1)[0]
+    return s
+
 def trunc_expr(s: 'str | IsaTerm') -> str:
     return _trunc_expr_base(s.unicode if isinstance(s, IsaTerm) else s, AGENT_EXPR_LIMIT)
 from abc import ABC, abstractmethod
@@ -1550,7 +1556,7 @@ class Minilang_State:
                                        name_contains=name_contains,
                                        target_type=target_type,
                                        ctxt=self.name)
-                warnings = [pretty_unicode(w) for w in warnings_raw]
+                warnings = [_clean_warning(w) for w in warnings_raw]
                 scored_recs = [(score, rec) for score, rec in raw_results]
             else:
                 # Pattern-only search: get filtered entities, look up records, no ranking
@@ -1563,7 +1569,7 @@ class Minilang_State:
                                          limit=k,
                                          target_type=target_type,
                                          ctxt=self.name)
-                warnings = [pretty_unicode(w) for w in warnings_raw]
+                warnings = [_clean_warning(w) for w in warnings_raw]
                 scored_recs = []
                 for uk, name, _ in entries:
                     rec = Semantic_DB[uk]
