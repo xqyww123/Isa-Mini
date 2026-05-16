@@ -383,7 +383,15 @@ OpenAIProvider = OpenAIChatProvider
 
 
 class OpenAIResponsesProvider(OpenAIBase):
-    """Responses protocol (/v1/responses)."""
+    """Responses protocol (/v1/responses).
+
+    Transient-error policy: this provider handles transient API errors
+    (rate limits, network errors, timeouts) internally via retries and
+    background-mode fallback.  Callers do not need ``_retry_transient``
+    wrapping.  Only ``_QuotaError`` (insufficient quota), non-transient
+    request errors (4xx other than 429), and ``_TransientError`` after
+    exhausting the 1-hour background retry budget propagate.
+    """
 
     def _msgs_to_input(self, messages: list[Msg]) -> list[Any]:
         """Convert Msg list → input_items.
@@ -433,45 +441,60 @@ class OpenAIResponsesProvider(OpenAIBase):
         if previous_response_id is not None:
             params["previous_response_id"] = previous_response_id
 
-        try:
-            stream = await self._client.responses.create(**params, stream=True)
-        except (openai.BadRequestError, openai.NotFoundError) as e:
-            if previous_response_id is not None:
-                params.pop("previous_response_id", None)
-                try:
-                    stream = await self._client.responses.create(**params, stream=True)
-                except openai.RateLimitError as e2:
-                    if "insufficient_quota" in str(e2):
-                        raise _QuotaError(str(e2)) from e2
-                    raise _TransientError(str(e2)) from e2
-                except openai.APIError as e2:
-                    raise _TransientError(str(e2)) from e2
-            else:
+        # Stream the response, retrying transient errors internally.
+        # Falls back to background mode if streaming ran over 15 min
+        # before failing, or on any read timeout.
+        _BACKOFF_CAP = 30
+        _BACKGROUND_THRESHOLD = 900
+        _MAX_CHAT_TIME = 3600
+        _chat_t0 = time()
+        attempt = 0
+        while True:
+            if time() - _chat_t0 >= _MAX_CHAT_TIME:
+                raise _TransientError("chat() retry budget exhausted (1 hour)")
+            t0 = time()
+            try:
+                stream = await self._client.responses.create(**params, stream=True)
+            except (openai.BadRequestError, openai.NotFoundError):
+                if params.get("previous_response_id") is not None:
+                    params.pop("previous_response_id", None)
+                    continue
                 raise
-        except openai.RateLimitError as e:
-            if "insufficient_quota" in str(e):
-                raise _QuotaError(str(e)) from e
-            raise _TransientError(str(e)) from e
-        except openai.APIError as e:
-            raise _TransientError(str(e)) from e
+            except openai.RateLimitError as e:
+                if "insufficient_quota" in str(e):
+                    raise _QuotaError(str(e)) from e
+                attempt += 1
+                await asyncio.sleep(min(2 ** attempt, _BACKOFF_CAP))
+                continue
+            except openai.APIError:
+                attempt += 1
+                await asyncio.sleep(min(2 ** attempt, _BACKOFF_CAP))
+                continue
+            attempt = 0
 
-        response = None
-        try:
-            async for event in stream:
-                if event.type == "response.completed":
-                    response = event.response
-        except httpx.ReadTimeout:
-            response = await self._resubmit_background(params)
-        except openai.APIError as e:
-            if isinstance(e, openai.APIStatusError) and e.status_code < 500 and not isinstance(e, openai.RateLimitError):
-                raise
-            raise _TransientError(str(e)) from e
-        except httpx.TransportError as e:
-            raise _TransientError(str(e)) from e
-        finally:
-            await stream.close()
-        if response is None:
-            raise RuntimeError("OpenAI responses stream ended without response.completed event")
+            try:
+                async for event in stream:
+                    if event.type == "response.completed":
+                        response = event.response
+                        break
+                else:
+                    attempt += 1
+                    await asyncio.sleep(min(2 ** attempt, _BACKOFF_CAP))
+                    continue
+            except httpx.ReadTimeout:
+                response = await self._resubmit_background(params)
+            except (openai.APIError, httpx.TransportError) as e:
+                if time() - t0 > _BACKGROUND_THRESHOLD:
+                    response = await self._resubmit_background(params)
+                elif isinstance(e, openai.APIStatusError) and e.status_code < 500 and not isinstance(e, openai.RateLimitError):
+                    raise
+                else:
+                    attempt += 1
+                    await asyncio.sleep(min(2 ** attempt, _BACKOFF_CAP))
+                    continue
+            finally:
+                await stream.close()
+            break
 
         thinking_parts: list[str] = []
         text_parts: list[str] = []
@@ -519,22 +542,44 @@ class OpenAIResponsesProvider(OpenAIBase):
         )
 
     async def _resubmit_background(self, params: dict[str, Any]):
-        """Re-submit request in background mode after a streaming timeout."""
-        params.pop("stream", None)
-        resp = await self._client.responses.create(**params, background=True)
-        response_id = resp.id
+        """Re-submit request in background mode after a streaming timeout.
+
+        Handles all retries internally within a 1-hour time budget.
+        """
         _POLL_INTERVAL = 2
-        _MAX_POLL = 3600
-        elapsed = 0.0
+        _MAX_TIME = 3600
+        t0 = time()
+
+        while True:
+            try:
+                resp = await self._client.responses.create(**params, background=True)
+                break
+            except openai.RateLimitError as e:
+                if "insufficient_quota" in str(e):
+                    raise _QuotaError(str(e)) from e
+            except openai.APIError as e:
+                if isinstance(e, openai.APIStatusError) and e.status_code < 500 and not isinstance(e, openai.RateLimitError):
+                    raise
+            if time() - t0 >= _MAX_TIME:
+                raise _TransientError("Background create timed out")
+            await asyncio.sleep(_POLL_INTERVAL)
+
+        response_id = resp.id
+        _not_found_count = 0
         while resp.status in ("queued", "in_progress"):
             await asyncio.sleep(_POLL_INTERVAL)
-            elapsed += _POLL_INTERVAL
-            if elapsed >= _MAX_POLL:
+            if time() - t0 >= _MAX_TIME:
                 raise _TransientError(
-                    f"Background response {response_id} timed out after {_MAX_POLL}s")
+                    f"Background response {response_id} timed out after {_MAX_TIME}s")
             try:
                 resp = await self._client.responses.retrieve(response_id)
-            except (httpx.TimeoutException, openai.APIConnectionError, openai.NotFoundError):
+                _not_found_count = 0
+            except openai.NotFoundError:
+                _not_found_count += 1
+                if _not_found_count > 15:
+                    raise _TransientError(
+                        f"Background response {response_id} not found after {_not_found_count} attempts")
+            except (httpx.TimeoutException, openai.APIConnectionError):
                 pass
         if resp.status == "completed":
             return resp

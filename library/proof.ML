@@ -4941,20 +4941,8 @@ fun run_phase_2 outer_ctxt lthy2 {term_goal, term_afterqed}
             :: SK)
          end)
 
-(* Does a pattern match any subterm of the given term? *)
-fun matches_subterm_of thy pat (t as (f $ x)) =
-      ((Pattern.match thy (pat, t) (Vartab.empty, Vartab.empty); true)
-       handle Pattern.MATCH =>
-         matches_subterm_of thy pat f orelse matches_subterm_of thy pat x)
-  | matches_subterm_of thy pat (Abs (_, _, body)) =
-      ((Pattern.match thy (pat, body) (Vartab.empty, Vartab.empty); true)
-       handle Pattern.MATCH => matches_subterm_of thy pat body)
-  | matches_subterm_of thy pat t =
-      (Pattern.match thy (pat, t) (Vartab.empty, Vartab.empty); true)
-      handle Pattern.MATCH => false
+fun matches_subterm_of thy pat t = PLPR_Pattern.matches_subterm_of thy [] pat t
 
-(* Check if a rewrite equation (lhs, rhs) would loop: the LHS pattern
-   matches a subterm of the RHS. *)
 fun simp_rule_loops thy (lhs, rhs) = matches_subterm_of thy lhs rhs
 
 (* Create simprocs that fire only on specific target terms.

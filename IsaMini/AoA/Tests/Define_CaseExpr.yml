@@ -1,0 +1,26 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∃(f :: nat ⇒ nat × nat). fst (f (Suc (0 :: nat))) = (2 :: nat)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Define
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: ∃(f :: nat ⇒ nat × nat). fst (f (Suc (0 :: nat))) = (2 :: nat)
+proof:
+  - step id: 1
+    thought: Define a pair-valued recurrence using case to destructure the recursive call
+    operation: Define
+    name: sa
+    type: nat \<Rightarrow> nat \<times> nat
+    equations:
+      - sa 0 = ((1::nat), (1::nat))
+      - sa (Suc n) = (case sa n of (s, a) \<Rightarrow> (s + a, s))
+    Error: Failed to define the function: exception TERM raised (line 375 of "term.ML"): fastype_of: Bound
+    proof of termination: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  ∃(f :: nat ⇒ nat × nat). fst (f (Suc (0 :: nat))) = (2 :: nat)

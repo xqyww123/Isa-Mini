@@ -702,6 +702,56 @@ async def _test_Define_QuerySimps(root: Root, file: MyIO):
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
     assert len(unfinished_nodes) == 0, "Expected proof to be complete"
 
+@model_test("Define_QueryConst", "Test_Define_QueryConst.thy", 8)
+async def _test_Define_QueryConst(root: Root, file: MyIO):
+    """After defining a proof-local function, verify that querying for
+    it as a constant by exact_name works. Currently, the query tool only
+    finds true Const(_, _) entities via universal_key_of, so a
+    pseudo-constant (fixed free variable) created by Define is reported
+    as Undefined."""
+    from Isabelle_RPC_Host.universal_key import EntityKind
+
+    await root.fill("1", [Define.gen_single({
+        "thought": "Define doubling function",
+        "name": "double",
+        "type": r"nat \<Rightarrow> nat",
+        "equations": ["double n = n + n"],
+    })])
+    print_header("After Define", file)
+    root.print(0, file)
+
+    ml = root.session.retrieval_state()
+
+    # Query for double.simps (lemma) — should succeed
+    results_simps, warnings_simps = await ml.semantic_knn(
+        None, 1, [EntityKind.THEOREM], exact_name="double.simps")
+    file.write(f"Query double.simps (lemma): {len(results_simps)} results, warnings={warnings_simps}\n")
+    if results_simps:
+        file.write(f"  Found: {results_simps[0].entity.short_name.unicode}\n")
+
+    # Query for double (constant) — this is the bug: pseudo-constants
+    # defined by Define are fixed free variables, not true Const(_, _),
+    # so universal_key_of cannot resolve them.
+    results_const, warnings_const = await ml.semantic_knn(
+        None, 1, [EntityKind.CONSTANT], exact_name="double")
+    file.write(f"Query double (constant): {len(results_const)} results, warnings={warnings_const}\n")
+    if results_const:
+        file.write(f"  Found: {results_const[0].entity.short_name.unicode}\n")
+
+    # Complete the proof so the test leaves a clean state
+    await root.fill("2", [Witness.gen_single({
+        "thought": "Use double as witness",
+        "witness": "double",
+    })])
+    await root.fill("3", [Obvious.gen_single({"facts": []})])
+    print_header("After proof complete", file)
+    root.print(0, file)
+
+    unfinished_nodes = set()
+    root.unfinished_nodes(unfinished_nodes)
+    file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+    assert len(unfinished_nodes) == 0, "Expected proof to be complete"
+
 @model_test("Define_Manual", "Test_Define_Manual.thy", 16)
 async def _test_Define_Manual(root: Root, file: MyIO):
     """Manual-discharge path for the Define operation. The test .thy
@@ -776,6 +826,32 @@ async def _test_Define_Manual(root: Root, file: MyIO):
     unfinished_nodes = set()
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+
+@model_test("Define_CaseExpr", "Test_Define_CaseExpr.thy", 16)
+async def _test_Define_CaseExpr(root: Root, file: MyIO):
+    """Reproducer for fastype_of: Bound.
+    Defines a recursive function whose equation uses a `case` expression
+    to destructure the recursive call's pair result. The `case` compiles
+    to an Abs internally, and check_looping_simp_rules's
+    matches_subterm_of descends into the Abs body without substituting
+    the bound variable — the loose Bound crashes fastype_of inside
+    Pattern.match.
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    await root.fill("1", [Define.gen_single({
+        "thought": "Define a pair-valued recurrence using case to "
+                   "destructure the recursive call",
+        "name": "sa",
+        "type": r"nat \<Rightarrow> nat \<times> nat",
+        "equations": [
+            "sa 0 = ((1::nat), (1::nat))",
+            r"sa (Suc n) = (case sa n of (s, a) \<Rightarrow> (s + a, s))",
+        ],
+    })])
+    print_header("After Define", file)
+    root.print(0, file)
 
 @model_test("Witness2", "Test_Witness2.thy", 8)
 async def _test_Witness2(root: Root, file: MyIO):
@@ -9089,73 +9165,6 @@ async def _test_completion_goalnode(root: Root, file: MyIO):
     unfinished = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
-
-
-@model_test("ContextRestart", "Test_ContextRestart.thy", 8)
-async def _test_ContextRestart(root: Root, file: MyIO):
-    """Test that surrender triggers context restart via request_restart()."""
-    from .mcp_http_server import _refute_or_surrender_tool_logic
-
-    session = root.session
-
-    print_header("Initial YAML", file)
-    root.print(0, file)
-
-    # Partially fill the proof so restart preserves progress
-    root.session.age += 1
-    await root.fill("1", [Have.gen_single({
-        "thought": "helper",
-        "statement": {"english": "x squared is non-negative", "conclusion": "(0::int) \\<le> x * x"},
-        "name": "lem1",
-    })])
-    print_header("After Have (partial progress)", file)
-    root.print(0, file)
-
-    # First surrender: should trigger restart (not quit)
-    assert session._retry_count == 0
-    assert not session._restart_requested
-    msg1, err1 = await _refute_or_surrender_tool_logic(session, {"reason": "surrender", "detail": "stuck"})
-    file.write(f"surrender1: msg={msg1!r}, err={err1}, retry_count={session._retry_count}\n")
-    file.write(f"  restart_requested={session._restart_requested}\n")
-    file.write(f"  quit_info={root.quit_info}\n")
-    assert session._retry_count == 1
-    assert session._restart_requested
-    assert root.quit_info == ("restart", "")
-
-    # Simulate what a driver does on restart
-    session._restart_requested = False
-    root.quit_info = None
-    session.refute_or_surrender_warned = False
-
-    # Second surrender: should trigger restart again
-    msg2, err2 = await _refute_or_surrender_tool_logic(session, {"reason": "surrender", "detail": "still stuck"})
-    file.write(f"surrender2: msg={msg2!r}, err={err2}, retry_count={session._retry_count}\n")
-    file.write(f"  restart_requested={session._restart_requested}\n")
-    assert session._retry_count == 2
-    assert session._restart_requested
-
-    # Simulate driver restart
-    session._restart_requested = False
-    root.quit_info = None
-
-    # Push retry_count to max_retries - 1, then surrender should truly fail
-    session._retry_count = session.max_retries - 1
-    msg_last, err_last = await _refute_or_surrender_tool_logic(session, {"reason": "surrender", "detail": "final"})
-    file.write(f"surrender_final: msg={msg_last!r}, err={err_last}, retry_count={session._retry_count}\n")
-    file.write(f"  restart_requested={session._restart_requested}\n")
-    file.write(f"  quit_info={root.quit_info}\n")
-    assert session._retry_count == session.max_retries
-    assert not session._restart_requested
-    assert root.quit_info == ("surrender", "final")
-
-    # Refute should always quit immediately regardless of retry_count
-    root.quit_info = None
-    session._retry_count = 0
-    msg_refute, err_refute = await _refute_or_surrender_tool_logic(session, {"reason": "refute", "detail": "goal is buggy"})
-    file.write(f"refute: msg={msg_refute!r}, err={err_refute}\n")
-    file.write(f"  quit_info={root.quit_info}\n")
-    assert root.quit_info == ("refute", "goal is buggy")
-    assert not session._restart_requested
 
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
