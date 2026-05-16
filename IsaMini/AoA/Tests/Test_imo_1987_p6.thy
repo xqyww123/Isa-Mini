@@ -5,7 +5,7 @@
 theory Test_imo_1987_p6 imports
 MathBench_Prover.MathBench_Prover Minilang_Agent.Minilang_Agent
 begin
-declare [[auto_interpret_for_embedding=false, agent_AoA_driver="ChatGPT"]]
+declare [[auto_interpret_for_embedding=false, agent_AoA_driver="ChatGPT.gpt-5.5-medium"]]
 theorem imo_1987_p6:
   fixes p :: nat
     and f :: "nat \<Rightarrow> nat"

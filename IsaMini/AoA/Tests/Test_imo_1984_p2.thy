@@ -5,7 +5,7 @@
 theory Test_imo_1984_p2 imports
   MathBench_Prover.MathBench_Prover Minilang_Agent.Minilang_Agent
 begin
-declare [[auto_interpret_for_embedding=false, agent_AoA_driver="Claude"]]
+declare [[auto_interpret_for_embedding=false, agent_AoA_driver="ChatGPT.gpt-5.5-medium"]]
 theorem imo_1984_p2:
   fixes a b :: nat
   assumes h0 : "0 < a \<and> 0 < b"
@@ -14,7 +14,7 @@ theorem imo_1984_p2:
     and h3 : "\<not> (7 dvd (a+b))"
     and h4 : "(7^7) dvd ((a+b)^7 - a^7 - b^7)"
   shows "19 \<le> a + b"
-  by aoa
+  by a oa
 
 
 end

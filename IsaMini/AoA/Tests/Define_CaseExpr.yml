@@ -15,11 +15,10 @@ proof:
     thought: Define a pair-valued recurrence using case to destructure the recursive call
     operation: Define
     name: sa
-    type: nat \<Rightarrow> nat \<times> nat
+    type: nat ⇒ nat × nat
     equations:
       - sa 0 = ((1::nat), (1::nat))
       - sa (Suc n) = (case sa n of (s, a) \<Rightarrow> (s + a, s))
-    Error: Failed to define the function: exception TERM raised (line 375 of "term.ML"): fastype_of: Bound
     proof of termination: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:

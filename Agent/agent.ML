@@ -735,7 +735,8 @@ fun AUTO_SIMPLIFY
     fun thm_loops thm =
       exists (fn meta_eq =>
         Looping_Simp.simp_rule_may_loop
-          {only_check_local = false, ignore_cond = false, local_ignore_cond = true}
+          {only_check_local = false, ignore_cond = false, local_ignore_cond = true,
+           schematize_local_frees = false}
           ctxt (Thm.prop_of meta_eq))
       (Raw_Simplifier.mksimps ctxt thm)
     val (looping_thms, safe_thms) = List.partition thm_loops simp_thms
@@ -1234,7 +1235,8 @@ fun interpret_i (config as (_, _, counters)) cmd s =
           (* Looping check — before calling HAVE'', from parsed terms directly *)
           val meta_eq_prop = Logic.mk_equals (redex_term, residue_term)
           val may_loop = Looping_Simp.simp_rule_may_loop
-                {only_check_local = true, ignore_cond = true, local_ignore_cond = true}
+                {only_check_local = true, ignore_cond = true, local_ignore_cond = true,
+                 schematize_local_frees = false}
                 fixes_ctxt meta_eq_prop
           val _ = if may_loop then
                     Minilang.get_reporter ()

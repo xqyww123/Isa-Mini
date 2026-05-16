@@ -527,12 +527,22 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                 | retrieve (Universal_Key.InductionRuleK, name) = retrieve_thm name
                 | retrieve (Universal_Key.CaseSplitRuleK, name) = retrieve_thm name
                 | retrieve (Universal_Key.ConstantK, name) =
-                    let val name = Consts.intern consts name
-                        val short = Name_Space.extern ctxt const_space name
-                        val T = Consts.the_constraint consts name
-                        val abbrevs = if is_some (try (Consts.the_abbreviation consts) name)
-                                      then [name] else []
-                    in SOME (short, [SOTy T], [], abbrevs, false) end
+                    if Name_Space.declared const_space (Consts.intern consts name) then
+                      let val cname = Consts.intern consts name
+                          val short = Name_Space.extern ctxt const_space cname
+                          val T = Consts.the_constraint consts cname
+                          val abbrevs = if is_some (try (Consts.the_abbreviation consts) cname)
+                                        then [cname] else []
+                      in SOME (short, [SOTy T], [], abbrevs, false) end
+                    else
+                      (case Variable.lookup_fixed ctxt name of
+                        SOME fq_name =>
+                          SOME (Variable.revert_fixed ctxt fq_name,
+                            (case Variable.default_type ctxt fq_name of
+                               SOME T => [SOTy T]
+                             | NONE => []),
+                            [], [], true)
+                      | NONE => NONE)
                 | retrieve (Universal_Key.TypeK, name) =
                     SOME (Name_Space.extern ctxt type_space name, [], [], [], false)
                 | retrieve (Universal_Key.ClassK, name) =
@@ -766,7 +776,8 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                 let val meta_rules = maps (Raw_Simplifier.mksimps ctxt) thms
                     val looping_rules = filter (fn meta_eq =>
                       Looping_Simp.simp_rule_may_loop
-                        {only_check_local = false, ignore_cond = false, local_ignore_cond = true}
+                        {only_check_local = false, ignore_cond = false, local_ignore_cond = true,
+                         schematize_local_frees = false}
                         ctxt (Thm.prop_of meta_eq)
                     ) meta_rules
                 in

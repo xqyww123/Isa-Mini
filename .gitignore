@@ -26,3 +26,4 @@ dist
 __pycache__
 .vscode
 .coverage
+.claude

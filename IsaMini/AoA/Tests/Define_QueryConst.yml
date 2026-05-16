@@ -17,7 +17,8 @@ pending proof goal:
   ∃(f :: nat ⇒ nat). f (2 :: nat) = (4 :: nat)
 Query double.simps (lemma): 1 results, warnings=[]
   Found: double.simps
-Query double (constant): 0 results, warnings=['Undefined: "double"']
+Query double (constant): 1 results, warnings=[]
+  Found: double
 --------------------------------------------------
 After proof complete
 --------------------------------------------------

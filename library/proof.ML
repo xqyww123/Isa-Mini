@@ -333,29 +333,13 @@ val FUN'' : (binding * string option * mixfix) list
 val FUN_CMD : command
 val FUN_DEBUG_CMD : command
 
-(* Does a pattern match any subterm of the given term? *)
-val matches_subterm_of : theory -> term -> term -> bool
-
-(* Check if a rewrite equation (lhs, rhs) would loop: the LHS pattern
-   matches a subterm of the RHS. The LHS should use schematic variables
-   for the parts that vary (e.g., output of mksimps already has this). *)
-val simp_rule_loops : theory -> term * term -> bool
-
 (* Create simprocs that fire only on specific target terms.
    Unlike thms_to_once_simprocs, these fire on ALL indicated targets, not just once.
    Each (thm, targets) pair produces simprocs whose proc checks aconv against targets. *)
 val thms_to_targeted_simprocs : Proof.context -> (thm * term list) list -> simproc list
 
-(* Detect bad recursive definitions where a schematized LHS matches a
-   subterm of its own RHS, which would produce a looping simp rule.
-   Returns true if looping is detected. *)
-val check_looping_simp_rules :
-  Proof.context ->
-  (binding * string option * mixfix) list ->
-  Specification.multi_specs_cmd -> bool
-
-(* After a function definition, remove its simp rules from the simpset
-   if they were flagged as looping. The function stays defined and its
+(* After a function definition, check its .simps for looping rules and
+   remove them from the simpset. The function stays defined and its
    .simps remain accessible by name. *)
 val remove_looping_simps : Proof.context -> Proof.context
 val fun_fake_automatic_failure : bool Config.T
@@ -4941,10 +4925,6 @@ fun run_phase_2 outer_ctxt lthy2 {term_goal, term_afterqed}
             :: SK)
          end)
 
-fun matches_subterm_of thy pat t = PLPR_Pattern.matches_subterm_of thy [] pat t
-
-fun simp_rule_loops thy (lhs, rhs) = matches_subterm_of thy lhs rhs
-
 (* Create simprocs that fire only on specific target terms.
    Each firing consumes the matched target from a mutable list, so the simproc
    fires at most once per indicated target. This prevents loops when the rule
@@ -4979,42 +4959,18 @@ fun thms_to_targeted_simprocs ctxt (entries: (thm * term list) list) : simproc l
       end
   in map_filter I (flat (map_index mk_targeted entries)) end
 
-(* Detect bad recursive definitions: if a schematized LHS matches a
-   subterm of its own RHS, the generated simp rule would loop. *)
-fun check_looping_simp_rules ctxt fixes specs =
-  let
-    val thy = Proof_Context.theory_of ctxt
-    val ((_, eq_entries), _) = Specification.read_multi_specs fixes specs ctxt
-    val fun_names =
-      map (fn (b, _, _) => Binding.name_of b) fixes
-      |> Symtab.make_set
-    fun schematize_frees t =
-      let val frees = Term.add_frees t []
-          val subst = map_filter (fn (n, T) =>
-            if Symtab.defined fun_names n then NONE
-            else SOME (Free (n, T), Var ((n, 0), T))) frees
-      in Term.subst_free subst t end
-    fun check_eq (_, eq_term) =
-      let val params = Term.strip_all_vars eq_term
-          val body = Term.strip_all_body eq_term
-          val eq = subst_bounds (rev (map Free params), body)
-          val (lhs, rhs) = HOLogic.dest_eq (HOLogic.dest_Trueprop eq)
-                           handle TERM _ => raise Fail ""
-          val pat = schematize_frees lhs
-      in simp_rule_loops thy (pat, rhs) end
-      handle Fail _ => false
-  in
-    exists check_eq eq_entries
-  end
-
-(* After a function definition completes, if check_looping_simp_rules
-   detected that the generated simp rules would loop, remove them from
-   the simpset. The function remains defined and its .simps are still
-   accessible by name — they're just not applied automatically. *)
+(* After a function definition completes, check its .simps for looping
+   rules and remove them from the simpset. The function remains defined
+   and its .simps are still accessible by name. *)
 fun remove_looping_simps lthy =
   case Function_Common.import_last_function lthy of
     SOME {simps = SOME simps, ...} =>
-      fold Simplifier.del_simp simps lthy
+      let val cfg : Looping_Simp.config =
+            {only_check_local = false, ignore_cond = false,
+             local_ignore_cond = true, schematize_local_frees = true}
+          val looping = filter (fn th =>
+            Looping_Simp.simp_rule_may_loop cfg lthy (Thm.prop_of th)) simps
+      in fold Simplifier.del_simp looping lthy end
   | _ => lthy
 
 (* Extended FUN entrypoint. Runs phase 1 (pat-completeness) then phase 2
@@ -5023,11 +4979,7 @@ fun FUN_by_fun_ext fixes specs config metric_strs open_on_fail
                    (outer_ctxt, SK) =
   let
     val ctxt_fn = Variable.set_body false outer_ctxt
-    val has_looping_simps = check_looping_simp_rules ctxt_fn fixes specs
-    (* If the definition has looping simp rules, post-process the
-       context after the function is fully defined to remove them
-       from the simpset. The function and its .simps still exist. *)
-    fun post lthy = if has_looping_simps then remove_looping_simps lthy else lthy
+    fun post lthy = remove_looping_simps lthy
     val {pat_goal_state, pat_afterqed, lthy_after_prepare} =
       Proof_Local_Function.prepare_pat_goal fixes specs config false ctxt_fn
     val pat_state = escalate_pat lthy_after_prepare pat_goal_state
