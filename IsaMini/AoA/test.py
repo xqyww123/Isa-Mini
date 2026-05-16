@@ -853,6 +853,69 @@ async def _test_Define_CaseExpr(root: Root, file: MyIO):
     print_header("After Define", file)
     root.print(0, file)
 
+@model_test("Define_SucIMO", "Test_Define_SucIMO.thy", 16)
+async def _test_Define_SucIMO(root: Root, file: MyIO):
+    """Same as Define_SucPattern but under imo_1974_p3 imports
+    (Complex_Main + HOL-Number_Theory + HOL-Computational_Algebra).
+    Reproduces the "Non-constructor pattern" failure the LLM hit.
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    await root.fill("1", [Define.gen_single({
+        "thought": "Define pow2 with Suc pattern under imo_1974_p3 imports",
+        "name": "pow2",
+        "type": r"nat \<Rightarrow> nat",
+        "equations": [
+            "pow2 0 = (1::nat)",
+            "pow2 (Suc n) = (2::nat) * pow2 n",
+        ],
+    })])
+    print_header("After Define", file)
+    root.print(0, file)
+
+    unfinished_nodes = set()
+    root.unfinished_nodes(unfinished_nodes)
+    file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+
+@model_test("Define_SucPattern", "Test_Define_SucPattern.thy", 19)
+async def _test_Define_SucPattern(root: Root, file: MyIO):
+    """Reproducer from imo_1974_p3: Define with Suc constructor pattern.
+    The LLM tried `myf 0 = 1` / `myf (Suc n) = 2 * myf n` and got
+    "Non-constructor pattern not allowed in sequential mode" every time.
+    This test checks whether the same equations work in the standard
+    Minilang_Agent context.
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    await root.fill("1", [Define.gen_single({
+        "thought": "Define pow2 with Suc pattern — simplest failing case from imo_1974_p3 logs",
+        "name": "pow2",
+        "type": r"nat \<Rightarrow> nat",
+        "equations": [
+            "pow2 0 = (1::nat)",
+            "pow2 (Suc n) = (2::nat) * pow2 n",
+        ],
+    })])
+    print_header("After Define (Suc pattern)", file)
+    root.print(0, file)
+
+    await root.fill("2", [Witness.gen_single({
+        "thought": "Use pow2 as witness",
+        "witness": "pow2",
+    })])
+    print_header("After Witness", file)
+    root.print(0, file)
+
+    await root.fill("3", [Obvious.gen_single({"facts": []})])
+    print_header("After Obvious", file)
+    root.print(0, file)
+
+    unfinished_nodes = set()
+    root.unfinished_nodes(unfinished_nodes)
+    file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+
 @model_test("Witness2", "Test_Witness2.thy", 8)
 async def _test_Witness2(root: Root, file: MyIO):
     """Witness on a non-existential goal: the node stays in the tree

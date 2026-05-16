@@ -1336,18 +1336,7 @@ fun strip_meta_hhf term =
         | strip (V,P) X = (rev V, rev P, X)
    in strip ([],[]) term end
 
-fun strip_meta_and_hol_hhf term =
-  let fun strip (V,P) (Const("Pure.imp", _) $ H $ B) = strip (V,H::P) B
-        | strip (V,P) (Const(\<^const_name>\<open>HOL.implies\<close>, _) $ H $ B) = strip (V,H::P) B
-        | strip (V,P) (Const("Pure.all", _) $ Abs (a, T, B)) = strip ((a,T)::V,P) B
-        | strip (V,P) (Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs (a, T, B)) = strip ((a,T)::V,P) B
-        | strip (V,P) (\<^Const>\<open>Pure.all ty\<close> $ X) =
-            strip (V,P) (\<^Const>\<open>Pure.all ty\<close> $ Abs ("_", ty, Term.incr_boundvars 1 X $ Bound 0))
-        | strip (V,P) (\<^Const>\<open>HOL.All ty\<close> $ X) =
-            strip (V,P) (\<^Const>\<open>HOL.All ty\<close> $ Abs ("_", ty, Term.incr_boundvars 1 X $ Bound 0))
-        | strip (V,P) (\<^Const>\<open>Trueprop\<close> $ X) = strip (V,P) X
-        | strip (V,P) X = (rev V, rev P, X)
-   in strip ([],[]) term end
+val strip_meta_and_hol_hhf = Minilang_Aux.strip_meta_and_hol_hhf
 
 fun quantifier_bindings ctxt st =
          Thm.prop_of st
@@ -4979,6 +4968,21 @@ fun FUN_by_fun_ext fixes specs config metric_strs open_on_fail
                    (outer_ctxt, SK) =
   let
     val ctxt_fn = Variable.set_body false outer_ctxt
+    (* DEBUG: check Ctr_Sugar for nat in both contexts *)
+    val _ = let
+      val trace_file = "/tmp/fun_debug_trace.txt"
+      val has_sugar_outer = is_some (Ctr_Sugar.ctr_sugar_of outer_ctxt \<^type_name>\<open>nat\<close>)
+      val has_sugar_fn = is_some (Ctr_Sugar.ctr_sugar_of ctxt_fn \<^type_name>\<open>nat\<close>)
+      val suc_const = (case try (Proof_Context.read_const {proper = true, strict = false} outer_ctxt) "Suc" of
+        SOME t => Syntax.string_of_term outer_ctxt t | NONE => "NOT FOUND")
+      val eq_strs = map (fn ((_, eq), _, _) => eq) specs
+      val msg = cat_lines ([
+        "=== FUN_by_fun_ext DEBUG ===",
+        "outer_ctxt has nat ctr_sugar: " ^ Bool.toString has_sugar_outer,
+        "ctxt_fn has nat ctr_sugar: " ^ Bool.toString has_sugar_fn,
+        "Suc resolves to: " ^ suc_const,
+        "equations:"] @ eq_strs @ ["=== END ===", ""])
+    in File.write (Path.explode trace_file) msg end
     fun post lthy = remove_looping_simps lthy
     val {pat_goal_state, pat_afterqed, lthy_after_prepare} =
       Proof_Local_Function.prepare_pat_goal fixes specs config false ctxt_fn

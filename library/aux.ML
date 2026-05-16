@@ -56,6 +56,8 @@ val filter_redundant_facts : (string * term) list -> (string * term) list
 val implode_with' : 'a -> 'a list list -> 'a list -> 'a list
 val implode_with : 'a -> 'a list list -> 'a list
 
+val strip_meta_and_hol_hhf : term -> (string * typ) list * term list * term
+
 end
 
 structure Minilang_Aux : MINILANG_AUX = struct
@@ -809,7 +811,18 @@ fun implode_with _ [] = []
   | implode_with _ [x] = x
   | implode_with s (h::L) = h @ s :: implode_with s L
 
-
+fun strip_meta_and_hol_hhf term =
+  let fun strip (V,P) (Const("Pure.imp", _) $ H $ B) = strip (V,H::P) B
+        | strip (V,P) (Const(\<^const_name>\<open>HOL.implies\<close>, _) $ H $ B) = strip (V,H::P) B
+        | strip (V,P) (Const("Pure.all", _) $ Abs (a, T, B)) = strip ((a,T)::V,P) B
+        | strip (V,P) (Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs (a, T, B)) = strip ((a,T)::V,P) B
+        | strip (V,P) (\<^Const>\<open>Pure.all ty\<close> $ X) =
+            strip (V,P) (\<^Const>\<open>Pure.all ty\<close> $ Abs ("_", ty, Term.incr_boundvars 1 X $ Bound 0))
+        | strip (V,P) (\<^Const>\<open>HOL.All ty\<close> $ X) =
+            strip (V,P) (\<^Const>\<open>HOL.All ty\<close> $ Abs ("_", ty, Term.incr_boundvars 1 X $ Bound 0))
+        | strip (V,P) (\<^Const>\<open>Trueprop\<close> $ X) = strip (V,P) X
+        | strip (V,P) X = (rev V, rev P, X)
+   in strip ([],[]) term end
 
 
 end

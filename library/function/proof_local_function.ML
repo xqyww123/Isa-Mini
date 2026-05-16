@@ -1312,7 +1312,46 @@ fun prepare_function_top do_print prep fixspec eqns config lthy =
   let
     val ((fixes0, spec0), ctxt') = prep fixspec eqns lthy
     val fixes = map (apfst (apfst Binding.name_of)) fixes0
-    val spec = map (fn (bnd, prop) => (bnd, [prop])) spec0
+
+    (* Fix captured Free variables in LHS pattern positions.
+       After prep_specs, pattern variables that collide with the outer proof
+       context's fixed variables remain as Free (close_form skips quantifying
+       them).  Rename to fresh names and wrap in Pure.all so they become Bound,
+       fixing check_constr_pattern and pattern_subtract's is_fixed check. *)
+    val spec0' =
+      let
+        val fn_names = map (fst o fst) fixes
+        fun lhs_captured_frees prop =
+          let
+            val (_, _, concl) = Minilang_Aux.strip_meta_and_hol_hhf prop
+            val f_args = case concl of
+                Const (\<^const_name>\<open>HOL.eq\<close>, _) $ l $ _ => l
+              | Const (\<^const_name>\<open>Pure.eq\<close>, _) $ l $ _ => l
+              | _ => concl
+            val (_, args) = strip_comb f_args
+            fun collect (Free (x, T)) =
+                  if Variable.is_fixed ctxt' x
+                     andalso not (member (op =) fn_names x)
+                  then [(x, T)] else []
+              | collect (t $ u) = collect t @ collect u
+              | collect _ = []
+          in distinct (op =) (maps collect args) end
+          handle TERM _ => []
+        fun fix_prop prop =
+          let val captured = lhs_captured_frees prop
+          in if null captured then prop
+             else let
+               val names0 = Variable.names_of ctxt'
+               val (fresh_vars, _) = fold_map (fn (x, T) => fn names =>
+                   let val (x', names') = Name.variant x names
+                   in (Free (x', T), names') end) captured names0
+               val old_frees = map Free captured
+               val prop' = Term.subst_free (old_frees ~~ fresh_vars) prop
+             in fold_rev Logic.all fresh_vars prop' end
+          end
+      in map (apsnd fix_prop) spec0 end
+
+    val spec = map (fn (bnd, prop) => (bnd, [prop])) spec0'
     val (eqs, post, sort_cont, cnames) = get_preproc lthy config ctxt' fixes spec
 
     val fnames = map (fst o fst) fixes0
