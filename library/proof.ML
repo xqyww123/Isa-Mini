@@ -1944,6 +1944,9 @@ fun SIMP' _ _ (ctxt, []) = (ctxt, [])
     TRY_STANDARD SK0 |> (fn (s as (ctxt, _)) =>
   let val with_lems = prep_with ctxt raw_with_lems
       val ctxt = apply_WITH with_lems ctxt
+      val s = (case s of (c, HHF (st, facts) :: L) =>
+                  (c, HHF (Pre_Simproc.pre_simproc_on_sequent ctxt st, facts) :: L)
+                | _ => s)
       val time = Config.get ctxt crush_timeout
               |> Time.fromSeconds
       val reporter = get_reporter ()
@@ -2054,6 +2057,9 @@ fun SIMPLIFY_GOAL_AND_PREMISES'
     val st_protected =
       if simplify_goal then st_with_prems
       else Conv.gconv_rule (wrap_goal_conclusion_NO_SIMP ctxt) 1 st_with_prems
+
+    (* 3.5. Pre-simproc preprocessing *)
+    val st_protected = Pre_Simproc.pre_simproc_on_sequent ctxt st_protected
 
     (* 4. Setup simplifier context *)
     val simp_ctxt = (
@@ -3959,6 +3965,7 @@ fun HAMMER_i (prover : string option -> Proof.context -> thm -> string * thm)
   let val (_, _, ID_BASE) = IPS_Data.get ctxt
       val ID = ID_BASE ^ "/" ^ step_id
       val ID' = if Config.get ctxt enable_cache_by_step then SOME ID else NONE
+      val s = Pre_Simproc.pre_simproc_on_concl ctxt s
       val (prf, s') = prover ID' ctxt s
                       handle ERROR E => raise OPR_FAIL (PROOF_FAIL, E)
    in get_reporter () (Internal (SH_PRF prf))
