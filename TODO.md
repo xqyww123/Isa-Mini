@@ -84,6 +84,80 @@ erule_tac x=s in allE
 line 394 in /home/xero/repo/afp-2023-10-16/thys/Simpl/HoarePartialDef.thy
 
 
+### Missing Theories for MathBench_Prover (Trigonometric Analysis)
+
+Identified from putnam_2000_b3 evaluation. All items are missing from both Isabelle/HOL
+and the AFP (confirmed through AFP mid-2026). Items 1-3 are undergraduate-level facts;
+items 4-6 are standard graduate analysis used broadly in PDE, harmonic analysis,
+approximation theory.
+
+#### Easy (< 50 lines each, straightforward induction)
+
+1. **`higher_deriv_sin`**: `(deriv ^^ k) sin z = sin(z + of_nat k * (pi/2))`
+   - Strategy: induction on k using DERIV_sin/DERIV_cos + cos x = sin(x + pi/2)
+   - Deps: Transcendental.thy (DERIV_sin, sin_add)
+
+2. **`higher_deriv_sin_scaled`**: `(deriv ^^ k)(λt. sin(c*t)) t = c^k * sin(c*t + k*π/2)`
+   - Strategy: instantiate higher_deriv_compose_linear' (Complex_Analysis) + item 1
+   - Deps: item 1, Cauchy_Integral_Formula.thy (higher_deriv_compose_linear')
+
+#### Medium (40-70 lines, smoothness assumptions threading)
+
+3. **`higher_deriv_sum_real`**: `(deriv ^^ k)(λt. ∑j∈S. f j t) t = ∑j∈S. (deriv ^^ k)(f j) t`
+   - Strategy: induction on k using deriv_sum; or lift from higher_deriv_add (complex)
+   - Deps: Derivative.thy (deriv_sum), or Cauchy_Integral_Formula.thy (higher_deriv_add)
+   - Note: real version requires explicit k-differentiability assumption
+
+#### Hard (150-250 lines, algebraic reduction)
+
+4. **`trig_poly_finite_zeros`**: non-zero trig poly of degree N has ≤ 2N zeros on [0,1)
+   - Strategy: reduce to algebraic poly via Chebyshev (sin(jx) = sin(x)*U_{j-1}(cos x))
+     or via Laurent poly in z = e^{2πit}; then apply card_poly_roots_bound
+   - Deps: AFP Chebyshev_Polynomials (cheb_poly_cos, cheb_poly'_cos),
+     Polynomial.thy (card_poly_roots_bound)
+   - Note: AFP Budan_Fourier.Sturm_Multiple_Roots may also help (parallel to Budan_Fourier)
+
+#### Very Hard (500-700 lines each, AFP-contribution-scale)
+
+5. **`circular_Rolle`**: if f continuous on [a,b], differentiable on (a,b), f(a)=f(b),
+   f has n zeros (counting multiplicity) on [a,b), then f' has ≥ n zeros on [a,b)
+   - Strategy: combine multiplicity-reduction (order m zero ��� order m-1 for f') with
+     standard Rolle between consecutive zeros + wrap-around from f(a)=f(b)
+   - Blocker: NO existing "zero multiplicity" for general smooth functions in Isabelle
+     (only for polynomials via `order` in Polynomial.thy). Must define vanishing order
+     and prove basic properties.
+   - Deps: Deriv.thy (Rolle_deriv), Taylor's theorem (HOL-Analysis)
+
+6. **`trig_poly_deriv_zero_limit`**: for f(t) = ∑_{j=1}^N a_j sin(2πjt) with a_N ≠ 0,
+   the zero count of f^(k) on [0,1) converges to 2N as k→∞
+   - Strategy: upper bound from item 4; lower bound via asymptotic domination of
+     a_N(2πN)^k sin(2πNt + kπ/2) (since (j/N)^k → 0 for j<N), then Hurwitz-type
+     perturbation argument (zeros of uniform limit persist)
+   - Blocker: NO Hurwitz theorem for real functions in Isabelle. Complex version exists
+     but doesn't directly transfer.
+   - Deps: items 2, 3, 4, (partially 5 for multiplicity)
+
+#### Dependency graph
+
+```
+1. higher_deriv_sin          (standalone)
+2. higher_deriv_sin_scaled   ������─ depends on ──�� 1
+3. higher_deriv_sum_real     (standalone)
+4. trig_poly_finite_zeros    (standalone; needs AFP Chebyshev_Polynomials)
+5. circular_Rolle            (standalone; new infrastructure)
+6. trig_poly_deriv_zero_limit ─── depends on ──→ 2, 3, 4, (partially 5)
+```
+
+#### Imports needed in MathBench_Prover
+
+Currently NOT imported but contain relevant building blocks:
+- `HOL-Complex_Analysis.Complex_Analysis` — higher_deriv_add, higher_deriv_compose_linear'
+- `Chebyshev_Polynomials.Chebyshev_Polynomials` — cheb_poly_cos, sin/cos multiple angle
+- `Budan_Fourier.Budan_Fourier` / `Budan_Fourier.Sturm_Multiple_Roots` — proots_count
+- `Fourier.Fourier` — periodic function infrastructure (heavy: depends on HOL-Probability)
+
+---
+
 ### Notes
 
 using xxx by auto or by (auto simp: xxx)
