@@ -702,6 +702,11 @@
                 ],
                 "default": "default"
               },
+              "simplify": {
+                "type": "boolean",
+                "default": true,
+                "description": "automatically simplify each case's goal using the obtained case premises"
+              },
               "proofs": {
                 "type": "array",
                 "items": {
@@ -992,6 +997,11 @@
                   ],
                   "type": "object"
                 }
+              },
+              "simplify": {
+                "type": "boolean",
+                "default": true,
+                "description": "automatically simplify each case's goal using the obtained case premises"
               },
               "proofs": {
                 "const": "GivenLater",

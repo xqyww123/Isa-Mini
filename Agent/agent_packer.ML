@@ -127,17 +127,19 @@ val unpacker =
      | "UNFOLD"   => apfst UNFOLD   o unpackList unpack_extended_fact
      | "WITNESS"  => apfst WITNESS  o unpackList unpackString
      | "RULE"     => apfst RULE     o unpackList unpack_extended_fact
-     | "CASE_SPLIT" => apfst CASE_SPLIT o unpackTuple3 (
+     | "CASE_SPLIT" => apfst CASE_SPLIT o unpackTuple4 (
                         unpackString,
                         unpack_opt_var_names,
-                        unpackOption unpackString
+                        unpackOption unpackString,
+                        unpackBool                   (* no_simp *)
                      )
-     | "INDUCT"   => apfst INDUCT   o unpackTuple5 (
+     | "INDUCT"   => apfst INDUCT   o unpackTuple6 (
                         unpackString,                (* target *)
                         unpack_opt_var_names,        (* vars *)
                         unpackList unpackString,     (* arbitrary *)
                         unpackList unpackString,     (* facts_to_generalize *)
-                        unpackOption unpackString    (* rule *)
+                        unpackOption unpackString,   (* rule *)
+                        unpackBool                   (* no_simp *)
                      )
      | "ATP"      => apfst (fn (facts, vars) => NEXT_OR_END (facts, vars))
                       o unpackPair (unpackList unpack_extended_fact, unpack_opt_var_names)

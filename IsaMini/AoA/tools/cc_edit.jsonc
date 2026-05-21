@@ -294,6 +294,11 @@
           ],
           "default": "default"
         },
+        "simplify": {
+          "type": "boolean",
+          "default": true,
+          "description": "automatically simplify each case's goal using the obtained case premises"
+        },
         "proofs": {
           "type": "array",
           "items": {
@@ -354,6 +359,11 @@
           "description": "facts to generalize along with the generalized variables",
           "type": "array",
           "items": { "$ref": "#/$defs/FactByName" }
+        },
+        "simplify": {
+          "type": "boolean",
+          "default": true,
+          "description": "automatically simplify each case's goal using the obtained case premises"
         },
         "proofs": { "$ref": "#/$defs/GivenLater" }
       },

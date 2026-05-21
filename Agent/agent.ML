@@ -23,14 +23,14 @@ datatype ('term, 'thm, 'fact) command =
   | WITNESS  of 'term list
   | RULE     of ('term, 'fact) extended_fact list
   | CASE_SPLIT of 'term (*target*) * Minilang.opt_var_names
-                * 'thm option (*rule*)
+                * 'thm option (*rule*) * bool (*no_simp*)
   | INDUCT   of 'term (*target*) * Minilang.opt_var_names
               * 'term list (*arbitrary*)
               * 'fact list (*facts_to_generalize: in xcmd a raw name string; in
                             icmd a resolved `Facts.ref * Token.src list` — the
                             standard agent fact-ref path (see `read_fact`).
                             Supports `h`, `h(i)`, `h(1-3)`, `h[attr]`. *)
-              * 'thm option (*rule*)
+              * 'thm option (*rule*) * bool (*no_simp*)
   | NEXT_OR_END of ('term, 'fact) extended_fact list (*add lemmas*) * Minilang.opt_var_names
   | NEXT     of ('term, 'fact) extended_fact list (*add lemmas*) * Minilang.opt_var_names
   | END      of ('term, 'fact) extended_fact list (*add lemmas*)
@@ -179,14 +179,14 @@ datatype ('term, 'thm, 'fact) command =
   | WITNESS  of 'term list
   | RULE     of ('term, 'fact) extended_fact list
   | CASE_SPLIT of 'term (*target*) * Minilang.opt_var_names
-                * 'thm option (*rule*)
+                * 'thm option (*rule*) * bool (*no_simp*)
   | INDUCT   of 'term (*target*) * Minilang.opt_var_names
               * 'term list (*arbitrary*)
               * 'fact list (*facts_to_generalize: in xcmd a raw name string; in
                             icmd a resolved `Facts.ref * Token.src list` — the
                             standard agent fact-ref path (see `read_fact`).
                             Supports `h`, `h(i)`, `h(1-3)`, `h[attr]`. *)
-              * 'thm option (*rule*)
+              * 'thm option (*rule*) * bool (*no_simp*)
   | NEXT_OR_END of ('term, 'fact) extended_fact list (*add lemmas*) * Minilang.opt_var_names
   | NEXT     of ('term, 'fact) extended_fact list (*add lemmas*) * Minilang.opt_var_names
   | END      of ('term, 'fact) extended_fact list (*add lemmas*)
@@ -1000,9 +1000,9 @@ fun interpret_i (config as (_, _, counters)) cmd s =
     | RULE facts =>
         with_resolved_refs (mk_counter ()) s facts (fn s' => fn refs =>
           Minilang.RULE refs [] s')
-    | CASE_SPLIT (target, vars, rule) =>
-        Minilang.CASE_SPLIT (false, ([[SOME target]], rule)) vars [] s
-    | INDUCT (target, vars, arbitrary, gen_fact_refs, rule) =>
+    | CASE_SPLIT (target, vars, rule, no_simp) =>
+        Minilang.CASE_SPLIT (no_simp, ([[SOME target]], rule)) vars [] s
+    | INDUCT (target, vars, arbitrary, gen_fact_refs, rule, no_simp) =>
         let val ctxt = Minilang.context_of s
             val vs = map (fn Free nt => nt
                            | x => error ("The `arbitrary` argument must be variables, but (" ^
@@ -1025,7 +1025,7 @@ fun interpret_i (config as (_, _, counters)) cmd s =
                     in (name, thms) end)
                   gen_fact_refs
         in Minilang.INDUCT
-                    (false, ([[SOME (NONE, (target, false))]], (([vs], []), Option.map single rule))) vars
+                    (no_simp, ([[SOME (NONE, (target, false))]], (([vs], []), Option.map single rule))) vars
                     {using = [], insertion = named_insertion} s
         end
     | NEXT_OR_END (lemmas, vars) =>
@@ -1358,13 +1358,13 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
           val typed_terms = ListPair.zip (typs, terms)
        in WITNESS (read_terms_with_type ctxt typed_terms)
       end
-  | check_command_i s (CASE_SPLIT (target, vars, rule)) =
+  | check_command_i s (CASE_SPLIT (target, vars, rule, no_simp)) =
       let val ctxt = Minilang.context_of s
           val rule' = Option.map (chk_single ctxt rule o read_thms ctxt) rule
           val target' = read_term ctxt target
-       in CASE_SPLIT (target', vars, rule')
+       in CASE_SPLIT (target', vars, rule', no_simp)
       end
-  | check_command_i s (INDUCT (target, vars, arbitrary, gen_fact_names, rule)) =
+  | check_command_i s (INDUCT (target, vars, arbitrary, gen_fact_names, rule, no_simp)) =
       let val ctxt = Minilang.context_of s
           val (target' :: arbitrary') = read_terms ctxt (target :: arbitrary)
           val rule' = Option.map (chk_single ctxt rule o read_thms ctxt) rule
@@ -1374,7 +1374,7 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
            * strip matches items-channel naming. *)
           val gen_fact_refs =
             map (read_fact o Minilang_Aux.simp_fact_name') gen_fact_names
-       in INDUCT (target', vars, arbitrary', gen_fact_refs, rule')
+       in INDUCT (target', vars, arbitrary', gen_fact_refs, rule', no_simp)
       end
   | check_command_i s (NEXT_OR_END (facts, vars)) =
       let val ctxt = Minilang.context_of s

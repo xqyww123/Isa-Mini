@@ -1,4 +1,5 @@
 import asyncio
+import re
 from time import time
 from datetime import datetime
 from io import StringIO
@@ -25,7 +26,9 @@ LONG_GOAL_HINT = (
 def _clean_warning(w: str) -> str:
     s = pretty_unicode(w)
     if s.startswith("Ambiguous input"):
-        return s.split('\n', 1)[0]
+        first = s.split('\n', 1)[0]
+        first = re.sub(r'\s*\(\d+ displayed\)', '', first)
+        return first.rstrip(':')
     return s
 
 def trunc_expr(s: 'str | IsaTerm') -> str:
@@ -1240,18 +1243,20 @@ class Minilang_Operation(NamedTuple):
     def BRANCH(cases: list[tuple[str | None, xterm]]) -> 'Minilang_Operation':
         return Minilang_Operation("BRANCH", [(n, ascii_of_unicode(t)) for n, t in cases])
     @staticmethod
-    def CASE_SPLIT(target: xterm, vars: list[varname_spec] | None, rule: 'IsaTerm | None') -> 'Minilang_Operation':
+    def CASE_SPLIT(target: xterm, vars: list[varname_spec] | None, rule: 'IsaTerm | None', no_simp: bool) -> 'Minilang_Operation':
         return Minilang_Operation("CASE_SPLIT",
             (ascii_of_unicode(target), _pack_varnames(vars),
-             rule.ascii if rule is not None else None))
+             rule.ascii if rule is not None else None,
+             no_simp))
     @staticmethod
     def INDUCT(target: xterm, vars: list[varname_spec] | None, arbitrary: list[xvarname],
-               facts_to_generalize: list[str], rule: 'IsaTerm | None') -> 'Minilang_Operation':
+               facts_to_generalize: list[str], rule: 'IsaTerm | None', no_simp: bool) -> 'Minilang_Operation':
         return Minilang_Operation("INDUCT",
             (ascii_of_unicode(target), _pack_varnames(vars),
              [ascii_of_unicode(t) for t in arbitrary],
              list(facts_to_generalize),
-             rule.ascii if rule is not None else None))
+             rule.ascii if rule is not None else None,
+             no_simp))
     @staticmethod
     def SPECIALIZE(
         name: str,
@@ -7153,6 +7158,7 @@ class CaseSplit_ToolArg(TypedDict):
     target_isabelle_term: xterm
     rule: NotRequired[Literal["default"] | FactByName | FactByDescription]
     proofs: NotRequired[list[Proof_PerCase] | None]
+    simplify: NotRequired[bool]
 
 @proof_operation("CaseSplit", CaseSplit_ToolArg)
 class CaseSplit(CaseSplit_Like):
@@ -7165,6 +7171,7 @@ class CaseSplit(CaseSplit_Like):
         self.rule_spec: 'Literal["default"] | FactByName | FactByDescription' = \
             arg.get("rule", "default")
         self._supplied_proofs = proofs_by_case
+        self.no_simp: bool = not arg.get("simplify", True)
     def quickview_title(self) -> str:
         return f"CaseSplit {self.target_isabelle_term}"
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
@@ -7180,7 +7187,8 @@ class CaseSplit(CaseSplit_Like):
         return Minilang_Operation.CASE_SPLIT(
             self.target_isabelle_term,
             cast(list[varname_spec] | None, self._case_vars_of_child(0)),
-            self._resolved_rule_str)
+            self._resolved_rule_str,
+            self.no_simp)
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         return FailureReason(f"Case analysis failed because: {"\n".join(err.errors)}")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
@@ -7207,6 +7215,7 @@ class Induction_ToolArg(TypedDict):
     variables: list[Induction_ToolArg_Variable]
     facts_to_generalize: NotRequired[list[FactByName]]
     proofs: NotRequired[list[Proof_PerCase] | None]
+    simplify: NotRequired[bool]
 
 @proof_operation("Induction", Induction_ToolArg)
 class Induction(CaseSplit_Like):
@@ -7229,6 +7238,7 @@ class Induction(CaseSplit_Like):
             f for f in (arg.get("facts_to_generalize") or []) if f is not None]
         self.fact_refs_to_generalize: list[IsabelleFact_Presented] = []
         self._supplied_proofs = proofs_by_case
+        self.no_simp: bool = not arg.get("simplify", True)
     def quickview_title(self) -> str:
         return f"Induction {self.target_isabelle_term}"
     async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
@@ -7354,7 +7364,8 @@ class Induction(CaseSplit_Like):
             cast(list[varname_spec] | None, self._case_vars_of_child(0)),
             [var["name"] for var in self.variables if var["status"] == "generalized"],
             [r.full_name for r in self.fact_refs_to_generalize],
-            self._resolved_rule_str)
+            self._resolved_rule_str,
+            self.no_simp)
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         return FailureReason(f"Induction failed because: {"\n".join(err.errors)}")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:

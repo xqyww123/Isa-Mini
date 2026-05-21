@@ -2230,7 +2230,7 @@ fun make_case term =
   end
 
 
-fun CASES' diff ADDITIONAL_NOTES safe_names smart_rename tac first_vars (SK as (ctxt0, HHF (st00, items00) :: _)) =
+fun CASES' diff ADDITIONAL_NOTES safe_names smart_rename no_simp tac first_vars (SK as (ctxt0, HHF (st00, items00) :: _)) =
   apply' "Fail to apply the case-split operation."
          (get_reporter()) tac NONE SK
     |> (fn (ctxt, SK as HHF (rule, items0) :: REMAIN_SK) =>
@@ -2387,7 +2387,7 @@ fun CASES' diff ADDITIONAL_NOTES safe_names smart_rename tac first_vars (SK as (
          |> (fn (thms0, ctxt) =>
         let val thms = map (apfst simp_fact_name') thms0
             val goalx =
-              if Config.get ctxt high_auto_mode
+              if Config.get ctxt high_auto_mode andalso not no_simp
               then let
                    val simp_thms = maps snd thms
                 in if null simp_thms
@@ -2420,7 +2420,7 @@ fun CASES' diff ADDITIONAL_NOTES safe_names smart_rename tac first_vars (SK as (
           ctxt (Drule.dummy_thm, ([],[]), REMAIN_SK, CASE_NAME first_vars)
    end
      | _ => raise BROKEN_INVARIANT)
-  | CASES' _ _ _ _ _ _ _ = raise BROKEN_INVARIANT
+  | CASES' _ _ _ _ _ _ _ _ = raise BROKEN_INVARIANT
 
 (* Syntax *)
 
@@ -2952,7 +2952,7 @@ fun INDUCT' (no_simp, (insts, ((arbitrary, taking), opt_rule))) first_vars
               [[SOME (_, (Free (n, T), _))]] =>
                 SOME (Variable.revert_fixed ctxt n, T)
             | _ => NONE
-      val ret = CASES' diff (maps o update_tampered) induct_safe_names smart_rename tac first_vars (ctxt, SK)
+      val ret = CASES' diff (maps o update_tampered) induct_safe_names smart_rename no_simp tac first_vars (ctxt, SK)
    in get_reporter () (Internal (IH_MAP (!IH_map)))
     ; ret
   end
@@ -2995,7 +2995,7 @@ fun CASE_SPLIT' (no_simp, (insts, opt_rule)) vars (using : thm list) (ctxt, SK) 
         else effective_opt_rule
 
       val tac = Induct.cases_context_tactic (not no_simp) insts effective_opt_rule using 1
-   in CASES' 0 (K (K [])) [] NONE tac vars (ctxt, SK)
+   in CASES' 0 (K (K [])) [] NONE no_simp tac vars (ctxt, SK)
   end
 
 val INDUCT = timed_OPR 10 ooo INDUCT'
