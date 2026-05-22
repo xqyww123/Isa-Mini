@@ -70,6 +70,7 @@ datatype ('term, 'thm, 'fact) command =
                     * (string * string option) list (*for_any: var_name × type_string_opt*)
                     * (string option * string) list (*conditions: name_opt × prop_string*)
                     * string (*redex*) * string (*residue*)
+  | COMPUTE of string (*result name*) * 'term (*term to evaluate*)
 
 type xcmd = (string, string, string) command
 type icmd = (term, thm, Facts.ref * Token.src list) command
@@ -101,6 +102,7 @@ exception SPECIALIZE_RESULT of (string * string) list
    knows the inferred type when the user omitted the type field. *)
 exception DEFINE_RESULT of string * string
 exception SETUP_REWRITING_MAY_LOOP
+exception COMPUTE_RESULT of string * string
 
 val compute_bindings : Minilang.state -> string list -> string list -> bindings
 val check_need_intro : Minilang.state -> bool
@@ -163,6 +165,7 @@ exception SIMPLIFY_TARGETS_STALE of string list
 exception SPECIALIZE_RESULT of (string * string) list
 exception DEFINE_RESULT of string * string
 exception SETUP_REWRITING_MAY_LOOP
+exception COMPUTE_RESULT of string * string
 
 type counters = {
     prem_counter: int Synchronized.var,
@@ -226,6 +229,7 @@ datatype ('term, 'thm, 'fact) command =
                     * (string * string option) list (*for_any: var_name × type_string_opt*)
                     * (string option * string) list (*conditions: name_opt × prop_string*)
                     * string (*redex*) * string (*residue*)
+  | COMPUTE of string (*result name*) * 'term (*term to evaluate*)
 
 type xcmd = (string, string, string) command
 type icmd = (term, thm, Facts.ref * Token.src list) command
@@ -1260,6 +1264,18 @@ fun interpret_i (config as (_, _, counters)) cmd s =
           val shows = [((Binding.name name, attr_srcs), [(equation, [])])]
           val s' = Minilang.HAVE'' fixes' named_assumes shows s
         in s' end
+    | COMPUTE (name, term) =>
+        let val facts_before = Minilang.get_local_facts s
+            val s' = Minilang.COMPUTE name term s
+            val ctxt' = Minilang.context_of s'
+            val facts_after = Minilang.get_local_facts s'
+            val new_facts = filter (fn (n, _) =>
+                  not (exists (fn (n', _) => n = n') facts_before)) facts_after
+            val _ = case new_facts of
+                  [(rn, rt)] => Minilang.get_reporter ()
+                                  (Minilang.Internal (COMPUTE_RESULT (rn, string_of_term ctxt' rt)))
+                | _ => ()
+        in s' end
 
 local
 val keywords = Thy_Header.get_keywords @{theory Pure}
@@ -1414,6 +1430,18 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
   | check_command_i _ SKIP = SKIP
   | check_command_i _ (CONTRADICTION hyp) = CONTRADICTION hyp
   | check_command_i _ (SETUP_REWRITING data) = SETUP_REWRITING data
+  | check_command_i s (COMPUTE (name, raw_term)) =
+      let val ctxt = Minilang.context_of s
+          val term = read_term ctxt raw_term
+          val _ = if not (Ground_Eval.is_ground term)
+                  then raise Minilang.OPR_FAIL (Minilang.INVALID_OPR,
+                         String.concat [
+                           "Compute requires a fully concrete ground term, but the given term contains ",
+                           "free or schematic variables: ",
+                           string_of_term ctxt term])
+                  else ()
+      in COMPUTE (name, term)
+      end
 
 fun check_command s x = check_command_i s x
     handle ERROR msg => raise Minilang.OPR_FAIL (Minilang.TERMLANG, msg)

@@ -1011,6 +1011,14 @@ class SetupRewriting_MayLoop_Msg(Message):
     """The rewriting rule may cause infinite looping in the simplifier."""
     pass
 
+class Compute_Result_Msg(Message):
+    """Emitted after a successful COMPUTE operation. Carries the fact name
+    and the pretty-printed equation `term = result`."""
+    def __init__(self, name: varname, result: term):
+        super().__init__()
+        self.name = name
+        self.result = result
+
 def unpack_message(data) -> Message:
     match data:
         case (0, x):
@@ -1041,6 +1049,8 @@ def unpack_message(data) -> Message:
             return Induction_Dropped_Facts_Msg(names)
         case 13:
             return SetupRewriting_MayLoop_Msg()
+        case (14, (name, result)):
+            return Compute_Result_Msg(IsaTerm.from_isabelle(name), IsaTerm.from_isabelle(result))
         case _:
             raise Exception(f"BUG bad message kind: {data}")
 
@@ -1276,6 +1286,9 @@ class Minilang_Operation(NamedTuple):
     @staticmethod
     def CONTRADICTION(hypothesis_name: str) -> 'Minilang_Operation':
         return Minilang_Operation("CONTRADICTION", hypothesis_name)
+    @staticmethod
+    def COMPUTE(name: str, term: 'xterm') -> 'Minilang_Operation':
+        return Minilang_Operation("COMPUTE", (name, ascii_of_unicode(term)))
 
 type Extended_Minilang_Operation = Minilang_Operation | list[Minilang_Operation]
 
@@ -5393,6 +5406,69 @@ class Chaining(Leaf):
                 is_error=True)
             return (EditFailureBehavior.TERMINATE_AND_REVERT, outcome)
         return super()._on_edit_failure(outcome)
+
+#### Compute
+
+class Compute_ToolArg(TypedDict):
+    thought: str
+    term: xterm
+    name: str
+
+@proof_operation("Compute", Compute_ToolArg)
+class Compute(Leaf):
+    def __init__(self, config: NodeConfig, arg: Compute_ToolArg):
+        super().__init__(config, arg["thought"])
+        self.term_str: xterm = arg["term"]
+        self.result_name: str = arg["name"]
+        self.result_fact: tuple[varname, term] | None = None
+        self._prev_result_fact: tuple[varname, term] | None = None
+
+    def quickview_title(self) -> str:
+        return f"Compute {self.term_str}"
+
+    def quickview(self, indent: int, file: MyIO) -> int:
+        indent = super().quickview(indent, file)
+        if self.result_fact is not None and self.result_fact != self._prev_result_fact:
+            print_indent(indent, file)
+            name, expr = self.result_fact
+            file.write("results:\n")
+            print_indent(indent + 1, file)
+            file.write(f"{name.unicode}: {expr.unicode}\n")
+            self._prev_result_fact = self.result_fact
+        return indent
+
+    def the_operation(self) -> 'Minilang_Operation | FailureReason':
+        return Minilang_Operation.COMPUTE(self.result_name, self.term_str)
+
+    async def _refresh_me_alone(self, auto_intro: bool) -> None:
+        await super()._refresh_me_alone(auto_intro)
+        if self.status.status == EvaluationStatus.Status.SUCCESS:
+            for m in self.resulting_state().messages:
+                if isinstance(m, Compute_Result_Msg):
+                    self.result_fact = (m.name, m.result)
+                    break
+
+    def print(self, indent: int, file: MyIO, update_line: bool = False,
+              show_warnings: bool = False) -> int:
+        indent = super().print(indent, file, update_line, show_warnings=show_warnings)
+        self._print_thought(indent, file)
+        print_indent(indent, file)
+        file.write("operation: Compute\n")
+        print_indent(indent, file)
+        file.write(f"term: {self.term_str}\n")
+        print_indent(indent, file)
+        file.write(f"name: {self.result_name}\n")
+        if self.result_fact is not None:
+            print_indent(indent, file)
+            name, expr = self.result_fact
+            file.write("results:\n")
+            print_indent(indent + 1, file)
+            file.write(f"{name.unicode}: {expr.unicode}\n")
+        self._print_evaluation_status(indent, file)
+        if show_warnings:
+            self._print_warnings(indent, file,
+                [Warning.Position.HEADER, Warning.Position.FOOTER])
+        return indent
 
 #### Witness
 

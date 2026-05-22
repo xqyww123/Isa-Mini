@@ -9251,6 +9251,32 @@ async def _test_completion_goalnode(root: Root, file: MyIO):
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
 
+@model_test("Compute1", "Test_Compute1.thy", 9)
+async def _test_Compute1(root: Root, file: MyIO):
+    """Test Compute: evaluate a ground term and bind the result as a fact."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    await root.fill("1", [Compute.gen_single({
+        "thought": "Evaluate 3 * 7",
+        "term": "(3::nat) * 7",
+        "name": "computed"
+    })])
+    print_header("After Compute", file)
+    root.print(0, file)
+    print_header("Quickview after Compute", file)
+    root.quickview(0, file)
+    root.session.age += 1
+    await root.fill("2", [Obvious.gen_single({
+        "facts": [{"name": "computed"}]
+    })])
+    print_header("After Obvious", file)
+    root.print(0, file)
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
     import msgpack as mp
     from IsaREPL import Client

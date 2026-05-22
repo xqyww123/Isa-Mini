@@ -193,6 +193,7 @@ val unpacker =
                         unpackList (unpackPair (unpackString, unpackOption unpackString)),
                         unpackList (unpackPair (unpackOption unpackString, unpackString)),
                         unpackString, unpackString)
+     | "COMPUTE" => apfst COMPUTE o unpackPair (unpackString, unpackString)
      | cmd => error("Unknown operation " ^ cmd)
   ) #> apfst snd
 
@@ -285,6 +286,8 @@ fun packer (SIMPLIFY data) =
           packList (packPair (packOption packString, packString)),
           packString, packString))
         ("SETUP_REWRITING", (name, for_any, conditions, redex, residue))
+  | packer (COMPUTE (name, term)) =
+      packPair (packString, packPair (packString, packString)) ("COMPUTE", (name, term))
 (* | packer (ROLLBACK data) = packPair (packString, packInt) ("ROLLBACK", data) *)
 
 end

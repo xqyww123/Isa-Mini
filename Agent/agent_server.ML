@@ -219,6 +219,9 @@ fun minilang_message_packer ctxt =
              | Minilang.DROPPED_INSERTION_FACTS names =>
                  packPair (packInt, packList packString) (12, names)
              | MiniLang_Agent.SETUP_REWRITING_MAY_LOOP => packInt 13
+             | MiniLang_Agent.COMPUTE_RESULT (name, result) =>
+                 packPair (packInt, packPair (packString, packString))
+                          (14, (name, result))
              | _ => error "BUG #adli: unexpected Internal message")
    in packList pack o filter (fn Minilang.Internal (MiniLang_Agent.INTRO_BINDINGS _) => true
                                  | Minilang.Internal MiniLang_Agent.SIMPLIFY_FALLBACK_NOSYS => true
@@ -230,6 +233,7 @@ fun minilang_message_packer ctxt =
                                  | Minilang.Internal (MiniLang_Agent.DEFINE_RESULT _) => true
                                  | Minilang.Internal (Minilang.DROPPED_INSERTION_FACTS _) => true
                                  | Minilang.Internal MiniLang_Agent.SETUP_REWRITING_MAY_LOOP => true
+                                 | Minilang.Internal (MiniLang_Agent.COMPUTE_RESULT _) => true
                                  | Minilang.Internal _ => false
                                  | _ => true)
   end

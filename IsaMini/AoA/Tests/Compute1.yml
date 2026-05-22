@@ -1,0 +1,53 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (3 :: nat) * (7 :: nat) = (21 :: nat)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Compute
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (3 :: nat) * (7 :: nat) = (21 :: nat)
+proof:
+  - step id: 1
+    thought: Evaluate 3 * 7
+    operation: Compute
+    term: (3::nat) * 7
+    name: computed
+    results:
+      computed: (3 :: nat) * (7 :: nat) = (21 :: nat)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  premises:
+    - computed: (3 :: nat) * (7 :: nat) = (21 :: nat)
+  goal: (3 :: nat) * (7 :: nat) = (21 :: nat)
+--------------------------------------------------
+Quickview after Compute
+--------------------------------------------------
+step 1: Compute (3::nat) * 7
+  results:
+    computed: (3 :: nat) * (7 :: nat) = (21 :: nat)
+Error: Unfinished Proof. Call command `edit` with action `fill` and target step `2`
+premises:
+  - computed: (3 :: nat) * (7 :: nat) = (21 :: nat)
+goal: (3 :: nat) * (7 :: nat) = (21 :: nat)
+--------------------------------------------------
+After Obvious
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (3 :: nat) * (7 :: nat) = (21 :: nat)
+proof:
+  - step id: 1
+    thought: Evaluate 3 * 7
+    operation: Compute
+    term: (3::nat) * 7
+    name: computed
+    results:
+      computed: (3 :: nat) * (7 :: nat) = (21 :: nat)
+  - step id: 2
+    operation: Obvious
+    with facts:
+      - computed: (3 :: nat) * (7 :: nat) = (21 :: nat)
+Unfinished nodes: 0

@@ -671,6 +671,32 @@
       ],
       "type": "object"
     },
+    "Compute": {
+      "additionalProperties": false,
+      "description": "evaluate a ground term, resulting an equational fact `term = result`",
+      "properties": {
+        "operation": {
+          "const": "Compute",
+          "type": "string"
+        },
+        "thought": { "$ref": "#/$defs/Thought" },
+        "term": {
+          "type": "string",
+          "description": "an Isabelle term containing no free variables, with all literal numbers annotated with their types"
+        },
+        "name": {
+          "type": "string",
+          "description": "name to bind the resulting fact under"
+        }
+      },
+      "required": [
+        "operation",
+        "thought",
+        "term",
+        "name"
+      ],
+      "type": "object"
+    },
     "Define": {
       "additionalProperties": false,
       "description": "define a (recursive) function",
@@ -731,6 +757,7 @@
         { "$ref": "#/$defs/SplitConjs" },
         { "$ref": "#/$defs/Derive" },
         { "$ref": "#/$defs/Chaining" },
+        { "$ref": "#/$defs/Compute" },
         { "$ref": "#/$defs/Define" },
         { "$ref": "#/$defs/SetupRewriting" }
       ]

@@ -352,6 +352,8 @@ val STEP_CMD : command
 val CHAINING : string option -> thm list -> operation
 val CHAINING_CMD : command
 
+val COMPUTE : string -> term -> operation
+
 (* Toplevel *)
 
 val lex_cmds : string -> Token.src list
@@ -3940,6 +3942,39 @@ fun CHAINING_txt raw_name raw_thms (stack as (ctxt, _)) =
 val CHAINING_CMD =
       Parse.binding --| (Parse.$$$ "with" || Parse.$$$ "WITH") -- Parse.thms1
         >> (fn (b, raw) => timed_OPR 8 (CHAINING_txt b raw))
+
+
+(** COMPUTE **)
+
+fun simp_conv ctxt ct =
+  Timeout.apply (Time.fromSeconds 30) (Simplifier.full_rewrite ctxt) ct
+  handle Timeout.TIMEOUT _ => Conv.all_conv ct
+       | ERROR _ => Conv.all_conv ct
+
+fun eval_conv ctxt ct =
+  case Ground_Eval.eval_ground 60 ctxt ct of
+    SOME thm => thm
+  | NONE => Conv.all_conv ct
+
+fun COMPUTE' name term (ctxt, HHF (st, items) :: SK) =
+  let
+    val ct = Thm.cterm_of ctxt term
+    val meta_eq = (simp_conv ctxt then_conv eval_conv ctxt) ct
+    val _ = if Thm.is_reflexive meta_eq
+            then raise OPR_FAIL (PROOF_FAIL,
+              "Computation failed: the term may not be executable or timed out.")
+            else ()
+    val obj_eq = meta_eq RS @{thm meta_eq_to_obj_eq}
+    val lems = elim_conjs ctxt obj_eq
+    val binding = (Binding.name name, [])
+    val ((noted_name, noted_lems), ctxt') =
+          Proof_Context.note_thms "" (binding, [(lems, [])]) ctxt
+    val flattened = flatten_facts [(noted_name, map Thm.prop_of noted_lems)]
+  in (ctxt', HHF (st, cat_items ([], flattened) items) :: SK)
+  end
+  | COMPUTE' _ _ _ = raise BROKEN_INVARIANT
+
+val COMPUTE = fn name => fn term => timed_OPR 95 (COMPUTE' name term)
 
 
 (** HAMMER **)
