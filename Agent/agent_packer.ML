@@ -211,13 +211,14 @@ fun packer (SIMPLIFY data) =
   | packer (RULE data) =
       packPair (packString, packList pack_extended_fact) ("RULE", data)
   | packer (CASE_SPLIT data) =
-      packPair (packString, packTuple3 (packString, pack_opt_var_names, packOption packString))
+      packPair (packString, packTuple4 (packString, pack_opt_var_names, packOption packString, packBool))
         ("CASE_SPLIT", data)
   | packer (INDUCT data) =
-      packPair (packString, packTuple5 (packString, pack_opt_var_names,
+      packPair (packString, packTuple6 (packString, pack_opt_var_names,
                                          packList packString,
                                          packList packString,
-                                         packOption packString))
+                                         packOption packString,
+                                         packBool))
         ("INDUCT", data)
   | packer (NEXT_OR_END data) =
       packPair (packString, packPair (packList pack_extended_fact, pack_opt_var_names))
