@@ -1,5 +1,5 @@
 theory Sturm_Test
-  imports MathBench_Prover.MathBench_Prover
+  imports Sturm_Sequences.Sturm_Method Auto_Sledgehammer.Auto_Sledgehammer
 begin
 
 section \<open>Basic: sturm method works\<close>

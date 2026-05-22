@@ -720,7 +720,7 @@ fun AUTO_SIMPLIFY
         end)
 
     (* Execute SIMPLIFY with both naming functions - call operation *)
-    val simplify_timeout = SOME (Time.fromSeconds 10)
+    val simplify_timeout = SOME (Time.fromSeconds (Config.get ctxt Pre_Simproc.simplify_timeout_seconds))
 
     (* Build targeted simprocs from user-selected targets.
        Check for stale targets: if a target term no longer exists in the goal,

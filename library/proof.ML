@@ -3947,9 +3947,11 @@ val CHAINING_CMD =
 (** COMPUTE **)
 
 fun simp_conv ctxt ct =
-  Timeout.apply (Time.fromSeconds 30) (Simplifier.full_rewrite ctxt) ct
-  handle Timeout.TIMEOUT _ => Conv.all_conv ct
-       | ERROR _ => Conv.all_conv ct
+  let val secs = Config.get ctxt Pre_Simproc.simplify_timeout_seconds
+  in Timeout.apply (Time.fromSeconds secs) (Simplifier.full_rewrite ctxt) ct
+     handle Timeout.TIMEOUT _ => Conv.all_conv ct
+          | ERROR _ => Conv.all_conv ct
+  end
 
 fun eval_conv ctxt ct =
   case Ground_Eval.eval_ground 60 ctxt ct of
