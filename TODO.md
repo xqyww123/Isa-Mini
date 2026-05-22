@@ -117,35 +117,50 @@ approximation theory.
      Polynomial.thy (card_poly_roots_bound)
    - Note: AFP Budan_Fourier.Sturm_Multiple_Roots may also help (parallel to Budan_Fourier)
 
+#### Hard-to-Very-Hard (400-800 lines, complex analysis reduction)
+
+5. **`bernstein_inequality_trig`**: if f(x) = Σ_{k=0}^{n} (aₖ sin(kx) + bₖ cos(kx))
+   and |f(x)| ≤ 1 for all x, then |f'(x)| ≤ n. Stronger form: |f'(x)|² ≤ n²(1 - f(x)²).
+   - Strategy (recommended): complex analysis via maximum modulus principle.
+     (a) Convert trig poly to Laurent poly g(z) = Σ cₖ zᵏ on unit circle via z = e^{ix};
+     (b) Apply `maximum_modulus_principle` (HOL-Complex_Analysis/Conformal_Mappings.thy);
+     (c) Relate |g'(z)| bound to |f'(x)| bound via Cauchy integral formula.
+   - Alternative: Fourier approach via Parseval (available in AFP/Fourier), but needs
+     L²→L∞ norm bounds not currently formalized.
+   - Deps: HOL-Complex_Analysis (`maximum_modulus_principle`, `holomorphic_on`,
+     Cauchy integral formula), `cis` / Euler formula (Transcendental.thy)
+   - Identified from putnam_1962_b6 evaluation.
+
 #### Very Hard (500-700 lines each, AFP-contribution-scale)
 
-5. **`circular_Rolle`**: if f continuous on [a,b], differentiable on (a,b), f(a)=f(b),
+6. **`circular_Rolle`**: if f continuous on [a,b], differentiable on (a,b), f(a)=f(b),
    f has n zeros (counting multiplicity) on [a,b), then f' has ≥ n zeros on [a,b)
-   - Strategy: combine multiplicity-reduction (order m zero ��� order m-1 for f') with
+   - Strategy: combine multiplicity-reduction (order m zero → order m-1 for f') with
      standard Rolle between consecutive zeros + wrap-around from f(a)=f(b)
    - Blocker: NO existing "zero multiplicity" for general smooth functions in Isabelle
      (only for polynomials via `order` in Polynomial.thy). Must define vanishing order
      and prove basic properties.
    - Deps: Deriv.thy (Rolle_deriv), Taylor's theorem (HOL-Analysis)
 
-6. **`trig_poly_deriv_zero_limit`**: for f(t) = ∑_{j=1}^N a_j sin(2πjt) with a_N ≠ 0,
+7. **`trig_poly_deriv_zero_limit`**: for f(t) = ∑_{j=1}^N a_j sin(2πjt) with a_N ≠ 0,
    the zero count of f^(k) on [0,1) converges to 2N as k→∞
    - Strategy: upper bound from item 4; lower bound via asymptotic domination of
      a_N(2πN)^k sin(2πNt + kπ/2) (since (j/N)^k → 0 for j<N), then Hurwitz-type
      perturbation argument (zeros of uniform limit persist)
    - Blocker: NO Hurwitz theorem for real functions in Isabelle. Complex version exists
      but doesn't directly transfer.
-   - Deps: items 2, 3, 4, (partially 5 for multiplicity)
+   - Deps: items 2, 3, 4, (partially 6 for multiplicity)
 
 #### Dependency graph
 
 ```
-1. higher_deriv_sin          (standalone)
-2. higher_deriv_sin_scaled   ������─ depends on ──�� 1
-3. higher_deriv_sum_real     (standalone)
-4. trig_poly_finite_zeros    (standalone; needs AFP Chebyshev_Polynomials)
-5. circular_Rolle            (standalone; new infrastructure)
-6. trig_poly_deriv_zero_limit ─── depends on ──→ 2, 3, 4, (partially 5)
+1. higher_deriv_sin            (standalone)
+2. higher_deriv_sin_scaled     ──── depends on ──→ 1
+3. higher_deriv_sum_real       (standalone)
+4. trig_poly_finite_zeros      (standalone; needs AFP Chebyshev_Polynomials)
+5. bernstein_inequality_trig   (standalone; needs HOL-Complex_Analysis)
+6. circular_Rolle              (standalone; new infrastructure)
+7. trig_poly_deriv_zero_limit  ──── depends on ──→ 2, 3, 4, (partially 6)
 ```
 
 #### Imports needed in MathBench_Prover

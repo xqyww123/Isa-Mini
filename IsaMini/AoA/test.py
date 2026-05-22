@@ -271,6 +271,27 @@ async def _test_CaseSplit_Bool(root: Root, file: MyIO):
     print_header("Case Split Bool", file)
     root.print(0, file)
 
+@model_test("CaseSplit_NoSimp", "Test_CaseSplit_NoSimp.thy", 8)
+async def _test_CaseSplit_NoSimp(root: Root, file: MyIO):
+    await root.fill("1", [CaseSplit.gen_single({
+        "thought": "Case split on boolean b without simplification",
+        "target_isabelle_term": r"b",
+        "simplify": False
+    })])
+    print_header("CaseSplit with simplify=false", file)
+    root.print(0, file)
+
+@model_test("Induction_NoSimp", "Test_Induction_NoSimp.thy", 8)
+async def _test_Induction_NoSimp(root: Root, file: MyIO):
+    await root.fill("1", [Induction.gen_single({
+        "thought": "Induction on l without simplification",
+        "target_isabelle_term": r"l",
+        "variables": [{"name": "l", "status": "fixed"}],
+        "simplify": False
+    })])
+    print_header("Induction with simplify=false", file)
+    root.print(0, file)
+
 @model_test("CaseSplit_Quickview", "Test_CaseSplit_Quickview.thy", 8)
 async def _test_CaseSplit_Quickview(root: Root, file: MyIO):
     """Bug: quickview after CaseSplit doesn't print the binding variables

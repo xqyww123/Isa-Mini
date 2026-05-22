@@ -1,0 +1,25 @@
+--------------------------------------------------
+Induction with simplify=false
+--------------------------------------------------
+variables:
+  - l: 'a list
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: rev (rev l) = l
+proof:
+  - step id: 1
+    thought: Induction on l without simplification
+    operation: Induction
+    target term: l
+    cases:
+      - goal id: 1.Nil
+        goal: rev (rev []) = []
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Nil.1` to provide the proof.
+      - goal id: 1.Cons
+        variables:
+          - a: 'a
+        premises:
+          - Cons.IH: rev (rev l) = l
+        goal: rev (rev (a # l)) = a # l
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Cons.1` to provide the proof.
