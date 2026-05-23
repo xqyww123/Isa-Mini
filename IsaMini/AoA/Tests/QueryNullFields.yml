@@ -46,6 +46,8 @@ Result (is_error=False):
 - sqrt_ge_absD [opaque]: ¦?x¦ ≤ sqrt ?y ⟶ ?x² ≤ ?y
 - not_real_square_gt_zero: (¬ (0 :: real) < ?x * ?x) = (?x = (0 :: real))
 - sqrt_def [opaque]: sqrt = root (2 :: nat)
+  definition sqrt :: "real ⇒ real"
+    where "sqrt = root 2"
 - real_sqrt_zero: sqrt (0 :: real) = (0 :: real)
 - power2_eq_iff [opaque]: (?x² = ?y²) = (?x = ?y ∨ ?x = - ?y)
 - real_less_rsqrt [opaque]: ?x² < ?y ⟶ ?x < sqrt ?y
@@ -60,11 +62,23 @@ Result (is_error=False):
 Null kinds result (is_error=False):
 - Code_Numeral.Suc: natural ⇒ natural
   The successor function on the `natural` type, mapping a natural number to the next one.
+  lift_definition Suc :: "natural ⇒ natural"
+    is Nat.Suc
 - Suc: nat ⇒ nat
   The successor function on natural numbers, mapping a natural number `n` to `n + 1`.
+  definition Suc :: "nat ⇒ nat"
+    where "Suc n = Abs_Nat (Suc_Rep (Rep_Nat n))"
 - nat_gcd_sumC: nat × nat ⇒ nat
   The sum-encoding helper constant generated internally for the recursive definition of nat_gcd, operating on pairs of natural numbers.
+  fun nat_gcd :: "nat ⇒ nat ⇒ nat" where
+    "nat_gcd x y = (if y = 0 then x else nat_gcd y (x mod y))"
 - nat_of_natural: natural ⇒ nat
   The representation function that converts a `natural` value to its underlying `nat`.
+  typedef natural = "UNIV :: nat set"
+    morphisms nat_of_natural natural_of_nat
 - semiring_1_class.of_nat_aux: (?'a ⇒ ?'a) ⇒ nat ⇒ ?'a ⇒ ?'a
   The class-based auxiliary tail-recursive function for computing `of_nat`, parameterized by an increment function, a natural number count, and an accumulator.
+  primrec of_nat_aux :: "('a ⇒ 'a) ⇒ nat ⇒ 'a ⇒ 'a"
+    where
+      "of_nat_aux inc 0 i = i"
+    | "of_nat_aux inc (Suc n) i = of_nat_aux inc n (inc i)" ― ‹tail recursive›
