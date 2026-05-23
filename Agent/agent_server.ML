@@ -222,6 +222,9 @@ fun minilang_message_packer ctxt =
              | MiniLang_Agent.COMPUTE_RESULT (name, result) =>
                  packPair (packInt, packPair (packString, packString))
                           (14, (name, result))
+             | Minilang.SH_PRF (prf, time) =>
+                 packPair (packInt, packPair (packString, packInt))
+                          (15, (prf, Time.toMilliseconds time))
              | _ => error "BUG #adli: unexpected Internal message")
    in packList pack o filter (fn Minilang.Internal (MiniLang_Agent.INTRO_BINDINGS _) => true
                                  | Minilang.Internal MiniLang_Agent.SIMPLIFY_FALLBACK_NOSYS => true
@@ -234,6 +237,7 @@ fun minilang_message_packer ctxt =
                                  | Minilang.Internal (Minilang.DROPPED_INSERTION_FACTS _) => true
                                  | Minilang.Internal MiniLang_Agent.SETUP_REWRITING_MAY_LOOP => true
                                  | Minilang.Internal (MiniLang_Agent.COMPUTE_RESULT _) => true
+                                 | Minilang.Internal (Minilang.SH_PRF _) => true
                                  | Minilang.Internal _ => false
                                  | _ => true)
   end
@@ -295,6 +299,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         prem_counter = Synchronized.var "prem_counter" 0,
         fact_counter = Synchronized.var "fact_counter" 0
       } : MiniLang_Agent.counters
+      val replay_mode = Unsynchronized.ref false
       val messages = Unsynchronized.ref []
       fun listen_report msg = messages := msg :: !messages
       fun clean_report () =
@@ -319,6 +324,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
             |> Config.put Minilang.high_auto_mode true
             |> Config.put Minilang.auto_calculation false
             |> Config.put Printer.show_markup false
+            |> Config.put Phi_Cache_DB.enable_proof_cache false
             (* Under `subgoals`, an induction / case-split rule with
              * `consumes > 0` and insufficient `using` facts yields
              * `Prem<i>` subgoals for the agent to discharge through its
@@ -367,7 +373,9 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
           let val _ = Minilang.set_reporter listen_report
               val s0 = get_state from
               val (cfg', budget) = cfg
-              val full_config = (cfg', budget, counters) : MiniLang_Agent.config
+              val mode = if !replay_mode then MiniLang_Agent.REPLAY
+                         else MiniLang_Agent.LIVE
+              val full_config = (cfg', budget, counters, mode) : MiniLang_Agent.config
               val s1 = MiniLang_Agent.interpret full_config opr s0
               val ctxt' = Minilang.context_of s1
               val msgs = clean_report ()
@@ -395,6 +403,14 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         ret_schema = packUnit,
         function = (fn state_id =>
           (state := Symtab.delete_safe state_id (!state); ())),
+        timeout = NONE
+      }
+
+      val set_replay_mode_callback = {
+        name = "IsaMini.set_replay_mode",
+        arg_schema = unpackBool,
+        ret_schema = packUnit,
+        function = (fn mode => replay_mode := mode),
         timeout = NONE
       }
 
@@ -926,6 +942,17 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
       }
 
       (* Build AoA command with local callbacks *)
+      val goal_hash = Hasher.goal (ctxt, sequent)
+      val _ = tracing ("[AoA Cache] goal_hash = " ^ goal_hash)
+      val thy = Proof_Context.theory_of ctxt
+      val aoa_cache_key = "aoa:" ^ goal_hash
+      val cached_xcmd_json = case Phi_Cache_DB.get_cached_proof thy aoa_cache_key of
+          SOME (_, json) =>
+            (tracing ("[AoA Cache] Level 2 (Phi_Cache_DB): HIT (" ^
+                      string_of_int (size json) ^ " bytes)");
+             SOME json)
+        | NONE => (tracing "[AoA Cache] Level 2 (Phi_Cache_DB): MISS"; NONE)
+
       val s0_flat_goal = Minilang.leading_goal_data s0
       val au = agent_context_unpacker
       val {constants, theorems, types, classes, locales,
@@ -939,24 +966,28 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                 val retrieval_forking = Config.get ctxt AoA_retrieval_forking
                 val interactive_retrieval = Config.get ctxt AoA_interactive_retrieval
                 val (_, budget) = cfg
-            in packTuple8 (context_packer ctxt, minilang_flat_goal_packer ctxt,
+            in packTuple10 (context_packer ctxt, minilang_flat_goal_packer ctxt,
                            packString, packString, packString, packString, packString,
-                           packTuple3 (packInt, packInt, packInt))
+                           packTuple3 (packInt, packInt, packInt),
+                           packString, packOption packString)
                           (global_context, s0_flat_goal, driver, log_dir, invocation_id,
                            retrieval_forking, interactive_retrieval,
-                           (#timeout_seconds budget, #max_tool_calls budget, #max_retries budget))
+                           (#timeout_seconds budget, #max_tool_calls budget, #max_retries budget),
+                           goal_hash, cached_xcmd_json)
             end),
-        ret_schema = unpackTuple5 (unpackList MiniLang_Agent.xcmd_unpacker,
+        ret_schema = unpackTuple6 (unpackList MiniLang_Agent.xcmd_unpacker,
                                    unpackOption unpackString,
                                    (fn src => let val ((i,cw,cr,o_,c,tc,it,mt,qwt), src') =
                                       unpackTuple9 (unpackInt,unpackInt,unpackInt,unpackInt,unpackReal,unpackInt,unpackReal,unpackReal,unpackReal) src
                                     in ({input=i,cache_write=cw,cache_read=cr,output=o_,cost=c,tool_calls=tc,isabelle_time=it,model_time=mt,quota_wait_time=qwt}, src') end),
+                                   unpackOption unpackString,
                                    unpackOption unpackString,
                                    unpackOption unpackString),
         timeout = NONE,
         callback = [
           mk_callback proof_opr_callback,
           mk_callback reset_state_callback,
+          mk_callback set_replay_mode_callback,
           mk_callback lookup_fact_callback,
           mk_callback retrieve_entity_callback,
           mk_callback compute_bindings_callback,
@@ -983,7 +1014,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
       }
 
       val timer = Timer.startRealTimer ()
-      val (xcmds, s1o, {input, cache_write, cache_read, output, cost, tool_calls, isabelle_time, model_time, quota_wait_time}, reason, detail) =
+      val (xcmds, s1o, {input, cache_write, cache_read, output, cost, tool_calls, isabelle_time, model_time, quota_wait_time}, reason, detail, proof_json_opt) =
             call_command aoa_cmd (global_context, driver, invocation_id)
       val elapsed = Timer.checkRealTimer timer
       val _ = writeln (String.concat [
@@ -1009,6 +1040,11 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                          | _ => false) xcmds
            then error "Internal Error: the returned proofs contains axiomatic sorry."
            else ()
+           ; (case proof_json_opt of
+                SOME json => (Phi_Cache_DB.update_cached_proof thy
+                               (aoa_cache_key, (elapsed, json));
+                              tracing "[AoA Cache] Stored proof in Phi_Cache_DB")
+              | NONE => tracing "[AoA Cache] No proof_json returned from Python")
            ; (xcmds, Minilang.conclude ctxt s1',
               {input=input, cache_write=cache_write, cache_read=cache_read, output=output,
                cost=cost, tool_calls=tool_calls, isabelle_time=isabelle_time, model_time=model_time,

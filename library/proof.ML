@@ -366,7 +366,7 @@ val MP : Proof.context -> thm -> thm -> thm
 (* Internal *)
 
 exception IH_MAP of (string * string list) list
-exception SH_PRF of string
+exception SH_PRF of string * Time.time
 exception REPLACE_CMD of string * string
 
 (* Reporter signals fired by FUN / FUN_DEBUG / FUN'' when a residual
@@ -3984,7 +3984,7 @@ val COMPUTE = fn name => fn term => timed_OPR 95 (COMPUTE' name term)
 fun conclude_SK (ctxt, HHF (st, itms) :: S) = (ctxt, HHF (conclude_goal st, itms) :: S)
   | conclude_SK _ = raise BROKEN_INVARIANT
 
-exception SH_PRF of string
+exception SH_PRF of string * Time.time
 exception REPLACE_CMD of string * string
 
 val enable_cache_by_step = Config.declare_bool ("enable_cache_by_step", \<^here>) (K true)
@@ -4002,10 +4002,11 @@ fun HAMMER_i (prover : string option -> Proof.context -> thm -> string * thm)
   let val (_, _, ID_BASE) = IPS_Data.get ctxt
       val ID = ID_BASE ^ "/" ^ step_id
       val ID' = if Config.get ctxt enable_cache_by_step then SOME ID else NONE
-      val s = Pre_Simproc.pre_simproc_on_concl ctxt s
+      val timer = Timer.startRealTimer ()
       val (prf, s') = prover ID' ctxt s
                       handle ERROR E => raise OPR_FAIL (PROOF_FAIL, E)
-   in get_reporter () (Internal (SH_PRF prf))
+      val elapsed = Timer.checkRealTimer timer
+   in get_reporter () (Internal (SH_PRF (prf, elapsed)))
     ; (ctxt, HHF (s', facts) :: S)
    |> maintain
   end

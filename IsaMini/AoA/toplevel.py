@@ -2,6 +2,7 @@ from re import I
 from Isabelle_RPC_Host import isabelle_remote_procedure, Connection
 from .model import *
 from typing import Any
+import json
 import logging as _logging
 _logger = _logging.getLogger(__name__)
 
@@ -41,10 +42,30 @@ async def _query_by_name_rpc(arg: tuple[int, str], connection: Connection) -> tu
     text, is_error, _uk = await _query_entity_core(connection, tag, name)
     return (text, is_error)
 
+async def _replay_cached_proof(connection: Connection, packed_ops: list[Any],
+                               cache_source: str = "") -> tuple[bool, str | None]:
+    """Replay a cached proof by feeding operations through proof_opr callbacks.
+    Returns (success, final_state_name)."""
+    await connection.callback("IsaMini.set_replay_mode", True)
+    try:
+        state_name = "$init"
+        for i, packed_op in enumerate(packed_ops):
+            dest_name = f"$replay_{i+1}"
+            await connection.callback("IsaMini.proof_opr",
+                (state_name, dest_name, packed_op))
+            state_name = dest_name
+        return (True, state_name)
+    except Exception as e:
+        _logger.info(f"Proof replay failed ({cache_source}): {e}")
+        return (False, None)
+    finally:
+        await connection.callback("IsaMini.set_replay_mode", False)
+
 @isabelle_remote_procedure("IsaMini.AoA")
-async def IsaMini_AoA(data: tuple[Any, Any, str, str, str, str, str, tuple[int, int, int]], connection: Connection):
+async def IsaMini_AoA(data: tuple, connection: Connection):
     (global_context, ptree, driver, log_dir, invocation_id,
-     retrieval_forking_str, interactive_retrieval_str, budget_tuple) = data
+     retrieval_forking_str, interactive_retrieval_str, budget_tuple,
+     goal_hash, cached_xcmd_json) = data
     timeout_seconds, max_tool_calls, max_retries = budget_tuple
 
     # Environment variable AoA_LOG_DIR overrides user-provided log_dir
@@ -60,6 +81,30 @@ async def IsaMini_AoA(data: tuple[Any, Any, str, str, str, str, str, tuple[int, 
 
     global_context = Context.unpack(global_context)
     ptree = Minilang_State._unpack_flat_goal(ptree)
+
+    # --- Multi-level cache check ---
+    from .proof_cache import get_proof_cache
+    zero_cost = (0, 0, 0, 0, 0.0, 0, 0.0, 0.0, 0.0)
+
+    # Level 1: Python SQLite
+    cached_ops = get_proof_cache().lookup(goal_hash)
+
+    # Level 2: Phi_Cache_DB (from ML)
+    if cached_ops is None and cached_xcmd_json:
+        try:
+            cached_ops = json.loads(cached_xcmd_json)
+        except (json.JSONDecodeError, TypeError):
+            cached_ops = None
+
+    if cached_ops is not None:
+        cache_source = "SQLite" if not cached_xcmd_json or get_proof_cache().lookup(goal_hash) is not None else "Phi_Cache_DB"
+        ok, final_state = await _replay_cached_proof(connection, cached_ops, cache_source)
+        if ok:
+            proof_json = json.dumps(cached_ops)
+            return (cached_ops, final_state, zero_cost, None, None, proof_json)
+        # replay failed — fall through to agent
+
+    # --- Level 3: Full agent run ---
     if "." in driver:
         driver_name, argument = driver.split(".", 1)
         argument = argument or None
@@ -77,7 +122,7 @@ async def IsaMini_AoA(data: tuple[Any, Any, str, str, str, str, str, tuple[int, 
             raise ValueError(f"Test Not Found on '{argument}'")
         case = TESTS[argument]
         root = await case.run(connection, actual_log_path, global_context, ptree)
-        cost = (0, 0, 0, 0, 0.0, 0, 0.0, 0.0, 0.0)
+        cost = zero_cost
         is_test = True
     else:
         is_test = False
@@ -123,12 +168,23 @@ async def IsaMini_AoA(data: tuple[Any, Any, str, str, str, str, str, tuple[int, 
         if not is_test:
             raise
         assembled = []
+
     if root.is_proof_finished():
-        return (assembled, root.final_ml_state.name, cost, None, None)
+        proof_json = json.dumps(assembled)
+        # Store in Python SQLite cache
+        get_proof_cache().store(goal_hash, assembled)
+        # Write to log directory
+        if actual_log_path:
+            try:
+                os.makedirs(actual_log_path, exist_ok=True)
+                with open(os.path.join(actual_log_path, "proof.json"), "w") as f:
+                    f.write(proof_json)
+            except Exception as e:
+                _logger.warning(f"Failed to write proof.json: {e}")
+        return (assembled, root.final_ml_state.name, cost, None, None, proof_json)
     else:
         reason, detail = root.quit_info or ("resource_exhausted", None)
-        return (assembled, None, cost, reason, detail)
-    # Finally, we return the constructed proof
+        return (assembled, None, cost, reason, detail, None)
 
 
 

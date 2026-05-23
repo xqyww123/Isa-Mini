@@ -1019,6 +1019,13 @@ class Compute_Result_Msg(Message):
         self.name = name
         self.result = result
 
+class SH_PRF_Msg(Message):
+    """Proof method string and wall-clock time (ms) from a successful HAMMER."""
+    def __init__(self, method: str, time_ms: int):
+        super().__init__()
+        self.method = method
+        self.time_ms = time_ms
+
 def unpack_message(data) -> Message:
     match data:
         case (0, x):
@@ -1051,6 +1058,8 @@ def unpack_message(data) -> Message:
             return SetupRewriting_MayLoop_Msg()
         case (14, (name, result)):
             return Compute_Result_Msg(IsaTerm.from_isabelle(name), IsaTerm.from_isabelle(result))
+        case (15, (method, time_ms)):
+            return SH_PRF_Msg(method, time_ms)
         case _:
             raise Exception(f"BUG bad message kind: {data}")
 
@@ -1212,8 +1221,9 @@ class Minilang_Operation(NamedTuple):
     def RULE(rule_ref: 'IsabelleFact | None') -> 'Minilang_Operation':
         return Minilang_Operation("RULE", [rule_ref.pack()] if rule_ref is not None else [])
     @staticmethod
-    def HAMMER(fact_refs: 'list[IsabelleFact]', timeout: int = 20) -> 'Minilang_Operation':
-        return Minilang_Operation("HAMMER", ([r.pack() for r in fact_refs], timeout))
+    def HAMMER(fact_refs: 'list[IsabelleFact]', timeout: int = 20,
+               cached_proof: 'tuple[str, int] | None' = None) -> 'Minilang_Operation':
+        return Minilang_Operation("HAMMER", ([r.pack() for r in fact_refs], timeout, cached_proof))
     @staticmethod
     def CHAINING(name: str | None, fact_refs: 'list[IsabelleFact]') -> 'Minilang_Operation':
         return Minilang_Operation("CHAINING", (name, [r.pack() for r in fact_refs]))
@@ -5220,6 +5230,8 @@ class Obvious(Leaf):
         self._raw_facts: list[FactByName | FactByProposition] = [
             f for f in arg["facts"] if f is not None]
         self.fact_refs: list[IsabelleFact] | None = None
+        self._found_tactic: str | None = None
+        self._eval_time_ms: int | None = None
 
     @classmethod
     def gen(cls, arg: Obvious_ToolArg, remaining: 'LinkedList[_RawOp]',
@@ -5273,11 +5285,25 @@ class Obvious(Leaf):
         if self.parent is not None:
             if self.status.status == EvaluationStatus.Status.SUCCESS:
                 self.parent._is_trivial = True
+                for m in self.resulting_state().messages:
+                    if isinstance(m, SH_PRF_Msg):
+                        self._found_tactic = m.method
+                        self._eval_time_ms = m.time_ms
+                        break
             elif self.status.status == EvaluationStatus.Status.FAILURE:
                 self.parent._is_trivial = False
     def the_operation(self) -> 'Minilang_Operation | FailureReason':
         facts = self.fact_refs if self.fact_refs is not None else []
         return Minilang_Operation.HAMMER(facts, 30)
+    def assemble(self, output: 'list[Minilang_Operation] | None' = None) -> 'list[Minilang_Operation]':
+        if output is None:
+            output = []
+        facts = self.fact_refs if self.fact_refs is not None else []
+        cached: tuple[str, int] | None = None
+        if self._found_tactic and self._found_tactic != "" and self._eval_time_ms is not None:
+            cached = (self._found_tactic, self._eval_time_ms)
+        output.append(Minilang_Operation.HAMMER(facts, 30, cached))
+        return output
     def _on_edit_failure(self, outcome: 'EditOutcome') -> 'tuple[EditFailureBehavior, EditOutcome]':
         if self.status.status == EvaluationStatus.Status.FAILURE:
             # Multi-op batches skip auto-revert so the agent sees

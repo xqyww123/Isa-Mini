@@ -64,7 +64,7 @@ fun RE cout msgs src s =
                   consider_case := SOME name
               | handle_msg (Minilang.Internal (Minilang.REPLACE_CMD cmd)) =
                   code := cmd :: !code
-              | handle_msg (Minilang.Internal (Minilang.SH_PRF prfs)) =
+              | handle_msg (Minilang.Internal (Minilang.SH_PRF (prfs, _))) =
                   if cmd = "END" orelse cmd = "NEXT"
                   then code := ("APPLY", "APPLY " ^ prfs) :: !code
                   else ()

@@ -48,6 +48,7 @@ datatype ('term, 'thm, 'fact) command =
   | SORRY_END_ALL of Minilang.opt_var_names
   | SORRY_ONLY
   | HAMMER   of ('term, 'fact) extended_fact list (*with facts*) * int (*timeout in seconds*)
+              * (string * int) option (*cached proof: method_string * time_ms; NONE = no cache*)
   | INTRO    of bindings option
   | SPLIT_CONJS
   | SIMPLIFY of (('term, 'fact) extended_fact * term list option) list (*simp facts with optional targets*)
@@ -75,11 +76,13 @@ datatype ('term, 'thm, 'fact) command =
 type xcmd = (string, string, string) command
 type icmd = (term, thm, Facts.ref * Token.src list) command
 
+datatype exec_mode = LIVE | REPLAY
+
 type counters = {
     prem_counter: int Synchronized.var,
     fact_counter: int Synchronized.var
   }
-type config = cfg * budget * counters
+type config = cfg * budget * counters * exec_mode
 
 val check_command : Minilang.state -> xcmd -> icmd
 val interpret_i : config -> icmd -> Minilang.state -> Minilang.state
@@ -167,11 +170,13 @@ exception DEFINE_RESULT of string * string
 exception SETUP_REWRITING_MAY_LOOP
 exception COMPUTE_RESULT of string * string
 
+datatype exec_mode = LIVE | REPLAY
+
 type counters = {
     prem_counter: int Synchronized.var,
     fact_counter: int Synchronized.var
   }
-type config = cfg * budget * counters
+type config = cfg * budget * counters * exec_mode
 
 datatype ('term, 'fact) extended_fact =
     FactByName of 'fact
@@ -207,6 +212,7 @@ datatype ('term, 'thm, 'fact) command =
   | SORRY_END_ALL of Minilang.opt_var_names
   | SORRY_ONLY
   | HAMMER   of ('term, 'fact) extended_fact list (*with facts*) * int (*timeout in seconds*)
+              * (string * int) option (*cached proof: method_string * time_ms; NONE = no cache*)
   | INTRO    of bindings option
   | SPLIT_CONJS
   | SIMPLIFY of (('term, 'fact) extended_fact * term list option) list (*simp facts with optional targets*)
@@ -867,7 +873,7 @@ fun pre_resolve_fact _ (FactByName fref) ctxt = (fref, ctxt)
   | pre_resolve_fact counter (FactInTime prop) ctxt =
       let val goal = Goal.init (Thm.cterm_of ctxt prop)
           val proved =
-            (case Seq.pull (Phi_Sledgehammer_Solver.fast_mepo_tac (Time.fromSeconds 3) ctxt 1 goal)
+            (case Seq.pull (Phi_Sledgehammer_Solver.fast_mepo_tac (Time.fromSeconds 10) ctxt 1 goal)
                of SOME (st', _) => st'
                 | NONE => raise FACT_IN_TIME_FAIL prop)
             handle ERROR _ => raise FACT_IN_TIME_FAIL prop
@@ -972,7 +978,7 @@ val auto_apply_attrib : attribute =
      in fold apply_kind kinds context
     end)
 
-fun interpret_i (config as (_, _, counters)) cmd s =
+fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
   case cmd of
       SIMPLIFY (simp_facts_with_targets, use_system_simps, premise_names, simplify_goal, user_bindings_opt) =>
         let val ctxt = Minilang.context_of s
@@ -1094,32 +1100,78 @@ fun interpret_i (config as (_, _, counters)) cmd s =
         Minilang.SORRY_END_ALL vars s
     | SORRY_ONLY =>
         Minilang.SORRY_ONLY s
-    | HAMMER (facts, timeout) => (
-        Timeout.apply (Time.fromSeconds 1200) (fn () =>
-        with_resolved_override (mk_counter ()) s facts (fn s' => fn ovr =>
-          let val ctxt = Minilang.context_of s'
-              val improved_SH = Config.get ctxt Minilang.mini_use_improved_SH
-              val override' = if improved_SH then ovr
-                              else Sledgehammer_Fact.no_fact_override
-              val prover = fn id => Phi_Sledgehammer_Solver.auto_raw
-                             improved_SH override' id (SOME (Time.fromSeconds timeout))
-          in Minilang.HAMMER prover s'
-          end)) ()
-        handle Timeout.TIMEOUT _ =>
-          raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL,
-            "Automatic proof timed out (20 min). The goal is non-trivial and a step-by-step proof is required.")
-             | Phi_Sledgehammer_Solver.Auto_Fail reason =>
-          let val msg = case reason
-                of Phi_Sledgehammer_Solver.Subgoal_Fail sub =>
-                     "Automatic proof fails on the subgoal:\n  " ^
-                     string_of_term (Minilang.context_of s) sub ^
-                     "\nThe goal is non-trivial and a step-by-step proof is required."
-                 | _ => "Automatic proof fails. The goal is non-trivial and a step-by-step proof is required."
-          in raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL, msg)
-          end
-             | Minilang.OPR_FAIL (Minilang.PROOF_FAIL, _) =>
-          raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL,
-            "Automatic proof fails. The goal is non-trivial and a step-by-step proof is required."))
+    | HAMMER (facts, timeout, cached_proof) =>
+        let
+          fun hammer_live () = (
+            Timeout.apply (Time.fromSeconds 1200) (fn () =>
+            with_resolved_override (mk_counter ()) s facts (fn s' => fn ovr =>
+              let val ctxt = Minilang.context_of s'
+                  val improved_SH = Config.get ctxt Minilang.mini_use_improved_SH
+                  val override' = if improved_SH then ovr
+                                  else Sledgehammer_Fact.no_fact_override
+                  val prover = fn id => Phi_Sledgehammer_Solver.auto_raw
+                                 improved_SH override' id (SOME (Time.fromSeconds timeout))
+              in Minilang.HAMMER prover s'
+              end)) ()
+            handle Timeout.TIMEOUT _ =>
+              raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL,
+                "Automatic proof timed out (20 min). The goal is non-trivial and a step-by-step proof is required.")
+                 | Phi_Sledgehammer_Solver.Auto_Fail reason =>
+              let val msg = case reason
+                    of Phi_Sledgehammer_Solver.Subgoal_Fail sub =>
+                         "Automatic proof fails on the subgoal:\n  " ^
+                         string_of_term (Minilang.context_of s) sub ^
+                         "\nThe goal is non-trivial and a step-by-step proof is required."
+                     | _ => "Automatic proof fails. The goal is non-trivial and a step-by-step proof is required."
+              in raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL, msg)
+              end
+                 | Minilang.OPR_FAIL (Minilang.PROOF_FAIL, _) =>
+              raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL,
+                "Automatic proof fails. The goal is non-trivial and a step-by-step proof is required."))
+
+          fun try_cached_apply (prf, time_ms) =
+            let val _ = tracing ("[AoA Replay] Trying cached proof: " ^ quote prf ^
+                                 " (time_ms=" ^ string_of_int time_ms ^ ")")
+                val ctxt = Minilang.context_of s
+                val replay_timeout = Time.fromMilliseconds
+                      (Real.round (1.5 * Real.fromInt time_ms) + 3000)
+                val kws = Thy_Header.get_keywords (Proof_Context.theory_of ctxt)
+                val toks = Input.source_explode (Input.string prf)
+                        |> Token.tokenize (Keyword.no_major_keywords kws) {strict = false}
+                        |> filter Token.is_proper
+                val method_text = case Scan.read Token.stopper (Method.parser 0 >> #1) toks of
+                    SOME m => m
+                  | NONE => error ("Cannot parse cached method: " ^ quote prf)
+                val _ = tracing "[AoA Replay] Method parsed OK, applying..."
+                val s' = Minilang.APPLY (SOME replay_timeout) []
+                           (Method.check_text ctxt method_text) s
+                val _ = tracing "[AoA Replay] Apply succeeded"
+                val _ = Minilang.get_reporter ()
+                          (Minilang.Internal (Minilang.SH_PRF (prf, Time.fromMilliseconds time_ms)))
+            in s' end
+
+        in case (cached_proof, exec_mode) of
+            (SOME (prf, ms), _) =>
+              if prf = "" then
+                (case exec_mode of
+                   LIVE => hammer_live ()
+                 | REPLAY => raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL,
+                     "Cached proof is empty (classical automation) and replay mode forbids sledgehammer"))
+              else
+                (\<^try>\<open>try_cached_apply (prf, ms)
+                  catch exn => (fn () =>
+                   let val _ = tracing ("[AoA Replay] Cached proof FAILED: " ^
+                                        Runtime.exn_message exn)
+                   in case exec_mode of
+                     LIVE => hammer_live ()
+                   | REPLAY => raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL,
+                       "Cached proof replay failed: " ^ Runtime.exn_message exn)
+                   end) ()\<close>)
+          | (NONE, LIVE) => hammer_live ()
+          | (NONE, REPLAY) =>
+              raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL,
+                "No cached proof available and replay mode forbids sledgehammer")
+        end
     | INTRO opt_bindings =>
         #2 (AUTO_INTRO counters opt_bindings s)
     | SPLIT_CONJS => AUTO_SPLIT_CONJS s
@@ -1408,9 +1460,9 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
   | check_command_i _ (SORRY_NEXT vars) = SORRY_NEXT vars
   | check_command_i _ (SORRY_END_ALL vars) = SORRY_END_ALL vars
   | check_command_i _ SORRY_ONLY = SORRY_ONLY
-  | check_command_i s (HAMMER (facts, timeout)) =
+  | check_command_i s (HAMMER (facts, timeout, cached_proof)) =
       let val ctxt = Minilang.context_of s
-      in HAMMER (map (check_extended_fact ctxt) facts, timeout) end
+      in HAMMER (map (check_extended_fact ctxt) facts, timeout, cached_proof) end
   | check_command_i _ (INTRO opt_bindings) = INTRO opt_bindings
   | check_command_i _ SPLIT_CONJS = SPLIT_CONJS
   | check_command_i s (SPECIALIZE (name, rule_fact, insts, discharge_facts)) =

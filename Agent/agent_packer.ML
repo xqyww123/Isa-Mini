@@ -163,7 +163,8 @@ val unpacker =
      | "OBTAIN"   => apfst OBTAIN   o unpackPair (
                           unpackList (unpackPair (unpackString, unpackOption unpackString)),
                           unpackList (unpackPair (unpackOption unpackString, unpackString)))
-     | "HAMMER"   => apfst HAMMER o unpackPair (unpackList unpack_extended_fact, unpackInt)
+     | "HAMMER"   => apfst HAMMER o unpackTuple3 (unpackList unpack_extended_fact, unpackInt,
+                        unpackOption (unpackPair (unpackString, unpackInt)))
      | "INTRO"    => (fn s =>
             let val ((bindings, split_conj), s') =
                     unpackPair (unpackOption unpack_bindings, unpackBool) s
@@ -255,7 +256,10 @@ fun packer (SIMPLIFY data) =
         ("SORRY_END_ALL", data)
   | packer SORRY_ONLY =
       packPair (packString, packUnit) ("SORRY_ONLY", ())
-  | packer (HAMMER data) = packPair (packString, packPair (packList pack_extended_fact, packInt)) ("HAMMER", data)
+  | packer (HAMMER (facts, timeout, cached)) =
+      packPair (packString, packTuple3 (packList pack_extended_fact, packInt,
+                packOption (packPair (packString, packInt))))
+        ("HAMMER", (facts, timeout, cached))
   | packer (INTRO data) = packPair (packString, packOption pack_bindings) ("INTRO", data)
   | packer SPLIT_CONJS = packPair (packString, packUnit) ("SPLIT_CONJS", ())
   | packer (SPECIALIZE data) =
