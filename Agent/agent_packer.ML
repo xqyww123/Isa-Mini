@@ -106,14 +106,14 @@ val pack_bindings =
   packPair (packList pack_var_name, packList pack_prem_name)
 
 fun pack_extended_fact (FactByName name) =
-      packPair (packInt, packString) (0, name)
-  | pack_extended_fact (FactInTime stmt) =
-      packPair (packInt, packString) (1, stmt)
+      packPair (packString, packOption packString) (name, NONE)
+  | pack_extended_fact (FactInTime (assigned_name, stmt)) =
+      packPair (packString, packOption packString) (assigned_name, SOME stmt)
 
 val unpack_extended_fact =
-  unpackPair_dep' unpackInt (fn 0 => unpackString >> FactByName
-                              | 1 => unpackString >> FactInTime
-                              | n => error ("Unknown extended_fact tag: " ^ Int.toString n))
+  unpackPair (unpackString, unpackOption unpackString)
+  >> (fn (name, NONE) => FactByName name
+       | (name, SOME stmt) => FactInTime (name, stmt))
 
 val unpacker =
   unpackPair_dep unpackString (

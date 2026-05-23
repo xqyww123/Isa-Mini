@@ -296,8 +296,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
 
       (* Shared state for all callbacks *)
       val counters = {
-        prem_counter = Synchronized.var "prem_counter" 0,
-        fact_counter = Synchronized.var "fact_counter" 0
+        prem_counter = Synchronized.var "prem_counter" 0
       } : MiniLang_Agent.counters
       val replay_mode = Unsynchronized.ref false
       val messages = Unsynchronized.ref []

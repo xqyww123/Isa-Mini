@@ -2810,7 +2810,7 @@ async def _test_prove_in_time_parse_error(root: Root, file: MyIO):
         file.write(f"  UNCAUGHT {type(e).__name__}: {e}\n")
 
     # --- Test 3: _filter_unprovable with bad ProveInTime ---
-    bad_pit = IsabelleFact_ProveInTime(IsaTerm.from_agent(stmt_ascii))
+    bad_pit = IsabelleFact_ProveInTime(IsaTerm.from_agent(stmt_ascii), assigned_name="P__I__T__test0")
     file.write(f"_filter_unprovable([ProveInTime(\"{stmt_ascii}\")]): ")
     try:
         kept, warnings = await _filter_unprovable([bad_pit], ml_state)
@@ -2821,7 +2821,7 @@ async def _test_prove_in_time_parse_error(root: Root, file: MyIO):
         file.write(f"UNCAUGHT {type(e).__name__}: {e}\n")
 
     # --- Test 4: _filter_unprovable with Unicode ¦ variant ---
-    bad_pit_unicode = IsabelleFact_ProveInTime(IsaTerm.from_agent(stmt_unicode))
+    bad_pit_unicode = IsabelleFact_ProveInTime(IsaTerm.from_agent(stmt_unicode), assigned_name="P__I__T__test1")
     file.write(f"_filter_unprovable([ProveInTime(unicode ¦ variant)]): ")
     try:
         kept, warnings = await _filter_unprovable([bad_pit_unicode], ml_state)

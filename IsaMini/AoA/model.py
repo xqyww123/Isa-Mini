@@ -280,24 +280,25 @@ class IsabelleFact_Presented(IsabelleFact, IsabelleEntity):
                 file.write(f"  ... ({len(self.expression)} facts total)\n")
         else:
             file.write(f"- {display_name}\n")
-    def pack(self) -> tuple[int, str]:
+    def pack(self) -> tuple[str, str | None]:
         suffix = _fact_suffix(self.fact)
         if suffix:
             suffix = ascii_of_unicode(suffix)
-        return (0, self.full_name + suffix)
+        return (self.full_name + suffix, None)
 
 class IsabelleFact_ProveInTime(IsabelleFact):
     """A fact to be proven just-in-time by Isabelle."""
-    __slots__ = ('statement',)
-    def __init__(self, statement: term):
+    __slots__ = ('statement', 'assigned_name')
+    def __init__(self, statement: term, assigned_name: str):
         self.statement = statement
+        self.assigned_name = assigned_name
     def name(self) -> 'term':
         return self.statement
     def print(self, indent: int, file: MyIO) -> None:
         print_indent(indent, file)
         file.write(f"- {self.statement.unicode}\n")
-    def pack(self) -> tuple[int, str]:
-        return (1, self.statement.ascii)
+    def pack(self) -> tuple[str, str | None]:
+        return (self.assigned_name, self.statement.ascii)
 
 class IsabelleFact_Unfound(IsabelleFact):
     """A fact that could not be found in the Isabelle context."""
@@ -1460,7 +1461,8 @@ class Minilang_State:
                 name_queries.append(fact["name"])
             elif "proposition" in fact:
                 prop = cast(FactByProposition, fact)["proposition"]
-                out[i] = IsabelleFact_ProveInTime(IsaTerm.from_agent(prop))
+                out[i] = IsabelleFact_ProveInTime(IsaTerm.from_agent(prop),
+                                                   assigned_name=the_session().next_pit_name())
             else:
                 desc = " ".join(cast(FactByDescription, fact)["english"].split())
                 out[i] = Interaction_RetrieveForProof(
@@ -2202,7 +2204,8 @@ class Interaction_RetrieveForProof(Interaction_Retrieve):
         if answer.statement is not None and not answer.indexes:
             await self._log_retrieval_training_data([], prove_in_time=answer.statement)
             session.log_retrieval(self.query, [f"prove-in-time: {answer.statement}"])
-            return [IsabelleFact_ProveInTime(IsaTerm.from_agent(answer.statement))]
+            return [IsabelleFact_ProveInTime(IsaTerm.from_agent(answer.statement),
+                                              assigned_name=the_session().next_pit_name())]
         if answer.is_empty() and self.k >= self.FINAL_K:
             await self._log_retrieval_training_data([])
             session.log_retrieval(self.query, ["unfound"])
@@ -6198,7 +6201,7 @@ class Rewrite(Leaf):
             # Check for looping rules and fork interaction if needed
             # Send full fact references (including [where ...] attributes) so
             # the ML side resolves the same instantiated theorems that SIMPLIFY uses.
-            fact_names = [f.pack()[1] for f in self.using
+            fact_names = [f.pack()[0] for f in self.using
                           if isinstance(f, IsabelleFact_Presented)]
             if fact_names:
                 looping_info = await self.ml_state.check_looping_rules(
@@ -7853,6 +7856,7 @@ class Session:
         _session_var.set(self)
         self.age = 0
         self.setup_rewriting_counter: int = 0
+        self._pit_counter: int = parent._pit_counter if parent else 0
         self.last_proof_op_time: float = time()
         self.logger = logger or (parent.logger if parent else None)
         # On a fork, the interaction it is answering (plus its eventual
@@ -8190,6 +8194,11 @@ class Session:
                 _session_var.set(None)  # type: ignore
         except LookupError:
             pass
+
+    def next_pit_name(self) -> str:
+        i = self._pit_counter
+        self._pit_counter = i + 1
+        return f"P__I__T__{i}"
 
     async def initialize(self, root: Root):
         if hasattr(self, 'root'):

@@ -16,7 +16,7 @@ type bindings = var_name list * prem_name list
 
 datatype ('term, 'fact) extended_fact =
     FactByName of 'fact
-  | FactInTime of 'term (*statement to prove on-the-fly*)
+  | FactInTime of string (*assigned name*) * 'term (*statement to prove on-the-fly*)
 
 datatype ('term, 'thm, 'fact) command =
     UNFOLD   of ('term, 'fact) extended_fact list
@@ -79,8 +79,7 @@ type icmd = (term, thm, Facts.ref * Token.src list) command
 datatype exec_mode = LIVE | REPLAY
 
 type counters = {
-    prem_counter: int Synchronized.var,
-    fact_counter: int Synchronized.var
+    prem_counter: int Synchronized.var
   }
 type config = cfg * budget * counters * exec_mode
 
@@ -173,14 +172,13 @@ exception COMPUTE_RESULT of string * string
 datatype exec_mode = LIVE | REPLAY
 
 type counters = {
-    prem_counter: int Synchronized.var,
-    fact_counter: int Synchronized.var
+    prem_counter: int Synchronized.var
   }
 type config = cfg * budget * counters * exec_mode
 
 datatype ('term, 'fact) extended_fact =
     FactByName of 'fact
-  | FactInTime of 'term
+  | FactInTime of string * 'term
 
 datatype ('term, 'thm, 'fact) command =
     UNFOLD   of ('term, 'fact) extended_fact list
@@ -864,13 +862,11 @@ fun AUTO_SIMPLIFY
 
 exception FACT_IN_TIME_FAIL of term
 
-type counter = int Unsynchronized.ref
-fun mk_counter () = Unsynchronized.ref 0
-
 (* Resolve FactInTime: prove the statement, register in context, return FactByName.
-   FactByName passes through unchanged. Threads updated context via fold. *)
-fun pre_resolve_fact _ (FactByName fref) ctxt = (fref, ctxt)
-  | pre_resolve_fact counter (FactInTime prop) ctxt =
+   FactByName passes through unchanged. Threads updated context via fold.
+   The assigned name comes from the FactInTime tuple (set by Python). *)
+fun pre_resolve_fact (FactByName fref) ctxt = (fref, ctxt)
+  | pre_resolve_fact (FactInTime (assigned_name, prop)) ctxt =
       let val goal = Goal.init (Thm.cterm_of ctxt prop)
           val proved =
             (case Seq.pull (Phi_Sledgehammer_Solver.fast_mepo_tac (Time.fromSeconds 10) ctxt 1 goal)
@@ -878,39 +874,36 @@ fun pre_resolve_fact _ (FactByName fref) ctxt = (fref, ctxt)
                 | NONE => raise FACT_IN_TIME_FAIL prop)
             handle ERROR _ => raise FACT_IN_TIME_FAIL prop
           val thm = Goal.finish ctxt proved
-          val i = !counter
-          val _ = counter := i + 1
-          val fact_name = "proven_in_time___" ^ string_of_int i
           val ((_, _), ctxt') = Proof_Context.note_thms ""
-                ((Binding.name fact_name, []), [([thm], [])]) ctxt
-      in ((Facts.Named ((fact_name, Position.none), NONE), []), ctxt') end
+                ((Binding.name assigned_name, []), [([thm], [])]) ctxt
+      in ((Facts.Named ((assigned_name, Position.none), NONE), []), ctxt') end
 
-fun pre_resolve_facts counter ctxt facts =
-  fold_map (pre_resolve_fact counter) facts ctxt
+fun pre_resolve_facts ctxt facts =
+  fold_map pre_resolve_fact facts ctxt
 
 (* Resolve extended facts to a flat thm list (for SIMPLIFY, UNFOLD) *)
-fun resolve_to_thms counter ctxt facts =
-  let val (refs, ctxt') = pre_resolve_facts counter ctxt facts
+fun resolve_to_thms ctxt facts =
+  let val (refs, ctxt') = pre_resolve_facts ctxt facts
   in maps (Attrib.eval_thms ctxt' o single) refs
   end
 
 (* Resolve extended facts to fact refs, threading context (for RULE, HAMMER, END, NXT) *)
 fun resolve_to_refs ctxt facts = pre_resolve_facts ctxt facts
 
-fun resolve_to_override counter ctxt facts =
-  let val (refs, ctxt') = resolve_to_refs counter ctxt facts
+fun resolve_to_override ctxt facts =
+  let val (refs, ctxt') = resolve_to_refs ctxt facts
   in (ctxt', {add = refs, del = [], only = false}) end
 
 (* Resolve extended facts and update Minilang state's context *)
-fun with_resolved_refs counter s facts f =
+fun with_resolved_refs s facts f =
   let val ctxt = Minilang.context_of s
-      val (refs, ctxt') = resolve_to_refs counter ctxt facts
+      val (refs, ctxt') = resolve_to_refs ctxt facts
       val s' = Minilang.map_context (K ctxt') s
   in f s' refs end
 
-fun with_resolved_override counter s facts f =
+fun with_resolved_override s facts f =
   let val ctxt = Minilang.context_of s
-      val (ctxt', ovr) = resolve_to_override counter ctxt facts
+      val (ctxt', ovr) = resolve_to_override ctxt facts
       val s' = Minilang.map_context (K ctxt') s
   in f s' ovr end
 
@@ -982,17 +975,16 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
   case cmd of
       SIMPLIFY (simp_facts_with_targets, use_system_simps, premise_names, simplify_goal, user_bindings_opt) =>
         let val ctxt = Minilang.context_of s
-            val counter = mk_counter ()
             (* Split facts into targeted and non-targeted *)
             val (targeted_entries, normal_facts) =
               fold_rev (fn (fact, SOME targets) => apfst (cons (fact, targets))
                          | (fact, NONE) => apsnd (cons fact))
                 simp_facts_with_targets ([], [])
-            val simp_thms = resolve_to_thms counter ctxt normal_facts
+            val simp_thms = resolve_to_thms ctxt normal_facts
             val targeted_thms =
               maps (fn (fact, targets) =>
                 map (fn thm => (thm, targets))
-                    (resolve_to_thms counter ctxt [fact])
+                    (resolve_to_thms ctxt [fact])
               ) targeted_entries
          in AUTO_SIMPLIFY counters simp_thms targeted_thms use_system_simps premise_names
                           simplify_goal user_bindings_opt s
@@ -1002,13 +994,13 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
                     then error "You must specify at least one theorem to unfold"
                     else ()
             val ctxt = Minilang.context_of s
-            val defs = resolve_to_thms (mk_counter ()) ctxt facts
+            val defs = resolve_to_thms ctxt facts
         in Minilang.UNFOLD defs s
         end
     | WITNESS terms =>
         Minilang.CHOOSE terms s
     | RULE facts =>
-        with_resolved_refs (mk_counter ()) s facts (fn s' => fn refs =>
+        with_resolved_refs s facts (fn s' => fn refs =>
           Minilang.RULE refs [] s')
     | CASE_SPLIT (target, vars, rule, no_simp) =>
         Minilang.CASE_SPLIT (no_simp, ([[SOME target]], rule)) vars [] s
@@ -1039,13 +1031,13 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
                     {using = [], insertion = named_insertion} s
         end
     | NEXT_OR_END (lemmas, vars) =>
-        with_resolved_override (mk_counter ()) s lemmas (fn s' => fn ovr =>
+        with_resolved_override s lemmas (fn s' => fn ovr =>
           Minilang.END_or_NXT vars ovr s')
     | NEXT (lemmas, vars) =>
-        with_resolved_override (mk_counter ()) s lemmas (fn s' => fn ovr =>
+        with_resolved_override s lemmas (fn s' => fn ovr =>
           Minilang.NXT vars ovr s')
     | END lemmas =>
-        with_resolved_override (mk_counter ()) s lemmas (fn s' => fn ovr =>
+        with_resolved_override s lemmas (fn s' => fn ovr =>
           Minilang.END ovr s')
     | BRANCH branches =>
         let val brs = map (fn (SOME name, br) =>
@@ -1102,17 +1094,19 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
         Minilang.SORRY_ONLY s
     | HAMMER (facts, timeout, cached_proof) =>
         let
+          val ctxt0 = Minilang.context_of s
+          val (ctxt_r, ovr) = resolve_to_override ctxt0 facts
+          val s_resolved = Minilang.map_context (K ctxt_r) s
+
           fun hammer_live () = (
             Timeout.apply (Time.fromSeconds 1200) (fn () =>
-            with_resolved_override (mk_counter ()) s facts (fn s' => fn ovr =>
-              let val ctxt = Minilang.context_of s'
-                  val improved_SH = Config.get ctxt Minilang.mini_use_improved_SH
+              let val improved_SH = Config.get ctxt_r Minilang.mini_use_improved_SH
                   val override' = if improved_SH then ovr
                                   else Sledgehammer_Fact.no_fact_override
                   val prover = fn id => Phi_Sledgehammer_Solver.auto_raw
                                  improved_SH override' id (SOME (Time.fromSeconds timeout))
-              in Minilang.HAMMER prover s'
-              end)) ()
+              in Minilang.HAMMER prover s_resolved
+              end) ()
             handle Timeout.TIMEOUT _ =>
               raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL,
                 "Automatic proof timed out (20 min). The goal is non-trivial and a step-by-step proof is required.")
@@ -1120,7 +1114,7 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
               let val msg = case reason
                     of Phi_Sledgehammer_Solver.Subgoal_Fail sub =>
                          "Automatic proof fails on the subgoal:\n  " ^
-                         string_of_term (Minilang.context_of s) sub ^
+                         string_of_term ctxt_r sub ^
                          "\nThe goal is non-trivial and a step-by-step proof is required."
                      | _ => "Automatic proof fails. The goal is non-trivial and a step-by-step proof is required."
               in raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL, msg)
@@ -1132,10 +1126,9 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
           fun try_cached_apply (prf, time_ms) =
             let val _ = tracing ("[AoA Replay] Trying cached proof: " ^ quote prf ^
                                  " (time_ms=" ^ string_of_int time_ms ^ ")")
-                val ctxt = Minilang.context_of s
                 val replay_timeout = Time.fromMilliseconds
                       (Real.round (1.5 * Real.fromInt time_ms) + 3000)
-                val kws = Thy_Header.get_keywords (Proof_Context.theory_of ctxt)
+                val kws = Thy_Header.get_keywords (Proof_Context.theory_of ctxt_r)
                 val toks = Input.source_explode (Input.string prf)
                         |> Token.tokenize (Keyword.no_major_keywords kws) {strict = false}
                         |> filter Token.is_proper
@@ -1144,7 +1137,7 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
                   | NONE => error ("Cannot parse cached method: " ^ quote prf)
                 val _ = tracing "[AoA Replay] Method parsed OK, applying..."
                 val s' = Minilang.APPLY (SOME replay_timeout) []
-                           (Method.check_text ctxt method_text) s
+                           (Method.check_text ctxt_r method_text) s_resolved
                 val _ = tracing "[AoA Replay] Apply succeeded"
                 val _ = Minilang.get_reporter ()
                           (Minilang.Internal (Minilang.SH_PRF (prf, Time.fromMilliseconds time_ms)))
@@ -1177,9 +1170,8 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
     | SPLIT_CONJS => AUTO_SPLIT_CONJS s
     | SPECIALIZE (name, rule_fact, insts, discharge_facts) =>
         let val ctxt = Minilang.context_of s
-            val counter = mk_counter ()
-            val rule_thms = resolve_to_thms counter ctxt [rule_fact]
-            val discharge_thms = resolve_to_thms counter ctxt discharge_facts
+            val rule_thms = resolve_to_thms ctxt [rule_fact]
+            val discharge_thms = resolve_to_thms ctxt discharge_facts
             val insts' = map (fn (n, tm) =>
               if String.isPrefix "?" n then
                 case Lexicon.read_variable n of
@@ -1202,7 +1194,7 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
         in s'
         end
     | CHAINING (name_opt, facts) =>
-        with_resolved_refs (mk_counter ()) s facts (fn s' => fn refs =>
+        with_resolved_refs s facts (fn s' => fn refs =>
           let val ctxt' = Minilang.context_of s'
               val thms = maps (Attrib.eval_thms ctxt' o single) refs
               val facts_before = Minilang.get_local_facts s'
@@ -1381,7 +1373,8 @@ fun chk_single _ _ [x] = x
         ^ "You may select the i-th rule by using \"" ^ the rule ^ "(i)\".")
 
 fun check_extended_fact ctxt (FactByName name) = FactByName (read_fact name)
-  | check_extended_fact ctxt (FactInTime stmt) = FactInTime (read_prop ctxt stmt)
+  | check_extended_fact ctxt (FactInTime (assigned_name, stmt)) =
+      FactInTime (assigned_name, read_prop ctxt stmt)
 
 in
 
