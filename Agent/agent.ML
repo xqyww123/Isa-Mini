@@ -1124,9 +1124,7 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
                 "Automatic proof fails. The goal is non-trivial and a step-by-step proof is required."))
 
           fun try_cached_apply (prf, time_ms) =
-            let val _ = tracing ("[AoA Replay] Trying cached proof: " ^ quote prf ^
-                                 " (time_ms=" ^ string_of_int time_ms ^ ")")
-                val replay_timeout = Time.fromMilliseconds
+            let val replay_timeout = Time.fromMilliseconds
                       (Real.round (1.5 * Real.fromInt time_ms) + 3000)
                 val kws = Thy_Header.get_keywords (Proof_Context.theory_of ctxt_r)
                 val toks = Input.source_explode (Input.string prf)
@@ -1135,10 +1133,8 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
                 val method_text = case Scan.read Token.stopper (Method.parser 0 >> #1) toks of
                     SOME m => m
                   | NONE => error ("Cannot parse cached method: " ^ quote prf)
-                val _ = tracing "[AoA Replay] Method parsed OK, applying..."
                 val s' = Minilang.APPLY (SOME replay_timeout) []
                            (Method.check_text ctxt_r method_text) s_resolved
-                val _ = tracing "[AoA Replay] Apply succeeded"
                 val _ = Minilang.get_reporter ()
                           (Minilang.Internal (Minilang.SH_PRF (prf, Time.fromMilliseconds time_ms)))
             in s' end
@@ -1153,13 +1149,11 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
               else
                 (\<^try>\<open>try_cached_apply (prf, ms)
                   catch exn => (fn () =>
-                   let val _ = tracing ("[AoA Replay] Cached proof FAILED: " ^
-                                        Runtime.exn_message exn)
-                   in case exec_mode of
+                   case exec_mode of
                      LIVE => hammer_live ()
                    | REPLAY => raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL,
                        "Cached proof replay failed: " ^ Runtime.exn_message exn)
-                   end) ()\<close>)
+                   ) ()\<close>)
           | (NONE, LIVE) => hammer_live ()
           | (NONE, REPLAY) =>
               raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL,

@@ -942,15 +942,11 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
 
       (* Build AoA command with local callbacks *)
       val goal_hash = Hasher.goal (ctxt, sequent)
-      val _ = tracing ("[AoA Cache] goal_hash = " ^ goal_hash)
       val thy = Proof_Context.theory_of ctxt
       val aoa_cache_key = "aoa:" ^ goal_hash
       val cached_xcmd_json = case Phi_Cache_DB.get_cached_proof thy aoa_cache_key of
-          SOME (_, json) =>
-            (tracing ("[AoA Cache] Level 2 (Phi_Cache_DB): HIT (" ^
-                      string_of_int (size json) ^ " bytes)");
-             SOME json)
-        | NONE => (tracing "[AoA Cache] Level 2 (Phi_Cache_DB): MISS"; NONE)
+          SOME (_, json) => SOME json
+        | NONE => NONE
 
       val s0_flat_goal = Minilang.leading_goal_data s0
       val au = agent_context_unpacker
@@ -1040,10 +1036,9 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
            then error "Internal Error: the returned proofs contains axiomatic sorry."
            else ()
            ; (case proof_json_opt of
-                SOME json => (Phi_Cache_DB.update_cached_proof thy
-                               (aoa_cache_key, (elapsed, json));
-                              tracing "[AoA Cache] Stored proof in Phi_Cache_DB")
-              | NONE => tracing "[AoA Cache] No proof_json returned from Python")
+                SOME json => Phi_Cache_DB.update_cached_proof thy
+                               (aoa_cache_key, (elapsed, json))
+              | NONE => ())
            ; (xcmds, Minilang.conclude ctxt s1',
               {input=input, cache_write=cache_write, cache_read=cache_read, output=output,
                cost=cost, tool_calls=tool_calls, isabelle_time=isabelle_time, model_time=model_time,

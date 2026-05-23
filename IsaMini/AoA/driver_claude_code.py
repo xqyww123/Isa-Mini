@@ -28,6 +28,44 @@ from io import StringIO
 import Isabelle_Semantic_Embedding
 
 _COMPACT_HEADROOM = 13_000
+_DEFAULT_MODEL = "claude-opus-4-6[1m]"
+
+def _derive_cheaper_model(model: str) -> str:
+    m = re.match(r'(claude-)(opus)(-[\d\w.-]+)((?:\[.*\])?)', model)
+    if m:
+        return f"{m.group(1)}sonnet{m.group(3)}{m.group(4)}"
+    return model
+
+_PRICING_TABLE: dict[str, dict[str, float]] = {
+    "claude-opus-4-6": {
+        "input":        5.00 / 1_000_000,
+        "cache_write": 10.00 / 1_000_000,
+        "cache_read":   0.50 / 1_000_000,
+        "output":      25.00 / 1_000_000,
+    },
+    "claude-opus-4-5": {
+        "input":       15.00 / 1_000_000,
+        "cache_write": 18.75 / 1_000_000,
+        "cache_read":   1.50 / 1_000_000,
+        "output":      75.00 / 1_000_000,
+    },
+    "claude-sonnet-4-6": {
+        "input":        3.00 / 1_000_000,
+        "cache_write":  3.75 / 1_000_000,
+        "cache_read":   0.30 / 1_000_000,
+        "output":      15.00 / 1_000_000,
+    },
+    "claude-sonnet-4-5": {
+        "input":        3.00 / 1_000_000,
+        "cache_write":  3.75 / 1_000_000,
+        "cache_read":   0.30 / 1_000_000,
+        "output":      15.00 / 1_000_000,
+    },
+}
+_DEFAULT_PRICING_KEY = "claude-opus-4-6"
+
+def _pricing_key(model: str) -> str:
+    return re.sub(r'\[.*\]$', '', model)
 
 def _model_context_window(model: str) -> int:
     m = re.search(r'\[(\d+)([mk])\]', model)
@@ -71,6 +109,11 @@ class ClaudeCode(LMDriver):
     def tool_name(self, t: str) -> str:
         return self._TOOL_NAME_MAP.get(t, t)
 
+    def __str__(self) -> str:
+        if self._model == _DEFAULT_MODEL:
+            return self._driver_name
+        return f"{self._driver_name}({self._model})"
+
     working_dir: str
     _fork_counter: int
     _fork_name: str
@@ -79,10 +122,11 @@ class ClaudeCode(LMDriver):
     def __init__(self, *args, parent: 'ClaudeCode | None' = None,
                  interactive_web_terminal: bool = False,
                  argument: str | None = None, **kwargs):
-        if argument is not None:
-            raise DriverArgumentError(
-                f"Driver 'ClaudeCode' does not accept arguments, but got '{argument}'")
         super().__init__(*args, parent=parent, **kwargs)
+        if parent is not None:
+            self._model = parent._model
+        else:
+            self._model = argument or _DEFAULT_MODEL
         if parent is None:
             self.quickview_line_numbers = True
         if parent is not None:
@@ -163,7 +207,7 @@ class ClaudeCode(LMDriver):
 
         if not self._interactive_web_terminal:
             # Embedded mode: Agent SDK connects to HTTP server via URL
-            main_model = "claude-opus-4-6[1m]"
+            main_model = self._model
             self.options = ClaudeAgentOptions(
                 model=main_model,
                 thinking={"type": "adaptive"},
@@ -476,6 +520,7 @@ class ClaudeCode(LMDriver):
         yaml_path_abs = os.path.abspath(self.YAML_path)
         reset_url = f"http://127.0.0.1:{self._http_server.port}/reset_cache/{self._session_id}"
         settings = json.dumps({
+            "autoCompactWindow": _auto_compact_window(self._model, self.COMPACT_THRESHOLD),
             "permissions": {
                 "allow": [
                     f"Read(//{yaml_path_abs})",
@@ -510,6 +555,7 @@ class ClaudeCode(LMDriver):
             f.write(f"cd {shlex.quote(self.working_dir)}\n")
             f.write("unset CLAUDECODE\n")  # prevent nesting protection
             f.write(f"claude --session-id {shlex.quote(claude_session_id)} "
+                    f"--model {shlex.quote(self._model)} "
                     f"--mcp-config {shlex.quote(config_path)} "
                     f"--strict-mcp-config "
                     f"--allowed-tools {shlex.quote(allowed)} "
@@ -590,13 +636,9 @@ class ClaudeCode(LMDriver):
         self._read_cost_from_session_log()
         self.log_proof()
 
-    # Opus 4.6 pricing per token (USD) for cost estimation from token counts.
-    _PRICING = {
-        "input":        5.00 / 1_000_000,
-        "cache_write": 10.00 / 1_000_000,   # 1-hour tier (Claude Code default)
-        "cache_read":   0.50 / 1_000_000,
-        "output":      25.00 / 1_000_000,
-    }
+    def _get_pricing(self) -> dict[str, float]:
+        return _PRICING_TABLE.get(_pricing_key(self._model),
+                                 _PRICING_TABLE[_DEFAULT_PRICING_KEY])
 
     def _read_cost_from_session_log(self) -> None:
         """Read token usage from Claude Code JSONL session logs (standalone mode).
@@ -654,7 +696,7 @@ class ClaudeCode(LMDriver):
             self.total_cache_creation_input_tokens += usage.get("cache_creation_input_tokens", 0)
             self.total_cache_read_input_tokens += usage.get("cache_read_input_tokens", 0)
 
-        p = self._PRICING
+        p = self._get_pricing()
         self.total_cost_usd = (
             self.total_input_tokens * p["input"]
             + self.total_cache_creation_input_tokens * p["cache_write"]
@@ -725,9 +767,9 @@ class ClaudeCode(LMDriver):
 
         mode = interaction.forking
         if mode == ForkingMode.FORKING_CHEAPER_NO_CTXT:
-            model = "claude-sonnet-4-6[1m]"
+            model = _derive_cheaper_model(self._model)
         else:
-            model = "claude-opus-4-6[1m]"
+            model = self._model
         if mode == ForkingMode.FORKING_WITH_CTXT:
             resume = self._conversation_id
             fork_session = True
@@ -880,7 +922,5 @@ class ClaudeCode(LMDriver):
 
 @agent_driver("ClaudeCode_Interactive")
 def _claude_code_interactive(logger, log_dir, *, argument=None, **kwargs):
-    if argument is not None:
-        raise DriverArgumentError(
-            f"Driver 'ClaudeCode_Interactive' does not accept arguments, but got '{argument}'")
-    return ClaudeCode(logger, log_dir, interactive_web_terminal=True, **kwargs)
+    return ClaudeCode(logger, log_dir, interactive_web_terminal=True,
+                      argument=argument, **kwargs)
