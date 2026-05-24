@@ -119,11 +119,22 @@ in
 fun context_packer ctxt =
   let val SOT  = MiniLang_Agent.string_of_term ctxt
       val SOTT = MiniLang_Agent.string_of_type ctxt
+      val SOS  = MiniLang_Agent.string_of_sort ctxt
    in fn {vars, hyps}:context =>
-        packPair (packPairList (packString, packString o SOTT),
-                  packPairList (packString, packString o SOT))
-                 (vars, hyps)
-  end
+      let val tfrees = fold (Term.add_tfreesT o snd) vars []
+                       |> distinct (op =)
+          val tvars_s = fold (Term.add_tvarsT o snd) vars []
+                        |> distinct (op =)
+          val tvar_list =
+                map (fn (n, s) => (n, SOS s)) tfrees
+              @ map (fn (ni, s) => (Term.string_of_vname ni, SOS s)) tvars_s
+       in packTuple3
+            (packPairList (packString, packString o SOTT),
+             packPairList (packString, packString),
+             packPairList (packString, packString o SOT))
+            (vars, tvar_list, hyps)
+      end
+   end
 
 fun goal_packer ctxt =
   let val SOT  = MiniLang_Agent.string_of_term ctxt

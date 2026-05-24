@@ -123,6 +123,7 @@ val string_of_term : Proof.context -> term -> string
 val string_of_term_main_syntax : term -> string
 val string_of_type : Proof.context -> typ -> string
 val string_of_type_full_sort : Proof.context -> typ -> string
+val string_of_sort : Proof.context -> sort -> string
 
 val read_term : Proof.context -> string -> term
 val read_terms : Proof.context -> string list -> term list
@@ -280,6 +281,9 @@ fun string_of_type_full_sort ctxt =
      in Syntax.string_of_typ ctxt'
      #> REPL.trim_makrup
     end
+
+fun string_of_sort ctxt =
+    Syntax.string_of_sort ctxt #> REPL.trim_makrup
 
 fun string_of_thm ctxt th = string_of_term ctxt (Thm.prop_of th)
 

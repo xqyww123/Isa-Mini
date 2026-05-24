@@ -37,7 +37,7 @@ from .model import (
     _session_var, Session, Node, NonLeaf_Node,
     IsaTerm, InteractionExpanded,
     AoA_Error, ArgumentError, IsabelleError, InternalError,
-    CannotDelete_Root, NodeNotFound,
+    CannotDelete_Root, NodeNotFound, ProofTreeTooDeep,
     EvaluationStatus,
     Parse_Op_List, normalize_answer, Interaction_BadAnswer,
     TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER, TOOL_READ, TOOL_SURRENDER, ALL_PROOF_TOOLS,
@@ -270,6 +270,23 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         is_error = outcome.failure is not None and outcome.failure.is_error
         session.log_tool_response(_tn, response)
         session.log_proof_tree_snapshot(f"after_{action}_step_{step}")
+
+        depth_exceeded = session._depth_limit_exceeded
+        session._depth_limit_exceeded = False
+        if depth_exceeded:
+            session._depth_limit += 5
+            session._retry_count += 1
+            session.log_AoA_opr(
+                f"Proof tree depth exceeded limit, "
+                f"new limit: {session._depth_limit}")
+            if session._retry_count >= session.max_retries:
+                session.root.quit_info = (
+                    "surrender",
+                    f"proof tree depth exceeded limit {session._depth_limit - 5}")
+                await session.interrupt()
+            else:
+                await session.request_restart()
+
         return (response, is_error)
     except IsabelleError as e:
         error_msg = f"Isabelle error: {'; '.join(pretty_unicode(err) for err in e.errors)}"

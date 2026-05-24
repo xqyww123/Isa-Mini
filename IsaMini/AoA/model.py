@@ -107,6 +107,7 @@ type Var = tuple[varname, typ]
 type Hyp = tuple[varname, term]
 type Vars = dict[varname, typ]
 type Hyps = dict[varname, term]
+type TVars = dict[varname, typ]
 # `ToolCall_arg` — the generic shape of any ToolCall argument dict sent by
 # the agent.  `Mapping[str, Any]` rather than `dict[str, Any]` so TypedDict
 # subclasses are assignable (TypedDicts are NOT pyright-subtypes of `dict`
@@ -320,18 +321,21 @@ class IsabelleFact_Unfound(IsabelleFact):
 
 class Context(NamedTuple):
     vars: Vars
+    tvars: TVars
     hyps: Hyps
 
     @classmethod
     def unpack(cls, data) -> 'Context':
-        (vars, hyps) = data
+        (vars, tvars, hyps) = data
         vars = {IsaTerm.from_isabelle(k): IsaTerm.from_isabelle(v) for k, v in vars.items()}
+        tvars = {IsaTerm.from_isabelle(k): IsaTerm.from_isabelle(v) for k, v in tvars.items()}
         hyps = {IsaTerm.from_isabelle(k): IsaTerm.from_isabelle(v) for k, v in hyps.items()}
-        return cls(vars, hyps)
+        return cls(vars, tvars, hyps)
     def __str__(self) -> str:
         vs = ", ".join(f"{k.unicode}: {v.unicode}" for k, v in self.vars.items())
+        ts = ", ".join(f"{k.unicode}: {v.unicode}" for k, v in self.tvars.items())
         hs = ", ".join(f"{k.unicode}: {v.unicode}" for k, v in self.hyps.items())
-        return f"{{{vs}}}, {{{hs}}}"
+        return f"{{{vs}}}, tvars={{{ts}}}, {{{hs}}}"
 
 class Goal(NamedTuple):
     context: Context
@@ -343,11 +347,12 @@ class Goal(NamedTuple):
         conclusion = IsaTerm.from_isabelle(conclusion)
         return cls(Context.unpack(context), conclusion)
     def visible(self, suppressed: Context) -> 'Goal':
-        """Return a Goal with suppressed vars/hyps removed."""
+        """Return a Goal with suppressed vars/hyps/tvars removed."""
         return Goal(
             Context(
                 {k: v for k, v in self.context.vars.items() if k not in suppressed.vars},
-                {k: v for k, v in self.context.hyps.items() if k not in suppressed.hyps}
+                {k: v for k, v in self.context.tvars.items() if k not in suppressed.tvars},
+                {k: v for k, v in self.context.hyps.items() if k not in suppressed.hyps},
             ),
             self.conclusion
         )
@@ -431,6 +436,19 @@ def print_vars(vars: Iterable[tuple[varname, typ]], indent: int, file, suppresse
         print_indent(indent+1, file)
         file.write(f"- {name.unicode}: {type.unicode}\n")
 
+def print_type_vars(tvars: Iterable[tuple[varname, typ]], indent: int, file, suppressed: TVars, banner='type variables'):
+    printed_banner = False
+    for name, sort in tvars:
+        if name in suppressed:
+            continue
+        if not printed_banner:
+            print_indent(indent, file)
+            file.write(banner)
+            file.write(":\n")
+            printed_banner = True
+        print_indent(indent+1, file)
+        file.write(f"- {name.unicode}: {sort.unicode}\n")
+
 def print_hyps(hyps: Iterable[tuple[varname, term]], indent: int, file, suppressed: Hyps, banner='premises'):
     printed_banner = False
     for name, term in hyps:
@@ -447,6 +465,7 @@ def print_hyps(hyps: Iterable[tuple[varname, term]], indent: int, file, suppress
 def print_goal(goal: Goal, indent: int, show_header: bool, file, suppressed: Context,
                truncate: bool = False):
     print_vars(goal.context.vars.items(), indent, file, suppressed.vars)
+    print_type_vars(goal.context.tvars.items(), indent, file, suppressed.tvars)
     print_hyps(goal.context.hyps.items(), indent, file, suppressed.hyps)
     print_indent(indent, file)
 
@@ -457,6 +476,7 @@ def print_goal(goal: Goal, indent: int, show_header: bool, file, suppressed: Con
         was_truncated = True
 
     if any(name not in suppressed.vars for name in goal.context.vars) or\
+        any(name not in suppressed.tvars for name in goal.context.tvars) or\
         any(name not in suppressed.hyps for name in goal.context.hyps):
         file.write(f"goal: {conclusion_str}\n")
     else:
@@ -620,6 +640,16 @@ class GoalIsNontrivial(CannotEdit):
         self.parent = parent
     def __str__(self) -> str:
         return f"{super().__str__()}\n{self._message}"
+
+
+class ProofTreeTooDeep(CannotEdit):
+    """Raised in Node.__init__ when the proof tree depth exceeds the session limit."""
+    def __init__(self, depth: int, limit: int, parent: 'Node | None'):
+        super().__init__(target_step=parent.id if parent else "")
+        self.depth = depth
+        self.limit = limit
+    def __str__(self) -> str:
+        return f"Proof tree depth {self.depth} exceeds the limit of {self.limit}."
 
 
 class InternalError(OprError):
@@ -892,17 +922,19 @@ class Goals_Msg(Message):
         return cls(data)
 
 class Consider_Case_Msg(Message):
-    def __init__(self, case: str, vars: list[Var], hyps: list[Hyp]) -> None:
+    def __init__(self, case: str, vars: list[Var], tvars: list[tuple[varname, typ]], hyps: list[Hyp]) -> None:
         self.case = case
         self.vars = vars
+        self.tvars = tvars
         self.hyps = hyps
     @classmethod
     def unpack(cls, data) -> 'Consider_Case_Msg':
         (case, items_data) = data
         context = Context.unpack(items_data)
         vars = list(context.vars.items())
+        tvars = list(context.tvars.items())
         hyps = list(context.hyps.items())
-        return cls(case, vars, hyps)
+        return cls(case, vars, tvars, hyps)
 
 class Intro_Bindings_Msg(Message):
     def __init__(self, missing: 'Bindings', auto_introduced: 'Bindings', final: 'Bindings') -> None:
@@ -2512,6 +2544,9 @@ class Node(ABC):
         else:
             self.id = self.local_step
             self.session = the_session()
+        self._depth = (self.parent._depth + 1) if self.parent is not None else 0
+        if self._depth > self.session._depth_limit:
+            raise ProofTreeTooDeep(self._depth, self.session._depth_limit, self.parent)
         self.status : EvaluationStatus = EVALUATION_NOT_YET
         self.warnings : list[Warning] = []
         self.changed : bool = False
@@ -2948,6 +2983,10 @@ class Node(ABC):
         return ret
     def _fixed_facts_at_me(self, ret: Hyps) -> Hyps:
         return ret
+    def _fixed_tvars_after_me(self, ret: TVars) -> TVars:
+        return ret
+    def _fixed_tvars_at_me(self, ret: TVars) -> TVars:
+        return ret
     def _all_fixed_vars_before_me(self, ret: Vars) -> Vars:
         if self.parent is not None:
             self.parent._all_fixed_vars_before_a_child(self, ret)
@@ -2956,16 +2995,23 @@ class Node(ABC):
         if self.parent is not None:
             self.parent._all_fixed_facts_before_a_child(self, ret)
         return ret
+    def _all_fixed_tvars_before_me(self, ret: TVars) -> TVars:
+        if self.parent is not None:
+            self.parent._all_fixed_tvars_before_a_child(self, ret)
+        return ret
     def _ctxt_before_me(self) -> Context:
         vars = self._all_fixed_vars_before_me({})
         hyps = self._all_fixed_facts_before_me({})
-        return Context(vars, hyps)
+        tvars = self._all_fixed_tvars_before_me({})
+        return Context(vars, tvars, hyps)
     def _ctxt_at_me(self) -> Context:
         vars = self._all_fixed_vars_before_me({})
         self._fixed_vars_at_me(vars)
+        tvars = self._all_fixed_tvars_before_me({})
+        self._fixed_tvars_at_me(tvars)
         hyps = self._all_fixed_facts_before_me({})
         self._fixed_facts_at_me(hyps)
-        return Context(vars, hyps)
+        return Context(vars, tvars, hyps)
     def _rename_var(self, old_name: varname, new_name: varname) -> 'Node | None':
         """
         Return the modified node if the variable is found and renamed, None otherwise.
@@ -3096,7 +3142,9 @@ class Node(ABC):
         if len(gns) == 1:
             try:
                 new_node, old = await self.parent._amend_child(self, gns[0])
-            except GoalIsNontrivial as e:
+            except (GoalIsNontrivial, ProofTreeTooDeep) as e:
+                if isinstance(e, ProofTreeTooDeep):
+                    self.session._depth_limit_exceeded = True
                 e.operation = op
                 e.unapplied_oprs = list(gns)
                 e.is_error = True
@@ -3228,7 +3276,7 @@ class NonLeaf_Node(Node):
     class _InsertBatchResult(NamedTuple):
         created: 'list[Node]'
         stopped_at: 'int | None'
-        error: 'GoalIsNontrivial | None'
+        error: 'GoalIsNontrivial | ProofTreeTooDeep | None'
 
     def __init__(self, config: NodeConfig, thought: str, sub_nodes: list['Node']):
         super().__init__(config, thought)
@@ -3330,7 +3378,10 @@ class NonLeaf_Node(Node):
             new_id = self._local_step_of_next_proof_step()
         ml_state = await child.resulting_state().clone(None)
         config = NodeConfig(new_id, ml_state, self)
-        intro = Intro(config, "", None)
+        try:
+            intro = Intro(config, "", None)
+        except ProofTreeTooDeep:
+            return
         self.session.auto_intro_nodes.append(intro)
         self.sub_nodes.insert(next_idx, intro)
         await intro._refresh_me_alone(auto_intro=True)
@@ -3378,7 +3429,9 @@ class NonLeaf_Node(Node):
             config = NodeConfig(new_id, await before.ml_state.clone(None), self)
             try:
                 node = gn.factory(config)
-            except GoalIsNontrivial as e:
+            except (GoalIsNontrivial, ProofTreeTooDeep) as e:
+                if isinstance(e, ProofTreeTooDeep):
+                    self.session._depth_limit_exceeded = True
                 stopped_at = k
                 error = e
                 break
@@ -3447,6 +3500,15 @@ class NonLeaf_Node(Node):
                 return ret
             else:
                 c._fixed_facts_after_me(ret)
+        raise InternalError("The target node is not my children")
+    def _all_fixed_tvars_before_a_child(self, child: Node, ret: TVars) -> TVars:
+        self._all_fixed_tvars_before_me(ret)
+        self._fixed_tvars_at_me(ret)
+        for c in self.sub_nodes:
+            if c is child:
+                return ret
+            else:
+                c._fixed_tvars_after_me(ret)
         raise InternalError("The target node is not my children")
     def unfinished_nodes(self, ret: set['Node']) -> None:
         super().unfinished_nodes(ret)
@@ -3762,13 +3824,16 @@ class StdBlock(NonLeaf_Node):
             await self._auto_intro_after_me()
     def _ctxt_of_filling(self) -> Context:
         vars = self._all_fixed_vars_before_me({})
+        tvars = self._all_fixed_tvars_before_me({})
         hyps = self._all_fixed_facts_before_me({})
         self._fixed_vars_at_me(vars)
+        self._fixed_tvars_at_me(tvars)
         self._fixed_facts_at_me(hyps)
         for child in self.sub_nodes:
             child._fixed_vars_after_me(vars)
+            child._fixed_tvars_after_me(tvars)
             child._fixed_facts_after_me(hyps)
-        return Context(vars, hyps)
+        return Context(vars, tvars, hyps)
     @abstractmethod
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False) -> None:
         ...
@@ -3952,15 +4017,22 @@ class StdBlock(NonLeaf_Node):
                 local_step = self._local_step_of_next_proof_step()
                 ml_state = await self._state_after_beginning().clone(None)
                 config = NodeConfig(local_step, ml_state, self)
-                intro = Intro(config, "", None)
-                self.sub_nodes.append(intro)
-                self.session.auto_intro_nodes.append(intro)
+                try:
+                    intro = Intro(config, "", None)
+                except ProofTreeTooDeep:
+                    pass
+                else:
+                    self.sub_nodes.append(intro)
+                    self.session.auto_intro_nodes.append(intro)
             for gn in gns:
                 local_step = self._local_step_of_next_proof_step()
                 ml_state = await self._state_after_beginning().clone(None)
                 sub_config = NodeConfig(local_step, ml_state, self)
                 try:
                     new_child = gn.factory(sub_config)
+                except ProofTreeTooDeep:
+                    self.session._depth_limit_exceeded = True
+                    return FailureReason("Proof tree depth exceeds the limit")
                 except GoalIsNontrivial:
                     return FailureReason(
                         "Nested proof contains Obvious on a goal that is not "
@@ -3983,9 +4055,13 @@ class StdBlock(NonLeaf_Node):
             local_step = self._local_step_of_next_proof_step()
             ml_state = await self._state_after_beginning().clone(None)
             config = NodeConfig(local_step, ml_state, self)
-            intro = Intro(config, "", None)
-            self.sub_nodes.append(intro)
-            self.session.auto_intro_nodes.append(intro)
+            try:
+                intro = Intro(config, "", None)
+            except ProofTreeTooDeep:
+                pass
+            else:
+                self.sub_nodes.append(intro)
+                self.session.auto_intro_nodes.append(intro)
         return None
     async def append(
         self, gns: 'list[Parsed_Opr]',
@@ -4024,7 +4100,9 @@ class StdBlock(NonLeaf_Node):
             config = NodeConfig(local_step, ml_state, self)
             try:
                 node = gn.factory(config)
-            except GoalIsNontrivial as e:
+            except (GoalIsNontrivial, ProofTreeTooDeep) as e:
+                if isinstance(e, ProofTreeTooDeep):
+                    self.session._depth_limit_exceeded = True
                 e.operation = op
                 e.unapplied_oprs = list(gns[i:])
                 e.is_error = len(outcome.committed) == 0
@@ -4093,6 +4171,7 @@ class GoalNode(StdBlock):
     _changes_pending_goal = False
     case_vars: list[Var] | None
     case_hyps: list[Hyp] | None
+    case_tvars: list[tuple[varname, typ]] | None
 
     def __init__(self, config: NodeConfig, is_single_goal: bool, show_goal: bool,
                  pending_proof: 'proof | None' = None):
@@ -4103,7 +4182,8 @@ class GoalNode(StdBlock):
         self._kind = "goal"
         self.case_vars = None
         self.case_hyps = None
-        self._prev_quickview_context: tuple[Vars, Hyps] | None = None
+        self.case_tvars = None
+        self._prev_quickview_context: tuple[Vars, TVars, Hyps] | None = None
         self._prev_quickview_conclusion: term | None = None
         self._pending_proof: 'proof | None' = pending_proof
     @property
@@ -4157,7 +4237,8 @@ class GoalNode(StdBlock):
                 if self.case_vars or self.case_hyps:
                     merged_vars = {v[0]: v[1] for v in (self.case_vars or [])} | goal.context.vars
                     merged_hyps = {h[0]: h[1] for h in (self.case_hyps or [])} | goal.context.hyps
-                    goal = Goal(Context(merged_vars, merged_hyps), goal.conclusion)
+                    merged_tvars = {t[0]: t[1] for t in (self.case_tvars or [])} | goal.context.tvars
+                    goal = Goal(Context(merged_vars, merged_tvars, merged_hyps), goal.conclusion)
                 print_goal(goal, indent, True, file, self._ctxt_before_me())
         self._print_evaluation_status(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
@@ -4170,7 +4251,7 @@ class GoalNode(StdBlock):
             return super()._print_step_id(indent, file, update_line)
     async def _refresh_me_alone(self, auto_intro: bool):
         is_init = self._first_time
-        old_case = (self.case_vars, self.case_hyps)
+        old_case = (self.case_vars, self.case_tvars, self.case_hyps)
         consider_case_msgs = [m for m in self.ml_state.messages if isinstance(m, Consider_Case_Msg)]
         match consider_case_msgs:
             case []:
@@ -4178,10 +4259,11 @@ class GoalNode(StdBlock):
             case [consider_case_msg]:
                 self._reset_local_step(consider_case_msg.case)
                 self.case_vars = consider_case_msg.vars
+                self.case_tvars = consider_case_msg.tvars
                 self.case_hyps = consider_case_msg.hyps
             case _:
                 raise InternalError(f"Expected exactly one Consider_Case_Msg in Case's messages, got {len(consider_case_msgs)}")
-        if not is_init and (self.case_vars, self.case_hyps) != old_case:
+        if not is_init and (self.case_vars, self.case_tvars, self.case_hyps) != old_case:
             self.changed = True
         # `_pending_proof` may have been populated by the parent
         # Install `_pending_proof` (set by SubgoalMaker orchestration)
@@ -4194,24 +4276,34 @@ class GoalNode(StdBlock):
                 local_step = self._local_step_of_next_proof_step()
                 ml_state = await self.ml_state.clone(None)
                 config = NodeConfig(local_step, ml_state, self)
-                intro = Intro(config, "", None)
-                self.sub_nodes.append(intro)
-                self.session.auto_intro_nodes.append(intro)
+                try:
+                    intro = Intro(config, "", None)
+                except ProofTreeTooDeep:
+                    pass
+                else:
+                    self.sub_nodes.append(intro)
+                    self.session.auto_intro_nodes.append(intro)
             for gn in gns:
                 local_step = self._local_step_of_next_proof_step()
                 ml_state = await self.ml_state.clone(None)
                 sub_config = NodeConfig(local_step, ml_state, self)
                 try:
                     self.sub_nodes.append(gn.factory(sub_config))
-                except GoalIsNontrivial:
+                except (GoalIsNontrivial, ProofTreeTooDeep) as e:
+                    if isinstance(e, ProofTreeTooDeep):
+                        self.session._depth_limit_exceeded = True
                     break
         elif is_init and not self.sub_nodes and await self.ml_state.need_intro(False):
             local_step = self._local_step_of_next_proof_step()
             ml_state = await self.ml_state.clone(None)
             config = NodeConfig(local_step, ml_state, self)
-            intro = Intro(config, "", None)
-            self.sub_nodes.append(intro)
-            self.session.auto_intro_nodes.append(intro)
+            try:
+                intro = Intro(config, "", None)
+            except ProofTreeTooDeep:
+                pass
+            else:
+                self.sub_nodes.append(intro)
+                self.session.auto_intro_nodes.append(intro)
         return await super()._refresh_me_alone(auto_intro)
     async def _auto_intro_after_me(self) -> None:
         pass
@@ -4219,6 +4311,11 @@ class GoalNode(StdBlock):
         goal = self.goal()
         if goal is not None:
             ret.update(goal.context.vars)
+        return ret
+    def _fixed_tvars_at_me(self, ret: TVars) -> TVars:
+        goal = self.goal()
+        if goal is not None:
+            ret.update(goal.context.tvars)
         return ret
     def _fixed_facts_at_me(self, ret: Hyps) -> Hyps:
         goal = self.goal()
@@ -4246,14 +4343,18 @@ class GoalNode(StdBlock):
                     if self.case_vars or self.case_hyps:
                         merged_vars = {v[0]: v[1] for v in (self.case_vars or [])} | goal.context.vars
                         merged_hyps = {h[0]: h[1] for h in (self.case_hyps or [])} | goal.context.hyps
+                        merged_tvars = {t[0]: t[1] for t in (self.case_tvars or [])} | goal.context.tvars
                     else:
                         merged_vars = goal.context.vars
                         merged_hyps = goal.context.hyps
+                        merged_tvars = goal.context.tvars
                     visible_vars = {k: v for k, v in merged_vars.items() if k not in suppressed.vars}
                     visible_hyps = {k: v for k, v in merged_hyps.items() if k not in suppressed.hyps}
-                    visible = (visible_vars, visible_hyps)
+                    visible_tvars = {k: v for k, v in merged_tvars.items() if k not in suppressed.tvars}
+                    visible = (visible_vars, visible_tvars, visible_hyps)
                     if visible != self._prev_quickview_context and self.does_quickview_need_detail():
                         print_vars(merged_vars.items(), child_indent, file, suppressed.vars)
+                        print_type_vars(merged_tvars.items(), child_indent, file, suppressed.tvars)
                         print_hyps(merged_hyps.items(), child_indent, file, suppressed.hyps)
                         self._prev_quickview_context = visible
                     conclusion = goal.conclusion
@@ -4460,7 +4561,11 @@ class SubgoalMaker(GoalContainer, StdBlock):
                 local_step = parent._local_step_of_next_proof_step()
                 ml_state = await parent._state_before_ending_.clone(None)
                 config = NodeConfig(local_step, ml_state, parent)
-                new_node = parsed_op.factory(config)
+                try:
+                    new_node = parsed_op.factory(config)
+                except ProofTreeTooDeep:
+                    self.session._depth_limit_exceeded = True
+                    break
                 parent.sub_nodes.append(new_node)
 
     def _cleanup_inherited_proofs(self) -> None:
@@ -4657,6 +4762,7 @@ class CaseSplit_Like(SubgoalMaker):
     _case_kind: ClassVar[Literal["case-split", "induction"]]
 
     case_vars: list[Var] | None
+    case_tvars: list[tuple[varname, typ]] | None
     case_hyps: list[Hyp] | None
     case_name: str | None
     # Rule resolution cache. `_resolved_rule_str = None` means "no explicit
@@ -4668,13 +4774,14 @@ class CaseSplit_Like(SubgoalMaker):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.case_vars = None
+        self.case_tvars = None
         self.case_hyps = None
         self._resolved_rule_str = None
         self._rule_resolved = False
         # quickview dedup: remember what case_vars / case_hyps we last
         # printed so we don't repeat them on every re-render unless
         # they actually changed (mirrors Intro's `_prev_bindings`).
-        self._prev_case_printed: tuple[list[Var] | None, list[Hyp] | None] | None = None
+        self._prev_case_printed: tuple[list[Var] | None, list[tuple[varname, typ]] | None, list[Hyp] | None] | None = None
 
     @classmethod
     def gen_single(cls, arg: Any, path: str = "<direct>") -> Parsed_Opr:
@@ -4880,6 +4987,8 @@ class CaseSplit_Like(SubgoalMaker):
             return
         if self.case_vars is not None:
             print_vars(self.case_vars, indent, file, {}, "fixing variables")
+        if self.case_tvars is not None:
+            print_type_vars(self.case_tvars, indent, file, {}, "type variables")
         if self.case_hyps is not None:
             print_hyps(self.case_hyps, indent, file, {}, "assuming premises")
     def quickview(self, indent: int, file: MyIO) -> int:
@@ -4890,10 +4999,12 @@ class CaseSplit_Like(SubgoalMaker):
         # every re-render (mirrors Intro's `_prev_bindings` dedup).
         indent = super().quickview(indent, file)
         if not self.sub_nodes and (self.case_vars or self.case_hyps):
-            current = (self.case_vars, self.case_hyps)
+            current = (self.case_vars, self.case_tvars, self.case_hyps)
             if current != self._prev_case_printed:
                 if self.case_vars:
                     print_vars(self.case_vars, indent, file, {}, "fixing variables")
+                if self.case_tvars:
+                    print_type_vars(self.case_tvars, indent, file, {}, "type variables")
                 if self.case_hyps:
                     print_hyps(self.case_hyps, indent, file, {}, "assuming premises")
                 self._prev_case_printed = current
@@ -4908,6 +5019,11 @@ class CaseSplit_Like(SubgoalMaker):
             for name, ty in self.case_vars:
                 ret[name] = ty
         return ret
+    def _fixed_tvars_at_me(self, ret: TVars) -> TVars:
+        if not self.sub_nodes and self.case_tvars:
+            for name, sort in self.case_tvars:
+                ret[name] = sort
+        return ret
     def _fixed_facts_at_me(self, ret: Hyps) -> Hyps:
         if not self.sub_nodes and self.case_hyps:
             for name, prop in self.case_hyps:
@@ -4915,11 +5031,13 @@ class CaseSplit_Like(SubgoalMaker):
         return ret
     def _fixed_vars_after_me(self, ret: Vars) -> Vars:
         return self._fixed_vars_at_me(ret)
+    def _fixed_tvars_after_me(self, ret: TVars) -> TVars:
+        return self._fixed_tvars_at_me(ret)
     def _fixed_facts_after_me(self, ret: Hyps) -> Hyps:
         return self._fixed_facts_at_me(ret)
     async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
         is_init = self._first_time
-        old_case = (self.case_vars, self.case_hyps)
+        old_case = (self.case_vars, self.case_tvars, self.case_hyps)
         fail = await super()._refresh_the_beginning_opr()
         if fail is not None:
             return fail
@@ -4942,12 +5060,13 @@ class CaseSplit_Like(SubgoalMaker):
                 case [m0]:
                     self.case_name = m0.case
                     self.case_vars = m0.vars
+                    self.case_tvars = m0.tvars
                     self.case_hyps = m0.hyps
                 case _:
                     raise InternalError(
                         f"Expected at most one Consider_Case_Msg in Case's "
                         f"messages, got {len(msgs)}")
-        if not is_init and (self.case_vars, self.case_hyps) != old_case:
+        if not is_init and (self.case_vars, self.case_tvars, self.case_hyps) != old_case:
             self.changed = True
         return None
 
@@ -6659,7 +6778,7 @@ class Obtain(StdBlock):
         # walking `self.variables` / `self.constraints` because (a) the
         # agent may omit an explicit `type:` and ML inference fills it
         # in, and (b) IsaTerm conversion is already done here.
-        self._introduced: Context = Context({}, {})
+        self._introduced: Context = Context({}, {}, {})
         # Quickview dedup: only re-emit the obtained vars / constraints
         # block when `_introduced` actually changed (mirrors Intro's
         # `_prev_bindings`).
@@ -6698,6 +6817,9 @@ class Obtain(StdBlock):
     def _fixed_vars_after_me(self, ret: Vars) -> Vars:
         ret.update(self._introduced.vars)
         return ret
+    def _fixed_tvars_after_me(self, ret: TVars) -> TVars:
+        ret.update(self._introduced.tvars)
+        return ret
     def _fixed_facts_after_me(self, ret: Hyps) -> Hyps:
         ret.update(self._introduced.hyps)
         return ret
@@ -6712,6 +6834,9 @@ class Obtain(StdBlock):
             if self._introduced.vars:
                 print_vars(self._introduced.vars.items(), indent, file, {},
                            "obtained variables")
+            if self._introduced.tvars:
+                print_type_vars(self._introduced.tvars.items(), indent, file, {},
+                                "type variables")
             if self._introduced.hyps:
                 print_hyps(self._introduced.hyps.items(), indent, file, {},
                            "constraints")
@@ -6990,6 +7115,18 @@ class SplitConjs(SubgoalMaker):
                     gc._fixed_vars_after_me(ret)
             else:
                 c._fixed_vars_after_me(ret)
+        raise InternalError("The target node is not my children")
+    def _all_fixed_tvars_before_a_child(self, child: Node, ret: TVars) -> TVars:
+        self._all_fixed_tvars_before_me(ret)
+        self._fixed_tvars_at_me(ret)
+        for c in self.sub_nodes:
+            if c is child:
+                return ret
+            elif isinstance(c, GoalNode):
+                for gc in c.sub_nodes:
+                    gc._fixed_tvars_after_me(ret)
+            else:
+                c._fixed_tvars_after_me(ret)
         raise InternalError("The target node is not my children")
 
 
@@ -7525,6 +7662,10 @@ class GlobalEnv(StdBlock):
         for child in self.sub_nodes:
             child._fixed_vars_after_me(ret)
         return ret
+    def _fixed_tvars_after_me(self, ret: TVars) -> TVars:
+        for child in self.sub_nodes:
+            child._fixed_tvars_after_me(ret)
+        return ret
     def _fixed_facts_after_me(self, ret: Hyps) -> Hyps:
         # Aggregate facts established by children (e.g. global Have's) so that
         # sibling GoalNodes see them in their Python-side context. Without
@@ -7614,6 +7755,7 @@ class Root(GoalContainer, StdBlock):
         return FailureReason("Failed to close the top-level proof")
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         print_vars(self.context.vars.items(), indent, file, {})
+        print_type_vars(self.context.tvars.items(), indent, file, {})
         print_hyps(self.context.hyps.items(), indent, file, {})
         self._print_evaluation_status(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
@@ -7668,10 +7810,13 @@ class Root(GoalContainer, StdBlock):
     def _fixed_vars_at_me(self, ret: Vars) -> Vars:
         ret.update(self.context.vars)
         return ret
+    def _fixed_tvars_at_me(self, ret: TVars) -> TVars:
+        ret.update(self.context.tvars)
+        return ret
     def _fixed_facts_at_me(self, ret: Hyps) -> Hyps:
         ret.update(self.context.hyps)
         return ret
-    
+
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         raise InternalError("Depreciated")
 
@@ -7887,6 +8032,8 @@ class Session:
             self.max_retries = max_retries
             self._budget_start_time: float | None = None
         self._retry_count: int = 0
+        self._depth_limit: int = 30
+        self._depth_limit_exceeded: bool = False
         self._restart_requested: bool = False
         self.retrieval_forking_mode: ForkingMode = (
             parent.retrieval_forking_mode if parent is not None
