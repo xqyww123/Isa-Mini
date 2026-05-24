@@ -58,7 +58,7 @@
           },
           "exact_term": {
             "type": "string",
-            "description": "Parse a term, show its unfolded lambda structure (Main-level syntax only), and look up the head constant. When given, all other fields are ignored."
+            "description": "Parse a term, reveal its fancy syntax, show its unfolded lambda structure, and explain the head constant. When given, all other fields are ignored."
           }
         },
         "required": ["kinds"],

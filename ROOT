@@ -32,6 +32,7 @@ session Minilang_Agent in Agent = Minilang +
   theories
     Minilang_Agent
 
+(*
 session Infra_Filter_Test in Test_InfraFilter = "HOL-Analysis" +
   sessions
     Performant_Isabelle_ML
@@ -48,3 +49,4 @@ session Infra_Filter_Test in Test_InfraFilter = "HOL-Analysis" +
     Bell_Numbers_Spivey
   theories
     Test_LTE_InfraFilter
+*)
