@@ -20,11 +20,11 @@ ML_file \<open>./library/proof.ML\<close>
 
 (* term Pure.eq *)
 
-attribute_setup OF = \<open>Scan.repeat (Scan.lift (Args.$$$ "_") >> K NONE || Attrib.thm >> SOME) >> (fn Bs =>
+attribute_setup xOF = \<open>Scan.repeat (Scan.lift (Args.$$$ "_") >> K NONE || Attrib.thm >> SOME) >> (fn Bs =>
       Thm.rule_attribute (map_filter I Bs)
         (fn ctxt => Minilang_Aux.xOF false (Context.proof_of ctxt) Bs))\<close>
 
-attribute_setup of = \<open>let
+attribute_setup xof = \<open>let
      val inst = Args.maybe Parse.embedded_inner_syntax;
      val concl = Args.$$$ "concl" -- Args.colon;
      val insts =
@@ -36,7 +36,7 @@ attribute_setup of = \<open>let
  end \<close> "positional instantiation of theorem"
 
 
-attribute_setup "where" = \<open>let
+attribute_setup "xwhere" = \<open>let
      val ident = Parse.token
        (Parse.short_ident || Parse.long_ident || Parse.sym_ident || Parse.term_var ||
          Parse.type_ident || Parse.type_var || Parse.number)
@@ -62,10 +62,7 @@ attribute_setup "where" = \<open>let
  end \<close> "positional instantiation of theorem"
 
 
-notepad begin
-  fix k::int
-thm int_le_induct[where ?k = \<open>k\<close>]
-end
+(* thm allI[xwhere 'a=nat] *)
 
 (*
 (*

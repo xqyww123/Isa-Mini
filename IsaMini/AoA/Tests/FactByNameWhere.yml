@@ -22,5 +22,5 @@ proof:
   - step id: 1
     operation: Obvious
     with facts:
-      - h[where x = ‹0 :: nat›]: ∀(x :: nat). P x
+      - h[xwhere x = ‹0 :: nat›]: ∀(x :: nat). P x
 Unfinished nodes: 0

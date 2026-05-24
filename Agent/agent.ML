@@ -1178,7 +1178,7 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
                             "Specialize: cannot parse variable name " ^ quote n)
               else (Minilang_Aux.VN_Name n, tm)) insts
             val facts_before = Minilang.get_local_facts s
-            val s' = Minilang.SPECIALIZE'' (SOME name) rule_thms insts' discharge_thms s
+            val s' = Minilang.SPECIALIZE'' (SOME name) rule_thms (insts', []) discharge_thms s
                      handle ERROR msg => raise Minilang.OPR_FAIL (Minilang.INVALID_OPR,
                                REPL.trim_makrup msg)
             val facts_after = Minilang.get_local_facts s'

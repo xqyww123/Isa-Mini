@@ -17,6 +17,8 @@ val xof : Proof.context -> string option list * string option list ->
     (binding * string option * mixfix) list -> thm -> thm
 
 datatype var_name = VN_IndexName of indexname | VN_Name of string
+val is_tvar_name : var_name -> bool
+val tvar_indexname : var_name -> indexname
 
 val xwhere : Proof.context ->
       ((var_name * Position.T) * (string * string)) list ->
@@ -26,7 +28,7 @@ val xwhere : Proof.context ->
 val deconflict_bound_names : term -> term
 
 val inst_hol_alls : Proof.context -> (string * cterm) list -> thm -> thm
-val inst_universal_quantifiers : Proof.context -> (var_name * term) list -> thm -> thm
+val inst_universal_quantifiers : Proof.context -> (var_name * term) list * (indexname * typ) list -> thm -> thm
 val inst_universal_quantifiers' : Proof.context -> (var_name * string) list -> thm -> thm
 
 val print_toks : Token.src -> string list
@@ -360,6 +362,12 @@ fun inst_hol_alls ctxt insts thm =
 
 datatype var_name = VN_IndexName of indexname | VN_Name of string
 
+fun is_tvar_name (VN_Name s) = String.isPrefix "'" s
+  | is_tvar_name (VN_IndexName (s, _)) = String.isPrefix "'" s
+
+fun tvar_indexname (VN_Name s) = (s, 0)
+  | tvar_indexname (VN_IndexName idx) = idx
+
 fun display_of_indexname (x, 0) = x
   | display_of_indexname xi = unprefix "?" (Term.string_of_vname xi)
 
@@ -408,8 +416,25 @@ fun deconflict_bound_names term =
    - Schematic variables (?x) — anywhere in the theorem
    Each instantiation is classified automatically based on where the variable name
    appears in the theorem. *)
-fun inst_universal_quantifiers ctxt insts thm =
+fun inst_universal_quantifiers ctxt (insts, tinsts) thm =
   let
+    (* === Phase 0: Instantiate type variables === *)
+    val thm = if null tinsts then thm
+              else let
+                val tvars_list = Term.add_tvars (Thm.prop_of thm) []
+                fun find_sort idx =
+                  case find_first (fn (idx', _) => idx = idx') tvars_list of
+                    SOME (_, sort) => sort
+                  | NONE => error ("Type variable " ^ quote (Term.string_of_vname idx) ^
+                                   " is not found in the rule")
+                val cinsts = map (fn (idx, T) =>
+                  ((idx, find_sort idx), Thm.ctyp_of ctxt T)) tinsts
+              in Thm.instantiate (TVars.make cinsts, Vars.empty) thm
+                 handle THM (msg, _, _) =>
+                   error ("type mismatch in type variable instantiation:\n  " ^
+                          String.translate (fn #"\n" => "\n  " | c => str c) msg)
+              end
+
     val prop = Thm.prop_of thm
 
     (* === Bump schematic indices in value terms to avoid capture ===
@@ -582,15 +607,25 @@ fun inst_universal_quantifiers ctxt insts thm =
   in thm4 end
 
 fun inst_universal_quantifiers' ctxt insts thm =
-  let val (vns, raws) = ListPair.unzip insts
-      val terms = Syntax.read_terms (Proof_Context.set_mode Proof_Context.mode_pattern ctxt) raws
-   in inst_universal_quantifiers ctxt (vns ~~ terms) thm
+  let
+    val (tinst_raw, inst_raw) = List.partition (is_tvar_name o fst) insts
+    val tinsts = map (fn (vn, src) =>
+      (tvar_indexname vn, Syntax.read_typ ctxt src)) tinst_raw
+    val (vns, raws) = ListPair.unzip inst_raw
+    val terms = Syntax.read_terms
+      (Proof_Context.set_mode Proof_Context.mode_pattern ctxt) raws
+  in inst_universal_quantifiers ctxt (vns ~~ terms, tinsts) thm
   end
 
 fun xwhere ctxt inst0 fixes thm =
   let
     val raw_insts = map (fn ((vn, _), (_, src)) => (vn, src)) inst0
-    val (vns, ss) = ListPair.unzip raw_insts
+
+    val (tinst_raw, inst_raw) = List.partition (is_tvar_name o fst) raw_insts
+    val tinsts = map (fn (vn, src) =>
+      (tvar_indexname vn, Syntax.read_typ ctxt src)) tinst_raw
+
+    val (vns, ss) = ListPair.unzip inst_raw
 
     (* Build eigen-context: declare theorem's tvars/vars for type inference,
        then add user fixes from the `for` clause. *)
@@ -606,7 +641,7 @@ fun xwhere ctxt inst0 fixes thm =
       |> Variable.export_terms ctxt1 ctxt
 
     val insts = vns ~~ ts
-  in inst_universal_quantifiers ctxt insts thm
+  in inst_universal_quantifiers ctxt (insts, tinsts) thm
      |> Rule_Cases.save thm
   end
 

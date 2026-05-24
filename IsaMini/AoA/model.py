@@ -165,7 +165,7 @@ def _where_suffix(fact: Fact) -> str:
     where_parts = " and ".join(
         f"{i['name']} = \N{SINGLE LEFT-POINTING ANGLE QUOTATION MARK}{i['value']}\N{SINGLE RIGHT-POINTING ANGLE QUOTATION MARK}"
         for i in insts)
-    return f"[where {where_parts}]"
+    return f"[xwhere {where_parts}]"
 
 def _of_suffix(fact: Fact) -> str:
     if "name" not in fact:
@@ -179,7 +179,7 @@ def _of_suffix(fact: Fact) -> str:
             of_parts.append("_")
         else:
             of_parts.append(item["name"] + _fact_suffix(item))
-    return "[OF " + " ".join(of_parts) + "]"
+    return "[xOF " + " ".join(of_parts) + "]"
 
 def _symmetric_suffix(fact: Fact) -> str:
     if "name" not in fact:
@@ -2337,7 +2337,7 @@ class Interaction_InstantiateSchematics(Interaction):
         where_parts = " and ".join(
             f"{v} = \N{SINGLE LEFT-POINTING ANGLE QUOTATION MARK}{t}\N{SINGLE RIGHT-POINTING ANGLE QUOTATION MARK}"
             for v, t in insts)
-        rule_src = f'"{self.rule_name.unicode}"[where {where_parts}]'
+        rule_src = f'"{self.rule_name.unicode}"[xwhere {where_parts}]'
         return IsaTerm.from_agent(rule_src)
 
 
@@ -4862,7 +4862,7 @@ class CaseSplit_Like(SubgoalMaker):
                             kind: Literal["induction", "case-split"],
                            ) -> 'FailureReason | None':
         """Resolve `rule_spec` to a concrete Isabelle rule source string
-        (possibly with a `[where ?v = t]` attribute clause) and cache it
+        (possibly with a `[xwhere ?v = t]` attribute clause) and cache it
         in `self._resolved_rule_str`.
 
         Three stages:
@@ -4873,7 +4873,7 @@ class CaseSplit_Like(SubgoalMaker):
              the rule's consume premises.
           3. If schematic vars are present, fork an
              `Interaction_InstantiateSchematics` to collect instantiations,
-             then assemble `rule_name[where ?v1 = t1, ...]`.
+             then assemble `rule_name[xwhere ?v1 = t1, ...]`.
 
         Returns None on success (result in `self._resolved_rule_str`),
         or a `FailureReason` if resolution failed (e.g. no matching rule,
@@ -6327,7 +6327,7 @@ class Rewrite(Leaf):
             for w in unfound_warnings + pit_warnings:
                 self.warnings.append(Warning(Warning.Position.FOOTER, w))
             # Check for looping rules and fork interaction if needed
-            # Send full fact references (including [where ...] attributes) so
+            # Send full fact references (including [xwhere ...] attributes) so
             # the ML side resolves the same instantiated theorems that SIMPLIFY uses.
             fact_names = [f.pack()[0] for f in self.using
                           if isinstance(f, IsabelleFact_Presented)]

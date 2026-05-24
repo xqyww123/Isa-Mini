@@ -220,7 +220,7 @@ val INST_VAR'' : (indexname * term) list -> operation
 val INST_VAR_CMD : command
 
 val SPECIALIZE   : string option -> fact list -> (Minilang_Aux.var_name * string) list -> fact list -> operation
-val SPECIALIZE'' : string option -> thm list  -> (Minilang_Aux.var_name * term) list   -> thm list  -> operation
+val SPECIALIZE'' : string option -> thm list  -> (Minilang_Aux.var_name * term) list * (indexname * typ) list -> thm list  -> operation
 val SPECIALIZE_CMD : command
 
 val CONSIDER : (
@@ -3559,9 +3559,15 @@ fun gen_SPECIALIZE prep_thms prep_insts opt_name raw_rules raw_insts raw_facts =
   timed_OPR 8 (SPECIALIZE' prep_thms prep_insts opt_name raw_rules raw_insts raw_facts)
 
 fun read_inst_terms ctxt raw_insts =
-  let val (vns, raws) = ListPair.unzip raw_insts
-      val terms = Syntax.read_terms (Proof_Context.set_mode Proof_Context.mode_pattern ctxt) raws
-   in vns ~~ terms end
+  let
+    val (tinst_raw, inst_raw) =
+      List.partition (Minilang_Aux.is_tvar_name o fst) raw_insts
+    val tinsts = map (fn (vn, src) =>
+      (Minilang_Aux.tvar_indexname vn, Syntax.read_typ ctxt src)) tinst_raw
+    val (vns, raws) = ListPair.unzip inst_raw
+    val terms = Syntax.read_terms
+      (Proof_Context.set_mode Proof_Context.mode_pattern ctxt) raws
+  in (vns ~~ terms, tinsts) end
 
 val SPECIALIZE   = gen_SPECIALIZE Attrib.eval_thms read_inst_terms
 val SPECIALIZE'' = gen_SPECIALIZE (K I) (K I)

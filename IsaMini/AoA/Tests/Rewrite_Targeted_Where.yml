@@ -13,7 +13,7 @@ Error: Unfinished Proof! Call command `edit` with action `fill` and target step 
 --------------------------------------------------
 Interaction Prompt
 --------------------------------------------------
-Rule 'my_looping[where ?x = \<open>a::nat\<close>]' (f a = g (f a)) would cause infinite rewriting.
+Rule 'my_looping[xwhere ?x = \<open>a::nat\<close>]' (f a = g (f a)) would cause infinite rewriting.
 To use this rule safely, select which specific subterm to rewrite:
   0. f a
 Answer with the index of the subterm to rewrite, or leave empty to drop this rule.
@@ -33,7 +33,7 @@ proof:
     thought: Apply my_looping with x instantiated to a
     operation: Rewrite
     using:
-      - my_looping[where ?x = ‹a::nat›]: f ?x = g (f ?x)
+      - my_looping[xwhere ?x = ‹a::nat›]: f ?x = g (f ?x)
     targets:
       - the goal
     goal changes into:
