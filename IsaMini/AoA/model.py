@@ -2491,7 +2491,12 @@ class EditOutcome:
         in the tree)."""
         cancelled = False
         if can_continue:
-            await node._refresh_me_alone(auto_intro=auto_intro)
+            try:
+                await node._refresh_me_alone(auto_intro=auto_intro)
+            except ProofTreeTooDeep:
+                node.session._depth_limit_exceeded = True
+                node.status = EvaluationStatus.Failure(
+                    0.0, FailureReason("Proof tree depth exceeds the limit"))
         else:
             failed_id = node.parent._failed_predecessor_id(node) if node.parent else None
             await node._cancel(failed_id)
@@ -3407,7 +3412,7 @@ class NonLeaf_Node(Node):
         before_segs = split_id_into_segs(before.local_step)
         created: list[Node] = []
         stopped_at: int | None = None
-        error: GoalIsNontrivial | None = None
+        error: GoalIsNontrivial | ProofTreeTooDeep | None = None
         for k, gn in enumerate(gns):
             if insert_idx + k == 0 and k == 0:
                 segs = list(before_segs)
@@ -4721,7 +4726,11 @@ class SubgoalMaker(GoalContainer, StdBlock):
                 self.sub_nodes = []
                 ml_state = await s0.clone(None)
                 for i in range(goals_count):
-                    new_node = self._new_goal_node(i, ml_state)
+                    try:
+                        new_node = self._new_goal_node(i, ml_state)
+                    except ProofTreeTooDeep:
+                        self.session._depth_limit_exceeded = True
+                        return FailureReason("Proof tree depth exceeds the limit")
                     self.sub_nodes.append(new_node)
                     if i < goals_count - 1:
                         ml_state = await ml_state.sorry_next(None, None)
