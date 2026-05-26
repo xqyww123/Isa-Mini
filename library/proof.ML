@@ -1383,6 +1383,40 @@ fun SPLIT_CONJS' (ctxt, HHF (st, items) :: L) =
     else raise OPR_FAIL (INVALID_OPR, "SPLIT_CONJS: the leading goal is not a conjunction")
   | SPLIT_CONJS' _ = raise BROKEN_INVARIANT
 
+(* Helper conversions for wrapping/unwrapping NO_SIMP protection on goal conclusions.
+
+   NO_SIMP is wrapped at the META level (around Trueprop XXX) rather than at
+   the object level (inside Trueprop). This makes NO_SIMP invisible to the
+   classical reasoner, which operates on object-level propositions inside
+   Trueprop. Previously, wrapping inside Trueprop exposed NO_SIMP(False) to
+   the classical reasoner, which could leak '¬ NO_SIMP False' into new
+   premises via classical interactions. *)
+local
+  open Conv
+  val NO_SIMP_def_sym = @{thm NO_SIMP_def[symmetric]}
+  val NO_SIMP_def = @{thm NO_SIMP_def}
+
+  fun traverse_to_conclusion transform ctxt' ctm =
+    case Thm.term_of ctm of
+      Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs _ =>
+        arg_conv (abs_conv (traverse_to_conclusion transform o snd) ctxt') ctm
+    | Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ _ =>
+        arg_conv (traverse_to_conclusion transform ctxt') ctm
+    | _ => transform ctm
+
+in
+  fun wrap_goal_conclusion_NO_SIMP ctxt =
+    traverse_to_conclusion (rewr_conv NO_SIMP_def_sym) ctxt
+
+  fun unwrap_goal_conclusion_NO_SIMP ctxt =
+    let fun unwrap ctm =
+          case Thm.term_of ctm of
+            Const(\<^const_name>\<open>NO_SIMP\<close>, _) $ _ =>
+              (rewr_conv NO_SIMP_def then_conv unwrap) ctm
+          | _ => all_conv ctm
+    in traverse_to_conclusion unwrap ctxt end
+end
+
 (* INTRO'' performs introduction rules (allI and impI) on the current goal.
    Parameters:
    - F: Processing function that handles the focused subgoal.
@@ -1403,6 +1437,7 @@ fun INTRO'' F mode bs (origin as (ctxt, HHF (st0, items) :: L)) =
                      |> Seq.REPEAT (Thm.biresolution NONE true
                               [(false, Thms.allI), (false, Thms.impI)] 1)
                      |> Seq.hd
+               val st = Conv.gconv_rule (unwrap_goal_conclusion_NO_SIMP ctxt) 1 st
 
                val default_binds = quantifier_bindings ctxt st |> map fst
                val binds = case bs
@@ -1985,45 +2020,6 @@ val CRUSH_CMD = ( OPT_VARS -- with_parser )
              >> (OPR o CRUSH' read_with)
 
 (** SIMPLIFY_GOAL_AND_PREMISES' **)
-
-(* Helper conversions for wrapping/unwrapping NO_SIMP protection on goal conclusions.
-
-   NO_SIMP is wrapped at the META level (around Trueprop XXX) rather than at
-   the object level (inside Trueprop). This makes NO_SIMP invisible to the
-   classical reasoner, which operates on object-level propositions inside
-   Trueprop. Previously, wrapping inside Trueprop exposed NO_SIMP(False) to
-   the classical reasoner, which could leak '¬ NO_SIMP False' into new
-   premises via classical interactions. *)
-local
-  open Conv
-  val NO_SIMP_def_sym = @{thm NO_SIMP_def[symmetric]}
-  val NO_SIMP_def = @{thm NO_SIMP_def}
-
-  (* Traverse the meta-level structure (⋀x. ... ⟹ ... ⟹ conclusion) to reach
-     the conclusion and apply the transform there. Stops at Trueprop so the
-     transform wraps the entire Trueprop(...) at the meta level. *)
-  fun traverse_to_conclusion transform ctxt' ctm =
-    case Thm.term_of ctm of
-      Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs _ =>
-        arg_conv (abs_conv (traverse_to_conclusion transform o snd) ctxt') ctm
-    | Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ _ =>
-        arg_conv (traverse_to_conclusion transform ctxt') ctm
-    | _ => transform ctm
-
-in
-  (* Wrap goal conclusion (at the prop level, around Trueprop) with NO_SIMP *)
-  fun wrap_goal_conclusion_NO_SIMP ctxt =
-    traverse_to_conclusion (rewr_conv NO_SIMP_def_sym) ctxt
-
-  (* Unwrap NO_SIMP from the meta-level goal conclusion after simplification *)
-  fun unwrap_goal_conclusion_NO_SIMP ctxt =
-    let fun unwrap ctm =
-          case Thm.term_of ctm of
-            Const(\<^const_name>\<open>NO_SIMP\<close>, _) $ _ =>
-              (rewr_conv NO_SIMP_def then_conv unwrap) ctm
-          | _ => all_conv ctm
-    in traverse_to_conclusion unwrap ctxt end
-end
 
 (* Main operation function *)
 fun SIMPLIFY_GOAL_AND_PREMISES'
@@ -3750,18 +3746,17 @@ fun CONSIDER'i raw_dnf (ctxt0, HHF (st0, items0) :: S) =
         | CB initial sgs
              ((cparams, _, (decls, fixes, AS, raw_props, binds, binders), _) :: remain_clauses)
              ctxt' (lem, _, S, _) =
-            let val rule' = lem
-                         |> Goal.conclude
-                         |> singleton (Proof_Context.export ctxt' ctxt0)
-                         |> initial ? MP ctxt0 rule0
+            let val lem_concluded = Goal.conclude lem
+                val lem_exported = singleton (Proof_Context.export ctxt' ctxt0) lem_concluded
+                val rule' = lem_exported |> initial ? MP ctxt0 rule0
                 fun export a b =
-                    let val (A,B) = Obtain.obtain_export ctxt0 rule' cparams a b 
+                    let val (A,B) = Obtain.obtain_export ctxt0 rule' cparams a b
                         fun export_thm thm =
                           let val protected = is_protected (Thm.prop_of thm)
-                           in thm
-                           |> protected? Goal.conclude
+                              val thm' = thm |> protected? Goal.conclude
+                           in (thm'
                            |> A
-                           |> protected? Goal.protect 0
+                           |> protected? Goal.protect 0)
                           end
                      in (export_thm,B)
                     end

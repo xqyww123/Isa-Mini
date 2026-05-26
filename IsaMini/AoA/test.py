@@ -9277,6 +9277,164 @@ async def _test_Compute1(root: Root, file: MyIO):
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
 
+@model_test("Branch_SorryNextFail", "Test_Branch.thy", 8)
+async def _test_Branch_SorryNextFail(root: Root, file: MyIO):
+    """Reproduce: when Branch's sorry_next fails during sub-node creation,
+    subsequent fill on a child of the partially-created Branch must NOT
+    crash with InternalError("The beginning state of the execution is not
+    initialized!").
+
+    Root cause (from conversation e5fe3afb6_6): SubgoalMaker._refresh_the
+    _beginning_opr's sorry_next loop (model.py ~line 4736) can raise
+    IsabelleError (e.g. "Conclusion in obtained context must be object-logic
+    judgment" from Obtain.eliminate in the CONSIDER MAGIC callback). The
+    unhandled exception leaves sub_nodes partially populated with
+    GoalNodes whose _state_before_ending_ was never initialized via the
+    normal refresh path. A subsequent fill on those GoalNodes tries to
+    execute from an uninitialized state, hitting "beginning_state_not_found"
+    on the ML side, which is escalated to InternalError and crashes the
+    process (sys.exit(1) in _edit_tool_logic).
+
+    Strategy: monkey-patch sorry_next to fail on the second call (the one
+    that advances past the first case), simulating the real failure without
+    requiring the exact Isabelle-level conditions.
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    sorry_next_call_count = 0
+    original_sorry_next = Minilang_State.sorry_next
+
+    async def patched_sorry_next(self, varnames, assign_to):
+        nonlocal sorry_next_call_count
+        sorry_next_call_count += 1
+        if sorry_next_call_count == 2:
+            raise IsabelleError(
+                ["Conclusion in obtained context must be object-logic judgment"], None)
+        return await original_sorry_next(self, varnames, assign_to)
+
+    Minilang_State.sorry_next = patched_sorry_next
+
+    root.session.age += 1
+    try:
+        outcome1 = await root.fill("1", [Branch.gen_single({
+            "thought": "Case split on sign of x",
+            "cases": [
+                {"statement": {"english": "x is positive", "isabelle": "x > 0"},
+                 "name": "pos"},
+                {"statement": {"english": "x is negative", "isabelle": "x < 0"},
+                 "name": "neg"},
+                {"statement": {"english": "x is zero", "isabelle": "x = 0"},
+                 "name": "zero"},
+            ]
+        })])
+        branch_err = outcome1.failure
+        if branch_err is not None:
+            file.write(f"Branch fill returned failure: {branch_err}\n")
+        else:
+            file.write("Branch fill succeeded\n")
+    except IsabelleError as e:
+        file.write(f"Branch fill raised IsabelleError: {e}\n")
+    except InternalError as e:
+        file.write(f"BUG: Branch fill raised InternalError: {e}\n")
+    finally:
+        Minilang_State.sorry_next = original_sorry_next
+
+    print_header("After Branch attempt (sorry_next patched to fail on 2nd call)", file)
+    root.print(0, file)
+
+    br = root.locate_node("1")
+    if isinstance(br, NonLeaf_Node) and br.sub_nodes:
+        file.write(f"Branch sub_nodes count: {len(br.sub_nodes)}\n")
+        for gn in br.sub_nodes:
+            file.write(f"  {gn.id}: status={gn.status.status.value}\n")
+
+        root.session.age += 1
+        try:
+            outcome2 = await root.fill("1.0.1", [Obvious.gen_single({"facts": []})])
+            if outcome2.failure:
+                file.write(f"Fill 1.0.1 failure (graceful): {outcome2.failure}\n")
+            else:
+                file.write(f"Fill 1.0.1 succeeded\n")
+        except InternalError as e:
+            file.write(f"BUG: Fill 1.0.1 raised InternalError: {e}\n")
+        except IsabelleError as e:
+            file.write(f"Fill 1.0.1 raised IsabelleError (graceful): {e}\n")
+        except Exception as e:
+            file.write(f"Fill 1.0.1 raised {type(e).__name__}: {e}\n")
+    else:
+        file.write("Branch has no sub_nodes or was not created\n")
+
+    print_header("Final state", file)
+    root.print(0, file)
+
+
+@model_test("Branch_SorryNextFail_Real", "Test_BranchSorryNextFail.thy", 16)
+async def _test_Branch_SorryNextFail_Real(root: Root, file: MyIO):
+    """Reproduce the actual ML-level sorry_next failure from conversation
+    e5fe3afb6_6.  Uses the same goal structure: Ball quantifier over a set
+    of functions, Rewrite with Ball_def to fix variables, then Branch.
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    outcome1 = await root.fill("1", [Rewrite.gen_single({
+        "thought": "Unfold the bounded universal",
+        "using": [{"name": "Ball_def"}],
+        "use system simplifiers": False,
+        "rewrite goal": True,
+        "rewrite premises": []
+    })])
+    print_header("After Rewrite with Ball_def", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    try:
+        outcome2 = await root.fill("2", [Branch.gen_single({
+            "thought": "Case split: c > 0 or c <= 0",
+            "cases": [
+                {"statement": {"english": "c is positive", "isabelle": "(0::real) < c"},
+                 "name": "c_pos"},
+                {"statement": {"english": "c is non-positive", "isabelle": "c \\<le> (0::real)"},
+                 "name": "c_nonpos"},
+            ]
+        })])
+        if outcome2.failure is not None:
+            file.write(f"Branch fill failure: {outcome2.failure}\n")
+        else:
+            file.write("Branch fill succeeded\n")
+    except IsabelleError as e:
+        file.write(f"Branch raised IsabelleError: {e}\n")
+    except InternalError as e:
+        file.write(f"BUG (Branch): InternalError: {e}\n")
+
+    print_header("After Branch attempt", file)
+    root.print(0, file)
+
+    br = root.locate_node("2")
+    if isinstance(br, NonLeaf_Node) and br.sub_nodes:
+        file.write(f"Branch sub_nodes: {len(br.sub_nodes)}\n")
+        for gn in br.sub_nodes:
+            file.write(f"  {gn.id}: status={gn.status.status.value}\n")
+        root.session.age += 1
+        try:
+            outcome3 = await root.fill("2.0.1", [Obvious.gen_single({"facts": []})])
+            if outcome3.failure:
+                file.write(f"Fill 2.0.1 failure: {outcome3.failure}\n")
+            else:
+                file.write(f"Fill 2.0.1 succeeded\n")
+        except InternalError as e:
+            file.write(f"BUG (Fill): InternalError: {e}\n")
+        except Exception as e:
+            file.write(f"Fill 2.0.1 raised {type(e).__name__}: {e}\n")
+    else:
+        file.write("Branch has no sub_nodes\n")
+
+    print_header("Final state", file)
+    root.print(0, file)
+
+
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
     import msgpack as mp
     from IsaREPL import Client
