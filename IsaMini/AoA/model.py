@@ -1247,7 +1247,7 @@ class Minilang_Operation(NamedTuple):
             ascii_of_unicode(conclusion)
         ))
     @staticmethod
-    def OBTAIN(variables: list[Explicit_Var], constraints: list[tuple[str | None, xterm]]) -> 'Minilang_Operation':
+    def OBTAIN(variables: list[Explicit_Var], constraints: list[tuple[str, xterm]]) -> 'Minilang_Operation':
         vars = [(v["name"], ascii_of_unicode(v["type"]) if "type" in v else None) for v in variables]
         return Minilang_Operation("OBTAIN", (vars, [(n, ascii_of_unicode(c)) for n, c in constraints]))
     @staticmethod
@@ -1258,7 +1258,7 @@ class Minilang_Operation(NamedTuple):
                cached_proof: 'tuple[str, int] | None' = None) -> 'Minilang_Operation':
         return Minilang_Operation("HAMMER", ([r.pack() for r in fact_refs], timeout, cached_proof))
     @staticmethod
-    def CHAINING(name: str | None, fact_refs: 'list[IsabelleFact]') -> 'Minilang_Operation':
+    def CHAINING(name: str, fact_refs: 'list[IsabelleFact]') -> 'Minilang_Operation':
         return Minilang_Operation("CHAINING", (name, [r.pack() for r in fact_refs]))
     @staticmethod
     def INTRO(bindings: Bindings | None) -> 'Minilang_Operation':
@@ -1293,7 +1293,7 @@ class Minilang_Operation(NamedTuple):
     def WITNESS(terms: list[xterm]) -> 'Minilang_Operation':
         return Minilang_Operation("WITNESS", [ascii_of_unicode(t) for t in terms])
     @staticmethod
-    def BRANCH(cases: list[tuple[str | None, xterm]]) -> 'Minilang_Operation':
+    def BRANCH(cases: list[tuple[str, xterm]]) -> 'Minilang_Operation':
         return Minilang_Operation("BRANCH", [(n, ascii_of_unicode(t)) for n, t in cases])
     @staticmethod
     def CASE_SPLIT(target: xterm, vars: list[varname_spec] | None, rule: 'IsaTerm | None', no_simp: bool) -> 'Minilang_Operation':
@@ -5464,7 +5464,13 @@ class Chaining_ToolArg(TypedDict):
 class Chaining(Leaf):
     def __init__(self, config: NodeConfig, arg: Chaining_ToolArg):
         super().__init__(config, "")
-        self.chain_name: str | None = arg.get("name")
+        explicit_name = arg.get("name")
+        if explicit_name:
+            self.chain_name: str = explicit_name
+        else:
+            session = the_session()
+            session.fact_name_counter += 1
+            self.chain_name = f"chain{session.fact_name_counter}"
         self._raw_facts: list[FactByName | FactByProposition] = [
             f for f in arg["facts"] if f is not None]
         self.fact_refs: list[IsabelleFact] | None = None
@@ -8010,6 +8016,7 @@ class Session:
         _session_var.set(self)
         self.age = 0
         self.setup_rewriting_counter: int = 0
+        self.fact_name_counter: int = 0
         self._pit_counter: int = parent._pit_counter if parent else 0
         self.last_proof_op_time: float = time()
         self.logger = logger or (parent.logger if parent else None)

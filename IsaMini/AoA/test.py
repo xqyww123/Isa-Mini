@@ -3544,6 +3544,60 @@ async def _test_Derive_NullGap(root: Root, file: MyIO):
     await root.fill("1" if _outcome.failure is not None else "2",
                     [Obvious.gen_single({"facts": [{"name": "h1"}, {"name": "h2"}, {"name": "h3"}]})])
 
+@model_test("DeriveBall", "Test_DeriveBall.thy", 11)
+async def _test_DeriveBall(root: Root, file: MyIO):
+    """Test Derive on a Ball-quantified rule: ∀x∈A. P x.
+    Instantiate x=0, discharge membership h1: 0 ∈ A."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    outcome = await root.fill("1", [Derive.gen_single({
+        "thought": "Instantiate Ball-quantified h2 with x=0, discharge membership with h1",
+        "rule": {"name": "h2"},
+        "instantiations": [{"name": "x", "value": "0"}],
+        "discharging_facts": [{"name": "h1"}],
+        "result_name": "derived_P0"
+    })])
+    if outcome.failure is not None:
+        file.write(f"Derive failed: {outcome.failure}\n")
+    print_header("After Derive", file)
+    root.print(0, file)
+    root.session.age += 1
+    outcome2 = await root.fill("2", [Obvious.gen_single({
+        "facts": [{"name": "derived_P0"}]
+    })])
+    if outcome2.failure is not None:
+        file.write(
+            f"No step 2 needed: "
+            f"{type(outcome2.failure).__name__}: {outcome2.failure}\n")
+    else:
+        print_header("After Obvious", file)
+        root.print(0, file)
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+@model_test("FactByNameWhereBall", "Test_FactByNameWhereBall.thy", 11)
+async def _test_FactByNameWhereBall(root: Root, file: MyIO):
+    """Test FactByName with [xwhere] on a Ball-quantified fact: ∀x∈A. P x.
+    Instantiate x=0 via xwhere, membership premise discharged by hmem."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    outcome = await root.fill("1", [Obvious.gen_single({
+        "facts": [
+            {"name": "h", "instantiations": [{"name": "x", "value": "0 :: nat"}]},
+            {"name": "hmem"}
+        ]
+    })])
+    if outcome.failure is not None:
+        file.write(f"Fill failed: {outcome.failure}\n")
+    print_header("After Obvious with Ball xwhere", file)
+    root.print(0, file)
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 @model_test("GlobalEnv", "Test_GlobalEnv.thy", 11)
 async def _test_GlobalEnv(root: Root, file: MyIO):
     """Corner case + recovery on `x = 0 ⟹ x * x = 0`:
@@ -4000,6 +4054,38 @@ async def _test_Chaining(root: Root, file: MyIO):
         "facts": [{"name": "ac"}],
     })])
     print_header("After Obvious using ac", file)
+    root.print(0, file)
+
+    unfinished_nodes = set()
+    root.unfinished_nodes(unfinished_nodes)
+    file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+
+@model_test("Chaining_NoCounter_AutoName", "Test_Chaining_NoCounter_AutoName.thy", 14)
+async def _test_Chaining_NoCounter_AutoName(root: Root, file: MyIO):
+    """Chaining without an explicit name under No_Counter mode.
+    The agent server sets counter_mode="none", so CHAINING's auto-name path
+    used to call map_fact_counter which raised "No_Counter: fact counter cannot
+    be modified". After the fix, Python assigns a stable name from the step id
+    so ML never tries to auto-increment."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Chaining WITHOUT a name — Python auto-assigns via Session.fact_name_counter
+    await root.fill("1", [Chaining.gen_single({
+        "thought": "Chain ab and bc by transitivity (no explicit name)",
+        "facts": [
+            {"name": "ab"},
+            {"name": "bc"},
+        ],
+    })])
+    print_header("After Chaining (auto-named)", file)
+    root.print(0, file)
+
+    # Close the goal using the auto-named fact
+    await root.fill("2", [Obvious.gen_single({
+        "facts": [{"name": "chain1"}],
+    })])
+    print_header("After Obvious using auto-named fact", file)
     root.print(0, file)
 
     unfinished_nodes = set()

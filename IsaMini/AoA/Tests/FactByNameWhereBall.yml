@@ -1,0 +1,33 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - P: nat ⇒ bool
+premises:
+  - h: ∀x ∈A. P x
+  - hmem: (0 :: nat) ∈ A
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+variables:
+  - A: nat set
+goal: P (0 :: nat)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Obvious with Ball xwhere
+--------------------------------------------------
+variables:
+  - P: nat ⇒ bool
+premises:
+  - h: ∀x ∈A. P x
+  - hmem: (0 :: nat) ∈ A
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+variables:
+  - A: nat set
+goal: P (0 :: nat)
+proof:
+  - step id: 1
+    operation: Obvious
+    with facts:
+      - h[xwhere x = ‹0 :: nat›]: ∀x ∈A. P x
+      - hmem: (0 :: nat) ∈ A
+Unfinished nodes: 0

@@ -4,6 +4,8 @@ Initial YAML
 variables:
   - z: 'a
   - x: 'a
+type variables:
+  - 'a: {one,plus,times,zero}
 premises:
   - h1: y = x + (0 :: 'a)
   - h2: ∃(aAa :: 'a). z = y * (1 :: 'a) + aAa
@@ -19,6 +21,8 @@ After Rewrite
 variables:
   - z: 'a
   - x: 'a
+type variables:
+  - 'a: {one,plus,times,zero}
 premises:
   - h1: y = x + (0 :: 'a)
   - h2: ∃(aAa :: 'a). z = y * (1 :: 'a) + aAa
@@ -46,6 +50,8 @@ After Rename Fact
 variables:
   - z: 'a
   - x: 'a
+type variables:
+  - 'a: {one,plus,times,zero}
 premises:
   - h1: y = x + (0 :: 'a)
   - h2: ∃(aAa :: 'a). z = y * (1 :: 'a) + aAa

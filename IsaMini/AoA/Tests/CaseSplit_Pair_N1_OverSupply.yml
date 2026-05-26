@@ -4,6 +4,9 @@ Initial YAML
 variables:
   - p: 'a × 'b
   - P: 'a × 'b ⇒ bool
+type variables:
+  - 'b: type
+  - 'a: type
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: P p
 proof: empty
@@ -28,6 +31,9 @@ After splice (N==1, over-supply)
 variables:
   - p: 'a × 'b
   - P: 'a × 'b ⇒ bool
+type variables:
+  - 'b: type
+  - 'a: type
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: P p
 proof:
@@ -38,6 +44,9 @@ proof:
     fixing variables:
       - a: 'a
       - b: 'b
+    type variables:
+      - 'b: type
+      - 'a: type
     assuming premises:
       - Pair.prem0: p = (a, b)
     notice:

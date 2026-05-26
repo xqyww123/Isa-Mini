@@ -3,6 +3,8 @@ Initial YAML
 --------------------------------------------------
 variables:
   - l: 'a list
+type variables:
+  - 'a: type
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: rev (rev l) = l
 proof: empty
@@ -33,6 +35,8 @@ After Induction with mapped case_names
 --------------------------------------------------
 variables:
   - l: 'a list
+type variables:
+  - 'a: type
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: rev (rev l) = l
 proof:

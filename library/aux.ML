@@ -278,6 +278,8 @@ fun xof ctxt (args, concl_args) fixes thm =
 fun inst_hol_alls ctxt insts thm =
   if null insts then thm
   else let
+    datatype quant_kind = QAll | QBall
+
     fun concl_conv C ctxt ctm =
       case Thm.term_of ctm
         of Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs _ =>
@@ -286,42 +288,67 @@ fun inst_hol_alls ctxt insts thm =
             Conv.arg_conv (concl_conv C ctxt) ctm
          | _ => C ctxt ctm
 
-    (* Pull a ∀ from inside ⟶ consequent(s) to the top:
-       (P ⟶ ∀x. Q x) = (∀x. P ⟶ Q x)  via all_simps(6)[symmetric] *)
+    (* Pull a ∀ or Ball from inside ⟶ consequent(s) to the top *)
+    fun pull_rewrite ctm =
+      case Thm.term_of ctm of
+        Const(\<^const_name>\<open>HOL.implies\<close>, _) $ _ $ (Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs _) =>
+          Conv.rewr_conv @{lemma "(P \<longrightarrow> (\<forall>x. Q x)) \<equiv> (\<forall>x. P \<longrightarrow> Q x)" for P Q by auto} ctm
+      | Const(\<^const_name>\<open>HOL.implies\<close>, _) $ _ $ (Const(\<^const_name>\<open>Set.Ball\<close>, _) $ _ $ Abs _) =>
+          Conv.rewr_conv @{thm pull_Ball_eq} ctm
+      | _ => Conv.all_conv ctm
+
     fun pull_forall ctxt ctm =
       case Thm.term_of ctm of
         Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs _ => Conv.all_conv ctm
+      | Const(\<^const_name>\<open>Set.Ball\<close>, _) $ _ $ Abs _ => Conv.all_conv ctm
       | Const(\<^const_name>\<open>HOL.implies\<close>, _) $ _ $ _ =>
-          (Conv.arg_conv (pull_forall ctxt)
-           then_conv Conv.rewr_conv @{lemma "(P \<longrightarrow> (\<forall>x. Q x)) \<equiv> (\<forall>x. P \<longrightarrow> Q x)" for P Q by auto}) ctm
+          (Conv.arg_conv (pull_forall ctxt) then_conv pull_rewrite) ctm
       | _ => Conv.all_conv ctm
 
+    fun swap_comm ctm =
+      case Thm.term_of ctm of
+        Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs(_, _,
+          Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs _) =>
+          Conv.rewr_conv @{thm HOL.all_comm[folded atomize_eq]} ctm
+      | Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs(_, _,
+          Const(\<^const_name>\<open>Set.Ball\<close>, _) $ _ $ Abs _) =>
+          Conv.rewr_conv @{thm All_Ball_comm[folded atomize_eq]} ctm
+      | Const(\<^const_name>\<open>Set.Ball\<close>, _) $ _ $ Abs(_, _,
+          Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs _) =>
+          Conv.rewr_conv @{thm Ball_All_comm[folded atomize_eq]} ctm
+      | Const(\<^const_name>\<open>Set.Ball\<close>, _) $ _ $ Abs(_, _,
+          Const(\<^const_name>\<open>Set.Ball\<close>, _) $ _ $ Abs _) =>
+          Conv.rewr_conv @{thm Ball_Ball_comm[folded atomize_eq]} ctm
+      | t => raise TERM ("swap_comm: unexpected quantifier structure", [t])
+
     fun swap_all [] _ ctm = Conv.all_conv ctm
-      | swap_all (NONE :: L) ctxt ctm =
+      | swap_all ((_, NONE) :: L) ctxt ctm =
           let fun swap [] ctm = Conv.all_conv ctm
-                | swap (NONE :: L) ctm = swap L ctm
-                | swap (SOME _ :: L) ctm =
-                   (Conv.rewr_conv @{thm HOL.all_comm[folded atomize_eq]} then_conv
-                    Conv.arg_conv (swap L)) ctm
+                | swap ((_, NONE) :: L) ctm = swap L ctm
+                | swap ((_, SOME _) :: L) ctm =
+                   (swap_comm then_conv Conv.arg_conv (swap L)) ctm
            in (pull_forall ctxt
                then_conv Conv.arg_conv (Conv.abs_conv (swap_all L o snd) ctxt)
                then_conv swap L) ctm end
-      | swap_all (SOME _ :: L) ctxt ctm =
+      | swap_all ((_, SOME _) :: L) ctxt ctm =
           (pull_forall ctxt
            then_conv Conv.arg_conv (Conv.abs_conv (swap_all L o snd) ctxt)) ctm
 
     fun foralls (Const(\<^const_name>\<open>Trueprop\<close>, _) $ X) = foralls X
       | foralls (Const(\<^const_name>\<open>HOL.implies\<close>, _) $ _ $ X) = foralls X
-      | foralls (Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs (name, _, X)) = name :: foralls X
+      | foralls (Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs (name, _, X)) =
+          (name, QAll) :: foralls X
+      | foralls (Const(\<^const_name>\<open>Set.Ball\<close>, _) $ _ $ Abs (name, _, X)) =
+          (name, QBall) :: foralls X
       | foralls (Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs (_, _, X)) = foralls X
       | foralls (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ X) = foralls X
       | foralls _ = []
 
     val alls = foralls (Thm.concl_of thm)
-            |> map (fn name =>
-                case AList.lookup (op =) insts name of
-                  SOME ct => SOME ct
-                | NONE => NONE)
+            |> map (fn (name, qk) =>
+                (qk, case AList.lookup (op =) insts name of
+                       SOME ct => SOME ct
+                     | NONE => NONE))
 
     (* Instantiate a single outermost HOL ∀ in the conclusion using spec,
        without bumping any schematic variable indices.
@@ -329,7 +356,6 @@ fun inst_hol_alls ctxt insts thm =
        Result:            ... ⟹ Trueprop(body[0 := ct])              *)
     fun spec_no_bump ct th =
       let
-        (* Extract All(Abs(...)) from the conclusion, navigating past ⋀ and ⟹ *)
         fun get_hol_all (Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs(_, _, b)) = get_hol_all b
           | get_hol_all (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ b) = get_hol_all b
           | get_hol_all (Const(\<^const_name>\<open>Trueprop\<close>, _) $
@@ -339,15 +365,11 @@ fun inst_hol_alls ctxt insts thm =
         val (allT, abs_body) = case all_term of
             Const(_, allT) $ abs_body => (allT, abs_body)
         val T = Term.domain_type (Term.domain_type allT)
-        (* Fully instantiate spec: 'a := T, ?P := abs_body, ?x := ct *)
         val spec_inst = @{thm spec}
           |> Thm.instantiate_beta
               (TVars.make [((("'a", 0), \<^sort>\<open>type\<close>), Thm.ctyp_of ctxt T)],
                Vars.make [((("P", 0), T --> \<^typ>\<open>bool\<close>), Thm.cterm_of ctxt abs_body),
                           ((("x", 0), T), ct)])
-        (* spec_inst: Trueprop(All(abs_body)) ⟹ Trueprop(abs_body ct)
-           — fully ground, no schematics from spec remain *)
-        (* Compose: resolve spec_inst's premise using th's conclusion *)
       in case Seq.pull (Thm.bicompose (SOME ctxt)
               {flatten = true, match = false, incremented = false}
               (false, th, Thm.nprems_of th) 1 spec_inst) of
@@ -355,9 +377,55 @@ fun inst_hol_alls ctxt insts thm =
          | NONE => raise THM ("spec_no_bump: bicompose failed", 0, [th, spec_inst])
       end
 
+    (* Instantiate a single outermost Ball in the conclusion using bspec.
+       th has conclusion: ... ⟹ Trueprop(Ball(S, Abs(name, T, body)))
+       Result:            ... ⟹ Trueprop(ct ∈ S) ⟹ Trueprop(body[0 := ct]) *)
+    fun bspec_no_bump ct th =
+      let
+        fun get_hol_ball (Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs(_, _, b)) = get_hol_ball b
+          | get_hol_ball (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ b) = get_hol_ball b
+          | get_hol_ball (Const(\<^const_name>\<open>Trueprop\<close>, _) $
+              (ball as Const(\<^const_name>\<open>Set.Ball\<close>, _) $ _ $ Abs _)) = ball
+          | get_hol_ball t = raise TERM ("bspec_no_bump: no Set.Ball in conclusion", [t])
+        val ball_term = get_hol_ball (Thm.concl_of th)
+        val (set_term, abs_body) = case ball_term of
+            Const(_, _) $ set_term $ abs_body => (set_term, abs_body)
+        val T = case abs_body of Abs(_, T, _) => T
+        val bspec_inst = @{thm bspec}
+          |> Thm.instantiate_beta
+              (TVars.make [((("'a", 0), \<^sort>\<open>type\<close>), Thm.ctyp_of ctxt T)],
+               Vars.make [((("A", 0), HOLogic.mk_setT T), Thm.cterm_of ctxt set_term),
+                          ((("P", 0), T --> \<^typ>\<open>bool\<close>), Thm.cterm_of ctxt abs_body),
+                          ((("x", 0), T), ct)])
+      in case Seq.pull (Thm.bicompose (SOME ctxt)
+              {flatten = true, match = false, incremented = false}
+              (false, th, Thm.nprems_of th) 1 bspec_inst) of
+           SOME (result, _) => result
+         | NONE => raise THM ("bspec_no_bump: bicompose failed", 0, [th, bspec_inst])
+      end
+
+    (* Strip all outermost Pure.all from a theorem, returning the free
+       cterms introduced (in order) so they can be re-introduced later.
+       Needed because spec_no_bump/bspec_no_bump extract raw terms from
+       the conclusion and fail on loose Bound variables from enclosing ⋀. *)
+    fun strip_pure_foralls thm =
+      case Thm.prop_of thm of
+        Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs(name, T, _) =>
+          let val frees = Term.add_free_names (Thm.prop_of thm) []
+              val name' = singleton (Name.variant_list frees) name
+              val free_ct = Thm.cterm_of ctxt (Free(name', T))
+              val (cts, thm') = strip_pure_foralls (Thm.forall_elim free_ct thm)
+          in (free_ct :: cts, thm') end
+      | _ => ([], thm)
+
   in Conv.fconv_rule (concl_conv (fn ctxt =>
           HOLogic.Trueprop_conv (swap_all alls ctxt)) ctxt) thm
-     |> fold (fn SOME ct => spec_no_bump ct | NONE => I) alls
+     |> (fn thm =>
+       let val (free_cts, thm') = strip_pure_foralls thm
+           val thm'' = fold (fn (QAll, SOME ct) => spec_no_bump ct
+                              | (QBall, SOME ct) => bspec_no_bump ct
+                              | (_, NONE) => I) alls thm'
+       in fold Thm.forall_intr free_cts thm'' end)
   end
 
 datatype var_name = VN_IndexName of indexname | VN_Name of string
@@ -466,6 +534,8 @@ fun inst_universal_quantifiers ctxt (insts, tinsts) thm =
     fun strip_hol_alls (Const(\<^const_name>\<open>Trueprop\<close>, _) $ X) = strip_hol_alls X
       | strip_hol_alls (Const(\<^const_name>\<open>HOL.implies\<close>, _) $ _ $ X) = strip_hol_alls X
       | strip_hol_alls (Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs(name, T, X)) =
+          (name, T) :: strip_hol_alls X
+      | strip_hol_alls (Const(\<^const_name>\<open>Set.Ball\<close>, _) $ _ $ Abs(name, T, X)) =
           (name, T) :: strip_hol_alls X
       | strip_hol_alls _ = []
     val hol_all_vars = strip_hol_alls (get_body prop)
@@ -587,8 +657,8 @@ fun inst_universal_quantifiers ctxt (insts, tinsts) thm =
     val hol_cterm_insts = map (fn (name, t) => (name, Thm.cterm_of ctxt t)) hol_insts
     val thm3 = inst_hol_alls ctxt hol_cterm_insts thm2
                handle THM (msg, _, _) =>
-                 error ("type mismatch in instantiation of HOL-universal (\<forall>) \
-                        \variable:\n  " ^
+                 error ("type mismatch in instantiation of HOL-universal (\<forall>) or \
+                        \bounded-universal (\<forall>\<in>) variable:\n  " ^
                         String.translate (fn #"\n" => "\n  " | c => str c) msg)
 
     (* === Unbump: restore original indices of value schematics === *)

@@ -3,6 +3,8 @@ Initial YAML
 --------------------------------------------------
 variables:
   - l: 'a list
+type variables:
+  - 'a: type
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: rev (rev l) = l
 proof: empty
@@ -12,6 +14,8 @@ After seed (cases Nil/Cons, each with an Obvious child)
 --------------------------------------------------
 variables:
   - l: 'a list
+type variables:
+  - 'a: type
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: rev (rev l) = l
 proof:

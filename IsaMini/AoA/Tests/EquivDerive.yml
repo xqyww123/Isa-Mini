@@ -5,6 +5,10 @@ variables:
   - Q: 'c ⇒ 'a ⇒ bool
   - P: 'b ⇒ 'a ⇒ bool
   - R: 'a ⇒ bool
+type variables:
+  - 'b: type
+  - 'a: type
+  - 'c: type
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: ∀(a :: 'a). R a ⟶ (∀(b :: 'b). P b a) = (∀(c :: 'c). Q c a)
 proof:
@@ -24,6 +28,10 @@ variables:
   - Q: 'c ⇒ 'a ⇒ bool
   - P: 'b ⇒ 'a ⇒ bool
   - R: 'a ⇒ bool
+type variables:
+  - 'b: type
+  - 'a: type
+  - 'c: type
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: ∀(a :: 'a). R a ⟶ (∀(b :: 'b). P b a) = (∀(c :: 'c). Q c a)
 proof:

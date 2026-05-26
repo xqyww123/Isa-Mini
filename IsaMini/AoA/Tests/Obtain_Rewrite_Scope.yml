@@ -5,6 +5,8 @@ variables:
   - k: 'a
   - P: 'a ⇒ bool
   - m: nat
+type variables:
+  - 'a: type
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: (∃(k :: nat). k = m) ⟶ P k
 proof:
@@ -22,6 +24,8 @@ variables:
   - k: 'a
   - P: 'a ⇒ bool
   - m: nat
+type variables:
+  - 'a: type
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: (∃(k :: nat). k = m) ⟶ P k
 proof:
@@ -54,6 +58,8 @@ variables:
   - k: 'a
   - P: 'a ⇒ bool
   - m: nat
+type variables:
+  - 'a: type
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: (∃(k :: nat). k = m) ⟶ P k
 proof:

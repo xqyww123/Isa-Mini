@@ -6,6 +6,9 @@ variables:
   - PP: 'a ⇒ bool
   - z: 'a
   - x: 'a
+type variables:
+  - 'b: type
+  - 'a: {one,plus,times,zero}
 premises:
   - h1: y = x + (0 :: 'a)
   - h2: ∃(aAa :: 'a). z = y * (1 :: 'a) + aAa
@@ -23,6 +26,9 @@ variables:
   - PP: 'a ⇒ bool
   - z: 'a
   - x: 'a
+type variables:
+  - 'b: type
+  - 'a: {one,plus,times,zero}
 premises:
   - h1: y = x + (0 :: 'a)
   - h2: ∃(aAa :: 'a). z = y * (1 :: 'a) + aAa
@@ -52,6 +58,9 @@ variables:
   - PP: 'a ⇒ bool
   - z: 'a
   - x: 'a
+type variables:
+  - 'b: type
+  - 'a: {one,plus,times,zero}
 premises:
   - h1: y = x + (0 :: 'a)
   - h2: ∃(aAa :: 'a). z = y * (1 :: 'a) + aAa
@@ -81,6 +90,9 @@ variables:
   - PP: 'a ⇒ bool
   - z: 'a
   - x: 'a
+type variables:
+  - 'b: type
+  - 'a: {one,plus,times,zero}
 premises:
   - h1: y = x + (0 :: 'a)
   - h2: ∃(aAa :: 'a). z = y * (1 :: 'a) + aAa

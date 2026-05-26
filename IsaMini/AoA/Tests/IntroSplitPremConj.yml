@@ -24,6 +24,8 @@ variables:
   - C: bool
   - B: bool
   - A: bool
+type variables:
+  - 'a: type
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: A ∧ B ∧ C ⟶ (∀(x :: 'a). P x ∧ Q x) ⟶ (D ⟶ E ∧ F) ⟶ (big1 ∧ big2 ∧ big3 ∧ big4 ∧ big5 ∧ big6 ∧ big7 ∧ big8 ∧ big9 ∧ big10 ∧ big11 ∧ big12 ⟶ G ∧ H) ⟶ A ∧ B ∧ C ∧ P (SOME (x :: 'a). True) ∧ Q (SOME (x :: 'a). True) ∧ (D ⟶ E) ∧ (D ⟶ F)
 proof:
@@ -82,6 +84,8 @@ variables:
   - C: bool
   - B: bool
   - A: bool
+type variables:
+  - 'a: type
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
 goal: A ∧ B ∧ C ⟶ (∀(x :: 'a). P x ∧ Q x) ⟶ (D ⟶ E ∧ F) ⟶ (big1 ∧ big2 ∧ big3 ∧ big4 ∧ big5 ∧ big6 ∧ big7 ∧ big8 ∧ big9 ∧ big10 ∧ big11 ∧ big12 ⟶ G ∧ H) ⟶ A ∧ B ∧ C ∧ P (SOME (x :: 'a). True) ∧ Q (SOME (x :: 'a). True) ∧ (D ⟶ E) ∧ (D ⟶ F)
 proof:
