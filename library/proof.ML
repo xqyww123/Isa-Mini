@@ -1179,6 +1179,7 @@ fun need_intro st =
         | need' (Const(\<^const_name>\<open>Trueprop\<close>, _) $ X) = need' X
         | need' (Const(\<^const_name>\<open>HOL.All\<close>, _) $ _) = true
         | need' (Const(\<^const_name>\<open>HOL.implies\<close>, _) $ _ $ _) = true
+        | need' (Const(\<^const_name>\<open>Ball\<close>, _) $ _ $ _) = true
         | need' _ = false
    in case Thm.prop_of st
         of (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ G $ _) => need' G
@@ -1286,6 +1287,7 @@ val has_prems_universal_vars =
         | chk (Const(\<^const_name>\<open>Trueprop\<close>, _) $ X) = chk X
         | chk (Const(\<^const_name>\<open>HOL.implies\<close>, _) $ _ $ _) = true
         | chk (Const(\<^const_name>\<open>HOL.All\<close>, _) $ _) = true
+        | chk (Const(\<^const_name>\<open>Ball\<close>, _) $ _ $ _) = true
         | chk _ = false
    in chk
   end
@@ -1435,7 +1437,8 @@ fun INTRO'' F mode bs (origin as (ctxt, HHF (st0, items) :: L)) =
     else if need_intro st0
       then let val st = st0
                      |> Seq.REPEAT (Thm.biresolution NONE true
-                              [(false, Thms.allI), (false, Thms.impI)] 1)
+                              [(false, Thms.allI), (false, Thms.impI),
+                               (false, @{thm ballI})] 1)
                      |> Seq.hd
                val st = Conv.gconv_rule (unwrap_goal_conclusion_NO_SIMP ctxt) 1 st
 

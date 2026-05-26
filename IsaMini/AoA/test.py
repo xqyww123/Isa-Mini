@@ -3026,6 +3026,78 @@ async def _test_HaveDupFixed(root: Root, file: MyIO):
     if outcome.failure:
         file.write(f"Failure: {outcome.failure}\n")
 
+@model_test("HaveSpuriousForAny", "Test_HaveSpuriousForAny.thy", 8)
+async def _test_HaveSpuriousForAny(root: Root, file: MyIO):
+    """Bug: Have after Intro gets spurious for_any from Newly_Fixed_Vars_Msg.
+
+    Scenario: goal is (∀x∈{1..10}. x+1>1) ∧ True.
+    Step 1: SplitConjs splits the conjunction.
+    Step 2: In the first branch, Intro fixes x and introduces x∈{1..10}.
+    Step 3: Have with conclusion "x + 1 > 1" (no for_any).
+    Expected: for_any should be empty — x is already fixed by Intro.
+    Bug: the system reports Newly_Fixed x, making the Have universally
+    quantified over x, which changes the semantics entirely."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # SplitConjs to split (∀x∈{1..10}. x+1>1) ∧ True.
+    # First branch: Intro + Have (no for_any) + Obvious
+    # Second branch: Obvious (True is trivial)
+    root.session.age += 1
+    await root.fill("1", [SplitConjs.gen_single({
+        "thought": "split the conjunction",
+        "proofs": [
+            [
+                {"operation": "Intro", "thought": "introduce x and the membership"},
+                {"operation": "Have", "thought": "derive x+1>1 from membership",
+                 "statement": {
+                     "english": "x + 1 is greater than 1",
+                     "conclusion": "x + (1::nat) > 1"
+                 },
+                 "name": "helper"},
+                {"operation": "Obvious", "facts": [{"name": "helper"}]}
+            ],
+            [
+                {"operation": "Obvious", "facts": []}
+            ]
+        ]
+    })])
+    print_header("After SplitConjs with Intro+Have", file)
+    root.print(0, file)
+
+    # Check if the Have node got spurious for_any
+    have_node = root.locate_node("1.1.2")
+    file.write(f"Have status: {have_node.status.status.value}\n")
+    assert isinstance(have_node, Have), f"Expected Have, got {type(have_node).__name__}"
+    if have_node.for_any:
+        file.write(f"BUG: for_any is non-empty: {[(n.unicode, t.unicode) for n, t in have_node.for_any]}\n")
+    else:
+        file.write("OK: for_any is empty as expected\n")
+
+    # Also test the sequential fill scenario (after Intro already refreshed)
+    print_header("--- Sequential scenario ---", file)
+    root.session.age += 1
+    # Delete steps after Intro in first branch and re-fill
+    await root.delete(["1.1.2", "1.1.3"])
+    root.session.age += 1
+    await root.fill("1.1.2", [Have.gen_single({
+        "thought": "derive x+1>1 from membership (re-fill)",
+        "statement": {
+            "english": "x + 1 is greater than 1",
+            "conclusion": "x + (1::nat) > 1"
+        },
+        "name": "helper2",
+    })])
+    print_header("After sequential Have fill", file)
+    root.print(0, file)
+
+    have_node2 = root.locate_node("1.1.2")
+    assert isinstance(have_node2, Have), f"Expected Have, got {type(have_node2).__name__}"
+    if have_node2.for_any:
+        file.write(f"BUG: for_any is non-empty: {[(n.unicode, t.unicode) for n, t in have_node2.for_any]}\n")
+    else:
+        file.write("OK: for_any is empty as expected\n")
+
 @model_test("SufficesDupFixed", "Test_SufficesDupFixed.thy", 8)
 async def _test_SufficesDupFixed(root: Root, file: MyIO):
     """Mirror of HaveDupFixed but with Suffices: for_any names a variable

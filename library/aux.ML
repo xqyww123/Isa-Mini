@@ -856,6 +856,8 @@ fun strip_meta_and_hol_hhf term =
         | strip (V,P) (\<^Const>\<open>HOL.All ty\<close> $ X) =
             strip (V,P) (\<^Const>\<open>HOL.All ty\<close> $ Abs ("_", ty, Term.incr_boundvars 1 X $ Bound 0))
         | strip (V,P) (\<^Const>\<open>Trueprop\<close> $ X) = strip (V,P) X
+        | strip (V,P) (Const("Set.Ball", _) $ S $ Abs (a, T, B)) =
+            strip ((a,T)::V, HOLogic.mk_mem (Bound 0, Term.incr_boundvars 1 S) :: P) B
         | strip (V,P) X = (rev V, rev P, X)
    in strip ([],[]) term end
 
