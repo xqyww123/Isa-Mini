@@ -6549,8 +6549,6 @@ class Have(StdBlock):
         shown = session.shown_HAVE_fact_names
         prev = shown.get(self.name)
         if prev is None:
-            print_indent(indent, file)
-            file.write(f"proposition: {self.statement['conclusion']}\n")
             if self.for_any:
                 names = [name.unicode for name, _ in self.for_any]
                 if len(names) == 1:
@@ -6561,6 +6559,14 @@ class Have(StdBlock):
                     names_str = ", ".join(names[:-1]) + f", and {names[-1]}"
                 print_indent(indent, file)
                 file.write(f"the statement is quantified over {names_str}\n")
+            if self._input_premises:
+                print_indent(indent, file)
+                file.write("assuming:\n")
+                for p in self._input_premises:
+                    print_indent(indent + 1, file)
+                    file.write(f"- {p['name']}: {p['term']}\n")
+            print_indent(indent, file)
+            file.write(f"proposition: {self.statement['conclusion']}\n")
             shown[self.name] = list(self.for_any)
         elif self.for_any and self.for_any != prev:
             names = [name.unicode for name, _ in self.for_any]
@@ -8394,7 +8400,7 @@ class Session:
                 f"- {self.tool_name(TOOL_DELETE)}: Delete proof steps\n"
                 f"- {self.tool_name(TOOL_SEARCH)}: Search for theorems, constants, types, and rules\n"
                 f"- {self.tool_name(TOOL_READ)}: Recall proof state from `proof.yaml`. Use only when you have lost track.\n"
-                f"- {self.tool_name(TOOL_REQUEST_LEMMAS)}: Declare intermediate lemmas; sub-agents will prove them for you\n"
+                f"- {self.tool_name(TOOL_REQUEST_LEMMAS)}: Request common lemmas you lack; an external system will provide them\n"
             )
         return (
             "You are a formal theorem proving agent.\n"
@@ -8410,7 +8416,7 @@ class Session:
             f"- {self.tool_name(TOOL_DELETE)}: Delete proof steps\n"
             f"- {self.tool_name(TOOL_SEARCH)}: Search for theorems, constants, types, and rules; help you understand unfamiliar terms\n"
             f"- {self.tool_name(TOOL_READ)}: Recall proof state from `proof.yaml`. Use only when you have lost track.\n"
-            f"- {self.tool_name(TOOL_REQUEST_LEMMAS)}: Declare intermediate lemmas; sub-agents will prove them for you\n"
+            f"- {self.tool_name(TOOL_REQUEST_LEMMAS)}: Request common lemmas you lack; an external system will provide them\n"
         )
 
     INITIAL_PROMPT_GOAL_LINE_LIMIT = 20

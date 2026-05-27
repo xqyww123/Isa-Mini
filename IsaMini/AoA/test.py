@@ -9705,7 +9705,7 @@ async def _test_RequestLemmas(root: Root, file: MyIO):
     async def stub_success(have_node, lemma_name):
         session.age += 1
         await have_node.append([Obvious.gen_single({"facts": [{"name": "h1"}]})])
-        return have_node.status.status == EvaluationStatus.Status.SUCCESS
+        return have_node.is_proof_finished()
     async def stub_failure(have_node, lemma_name):
         return False
 

@@ -380,7 +380,10 @@ class Codex_Driver(LMDriver):
         finally:
             if self._http_server is not None and fork._session_id is not None:
                 await self._http_server.unregister_session(fork._session_id)
-            self.total_tool_calls += fork.total_tool_calls
+            self.total_input_tokens += fork.total_input_tokens
+            self.total_output_tokens += fork.total_output_tokens
+            self.total_cache_creation_input_tokens += fork.total_cache_creation_input_tokens
+            self.total_cache_read_input_tokens += fork.total_cache_read_input_tokens
             self.total_isabelle_time += fork.total_isabelle_time
             self.total_model_time += fork.total_model_time
             self.total_quota_wait_time += fork.total_quota_wait_time

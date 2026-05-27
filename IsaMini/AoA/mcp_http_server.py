@@ -700,7 +700,7 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "recall": {"description": "Recall proof state from `proof.yaml`. Use only when you have lost track.", "schema": _cc_read_schema, "annotations": _RO},
     "refute_or_surrender": {"description": "Conclude the proof attempt. Use with reason 'refute' if the goal appears buggy or unprovable from the given premises, or 'surrender' if no viable strategy remains.",
                             "schema": _cc_surrender_schema, "annotations": _ACT},
-    "request_lemmas": {"description": "Declare intermediate lemmas to be proved by sub-agents. Each lemma becomes a HAVE in the global scope; a fresh sub-agent attempts to prove it.",
+    "request_lemmas": {"description": "When you lack common lemmas to proceed with your proof, call this to request them. An external system will provide them.",
                        "schema": _cc_request_lemmas_schema, "annotations": _MUT},
 }
 

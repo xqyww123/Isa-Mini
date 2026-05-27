@@ -135,7 +135,7 @@ class ClaudeCode(LMDriver):
             self.YAML_path = parent.YAML_path
             self.root = parent.root
             self._http_server = parent._http_server
-            self._interactive_web_terminal = parent._interactive_web_terminal
+            self._interactive_web_terminal = False
             self._on_yaml_refresh = parent._on_yaml_refresh
             self._on_operation_status = parent._on_operation_status
             self._on_log_callback = parent._on_log_callback
@@ -867,7 +867,6 @@ class ClaudeCode(LMDriver):
         finally:
             if self._http_server is not None and fork._session_id is not None:
                 await self._http_server.unregister_session(fork._session_id)
-            self.total_tool_calls += fork.total_tool_calls
             self.total_isabelle_time += fork.total_isabelle_time
             self.total_model_time += fork.total_model_time
             self.total_quota_wait_time += fork.total_quota_wait_time

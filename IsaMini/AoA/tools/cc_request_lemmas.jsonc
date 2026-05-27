@@ -7,10 +7,7 @@
       "items": {
         "type": "object",
         "properties": {
-          "name": {
-            "type": "string",
-            "description": "Binding name for the lemma (used to refer to it later)"
-          },
+          "name": { "type": "string" },
           "english": {
             "type": "string",
             "description": "English description of the lemma"
@@ -34,22 +31,21 @@
               "type": "object",
               "properties": {
                 "name": { "type": "string" },
-                "term": { "type": "string" }
+                "term": { "type": "string", "description": "Isabelle/HOL term with all literal numbers annotated with types" }
               },
               "required": ["name", "term"],
               "additionalProperties": false
-            },
-            "description": "Premises / assumptions of the lemma"
+            }
           },
           "conclusion": {
             "type": "string",
-            "description": "Isabelle/HOL term for the conclusion (literal numbers type-annotated)"
+            "description": "Isabelle/HOL term with all literal numbers annotated with types"
           }
         },
         "required": ["name", "english", "conclusion"],
         "additionalProperties": false
       },
-      "description": "List of intermediate lemmas to be proved by sub-agents"
+      "description": "Proposed common lemmas"
     }
   },
   "required": ["lemmas"],
