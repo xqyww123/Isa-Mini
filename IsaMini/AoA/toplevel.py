@@ -149,7 +149,7 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
                        timeout_seconds=timeout_seconds,
                        max_tool_calls=max_tool_calls,
                        max_retries=max_retries) as session:
-            root = Root((global_context, ptree), connection, session)
+            root = Root((global_context, ptree), connection)
             await session.initialize(root)
             await session.run()
             cost = (session.total_input_tokens,

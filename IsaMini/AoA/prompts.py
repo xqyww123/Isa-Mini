@@ -106,11 +106,10 @@ async def edit_message(
         session.warnings.clear()
     if outcome.committed:
         file.write("Outline:\n")
-        root.quickview(1, file)
+        session.quickview_proof_scope(1, file)
         root.reset_changed()
         _render_auto_intro_warning(session, file)
-        unfinished = set()
-        root.unfinished_nodes(unfinished)
+        unfinished = session.proof_scope_unfinished_nodes()
         if not unfinished:
             file.write("Congratulations! All goals are proven.\n")
             await session.interrupt()
@@ -132,11 +131,10 @@ async def deleted_steps_message(steps: list[str], root: Root, session: 'model.Se
             file.write(f"  - {w}\n")
         session.warnings.clear()
     file.write("Outline:\n")
-    root.quickview(1, file)
+    session.quickview_proof_scope(1, file)
     root.reset_changed()
     _render_auto_intro_warning(session, file)
-    unfinished = set()
-    root.unfinished_nodes(unfinished)
+    unfinished = session.proof_scope_unfinished_nodes()
     if not unfinished:
         file.write("Congratulations! All goals are proven.\n")
         await session.interrupt()

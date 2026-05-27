@@ -1,0 +1,57 @@
+{
+  "type": "object",
+  "properties": {
+    "lemmas": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Binding name for the lemma (used to refer to it later)"
+          },
+          "english": {
+            "type": "string",
+            "description": "English description of the lemma"
+          },
+          "for_any": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "type": { "type": "string" }
+              },
+              "required": ["name"],
+              "additionalProperties": false
+            },
+            "description": "Universally quantified variables. ALL free variables MUST appear here."
+          },
+          "premises": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "term": { "type": "string" }
+              },
+              "required": ["name", "term"],
+              "additionalProperties": false
+            },
+            "description": "Premises / assumptions of the lemma"
+          },
+          "conclusion": {
+            "type": "string",
+            "description": "Isabelle/HOL term for the conclusion (literal numbers type-annotated)"
+          }
+        },
+        "required": ["name", "english", "conclusion"],
+        "additionalProperties": false
+      },
+      "description": "List of intermediate lemmas to be proved by sub-agents"
+    }
+  },
+  "required": ["lemmas"],
+  "additionalProperties": false
+}

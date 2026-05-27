@@ -1,0 +1,186 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: int
+premises:
+  - h1: (0 :: int) ≤ x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+Goal context inspection
+--------------------------------------------------
+h_target goal.context.vars: []
+h_target goal.context.hyps: []
+h_target goal.conclusion: (1 :: int) = (2 :: int)
+h_forany goal.context.vars: []
+h_forany goal.context.hyps: []
+h_forany goal.conclusion: (0 :: int) ≤ y * y
+--------------------------------------------------
+Tree with two HAVEs
+--------------------------------------------------
+variables:
+  - x: int
+premises:
+  - h1: (0 :: int) ≤ x
+- step id: global.1
+thought: trivial lemma
+operation: Have
+statement:
+  english: trivial truth
+  conclusion: True
+name: h_triv
+proof: empty
+- step id: global.2
+thought: target lemma
+operation: Have
+statement:
+  english: one equals two
+  conclusion: 1 = (2::int)
+name: h_target
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `global.2.1` to provide the proof for the following goal.
+pending proof goal:
+  (1 :: int) = (2 :: int)
+- step id: global.3
+thought: lemma with for_any and premises
+operation: Have
+statement:
+  english: y squared is non-negative
+  for_any:
+    y: int
+  premises:
+    hy: y ≥ 0
+  conclusion: y * y ≥ 0
+name: h_forany
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `global.3.1` to provide the proof for the following goal.
+pending proof goal:
+  (0 :: int) ≤ y * y
+You can write global declarations by calling command `edit` with action `fill` and target step `global.4`
+goal: (0 :: int) ≤ x * x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+h_triv status: success
+h_target status: success
+--------------------------------------------------
+print_proof_scope (lemma_anchor = h_target)
+--------------------------------------------------
+variables:
+  - x: int
+premises:
+  - h1: (0 :: int) ≤ x
+available declarations:
+  step global.1: Have h_triv (done)
+goal: (1 :: int) = (2 :: int)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `global.2.1` to provide the proof for the following goal.
+pending proof goal:
+  (1 :: int) = (2 :: int)
+--------------------------------------------------
+quickview_proof_scope (lemma_anchor = h_target)
+--------------------------------------------------
+available declarations:
+  step global.1: Have h_triv (done)
+proof:
+  Error: Unfinished Proof. Call command `edit` with action `fill` and target step `global.2.1`
+  goal: (1 :: int) = (2 :: int)
+
+print_proof_scope contains 'available declarations': True
+print_proof_scope contains 'h_triv': True
+print_proof_scope contains 'goal:': True
+print_proof_scope contains main goal 'x * x': False
+quickview contains 'available declarations': True
+quickview contains 'Unfinished Proof': True
+--------------------------------------------------
+print_proof_scope (lemma_anchor = None, full view)
+--------------------------------------------------
+variables:
+  - x: int
+premises:
+  - h1: (0 :: int) ≤ x
+- step id: global.1
+thought: trivial lemma
+operation: Have
+statement:
+  english: trivial truth
+  conclusion: True
+name: h_triv
+proof: empty
+- step id: global.2
+thought: target lemma
+operation: Have
+statement:
+  english: one equals two
+  conclusion: 1 = (2::int)
+name: h_target
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `global.2.1` to provide the proof for the following goal.
+pending proof goal:
+  (1 :: int) = (2 :: int)
+- step id: global.3
+thought: lemma with for_any and premises
+operation: Have
+statement:
+  english: y squared is non-negative
+  for_any:
+    y: int
+  premises:
+    hy: y ≥ 0
+  conclusion: y * y ≥ 0
+name: h_forany
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `global.3.1` to provide the proof for the following goal.
+pending proof goal:
+  (0 :: int) ≤ y * y
+You can write global declarations by calling command `edit` with action `fill` and target step `global.4`
+goal: (0 :: int) ≤ x * x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+Final tree (reference)
+--------------------------------------------------
+variables:
+  - x: int
+premises:
+  - h1: (0 :: int) ≤ x
+- step id: global.1
+thought: trivial lemma
+operation: Have
+statement:
+  english: trivial truth
+  conclusion: True
+name: h_triv
+proof: empty
+- step id: global.2
+thought: target lemma
+operation: Have
+statement:
+  english: one equals two
+  conclusion: 1 = (2::int)
+name: h_target
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `global.2.1` to provide the proof for the following goal.
+pending proof goal:
+  (1 :: int) = (2 :: int)
+- step id: global.3
+thought: lemma with for_any and premises
+operation: Have
+statement:
+  english: y squared is non-negative
+  for_any:
+    y: int
+  premises:
+    hy: y ≥ 0
+  conclusion: y * y ≥ 0
+name: h_forany
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `global.3.1` to provide the proof for the following goal.
+pending proof goal:
+  (0 :: int) ≤ y * y
+You can write global declarations by calling command `edit` with action `fill` and target step `global.4`
+goal: (0 :: int) ≤ x * x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.

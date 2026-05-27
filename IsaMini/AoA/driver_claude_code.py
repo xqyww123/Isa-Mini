@@ -471,8 +471,7 @@ class ClaudeCode(LMDriver):
                                 self._check_result_error(message)
                         if self.check_budget():
                             break
-                        unfinished_nodes = set()
-                        self.root.unfinished_nodes(unfinished_nodes)
+                        unfinished_nodes = self.proof_scope_unfinished_nodes()
                         if unfinished_nodes and self.root.quit_info is None:
                             self._retry_count += 1
                             if self.check_budget():
@@ -878,10 +877,11 @@ class ClaudeCode(LMDriver):
 
     def refresh_YAML(self):
         with open(self.YAML_path, 'w') as f:
-            self.root.print(0, MyIO(f), update_line=True, show_warnings=True)
+            self.print_proof_scope(0, MyIO(f), update_line=True, show_warnings=True)
         if self._on_yaml_refresh is not None:
-            quickview = self.root.quickview_string(0)
-            self._on_yaml_refresh(quickview)
+            buf = StringIO()
+            self.quickview_proof_scope(0, MyIO(buf))
+            self._on_yaml_refresh(buf.getvalue())
 
     _SKIP_STATUS_OPS = frozenset({"SKIP", "SORRY", "NEXT", "END"})
 

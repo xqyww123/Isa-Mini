@@ -1,0 +1,86 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: int
+premises:
+  - h1: x = (0 :: int)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: x * x = (0 :: int)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+GlobalEnv children: 0
+--------------------------------------------------
+1: Obvious in GlobalEnv (should fail)
+--------------------------------------------------
+committed: 0
+failure: True
+  type: CannotEdit_NonDeclarative
+  message: Operation Obvious is a proof operation and cannot be used as a global declaration. Use it inside a proof step instead.
+  is_error: True
+GlobalEnv children: 0
+--------------------------------------------------
+2: Rewrite in GlobalEnv (should fail)
+--------------------------------------------------
+committed: 0
+failure: True
+  type: CannotEdit_NonDeclarative
+  message: Operation Rewrite is a proof operation and cannot be used as a global declaration. Use it inside a proof step instead.
+GlobalEnv children: 0
+--------------------------------------------------
+3: InferenceRule in GlobalEnv (should fail)
+--------------------------------------------------
+committed: 0
+failure: True
+  type: CannotEdit_NonDeclarative
+  message: Operation InferenceRule is a proof operation and cannot be used as a global declaration. Use it inside a proof step instead.
+GlobalEnv children: 0
+--------------------------------------------------
+4: Have in GlobalEnv (should succeed)
+--------------------------------------------------
+committed: 1
+  id: global.1
+  status: success
+failure: False
+GlobalEnv children: 1
+--------------------------------------------------
+5: Batch [Have, Obvious] (partial commit)
+--------------------------------------------------
+committed: 1
+  global.2: success
+failure: True
+  type: CannotEdit_NonDeclarative
+GlobalEnv children: 2
+--------------------------------------------------
+Final tree
+--------------------------------------------------
+variables:
+  - x: int
+premises:
+  - h1: x = (0 :: int)
+- step id: global.1
+thought: Restate h1
+operation: Have
+statement:
+  english: x is zero
+  conclusion: x = 0
+name: t1
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `global.1.1` to provide the proof for the following goal.
+pending proof goal:
+  x = (0 :: int)
+- step id: global.2
+thought: Another fact
+operation: Have
+statement:
+  english: zero
+  conclusion: (0::int) = 0
+name: t2
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `global.2.1` to provide the proof for the following goal.
+pending proof goal:
+  (0 :: int) = (0 :: int)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.3`
+goal: x * x = (0 :: int)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.

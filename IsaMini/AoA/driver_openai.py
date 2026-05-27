@@ -196,8 +196,7 @@ class OpenAI_Driver(LMDriver):
                     self._forkable_response_id = last_response_id
                     if self.check_budget():
                         break
-                    unfinished: set[Node] = set()
-                    self.root.unfinished_nodes(unfinished)
+                    unfinished = self.proof_scope_unfinished_nodes()
                     if unfinished and self.root.quit_info is None:
                         self._retry_count += 1
                         if self.check_budget():
@@ -343,7 +342,7 @@ class OpenAI_Driver(LMDriver):
 
     def refresh_YAML(self):
         with open(self.YAML_path, 'w', encoding="utf-8") as f:
-            self.root.print(0, MyIO(f), update_line=True, show_warnings=True)
+            self.print_proof_scope(0, MyIO(f), update_line=True, show_warnings=True)
 
     # ------------------------------------------------------------------
     # RunHooks

@@ -51,7 +51,7 @@ class ModelTestCase(TestCase):
             if os.path.exists(stale):
                 os.remove(stale)
         async with Session(connection.server.logger, log_dir) as session:
-            root = Root((global_context, ptree), connection, session)
+            root = Root((global_context, ptree), connection)
             await session.initialize(root)
             buffer = io.StringIO()
             result = self.opr(root, MyIO(buffer))
@@ -9227,6 +9227,7 @@ async def _test_fork_provider_conflict(root: Root, file: MyIO):
                 provider = MockProvider()
             super().__init__(*args, provider=provider, **kwargs)
 
+    saved_session = model.the_session()
     parent = TestSubDriver()
     parent.root = None  # normally set by initialize(); fork just copies it
     model._session_var.set(None)
@@ -9237,7 +9238,7 @@ async def _test_fork_provider_conflict(root: Root, file: MyIO):
     except TypeError as e:
         file.write(f"BUG: _make_fork raised TypeError: {e}\n")
     finally:
-        model._session_var.set(root.session)
+        model._session_var.set(saved_session)
         shutil.rmtree(parent.working_dir, ignore_errors=True)
 
 
@@ -9590,6 +9591,259 @@ async def _test_Branch_SorryNextFail_Real(root: Root, file: MyIO):
         file.write("Branch has no sub_nodes\n")
 
     print_header("Final state", file)
+    root.print(0, file)
+
+
+@model_test("GlobalEnv_LeafOps", "Test_GlobalEnv_LeafOps.thy", 11)
+async def _test_GlobalEnv_LeafOps(root: Root, file: MyIO):
+    """Verify that non-declarative operations (Obvious, Rewrite, InferenceRule)
+    are rejected when inserted into GlobalEnv via append, and that declarative
+    operations (Have) still work.
+
+    Lemma: x = 0 ⟹ x * x = 0
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    file.write(f"GlobalEnv children: {len(root.global_env.sub_nodes)}\n")
+
+    # --- 1: Obvious in GlobalEnv — should be rejected ---
+    print_header("1: Obvious in GlobalEnv (should fail)", file)
+    root.session.age += 1
+    outcome = await root.global_env.append([Obvious.gen_single({
+        "facts": [{"name": "h1"}]
+    })])
+    file.write(f"committed: {len(outcome.committed)}\n")
+    file.write(f"failure: {outcome.failure is not None}\n")
+    if outcome.failure:
+        file.write(f"  type: {type(outcome.failure).__name__}\n")
+        file.write(f"  message: {outcome.failure}\n")
+        file.write(f"  is_error: {outcome.failure.is_error}\n")
+    file.write(f"GlobalEnv children: {len(root.global_env.sub_nodes)}\n")
+
+    # --- 2: Rewrite in GlobalEnv — should be rejected ---
+    print_header("2: Rewrite in GlobalEnv (should fail)", file)
+    root.session.age += 1
+    outcome = await root.global_env.append([Rewrite.gen_single({
+        "thought": "Rewrite using h1",
+        "using": [{"name": "h1"}],
+        "use system simplifiers": True,
+        "rewrite goal": True,
+        "rewrite premises": []
+    })])
+    file.write(f"committed: {len(outcome.committed)}\n")
+    file.write(f"failure: {outcome.failure is not None}\n")
+    if outcome.failure:
+        file.write(f"  type: {type(outcome.failure).__name__}\n")
+        file.write(f"  message: {outcome.failure}\n")
+    file.write(f"GlobalEnv children: {len(root.global_env.sub_nodes)}\n")
+
+    # --- 3: InferenceRule in GlobalEnv — should be rejected ---
+    print_header("3: InferenceRule in GlobalEnv (should fail)", file)
+    root.session.age += 1
+    outcome = await root.global_env.append([InferenceRule.gen_single({
+        "thought": "Apply conjI",
+        "rule": {"name": "conjI"},
+    })])
+    file.write(f"committed: {len(outcome.committed)}\n")
+    file.write(f"failure: {outcome.failure is not None}\n")
+    if outcome.failure:
+        file.write(f"  type: {type(outcome.failure).__name__}\n")
+        file.write(f"  message: {outcome.failure}\n")
+    file.write(f"GlobalEnv children: {len(root.global_env.sub_nodes)}\n")
+
+    # --- 4: Have in GlobalEnv — should succeed (declarative) ---
+    print_header("4: Have in GlobalEnv (should succeed)", file)
+    root.session.age += 1
+    outcome = await root.global_env.append([Have.gen_single({
+        "thought": "Restate h1",
+        "statement": {"english": "x is zero", "conclusion": "x = 0"},
+        "name": "t1",
+    })])
+    file.write(f"committed: {len(outcome.committed)}\n")
+    if outcome.committed:
+        file.write(f"  id: {outcome.committed[0].id}\n")
+        file.write(f"  status: {outcome.committed[0].status.status.value}\n")
+    file.write(f"failure: {outcome.failure is not None}\n")
+    file.write(f"GlobalEnv children: {len(root.global_env.sub_nodes)}\n")
+
+    # --- 5: Batch with Have + Obvious — should commit Have, reject Obvious ---
+    print_header("5: Batch [Have, Obvious] (partial commit)", file)
+    root.session.age += 1
+    outcome = await root.global_env.append([
+        Have.gen_single({
+            "thought": "Another fact",
+            "statement": {"english": "zero", "conclusion": "(0::int) = 0"},
+            "name": "t2",
+        }),
+        Obvious.gen_single({"facts": []}),
+    ])
+    file.write(f"committed: {len(outcome.committed)}\n")
+    if outcome.committed:
+        for c in outcome.committed:
+            file.write(f"  {c.id}: {c.status.status.value}\n")
+    file.write(f"failure: {outcome.failure is not None}\n")
+    if outcome.failure:
+        file.write(f"  type: {type(outcome.failure).__name__}\n")
+    file.write(f"GlobalEnv children: {len(root.global_env.sub_nodes)}\n")
+
+    # --- Final tree ---
+    print_header("Final tree", file)
+    root.print(0, file)
+
+
+@model_test("RequestLemmas", "Test_RequestLemmas.thy", 11)
+async def _test_RequestLemmas(root: Root, file: MyIO):
+    import asyncio as _asyncio
+    from .mcp_http_server import _request_lemmas_tool_logic
+    session = root.session
+    tool_lock = _asyncio.Lock()
+
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Mock: sub-agent fills proof with Obvious using h1
+    async def stub_success(have_node, lemma_name):
+        session.age += 1
+        await have_node.append([Obvious.gen_single({"facts": [{"name": "h1"}]})])
+        return have_node.status.status == EvaluationStatus.Status.SUCCESS
+    async def stub_failure(have_node, lemma_name):
+        return False
+
+    # --- Phase A: Sub-agent success (x ≥ 0, provable from h1) ---
+    print_header("Phase A: Sub-agent success", file)
+    session.spawn_lemma_subagent = stub_success
+    session.age += 1
+    result, is_error = await _request_lemmas_tool_logic(session, {
+        "lemmas": [{"name": "h_pos", "english": "x is non-negative",
+                     "conclusion": "x ≥ 0"}]
+    }, tool_lock)
+    file.write(result)
+    file.write(f"is_error: {is_error}\n")
+    file.write(f"GlobalEnv children: {len(root.global_env.sub_nodes)}\n")
+
+    # --- Phase B: Sub-agent failure (1 = 2, mock returns False → HAVE deleted) ---
+    print_header("Phase B: Sub-agent failure", file)
+    session.spawn_lemma_subagent = stub_failure
+    session.age += 1
+    result, is_error = await _request_lemmas_tool_logic(session, {
+        "lemmas": [{"name": "h_fail", "english": "one equals two",
+                     "conclusion": "1 = (2::int)"}]
+    }, tool_lock)
+    file.write(result)
+    file.write(f"is_error: {is_error}\n")
+    file.write(f"GlobalEnv children after cleanup: {len(root.global_env.sub_nodes)}\n")
+
+    # --- Phase C: Validation skip (empty conclusion) ---
+    print_header("Phase C: Validation skip", file)
+    session.age += 1
+    result, is_error = await _request_lemmas_tool_logic(session, {
+        "lemmas": [{"name": "noconc", "english": "missing conclusion", "conclusion": ""}]
+    }, tool_lock)
+    file.write(result)
+    file.write(f"is_error: {is_error}\n")
+
+    # --- Phase D: Invalid args (not a list) ---
+    print_header("Phase D: Invalid args", file)
+    result, is_error = await _request_lemmas_tool_logic(session, {
+        "lemmas": "not a list"
+    }, tool_lock)
+    file.write(result)
+    file.write(f"is_error: {is_error}\n")
+
+    # --- Final state ---
+    print_header("Final tree", file)
+    root.print(0, file)
+    file.write(f"GlobalEnv children: {len(root.global_env.sub_nodes)}\n")
+
+
+@model_test("RequestLemmas_FocusedView", "Test_RequestLemmas_FocusedView.thy", 11)
+async def _test_RequestLemmas_FocusedView(root: Root, file: MyIO):
+    session = root.session
+
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # --- Setup: Insert two HAVE nodes ---
+    # HAVE 1: trivially proved (True)
+    session.age += 1
+    [h_triv] = (await root.global_env.append([Have.gen_single({
+        "thought": "trivial lemma",
+        "statement": {"english": "trivial truth", "conclusion": "True"},
+        "name": "h_triv",
+    })])).committed
+
+    # HAVE 2: unprovable, stays open (Obvious will fail)
+    session.age += 1
+    [h_target] = (await root.global_env.append([Have.gen_single({
+        "thought": "target lemma",
+        "statement": {"english": "one equals two", "conclusion": "1 = (2::int)"},
+        "name": "h_target",
+    })])).committed
+
+    # HAVE 3: with for_any and premises
+    session.age += 1
+    [h_forany] = (await root.global_env.append([Have.gen_single({
+        "thought": "lemma with for_any and premises",
+        "statement": {
+            "english": "y squared is non-negative",
+            "for_any": [{"name": "y", "type": "int"}],
+            "premises": [{"name": "hy", "term": "y ≥ 0"}],
+            "conclusion": "y * y ≥ 0",
+        },
+        "name": "h_forany",
+    })])).committed
+
+    # Inspect goal.context for each HAVE
+    print_header("Goal context inspection", file)
+    for label, have in [("h_target", h_target), ("h_forany", h_forany)]:
+        goal = have._state_after_beginning().leading_goal
+        if goal is not None:
+            file.write(f"{label} goal.context.vars: {[(n.unicode, t.unicode) for n, t in goal.context.vars.items()]}\n")
+            file.write(f"{label} goal.context.hyps: {[(n.unicode, t.unicode) for n, t in goal.context.hyps.items()]}\n")
+            file.write(f"{label} goal.conclusion: {goal.conclusion.unicode}\n")
+        else:
+            file.write(f"{label} goal: None\n")
+
+    # Obvious fails on the false goal — h_target stays open with children
+    session.age += 1
+    await h_target.append([Obvious.gen_single({"facts": []})])
+
+    print_header("Tree with two HAVEs", file)
+    root.print(0, file)
+    file.write(f"h_triv status: {h_triv.status.status.value}\n")
+    file.write(f"h_target status: {h_target.status.status.value}\n")
+
+    # --- Set lemma_anchor and test focused view ---
+    session.lemma_anchor = h_target
+
+    print_header("print_proof_scope (lemma_anchor = h_target)", file)
+    session.print_proof_scope(0, file, show_warnings=True)
+
+    print_header("quickview_proof_scope (lemma_anchor = h_target)", file)
+    session.quickview_proof_scope(0, file)
+
+    # --- Verify content assertions ---
+    buf_ps = MyIO(io.StringIO())
+    session.print_proof_scope(0, buf_ps)
+    ps_text = buf_ps.getvalue()
+    file.write(f"\nprint_proof_scope contains 'available declarations': {'available declarations' in ps_text}\n")
+    file.write(f"print_proof_scope contains 'h_triv': {'h_triv' in ps_text}\n")
+    file.write(f"print_proof_scope contains 'goal:': {'goal:' in ps_text}\n")
+    file.write(f"print_proof_scope contains main goal 'x * x': {'x * x' in ps_text}\n")
+
+    buf_qv = MyIO(io.StringIO())
+    session.quickview_proof_scope(0, buf_qv)
+    qv_text = buf_qv.getvalue()
+    file.write(f"quickview contains 'available declarations': {'available declarations' in qv_text}\n")
+    file.write(f"quickview contains 'Unfinished Proof': {'Unfinished Proof' in qv_text}\n")
+
+    # --- Reset and verify full view is restored ---
+    session.lemma_anchor = None
+
+    print_header("print_proof_scope (lemma_anchor = None, full view)", file)
+    session.print_proof_scope(0, file)
+
+    print_header("Final tree (reference)", file)
     root.print(0, file)
 
 

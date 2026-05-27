@@ -651,6 +651,17 @@ class ProofTreeTooDeep(CannotEdit):
     def __str__(self) -> str:
         return f"Proof tree depth {self.depth} exceeds the limit of {self.limit}."
 
+class CannotEdit_NonDeclarative(CannotEdit):
+    """A non-declarative proof operation was inserted into a declaration-only
+    block (e.g. GlobalEnv)."""
+    def __init__(self, operation_name: str, target_step: str = ""):
+        super().__init__(target_step=target_step)
+        self.operation_name = operation_name
+    def __str__(self) -> str:
+        return (f"Operation {self.operation_name} is a proof operation and "
+                f"cannot be used as a global declaration. "
+                f"Use it inside a proof step instead.")
+
 
 class InternalError(OprError):
     pass
@@ -1916,7 +1927,8 @@ TOOL_ANSWER: tool = "answer"
 TOOL_SEARCH: tool = "query"
 TOOL_READ:   tool = "recall"
 TOOL_SURRENDER: tool = "refute_or_surrender"
-ALL_PROOF_TOOLS: tuple[tool, ...] = (TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER, TOOL_SEARCH, TOOL_READ, TOOL_SURRENDER)
+TOOL_REQUEST_LEMMAS: tool = "request_lemmas"
+ALL_PROOF_TOOLS: tuple[tool, ...] = (TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER, TOOL_SEARCH, TOOL_READ, TOOL_SURRENDER, TOOL_REQUEST_LEMMAS)
 
 class Interaction:
     forking: ForkingMode = ForkingMode.FORKING_WITH_CTXT
@@ -2494,7 +2506,7 @@ class EditOutcome:
             try:
                 await node._refresh_me_alone(auto_intro=auto_intro)
             except ProofTreeTooDeep:
-                node.session._depth_limit_exceeded = True
+                the_session()._depth_limit_exceeded = True
                 node.status = EvaluationStatus.Failure(
                     0.0, FailureReason("Proof tree depth exceeds the limit"))
         else:
@@ -2530,6 +2542,7 @@ class Node(ABC):
     id: 'step'
     line: int
     _changes_pending_goal = True
+    _is_declarative: ClassVar[bool] = False
     _the_single_printed_goal: 'Goal | None' = None
     """Set by quickview when this node prints a single goal (e.g. Rewrite's
     "goal changes into").  Used by the enclosing StdBlock to suppress
@@ -2545,13 +2558,12 @@ class Node(ABC):
         self.parent = config.parent
         if self.parent is not None and self.parent.id:
             self.id = f"{self.parent.id}.{self.local_step}"
-            self.session = self.parent.session
         else:
             self.id = self.local_step
-            self.session = the_session()
         self._depth = (self.parent._depth + 1) if self.parent is not None else 0
-        if self._depth > self.session._depth_limit:
-            raise ProofTreeTooDeep(self._depth, self.session._depth_limit, self.parent)
+        session = the_session()
+        if self._depth > session._depth_limit:
+            raise ProofTreeTooDeep(self._depth, session._depth_limit, self.parent)
         self.status : EvaluationStatus = EVALUATION_NOT_YET
         self.warnings : list[Warning] = []
         self.changed : bool = False
@@ -2560,7 +2572,7 @@ class Node(ABC):
         self._cancelled_by: str | None = None
         self._has_considered_auto_intro = False
         self._is_trivial: bool | None = None
-        self.age = self.session.age
+        self.age = session.age
         self.line = 0
         self._prev_eval_status: tuple[EvaluationStatus.Status, str | None] | None = None
 
@@ -2654,7 +2666,7 @@ class Node(ABC):
                 status_mark = "pending, "
             case _:
                 status_mark = ""
-        line_mark = f"line {self.line}, " if self.session.quickview_line_numbers else ""
+        line_mark = f"line {self.line}, " if the_session().quickview_line_numbers else ""
         marks = f"{changed_mark}{status_mark}{done_mark}{line_mark}".rstrip(", ")
         suffix = f" ({marks})" if marks else ""
         file.write(f"{self._kind} {self.id}: {self.quickview_title()}{suffix}\n")
@@ -2684,9 +2696,9 @@ class Node(ABC):
             case EvaluationStatus.Status.CANCELLED:
                 print_indent(indent, file)
                 if self._cancelled_by:
-                    if not self.session.showed_cancelled_notice:
+                    if not the_session().showed_cancelled_notice:
                         file.write(f"Error: the evaluation is cancelled due to failure of step `{self._cancelled_by}`\n")
-                        self.session.showed_cancelled_notice = True
+                        the_session().showed_cancelled_notice = True
                     else:
                         file.write(f"Error: cancelled (step `{self._cancelled_by}` failed)\n")
                 else:
@@ -2796,7 +2808,7 @@ class Node(ABC):
         must update self.status
         Convention: Any node must be up to date after calling any public Node method
         """
-        self.age = self.session.age
+        self.age = the_session().age
         self._first_time = False
     async def _auto_intro_after_me(self) -> None:
         if self.parent is not None:
@@ -3087,7 +3099,7 @@ class Node(ABC):
         return refresh_point
     async def delete(self, ids: list[step]) -> list[step]:
         """Delete nodes by IDs. Returns list of unfound IDs (warnings)."""
-        self.session.age += 1
+        the_session().age += 1
         # Locate all, deduplicate
         nodes: list['Node'] = []
         seen: set[str] = set()
@@ -3115,7 +3127,7 @@ class Node(ABC):
         refresh_points.sort(key=lambda n: n.line)
         # Refresh each point, skip if already refreshed this session age
         for rp in refresh_points:
-            if rp.age < self.session.age:
+            if rp.age < the_session().age:
                 await rp._refresh_me_alone(auto_intro=False)
                 if rp.parent is not None:
                     await rp._refresh_all_after_me()
@@ -3147,9 +3159,9 @@ class Node(ABC):
         if len(gns) == 1:
             try:
                 new_node, old = await self.parent._amend_child(self, gns[0])
-            except (GoalIsNontrivial, ProofTreeTooDeep) as e:
+            except (GoalIsNontrivial, ProofTreeTooDeep, CannotEdit_NonDeclarative) as e:
                 if isinstance(e, ProofTreeTooDeep):
-                    self.session._depth_limit_exceeded = True
+                    the_session()._depth_limit_exceeded = True
                 e.operation = op
                 e.unapplied_oprs = list(gns)
                 e.is_error = True
@@ -3274,6 +3286,29 @@ class Leaf(Node):
             f"append called on Leaf node {self.id}; "
             f"expected a NonLeaf_Node target")
 
+def _quickview_children_compressed(children: 'Sequence[Node]', indent: int, file: MyIO) -> None:
+    i = 0
+    while i < len(children):
+        child = children[i]
+        if not child.changed and not child.does_quickview_need_detail():
+            run_start = i
+            i += 1
+            while i < len(children) and not children[i].changed and not children[i].does_quickview_need_detail():
+                i += 1
+            run_len = i - run_start
+            if run_len >= 5:
+                children[run_start].quickview(indent, file)
+                print_indent(indent, file)
+                file.write("...\n")
+                children[i - 2].quickview(indent, file)
+                children[i - 1].quickview(indent, file)
+            else:
+                for j in range(run_start, i):
+                    children[j].quickview(indent, file)
+        else:
+            child.quickview(indent, file)
+            i += 1
+
 class NonLeaf_Node(Node):
     _closed_by: Node | None # Some proof operation (e.g. Branch) may close a block, preventing all later appending to this block.
     sub_nodes: list['Node']
@@ -3282,6 +3317,9 @@ class NonLeaf_Node(Node):
         created: 'list[Node]'
         stopped_at: 'int | None'
         error: 'GoalIsNontrivial | ProofTreeTooDeep | None'
+
+    def _validate_child_class(self, cls: 'type[Node]') -> 'CannotEdit | None':
+        return None
 
     def __init__(self, config: NodeConfig, thought: str, sub_nodes: list['Node']):
         super().__init__(config, thought)
@@ -3387,7 +3425,7 @@ class NonLeaf_Node(Node):
             intro = Intro(config, "", None)
         except ProofTreeTooDeep:
             return
-        self.session.auto_intro_nodes.append(intro)
+        the_session().auto_intro_nodes.append(intro)
         self.sub_nodes.insert(next_idx, intro)
         await intro._refresh_me_alone(auto_intro=True)
     def _local_step_of_next_proof_step(self) -> local_step:
@@ -3414,6 +3452,11 @@ class NonLeaf_Node(Node):
         stopped_at: int | None = None
         error: GoalIsNontrivial | ProofTreeTooDeep | None = None
         for k, gn in enumerate(gns):
+            child_err = self._validate_child_class(gn.cls)
+            if child_err is not None:
+                stopped_at = k
+                error = child_err  # type: ignore[assignment]  — CannotEdit subclass
+                break
             if insert_idx + k == 0 and k == 0:
                 segs = list(before_segs)
                 if segs[-1] > 1:
@@ -3436,7 +3479,7 @@ class NonLeaf_Node(Node):
                 node = gn.factory(config)
             except (GoalIsNontrivial, ProofTreeTooDeep) as e:
                 if isinstance(e, ProofTreeTooDeep):
-                    self.session._depth_limit_exceeded = True
+                    the_session()._depth_limit_exceeded = True
                 stopped_at = k
                 error = e
                 break
@@ -3531,28 +3574,7 @@ class NonLeaf_Node(Node):
         if not self.does_quickview_need_detail():
             return self.quickview_header(indent, file)
         indent = super().quickview(indent, file)
-        children = self.sub_nodes
-        i = 0
-        while i < len(children):
-            child = children[i]
-            if not child.changed and not child.does_quickview_need_detail():
-                run_start = i
-                i += 1
-                while i < len(children) and not children[i].changed and not children[i].does_quickview_need_detail():
-                    i += 1
-                run_len = i - run_start
-                if run_len >= 5:
-                    children[run_start].quickview(indent, file)
-                    print_indent(indent, file)
-                    file.write("...\n")
-                    children[i - 2].quickview(indent, file)
-                    children[i - 1].quickview(indent, file)
-                else:
-                    for j in range(run_start, i):
-                        children[j].quickview(indent, file)
-            else:
-                child.quickview(indent, file)
-                i += 1
+        _quickview_children_compressed(self.sub_nodes, indent, file)
         return indent
     def _rename_var(self, old_name: varname, new_name: varname) -> 'Node | None':
         for child in self.sub_nodes:
@@ -3581,6 +3603,9 @@ class NonLeaf_Node(Node):
                 return
         raise InternalError("The target node is not my children")
     async def _amend_child(self, child: 'Node', gn: Parsed_Opr) -> 'tuple[Node, Node]':
+        child_err = self._validate_child_class(gn.cls)
+        if child_err is not None:
+            raise child_err
         for i, c in enumerate(self.sub_nodes):
             if c is child:
                 config = NodeConfig(child.local_step, await child.ml_state.clone(None), self)
@@ -3939,8 +3964,7 @@ class StdBlock(NonLeaf_Node):
             if not self._state_before_ending_.initialized() or self.should_I_show_pending_goal() is not None:
                 return True
         return False
-    def quickview(self, indent: int, file: MyIO) -> int:
-        indent = super().quickview(indent, file)
+    def _quickview_pending_footer(self, indent: int, file: MyIO) -> None:
         if self.opening():
             if not self._state_before_ending_.initialized():
                 print_indent(indent, file)
@@ -3949,12 +3973,12 @@ class StdBlock(NonLeaf_Node):
             elif (goal_and_step := self.should_I_show_pending_goal()) is not None:
                 goal, step_to_fill = goal_and_step
                 print_indent(indent, file)
-                line_hint = f" (line {self.open_pending_proof_line})" if self.open_pending_proof_line is not None and self.session.quickview_line_numbers else ""
-                if self.session.showed_fill_hint:
+                line_hint = f" (line {self.open_pending_proof_line})" if self.open_pending_proof_line is not None and the_session().quickview_line_numbers else ""
+                if the_session().showed_fill_hint:
                     file.write(f"Error: Unfinished Proof{line_hint}. Fill step `{step_to_fill}`\n")
                 else:
                     file.write(f"Error: Unfinished Proof{line_hint}. Call command `edit` with action `fill` and target step `{step_to_fill}`\n")
-                    self.session.showed_fill_hint = True
+                    the_session().showed_fill_hint = True
                 suppressed = self._ctxt_of_filling()
                 visible = goal.visible(suppressed)
                 already_printed = None
@@ -3973,6 +3997,9 @@ class StdBlock(NonLeaf_Node):
                 self._prev_pending_goal = None
         else:
             self._prev_pending_goal = None
+    def quickview(self, indent: int, file: MyIO) -> int:
+        indent = super().quickview(indent, file)
+        self._quickview_pending_footer(indent, file)
         return indent
     def print_string(self, indent: int, show_warnings: bool = True) -> str:
         buffer = StringIO()
@@ -4028,7 +4055,7 @@ class StdBlock(NonLeaf_Node):
                     pass
                 else:
                     self.sub_nodes.append(intro)
-                    self.session.auto_intro_nodes.append(intro)
+                    the_session().auto_intro_nodes.append(intro)
             for gn in gns:
                 local_step = self._local_step_of_next_proof_step()
                 ml_state = await self._state_after_beginning().clone(None)
@@ -4036,7 +4063,7 @@ class StdBlock(NonLeaf_Node):
                 try:
                     new_child = gn.factory(sub_config)
                 except ProofTreeTooDeep:
-                    self.session._depth_limit_exceeded = True
+                    the_session()._depth_limit_exceeded = True
                     return FailureReason("Proof tree depth exceeds the limit")
                 except GoalIsNontrivial:
                     return FailureReason(
@@ -4066,7 +4093,7 @@ class StdBlock(NonLeaf_Node):
                 pass
             else:
                 self.sub_nodes.append(intro)
-                self.session.auto_intro_nodes.append(intro)
+                the_session().auto_intro_nodes.append(intro)
         return None
     async def append(
         self, gns: 'list[Parsed_Opr]',
@@ -4100,6 +4127,13 @@ class StdBlock(NonLeaf_Node):
             if not self.opening():
                 outcome.failure = _block_closed(list(gns[i:]))
                 return outcome
+            child_err = self._validate_child_class(gn.cls)
+            if child_err is not None:
+                child_err.operation = op
+                child_err.unapplied_oprs = list(gns[i:])
+                child_err.is_error = len(outcome.committed) == 0
+                outcome.failure = child_err
+                return outcome
             local_step = self._local_step_of_next_proof_step()
             ml_state = await self._state_before_ending_.clone(None)
             config = NodeConfig(local_step, ml_state, self)
@@ -4107,7 +4141,7 @@ class StdBlock(NonLeaf_Node):
                 node = gn.factory(config)
             except (GoalIsNontrivial, ProofTreeTooDeep) as e:
                 if isinstance(e, ProofTreeTooDeep):
-                    self.session._depth_limit_exceeded = True
+                    the_session()._depth_limit_exceeded = True
                 e.operation = op
                 e.unapplied_oprs = list(gns[i:])
                 e.is_error = len(outcome.committed) == 0
@@ -4287,7 +4321,7 @@ class GoalNode(StdBlock):
                     pass
                 else:
                     self.sub_nodes.append(intro)
-                    self.session.auto_intro_nodes.append(intro)
+                    the_session().auto_intro_nodes.append(intro)
             for gn in gns:
                 local_step = self._local_step_of_next_proof_step()
                 ml_state = await self.ml_state.clone(None)
@@ -4296,7 +4330,7 @@ class GoalNode(StdBlock):
                     self.sub_nodes.append(gn.factory(sub_config))
                 except (GoalIsNontrivial, ProofTreeTooDeep) as e:
                     if isinstance(e, ProofTreeTooDeep):
-                        self.session._depth_limit_exceeded = True
+                        the_session()._depth_limit_exceeded = True
                     break
         elif is_init and not self.sub_nodes and await self.ml_state.need_intro(False):
             local_step = self._local_step_of_next_proof_step()
@@ -4308,7 +4342,7 @@ class GoalNode(StdBlock):
                 pass
             else:
                 self.sub_nodes.append(intro)
-                self.session.auto_intro_nodes.append(intro)
+                the_session().auto_intro_nodes.append(intro)
         return await super()._refresh_me_alone(auto_intro)
     async def _auto_intro_after_me(self) -> None:
         pass
@@ -4335,7 +4369,7 @@ class GoalNode(StdBlock):
             return indent
         else:
             done_mark = "done, " if self._should_print_done() else ""
-            line_mark = f"line {self.line}, " if self.session.quickview_line_numbers else ""
+            line_mark = f"line {self.line}, " if the_session().quickview_line_numbers else ""
             marks = f"{done_mark}{line_mark}".rstrip(", ")
             suffix = f" ({marks})" if marks else ""
             print_indent(indent, file)
@@ -4569,7 +4603,7 @@ class SubgoalMaker(GoalContainer, StdBlock):
                 try:
                     new_node = parsed_op.factory(config)
                 except ProofTreeTooDeep:
-                    self.session._depth_limit_exceeded = True
+                    the_session()._depth_limit_exceeded = True
                     break
                 parent.sub_nodes.append(new_node)
 
@@ -4729,7 +4763,7 @@ class SubgoalMaker(GoalContainer, StdBlock):
                     try:
                         new_node = self._new_goal_node(i, ml_state)
                     except ProofTreeTooDeep:
-                        self.session._depth_limit_exceeded = True
+                        the_session()._depth_limit_exceeded = True
                         return FailureReason("Proof tree depth exceeds the limit")
                     self.sub_nodes.append(new_node)
                     if i < goals_count - 1:
@@ -4889,7 +4923,7 @@ class CaseSplit_Like(SubgoalMaker):
                            else EntityKind.CASE_SPLIT_RULE)
             retrieve = Interaction_RetrieveForProof(
                 self.ml_state, desc, [entity_kind], single_choice=True)
-            results = await self.session.fork_interaction(retrieve)
+            results = await the_session().fork_interaction(retrieve)
             if not results:
                 return FailureReason(f"No rule matching `{desc}` was found.")
             r = results[0]
@@ -4936,7 +4970,7 @@ class CaseSplit_Like(SubgoalMaker):
                     schematic_vars=schematic_vars,
                     kind=kind)
                 self._resolved_rule_str = \
-                    await self.session.fork_interaction(instantiate)
+                    await the_session().fork_interaction(instantiate)
                 self._rule_resolved = True
                 return None
         self._resolved_rule_str = (IsaTerm.from_isabelle(rule_name)
@@ -5130,7 +5164,7 @@ class CaseSplit_Like(SubgoalMaker):
             kind=self._case_kind,
             goal=goal,
             ctxt_before=self._ctxt_before_me())
-        return await self.session.fork_interaction(interaction)
+        return await the_session().fork_interaction(interaction)
 
     def _splice_goal(self) -> 'tuple[str, Goal] | None':
         s0 = self._state_after_beginning()
@@ -5166,6 +5200,7 @@ class OperationMeta(NamedTuple):
     cls: type[Any]  # the Node subclass — `.gen(arg, container, index, path)` dispatches here
 
 OPERATION_REGISTRY: dict[str, OperationMeta] = {}
+OPERATION_REGISTRY_BY_CLS: 'dict[type[Node], str]' = {}
 
 def proof_operation(operation: str, toolarg_typed_dict: type[Any]):
     """Class decorator to register a Node subclass as a proof operation.
@@ -5181,6 +5216,7 @@ def proof_operation(operation: str, toolarg_typed_dict: type[Any]):
     """
     def decorator(cls: type[Any]):
         OPERATION_REGISTRY[operation] = OperationMeta(toolarg_typed_dict, cls)
+        OPERATION_REGISTRY_BY_CLS[cls] = operation
         return cls
     return decorator
 
@@ -5672,6 +5708,7 @@ class Define_ToolArg(TypedDict):
 
 @proof_operation("Define", Define_ToolArg)
 class Define(SubgoalMaker):
+    _is_declarative = True
     """Define a (recursive) function proof-locally via minilang's FUN
     command. The Minilang.FUN'' ML API is invoked with
     `open_on_fail = true` so that if pat-completeness or termination
@@ -6488,6 +6525,7 @@ class Have_ToolArg(TypedDict):
 
 @proof_operation("Have", Have_ToolArg)
 class Have(StdBlock):
+    _is_declarative = True
     _changes_pending_goal = False
     def __init__(self, config: NodeConfig, arg : Have_ToolArg,
                  parsed_proof: 'proof | None' = None):
@@ -6499,15 +6537,32 @@ class Have(StdBlock):
         self._input_premises: list[PremiseBinding] = self.statement.get("premises") or []
         # Merged for_any: user-specified + any additional implicit fixes from ML
         self.for_any: list[tuple[varname, typ]] = []
-        self._prev_for_any: list[tuple[varname, typ]] = []
         # Pre-parsed subproof body (list[Parsed_Opr]); consumed by
         # _attach_proof on first refresh.
         self._proof: 'proof | None' = parsed_proof
+        the_session().shown_HAVE_fact_names.setdefault(self.name, [])
     def quickview_title(self) -> str:
         return f"Have {self.name}"
     def quickview(self, indent: int, file: MyIO) -> int:
         indent = super().quickview(indent, file)
-        if self.for_any and self.for_any != self._prev_for_any:
+        session = the_session()
+        shown = session.shown_HAVE_fact_names
+        prev = shown.get(self.name)
+        if prev is None:
+            print_indent(indent, file)
+            file.write(f"proposition: {self.statement['conclusion']}\n")
+            if self.for_any:
+                names = [name.unicode for name, _ in self.for_any]
+                if len(names) == 1:
+                    names_str = names[0]
+                elif len(names) == 2:
+                    names_str = f"{names[0]} and {names[1]}"
+                else:
+                    names_str = ", ".join(names[:-1]) + f", and {names[-1]}"
+                print_indent(indent, file)
+                file.write(f"the statement is quantified over {names_str}\n")
+            shown[self.name] = list(self.for_any)
+        elif self.for_any and self.for_any != prev:
             names = [name.unicode for name, _ in self.for_any]
             if len(names) == 1:
                 names_str = names[0]
@@ -6517,7 +6572,7 @@ class Have(StdBlock):
                 names_str = ", ".join(names[:-1]) + f", and {names[-1]}"
             print_indent(indent, file)
             file.write(f"the statement is quantified over {names_str}\n")
-            self._prev_for_any = self.for_any
+            shown[self.name] = list(self.for_any)
         return indent
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         self._print_thought(indent, file)
@@ -6578,6 +6633,14 @@ class Have(StdBlock):
             return FailureReason("Each of the following proof steps above is valid, but the target statement doesn't trivially follow from these steps. Please provide more detailed proof steps.")
         else:
             return FailureReason("The statement is nontrivial. Detailed proofs are required to establish this statement.")
+    def _fixed_vars_at_me(self, ret: Vars) -> Vars:
+        for name, typ in self.for_any:
+            ret[name] = typ
+        return ret
+    def _fixed_facts_at_me(self, ret: Hyps) -> Hyps:
+        for p in self._input_premises:
+            ret[IsaTerm.from_agent(p["name"])] = IsaTerm.from_agent(p["term"])
+        return ret
     def _fixed_facts_after_me(self, ret: Hyps) -> Hyps:
         ret[IsaTerm.from_agent(self.name)] = IsaTerm.from_agent(self.statement['conclusion'])
         return ret
@@ -6594,6 +6657,7 @@ class SetupRewriting_ToolArg(TypedDict):
 
 @proof_operation("SetupRewriting", SetupRewriting_ToolArg)
 class SetupRewriting(StdBlock):
+    _is_declarative = True
     _changes_pending_goal = False
     def __init__(self, config: NodeConfig, arg: SetupRewriting_ToolArg,
                  parsed_proof: 'proof | None' = None):
@@ -6722,10 +6786,10 @@ class Suffices(StdBlock):
         return await self._attach_proof(auto_intro=False)
     def quickview(self, indent: int, file: MyIO) -> int:
         indent = super().quickview(indent, file)
-        if not self.sub_nodes and not self.session.showed_suffices_notice:
+        if not self.sub_nodes and not the_session().showed_suffices_notice:
             print_indent(indent, file)
             file.write("notice: show the provided statement implies the goal\n")
-            self.session.showed_suffices_notice = True
+            the_session().showed_suffices_notice = True
         return indent
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         self._print_thought(indent, file)
@@ -6778,6 +6842,7 @@ class Obtain_ToolArg(TypedDict):
 
 @proof_operation("Obtain", Obtain_ToolArg)
 class Obtain(StdBlock):
+    _is_declarative = True
     _changes_pending_goal = False
     def __init__(self, config: NodeConfig, arg : Obtain_ToolArg,
                  parsed_proof: 'proof | None' = None):
@@ -7634,6 +7699,11 @@ class Induction(CaseSplit_Like):
 
 class GlobalEnv(StdBlock):
     _body_affects_siblings = True
+    def _validate_child_class(self, cls: 'type[Node]') -> 'CannotEdit | None':
+        if not cls._is_declarative:
+            op_name = OPERATION_REGISTRY_BY_CLS.get(cls, cls.__name__)
+            return CannotEdit_NonDeclarative(op_name, target_step=self.id)
+        return None
     def __init__(self, config: NodeConfig):
         if not isinstance(config.parent, Root):
             raise InternalError("The parent of a GlobalEnv must be a Root")
@@ -7700,7 +7770,7 @@ class GlobalEnv(StdBlock):
 
 class Root(GoalContainer, StdBlock):
     def __init__(self, context_and_flat_goal: tuple[Context, tuple['Goal | None', int]],
-                 connection: Connection, session: 'Session'):
+                 connection: Connection):
         (context, (leading_goal, goals_count)) = context_and_flat_goal
         ml_state0 = Minilang_State(connection, '$init')
         ml_state0.leading_goal = leading_goal
@@ -7708,12 +7778,14 @@ class Root(GoalContainer, StdBlock):
         ml_state0._initialized = True
         super().__init__(NodeConfig("$root", ml_state0, None), "", [])
         self.context = context
-        self.session = session
         self.global_env = GlobalEnv(NodeConfig("global", Minilang_State.assign(ml_state0), self))
         self.sub_nodes.append(self.global_env)
         self.final_ml_state = Minilang_State.assign(ml_state0)
         self.quit_info: tuple[str, str] | None = None
         self._closed_by = self
+    @property
+    def session(self) -> 'Session':
+        return the_session()
     async def _refresh_me_alone(self, auto_intro: bool):
         if self._first_time:
             ml_state = await self.ml_state.skip(None)
@@ -7972,10 +8044,29 @@ def _str_representer(dumper, data):
 # Register the custom representer
 yaml.add_representer(str, _str_representer)
 
+class Runtime:
+    """Global singleton shared across all Sessions operating on the same proof tree.
+    Holds counters and limits that must be unique/shared."""
+    def __init__(self):
+        self.age: int = 0
+        self.setup_rewriting_counter: int = 0
+        self.fact_name_counter: int = 0
+        self._pit_counter: int = 0
+        self.quickview_line_numbers: bool = False
+        self._depth_limit: int = 30
+        self._depth_limit_exceeded: bool = False
+        self.total_tool_calls: int = 0
+
+    def next_pit_name(self) -> str:
+        i = self._pit_counter
+        self._pit_counter = i + 1
+        return f"P__I__T__{i}"
+
+
 # abstract base class for a session
 class Session:
     root: Root
-    age: int
+    runtime: Runtime
     logger: logging.Logger | None
     log_dir: Path | None
     interaction_log_path: Path | None
@@ -7999,7 +8090,8 @@ class Session:
                  interactive_retrieval: InteractiveRetrievalMode = InteractiveRetrievalMode.YES,
                  timeout_seconds: float = 14400,
                  max_tool_calls: int = 10000,
-                 max_retries: int = 5):
+                 max_retries: int = 5,
+                 runtime: Runtime | None = None):
         """
         Args:
             logger: Python logger for runtime debug messages to the server log stream.
@@ -8011,13 +8103,16 @@ class Session:
             timeout_seconds: Wall-clock time limit for the session.
             max_tool_calls: Maximum number of tool invocations.
             max_retries: Maximum number of conversation retry turns.
+            runtime: Shared Runtime instance. If None, inherits from parent or creates new.
         """
         self.parent = parent
+        if runtime is not None:
+            self.runtime = runtime
+        elif parent is not None:
+            self.runtime = parent.runtime
+        else:
+            self.runtime = Runtime()
         _session_var.set(self)
-        self.age = 0
-        self.setup_rewriting_counter: int = 0
-        self.fact_name_counter: int = 0
-        self._pit_counter: int = parent._pit_counter if parent else 0
         self.last_proof_op_time: float = time()
         self.logger = logger or (parent.logger if parent else None)
         # On a fork, the interaction it is answering (plus its eventual
@@ -8033,7 +8128,6 @@ class Session:
         self.total_output_tokens: int = 0
         self.total_cache_creation_input_tokens: int = 0
         self.total_cache_read_input_tokens: int = 0
-        self.total_tool_calls: int = 0
         self.total_isabelle_time: float = 0.0
         self.total_model_time: float = 0.0
         self.total_quota_wait_time: float = 0.0
@@ -8048,8 +8142,6 @@ class Session:
             self.max_retries = max_retries
             self._budget_start_time: float | None = None
         self._retry_count: int = 0
-        self._depth_limit: int = 30
-        self._depth_limit_exceeded: bool = False
         self._restart_requested: bool = False
         self.retrieval_forking_mode: ForkingMode = (
             parent.retrieval_forking_mode if parent is not None
@@ -8068,8 +8160,8 @@ class Session:
             set(parent.seen_abbreviations) if parent is not None else set())
         self.showed_fill_hint: bool = False
         self.showed_cancelled_notice: bool = False
-        self.quickview_line_numbers: bool = (
-            parent.quickview_line_numbers if parent is not None else False)
+        self.lemma_anchor: 'Have | None' = None
+        self.shown_HAVE_fact_names: 'dict[str, list[tuple[varname, typ]]]' = {}
         if parent is not None:
             # Subsessions share parent's log files
             self.log_dir = parent.log_dir
@@ -8100,6 +8192,58 @@ class Session:
             self._meta_log_writer = None
             if log_dir != "":
                 self._setup_log_directory(log_dir)
+
+    # --- Forwarding properties to Runtime ---
+    @property
+    def age(self) -> int:
+        return self.runtime.age
+    @age.setter
+    def age(self, v: int):
+        self.runtime.age = v
+    @property
+    def setup_rewriting_counter(self) -> int:
+        return self.runtime.setup_rewriting_counter
+    @setup_rewriting_counter.setter
+    def setup_rewriting_counter(self, v: int):
+        self.runtime.setup_rewriting_counter = v
+    @property
+    def fact_name_counter(self) -> int:
+        return self.runtime.fact_name_counter
+    @fact_name_counter.setter
+    def fact_name_counter(self, v: int):
+        self.runtime.fact_name_counter = v
+    @property
+    def _pit_counter(self) -> int:
+        return self.runtime._pit_counter
+    @_pit_counter.setter
+    def _pit_counter(self, v: int):
+        self.runtime._pit_counter = v
+    @property
+    def quickview_line_numbers(self) -> bool:
+        return self.runtime.quickview_line_numbers
+    @quickview_line_numbers.setter
+    def quickview_line_numbers(self, v: bool):
+        self.runtime.quickview_line_numbers = v
+    @property
+    def _depth_limit(self) -> int:
+        return self.runtime._depth_limit
+    @_depth_limit.setter
+    def _depth_limit(self, v: int):
+        self.runtime._depth_limit = v
+    @property
+    def _depth_limit_exceeded(self) -> bool:
+        return self.runtime._depth_limit_exceeded
+    @_depth_limit_exceeded.setter
+    def _depth_limit_exceeded(self, v: bool):
+        self.runtime._depth_limit_exceeded = v
+    @property
+    def total_tool_calls(self) -> int:
+        return self.runtime.total_tool_calls
+    @total_tool_calls.setter
+    def total_tool_calls(self, v: int):
+        self.runtime.total_tool_calls = v
+    def next_pit_name(self) -> str:
+        return self.runtime.next_pit_name()
 
     @property
     def is_major(self) -> bool:
@@ -8234,6 +8378,24 @@ class Session:
 
     def system_prompt(self) -> str | None:
         """Return the system prompt, or None if the driver folds it into the initial message."""
+        if self.lemma_anchor is not None:
+            return (
+                "You are a formal theorem proving sub-agent.\n"
+                f"Your task is to prove the lemma `{self.lemma_anchor.name}`.\n"
+                "The proof goal and available context are provided in `./proof.yaml`.\n"
+                "Complete the proof using the MCP proof tools.\n"
+                "Continue until no errors remain.\n"
+                "A proof goal can be buggy and thus unprovable — "
+                f"call `{self.tool_name(TOOL_SURRENDER)}` with your analysis if you believe so.\n"
+                "Be concise in text output.\n"
+                "\n"
+                "## Tools\n"
+                f"- {self.tool_name(TOOL_EDIT)}: Fill, insert, or amend proof steps (your primary tool)\n"
+                f"- {self.tool_name(TOOL_DELETE)}: Delete proof steps\n"
+                f"- {self.tool_name(TOOL_SEARCH)}: Search for theorems, constants, types, and rules\n"
+                f"- {self.tool_name(TOOL_READ)}: Recall proof state from `proof.yaml`. Use only when you have lost track.\n"
+                f"- {self.tool_name(TOOL_REQUEST_LEMMAS)}: Declare intermediate lemmas; sub-agents will prove them for you\n"
+            )
         return (
             "You are a formal theorem proving agent.\n"
             "A proof goal and an incomplete proof are provided in `./proof.yaml` under the current directory.\n"
@@ -8248,6 +8410,7 @@ class Session:
             f"- {self.tool_name(TOOL_DELETE)}: Delete proof steps\n"
             f"- {self.tool_name(TOOL_SEARCH)}: Search for theorems, constants, types, and rules; help you understand unfamiliar terms\n"
             f"- {self.tool_name(TOOL_READ)}: Recall proof state from `proof.yaml`. Use only when you have lost track.\n"
+            f"- {self.tool_name(TOOL_REQUEST_LEMMAS)}: Declare intermediate lemmas; sub-agents will prove them for you\n"
         )
 
     INITIAL_PROMPT_GOAL_LINE_LIMIT = 20
@@ -8255,9 +8418,49 @@ class Session:
     def initial_prompt(self) -> str:
         """Return the initial user message to start the proof session."""
         buf = StringIO()
-        self.root.print(0, MyIO(buf), update_line=True, show_warnings=True)
+        self.print_proof_scope(0, MyIO(buf), update_line=True, show_warnings=True)
         proof_state = buf.getvalue()
         inline = proof_state.count('\n') < self.INITIAL_PROMPT_GOAL_LINE_LIMIT
+
+        if self.lemma_anchor is not None:
+            lemma_name = self.lemma_anchor.name
+            english = self.lemma_anchor.statement['english']
+            header = f"Prove the lemma `{lemma_name}`: {english}\n"
+            if self.system_prompt() is not None:
+                if inline:
+                    return (
+                        header
+                        + "Complete the proof using the MCP proof tools.\n"
+                        + proof_state
+                        + "\n`proof.yaml` contains the proof state, but read it only when you lose track of it."
+                    )
+                else:
+                    return (
+                        header
+                        + "Complete the proof using the MCP proof tools.\n"
+                        "The proof state is in `proof.yaml` — read it to see the goal and current proof."
+                    )
+            else:
+                if inline:
+                    return (
+                        header
+                        + proof_state
+                        + f"Analyze the proof goal, plan a proof, and complete it using tools `{self.tool_name(TOOL_EDIT)}` and `{self.tool_name(TOOL_DELETE)}`.\n"
+                        "Continue building the proof until no error remains.\n"
+                        "A proof goal can be buggy and thus unprovable — "
+                        f"call `{self.tool_name(TOOL_SURRENDER)}` with your analysis if you believe so.\n"
+                        "`proof.yaml` contains the proof state, but recall it only when you lose track of it."
+                    )
+                else:
+                    return (
+                        header
+                        + "The proof state is in `proof.yaml` — read it to see the goal and current proof.\n"
+                        f"Analyze the proof goal, plan a proof, and complete it using tools `{self.tool_name(TOOL_EDIT)}` and `{self.tool_name(TOOL_DELETE)}`.\n"
+                        "Continue building the proof until no error remains.\n"
+                        "A proof goal can be buggy and thus unprovable — "
+                        f"call `{self.tool_name(TOOL_SURRENDER)}` with your analysis if you believe so."
+                    )
+
         if self.system_prompt() is not None:
             if inline:
                 return (
@@ -8357,11 +8560,6 @@ class Session:
                 _session_var.set(None)  # type: ignore
         except LookupError:
             pass
-
-    def next_pit_name(self) -> str:
-        i = self._pit_counter
-        self._pit_counter = i + 1
-        return f"P__I__T__{i}"
 
     async def initialize(self, root: Root):
         if hasattr(self, 'root'):
@@ -8561,6 +8759,99 @@ class Session:
         self.showed_suffices_notice = False
         self.showed_fill_hint = False
         self.showed_cancelled_notice = False
+        self.shown_HAVE_fact_names.clear()
+
+    def proof_scope_unfinished_nodes(self) -> 'set[Node]':
+        """Return unfinished nodes scoped to this session's proof responsibility.
+        Sub-agents (lemma_anchor set) check only their HAVE subtree."""
+        unfinished: 'set[Node]' = set()
+        if self.lemma_anchor is not None:
+            self.lemma_anchor.unfinished_nodes(unfinished)
+        else:
+            self.root.unfinished_nodes(unfinished)
+        return unfinished
+
+    def print_proof_scope(self, indent: int, file: MyIO,
+                          update_line: bool = False, show_warnings: bool = False):
+        """Print the proof state scoped to this session's responsibility.
+        Sub-agents see only available declarations + target goal + own steps."""
+        if self.lemma_anchor is None:
+            self.root.print(indent, file, update_line=update_line, show_warnings=show_warnings)
+            return
+        have = self.lemma_anchor
+        root = self.root
+
+        print_vars(root.context.vars.items(), indent, file, {})
+        print_type_vars(root.context.tvars.items(), indent, file, {})
+        print_hyps(root.context.hyps.items(), indent, file, {})
+
+        preceding: list[Node] = []
+        for c in root.global_env.sub_nodes:
+            if c is have:
+                break
+            if c._is_declarative and c.status.status == EvaluationStatus.Status.SUCCESS:
+                preceding.append(c)
+        if preceding:
+            print_indent(indent, file)
+            file.write("available declarations:\n")
+            for h in preceding:
+                h.quickview(indent + 1, file)
+
+        goal = have._state_after_beginning().leading_goal
+        if goal is not None:
+            print_goal(goal, indent, True, file, root.context)
+        else:
+            print_indent(indent, file)
+            file.write("goal: evaluation pending\n")
+
+        have._print_evaluation_status(indent, file)
+        if show_warnings:
+            have._print_warnings(indent, file, [Warning.Position.HEADER])
+
+        if have.sub_nodes:
+            print_indent(indent, file)
+            file.write("proof:\n")
+            for s in have.sub_nodes:
+                s.print(indent + 1, file, update_line, show_warnings=show_warnings)
+        else:
+            print_indent(indent, file)
+            file.write("proof: empty\n")
+
+        have._print_footer(indent, file, show_warnings=show_warnings)
+
+    def quickview_proof_scope(self, indent: int, file: MyIO):
+        """Quickview scoped to this session's proof responsibility."""
+        if self.lemma_anchor is None:
+            self.root.quickview(indent, file)
+            return
+        have = self.lemma_anchor
+
+        preceding: list[Node] = []
+        for c in self.root.global_env.sub_nodes:
+            if c is have:
+                break
+            if c._is_declarative and c.status.status == EvaluationStatus.Status.SUCCESS:
+                preceding.append(c)
+        if preceding:
+            print_indent(indent, file)
+            file.write("available declarations:\n")
+            for h in preceding:
+                h.quickview(indent + 1, file)
+
+        if preceding:
+            print_indent(indent, file)
+            file.write("proof:\n")
+            child_indent = indent + 1
+        else:
+            child_indent = indent
+        _quickview_children_compressed(have.sub_nodes, child_indent, file)
+
+        have._quickview_pending_footer(child_indent, file)
+
+    async def spawn_lemma_subagent(self, have_node: 'Have', lemma_name: str) -> bool:
+        """Spawn a sub-agent to prove a lemma. Returns True on success.
+        Default implementation returns False (no sub-agent support)."""
+        return False
 
     async def request_restart(self):
         """Request a context restart.  Sets a transient quit_info to break

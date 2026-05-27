@@ -736,7 +736,7 @@ class APIDriver(LMDriver):
 
     def refresh_YAML(self):
         with open(self.YAML_path, 'w', encoding="utf-8") as f:
-            self.root.print(0, MyIO(f), update_line=True, show_warnings=True)
+            self.print_proof_scope(0, MyIO(f), update_line=True, show_warnings=True)
 
     # ------------------------------------------------------------------
     # Main Agent Loop
@@ -752,7 +752,8 @@ class APIDriver(LMDriver):
 
     async def _run_main(self):
         assert self._executor is not None
-        self._budget_start_time = time()
+        if self._budget_start_time is None:
+            self._budget_start_time = time()
         self._messages = self._initial_messages()
         self._last_response_id = None
         self._msgs_sent_through = 0
@@ -794,11 +795,12 @@ class APIDriver(LMDriver):
                             ToolResultMsg(call_id=tc.id, name=tc.name, content=text))
                     if self.root.quit_info is not None:
                         break
+                    if not self.proof_scope_unfinished_nodes():
+                        break
                     if self.check_budget():
                         break
                 else:
-                    unfinished: set[Node] = set()
-                    self.root.unfinished_nodes(unfinished)
+                    unfinished = self.proof_scope_unfinished_nodes()
                     if not unfinished:
                         break
                     self._retry_count += 1
@@ -1067,7 +1069,6 @@ class APIDriver(LMDriver):
                 self.warn_AoA_opr(f"{tag} Transient API error, retrying in 2s: {e}")
                 await asyncio.sleep(2)
         finally:
-            self.total_tool_calls += fork.total_tool_calls
             self.total_isabelle_time += fork.total_isabelle_time
             self.total_model_time += fork.total_model_time
             self.total_quota_wait_time += fork.total_quota_wait_time
@@ -1075,6 +1076,49 @@ class APIDriver(LMDriver):
 
         assert fork.fork_pending is not None and fork.fork_pending.answer.done()
         return fork.fork_pending.answer.result()
+
+    # ------------------------------------------------------------------
+    # Lemma Sub-Agent
+    # ------------------------------------------------------------------
+
+    async def spawn_lemma_subagent(self, have_node, lemma_name: str) -> bool:
+        ctx = contextvars.copy_context()
+        task = asyncio.get_running_loop().create_task(
+            self._run_lemma_subagent(have_node, lemma_name), context=ctx)
+        result = await task
+        self.refresh_YAML()
+        return result
+
+    async def _run_lemma_subagent(self, have_node, lemma_name: str) -> bool:
+        from .model import _session_var
+        _session_var.set(None)  # type: ignore
+        sub = self.__class__._make_fork(self)
+        sub.lemma_anchor = have_node
+        sub._executor = ToolExecutor(sub)
+        sub.working_block = self.root
+        sub._fork_name = f"{self._fork_name}.lemma_{lemma_name}"
+
+        tag = f"[{sub._fork_name}]"
+        self.log_interaction("lemma_subagent", f"{tag} spawned for lemma '{lemma_name}'")
+
+        try:
+            await sub._run_with_retry()
+        except asyncio.CancelledError:
+            self.warn_AoA_opr(f"{tag} cancelled")
+        except Exception as e:
+            self.warn_AoA_opr(f"{tag} failed with {type(e).__name__}: {e}")
+        finally:
+            self.root.quit_info = None
+            self.total_isabelle_time += sub.total_isabelle_time
+            self.total_model_time += sub.total_model_time
+            self.total_quota_wait_time += sub.total_quota_wait_time
+            await sub.close()
+
+        success = have_node.is_proof_finished()
+        self.log_interaction(
+            "lemma_subagent",
+            f"{tag} {'succeeded' if success else 'failed'} for lemma '{lemma_name}'")
+        return success
 
     # ------------------------------------------------------------------
     # Cost Tracking

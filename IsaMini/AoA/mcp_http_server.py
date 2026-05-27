@@ -23,6 +23,7 @@ import json
 import os
 import sys
 import socket
+from io import StringIO
 from time import time
 from typing import Any
 
@@ -40,7 +41,8 @@ from .model import (
     CannotDelete_Root, NodeNotFound, ProofTreeTooDeep,
     EvaluationStatus,
     Parse_Op_List, normalize_answer, Interaction_BadAnswer,
-    TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER, TOOL_READ, TOOL_SURRENDER, ALL_PROOF_TOOLS,
+    TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER, TOOL_READ, TOOL_SURRENDER, TOOL_REQUEST_LEMMAS,
+    ALL_PROOF_TOOLS, Have_ToolArg, Have,
 )
 import yaml as _yaml
 from .retrieval import (
@@ -67,6 +69,7 @@ _cc_answer_schema = _load_schema("cc_answer.jsonc")
 _cc_delete_schema = _load_schema("cc_delete.jsonc")
 _cc_read_schema = _load_schema("cc_recall.jsonc")
 _cc_surrender_schema = _load_schema("cc_surrender.jsonc")
+_cc_request_lemmas_schema = _load_schema("cc_request_lemmas.jsonc")
 
 
 
@@ -252,7 +255,7 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             return (error_msg, True)
 
         root = session.root
-        root.session.age += 1
+        session.age += 1
         match action:
             case "fill":
                 outcome = await root.fill(step, gns)
@@ -318,7 +321,7 @@ async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             error_msg = "target_steps must be a non-empty array of strings"
             session.log_tool_response(_tn, f"ERROR: {error_msg}")
             return (error_msg, True)
-        session.root.session.age += 1
+        session.age += 1
         steps = [str(s) for s in target_steps]
         try:
             not_found = await session.root.delete(steps)
@@ -567,6 +570,116 @@ async def _refute_or_surrender_tool_logic(session: Session, args: dict) -> tuple
     return (msg, False)
 
 
+async def _request_lemmas_tool_logic(
+    session: Session, args: dict, tool_lock: asyncio.Lock,
+) -> tuple[str, bool]:
+    _tn = session.tool_name(TOOL_REQUEST_LEMMAS)
+    session.log_tool_call(_tn, args)
+    try:
+        lemmas = args.get("lemmas")
+        if not isinstance(lemmas, list) or not lemmas:
+            msg = "lemmas must be a non-empty array"
+            session.log_tool_response(_tn, f"ERROR: {msg}")
+            return (msg, True)
+
+        root = session.root
+        results: list[str] = []
+
+        for i, lemma in enumerate(lemmas):
+            name = lemma.get("name", "")
+            english = lemma.get("english", "")
+            conclusion = lemma.get("conclusion", "")
+            if not name or not conclusion:
+                results.append(f"Lemma {i+1}: skipped (name and conclusion required)")
+                continue
+
+            statement: dict = {
+                "english": english,
+                "conclusion": conclusion,
+            }
+            if "for_any" in lemma:
+                statement["for_any"] = lemma["for_any"]
+            if "premises" in lemma:
+                statement["premises"] = lemma["premises"]
+
+            have_arg: Have_ToolArg = {
+                "thought": f"Sub-agent lemma: {english}",
+                "statement": statement,  # type: ignore[typeddict-item]
+                "name": name,
+            }
+
+            try:
+                gns = Parse_Op_List([{"operation": "Have", **have_arg}],
+                                    f"lemmas[{i}]")
+            except AoA_Error as e:
+                results.append(f"Lemma '{name}': parse error: {e}")
+                continue
+
+            async with tool_lock:
+                session.age += 1
+                if session.lemma_anchor is not None:
+                    outcome = await session.lemma_anchor.insert_before_me(gns)
+                else:
+                    outcome = await root.global_env.append(gns)
+                session.refresh_YAML()
+
+            if not outcome.committed:
+                results.append(f"Lemma '{name}': insertion failed")
+                continue
+
+            have_node = outcome.committed[-1]
+            if not isinstance(have_node, Have):
+                results.append(f"Lemma '{name}': unexpected node type after insertion")
+                continue
+
+            if have_node.status.status == EvaluationStatus.Status.FAILURE or \
+               have_node.status.status == EvaluationStatus.Status.CANCELLED:
+                results.append(
+                    f"Lemma '{name}': HAVE failed: {have_node.status}")
+                async with tool_lock:
+                    rp = have_node._delete_me()
+                    await rp._refresh_me_alone(auto_intro=False)
+                    if rp.parent is not None:
+                        await rp._refresh_all_after_me()
+                    session.refresh_YAML()
+                continue
+
+            session.shown_HAVE_fact_names[name] = list(have_node.for_any)
+
+            success = await session.spawn_lemma_subagent(have_node, name)
+
+            if not success:
+                results.append(f"Lemma '{name}': sub-agent failed to prove")
+                session.shown_HAVE_fact_names.pop(name, None)
+                async with tool_lock:
+                    rp = have_node._delete_me()
+                    await rp._refresh_me_alone(auto_intro=False)
+                    if rp.parent is not None:
+                        await rp._refresh_all_after_me()
+                    session.refresh_YAML()
+            else:
+                results.append(f"Lemma '{name}': proved successfully")
+
+        file = P.MyIO(StringIO())
+        file.write("request_lemmas results:\n")
+        for r in results:
+            file.write(f"  - {r}\n")
+        file.write("\nOutline:\n")
+        session.quickview_proof_scope(1, file)
+        root.reset_changed()
+
+        response = file.getvalue()
+        session.log_tool_response(_tn, response)
+        return (response, False)
+    except (ConnectionError, EOFError):
+        raise asyncio.CancelledError("connection lost")
+    except Exception as e:
+        session.log_tool_response(
+            _tn,
+            f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
+        sys.exit(1)
+
+
 # ============================================================================
 # ToolExecutor — Direct In-Process Tool Dispatch
 # ============================================================================
@@ -587,6 +700,8 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "recall": {"description": "Recall proof state from `proof.yaml`. Use only when you have lost track.", "schema": _cc_read_schema, "annotations": _RO},
     "refute_or_surrender": {"description": "Conclude the proof attempt. Use with reason 'refute' if the goal appears buggy or unprovable from the given premises, or 'surrender' if no viable strategy remains.",
                             "schema": _cc_surrender_schema, "annotations": _ACT},
+    "request_lemmas": {"description": "Declare intermediate lemmas to be proved by sub-agents. Each lemma becomes a HAVE in the global scope; a fresh sub-agent attempts to prove it.",
+                       "schema": _cc_request_lemmas_schema, "annotations": _MUT},
 }
 
 
@@ -653,6 +768,10 @@ class ToolExecutor:
                 result, is_error = await _read_tool_logic(session, arguments)
             case "refute_or_surrender":
                 result, is_error = await _refute_or_surrender_tool_logic(session, arguments)
+            case "request_lemmas":
+                result, is_error = await _request_lemmas_tool_logic(
+                    session, arguments, self._tool_lock)
+                session.last_proof_op_time = time()
             case _:
                 return (f"Unknown tool: {name}", True)
 
@@ -810,8 +929,11 @@ class _SessionRouter:
                 session.seen_commands.clear()
                 session.seen_entities.clear()
                 session.seen_opaque_note = False
-                session.root.session.showed_suffices_notice = False
-                session.root.session.showed_cancelled_notice = False
+                session.seen_abbreviations.clear()
+                session.showed_suffices_notice = False
+                session.showed_fill_hint = False
+                session.showed_cancelled_notice = False
+                session.shown_HAVE_fact_names.clear()
             await send({
                 "type": "http.response.start",
                 "status": 200,
