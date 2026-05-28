@@ -94,16 +94,19 @@ class Codex_Driver(LMDriver):
 
     async def initialize(self, root: Root):
         await super().initialize(root)
-        with open(self.YAML_path, "w", encoding="utf-8") as f:
-            root.print(0, MyIO(f), update_line=True, show_warnings=True)
-
-        self._http_server = await ProofMCPHTTPServer.get_or_create()
+        if self._http_server is None:
+            self._http_server = await ProofMCPHTTPServer.get_or_create()
         self._session_id = self._http_server.allocate_session_id()
         self._mcp_url = await self._http_server.register_session(
             self._session_id, self)
-
-        self._write_codex_config()
-        self._init_git_repo()
+        if self.is_major:
+            self._write_codex_config()
+            self._init_git_repo()
+        if self.is_planning:
+            with open(self.YAML_path, "w", encoding="utf-8") as f:
+                root.print(0, MyIO(f), update_line=True, show_warnings=True)
+        elif self.is_worker:
+            self.refresh_YAML()
 
     def _write_codex_config(self):
         config_dir = os.path.join(self.working_dir, ".codex")
@@ -352,12 +355,9 @@ class Codex_Driver(LMDriver):
             resume_id=None,
             mode=interaction.forking,
         ))
-
-        assert self._http_server is not None
-        fork._session_id = self._http_server.allocate_session_id()
-        fork_url = await self._http_server.register_session(
-            fork._session_id, fork)
-        fork._mcp_url = fork_url
+        await fork.initialize(self.root)
+        assert fork._mcp_url is not None
+        fork_url = fork._mcp_url
 
         fork_prompt = (
             "Let's consider a sub-task forked from the context:\n"

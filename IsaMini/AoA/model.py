@@ -8541,10 +8541,12 @@ class Session:
 
     def system_prompt(self) -> str | None:
         """Return the system prompt, or None if the driver folds it into the initial message."""
-        if self.lemma_anchor is not None:
+        if self.is_worker:
+            target = self.role.target
+            target_desc = f"the lemma `{target.name}`" if isinstance(target, Have) else f"step `{target.id}`"
             return (
                 "You are a formal theorem proving sub-agent.\n"
-                f"Your task is to prove the lemma `{self.lemma_anchor.name}`.\n"
+                f"Your task is to prove {target_desc}.\n"
                 "The proof goal and available context are provided in `./proof.yaml`.\n"
                 "Complete the proof using the MCP proof tools.\n"
                 "Continue until no errors remain.\n"
@@ -8585,10 +8587,12 @@ class Session:
         proof_state = buf.getvalue()
         inline = proof_state.count('\n') < self.INITIAL_PROMPT_GOAL_LINE_LIMIT
 
-        if self.lemma_anchor is not None:
-            lemma_name = self.lemma_anchor.name
-            english = self.lemma_anchor.statement['english']
-            header = f"Prove the lemma `{lemma_name}`: {english}\n"
+        if self.is_worker:
+            target = self.role.target
+            if isinstance(target, Have):
+                header = f"Prove the lemma `{target.name}`: {target.statement['english']}\n"
+            else:
+                header = f"Prove step `{target.id}`.\n"
             if self.system_prompt() is not None:
                 if inline:
                     return (
@@ -8725,15 +8729,20 @@ class Session:
             pass
 
     async def initialize(self, root: Root):
-        if hasattr(self, 'root'):
-            raise InternalError("The session is already initialized.")
-        self.root = root
-        self.working_block = root
-        await root._refresh_me_alone(auto_intro=True)
-        sp = self.system_prompt()
-        if sp is not None:
-            self._log_meta("SYS_PROMPT", text=sp)
-        self._log_meta("PROMPT", subtype="initial", text=self.initial_prompt())
+        match self.role:
+            case Role_Plan():
+                if hasattr(self, 'root'):
+                    raise InternalError("The session is already initialized.")
+                self.root = root
+                self.working_block = root
+                await root._refresh_me_alone(auto_intro=True)
+                sp = self.system_prompt()
+                if sp is not None:
+                    self._log_meta("SYS_PROMPT", text=sp)
+                self._log_meta("PROMPT", subtype="initial", text=self.initial_prompt())
+            case Role_Worker() | Role_Interaction():
+                assert self.root is root
+                self.working_block = root
 
     def retrieval_state(self) -> Minilang_State:
         if self.working_block is not None:
@@ -8939,10 +8948,10 @@ class Session:
 
     def proof_scope_unfinished_nodes(self) -> 'set[Node]':
         """Return unfinished nodes scoped to this session's proof responsibility.
-        Sub-agents (lemma_anchor set) check only their HAVE subtree."""
+        Workers check only their target subtree."""
         unfinished: 'set[Node]' = set()
-        if self.lemma_anchor is not None:
-            self.lemma_anchor.unfinished_nodes(unfinished)
+        if self.is_worker:
+            self.role.target.unfinished_nodes(unfinished)
         else:
             self.root.unfinished_nodes(unfinished)
         return unfinished
@@ -8950,69 +8959,71 @@ class Session:
     def print_proof_scope(self, indent: int, file: MyIO,
                           update_line: bool = False, show_warnings: bool = False):
         """Print the proof state scoped to this session's responsibility.
-        Sub-agents see only available declarations + target goal + own steps."""
-        if self.lemma_anchor is None:
+        Workers see only available declarations + target goal + own steps."""
+        if not self.is_worker:
             self.root.print(indent, file, update_line=update_line, show_warnings=show_warnings)
             return
-        have = self.lemma_anchor
+        target = self.role.target
         root = self.root
 
         print_vars(root.context.vars.items(), indent, file, {})
         print_type_vars(root.context.tvars.items(), indent, file, {})
         print_hyps(root.context.hyps.items(), indent, file, {})
 
-        preceding: list[Node] = []
-        for c in root.global_env.sub_nodes:
-            if c is have:
-                break
-            if c._is_declarative and c.status.status == EvaluationStatus.Status.SUCCESS:
-                preceding.append(c)
-        if preceding:
-            print_indent(indent, file)
-            file.write("available declarations:\n")
-            for h in preceding:
-                h.quickview(indent + 1, file)
+        if isinstance(target, Have):
+            preceding: list[Node] = []
+            for c in root.global_env.sub_nodes:
+                if c is target:
+                    break
+                if c._is_declarative and c.status.status == EvaluationStatus.Status.SUCCESS:
+                    preceding.append(c)
+            if preceding:
+                print_indent(indent, file)
+                file.write("available declarations:\n")
+                for h in preceding:
+                    h.quickview(indent + 1, file)
 
-        goal = have._state_after_beginning().leading_goal
+        goal = target.goal() if hasattr(target, 'goal') else None
         if goal is not None:
             print_goal(goal, indent, True, file, root.context)
         else:
             print_indent(indent, file)
             file.write("goal: evaluation pending\n")
 
-        have._print_evaluation_status(indent, file)
+        target._print_evaluation_status(indent, file)
         if show_warnings:
-            have._print_warnings(indent, file, [Warning.Position.HEADER])
+            target._print_warnings(indent, file, [Warning.Position.HEADER])
 
-        if have.sub_nodes:
+        if target.sub_nodes:
             print_indent(indent, file)
             file.write("proof:\n")
-            for s in have.sub_nodes:
+            for s in target.sub_nodes:
                 s.print(indent + 1, file, update_line, show_warnings=show_warnings)
         else:
             print_indent(indent, file)
             file.write("proof: empty\n")
 
-        have._print_footer(indent, file, show_warnings=show_warnings)
+        target._print_footer(indent, file, show_warnings=show_warnings)
 
     def quickview_proof_scope(self, indent: int, file: MyIO):
         """Quickview scoped to this session's proof responsibility."""
-        if self.lemma_anchor is None:
+        if not self.is_worker:
             self.root.quickview(indent, file)
             return
-        have = self.lemma_anchor
+        target = self.role.target
 
         preceding: list[Node] = []
-        for c in self.root.global_env.sub_nodes:
-            if c is have:
-                break
-            if c._is_declarative and c.status.status == EvaluationStatus.Status.SUCCESS:
-                preceding.append(c)
-        if preceding:
-            print_indent(indent, file)
-            file.write("available declarations:\n")
-            for h in preceding:
-                h.quickview(indent + 1, file)
+        if isinstance(target, Have):
+            for c in self.root.global_env.sub_nodes:
+                if c is target:
+                    break
+                if c._is_declarative and c.status.status == EvaluationStatus.Status.SUCCESS:
+                    preceding.append(c)
+            if preceding:
+                print_indent(indent, file)
+                file.write("available declarations:\n")
+                for h in preceding:
+                    h.quickview(indent + 1, file)
 
         if preceding:
             print_indent(indent, file)
@@ -9020,9 +9031,9 @@ class Session:
             child_indent = indent + 1
         else:
             child_indent = indent
-        _quickview_children_compressed(have.sub_nodes, child_indent, file)
+        _quickview_children_compressed(target.sub_nodes, child_indent, file)
 
-        have._quickview_pending_footer(child_indent, file)
+        target._quickview_pending_footer(child_indent, file)
 
     async def spawn_lemma_subagent(self, have_node: 'Have', lemma_name: str) -> bool:
         """Spawn a sub-agent to prove a lemma. Returns True on success.

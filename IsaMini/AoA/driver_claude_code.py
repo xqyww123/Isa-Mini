@@ -197,15 +197,21 @@ class ClaudeCode(LMDriver):
 
     async def initialize(self, root: Root):
         await super().initialize(root)
-        with open(self.YAML_path, "w", encoding="utf-8") as f:
-            root.print(0, MyIO(f), update_line=True, show_warnings=True)
-        self._install_skills()
+        if self.is_major:
+            self._install_skills()
 
         # Register with singleton HTTP MCP server
-        self._http_server = await ProofMCPHTTPServer.get_or_create()
+        if self._http_server is None:
+            self._http_server = await ProofMCPHTTPServer.get_or_create()
         self._session_id = self._http_server.allocate_session_id()
         self._mcp_url = await self._http_server.register_session(
             self._session_id, self)
+
+        if self.is_planning:
+            with open(self.YAML_path, "w", encoding="utf-8") as f:
+                root.print(0, MyIO(f), update_line=True, show_warnings=True)
+        elif self.is_worker:
+            self.refresh_YAML()
 
         if not self._interactive_web_terminal:
             # Embedded mode: Agent SDK connects to HTTP server via URL
@@ -765,10 +771,9 @@ class ClaudeCode(LMDriver):
             mode=mode,
         ))
 
-        assert self._http_server is not None
-        fork._session_id = self._http_server.allocate_session_id()
-        fork_url = await self._http_server.register_session(fork._session_id, fork)
-        fork._mcp_url = fork_url
+        await fork.initialize(self.root)
+        assert fork._mcp_url is not None
+        fork_url = fork._mcp_url
 
         mode = interaction.forking
         if mode == ForkingMode.FORKING_CHEAPER_NO_CTXT:

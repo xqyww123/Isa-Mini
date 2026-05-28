@@ -660,8 +660,8 @@ async def _request_lemmas_tool_logic(
 
             async with tool_lock:
                 session.age += 1
-                if session.lemma_anchor is not None:
-                    outcome = await session.lemma_anchor.insert_before_me(gns)
+                if session.is_worker and isinstance(session.role.target, Have):
+                    outcome = await session.role.target.insert_before_me(gns)
                 else:
                     outcome = await root.global_env.append(gns)
                 session.refresh_YAML()

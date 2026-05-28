@@ -718,9 +718,12 @@ class APIDriver(LMDriver):
 
     async def initialize(self, root: Root):
         await super().initialize(root)
-        with open(self.YAML_path, "w", encoding="utf-8") as f:
-            root.print(0, MyIO(f), update_line=True, show_warnings=True)
         self._executor = ToolExecutor(self)
+        if self.is_planning:
+            with open(self.YAML_path, "w", encoding="utf-8") as f:
+                root.print(0, MyIO(f), update_line=True, show_warnings=True)
+        elif self.is_worker:
+            self.refresh_YAML()
 
     async def interrupt(self):
         self._interrupted = True
@@ -942,7 +945,7 @@ class APIDriver(LMDriver):
             resume_id=None,
             mode=mode,
         ))
-        fork._executor = ToolExecutor(fork)
+        await fork.initialize(self.root)
 
         fork_response_id: str | None = None
 
@@ -1099,13 +1102,11 @@ class APIDriver(LMDriver):
         from .model import _session_var, Role_Worker
         _session_var.set(None)  # type: ignore
         sub = self.__class__._make_fork(self, role=Role_Worker(target=have_node))
-        sub._executor = ToolExecutor(sub)
-        sub.working_block = self.root
         sub._fork_name = f"{self._fork_name}.lemma_{lemma_name}"
+        await sub.initialize(self.root)
 
         tag = f"[{sub._fork_name}]"
         self.log_interaction("lemma_subagent", f"{tag} spawned for lemma '{lemma_name}'")
-        sub.refresh_YAML()
 
         try:
             await sub._run_agent_loop()
