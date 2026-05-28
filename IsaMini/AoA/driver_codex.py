@@ -73,7 +73,7 @@ class Codex_Driver(LMDriver):
         self._exec_process: asyncio.subprocess.Process | None = None
 
     @classmethod
-    def _make_fork(cls, parent: 'Codex_Driver') -> 'Codex_Driver':
+    def _make_fork(cls, parent: 'Codex_Driver', role=None) -> 'Codex_Driver':
         from .model import _session_var
         try:
             current = _session_var.get()
@@ -83,7 +83,7 @@ class Codex_Driver(LMDriver):
             raise InternalError(
                 "_make_fork must be called in a fresh context "
                 "(use loop.create_task with context=contextvars.copy_context())")
-        return cls(parent=parent)
+        return cls(parent=parent, role=role)
 
     def system_prompt(self) -> str | None:
         return None
@@ -178,7 +178,10 @@ class Codex_Driver(LMDriver):
             raise InternalError(f"Codex session JSONL not found for {session_id}")
         return matches[0]
 
-    async def _run_main(self):
+    async def _run_agent_loop(self):
+        await self._with_retry(self._codex_loop)
+
+    async def _codex_loop(self):
         self._budget_start_time = time()
         prompt = self.initial_prompt()
         codex_session_id: str | None = None
@@ -341,11 +344,14 @@ class Codex_Driver(LMDriver):
         return await task
 
     async def _run_fork(self, interaction: Interaction, prompt_text: str) -> Any:
-        from .model import _session_var, Fork_Pending
+        from .model import _session_var, Fork_Pending, Role_Interaction
         _session_var.set(None)  # type: ignore
-        fork = Codex_Driver._make_fork(self)
-        fork.fork_pending = Fork_Pending(
-            interaction, asyncio.get_running_loop().create_future())
+        fork = Codex_Driver._make_fork(self, role=Role_Interaction(
+            pending=Fork_Pending(interaction, asyncio.get_running_loop().create_future()),
+            prompt=prompt_text,
+            resume_id=None,
+            mode=interaction.forking,
+        ))
 
         assert self._http_server is not None
         fork._session_id = self._http_server.allocate_session_id()

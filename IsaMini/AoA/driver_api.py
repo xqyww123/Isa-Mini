@@ -705,7 +705,7 @@ class APIDriver(LMDriver):
             self._fork_name = "main"
 
     @classmethod
-    def _make_fork(cls, parent: 'APIDriver') -> 'APIDriver':
+    def _make_fork(cls, parent: 'APIDriver', role=None) -> 'APIDriver':
         from .model import _session_var
         try:
             current = _session_var.get()
@@ -714,7 +714,7 @@ class APIDriver(LMDriver):
         if current is not None:
             raise InternalError(
                 "_make_fork must be called in a fresh context")
-        return cls(provider=parent._provider, parent=parent)
+        return cls(provider=parent._provider, parent=parent, role=role)
 
     async def initialize(self, root: Root):
         await super().initialize(root)
@@ -750,7 +750,10 @@ class APIDriver(LMDriver):
         msgs.append(UserMsg(self.initial_prompt()))
         return msgs
 
-    async def _run_main(self):
+    async def _run_agent_loop(self):
+        await self._with_retry(self._api_loop)
+
+    async def _api_loop(self):
         assert self._executor is not None
         if self._budget_start_time is None:
             self._budget_start_time = time()
@@ -930,14 +933,17 @@ class APIDriver(LMDriver):
         return self._provider
 
     async def _run_fork(self, interaction: 'Interaction', prompt_text: str) -> Any:
-        from .model import _session_var, Fork_Pending
+        from .model import _session_var, Fork_Pending, Role_Interaction
         _session_var.set(None)  # type: ignore
-        fork = self.__class__._make_fork(self)
-        fork.fork_pending = Fork_Pending(
-            interaction, asyncio.get_running_loop().create_future())
+        mode = interaction.forking
+        fork = self.__class__._make_fork(self, role=Role_Interaction(
+            pending=Fork_Pending(interaction, asyncio.get_running_loop().create_future()),
+            prompt=prompt_text,
+            resume_id=None,
+            mode=mode,
+        ))
         fork._executor = ToolExecutor(fork)
 
-        mode = interaction.forking
         fork_response_id: str | None = None
 
         if self.tool_name(TOOL_ANSWER) not in prompt_text:
@@ -1090,10 +1096,9 @@ class APIDriver(LMDriver):
         return result
 
     async def _run_lemma_subagent(self, have_node, lemma_name: str) -> bool:
-        from .model import _session_var
+        from .model import _session_var, Role_Worker
         _session_var.set(None)  # type: ignore
-        sub = self.__class__._make_fork(self)
-        sub.lemma_anchor = have_node
+        sub = self.__class__._make_fork(self, role=Role_Worker(target=have_node))
         sub._executor = ToolExecutor(sub)
         sub.working_block = self.root
         sub._fork_name = f"{self._fork_name}.lemma_{lemma_name}"
@@ -1103,7 +1108,7 @@ class APIDriver(LMDriver):
         sub.refresh_YAML()
 
         try:
-            await sub._run_with_retry()
+            await sub._run_agent_loop()
         except asyncio.CancelledError:
             self.warn_AoA_opr(f"{tag} cancelled")
         except Exception as e:

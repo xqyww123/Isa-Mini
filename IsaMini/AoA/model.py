@@ -1928,7 +1928,8 @@ TOOL_SEARCH: tool = "query"
 TOOL_READ:   tool = "recall"
 TOOL_SURRENDER: tool = "refute_or_surrender"
 TOOL_REQUEST_LEMMAS: tool = "request_lemmas"
-ALL_PROOF_TOOLS: tuple[tool, ...] = (TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER, TOOL_SEARCH, TOOL_READ, TOOL_SURRENDER, TOOL_REQUEST_LEMMAS)
+TOOL_COMPLAIN: tool = "complain"
+ALL_PROOF_TOOLS: tuple[tool, ...] = (TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER, TOOL_SEARCH, TOOL_READ, TOOL_SURRENDER, TOOL_REQUEST_LEMMAS, TOOL_COMPLAIN)
 
 class Interaction:
     forking: ForkingMode = ForkingMode.FORKING_WITH_CTXT
@@ -1953,6 +1954,86 @@ class InteractionExpanded(Exception):
 class Interaction_BadAnswer(Exception):
     """Raised when an answer to an interaction is invalid. The interaction remains active."""
     pass
+
+
+class Interaction_Finishing(Interaction):
+    """FINISHING-stage interaction: dispatches Worker agents to prove failed Obvious nodes."""
+    forking = ForkingMode.FORKING_WITH_CTXT
+
+    def __init__(self, failed_parents: 'list[NonLeaf_Node]', session: 'Session'):
+        self.failed_parents = list(failed_parents)
+        self.session = session
+        self._phase = "choose_target"
+        self._pending_refutation: 'tuple[NonLeaf_Node, str] | None' = None
+
+    async def prompt(self, indent: int, file: MyIO) -> None:
+        file.write("The planning phase is complete. The following proof steps need Worker agents:\n\n")
+        for p in self.failed_parents:
+            goal = p.goal() if hasattr(p, 'goal') else None
+            goal_str = f" — goal: {goal.conclusion.unicode}" if goal else ""
+            file.write(f"  - {p.id}{goal_str}\n")
+        file.write(
+            "\nPick the hardest step to tackle first. "
+            "In your answer, provide:\n"
+            '  {"target": "<step_id>", "suggestions": "...", "useful_lemmas": [...]}\n')
+
+    async def answer(self, answer: 'Answer') -> Any:
+        match self._phase:
+            case "choose_target":
+                return await self._handle_choose_target(answer)
+            case "review_refutation":
+                return await self._handle_review_refutation(answer)
+
+    async def _handle_choose_target(self, answer: 'Answer') -> Any:
+        target_id = answer.get("target", "") if isinstance(answer, dict) else ""
+        target: 'NonLeaf_Node | None' = None
+        for p in self.failed_parents:
+            if p.id == target_id:
+                target = p
+                break
+        if target is None and self.failed_parents:
+            target = self.failed_parents[0]
+        if target is None:
+            return "all_proved"
+
+        from .language_model_driver import WorkerResult
+        result: WorkerResult = await self.session.spawn_worker(target)
+
+        if result.success:
+            self.failed_parents = [p for p in self.failed_parents if p is not target]
+            if not self.failed_parents:
+                return "all_proved"
+            raise InteractionExpanded(
+                f"Goal {target.id} proved!\n"
+                f"Remaining: {[p.id for p in self.failed_parents]}\n"
+                "Which is hardest next? Provide suggestions and useful lemmas.")
+
+        if result.complaint and result.complaint.kind == "refute":
+            self._phase = "review_refutation"
+            self._pending_refutation = (target, result.complaint.detail)
+            raise InteractionExpanded(
+                f"Worker refuted goal {target.id}: {result.complaint.detail}\n"
+                "Do you accept this refutation? Answer with your judgment.")
+
+        if result.complaint and result.complaint.kind == "surrender":
+            return ("surrender", result.complaint.detail)
+
+        return ("worker_failed", f"Worker failed on {target.id} without complaint")
+
+    async def _handle_review_refutation(self, answer: 'Answer') -> Any:
+        assert self._pending_refutation is not None
+        target, detail = self._pending_refutation
+        accepted = answer.get("accept", False) if isinstance(answer, dict) else False
+
+        if accepted:
+            return ("refute_accepted", detail)
+
+        rejection = answer.get("reason", "") if isinstance(answer, dict) else ""
+        self._phase = "choose_target"
+        raise InteractionExpanded(
+            f"Refutation rejected. Reason: {rejection}\n"
+            f"Remaining: {[p.id for p in self.failed_parents]}\n"
+            "Which goal to attempt next?")
 
 
 class Fork_Pending(NamedTuple):
@@ -2561,6 +2642,7 @@ class Node(ABC):
         else:
             self.id = self.local_step
         self._depth = (self.parent._depth + 1) if self.parent is not None else 0
+        self._subgoal_level: int = 0 if self.parent is None else self.parent._subgoal_level
         session = the_session()
         if self._depth > session._depth_limit:
             raise ProofTreeTooDeep(self._depth, session._depth_limit, self.parent)
@@ -3717,6 +3799,8 @@ class StdBlock(NonLeaf_Node):
             return self.sub_nodes[0].ml_state
         else:
             return self._state_before_ending_
+    def goal(self) -> 'Goal | None':
+        return self._state_after_beginning().leading_goal
     def assemble(self, output: list[Minilang_Operation] | None = None) -> list[Minilang_Operation]:
         if output is None:
             output = []
@@ -5385,6 +5469,8 @@ def _fetched_to_facts(fetched: 'list[IsabelleFact | Interaction_RetrieveForProof
 
 #### Obvious
 
+_PLANNING_SORRY_DEPTH = 2
+
 class Obvious_ToolArg(TypedDict):
     facts: list[FactByName | FactByProposition]
 
@@ -5399,6 +5485,7 @@ class Obvious(Leaf):
         self.fact_refs: list[IsabelleFact] | None = None
         self._found_tactic: str | None = None
         self._eval_time_ms: int | None = None
+        self._is_sorry_degraded: bool = False
 
     @classmethod
     def gen(cls, arg: Obvious_ToolArg, remaining: 'LinkedList[_RawOp]',
@@ -5460,11 +5547,21 @@ class Obvious(Leaf):
             elif self.status.status == EvaluationStatus.Status.FAILURE:
                 self.parent._is_trivial = False
     def the_operation(self) -> 'Minilang_Operation | FailureReason':
+        session = the_session()
+        if (self._subgoal_level >= _PLANNING_SORRY_DEPTH
+                and isinstance(session.role, Role_Plan)
+                and session.role.stage == PlanStage.PLANNING):
+            self._is_sorry_degraded = True
+            return Minilang_Operation.SORRY_ONLY()
+        self._is_sorry_degraded = False
         facts = self.fact_refs if self.fact_refs is not None else []
         return Minilang_Operation.HAMMER(facts, 30)
     def assemble(self, output: 'list[Minilang_Operation] | None' = None) -> 'list[Minilang_Operation]':
         if output is None:
             output = []
+        if self._is_sorry_degraded:
+            output.append(Minilang_Operation.SORRY_ONLY())
+            return output
         facts = self.fact_refs if self.fact_refs is not None else []
         cached: tuple[str, int] | None = None
         if self._found_tactic and self._found_tactic != "" and self._eval_time_ms is not None:
@@ -6533,6 +6630,8 @@ class Have(StdBlock):
         self.statement = arg["statement"]
         self.name = arg["name"]
         self.auto_apply = arg.get("auto_apply", False)
+        self._subgoal_level = (0 if self.parent is None
+                               else self.parent._subgoal_level + 1)
         self._input_for_any: list[Explicit_Var] = self.statement.get("for_any") or []
         self._input_premises: list[PremiseBinding] = self.statement.get("premises") or []
         # Merged for_any: user-specified + any additional implicit fixes from ML
@@ -6771,6 +6870,8 @@ class Suffices(StdBlock):
                  parsed_proof: 'proof | None' = None):
         super().__init__(config, arg["thought"], [])
         self.statement = arg["statement"]
+        self._subgoal_level = (0 if self.parent is None
+                               else self.parent._subgoal_level + 1)
         self._input_for_any: list[Explicit_Var] = self.statement.get("for_any") or []
         self._input_premises: list[PremiseBinding] = self.statement.get("premises") or []
         self.for_any: list[tuple[varname, typ]] = []
@@ -6855,6 +6956,8 @@ class Obtain(StdBlock):
         super().__init__(config, arg["thought"], [])
         self.variables = arg["variables"]
         self.constraints = arg["constraints"]
+        self._subgoal_level = (0 if self.parent is None
+                               else self.parent._subgoal_level + 1)
         self._proof: 'proof | None' = parsed_proof
         # Populated from `New_Item_Msg` after OBTAIN runs: the vars +
         # facts Isabelle actually fixed, with types inferred by the ML
@@ -7787,7 +7890,7 @@ class Root(GoalContainer, StdBlock):
         self.global_env = GlobalEnv(NodeConfig("global", Minilang_State.assign(ml_state0), self))
         self.sub_nodes.append(self.global_env)
         self.final_ml_state = Minilang_State.assign(ml_state0)
-        self.quit_info: tuple[str, str] | None = None
+        self.quit_info: tuple | None = None
         self._closed_by = self
     @property
     def session(self) -> 'Session':
@@ -8050,6 +8153,29 @@ def _str_representer(dumper, data):
 # Register the custom representer
 yaml.add_representer(str, _str_representer)
 
+#### Role ADT
+
+class PlanStage(Enum):
+    PLANNING = "planning"
+    FINISHING = "finishing"
+
+@dataclass
+class Role_Plan:
+    stage: PlanStage = PlanStage.PLANNING
+
+@dataclass
+class Role_Worker:
+    target: 'NonLeaf_Node'
+
+@dataclass
+class Role_Interaction:
+    pending: Fork_Pending
+    prompt: str
+    resume_id: str | None
+    mode: ForkingMode
+
+Role = Role_Plan | Role_Worker | Role_Interaction
+
 class Runtime:
     """Global singleton shared across all Sessions operating on the same proof tree.
     Holds counters and limits that must be unique/shared."""
@@ -8062,6 +8188,8 @@ class Runtime:
         self._depth_limit: int = 30
         self._depth_limit_exceeded: bool = False
         self.total_tool_calls: int = 0
+        self._budget_start_time: float | None = None
+        self.worker_max_tool_calls: int = 500
 
     def next_pit_name(self) -> str:
         i = self._pit_counter
@@ -8097,7 +8225,8 @@ class Session:
                  timeout_seconds: float = 14400,
                  max_tool_calls: int = 10000,
                  max_retries: int = 5,
-                 runtime: Runtime | None = None):
+                 runtime: Runtime | None = None,
+                 role: Role | None = None):
         """
         Args:
             logger: Python logger for runtime debug messages to the server log stream.
@@ -8119,12 +8248,9 @@ class Session:
         else:
             self.runtime = Runtime()
         _session_var.set(self)
+        self.role: Role = role if role is not None else Role_Plan()
         self.last_proof_op_time: float = time()
         self.logger = logger or (parent.logger if parent else None)
-        # On a fork, the interaction it is answering (plus its eventual
-        # result). None on the main session; also None on forks before
-        # assignment and after cleanup.
-        self.fork_pending: 'Fork_Pending | None' = None
         self.working_block: 'NonLeaf_Node | None' = None
         self.warnings: list[str] = []
         self.refute_or_surrender_warned: bool = False
@@ -8141,12 +8267,10 @@ class Session:
             self.timeout_seconds = parent.timeout_seconds
             self.max_tool_calls = parent.max_tool_calls
             self.max_retries = parent.max_retries
-            self._budget_start_time = parent._budget_start_time
         else:
             self.timeout_seconds = timeout_seconds
             self.max_tool_calls = max_tool_calls
             self.max_retries = max_retries
-            self._budget_start_time: float | None = None
         self._retry_count: int = 0
         self._restart_requested: bool = False
         self.retrieval_forking_mode: ForkingMode = (
@@ -8166,7 +8290,6 @@ class Session:
             set(parent.seen_abbreviations) if parent is not None else set())
         self.showed_fill_hint: bool = False
         self.showed_cancelled_notice: bool = False
-        self.lemma_anchor: 'Have | None' = None
         self.shown_HAVE_fact_names: 'dict[str, list[tuple[varname, typ]]]' = {}
         if parent is not None:
             # Subsessions share parent's log files
@@ -8248,12 +8371,46 @@ class Session:
     @total_tool_calls.setter
     def total_tool_calls(self, v: int):
         self.runtime.total_tool_calls = v
+    @property
+    def _budget_start_time(self) -> float | None:
+        return self.runtime._budget_start_time
+    @_budget_start_time.setter
+    def _budget_start_time(self, v: float | None):
+        self.runtime._budget_start_time = v
+    @property
+    def worker_max_tool_calls(self) -> int:
+        return self.runtime.worker_max_tool_calls
+    @worker_max_tool_calls.setter
+    def worker_max_tool_calls(self, v: int):
+        self.runtime.worker_max_tool_calls = v
     def next_pit_name(self) -> str:
         return self.runtime.next_pit_name()
 
     @property
     def is_major(self) -> bool:
         return self.parent is None
+
+    @property
+    def is_planning(self) -> bool:
+        return isinstance(self.role, Role_Plan)
+    @property
+    def is_worker(self) -> bool:
+        return isinstance(self.role, Role_Worker)
+    @property
+    def is_interaction(self) -> bool:
+        return isinstance(self.role, Role_Interaction)
+
+    @property
+    def fork_pending(self) -> 'Fork_Pending | None':
+        if isinstance(self.role, Role_Interaction):
+            return self.role.pending
+        return None
+
+    @property
+    def lemma_anchor(self) -> 'Have | None':
+        if isinstance(self.role, Role_Worker) and isinstance(self.role.target, Have):
+            return self.role.target
+        return None
 
     def __str__(self) -> str:
         return self._driver_name
@@ -8766,6 +8923,19 @@ class Session:
         self.showed_fill_hint = False
         self.showed_cancelled_notice = False
         self.shown_HAVE_fact_names.clear()
+
+    def _collect_failed_obvious_parents(self) -> 'set[NonLeaf_Node]':
+        """Walk the proof tree and collect deduplicated parents of failed Obvious nodes."""
+        result: 'set[NonLeaf_Node]' = set()
+        def visit(node: 'Node'):
+            if isinstance(node, Obvious) and node.status.status == EvaluationStatus.Status.FAILURE:
+                if node.parent is not None:
+                    result.add(node.parent)
+            elif isinstance(node, NonLeaf_Node):
+                for child in node.sub_nodes:
+                    visit(child)
+        visit(self.root)
+        return result
 
     def proof_scope_unfinished_nodes(self) -> 'set[Node]':
         """Return unfinished nodes scoped to this session's proof responsibility.

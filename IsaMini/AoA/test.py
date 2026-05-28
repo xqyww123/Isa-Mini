@@ -9813,8 +9813,8 @@ async def _test_RequestLemmas_FocusedView(root: Root, file: MyIO):
     file.write(f"h_triv status: {h_triv.status.status.value}\n")
     file.write(f"h_target status: {h_target.status.status.value}\n")
 
-    # --- Set lemma_anchor and test focused view ---
-    session.lemma_anchor = h_target
+    # --- Set role to Role_Worker and test focused view ---
+    session.role = model.Role_Worker(target=h_target)
 
     print_header("print_proof_scope (lemma_anchor = h_target)", file)
     session.print_proof_scope(0, file, show_warnings=True)
@@ -9838,7 +9838,7 @@ async def _test_RequestLemmas_FocusedView(root: Root, file: MyIO):
     file.write(f"quickview contains 'Unfinished Proof': {'Unfinished Proof' in qv_text}\n")
 
     # --- Reset and verify full view is restored ---
-    session.lemma_anchor = None
+    session.role = model.Role_Plan()
 
     print_header("print_proof_scope (lemma_anchor = None, full view)", file)
     session.print_proof_scope(0, file)

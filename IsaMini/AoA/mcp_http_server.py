@@ -42,7 +42,9 @@ from .model import (
     EvaluationStatus,
     Parse_Op_List, normalize_answer, Interaction_BadAnswer,
     TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER, TOOL_READ, TOOL_SURRENDER, TOOL_REQUEST_LEMMAS,
+    TOOL_COMPLAIN,
     ALL_PROOF_TOOLS, Have_ToolArg, Have,
+    Role_Worker,
 )
 import yaml as _yaml
 from .retrieval import (
@@ -70,6 +72,7 @@ _cc_delete_schema = _load_schema("cc_delete.jsonc")
 _cc_read_schema = _load_schema("cc_recall.jsonc")
 _cc_surrender_schema = _load_schema("cc_surrender.jsonc")
 _cc_request_lemmas_schema = _load_schema("cc_request_lemmas.jsonc")
+_cc_complain_schema = _load_schema("cc_complain.jsonc")
 
 
 
@@ -570,6 +573,46 @@ async def _refute_or_surrender_tool_logic(session: Session, args: dict) -> tuple
     return (msg, False)
 
 
+async def _complain_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
+    _tn = session.tool_name(TOOL_COMPLAIN)
+    session.log_tool_call(_tn, args)
+    reason = args.get("reason", "surrender")
+    detail = args.get("detail", "")
+    if reason not in ("refute", "surrender"):
+        msg = f"Invalid reason: {reason!r}. Must be `refute` or `surrender`."
+        session.log_tool_response(_tn, f"ERROR: {msg}")
+        return (msg, True)
+
+    suggested_lemmas = args.get("suggested_lemmas")
+
+    if isinstance(session.role, Role_Worker):
+        session.root.quit_info = (reason, detail, suggested_lemmas)
+        msg = f"Complaint recorded ({reason})."
+        session.log_tool_response(_tn, msg)
+        await session.interrupt()
+        return (msg, False)
+
+    # Role_Plan: same behavior as refute_or_surrender
+    if reason == "surrender":
+        session._retry_count += 1
+        if session._retry_count >= session.max_retries:
+            session.root.quit_info = ("surrender", detail)
+            msg = f"Proof attempt concluded ({reason})."
+            session.log_tool_response(_tn, msg)
+            await session.interrupt()
+            return (msg, False)
+        msg = "Restarting session with fresh context."
+        session.log_tool_response(_tn, msg)
+        await session.request_restart()
+        return (msg, False)
+    # reason == "refute"
+    session.root.quit_info = (reason, detail)
+    msg = f"Proof attempt concluded ({reason})."
+    session.log_tool_response(_tn, msg)
+    await session.interrupt()
+    return (msg, False)
+
+
 async def _request_lemmas_tool_logic(
     session: Session, args: dict, tool_lock: asyncio.Lock,
 ) -> tuple[str, bool]:
@@ -702,6 +745,8 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                             "schema": _cc_surrender_schema, "annotations": _ACT},
     "request_lemmas": {"description": "When you lack common lemmas to proceed with your proof, call this to request them. An external system will provide them.",
                        "schema": _cc_request_lemmas_schema, "annotations": _MUT},
+    "complain": {"description": "Report that the goal cannot be proved: 'refute' if buggy/unprovable, 'surrender' if no strategy remains. Optionally suggest lemmas that would help.",
+                 "schema": _cc_complain_schema, "annotations": _ACT},
 }
 
 
@@ -772,6 +817,8 @@ class ToolExecutor:
                 result, is_error = await _request_lemmas_tool_logic(
                     session, arguments, self._tool_lock)
                 session.last_proof_op_time = time()
+            case "complain":
+                result, is_error = await _complain_tool_logic(session, arguments)
             case _:
                 return (f"Unknown tool: {name}", True)
 

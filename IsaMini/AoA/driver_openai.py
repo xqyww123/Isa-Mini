@@ -81,7 +81,7 @@ class OpenAI_Driver(LMDriver):
         self._runner_task: asyncio.Task | None = None
 
     @classmethod
-    def _make_fork(cls, parent: 'OpenAI_Driver') -> 'OpenAI_Driver':
+    def _make_fork(cls, parent: 'OpenAI_Driver', role=None) -> 'OpenAI_Driver':
         from .model import _session_var
         try:
             current = _session_var.get()
@@ -91,7 +91,7 @@ class OpenAI_Driver(LMDriver):
             raise InternalError(
                 "_make_fork must be called in a fresh context "
                 "(use loop.create_task with context=contextvars.copy_context())")
-        return cls(parent=parent)
+        return cls(parent=parent, role=role)
 
     async def initialize(self, root: Root):
         await super().initialize(root)
@@ -147,7 +147,10 @@ class OpenAI_Driver(LMDriver):
             ),
         )
 
-    async def _run_main(self):
+    async def _run_agent_loop(self):
+        await self._with_retry(self._openai_loop)
+
+    async def _openai_loop(self):
         assert self._mcp_url is not None
         self._budget_start_time = time()
         mcp = self._make_mcp(self._mcp_url)
@@ -245,11 +248,15 @@ class OpenAI_Driver(LMDriver):
         return await task
 
     async def _run_fork(self, interaction: Interaction, prompt_text: str) -> Any:
-        from .model import _session_var, Fork_Pending
+        from .model import _session_var, Fork_Pending, Role_Interaction
         _session_var.set(None)  # type: ignore
-        fork = OpenAI_Driver._make_fork(self)
-        fork.fork_pending = Fork_Pending(
-            interaction, asyncio.get_running_loop().create_future())
+        mode = interaction.forking
+        fork = OpenAI_Driver._make_fork(self, role=Role_Interaction(
+            pending=Fork_Pending(interaction, asyncio.get_running_loop().create_future()),
+            prompt=prompt_text,
+            resume_id=self._forkable_response_id if mode == ForkingMode.FORKING_WITH_CTXT else None,
+            mode=mode,
+        ))
 
         assert self._http_server is not None
         fork._session_id = self._http_server.allocate_session_id()

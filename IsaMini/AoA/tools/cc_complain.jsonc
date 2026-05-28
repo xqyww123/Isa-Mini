@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "properties": {
+    "reason": {
+      "type": "string",
+      "enum": ["refute", "surrender"],
+      "description": "Why the proof cannot be completed: 'refute' if the goal appears to be buggy or unprovable from the given premises, 'surrender' if no viable strategy remains"
+    },
+    "detail": { "type": "string", "description": "Explanation of why" },
+    "suggested_lemmas": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "statement": { "type": "string" }
+        },
+        "required": ["name", "statement"]
+      },
+      "description": "Optional lemma suggestions (surrender only)"
+    }
+  },
+  "required": ["reason", "detail"],
+  "additionalProperties": false
+}

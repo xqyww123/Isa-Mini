@@ -101,6 +101,8 @@ class ClaudeCode(LMDriver):
         "delete": "mcp__proof__delete",
         "recall": "Read",
         "refute_or_surrender": "mcp__proof__refute_or_surrender",
+        "request_lemmas": "mcp__proof__request_lemmas",
+        "complain": "mcp__proof__complain",
     }
     TOOL_WHITELIST = _NON_PROOF_TOOLS + list(_TOOL_NAME_MAP.values())
     COMPACT_THRESHOLD = 0.85
@@ -167,7 +169,7 @@ class ClaudeCode(LMDriver):
             self._on_log_callback: Callable[[dict], Any] | None = None
 
     @classmethod
-    def _make_fork(cls, parent: 'ClaudeCode') -> 'ClaudeCode':
+    def _make_fork(cls, parent: 'ClaudeCode', role=None) -> 'ClaudeCode':
         """Create a fork subsession sharing parent's state.
         Must be called from a different contextvars context than the parent."""
         from .model import _session_var
@@ -179,7 +181,7 @@ class ClaudeCode(LMDriver):
             raise InternalError(
                 "_make_fork must be called in a fresh context "
                 "(use loop.create_task with context=contextvars.copy_context())")
-        return cls(parent=parent)
+        return cls(parent=parent, role=role)
 
     _SKILLS = ["isabelle-fun-definition"]
 
@@ -244,11 +246,11 @@ class ClaudeCode(LMDriver):
         if self._client is not None:
             await self._client.interrupt()
 
-    async def _run_with_retry(self):
+    async def _run_agent_loop(self):
         if self._interactive_web_terminal:
             await self._run_standalone()
             return
-        await super()._run_with_retry()
+        await self._with_retry(self._sdk_loop)
 
     async def close(self):
         """Clean up the session and remove the temporary directory."""
@@ -436,10 +438,10 @@ class ClaudeCode(LMDriver):
         if message.is_error and message.result:
             self._check_error_text(message.result)
 
-    async def _run_main(self):
+    async def _sdk_loop(self):
         """Run using the Claude Agent SDK (embedded mode)."""
         if self._client is not None:
-            raise InternalError("_run_main called while already running")
+            raise InternalError("_sdk_loop called while already running")
         self._budget_start_time = time()
         while True:
             try:
@@ -753,11 +755,15 @@ class ClaudeCode(LMDriver):
 
     async def _run_fork(self, interaction: Interaction, prompt_text: str) -> Any:
         """Body of a forked interaction, run in its own contextvars context."""
-        from .model import _session_var, Fork_Pending
+        from .model import _session_var, Fork_Pending, Role_Interaction
         _session_var.set(None)  # type: ignore  # Clear the copied parent session so _make_fork succeeds
-        fork = ClaudeCode._make_fork(self)  # type: ignore[attr-defined]
-        fork.fork_pending = Fork_Pending(
-            interaction, asyncio.get_running_loop().create_future())
+        mode = interaction.forking
+        fork = ClaudeCode._make_fork(self, role=Role_Interaction(  # type: ignore[attr-defined]
+            pending=Fork_Pending(interaction, asyncio.get_running_loop().create_future()),
+            prompt=prompt_text,
+            resume_id=self._conversation_id if mode == ForkingMode.FORKING_WITH_CTXT else None,
+            mode=mode,
+        ))
 
         assert self._http_server is not None
         fork._session_id = self._http_server.allocate_session_id()
