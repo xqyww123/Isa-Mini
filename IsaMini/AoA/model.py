@@ -2002,7 +2002,7 @@ class Interaction:
 
     async def prompt(self, indent: int, file: MyIO) -> None:
         raise NotImplementedError("`prompt` must be implemented by subclass")
-    async def answer(self, answer: Answer) -> Any:
+    async def answer(self, answer: Any) -> Any:
         raise NotImplementedError("`answer` must be implemented by subclass")
 
 class ImmediateAnswer(Exception):
@@ -2022,84 +2022,85 @@ class Interaction_BadAnswer(Exception):
     pass
 
 
-class Interaction_Finishing(Interaction):
-    """FINISHING-stage interaction: dispatches Worker agents to prove failed Obvious nodes."""
+class Interaction_ChooseTarget(Interaction):
+    """FINISHING-stage interaction: present failed goals and let the planning
+    agent pick which to dispatch a Worker for."""
     forking = ForkingMode.FORKING_WITH_CTXT
+    fork_allowed_tools = [TOOL_ANSWER_TARGET_GOAL, TOOL_SEARCH]
 
-    def __init__(self, failed_parents: 'list[NonLeaf_Node]', session: 'Session'):
-        self.failed_parents = list(failed_parents)
+    def __init__(self, failed_parents: 'set[NonLeaf_Node]', session: 'Session'):
+        self.failed_parents = failed_parents
         self.session = session
-        self._phase = "choose_target"
-        self._pending_refutation: 'tuple[NonLeaf_Node, str] | None' = None
+
+    def _sorted_targets(self) -> 'list[NonLeaf_Node]':
+        return sorted(self.failed_parents, key=lambda n: n.id)
 
     async def prompt(self, indent: int, file: MyIO) -> None:
+        targets = self._sorted_targets()
         file.write("The planning phase is complete. The following proof steps need Worker agents:\n\n")
-        for p in self.failed_parents:
+        for i, p in enumerate(targets):
             goal = p.goal() if hasattr(p, 'goal') else None
             goal_str = f" — goal: {goal.conclusion.unicode}" if goal else ""
-            file.write(f"  - {p.id}{goal_str}\n")
+            file.write(f"  {i}. {p.id}{goal_str}\n")
         file.write(
-            "\nPick the hardest step to tackle first. "
-            "In your answer, provide:\n"
-            '  {"target": "<step_id>", "suggestions": "...", "useful_lemmas": [...]}\n')
+            f"\nPick the hardest step to tackle first. "
+            f"Use `{tn(TOOL_ANSWER_TARGET_GOAL)}` with:\n"
+            f"  - index: the number of your chosen step\n"
+            f"  - suggestions: strategy hints for the worker\n"
+            f"  - useful_lemmas: names of lemmas the worker should try\n")
 
-    async def answer(self, answer: 'Answer') -> Any:
-        match self._phase:
-            case "choose_target":
-                return await self._handle_choose_target(answer)
-            case "review_refutation":
-                return await self._handle_review_refutation(answer)
-
-    async def _handle_choose_target(self, answer: 'Answer') -> Any:
-        target_id = answer.get("target", "") if isinstance(answer, dict) else ""
-        target: 'NonLeaf_Node | None' = None
-        for p in self.failed_parents:
-            if p.id == target_id:
-                target = p
-                break
-        if target is None and self.failed_parents:
-            target = self.failed_parents[0]
-        if target is None:
-            return "all_proved"
+    async def answer(self, answer: AnswerTargetGoal) -> Any:
+        targets = self._sorted_targets()
+        _check_index(answer.index, len(targets))
+        target = targets[answer.index]
 
         from .language_model_driver import WorkerResult
-        result: WorkerResult = await self.session.spawn_worker(target)
+        result: WorkerResult = await self.session.spawn_worker(
+            target, answer.suggestions, answer.useful_lemmas)
 
         if result.success:
-            self.failed_parents = [p for p in self.failed_parents if p is not target]
+            self.failed_parents.discard(target)
             if not self.failed_parents:
                 return "all_proved"
+            remaining = self._sorted_targets()
+            lines = "\n".join(f"  {i}. {p.id}" for i, p in enumerate(remaining))
             raise InteractionExpanded(
-                f"Goal {target.id} proved!\n"
-                f"Remaining: {[p.id for p in self.failed_parents]}\n"
-                "Which is hardest next? Provide suggestions and useful lemmas.")
+                f"Worker proved goal {target.id}!\n"
+                f"Remaining targets:\n{lines}\n"
+                f"Pick the next hardest target.")
 
         if result.complaint and result.complaint.kind == "refute":
-            self._phase = "review_refutation"
-            self._pending_refutation = (target, result.complaint.detail)
-            raise InteractionExpanded(
-                f"Worker refuted goal {target.id}: {result.complaint.detail}\n"
-                "Do you accept this refutation? Answer with your judgment.")
+            return ("refutation", target, result.complaint)
 
         if result.complaint and result.complaint.kind == "surrender":
             return ("surrender", result.complaint.detail)
 
-        return ("worker_failed", f"Worker failed on {target.id} without complaint")
+        return ("worker_failed", target)
 
-    async def _handle_review_refutation(self, answer: 'Answer') -> Any:
-        assert self._pending_refutation is not None
-        target, detail = self._pending_refutation
-        accepted = answer.get("accept", False) if isinstance(answer, dict) else False
 
-        if accepted:
-            return ("refute_accepted", detail)
+class Interaction_ReviewRefutation(Interaction):
+    """Review a Worker's claim that a goal is unprovable."""
+    forking = ForkingMode.FORKING_WITH_CTXT
+    fork_allowed_tools = [TOOL_ANSWER_REFUTATION, TOOL_SEARCH]
 
-        rejection = answer.get("reason", "") if isinstance(answer, dict) else ""
-        self._phase = "choose_target"
-        raise InteractionExpanded(
-            f"Refutation rejected. Reason: {rejection}\n"
-            f"Remaining: {[p.id for p in self.failed_parents]}\n"
-            "Which goal to attempt next?")
+    def __init__(self, target: 'NonLeaf_Node', complaint: Any):
+        self.target = target
+        self.complaint = complaint
+
+    async def prompt(self, indent: int, file: MyIO) -> None:
+        goal = self.target.goal() if hasattr(self.target, 'goal') else None
+        goal_str = f"\nGoal: {goal.conclusion.unicode}" if goal else ""
+        file.write(
+            f"Worker attempted {self.target.id} but claims the goal is unprovable.{goal_str}\n\n"
+            f"Refutation: {self.complaint.detail}\n\n"
+            f"Do you accept this refutation? Use `{tn(TOOL_ANSWER_REFUTATION)}` with:\n"
+            f"  - accept: true to accept (goal is unprovable), false to reject\n"
+            f"  - reason: explanation of your judgment\n")
+
+    async def answer(self, answer: AnswerRefutation) -> bool:
+        the_session().log_interaction("refutation_review",
+            f"target={self.target.id} accept={answer.accept} reason={answer.reason}")
+        return answer.accept
 
 
 class Fork_Pending(NamedTuple):
@@ -2197,7 +2198,7 @@ class Interaction_Retrieve(Interaction):
             self.forking = session.retrieval_forking_mode
         # Tool access in forks: YES = answer only, YES_RECURSIVE = answer + query (default)
         if session.interactive_retrieval == InteractiveRetrievalMode.YES:
-            self.fork_allowed_tools = [TOOL_ANSWER]
+            self.fork_allowed_tools = [TOOL_ANSWER_INDEXES]
 
     async def _render_prompt(self) -> str:
         """Render the prompt into a string. Used after candidate-list expansion
@@ -2278,13 +2279,9 @@ class Interaction_Retrieve(Interaction):
     async def prompt(self, indent: int, file: MyIO) -> None:
         raise NotImplementedError("subclasses must override prompt()")
 
-    async def answer(self, answer: Answer) -> 'list[IsabelleEntity | IsabelleFact]':
-        # Base class: accepts `indexes` only. Subclasses (e.g.
-        # Interaction_RetrieveForProof) override to also consume `name` /
-        # `statement`.
-        _reject_fields(answer, allow={"indexes"},
-                       hint="Select candidate(s) by `indexes`.")
-        # Empty answer — expand search if possible
+    fork_allowed_tools = [TOOL_ANSWER_INDEXES, TOOL_SEARCH]
+
+    async def answer(self, answer: AnswerIndexes) -> 'list[IsabelleEntity | IsabelleFact]':
         if not answer.indexes:
             if self.k < self.FINAL_K:
                 self.k = self.FINAL_K
@@ -2295,7 +2292,6 @@ class Interaction_Retrieve(Interaction):
                 await self._log_retrieval_training_data([])
                 the_session().log_retrieval(self.query, ["none selected"])
                 return []
-        # Index answer
         if self.single_choice and len(answer.indexes) > 1:
             raise Interaction_BadAnswer("Please select exactly one entry.")
         facts = await self.candidate_facts()
@@ -2367,44 +2363,30 @@ class Interaction_RetrieveForProof(Interaction_Retrieve):
         else:
             file.write("If none of the above applies, answer empty to see more candidates.\n")
 
-    async def answer(self, answer: Answer) -> 'list[IsabelleEntity | IsabelleFact]':
-        """Priority order: name > indexes > statement (> empty-expand).
+    fork_allowed_tools = [TOOL_ANSWER_INDEXES_OR_SPEC, TOOL_SEARCH]
 
-        `name`      → strict lookup of an accessible named fact. BadAnswer
-                      if the name doesn't resolve — it does NOT fall through
-                      to prove-in-time.
+    async def answer(self, answer: AnswerIndexesOrSpec) -> 'list[IsabelleEntity | IsabelleFact]':
+        """Priority order: indexes > statement (> empty-expand).
+
         `indexes`   → select from the candidate list (delegates to super).
         `statement` → prove-in-time: treat as a new proposition to prove
-                      inline.
+                      inline (only when indexes is empty).
         (all empty) → expand the candidate list, or give up on the second
                       empty answer (delegates to super)."""
         session = the_session()
-        # 1. Name lookup (strict — does not fall through)
-        if answer.name is not None:
-            presented = await _try_resolve_as_named_fact(self.state, answer.name)
-            if presented is None:
-                raise Interaction_BadAnswer(
-                    f"No accessible fact found with name '{answer.name}'.")
-            await self._log_retrieval_training_data([])
-            session.log_retrieval(self.query, [f"named: {answer.name}"])
-            return [presented]
-        # 2. Index selection → delegate to super (which also handles empty
-        #    → expand/give-up). But first peel off the statement (prove-
-        #    in-time) and empty-with-no-expansion-left paths that super
-        #    would reject.
         if answer.statement is not None and not answer.indexes:
             await self._log_retrieval_training_data([], prove_in_time=answer.statement)
             session.log_retrieval(self.query, [f"prove-in-time: {answer.statement}"])
             return [IsabelleFact_ProveInTime(IsaTerm.from_agent(answer.statement),
                                               assigned_name=the_session().next_pit_name())]
-        if answer.is_empty() and self.k >= self.FINAL_K:
+        if not answer.indexes and answer.statement is None and self.k >= self.FINAL_K:
             await self._log_retrieval_training_data([])
             session.log_retrieval(self.query, ["unfound"])
             if self.single_choice:
                 return [IsabelleFact_Unfound(
                     FactByDescription(english=self.query))]
             return []
-        return await super().answer(answer)
+        return await super().answer(AnswerIndexes(indexes=answer.indexes))
 
 
 class Interaction_InstantiateSchematics(Interaction):
@@ -2456,7 +2438,9 @@ class Interaction_InstantiateSchematics(Interaction):
                    "{variable, term} objects. Each term must be a "
                    "type-correct Isabelle expression.\n")
 
-    async def answer(self, answer: Answer) -> IsaTerm:
+    fork_allowed_tools = [TOOL_ANSWER_INSTANTIATE, TOOL_SEARCH]
+
+    async def answer(self, answer: AnswerInstantiate) -> IsaTerm:
         if not answer.instantiations:
             names = ", ".join(n for n, _ in self.schematic_vars)
             raise Interaction_BadAnswer(
@@ -2515,8 +2499,7 @@ class Interaction_MapCase(Interaction):
     "none of my supplied bodies belong to this actual case").
     Returns the selected supplied name (a string from
     `supplied_options`), or None when the answer is empty."""
-    # No search needed — restrict the fork to the answer tool only.
-    fork_allowed_tools = [TOOL_ANSWER]
+    fork_allowed_tools = [TOOL_ANSWER_INDEX]
 
     def __init__(self,
                  actual_case: str,
@@ -2535,10 +2518,6 @@ class Interaction_MapCase(Interaction):
         file.write(
             f"The {self.kind} operation produced a case `{self.actual_case}` "
             f"(as follows) that does not match any `case_name` you supplied.\n")
-        # Render the case context (vars + hyps + goal). Goal already carries
-        # the case's vars/hyps in its context — Isabelle pushes them into
-        # the HHF state's items at case entry (see library/proof.ML around
-        # line 2390-2412), so no caller-side merging is needed here.
         if self.goal is None:
             print_indent(indent + 1, file)
             file.write("goal: unknown, evaluation pending\n")
@@ -2550,22 +2529,14 @@ class Interaction_MapCase(Interaction):
             print_indent(indent + 1, file)
             file.write(f"{i}. {name}\n")
         print_indent(indent, file)
-        file.write("Answer with its index if so, or with empty `indexes` to "
+        file.write("Answer with the index if so, or with null to "
                    "leave this case without a proof for now.\n")
 
-    async def answer(self, answer: Answer) -> str | None:
-        _reject_fields(answer, allow={"indexes"},
-                       hint="Select one supplied case_name by `indexes` "
-                            "(at most one), or answer with empty `indexes` "
-                            "to drop.")
-        if not answer.indexes:
+    async def answer(self, answer: AnswerIndex) -> str | None:
+        if answer.index is None:
             return None
-        if len(answer.indexes) > 1:
-            raise Interaction_BadAnswer(
-                "Select at most one supplied case_name.")
-        idx = answer.indexes[0]
-        _check_index(idx, len(self.supplied_options))
-        return self.supplied_options[idx]
+        _check_index(answer.index, len(self.supplied_options))
+        return self.supplied_options[answer.index]
 
 
 ### The Abstract Model
@@ -6030,14 +6001,10 @@ class Define(SubgoalMaker):
 #### Unfold
 
 class Interaction_ChooseDef(Interaction):
+    fork_allowed_tools = [TOOL_ANSWER_INDEXES_OR_NAME, TOOL_SEARCH]
+
     def __init__(self, constants: list[str], candidate_defs: list[IsabelleFact_Presented],
                  state: 'Minilang_State | None' = None):
-        """
-        Args:
-            constants: List of constants being unfolded
-            candidate_defs: List of candidate definitions
-            state: Optional Minilang_State for name-based fact resolution
-        """
         self.constants = constants
         self.candidate_defs = candidate_defs
         self.state = state
@@ -6051,20 +6018,14 @@ class Interaction_ChooseDef(Interaction):
             print_indent(indent+1, file)
             file.write(f"{i}. {ref.full_name}: {', '.join(e.unicode for e in ref.expression)}\n")
         if len(self.candidate_defs) > 1:
-            file.write(f"Select definitions to use in unfolding. Call `{tn(TOOL_ANSWER)}` with `indexes`, or the `name` of a definition, or leave empty to skip.\n")
+            file.write(f"Select definitions to use in unfolding. Call `{tn(TOOL_ANSWER_INDEXES_OR_NAME)}` with `indexes`, or the `name` of a definition, or leave empty to skip.\n")
         else:
-            file.write(f"Select this definition to use in unfolding. Call `{tn(TOOL_ANSWER)}` with `indexes`, or the `name` of a definition, or leave empty to skip.\n")
-    async def answer(self, answer: Answer) -> list[IsabelleFact]:
-        """Priority: name > indexes. `statement` is rejected (use Have/Obvious
-        instead if you want to prove-in-time)."""
-        _reject_fields(answer, allow={"indexes", "name"},
-                       hint="Select a definition by `indexes` or `name`.")
+            file.write(f"Select this definition to use in unfolding. Call `{tn(TOOL_ANSWER_INDEXES_OR_NAME)}` with `indexes`, or the `name` of a definition, or leave empty to skip.\n")
+    async def answer(self, answer: AnswerIndexesOrName) -> list[IsabelleFact]:
         if answer.name is not None:
-            # Try matching against candidate names first
             for d in self.candidate_defs:
                 if d.short_name.unicode == answer.name or d.full_name == answer.name:
                     return [d]
-            # Try general RPC lookup
             if self.state is not None:
                 presented = await _try_resolve_as_named_fact(self.state, answer.name)
                 if presented is not None:
@@ -6330,11 +6291,11 @@ class Interaction_SelectRewriteTargets(Interaction):
                 file.write("Answer with the index of the subterm to rewrite, or leave empty to drop this rule.\n")
             else:
                 file.write("Answer with the indices of the subterms to rewrite, or leave empty to drop this rule.\n")
-    async def answer(self, answer: Answer) -> list[tuple[int, list[lambda_term]]]:
+    fork_allowed_tools = [TOOL_ANSWER_INDEXES, TOOL_SEARCH]
+
+    async def answer(self, answer: AnswerIndexes) -> list[tuple[int, list[lambda_term]]]:
         """Returns [(fact_index, [selected_raw_terms])] for each looping rule.
-        Empty selection for a rule means drop it. Accepts `indexes` only."""
-        _reject_fields(answer, allow={"indexes"},
-                       hint="Select subterm(s) by `indexes`.")
+        Empty selection for a rule means drop it."""
         idxs = answer.indexes
         result: list[tuple[int, list[lambda_term]]] = []
         # answer is a list of indices — applied to all looping rules sequentially
@@ -8232,6 +8193,8 @@ class Role_Plan:
 @dataclass
 class Role_Worker:
     target: 'NonLeaf_Node'
+    suggestions: str = ""
+    useful_lemmas: list[str] = field(default_factory=list)
 
 @dataclass
 class Role_Interaction:

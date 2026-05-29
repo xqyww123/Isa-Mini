@@ -103,6 +103,13 @@ class ClaudeCode(LMDriver):
         "refute_or_surrender": "mcp__proof__refute_or_surrender",
         "request_lemmas": "mcp__proof__request_lemmas",
         "complain": "mcp__proof__complain",
+        "answer_indexes": "mcp__proof__answer_indexes",
+        "answer_index": "mcp__proof__answer_index",
+        "answer_indexes_or_name": "mcp__proof__answer_indexes_or_name",
+        "answer_indexes_or_spec": "mcp__proof__answer_indexes_or_spec",
+        "answer_instantiate": "mcp__proof__answer_instantiate",
+        "answer_target_goal": "mcp__proof__answer_target_goal",
+        "answer_refutation": "mcp__proof__answer_refutation",
     }
     TOOL_WHITELIST = _NON_PROOF_TOOLS + list(_TOOL_NAME_MAP.values())
     COMPACT_THRESHOLD = 0.85
@@ -328,15 +335,17 @@ class ClaudeCode(LMDriver):
             }
 
         # 2. Check proof MCP tool interaction state.
-        # Only forks assigned to answer an interaction may call the ``answer`` tool.
-        if tool == self.tool_name(TOOL_ANSWER) and (
+        # Only forks assigned to answer an interaction may call answer tools.
+        is_answer_tool = (tool == self.tool_name(TOOL_ANSWER)
+                          or any(tool == self.tool_name(t) for t in ANSWER_TOOLS))
+        if is_answer_tool and (
                 self.fork_pending is None or self.fork_pending.answer.done()):
             return {
                 "continue_": False,
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "deny",
-                    "permissionDecisionReason": f"No question pending. The `{self.tool_name(TOOL_ANSWER)}` tool can only be used when there is a question for you to answer.",
+                    "permissionDecisionReason": f"No question pending. The `{tool}` tool can only be used when there is a question for you to answer.",
                 },
             }
 
@@ -827,7 +836,7 @@ class ClaudeCode(LMDriver):
                 # parent conversation, and those phrases trip Claude's anti-
                 # injection training, leading the fork to ignore the prompt.
                 fork_prompt = prompt_text
-                answer_tool = self.tool_name(TOOL_ANSWER)
+                answer_tool = self.tool_name(interaction.answer_tool_name)
                 if answer_tool not in prompt_text:
                     fork_prompt += (
                         f"\nAnswer the question above by calling the "
@@ -863,7 +872,7 @@ class ClaudeCode(LMDriver):
                     fork.log_interaction("fork", f"{tag} retrying: interaction not answered")
                     await fork_client.query(
                         "It looks like you haven't submitted your answer. "
-                        f"Call `{self.tool_name(TOOL_ANSWER)}` to submit it.")
+                        f"Call `{self.tool_name(interaction.answer_tool_name)}` to submit it.")
                     fork._model_time_start = time()
               fork._client = None
               break

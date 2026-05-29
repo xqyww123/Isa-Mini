@@ -9,7 +9,9 @@ from time import time
 from typing import Awaitable, Callable, Literal, TypeVar
 
 from .model import (
-    AoA_Error, EvaluationStatus, Interaction_Finishing, NonLeaf_Node,
+    AoA_Error, EvaluationStatus, InternalError,
+    Interaction_ChooseTarget, Interaction_ReviewRefutation,
+    NonLeaf_Node,
     PlanStage, Role_Plan, Role_Worker, Session, _session_var,
 )
 
@@ -70,8 +72,7 @@ class LMDriver(Session):
                 break
 
             self.refresh_YAML()
-            interaction = Interaction_Finishing(list(failed_parents), self)
-            result = await self.fork_interaction(interaction)
+            result = await self._run_finishing(failed_parents)
 
             match result:
                 case "all_proved":
@@ -84,6 +85,26 @@ class LMDriver(Session):
                     continue
                 case _:
                     break
+
+    async def _run_finishing(self, failed_parents: set[NonLeaf_Node]):
+        while failed_parents:
+            choose = Interaction_ChooseTarget(failed_parents, self)
+            result = await self.fork_interaction(choose)
+
+            match result:
+                case "all_proved":
+                    return "all_proved"
+                case ("refutation", target, complaint):
+                    review = Interaction_ReviewRefutation(target, complaint)
+                    accepted = await self.fork_interaction(review)
+                    if accepted:
+                        return ("refute_accepted", complaint.detail)
+                case ("surrender", detail):
+                    return ("surrender", detail)
+                case ("worker_failed", target):
+                    raise InternalError(
+                        f"Worker failed on {target.id} without complaint")
+        return "all_proved"
 
     async def _with_retry(self, fn: Callable[[], Awaitable]):
         """Retry *fn()* on quota exhaustion or transient API errors."""
@@ -131,19 +152,33 @@ class LMDriver(Session):
         self.total_model_time += sub.total_model_time
         self.total_quota_wait_time += sub.total_quota_wait_time
 
-    async def spawn_worker(self, target: NonLeaf_Node) -> WorkerResult:
+    async def spawn_worker(self, target: NonLeaf_Node,
+                           suggestions: str = "",
+                           useful_lemmas: list[str] | None = None,
+                           ) -> WorkerResult:
         ctx = contextvars.copy_context()
         loop = asyncio.get_running_loop()
-        task = loop.create_task(self._run_worker(target), context=ctx)
+        task = loop.create_task(
+            self._run_worker(target, suggestions, useful_lemmas or []),
+            context=ctx)
         result = await task
         self.refresh_YAML()
         return result
 
-    async def _run_worker(self, target: NonLeaf_Node) -> WorkerResult:
+    async def _run_worker(self, target: NonLeaf_Node,
+                          suggestions: str,
+                          useful_lemmas: list[str]) -> WorkerResult:
         _session_var.set(None)  # type: ignore
-        sub = self.__class__._make_fork(self, role=Role_Worker(target=target))
-        sub._fork_name = f"{self._fork_name}.worker_{target.id}"
-        await sub.initialize(self.root)
+        try:
+            sub = self.__class__._make_fork(
+                self, role=Role_Worker(target=target,
+                                       suggestions=suggestions,
+                                       useful_lemmas=useful_lemmas))
+            sub._fork_name = f"{self._fork_name}.worker_{target.id}"
+            await sub.initialize(self.root)
+        except Exception as e:
+            self.warn_AoA_opr(f"Worker init failed for {target.id}: {e}")
+            return WorkerResult(success=False)
 
         tag = f"[{sub._fork_name}]"
         self.log_interaction("worker", f"{tag} spawned")
@@ -158,10 +193,14 @@ class LMDriver(Session):
             raw = self.root.quit_info
             self.root.quit_info = None
             self._accumulate_subagent_costs(sub)
-            await sub.close()
+            try:
+                await sub.close()
+            except Exception as e:
+                self.warn_AoA_opr(f"{tag} close failed: {e}")
 
         complaint = None
-        if raw is not None and len(raw) >= 2 and raw[0] in ("refute", "surrender"):
+        if raw is not None and len(raw) >= 2 and raw[0] in (
+                "refute", "surrender", "resource_exhausted"):
             suggested = raw[2] if len(raw) > 2 else None
             complaint = WorkerComplaint(kind=raw[0], detail=raw[1],
                                         suggested_lemmas=suggested)
@@ -174,7 +213,7 @@ class LMDriver(Session):
 
 @dataclass
 class WorkerComplaint:
-    kind: Literal["refute", "surrender"]
+    kind: Literal["refute", "surrender", "resource_exhausted"]
     detail: str
     suggested_lemmas: list | None = None
 

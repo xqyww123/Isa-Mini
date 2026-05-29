@@ -949,10 +949,11 @@ class APIDriver(LMDriver):
 
         fork_response_id: str | None = None
 
-        if self.tool_name(TOOL_ANSWER) not in prompt_text:
+        answer_tool = self.tool_name(interaction.answer_tool_name)
+        if answer_tool not in prompt_text:
             prompt_text += (
                 f"\nAnswer the question above by calling "
-                f"the `{self.tool_name(TOOL_ANSWER)}` tool.")
+                f"the `{answer_tool}` tool.")
 
         fork_messages: list[Msg]
         if mode == ForkingMode.FORKING_WITH_CTXT:
@@ -1066,7 +1067,7 @@ class APIDriver(LMDriver):
 
                 if not resp.tool_calls:
                     fork_messages.append(UserMsg(
-                        f"Call the `{self.tool_name(TOOL_ANSWER)}` tool to submit your answer."))
+                        f"Call the `{self.tool_name(interaction.answer_tool_name)}` tool to submit your answer."))
                     fork.log_interaction("fork", f"{tag} retrying: no tool calls")
               break
             except _QuotaError:

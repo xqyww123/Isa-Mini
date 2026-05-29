@@ -362,8 +362,9 @@ class Codex_Driver(LMDriver):
         fork_prompt = (
             "Let's consider a sub-task forked from the context:\n"
             + prompt_text)
-        if self.tool_name(TOOL_ANSWER) not in prompt_text:
-            fork_prompt += f"\nAnswer the question above by calling the `{self.tool_name(TOOL_ANSWER)}` tool."
+        answer_tool = self.tool_name(interaction.answer_tool_name)
+        if answer_tool not in prompt_text:
+            fork_prompt += f"\nAnswer the question above by calling the `{answer_tool}` tool."
 
         tag = f"[{fork._fork_name}]"
         fork.log_interaction("fork", f"{tag} prompt:\n{prompt_text}")
@@ -433,7 +434,7 @@ class Codex_Driver(LMDriver):
                     "codex", "exec", "resume",
                     self._codex_session_id,
                     "You haven't submitted your answer. "
-                    f"Call the `{self.tool_name(TOOL_ANSWER)}` tool to submit it.",
+                    f"Call the `{self.tool_name(fork.fork_pending.interaction.answer_tool_name)}` tool to submit it.",
                     "--json",
                     "-m", self._model,
                     "-c", f'mcp_servers.proof.url="{fork_url}"',
