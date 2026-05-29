@@ -98,7 +98,8 @@ class Provider(ABC):
 
     @abstractmethod
     async def chat(self, messages: list[Msg], tools: list[dict],
-                   *, previous_response_id: str | None = None) -> ProviderResponse:
+                   *, previous_response_id: str | None = None,
+                   allowed_tools: list[str] | None = None) -> ProviderResponse:
         ...
 
     @abstractmethod
@@ -276,7 +277,8 @@ class OpenAIChatProvider(OpenAIBase):
         return out
 
     async def chat(self, messages: list[Msg], tools: list[dict],
-                   *, previous_response_id: str | None = None) -> ProviderResponse:
+                   *, previous_response_id: str | None = None,
+                   allowed_tools: list[str] | None = None) -> ProviderResponse:
         params: dict[str, Any] = {
             "model": self._model,
             "messages": self._msgs_to_dicts(messages),
@@ -287,6 +289,14 @@ class OpenAIChatProvider(OpenAIBase):
             params["reasoning_effort"] = self._reasoning_effort
         if tools:
             params["tools"] = tools
+        if allowed_tools:
+            params["tool_choice"] = {
+                "type": "allowed_tools",
+                "allowed_tools": {
+                    "mode": "required",
+                    "tools": [{"type": "function", "function": {"name": n}} for n in allowed_tools],
+                },
+            }
         if self._cache_key:
             params.setdefault("extra_body", {})
             params["extra_body"]["prompt_cache_key"] = self._cache_key
@@ -418,7 +428,8 @@ class OpenAIResponsesProvider(OpenAIBase):
         return items
 
     async def chat(self, messages: list[Msg], tools: list[dict],
-                   *, previous_response_id: str | None = None) -> ProviderResponse:
+                   *, previous_response_id: str | None = None,
+                   allowed_tools: list[str] | None = None) -> ProviderResponse:
         input_items = self._msgs_to_input(messages)
         params: dict[str, Any] = {
             "model": self._model,
@@ -430,6 +441,12 @@ class OpenAIResponsesProvider(OpenAIBase):
             params["temperature"] = self._temperature
         if tools:
             params["tools"] = tools
+        if allowed_tools:
+            params["tool_choice"] = {
+                "type": "allowed_tools",
+                "mode": "required",
+                "tools": [{"type": "function", "name": n} for n in allowed_tools],
+            }
         if self._cache_key:
             params["prompt_cache_key"] = self._cache_key
         if self._extra_params:
@@ -621,8 +638,10 @@ class K2ThinkProvider(OpenAIProvider):
         )
 
     async def chat(self, messages: list[Msg], tools: list[dict],
-                   *, previous_response_id: str | None = None) -> ProviderResponse:
-        resp = await super().chat(messages, tools, previous_response_id=previous_response_id)
+                   *, previous_response_id: str | None = None,
+                   allowed_tools: list[str] | None = None) -> ProviderResponse:
+        resp = await super().chat(messages, tools, previous_response_id=previous_response_id,
+                                  allowed_tools=allowed_tools)
         if resp.content:
             m = self._THINK_RE.match(resp.content)
             if m:
@@ -1013,6 +1032,8 @@ class APIDriver(LMDriver):
 
         fork_msgs_sent_through: int = 0
 
+        _fork_allowed = list(interaction.fork_allowed_tools)
+
         try:
           while True:
             try:
@@ -1029,7 +1050,8 @@ class APIDriver(LMDriver):
                 resp = await self._retry_transient(
                     lambda: fork_provider.chat(
                         fork_msgs_to_send, fork_tools,
-                        previous_response_id=fork_response_id))
+                        previous_response_id=fork_response_id,
+                        allowed_tools=_fork_allowed))
 
                 if resp.response_id is not None:
                     fork_response_id = resp.response_id

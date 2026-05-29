@@ -9215,7 +9215,7 @@ async def _test_fork_provider_conflict(root: Root, file: MyIO):
         def model_name(self): return "mock"
         def pricing(self): return {"input": 0.0, "cached": 0.0, "output": 0.0}
         def format_tools(self, tool_info): return []
-        async def chat(self, messages, tools): raise NotImplementedError
+        async def chat(self, messages, tools, **kwargs): raise NotImplementedError
         def format_assistant_msg(self, response): raise NotImplementedError
 
     class TestSubDriver(APIDriver):
