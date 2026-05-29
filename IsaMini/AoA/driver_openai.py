@@ -321,7 +321,7 @@ class OpenAI_Driver(LMDriver):
                     fork.log_interaction("fork", f"{tag} retrying: interaction not answered")
                     fork_prompt = (
                         "You haven't submitted your answer. "
-                        f"Call the `{self.tool_name(interaction.answer_tool_name)}` tool to submit it.")
+                        f"Call the `{self.tool_name(fork.fork_pending.interaction.answer_tool_name)}` tool to submit it.")
                     previous_response_id = fork._last_response_id
               break
             except _QuotaError:

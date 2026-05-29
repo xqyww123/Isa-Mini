@@ -1,0 +1,13 @@
+worker surrender result: Complaint recorded (surrender).
+worker surrender is_error: False
+quit_info set: True
+quit_info[0] (reason): surrender
+quit_info[1] (detail): I need more lemmas
+quit_info[2] (suggested_lemmas): ['aux_lemma_1', 'aux_lemma_2']
+worker refute result: Complaint recorded (refute).
+quit_info[0]: refute
+quit_info[2] (no suggested_lemmas): None
+invalid reason is_error: True
+invalid reason result contains 'Invalid': True
+plan surrender result contains 'surrender': False
+plan surrender quit_info set: True

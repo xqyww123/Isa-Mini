@@ -95,7 +95,6 @@ class ClaudeCode(LMDriver):
         'WebFetch', 'WebSearch', 'ExitPlanMode', 'MCPSearch', 'ToolSearch',
     ]
     _TOOL_NAME_MAP: dict[str, str] = {
-        "answer": "mcp__proof__answer",
         "query":  "mcp__proof__query",
         "edit":   "mcp__proof__edit",
         "delete": "mcp__proof__delete",
@@ -336,8 +335,7 @@ class ClaudeCode(LMDriver):
 
         # 2. Check proof MCP tool interaction state.
         # Only forks assigned to answer an interaction may call answer tools.
-        is_answer_tool = (tool == self.tool_name(TOOL_ANSWER)
-                          or any(tool == self.tool_name(t) for t in ANSWER_TOOLS))
+        is_answer_tool = any(tool == self.tool_name(t) for t in ANSWER_TOOLS)
         if is_answer_tool and (
                 self.fork_pending is None or self.fork_pending.answer.done()):
             return {
@@ -872,7 +870,7 @@ class ClaudeCode(LMDriver):
                     fork.log_interaction("fork", f"{tag} retrying: interaction not answered")
                     await fork_client.query(
                         "It looks like you haven't submitted your answer. "
-                        f"Call `{self.tool_name(interaction.answer_tool_name)}` to submit it.")
+                        f"Call `{self.tool_name(fork.fork_pending.interaction.answer_tool_name)}` to submit it.")
                     fork._model_time_start = time()
               fork._client = None
               break

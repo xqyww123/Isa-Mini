@@ -7,7 +7,7 @@ from pathlib import Path
 from .helper import split_id_into_segs, cat_segs_into_id, incr_id_major, incr_id_minor, MyIO
 from .linked_list import Cons, LinkedList, from_iterable, iterate, concat
 import types as _types
-from typing import Any, Awaitable, ClassVar, Iterable, Mapping, NamedTuple, Protocol, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired, Annotated, TypeAliasType, Union, get_type_hints, get_origin, get_args, is_typeddict
+from typing import Any, Awaitable, ClassVar, Iterable, Mapping, NamedTuple, Protocol, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired, TypeAliasType, Union, get_type_hints, get_origin, get_args, is_typeddict
 from Isabelle_RPC_Host import Connection, IsabelleError, pretty_unicode, ascii_of_unicode
 from Isabelle_RPC_Host.position import IsabellePosition
 from Isabelle_RPC_Host.universal_key import (
@@ -1834,71 +1834,10 @@ class Minilang_State:
 
 ### Interaction
 
-# Structured answer object carried by every interaction reply. Each
-# Interaction subclass's `answer()` method documents which fields it
-# consumes and in what priority order; fields not consumed are ignored.
-#
-# - `indexes`       : selection into a numbered candidate list
-# - `name`          : exact name of an accessible fact/entity (strict
-#                     lookup — no fallback to prove-in-time)
-# - `statement`     : an Isabelle term string (prove-in-time for
-#                     rule-retrieval interactions; instantiation value
-#                     for single-variable schematic interactions)
-# - `instantiations`: (variable-name, term) pairs for multi-variable
-#                     schematic instantiation
-class Answer(NamedTuple):
-    # The list defaults are shared; the codebase treats Answer as read-only
-    # (constructed once per reply, never mutated in place).
-    indexes: Annotated[list[int], "sorted and all elements are distinct"] = []
-    name: str | None = None
-    statement: str | None = None
-    instantiations: list[tuple[str, str]] = []
-
-    def is_empty(self) -> bool:
-        """All four fields empty — conventionally means 'give up / expand'."""
-        return (not self.indexes and self.name is None
-                and self.statement is None and not self.instantiations)
-
-def normalize_answer(indexes: list[int] | None,
-                     name: str | None,
-                     statement: str | None,
-                     instantiations: list[dict[str, str]] | None) -> Answer:
-    """Build a structured Answer from the raw tool-arg fields.
-
-    All four fields are independent — interactions extract what they need
-    in their own priority order. Empty / missing inputs become the
-    conventional empty values (empty list, None)."""
-    idx = sorted(set(indexes)) if indexes else []
-    n = name if name else None
-    s = statement if statement else None
-    insts = [(i["variable"], i["term"]) for i in instantiations] if instantiations else []
-    return Answer(indexes=idx, name=n, statement=s, instantiations=insts)
-
-
-# Small helpers shared by the `Interaction.answer` overrides. They exist so
-# each subclass doesn't have to restate "this interaction only accepts
-# indexes / only some fields" with slightly different wording, and so the
-# "range-check + BadAnswer" pattern around candidate indexing is stated
-# once. Forward refs: both raise `Interaction_BadAnswer` defined below —
-# called at runtime, so declaration order doesn't matter.
-
-_ANSWER_FIELDS = ("indexes", "name", "statement", "instantiations")
-
-def _reject_fields(answer: 'Answer', *, allow: set[str], hint: str) -> None:
-    """Raise `Interaction_BadAnswer` if `answer` carries any field outside
-    `allow` (empty-list / None fields count as 'not used'). `hint` is
-    appended verbatim — use it to suggest what the interaction does
-    expect, e.g. 'Select by `indexes`.'."""
-    using: set[str] = set()
-    if answer.indexes: using.add("indexes")
-    if answer.name is not None: using.add("name")
-    if answer.statement is not None: using.add("statement")
-    if answer.instantiations: using.add("instantiations")
-    extra = using - allow
-    if extra:
-        raise Interaction_BadAnswer(
-            f"This interaction does not accept "
-            f"{', '.join(sorted(extra))}. {hint}")
+# Helper shared by the `Interaction.answer` overrides: the "range-check +
+# BadAnswer" pattern around candidate indexing, stated once. Raises
+# `Interaction_BadAnswer` (defined below) at runtime, so declaration order
+# doesn't matter.
 
 def _check_index(idx: int, length: int) -> None:
     """Raise `Interaction_BadAnswer` if `idx` is out of `[0, length)`."""
@@ -1962,7 +1901,6 @@ AnswerPayload = (AnswerIndexes | AnswerIndex | AnswerIndexesOrName
 type tool = str
 TOOL_EDIT:   tool = "edit"
 TOOL_DELETE: tool = "delete"
-TOOL_ANSWER: tool = "answer"
 TOOL_SEARCH: tool = "query"
 TOOL_READ:   tool = "recall"
 TOOL_SURRENDER: tool = "refute_or_surrender"
@@ -1984,26 +1922,48 @@ ANSWER_TOOLS: frozenset[tool] = frozenset({
 })
 
 ALL_PROOF_TOOLS: tuple[tool, ...] = (
-    TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER, TOOL_SEARCH, TOOL_READ,
+    TOOL_EDIT, TOOL_DELETE, TOOL_SEARCH, TOOL_READ,
     TOOL_SURRENDER, TOOL_REQUEST_LEMMAS, TOOL_COMPLAIN,
     *ANSWER_TOOLS,
 )
 
 class Interaction:
     forking: ForkingMode = ForkingMode.FORKING_WITH_CTXT
-    fork_allowed_tools: list[tool] = [TOOL_ANSWER, TOOL_SEARCH]
+    # Subclasses MUST add exactly one ANSWER_TOOLS member (the answer tool the
+    # fork uses to submit its result); the base default carries only `query`.
+    # Enforced at class-definition time by `__init_subclass__` below.
+    fork_allowed_tools: list[tool] = [TOOL_SEARCH]
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        n = sum(1 for t in cls.fork_allowed_tools if t in ANSWER_TOOLS)
+        if n != 1:
+            raise TypeError(
+                f"{cls.__name__}.fork_allowed_tools must declare exactly one "
+                f"ANSWER_TOOLS member (the fork's answer tool); got {n} "
+                f"in {cls.fork_allowed_tools}")
 
     @property
     def answer_tool_name(self) -> str:
         for t in self.fork_allowed_tools:
             if t in ANSWER_TOOLS:
                 return t
-        return TOOL_ANSWER
+        raise NotImplementedError(
+            f"{type(self).__name__}.fork_allowed_tools must declare an "
+            f"ANSWER_TOOLS member")
 
     async def prompt(self, indent: int, file: MyIO) -> None:
         raise NotImplementedError("`prompt` must be implemented by subclass")
     async def answer(self, answer: Any) -> Any:
         raise NotImplementedError("`answer` must be implemented by subclass")
+
+    async def _render_prompt(self) -> str:
+        """Render this interaction's prompt into a string. Used to build the
+        text carried by ContinuingInteraction (candidate-list expansion or a
+        full interaction replacement)."""
+        buf = StringIO()
+        await self.prompt(0, MyIO(buf))
+        return buf.getvalue()
 
 class ImmediateAnswer(Exception):
     """Raised by prompt() when the interaction resolves without LLM input."""
@@ -2011,11 +1971,15 @@ class ImmediateAnswer(Exception):
         self.answer = answer
 
 class ContinuingInteraction(Exception):
-    """Raised by answer() when the interaction's candidate list has been expanded
-    and the caller should re-prompt the LLM with the new list. The new prompt text
-    is carried in ``new_prompt``. The interaction remains active."""
-    def __init__(self, new_prompt: str):
+    """Raised by answer() to keep the fork alive instead of resolving it. Either
+    re-prompt the SAME interaction with ``new_prompt`` (e.g. after the candidate
+    list has been expanded), OR replace the pending interaction entirely with
+    ``new_interaction`` (its ``prompt()`` is auto-rendered for the fork). The
+    fork remains active in both cases."""
+    def __init__(self, new_prompt: 'str | None' = None,
+                 new_interaction: 'Interaction | None' = None):
         self.new_prompt = new_prompt
+        self.new_interaction = new_interaction
 
 class Interaction_BadAnswer(Exception):
     """Raised when an answer to an interaction is invalid. The interaction remains active."""
@@ -2199,13 +2163,6 @@ class Interaction_Retrieve(Interaction):
         # Tool access in forks: YES = answer only, YES_RECURSIVE = answer + query (default)
         if session.interactive_retrieval == InteractiveRetrievalMode.YES:
             self.fork_allowed_tools = [TOOL_ANSWER_INDEXES]
-
-    async def _render_prompt(self) -> str:
-        """Render the prompt into a string. Used after candidate-list expansion
-        to build the new prompt text carried by ContinuingInteraction."""
-        buf = StringIO()
-        await self.prompt(0, MyIO(buf))
-        return buf.getvalue()
 
     async def candidate_facts(self) -> list[RetrievedEntity]:
         if self._candidate_facts_cache is None:
@@ -2401,9 +2358,9 @@ class Interaction_InstantiateSchematics(Interaction):
     this interaction closes that gap by asking the agent to make them
     concrete before the rule is applied.
 
-    Consumes the `instantiations` field of `Answer`. Every schematic
-    variable listed in `schematic_vars` must appear exactly once in the
-    answer."""
+    Consumes the `instantiations` field of `AnswerInstantiate`. Every
+    schematic variable listed in `schematic_vars` must appear exactly once
+    in the answer."""
 
     def __init__(self,
                  state: 'Minilang_State',
@@ -8436,6 +8393,21 @@ class Session:
         if isinstance(self.role, Role_Interaction):
             return self.role.pending
         return None
+
+    def replace_pending_interaction(self, new_interaction: 'Interaction') -> None:
+        """Swap the pending interaction of this fork for a different one, reusing
+        the existing answer future (only one final answer is ever returned to the
+        operation that called fork_interaction). The replacement must match this
+        fork's forking mode (fixed at fork creation); a mismatch is a programming
+        bug and raises InternalError."""
+        role = self.role
+        if not isinstance(role, Role_Interaction):
+            raise InternalError("replace_pending_interaction on non-interaction session")
+        if new_interaction.forking != role.mode:
+            raise InternalError(
+                f"Cannot replace interaction: new forking mode {new_interaction.forking} "
+                f"is incompatible with this fork's mode {role.mode}")
+        role.pending = Fork_Pending(new_interaction, role.pending.answer)
 
     @property
     def lemma_anchor(self) -> 'Have | None':

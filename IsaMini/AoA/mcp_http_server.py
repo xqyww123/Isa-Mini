@@ -36,14 +36,14 @@ from mcp.types import Tool, ToolAnnotations, TextContent, CallToolResult
 from Isabelle_RPC_Host import pretty_unicode
 from .model import (
     _session_var, Session, Node, NonLeaf_Node,
-    IsaTerm, ContinuingInteraction,
+    IsaTerm, ContinuingInteraction, ImmediateAnswer,
     AoA_Error, ArgumentError, IsabelleError, InternalError,
     CannotDelete_Root, NodeNotFound, ProofTreeTooDeep,
     EvaluationStatus,
-    Parse_Op_List, normalize_answer, Interaction_BadAnswer,
+    Parse_Op_List, Interaction_BadAnswer,
     AnswerIndexes, AnswerIndex, AnswerIndexesOrName, AnswerIndexesOrSpec,
     AnswerInstantiate, AnswerTargetGoal, AnswerRefutation,
-    TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER, TOOL_READ, TOOL_SURRENDER, TOOL_REQUEST_LEMMAS,
+    TOOL_EDIT, TOOL_DELETE, TOOL_READ, TOOL_SURRENDER, TOOL_REQUEST_LEMMAS,
     TOOL_COMPLAIN,
     TOOL_ANSWER_INDEXES, TOOL_ANSWER_INDEX, TOOL_ANSWER_INDEXES_OR_NAME,
     TOOL_ANSWER_INDEXES_OR_SPEC, TOOL_ANSWER_INSTANTIATE,
@@ -73,7 +73,6 @@ def _load_schema(filename: str) -> dict:
         return _json.load(f)
 
 _cc_edit_schema_raw = _load_schema("cc_edit.jsonc")
-_cc_answer_schema = _load_schema("cc_answer.jsonc")
 _cc_delete_schema = _load_schema("cc_delete.jsonc")
 _cc_read_schema = _load_schema("cc_recall.jsonc")
 _cc_surrender_schema = _load_schema("cc_surrender.jsonc")
@@ -203,14 +202,15 @@ _assert_no_refs(_cc_edit_schema_flat)
 def _check_tool_permission(session: Session, tool_name: str) -> str | None:
     """Check interaction state. Returns error message or None.
 
-    Only the fork session assigned to answer an interaction may call the
-    ``answer`` tool. The parent session never has a pending interaction
+    Only the fork session assigned to answer an interaction may call an
+    ``answer_*`` tool. The parent session never has a pending interaction
     because all interactions are delegated to forks via ``fork_interaction``.
 
     Fork sessions are additionally restricted to the tools declared in
-    ``interaction.fork_allowed_tools`` — typically ``answer`` + ``query``.
+    ``interaction.fork_allowed_tools`` — typically one ``answer_*`` tool
+    plus ``query``.
     """
-    if (tool_name == "answer" or tool_name in ANSWER_TOOLS) and (
+    if tool_name in ANSWER_TOOLS and (
             session.fork_pending is None or session.fork_pending.answer.done()):
         answer_tn = session.tool_name(tool_name)
         return f"No question pending. The `{answer_tn}` tool can only be used when there is a question for you to answer."
@@ -243,6 +243,12 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         args = {**args, "proof_operations": ops}
     _tn = session.tool_name(TOOL_EDIT)
     session.log_tool_call(_tn, args)
+    # IsabelleError is caught here (not in ToolExecutor.execute) so it stays a
+    # recoverable (msg, True) return: a malformed/ill-typed term in a block
+    # statement (HAVE/OBTAIN/Induction/Intro) escapes root.fill/amend as an
+    # IsabelleError, and the agent should see it and retry — and the mutate
+    # cooldown in execute must still fire on it. ConnectionError/EOFError and
+    # truly-unexpected exceptions propagate to execute for unified handling.
     try:
         step = args.get("target_step")
         if step is not None:
@@ -312,18 +318,14 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         error_msg = f"Isabelle error: {'; '.join(pretty_unicode(err) for err in e.errors)}"
         session.log_tool_response(_tn, f"ERROR: {error_msg}")
         return (error_msg, True)
-    except (ConnectionError, EOFError):
-        raise asyncio.CancelledError("connection lost")
-    except Exception as e:
-        session.log_tool_response(
-            _tn,
-            f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
-        sys.exit(1)
 
 
 async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     _tn = session.tool_name(TOOL_DELETE)
     session.log_tool_call(_tn, args)
+    # IsabelleError caught here (not in execute) so it stays a recoverable
+    # (msg, True) return and still triggers the mutate cooldown; other
+    # exceptions propagate to ToolExecutor.execute for unified handling.
     try:
         target_steps = args.get("target_steps")
         if isinstance(target_steps, str):
@@ -364,86 +366,6 @@ async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         error_msg = f"Isabelle error: {'; '.join(pretty_unicode(err) for err in e.errors)}"
         session.log_tool_response(_tn, f"ERROR: {error_msg}")
         return (error_msg, True)
-    except (ConnectionError, EOFError):
-        raise asyncio.CancelledError("connection lost")
-    except Exception as e:
-        session.log_tool_response(_tn, f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
-        sys.exit(1)
-
-
-async def _answer_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
-    """Handle an ``answer`` tool call from a forked sub-agent.
-
-    On success: completes ``session.fork_pending.answer`` with the computed
-    answer and interrupts the session so ``fork_interaction`` can return.
-    On ``ContinuingInteraction``: returns the new prompt so the same fork
-    re-submits with the expanded list.
-    """
-    _tn = session.tool_name(TOOL_ANSWER)
-    session.log_tool_call(_tn, args)
-    try:
-        pending = session.fork_pending
-        if pending is None or pending.answer.done():
-            answer_tn = session.tool_name(TOOL_ANSWER)
-            error_msg = f"No question pending. The `{answer_tn}` tool can only be used when there is a question for you to answer"
-            session.log_tool_response(_tn, f"ERROR: {error_msg}")
-            return (error_msg, True)
-
-        indexes = args.get("indexes")
-        if isinstance(indexes, str):
-            try:
-                indexes = json.loads(indexes)
-            except (json.JSONDecodeError, ValueError):
-                indexes = None
-        if isinstance(indexes, int):
-            indexes = [indexes]
-        if indexes is not None and not isinstance(indexes, list):
-            indexes = None
-
-        instantiations = args.get("instantiations")
-        if isinstance(instantiations, str):
-            try:
-                instantiations = json.loads(instantiations)
-            except (json.JSONDecodeError, ValueError):
-                instantiations = None
-        if isinstance(instantiations, dict):
-            instantiations = [instantiations]
-        if instantiations is not None and not isinstance(instantiations, list):
-            instantiations = None
-
-        normalized = normalize_answer(
-            indexes,
-            args.get("name"),
-            args.get("statement"),
-            instantiations)
-
-        try:
-            result = await pending.interaction.answer(normalized)
-        except Interaction_BadAnswer as e:
-            error_msg = str(e)
-            session.log_tool_response(_tn, f"BAD ANSWER: {error_msg}")
-            return (error_msg, True)
-        except ContinuingInteraction as exp:
-            session.log_tool_response(
-                _tn, f"[INTERACTION PROMPT]\n{exp.new_prompt}")
-            return (exp.new_prompt, False)
-
-        pending.answer.set_result(result)
-        result_str = result.unicode if isinstance(result, IsaTerm) else str(result)
-        session.log_interaction(_tn, f"interaction answered: {result_str}")
-        session.log_tool_response(_tn, f"[INTERACTION RESOLVED] {result_str}")
-        if not session.is_major:
-            await session.interrupt()
-        return (result_str, False)
-    except IsabelleError as e:
-        error_msg = f"Isabelle error: {'; '.join(pretty_unicode(err) for err in e.errors)}"
-        session.log_tool_response(_tn, f"ERROR: {error_msg}")
-        return (error_msg, True)
-    except (ConnectionError, EOFError):
-        raise asyncio.CancelledError("connection lost")
-    except Exception as e:
-        session.log_tool_response(_tn, f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
-        sys.exit(1)
 
 
 def _extract_indexes(args: dict) -> list[int]:
@@ -476,6 +398,9 @@ def _extract_instantiations(args: dict) -> list[tuple[str, str]]:
 async def _answer_tool_dispatch(session: Session, tool_name: str, args: dict) -> tuple[str, bool]:
     _tn = session.tool_name(tool_name)
     session.log_tool_call(_tn, args)
+    # IsabelleError caught here (not in execute) so it stays a recoverable
+    # (msg, True) return; other exceptions propagate to ToolExecutor.execute
+    # for unified handling.
     try:
         pending = session.fork_pending
         if pending is None or pending.answer.done():
@@ -528,9 +453,34 @@ async def _answer_tool_dispatch(session: Session, tool_name: str, args: dict) ->
             session.log_tool_response(_tn, f"BAD ANSWER: {error_msg}")
             return (error_msg, True)
         except ContinuingInteraction as exp:
-            session.log_tool_response(
-                _tn, f"[INTERACTION PROMPT]\n{exp.new_prompt}")
-            return (exp.new_prompt, False)
+            if exp.new_interaction is None:                       # re-prompt the SAME interaction
+                assert exp.new_prompt is not None, \
+                    "ContinuingInteraction needs new_prompt or new_interaction"
+                session.log_tool_response(
+                    _tn, f"[INTERACTION PROMPT]\n{exp.new_prompt}")
+                return (exp.new_prompt, False)
+            new_it = exp.new_interaction
+            try:
+                # Render BEFORE swap. NOTE: a replacement interaction's prompt()
+                # must not mutate shared/session state — on the ImmediateAnswer
+                # branch below the swap is abandoned, but any such mutation would
+                # already have happened and would persist.
+                text = await new_it._render_prompt()
+            except ImmediateAnswer as ia:                         # replacement resolves without the LLM
+                pending.answer.set_result(ia.answer)              # reuse the existing future; do NOT swap
+                resolved = ia.answer.unicode if isinstance(ia.answer, IsaTerm) else str(ia.answer)
+                session.log_interaction(
+                    _tn, f"interaction replaced+resolved: {type(new_it).__name__}")
+                session.log_tool_response(_tn, f"[INTERACTION RESOLVED] {resolved}")
+                if not session.is_major:
+                    await session.interrupt()
+                return (resolved, False)
+            session.replace_pending_interaction(new_it)           # mode-check (InternalError) + swap
+            answer_tn = session.tool_name(new_it.answer_tool_name)
+            text += f"\nAnswer the question above by calling the `{answer_tn}` tool."
+            session.log_interaction(_tn, f"interaction replaced: {type(new_it).__name__}")
+            session.log_tool_response(_tn, f"[INTERACTION REPLACED]\n{text}")
+            return (text, False)
 
         pending.answer.set_result(result)
         result_str = result.unicode if isinstance(result, IsaTerm) else str(result)
@@ -543,11 +493,6 @@ async def _answer_tool_dispatch(session: Session, tool_name: str, args: dict) ->
         error_msg = f"Isabelle error: {'; '.join(pretty_unicode(err) for err in e.errors)}"
         session.log_tool_response(_tn, f"ERROR: {error_msg}")
         return (error_msg, True)
-    except (ConnectionError, EOFError):
-        raise asyncio.CancelledError("connection lost")
-    except Exception as e:
-        session.log_tool_response(_tn, f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
-        sys.exit(1)
 
 
 def _node_end_line(node: Node, total_lines: int) -> int:
@@ -736,109 +681,101 @@ async def _request_lemmas_tool_logic(
 ) -> tuple[str, bool]:
     _tn = session.tool_name(TOOL_REQUEST_LEMMAS)
     session.log_tool_call(_tn, args)
-    try:
-        lemmas = args.get("lemmas")
-        if not isinstance(lemmas, list) or not lemmas:
-            msg = "lemmas must be a non-empty array"
-            session.log_tool_response(_tn, f"ERROR: {msg}")
-            return (msg, True)
+    lemmas = args.get("lemmas")
+    if not isinstance(lemmas, list) or not lemmas:
+        msg = "lemmas must be a non-empty array"
+        session.log_tool_response(_tn, f"ERROR: {msg}")
+        return (msg, True)
 
-        root = session.root
-        results: list[str] = []
+    root = session.root
+    results: list[str] = []
 
-        for i, lemma in enumerate(lemmas):
-            name = lemma.get("name", "")
-            english = lemma.get("english", "")
-            conclusion = lemma.get("conclusion", "")
-            if not name or not conclusion:
-                results.append(f"Lemma {i+1}: skipped (name and conclusion required)")
-                continue
+    for i, lemma in enumerate(lemmas):
+        name = lemma.get("name", "")
+        english = lemma.get("english", "")
+        conclusion = lemma.get("conclusion", "")
+        if not name or not conclusion:
+            results.append(f"Lemma {i+1}: skipped (name and conclusion required)")
+            continue
 
-            statement: dict = {
-                "english": english,
-                "conclusion": conclusion,
-            }
-            if "for_any" in lemma:
-                statement["for_any"] = lemma["for_any"]
-            if "premises" in lemma:
-                statement["premises"] = lemma["premises"]
+        statement: dict = {
+            "english": english,
+            "conclusion": conclusion,
+        }
+        if "for_any" in lemma:
+            statement["for_any"] = lemma["for_any"]
+        if "premises" in lemma:
+            statement["premises"] = lemma["premises"]
 
-            have_arg: Have_ToolArg = {
-                "thought": f"Sub-agent lemma: {english}",
-                "statement": statement,  # type: ignore[typeddict-item]
-                "name": name,
-            }
+        have_arg: Have_ToolArg = {
+            "thought": f"Sub-agent lemma: {english}",
+            "statement": statement,  # type: ignore[typeddict-item]
+            "name": name,
+        }
 
-            try:
-                gns = Parse_Op_List([{"operation": "Have", **have_arg}],
-                                    f"lemmas[{i}]")
-            except AoA_Error as e:
-                results.append(f"Lemma '{name}': parse error: {e}")
-                continue
+        try:
+            gns = Parse_Op_List([{"operation": "Have", **have_arg}],
+                                f"lemmas[{i}]")
+        except AoA_Error as e:
+            results.append(f"Lemma '{name}': parse error: {e}")
+            continue
 
-            async with tool_lock:
-                session.age += 1
-                if session.is_worker and isinstance(session.role.target, Have):
-                    outcome = await session.role.target.insert_before_me(gns)
-                else:
-                    outcome = await root.global_env.append(gns)
-                session.refresh_YAML()
-
-            if not outcome.committed:
-                results.append(f"Lemma '{name}': insertion failed")
-                continue
-
-            have_node = outcome.committed[-1]
-            if not isinstance(have_node, Have):
-                results.append(f"Lemma '{name}': unexpected node type after insertion")
-                continue
-
-            if have_node.status.status == EvaluationStatus.Status.FAILURE or \
-               have_node.status.status == EvaluationStatus.Status.CANCELLED:
-                results.append(
-                    f"Lemma '{name}': HAVE failed: {have_node.status}")
-                async with tool_lock:
-                    rp = have_node._delete_me()
-                    await rp._refresh_me_alone(auto_intro=False)
-                    if rp.parent is not None:
-                        await rp._refresh_all_after_me()
-                    session.refresh_YAML()
-                continue
-
-            session.shown_HAVE_fact_names[name] = list(have_node.for_any)
-
-            success = await session.spawn_lemma_subagent(have_node, name)
-
-            if not success:
-                results.append(f"Lemma '{name}': sub-agent failed to prove")
-                session.shown_HAVE_fact_names.pop(name, None)
-                async with tool_lock:
-                    rp = have_node._delete_me()
-                    await rp._refresh_me_alone(auto_intro=False)
-                    if rp.parent is not None:
-                        await rp._refresh_all_after_me()
-                    session.refresh_YAML()
+        async with tool_lock:
+            session.age += 1
+            if session.is_worker and isinstance(session.role.target, Have):
+                outcome = await session.role.target.insert_before_me(gns)
             else:
-                results.append(f"Lemma '{name}': proved successfully")
+                outcome = await root.global_env.append(gns)
+            session.refresh_YAML()
 
-        file = P.MyIO(StringIO())
-        file.write("request_lemmas results:\n")
-        for r in results:
-            file.write(f"  - {r}\n")
-        file.write("\nOutline:\n")
-        session.quickview_proof_scope(1, file)
-        root.reset_changed()
+        if not outcome.committed:
+            results.append(f"Lemma '{name}': insertion failed")
+            continue
 
-        response = file.getvalue()
-        session.log_tool_response(_tn, response)
-        return (response, False)
-    except (ConnectionError, EOFError):
-        raise asyncio.CancelledError("connection lost")
-    except Exception as e:
-        session.log_tool_response(
-            _tn,
-            f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
-        sys.exit(1)
+        have_node = outcome.committed[-1]
+        if not isinstance(have_node, Have):
+            results.append(f"Lemma '{name}': unexpected node type after insertion")
+            continue
+
+        if have_node.status.status == EvaluationStatus.Status.FAILURE or \
+           have_node.status.status == EvaluationStatus.Status.CANCELLED:
+            results.append(
+                f"Lemma '{name}': HAVE failed: {have_node.status}")
+            async with tool_lock:
+                rp = have_node._delete_me()
+                await rp._refresh_me_alone(auto_intro=False)
+                if rp.parent is not None:
+                    await rp._refresh_all_after_me()
+                session.refresh_YAML()
+            continue
+
+        session.shown_HAVE_fact_names[name] = list(have_node.for_any)
+
+        success = await session.spawn_lemma_subagent(have_node, name)
+
+        if not success:
+            results.append(f"Lemma '{name}': sub-agent failed to prove")
+            session.shown_HAVE_fact_names.pop(name, None)
+            async with tool_lock:
+                rp = have_node._delete_me()
+                await rp._refresh_me_alone(auto_intro=False)
+                if rp.parent is not None:
+                    await rp._refresh_all_after_me()
+                session.refresh_YAML()
+        else:
+            results.append(f"Lemma '{name}': proved successfully")
+
+    file = P.MyIO(StringIO())
+    file.write("request_lemmas results:\n")
+    for r in results:
+        file.write(f"  - {r}\n")
+    file.write("\nOutline:\n")
+    session.quickview_proof_scope(1, file)
+    root.reset_changed()
+
+    response = file.getvalue()
+    session.log_tool_response(_tn, response)
+    return (response, False)
 
 
 # ============================================================================
@@ -852,7 +789,6 @@ _ACT = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=
 _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "edit":   {"description": "Edit the proof.yaml file", "schema": _cc_edit_schema_raw, "annotations": _MUT},
     "delete": {"description": "Delete proof steps", "schema": _cc_delete_schema, "annotations": _MUT},
-    "answer": {"description": "Answer a pending question", "schema": _cc_answer_schema, "annotations": _ACT},
     "query":  {"description": "Search for Isabelle entities by semantic similarity, patterns, or exact name/term. "
                 "Use exact_name to look up definitions; "
                 "use exact_term to unfold fancy syntax and retrieve semantic explanations; "
@@ -908,47 +844,52 @@ class ToolExecutor:
             session.refute_or_surrender_warned = False
 
         is_error = False
-        match name:
-            case "edit":
-                async with self._tool_lock:
-                    ops = arguments.get("proof_operations") if isinstance(arguments, dict) else None
-                    is_batch = isinstance(ops, list) and len(ops) > 1
-                    if not is_batch and time() - self._last_mutate_fail_time < 0.7:
-                        result, is_error = self._BATCH_CANCEL_MSG, True
-                    else:
-                        result, is_error = await _edit_tool_logic(session, arguments)
-                        if is_error and not is_batch:
-                            self._last_mutate_fail_time = time()
-                session.last_proof_op_time = time()
-            case "delete":
-                async with self._tool_lock:
-                    if time() - self._last_mutate_fail_time < 0.7:
-                        result, is_error = self._BATCH_CANCEL_MSG, True
-                    else:
-                        result, is_error = await _delete_tool_logic(session, arguments)
-                        if is_error:
-                            self._last_mutate_fail_time = time()
-                session.last_proof_op_time = time()
-            case "answer":
-                async with self._tool_lock:
-                    result, is_error = await _answer_tool_logic(session, arguments)
-            case n if n in ANSWER_TOOLS:
-                async with self._tool_lock:
-                    result, is_error = await _answer_tool_dispatch(session, n, arguments)
-            case "query":
-                result, is_error = await _query_tool_logic(session, arguments)
-            case "recall":
-                result, is_error = await _read_tool_logic(session, arguments)
-            case "refute_or_surrender":
-                result, is_error = await _refute_or_surrender_tool_logic(session, arguments)
-            case "request_lemmas":
-                result, is_error = await _request_lemmas_tool_logic(
-                    session, arguments, self._tool_lock)
-                session.last_proof_op_time = time()
-            case "complain":
-                result, is_error = await _complain_tool_logic(session, arguments)
-            case _:
-                return (f"Unknown tool: {name}", True)
+        try:
+            match name:
+                case "edit":
+                    async with self._tool_lock:
+                        ops = arguments.get("proof_operations") if isinstance(arguments, dict) else None
+                        is_batch = isinstance(ops, list) and len(ops) > 1
+                        if not is_batch and time() - self._last_mutate_fail_time < 0.7:
+                            result, is_error = self._BATCH_CANCEL_MSG, True
+                        else:
+                            result, is_error = await _edit_tool_logic(session, arguments)
+                            if is_error and not is_batch:
+                                self._last_mutate_fail_time = time()
+                    session.last_proof_op_time = time()
+                case "delete":
+                    async with self._tool_lock:
+                        if time() - self._last_mutate_fail_time < 0.7:
+                            result, is_error = self._BATCH_CANCEL_MSG, True
+                        else:
+                            result, is_error = await _delete_tool_logic(session, arguments)
+                            if is_error:
+                                self._last_mutate_fail_time = time()
+                    session.last_proof_op_time = time()
+                case n if n in ANSWER_TOOLS:
+                    async with self._tool_lock:
+                        result, is_error = await _answer_tool_dispatch(session, n, arguments)
+                case "query":
+                    result, is_error = await _query_tool_logic(session, arguments)
+                case "recall":
+                    result, is_error = await _read_tool_logic(session, arguments)
+                case "refute_or_surrender":
+                    result, is_error = await _refute_or_surrender_tool_logic(session, arguments)
+                case "request_lemmas":
+                    result, is_error = await _request_lemmas_tool_logic(
+                        session, arguments, self._tool_lock)
+                    session.last_proof_op_time = time()
+                case "complain":
+                    result, is_error = await _complain_tool_logic(session, arguments)
+                case _:
+                    return (f"Unknown tool: {name}", True)
+        except (ConnectionError, EOFError):
+            raise asyncio.CancelledError("connection lost")
+        except Exception as e:
+            session.log_tool_response(
+                session.tool_name(name),
+                f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
+            sys.exit(1)
 
         if name == "query" and not is_error:
             if time() - session.last_proof_op_time >= self._SEARCH_HINT_THRESHOLD:

@@ -1032,8 +1032,6 @@ class APIDriver(LMDriver):
 
         fork_msgs_sent_through: int = 0
 
-        _fork_allowed = list(interaction.fork_allowed_tools)
-
         try:
           while True:
             try:
@@ -1045,6 +1043,9 @@ class APIDriver(LMDriver):
                     fork_msgs_to_send = fork_messages[fork_msgs_sent_through:]
                 else:
                     fork_msgs_to_send = fork_messages
+
+                assert fork.fork_pending is not None
+                _fork_allowed = list(fork.fork_pending.interaction.fork_allowed_tools)
 
                 fork._model_time_start = time()
                 resp = await self._retry_transient(
@@ -1089,7 +1090,7 @@ class APIDriver(LMDriver):
 
                 if not resp.tool_calls:
                     fork_messages.append(UserMsg(
-                        f"Call the `{self.tool_name(interaction.answer_tool_name)}` tool to submit your answer."))
+                        f"Call the `{self.tool_name(fork.fork_pending.interaction.answer_tool_name)}` tool to submit your answer."))
                     fork.log_interaction("fork", f"{tag} retrying: no tool calls")
               break
             except _QuotaError:
