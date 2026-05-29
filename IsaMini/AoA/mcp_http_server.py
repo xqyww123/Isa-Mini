@@ -509,13 +509,13 @@ async def _answer_tool_dispatch(session: Session, tool_name: str, args: dict) ->
                     instantiations=_extract_instantiations(args))
             case "answer_target_goal":
                 payload = AnswerTargetGoal(
-                    index=args.get("index", 0),
-                    suggestions=args.get("suggestions", ""),
-                    useful_lemmas=args.get("useful_lemmas", []))
+                    index=args["index"],
+                    suggestions=args["suggestions"],
+                    useful_lemmas=args["useful_lemmas"])
             case "answer_refutation":
                 payload = AnswerRefutation(
-                    accept=bool(args.get("accept", False)),
-                    reason=args.get("reason", ""))
+                    accept=bool(args["accept"]),
+                    reason=args["reason"])
             case _:
                 error_msg = f"Unknown answer tool: {tool_name}"
                 session.log_tool_response(_tn, f"ERROR: {error_msg}")

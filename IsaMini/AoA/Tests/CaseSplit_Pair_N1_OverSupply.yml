@@ -24,7 +24,7 @@ The case-split operation produced a case `Pair` (as follows) that does not match
 Is any of your supplied proof intended for this case?
   0. alpha
   1. beta
-Answer with its index if so, or with empty `indexes` to leave this case without a proof for now.
+Answer with the index if so, or with null to leave this case without a proof for now.
 --------------------------------------------------
 After splice (N==1, over-supply)
 --------------------------------------------------

@@ -960,7 +960,7 @@ async def _test_Unfold1(root: Root, file: MyIO):
 
     # First Unfold: silently pick XXX_def (index 0) — no interaction printed.
     async def stub_silent(interaction):
-        return await interaction.answer(Answer(indexes=[0]))
+        return await interaction.answer(AnswerIndexesOrName(indexes=[0], name=None))
     root.session.fork_interaction = stub_silent
     await root.fill("1", [Unfold.gen_single({
         "thought": "Unfold the goal",
@@ -973,7 +973,7 @@ async def _test_Unfold1(root: Root, file: MyIO):
     async def stub_fork(interaction):
         print_header("Interaction Prompt", file)
         await interaction.prompt(0, file)
-        return await interaction.answer(Answer(indexes=[1]))
+        return await interaction.answer(AnswerIndexesOrName(indexes=[1], name=None))
     root.session.fork_interaction = stub_fork
     await root.amend("1", [Unfold.gen_single({
         "thought": "Unfold the goal",
@@ -1174,7 +1174,7 @@ async def _test_RetrieveFact2(root: Root, file: MyIO):
         file.write(f"    query: {interaction.query}\n")
         file.write(f"    candidates: {len(await interaction.candidate_facts())}\n")
         # Answer with a ProveInTime statement
-        result = await interaction.answer(Answer(statement="(8::nat) = 2^3"))
+        result = await interaction.answer(AnswerIndexesOrSpec(indexes=[], statement="(8::nat) = 2^3"))
         assert isinstance(result, list) and len(result) == 1
         pit = result[0]
         file.write(f"    ProveInTime answer: {type(pit).__name__}\n")
@@ -1811,7 +1811,7 @@ async def _test_Rewrite_Once_Simproc(root: Root, file: MyIO):
         await interaction.prompt(0, file)
         assert isinstance(interaction, Interaction_SelectRewriteTargets)
         num_matches = len(interaction.looping_rules[0][2]) if interaction.looping_rules else 0
-        return await interaction.answer(Answer(indexes=list(range(num_matches))))
+        return await interaction.answer(AnswerIndexes(indexes=list(range(num_matches))))
     root.session.fork_interaction = stub_fork
     _outcome = await root.fill("1", [Rewrite.gen_single({
         "thought": "Rewrite using my_wrap to unfold f into g(f(...))",
@@ -1840,7 +1840,7 @@ async def _test_Rewrite_Targeted(root: Root, file: MyIO):
         print_header("Interaction Prompt", file)
         await interaction.prompt(0, file)
         # Select index 1 only (should be "f a", leaving "f b" untouched)
-        return await interaction.answer(Answer(indexes=[1]))
+        return await interaction.answer(AnswerIndexes(indexes=[1]))
     root.session.fork_interaction = stub_fork
     _outcome = await root.fill("1", [Rewrite.gen_single({
         "thought": "Rewrite f a using my_wrap, leave f b alone",
@@ -1867,8 +1867,7 @@ async def _test_Rewrite_Targeted_Drop(root: Root, file: MyIO):
     async def stub_fork(interaction):
         print_header("Interaction Prompt", file)
         await interaction.prompt(0, file)
-        # Answer with empty selection — drop the rule
-        return await interaction.answer(Answer())
+        return await interaction.answer(AnswerIndexes(indexes=[]))
     root.session.fork_interaction = stub_fork
     _outcome = await root.fill("1", [Rewrite.gen_single({
         "thought": "Attempt rewrite with looping rule, then dismiss",
@@ -1944,7 +1943,7 @@ async def _test_Rewrite_LoopingForkCtxt(root: Root, file: MyIO):
 
         print_header("Interaction Prompt", file)
         await interaction.prompt(0, file)
-        return await interaction.answer(Answer(indexes=[0]))
+        return await interaction.answer(AnswerIndexes(indexes=[0]))
 
     root.session.fork_interaction = stub_fork
 
@@ -1978,7 +1977,7 @@ async def _test_Rewrite_QuantifiedGoal(root: Root, file: MyIO):
         await interaction.prompt(0, file)
         assert isinstance(interaction, Interaction_SelectRewriteTargets)
         num_matches = len(interaction.looping_rules[0][2]) if interaction.looping_rules else 0
-        return await interaction.answer(Answer(indexes=list(range(num_matches))))
+        return await interaction.answer(AnswerIndexes(indexes=list(range(num_matches))))
     root.session.fork_interaction = stub_fork
     _outcome = await root.fill("1", [Rewrite.gen_single({
         "thought": "Rewrite f y inside the existential using my_wrap",
@@ -2011,7 +2010,7 @@ async def _test_Rewrite_Targeted_Where(root: Root, file: MyIO):
         assert isinstance(interaction, Interaction_SelectRewriteTargets)
         num_matches = len(interaction.looping_rules[0][2]) if interaction.looping_rules else 0
         file.write(f"num_matches: {num_matches}\n")
-        return await interaction.answer(Answer(indexes=list(range(num_matches))))
+        return await interaction.answer(AnswerIndexes(indexes=list(range(num_matches))))
     root.session.fork_interaction = stub_fork
     _outcome = await root.fill("1", [Rewrite.gen_single({
         "thought": "Apply my_looping with x instantiated to a",
@@ -5031,7 +5030,7 @@ async def _test_FactsToGeneralize_ConsumingRule(root: Root, file: MyIO):
     async def stub_fork(interaction):
         if isinstance(interaction, Interaction_InstantiateSchematics):
             observed_interaction.append(interaction)
-            return await interaction.answer(Answer(instantiations=[("?k", "k")]))
+            return await interaction.answer(AnswerInstantiate(instantiations=[("?k", "k")]))
         raise InternalError(
             f"Unexpected interaction forked: {type(interaction).__name__}")
     root.session.fork_interaction = stub_fork
@@ -5495,20 +5494,20 @@ async def _test_NamedFactResolution(root: Root, file: MyIO):
 
     ml_state = root.ml_state
 
-    # --- RetrieveForProof: text that IS a valid theorem name ---
-    # "log_nat_power" is a theorem in Complex_Main
+    # --- RetrieveForProof: empty answer triggers give-up (name lookup removed) ---
     inter1 = Interaction_RetrieveForProof(
         state=ml_state, query="logarithm of a power", kinds=[EntityKind.THEOREM])
-    result1 = await inter1.answer(Answer(name="log_nat_power"))
-    file.write(f"RetrieveForProof(name='log_nat_power'): {type(result1[0]).__name__}\n")
-    assert isinstance(result1[0], IsabelleFact_Presented), \
-        f"Expected IsabelleFact_Presented, got {type(result1[0]).__name__}"
-    file.write(f"  short_name: {result1[0].short_name.unicode}\n")
+    result1 = await inter1.answer(AnswerIndexesOrSpec(indexes=[], statement=None))
+    file.write(f"RetrieveForProof(empty): {type(result1[0]).__name__ if result1 else 'empty'}\n")
+    if inter1.single_choice:
+        assert len(result1) == 1 and isinstance(result1[0], IsabelleFact_Unfound)
+    else:
+        assert result1 == [], f"Expected empty list for give-up, got {result1}"
 
-    # --- RetrieveForProof: prove-in-time statement (not a name) ---
+    # --- RetrieveForProof: prove-in-time statement ---
     inter2 = Interaction_RetrieveForProof(
         state=ml_state, query="something trivial", kinds=[EntityKind.THEOREM])
-    result2 = await inter2.answer(Answer(statement="(8::nat) = 2 ^ 3"))
+    result2 = await inter2.answer(AnswerIndexesOrSpec(indexes=[], statement="(8::nat) = 2 ^ 3"))
     file.write(f"RetrieveForProof(statement='(8::nat) = 2 ^ 3'): {type(result2[0]).__name__}\n")
     assert isinstance(result2[0], IsabelleFact_ProveInTime), \
         f"Expected IsabelleFact_ProveInTime, got {type(result2[0]).__name__}"
@@ -5525,21 +5524,21 @@ async def _test_NamedFactResolution(root: Root, file: MyIO):
         fact=FactByName(name="NF_XXX_alt"),
         expression=[IsaTerm.from_isabelle("NF_XXX ?a ?b = ?b + ?a")])
     inter3 = Interaction_ChooseDef(["NF_XXX"], [cand_a, cand_b], state=ml_state)
-    result3 = await inter3.answer(Answer(name="NF_XXX_def"))
+    result3 = await inter3.answer(AnswerIndexesOrName(indexes=[], name="NF_XXX_def"))
     file.write(f"ChooseDef(name='NF_XXX_def'): {[type(r).__name__ for r in result3]}\n")
     assert len(result3) == 1 and result3[0] is cand_a, \
         "Expected cand_a to be selected by short name"
 
     # --- ChooseDef: name matching a candidate full name ---
     inter4 = Interaction_ChooseDef(["NF_XXX"], [cand_a, cand_b], state=ml_state)
-    result4 = await inter4.answer(Answer(name="Test_NamedFactResolution.NF_XXX_alt"))
+    result4 = await inter4.answer(AnswerIndexesOrName(indexes=[], name="Test_NamedFactResolution.NF_XXX_alt"))
     file.write(f"ChooseDef(name=full_name NF_XXX_alt): {[type(r).__name__ for r in result4]}\n")
     assert len(result4) == 1 and result4[0] is cand_b, \
         "Expected cand_b to be selected by full name"
 
     # --- ChooseDef: name not matching any candidate, but IS an accessible fact ---
     inter5 = Interaction_ChooseDef(["NF_XXX"], [cand_a, cand_b], state=ml_state)
-    result5 = await inter5.answer(Answer(name="conjI"))
+    result5 = await inter5.answer(AnswerIndexesOrName(indexes=[], name="conjI"))
     file.write(f"ChooseDef(name='conjI'): {[type(r).__name__ for r in result5]}\n")
     assert len(result5) == 1 and isinstance(result5[0], IsabelleFact_Presented), \
         f"Expected IsabelleFact_Presented via RPC lookup, got {type(result5[0]).__name__}"
@@ -5548,7 +5547,7 @@ async def _test_NamedFactResolution(root: Root, file: MyIO):
     # --- ChooseDef: name not matching anything ---
     inter6 = Interaction_ChooseDef(["NF_XXX"], [cand_a, cand_b], state=ml_state)
     try:
-        await inter6.answer(Answer(name="xyzzy_nonexistent_thm"))
+        await inter6.answer(AnswerIndexesOrName(indexes=[], name="xyzzy_nonexistent_thm"))
         raise TestFailed("Expected Interaction_BadAnswer for nonexistent name")
     except Interaction_BadAnswer as e:
         file.write(f"ChooseDef(name='xyzzy_nonexistent_thm'): Interaction_BadAnswer as expected\n")
@@ -6080,7 +6079,7 @@ async def _test_CaseSplit_MapCase(root: Root, file: MyIO):
         # stub is called sequentially per GoalNode and each GoalNode
         # pops its pick from the shared dict, the options list shrinks
         # monotonically across calls.
-        return await interaction.answer(Answer(indexes=[0]))
+        return await interaction.answer(AnswerIndex(index=0))
     root.session.fork_interaction = stub_fork
 
     root.session.age += 1
@@ -6122,7 +6121,7 @@ async def _test_CaseSplit_MapCaseDrop(root: Root, file: MyIO):
         await interaction.prompt(0, file)
         # Empty indexes = drop; the supplied body stays in _proofs_by_case
         # and should surface as a FOOTER warning after refresh.
-        return await interaction.answer(Answer(indexes=[]))
+        return await interaction.answer(AnswerIndex(index=None))
     root.session.fork_interaction = stub_fork
 
     root.session.age += 1
@@ -6154,7 +6153,7 @@ async def _test_CaseSplit_MapCaseMixedPick(root: Root, file: MyIO):
             f"unexpected interaction type {type(interaction).__name__}"
         print_header(f"Interaction Prompt for actual case `{interaction.actual_case}`", file)
         await interaction.prompt(0, file)
-        return await interaction.answer(Answer(indexes=[0]))
+        return await interaction.answer(AnswerIndex(index=0))
     root.session.fork_interaction = stub_fork
 
     root.session.age += 1
@@ -6187,7 +6186,7 @@ async def _test_CaseSplit_MapCaseMixedDrop(root: Root, file: MyIO):
             f"unexpected interaction type {type(interaction).__name__}"
         print_header(f"Interaction Prompt for actual case `{interaction.actual_case}`", file)
         await interaction.prompt(0, file)
-        return await interaction.answer(Answer(indexes=[]))
+        return await interaction.answer(AnswerIndex(index=None))
     root.session.fork_interaction = stub_fork
 
     root.session.age += 1
@@ -6221,7 +6220,7 @@ async def _test_Induction_MapCase(root: Root, file: MyIO):
             f"expected kind=induction, got {interaction.kind!r}"
         print_header(f"Interaction Prompt for actual case `{interaction.actual_case}`", file)
         await interaction.prompt(0, file)
-        return await interaction.answer(Answer(indexes=[0]))
+        return await interaction.answer(AnswerIndex(index=0))
     root.session.fork_interaction = stub_fork
 
     root.session.age += 1
@@ -6254,11 +6253,11 @@ async def _test_CaseSplit_MapCaseAmend(root: Root, file: MyIO):
     amend_interaction_count = [0]
     async def drop_stub(interaction):
         assert isinstance(interaction, Interaction_MapCase)
-        return await interaction.answer(Answer(indexes=[]))
+        return await interaction.answer(AnswerIndex(index=None))
     async def amend_stub(interaction):
         amend_interaction_count[0] += 1
         file.write(f"UNEXPECTED interaction after amend: {type(interaction).__name__}\n")
-        return await interaction.answer(Answer(indexes=[]))
+        return await interaction.answer(AnswerIndex(index=None))
 
     root.session.fork_interaction = drop_stub
     root.session.age += 1
@@ -6330,7 +6329,7 @@ async def _test_CaseSplit_AmendReconcile_ExactMatch(root: Root, file: MyIO):
     async def count_stub(interaction):
         interaction_count[0] += 1
         file.write(f"UNEXPECTED interaction: {type(interaction).__name__}\n")
-        return await interaction.answer(Answer(indexes=[]))
+        return await interaction.answer(AnswerIndex(index=None))
     root.session.fork_interaction = count_stub
 
     root.session.age += 1
@@ -6386,12 +6385,12 @@ async def _test_CaseSplit_AmendReconcile_Rematch(root: Root, file: MyIO):
         # The options list for each goal has the new-* options first,
         # then (if applicable) own old-* last.  Index 0 is a new-* pick.
         if interaction.actual_case == "True":
-            return await interaction.answer(Answer(indexes=[0]))   # pick new-*
+            return await interaction.answer(AnswerIndex(index=0))   # pick new-*
         # For the second goal ('False'), pick the last option which is
         # the own old-* (keep existing body).
         last_idx = len(interaction.supplied_options) - 1
         assert interaction.supplied_options[last_idx].startswith("old-")
-        return await interaction.answer(Answer(indexes=[last_idx]))
+        return await interaction.answer(AnswerIndex(index=last_idx))
     root.session.fork_interaction = pick_stub
 
     root.session.age += 1
@@ -6442,7 +6441,7 @@ async def _test_CaseSplit_AmendReconcile_Drop(root: Root, file: MyIO):
     async def drop_stub(interaction):
         interaction_count[0] += 1
         assert isinstance(interaction, Interaction_MapCase)
-        return await interaction.answer(Answer(indexes=[]))   # drop
+        return await interaction.answer(AnswerIndex(index=None))   # drop
     root.session.fork_interaction = drop_stub
 
     root.session.age += 1
@@ -6490,7 +6489,7 @@ async def _test_CaseSplit_Pair_N1_OverSupply(root: Root, file: MyIO):
         assert isinstance(interaction, Interaction_MapCase)
         print_header(f"MapCase for `{interaction.actual_case}`", file)
         await interaction.prompt(0, file)
-        return await interaction.answer(Answer(indexes=[0]))
+        return await interaction.answer(AnswerIndex(index=0))
     root.session.fork_interaction = pick_stub
 
     root.session.age += 1
@@ -6539,7 +6538,7 @@ async def _test_CaseSplit_Pair_N1_Keep(root: Root, file: MyIO):
             idx = interaction.supplied_options.index(CASE_EXISTING)
         except ValueError:
             assert False, f"`{CASE_EXISTING}` not offered — siblings-after missing?"
-        return await interaction.answer(Answer(indexes=[idx]))
+        return await interaction.answer(AnswerIndex(index=idx))
     root.session.fork_interaction = keep_stub
 
     root.session.age += 1
@@ -6579,7 +6578,7 @@ async def _test_CaseSplit_Pair_N1_Replace(root: Root, file: MyIO):
         print_header(f"MapCase for `{interaction.actual_case}`", file)
         await interaction.prompt(0, file)
         # Pick first option (a new-* supplied body).
-        return await interaction.answer(Answer(indexes=[0]))
+        return await interaction.answer(AnswerIndex(index=0))
     root.session.fork_interaction = replace_stub
 
     root.session.age += 1
@@ -6614,7 +6613,7 @@ async def _test_CaseSplit_Pair_N1_MidProof(root: Root, file: MyIO):
     async def unexpected_stub(interaction):
         interaction_count[0] += 1
         file.write(f"UNEXPECTED interaction: {type(interaction).__name__}\n")
-        return await interaction.answer(Answer(indexes=[]))
+        return await interaction.answer(AnswerIndex(index=None))
     root.session.fork_interaction = unexpected_stub
 
     root.session.age += 1
@@ -6661,11 +6660,11 @@ async def _test_CaseSplit_NestedCaseNameShadow(root: Root, file: MyIO):
                 f"UNEXPECTED MapCase fired: kind={interaction.kind} "
                 f"actual_case={interaction.actual_case!r} "
                 f"options={list(interaction.supplied_options)}\n")
-            return await interaction.answer(Answer(indexes=[]))
+            return await interaction.answer(AnswerIndex(index=None))
         file.write(
             f"Other (non-MapCase) interaction: "
             f"{type(interaction).__name__}\n")
-        return await interaction.answer(Answer(indexes=[]))
+        return await interaction.answer(AnswerIndex(index=None))
     root.session.fork_interaction = stub_fork
 
     root.session.age += 1
@@ -8875,7 +8874,7 @@ async def _test_ForkDeletesRefreshingNode(root: Root, file: MyIO):
     root.print(0, file)
 
     async def stub_delete_during_fork(interaction):
-        answer = await interaction.answer(Answer(indexes=[0]))
+        answer = await interaction.answer(AnswerIndexesOrName(indexes=[0], name=None))
         # Simulate the fork sub-agent deleting the Unfold node (step 1)
         # while it is still mid-refresh.  In production this happened when
         # the fork sub-agent saw "Error: Not yet evaluated" on the Unfold

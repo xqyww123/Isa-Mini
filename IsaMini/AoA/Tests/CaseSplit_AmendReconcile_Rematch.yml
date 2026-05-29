@@ -55,7 +55,7 @@ Is any of your supplied proof intended for this case?
   0. new-alt1
   1. new-alt2
   2. old-True
-Answer with its index if so, or with empty `indexes` to leave this case without a proof for now.
+Answer with the index if so, or with null to leave this case without a proof for now.
 --------------------------------------------------
 MapCase for `False`
 --------------------------------------------------
@@ -66,7 +66,7 @@ The case-split operation produced a case `False` (as follows) that does not matc
 Is any of your supplied proof intended for this case?
   0. new-alt2
   1. old-False
-Answer with its index if so, or with empty `indexes` to leave this case without a proof for now.
+Answer with the index if so, or with null to leave this case without a proof for now.
 --------------------------------------------------
 After amend (rematch: new- for True, old- for False)
 --------------------------------------------------

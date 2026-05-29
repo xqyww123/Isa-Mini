@@ -2349,19 +2349,20 @@ class Interaction_RetrieveForProof(Interaction_Retrieve):
             file.write("\n")
         file.write(f"Similar {title} from the library:\n")
         await self._prompt_candidates(indent, file)
+        _atn = tn(TOOL_ANSWER_INDEXES_OR_SPEC)
         if self.single_choice:
-            file.write(f"\nIf an entry above matches what you need, answer with its index.\n")
+            file.write(f"\nIf an entry above matches what you need, call `{_atn}` with its index.\n")
         else:
-            file.write(f"\nAnswer with the indices of all matching {title}.\n")
-        file.write("Otherwise, if none matches but the statement is trivially provable, "
-                   "formalize the statement into Isabelle propositions and answer with them as text. "
+            file.write(f"\nCall `{_atn}` with the `indexes` of all matching {title}.\n")
+        file.write(f"Otherwise, if none matches but the statement is trivially provable, "
+                   f"formalize the statement into Isabelle propositions and call `{_atn}` with `statement`. "
                    "IMPORTANT: all numeric literals MUST be type-annotated, "
                    "example: `(2::nat)` not `2`.\n")
         if self.k >= self.FINAL_K:
-            file.write("If none of the above applies, answer empty to give up "
+            file.write(f"If none of the above applies, call `{_atn}` with no fields to give up "
                        "the search and prove the statement yourself later.\n")
         else:
-            file.write("If none of the above applies, answer empty to see more candidates.\n")
+            file.write(f"If none of the above applies, call `{_atn}` with no fields to see more candidates.\n")
 
     fork_allowed_tools = [TOOL_ANSWER_INDEXES_OR_SPEC, TOOL_SEARCH]
 
@@ -2434,7 +2435,7 @@ class Interaction_InstantiateSchematics(Interaction):
             print_indent(indent + 1, file)
             file.write(f"{i}. {prem}\n")
         print_indent(indent, file)
-        file.write("Answer with `instantiations`, a list of "
+        file.write(f"Call `{tn(TOOL_ANSWER_INSTANTIATE)}` with `instantiations`, a list of "
                    "{variable, term} objects. Each term must be a "
                    "type-correct Isabelle expression.\n")
 
@@ -2529,7 +2530,7 @@ class Interaction_MapCase(Interaction):
             print_indent(indent + 1, file)
             file.write(f"{i}. {name}\n")
         print_indent(indent, file)
-        file.write("Answer with the index if so, or with null to "
+        file.write(f"Call `{tn(TOOL_ANSWER_INDEX)}` with the `index` if so, or with null to "
                    "leave this case without a proof for now.\n")
 
     async def answer(self, answer: AnswerIndex) -> str | None:
@@ -6287,10 +6288,11 @@ class Interaction_SelectRewriteTargets(Interaction):
                 print_indent(indent, file)
                 file.write("No matching subterms found in rewrite targets.\n")
             print_indent(indent, file)
+            _atn = tn(TOOL_ANSWER_INDEXES)
             if matches and len(matches) == 1:
-                file.write("Answer with the index of the subterm to rewrite, or leave empty to drop this rule.\n")
+                file.write(f"Call `{_atn}` with the `indexes` of the subterm to rewrite, or with empty `indexes` to drop this rule.\n")
             else:
-                file.write("Answer with the indices of the subterms to rewrite, or leave empty to drop this rule.\n")
+                file.write(f"Call `{_atn}` with the `indexes` of the subterms to rewrite, or with empty `indexes` to drop this rule.\n")
     fork_allowed_tools = [TOOL_ANSWER_INDEXES, TOOL_SEARCH]
 
     async def answer(self, answer: AnswerIndexes) -> list[tuple[int, list[lambda_term]]]:
