@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "properties": {
+    "indexes": {
+      "type": "array",
+      "items": { "type": "integer" },
+      "description": "Selected indexes from the presented options"
+    },
+    "name": {
+      "type": "string",
+      "description": "The exact name of a fact or entity accessible in the current proof context"
+    }
+  },
+  "additionalProperties": false
+}

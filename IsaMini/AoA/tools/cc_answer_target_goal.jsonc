@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "properties": {
+    "index": {
+      "type": "integer",
+      "description": "Index of the target goal to attempt next (from the numbered list)"
+    },
+    "suggestions": {
+      "type": "string",
+      "description": "Strategy hints and proof suggestions for the worker agent"
+    },
+    "useful_lemmas": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Names of lemmas the worker should try using"
+    }
+  },
+  "required": ["index", "suggestions", "useful_lemmas"],
+  "additionalProperties": false
+}

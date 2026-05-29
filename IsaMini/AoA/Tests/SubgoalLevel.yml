@@ -1,0 +1,5 @@
+root._subgoal_level: 0
+goal_node._subgoal_level: 0
+have1._subgoal_level: 1
+have2._subgoal_level: 2
+obvious_in_have2._subgoal_level: 2

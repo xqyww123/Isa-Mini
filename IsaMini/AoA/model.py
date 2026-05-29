@@ -1919,6 +1919,45 @@ class InteractiveRetrievalMode(Enum):
 
 INTERACTIVE_RETRIEVAL_MAP = {m.value: m for m in InteractiveRetrievalMode}
 
+# --- Typed answer payloads (one per answer tool variant) ---
+
+@dataclass(frozen=True)
+class AnswerIndexes:
+    indexes: list[int]
+
+@dataclass(frozen=True)
+class AnswerIndex:
+    index: int | None
+
+@dataclass(frozen=True)
+class AnswerIndexesOrName:
+    indexes: list[int]
+    name: str | None
+
+@dataclass(frozen=True)
+class AnswerIndexesOrSpec:
+    indexes: list[int]
+    statement: str | None
+
+@dataclass(frozen=True)
+class AnswerInstantiate:
+    instantiations: list[tuple[str, str]]
+
+@dataclass(frozen=True)
+class AnswerTargetGoal:
+    index: int
+    suggestions: str
+    useful_lemmas: list[str]
+
+@dataclass(frozen=True)
+class AnswerRefutation:
+    accept: bool
+    reason: str
+
+AnswerPayload = (AnswerIndexes | AnswerIndex | AnswerIndexesOrName
+                 | AnswerIndexesOrSpec | AnswerInstantiate
+                 | AnswerTargetGoal | AnswerRefutation)
+
 # Abstract tool identifiers (driver-agnostic)
 type tool = str
 TOOL_EDIT:   tool = "edit"
@@ -1929,11 +1968,38 @@ TOOL_READ:   tool = "recall"
 TOOL_SURRENDER: tool = "refute_or_surrender"
 TOOL_REQUEST_LEMMAS: tool = "request_lemmas"
 TOOL_COMPLAIN: tool = "complain"
-ALL_PROOF_TOOLS: tuple[tool, ...] = (TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER, TOOL_SEARCH, TOOL_READ, TOOL_SURRENDER, TOOL_REQUEST_LEMMAS, TOOL_COMPLAIN)
+
+TOOL_ANSWER_INDEXES:        tool = "answer_indexes"
+TOOL_ANSWER_INDEX:          tool = "answer_index"
+TOOL_ANSWER_INDEXES_OR_NAME: tool = "answer_indexes_or_name"
+TOOL_ANSWER_INDEXES_OR_SPEC: tool = "answer_indexes_or_spec"
+TOOL_ANSWER_INSTANTIATE:    tool = "answer_instantiate"
+TOOL_ANSWER_TARGET_GOAL:    tool = "answer_target_goal"
+TOOL_ANSWER_REFUTATION:     tool = "answer_refutation"
+
+ANSWER_TOOLS: frozenset[tool] = frozenset({
+    TOOL_ANSWER_INDEXES, TOOL_ANSWER_INDEX, TOOL_ANSWER_INDEXES_OR_NAME,
+    TOOL_ANSWER_INDEXES_OR_SPEC, TOOL_ANSWER_INSTANTIATE,
+    TOOL_ANSWER_TARGET_GOAL, TOOL_ANSWER_REFUTATION,
+})
+
+ALL_PROOF_TOOLS: tuple[tool, ...] = (
+    TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER, TOOL_SEARCH, TOOL_READ,
+    TOOL_SURRENDER, TOOL_REQUEST_LEMMAS, TOOL_COMPLAIN,
+    *ANSWER_TOOLS,
+)
 
 class Interaction:
     forking: ForkingMode = ForkingMode.FORKING_WITH_CTXT
     fork_allowed_tools: list[tool] = [TOOL_ANSWER, TOOL_SEARCH]
+
+    @property
+    def answer_tool_name(self) -> str:
+        for t in self.fork_allowed_tools:
+            if t in ANSWER_TOOLS:
+                return t
+        return TOOL_ANSWER
+
     async def prompt(self, indent: int, file: MyIO) -> None:
         raise NotImplementedError("`prompt` must be implemented by subclass")
     async def answer(self, answer: Answer) -> Any:
@@ -8550,8 +8616,8 @@ class Session:
                 "The proof goal and available context are provided in `./proof.yaml`.\n"
                 "Complete the proof using the MCP proof tools.\n"
                 "Continue until no errors remain.\n"
-                "A proof goal can be buggy and thus unprovable — "
-                f"call `{self.tool_name(TOOL_SURRENDER)}` with your analysis if you believe so.\n"
+                "If you believe the goal is unprovable or you need additional lemmas, "
+                f"call `{self.tool_name(TOOL_COMPLAIN)}` to report back.\n"
                 "Be concise in text output.\n"
                 "\n"
                 "## Tools\n"
@@ -8559,7 +8625,7 @@ class Session:
                 f"- {self.tool_name(TOOL_DELETE)}: Delete proof steps\n"
                 f"- {self.tool_name(TOOL_SEARCH)}: Search for theorems, constants, types, and rules\n"
                 f"- {self.tool_name(TOOL_READ)}: Recall proof state from `proof.yaml`. Use only when you have lost track.\n"
-                f"- {self.tool_name(TOOL_REQUEST_LEMMAS)}: Request common lemmas you lack; an external system will provide them\n"
+                f"- {self.tool_name(TOOL_COMPLAIN)}: Report that the goal is unprovable (refute) or that you need help (surrender)\n"
             )
         return (
             "You are a formal theorem proving agent.\n"
@@ -8614,8 +8680,8 @@ class Session:
                         + proof_state
                         + f"Analyze the proof goal, plan a proof, and complete it using tools `{self.tool_name(TOOL_EDIT)}` and `{self.tool_name(TOOL_DELETE)}`.\n"
                         "Continue building the proof until no error remains.\n"
-                        "A proof goal can be buggy and thus unprovable — "
-                        f"call `{self.tool_name(TOOL_SURRENDER)}` with your analysis if you believe so.\n"
+                        "If you believe the goal is unprovable or you need help, "
+                        f"call `{self.tool_name(TOOL_COMPLAIN)}` to report back.\n"
                         "`proof.yaml` contains the proof state, but recall it only when you lose track of it."
                     )
                 else:
@@ -8624,8 +8690,8 @@ class Session:
                         + "The proof state is in `proof.yaml` — read it to see the goal and current proof.\n"
                         f"Analyze the proof goal, plan a proof, and complete it using tools `{self.tool_name(TOOL_EDIT)}` and `{self.tool_name(TOOL_DELETE)}`.\n"
                         "Continue building the proof until no error remains.\n"
-                        "A proof goal can be buggy and thus unprovable — "
-                        f"call `{self.tool_name(TOOL_SURRENDER)}` with your analysis if you believe so."
+                        "If you believe the goal is unprovable or you need help, "
+                        f"call `{self.tool_name(TOOL_COMPLAIN)}` to report back."
                     )
 
         if self.system_prompt() is not None:

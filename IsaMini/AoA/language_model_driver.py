@@ -142,7 +142,6 @@ class LMDriver(Session):
     async def _run_worker(self, target: NonLeaf_Node) -> WorkerResult:
         _session_var.set(None)  # type: ignore
         sub = self.__class__._make_fork(self, role=Role_Worker(target=target))
-        sub.working_block = self.root
         sub._fork_name = f"{self._fork_name}.worker_{target.id}"
         await sub.initialize(self.root)
 

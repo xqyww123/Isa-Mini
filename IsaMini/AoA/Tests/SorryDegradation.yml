@@ -1,0 +1,39 @@
+obvious_lv1._subgoal_level: 1
+obvious_lv1._is_sorry_degraded: False
+obvious_lv2._subgoal_level: 2
+obvious_lv2._is_sorry_degraded: True
+obvious_lv2.status: success
+--------------------------------------------------
+Tree with sorry-degraded Obvious at level 2
+--------------------------------------------------
+variables:
+  - x: int
+premises:
+  - h1: (0 :: int) ≤ x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: outer have
+    operation: Have
+    statement:
+      english: trivial
+      conclusion: True
+    name: h_outer
+    proof:
+      - step id: 1.1
+        thought: inner have
+        operation: Have
+        statement:
+          english: also trivial
+          conclusion: True
+        name: h_inner
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+      - step id: 1.2
+        operation: Obvious
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+after FINISHING refresh:
+obvious_lv2._is_sorry_degraded: False
+obvious_lv2.status: success

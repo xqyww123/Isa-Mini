@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "properties": {
+    "accept": {
+      "type": "boolean",
+      "description": "true to accept the worker's refutation (goal is unprovable), false to reject it"
+    },
+    "reason": {
+      "type": "string",
+      "description": "Explanation of why you accept or reject the refutation"
+    }
+  },
+  "required": ["accept", "reason"],
+  "additionalProperties": false
+}

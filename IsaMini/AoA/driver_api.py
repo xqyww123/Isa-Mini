@@ -1116,14 +1116,7 @@ class APIDriver(LMDriver):
             self.warn_AoA_opr(f"{tag} failed with {type(e).__name__}: {e}")
         finally:
             self.root.quit_info = None
-            self.total_input_tokens += sub.total_input_tokens
-            self.total_output_tokens += sub.total_output_tokens
-            self.total_cache_creation_input_tokens += sub.total_cache_creation_input_tokens
-            self.total_cache_read_input_tokens += sub.total_cache_read_input_tokens
-            self.total_cost_usd += sub.total_cost_usd
-            self.total_isabelle_time += sub.total_isabelle_time
-            self.total_model_time += sub.total_model_time
-            self.total_quota_wait_time += sub.total_quota_wait_time
+            self._accumulate_subagent_costs(sub)
             await sub.close()
 
         success = have_node.is_proof_finished()

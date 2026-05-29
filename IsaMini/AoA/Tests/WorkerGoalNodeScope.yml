@@ -1,0 +1,51 @@
+--------------------------------------------------
+Full tree (Plan role)
+--------------------------------------------------
+variables:
+  - x: int
+premises:
+  - h1: (0 :: int) ≤ x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: a lemma
+    operation: Have
+    statement:
+      english: trivial
+      conclusion: True
+    name: h1
+    proof: empty
+  - step id: 2
+    operation: Obvious
+--------------------------------------------------
+Worker scope (target=GoalNode)
+--------------------------------------------------
+variables:
+  - x: int
+premises:
+  - h1: (0 :: int) ≤ x
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: a lemma
+    operation: Have
+    statement:
+      english: trivial
+      conclusion: True
+    name: h1
+    proof: empty
+  - step id: 2
+    operation: Obvious
+
+contains 'available declarations': False
+contains 'goal:': True
+contains 'proof:': True
+--------------------------------------------------
+Worker quickview (target=GoalNode)
+--------------------------------------------------
+step 1: Have h1 (done)
+step 2: Obvious
+
+unfinished count (GoalNode scope): 0
+unfinished count (full scope): 0

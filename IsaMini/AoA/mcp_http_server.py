@@ -41,8 +41,14 @@ from .model import (
     CannotDelete_Root, NodeNotFound, ProofTreeTooDeep,
     EvaluationStatus,
     Parse_Op_List, normalize_answer, Interaction_BadAnswer,
+    AnswerIndexes, AnswerIndex, AnswerIndexesOrName, AnswerIndexesOrSpec,
+    AnswerInstantiate, AnswerTargetGoal, AnswerRefutation,
     TOOL_EDIT, TOOL_DELETE, TOOL_ANSWER, TOOL_READ, TOOL_SURRENDER, TOOL_REQUEST_LEMMAS,
     TOOL_COMPLAIN,
+    TOOL_ANSWER_INDEXES, TOOL_ANSWER_INDEX, TOOL_ANSWER_INDEXES_OR_NAME,
+    TOOL_ANSWER_INDEXES_OR_SPEC, TOOL_ANSWER_INSTANTIATE,
+    TOOL_ANSWER_TARGET_GOAL, TOOL_ANSWER_REFUTATION,
+    ANSWER_TOOLS,
     ALL_PROOF_TOOLS, Have_ToolArg, Have,
     Role_Worker,
 )
@@ -73,6 +79,13 @@ _cc_read_schema = _load_schema("cc_recall.jsonc")
 _cc_surrender_schema = _load_schema("cc_surrender.jsonc")
 _cc_request_lemmas_schema = _load_schema("cc_request_lemmas.jsonc")
 _cc_complain_schema = _load_schema("cc_complain.jsonc")
+_cc_answer_indexes_schema = _load_schema("cc_answer_indexes.jsonc")
+_cc_answer_index_schema = _load_schema("cc_answer_index.jsonc")
+_cc_answer_indexes_or_name_schema = _load_schema("cc_answer_indexes_or_name.jsonc")
+_cc_answer_indexes_or_spec_schema = _load_schema("cc_answer_indexes_or_spec.jsonc")
+_cc_answer_instantiate_schema = _load_schema("cc_answer_instantiate.jsonc")
+_cc_answer_target_goal_schema = _load_schema("cc_answer_target_goal.jsonc")
+_cc_answer_refutation_schema = _load_schema("cc_answer_refutation.jsonc")
 
 
 
@@ -197,15 +210,16 @@ def _check_tool_permission(session: Session, tool_name: str) -> str | None:
     Fork sessions are additionally restricted to the tools declared in
     ``interaction.fork_allowed_tools`` — typically ``answer`` + ``query``.
     """
-    if tool_name == "answer" and (
+    if (tool_name == "answer" or tool_name in ANSWER_TOOLS) and (
             session.fork_pending is None or session.fork_pending.answer.done()):
-        answer_tn = session.tool_name(TOOL_ANSWER)
+        answer_tn = session.tool_name(tool_name)
         return f"No question pending. The `{answer_tn}` tool can only be used when there is a question for you to answer."
     if session.fork_pending is not None and tool_name in ALL_PROOF_TOOLS:
         allowed = session.fork_pending.interaction.fork_allowed_tools
         if tool_name not in allowed:
             allowed_list = ", ".join(f"`{session.tool_name(t)}`" for t in allowed)
-            answer_tn = session.tool_name(TOOL_ANSWER)
+            interaction = session.fork_pending.interaction
+            answer_tn = session.tool_name(interaction.answer_tool_name)
             return (f"Tool `{session.tool_name(tool_name)}` is not allowed. "
                     f"Only {allowed_list} {'is' if len(allowed) == 1 else 'are'} available. "
                     f"Use the `{answer_tn}` tool to submit your answer.")
@@ -405,6 +419,110 @@ async def _answer_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
 
         try:
             result = await pending.interaction.answer(normalized)
+        except Interaction_BadAnswer as e:
+            error_msg = str(e)
+            session.log_tool_response(_tn, f"BAD ANSWER: {error_msg}")
+            return (error_msg, True)
+        except InteractionExpanded as exp:
+            session.log_tool_response(
+                _tn, f"[INTERACTION PROMPT]\n{exp.new_prompt}")
+            return (exp.new_prompt, False)
+
+        pending.answer.set_result(result)
+        result_str = result.unicode if isinstance(result, IsaTerm) else str(result)
+        session.log_interaction(_tn, f"interaction answered: {result_str}")
+        session.log_tool_response(_tn, f"[INTERACTION RESOLVED] {result_str}")
+        if not session.is_major:
+            await session.interrupt()
+        return (result_str, False)
+    except IsabelleError as e:
+        error_msg = f"Isabelle error: {'; '.join(pretty_unicode(err) for err in e.errors)}"
+        session.log_tool_response(_tn, f"ERROR: {error_msg}")
+        return (error_msg, True)
+    except (ConnectionError, EOFError):
+        raise asyncio.CancelledError("connection lost")
+    except Exception as e:
+        session.log_tool_response(_tn, f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
+        sys.exit(1)
+
+
+def _extract_indexes(args: dict) -> list[int]:
+    indexes = args.get("indexes")
+    if isinstance(indexes, str):
+        try:
+            indexes = json.loads(indexes)
+        except (json.JSONDecodeError, ValueError):
+            indexes = None
+    if isinstance(indexes, int):
+        indexes = [indexes]
+    if indexes is not None and not isinstance(indexes, list):
+        indexes = None
+    return sorted(set(indexes)) if indexes else []
+
+def _extract_instantiations(args: dict) -> list[tuple[str, str]]:
+    instantiations = args.get("instantiations")
+    if isinstance(instantiations, str):
+        try:
+            instantiations = json.loads(instantiations)
+        except (json.JSONDecodeError, ValueError):
+            instantiations = None
+    if isinstance(instantiations, dict):
+        instantiations = [instantiations]
+    if instantiations is not None and not isinstance(instantiations, list):
+        instantiations = None
+    return [(i["variable"], i["term"]) for i in instantiations] if instantiations else []
+
+
+async def _answer_tool_dispatch(session: Session, tool_name: str, args: dict) -> tuple[str, bool]:
+    _tn = session.tool_name(tool_name)
+    session.log_tool_call(_tn, args)
+    try:
+        pending = session.fork_pending
+        if pending is None or pending.answer.done():
+            error_msg = f"No question pending. The `{_tn}` tool can only be used when there is a question for you to answer"
+            session.log_tool_response(_tn, f"ERROR: {error_msg}")
+            return (error_msg, True)
+
+        allowed = pending.interaction.fork_allowed_tools
+        if tool_name not in allowed:
+            answer_tools = [t for t in allowed if t in ANSWER_TOOLS]
+            error_msg = f"Wrong answer tool. Use: {', '.join(f'`{session.tool_name(t)}`' for t in answer_tools)}"
+            session.log_tool_response(_tn, f"ERROR: {error_msg}")
+            return (error_msg, True)
+
+        match tool_name:
+            case "answer_indexes":
+                payload = AnswerIndexes(indexes=_extract_indexes(args))
+            case "answer_index":
+                raw = args.get("index")
+                payload = AnswerIndex(index=raw if isinstance(raw, int) else None)
+            case "answer_indexes_or_name":
+                payload = AnswerIndexesOrName(
+                    indexes=_extract_indexes(args),
+                    name=args.get("name") or None)
+            case "answer_indexes_or_spec":
+                payload = AnswerIndexesOrSpec(
+                    indexes=_extract_indexes(args),
+                    statement=args.get("statement") or None)
+            case "answer_instantiate":
+                payload = AnswerInstantiate(
+                    instantiations=_extract_instantiations(args))
+            case "answer_target_goal":
+                payload = AnswerTargetGoal(
+                    index=args.get("index", 0),
+                    suggestions=args.get("suggestions", ""),
+                    useful_lemmas=args.get("useful_lemmas", []))
+            case "answer_refutation":
+                payload = AnswerRefutation(
+                    accept=bool(args.get("accept", False)),
+                    reason=args.get("reason", ""))
+            case _:
+                error_msg = f"Unknown answer tool: {tool_name}"
+                session.log_tool_response(_tn, f"ERROR: {error_msg}")
+                return (error_msg, True)
+
+        try:
+            result = await pending.interaction.answer(payload)
         except Interaction_BadAnswer as e:
             error_msg = str(e)
             session.log_tool_response(_tn, f"BAD ANSWER: {error_msg}")
@@ -747,6 +865,13 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                        "schema": _cc_request_lemmas_schema, "annotations": _MUT},
     "complain": {"description": "Report that the goal cannot be proved: 'refute' if buggy/unprovable, 'surrender' if no strategy remains. Optionally suggest lemmas that would help.",
                  "schema": _cc_complain_schema, "annotations": _ACT},
+    "answer_indexes": {"description": "Answer by selecting indexes from the presented options", "schema": _cc_answer_indexes_schema, "annotations": _ACT},
+    "answer_index": {"description": "Answer by selecting a single index, or null to skip", "schema": _cc_answer_index_schema, "annotations": _ACT},
+    "answer_indexes_or_name": {"description": "Answer by selecting indexes or providing an exact fact name", "schema": _cc_answer_indexes_or_name_schema, "annotations": _ACT},
+    "answer_indexes_or_spec": {"description": "Answer by selecting indexes or providing an Isabelle proposition", "schema": _cc_answer_indexes_or_spec_schema, "annotations": _ACT},
+    "answer_instantiate": {"description": "Answer by providing schematic-variable instantiations", "schema": _cc_answer_instantiate_schema, "annotations": _ACT},
+    "answer_target_goal": {"description": "Select a target goal for the worker agent and provide proof suggestions", "schema": _cc_answer_target_goal_schema, "annotations": _ACT},
+    "answer_refutation": {"description": "Accept or reject a worker's claim that the goal is unprovable", "schema": _cc_answer_refutation_schema, "annotations": _ACT},
 }
 
 
@@ -807,6 +932,9 @@ class ToolExecutor:
             case "answer":
                 async with self._tool_lock:
                     result, is_error = await _answer_tool_logic(session, arguments)
+            case n if n in ANSWER_TOOLS:
+                async with self._tool_lock:
+                    result, is_error = await _answer_tool_dispatch(session, n, arguments)
             case "query":
                 result, is_error = await _query_tool_logic(session, arguments)
             case "recall":

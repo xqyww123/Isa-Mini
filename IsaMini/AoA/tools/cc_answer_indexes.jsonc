@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "properties": {
+    "indexes": {
+      "type": "array",
+      "items": { "type": "integer" },
+      "description": "Selected indexes from the presented options"
+    }
+  },
+  "required": ["indexes"],
+  "additionalProperties": false
+}

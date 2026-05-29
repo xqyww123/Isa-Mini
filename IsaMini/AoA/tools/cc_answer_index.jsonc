@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "properties": {
+    "index": {
+      "type": ["integer", "null"],
+      "description": "Selected index from the presented options, or null to skip"
+    }
+  },
+  "required": ["index"],
+  "additionalProperties": false
+}

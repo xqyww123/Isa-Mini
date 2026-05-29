@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "properties": {
+    "indexes": {
+      "type": "array",
+      "items": { "type": "integer" },
+      "description": "Selected indexes from the presented options"
+    },
+    "statement": {
+      "type": "string",
+      "description": "An Isabelle proposition to prove in-line. All numeric literals MUST be type-annotated, e.g. `(2::nat)` not `2`."
+    }
+  },
+  "additionalProperties": false
+}

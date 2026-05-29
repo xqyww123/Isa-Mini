@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "properties": {
+    "instantiations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "variable": {
+            "type": "string",
+            "description": "The schematic variable name, e.g. `?k` or `?k.0`"
+          },
+          "term": {
+            "type": "string",
+            "description": "The Isabelle term to instantiate the variable with, with all literal numbers annotated with their types"
+          }
+        },
+        "required": ["variable", "term"],
+        "additionalProperties": false
+      },
+      "description": "Schematic-variable instantiations"
+    }
+  },
+  "required": ["instantiations"],
+  "additionalProperties": false
+}
