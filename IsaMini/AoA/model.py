@@ -2010,7 +2010,7 @@ class ImmediateAnswer(Exception):
     def __init__(self, answer: Any):
         self.answer = answer
 
-class InteractionExpanded(Exception):
+class ContinuingInteraction(Exception):
     """Raised by answer() when the interaction's candidate list has been expanded
     and the caller should re-prompt the LLM with the new list. The new prompt text
     is carried in ``new_prompt``. The interaction remains active."""
@@ -2064,7 +2064,7 @@ class Interaction_ChooseTarget(Interaction):
                 return "all_proved"
             remaining = self._sorted_targets()
             lines = "\n".join(f"  {i}. {p.id}" for i, p in enumerate(remaining))
-            raise InteractionExpanded(
+            raise ContinuingInteraction(
                 f"Worker proved goal {target.id}!\n"
                 f"Remaining targets:\n{lines}\n"
                 f"Pick the next hardest target.")
@@ -2202,7 +2202,7 @@ class Interaction_Retrieve(Interaction):
 
     async def _render_prompt(self) -> str:
         """Render the prompt into a string. Used after candidate-list expansion
-        to build the new prompt text carried by InteractionExpanded."""
+        to build the new prompt text carried by ContinuingInteraction."""
         buf = StringIO()
         await self.prompt(0, MyIO(buf))
         return buf.getvalue()
@@ -2287,7 +2287,7 @@ class Interaction_Retrieve(Interaction):
                 self.k = self.FINAL_K
                 self._candidate_facts_cache = None
                 await self.candidate_facts()
-                raise InteractionExpanded(await self._render_prompt())
+                raise ContinuingInteraction(await self._render_prompt())
             else:
                 await self._log_retrieval_training_data([])
                 the_session().log_retrieval(self.query, ["none selected"])
@@ -9100,7 +9100,7 @@ class Session:
         Short-circuits via ``ImmediateAnswer`` without spawning a subprocess.
         Otherwise spawns a forked session with its own MCP endpoint, queries
         the LLM with the rendered prompt, and drives the answer loop
-        (including ``InteractionExpanded`` re-prompts) until the fork
+        (including ``ContinuingInteraction`` re-prompts) until the fork
         submits a final answer. Returns the answer produced by
         ``interaction.answer``. Must be implemented by subclass."""
         raise NotImplementedError("`fork_interaction` must be implemented by subclass")

@@ -36,7 +36,7 @@ from mcp.types import Tool, ToolAnnotations, TextContent, CallToolResult
 from Isabelle_RPC_Host import pretty_unicode
 from .model import (
     _session_var, Session, Node, NonLeaf_Node,
-    IsaTerm, InteractionExpanded,
+    IsaTerm, ContinuingInteraction,
     AoA_Error, ArgumentError, IsabelleError, InternalError,
     CannotDelete_Root, NodeNotFound, ProofTreeTooDeep,
     EvaluationStatus,
@@ -376,7 +376,7 @@ async def _answer_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
 
     On success: completes ``session.fork_pending.answer`` with the computed
     answer and interrupts the session so ``fork_interaction`` can return.
-    On ``InteractionExpanded``: returns the new prompt so the same fork
+    On ``ContinuingInteraction``: returns the new prompt so the same fork
     re-submits with the expanded list.
     """
     _tn = session.tool_name(TOOL_ANSWER)
@@ -423,7 +423,7 @@ async def _answer_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             error_msg = str(e)
             session.log_tool_response(_tn, f"BAD ANSWER: {error_msg}")
             return (error_msg, True)
-        except InteractionExpanded as exp:
+        except ContinuingInteraction as exp:
             session.log_tool_response(
                 _tn, f"[INTERACTION PROMPT]\n{exp.new_prompt}")
             return (exp.new_prompt, False)
@@ -527,7 +527,7 @@ async def _answer_tool_dispatch(session: Session, tool_name: str, args: dict) ->
             error_msg = str(e)
             session.log_tool_response(_tn, f"BAD ANSWER: {error_msg}")
             return (error_msg, True)
-        except InteractionExpanded as exp:
+        except ContinuingInteraction as exp:
             session.log_tool_response(
                 _tn, f"[INTERACTION PROMPT]\n{exp.new_prompt}")
             return (exp.new_prompt, False)
