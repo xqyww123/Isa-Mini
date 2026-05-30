@@ -1454,7 +1454,7 @@ async def _test_Intro_no_intro_bindings(root: Root, file: MyIO):
         "fact_bindings": ["b_true"]
     })])
     print_header("edit_message: Intro under 1.True", file)
-    file.write(await _P.edit_message(root, _intro_outcome, root.session))
+    file.write((await _P.edit_message(root, _intro_outcome, root.session))[0])
     file.write("---------------\n")
     print_header("Intro node print (1.True.1)", file)
     intro_node = root.locate_node("1.True.1")
@@ -3623,7 +3623,7 @@ async def _test_GlobalEnv(root: Root, file: MyIO):
     })])
     [have1] = _have_outcome.committed
     print_header("edit_message: ADD global Have t1", file)
-    file.write(await _P.edit_message(root, _have_outcome, root.session))
+    file.write((await _P.edit_message(root, _have_outcome, root.session))[0])
     file.write("---------------\n")
     file.write(f"Added have1: id={have1.id}, local_step={have1.local_step}, status={have1.status.status.value}\n")
     root.session.age += 1
@@ -3631,7 +3631,7 @@ async def _test_GlobalEnv(root: Root, file: MyIO):
         "facts": [{"name": "h1"}]
     })])
     print_header("edit_message: Obvious under t1", file)
-    file.write(await _P.edit_message(root, _obv_outcome, root.session))
+    file.write((await _P.edit_message(root, _obv_outcome, root.session))[0])
     file.write("---------------\n")
     if _obv_outcome.committed:
         obv_status = _obv_outcome.committed[0].status.status.value
@@ -3659,7 +3659,7 @@ async def _test_GlobalEnv(root: Root, file: MyIO):
         "rewrite premises": []
     })])
     print_header("edit_message: Rewrite step 1 using broken t1", file)
-    file.write(await _P.edit_message(root, _outcome, root.session))
+    file.write((await _P.edit_message(root, _outcome, root.session))[0])
     file.write("---------------\n")
     # Verify: the Rewrite node IS in the tree (quickview just folded it
     # because its `changed` flag was cleared after the first edit_message's
@@ -3689,7 +3689,7 @@ async def _test_GlobalEnv(root: Root, file: MyIO):
         "name": "t1",
     })])
     print_header("edit_message: AMEND global.1 (recovery)", file)
-    file.write(await _P.edit_message(root, _outcome, root.session))
+    file.write((await _P.edit_message(root, _outcome, root.session))[0])
     file.write("---------------\n")
     amended = _outcome.committed[0] if _outcome.committed else None
     assert amended is not None
@@ -3732,14 +3732,14 @@ async def _test_GlobalEnv_BodyDone(root: Root, file: MyIO):
         "name": "g1",
     })])
     print_header("edit_message: ADD global g1 (unfinished)", file)
-    file.write(await _P.edit_message(root, _outcome, root.session))
+    file.write((await _P.edit_message(root, _outcome, root.session))[0])
     file.write("---------------\n")
 
     # Discharge the (trivial) proof body; never touch it again.
     root.session.age += 1
     _outcome = await root.fill("1", [Obvious.gen_single({"facts": []})])
     print_header("edit_message: Obvious (discharge body)", file)
-    file.write(await _P.edit_message(root, _outcome, root.session))
+    file.write((await _P.edit_message(root, _outcome, root.session))[0])
     file.write("---------------\n")
 
     # Repeatedly append more unfinished global Haves.  After each edit
@@ -3753,7 +3753,7 @@ async def _test_GlobalEnv_BodyDone(root: Root, file: MyIO):
             "name": name,
         })])
         print_header(f"edit_message: ADD global {name} (unfinished)", file)
-        file.write(await _P.edit_message(root, _outcome, root.session))
+        file.write((await _P.edit_message(root, _outcome, root.session))[0])
         file.write("---------------\n")
 
 @model_test("GlobalEnv_BodyUnfilled", "Test_GlobalEnv_BodyUnfilled.thy", 10)
@@ -3775,7 +3775,7 @@ async def _test_GlobalEnv_BodyUnfilled(root: Root, file: MyIO):
             "name": name,
         })])
         print_header(f"edit_message: ADD global {name} (unfinished)", file)
-        file.write(await _P.edit_message(root, _outcome, root.session))
+        file.write((await _P.edit_message(root, _outcome, root.session))[0])
         file.write("---------------\n")
 
     # Amend g2 to a different unprovable statement — still leaves the
@@ -3787,7 +3787,7 @@ async def _test_GlobalEnv_BodyUnfilled(root: Root, file: MyIO):
         "name": "g2",
     })])
     print_header("edit_message: AMEND global.2", file)
-    file.write(await _P.edit_message(root, _outcome, root.session))
+    file.write((await _P.edit_message(root, _outcome, root.session))[0])
     file.write("---------------\n")
 
     # Delete g1 — body still untouched.
@@ -3946,7 +3946,7 @@ async def _test_GlobalEnv_DoneQuickview(root: Root, file: MyIO):
 
     # --- Step 3: edit_message — calls quickview then reset_changed ---
     print_header("edit_message (completes everything)", file)
-    file.write(await _P.edit_message(root, _outcome, root.session))
+    file.write((await _P.edit_message(root, _outcome, root.session))[0])
     file.write("---------------\n")
 
     # --- Step 4: quickview AFTER reset_changed ---
@@ -5768,7 +5768,7 @@ async def _test_AmendQ6Preservation(root: Root, file: MyIO):
         "proof": [{"operation": "Obvious", "facts": []}],
     })])
     print_header("edit_message: seed Have { proof: [Obvious] }", file)
-    file.write(await _P.edit_message(root, _seed_outcome, root.session))
+    file.write((await _P.edit_message(root, _seed_outcome, root.session))[0])
     file.write("---------------\n")
     outer = root.locate_node("1")
     assert cast(NonLeaf_Node, outer).sub_nodes and isinstance(cast(NonLeaf_Node, outer).sub_nodes[0], Obvious), "seed failed"
@@ -5785,7 +5785,7 @@ async def _test_AmendQ6Preservation(root: Root, file: MyIO):
         ],
     })])
     print_header("edit_message: amend into Suffices; Q6 folds Obvious into inner Have", file)
-    file.write(await _P.edit_message(root, _amend_outcome, root.session))
+    file.write((await _P.edit_message(root, _amend_outcome, root.session))[0])
     file.write("---------------\n")
     suff = root.locate_node("1")
     assert isinstance(suff, Suffices), f"expected Suffices, got {type(suff).__name__}"
@@ -9267,13 +9267,13 @@ async def _test_completion_cascade(root: Root, file: MyIO):
         "name": "h1",
     })])
     print_header("edit_message: Have h1", file)
-    file.write(await _P.edit_message(root, outcome1, root.session))
+    file.write((await _P.edit_message(root, outcome1, root.session))[0])
     file.write("---------------\n")
 
     root.session.age += 1
     outcome2 = await root.fill("1.1", [Obvious.gen_single({"facts": []})])
     print_header("edit_message: fill 1.1 (should complete step 1)", file)
-    file.write(await _P.edit_message(root, outcome2, root.session))
+    file.write((await _P.edit_message(root, outcome2, root.session))[0])
     file.write("---------------\n")
 
     # --- Phase 2: two-level cascading completion ---
@@ -9285,7 +9285,7 @@ async def _test_completion_cascade(root: Root, file: MyIO):
         "name": "h2",
     })])
     print_header("edit_message: Have h2", file)
-    file.write(await _P.edit_message(root, outcome3, root.session))
+    file.write((await _P.edit_message(root, outcome3, root.session))[0])
     file.write("---------------\n")
 
     # step 2.1: Have h3 (nested inside h2's body)
@@ -9296,14 +9296,14 @@ async def _test_completion_cascade(root: Root, file: MyIO):
         "name": "h3",
     })])
     print_header("edit_message: Have h3 (nested in h2)", file)
-    file.write(await _P.edit_message(root, outcome4, root.session))
+    file.write((await _P.edit_message(root, outcome4, root.session))[0])
     file.write("---------------\n")
 
     # step 2.1.1: Obvious → completes step 2.1 only (step 2 still has 2.2)
     root.session.age += 1
     outcome5 = await root.fill("2.1.1", [Obvious.gen_single({"facts": []})])
     print_header("edit_message: fill 2.1.1 (should complete step 2.1 only)", file)
-    file.write(await _P.edit_message(root, outcome5, root.session))
+    file.write((await _P.edit_message(root, outcome5, root.session))[0])
     file.write("---------------\n")
 
     # step 2.2: Obvious → completes step 2.2. This also cascades to step 2
@@ -9311,7 +9311,7 @@ async def _test_completion_cascade(root: Root, file: MyIO):
     root.session.age += 1
     outcome6 = await root.fill("2.2", [Obvious.gen_single({"facts": [{"name": "h3"}]})])
     print_header("edit_message: fill 2.2 (should complete step 2.2 AND cascade to step 2)", file)
-    file.write(await _P.edit_message(root, outcome6, root.session))
+    file.write((await _P.edit_message(root, outcome6, root.session))[0])
     file.write("---------------\n")
 
     # --- Phase 3: multi-ID cascade ---
@@ -9325,7 +9325,7 @@ async def _test_completion_cascade(root: Root, file: MyIO):
         "name": "h4",
     })])
     print_header("edit_message: Have h4 (step 3)", file)
-    file.write(await _P.edit_message(root, outcome7, root.session))
+    file.write((await _P.edit_message(root, outcome7, root.session))[0])
     file.write("---------------\n")
 
     root.session.age += 1
@@ -9335,27 +9335,27 @@ async def _test_completion_cascade(root: Root, file: MyIO):
         "name": "h5",
     })])
     print_header("edit_message: Have h5 (step 3.1, nested in h4)", file)
-    file.write(await _P.edit_message(root, outcome8, root.session))
+    file.write((await _P.edit_message(root, outcome8, root.session))[0])
     file.write("---------------\n")
 
     # Fill the continuations first so the last fill cascades
     root.session.age += 1
     outcome9 = await root.fill("3.1.2", [Obvious.gen_single({"facts": [{"name": "h5"}]})])
     print_header("edit_message: fill 3.1.2 (h5's continuation)", file)
-    file.write(await _P.edit_message(root, outcome9, root.session))
+    file.write((await _P.edit_message(root, outcome9, root.session))[0])
     file.write("---------------\n")
 
     root.session.age += 1
     outcome10 = await root.fill("3.2", [Obvious.gen_single({"facts": [{"name": "h4"}]})])
     print_header("edit_message: fill 3.2 (h4's continuation)", file)
-    file.write(await _P.edit_message(root, outcome10, root.session))
+    file.write((await _P.edit_message(root, outcome10, root.session))[0])
     file.write("---------------\n")
 
     # Now fill 3.1.1 — should cascade: completes step 3.1 AND step 3
     root.session.age += 1
     outcome11 = await root.fill("3.1.1", [Obvious.gen_single({"facts": []})])
     print_header("edit_message: fill 3.1.1 (should complete step 3.1 AND step 3)", file)
-    file.write(await _P.edit_message(root, outcome11, root.session))
+    file.write((await _P.edit_message(root, outcome11, root.session))[0])
     file.write("---------------\n")
 
     unfinished = set()
@@ -9379,7 +9379,7 @@ async def _test_completion_goalnode(root: Root, file: MyIO):
         "rule": {"name": "conjI"},
     })])
     print_header("edit_message: conjI", file)
-    file.write(await _P.edit_message(root, outcome1, root.session))
+    file.write((await _P.edit_message(root, outcome1, root.session))[0])
     file.write("---------------\n")
     root.print(0, file)
 
@@ -9394,14 +9394,14 @@ async def _test_completion_goalnode(root: Root, file: MyIO):
     root.session.age += 1
     outcome2 = await root.fill("1.1.1", [Obvious.gen_single({"facts": []})])
     print_header("edit_message: fill 1.1.1 (first subgoal)", file)
-    file.write(await _P.edit_message(root, outcome2, root.session))
+    file.write((await _P.edit_message(root, outcome2, root.session))[0])
     file.write("---------------\n")
 
     # Fill GoalNode 1.2 (second subgoal — should complete 1.2 and cascade to step 1)
     root.session.age += 1
     outcome3 = await root.fill("1.2.1", [Obvious.gen_single({"facts": []})])
     print_header("edit_message: fill 1.2.1 (second subgoal — should cascade)", file)
-    file.write(await _P.edit_message(root, outcome3, root.session))
+    file.write((await _P.edit_message(root, outcome3, root.session))[0])
     file.write("---------------\n")
 
     unfinished = set()

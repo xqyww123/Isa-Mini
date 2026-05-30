@@ -292,7 +292,9 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
                 return (error_msg, True)
 
         session.refresh_YAML()
-        response = await P.edit_message(root, outcome, session)
+        response, finished = await P.edit_message(root, outcome, session)
+        if finished:
+            await session.interrupt()
         is_error = outcome.failure is not None and outcome.failure.is_error
         session.log_tool_response(_tn, response)
         session.log_proof_tree_snapshot(f"after_{action}_step_{step}")
@@ -351,7 +353,9 @@ async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
                 return (error_msg, True)
             deleted = [s for s in steps if s not in not_found]
             session.refresh_YAML()
-            response = await P.deleted_steps_message(deleted, session.root, session)
+            response, finished = await P.deleted_steps_message(deleted, session.root, session)
+            if finished:
+                await session.interrupt()
             if not_found:
                 noun = "step" if len(not_found) == 1 else "steps"
                 response += f"\nWarning: {noun} {', '.join(not_found)} not found and skipped."

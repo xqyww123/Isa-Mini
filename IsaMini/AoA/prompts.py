@@ -80,13 +80,18 @@ async def edit_message(
     root: Root,
     outcome: 'model.EditOutcome',
     session: 'model.Session',
-) -> str:
+) -> tuple[str, bool]:
     """Response for `fill` / `insert_before` / `amend`, dispatched on
     `outcome.operation`.
+
+    Returns `(message, finished)` where `finished` is `not unfinished`, i.e.
+    whether the edit discharged every remaining goal in the proof scope. The
+    caller is responsible for acting on `finished` (e.g. `session.interrupt()`).
 
     If `outcome.failure.is_error`, `str(failure)` is prepended to the
     response.  If `failure` is set but `is_error=False`, it is appended."""
     failure = outcome.failure
+    finished = False
     file = MyIO(StringIO())
     file.write(_headline(outcome))
     if failure is not None and failure.is_error:
@@ -112,16 +117,22 @@ async def edit_message(
         unfinished = session.proof_scope_unfinished_nodes()
         if not unfinished:
             file.write("Congratulations! All goals are proven.\n")
-            await session.interrupt()
+            finished = True
         root.reset()
     if failure is not None and not failure.is_error:
         file.write(str(failure))
         file.write("\n")
-    return file.getvalue()
+    return file.getvalue(), finished
 
 
-async def deleted_steps_message(steps: list[str], root: Root, session: 'model.Session') -> str:
-    """Message returned when steps are successfully deleted."""
+async def deleted_steps_message(steps: list[str], root: Root, session: 'model.Session') -> tuple[str, bool]:
+    """Message returned when steps are successfully deleted.
+
+    Returns `(message, finished)` where `finished` is `not unfinished`, i.e.
+    whether deletion left every remaining goal in the proof scope discharged.
+    The caller is responsible for acting on `finished` (e.g.
+    `session.interrupt()`)."""
+    finished = False
     file = MyIO(StringIO())
     noun = "steps" if len(steps) > 1 else "step"
     file.write(f"Deleted {noun} {', '.join(steps)}.\n")
@@ -137,8 +148,8 @@ async def deleted_steps_message(steps: list[str], root: Root, session: 'model.Se
     unfinished = session.proof_scope_unfinished_nodes()
     if not unfinished:
         file.write("Congratulations! All goals are proven.\n")
-        await session.interrupt()
-    return file.getvalue()
+        finished = True
+    return file.getvalue(), finished
 
 
 # ============================================================================
