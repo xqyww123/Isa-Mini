@@ -43,7 +43,7 @@ from .model import (
     Parse_Op_List, Interaction_BadAnswer,
     AnswerIndexes, AnswerIndex, AnswerIndexesOrName, AnswerIndexesOrSpec,
     AnswerInstantiate, AnswerTargetGoal, AnswerRefutation,
-    TOOL_EDIT, TOOL_DELETE, TOOL_READ, TOOL_SURRENDER, TOOL_REQUEST_LEMMAS,
+    TOOL_EDIT, TOOL_DELETE, TOOL_READ, TOOL_REQUEST_LEMMAS,
     TOOL_COMPLAIN,
     TOOL_ANSWER_INDEXES, TOOL_ANSWER_INDEX, TOOL_ANSWER_INDEXES_OR_NAME,
     TOOL_ANSWER_INDEXES_OR_SPEC, TOOL_ANSWER_INSTANTIATE,
@@ -75,7 +75,6 @@ def _load_schema(filename: str) -> dict:
 _cc_edit_schema_raw = _load_schema("cc_edit.jsonc")
 _cc_delete_schema = _load_schema("cc_delete.jsonc")
 _cc_read_schema = _load_schema("cc_recall.jsonc")
-_cc_surrender_schema = _load_schema("cc_surrender.jsonc")
 _cc_request_lemmas_schema = _load_schema("cc_request_lemmas.jsonc")
 _cc_complain_schema = _load_schema("cc_complain.jsonc")
 _cc_answer_indexes_schema = _load_schema("cc_answer_indexes.jsonc")
@@ -293,6 +292,24 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
 
         session.refresh_YAML()
         response, finished = await P.edit_message(root, outcome, session)
+        if finished and session.is_planning:
+            # Proof structure complete → hand off to the FINISHING flow. Snapshot
+            # now (this edit's tree state), but log the TOOL_RESPONSE only AFTER
+            # complete_proof returns, so it records what the agent actually
+            # receives: the edit message when everything proves, or a Worker
+            # outcome (surrender / failure / refutation) otherwise — not this
+            # edit's possibly-stale "all proven" message.
+            session.log_proof_tree_snapshot(f"after_{action}_step_{step}")
+            # NOTE: complete_proof runs while ToolExecutor._tool_lock is held
+            # (the `edit` case in execute() wraps this whole function in that
+            # lock). It dispatches Worker agents and can take many minutes and
+            # LLM round-trips, so the planning session's tool lock is held for
+            # that entire span. Intentional and safe: the planning loop is
+            # single-flight and already blocked awaiting this result, and each
+            # Worker fork uses its OWN executor/lock — no contention, no deadlock.
+            result = await session.complete_proof(response)
+            session.log_tool_response(_tn, result[0])
+            return result
         if finished:
             await session.interrupt()
         is_error = outcome.failure is not None and outcome.failure.is_error
@@ -354,11 +371,19 @@ async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             deleted = [s for s in steps if s not in not_found]
             session.refresh_YAML()
             response, finished = await P.deleted_steps_message(deleted, session.root, session)
-            if finished:
-                await session.interrupt()
             if not_found:
                 noun = "step" if len(not_found) == 1 else "steps"
                 response += f"\nWarning: {noun} {', '.join(not_found)} not found and skipped."
+            if finished and session.is_planning:
+                # See _edit_tool_logic: snapshot now, but log the TOOL_RESPONSE
+                # after complete_proof so it records the agent-visible result;
+                # complete_proof runs under the held _tool_lock.
+                session.log_proof_tree_snapshot("after_delete")
+                result = await session.complete_proof(response)
+                session.log_tool_response(_tn, result[0])
+                return result
+            if finished:
+                await session.interrupt()
         except AoA_Error as e:
             error_msg = str(e)
             session.log_tool_response(_tn, f"ERROR: {error_msg}")
@@ -487,7 +512,14 @@ async def _answer_tool_dispatch(session: Session, tool_name: str, args: dict) ->
             return (text, False)
 
         pending.answer.set_result(result)
-        result_str = result.unicode if isinstance(result, IsaTerm) else str(result)
+        # ``answer()`` may legitimately return None (e.g. all FINISHING targets
+        # proved) — surface it as an empty tool response, not the string "None".
+        if result is None:
+            result_str = ""
+        elif isinstance(result, IsaTerm):
+            result_str = result.unicode
+        else:
+            result_str = str(result)
         session.log_interaction(_tn, f"interaction answered: {result_str}")
         session.log_tool_response(_tn, f"[INTERACTION RESOLVED] {result_str}")
         if not session.is_major:
@@ -611,35 +643,6 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     return (result, False)
 
 
-async def _refute_or_surrender_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
-    _tn = session.tool_name(TOOL_SURRENDER)
-    session.log_tool_call(_tn, args)
-    reason = args.get("reason", "surrender")
-    detail = args.get("detail", "")
-    if reason not in ("refute", "surrender"):
-        msg = f"Invalid reason: {reason!r}. Must be `refute` or `surrender`."
-        session.log_tool_response(_tn, f"ERROR: {msg}")
-        return (msg, True)
-    if reason == "surrender":
-        session._retry_count += 1
-        if session._retry_count >= session.max_retries:
-            session.root.quit_info = ("surrender", detail)
-            msg = f"Proof attempt concluded ({reason})."
-            session.log_tool_response(_tn, msg)
-            await session.interrupt()
-            return (msg, False)
-        msg = "Restarting session with fresh context."
-        session.log_tool_response(_tn, msg)
-        await session.request_restart()
-        return (msg, False)
-    # reason == "refute"
-    session.root.quit_info = (reason, detail)
-    msg = f"Proof attempt concluded ({reason})."
-    session.log_tool_response(_tn, msg)
-    await session.interrupt()
-    return (msg, False)
-
-
 async def _complain_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     _tn = session.tool_name(TOOL_COMPLAIN)
     session.log_tool_call(_tn, args)
@@ -653,13 +656,42 @@ async def _complain_tool_logic(session: Session, args: dict) -> tuple[str, bool]
     suggested_lemmas = args.get("suggested_lemmas")
 
     if isinstance(session.role, Role_Worker):
-        session.root.quit_info = (reason, detail, suggested_lemmas)
+        from .language_model_driver import WorkerRefute, WorkerSurrender
+        handle = session.role.worker_handle
+        if handle is None:
+            # A worker is always spawned via WorkerHandle, which sets
+            # role.worker_handle. A missing handle is a programming error, not a
+            # runtime condition to paper over.
+            raise InternalError(
+                "Role_Worker has no worker_handle (worker must be spawned "
+                "via WorkerHandle).")
+
+        if reason == "refute":
+            # Stay alive and block until the planning agent reviews the claim.
+            fut: asyncio.Future = asyncio.get_running_loop().create_future()
+            handle._event_queue.put_nowait(
+                WorkerRefute(detail=detail, suggested_lemmas=suggested_lemmas,
+                             response_future=fut))
+            accepted, review_reason = await fut
+            if accepted:
+                await session.interrupt()
+                msg = "Refutation accepted; concluding this goal."
+                session.log_tool_response(_tn, msg)
+                return (msg, False)
+            tail = f" {review_reason}" if review_reason else ""
+            msg = (f"Refutation rejected.{tail} Keep working on the goal.")
+            session.log_tool_response(_tn, msg)
+            return (msg, False)
+
+        # reason == "surrender": terminal — notify, then wind down.
+        handle._event_queue.put_nowait(
+            WorkerSurrender(detail=detail, suggested_lemmas=suggested_lemmas))
+        await session.interrupt()
         msg = f"Complaint recorded ({reason})."
         session.log_tool_response(_tn, msg)
-        await session.interrupt()
         return (msg, False)
 
-    # Role_Plan: same behavior as refute_or_surrender
+    # Role_Plan: conclude / restart the planning session.
     if reason == "surrender":
         session._retry_count += 1
         if session._retry_count >= session.max_retries:
@@ -799,10 +831,10 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "use long_description and filters for discovery.",
                "schema": _cc_query_schema, "annotations": _RO},
     "recall": {"description": "Recall proof state from `proof.yaml`. Use only when you have lost track.", "schema": _cc_read_schema, "annotations": _RO},
-    "refute_or_surrender": {"description": "Conclude the proof attempt. Use with reason 'refute' if the goal appears buggy or unprovable from the given premises, or 'surrender' if no viable strategy remains.",
-                            "schema": _cc_surrender_schema, "annotations": _ACT},
-    "request_lemmas": {"description": "When you lack common lemmas to proceed with your proof, call this to request them. An external system will provide them.",
-                       "schema": _cc_request_lemmas_schema, "annotations": _MUT},
+    # NOTE: `request_lemmas` is intentionally NOT registered here — the tool is
+    # disabled (not exposed to the LLM) pending a redesign that moves it to a
+    # worker→planner channel via `complain`. The logic (`_request_lemmas_tool_logic`),
+    # its dispatch case, schema file, and driver mapping are retained as dead code.
     "complain": {"description": "Report that the goal cannot be proved: 'refute' if buggy/unprovable, 'surrender' if no strategy remains. Optionally suggest lemmas that would help.",
                  "schema": _cc_complain_schema, "annotations": _ACT},
     "answer_indexes": {"description": "Answer by selecting indexes from the presented options", "schema": _cc_answer_indexes_schema, "annotations": _ACT},
@@ -844,9 +876,6 @@ class ToolExecutor:
         if perm_error:
             return (perm_error, True)
 
-        if name != "refute_or_surrender":
-            session.refute_or_surrender_warned = False
-
         is_error = False
         try:
             match name:
@@ -877,8 +906,6 @@ class ToolExecutor:
                     result, is_error = await _query_tool_logic(session, arguments)
                 case "recall":
                     result, is_error = await _read_tool_logic(session, arguments)
-                case "refute_or_surrender":
-                    result, is_error = await _refute_or_surrender_tool_logic(session, arguments)
                 case "request_lemmas":
                     result, is_error = await _request_lemmas_tool_logic(
                         session, arguments, self._tool_lock)

@@ -1035,7 +1035,12 @@ class APIDriver(LMDriver):
         try:
           while True:
             try:
-              for _ in range(30):
+              # Unbounded: the fork runs until it submits an answer or is
+              # interrupted. A FINISHING flow can take many turns (pick target,
+              # await worker, review refutation, pick next target, ...), well
+              # beyond any fixed turn cap. Matches the ClaudeCode driver, whose
+              # fork loop is likewise an answer-or-interrupt `while True`.
+              while True:
                 if fork._interrupted:
                     break
 

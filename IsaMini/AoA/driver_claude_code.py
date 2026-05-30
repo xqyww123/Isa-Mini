@@ -99,7 +99,6 @@ class ClaudeCode(LMDriver):
         "edit":   "mcp__proof__edit",
         "delete": "mcp__proof__delete",
         "recall": "Read",
-        "refute_or_surrender": "mcp__proof__refute_or_surrender",
         "request_lemmas": "mcp__proof__request_lemmas",
         "complain": "mcp__proof__complain",
         "answer_indexes": "mcp__proof__answer_indexes",

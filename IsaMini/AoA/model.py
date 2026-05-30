@@ -1903,7 +1903,6 @@ TOOL_EDIT:   tool = "edit"
 TOOL_DELETE: tool = "delete"
 TOOL_SEARCH: tool = "query"
 TOOL_READ:   tool = "recall"
-TOOL_SURRENDER: tool = "refute_or_surrender"
 TOOL_REQUEST_LEMMAS: tool = "request_lemmas"
 TOOL_COMPLAIN: tool = "complain"
 
@@ -1923,7 +1922,7 @@ ANSWER_TOOLS: frozenset[tool] = frozenset({
 
 ALL_PROOF_TOOLS: tuple[tool, ...] = (
     TOOL_EDIT, TOOL_DELETE, TOOL_SEARCH, TOOL_READ,
-    TOOL_SURRENDER, TOOL_REQUEST_LEMMAS, TOOL_COMPLAIN,
+    TOOL_REQUEST_LEMMAS, TOOL_COMPLAIN,
     *ANSWER_TOOLS,
 )
 
@@ -1992,16 +1991,28 @@ class Interaction_ChooseTarget(Interaction):
     forking = ForkingMode.FORKING_WITH_CTXT
     fork_allowed_tools = [TOOL_ANSWER_TARGET_GOAL, TOOL_SEARCH]
 
-    def __init__(self, failed_parents: 'set[NonLeaf_Node]', session: 'Session'):
+    def __init__(self, failed_parents: 'set[NonLeaf_Node]', session: 'Session',
+                 is_first_entry: bool = True):
         self.failed_parents = failed_parents
         self.session = session
+        # First entry shows the "planning phase complete" framing; subsequent
+        # re-entries (after a worker finishes a target) show a terse remaining
+        # list instead.
+        self.is_first_entry = is_first_entry
+        # The currently-live WorkerHandle (set in answer()). complete_proof's
+        # finally cancels it so a worker can never leak if the fork exits
+        # without an answer.
+        self.active_handle: Any = None
 
     def _sorted_targets(self) -> 'list[NonLeaf_Node]':
         return sorted(self.failed_parents, key=lambda n: n.id)
 
     async def prompt(self, indent: int, file: MyIO) -> None:
         targets = self._sorted_targets()
-        file.write("The planning phase is complete. The following proof steps need Worker agents:\n\n")
+        if self.is_first_entry:
+            file.write("The planning phase is complete. The following proof steps need Worker agents:\n\n")
+        else:
+            file.write(f"{len(targets)} proof step(s) still need Worker agents:\n\n")
         for i, p in enumerate(targets):
             goal = p.goal() if hasattr(p, 'goal') else None
             goal_str = f" — goal: {goal.conclusion.unicode}" if goal else ""
@@ -2013,33 +2024,22 @@ class Interaction_ChooseTarget(Interaction):
             f"  - suggestions: strategy hints for the worker\n"
             f"  - useful_lemmas: names of lemmas the worker should try\n")
 
-    async def answer(self, answer: AnswerTargetGoal) -> Any:
+    async def answer(self, answer: AnswerTargetGoal) -> 'str | None':
         targets = self._sorted_targets()
         _check_index(answer.index, len(targets))
         target = targets[answer.index]
 
-        from .language_model_driver import WorkerResult
-        result: WorkerResult = await self.session.spawn_worker(
-            target, answer.suggestions, answer.useful_lemmas)
-
-        if result.success:
-            self.failed_parents.discard(target)
-            if not self.failed_parents:
-                return "all_proved"
-            remaining = self._sorted_targets()
-            lines = "\n".join(f"  {i}. {p.id}" for i, p in enumerate(remaining))
-            raise ContinuingInteraction(
-                f"Worker proved goal {target.id}!\n"
-                f"Remaining targets:\n{lines}\n"
-                f"Pick the next hardest target.")
-
-        if result.complaint and result.complaint.kind == "refute":
-            return ("refutation", target, result.complaint)
-
-        if result.complaint and result.complaint.kind == "surrender":
-            return ("surrender", result.complaint.detail)
-
-        return ("worker_failed", target)
+        from .language_model_driver import WorkerHandle
+        handle = WorkerHandle(target, self.session)
+        self.active_handle = handle
+        handle.start(answer.suggestions, answer.useful_lemmas)
+        try:
+            return await handle.process(self)
+        except ContinuingInteraction:
+            raise
+        except BaseException:
+            handle.cancel()
+            raise
 
 
 class Interaction_ReviewRefutation(Interaction):
@@ -2047,9 +2047,15 @@ class Interaction_ReviewRefutation(Interaction):
     forking = ForkingMode.FORKING_WITH_CTXT
     fork_allowed_tools = [TOOL_ANSWER_REFUTATION, TOOL_SEARCH]
 
-    def __init__(self, target: 'NonLeaf_Node', complaint: Any):
+    def __init__(self, target: 'NonLeaf_Node', complaint: Any,
+                 worker_handle: Any, choose_target: 'Interaction_ChooseTarget'):
         self.target = target
         self.complaint = complaint
+        # The live worker awaiting this review, and the originating target-choice
+        # interaction to fall back to if the refutation is rejected or the
+        # worker subsequently proves the goal.
+        self.worker_handle = worker_handle
+        self.choose_target = choose_target
 
     async def prompt(self, indent: int, file: MyIO) -> None:
         goal = self.target.goal() if hasattr(self.target, 'goal') else None
@@ -2061,10 +2067,30 @@ class Interaction_ReviewRefutation(Interaction):
             f"  - accept: true to accept (goal is unprovable), false to reject\n"
             f"  - reason: explanation of your judgment\n")
 
-    async def answer(self, answer: AnswerRefutation) -> bool:
+    async def answer(self, answer: AnswerRefutation) -> 'str | None':
         the_session().log_interaction("refutation_review",
             f"target={self.target.id} accept={answer.accept} reason={answer.reason}")
-        return answer.accept
+        if answer.accept:
+            # Accept: tell the worker to conclude, wait for it to wind down,
+            # then hand a status line back to the planning agent.
+            self.worker_handle.resolve_review(accepted=True, reason=answer.reason)
+            await self.worker_handle.wait_finish()
+            self.session.refresh_YAML()
+            return (f"Refutation accepted for {self.target.id}: the goal is "
+                    f"unprovable as stated. Revise the proof plan for this step.")
+        # Reject: resume the worker and continue consuming its events.
+        self.worker_handle.resolve_review(accepted=False, reason=answer.reason)
+        try:
+            return await self.worker_handle.process(self.choose_target)
+        except ContinuingInteraction:
+            raise
+        except BaseException:
+            self.worker_handle.cancel()
+            raise
+
+    @property
+    def session(self) -> 'Session':
+        return self.choose_target.session
 
 
 class Fork_Pending(NamedTuple):
@@ -8154,6 +8180,9 @@ class Role_Worker:
     target: 'NonLeaf_Node'
     suggestions: str = ""
     useful_lemmas: list[str] = field(default_factory=list)
+    # The live ``WorkerHandle`` (language_model_driver.WorkerHandle) mediating
+    # this worker's events. ``Any`` to avoid importing the driver layer here.
+    worker_handle: Any = None
 
 @dataclass
 class Role_Interaction:
@@ -8241,7 +8270,6 @@ class Session:
         self.logger = logger or (parent.logger if parent else None)
         self.working_block: 'NonLeaf_Node | None' = None
         self.warnings: list[str] = []
-        self.refute_or_surrender_warned: bool = False
         self.auto_intro_nodes: list['Intro'] = []
         self.total_cost_usd: float = 0.0
         self.total_input_tokens: int = 0
@@ -8548,7 +8576,7 @@ class Session:
             target = self.role.target
             target_desc = f"the lemma `{target.name}`" if isinstance(target, Have) else f"step `{target.id}`"
             return (
-                "You are a formal theorem proving sub-agent.\n"
+                "You are a formal theorem proving agent.\n"
                 f"Your task is to prove {target_desc}.\n"
                 "The proof goal and available context are provided in `./proof.yaml`.\n"
                 "Complete the proof using the MCP proof tools.\n"
@@ -8570,7 +8598,7 @@ class Session:
             "Analyze the proof goal, plan a proof, and complete it using the MCP proof tools.\n"
             "Continue until no errors remain.\n"
             "A proof goal can be buggy and thus unprovable — "
-            f"call `{self.tool_name(TOOL_SURRENDER)}` with your analysis if you believe so.\n"
+            f"call `{self.tool_name(TOOL_COMPLAIN)}` with your analysis if you believe so.\n"
             "Be concise in text output.\n"
             "\n"
             "## Tools\n"
@@ -8578,7 +8606,6 @@ class Session:
             f"- {self.tool_name(TOOL_DELETE)}: Delete proof steps\n"
             f"- {self.tool_name(TOOL_SEARCH)}: Search for theorems, constants, types, and rules; help you understand unfamiliar terms\n"
             f"- {self.tool_name(TOOL_READ)}: Recall proof state from `proof.yaml`. Use only when you have lost track.\n"
-            f"- {self.tool_name(TOOL_REQUEST_LEMMAS)}: Request common lemmas you lack; an external system will provide them\n"
         )
 
     INITIAL_PROMPT_GOAL_LINE_LIMIT = 20
@@ -8651,7 +8678,7 @@ class Session:
                     + f"Analyze the proof goal, plan a proof, and complete it using tools `{self.tool_name(TOOL_EDIT)}` and `{self.tool_name(TOOL_DELETE)}`.\n"
                     "Continue building the proof until no error remains.\n"
                     "A proof goal can be buggy and thus unprovable — "
-                    f"call `{self.tool_name(TOOL_SURRENDER)}` with your analysis if you believe so.\n"
+                    f"call `{self.tool_name(TOOL_COMPLAIN)}` with your analysis if you believe so.\n"
                     "`proof.yaml` contains the full proof state, but recall it only when you lose track of it."
                 )
             else:
@@ -8660,7 +8687,7 @@ class Session:
                     f"Analyze the proof goal, plan a proof, and complete it using tools `{self.tool_name(TOOL_EDIT)}` and `{self.tool_name(TOOL_DELETE)}`.\n"
                     "Continue building the proof until no error remains.\n"
                     "A proof goal can be buggy and thus unprovable — "
-                    f"call `{self.tool_name(TOOL_SURRENDER)}` with your analysis if you believe so."
+                    f"call `{self.tool_name(TOOL_COMPLAIN)}` with your analysis if you believe so."
                 )
 
     def retry_prompt(self, unfinished_nodes: set['Node']) -> str:
@@ -9043,6 +9070,55 @@ class Session:
         Default implementation returns False (no sub-agent support)."""
         return False
 
+    async def complete_proof(self, response: str) -> 'tuple[str, bool]':
+        """Drive the FINISHING flow from inside the planning agent loop.
+
+        Called by the edit/delete tools when the proof structure is complete
+        (all gaps closed, possibly via ``sorry``-degraded steps). Switches to
+        the FINISHING stage and re-evaluates the tree to surface the deferred
+        failures, then dispatches a Worker agent per failed step via
+        ``fork_interaction``. Returns the edit/delete tool's
+        ``(message, is_error)`` response — so the planning agent's conversation
+        context is never interrupted.
+
+        ``response`` is the triggering edit/delete tool's own message (which
+        already reports what was filled and "Congratulations! All goals are
+        proven."). When the proof completes with NO Worker dispatch, that
+        message is still accurate, so it is returned verbatim. When Workers ran
+        and all proved, ``response`` is stale (its Outline predates the Workers'
+        steps), so a fresh "All goals proved!" is returned instead. When a
+        Worker leaves an unproved outcome (surrender / failure / refutation
+        accepted) the Worker outcome message is returned, with the stage
+        restored to PLANNING so the agent can replan in place.
+        """
+        assert isinstance(self.role, Role_Plan)
+        self.role.stage = PlanStage.FINISHING
+        await self.root._refresh_me_alone(auto_intro=False)
+        failed_parents = self._collect_failed_obvious_parents()
+        if not failed_parents:
+            await self.interrupt()
+            return (response, False)
+        self.refresh_YAML()
+        choose = Interaction_ChooseTarget(failed_parents, self, is_first_entry=True)
+        try:
+            result = await self.fork_interaction(choose)
+        finally:
+            # Guarantee no worker leaks: if the fork exits without an answer
+            # (e.g. fork-loop exhaustion) the live worker would otherwise stay
+            # blocked forever on its review future.
+            if choose.active_handle is not None:
+                await choose.active_handle.aclose()
+        if result is None:
+            # All targets proved after dispatching Worker(s). The triggering
+            # edit's `response` is now stale (its Outline predates the Workers'
+            # added steps), so return a fresh synthetic message instead. This
+            # branch is production-only (it requires real fork_interaction), so
+            # it has no model-test/golden impact.
+            await self.interrupt()
+            return ("All goals proved!", False)
+        self.role.stage = PlanStage.PLANNING
+        return (result, False)
+
     async def request_restart(self):
         """Request a context restart.  Sets a transient quit_info to break
         driver loops, then interrupts.  Drivers check ``_restart_requested``
@@ -9050,7 +9126,6 @@ class Session:
         fresh ``initial_prompt()``."""
         self._restart_requested = True
         self._reset_view_state()
-        self.refute_or_surrender_warned = False
         self.root.quit_info = ("restart", "")
         await self.interrupt()
 

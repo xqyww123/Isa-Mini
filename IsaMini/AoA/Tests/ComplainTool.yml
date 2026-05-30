@@ -1,13 +1,16 @@
 worker surrender result: Complaint recorded (surrender).
 worker surrender is_error: False
-quit_info set: True
-quit_info[0] (reason): surrender
-quit_info[1] (detail): I need more lemmas
-quit_info[2] (suggested_lemmas): ['aux_lemma_1', 'aux_lemma_2']
-worker refute result: Complaint recorded (refute).
-quit_info[0]: refute
-quit_info[2] (no suggested_lemmas): None
+worker surrender sets quit_info: False
+surrender event: WorkerSurrender
+surrender event detail: I need more lemmas
+surrender event suggested_lemmas: ['aux_lemma_1', 'aux_lemma_2']
+refute event: WorkerRefute
+refute event detail: The goal contradicts premises
+refute rejected result mentions reject: True
+refute rejected is_error: False
+refute accepted result mentions accept: True
 invalid reason is_error: True
 invalid reason result contains 'Invalid': True
+no-handle worker: InternalError raised
 plan surrender result contains 'surrender': False
 plan surrender quit_info set: True

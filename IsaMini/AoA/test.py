@@ -9981,11 +9981,12 @@ async def _test_WorkerGoalNodeScope(root: Root, file: MyIO):
 
 @model_test("ComplainTool", "Test_ComplainTool.thy", 13)
 async def _test_ComplainTool(root: Root, file: MyIO):
-    """Test _complain_tool_logic for Worker and Plan roles."""
+    """Test _complain_tool_logic for Worker (event-based) and Plan roles."""
     from .mcp_http_server import _complain_tool_logic
+    from .language_model_driver import WorkerHandle
     session = root.session
 
-    # --- Test complain as Worker ---
+    # --- Worker: complain communicates via the WorkerHandle event queue ---
     session.age += 1
     goal_node = root.sub_nodes[1]
     await goal_node.fill("1", [Have.gen_single({
@@ -9995,9 +9996,12 @@ async def _test_ComplainTool(root: Root, file: MyIO):
     })])
     have_node = goal_node.sub_nodes[0]
 
-    session.role = model.Role_Worker(target=have_node)
+    # A real handle, but with no task started — we only inspect its event queue.
+    handle = WorkerHandle(have_node, session)
+    session.role = model.Role_Worker(target=have_node, worker_handle=handle)
 
-    # Surrender with suggested_lemmas
+    # Surrender: enqueues a WorkerSurrender, and sets NO quit_info (the planner
+    # learns of it via the event, not via the shared root).
     result, is_error = await _complain_tool_logic(session, {
         "reason": "surrender",
         "detail": "I need more lemmas",
@@ -10005,24 +10009,37 @@ async def _test_ComplainTool(root: Root, file: MyIO):
     })
     file.write(f"worker surrender result: {result}\n")
     file.write(f"worker surrender is_error: {is_error}\n")
-    file.write(f"quit_info set: {root.quit_info is not None}\n")
-    if root.quit_info is not None:
-        file.write(f"quit_info[0] (reason): {root.quit_info[0]}\n")
-        file.write(f"quit_info[1] (detail): {root.quit_info[1]}\n")
-        file.write(f"quit_info[2] (suggested_lemmas): {root.quit_info[2]}\n")
-    root.quit_info = None
+    file.write(f"worker surrender sets quit_info: {root.quit_info is not None}\n")
+    ev = handle._event_queue.get_nowait()
+    file.write(f"surrender event: {type(ev).__name__}\n")
+    file.write(f"surrender event detail: {ev.detail}\n")
+    file.write(f"surrender event suggested_lemmas: {ev.suggested_lemmas}\n")
 
-    # Refute
-    result, is_error = await _complain_tool_logic(session, {
+    # Refute, planner REJECTS: complain blocks on the review future until it is
+    # resolved, then tells the worker to keep going.
+    task = asyncio.ensure_future(_complain_tool_logic(session, {
         "reason": "refute",
         "detail": "The goal contradicts premises",
-    })
-    file.write(f"worker refute result: {result}\n")
-    file.write(f"quit_info[0]: {root.quit_info[0]}\n")
-    file.write(f"quit_info[2] (no suggested_lemmas): {root.quit_info[2]}\n")
-    root.quit_info = None
+    }))
+    ev = await handle._event_queue.get()
+    file.write(f"refute event: {type(ev).__name__}\n")
+    file.write(f"refute event detail: {ev.detail}\n")
+    ev.response_future.set_result((False, "premises are actually consistent"))
+    result, is_error = await task
+    file.write(f"refute rejected result mentions reject: {'reject' in result.lower()}\n")
+    file.write(f"refute rejected is_error: {is_error}\n")
 
-    # Invalid reason
+    # Refute, planner ACCEPTS.
+    task = asyncio.ensure_future(_complain_tool_logic(session, {
+        "reason": "refute",
+        "detail": "genuinely unprovable",
+    }))
+    ev = await handle._event_queue.get()
+    ev.response_future.set_result((True, None))
+    result, is_error = await task
+    file.write(f"refute accepted result mentions accept: {'accept' in result.lower()}\n")
+
+    # Invalid reason (validated before the role branch).
     result, is_error = await _complain_tool_logic(session, {
         "reason": "invalid_reason",
         "detail": "test",
@@ -10030,7 +10047,15 @@ async def _test_ComplainTool(root: Root, file: MyIO):
     file.write(f"invalid reason is_error: {is_error}\n")
     file.write(f"invalid reason result contains 'Invalid': {'Invalid' in result}\n")
 
-    # --- Test complain as Plan role (should behave like refute_or_surrender) ---
+    # A Role_Worker with no handle is a programming error → InternalError.
+    session.role = model.Role_Worker(target=goal_node)
+    try:
+        await _complain_tool_logic(session, {"reason": "surrender", "detail": "x"})
+        file.write("no-handle worker: NO error raised (UNEXPECTED)\n")
+    except model.InternalError:
+        file.write("no-handle worker: InternalError raised\n")
+
+    # --- Plan role: conclude / restart the planning session ---
     session.role = model.Role_Plan()
     result, is_error = await _complain_tool_logic(session, {
         "reason": "surrender",
