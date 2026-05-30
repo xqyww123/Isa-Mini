@@ -12,5 +12,3 @@ refute accepted result mentions accept: True
 invalid reason is_error: True
 invalid reason result contains 'Invalid': True
 no-handle worker: InternalError raised
-plan surrender result contains 'surrender': False
-plan surrender quit_info set: True

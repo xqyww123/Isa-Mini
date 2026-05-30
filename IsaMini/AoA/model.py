@@ -8572,50 +8572,33 @@ class Session:
 
     def system_prompt(self) -> str | None:
         """Return the system prompt, or None if the driver folds it into the initial message."""
-        if self.is_worker:
-            target = self.role.target
-            target_desc = f"the lemma `{target.name}`" if isinstance(target, Have) else f"step `{target.id}`"
-            return (
+        PROMPT = (
                 "You are a formal theorem proving agent.\n"
-                f"Your task is to prove {target_desc}.\n"
-                "The proof goal and available context are provided in `./proof.yaml`.\n"
-                "Complete the proof using the MCP proof tools.\n"
+                "A proof goal and an incomplete proof are provided in `./proof.yaml` under the current directory.\n"
+                "Analyze the proof goal, plan a proof, and complete it using the MCP proof tools.\n"
                 "Continue until no errors remain.\n"
-                "If you believe the goal is unprovable or you need additional lemmas, "
-                f"call `{self.tool_name(TOOL_COMPLAIN)}` to report back.\n"
+                "A proof goal can be buggy and thus unprovable — "
+                f"call `{self.tool_name(TOOL_COMPLAIN)}` with your analysis if you believe so.\n"
                 "Be concise in text output.\n"
                 "\n"
                 "## Tools\n"
                 f"- {self.tool_name(TOOL_EDIT)}: Fill, insert, or amend proof steps (your primary tool)\n"
                 f"- {self.tool_name(TOOL_DELETE)}: Delete proof steps\n"
-                f"- {self.tool_name(TOOL_SEARCH)}: Search for theorems, constants, types, and rules\n"
+                f"- {self.tool_name(TOOL_SEARCH)}: Search for theorems, constants, types, and rules; help you understand unfamiliar terms\n"
                 f"- {self.tool_name(TOOL_READ)}: Recall proof state from `proof.yaml`. Use only when you have lost track.\n"
-                f"- {self.tool_name(TOOL_COMPLAIN)}: Report that the goal is unprovable (refute) or that you need help (surrender)\n"
             )
-        return (
-            "You are a formal theorem proving agent.\n"
-            "A proof goal and an incomplete proof are provided in `./proof.yaml` under the current directory.\n"
-            "Analyze the proof goal, plan a proof, and complete it using the MCP proof tools.\n"
-            "Continue until no errors remain.\n"
-            "A proof goal can be buggy and thus unprovable — "
-            f"call `{self.tool_name(TOOL_COMPLAIN)}` with your analysis if you believe so.\n"
-            "Be concise in text output.\n"
-            "\n"
-            "## Tools\n"
-            f"- {self.tool_name(TOOL_EDIT)}: Fill, insert, or amend proof steps (your primary tool)\n"
-            f"- {self.tool_name(TOOL_DELETE)}: Delete proof steps\n"
-            f"- {self.tool_name(TOOL_SEARCH)}: Search for theorems, constants, types, and rules; help you understand unfamiliar terms\n"
-            f"- {self.tool_name(TOOL_READ)}: Recall proof state from `proof.yaml`. Use only when you have lost track.\n"
-        )
-
-    INITIAL_PROMPT_GOAL_LINE_LIMIT = 20
+        if self.is_worker:
+            return PROMPT + f"- {self.tool_name(TOOL_COMPLAIN)}: Report that the goal is unprovable (refute) or that you need help (surrender)\n"
+        else:
+            return PROMPT
 
     def initial_prompt(self) -> str:
         """Return the initial user message to start the proof session."""
-        buf = StringIO()
-        self.print_proof_scope(0, MyIO(buf), update_line=True, show_warnings=True)
-        proof_state = buf.getvalue()
-        inline = proof_state.count('\n') < self.INITIAL_PROMPT_GOAL_LINE_LIMIT
+        # Render the proof scope once for its side effect: ``update_line=True``
+        # populates each node's ``.line`` (shown by drivers that enable
+        # ``quickview_line_numbers``). The rendered text itself is unused — the
+        # proof state is delivered to the agent via ``proof.yaml``.
+        self.print_proof_scope(0, MyIO(StringIO()), update_line=True, show_warnings=True)
 
         if self.is_worker:
             target = self.role.target
@@ -8624,71 +8607,33 @@ class Session:
             else:
                 header = f"Prove step `{target.id}`.\n"
             if self.system_prompt() is not None:
-                if inline:
-                    return (
-                        header
-                        + "Complete the proof using the MCP proof tools.\n"
-                        + proof_state
-                        + "\n`proof.yaml` contains the proof state, but read it only when you lose track of it."
-                    )
-                else:
-                    return (
-                        header
-                        + "Complete the proof using the MCP proof tools.\n"
-                        "The proof state is in `proof.yaml` — read it to see the goal and current proof."
-                    )
-            else:
-                if inline:
-                    return (
-                        header
-                        + proof_state
-                        + f"Analyze the proof goal, plan a proof, and complete it using tools `{self.tool_name(TOOL_EDIT)}` and `{self.tool_name(TOOL_DELETE)}`.\n"
-                        "Continue building the proof until no error remains.\n"
-                        "If you believe the goal is unprovable or you need help, "
-                        f"call `{self.tool_name(TOOL_COMPLAIN)}` to report back.\n"
-                        "`proof.yaml` contains the proof state, but recall it only when you lose track of it."
-                    )
-                else:
-                    return (
-                        header
-                        + "The proof state is in `proof.yaml` — read it to see the goal and current proof.\n"
-                        f"Analyze the proof goal, plan a proof, and complete it using tools `{self.tool_name(TOOL_EDIT)}` and `{self.tool_name(TOOL_DELETE)}`.\n"
-                        "Continue building the proof until no error remains.\n"
-                        "If you believe the goal is unprovable or you need help, "
-                        f"call `{self.tool_name(TOOL_COMPLAIN)}` to report back."
-                    )
-
-        if self.system_prompt() is not None:
-            if inline:
                 return (
-                    "Complete the following proof using the MCP proof tools.\n"
-                    + proof_state
-                    + "\n`proof.yaml` contains the full proof state, but read it only when you lose track of it."
-                )
-            else:
-                return (
-                    "Complete the proof using the MCP proof tools.\n"
+                    header
+                    + "Complete the proof using the MCP proof tools.\n"
                     "The proof state is in `proof.yaml` — read it to see the goal and current proof."
                 )
-        else:
-            if inline:
-                return (
-                    "An incomplete proof is provided as follows\n"
-                    + proof_state
-                    + f"Analyze the proof goal, plan a proof, and complete it using tools `{self.tool_name(TOOL_EDIT)}` and `{self.tool_name(TOOL_DELETE)}`.\n"
-                    "Continue building the proof until no error remains.\n"
-                    "A proof goal can be buggy and thus unprovable — "
-                    f"call `{self.tool_name(TOOL_COMPLAIN)}` with your analysis if you believe so.\n"
-                    "`proof.yaml` contains the full proof state, but recall it only when you lose track of it."
-                )
             else:
                 return (
-                    "An incomplete proof is provided in `proof.yaml` — read it to see the goal and current proof.\n"
+                    header
+                    + "The proof state is in `proof.yaml` — read it to see the goal and current proof.\n"
                     f"Analyze the proof goal, plan a proof, and complete it using tools `{self.tool_name(TOOL_EDIT)}` and `{self.tool_name(TOOL_DELETE)}`.\n"
                     "Continue building the proof until no error remains.\n"
-                    "A proof goal can be buggy and thus unprovable — "
-                    f"call `{self.tool_name(TOOL_COMPLAIN)}` with your analysis if you believe so."
+                    "If you believe the goal is unprovable or you need help, "
+                    f"call `{self.tool_name(TOOL_COMPLAIN)}` to report back."
                 )
+        elif self.system_prompt() is not None:
+            return (
+                "Complete the proof using the MCP proof tools.\n"
+                "The proof state is in `proof.yaml` — read it to see the goal and current proof."
+            )
+        else:
+            return (
+                "An incomplete proof is provided in `proof.yaml` — read it to see the goal and current proof.\n"
+                f"Analyze the proof goal, plan a proof, and complete it using tools `{self.tool_name(TOOL_EDIT)}` and `{self.tool_name(TOOL_DELETE)}`.\n"
+                "Continue building the proof until no error remains.\n"
+                "A proof goal can be buggy and thus unprovable — "
+                f"call `{self.tool_name(TOOL_COMPLAIN)}` with your analysis if you believe so."
+            )
 
     def retry_prompt(self, unfinished_nodes: set['Node']) -> str:
         """Return the retry message when proof steps remain incomplete."""
