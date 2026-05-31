@@ -536,6 +536,38 @@ class AoA_Error(Exception):
     pass
 
 
+# --- Quit reasons (per-session ADT) ----------------------------------------
+# Why a session's agent loop stopped without finishing the proof. Stored on
+# ``Session.quit_info`` — each session owns its own; never shared via ``Root``.
+# The major/planner session's value is what ``toplevel`` reports to ML; a
+# fork's value dies with the fork. ``reason`` strings are the ML-facing codes.
+@dataclass
+class ResourceExhausted:
+    reason: ClassVar[str] = "resource_exhausted"
+    is_terminal: ClassVar[bool] = True
+    detail: str | None = None
+
+@dataclass
+class Surrender:
+    reason: ClassVar[str] = "surrender"
+    is_terminal: ClassVar[bool] = True
+    detail: str | None = None
+
+@dataclass
+class Refute:
+    reason: ClassVar[str] = "refute"
+    is_terminal: ClassVar[bool] = True
+    detail: str | None = None
+
+@dataclass
+class Restart:
+    reason: ClassVar[str] = "restart"
+    is_terminal: ClassVar[bool] = False
+    detail: str | None = None
+
+QuitInfo = ResourceExhausted | Surrender | Refute | Restart
+
+
 class DriverArgumentError(AoA_Error):
     pass
 
@@ -1831,6 +1863,15 @@ class Minilang_State:
              [ascii_of_unicode(a) for a in assumes],
              ascii_of_unicode(concl)))
         return pretty_unicode(result)
+
+    async def fact_propositions(self, names: list[str]) -> list[tuple[str, str]]:
+        """Resolve fact names to (name, standard-printed proposition) in this state's context.
+        Names that don't resolve are dropped by the ML side. Propositions are raw Isabelle
+        RPC strings; wrap with `IsaTerm.from_isabelle` at the call site."""
+        if not names:
+            return []
+        return await self.connection.callback(
+            "IsaMini.fact_propositions", (self.name, names))
 
 ### Interaction
 
@@ -7902,7 +7943,6 @@ class Root(GoalContainer, StdBlock):
         self.global_env = GlobalEnv(NodeConfig("global", Minilang_State.assign(ml_state0), self))
         self.sub_nodes.append(self.global_env)
         self.final_ml_state = Minilang_State.assign(ml_state0)
-        self.quit_info: tuple | None = None
         self._closed_by = self
     @property
     def session(self) -> 'Session':
@@ -8288,7 +8328,7 @@ class Session:
             self.max_tool_calls = max_tool_calls
             self.max_retries = max_retries
         self._retry_count: int = 0
-        self._restart_requested: bool = False
+        self.quit_info: 'QuitInfo | None' = None
         self.retrieval_forking_mode: ForkingMode = (
             parent.retrieval_forking_mode if parent is not None
             else retrieval_forking_mode)
@@ -8307,6 +8347,9 @@ class Session:
         self.showed_fill_hint: bool = False
         self.showed_cancelled_notice: bool = False
         self.shown_HAVE_fact_names: 'dict[str, list[tuple[varname, typ]]]' = {}
+        # Worker-only: ascii fact name -> standard-printed proposition (IsaTerm),
+        # prefetched once at init (see prefetch_worker_premises).
+        self._worker_premise_cache: 'dict[str, IsaTerm]' = {}
         if parent is not None:
             # Subsessions share parent's log files
             self.log_dir = parent.log_dir
@@ -8718,6 +8761,7 @@ class Session:
             case Role_Worker() | Role_Interaction():
                 assert self.root is root
                 self.working_block = root
+                await self.prefetch_worker_premises()
 
     def retrieval_state(self) -> Minilang_State:
         if self.working_block is not None:
@@ -8810,8 +8854,8 @@ class Session:
 
     def check_budget(self) -> bool:
         """Check budget limits. If exceeded, set quit_info and return True."""
-        if not hasattr(self, 'root') or self.root.quit_info is not None:
-            return hasattr(self, 'root') and self.root.quit_info is not None
+        if self.quit_info is not None:
+            return self.quit_info.is_terminal
 
         reason = None
         if self._budget_start_time is not None:
@@ -8824,7 +8868,7 @@ class Session:
             reason = f"retry limit ({self._retry_count} >= {self.max_retries})"
 
         if reason is not None:
-            self.root.quit_info = ("resource_exhausted", reason)
+            self.quit_info = ResourceExhausted(reason)
             self.log_budget_exhausted(reason)
             return True
         return False
@@ -8931,36 +8975,59 @@ class Session:
             self.root.unfinished_nodes(unfinished)
         return unfinished
 
+    async def prefetch_worker_premises(self) -> None:
+        """Resolve the standard-printed propositions of every fact in scope before the
+        worker's target and cache them (ascii name -> IsaTerm).  Called once at worker
+        ``initialize``.
+
+        SYSTEM INVARIANT: a worker only ever edits its own target subtree, so the facts
+        in scope BEFORE the target are immutable for the worker's lifetime.  Hence a single
+        prefetch is sufficient and never goes stale (no re-fetch / cache invalidation needed).
+        """
+        if not self.is_worker:
+            return
+        target = self.role.target
+        if not hasattr(target, '_state_after_beginning'):
+            return
+        names = [n.ascii for n in target._ctxt_before_me().hyps]
+        pairs = await target._state_after_beginning().fact_propositions(names)
+        self._worker_premise_cache = {n: IsaTerm.from_isabelle(p) for n, p in pairs}
+
     def print_proof_scope(self, indent: int, file: MyIO,
                           update_line: bool = False, show_warnings: bool = False):
         """Print the proof state scoped to this session's responsibility.
-        Workers see only available declarations + target goal + own steps."""
+        Workers see a unified premises section (in-scope assumptions + declared facts,
+        standard-printed via the prefetched cache) + the bare target goal + own steps."""
         if not self.is_worker:
             self.root.print(indent, file, update_line=update_line, show_warnings=show_warnings)
             return
         target = self.role.target
-        root = self.root
-
-        print_vars(root.context.vars.items(), indent, file, {})
-        print_type_vars(root.context.tvars.items(), indent, file, {})
-        print_hyps(root.context.hyps.items(), indent, file, {})
-
-        if isinstance(target, Have):
-            preceding: list[Node] = []
-            for c in root.global_env.sub_nodes:
-                if c is target:
-                    break
-                if c._is_declarative and c.status.status == EvaluationStatus.Status.SUCCESS:
-                    preceding.append(c)
-            if preceding:
-                print_indent(indent, file)
-                file.write("available declarations:\n")
-                for h in preceding:
-                    h.quickview(indent + 1, file)
 
         goal = target.goal() if hasattr(target, 'goal') else None
+        before = target._ctxt_before_me()
+        gctx = goal.context if goal is not None else Context({}, {}, {})
+
+        # Unify in-scope context (root + enclosing + target-local) into one block.
+        # `before` carries everything in scope before the target (original assumptions,
+        # Intro/Have/Obtain/Derive/... — Define/SetupRewriting are no-ops); `gctx` adds
+        # the target's own live local context (e.g. the worker's own Intro assumptions).
+        merged_vars = {**before.vars, **gctx.vars}
+        merged_tvars = {**before.tvars, **gctx.tvars}
+        merged_hyps: Hyps = {}
+        for n, raw in before.hyps.items():
+            # Upgrade to the standard-printed proposition when prefetched (e.g. a Have's
+            # full `⋀y. y≥0 ⟹ …` rather than its stored bare conclusion); else fall back.
+            merged_hyps[n] = self._worker_premise_cache.get(n.ascii, raw)
+        for n, t in gctx.hyps.items():
+            merged_hyps.setdefault(n, t)
+
+        print_vars(merged_vars.items(), indent, file, {})
+        print_type_vars(merged_tvars.items(), indent, file, {})
+        print_hyps(merged_hyps.items(), indent, file, {})
+
         if goal is not None:
-            print_goal(goal, indent, True, file, root.context)
+            # Suppress the goal's own context (already surfaced above) -> bare conclusion.
+            print_goal(goal, indent, True, file, goal.context)
         else:
             print_indent(indent, file)
             file.write("goal: evaluation pending\n")
@@ -8986,29 +9053,8 @@ class Session:
             self.root.quickview(indent, file)
             return
         target = self.role.target
-
-        preceding: list[Node] = []
-        if isinstance(target, Have):
-            for c in self.root.global_env.sub_nodes:
-                if c is target:
-                    break
-                if c._is_declarative and c.status.status == EvaluationStatus.Status.SUCCESS:
-                    preceding.append(c)
-            if preceding:
-                print_indent(indent, file)
-                file.write("available declarations:\n")
-                for h in preceding:
-                    h.quickview(indent + 1, file)
-
-        if preceding:
-            print_indent(indent, file)
-            file.write("proof:\n")
-            child_indent = indent + 1
-        else:
-            child_indent = indent
-        _quickview_children_compressed(target.sub_nodes, child_indent, file)
-
-        target._quickview_pending_footer(child_indent, file)
+        _quickview_children_compressed(target.sub_nodes, indent, file)
+        target._quickview_pending_footer(indent, file)
 
     async def spawn_lemma_subagent(self, have_node: 'Have', lemma_name: str) -> bool:
         """Spawn a sub-agent to prove a lemma. Returns True on success.
@@ -9065,13 +9111,12 @@ class Session:
         return (result, False)
 
     async def request_restart(self):
-        """Request a context restart.  Sets a transient quit_info to break
-        driver loops, then interrupts.  Drivers check ``_restart_requested``
-        after loop exit and, if set, clear quit_info and re-enter with a
-        fresh ``initial_prompt()``."""
-        self._restart_requested = True
+        """Request a context restart.  Sets ``self.quit_info = Restart()`` to
+        break this session's driver loop, then interrupts.  The loop's restart
+        branch detects the ``Restart`` variant, clears ``quit_info`` and
+        re-enters with a fresh ``initial_prompt()``."""
         self._reset_view_state()
-        self.root.quit_info = ("restart", "")
+        self.quit_info = Restart()
         await self.interrupt()
 
     async def interrupt(self):

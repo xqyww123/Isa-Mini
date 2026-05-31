@@ -199,7 +199,6 @@ class WorkerHandle:
         except Exception as e:
             session.warn_AoA_opr(f"{tag} failed: {type(e).__name__}: {e}")
         finally:
-            session.root.quit_info = None
             session._accumulate_subagent_costs(sub)
             try:
                 await sub.close()

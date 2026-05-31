@@ -579,7 +579,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                     SOME (Name_Space.extern ctxt class_space name, [], [], [], false)
                 | retrieve (Universal_Key.LocaleK, name) =
                     SOME (Name_Space.extern ctxt locale_space name, [], [], [], false)
-          in map (fn e => retrieve e handle ERROR _ => NONE | TYPE _ => NONE) entities end),
+          in map (fn e => the_default NONE (try retrieve e)) entities end),
         timeout = NONE
       }
 
@@ -766,6 +766,21 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         timeout = NONE
       }
 
+      val fact_propositions_callback = {
+        name = "IsaMini.fact_propositions",
+        arg_schema = unpackPair (unpackString, unpackList unpackString),
+        ret_schema = packList (packPair (packString, packString)),
+        function = (fn (state_id, names) =>
+          let val ctxt = Minilang.context_of (get_state state_id)
+              val SOT  = MiniLang_Agent.string_of_term ctxt
+          in map_filter (fn nm =>
+               case the_default [] (try (MiniLang_Agent.read_thms ctxt) nm) of
+                   [] => NONE
+                 | th :: _ => SOME (nm, SOT (Thm.prop_of th))) names
+          end),
+        timeout = NONE
+      }
+
       val check_looping_rules_callback = {
         name = "IsaMini.check_looping_rules",
         arg_schema = unpackTuple4 (
@@ -787,8 +802,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
 
               (* Resolve fact names to thms (supports [where ...] attributes) *)
               val facts_thms = map (fn name =>
-                MiniLang_Agent.read_thms ctxt name
-                handle ERROR _ => []) fact_names
+                the_default [] (try (MiniLang_Agent.read_thms ctxt) name)) fact_names
 
               (* Get target terms to search in *)
               val st = Minilang.leading_proof_sequent_of s0
@@ -796,8 +810,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
               val goal_concl = Logic.strip_imp_concl goal_prop
               val prem_terms =
                 flat (map (fn name =>
-                  map Thm.prop_of (Proof_Context.get_thms ctxt name)
-                  handle ERROR _ => []) premise_names)
+                  map Thm.prop_of (the_default [] (try (Proof_Context.get_thms ctxt) name))) premise_names)
               val search_terms =
                 (if simplify_goal then [goal_concl] else []) @ prem_terms
 
@@ -1007,6 +1020,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
           mk_callback analyze_case_split_callback,
           mk_callback validate_instantiation_callback,
           mk_callback contextual_thms_callback,
+          mk_callback fact_propositions_callback,
           mk_callback validate_prove_in_time_callback,
           mk_callback check_looping_rules_callback,
           Universal_Key.make_universal_key_callback' (SOME thm_cache) au,

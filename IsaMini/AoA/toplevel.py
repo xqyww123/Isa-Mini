@@ -124,6 +124,7 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
         root = await case.run(connection, actual_log_path, global_context, ptree)
         cost = zero_cost
         is_test = True
+        quit_obj = None
     else:
         is_test = False
         logger = connection.server.logger
@@ -152,6 +153,7 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
             root = Root((global_context, ptree), connection)
             await session.initialize(root)
             await session.run()
+            quit_obj = session.quit_info
             cost = (session.total_input_tokens,
                     session.total_cache_creation_input_tokens,
                     session.total_cache_read_input_tokens,
@@ -183,7 +185,8 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
                 _logger.warning(f"Failed to write proof.json: {e}")
         return (assembled, root.final_ml_state.name, cost, None, None, proof_json)
     else:
-        reason, detail = root.quit_info or ("resource_exhausted", None)
+        reason = quit_obj.reason if quit_obj is not None else "resource_exhausted"
+        detail = quit_obj.detail if quit_obj is not None else None
         return (assembled, None, cost, reason, detail, None)
 
 

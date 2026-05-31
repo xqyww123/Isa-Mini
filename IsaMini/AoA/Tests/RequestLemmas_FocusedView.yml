@@ -72,8 +72,7 @@ variables:
   - x: int
 premises:
   - h1: (0 :: int) ≤ x
-available declarations:
-  step global.1: Have h_triv (done)
+  - h_triv: True
 goal: (1 :: int) = (2 :: int)
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `global.2.1` to provide the proof for the following goal.
@@ -82,17 +81,14 @@ pending proof goal:
 --------------------------------------------------
 quickview_proof_scope (lemma_anchor = h_target)
 --------------------------------------------------
-available declarations:
-  step global.1: Have h_triv (done)
-proof:
-  Error: Unfinished Proof. Call command `edit` with action `fill` and target step `global.2.1`
-  goal: (1 :: int) = (2 :: int)
+Error: Unfinished Proof. Call command `edit` with action `fill` and target step `global.2.1`
+goal: (1 :: int) = (2 :: int)
 
-print_proof_scope contains 'available declarations': True
+print_proof_scope contains 'available declarations': False
 print_proof_scope contains 'h_triv': True
 print_proof_scope contains 'goal:': True
 print_proof_scope contains main goal 'x * x': False
-quickview contains 'available declarations': True
+quickview contains 'available declarations': False
 quickview contains 'Unfinished Proof': True
 --------------------------------------------------
 print_proof_scope (lemma_anchor = None, full view)

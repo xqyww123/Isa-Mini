@@ -818,7 +818,7 @@ class APIDriver(LMDriver):
                     for tc, (text, _is_error) in results:
                         self._messages.append(
                             ToolResultMsg(call_id=tc.id, name=tc.name, content=text))
-                    if self.root.quit_info is not None:
+                    if self.quit_info is not None:
                         break
                     if not self.proof_scope_unfinished_nodes():
                         break
@@ -842,12 +842,11 @@ class APIDriver(LMDriver):
                         self._msgs_sent_through = 0
                     self._messages = compacted
 
-            if not self._restart_requested:
+            if not isinstance(self.quit_info, Restart):
                 break
 
-            self._restart_requested = False
             self._interrupted = False
-            self.root.quit_info = None
+            self.quit_info = None
             self.refresh_YAML()
             self._messages = self._initial_messages()
             self._last_response_id = None
@@ -1144,7 +1143,6 @@ class APIDriver(LMDriver):
         except Exception as e:
             self.warn_AoA_opr(f"{tag} failed with {type(e).__name__}: {e}")
         finally:
-            self.root.quit_info = None
             self._accumulate_subagent_costs(sub)
             await sub.close()
 

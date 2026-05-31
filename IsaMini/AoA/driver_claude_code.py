@@ -486,7 +486,7 @@ class ClaudeCode(LMDriver):
                         if self.check_budget():
                             break
                         unfinished_nodes = self.proof_scope_unfinished_nodes()
-                        if unfinished_nodes and self.root.quit_info is None:
+                        if unfinished_nodes and self.quit_info is None:
                             self._retry_count += 1
                             if self.check_budget():
                                 break
@@ -499,11 +499,10 @@ class ClaudeCode(LMDriver):
             finally:
                 self._client = None
 
-            if not self._restart_requested:
+            if not isinstance(self.quit_info, Restart):
                 break
 
-            self._restart_requested = False
-            self.root.quit_info = None
+            self.quit_info = None
             self.log_AoA_opr("Context restarted")
             self._log_meta("CONTEXT_RESTART")
 
@@ -620,8 +619,8 @@ class ClaudeCode(LMDriver):
             for t in pending:
                 t.cancel()
             if not done:
-                self.root.quit_info = ("resource_exhausted",
-                                       f"timeout ({self.timeout_seconds}s)")
+                self.quit_info = ResourceExhausted(
+                    f"timeout ({self.timeout_seconds}s)")
                 self.log_budget_exhausted(f"timeout ({self.timeout_seconds}s)")
         finally:
             self._proof_complete = None

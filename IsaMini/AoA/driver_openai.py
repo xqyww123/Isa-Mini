@@ -159,58 +159,59 @@ class OpenAI_Driver(LMDriver):
         mcp = self._make_mcp(self._mcp_url)
         agent = self._make_agent(mcp)
         hooks = self._make_hooks()
-        prompt: str | None = self.initial_prompt()
-        last_response_id: str | None = None
-
         try:
             async with mcp:
-                while True:
-                    self._model_time_start = time()
-                    try:
-                        self._runner_task = asyncio.current_task()
-                        await Runner.run(
-                            agent, prompt,
-                            hooks=hooks,
-                            max_turns=1000,
-                            previous_response_id=last_response_id,
-                        )
-                    except MaxTurnsExceeded:
-                        self.warn_AoA_opr("Max turns exceeded in single run segment")
-                    except asyncio.CancelledError:
-                        self.log_AoA_opr("Run cancelled (proof complete or interrupt)")
+                while True:  # outer restart loop (mirrors codex/api re-route)
+                    prompt: str | None = self.initial_prompt()
+                    last_response_id: str | None = None
+                    while True:
+                        self._model_time_start = time()
+                        try:
+                            self._runner_task = asyncio.current_task()
+                            await Runner.run(
+                                agent, prompt,
+                                hooks=hooks,
+                                max_turns=1000,
+                                previous_response_id=last_response_id,
+                            )
+                        except MaxTurnsExceeded:
+                            self.warn_AoA_opr("Max turns exceeded in single run segment")
+                        except asyncio.CancelledError:
+                            self.log_AoA_opr("Run cancelled (proof complete or interrupt)")
+                            if self._model_time_start is not None:
+                                self.total_model_time += time() - self._model_time_start
+                                self._model_time_start = None
+                            break
+                        finally:
+                            self._runner_task = None
+
                         if self._model_time_start is not None:
                             self.total_model_time += time() - self._model_time_start
                             self._model_time_start = None
-                        if self._restart_requested:
-                            self._restart_requested = False
-                            self.root.quit_info = None
-                            self.refresh_YAML()
-                            prompt = self.initial_prompt()
-                            last_response_id = None
-                            self.log_AoA_opr("Context restarted")
-                            self._log_meta("CONTEXT_RESTART")
-                            continue
-                        break
-                    finally:
-                        self._runner_task = None
 
-                    if self._model_time_start is not None:
-                        self.total_model_time += time() - self._model_time_start
-                        self._model_time_start = None
-
-                    last_response_id = self._last_response_id
-                    self._forkable_response_id = last_response_id
-                    if self.check_budget():
-                        break
-                    unfinished = self.proof_scope_unfinished_nodes()
-                    if unfinished and self.root.quit_info is None:
-                        self._retry_count += 1
+                        last_response_id = self._last_response_id
+                        self._forkable_response_id = last_response_id
                         if self.check_budget():
                             break
-                        prompt = self.retry_prompt(unfinished)
-                        self.log_retry(unfinished, prompt)
-                    else:
+                        unfinished = self.proof_scope_unfinished_nodes()
+                        if unfinished and self.quit_info is None:
+                            self._retry_count += 1
+                            if self.check_budget():
+                                break
+                            prompt = self.retry_prompt(unfinished)
+                            self.log_retry(unfinished, prompt)
+                        else:
+                            break
+
+                    # Restart re-route: a pending Restart() exits the inner loop
+                    # (via the quit_info guard / check_budget) and is re-entered
+                    # here; any other exit (terminal / proof-complete) breaks out.
+                    if not isinstance(self.quit_info, Restart):
                         break
+                    self.quit_info = None
+                    self.refresh_YAML()
+                    self.log_AoA_opr("Context restarted")
+                    self._log_meta("CONTEXT_RESTART")
         except Exception as e:
             import openai as _openai
             if isinstance(e, _openai.RateLimitError):

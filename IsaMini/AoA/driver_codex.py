@@ -189,38 +189,48 @@ class Codex_Driver(LMDriver):
         prompt = self.initial_prompt()
         codex_session_id: str | None = None
 
-        while True:
-            if codex_session_id is None:
-                cmd = self._build_exec_cmd(prompt)
-            else:
-                cmd = self._build_resume_cmd(codex_session_id, prompt)
+        while True:  # outer restart loop
+            while True:
+                if codex_session_id is None:
+                    cmd = self._build_exec_cmd(prompt)
+                else:
+                    cmd = self._build_resume_cmd(codex_session_id, prompt)
 
-            self._model_time_start = time()
-            events = await self._run_codex_exec(cmd)
-            if self._model_time_start is not None:
-                self.total_model_time += time() - self._model_time_start
-                self._model_time_start = None
+                self._model_time_start = time()
+                events = await self._run_codex_exec(cmd)
+                if self._model_time_start is not None:
+                    self.total_model_time += time() - self._model_time_start
+                    self._model_time_start = None
 
-            if codex_session_id is None:
-                codex_session_id = events.get("thread_id")
-                if codex_session_id is not None:
-                    self._codex_session_id = codex_session_id
-                    self._codex_session_jsonl = self._find_session_jsonl(
-                        codex_session_id)
+                if codex_session_id is None:
+                    codex_session_id = events.get("thread_id")
+                    if codex_session_id is not None:
+                        self._codex_session_id = codex_session_id
+                        self._codex_session_jsonl = self._find_session_jsonl(
+                            codex_session_id)
 
-            self._accumulate_usage(events.get("usage", {}))
+                self._accumulate_usage(events.get("usage", {}))
 
-            if self.check_budget():
-                break
-            unfinished = self.proof_scope_unfinished_nodes()
-            if unfinished and self.root.quit_info is None:
-                self._retry_count += 1
                 if self.check_budget():
                     break
-                prompt = self.retry_prompt(unfinished)
-                self.log_retry(unfinished, prompt)
-            else:
+                unfinished = self.proof_scope_unfinished_nodes()
+                if unfinished and self.quit_info is None:
+                    self._retry_count += 1
+                    if self.check_budget():
+                        break
+                    prompt = self.retry_prompt(unfinished)
+                    self.log_retry(unfinished, prompt)
+                else:
+                    break
+
+            if not isinstance(self.quit_info, Restart):
                 break
+            self.quit_info = None
+            self.refresh_YAML()
+            codex_session_id = None
+            prompt = self.initial_prompt()
+            self.log_AoA_opr("Context restarted")
+            self._log_meta("CONTEXT_RESTART")
 
         self._compute_cost()
         self.log_proof()

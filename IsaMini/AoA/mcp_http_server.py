@@ -51,6 +51,7 @@ from .model import (
     ANSWER_TOOLS,
     ALL_PROOF_TOOLS, Have_ToolArg, Have,
     Role_Worker,
+    Surrender, Refute,
 )
 import yaml as _yaml
 from .retrieval import (
@@ -325,8 +326,7 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
                 f"Proof tree depth exceeded limit, "
                 f"new limit: {session._depth_limit}")
             if session._retry_count >= session.max_retries:
-                session.root.quit_info = (
-                    "surrender",
+                session.quit_info = Surrender(
                     f"proof tree depth exceeded limit {session._depth_limit - 5}")
                 await session.interrupt()
             else:
@@ -695,7 +695,7 @@ async def _complain_tool_logic(session: Session, args: dict) -> tuple[str, bool]
     if reason == "surrender":
         session._retry_count += 1
         if session._retry_count >= session.max_retries:
-            session.root.quit_info = ("surrender", detail)
+            session.quit_info = Surrender(detail)
             msg = f"Proof attempt concluded ({reason})."
             session.log_tool_response(_tn, msg)
             await session.interrupt()
@@ -705,7 +705,7 @@ async def _complain_tool_logic(session: Session, args: dict) -> tuple[str, bool]
         await session.request_restart()
         return (msg, False)
     # reason == "refute"
-    session.root.quit_info = (reason, detail)
+    session.quit_info = Refute(detail)
     msg = f"Proof attempt concluded ({reason})."
     session.log_tool_response(_tn, msg)
     await session.interrupt()

@@ -9814,6 +9814,7 @@ async def _test_RequestLemmas_FocusedView(root: Root, file: MyIO):
 
     # --- Set role to Role_Worker and test focused view ---
     session.role = model.Role_Worker(target=h_target)
+    await session.prefetch_worker_premises()
 
     print_header("print_proof_scope (lemma_anchor = h_target)", file)
     session.print_proof_scope(0, file, show_warnings=True)
@@ -9934,7 +9935,7 @@ async def _test_SorryDegradation(root: Root, file: MyIO):
     file.write(f"obvious_lv2.status: {obv_lv2.status.status.value}\n")
 
 
-@model_test("WorkerGoalNodeScope", "Test_WorkerGoalNodeScope.thy", 13)
+@model_test("WorkerGoalNodeScope", "Test_WorkerGoalNodeScope.thy", 11)
 async def _test_WorkerGoalNodeScope(root: Root, file: MyIO):
     """Test print_proof_scope/quickview_proof_scope with a GoalNode target (not Have)."""
     session = root.session
@@ -9955,6 +9956,7 @@ async def _test_WorkerGoalNodeScope(root: Root, file: MyIO):
 
     # --- Set role to Worker targeting GoalNode ---
     session.role = model.Role_Worker(target=goal_node)
+    await session.prefetch_worker_premises()
 
     print_header("Worker scope (target=GoalNode)", file)
     session.print_proof_scope(0, file)
@@ -10001,7 +10003,7 @@ async def _test_ComplainTool(root: Root, file: MyIO):
     session.role = model.Role_Worker(target=have_node, worker_handle=handle)
 
     # Surrender: enqueues a WorkerSurrender, and sets NO quit_info (the planner
-    # learns of it via the event, not via the shared root).
+    # learns of it via the event; the worker never writes its own quit_info).
     result, is_error = await _complain_tool_logic(session, {
         "reason": "surrender",
         "detail": "I need more lemmas",
@@ -10009,7 +10011,7 @@ async def _test_ComplainTool(root: Root, file: MyIO):
     })
     file.write(f"worker surrender result: {result}\n")
     file.write(f"worker surrender is_error: {is_error}\n")
-    file.write(f"worker surrender sets quit_info: {root.quit_info is not None}\n")
+    file.write(f"worker surrender sets quit_info: {session.quit_info is not None}\n")
     ev = handle._event_queue.get_nowait()
     file.write(f"surrender event: {type(ev).__name__}\n")
     file.write(f"surrender event detail: {ev.detail}\n")
@@ -10056,7 +10058,7 @@ async def _test_ComplainTool(root: Root, file: MyIO):
         file.write("no-handle worker: InternalError raised\n")
 
     # NOTE: the Role_Plan surrender path is intentionally NOT exercised here.
-    # It calls request_restart(), which leaves a transient quit_info=("restart","")
+    # It calls request_restart(), which leaves a transient quit_info=Restart()
     # that only a driver loop consumes; in the model-test path nothing consumes
     # it, so `by aoa` would never terminate cleanly. Planner complain behavior is
     # unchanged by the worker refactor and is out of scope for this test.
