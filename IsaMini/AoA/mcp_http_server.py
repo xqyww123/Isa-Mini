@@ -546,24 +546,42 @@ def _node_end_line(node: Node, total_lines: int) -> int:
 
 
 async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
-    """Read proof.yaml around a step_id or line number."""
+    """Read proof.yaml around one or more step_ids, or a line number.
+
+    ``step_id`` accepts either a single id or a list of ids; each id is
+    rendered as its own segment. A node's bounds come from the proof-tree
+    structure (``_node_end_line``), so a segment prints strictly the node's
+    own lines — no preceding context, and ``range`` is clamped to the node so
+    it never spills into the next node."""
     _tn = session.tool_name(TOOL_READ)
     session.log_tool_call(_tn, args)
     session.refresh_YAML()
 
-    step_id = args.get("step_id")
-    if step_id is not None:
-        step_id = str(step_id).strip() or None
+    # Normalize ``step_id`` to a list (the schema requires an array; a bare
+    # scalar is tolerated defensively). Requesting exactly one id keeps the
+    # legacy single-id error semantics (abort + small-file fallback).
+    raw_step = args.get("step_id")
+    if raw_step is None:
+        step_ids: list[str] | None = None
+    elif isinstance(raw_step, list):
+        step_ids = [s for s in (str(x).strip() for x in raw_step) if s] or None
+    else:
+        s = str(raw_step).strip()
+        step_ids = [s] if s else None
+    single_step = step_ids is not None and len(step_ids) == 1
+
     line_num = args.get("line")
     if line_num is not None:
         line_num = int(line_num)
     explicit_range = args.get("range")
     range_lines = int(explicit_range or 50)
 
-    if step_id is None and line_num is None:
-        yaml_path: str | None = getattr(session, "YAML_path", None)
-        if yaml_path is None:
-            raise InternalError("proof.yaml path not configured")
+    yaml_path: str | None = getattr(session, "YAML_path", None)
+    if yaml_path is None:
+        raise InternalError("proof.yaml path not configured")
+
+    # Whole-file dump when neither a step nor a line is requested.
+    if step_ids is None and line_num is None:
         try:
             with open(yaml_path, encoding="utf-8") as f:
                 all_lines = f.readlines()
@@ -580,65 +598,67 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         session.log_tool_response(_tn, result)
         return (result, False)
 
-    node = None
-    if step_id is not None:
-        try:
-            node = session.root.locate_node(step_id)
-            if node.line == 0:
-                error_msg = (
-                    f"Step '{step_id}' has no line information (proof not yet printed). "
-                    "Read by line number instead.")
-                session.log_tool_response(_tn, f"ERROR: {error_msg}")
-                return (error_msg, True)
-            line_num = node.line
-        except NodeNotFound:
-            yaml_path_fb: str | None = getattr(session, "YAML_path", None)
-            if yaml_path_fb is not None:
-                try:
-                    with open(yaml_path_fb, encoding="utf-8") as f:
-                        fb_lines = f.readlines()
-                    if len(fb_lines) <= 40:
-                        result = (f"WARNING: Step '{step_id}' doesn't exist.\n"
-                                  f"[Line 1-{len(fb_lines)}]\n"
-                                  + "".join(fb_lines))
-                        session.log_tool_response(_tn, result)
-                        return (result, False)
-                except FileNotFoundError:
-                    pass
-            error_msg = f"Step '{step_id}' doesn't exist. Read the proof by line number instead."
-            session.log_tool_response(_tn, f"ERROR: {error_msg}")
-            return (error_msg, True)
-
-    assert line_num is not None
-    yaml_path: str | None = getattr(session, "YAML_path", None)
-    if yaml_path is None:
-        raise InternalError("proof.yaml path not configured")
-
     try:
         with open(yaml_path, encoding="utf-8") as f:
             all_lines = f.readlines()
     except FileNotFoundError:
         raise InternalError(f"proof.yaml not found at {yaml_path}")
-
     total_lines = len(all_lines)
-    if node is not None:
-        if explicit_range is None:
-            node_end = _node_end_line(node, total_lines)
-            start = max(1, line_num - 5)
-            end = min(node_end + 5, total_lines)
-        else:
-            start = max(1, line_num - 5)
-            end = start + range_lines
-    else:
+
+    # Line-number path (no step ids): read forward from the given line.
+    if step_ids is None:
+        assert line_num is not None
         start = line_num
         end = start + range_lines
-
-    selected = all_lines[start - 1 : end]
-    end_line = start + len(selected) - 1
-    if node is not None:
-        result = f"[Step {node.id} is at Line {line_num}, showing Line {start}-{end_line}]\n" + "".join(selected)
-    else:
+        selected = all_lines[start - 1 : end]
+        end_line = start + len(selected) - 1
         result = f"[Line {start}-{end_line}]\n" + "".join(selected)
+        session.log_tool_response(_tn, result)
+        return (result, False)
+
+    # Step-id path (one or many): one segment per id, strictly node-bounded.
+    def _render_node_segment(node: Node) -> str:
+        node_start = node.line
+        node_end = _node_end_line(node, total_lines)
+        if explicit_range is None:
+            end = node_end
+        else:
+            end = min(node_start + range_lines - 1, node_end)
+        end = min(end, total_lines)
+        selected = all_lines[node_start - 1 : end]
+        end_line = node_start + len(selected) - 1
+        return (f"[Step {node.id} is at Line {node_start}, showing Line "
+                f"{node_start}-{end_line}]\n" + "".join(selected))
+
+    segments: list[str] = []
+    for sid in step_ids:
+        try:
+            node = session.root.locate_node(sid)
+        except NodeNotFound:
+            if single_step:
+                if total_lines <= 40:
+                    result = (f"WARNING: Step '{sid}' doesn't exist.\n"
+                              f"[Line 1-{total_lines}]\n" + "".join(all_lines))
+                    session.log_tool_response(_tn, result)
+                    return (result, False)
+                error_msg = (f"Step '{sid}' doesn't exist. "
+                             "Read the proof by line number instead.")
+                session.log_tool_response(_tn, f"ERROR: {error_msg}")
+                return (error_msg, True)
+            segments.append(f"WARNING: Step '{sid}' doesn't exist.")
+            continue
+        if node.line == 0:
+            error_msg = (
+                f"Step '{sid}' has no line information (proof not yet printed). "
+                "Read by line number instead.")
+            if single_step:
+                session.log_tool_response(_tn, f"ERROR: {error_msg}")
+                return (error_msg, True)
+            segments.append(f"WARNING: {error_msg}")
+            continue
+        segments.append(_render_node_segment(node))
+
+    result = "\n".join(segments)
     session.log_tool_response(_tn, result)
     return (result, False)
 

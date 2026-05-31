@@ -3,8 +3,9 @@
   "properties": {
     "line": { "type": "integer" },
     "step_id": {
-      "type": "string",
-      "description": "Alternatively, provide the step id of a node to read the node"
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Alternatively, provide one or more step ids of nodes to read."
     },
     "range": {
       "type": "integer",

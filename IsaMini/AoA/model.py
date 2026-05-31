@@ -8615,6 +8615,13 @@ class Session:
 
     def system_prompt(self) -> str | None:
         """Return the system prompt, or None if the driver folds it into the initial message."""
+        # Planner-only hint: workers are scoped to a single target and cannot
+        # edit the global env, so this guidance is shown only to the planner.
+        planner_hint = (
+                "The goal may rely on background lemmas that are not yet available. "
+                f"Search for them with `{self.tool_name(TOOL_SEARCH)}` first; "
+                "if a needed lemma truly does not exist, prove it as a `Have` node under `global`.\n"
+            ) if self.is_planning else ""
         PROMPT = (
                 "You are a formal theorem proving agent.\n"
                 "A proof goal and an incomplete proof are provided in `./proof.yaml` under the current directory.\n"
@@ -8622,6 +8629,7 @@ class Session:
                 "Continue until no errors remain.\n"
                 "A proof goal can be buggy and thus unprovable — "
                 f"call `{self.tool_name(TOOL_COMPLAIN)}` with your analysis if you believe so.\n"
+                f"{planner_hint}"
                 "Be concise in text output.\n"
                 "\n"
                 "## Tools\n"
@@ -8670,10 +8678,18 @@ class Session:
                 "The proof state is in `proof.yaml` — read it to see the goal and current proof."
             )
         else:
+            # No system prompt (e.g. Codex driver): fold the planner-only hint
+            # into the initial message, mirroring system_prompt()'s planner_hint.
+            planner_hint = (
+                "The goal may rely on background lemmas that are not yet available. "
+                f"Search for them with `{self.tool_name(TOOL_SEARCH)}` first; "
+                "if a needed lemma truly does not exist, prove it as a `Have` node under `global`.\n"
+            ) if self.is_planning else ""
             return (
                 "An incomplete proof is provided in `proof.yaml` — read it to see the goal and current proof.\n"
                 f"Analyze the proof goal, plan a proof, and complete it using tools `{self.tool_name(TOOL_EDIT)}` and `{self.tool_name(TOOL_DELETE)}`.\n"
                 "Continue building the proof until no error remains.\n"
+                f"{planner_hint}"
                 "A proof goal can be buggy and thus unprovable — "
                 f"call `{self.tool_name(TOOL_COMPLAIN)}` with your analysis if you believe so."
             )
