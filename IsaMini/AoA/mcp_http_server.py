@@ -91,7 +91,7 @@ def _flatten_edit_schema(schema: dict) -> dict:
     """Produce a Gemini-compatible edit schema: no $defs/$ref, no recursion.
 
     Proof fields become ``anyOf: [{"const": "GivenLater"}, Obvious]``.
-    FactByName.discharge_premises items become ``{"type": "string"}``.
+    FactByName.discharge items become ``{"type": "string"}``.
     """
     flat = copy.deepcopy(schema)
     defs: dict[str, Any] = flat.pop("$defs", {})
@@ -112,8 +112,8 @@ def _flatten_edit_schema(schema: dict) -> dict:
         if "instantiations" in props:
             props["instantiations"]["items"] = _resolve(
                 props["instantiations"]["items"])
-        if "discharge_premises" in props:
-            props["discharge_premises"]["items"] = {
+        if "discharge" in props:
+            props["discharge"]["items"] = {
                 "anyOf": [{"type": "string"}, {"type": "null"}]
             }
         flat_fact_by_name = fbn
@@ -534,8 +534,41 @@ async def _answer_tool_dispatch(session: Session, tool_name: str, args: dict) ->
         return (error_msg, True)
 
 
-def _node_end_line(node: Node, total_lines: int) -> int:
-    """End line of a node's printed representation (1-indexed, inclusive)."""
+def _line_is_fresh(node: Node, scope_root: Node, is_worker: bool) -> bool:
+    """Whether ``node.line`` matches the just-written ``proof.yaml``.
+
+    A full (planner/interaction) render refreshes every node's ``.line``, so any
+    located node is reliable. A worker's scoped render
+    (``Session.print_proof_scope``) refreshes only ``scope_root``'s *descendants*
+    — ``scope_root`` itself, its ancestors and siblings keep a stale ``.line``
+    from an earlier full render, into a different layout. So for a worker only a
+    strict descendant of ``scope_root`` carries a trustworthy ``.line``; reading
+    any other node by step id would slice the scoped file at a wrong offset."""
+    if not is_worker:
+        return True
+    n = node.parent
+    while n is not None:
+        if n is scope_root:
+            return True
+        n = n.parent
+    return False
+
+
+def _node_end_line(node: Node, total_lines: int, scope_root: Node) -> int:
+    """End line of a node's printed representation (1-indexed, inclusive).
+
+    ``scope_root`` is the node whose subtree was actually rendered to
+    ``proof.yaml`` with fresh line numbers: the whole ``root`` for a
+    planner/interaction view, but the worker's ``target`` for a scoped worker
+    view (``Session.print_proof_scope`` only re-renders ``target.sub_nodes``).
+    The recursion stops at ``scope_root``: a node outside the rendered subtree
+    (the target's own header, its ancestors, its siblings) keeps a stale
+    ``.line`` from an earlier render, so its value must never be used as a
+    boundary. Without this guard the *last* child of a worker's target escapes
+    the rendered region and reads a sibling's stale line, yielding an end
+    before the node's own start (an empty `Line N-(N-1)` read)."""
+    if node is scope_root:
+        return total_lines
     parent = node.parent
     if parent is None:
         return total_lines
@@ -545,7 +578,7 @@ def _node_end_line(node: Node, total_lines: int) -> int:
         nxt = parent.sub_nodes[idx + 1]
         if nxt.line > 0:
             return nxt.line - 1
-    return _node_end_line(parent, total_lines)
+    return _node_end_line(parent, total_lines, scope_root)
 
 
 async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
@@ -620,9 +653,13 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         return (result, False)
 
     # Step-id path (one or many): one segment per id, strictly node-bounded.
+    # ``scope_root`` is the subtree actually rendered to proof.yaml with fresh
+    # line numbers (see ``Session.proof_scope_root``); bounds must not be
+    # derived from nodes outside it (stale `.line`).
+    scope_root: Node = session.proof_scope_root
     def _render_node_segment(node: Node) -> str:
         node_start = node.line
-        node_end = _node_end_line(node, total_lines)
+        node_end = _node_end_line(node, total_lines, scope_root)
         if explicit_range is None:
             end = node_end
         else:
@@ -654,6 +691,15 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             error_msg = (
                 f"Step '{sid}' has no line information (proof not yet printed). "
                 "Read by line number instead.")
+            if single_step:
+                session.log_tool_response(_tn, f"ERROR: {error_msg}")
+                return (error_msg, True)
+            segments.append(f"WARNING: {error_msg}")
+            continue
+        if not _line_is_fresh(node, scope_root, session.is_worker):
+            error_msg = (
+                f"Step '{sid}' is outside your current proof scope, "
+                "so its location is unavailable.")
             if single_step:
                 session.log_tool_response(_tn, f"ERROR: {error_msg}")
                 return (error_msg, True)

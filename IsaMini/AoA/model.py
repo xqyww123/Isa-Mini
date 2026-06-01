@@ -144,7 +144,7 @@ class Instantiation(TypedDict):
 class FactByName(TypedDict):
     name: xname
     instantiations: NotRequired[list[Instantiation]]
-    discharge_premises: NotRequired[list['FactByName | None']]
+    discharge: NotRequired[list['FactByName | None']]
     flip: NotRequired[bool]
 
 type Fact = FactByName | FactByProposition | FactByDescription
@@ -170,7 +170,7 @@ def _where_suffix(fact: Fact) -> str:
 def _of_suffix(fact: Fact) -> str:
     if "name" not in fact:
         return ""
-    discharge = cast(FactByName, fact).get("discharge_premises", [])
+    discharge = cast(FactByName, fact).get("discharge", [])
     if not discharge:
         return ""
     of_parts = []
@@ -8018,10 +8018,9 @@ class GlobalEnv(StdBlock):
     def _print_footer(self, indent: int, file: MyIO, show_warnings: bool = False) -> None:
         print_indent(indent, file)
         file.write(
-            f"Here you can write global declarations. If you find the "
-            f"background theory is missing any lemmas you need, formalize "
-            f"and prove them here. Call command `edit` with action `fill` "
-            f"and target step `{self.id}.{len(self.sub_nodes)+1}`.\n")
+            f"You can write global declarations by calling command `edit` with action `fill` "
+            f"and target step `{self.id}.{len(self.sub_nodes)+1}`. If you find the "
+            f"background theory is missing any lemmas you need, formalize and prove them here.")
     def unfinished_nodes(self, ret: set['Node']) -> None:
         for child in self.sub_nodes:
             child.unfinished_nodes(ret)
@@ -8721,13 +8720,6 @@ class Session:
 
     def system_prompt(self) -> str | None:
         """Return the system prompt, or None if the driver folds it into the initial message."""
-        # Planner-only hint: workers are scoped to a single target and cannot
-        # edit the global env, so this guidance is shown only to the planner.
-        planner_hint = (
-                "The goal may rely on background lemmas that are not yet available. "
-                f"Search for them with `{self.tool_name(TOOL_SEARCH)}` first; "
-                "if a needed lemma truly does not exist, prove it as a `Have` node under `global`.\n"
-            ) if self.is_planning else ""
         PROMPT = (
                 "You are a formal theorem proving agent.\n"
                 "A proof goal and an incomplete proof are provided in `./proof.yaml` under the current directory.\n"
@@ -8735,7 +8727,9 @@ class Session:
                 "Continue until no errors remain.\n"
                 "A proof goal can be buggy and thus unprovable — "
                 f"call `{self.tool_name(TOOL_REFUTE_OR_SURRENDER)}` with your analysis if you believe so.\n"
-                f"{planner_hint}"
+                "The goal may rely on background lemmas that are not yet available. "
+                f"Search for them with `{self.tool_name(TOOL_SEARCH)}` first; "
+                f"if a needed lemma truly does not exist, prove it as a `Have` node{" under `global`" if self.is_planning else ""}.\n"
                 "Be concise in text output.\n"
                 "\n"
                 "## Tools\n"
@@ -9101,14 +9095,20 @@ class Session:
         visit(self.root)
         return result
 
+    @property
+    def proof_scope_root(self) -> 'Node':
+        """The node whose subtree defines this session's proof scope: the
+        worker's ``target`` (a worker renders/checks only ``target.sub_nodes`` —
+        see ``print_proof_scope``), otherwise the whole ``root``. This is the
+        single source of truth for "what subtree does this session render to
+        ``proof.yaml``"; line numbers and scoped views outside it are stale."""
+        return self.role.target if self.is_worker else self.root
+
     def proof_scope_unfinished_nodes(self) -> 'set[Node]':
         """Return unfinished nodes scoped to this session's proof responsibility.
         Workers check only their target subtree."""
         unfinished: 'set[Node]' = set()
-        if self.is_worker:
-            self.role.target.unfinished_nodes(unfinished)
-        else:
-            self.root.unfinished_nodes(unfinished)
+        self.proof_scope_root.unfinished_nodes(unfinished)
         return unfinished
 
     async def prefetch_worker_premises(self) -> None:
@@ -9140,7 +9140,7 @@ class Session:
         if not self.is_worker:
             self.root.print(indent, file, update_line=update_line, show_warnings=show_warnings)
             return
-        target = self.role.target
+        target = self.proof_scope_root
 
         goal = target.goal() if hasattr(target, 'goal') else None
         before = target._ctxt_before_me()
@@ -9191,7 +9191,7 @@ class Session:
         if not self.is_worker:
             self.root.quickview(indent, file)
             return
-        target = self.role.target
+        target = self.proof_scope_root
         _quickview_children_compressed(target.sub_nodes, indent, file)
         target._quickview_pending_footer(indent, file)
 

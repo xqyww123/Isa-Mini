@@ -8586,7 +8586,7 @@ async def _test_FactByNameOF(root: Root, file: MyIO):
     root.session.age += 1
     outcome = await root.fill("1", [Obvious.gen_single({
         "facts": [
-            {"name": "rule", "discharge_premises": [None, {"name": "hb"}]},
+            {"name": "rule", "discharge": [None, {"name": "hb"}]},
             {"name": "ha"}
         ]
     })])

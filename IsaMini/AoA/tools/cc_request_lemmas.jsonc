@@ -6,9 +6,9 @@
       "items": {
         "type": "object",
         "properties": {
-          "name": { "type": "string", "description": "A short handle for the lemma" },
-          "english": { "type": "string", "description": "Plain-English description of what the lemma should state" },
-          "isabelle_statement": { "type": "string", "description": "A rough Isabelle/HOL statement of the proposition (the planning agent will refine it)" }
+          "name": { "type": "string" },
+          "english": { "type": "string", "description": "Plain-English description of the lemma"},
+          "isabelle_statement": { "type": "string", "description": "Isabelle/HOL term with all literal numbers annotated with types" }
         },
         "required": ["name", "english", "isabelle_statement"]
       }

@@ -82,7 +82,7 @@
           "items": { "$ref": "#/$defs/Instantiation" },
           "type": "array"
         },
-        "discharge_premises": {
+        "discharge": {
           "description": "facts to discharge the premises left-to-right; use null to skip a premise position",
           "items": {
             "anyOf": [
