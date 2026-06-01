@@ -2050,7 +2050,7 @@ class Interaction_ChooseTarget(Interaction):
         # The currently-live WorkerHandle (set in answer()). complete_proof's
         # finally cancels it so a worker can never leak if the fork exits
         # without an answer.
-        self.active_handle: Any = None
+        self.active_handle: 'WorkerHandle | None' = None
 
     def _sorted_targets(self) -> 'list[NonLeaf_Node]':
         return sorted(self.failed_parents, key=lambda n: n.id)
@@ -2082,7 +2082,6 @@ class Interaction_ChooseTarget(Interaction):
         _check_index(answer.index, len(targets))
         target = targets[answer.index]
 
-        from .language_model_driver import WorkerHandle
         handle = WorkerHandle(target, self.session)
         self.active_handle = handle
         handle.start(answer.suggestions, answer.useful_lemmas)
@@ -2101,7 +2100,8 @@ class Interaction_ReviewRefutation(Interaction):
     fork_allowed_tools = [TOOL_ANSWER_REFUTATION, TOOL_SEARCH]
 
     def __init__(self, target: 'NonLeaf_Node', complaint: Any,
-                 worker_handle: Any, continuation: Any):
+                 worker_handle: 'WorkerHandle',
+                 continuation: 'Interaction_ChooseTarget | LemmaDrive | None'):
         self.target = target
         self.complaint = complaint
         # The live worker awaiting this review, plus its continuation: the
@@ -2122,7 +2122,6 @@ class Interaction_ReviewRefutation(Interaction):
             f"  - reason: explanation of your judgment\n")
 
     async def answer(self, answer: AnswerRefutation) -> 'str | None':
-        from .language_model_driver import _resume_worker, aclose_all, LemmaDrive
         the_session().log_interaction("refutation_review",
             f"target={self.target.id} accept={answer.accept} reason={answer.reason}")
         if answer.accept:
@@ -2162,7 +2161,8 @@ class Interaction_ReviewLemmaRequest(Interaction):
     fork_allowed_tools = [TOOL_ANSWER_LEMMA_REQUEST, TOOL_SEARCH]
 
     def __init__(self, target: 'NonLeaf_Node', detail: str,
-                 requested_lemmas: Any, worker_handle: Any, continuation: Any):
+                 requested_lemmas: 'list | None', worker_handle: 'WorkerHandle',
+                 continuation: 'Interaction_ChooseTarget | LemmaDrive | None'):
         self.target = target
         self.detail = detail
         self.requested_lemmas = requested_lemmas or []
@@ -2205,7 +2205,6 @@ class Interaction_ReviewLemmaRequest(Interaction):
                 f"{WORKER_NESTING_LIMIT}.)\n")
 
     async def answer(self, answer: AnswerLemmaRequest) -> 'str | None':
-        from .language_model_driver import LemmaDrive, _abort_to_planning
         planner = self.session
         the_session().log_interaction(
             "lemma_request_review",
@@ -3468,12 +3467,24 @@ class Node(ABC):
             old_node = self.locate_node(id)
         except NodeNotFound:
             fill_outcome = await self.fill(id, gns)
-            if fill_outcome.failure is not None:
-                outcome.failure = CannotEdit_NodeNotFound(
-                    target_step=id, operation=op,
-                    unapplied_oprs=list(gns), is_error=True)
-                return outcome
-            return fill_outcome
+            if fill_outcome.failure is None:
+                return fill_outcome
+            # `fill` was a genuine attempt on a valid slot but the
+            # operation itself was rejected (e.g. `Obvious` on a
+            # non-trivial goal, or evaluation failed).  Surface that
+            # actionable reason rather than masking it as "node not
+            # found".  Only when `fill` *also* couldn't locate/claim a
+            # fillable slot (NodeNotFound / BadNode) do we report the
+            # amend-flavoured "node is not found".
+            if not isinstance(
+                fill_outcome.failure,
+                (CannotEdit_NodeNotFound, CannotEdit_BadNode),
+            ):
+                return fill_outcome
+            outcome.failure = CannotEdit_NodeNotFound(
+                target_step=id, operation=op,
+                unapplied_oprs=list(gns), is_error=True)
+            return outcome
         if old_node.parent is not None and isinstance(old_node.parent, NonLeaf_Node):
             the_session().working_block = old_node.parent
         sub_outcome, _ = await old_node.amend_me(gns, op=op)
@@ -8315,9 +8326,9 @@ class Role_Worker:
     target: 'NonLeaf_Node'
     suggestions: str = ""
     useful_lemmas: list[str] = field(default_factory=list)
-    # The live ``WorkerHandle`` (language_model_driver.WorkerHandle) mediating
-    # this worker's events. ``Any`` to avoid importing the driver layer here.
-    worker_handle: Any = None
+    # The live ``WorkerHandle`` mediating
+    # this worker's events (``WorkerHandle`` is defined below in this module).
+    worker_handle: 'WorkerHandle | None' = None
 
 @dataclass
 class Role_Interaction:
@@ -9283,7 +9294,6 @@ class Session:
             # the last active handle — a nested sub-agent would otherwise stay
             # blocked forever on its review future if the fork exits without an
             # answer (e.g. fork-loop exhaustion).
-            from .language_model_driver import aclose_all
             await aclose_all(self.runtime.worker_stack)
         if result is None:
             # All targets proved after dispatching Worker(s). The triggering
@@ -9360,3 +9370,391 @@ def agent_driver(name : str):
     return decorator
 
 
+# ===== Worker orchestration =====
+# Moved here from language_model_driver.py: the worker event types,
+# ``WorkerHandle``, ``LemmaDrive`` and helpers form one mutually-recursive
+# state machine with the ``Interaction_*`` classes above, so they live in
+# the same module (removes the former cross-module circular import).
+
+@dataclass
+class WorkerComplaint:
+    kind: Literal["refute", "surrender", "resource_exhausted"]
+    detail: str
+
+
+# --- Worker events ---------------------------------------------------------
+# A live worker communicates with the planning agent through its
+# ``WorkerHandle``'s event queue instead of dying and leaving a ``quit_info``
+# behind. This lets the worker block (and later resume) while the planning
+# agent reviews a refutation, preserving the worker's conversation context.
+
+@dataclass
+class WorkerRefute:
+    """Worker claims the goal is unprovable and awaits the planning agent's
+    review. ``response_future`` is resolved with ``(accepted, reason)`` by
+    ``WorkerHandle.resolve_review``; the worker blocks on it inside the
+    ``refute_or_surrender`` tool until then."""
+    detail: str
+    response_future: 'asyncio.Future[tuple[bool, str | None]]'
+
+@dataclass
+class WorkerSurrender:
+    """Worker gives up (no viable strategy / needs help). Terminal — the
+    worker interrupts itself right after emitting this."""
+    detail: str
+
+@dataclass
+class WorkerRequestLemmas:
+    """Worker asks the planning agent to author + prove helper lemmas, then
+    resume. NON-terminal (the worker keeps working afterwards, like a rejected
+    refutation). ``lemmas`` is the worker's *loose* wish-list
+    (``{name, english, isabelle_statement}`` items); the planner re-authors them
+    precisely. ``response_future`` is resolved with a feedback STRING by
+    ``WorkerHandle.resolve_lemma_request``; the worker blocks on it inside the
+    ``request_lemmas`` tool until then."""
+    detail: str
+    lemmas: list | None
+    response_future: 'asyncio.Future[str]'
+
+@dataclass
+class WorkerDone:
+    """The worker task finished. ``success`` reflects whether the target goal
+    is proved. Synthesised by ``WorkerHandle`` when the task completes without
+    a pending event."""
+    success: bool
+
+
+class WorkerHandle:
+    """Owns a running worker sub-session and mediates between it and the
+    planning agent's FINISHING interactions.
+
+    The worker runs as its own asyncio task. Its lifecycle events arrive
+    either through ``_event_queue`` (refute / surrender, pushed by the
+    ``refute_or_surrender`` tool) or as task completion (mapped to ``WorkerDone``).
+    ``process`` consumes one event and either returns a planning-agent-facing
+    string, returns ``None`` (all targets proved), or raises
+    ``ContinuingInteraction`` to chain the next FINISHING interaction without
+    breaking the planning agent's context."""
+
+    def __init__(self, target: NonLeaf_Node, session: 'LMDriver'):
+        self.target = target
+        self.session = session
+        self._event_queue: 'asyncio.Queue' = asyncio.Queue()
+        self._task: 'asyncio.Task | None' = None
+        self._sub: 'LMDriver | None' = None
+        self._pending_review: 'asyncio.Future[tuple[bool, str | None]] | None' = None
+        # Pending lemma-request review (resolved with a feedback STRING — a
+        # distinct result type from _pending_review's (accepted, reason) tuple).
+        self._pending_lemma_request: 'asyncio.Future[str] | None' = None
+        # What to chain when THIS worker finishes / how its reviews resume:
+        # the originating Interaction_ChooseTarget for a FINISHING worker, or a
+        # LemmaDrive for a lemma sub-agent (None until set by the spawner).
+        self.continuation: Any = None
+
+    def start(self, suggestions: str = "",
+              useful_lemmas: list[str] | None = None) -> None:
+        ctx = contextvars.copy_context()
+        loop = asyncio.get_running_loop()
+        # Track live nesting depth: pushed here, popped at the terminal outcome
+        # in process_core (and idempotently in aclose as a safety net).
+        self.session.runtime.worker_stack.append(self)
+        self._task = loop.create_task(
+            self._run(suggestions, useful_lemmas or []), context=ctx)
+
+    def _pop_from_stack(self) -> None:
+        stack = self.session.runtime.worker_stack
+        if self in stack:
+            stack.remove(self)
+
+    async def _run(self, suggestions: str, useful_lemmas: list[str]) -> None:
+        _session_var.set(None)  # type: ignore
+        session = self.session
+        try:
+            sub = session.__class__._make_fork(
+                session, role=Role_Worker(target=self.target,
+                                          suggestions=suggestions,
+                                          useful_lemmas=useful_lemmas,
+                                          worker_handle=self))
+            sub._fork_name = f"{session._fork_name}.worker_{self.target.id}"
+            self._sub = sub
+            await sub.initialize(session.root)
+        except Exception as e:
+            session.warn_AoA_opr(f"Worker init failed for {self.target.id}: {e}")
+            return
+
+        tag = f"[{sub._fork_name}]"
+        session.log_interaction("worker", f"{tag} spawned")
+        try:
+            await sub.run()
+        except asyncio.CancelledError:
+            session.warn_AoA_opr(f"{tag} cancelled")
+            raise
+        except Exception as e:
+            session.warn_AoA_opr(f"{tag} failed: {type(e).__name__}: {e}")
+        finally:
+            session._accumulate_subagent_costs(sub)
+            try:
+                await sub.close()
+            except Exception as e:
+                session.warn_AoA_opr(f"{tag} close failed: {e}")
+
+    async def _wait_next_event(self):
+        """Return the next worker event. A queued event (refute/surrender)
+        always wins over task completion: ``put_nowait`` synchronously
+        resolves the pending ``queue.get()`` future, and FIFO callback
+        ordering guarantees we observe it before the task's completion."""
+        assert self._task is not None
+        queue_get = asyncio.ensure_future(self._event_queue.get())
+        done, _pending = await asyncio.wait(
+            {self._task, queue_get},
+            return_when=asyncio.FIRST_COMPLETED)
+        if queue_get in done:
+            return queue_get.result()
+        queue_get.cancel()
+        exc = self._task.exception()
+        if exc is not None:
+            raise exc
+        # Worker succeeded iff the target's subtree has NO unfinished nodes.
+        # `target.status` alone is NOT sufficient: for a NonLeaf_Node it
+        # reflects only the node's own declaration/goal, not whether the proof
+        # below it is complete — child steps may still be unproved. This is the
+        # same criterion the worker's own loop uses to decide it is done
+        # (proof_scope_unfinished_nodes → target.unfinished_nodes).
+        unfinished: set = set()
+        self.target.unfinished_nodes(unfinished)
+        return WorkerDone(success=not unfinished)
+
+    async def process_core(self) -> 'str | None':
+        """Generic event consumer shared by the FINISHING worker and lemma
+        sub-agents. Consumes ONE worker event:
+
+        - ``WorkerRefute`` / ``WorkerRequestLemmas`` (non-terminal): store the
+          pending future and ``raise ContinuingInteraction`` with the review
+          interaction, carrying ``self.continuation`` (the originating
+          ``Interaction_ChooseTarget`` for a FINISHING worker, or a
+          ``LemmaDrive`` for a lemma sub-agent). The review's ``answer`` is
+          responsible for the post-review resume.
+        - ``WorkerSurrender`` / ``WorkerDone(success=False)`` (terminal): pop the
+          nesting stack, return a planner-facing string.
+        - ``WorkerDone(success=True)`` (terminal): pop the stack, return ``None``.
+
+        Does NOT do FINISHING multi-target chaining — that is ``process``'s job.
+        ``None`` always means "this worker succeeded" (see M4)."""
+        event = await self._wait_next_event()
+        match event:
+            case WorkerRefute():
+                self._pending_review = event.response_future
+                complaint = WorkerComplaint(
+                    kind="refute", detail=event.detail)
+                raise ContinuingInteraction(
+                    new_interaction=Interaction_ReviewRefutation(
+                        self.target, complaint, self, self.continuation))
+            case WorkerRequestLemmas():
+                self._pending_lemma_request = event.response_future
+                raise ContinuingInteraction(
+                    new_interaction=Interaction_ReviewLemmaRequest(
+                        self.target, event.detail, event.lemmas, self,
+                        self.continuation))
+            case WorkerSurrender():
+                await self.wait_finish()
+                self._pop_from_stack()
+                self.session.refresh_YAML()
+                return (f"Worker on {self.target.id} surrendered: "
+                        f"{event.detail}\n"
+                        f"Reconsider the proof plan for this step.")
+            case WorkerDone(success=True):
+                await self.wait_finish()
+                self._pop_from_stack()
+                self.session.refresh_YAML()
+                return None
+            case _:  # WorkerDone(success=False)
+                await self.wait_finish()
+                self._pop_from_stack()
+                self.session.refresh_YAML()
+                return (f"Worker on {self.target.id} could not prove the goal. "
+                        f"Reconsider the proof plan for this step.")
+
+    async def process(self, choose_target: 'Interaction_ChooseTarget'):
+        """FINISHING-stage wrapper over ``process_core``: records the
+        continuation and, on worker success (``None``), applies the
+        ``Interaction_ChooseTarget`` multi-target chaining
+        (``failed_parents.discard`` + re-raise to pick the next target)."""
+        self.continuation = choose_target
+        result = await self.process_core()
+        if result is None:                       # WorkerDone(success=True)
+            choose_target.failed_parents.discard(self.target)
+            if not choose_target.failed_parents:
+                return None
+            choose_target.is_first_entry = False
+            raise ContinuingInteraction(new_interaction=choose_target)
+        return result                            # surrender / failure string
+
+    def resolve_review(self, accepted: bool, reason: str | None = None) -> None:
+        fut = self._pending_review
+        self._pending_review = None
+        if fut is not None and not fut.done():
+            fut.set_result((accepted, reason))
+
+    def resolve_lemma_request(self, feedback: str) -> None:
+        """Wake a worker blocked in a ``request_lemmas`` complaint, handing it
+        the planner's feedback string (mirrors ``resolve_review`` but with a
+        plain-string result)."""
+        fut = self._pending_lemma_request
+        self._pending_lemma_request = None
+        if fut is not None and not fut.done():
+            fut.set_result(feedback)
+
+    async def wait_finish(self) -> None:
+        if self._task is not None:
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+
+    def cancel(self) -> None:
+        """Best-effort synchronous teardown: unblock a worker waiting on its
+        review (so its ``await fut`` raises) and cancel the worker task. Does
+        NOT await the task — use ``aclose`` for guaranteed cleanup."""
+        for fut in (self._pending_review, self._pending_lemma_request):
+            if fut is not None and not fut.done():
+                fut.cancel()
+        self._pending_review = None
+        self._pending_lemma_request = None
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+
+    async def aclose(self) -> None:
+        """Idempotent teardown that GUARANTEES the worker is gone: cancel it,
+        then await the task (swallowing ``CancelledError``). Safe to call when
+        the worker already finished. Used by ``Session.complete_proof`` in a
+        ``finally`` so a worker can never leak if the review fork exits without
+        an answer (e.g. fork-loop exhaustion → the worker would otherwise stay
+        blocked forever on its review future)."""
+        self.cancel()
+        await self.wait_finish()
+        self._pop_from_stack()
+
+
+async def aclose_all(handles: list['WorkerHandle']) -> None:
+    """``aclose`` every handle on a nesting stack, deepest-first. Snapshots the
+    list (each ``aclose`` mutates ``worker_stack``) and swallows errors so one
+    failing teardown can't strand the rest."""
+    for h in list(reversed(handles)):
+        try:
+            await h.aclose()
+        except Exception:
+            pass
+
+
+async def _abort_to_planning(planner: 'LMDriver') -> str:
+    """proof-failure unwind (plan decision 5): a planner-authored lemma could
+    not be proved. Keep ALL nodes (no rollback — decision 4), tear down the
+    whole nesting stack, and return a re-plan message that collapses the review
+    fork back to ``complete_proof`` (which restores PLANNING). Abandons any other
+    in-flight FINISHING targets, exactly like accepting a refutation."""
+    await aclose_all(planner.runtime.worker_stack)
+    planner.refresh_YAML()
+    # DRAFT wording (pending user review — see plan §"User-facing text").
+    return ("A helper lemma could not be proved. The relevant Have node(s) have "
+            "been kept in place; returning to planning so you can revise the "
+            "proof strategy (fix or remove the unproved lemma, or take a "
+            "different approach).")
+
+
+async def _abort_nesting(planner: 'LMDriver') -> str:
+    """Nesting backstop (plan decision 7): the live worker stack reached
+    WORKER_NESTING_LIMIT. End the whole ``by aoa`` as resource_exhausted — set
+    the MAJOR session's terminal quit_info, tear down the stack, interrupt the
+    major so its run loop stops promptly, and return (collapsing the fork back to
+    ``complete_proof``; the loop then breaks on the terminal quit_info)."""
+    major = planner
+    while major.parent is not None:
+        major = major.parent
+    major.quit_info = ResourceExhausted(
+        f"lemma-request nesting exceeded depth {WORKER_NESTING_LIMIT}")
+    await aclose_all(planner.runtime.worker_stack)
+    await major.interrupt()
+    # DRAFT wording (pending user review).
+    return (f"Lemma-request nesting exceeded the limit of {WORKER_NESTING_LIMIT}; "
+            f"aborting the proof.")
+
+
+async def _resume_worker(handle: 'WorkerHandle'):
+    """Resume a worker whose review just resolved its pending future. The resume
+    STYLE depends on the worker's continuation:
+
+    - ``Interaction_ChooseTarget`` (a FINISHING worker): drive it via the
+      FINISHING wrapper ``process`` so multi-target chaining still applies.
+    - ``LemmaDrive`` (a lemma sub-agent): re-drive it to its terminal outcome
+      with ``process_core`` (may itself raise ``ContinuingInteraction`` for a
+      further nested request), then continue the owning drive's queue via
+      ``advance`` (which finalises this worker at its loop top). A non-``None``
+      terminal here means the sub-agent could not prove its lemma → abort."""
+    cont = handle.continuation
+    if isinstance(cont, Interaction_ChooseTarget):
+        return await handle.process(cont)
+    if isinstance(cont, LemmaDrive):
+        result = await handle.process_core()
+        if result is not None:
+            return await _abort_to_planning(cont.planner)
+        return await cont.advance()
+    # No continuation recorded — nothing sensible to chain to.
+    return None
+
+
+class LemmaDrive:
+    """Drives sequential proving of a batch of planner-authored helper lemmas for
+    one requesting worker, surviving nested requests via a re-entrant ``advance``.
+
+    It is the lemma-flow analogue of ``Interaction_ChooseTarget``: the queue and
+    bookkeeping live on this object (NOT on an ``answer()`` stack frame, which the
+    ``ContinuingInteraction`` trampoline would destroy on a nested request), so
+    ``advance`` can be re-entered after a nested excursion and pick up where it
+    left off."""
+
+    def __init__(self, planner: 'LMDriver', queue: list,
+                 requester: 'WorkerHandle', requester_continuation: Any,
+                 feedback: str):
+        self.planner = planner
+        self.queue = queue                         # list[(have_node, name)] remaining
+        self.requester = requester                 # worker to wake when queue empties
+        self.requester_continuation = requester_continuation
+        self.feedback = feedback
+        self.current: 'WorkerHandle | None' = None  # handle proving queue[0], if live
+
+    async def advance(self):
+        """Prove the remaining queue one sub-agent at a time, then wake + resume
+        the requesting worker. Re-entrant: also the resume point after a nested
+        review (see ``_resume_worker``). No planner re-prompt happens between
+        lemmas — only an actual nested request re-prompts (for that request)."""
+        while True:
+            # Finalise a worker just driven to terminal — either by our own
+            # process_core below (no-nested case) or by a nested review that
+            # re-drove it (_resume_worker). `current is None` on first entry.
+            if self.current is not None:
+                have_node = self.queue[0][0]
+                self.current = None
+                if have_node.is_proof_finished():
+                    self.queue.pop(0)
+                else:
+                    return await _abort_to_planning(self.planner)
+            if not self.queue:
+                break
+            # Backstop BEFORE spawning the next sub-agent (before the push that
+            # would reach the limit).
+            if len(self.planner.runtime.worker_stack) >= WORKER_NESTING_LIMIT:
+                return await _abort_nesting(self.planner)
+            have_node, _name = self.queue[0]
+            sub = WorkerHandle(have_node, self.planner)
+            sub.continuation = self
+            self.current = sub
+            sub.start()
+            result = await sub.process_core()   # may raise ContinuingInteraction
+            if result is not None:
+                # surrender / failure → lemma not proved → terminate (decision 5)
+                return await _abort_to_planning(self.planner)
+            # result is None → proved; loop top finalises (pops the queue).
+        # Queue drained — all requested lemmas proved. Wake the requester with
+        # the planner's feedback and resume it.
+        self.requester.resolve_lemma_request(self.feedback)
+        return await _resume_worker(self.requester)

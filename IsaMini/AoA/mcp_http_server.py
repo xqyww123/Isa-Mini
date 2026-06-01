@@ -723,7 +723,7 @@ async def _refute_or_surrender_tool_logic(session: Session, args: dict) -> tuple
         return (msg, True)
 
     if isinstance(session.role, Role_Worker):
-        from .language_model_driver import WorkerRefute, WorkerSurrender
+        from .model import WorkerRefute, WorkerSurrender
         handle = session.role.worker_handle
         if handle is None:
             # A worker is always spawned via WorkerHandle, which sets
@@ -793,7 +793,7 @@ async def _request_lemmas_tool_logic(session: Session, args: dict) -> tuple[str,
     session.log_tool_call(_tn, args)
 
     if isinstance(session.role, Role_Worker):
-        from .language_model_driver import WorkerRequestLemmas
+        from .model import WorkerRequestLemmas
         handle = session.role.worker_handle
         if handle is None:
             raise InternalError(

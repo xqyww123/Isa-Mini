@@ -1,0 +1,20 @@
+worker surrender result: Complaint recorded (surrender).
+worker surrender is_error: False
+worker surrender sets quit_info: False
+surrender event: WorkerSurrender
+surrender event detail: I need more lemmas
+refute event: WorkerRefute
+refute event detail: The goal contradicts premises
+refute rejected result mentions reject: True
+refute rejected is_error: False
+refute accepted result mentions accept: True
+request_lemmas event: WorkerRequestLemmas
+request_lemmas event lemmas count: 1
+request_lemmas resume mentions sq_nonneg: True
+request_lemmas resume is_error: False
+empty request_lemmas is_error: True
+invalid reason is_error: True
+invalid reason result contains 'Invalid': True
+no-handle worker: InternalError raised
+planner request_lemmas is_error: False
+planner request_lemmas mentions global: True

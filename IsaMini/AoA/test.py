@@ -9697,7 +9697,7 @@ async def _test_RefuteOrSurrender(root: Root, file: MyIO):
     `request_lemmas` (worker channel + planner no-arg hint)."""
     from .mcp_http_server import (
         _refute_or_surrender_tool_logic, _request_lemmas_tool_logic)
-    from .language_model_driver import WorkerHandle
+    from .model import WorkerHandle
     session = root.session
 
     # --- Worker: refute_or_surrender communicates via the WorkerHandle queue ---
@@ -9798,6 +9798,109 @@ async def _test_RefuteOrSurrender(root: Root, file: MyIO):
     # that only a driver loop consumes; in the model-test path nothing consumes
     # it, so `by aoa` would never terminate cleanly. Planner refute/surrender
     # behavior is unchanged by this split and is out of scope for this test.
+
+
+@model_test("RecallWorkerScope", "Test_RecallWorkerScope.thy", 9)
+async def _test_recall_worker_scope(root: Root, file: MyIO):
+    """`recall` line-bound computation under a *worker*-scoped proof.yaml.
+
+    A worker's ``refresh_YAML`` (``print_proof_scope``) re-renders only the
+    target's subtree, so only the target's *descendants* get fresh ``.line``;
+    the target itself, its ancestors and its siblings keep stale lines from an
+    earlier full render. We build a Have block ``H`` (the worker target) with
+    two children, plus a sibling step ``G`` after it, then poison ``G.line``
+    to simulate that stale value. The regression this guards: before the
+    scope-aware fix, recalling the *last* child of ``H`` escaped the target
+    subtree and read ``G``'s stale line, returning an end before the node's
+    own start (an empty `Line N-(N-1)` read). It also checks that recalling an
+    out-of-scope id (the target itself, or the sibling) is rejected."""
+    import re
+    import tempfile
+    from io import StringIO
+    from .mcp_http_server import _read_tool_logic, _line_is_fresh, _node_end_line
+
+    session = root.session
+    goal = root.sub_nodes[1]
+
+    # H = Have block (worker target) with two children: a nested Have "1.1"
+    # (itself having child "1.1.1") and a closing Obvious "1.2" (the LAST child).
+    await goal.fill("1", [Have.gen_single({
+        "thought": "outer helper",
+        "statement": {"english": "x squared is non-negative",
+                      "conclusion": r"(0::int) \<le> x * x"},
+        "name": "outer"})])
+    H = goal.sub_nodes[0]
+    await root.fill("1.1", [Have.gen_single({
+        "thought": "inner helper",
+        "statement": {"english": "x squared is non-negative",
+                      "conclusion": r"(0::int) \<le> x * x"},
+        "name": "inner"})])
+    await root.fill("1.1.1", [Obvious.gen_single({"facts": []})])
+    await H.append([Obvious.gen_single({"facts": []})])   # node "1.2"
+    # G = a top-level sibling AFTER H (out of the worker's scope).
+    await goal.append([Obvious.gen_single({"facts": []})])  # node "2"
+    G = goal.sub_nodes[1]
+
+    # Switch to a worker scoped to H and render the scoped proof.yaml (this is
+    # what the live worker's refresh_YAML does): only H's descendants get fresh
+    # `.line` values, consistent with the on-disk scoped file.
+    session.role = model.Role_Worker(target=H)
+    fd, tmp = tempfile.mkstemp(prefix="recall_scope_", suffix=".yaml")
+    os.close(fd)
+    session.YAML_path = tmp
+    with open(tmp, "w", encoding="utf-8") as f:
+        session.print_proof_scope(0, MyIO(f), update_line=True, show_warnings=True)
+    with open(tmp, encoding="utf-8") as f:
+        total_lines = len(f.readlines())
+
+    # Simulate a stale line left on the out-of-scope sibling by an earlier full
+    # render: a small, nonzero value that the old (scope-blind) `_node_end_line`
+    # would wrongly adopt as the end bound for H's last child.
+    G.line = 5
+
+    def _span(res: str) -> tuple[int, int] | None:
+        m = re.search(r"showing Line (\d+)-(\d+)", res)
+        return (int(m.group(1)), int(m.group(2))) if m else None
+
+    last = H.sub_nodes[-1]                 # "1.2", H's last child
+    nonlast = H.sub_nodes[0]               # "1.1", in-scope, not last
+
+    print_header("recall last child of target (in scope)", file)
+    res, err = await _read_tool_logic(session, {"step_id": [last.id]})
+    a, b = _span(res)
+    file.write(f"is_error: {err}\n")
+    file.write(f"non-empty range (end >= start): {b >= a}\n")
+    file.write(f"reaches end of scoped file: {b == total_lines}\n")
+
+    print_header("recall non-last child of target (in scope)", file)
+    res, err = await _read_tool_logic(session, {"step_id": [nonlast.id]})
+    a, b = _span(res)
+    file.write(f"is_error: {err}\n")
+    file.write(f"non-empty range (end >= start): {b >= a}\n")
+
+    print_header("recall target itself (out of scope)", file)
+    res, err = await _read_tool_logic(session, {"step_id": [H.id]})
+    file.write(f"is_error: {err}\n")
+    file.write(f"out-of-scope message: {res}\n")
+
+    print_header("recall sibling (out of scope)", file)
+    res, err = await _read_tool_logic(session, {"step_id": [G.id]})
+    file.write(f"is_error: {err}\n")
+    file.write(f"out-of-scope message: {res}\n")
+
+    print_header("helper predicates", file)
+    file.write(f"_line_is_fresh(last child)  : {_line_is_fresh(last, H, True)}\n")
+    file.write(f"_line_is_fresh(grandchild)  : {_line_is_fresh(nonlast.sub_nodes[0], H, True)}\n")
+    file.write(f"_line_is_fresh(target self) : {_line_is_fresh(H, H, True)}\n")
+    file.write(f"_line_is_fresh(sibling)     : {_line_is_fresh(G, H, True)}\n")
+    file.write(f"_node_end_line(last child) == EOF: "
+               f"{_node_end_line(last, total_lines, H) == total_lines}\n")
+    # Planner (non-worker): the whole tree is freshly rendered, so every node is
+    # in scope regardless of position.
+    file.write(f"_line_is_fresh(sibling, planner): {_line_is_fresh(G, root, False)}\n")
+
+    session.role = model.Role_Plan()
+    os.remove(tmp)
 
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
