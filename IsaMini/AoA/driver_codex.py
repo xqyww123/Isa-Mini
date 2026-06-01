@@ -102,7 +102,7 @@ class Codex_Driver(LMDriver):
         if self.is_major:
             self._write_codex_config()
             self._init_git_repo()
-        if self.is_planning:
+        if self.is_major:
             with open(self.YAML_path, "w", encoding="utf-8") as f:
                 root.print(0, MyIO(f), update_line=True, show_warnings=True)
         elif self.is_worker:

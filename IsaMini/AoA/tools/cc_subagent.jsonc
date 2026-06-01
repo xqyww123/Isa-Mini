@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "properties": {
+    "step_id": {
+      "type": "string",
+      "description": "The target step that the sub-agent aims to prove."
+    },
+    "suggestions": {
+      "type": "string",
+      "description": "Strategy hints and proof suggestions for the sub-agent."
+    },
+    "helpful_lemmas": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Names of lemmas the sub-agent should try — the more the better; list any that might help (may be empty)."
+    }
+  },
+  "required": ["step_id", "suggestions", "helpful_lemmas"],
+  "additionalProperties": false
+}

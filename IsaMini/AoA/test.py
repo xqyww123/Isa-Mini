@@ -9788,12 +9788,12 @@ async def _test_RefuteOrSurrender(root: Root, file: MyIO):
         file.write("no-handle worker: InternalError raised\n")
 
     # --- Plan: request_lemmas is a no-argument hint (no event, no error) ---
-    session.role = model.Role_Plan()
+    session.role = model.Role_Major()
     result, is_error = await _request_lemmas_tool_logic(session, {})
     file.write(f"planner request_lemmas is_error: {is_error}\n")
     file.write(f"planner request_lemmas mentions global: {'global' in result.lower()}\n")
 
-    # NOTE: the Role_Plan surrender path is intentionally NOT exercised here.
+    # NOTE: the Role_Major surrender path is intentionally NOT exercised here.
     # It calls request_restart(), which leaves a transient quit_info=Restart()
     # that only a driver loop consumes; in the model-test path nothing consumes
     # it, so `by aoa` would never terminate cleanly. Planner refute/surrender
@@ -9911,7 +9911,7 @@ async def _test_recall_worker_scope(root: Root, file: MyIO):
     # in scope regardless of position.
     file.write(f"_line_is_fresh(sibling, planner): {_line_is_fresh(G, root, False)}\n")
 
-    session.role = model.Role_Plan()
+    session.role = model.Role_Major()
     os.remove(tmp)
 
 

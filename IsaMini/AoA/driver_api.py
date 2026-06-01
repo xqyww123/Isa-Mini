@@ -738,7 +738,7 @@ class APIDriver(LMDriver):
     async def initialize(self, root: Root):
         await super().initialize(root)
         self._executor = ToolExecutor(self)
-        if self.is_planning:
+        if self.is_major:
             with open(self.YAML_path, "w", encoding="utf-8") as f:
                 root.print(0, MyIO(f), update_line=True, show_warnings=True)
         elif self.is_worker:
@@ -1035,10 +1035,10 @@ class APIDriver(LMDriver):
           while True:
             try:
               # Unbounded: the fork runs until it submits an answer or is
-              # interrupted. A FINISHING flow can take many turns (pick target,
-              # await worker, review refutation, pick next target, ...), well
-              # beyond any fixed turn cap. Matches the ClaudeCode driver, whose
-              # fork loop is likewise an answer-or-interrupt `while True`.
+              # interrupted. A review fork (e.g. a refutation review) can take
+              # several turns, well beyond any fixed turn cap. Matches the
+              # ClaudeCode driver, whose fork loop is likewise an
+              # answer-or-interrupt `while True`.
               while True:
                 if fork._interrupted:
                     break

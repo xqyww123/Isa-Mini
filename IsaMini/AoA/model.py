@@ -1924,25 +1924,13 @@ class AnswerInstantiate:
     instantiations: list[tuple[str, str]]
 
 @dataclass(frozen=True)
-class AnswerTargetGoal:
-    index: int
-    suggestions: str
-    useful_lemmas: list[str]
-
-@dataclass(frozen=True)
 class AnswerRefutation:
     accept: bool
     reason: str
 
-@dataclass(frozen=True)
-class AnswerLemmaRequest:
-    # Planner-authored helper lemmas (rich Have specs). Empty == reject-all.
-    lemmas: list
-    feedback: str
-
 AnswerPayload = (AnswerIndexes | AnswerIndex | AnswerIndexesOrName
                  | AnswerIndexesOrSpec | AnswerInstantiate
-                 | AnswerTargetGoal | AnswerRefutation | AnswerLemmaRequest)
+                 | AnswerRefutation)
 
 # Abstract tool identifiers (driver-agnostic)
 type tool = str
@@ -1952,25 +1940,24 @@ TOOL_SEARCH: tool = "query"
 TOOL_READ:   tool = "recall"
 TOOL_REQUEST_LEMMAS: tool = "request_lemmas"
 TOOL_REFUTE_OR_SURRENDER: tool = "refute_or_surrender"
+TOOL_SUBAGENT: tool = "subagent"
 
 TOOL_ANSWER_INDEXES:        tool = "answer_indexes"
 TOOL_ANSWER_INDEX:          tool = "answer_index"
 TOOL_ANSWER_INDEXES_OR_NAME: tool = "answer_indexes_or_name"
 TOOL_ANSWER_INDEXES_OR_SPEC: tool = "answer_indexes_or_spec"
 TOOL_ANSWER_INSTANTIATE:    tool = "answer_instantiate"
-TOOL_ANSWER_TARGET_GOAL:    tool = "answer_target_goal"
 TOOL_ANSWER_REFUTATION:     tool = "answer_refutation"
-TOOL_ANSWER_LEMMA_REQUEST:  tool = "answer_lemma_request"
 
 ANSWER_TOOLS: frozenset[tool] = frozenset({
     TOOL_ANSWER_INDEXES, TOOL_ANSWER_INDEX, TOOL_ANSWER_INDEXES_OR_NAME,
     TOOL_ANSWER_INDEXES_OR_SPEC, TOOL_ANSWER_INSTANTIATE,
-    TOOL_ANSWER_TARGET_GOAL, TOOL_ANSWER_REFUTATION, TOOL_ANSWER_LEMMA_REQUEST,
+    TOOL_ANSWER_REFUTATION,
 })
 
 ALL_PROOF_TOOLS: tuple[tool, ...] = (
     TOOL_EDIT, TOOL_DELETE, TOOL_SEARCH, TOOL_READ,
-    TOOL_REQUEST_LEMMAS, TOOL_REFUTE_OR_SURRENDER,
+    TOOL_REQUEST_LEMMAS, TOOL_REFUTE_OR_SURRENDER, TOOL_SUBAGENT,
     *ANSWER_TOOLS,
 )
 
@@ -2033,83 +2020,19 @@ class Interaction_BadAnswer(Exception):
     pass
 
 
-class Interaction_ChooseTarget(Interaction):
-    """FINISHING-stage interaction: present failed goals and let the planning
-    agent pick which to dispatch a Worker for."""
-    forking = ForkingMode.FORKING_WITH_CTXT
-    fork_allowed_tools = [TOOL_ANSWER_TARGET_GOAL, TOOL_SEARCH]
-
-    def __init__(self, failed_parents: 'set[NonLeaf_Node]', session: 'Session',
-                 is_first_entry: bool = True):
-        self.failed_parents = failed_parents
-        self.session = session
-        # First entry shows the "planning phase complete" framing; subsequent
-        # re-entries (after a worker finishes a target) show a terse remaining
-        # list instead.
-        self.is_first_entry = is_first_entry
-        # The currently-live WorkerHandle (set in answer()). complete_proof's
-        # finally cancels it so a worker can never leak if the fork exits
-        # without an answer.
-        self.active_handle: 'WorkerHandle | None' = None
-
-    def _sorted_targets(self) -> 'list[NonLeaf_Node]':
-        return sorted(self.failed_parents, key=lambda n: n.id)
-
-    async def prompt(self, indent: int, file: MyIO) -> None:
-        targets = self._sorted_targets()
-        if self.is_first_entry:
-            file.write("Great! We now have a complete proof sketch. A few subgoals you expected to be obvious didn't go through automatically, so we'll now run sub-agents to prove each of them:\n\n")
-        else:
-            file.write(f"{len(targets)} proof step(s) still need sub-agents:\n\n")
-        for i, p in enumerate(targets):
-            goal = p.goal() if hasattr(p, 'goal') else None
-            goal_str = f" — goal: {goal.conclusion.unicode}" if goal else ""
-            file.write(f"  {i}. {p.id}{goal_str}\n")
-        if self.is_first_entry:
-            file.write(
-                f"\nPick the hardest step to tackle first. "
-                f"Please call `{tn(TOOL_ANSWER_TARGET_GOAL)}` with:\n"
-                f"  - index: the number of your chosen step\n"
-                f"  - suggestions: strategy hints for the sub-agent\n"
-                f"  - useful_lemmas: names of lemmas the sub-agent should try\n")
-        else:
-            file.write(
-                f"\nPick the hardest step to tackle first. "
-                f"Answer by calling `{tn(TOOL_ANSWER_TARGET_GOAL)}` with your choice.\n")
-
-    async def answer(self, answer: AnswerTargetGoal) -> 'str | None':
-        targets = self._sorted_targets()
-        _check_index(answer.index, len(targets))
-        target = targets[answer.index]
-
-        handle = WorkerHandle(target, self.session)
-        self.active_handle = handle
-        handle.start(answer.suggestions, answer.useful_lemmas)
-        try:
-            return await handle.process(self)
-        except ContinuingInteraction:
-            raise
-        except BaseException:
-            handle.cancel()
-            raise
-
-
 class Interaction_ReviewRefutation(Interaction):
     """Review a Worker's claim that a goal is unprovable."""
     forking = ForkingMode.FORKING_WITH_CTXT
     fork_allowed_tools = [TOOL_ANSWER_REFUTATION, TOOL_SEARCH]
 
     def __init__(self, target: 'NonLeaf_Node', complaint: Any,
-                 worker_handle: 'WorkerHandle',
-                 continuation: 'Interaction_ChooseTarget | LemmaDrive | None'):
+                 worker_handle: 'WorkerHandle'):
         self.target = target
         self.complaint = complaint
-        # The live worker awaiting this review, plus its continuation: the
-        # originating ``Interaction_ChooseTarget`` (FINISHING worker) or the
-        # ``LemmaDrive`` (lemma sub-agent) used to resume it if the refutation is
-        # rejected. ``None`` is tolerated.
+        # The live worker awaiting this review. The WorkerHandle.run_until_yield
+        # loop owns the post-review resume (reject) / wind-down (accept); this
+        # interaction only records the planner's verdict.
         self.worker_handle = worker_handle
-        self.continuation = continuation
 
     async def prompt(self, indent: int, file: MyIO) -> None:
         goal = self.target.goal() if hasattr(self.target, 'goal') else None
@@ -2121,108 +2044,17 @@ class Interaction_ReviewRefutation(Interaction):
             f"  - accept: true to accept (goal is unprovable), false to reject\n"
             f"  - reason: explanation of your judgment\n")
 
-    async def answer(self, answer: AnswerRefutation) -> 'str | None':
+    async def answer(self, answer: AnswerRefutation) -> 'tuple[bool, str | None]':
         the_session().log_interaction("refutation_review",
             f"target={self.target.id} accept={answer.accept} reason={answer.reason}")
-        if answer.accept:
-            # Accept: tell the worker to conclude and wait for it to wind down.
-            self.worker_handle.resolve_review(accepted=True, reason=answer.reason)
-            await self.worker_handle.wait_finish()
-            # A lemma sub-agent accepting its own refutation = the authored lemma
-            # is unprovable ⇒ proof-failure: tear down the whole nesting stack
-            # (the outer requesters) before returning to planning. For a plain
-            # FINISHING refutation the stack is just this (now-finished) worker.
-            await aclose_all(self.worker_handle.session.runtime.worker_stack)
-            self.session.refresh_YAML()
-            return (f"Refutation accepted for {self.target.id}: the goal is "
-                    f"unprovable as stated. Revise the proof plan for this step.")
-        # Reject: resume the worker (style depends on its continuation).
-        self.worker_handle.resolve_review(accepted=False, reason=answer.reason)
-        try:
-            return await _resume_worker(self.worker_handle)
-        except ContinuingInteraction:
-            raise
-        except BaseException:
-            self.worker_handle.cancel()
-            raise
+        # Unblock the worker either way; the WorkerHandle.run_until_yield loop
+        # acts on the verdict (accept → wind down, reject → resume in-loop).
+        self.worker_handle.resolve_review(accepted=answer.accept, reason=answer.reason)
+        return (answer.accept, answer.reason)
 
     @property
     def session(self) -> 'Session':
         return self.worker_handle.session
-
-
-class Interaction_ReviewLemmaRequest(Interaction):
-    """Review a Worker's request for helper lemmas. The planning agent (global
-    vision) re-authors the lemmas precisely — it may tighten/relax/reject them —
-    then the pipeline adds the accepted ones to ``global_env`` and proves each
-    with a sub-agent, in order, before waking the requesting worker with
-    feedback. An empty ``lemmas`` answer rejects the request (feedback only)."""
-    forking = ForkingMode.FORKING_WITH_CTXT
-    fork_allowed_tools = [TOOL_ANSWER_LEMMA_REQUEST, TOOL_SEARCH]
-
-    def __init__(self, target: 'NonLeaf_Node', detail: str,
-                 requested_lemmas: 'list | None', worker_handle: 'WorkerHandle',
-                 continuation: 'Interaction_ChooseTarget | LemmaDrive | None'):
-        self.target = target
-        self.detail = detail
-        self.requested_lemmas = requested_lemmas or []
-        self.worker_handle = worker_handle
-        self.continuation = continuation
-
-    @property
-    def session(self) -> 'Session':
-        return self.worker_handle.session
-
-    async def prompt(self, indent: int, file: MyIO) -> None:
-        # DRAFT wording (pending user review — see plan §"User-facing text").
-        depth = len(self.session.runtime.worker_stack)
-        noun = "a helper lemma" if len(self.requested_lemmas) == 1 else "helper lemmas"
-        file.write(
-            f"A sub-agent proving {self.target.id} is requesting {noun}:\n"
-            f"  {self.detail}\n\n")
-        if self.requested_lemmas:
-            file.write("It suggested (informally — refine as you see fit):\n")
-            for i, lm in enumerate(self.requested_lemmas):
-                nm = lm.get("name", "") if isinstance(lm, dict) else ""
-                eng = lm.get("english", "") if isinstance(lm, dict) else ""
-                stmt = lm.get("isabelle_statement", "") if isinstance(lm, dict) else ""
-                file.write(f"  {i}. {nm}: {eng}\n     {stmt}\n")
-            file.write("\n")
-        file.write(
-            f"These suggestions are informal — you decide the precise "
-            f"statements. Re-author them (tighten, relax, rename, split, or "
-            f"drop), or reject the request entirely. Keep each lemma genuinely "
-            f"simpler than the current goal. Sub-agents will prove them one by "
-            f"one. Call `{tn(TOOL_ANSWER_LEMMA_REQUEST)}` with:\n"
-            f"  - lemmas: the lemmas to add+prove (empty = reject; each "
-            f"{{name, english, for_any?, premises?, conclusion}})\n"
-            f"  - feedback: a message back to the requesting sub-agent\n")
-        if depth >= 3:
-            file.write(
-                f"\n(Note: this request is {depth} levels deep into nested "
-                f"lemma requests — consider whether a different strategy would "
-                f"be simpler. Nesting is hard-capped at "
-                f"{WORKER_NESTING_LIMIT}.)\n")
-
-    async def answer(self, answer: AnswerLemmaRequest) -> 'str | None':
-        planner = self.session
-        the_session().log_interaction(
-            "lemma_request_review",
-            f"target={self.target.id} n_lemmas={len(answer.lemmas)}")
-        # Author all accepted lemmas up-front (pure tree edits — no nesting can
-        # occur during authoring). On any authoring failure, decision 4 keeps the
-        # node and decision 5 terminates to planning.
-        queue: list = []
-        for spec in (answer.lemmas or []):
-            if not isinstance(spec, dict):
-                continue
-            have_node = await planner.add_lemma_node(spec, self.target)
-            if have_node is None:
-                return await _abort_to_planning(planner)
-            queue.append((have_node, spec.get("name", "")))
-        drive = LemmaDrive(planner, queue, self.worker_handle,
-                           self.continuation, answer.feedback)
-        return await drive.advance()
 
 
 class Fork_Pending(NamedTuple):
@@ -3159,6 +2991,25 @@ class Node(ABC):
     def unfinished_nodes(self, ret: set['Node']) -> None:
         if self.status.status != EvaluationStatus.Status.SUCCESS:
             ret.add(self)
+    async def discard(self) -> None:
+        """Release THIS node's own resources as it leaves the tree — currently:
+        tear down its sub-agent worker. Non-recursive: call it on each node that
+        is actually removed (a node whose children survive keeps theirs). Base
+        case (covers ``Leaf``): nothing to release. ``NonLeaf_Node`` overrides."""
+        return None
+    async def aclose_all_workers(self) -> None:
+        """Recursively ``discard`` this node and its whole subtree (close every
+        attached sub-agent worker). Used by the session-close sweep and by
+        ``delete`` (whole-subtree removal). ``NonLeaf_Node`` overrides to recurse."""
+        await self.discard()
+    def _nearest_goal_for_subagent(self) -> 'Node | None':
+        """The node a ``subagent`` call on `self` should actually target — the
+        nearest delegatable goal. Default: `self` is not a goal → redirect to the
+        parent; ``None`` at the top. Goal blocks (Have/Obtain/Suffices/GoalNode)
+        override to return `self`; non-delegatable containers (GoalContainer/Root,
+        GlobalEnv, SetupRewriting) override to return ``None`` directly (neither a
+        target nor transparent — pointing at them is an error)."""
+        return self.parent._nearest_goal_for_subagent() if self.parent is not None else None
     async def fill(self, id: step, gns: 'list[Parsed_Opr]') -> 'EditOutcome':
         """Fill a blank proof slot (or replace an existing failed step
         via the fallback path) with one or more newly-constructed
@@ -3350,6 +3201,11 @@ class Node(ABC):
                 nodes.append(node)
         if nodes and nodes[0].parent is not None and isinstance(nodes[0].parent, NonLeaf_Node):
             the_session().working_block = nodes[0].parent
+        # Tear down any worker sub-agents within the subtrees being removed (the
+        # deleted node + its descendants) before unlinking — never ancestors, so
+        # deleting a strict descendant of a parked node leaves that worker parked.
+        for node in nodes:
+            await node.aclose_all_workers()
         # Delete all, collect refresh points
         deleted_ids = seen
         refresh_points: list['Node'] = []
@@ -3559,6 +3415,8 @@ def _quickview_children_compressed(children: 'Sequence[Node]', indent: int, file
 class NonLeaf_Node(Node):
     _closed_by: Node | None # Some proof operation (e.g. Branch) may close a block, preventing all later appending to this block.
     sub_nodes: list['Node']
+    # A live sub-agent (running or parked) proving this node's subtree, or None.
+    worker_handle: 'WorkerHandle | None'
 
     class _InsertBatchResult(NamedTuple):
         created: 'list[Node]'
@@ -3572,6 +3430,7 @@ class NonLeaf_Node(Node):
         super().__init__(config, thought)
         self.sub_nodes = sub_nodes
         self._closed_by = None
+        self.worker_handle = None
     def _on_upstream_change(self) -> None:
         super()._on_upstream_change()
         for child in self.sub_nodes:
@@ -3809,6 +3668,13 @@ class NonLeaf_Node(Node):
         super().unfinished_nodes(ret)
         for child in self.sub_nodes:
             child.unfinished_nodes(ret)
+    async def discard(self) -> None:
+        if self.worker_handle is not None:
+            await self.worker_handle.aclose()
+    async def aclose_all_workers(self) -> None:
+        await self.discard()
+        for child in self.sub_nodes:
+            await child.aclose_all_workers()
     def _print_all_warnings(self, file: MyIO) -> None:
         self._print_warnings(0, file, [Warning.Position.HEADER], show_at=True)
         for child in self.sub_nodes:
@@ -3861,6 +3727,9 @@ class NonLeaf_Node(Node):
                 self._is_trivial = None
                 for sibling in self.sub_nodes[i+1:]:
                     sibling._on_upstream_change()
+                # `child` is being replaced (its children move to new_node);
+                # release child's own resources — tear down its sub-agent worker.
+                await child.discard()
                 new_node._amend_from(child)
                 if self._can_continue_before_child(new_node):
                     await new_node._refresh_me_alone(auto_intro=True)
@@ -4189,6 +4058,7 @@ class StdBlock(NonLeaf_Node):
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False):
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
         self._print_header(indent, file, show_warnings=show_warnings)
+        self._print_suspended_worker_hint(indent, file)
         title, child_indent = self._title_of_children(indent)
         if title is None:
             for step in self.sub_nodes:
@@ -4206,6 +4076,12 @@ class StdBlock(NonLeaf_Node):
                 file.write(": empty\n")
         self._print_footer(indent, file, show_warnings=show_warnings)
         return indent
+    def _print_suspended_worker_hint(self, indent: int, file: MyIO) -> None:
+        """When a sub-agent is parked on this node, tell the main agent how to
+        resume it. Shown only to the planner (workers never render this)."""
+        if self.worker_handle is not None and _rendering_for_planner():
+            print_indent(indent, file)
+            file.write(f"A sub-agent is suspended, call `subagent` tool with step {self.id} to resume it.\n")
     def does_quickview_need_detail(self) -> bool:
         if super().does_quickview_need_detail():
             return True
@@ -4248,6 +4124,7 @@ class StdBlock(NonLeaf_Node):
             self._prev_pending_goal = None
     def quickview(self, indent: int, file: MyIO) -> int:
         indent = super().quickview(indent, file)
+        self._print_suspended_worker_hint(indent, file)
         self._quickview_pending_footer(indent, file)
         return indent
     def print_string(self, indent: int, show_warnings: bool = True) -> str:
@@ -4413,6 +4290,8 @@ class StdBlock(NonLeaf_Node):
 
 
 class GoalContainer(NonLeaf_Node):
+    def _nearest_goal_for_subagent(self) -> 'Node | None':
+        return None  # a container of goals, not itself a delegatable goal
     def _child_has_ending_opr(self, child : Node) -> bool:
         # Non-last children emit NEXT to advance to the next sibling
         # subgoal; the last child emits nothing. If the container as
@@ -4461,6 +4340,8 @@ class GoalNode(StdBlock):
     case_hyps: list[Hyp] | None
     case_tvars: list[tuple[varname, typ]] | None
 
+    def _nearest_goal_for_subagent(self) -> 'Node | None':
+        return self
     def __init__(self, config: NodeConfig, is_single_goal: bool, show_goal: bool,
                  pending_proof: 'proof | None' = None):
         super().__init__(config, "", [])
@@ -4686,6 +4567,10 @@ CASE_EXISTING = "the-existing-proof"
 
 class SubgoalMaker(GoalContainer, StdBlock):
     _can_host_inherited_children = False
+    def _nearest_goal_for_subagent(self) -> 'Node | None':
+        # A subgoal-maker's subgoals aren't independently delegatable; redirect up
+        # to the enclosing goal (overriding GoalContainer's None).
+        return self.parent._nearest_goal_for_subagent() if self.parent is not None else None
     def _should_print_done(self) -> bool:
         return bool(self.sub_nodes) and super()._should_print_done()
     def __init__(self, *args, **kwargs):
@@ -5634,7 +5519,10 @@ def _fetched_to_facts(fetched: 'list[IsabelleFact | Interaction_RetrieveForProof
 
 #### Obvious
 
-_PLANNING_SORRY_DEPTH = 2
+# Depth (count of enclosing Have/Obtain/Suffices blocks) at or beyond which a
+# FAILED Obvious is rendered with a hint to delegate the goal via the `subagent`
+# tool. Formerly the deep-Obvious auto-sorry threshold; now used only by the hint.
+_SUBAGENT_HINT_DEPTH = 2
 
 class Obvious_ToolArg(TypedDict):
     facts: list[FactByName | FactByProposition]
@@ -5650,7 +5538,6 @@ class Obvious(Leaf):
         self.fact_refs: list[IsabelleFact] | None = None
         self._found_tactic: str | None = None
         self._eval_time_ms: int | None = None
-        self._is_sorry_degraded: bool = False
 
     @classmethod
     def gen(cls, arg: Obvious_ToolArg, remaining: 'LinkedList[_RawOp]',
@@ -5682,8 +5569,22 @@ class Obvious(Leaf):
             for ref in self._raw_facts:
                 _print_raw_fact(ref, indent+1, file)
         self._print_evaluation_status(indent, file)
+        self._print_subagent_hint(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
         return indent
+    def quickview(self, indent: int, file: MyIO) -> int:
+        indent = super().quickview(indent, file)
+        self._print_subagent_hint(indent, file)
+        return indent
+    def _print_subagent_hint(self, indent: int, file: MyIO) -> None:
+        """A deeply-nested (>= _SUBAGENT_HINT_DEPTH) Obvious that FAILED: point the
+        main agent at the `subagent` tool to delegate this sub-goal. Shown only to
+        the planner — a worker cannot call `subagent`."""
+        if (_rendering_for_planner()
+                and self.status.status == EvaluationStatus.Status.FAILURE
+                and self._subgoal_level >= _SUBAGENT_HINT_DEPTH):
+            print_indent(indent, file)
+            file.write("This sub-goal didn't close automatically — consider delegating it with the `subagent` tool.\n")
     async def _refresh_me_alone(self, auto_intro: bool) -> None:
         if self.fact_refs is None:
             if self._raw_facts:
@@ -5712,21 +5613,14 @@ class Obvious(Leaf):
             elif self.status.status == EvaluationStatus.Status.FAILURE:
                 self.parent._is_trivial = False
     def the_operation(self) -> 'Minilang_Operation | FailureReason':
-        session = the_session()
-        if (self._subgoal_level >= _PLANNING_SORRY_DEPTH
-                and isinstance(session.role, Role_Plan)
-                and session.role.stage == PlanStage.PLANNING):
-            self._is_sorry_degraded = True
-            return Minilang_Operation.SORRY_ONLY()
-        self._is_sorry_degraded = False
+        # Always run a real sledgehammer — deep Obvious no longer degrades to
+        # sorry. Failures surface immediately at edit time, and the main agent
+        # delegates hard sub-goals on demand via the `subagent` tool.
         facts = self.fact_refs if self.fact_refs is not None else []
         return Minilang_Operation.HAMMER(facts, 30)
     def assemble(self, output: 'list[Minilang_Operation] | None' = None) -> 'list[Minilang_Operation]':
         if output is None:
             output = []
-        if self._is_sorry_degraded:
-            output.append(Minilang_Operation.SORRY_ONLY())
-            return output
         facts = self.fact_refs if self.fact_refs is not None else []
         cached: tuple[str, int] | None = None
         if self._found_tactic and self._found_tactic != "" and self._eval_time_ms is not None:
@@ -6780,6 +6674,8 @@ class Have_ToolArg(TypedDict):
 class Have(StdBlock):
     _is_declarative = True
     _changes_pending_goal = False
+    def _nearest_goal_for_subagent(self) -> 'Node | None':
+        return self
     def __init__(self, config: NodeConfig, arg : Have_ToolArg,
                  parsed_proof: 'proof | None' = None):
         super().__init__(config, arg["thought"], [])
@@ -6920,6 +6816,8 @@ class SetupRewriting_ToolArg(TypedDict):
 class SetupRewriting(StdBlock):
     _is_declarative = True
     _changes_pending_goal = False
+    def _nearest_goal_for_subagent(self) -> 'Node | None':
+        return None  # a rewriting-setup directive (empty body), not a goal
     def __init__(self, config: NodeConfig, arg: SetupRewriting_ToolArg,
                  parsed_proof: 'proof | None' = None):
         super().__init__(config, arg["thought"], [])
@@ -7022,6 +6920,8 @@ class Suffices_ToolArg(TypedDict):
 
 @proof_operation("Suffices", Suffices_ToolArg)
 class Suffices(StdBlock):
+    def _nearest_goal_for_subagent(self) -> 'Node | None':
+        return self
     def __init__(self, config: NodeConfig, arg : Suffices_ToolArg,
                  parsed_proof: 'proof | None' = None):
         super().__init__(config, arg["thought"], [])
@@ -7107,6 +7007,8 @@ class Obtain_ToolArg(TypedDict):
 class Obtain(StdBlock):
     _is_declarative = True
     _changes_pending_goal = False
+    def _nearest_goal_for_subagent(self) -> 'Node | None':
+        return self
     def __init__(self, config: NodeConfig, arg : Obtain_ToolArg,
                  parsed_proof: 'proof | None' = None):
         super().__init__(config, arg["thought"], [])
@@ -7964,6 +7866,8 @@ class Induction(CaseSplit_Like):
 
 class GlobalEnv(StdBlock):
     _body_affects_siblings = True
+    def _nearest_goal_for_subagent(self) -> 'Node | None':
+        return None  # the global-lemmas container, not a single delegatable goal
     def _validate_child_class(self, cls: 'type[Node]') -> 'CannotEdit | None':
         if not cls._is_declarative:
             op_name = OPERATION_REGISTRY_BY_CLS.get(cls, cls.__name__)
@@ -8293,6 +8197,13 @@ _session_var: contextvars.ContextVar['Session'] = contextvars.ContextVar('_sessi
 def the_session() -> 'Session':
     return _session_var.get()
 
+def _rendering_for_planner() -> bool:
+    """True when the current rendering session is the main (planner) agent.
+    Hints that point at the planner-only `subagent` tool are shown only then —
+    never to workers or interaction forks (and never crash outside a session)."""
+    sess = _session_var.get(None)
+    return sess is not None and sess.is_major
+
 def tn(t: tool) -> str:
     """Resolve abstract tool id to driver-specific name via the current session."""
     return the_session().tool_name(t)
@@ -8313,13 +8224,11 @@ yaml.add_representer(str, _str_representer)
 
 #### Role ADT
 
-class PlanStage(Enum):
-    PLANNING = "planning"
-    FINISHING = "finishing"
-
 @dataclass
-class Role_Plan:
-    stage: PlanStage = PlanStage.PLANNING
+class Role_Major:
+    # The single continuous main (planner) agent. Stageless: it runs real proofs
+    # throughout and delegates hard sub-goals on demand via the `subagent` tool.
+    pass
 
 @dataclass
 class Role_Worker:
@@ -8337,12 +8246,7 @@ class Role_Interaction:
     resume_id: str | None
     mode: ForkingMode
 
-Role = Role_Plan | Role_Worker | Role_Interaction
-
-# Hard cap on lemma-request nesting depth (worker → lemma sub-agent → … ). When
-# the live worker_stack reaches this, the whole proof aborts as
-# resource_exhausted (a soft warning appears in the review prompt before then).
-WORKER_NESTING_LIMIT: int = 10
+Role = Role_Major | Role_Worker | Role_Interaction
 
 
 class Runtime:
@@ -8359,10 +8263,6 @@ class Runtime:
         self.total_tool_calls: int = 0
         self._budget_start_time: float | None = None
         self.worker_max_tool_calls: int = 500
-        # Live WorkerHandle nesting stack (FINISHING worker + any lemma
-        # sub-agents it spawned, deepest last). Drives the lemma-request nesting
-        # backstop and guarantees no worker leaks on terminate (aclose_all).
-        self.worker_stack: list = []
 
     def next_pit_name(self) -> str:
         i = self._pit_counter
@@ -8421,7 +8321,7 @@ class Session:
         else:
             self.runtime = Runtime()
         _session_var.set(self)
-        self.role: Role = role if role is not None else Role_Plan()
+        self.role: Role = role if role is not None else Role_Major()
         self.last_proof_op_time: float = time()
         self.logger = logger or (parent.logger if parent else None)
         self.working_block: 'NonLeaf_Node | None' = None
@@ -8563,11 +8463,11 @@ class Session:
 
     @property
     def is_major(self) -> bool:
+        # The top-level (main) session — no parent. This is the planner / main
+        # agent; workers and interaction forks are sub-sessions. Owns log files
+        # and working-dir cleanup, and gates the planner-only `subagent` tool.
         return self.parent is None
 
-    @property
-    def is_planning(self) -> bool:
-        return isinstance(self.role, Role_Plan)
     @property
     def is_worker(self) -> bool:
         return isinstance(self.role, Role_Worker)
@@ -8740,7 +8640,7 @@ class Session:
                 f"call `{self.tool_name(TOOL_REFUTE_OR_SURRENDER)}` with your analysis if you believe so.\n"
                 "The goal may rely on background lemmas that are not yet available. "
                 f"Search for them with `{self.tool_name(TOOL_SEARCH)}` first; "
-                f"if a needed lemma truly does not exist, prove it as a `Have` node{" under `global`" if self.is_planning else ""}.\n"
+                f"if a needed lemma truly does not exist, prove it as a `Have` node{" under `global`" if self.is_major else ""}.\n"
                 "Be concise in text output.\n"
                 "\n"
                 "## Tools\n"
@@ -8809,7 +8709,7 @@ class Session:
                 "The goal may rely on background lemmas that are not yet available. "
                 f"Search for them with `{self.tool_name(TOOL_SEARCH)}` first; "
                 "if a needed lemma truly does not exist, prove it as a `Have` node under `global`.\n"
-            ) if self.is_planning else ""
+            ) if self.is_major else ""
             return (
                 "An incomplete proof is provided in `proof.yaml` — read it to see the goal and current proof.\n"
                 f"Analyze the proof goal, plan a proof, and complete it using tools `{self.tool_name(TOOL_EDIT)}` and `{self.tool_name(TOOL_DELETE)}`.\n"
@@ -8846,6 +8746,11 @@ class Session:
         Subsessions do not close shared log files — only major sessions do."""
         if not self.is_major:
             return
+        # Tear down any worker sub-agents still attached to the tree (running or
+        # parked on a review/lemma future) so their asyncio tasks don't leak on
+        # shutdown. `aclose` is idempotent and tolerates already-finished workers.
+        if getattr(self, 'root', None) is not None:
+            await self.root.aclose_all_workers()
         # Major session: write end markers and close log files
         if self.log_dir is not None:
             session_end = {
@@ -8889,7 +8794,7 @@ class Session:
 
     async def initialize(self, root: Root):
         match self.role:
-            case Role_Plan():
+            case Role_Major():
                 if hasattr(self, 'root'):
                     raise InternalError("The session is already initialized.")
                 self.root = root
@@ -9093,19 +8998,6 @@ class Session:
         self.showed_cancelled_notice = False
         self.shown_HAVE_fact_names.clear()
 
-    def _collect_failed_obvious_parents(self) -> 'set[NonLeaf_Node]':
-        """Walk the proof tree and collect deduplicated parents of failed Obvious nodes."""
-        result: 'set[NonLeaf_Node]' = set()
-        def visit(node: 'Node'):
-            if isinstance(node, Obvious) and node.status.status == EvaluationStatus.Status.FAILURE:
-                if node.parent is not None:
-                    result.add(node.parent)
-            elif isinstance(node, NonLeaf_Node):
-                for child in node.sub_nodes:
-                    visit(child)
-        visit(self.root)
-        return result
-
     @property
     def proof_scope_root(self) -> 'Node':
         """The node whose subtree defines this session's proof scope: the
@@ -9121,6 +9013,38 @@ class Session:
         unfinished: 'set[Node]' = set()
         self.proof_scope_root.unfinished_nodes(unfinished)
         return unfinished
+
+    def _worker_lock_for(self, step: 'step') -> "WorkerHandle | None":
+        """The parked/running worker (if any) that an ``edit`` targeting ``step``
+        must not disturb: a handle on ``step``'s node, an ancestor, or a
+        descendant (all the nodes "comparable to" a parked worker). On a
+        not-yet-created slot (e.g. a ``fill`` target) fall back to the parent
+        prefix, so filling a parked node's blank child slot is still blocked.
+        Returns the blocking handle, or ``None`` if the edit is allowed."""
+        try:
+            node = self.root.locate_node(step)
+        except NodeNotFound:
+            if '.' in step:
+                parent_step = step.rsplit('.', 1)[0]
+                try:
+                    parent = self.root.locate_node(parent_step)
+                except NodeNotFound:
+                    return None
+                return _handle_on_chain(parent, descendants=False)
+            return _handle_on_chain(self.root, descendants=False)
+        return _handle_on_chain(node, descendants=True)
+
+    def _worker_in_scope_of(self, step: 'step') -> "WorkerHandle | None":
+        """A parked worker whose scope strictly CONTAINS ``step`` — i.e. a worker
+        is a strict ancestor of ``step``'s node, so ``step`` lies inside that
+        sub-agent's territory. Used to reject ``amend`` inside a worker's scope
+        (amend is otherwise allowed; the target's own worker, if any, is torn
+        down by ``_amend_child``). Returns the blocking handle, or ``None``."""
+        try:
+            node = self.root.locate_node(step)
+        except NodeNotFound:
+            return None
+        return _first_worker_in_ancestors(node)
 
     async def prefetch_worker_premises(self) -> None:
         """Resolve the standard-printed propositions of every fact in scope before the
@@ -9206,106 +9130,6 @@ class Session:
         _quickview_children_compressed(target.sub_nodes, indent, file)
         target._quickview_pending_footer(indent, file)
 
-    async def add_lemma_node(self, spec: dict, anchor: 'NonLeaf_Node | None') -> 'Have | None':
-        """Author one planner-requested helper lemma as a Have node; return it.
-
-        Positioning (plan decision 3): if ``anchor`` (the requesting worker's
-        target) is directly under ``global_env``, insert the lemma immediately
-        before it there; otherwise append to the end of ``global_env``. Returns
-        the committed Have node, or ``None`` if the spec is incomplete / fails to
-        parse / opens as a non-SUCCESS node. Per decision 4 a FAILURE node is NOT
-        rolled back — it stays (the planner is forced to fix it); ``None`` only
-        signals authoring failure to the caller.
-
-        (Authoring is a pure tree edit — it never spawns a sub-agent — so callers
-        may loop over several specs without risking the trampoline frame-loss
-        that proving incurs.)"""
-        name = spec.get("name", "")
-        english = spec.get("english", "")
-        conclusion = spec.get("conclusion", "")
-        if not name or not conclusion:
-            return None
-        statement: dict = {"english": english, "conclusion": conclusion}
-        if "for_any" in spec:
-            statement["for_any"] = spec["for_any"]
-        if "premises" in spec:
-            statement["premises"] = spec["premises"]
-        have_arg: Have_ToolArg = {
-            "thought": f"Helper lemma: {english}",
-            "statement": statement,  # type: ignore[typeddict-item]
-            "name": name,
-        }
-        try:
-            gns = Parse_Op_List([{"operation": "Have", **have_arg}], "lemma")
-        except AoA_Error:
-            return None
-        self.age += 1
-        if anchor is not None and anchor.parent is self.root.global_env:
-            outcome = await anchor.insert_before_me(gns)
-        else:
-            outcome = await self.root.global_env.append(gns)
-        self.refresh_YAML()
-        if not outcome.committed:
-            return None
-        have_node = outcome.committed[-1]
-        if not isinstance(have_node, Have):
-            return None
-        if have_node.status.status in (
-                EvaluationStatus.Status.FAILURE, EvaluationStatus.Status.CANCELLED):
-            return None  # decision 4: node kept; None = authoring failure
-        self.shown_HAVE_fact_names[name] = list(have_node.for_any)
-        return have_node
-
-    async def complete_proof(self, response: str) -> 'tuple[str, bool]':
-        """Drive the FINISHING flow from inside the planning agent loop.
-
-        Called by the edit/delete tools when the proof structure is complete
-        (all gaps closed, possibly via ``sorry``-degraded steps). Switches to
-        the FINISHING stage and re-evaluates the tree to surface the deferred
-        failures, then dispatches a Worker agent per failed step via
-        ``fork_interaction``. Returns the edit/delete tool's
-        ``(message, is_error)`` response — so the planning agent's conversation
-        context is never interrupted.
-
-        ``response`` is the triggering edit/delete tool's own message (which
-        already reports what was filled and "Congratulations! All goals are
-        proven."). When the proof completes with NO Worker dispatch, that
-        message is still accurate, so it is returned verbatim. When Workers ran
-        and all proved, ``response`` is stale (its Outline predates the Workers'
-        steps), so a fresh "All goals proved!" is returned instead. When a
-        Worker leaves an unproved outcome (surrender / failure / refutation
-        accepted) the Worker outcome message is returned, with the stage
-        restored to PLANNING so the agent can replan in place.
-        """
-        assert isinstance(self.role, Role_Plan)
-        self.role.stage = PlanStage.FINISHING
-        await self.root._refresh_me_alone(auto_intro=False)
-        failed_parents = self._collect_failed_obvious_parents()
-        if not failed_parents:
-            await self.interrupt()
-            return (response, False)
-        self.refresh_YAML()
-        choose = Interaction_ChooseTarget(failed_parents, self, is_first_entry=True)
-        try:
-            result = await self.fork_interaction(choose)
-        finally:
-            # Guarantee no worker leaks: aclose the WHOLE nesting stack (the
-            # FINISHING worker plus any lemma sub-agents it spawned), not just
-            # the last active handle — a nested sub-agent would otherwise stay
-            # blocked forever on its review future if the fork exits without an
-            # answer (e.g. fork-loop exhaustion).
-            await aclose_all(self.runtime.worker_stack)
-        if result is None:
-            # All targets proved after dispatching Worker(s). The triggering
-            # edit's `response` is now stale (its Outline predates the Workers'
-            # added steps), so return a fresh synthetic message instead. This
-            # branch is production-only (it requires real fork_interaction), so
-            # it has no model-test/golden impact.
-            await self.interrupt()
-            return ("All goals proved!", False)
-        self.role.stage = PlanStage.PLANNING
-        return (result, False)
-
     async def request_restart(self):
         """Request a context restart.  Sets ``self.quit_info = Restart()`` to
         break this session's driver loop, then interrupts.  The loop's restart
@@ -9371,10 +9195,9 @@ def agent_driver(name : str):
 
 
 # ===== Worker orchestration =====
-# Moved here from language_model_driver.py: the worker event types,
-# ``WorkerHandle``, ``LemmaDrive`` and helpers form one mutually-recursive
-# state machine with the ``Interaction_*`` classes above, so they live in
-# the same module (removes the former cross-module circular import).
+# The worker event types and ``WorkerHandle`` form one state machine with the
+# ``Interaction_ReviewRefutation`` fork above, so they live in the same module
+# (removes the former cross-module circular import).
 
 @dataclass
 class WorkerComplaint:
@@ -9419,22 +9242,51 @@ class WorkerRequestLemmas:
 @dataclass
 class WorkerDone:
     """The worker task finished. ``success`` reflects whether the target goal
-    is proved. Synthesised by ``WorkerHandle`` when the task completes without
-    a pending event."""
+    is proved. ``detail`` carries the worker's termination reason (its
+    ``quit_info``, e.g. a budget/timeout/retry limit) when it stopped without
+    proving. Synthesised by ``WorkerHandle`` when the task completes without a
+    pending event."""
     success: bool
+    detail: str = ""
+
+
+@dataclass
+class WorkerYield:
+    """The outcome of one ``WorkerHandle.run_until_yield`` excursion, consumed by
+    the ``subagent`` tool logic. ``kind`` discriminates; the other fields are
+    kind-specific. ``lemmas`` (the park case) is the worker's wish-list."""
+    kind: str  # proved | could_not_prove | surrendered | refute_accepted | lemmas
+    detail: str = ""
+    reason: 'str | None' = None
+    lemmas: 'list | None' = None
+
+    @classmethod
+    def proved(cls) -> 'WorkerYield':
+        return cls(kind="proved")
+    @classmethod
+    def could_not_prove(cls, detail: str = "") -> 'WorkerYield':
+        return cls(kind="could_not_prove", detail=detail)
+    @classmethod
+    def surrendered(cls, detail: str) -> 'WorkerYield':
+        return cls(kind="surrendered", detail=detail)
+    @classmethod
+    def refute_accepted(cls, reason: 'str | None', detail: str) -> 'WorkerYield':
+        return cls(kind="refute_accepted", reason=reason, detail=detail)
+    @classmethod
+    def lemmas(cls, detail: str, lemmas: 'list | None') -> 'WorkerYield':
+        return cls(kind="lemmas", detail=detail, lemmas=lemmas)
 
 
 class WorkerHandle:
-    """Owns a running worker sub-session and mediates between it and the
-    planning agent's FINISHING interactions.
+    """Owns a running worker sub-session and mediates between it and the single
+    main (planner) agent.
 
-    The worker runs as its own asyncio task. Its lifecycle events arrive
-    either through ``_event_queue`` (refute / surrender, pushed by the
-    ``refute_or_surrender`` tool) or as task completion (mapped to ``WorkerDone``).
-    ``process`` consumes one event and either returns a planning-agent-facing
-    string, returns ``None`` (all targets proved), or raises
-    ``ContinuingInteraction`` to chain the next FINISHING interaction without
-    breaking the planning agent's context."""
+    The worker runs as its own asyncio task. Its lifecycle events arrive either
+    through ``_event_queue`` (refute / surrender / request_lemmas, pushed by the
+    worker's tools) or as task completion (mapped to ``WorkerDone``). The handle
+    is attached to its target ``NonLeaf_Node`` (``node.worker_handle``) while the
+    worker runs or is parked; ``run_until_yield`` drives it until it yields
+    control back to the main agent (terminal outcome or a request_lemmas park)."""
 
     def __init__(self, target: NonLeaf_Node, session: 'LMDriver'):
         self.target = target
@@ -9446,25 +9298,13 @@ class WorkerHandle:
         # Pending lemma-request review (resolved with a feedback STRING — a
         # distinct result type from _pending_review's (accepted, reason) tuple).
         self._pending_lemma_request: 'asyncio.Future[str] | None' = None
-        # What to chain when THIS worker finishes / how its reviews resume:
-        # the originating Interaction_ChooseTarget for a FINISHING worker, or a
-        # LemmaDrive for a lemma sub-agent (None until set by the spawner).
-        self.continuation: Any = None
 
     def start(self, suggestions: str = "",
               useful_lemmas: list[str] | None = None) -> None:
         ctx = contextvars.copy_context()
         loop = asyncio.get_running_loop()
-        # Track live nesting depth: pushed here, popped at the terminal outcome
-        # in process_core (and idempotently in aclose as a safety net).
-        self.session.runtime.worker_stack.append(self)
         self._task = loop.create_task(
             self._run(suggestions, useful_lemmas or []), context=ctx)
-
-    def _pop_from_stack(self) -> None:
-        stack = self.session.runtime.worker_stack
-        if self in stack:
-            stack.remove(self)
 
     async def _run(self, suggestions: str, useful_lemmas: list[str]) -> None:
         _session_var.set(None)  # type: ignore
@@ -9480,7 +9320,10 @@ class WorkerHandle:
             await sub.initialize(session.root)
         except Exception as e:
             session.warn_AoA_opr(f"Worker init failed for {self.target.id}: {e}")
-            return
+            # Expose the failure rather than swallow it (would otherwise surface
+            # as a vague could_not_prove): let it propagate to the fatal handler.
+            raise InternalError(
+                f"sub-agent on {self.target.id} failed to initialize: {e}") from e
 
         tag = f"[{sub._fork_name}]"
         session.log_interaction("worker", f"{tag} spawned")
@@ -9491,6 +9334,11 @@ class WorkerHandle:
             raise
         except Exception as e:
             session.warn_AoA_opr(f"{tag} failed: {type(e).__name__}: {e}")
+            # A worker crashing internally is a bug — re-raise so it propagates
+            # (via _wait_next_event → run_until_yield → the executor's sys.exit)
+            # instead of being masked as could_not_prove.
+            raise InternalError(
+                f"sub-agent on {self.target.id} crashed: {type(e).__name__}: {e}") from e
         finally:
             session._accumulate_subagent_costs(sub)
             try:
@@ -9522,72 +9370,59 @@ class WorkerHandle:
         # (proof_scope_unfinished_nodes → target.unfinished_nodes).
         unfinished: set = set()
         self.target.unfinished_nodes(unfinished)
-        return WorkerDone(success=not unfinished)
+        # When it stopped without proving, carry the worker's own termination
+        # reason (quit_info, e.g. a budget/timeout/retry limit) to the planner.
+        detail = ""
+        if unfinished and self._sub is not None and self._sub.quit_info is not None:
+            q = self._sub.quit_info
+            detail = q.detail or q.reason
+        return WorkerDone(success=not unfinished, detail=detail)
 
-    async def process_core(self) -> 'str | None':
-        """Generic event consumer shared by the FINISHING worker and lemma
-        sub-agents. Consumes ONE worker event:
+    async def run_until_yield(self) -> 'WorkerYield':
+        """Drive the worker until it yields control back to the main agent.
+        Re-entered on resume (after the main agent answers a request_lemmas).
 
-        - ``WorkerRefute`` / ``WorkerRequestLemmas`` (non-terminal): store the
-          pending future and ``raise ContinuingInteraction`` with the review
-          interaction, carrying ``self.continuation`` (the originating
-          ``Interaction_ChooseTarget`` for a FINISHING worker, or a
-          ``LemmaDrive`` for a lemma sub-agent). The review's ``answer`` is
-          responsible for the post-review resume.
-        - ``WorkerSurrender`` / ``WorkerDone(success=False)`` (terminal): pop the
-          nesting stack, return a planner-facing string.
-        - ``WorkerDone(success=True)`` (terminal): pop the stack, return ``None``.
+        - ``WorkerRefute`` → reviewed in-loop via a fork
+          (``Interaction_ReviewRefutation``). Reject → the worker resumes
+          transparently (loop continues, main agent never sees it); accept → the
+          worker winds down and we return a ``refute_accepted`` yield.
+        - ``WorkerRequestLemmas`` → PARK: keep the handle on the node, store the
+          pending future, and return the wish-list to the main agent.
+        - ``WorkerSurrender`` / ``WorkerDone`` → detach and return the outcome."""
+        while True:
+            event = await self._wait_next_event()
+            match event:
+                case WorkerRefute():
+                    self._pending_review = event.response_future
+                    complaint = WorkerComplaint(kind="refute", detail=event.detail)
+                    accepted, reason = await self.session.fork_interaction(
+                        Interaction_ReviewRefutation(self.target, complaint, self))
+                    if accepted:                  # worker is winding down
+                        await self.wait_finish()
+                        self._detach()
+                        return WorkerYield.refute_accepted(reason, event.detail)
+                    continue                      # rejected → worker resumed in-loop
+                case WorkerRequestLemmas():
+                    self._pending_lemma_request = event.response_future
+                    return WorkerYield.lemmas(event.detail, event.lemmas)  # PARK
+                case WorkerSurrender():
+                    await self.wait_finish()
+                    self._detach()
+                    return WorkerYield.surrendered(event.detail)
+                case WorkerDone(success=True):
+                    await self.wait_finish()
+                    self._detach()
+                    return WorkerYield.proved()
+                case _:  # WorkerDone(success=False)
+                    await self.wait_finish()
+                    self._detach()
+                    return WorkerYield.could_not_prove(event.detail)
 
-        Does NOT do FINISHING multi-target chaining — that is ``process``'s job.
-        ``None`` always means "this worker succeeded" (see M4)."""
-        event = await self._wait_next_event()
-        match event:
-            case WorkerRefute():
-                self._pending_review = event.response_future
-                complaint = WorkerComplaint(
-                    kind="refute", detail=event.detail)
-                raise ContinuingInteraction(
-                    new_interaction=Interaction_ReviewRefutation(
-                        self.target, complaint, self, self.continuation))
-            case WorkerRequestLemmas():
-                self._pending_lemma_request = event.response_future
-                raise ContinuingInteraction(
-                    new_interaction=Interaction_ReviewLemmaRequest(
-                        self.target, event.detail, event.lemmas, self,
-                        self.continuation))
-            case WorkerSurrender():
-                await self.wait_finish()
-                self._pop_from_stack()
-                self.session.refresh_YAML()
-                return (f"Worker on {self.target.id} surrendered: "
-                        f"{event.detail}\n"
-                        f"Reconsider the proof plan for this step.")
-            case WorkerDone(success=True):
-                await self.wait_finish()
-                self._pop_from_stack()
-                self.session.refresh_YAML()
-                return None
-            case _:  # WorkerDone(success=False)
-                await self.wait_finish()
-                self._pop_from_stack()
-                self.session.refresh_YAML()
-                return (f"Worker on {self.target.id} could not prove the goal. "
-                        f"Reconsider the proof plan for this step.")
-
-    async def process(self, choose_target: 'Interaction_ChooseTarget'):
-        """FINISHING-stage wrapper over ``process_core``: records the
-        continuation and, on worker success (``None``), applies the
-        ``Interaction_ChooseTarget`` multi-target chaining
-        (``failed_parents.discard`` + re-raise to pick the next target)."""
-        self.continuation = choose_target
-        result = await self.process_core()
-        if result is None:                       # WorkerDone(success=True)
-            choose_target.failed_parents.discard(self.target)
-            if not choose_target.failed_parents:
-                return None
-            choose_target.is_first_entry = False
-            raise ContinuingInteraction(new_interaction=choose_target)
-        return result                            # surrender / failure string
+    def _detach(self) -> None:
+        """Clear this handle from its node on a terminal outcome, then refresh."""
+        if self.target.worker_handle is self:
+            self.target.worker_handle = None
+        self.session.refresh_YAML()
 
     def resolve_review(self, accepted: bool, reason: str | None = None) -> None:
         fut = self._pending_review
@@ -9626,135 +9461,44 @@ class WorkerHandle:
     async def aclose(self) -> None:
         """Idempotent teardown that GUARANTEES the worker is gone: cancel it,
         then await the task (swallowing ``CancelledError``). Safe to call when
-        the worker already finished. Used by ``Session.complete_proof`` in a
-        ``finally`` so a worker can never leak if the review fork exits without
-        an answer (e.g. fork-loop exhaustion → the worker would otherwise stay
-        blocked forever on its review future)."""
+        the worker already finished. Detaches the handle from its node. Used by
+        ``Node.aclose_all_workers`` (session-close sweep and delete teardown)."""
         self.cancel()
         await self.wait_finish()
-        self._pop_from_stack()
+        if self.target.worker_handle is self:
+            self.target.worker_handle = None
 
 
-async def aclose_all(handles: list['WorkerHandle']) -> None:
-    """``aclose`` every handle on a nesting stack, deepest-first. Snapshots the
-    list (each ``aclose`` mutates ``worker_stack``) and swallows errors so one
-    failing teardown can't strand the rest."""
-    for h in list(reversed(handles)):
-        try:
-            await h.aclose()
-        except Exception:
-            pass
-
-
-async def _abort_to_planning(planner: 'LMDriver') -> str:
-    """proof-failure unwind (plan decision 5): a planner-authored lemma could
-    not be proved. Keep ALL nodes (no rollback — decision 4), tear down the
-    whole nesting stack, and return a re-plan message that collapses the review
-    fork back to ``complete_proof`` (which restores PLANNING). Abandons any other
-    in-flight FINISHING targets, exactly like accepting a refutation."""
-    await aclose_all(planner.runtime.worker_stack)
-    planner.refresh_YAML()
-    # DRAFT wording (pending user review — see plan §"User-facing text").
-    return ("A helper lemma could not be proved. The relevant Have node(s) have "
-            "been kept in place; returning to planning so you can revise the "
-            "proof strategy (fix or remove the unproved lemma, or take a "
-            "different approach).")
-
-
-async def _abort_nesting(planner: 'LMDriver') -> str:
-    """Nesting backstop (plan decision 7): the live worker stack reached
-    WORKER_NESTING_LIMIT. End the whole ``by aoa`` as resource_exhausted — set
-    the MAJOR session's terminal quit_info, tear down the stack, interrupt the
-    major so its run loop stops promptly, and return (collapsing the fork back to
-    ``complete_proof``; the loop then breaks on the terminal quit_info)."""
-    major = planner
-    while major.parent is not None:
-        major = major.parent
-    major.quit_info = ResourceExhausted(
-        f"lemma-request nesting exceeded depth {WORKER_NESTING_LIMIT}")
-    await aclose_all(planner.runtime.worker_stack)
-    await major.interrupt()
-    # DRAFT wording (pending user review).
-    return (f"Lemma-request nesting exceeded the limit of {WORKER_NESTING_LIMIT}; "
-            f"aborting the proof.")
-
-
-async def _resume_worker(handle: 'WorkerHandle'):
-    """Resume a worker whose review just resolved its pending future. The resume
-    STYLE depends on the worker's continuation:
-
-    - ``Interaction_ChooseTarget`` (a FINISHING worker): drive it via the
-      FINISHING wrapper ``process`` so multi-target chaining still applies.
-    - ``LemmaDrive`` (a lemma sub-agent): re-drive it to its terminal outcome
-      with ``process_core`` (may itself raise ``ContinuingInteraction`` for a
-      further nested request), then continue the owning drive's queue via
-      ``advance`` (which finalises this worker at its loop top). A non-``None``
-      terminal here means the sub-agent could not prove its lemma → abort."""
-    cont = handle.continuation
-    if isinstance(cont, Interaction_ChooseTarget):
-        return await handle.process(cont)
-    if isinstance(cont, LemmaDrive):
-        result = await handle.process_core()
-        if result is not None:
-            return await _abort_to_planning(cont.planner)
-        return await cont.advance()
-    # No continuation recorded — nothing sensible to chain to.
+def _first_worker_in_subtree(n: 'Node') -> 'WorkerHandle | None':
+    """First ``worker_handle`` at ``n`` or anywhere below it (DFS), else None."""
+    if isinstance(n, NonLeaf_Node):
+        if n.worker_handle is not None:
+            return n.worker_handle
+        for child in n.sub_nodes:
+            h = _first_worker_in_subtree(child)
+            if h is not None:
+                return h
     return None
 
 
-class LemmaDrive:
-    """Drives sequential proving of a batch of planner-authored helper lemmas for
-    one requesting worker, surviving nested requests via a re-entrant ``advance``.
+def _first_worker_in_ancestors(n: 'Node') -> 'WorkerHandle | None':
+    """First ``worker_handle`` strictly above ``n`` (its ancestors), else None."""
+    cur = n.parent
+    while cur is not None:
+        if isinstance(cur, NonLeaf_Node) and cur.worker_handle is not None:
+            return cur.worker_handle
+        cur = cur.parent
+    return None
 
-    It is the lemma-flow analogue of ``Interaction_ChooseTarget``: the queue and
-    bookkeeping live on this object (NOT on an ``answer()`` stack frame, which the
-    ``ContinuingInteraction`` trampoline would destroy on a nested request), so
-    ``advance`` can be re-entered after a nested excursion and pick up where it
-    left off."""
 
-    def __init__(self, planner: 'LMDriver', queue: list,
-                 requester: 'WorkerHandle', requester_continuation: Any,
-                 feedback: str):
-        self.planner = planner
-        self.queue = queue                         # list[(have_node, name)] remaining
-        self.requester = requester                 # worker to wake when queue empties
-        self.requester_continuation = requester_continuation
-        self.feedback = feedback
-        self.current: 'WorkerHandle | None' = None  # handle proving queue[0], if live
-
-    async def advance(self):
-        """Prove the remaining queue one sub-agent at a time, then wake + resume
-        the requesting worker. Re-entrant: also the resume point after a nested
-        review (see ``_resume_worker``). No planner re-prompt happens between
-        lemmas — only an actual nested request re-prompts (for that request)."""
-        while True:
-            # Finalise a worker just driven to terminal — either by our own
-            # process_core below (no-nested case) or by a nested review that
-            # re-drove it (_resume_worker). `current is None` on first entry.
-            if self.current is not None:
-                have_node = self.queue[0][0]
-                self.current = None
-                if have_node.is_proof_finished():
-                    self.queue.pop(0)
-                else:
-                    return await _abort_to_planning(self.planner)
-            if not self.queue:
-                break
-            # Backstop BEFORE spawning the next sub-agent (before the push that
-            # would reach the limit).
-            if len(self.planner.runtime.worker_stack) >= WORKER_NESTING_LIMIT:
-                return await _abort_nesting(self.planner)
-            have_node, _name = self.queue[0]
-            sub = WorkerHandle(have_node, self.planner)
-            sub.continuation = self
-            self.current = sub
-            sub.start()
-            result = await sub.process_core()   # may raise ContinuingInteraction
-            if result is not None:
-                # surrender / failure → lemma not proved → terminate (decision 5)
-                return await _abort_to_planning(self.planner)
-            # result is None → proved; loop top finalises (pops the queue).
-        # Queue drained — all requested lemmas proved. Wake the requester with
-        # the planner's feedback and resume it.
-        self.requester.resolve_lemma_request(self.feedback)
-        return await _resume_worker(self.requester)
+def _handle_on_chain(n: 'Node', descendants: bool) -> 'WorkerHandle | None':
+    """First ``worker_handle`` among {``n``, its ancestors} and — when
+    ``descendants`` — ``n``'s subtree. Used by the edit-lock (``_worker_lock_for``)
+    to reject an edit whose target is comparable to a parked worker's node."""
+    if descendants:
+        h = _first_worker_in_subtree(n)            # n itself + descendants
+        if h is not None:
+            return h
+    elif isinstance(n, NonLeaf_Node) and n.worker_handle is not None:
+        return n.worker_handle                     # n itself (no descendants)
+    return _first_worker_in_ancestors(n)

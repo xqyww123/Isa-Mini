@@ -6,7 +6,7 @@ import asyncio
 from time import time
 from typing import Awaitable, Callable, TypeVar
 
-from .model import AoA_Error, Role_Plan, Session
+from .model import AoA_Error, Session
 
 _T = TypeVar("_T")
 
@@ -38,22 +38,14 @@ class LMDriver(Session):
     async def run(self):
         self._on_start_run()
         try:
-            match self.role:
-                case Role_Plan():
-                    await self._run_planning()
-                case _:
-                    await self._run_agent_loop()
+            # Single continuous agent loop for every role. The main (planner)
+            # agent runs real proofs throughout and delegates hard sub-goals on
+            # demand via the `subagent` tool; workers run the same loop scoped to
+            # their target. There is no separate FINISHING stage anymore.
+            await self._run_agent_loop()
         except asyncio.CancelledError:
             self.warn_AoA_opr("Cancelled (Isabelle interrupted)")
             raise
-
-    async def _run_planning(self):
-        # The FINISHING flow (target selection, worker dispatch, refutation
-        # review) is now driven from inside the agent loop via
-        # ``Session.complete_proof`` (called by the edit/delete tools when the
-        # proof structure is complete). This keeps the planning agent's
-        # conversation context intact across the whole proof.
-        await self._run_agent_loop()
 
     async def _with_retry(self, fn: Callable[[], Awaitable]):
         """Retry *fn()* on quota exhaustion or transient API errors."""

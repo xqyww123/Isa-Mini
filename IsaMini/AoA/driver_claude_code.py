@@ -101,18 +101,27 @@ class ClaudeCode(LMDriver):
         "recall": "Read",
         "request_lemmas": "mcp__proof__request_lemmas",
         "refute_or_surrender": "mcp__proof__refute_or_surrender",
+        "subagent": "mcp__proof__subagent",
         "answer_indexes": "mcp__proof__answer_indexes",
         "answer_index": "mcp__proof__answer_index",
         "answer_indexes_or_name": "mcp__proof__answer_indexes_or_name",
         "answer_indexes_or_spec": "mcp__proof__answer_indexes_or_spec",
         "answer_instantiate": "mcp__proof__answer_instantiate",
-        "answer_target_goal": "mcp__proof__answer_target_goal",
         "answer_refutation": "mcp__proof__answer_refutation",
-        "answer_lemma_request": "mcp__proof__answer_lemma_request",
     }
     TOOL_WHITELIST = _NON_PROOF_TOOLS + list(_TOOL_NAME_MAP.values())
+    # subagent is the planner's tool only; precompute the worker/fork allow-list
+    # (TOOL_WHITELIST minus subagent) once at class-definition time. (Statements,
+    # not a comprehension, so the class-body name _TOOL_NAME_MAP stays in scope.)
+    _WORKER_TOOL_WHITELIST = list(TOOL_WHITELIST)
+    _WORKER_TOOL_WHITELIST.remove(_TOOL_NAME_MAP["subagent"])
     COMPACT_THRESHOLD = 0.85
     FORK_COMPACT_THRESHOLD = 0.99
+
+    def _role_allowed_tools(self) -> list[str]:
+        """SDK tool allow-list for this session's role. `subagent` is hidden from
+        workers and interaction forks (also absent from their MCP tool list)."""
+        return self.TOOL_WHITELIST if self.is_major else self._WORKER_TOOL_WHITELIST
 
     def tool_name(self, t: str) -> str:
         return self._TOOL_NAME_MAP.get(t, t)
@@ -213,7 +222,7 @@ class ClaudeCode(LMDriver):
         self._mcp_url = await self._http_server.register_session(
             self._session_id, self)
 
-        if self.is_planning:
+        if self.is_major:
             with open(self.YAML_path, "w", encoding="utf-8") as f:
                 root.print(0, MyIO(f), update_line=True, show_warnings=True)
         elif self.is_worker:
@@ -228,7 +237,7 @@ class ClaudeCode(LMDriver):
                 system_prompt=self.system_prompt(),
                 cwd=self.working_dir,
                 permission_mode="default",
-                allowed_tools=self.TOOL_WHITELIST,
+                allowed_tools=self._role_allowed_tools(),
                 mcp_servers={"proof": {"type": "http", "url": self._mcp_url}},
                 env={"CLAUDE_CODE_ATTRIBUTION_HEADER": "0"},
                 settings=json.dumps({"autoCompactWindow":
@@ -323,7 +332,7 @@ class ClaudeCode(LMDriver):
         self._conversation_id = pre_tool_input.get("session_id") or self._conversation_id
 
         # 1. Check if tool is in whitelist
-        if tool not in self.TOOL_WHITELIST:
+        if tool not in self._role_allowed_tools():
             return {
                 "continue_": False,
                 "hookSpecificOutput": {
@@ -560,7 +569,7 @@ class ClaudeCode(LMDriver):
                 }],
             },
         })
-        allowed = ",".join(self.TOOL_WHITELIST)
+        allowed = ",".join(self._role_allowed_tools())
         launcher_path = os.path.join(self.working_dir, "launch_claude.sh")
         error_log = os.path.join(self.working_dir, "claude_error.log")
         with open(launcher_path, "w") as f:
@@ -801,7 +810,7 @@ class ClaudeCode(LMDriver):
             fork_session=fork_session,
             cwd=self.working_dir,
             permission_mode="default",
-            allowed_tools=self.TOOL_WHITELIST,
+            allowed_tools=self._role_allowed_tools(),
             mcp_servers={"proof": {"type": "http", "url": fork_url}},
             env={"CLAUDE_CODE_ATTRIBUTION_HEADER": "0"},
             settings=json.dumps({"autoCompactWindow":

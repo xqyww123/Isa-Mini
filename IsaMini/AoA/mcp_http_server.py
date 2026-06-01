@@ -34,18 +34,19 @@ from mcp.types import Tool, ToolAnnotations, TextContent, CallToolResult
 
 from Isabelle_RPC_Host import pretty_unicode
 from .model import (
-    _session_var, Session, Node, NonLeaf_Node,
+    _session_var, Session, Node, NonLeaf_Node, StdBlock,
     IsaTerm, ContinuingInteraction, ImmediateAnswer,
     AoA_Error, ArgumentError, IsabelleError, InternalError,
     CannotDelete_Root, NodeNotFound, ProofTreeTooDeep,
+    EvaluationStatus, WorkerHandle,
     Parse_Op_List, Interaction_BadAnswer,
     AnswerIndexes, AnswerIndex, AnswerIndexesOrName, AnswerIndexesOrSpec,
-    AnswerInstantiate, AnswerTargetGoal, AnswerRefutation, AnswerLemmaRequest,
+    AnswerInstantiate, AnswerRefutation,
     TOOL_EDIT, TOOL_DELETE, TOOL_READ, TOOL_REQUEST_LEMMAS,
-    TOOL_REFUTE_OR_SURRENDER,
+    TOOL_REFUTE_OR_SURRENDER, TOOL_SUBAGENT,
     TOOL_ANSWER_INDEXES, TOOL_ANSWER_INDEX, TOOL_ANSWER_INDEXES_OR_NAME,
     TOOL_ANSWER_INDEXES_OR_SPEC, TOOL_ANSWER_INSTANTIATE,
-    TOOL_ANSWER_TARGET_GOAL, TOOL_ANSWER_REFUTATION, TOOL_ANSWER_LEMMA_REQUEST,
+    TOOL_ANSWER_REFUTATION,
     ANSWER_TOOLS,
     ALL_PROOF_TOOLS,
     Role_Worker,
@@ -81,9 +82,8 @@ _cc_answer_index_schema = _load_schema("cc_answer_index.jsonc")
 _cc_answer_indexes_or_name_schema = _load_schema("cc_answer_indexes_or_name.jsonc")
 _cc_answer_indexes_or_spec_schema = _load_schema("cc_answer_indexes_or_spec.jsonc")
 _cc_answer_instantiate_schema = _load_schema("cc_answer_instantiate.jsonc")
-_cc_answer_target_goal_schema = _load_schema("cc_answer_target_goal.jsonc")
 _cc_answer_refutation_schema = _load_schema("cc_answer_refutation.jsonc")
-_cc_answer_lemma_request_schema = _load_schema("cc_answer_lemma_request.jsonc")
+_cc_subagent_schema = _load_schema("cc_subagent.jsonc")
 
 
 
@@ -266,6 +266,30 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             error_msg = "proof_operations must be a non-empty array of proof operations"
             session.log_tool_response(_tn, f"ERROR: {error_msg}")
             return (error_msg, True)
+        # Edit-lock (main agent only; workers' own edits are never gated).
+        # `fill`/`insert_before` may not touch a node comparable to a live
+        # sub-agent (the node, an ancestor, or a descendant) — delete it first.
+        # `amend` IS allowed (it tears down the amended node's own worker via
+        # `_amend_child`) EXCEPT inside a sub-agent's scope (a worker is proving
+        # an enclosing step).
+        if session.is_major:
+            if action == "amend":
+                blocker = session._worker_in_scope_of(step)
+                if blocker is not None:
+                    wstep = blocker.target.id
+                    error_msg = (
+                        f"Cannot amend step {step} because it belongs to the scope of "
+                        f"the sub-agent on step {wstep}. If you really need to change it, "
+                        f"either call `subagent` on step {wstep} to resume that sub-agent "
+                        f"with your suggestions, or close it with `close_subagent`.")
+                    session.log_tool_response(_tn, f"ERROR: {error_msg}")
+                    return (error_msg, True)
+            else:
+                locked = session._worker_lock_for(step)
+                if locked is not None:
+                    error_msg = "This step (or a step above/below it) has a sub-agent working on it, so it can't be edited. Delete it first (which ends that sub-agent), then re-add."
+                    session.log_tool_response(_tn, f"ERROR: {error_msg}")
+                    return (error_msg, True)
         # Parse atomically: validation, splice, and Parsed_Opr construction
         # all happen in one pass — on any failure, no tree mutation has
         # occurred.
@@ -292,24 +316,6 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
 
         session.refresh_YAML()
         response, finished = await P.edit_message(root, outcome, session)
-        if finished and session.is_planning:
-            # Proof structure complete → hand off to the FINISHING flow. Snapshot
-            # now (this edit's tree state), but log the TOOL_RESPONSE only AFTER
-            # complete_proof returns, so it records what the agent actually
-            # receives: the edit message when everything proves, or a Worker
-            # outcome (surrender / failure / refutation) otherwise — not this
-            # edit's possibly-stale "all proven" message.
-            session.log_proof_tree_snapshot(f"after_{action}_step_{step}")
-            # NOTE: complete_proof runs while ToolExecutor._tool_lock is held
-            # (the `edit` case in execute() wraps this whole function in that
-            # lock). It dispatches Worker agents and can take many minutes and
-            # LLM round-trips, so the planning session's tool lock is held for
-            # that entire span. Intentional and safe: the planning loop is
-            # single-flight and already blocked awaiting this result, and each
-            # Worker fork uses its OWN executor/lock — no contention, no deadlock.
-            result = await session.complete_proof(response)
-            session.log_tool_response(_tn, result[0])
-            return result
         if finished:
             await session.interrupt()
         is_error = outcome.failure is not None and outcome.failure.is_error
@@ -373,14 +379,6 @@ async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             if not_found:
                 noun = "step" if len(not_found) == 1 else "steps"
                 response += f"\nWarning: {noun} {', '.join(not_found)} not found and skipped."
-            if finished and session.is_planning:
-                # See _edit_tool_logic: snapshot now, but log the TOOL_RESPONSE
-                # after complete_proof so it records the agent-visible result;
-                # complete_proof runs under the held _tool_lock.
-                session.log_proof_tree_snapshot("after_delete")
-                result = await session.complete_proof(response)
-                session.log_tool_response(_tn, result[0])
-                return result
             if finished:
                 await session.interrupt()
         except AoA_Error as e:
@@ -460,19 +458,10 @@ async def _answer_tool_dispatch(session: Session, tool_name: str, args: dict) ->
             case "answer_instantiate":
                 payload = AnswerInstantiate(
                     instantiations=_extract_instantiations(args))
-            case "answer_target_goal":
-                payload = AnswerTargetGoal(
-                    index=args["index"],
-                    suggestions=args["suggestions"],
-                    useful_lemmas=args["useful_lemmas"])
             case "answer_refutation":
                 payload = AnswerRefutation(
                     accept=bool(args["accept"]),
                     reason=args["reason"])
-            case "answer_lemma_request":
-                payload = AnswerLemmaRequest(
-                    lemmas=args.get("lemmas") or [],
-                    feedback=args.get("feedback", ""))
             case _:
                 error_msg = f"Unknown answer tool: {tool_name}"
                 session.log_tool_response(_tn, f"ERROR: {error_msg}")
@@ -515,8 +504,8 @@ async def _answer_tool_dispatch(session: Session, tool_name: str, args: dict) ->
             return (text, False)
 
         pending.answer.set_result(result)
-        # ``answer()`` may legitimately return None (e.g. all FINISHING targets
-        # proved) — surface it as an empty tool response, not the string "None".
+        # ``answer()`` may legitimately return None — surface it as an empty
+        # tool response, not the string "None".
         if result is None:
             result_str = ""
         elif isinstance(result, IsaTerm):
@@ -740,6 +729,11 @@ async def _refute_or_surrender_tool_logic(session: Session, args: dict) -> tuple
                 WorkerRefute(detail=detail, response_future=fut))
             accepted, review_reason = await fut
             if accepted:
+                # Set a terminal quit_info so the worker's agent loop actually
+                # winds down: the ClaudeCode loop breaks on quit_info, not on an
+                # interrupt alone, so without this it would retry until its budget
+                # exhausts while the planner blocks on wait_finish.
+                session.quit_info = Refute(review_reason or detail)
                 await session.interrupt()
                 msg = "Refutation accepted; concluding this goal."
                 session.log_tool_response(_tn, msg)
@@ -751,12 +745,14 @@ async def _refute_or_surrender_tool_logic(session: Session, args: dict) -> tuple
 
         # reason == "surrender": terminal — notify, then wind down.
         handle._event_queue.put_nowait(WorkerSurrender(detail=detail))
+        # Terminal quit_info so the worker's loop breaks cleanly (see refute above).
+        session.quit_info = Surrender(detail)
         await session.interrupt()
         msg = f"Complaint recorded ({reason})."
         session.log_tool_response(_tn, msg)
         return (msg, False)
 
-    # Role_Plan: conclude / restart the planning session.
+    # Role_Major: conclude / restart the planning session.
     if reason == "surrender":
         session._retry_count += 1
         if session._retry_count >= session.max_retries:
@@ -821,12 +817,118 @@ async def _request_lemmas_tool_logic(session: Session, args: dict) -> tuple[str,
         session.log_tool_response(_tn, feedback)
         return (feedback, False)
 
-    # Role_Plan: no-argument hint — the planner formalizes the lemma itself.
+    # Role_Major: no-argument hint — the planner formalizes the lemma itself.
     global_env = session.root.global_env
     target_step = f"{global_env.id}.{len(global_env.sub_nodes) + 1}"
     msg = ("You should formalize and prove the lemmas you need directly under "
            f"`global`. Call command `edit` with action `fill` and target step "
            f"`{target_step}`.")
+    session.log_tool_response(_tn, msg)
+    return (msg, False)
+
+
+def _subagent_resume_feedback(suggestions: str, helpful_lemmas: list) -> str:
+    """Build the feedback string handed to a parked worker on resume, carrying
+    the main agent's fresh suggestions + lemma names."""
+    parts = ["Resuming — the main agent has updated the surrounding context."]
+    if suggestions:
+        parts.append(f"Suggestions:\n{suggestions}")
+    if helpful_lemmas:
+        parts.append(f"Helpful lemmas: {', '.join(str(x) for x in helpful_lemmas)}")
+    return "\n".join(parts)
+
+
+async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
+    """Planner-only `subagent`: delegate a sub-goal to a forked worker agent, or
+    resume a parked worker on the same node. Drives the worker's event loop
+    (`WorkerHandle.run_until_yield`) until it yields control back to the main
+    agent (a terminal outcome, or a request_lemmas park)."""
+    _tn = session.tool_name(TOOL_SUBAGENT)
+    session.log_tool_call(_tn, args)
+
+    # Set once a leaf/non-goal target redirects to its enclosing goal; prepended
+    # to EVERY response below (error or outcome) so the agent always knows which
+    # step the sub-agent is actually working on.
+    redirect_note = ""
+
+    def _err(msg: str) -> tuple[str, bool]:
+        full = redirect_note + msg
+        session.log_tool_response(_tn, f"ERROR: {full}")
+        return (full, True)
+
+    # Planner-only (role gating lives here, not in _check_tool_permission).
+    if isinstance(session.role, Role_Worker):
+        return _err("The `subagent` tool is unavailable for you. Call `request_lemmas` instead.")
+
+    step_id = str(args.get("step_id", ""))
+    suggestions = args.get("suggestions", "")
+    helpful_lemmas = args.get("helpful_lemmas") or []
+
+    try:
+        node = session.root.locate_node(step_id)
+    except NodeNotFound:
+        return _err(f"No step `{step_id}` found.")
+
+    # Redirect to the node's nearest delegatable goal (a leaf or any non-goal
+    # node walks up to its enclosing goal; containers/directives return None).
+    target = node._nearest_goal_for_subagent()
+    if target is None:
+        return _err("That step has no enclosing goal to prove.")
+    if target is not node:
+        redirect_note = (f"Instead of step {step_id}, the sub-agent is working "
+                         f"on step {target.id}.\n")
+    node = target
+    # Invariant: _nearest_goal_for_subagent only ever returns a provable goal
+    # block (Have / Obtain / Suffices / GoalNode), all StdBlock subtypes.
+    assert isinstance(node, StdBlock)
+
+    # The goal block's own operation must be sound, and the goal not yet proved.
+    if node.status.status == EvaluationStatus.Status.FAILURE:
+        reason = node.status.reason
+        detail = f":\n{reason.reason}" if reason is not None else "."
+        return _err(f"That step's own operation failed{detail}\n"
+                    f"Fix it before delegating the proof of this step.")
+    if node.status.status == EvaluationStatus.Status.CANCELLED:
+        return _err("That step was cancelled by an earlier failure. "
+                    "Fix the earlier step first.")
+    if node.is_proof_finished():
+        return _err("That step is already proved.")
+
+    # Resume the parked worker on this node, or start a fresh one. Unexpected
+    # errors are intentionally NOT caught here — they propagate to the executor's
+    # fatal handler (sys.exit(1)) so latent bugs surface early rather than being
+    # silently reported back to the agent.
+    if node.worker_handle is not None:
+        handle = node.worker_handle
+        handle.resolve_lemma_request(
+            _subagent_resume_feedback(suggestions, helpful_lemmas))
+        outcome = await handle.run_until_yield()
+    else:
+        handle = WorkerHandle(node, session)
+        node.worker_handle = handle
+        handle.start(suggestions, helpful_lemmas)
+        outcome = await handle.run_until_yield()
+
+    match outcome.kind:
+        case "proved":
+            msg = "The sub-agent proved the goal."
+        case "surrendered":
+            msg = (f"The sub-agent surrendered:\n{outcome.detail}\n"
+                   f"Reconsider the proof plan for this step.")
+        case "could_not_prove":
+            why = f" (it stopped: {outcome.detail})" if outcome.detail else ""
+            msg = (f"The sub-agent could not prove the goal{why}.\n"
+                   f"Reconsider the proof plan for this step.")
+        case "refute_accepted":
+            msg = f"The sub-agent argues the goal is unprovable:\n{outcome.detail}"
+        case _:  # "lemmas" — worker parked requesting helper lemmas
+            msg = (f"The sub-agent requests helper lemmas to continue:\n"
+                   f"{outcome.detail}\n"
+                   f"Consider providing these lemmas, then call `subagent` on step "
+                   f"{node.id} again to resume the sub-agent, listing the lemmas you "
+                   f"built in `helpful_lemmas`.")
+    msg = redirect_note + msg
+
     session.log_tool_response(_tn, msg)
     return (msg, False)
 
@@ -857,10 +959,21 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "answer_indexes_or_name": {"description": "Answer by selecting indexes or providing an exact fact name", "schema": _cc_answer_indexes_or_name_schema, "annotations": _ACT},
     "answer_indexes_or_spec": {"description": "Answer by selecting indexes or providing an Isabelle proposition", "schema": _cc_answer_indexes_or_spec_schema, "annotations": _ACT},
     "answer_instantiate": {"description": "Answer by providing schematic-variable instantiations", "schema": _cc_answer_instantiate_schema, "annotations": _ACT},
-    "answer_target_goal": {"description": "Select a target goal for the worker agent and provide proof suggestions", "schema": _cc_answer_target_goal_schema, "annotations": _ACT},
     "answer_refutation": {"description": "Accept or reject a worker's claim that the goal is unprovable", "schema": _cc_answer_refutation_schema, "annotations": _ACT},
-    "answer_lemma_request": {"description": "Author the helper lemmas to add+prove for a worker's lemma request (or none, to reject), plus feedback", "schema": _cc_answer_lemma_request_schema, "annotations": _ACT},
+    "subagent": {"description": "Launch a sub-agent to prove a goal in isolation. Call this when a goal is tedious and its proof would derail your main line of reasoning.", "schema": _cc_subagent_schema, "annotations": _ACT},
 }
+
+
+# ``subagent`` is the main (planner) agent's tool only; precompute the
+# worker/fork view (all tools except subagent) once at import time.
+_TOOL_SCHEMAS_NO_SUBAGENT: dict[str, dict[str, Any]] = {
+    k: v for k, v in _TOOL_SCHEMAS.items() if k != TOOL_SUBAGENT}
+
+
+def _tool_schemas_for(session: Session) -> dict[str, dict[str, Any]]:
+    """Tool schemas advertised to ``session``. ``subagent`` is hidden entirely
+    from workers and interaction forks (they never see it in the tool list)."""
+    return _TOOL_SCHEMAS if session.is_major else _TOOL_SCHEMAS_NO_SUBAGENT
 
 
 class ToolExecutor:
@@ -928,6 +1041,13 @@ class ToolExecutor:
                     session.last_proof_op_time = time()
                 case "refute_or_surrender":
                     result, is_error = await _refute_or_surrender_tool_logic(session, arguments)
+                case "subagent":
+                    # The held lock spans the worker's whole run: safe because the
+                    # main loop is single-flight and each forked worker/review uses
+                    # its OWN executor lock (no contention, no deadlock).
+                    async with self._tool_lock:
+                        result, is_error = await _subagent_tool_logic(session, arguments)
+                    session.last_proof_op_time = time()
                 case _:
                     return (f"Unknown tool: {name}", True)
         except (ConnectionError, EOFError):
@@ -944,10 +1064,10 @@ class ToolExecutor:
 
         return (result, is_error)
 
-    @staticmethod
-    def tool_schemas() -> dict[str, dict[str, Any]]:
-        """Return {name: {"description": ..., "schema": ...}} for all built-in tools."""
-        return _TOOL_SCHEMAS
+    def tool_schemas(self) -> dict[str, dict[str, Any]]:
+        """Return {name: {"description": ..., "schema": ...}} for the tools
+        advertised to this session's role (``subagent`` is planner-only)."""
+        return _tool_schemas_for(self._session)
 
 
 # ============================================================================
@@ -964,11 +1084,11 @@ def _create_mcp_server(session: Session, extra_sdk_tools: list | None = None) ->
     server = MCPServer(f"proof-{id(session)}")
     executor = ToolExecutor(session)
 
-    # Build tool list: built-in + extras
+    # Build tool list: built-in (role-scoped — `subagent` is planner-only) + extras
     tools: list[Tool] = [
         Tool(name=name, description=t["description"],
              inputSchema=t["schema"], annotations=t["annotations"])
-        for name, t in _TOOL_SCHEMAS.items()
+        for name, t in _tool_schemas_for(session).items()
     ]
 
     # Extract schema/handler from SdkMcpTool extras
