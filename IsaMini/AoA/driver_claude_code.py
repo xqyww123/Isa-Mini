@@ -100,7 +100,7 @@ class ClaudeCode(LMDriver):
         "delete": "mcp__proof__delete",
         "recall": "Read",
         "request_lemmas": "mcp__proof__request_lemmas",
-        "complain": "mcp__proof__complain",
+        "refute_or_surrender": "mcp__proof__refute_or_surrender",
         "answer_indexes": "mcp__proof__answer_indexes",
         "answer_index": "mcp__proof__answer_index",
         "answer_indexes_or_name": "mcp__proof__answer_indexes_or_name",
@@ -108,6 +108,7 @@ class ClaudeCode(LMDriver):
         "answer_instantiate": "mcp__proof__answer_instantiate",
         "answer_target_goal": "mcp__proof__answer_target_goal",
         "answer_refutation": "mcp__proof__answer_refutation",
+        "answer_lemma_request": "mcp__proof__answer_lemma_request",
     }
     TOOL_WHITELIST = _NON_PROOF_TOOLS + list(_TOOL_NAME_MAP.values())
     COMPACT_THRESHOLD = 0.85

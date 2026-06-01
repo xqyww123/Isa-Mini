@@ -56,7 +56,7 @@ async def _replay_cached_proof(connection: Connection, packed_ops: list[Any],
             state_name = dest_name
         return (True, state_name)
     except Exception as e:
-        _logger.info(f"Proof replay failed ({cache_source}): {e}")
+        connection.server.logger.info(f"[AoA-cache] Proof replay failed ({cache_source}): {e}")
         return (False, None)
     finally:
         await connection.callback("IsaMini.set_replay_mode", False)
@@ -86,19 +86,34 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
     from .proof_cache import get_proof_cache
     zero_cost = (0, 0, 0, 0, 0.0, 0, 0.0, 0.0, 0.0)
 
+    logger = connection.server.logger
+    pc = get_proof_cache()
+    logger.info(
+        "[AoA-cache] lookup goal_hash=%s | sqlite_db=%s | phi_cache_json=%s",
+        goal_hash, pc.db_path,
+        f"present({len(cached_xcmd_json)}B)" if cached_xcmd_json else "absent")
+
     # Level 1: Python SQLite
-    cached_ops = get_proof_cache().lookup(goal_hash)
+    cached_ops = pc.lookup(goal_hash)
+    logger.info("[AoA-cache] L1 SQLite: %s",
+                "HIT" if cached_ops is not None else "MISS")
 
     # Level 2: Phi_Cache_DB (from ML)
     if cached_ops is None and cached_xcmd_json:
         try:
             cached_ops = json.loads(cached_xcmd_json)
-        except (json.JSONDecodeError, TypeError):
+            logger.info("[AoA-cache] L2 Phi_Cache_DB: HIT (%d ops)", len(cached_ops))
+        except (json.JSONDecodeError, TypeError) as e:
             cached_ops = None
+            logger.warning("[AoA-cache] L2 Phi_Cache_DB: JSON parse FAILED: %r", e)
+    elif cached_ops is None:
+        logger.info("[AoA-cache] L2 Phi_Cache_DB: MISS (no json from ML)")
 
     if cached_ops is not None:
-        cache_source = "SQLite" if not cached_xcmd_json or get_proof_cache().lookup(goal_hash) is not None else "Phi_Cache_DB"
+        cache_source = "SQLite" if not cached_xcmd_json or pc.lookup(goal_hash) is not None else "Phi_Cache_DB"
         ok, final_state = await _replay_cached_proof(connection, cached_ops, cache_source)
+        logger.info("[AoA-cache] replay from %s: %s (%d ops)",
+                    cache_source, "OK" if ok else "FAILED", len(cached_ops))
         if ok:
             proof_json = json.dumps(cached_ops)
             return (cached_ops, final_state, zero_cost, None, None, proof_json)
@@ -175,6 +190,8 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
         proof_json = json.dumps(assembled)
         # Store in Python SQLite cache
         get_proof_cache().store(goal_hash, assembled)
+        logger.info("[AoA-cache] L1 SQLite STORE goal_hash=%s (%d ops) db=%s",
+                    goal_hash, len(assembled), get_proof_cache().db_path)
         # Write to log directory
         if actual_log_path:
             try:
@@ -187,6 +204,8 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
     else:
         reason = quit_obj.reason if quit_obj is not None else "resource_exhausted"
         detail = quit_obj.detail if quit_obj is not None else None
+        logger.info("[AoA-cache] NOT stored: proof not finished (reason=%s) goal_hash=%s",
+                    reason, goal_hash)
         return (assembled, None, cost, reason, detail, None)
 
 

@@ -24,7 +24,7 @@ operations. Two kinds of agent operate on that tree:
 The agents never speak raw Isar. They emit **Minilang operations** (a small high-level vocabulary),
 which the ML side executes against a live Isabelle proof state. Agents perceive the proof as a
 YAML-shaped rendering (`proof.yaml`) and act through a handful of MCP tools (`edit`, `delete`,
-`query`, `recall`, `complain`).
+`query`, `recall`, `refute_or_surrender`, `request_lemmas`).
 
 ---
 
@@ -225,12 +225,16 @@ A worker communicates back through events rather than dying:
 
 - `WorkerRefute` — "this goal looks unprovable"; the worker *blocks* on a review future while the
   planner decides, preserving its context.
+- `WorkerRequestLemmas` — "I need a background lemma" (via the worker-side `request_lemmas` tool);
+  the worker *blocks* while the planner authors + proves helper lemmas, then resumes (non-terminal).
 - `WorkerSurrender` — "I'm stuck / need help" (terminal).
 - `WorkerDone` — synthesised when the task ends; `success` reflects `target.is_proof_finished()`.
 
-`Session.spawn_lemma_subagent` / `_run_lemma_subagent` (driver implementation) fork a `Role_Worker`
-for a named lemma. `WorkerHandle.aclose` (called from `complete_proof`'s `finally`) guarantees no
-worker is left blocked on a review future.
+A lemma sub-agent is a first-class `WorkerHandle` driven by a `LemmaDrive` (in
+`language_model_driver.py`), which proves the planner-authored lemmas one at a time through the same
+`ContinuingInteraction` trampoline (no extra fork). `WorkerHandle.aclose` (called from
+`complete_proof`'s `finally`, over the whole `worker_stack`) guarantees no worker is left blocked on
+a review future.
 
 ### 5.3 The worker's scoped view
 
@@ -264,8 +268,8 @@ retry layers (`_with_retry` for quota — 20-minute wait; `_retry_transient` —
 | `driver_openai/anthropic/gemini/codex.py` | Provider variants, lazily imported in `toplevel.py`. |
 
 **Tools** (abstract ids in `model.py`) map to external names per driver: `edit`, `delete`,
-`query` (search), `recall` (read `proof.yaml`), `complain` (refute/surrender), request-lemmas,
-answer-*. The tool→operation logic is in `mcp_http_server.py`: `_edit_tool_logic` parses the agent's
+`query` (search), `recall` (read `proof.yaml`), `refute_or_surrender` (refute/surrender),
+`request_lemmas` (dual-role: a worker→planner channel, or a planner self-formalize hint), answer-*. The tool→operation logic is in `mcp_http_server.py`: `_edit_tool_logic` parses the agent's
 `proof_operations` and dispatches to `root.fill` / `insert_before` / `amend`; structural completion
 in PLANNING hands off to `Session.complete_proof`. Tool JSON schemas live in `tools/*.jsonc`.
 

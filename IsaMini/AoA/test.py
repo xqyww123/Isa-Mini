@@ -9690,305 +9690,17 @@ async def _test_GlobalEnv_LeafOps(root: Root, file: MyIO):
     root.print(0, file)
 
 
-@model_test("RequestLemmas", "Test_RequestLemmas.thy", 11)
-async def _test_RequestLemmas(root: Root, file: MyIO):
-    import asyncio as _asyncio
-    from .mcp_http_server import _request_lemmas_tool_logic
-    session = root.session
-    tool_lock = _asyncio.Lock()
-
-    print_header("Initial YAML", file)
-    root.print(0, file)
-
-    # Mock: sub-agent fills proof with Obvious using h1
-    async def stub_success(have_node, lemma_name):
-        session.age += 1
-        await have_node.append([Obvious.gen_single({"facts": [{"name": "h1"}]})])
-        return have_node.is_proof_finished()
-    async def stub_failure(have_node, lemma_name):
-        return False
-
-    # --- Phase A: Sub-agent success (x ≥ 0, provable from h1) ---
-    print_header("Phase A: Sub-agent success", file)
-    session.spawn_lemma_subagent = stub_success
-    session.age += 1
-    result, is_error = await _request_lemmas_tool_logic(session, {
-        "lemmas": [{"name": "h_pos", "english": "x is non-negative",
-                     "conclusion": "x ≥ 0"}]
-    }, tool_lock)
-    file.write(result)
-    file.write(f"is_error: {is_error}\n")
-    file.write(f"GlobalEnv children: {len(root.global_env.sub_nodes)}\n")
-
-    # --- Phase B: Sub-agent failure (1 = 2, mock returns False → HAVE deleted) ---
-    print_header("Phase B: Sub-agent failure", file)
-    session.spawn_lemma_subagent = stub_failure
-    session.age += 1
-    result, is_error = await _request_lemmas_tool_logic(session, {
-        "lemmas": [{"name": "h_fail", "english": "one equals two",
-                     "conclusion": "1 = (2::int)"}]
-    }, tool_lock)
-    file.write(result)
-    file.write(f"is_error: {is_error}\n")
-    file.write(f"GlobalEnv children after cleanup: {len(root.global_env.sub_nodes)}\n")
-
-    # --- Phase C: Validation skip (empty conclusion) ---
-    print_header("Phase C: Validation skip", file)
-    session.age += 1
-    result, is_error = await _request_lemmas_tool_logic(session, {
-        "lemmas": [{"name": "noconc", "english": "missing conclusion", "conclusion": ""}]
-    }, tool_lock)
-    file.write(result)
-    file.write(f"is_error: {is_error}\n")
-
-    # --- Phase D: Invalid args (not a list) ---
-    print_header("Phase D: Invalid args", file)
-    result, is_error = await _request_lemmas_tool_logic(session, {
-        "lemmas": "not a list"
-    }, tool_lock)
-    file.write(result)
-    file.write(f"is_error: {is_error}\n")
-
-    # --- Final state ---
-    print_header("Final tree", file)
-    root.print(0, file)
-    file.write(f"GlobalEnv children: {len(root.global_env.sub_nodes)}\n")
-
-
-@model_test("RequestLemmas_FocusedView", "Test_RequestLemmas_FocusedView.thy", 11)
-async def _test_RequestLemmas_FocusedView(root: Root, file: MyIO):
-    session = root.session
-
-    print_header("Initial YAML", file)
-    root.print(0, file)
-
-    # --- Setup: Insert two HAVE nodes ---
-    # HAVE 1: trivially proved (True)
-    session.age += 1
-    [h_triv] = (await root.global_env.append([Have.gen_single({
-        "thought": "trivial lemma",
-        "statement": {"english": "trivial truth", "conclusion": "True"},
-        "name": "h_triv",
-    })])).committed
-
-    # HAVE 2: unprovable, stays open (Obvious will fail)
-    session.age += 1
-    [h_target] = (await root.global_env.append([Have.gen_single({
-        "thought": "target lemma",
-        "statement": {"english": "one equals two", "conclusion": "1 = (2::int)"},
-        "name": "h_target",
-    })])).committed
-
-    # HAVE 3: with for_any and premises
-    session.age += 1
-    [h_forany] = (await root.global_env.append([Have.gen_single({
-        "thought": "lemma with for_any and premises",
-        "statement": {
-            "english": "y squared is non-negative",
-            "for_any": [{"name": "y", "type": "int"}],
-            "premises": [{"name": "hy", "term": "y ≥ 0"}],
-            "conclusion": "y * y ≥ 0",
-        },
-        "name": "h_forany",
-    })])).committed
-
-    # Inspect goal.context for each HAVE
-    print_header("Goal context inspection", file)
-    for label, have in [("h_target", h_target), ("h_forany", h_forany)]:
-        goal = have._state_after_beginning().leading_goal
-        if goal is not None:
-            file.write(f"{label} goal.context.vars: {[(n.unicode, t.unicode) for n, t in goal.context.vars.items()]}\n")
-            file.write(f"{label} goal.context.hyps: {[(n.unicode, t.unicode) for n, t in goal.context.hyps.items()]}\n")
-            file.write(f"{label} goal.conclusion: {goal.conclusion.unicode}\n")
-        else:
-            file.write(f"{label} goal: None\n")
-
-    # Obvious fails on the false goal — h_target stays open with children
-    session.age += 1
-    await h_target.append([Obvious.gen_single({"facts": []})])
-
-    print_header("Tree with two HAVEs", file)
-    root.print(0, file)
-    file.write(f"h_triv status: {h_triv.status.status.value}\n")
-    file.write(f"h_target status: {h_target.status.status.value}\n")
-
-    # --- Set role to Role_Worker and test focused view ---
-    session.role = model.Role_Worker(target=h_target)
-    await session.prefetch_worker_premises()
-
-    print_header("print_proof_scope (lemma_anchor = h_target)", file)
-    session.print_proof_scope(0, file, show_warnings=True)
-
-    print_header("quickview_proof_scope (lemma_anchor = h_target)", file)
-    session.quickview_proof_scope(0, file)
-
-    # --- Verify content assertions ---
-    buf_ps = MyIO(io.StringIO())
-    session.print_proof_scope(0, buf_ps)
-    ps_text = buf_ps.getvalue()
-    file.write(f"\nprint_proof_scope contains 'available declarations': {'available declarations' in ps_text}\n")
-    file.write(f"print_proof_scope contains 'h_triv': {'h_triv' in ps_text}\n")
-    file.write(f"print_proof_scope contains 'goal:': {'goal:' in ps_text}\n")
-    file.write(f"print_proof_scope contains main goal 'x * x': {'x * x' in ps_text}\n")
-
-    buf_qv = MyIO(io.StringIO())
-    session.quickview_proof_scope(0, buf_qv)
-    qv_text = buf_qv.getvalue()
-    file.write(f"quickview contains 'available declarations': {'available declarations' in qv_text}\n")
-    file.write(f"quickview contains 'Unfinished Proof': {'Unfinished Proof' in qv_text}\n")
-
-    # --- Reset and verify full view is restored ---
-    session.role = model.Role_Plan()
-
-    print_header("print_proof_scope (lemma_anchor = None, full view)", file)
-    session.print_proof_scope(0, file)
-
-    print_header("Final tree (reference)", file)
-    root.print(0, file)
-
-
-# ==================== Role ADT Architecture Tests ====================
-
-@model_test("SubgoalLevel", "Test_SubgoalLevel.thy", 13)
-async def _test_SubgoalLevel(root: Root, file: MyIO):
-    """Verify _subgoal_level inheritance through nested Have/Obtain/Suffices."""
-    session = root.session
-    goal_node = root.sub_nodes[1]
-
-    file.write(f"root._subgoal_level: {root._subgoal_level}\n")
-    file.write(f"goal_node._subgoal_level: {goal_node._subgoal_level}\n")
-
-    # Level 1: Have inside GoalNode
-    session.age += 1
-    await root.fill("1", [Have.gen_single({
-        "thought": "level 1 have",
-        "statement": {"english": "trivial", "conclusion": "True"},
-        "name": "h1",
-    })])
-    have1 = root.locate_node("1")
-    file.write(f"have1._subgoal_level: {have1._subgoal_level}\n")
-
-    # Level 2: Nested Have inside Have's subproof
-    session.age += 1
-    await root.fill("1.1", [Have.gen_single({
-        "thought": "level 2 have",
-        "statement": {"english": "also trivial", "conclusion": "True"},
-        "name": "h2",
-    })])
-    have2 = root.locate_node("1.1")
-    file.write(f"have2._subgoal_level: {have2._subgoal_level}\n")
-
-    # Obvious inside level 2 Have — inherits level 2
-    session.age += 1
-    await root.fill("1.1.1", [Obvious.gen_single({"facts": []})])
-    obvious = root.locate_node("1.1.1")
-    file.write(f"obvious_in_have2._subgoal_level: {obvious._subgoal_level}\n")
-
-
-@model_test("SorryDegradation", "Test_SorryDegradation.thy", 13)
-async def _test_SorryDegradation(root: Root, file: MyIO):
-    """Verify Obvious sorry degradation at _subgoal_level >= 2 in PLANNING stage."""
-    session = root.session
-
-    # Level 1 Have
-    session.age += 1
-    await root.fill("1", [Have.gen_single({
-        "thought": "outer have",
-        "statement": {"english": "trivial", "conclusion": "True"},
-        "name": "h_outer",
-    })])
-
-    # Level 2 Have (nested inside level 1)
-    session.age += 1
-    await root.fill("1.1", [Have.gen_single({
-        "thought": "inner have",
-        "statement": {"english": "also trivial", "conclusion": "True"},
-        "name": "h_inner",
-    })])
-
-    # --- Obvious at level 1 (should NOT be degraded) ---
-    session.age += 1
-    await root.fill("1.2", [Obvious.gen_single({"facts": []})])
-    obv_lv1 = root.locate_node("1.2")
-    file.write(f"obvious_lv1._subgoal_level: {obv_lv1._subgoal_level}\n")
-    file.write(f"obvious_lv1._is_sorry_degraded: {obv_lv1._is_sorry_degraded}\n")
-
-    # --- Obvious at level 2 in PLANNING stage (should BE degraded) ---
-    assert isinstance(session.role, model.Role_Plan)
-    assert session.role.stage == model.PlanStage.PLANNING
-    session.age += 1
-    await root.fill("1.1.1", [Obvious.gen_single({"facts": []})])
-    obv_lv2 = root.locate_node("1.1.1")
-    file.write(f"obvious_lv2._subgoal_level: {obv_lv2._subgoal_level}\n")
-    file.write(f"obvious_lv2._is_sorry_degraded: {obv_lv2._is_sorry_degraded}\n")
-    file.write(f"obvious_lv2.status: {obv_lv2.status.status.value}\n")
-
-    print_header("Tree with sorry-degraded Obvious at level 2", file)
-    root.print(0, file)
-
-    # --- Switch to FINISHING and re-evaluate: degradation should lift ---
-    session.role.stage = model.PlanStage.FINISHING
-    session.age += 1
-    await obv_lv2._refresh_me_alone(auto_intro=False)
-    file.write(f"after FINISHING refresh:\n")
-    file.write(f"obvious_lv2._is_sorry_degraded: {obv_lv2._is_sorry_degraded}\n")
-    file.write(f"obvious_lv2.status: {obv_lv2.status.status.value}\n")
-
-
-@model_test("WorkerGoalNodeScope", "Test_WorkerGoalNodeScope.thy", 11)
-async def _test_WorkerGoalNodeScope(root: Root, file: MyIO):
-    """Test print_proof_scope/quickview_proof_scope with a GoalNode target (not Have)."""
-    session = root.session
-    goal_node = root.sub_nodes[1]
-
-    # Add some structure
-    session.age += 1
-    await goal_node.fill("1", [Have.gen_single({
-        "thought": "a lemma",
-        "statement": {"english": "trivial", "conclusion": "True"},
-        "name": "h1",
-    })])
-    session.age += 1
-    await goal_node.fill("2", [Obvious.gen_single({"facts": []})])
-
-    print_header("Full tree (Plan role)", file)
-    session.print_proof_scope(0, file)
-
-    # --- Set role to Worker targeting GoalNode ---
-    session.role = model.Role_Worker(target=goal_node)
-    await session.prefetch_worker_premises()
-
-    print_header("Worker scope (target=GoalNode)", file)
-    session.print_proof_scope(0, file)
-
-    buf = MyIO(io.StringIO())
-    session.print_proof_scope(0, buf)
-    ps_text = buf.getvalue()
-    file.write(f"\ncontains 'available declarations': {'available declarations' in ps_text}\n")
-    file.write(f"contains 'goal:': {'goal:' in ps_text}\n")
-    file.write(f"contains 'proof:': {'proof:' in ps_text}\n")
-
-    print_header("Worker quickview (target=GoalNode)", file)
-    session.quickview_proof_scope(0, file)
-
-    # --- Verify unfinished_nodes scoping ---
-    unfinished = session.proof_scope_unfinished_nodes()
-    file.write(f"\nunfinished count (GoalNode scope): {len(unfinished)}\n")
-
-    # --- Switch back to Plan ---
-    session.role = model.Role_Plan()
-    unfinished_full = session.proof_scope_unfinished_nodes()
-    file.write(f"unfinished count (full scope): {len(unfinished_full)}\n")
-
-
-@model_test("ComplainTool", "Test_ComplainTool.thy", 11)
-async def _test_ComplainTool(root: Root, file: MyIO):
-    """Test _complain_tool_logic for Worker (event-based) and Plan roles."""
-    from .mcp_http_server import _complain_tool_logic
+@model_test("RefuteOrSurrender", "Test_RefuteOrSurrender.thy", 11)
+async def _test_RefuteOrSurrender(root: Root, file: MyIO):
+    """Test the split tools for Worker (event-based) and Plan roles:
+    `refute_or_surrender` (refute / surrender) and the dual-role
+    `request_lemmas` (worker channel + planner no-arg hint)."""
+    from .mcp_http_server import (
+        _refute_or_surrender_tool_logic, _request_lemmas_tool_logic)
     from .language_model_driver import WorkerHandle
     session = root.session
 
-    # --- Worker: complain communicates via the WorkerHandle event queue ---
+    # --- Worker: refute_or_surrender communicates via the WorkerHandle queue ---
     session.age += 1
     goal_node = root.sub_nodes[1]
     await goal_node.fill("1", [Have.gen_single({
@@ -10004,10 +9716,9 @@ async def _test_ComplainTool(root: Root, file: MyIO):
 
     # Surrender: enqueues a WorkerSurrender, and sets NO quit_info (the planner
     # learns of it via the event; the worker never writes its own quit_info).
-    result, is_error = await _complain_tool_logic(session, {
+    result, is_error = await _refute_or_surrender_tool_logic(session, {
         "reason": "surrender",
         "detail": "I need more lemmas",
-        "suggested_lemmas": ["aux_lemma_1", "aux_lemma_2"],
     })
     file.write(f"worker surrender result: {result}\n")
     file.write(f"worker surrender is_error: {is_error}\n")
@@ -10015,11 +9726,10 @@ async def _test_ComplainTool(root: Root, file: MyIO):
     ev = handle._event_queue.get_nowait()
     file.write(f"surrender event: {type(ev).__name__}\n")
     file.write(f"surrender event detail: {ev.detail}\n")
-    file.write(f"surrender event suggested_lemmas: {ev.suggested_lemmas}\n")
 
-    # Refute, planner REJECTS: complain blocks on the review future until it is
+    # Refute, planner REJECTS: the tool blocks on the review future until it is
     # resolved, then tells the worker to keep going.
-    task = asyncio.ensure_future(_complain_tool_logic(session, {
+    task = asyncio.ensure_future(_refute_or_surrender_tool_logic(session, {
         "reason": "refute",
         "detail": "The goal contradicts premises",
     }))
@@ -10032,7 +9742,7 @@ async def _test_ComplainTool(root: Root, file: MyIO):
     file.write(f"refute rejected is_error: {is_error}\n")
 
     # Refute, planner ACCEPTS.
-    task = asyncio.ensure_future(_complain_tool_logic(session, {
+    task = asyncio.ensure_future(_refute_or_surrender_tool_logic(session, {
         "reason": "refute",
         "detail": "genuinely unprovable",
     }))
@@ -10041,8 +9751,28 @@ async def _test_ComplainTool(root: Root, file: MyIO):
     result, is_error = await task
     file.write(f"refute accepted result mentions accept: {'accept' in result.lower()}\n")
 
+    # --- Worker: request_lemmas blocks on a feedback future, then resumes ---
+    task = asyncio.ensure_future(_request_lemmas_tool_logic(session, {
+        "detail": "need a helper about squares",
+        "suggested_lemmas": [{
+            "name": "sq_nonneg", "english": "squares are non-negative",
+            "isabelle_statement": "0 ≤ x * x"}],
+    }))
+    ev = await handle._event_queue.get()
+    file.write(f"request_lemmas event: {type(ev).__name__}\n")
+    file.write(f"request_lemmas event lemmas count: {len(ev.lemmas)}\n")
+    ev.response_future.set_result("Added lemma sq_nonneg; use it to continue.")
+    result, is_error = await task
+    file.write(f"request_lemmas resume mentions sq_nonneg: {'sq_nonneg' in result}\n")
+    file.write(f"request_lemmas resume is_error: {is_error}\n")
+
+    # Worker request_lemmas with an empty wish-list is rejected.
+    result, is_error = await _request_lemmas_tool_logic(session, {
+        "detail": "vague", "suggested_lemmas": []})
+    file.write(f"empty request_lemmas is_error: {is_error}\n")
+
     # Invalid reason (validated before the role branch).
-    result, is_error = await _complain_tool_logic(session, {
+    result, is_error = await _refute_or_surrender_tool_logic(session, {
         "reason": "invalid_reason",
         "detail": "test",
     })
@@ -10052,16 +9782,22 @@ async def _test_ComplainTool(root: Root, file: MyIO):
     # A Role_Worker with no handle is a programming error → InternalError.
     session.role = model.Role_Worker(target=goal_node)
     try:
-        await _complain_tool_logic(session, {"reason": "surrender", "detail": "x"})
+        await _refute_or_surrender_tool_logic(session, {"reason": "surrender", "detail": "x"})
         file.write("no-handle worker: NO error raised (UNEXPECTED)\n")
     except model.InternalError:
         file.write("no-handle worker: InternalError raised\n")
 
+    # --- Plan: request_lemmas is a no-argument hint (no event, no error) ---
+    session.role = model.Role_Plan()
+    result, is_error = await _request_lemmas_tool_logic(session, {})
+    file.write(f"planner request_lemmas is_error: {is_error}\n")
+    file.write(f"planner request_lemmas mentions global: {'global' in result.lower()}\n")
+
     # NOTE: the Role_Plan surrender path is intentionally NOT exercised here.
     # It calls request_restart(), which leaves a transient quit_info=Restart()
     # that only a driver loop consumes; in the model-test path nothing consumes
-    # it, so `by aoa` would never terminate cleanly. Planner complain behavior is
-    # unchanged by the worker refactor and is out of scope for this test.
+    # it, so `by aoa` would never terminate cleanly. Planner refute/surrender
+    # behavior is unchanged by this split and is out of scope for this test.
 
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):

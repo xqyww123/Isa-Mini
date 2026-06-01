@@ -23,7 +23,6 @@ import json
 import os
 import sys
 import socket
-from io import StringIO
 from time import time
 from typing import Any
 
@@ -39,17 +38,16 @@ from .model import (
     IsaTerm, ContinuingInteraction, ImmediateAnswer,
     AoA_Error, ArgumentError, IsabelleError, InternalError,
     CannotDelete_Root, NodeNotFound, ProofTreeTooDeep,
-    EvaluationStatus,
     Parse_Op_List, Interaction_BadAnswer,
     AnswerIndexes, AnswerIndex, AnswerIndexesOrName, AnswerIndexesOrSpec,
-    AnswerInstantiate, AnswerTargetGoal, AnswerRefutation,
+    AnswerInstantiate, AnswerTargetGoal, AnswerRefutation, AnswerLemmaRequest,
     TOOL_EDIT, TOOL_DELETE, TOOL_READ, TOOL_REQUEST_LEMMAS,
-    TOOL_COMPLAIN,
+    TOOL_REFUTE_OR_SURRENDER,
     TOOL_ANSWER_INDEXES, TOOL_ANSWER_INDEX, TOOL_ANSWER_INDEXES_OR_NAME,
     TOOL_ANSWER_INDEXES_OR_SPEC, TOOL_ANSWER_INSTANTIATE,
-    TOOL_ANSWER_TARGET_GOAL, TOOL_ANSWER_REFUTATION,
+    TOOL_ANSWER_TARGET_GOAL, TOOL_ANSWER_REFUTATION, TOOL_ANSWER_LEMMA_REQUEST,
     ANSWER_TOOLS,
-    ALL_PROOF_TOOLS, Have_ToolArg, Have,
+    ALL_PROOF_TOOLS,
     Role_Worker,
     Surrender, Refute,
 )
@@ -77,7 +75,7 @@ _cc_edit_schema_raw = _load_schema("cc_edit.jsonc")
 _cc_delete_schema = _load_schema("cc_delete.jsonc")
 _cc_read_schema = _load_schema("cc_recall.jsonc")
 _cc_request_lemmas_schema = _load_schema("cc_request_lemmas.jsonc")
-_cc_complain_schema = _load_schema("cc_complain.jsonc")
+_cc_refute_or_surrender_schema = _load_schema("cc_refute_or_surrender.jsonc")
 _cc_answer_indexes_schema = _load_schema("cc_answer_indexes.jsonc")
 _cc_answer_index_schema = _load_schema("cc_answer_index.jsonc")
 _cc_answer_indexes_or_name_schema = _load_schema("cc_answer_indexes_or_name.jsonc")
@@ -85,6 +83,7 @@ _cc_answer_indexes_or_spec_schema = _load_schema("cc_answer_indexes_or_spec.json
 _cc_answer_instantiate_schema = _load_schema("cc_answer_instantiate.jsonc")
 _cc_answer_target_goal_schema = _load_schema("cc_answer_target_goal.jsonc")
 _cc_answer_refutation_schema = _load_schema("cc_answer_refutation.jsonc")
+_cc_answer_lemma_request_schema = _load_schema("cc_answer_lemma_request.jsonc")
 
 
 
@@ -470,6 +469,10 @@ async def _answer_tool_dispatch(session: Session, tool_name: str, args: dict) ->
                 payload = AnswerRefutation(
                     accept=bool(args["accept"]),
                     reason=args["reason"])
+            case "answer_lemma_request":
+                payload = AnswerLemmaRequest(
+                    lemmas=args.get("lemmas") or [],
+                    feedback=args.get("feedback", ""))
             case _:
                 error_msg = f"Unknown answer tool: {tool_name}"
                 session.log_tool_response(_tn, f"ERROR: {error_msg}")
@@ -663,17 +666,15 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     return (result, False)
 
 
-async def _complain_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
-    _tn = session.tool_name(TOOL_COMPLAIN)
+async def _refute_or_surrender_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
+    _tn = session.tool_name(TOOL_REFUTE_OR_SURRENDER)
     session.log_tool_call(_tn, args)
     reason = args.get("reason", "surrender")
     detail = args.get("detail", "")
     if reason not in ("refute", "surrender"):
-        msg = f"Invalid reason: {reason!r}. Must be `refute` or `surrender`."
+        msg = (f"Invalid reason: {reason!r}. Must be `refute` or `surrender`.")
         session.log_tool_response(_tn, f"ERROR: {msg}")
         return (msg, True)
-
-    suggested_lemmas = args.get("suggested_lemmas")
 
     if isinstance(session.role, Role_Worker):
         from .language_model_driver import WorkerRefute, WorkerSurrender
@@ -690,8 +691,7 @@ async def _complain_tool_logic(session: Session, args: dict) -> tuple[str, bool]
             # Stay alive and block until the planning agent reviews the claim.
             fut: asyncio.Future = asyncio.get_running_loop().create_future()
             handle._event_queue.put_nowait(
-                WorkerRefute(detail=detail, suggested_lemmas=suggested_lemmas,
-                             response_future=fut))
+                WorkerRefute(detail=detail, response_future=fut))
             accepted, review_reason = await fut
             if accepted:
                 await session.interrupt()
@@ -704,8 +704,7 @@ async def _complain_tool_logic(session: Session, args: dict) -> tuple[str, bool]
             return (msg, False)
 
         # reason == "surrender": terminal — notify, then wind down.
-        handle._event_queue.put_nowait(
-            WorkerSurrender(detail=detail, suggested_lemmas=suggested_lemmas))
+        handle._event_queue.put_nowait(WorkerSurrender(detail=detail))
         await session.interrupt()
         msg = f"Complaint recorded ({reason})."
         session.log_tool_response(_tn, msg)
@@ -732,106 +731,58 @@ async def _complain_tool_logic(session: Session, args: dict) -> tuple[str, bool]
     return (msg, False)
 
 
-async def _request_lemmas_tool_logic(
-    session: Session, args: dict, tool_lock: asyncio.Lock,
-) -> tuple[str, bool]:
+async def _request_lemmas_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
+    """Dual-role `request_lemmas`.
+
+    - **Worker (sub-agent)**: a worker→planner channel. The worker submits a
+      loose wish-list and BLOCKS until the planning agent reviews it, authors +
+      proves any accepted helper lemmas into the global env, and hands back a
+      feedback string. The worker then KEEPS WORKING (non-terminal, like a
+      rejected refutation), now with the proven lemmas in scope.
+    - **Planning agent**: a no-argument hint. The planner edits the global env
+      itself, so this just points it at the right action — formalize and prove
+      the missing lemma under `global` via `edit`/`fill`.
+    """
     _tn = session.tool_name(TOOL_REQUEST_LEMMAS)
     session.log_tool_call(_tn, args)
-    lemmas = args.get("lemmas")
-    if not isinstance(lemmas, list) or not lemmas:
-        msg = "lemmas must be a non-empty array"
-        session.log_tool_response(_tn, f"ERROR: {msg}")
-        return (msg, True)
 
-    root = session.root
-    results: list[str] = []
+    if isinstance(session.role, Role_Worker):
+        from .language_model_driver import WorkerRequestLemmas
+        handle = session.role.worker_handle
+        if handle is None:
+            raise InternalError(
+                "Role_Worker has no worker_handle (worker must be spawned "
+                "via WorkerHandle).")
+        detail = args.get("detail", "")
+        suggested_lemmas = args.get("suggested_lemmas")
+        if not suggested_lemmas:
+            msg = ("The `suggested_lemmas` argument is compulsory for the "
+                   "`request_lemmas` tool.")
+            session.log_tool_response(_tn, f"ERROR: {msg}")
+            return (msg, True)
+        fut: asyncio.Future = asyncio.get_running_loop().create_future()
+        handle._event_queue.put_nowait(
+            WorkerRequestLemmas(detail=detail, lemmas=suggested_lemmas,
+                                response_future=fut))
+        feedback = await fut
+        # New lemmas were added to the global env, i.e. into the facts in scope
+        # BEFORE this worker's target — which the worker premise cache assumed
+        # immutable. Re-prefetch so the worker's premises/scope view reflect
+        # them, then refresh proof.yaml (so a later `recall` does too). The
+        # feedback string also names the proven lemmas.
+        await session.prefetch_worker_premises()
+        session.refresh_YAML()
+        session.log_tool_response(_tn, feedback)
+        return (feedback, False)
 
-    for i, lemma in enumerate(lemmas):
-        name = lemma.get("name", "")
-        english = lemma.get("english", "")
-        conclusion = lemma.get("conclusion", "")
-        if not name or not conclusion:
-            results.append(f"Lemma {i+1}: skipped (name and conclusion required)")
-            continue
-
-        statement: dict = {
-            "english": english,
-            "conclusion": conclusion,
-        }
-        if "for_any" in lemma:
-            statement["for_any"] = lemma["for_any"]
-        if "premises" in lemma:
-            statement["premises"] = lemma["premises"]
-
-        have_arg: Have_ToolArg = {
-            "thought": f"Sub-agent lemma: {english}",
-            "statement": statement,  # type: ignore[typeddict-item]
-            "name": name,
-        }
-
-        try:
-            gns = Parse_Op_List([{"operation": "Have", **have_arg}],
-                                f"lemmas[{i}]")
-        except AoA_Error as e:
-            results.append(f"Lemma '{name}': parse error: {e}")
-            continue
-
-        async with tool_lock:
-            session.age += 1
-            if session.is_worker and isinstance(session.role.target, Have):
-                outcome = await session.role.target.insert_before_me(gns)
-            else:
-                outcome = await root.global_env.append(gns)
-            session.refresh_YAML()
-
-        if not outcome.committed:
-            results.append(f"Lemma '{name}': insertion failed")
-            continue
-
-        have_node = outcome.committed[-1]
-        if not isinstance(have_node, Have):
-            results.append(f"Lemma '{name}': unexpected node type after insertion")
-            continue
-
-        if have_node.status.status == EvaluationStatus.Status.FAILURE or \
-           have_node.status.status == EvaluationStatus.Status.CANCELLED:
-            results.append(
-                f"Lemma '{name}': HAVE failed: {have_node.status}")
-            async with tool_lock:
-                rp = have_node._delete_me()
-                await rp._refresh_me_alone(auto_intro=False)
-                if rp.parent is not None:
-                    await rp._refresh_all_after_me()
-                session.refresh_YAML()
-            continue
-
-        session.shown_HAVE_fact_names[name] = list(have_node.for_any)
-
-        success = await session.spawn_lemma_subagent(have_node, name)
-
-        if not success:
-            results.append(f"Lemma '{name}': sub-agent failed to prove")
-            session.shown_HAVE_fact_names.pop(name, None)
-            async with tool_lock:
-                rp = have_node._delete_me()
-                await rp._refresh_me_alone(auto_intro=False)
-                if rp.parent is not None:
-                    await rp._refresh_all_after_me()
-                session.refresh_YAML()
-        else:
-            results.append(f"Lemma '{name}': proved successfully")
-
-    file = P.MyIO(StringIO())
-    file.write("request_lemmas results:\n")
-    for r in results:
-        file.write(f"  - {r}\n")
-    file.write("\nOutline:\n")
-    session.quickview_proof_scope(1, file)
-    root.reset_changed()
-
-    response = file.getvalue()
-    session.log_tool_response(_tn, response)
-    return (response, False)
+    # Role_Plan: no-argument hint — the planner formalizes the lemma itself.
+    global_env = session.root.global_env
+    target_step = f"{global_env.id}.{len(global_env.sub_nodes) + 1}"
+    msg = ("You should formalize and prove the lemmas you need directly under "
+           f"`global`. Call command `edit` with action `fill` and target step "
+           f"`{target_step}`.")
+    session.log_tool_response(_tn, msg)
+    return (msg, False)
 
 
 # ============================================================================
@@ -851,12 +802,10 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "use long_description and filters for discovery.",
                "schema": _cc_query_schema, "annotations": _RO},
     "recall": {"description": "Recall proof state from `proof.yaml`. Use only when you have lost track.", "schema": _cc_read_schema, "annotations": _RO},
-    # NOTE: `request_lemmas` is intentionally NOT registered here — the tool is
-    # disabled (not exposed to the LLM) pending a redesign that moves it to a
-    # worker→planner channel via `complain`. The logic (`_request_lemmas_tool_logic`),
-    # its dispatch case, schema file, and driver mapping are retained as dead code.
-    "complain": {"description": "Report that the goal cannot be proved: 'refute' if buggy/unprovable, 'surrender' if no strategy remains. Optionally suggest lemmas that would help.",
-                 "schema": _cc_complain_schema, "annotations": _ACT},
+    "request_lemmas": {"description": "Report missing background lemmas and request that the external environment supply them.",
+                       "schema": _cc_request_lemmas_schema, "annotations": _ACT},
+    "refute_or_surrender": {"description": "Report that the goal is unprovable, or surrender and admit you cannot prove it yourself.",
+                 "schema": _cc_refute_or_surrender_schema, "annotations": _ACT},
     "answer_indexes": {"description": "Answer by selecting indexes from the presented options", "schema": _cc_answer_indexes_schema, "annotations": _ACT},
     "answer_index": {"description": "Answer by selecting a single index, or null to skip", "schema": _cc_answer_index_schema, "annotations": _ACT},
     "answer_indexes_or_name": {"description": "Answer by selecting indexes or providing an exact fact name", "schema": _cc_answer_indexes_or_name_schema, "annotations": _ACT},
@@ -864,6 +813,7 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "answer_instantiate": {"description": "Answer by providing schematic-variable instantiations", "schema": _cc_answer_instantiate_schema, "annotations": _ACT},
     "answer_target_goal": {"description": "Select a target goal for the worker agent and provide proof suggestions", "schema": _cc_answer_target_goal_schema, "annotations": _ACT},
     "answer_refutation": {"description": "Accept or reject a worker's claim that the goal is unprovable", "schema": _cc_answer_refutation_schema, "annotations": _ACT},
+    "answer_lemma_request": {"description": "Author the helper lemmas to add+prove for a worker's lemma request (or none, to reject), plus feedback", "schema": _cc_answer_lemma_request_schema, "annotations": _ACT},
 }
 
 
@@ -928,10 +878,10 @@ class ToolExecutor:
                     result, is_error = await _read_tool_logic(session, arguments)
                 case "request_lemmas":
                     result, is_error = await _request_lemmas_tool_logic(
-                        session, arguments, self._tool_lock)
+                        session, arguments)
                     session.last_proof_op_time = time()
-                case "complain":
-                    result, is_error = await _complain_tool_logic(session, arguments)
+                case "refute_or_surrender":
+                    result, is_error = await _refute_or_surrender_tool_logic(session, arguments)
                 case _:
                     return (f"Unknown tool: {name}", True)
         except (ConnectionError, EOFError):

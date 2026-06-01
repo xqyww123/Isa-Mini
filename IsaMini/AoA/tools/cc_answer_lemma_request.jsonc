@@ -1,0 +1,56 @@
+{
+  "type": "object",
+  "properties": {
+    "lemmas": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "english": {
+            "type": "string",
+            "description": "English description of the lemma"
+          },
+          "for_any": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "type": { "type": "string" }
+              },
+              "required": ["name"],
+              "additionalProperties": false
+            },
+            "description": "Universally quantified variables. ALL free variables MUST appear here."
+          },
+          "premises": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "term": { "type": "string", "description": "Isabelle/HOL term with all literal numbers annotated with types" }
+              },
+              "required": ["name", "term"],
+              "additionalProperties": false
+            }
+          },
+          "conclusion": {
+            "type": "string",
+            "description": "Isabelle/HOL term with all literal numbers annotated with types"
+          }
+        },
+        "required": ["name", "english", "conclusion"],
+        "additionalProperties": false
+      },
+      "description": "Helper lemmas to add to the global environment and prove (in order) before the requesting sub-agent resumes. Leave empty to REJECT the request (no lemmas added)."
+    },
+    "feedback": {
+      "type": "string",
+      "description": "Message back to the requesting sub-agent: which lemmas are now available (and how to use them), or — if rejecting — why, and what to try instead."
+    }
+  },
+  "required": ["feedback"],
+  "additionalProperties": false
+}

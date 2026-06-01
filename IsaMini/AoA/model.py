@@ -1934,9 +1934,15 @@ class AnswerRefutation:
     accept: bool
     reason: str
 
+@dataclass(frozen=True)
+class AnswerLemmaRequest:
+    # Planner-authored helper lemmas (rich Have specs). Empty == reject-all.
+    lemmas: list
+    feedback: str
+
 AnswerPayload = (AnswerIndexes | AnswerIndex | AnswerIndexesOrName
                  | AnswerIndexesOrSpec | AnswerInstantiate
-                 | AnswerTargetGoal | AnswerRefutation)
+                 | AnswerTargetGoal | AnswerRefutation | AnswerLemmaRequest)
 
 # Abstract tool identifiers (driver-agnostic)
 type tool = str
@@ -1945,7 +1951,7 @@ TOOL_DELETE: tool = "delete"
 TOOL_SEARCH: tool = "query"
 TOOL_READ:   tool = "recall"
 TOOL_REQUEST_LEMMAS: tool = "request_lemmas"
-TOOL_COMPLAIN: tool = "complain"
+TOOL_REFUTE_OR_SURRENDER: tool = "refute_or_surrender"
 
 TOOL_ANSWER_INDEXES:        tool = "answer_indexes"
 TOOL_ANSWER_INDEX:          tool = "answer_index"
@@ -1954,16 +1960,17 @@ TOOL_ANSWER_INDEXES_OR_SPEC: tool = "answer_indexes_or_spec"
 TOOL_ANSWER_INSTANTIATE:    tool = "answer_instantiate"
 TOOL_ANSWER_TARGET_GOAL:    tool = "answer_target_goal"
 TOOL_ANSWER_REFUTATION:     tool = "answer_refutation"
+TOOL_ANSWER_LEMMA_REQUEST:  tool = "answer_lemma_request"
 
 ANSWER_TOOLS: frozenset[tool] = frozenset({
     TOOL_ANSWER_INDEXES, TOOL_ANSWER_INDEX, TOOL_ANSWER_INDEXES_OR_NAME,
     TOOL_ANSWER_INDEXES_OR_SPEC, TOOL_ANSWER_INSTANTIATE,
-    TOOL_ANSWER_TARGET_GOAL, TOOL_ANSWER_REFUTATION,
+    TOOL_ANSWER_TARGET_GOAL, TOOL_ANSWER_REFUTATION, TOOL_ANSWER_LEMMA_REQUEST,
 })
 
 ALL_PROOF_TOOLS: tuple[tool, ...] = (
     TOOL_EDIT, TOOL_DELETE, TOOL_SEARCH, TOOL_READ,
-    TOOL_REQUEST_LEMMAS, TOOL_COMPLAIN,
+    TOOL_REQUEST_LEMMAS, TOOL_REFUTE_OR_SURRENDER,
     *ANSWER_TOOLS,
 )
 
@@ -2051,19 +2058,24 @@ class Interaction_ChooseTarget(Interaction):
     async def prompt(self, indent: int, file: MyIO) -> None:
         targets = self._sorted_targets()
         if self.is_first_entry:
-            file.write("The planning phase is complete. The following proof steps need Worker agents:\n\n")
+            file.write("Great! We now have a complete proof sketch. A few subgoals you expected to be obvious didn't go through automatically, so we'll now run sub-agents to prove each of them:\n\n")
         else:
-            file.write(f"{len(targets)} proof step(s) still need Worker agents:\n\n")
+            file.write(f"{len(targets)} proof step(s) still need sub-agents:\n\n")
         for i, p in enumerate(targets):
             goal = p.goal() if hasattr(p, 'goal') else None
             goal_str = f" — goal: {goal.conclusion.unicode}" if goal else ""
             file.write(f"  {i}. {p.id}{goal_str}\n")
-        file.write(
-            f"\nPick the hardest step to tackle first. "
-            f"Use `{tn(TOOL_ANSWER_TARGET_GOAL)}` with:\n"
-            f"  - index: the number of your chosen step\n"
-            f"  - suggestions: strategy hints for the worker\n"
-            f"  - useful_lemmas: names of lemmas the worker should try\n")
+        if self.is_first_entry:
+            file.write(
+                f"\nPick the hardest step to tackle first. "
+                f"Please call `{tn(TOOL_ANSWER_TARGET_GOAL)}` with:\n"
+                f"  - index: the number of your chosen step\n"
+                f"  - suggestions: strategy hints for the sub-agent\n"
+                f"  - useful_lemmas: names of lemmas the sub-agent should try\n")
+        else:
+            file.write(
+                f"\nPick the hardest step to tackle first. "
+                f"Answer by calling `{tn(TOOL_ANSWER_TARGET_GOAL)}` with your choice.\n")
 
     async def answer(self, answer: AnswerTargetGoal) -> 'str | None':
         targets = self._sorted_targets()
@@ -2089,40 +2101,46 @@ class Interaction_ReviewRefutation(Interaction):
     fork_allowed_tools = [TOOL_ANSWER_REFUTATION, TOOL_SEARCH]
 
     def __init__(self, target: 'NonLeaf_Node', complaint: Any,
-                 worker_handle: Any, choose_target: 'Interaction_ChooseTarget'):
+                 worker_handle: Any, continuation: Any):
         self.target = target
         self.complaint = complaint
-        # The live worker awaiting this review, and the originating target-choice
-        # interaction to fall back to if the refutation is rejected or the
-        # worker subsequently proves the goal.
+        # The live worker awaiting this review, plus its continuation: the
+        # originating ``Interaction_ChooseTarget`` (FINISHING worker) or the
+        # ``LemmaDrive`` (lemma sub-agent) used to resume it if the refutation is
+        # rejected. ``None`` is tolerated.
         self.worker_handle = worker_handle
-        self.choose_target = choose_target
+        self.continuation = continuation
 
     async def prompt(self, indent: int, file: MyIO) -> None:
         goal = self.target.goal() if hasattr(self.target, 'goal') else None
         goal_str = f"\nGoal: {goal.conclusion.unicode}" if goal else ""
         file.write(
-            f"Worker attempted {self.target.id} but claims the goal is unprovable.{goal_str}\n\n"
+            f"A sub-agent attempted {self.target.id} but claims the goal is unprovable.{goal_str}\n\n"
             f"Refutation: {self.complaint.detail}\n\n"
             f"Do you accept this refutation? Use `{tn(TOOL_ANSWER_REFUTATION)}` with:\n"
             f"  - accept: true to accept (goal is unprovable), false to reject\n"
             f"  - reason: explanation of your judgment\n")
 
     async def answer(self, answer: AnswerRefutation) -> 'str | None':
+        from .language_model_driver import _resume_worker, aclose_all, LemmaDrive
         the_session().log_interaction("refutation_review",
             f"target={self.target.id} accept={answer.accept} reason={answer.reason}")
         if answer.accept:
-            # Accept: tell the worker to conclude, wait for it to wind down,
-            # then hand a status line back to the planning agent.
+            # Accept: tell the worker to conclude and wait for it to wind down.
             self.worker_handle.resolve_review(accepted=True, reason=answer.reason)
             await self.worker_handle.wait_finish()
+            # A lemma sub-agent accepting its own refutation = the authored lemma
+            # is unprovable ⇒ proof-failure: tear down the whole nesting stack
+            # (the outer requesters) before returning to planning. For a plain
+            # FINISHING refutation the stack is just this (now-finished) worker.
+            await aclose_all(self.worker_handle.session.runtime.worker_stack)
             self.session.refresh_YAML()
             return (f"Refutation accepted for {self.target.id}: the goal is "
                     f"unprovable as stated. Revise the proof plan for this step.")
-        # Reject: resume the worker and continue consuming its events.
+        # Reject: resume the worker (style depends on its continuation).
         self.worker_handle.resolve_review(accepted=False, reason=answer.reason)
         try:
-            return await self.worker_handle.process(self.choose_target)
+            return await _resume_worker(self.worker_handle)
         except ContinuingInteraction:
             raise
         except BaseException:
@@ -2131,7 +2149,81 @@ class Interaction_ReviewRefutation(Interaction):
 
     @property
     def session(self) -> 'Session':
-        return self.choose_target.session
+        return self.worker_handle.session
+
+
+class Interaction_ReviewLemmaRequest(Interaction):
+    """Review a Worker's request for helper lemmas. The planning agent (global
+    vision) re-authors the lemmas precisely — it may tighten/relax/reject them —
+    then the pipeline adds the accepted ones to ``global_env`` and proves each
+    with a sub-agent, in order, before waking the requesting worker with
+    feedback. An empty ``lemmas`` answer rejects the request (feedback only)."""
+    forking = ForkingMode.FORKING_WITH_CTXT
+    fork_allowed_tools = [TOOL_ANSWER_LEMMA_REQUEST, TOOL_SEARCH]
+
+    def __init__(self, target: 'NonLeaf_Node', detail: str,
+                 requested_lemmas: Any, worker_handle: Any, continuation: Any):
+        self.target = target
+        self.detail = detail
+        self.requested_lemmas = requested_lemmas or []
+        self.worker_handle = worker_handle
+        self.continuation = continuation
+
+    @property
+    def session(self) -> 'Session':
+        return self.worker_handle.session
+
+    async def prompt(self, indent: int, file: MyIO) -> None:
+        # DRAFT wording (pending user review — see plan §"User-facing text").
+        depth = len(self.session.runtime.worker_stack)
+        noun = "a helper lemma" if len(self.requested_lemmas) == 1 else "helper lemmas"
+        file.write(
+            f"A sub-agent proving {self.target.id} is requesting {noun}:\n"
+            f"  {self.detail}\n\n")
+        if self.requested_lemmas:
+            file.write("It suggested (informally — refine as you see fit):\n")
+            for i, lm in enumerate(self.requested_lemmas):
+                nm = lm.get("name", "") if isinstance(lm, dict) else ""
+                eng = lm.get("english", "") if isinstance(lm, dict) else ""
+                stmt = lm.get("isabelle_statement", "") if isinstance(lm, dict) else ""
+                file.write(f"  {i}. {nm}: {eng}\n     {stmt}\n")
+            file.write("\n")
+        file.write(
+            f"These suggestions are informal — you decide the precise "
+            f"statements. Re-author them (tighten, relax, rename, split, or "
+            f"drop), or reject the request entirely. Keep each lemma genuinely "
+            f"simpler than the current goal. Sub-agents will prove them one by "
+            f"one. Call `{tn(TOOL_ANSWER_LEMMA_REQUEST)}` with:\n"
+            f"  - lemmas: the lemmas to add+prove (empty = reject; each "
+            f"{{name, english, for_any?, premises?, conclusion}})\n"
+            f"  - feedback: a message back to the requesting sub-agent\n")
+        if depth >= 3:
+            file.write(
+                f"\n(Note: this request is {depth} levels deep into nested "
+                f"lemma requests — consider whether a different strategy would "
+                f"be simpler. Nesting is hard-capped at "
+                f"{WORKER_NESTING_LIMIT}.)\n")
+
+    async def answer(self, answer: AnswerLemmaRequest) -> 'str | None':
+        from .language_model_driver import LemmaDrive, _abort_to_planning
+        planner = self.session
+        the_session().log_interaction(
+            "lemma_request_review",
+            f"target={self.target.id} n_lemmas={len(answer.lemmas)}")
+        # Author all accepted lemmas up-front (pure tree edits — no nesting can
+        # occur during authoring). On any authoring failure, decision 4 keeps the
+        # node and decision 5 terminates to planning.
+        queue: list = []
+        for spec in (answer.lemmas or []):
+            if not isinstance(spec, dict):
+                continue
+            have_node = await planner.add_lemma_node(spec, self.target)
+            if have_node is None:
+                return await _abort_to_planning(planner)
+            queue.append((have_node, spec.get("name", "")))
+        drive = LemmaDrive(planner, queue, self.worker_handle,
+                           self.continuation, answer.feedback)
+        return await drive.advance()
 
 
 class Fork_Pending(NamedTuple):
@@ -7925,7 +8017,11 @@ class GlobalEnv(StdBlock):
         return ret
     def _print_footer(self, indent: int, file: MyIO, show_warnings: bool = False) -> None:
         print_indent(indent, file)
-        file.write(f"You can write global declarations by calling command `edit` with action `fill` and target step `{self.id}.{len(self.sub_nodes)+1}`\n")
+        file.write(
+            f"Here you can write global declarations. If you find the "
+            f"background theory is missing any lemmas you need, formalize "
+            f"and prove them here. Call command `edit` with action `fill` "
+            f"and target step `{self.id}.{len(self.sub_nodes)+1}`.\n")
     def unfinished_nodes(self, ret: set['Node']) -> None:
         for child in self.sub_nodes:
             child.unfinished_nodes(ret)
@@ -8233,6 +8329,12 @@ class Role_Interaction:
 
 Role = Role_Plan | Role_Worker | Role_Interaction
 
+# Hard cap on lemma-request nesting depth (worker → lemma sub-agent → … ). When
+# the live worker_stack reaches this, the whole proof aborts as
+# resource_exhausted (a soft warning appears in the review prompt before then).
+WORKER_NESTING_LIMIT: int = 10
+
+
 class Runtime:
     """Global singleton shared across all Sessions operating on the same proof tree.
     Holds counters and limits that must be unique/shared."""
@@ -8247,6 +8349,10 @@ class Runtime:
         self.total_tool_calls: int = 0
         self._budget_start_time: float | None = None
         self.worker_max_tool_calls: int = 500
+        # Live WorkerHandle nesting stack (FINISHING worker + any lemma
+        # sub-agents it spawned, deepest last). Drives the lemma-request nesting
+        # backstop and guarantees no worker leaks on terminate (aclose_all).
+        self.worker_stack: list = []
 
     def next_pit_name(self) -> str:
         i = self._pit_counter
@@ -8628,7 +8734,7 @@ class Session:
                 "Analyze the proof goal, plan a proof, and complete it using the MCP proof tools.\n"
                 "Continue until no errors remain.\n"
                 "A proof goal can be buggy and thus unprovable — "
-                f"call `{self.tool_name(TOOL_COMPLAIN)}` with your analysis if you believe so.\n"
+                f"call `{self.tool_name(TOOL_REFUTE_OR_SURRENDER)}` with your analysis if you believe so.\n"
                 f"{planner_hint}"
                 "Be concise in text output.\n"
                 "\n"
@@ -8637,9 +8743,13 @@ class Session:
                 f"- {self.tool_name(TOOL_DELETE)}: Delete proof steps\n"
                 f"- {self.tool_name(TOOL_SEARCH)}: Search for theorems, constants, types, and rules; help you understand unfamiliar terms\n"
                 f"- {self.tool_name(TOOL_READ)}: Recall proof state from `proof.yaml`. Use only when you have lost track.\n"
+                f"- {self.tool_name(TOOL_REQUEST_LEMMAS)}: Report missing background lemmas and request that they be supplied.\n"
             )
+        # refute_or_surrender is shown to workers only.
         if self.is_worker:
-            return PROMPT + f"- {self.tool_name(TOOL_COMPLAIN)}: Report that the goal is unprovable (refute) or that you need help (surrender)\n"
+            return PROMPT + (
+                f"- {self.tool_name(TOOL_REFUTE_OR_SURRENDER)}: Report that the goal is unprovable (refute) or that you need help (surrender)\n"
+            )
         else:
             return PROMPT
 
@@ -8657,20 +8767,30 @@ class Session:
                 header = f"Prove the lemma `{target.name}`: {target.statement['english']}\n"
             else:
                 header = f"Prove step `{target.id}`.\n"
+            guidance = ""
+            if isinstance(self.role, Role_Worker):
+                g = []
+                sugg = self.role.suggestions.strip()
+                if sugg:
+                    g.append(sugg)
+                if self.role.useful_lemmas:
+                    g.append("Useful lemmas: " + ", ".join(self.role.useful_lemmas))
+                if g:
+                    guidance = "\n" + "\n\n".join(g) + "\n\n"
             if self.system_prompt() is not None:
                 return (
-                    header
+                    header + guidance
                     + "Complete the proof using the MCP proof tools.\n"
                     "The proof state is in `proof.yaml` — read it to see the goal and current proof."
                 )
             else:
                 return (
-                    header
+                    header + guidance
                     + "The proof state is in `proof.yaml` — read it to see the goal and current proof.\n"
                     f"Analyze the proof goal, plan a proof, and complete it using tools `{self.tool_name(TOOL_EDIT)}` and `{self.tool_name(TOOL_DELETE)}`.\n"
                     "Continue building the proof until no error remains.\n"
                     "If you believe the goal is unprovable or you need help, "
-                    f"call `{self.tool_name(TOOL_COMPLAIN)}` to report back."
+                    f"call `{self.tool_name(TOOL_REFUTE_OR_SURRENDER)}` to report back."
                 )
         elif self.system_prompt() is not None:
             return (
@@ -8691,7 +8811,7 @@ class Session:
                 "Continue building the proof until no error remains.\n"
                 f"{planner_hint}"
                 "A proof goal can be buggy and thus unprovable — "
-                f"call `{self.tool_name(TOOL_COMPLAIN)}` with your analysis if you believe so."
+                f"call `{self.tool_name(TOOL_REFUTE_OR_SURRENDER)}` with your analysis if you believe so."
             )
 
     def retry_prompt(self, unfinished_nodes: set['Node']) -> str:
@@ -8993,12 +9113,15 @@ class Session:
 
     async def prefetch_worker_premises(self) -> None:
         """Resolve the standard-printed propositions of every fact in scope before the
-        worker's target and cache them (ascii name -> IsaTerm).  Called once at worker
-        ``initialize``.
+        worker's target and cache them (ascii name -> IsaTerm).  Called at worker
+        ``initialize``, and re-called when the in-scope facts change (see below).
 
-        SYSTEM INVARIANT: a worker only ever edits its own target subtree, so the facts
-        in scope BEFORE the target are immutable for the worker's lifetime.  Hence a single
-        prefetch is sufficient and never goes stale (no re-fetch / cache invalidation needed).
+        The facts in scope BEFORE the target are immutable for the worker's lifetime
+        with ONE exception: a ``request_lemmas`` call can have the planning agent
+        add (and prove) helper lemmas into the global env — i.e. into the facts in scope
+        before the target — while the worker is parked. The ``request_lemmas`` tool therefore
+        re-invokes this method when the worker resumes, so the cache picks up the new
+        lemmas. The method is idempotent: it just recomputes ``_worker_premise_cache``.
         """
         if not self.is_worker:
             return
@@ -9072,10 +9195,55 @@ class Session:
         _quickview_children_compressed(target.sub_nodes, indent, file)
         target._quickview_pending_footer(indent, file)
 
-    async def spawn_lemma_subagent(self, have_node: 'Have', lemma_name: str) -> bool:
-        """Spawn a sub-agent to prove a lemma. Returns True on success.
-        Default implementation returns False (no sub-agent support)."""
-        return False
+    async def add_lemma_node(self, spec: dict, anchor: 'NonLeaf_Node | None') -> 'Have | None':
+        """Author one planner-requested helper lemma as a Have node; return it.
+
+        Positioning (plan decision 3): if ``anchor`` (the requesting worker's
+        target) is directly under ``global_env``, insert the lemma immediately
+        before it there; otherwise append to the end of ``global_env``. Returns
+        the committed Have node, or ``None`` if the spec is incomplete / fails to
+        parse / opens as a non-SUCCESS node. Per decision 4 a FAILURE node is NOT
+        rolled back — it stays (the planner is forced to fix it); ``None`` only
+        signals authoring failure to the caller.
+
+        (Authoring is a pure tree edit — it never spawns a sub-agent — so callers
+        may loop over several specs without risking the trampoline frame-loss
+        that proving incurs.)"""
+        name = spec.get("name", "")
+        english = spec.get("english", "")
+        conclusion = spec.get("conclusion", "")
+        if not name or not conclusion:
+            return None
+        statement: dict = {"english": english, "conclusion": conclusion}
+        if "for_any" in spec:
+            statement["for_any"] = spec["for_any"]
+        if "premises" in spec:
+            statement["premises"] = spec["premises"]
+        have_arg: Have_ToolArg = {
+            "thought": f"Helper lemma: {english}",
+            "statement": statement,  # type: ignore[typeddict-item]
+            "name": name,
+        }
+        try:
+            gns = Parse_Op_List([{"operation": "Have", **have_arg}], "lemma")
+        except AoA_Error:
+            return None
+        self.age += 1
+        if anchor is not None and anchor.parent is self.root.global_env:
+            outcome = await anchor.insert_before_me(gns)
+        else:
+            outcome = await self.root.global_env.append(gns)
+        self.refresh_YAML()
+        if not outcome.committed:
+            return None
+        have_node = outcome.committed[-1]
+        if not isinstance(have_node, Have):
+            return None
+        if have_node.status.status in (
+                EvaluationStatus.Status.FAILURE, EvaluationStatus.Status.CANCELLED):
+            return None  # decision 4: node kept; None = authoring failure
+        self.shown_HAVE_fact_names[name] = list(have_node.for_any)
+        return have_node
 
     async def complete_proof(self, response: str) -> 'tuple[str, bool]':
         """Drive the FINISHING flow from inside the planning agent loop.
@@ -9110,11 +9278,13 @@ class Session:
         try:
             result = await self.fork_interaction(choose)
         finally:
-            # Guarantee no worker leaks: if the fork exits without an answer
-            # (e.g. fork-loop exhaustion) the live worker would otherwise stay
-            # blocked forever on its review future.
-            if choose.active_handle is not None:
-                await choose.active_handle.aclose()
+            # Guarantee no worker leaks: aclose the WHOLE nesting stack (the
+            # FINISHING worker plus any lemma sub-agents it spawned), not just
+            # the last active handle — a nested sub-agent would otherwise stay
+            # blocked forever on its review future if the fork exits without an
+            # answer (e.g. fork-loop exhaustion).
+            from .language_model_driver import aclose_all
+            await aclose_all(self.runtime.worker_stack)
         if result is None:
             # All targets proved after dispatching Worker(s). The triggering
             # edit's `response` is now stale (its Outline predates the Workers'

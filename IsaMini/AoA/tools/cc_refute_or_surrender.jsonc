@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "properties": {
+    "reason": {
+      "type": "string",
+      "enum": ["refute", "surrender"],
+      "description": "'refute' if you believe the goal is unprovable; 'surrender' when you have exhausted your strategies and are giving up."
+    },
+    "detail": { "type": "string", "description": "Explanations." }
+  },
+  "required": ["reason", "detail"],
+  "additionalProperties": false
+}

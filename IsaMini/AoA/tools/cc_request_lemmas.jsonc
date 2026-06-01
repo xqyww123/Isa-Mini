@@ -1,53 +1,22 @@
 {
   "type": "object",
   "properties": {
-    "lemmas": {
+    "suggested_lemmas": {
       "type": "array",
-      "minItems": 1,
       "items": {
         "type": "object",
         "properties": {
-          "name": { "type": "string" },
-          "english": {
-            "type": "string",
-            "description": "English description of the lemma"
-          },
-          "for_any": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "name": { "type": "string" },
-                "type": { "type": "string" }
-              },
-              "required": ["name"],
-              "additionalProperties": false
-            },
-            "description": "Universally quantified variables. ALL free variables MUST appear here."
-          },
-          "premises": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "name": { "type": "string" },
-                "term": { "type": "string", "description": "Isabelle/HOL term with all literal numbers annotated with types" }
-              },
-              "required": ["name", "term"],
-              "additionalProperties": false
-            }
-          },
-          "conclusion": {
-            "type": "string",
-            "description": "Isabelle/HOL term with all literal numbers annotated with types"
-          }
+          "name": { "type": "string", "description": "A short handle for the lemma" },
+          "english": { "type": "string", "description": "Plain-English description of what the lemma should state" },
+          "isabelle_statement": { "type": "string", "description": "A rough Isabelle/HOL statement of the proposition (the planning agent will refine it)" }
         },
-        "required": ["name", "english", "conclusion"],
-        "additionalProperties": false
-      },
-      "description": "Proposed common lemmas"
+        "required": ["name", "english", "isabelle_statement"]
+      }
+    },
+    "detail": {
+      "type": "string",
+      "description": "Explanations."
     }
   },
-  "required": ["lemmas"],
   "additionalProperties": false
 }

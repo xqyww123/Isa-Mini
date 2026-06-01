@@ -1115,44 +1115,6 @@ class APIDriver(LMDriver):
         return fork.fork_pending.answer.result()
 
     # ------------------------------------------------------------------
-    # Lemma Sub-Agent
-    # ------------------------------------------------------------------
-
-    async def spawn_lemma_subagent(self, have_node, lemma_name: str) -> bool:
-        ctx = contextvars.copy_context()
-        task = asyncio.get_running_loop().create_task(
-            self._run_lemma_subagent(have_node, lemma_name), context=ctx)
-        result = await task
-        self.refresh_YAML()
-        return result
-
-    async def _run_lemma_subagent(self, have_node, lemma_name: str) -> bool:
-        from .model import _session_var, Role_Worker
-        _session_var.set(None)  # type: ignore
-        sub = self.__class__._make_fork(self, role=Role_Worker(target=have_node))
-        sub._fork_name = f"{self._fork_name}.lemma_{lemma_name}"
-        await sub.initialize(self.root)
-
-        tag = f"[{sub._fork_name}]"
-        self.log_interaction("lemma_subagent", f"{tag} spawned for lemma '{lemma_name}'")
-
-        try:
-            await sub._run_agent_loop()
-        except asyncio.CancelledError:
-            self.warn_AoA_opr(f"{tag} cancelled")
-        except Exception as e:
-            self.warn_AoA_opr(f"{tag} failed with {type(e).__name__}: {e}")
-        finally:
-            self._accumulate_subagent_costs(sub)
-            await sub.close()
-
-        success = have_node.is_proof_finished()
-        self.log_interaction(
-            "lemma_subagent",
-            f"{tag} {'succeeded' if success else 'failed'} for lemma '{lemma_name}'")
-        return success
-
-    # ------------------------------------------------------------------
     # Cost Tracking
     # ------------------------------------------------------------------
 
