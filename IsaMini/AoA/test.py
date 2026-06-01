@@ -9836,9 +9836,21 @@ async def _test_recall_worker_scope(root: Root, file: MyIO):
                       "conclusion": r"(0::int) \<le> x * x"},
         "name": "inner"})])
     await root.fill("1.1.1", [Obvious.gen_single({"facts": []})])
-    await H.append([Obvious.gen_single({"facts": []})])   # node "1.2"
+    # Second child of H, also a Have: this leaves H's own subgoal open (and thus
+    # the whole proof unfinished), so `root.is_proof_finished()` is False and the
+    # ML side never tries to assemble a closing proof (which would trip the
+    # "axiomatic sorry" guard). Mirrors how `Have1` leaves its goal open.
+    await H.append([Have.gen_single({
+        "thought": "inner helper 2",
+        "statement": {"english": "x squared is non-negative",
+                      "conclusion": r"(0::int) \<le> x * x"},
+        "name": "inner2"})])                               # node "1.2" (H's last child)
     # G = a top-level sibling AFTER H (out of the worker's scope).
-    await goal.append([Obvious.gen_single({"facts": []})])  # node "2"
+    await goal.append([Have.gen_single({
+        "thought": "out-of-scope sibling",
+        "statement": {"english": "x squared is non-negative",
+                      "conclusion": r"(0::int) \<le> x * x"},
+        "name": "sibling"})])                              # node "2"
     G = goal.sub_nodes[1]
 
     # Switch to a worker scoped to H and render the scoped proof.yaml (this is

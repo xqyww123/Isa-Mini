@@ -4,8 +4,8 @@ begin
 
 declare [[agent_AoA_driver="test.RecallWorkerScope"]]
 
-(* Test: `recall` line bounds under a worker-scoped proof.yaml render *)
-lemma recall_scope_test: "(0::int) \<le> x * x"
+(* Distinctive goal, left unfinished by the test, to avoid the shared proof cache *)
+lemma recall_scope_test: "(0::int) \<le> x * x + x * x + (1::int)"
   by Agent AoA
 
 end

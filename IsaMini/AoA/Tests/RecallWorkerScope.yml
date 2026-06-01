@@ -1,0 +1,30 @@
+--------------------------------------------------
+recall last child of target (in scope)
+--------------------------------------------------
+is_error: False
+non-empty range (end >= start): True
+reaches end of scoped file: True
+--------------------------------------------------
+recall non-last child of target (in scope)
+--------------------------------------------------
+is_error: False
+non-empty range (end >= start): True
+--------------------------------------------------
+recall target itself (out of scope)
+--------------------------------------------------
+is_error: True
+out-of-scope message: Step '1' has no line information (proof not yet printed). Read by line number instead.
+--------------------------------------------------
+recall sibling (out of scope)
+--------------------------------------------------
+is_error: True
+out-of-scope message: Step '2' is outside your current proof scope, so its location is unavailable.
+--------------------------------------------------
+helper predicates
+--------------------------------------------------
+_line_is_fresh(last child)  : True
+_line_is_fresh(grandchild)  : True
+_line_is_fresh(target self) : False
+_line_is_fresh(sibling)     : False
+_node_end_line(last child) == EOF: True
+_line_is_fresh(sibling, planner): True
