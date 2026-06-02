@@ -283,19 +283,22 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         if verdict is EditVerdict.LOCKED:
             assert blocker is not None  # LOCKED always carries the blocking handle
             wstep = blocker.target.id
+            _resume_hint = (
+                f"You cannot edit it before you close the sub-agent, but you are "
+                f"recommended to resume the sub-agent with your suggestions and let it "
+                f"carry out the work. You can resume it by calling `subagent` on step {wstep}.")
             if session.is_worker:
                 error_msg = (
                     f"A sub-agent is working on step {wstep}, which overlaps the step you "
-                    f"are editing. If you really need to edit it, close the sub-agent on "
-                    f"step {wstep} first.")
+                    f"are editing. {_resume_hint}")
             elif action == "amend":
                 error_msg = (
                     f"Cannot amend step {step} because it belongs to the scope of "
-                    f"the sub-agent on step {wstep}. If you really need to change it, "
-                    f"either call `subagent` on step {wstep} to resume that sub-agent "
-                    f"with your suggestions, or close it with `close_subagent`.")
+                    f"the sub-agent on step {wstep}. {_resume_hint}")
             else:
-                error_msg = "This step (or a step above/below it) has a sub-agent working on it, so it can't be edited. Delete it first (which ends that sub-agent), then re-add."
+                error_msg = (
+                    f"Cannot edit step {step} because a sub-agent is working on step {wstep}, "
+                    f"which overlaps step {step}. {_resume_hint}")
             session.log_tool_response(_tn, f"ERROR: {error_msg}")
             return (error_msg, True)
         # Parse atomically: validation, splice, and Parsed_Opr construction
@@ -919,7 +922,7 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
         blocker = session._dispatch_blocked_by(node)
         if blocker is not None:
             return _err(f"A sub-agent is already working on step {blocker.target.id}, which "
-                        f"overlaps the step you asked for, which is not allowed.")
+                        f"overlaps the step you asked for; this is not allowed.")
 
     # Resume the parked worker on this node, or start a fresh one. Unexpected
     # errors are intentionally NOT caught here — they propagate to the executor's
@@ -954,7 +957,12 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
                    f"Consider providing these lemmas, then call `subagent` on step "
                    f"{node.id} again to resume the sub-agent, listing the lemmas you "
                    f"built in `helpful_lemmas`.")
-    msg = redirect_note + msg
+    # Append the whole-proof outline (mirrors the `edit`/`delete` tools) so the
+    # planner sees the tree the worker just mutated without a `recall` round-trip.
+    outline, finished = await P.subagent_overall(session.root, session)
+    msg = redirect_note + msg + "\n" + outline
+    if finished:
+        await session.interrupt()
 
     session.log_tool_response(_tn, msg)
     return (msg, False)

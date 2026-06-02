@@ -13,9 +13,9 @@ main _edit_verdict (parked worker on 1)
 main fill 1.1 -> LOCKED message
 --------------------------------------------------
 is_error=True
-This step (or a step above/below it) has a sub-agent working on it, so it can't be edited. Delete it first (which ends that sub-agent), then re-add.
+Cannot edit step 1.1 because a sub-agent is working on step 1, which overlaps step 1.1. You cannot edit it before you close the sub-agent, but you are recommended to resume the sub-agent with your suggestions and let it carry out the work. You can resume it by calling `subagent` on step 1.
 --------------------------------------------------
 main amend 1.1 -> LOCKED message (names blocker 1)
 --------------------------------------------------
 is_error=True
-Cannot amend step 1.1 because it belongs to the scope of the sub-agent on step 1. If you really need to change it, either call `subagent` on step 1 to resume that sub-agent with your suggestions, or close it with `close_subagent`.
+Cannot amend step 1.1 because it belongs to the scope of the sub-agent on step 1. You cannot edit it before you close the sub-agent, but you are recommended to resume the sub-agent with your suggestions and let it carry out the work. You can resume it by calling `subagent` on step 1.

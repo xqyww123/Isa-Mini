@@ -112,7 +112,6 @@ async def edit_message(
     if outcome.committed:
         file.write("Outline:\n")
         session.quickview_proof_scope(1, file)
-        root.reset_changed()
         _render_auto_intro_warning(session, file)
         unfinished = session.proof_scope_unfinished_nodes()
         if not unfinished:
@@ -143,12 +142,35 @@ async def deleted_steps_message(steps: list[str], root: Root, session: 'model.Se
         session.warnings.clear()
     file.write("Outline:\n")
     session.quickview_proof_scope(1, file)
-    root.reset_changed()
     _render_auto_intro_warning(session, file)
     unfinished = session.proof_scope_unfinished_nodes()
     if not unfinished:
         file.write("Congratulations! All goals are proven.\n")
         finished = True
+    root.reset()
+    return file.getvalue(), finished
+
+
+async def subagent_overall(root: Root, session: 'model.Session') -> tuple[str, bool]:
+    """Whole-proof outline tail appended to every `subagent` outcome, mirroring
+    `edit_message`'s `Outline:` section (same quickview + reset bookkeeping)
+    under an `Overall:` header. Returns `(text, finished)` where `finished` is
+    `not unfinished` — whether the sub-agent's work discharged the last open
+    goal (the caller acts on it, e.g. `session.interrupt()`).
+
+    Unlike `edit_message` it does NOT bump `session.age`: the worker already
+    advanced the render generation during its run, and its edits set each
+    touched node's `changed` flag directly, so the quickview still highlights
+    them; the trailing `root.reset()` then clears those flags (and the node
+    warnings) as `edit_message` does."""
+    finished = False
+    file = MyIO(StringIO())
+    file.write("Overall:\n")
+    root.quickview(1, file)
+    if not session.proof_scope_unfinished_nodes():
+        file.write("Congratulations! All goals are proven.\n")
+        finished = True
+    root.reset()
     return file.getvalue(), finished
 
 
