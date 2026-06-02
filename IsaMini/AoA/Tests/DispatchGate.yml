@@ -1,0 +1,11 @@
+--------------------------------------------------
+_dispatch_blocked_by (parked worker on 1.1)
+--------------------------------------------------
+dispatch on 1.1.1   -> blocked_by=1.1
+dispatch on 1       -> blocked_by=1.1
+dispatch on 2       -> blocked_by=-
+--------------------------------------------------
+subagent on 1 -> gate reject message (names 1.1)
+--------------------------------------------------
+is_error=True
+A sub-agent is already working on step 1.1, which overlaps the step you asked for, which is not allowed.

@@ -38,7 +38,7 @@ from .model import (
     IsaTerm, ContinuingInteraction, ImmediateAnswer,
     AoA_Error, ArgumentError, IsabelleError, InternalError,
     CannotDelete_Root, NodeNotFound, ProofTreeTooDeep,
-    EvaluationStatus, WorkerHandle,
+    EvaluationStatus, WorkerHandle, EditVerdict,
     Parse_Op_List, Interaction_BadAnswer,
     AnswerIndexes, AnswerIndex, AnswerIndexesOrName, AnswerIndexesOrSpec,
     AnswerInstantiate, AnswerRefutation,
@@ -267,30 +267,37 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             error_msg = "proof_operations must be a non-empty array of proof operations"
             session.log_tool_response(_tn, f"ERROR: {error_msg}")
             return (error_msg, True)
-        # Edit-lock (main agent only; workers' own edits are never gated).
-        # `fill`/`insert_before` may not touch a node comparable to a live
-        # sub-agent (the node, an ancestor, or a descendant) — delete it first.
-        # `amend` IS allowed (it tears down the amended node's own worker via
-        # `_amend_child`) EXCEPT inside a sub-agent's scope (a worker is proving
-        # an enclosing step).
-        if session.is_major:
-            if action == "amend":
-                blocker = session._worker_in_scope_of(step)
-                if blocker is not None:
-                    wstep = blocker.target.id
-                    error_msg = (
-                        f"Cannot amend step {step} because it belongs to the scope of "
-                        f"the sub-agent on step {wstep}. If you really need to change it, "
-                        f"either call `subagent` on step {wstep} to resume that sub-agent "
-                        f"with your suggestions, or close it with `close_subagent`.")
-                    session.log_tool_response(_tn, f"ERROR: {error_msg}")
-                    return (error_msg, True)
+        # Edit-lock + worker confinement, unified in `_edit_verdict` (all agents):
+        #  - OUT_OF_SCOPE: a worker edit outside its own subtree.
+        #  - LOCKED: the target is comparable to a live sub-agent's node. `amend`
+        #    only locks on a strict-ancestor sub-agent (it tears down its own
+        #    target's worker via `_amend_child`); `fill`/`insert_before` lock on
+        #    the whole comparable region. Main is never OUT_OF_SCOPE.
+        verdict, blocker = session._edit_verdict(step, action)
+        if verdict is EditVerdict.OUT_OF_SCOPE:
+            error_msg = ("This step is outside the goal you were asked to prove — you may "
+                         "only edit within your own sub-proof. If you need a fact established "
+                         "elsewhere, use `request_lemmas`.")
+            session.log_tool_response(_tn, f"ERROR: {error_msg}")
+            return (error_msg, True)
+        if verdict is EditVerdict.LOCKED:
+            assert blocker is not None  # LOCKED always carries the blocking handle
+            wstep = blocker.target.id
+            if session.is_worker:
+                error_msg = (
+                    f"A sub-agent is working on step {wstep}, which overlaps the step you "
+                    f"are editing. If you really need to edit it, close the sub-agent on "
+                    f"step {wstep} first.")
+            elif action == "amend":
+                error_msg = (
+                    f"Cannot amend step {step} because it belongs to the scope of "
+                    f"the sub-agent on step {wstep}. If you really need to change it, "
+                    f"either call `subagent` on step {wstep} to resume that sub-agent "
+                    f"with your suggestions, or close it with `close_subagent`.")
             else:
-                locked = session._worker_lock_for(step)
-                if locked is not None:
-                    error_msg = "This step (or a step above/below it) has a sub-agent working on it, so it can't be edited. Delete it first (which ends that sub-agent), then re-add."
-                    session.log_tool_response(_tn, f"ERROR: {error_msg}")
-                    return (error_msg, True)
+                error_msg = "This step (or a step above/below it) has a sub-agent working on it, so it can't be edited. Delete it first (which ends that sub-agent), then re-add."
+            session.log_tool_response(_tn, f"ERROR: {error_msg}")
+            return (error_msg, True)
         # Parse atomically: validation, splice, and Parsed_Opr construction
         # all happen in one pass — on any failure, no tree mutation has
         # occurred.
@@ -367,6 +374,16 @@ async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             return (error_msg, True)
         session.age += 1
         steps = [str(s) for s in target_steps]
+        # Worker confinement: a worker may only delete inside its own subtree.
+        # (No lock — delete is always allowed and tears down what it removes.)
+        for sid in steps:
+            verdict, _ = session._edit_verdict(sid, "delete")
+            if verdict is EditVerdict.OUT_OF_SCOPE:
+                error_msg = ("This step is outside the goal you were asked to prove — you may "
+                             "only edit within your own sub-proof. If you need a fact established "
+                             "elsewhere, use `request_lemmas`.")
+                session.log_tool_response(_tn, f"ERROR: {error_msg}")
+                return (error_msg, True)
         try:
             not_found = await session.root.delete(steps)
             if len(not_found) == len(steps):
@@ -894,6 +911,15 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
                     "Fix the earlier step first.")
     if node.is_proof_finished():
         return _err("That step is already proved.")
+
+    # Dispatch gate: starting a FRESH worker must keep live handles an antichain —
+    # `node` must not be comparable (ancestor OR descendant) to an existing handle.
+    # Resuming an existing handle on `node` (the branch below) is exempt.
+    if node.worker_handle is None:
+        blocker = session._dispatch_blocked_by(node)
+        if blocker is not None:
+            return _err(f"A sub-agent is already working on step {blocker.target.id}, which "
+                        f"overlaps the step you asked for, which is not allowed.")
 
     # Resume the parked worker on this node, or start a fresh one. Unexpected
     # errors are intentionally NOT caught here — they propagate to the executor's

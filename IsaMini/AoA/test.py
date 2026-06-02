@@ -9915,6 +9915,145 @@ async def _test_recall_worker_scope(root: Root, file: MyIO):
     os.remove(tmp)
 
 
+async def _make_lock_tree(root):
+    """Build the shared tree used by the edit-lock tests:
+        1 (Have H) { 1.1 (Have){1.1.1 Obvious}, 1.2 (Have) },  2 (Have, sibling)
+    Returns (goal, H) where H == node "1". 1.2 is an open Have, so the proof
+    stays unfinished (H.status == SUCCESS but is_proof_finished() == False)."""
+    goal = root.sub_nodes[1]
+    s = {"english": "nonneg", "conclusion": r"(0::int) \<le> x * x"}
+    await goal.fill("1", [Have.gen_single({"thought": "H", "statement": s, "name": "hH"})])
+    H = goal.sub_nodes[0]
+    await root.fill("1.1", [Have.gen_single({"thought": "c1", "statement": s, "name": "hC1"})])
+    await root.fill("1.1.1", [Obvious.gen_single({"facts": []})])
+    await H.append([Have.gen_single({"thought": "c2", "statement": s, "name": "hC2"})])  # 1.2 (open)
+    await goal.append([Have.gen_single({"thought": "sib", "statement": s, "name": "hSib"})])  # 2
+    return goal, H
+
+
+def _dump_verdicts(session, file, label, cases):
+    print_header(label, file)
+    for step, action in cases:
+        v, h = session._edit_verdict(step, action)
+        file.write(f"{action:>13} {step:<9} -> {v.name:<13} blocker={h.target.id if h else '-'}\n")
+
+
+@model_test("EditLock_MainAgent", "Test_EditLock_MainAgent.thy", 9)
+async def _test_editlock_main(root: Root, file: MyIO):
+    """Main-agent edit-lock via `_edit_verdict` + the two rendered LOCKED
+    messages. A parked worker is simulated by attaching an (unstarted)
+    `WorkerHandle` to Have node "1". Covers lock rows L1-L4 and the self-handle
+    exemption (amend on the parked node itself is allowed; it tears its own
+    worker down)."""
+    from .mcp_http_server import _edit_tool_logic
+    from .model import WorkerHandle
+    session = root.session
+    session.age += 1
+    goal, H = await _make_lock_tree(root)
+
+    H.worker_handle = WorkerHandle(H, session)   # parked worker on "1"
+    try:
+        _dump_verdicts(session, file, "main _edit_verdict (parked worker on 1)", [
+            ("1.1", "fill"),     # L1 ancestor "1" has the handle
+            ("1", "fill"),       # L1 node itself holds the handle
+            ("1.1", "amend"),    # L2 ancestor "1"
+            ("1", "amend"),      # self-handle: own worker torn down by _amend_child -> OK
+            ("1.3", "fill"),     # L3 new slot, parent "1" holds the handle
+            ("2", "fill"),       # disjoint subtree -> OK
+            ("1.2", "delete"),   # L4 delete never locks
+            ("1", "delete"),     # L4
+        ])
+
+        print_header("main fill 1.1 -> LOCKED message", file)
+        r, e = await _edit_tool_logic(session, {"target_step": "1.1", "action": "fill",
+            "proof_operations": [{"operation": "Obvious", "facts": []}]})
+        file.write(f"is_error={e}\n{r}\n")
+        print_header("main amend 1.1 -> LOCKED message (names blocker 1)", file)
+        r, e = await _edit_tool_logic(session, {"target_step": "1.1", "action": "amend",
+            "proof_operations": [{"operation": "Obvious", "facts": []}]})
+        file.write(f"is_error={e}\n{r}\n")
+    finally:
+        H.worker_handle = None   # detach even on failure (close-sweep robustness)
+
+
+@model_test("EditConfine_Worker", "Test_EditConfine_Worker.thy", 9)
+async def _test_editconfine_worker(root: Root, file: MyIO):
+    """Worker confinement + worker-side lock via `_edit_verdict`, with the
+    out-of-scope and worker-LOCKED messages. The worker's scope root X_A is
+    Have node "1" (its own handle attached). Covers confinement rows C1-C7,
+    the C4/Bug-B own-direct-substep allowance, and worker-LOCKED on a nested
+    handle attached to "1.1"."""
+    from .mcp_http_server import _edit_tool_logic
+    from .model import WorkerHandle
+    session = root.session
+    session.age += 1
+    goal, H = await _make_lock_tree(root)
+
+    h_H = WorkerHandle(H, session)
+    H.worker_handle = h_H
+    session.role = model.Role_Worker(target=H, worker_handle=h_H)   # X_A = "1"
+    n11 = root.locate_node("1.1")
+    try:
+        _dump_verdicts(session, file, "worker confinement (X_A = 1)", [
+            ("1.1", "fill"),        # C1 proper descendant -> OK
+            ("1", "amend"),         # C2 editing own target -> OUT_OF_SCOPE
+            ("2", "fill"),          # C3 sibling subtree -> OUT_OF_SCOPE
+            ("global.1", "fill"),   # C3 the global env -> OUT_OF_SCOPE
+            ("1.3", "fill"),        # C4 own direct new slot (Bug B) -> OK
+            ("5", "fill"),          # C7 top-level new slot -> OUT_OF_SCOPE
+            ("1.1", "delete"),      # in scope -> OK
+            ("2", "delete"),        # out of scope -> OUT_OF_SCOPE
+        ])
+
+        n11.worker_handle = WorkerHandle(n11, session)   # nested sub-worker on "1.1"
+        _dump_verdicts(session, file, "worker-LOCKED (sub-worker on 1.1)", [
+            ("1.1.1", "fill"),      # ancestor "1.1" below X_A -> LOCKED
+            ("1.1.5", "fill"),      # new slot, parent "1.1" holds the handle -> LOCKED
+            ("1.1.1", "amend"),     # ancestor "1.1" -> LOCKED
+        ])
+
+        print_header("worker fill 2 -> OUT_OF_SCOPE message", file)
+        r, e = await _edit_tool_logic(session, {"target_step": "2", "action": "fill",
+            "proof_operations": [{"operation": "Obvious", "facts": []}]})
+        file.write(f"is_error={e}\n{r}\n")
+        print_header("worker fill 1.1.1 -> worker-LOCKED message (names 1.1)", file)
+        r, e = await _edit_tool_logic(session, {"target_step": "1.1.1", "action": "fill",
+            "proof_operations": [{"operation": "Obvious", "facts": []}]})
+        file.write(f"is_error={e}\n{r}\n")
+    finally:
+        session.role = model.Role_Major()
+        n11.worker_handle = None
+        H.worker_handle = None
+
+
+@model_test("DispatchGate", "Test_DispatchGate.thy", 9)
+async def _test_dispatch_gate(root: Root, file: MyIO):
+    """`subagent` dispatch gate via `_dispatch_blocked_by` + the rendered
+    rejection message. A parked worker on "1.1" makes both directions illegal:
+    dispatching a descendant INTO it, and dispatching an ancestor OVER it."""
+    from .mcp_http_server import _subagent_tool_logic
+    from .model import WorkerHandle
+    session = root.session
+    session.age += 1
+    goal, H = await _make_lock_tree(root)
+
+    n11 = root.locate_node("1.1")
+    n11.worker_handle = WorkerHandle(n11, session)
+    try:
+        print_header("_dispatch_blocked_by (parked worker on 1.1)", file)
+        for sid in ["1.1.1", "1", "2"]:
+            node = root.locate_node(sid)
+            h = session._dispatch_blocked_by(node)
+            file.write(f"dispatch on {sid:<7} -> blocked_by={h.target.id if h else '-'}\n")
+
+        print_header("subagent on 1 -> gate reject message (names 1.1)", file)
+        r, e = await _subagent_tool_logic(session, {
+            "step_id": "1", "suggestions": "x", "helpful_lemmas": []})
+        file.write(f"is_error={e}\n{r}\n")
+    finally:
+        n11.worker_handle = None
+
+
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
     import msgpack as mp
     from IsaREPL import Client
