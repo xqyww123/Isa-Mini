@@ -511,22 +511,24 @@
     },
     "Witness": {
       "additionalProperties": false,
-      "description": "provide a witness to reduce a existential proof goal",
+      "description": "provide witness term(s) to instantiate the leading existential quantifier(s) of the proof goal",
       "properties": {
         "operation": {
           "const": "Witness",
           "type": "string"
         },
         "thought": { "$ref": "#/$defs/Thought" },
-        "witness": {
-          "description": "an Isabelle term with all literal numbers annotated with their types",
-          "type": "string"
+        "witnesses": {
+          "description": "Isabelle term(s), from left to right, with literal numbers type-annotated",
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
         }
       },
       "required": [
         "operation",
         "thought",
-        "witness"
+        "witnesses"
       ],
       "type": "object"
     },

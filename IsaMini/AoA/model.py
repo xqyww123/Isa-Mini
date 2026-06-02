@@ -1689,29 +1689,9 @@ class Minilang_State:
         infos = await self._retrieve_entity(entity_keys)
         out: list[RetrievedEntity] = []
         for (score, rec), info in zip(scored_recs, infos):
-            if info is None:
-                sname: 'short_name' = IsaTerm.from_isabelle(rec.name)
-                exprs: list[term] = []
-                roles: list[str] = []
-                abbrev_names: 'list[full_name]' = []
-                is_local = False
-            else:
-                sname, exprs, roles, abbrev_names, is_local = info
-            if rec.kind in _THEOREM_KINDS:
-                entity: IsabelleEntity = IsabelleFact_Presented(
-                    full_name=rec.name, short_name=sname,
-                    fact=FactByName(name=sname.ascii),
-                    expression=exprs, kind=rec.kind, roles=roles,
-                    abbreviation_names=abbrev_names, is_local=is_local)
-            else:
-                entity = IsabelleEntity(
-                    full_name=rec.name, short_name=sname,
-                    expression=exprs, kind=rec.kind, roles=roles,
-                    abbreviation_names=abbrev_names)
-            out.append(RetrievedEntity(
-                entity=entity,
-                score=score,
-                interpretation=' '.join(rec.interpretation.split()) if rec.interpretation else None))
+            out.append(self._make_retrieved_entity(
+                rec.kind, rec.name, info, score,
+                ' '.join(rec.interpretation.split()) if rec.interpretation else None))
         return out, warnings
     async def compute_bindings(self, var_names: list[varname], fact_names: list[varname]) -> Bindings:
         """
@@ -1750,6 +1730,52 @@ class Minilang_State:
         return [(IsaTerm.from_isabelle(r[0]), [IsaTerm.from_isabelle(e) for e in r[1]], list(r[2]),
                  list(r[3]), bool(r[4]))
                 if r is not None else None for r in results]
+    def _make_retrieved_entity(
+        self, kind: EntityKind, full_name: str,
+        info: 'tuple[short_name, list[term], list[str], list[full_name], bool] | None',
+        score: float, interpretation: 'str | None',
+    ) -> RetrievedEntity:
+        """Build a ``RetrievedEntity`` from a ``_retrieve_entity`` result tuple
+        (or a ``None`` placeholder → empty expression). Pure construction: no RPC,
+        no semantic embedding. Shared by ``semantic_knn`` (with its similarity
+        ``score`` + ``interpretation``) and ``retrieve_entities_by_name`` (score
+        ``1.0``, no interpretation)."""
+        if info is None:
+            sname: 'short_name' = IsaTerm.from_isabelle(full_name)
+            exprs: list[term] = []
+            roles: list[str] = []
+            abbrev_names: 'list[full_name]' = []
+            is_local = False
+        else:
+            sname, exprs, roles, abbrev_names, is_local = info
+        if kind in _THEOREM_KINDS:
+            entity: IsabelleEntity = IsabelleFact_Presented(
+                full_name=full_name, short_name=sname,
+                fact=FactByName(name=sname.ascii),
+                expression=exprs, kind=kind, roles=roles,
+                abbreviation_names=abbrev_names, is_local=is_local)
+        else:
+            entity = IsabelleEntity(
+                full_name=full_name, short_name=sname,
+                expression=exprs, kind=kind, roles=roles,
+                abbreviation_names=abbrev_names)
+        return RetrievedEntity(entity=entity, score=score, interpretation=interpretation)
+
+    async def retrieve_entities_by_name(
+        self, names: list[str], kind: EntityKind = EntityKind.THEOREM,
+    ) -> 'list[RetrievedEntity | None]':
+        """Resolve entity NAMES to ``RetrievedEntity`` via the lightweight
+        ``IsaMini.retrieve_entity`` ML callback ONLY — no semantic embedding,
+        vector store, or ``Semantic_DB`` (unlike ``semantic_knn``). ``score`` is
+        ``1.0`` and ``interpretation`` is ``None`` (both are semantic-search-only).
+        Returns ``None`` in the slot of any name that does not resolve. Batched:
+        one RPC for all names."""
+        if not names:
+            return []
+        infos = await self._retrieve_entity([(kind, n) for n in names])
+        return [self._make_retrieved_entity(kind, n, info, 1.0, None)
+                if info is not None else None
+                for n, info in zip(names, infos)]
     async def check_term(self, term_str: xterm) -> tuple[typ, Vars, Vars]:
         """
         Parse and check a term string using Syntax.read_term.
@@ -3171,11 +3197,14 @@ class Node(ABC):
             return indent
         self.warnings.append(Warning(position, printer))
     def _on_reset(self) -> None:
+        # End-of-response render cleanup: clear both the per-render `changed`
+        # highlight and the node's deferred render warnings. Their visibility is
+        # already co-gated (`does_quickview_need_detail` = `changed or status !=
+        # SUCCESS`), so they share one "show once, then clear" lifecycle.
         self.warnings.clear()
+        self.changed = False
     def reset(self) -> None:
         self._on_reset()
-    def reset_changed(self) -> None:
-        self.changed = False
     def _delete_me(self) -> 'Node':
         """Delete this node and return the refresh point (predecessor sibling or parent)."""
         if self.parent is None:
@@ -3705,10 +3734,6 @@ class NonLeaf_Node(Node):
         super().reset()
         for child in self.sub_nodes:
             child.reset()
-    def reset_changed(self) -> None:
-        super().reset_changed()
-        for child in self.sub_nodes:
-            child.reset_changed()
     def _delete_child(self, child: Node) -> None:
         for i, c in enumerate(self.sub_nodes):
             if c is child:
@@ -5836,28 +5861,46 @@ class Compute(Leaf):
 
 class Witness_ToolArg(TypedDict):
     thought: str
-    witness: xterm
+    witnesses: list[xterm]
+
+@validator(Witness_ToolArg)
+def _validate_witness_tool_arg(data: Any, path: str) -> Witness_ToolArg:
+    # Accept either a single term or a list of terms for `witnesses`,
+    # normalizing the bare-string form to a one-element list.
+    if isinstance(data, dict) and isinstance(data.get("witnesses"), str):
+        data["witnesses"] = [data["witnesses"]]
+    if (isinstance(data, dict) and isinstance(data.get("witnesses"), list)
+            and len(data["witnesses"]) == 0):
+        raise ArgumentError({}, f"{path}: No witness terms is provided")
+    return _validate_typed_dict(Witness_ToolArg, data, path)
 
 @proof_operation("Witness", Witness_ToolArg)
 class Witness(Leaf):
     def __init__(self, config: NodeConfig, arg: Witness_ToolArg):
         super().__init__(config, arg["thought"])
-        self.witness = arg["witness"]
+        self.witnesses = list(arg["witnesses"])
     def quickview_title(self) -> str:
-        return f"Witness {self.witness}"
+        return f"Witness {', '.join(self.witnesses)}"
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
         self._print_thought(indent, file)
         print_indent(indent, file)
         file.write("operation: Witness\n")
-        print_indent(indent, file)
-        file.write(f"witness: {self.witness}\n")
+        if len(self.witnesses) == 1:
+            print_indent(indent, file)
+            file.write(f"witness: {self.witnesses[0]}\n")
+        else:
+            print_indent(indent, file)
+            file.write("witnesses:\n")
+            for w in self.witnesses:
+                print_indent(indent + 1, file)
+                file.write(f"- {w}\n")
         self._print_evaluation_status(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
         return indent
 
     def the_operation(self) -> Minilang_Operation:
-        return Minilang_Operation.WITNESS([self.witness])
+        return Minilang_Operation.WITNESS(self.witnesses)
 
 
 #### Define
@@ -7942,7 +7985,7 @@ class GlobalEnv(StdBlock):
         file.write(
             f"You can write global declarations by calling command `edit` with action `fill` "
             f"and target step `{self.id}.{len(self.sub_nodes)+1}`. If you find the "
-            f"background theory is missing any lemmas you need, formalize and prove them here.")
+            f"background theory is missing any lemmas you need, formalize and prove them here.\n")
     def unfinished_nodes(self, ret: set['Node']) -> None:
         for child in self.sub_nodes:
             child.unfinished_nodes(ret)
@@ -8331,6 +8374,11 @@ class Session:
         self.role: Role = role if role is not None else Role_Major()
         self.last_proof_op_time: float = time()
         self.logger = logger or (parent.logger if parent else None)
+        # The NonLeaf_Node block the agent is currently working in — i.e. "where
+        # in the proof tree the agent is now". `initialize` sets it to `root`;
+        # each edit op then moves it (fill → the filled node; insert_before /
+        # amend / delete → the target's parent). It drives `retrieval_state`, so
+        # name lookups resolve in the current block's context. None until init.
         self.working_block: 'NonLeaf_Node | None' = None
         self.warnings: list[str] = []
         self.auto_intro_nodes: list['Intro'] = []
@@ -8371,8 +8419,12 @@ class Session:
         self.showed_cancelled_notice: bool = False
         self.shown_HAVE_fact_names: 'dict[str, list[tuple[varname, typ]]]' = {}
         # Worker-only: ascii fact name -> standard-printed proposition (IsaTerm),
-        # prefetched once at init (see prefetch_worker_premises).
+        # prefetched once at init (see _prefetch_worker_premises).
         self._worker_premise_cache: 'dict[str, IsaTerm]' = {}
+        # Memoized `initial_prompt()`: its content is fixed for the session's
+        # lifetime, but computing it resolves worker-suggested lemmas via RPC, so
+        # repeat callers (compaction / restart / `_find_recent_start`) reuse it.
+        self._initial_prompt_cache: 'str | None' = None
         if parent is not None:
             # Subsessions share parent's log files
             self.log_dir = parent.log_dir
@@ -8668,8 +8720,20 @@ class Session:
         else:
             return PROMPT
 
-    def initial_prompt(self) -> str:
-        """Return the initial user message to start the proof session."""
+    async def initial_prompt(self) -> str:
+        """The initial user message to start the proof session, memoized.
+
+        Cached because resolving worker-suggested lemma statements costs an RPC,
+        and the content is fixed for the session's lifetime (header / suggestions
+        / lemmas / boilerplate don't change — proof state is delivered via
+        proof.yaml, not here). The cache lets repeat callers (context compaction,
+        restart, `_find_recent_start`'s message count) reuse it for free."""
+        if self._initial_prompt_cache is None:
+            self._initial_prompt_cache = await self._compute_initial_prompt()
+        return self._initial_prompt_cache
+
+    async def _compute_initial_prompt(self) -> str:
+        """Build the initial user message (uncached — call `initial_prompt`)."""
         # Render the proof scope once for its side effect: ``update_line=True``
         # populates each node's ``.line`` (shown by drivers that enable
         # ``quickview_line_numbers``). The rendered text itself is unused — the
@@ -8688,8 +8752,9 @@ class Session:
                 sugg = self.role.suggestions.strip()
                 if sugg:
                     g.append(sugg)
-                if self.role.useful_lemmas:
-                    g.append("Useful lemmas: " + ", ".join(self.role.useful_lemmas))
+                block = await self._render_useful_lemmas()
+                if block:
+                    g.append(block)
                 if g:
                     guidance = "\n" + "\n\n".join(g) + "\n\n"
             if self.system_prompt() is not None:
@@ -8813,13 +8878,18 @@ class Session:
                 sp = self.system_prompt()
                 if sp is not None:
                     self._log_meta("SYS_PROMPT", text=sp)
-                self._log_meta("PROMPT", subtype="initial", text=self.initial_prompt())
+                self._log_meta("PROMPT", subtype="initial", text=await self.initial_prompt())
             case Role_Worker() | Role_Interaction():
                 assert self.root is root
                 self.working_block = root
-                await self.prefetch_worker_premises()
+                await self._prefetch_worker_premises()
 
     def retrieval_state(self) -> Minilang_State:
+        """The Isabelle proof state that name lookups / the `query` tool resolve
+        against: the latest refreshed state of the block the agent is currently
+        working in (`working_block`), so retrieval sees that block's local
+        context (variables, local facts). Falls back to the root's state before
+        `working_block` is set (e.g. the base/test session)."""
         if self.working_block is not None:
             return self.working_block.latest_refreshed_state()
         return self.root.ml_state
@@ -9087,7 +9157,7 @@ class Session:
         stop = self.proof_scope_root
         return _first_worker_in_ancestors(node, stop=stop) or _first_worker_in_subtree(node)
 
-    async def prefetch_worker_premises(self) -> None:
+    async def _prefetch_worker_premises(self) -> None:
         """Resolve the standard-printed propositions of every fact in scope before the
         worker's target and cache them (ascii name -> IsaTerm).  Called at worker
         ``initialize``, and re-called when the in-scope facts change (see below).
@@ -9101,12 +9171,56 @@ class Session:
         """
         if not self.is_worker:
             return
-        target = self.role.target
-        if not hasattr(target, '_state_after_beginning'):
-            return
+        target = self.role.target # type: ignore
+        # `_ctxt_before_me()` is the context at the target's position, which is
+        # exactly `target.ml_state` (Node's "state before executing the node"),
+        # so resolve the before-target hyps against that state. `ml_state` is a
+        # `Node` attribute (no StdBlock-only access), so no type guard is needed.
         names = [n.ascii for n in target._ctxt_before_me().hyps]
-        pairs = await target._state_after_beginning().fact_propositions(names)
+        pairs = await target.ml_state.fact_propositions(names)
         self._worker_premise_cache = {n: IsaTerm.from_isabelle(p) for n, p in pairs}
+
+    async def _render_useful_lemmas(self) -> str:
+        """Resolve this worker's ``useful_lemmas`` (theorem names the planner
+        suggested at ``subagent`` dispatch) to their statements and render a
+        "Useful lemmas:" block for ``initial_prompt``.
+
+        Resolves the names with the lightweight ``retrieve_entities_by_name``
+        (the ``IsaMini.retrieve_entity`` ML callback — NOT ``semantic_knn``, whose
+        embedding/vector-store machinery is far too heavy for a by-name lookup),
+        then reuses the ``query`` tool's entity renderer
+        (``retrieval._render_fetched_entities``) so a suggested lemma reads
+        exactly as it would in a ``query`` result — statement, ``[opaque]`` tag,
+        declaring definition. Names that do not resolve are listed bare (the same
+        shape ``_format_fetched_entity`` uses for an entity with no expression).
+        Returns "" when there are no lemmas or this is not a worker."""
+        role = self.role
+        if not isinstance(role, Role_Worker) or not role.useful_lemmas:
+            return ""
+        from .retrieval import _render_fetched_entities
+        target = role.target
+        # Resolve the lemmas in the worker's own scope: the state INSIDE the
+        # target block (`_state_after_beginning`, StdBlock-only — sees the
+        # target's local fixes/assumptions, consistent with how
+        # `_prefetch_worker_premises` resolves the worker's premises). For a
+        # non-block target, fall back to its incoming state (`Node.ml_state`).
+        ml_state = (target._state_after_beginning()
+                    if isinstance(target, StdBlock)
+                    else target.ml_state)
+        names = list(role.useful_lemmas)
+        entities = await ml_state.retrieve_entities_by_name(names)
+        found = [e for e in entities if e is not None]
+        unfound = [n for n, e in zip(names, entities) if e is None]
+        buf = StringIO()
+        if found:
+            await _render_fetched_entities(self, ml_state, found, buf, indent=1)
+        for name in unfound:
+            print_indent(1, buf)
+            buf.write(f"- {name}\n")
+        body = buf.getvalue().rstrip("\n")
+        if not body:
+            return ""
+        return "Useful lemmas:\n" + body
 
     def print_proof_scope(self, indent: int, file: MyIO,
                           update_line: bool = False, show_warnings: bool = False):

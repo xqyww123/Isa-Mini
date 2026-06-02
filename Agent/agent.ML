@@ -1393,27 +1393,23 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
           val typs = get_witness_types s
           val num_typs = length typs
           val num_terms = length terms
-          val _ = if num_typs = num_terms then ()
-                  else
-                    let val msg =
-                          if num_typs = 0 andalso num_terms = 1 then
-                            "The proof goal is not led by an existential quantification"
-                          else if num_typs = 0 then
-                            "The proof goal is not led by existential quantifications"
-                          else
-                            String.concat [
-                              "Insufficient existential quantifications: the goal has ",
-                              string_of_int num_typs,
-                              " leading existential quantifier",
-                              if num_typs = 1 then "" else "s",
-                              " but ",
-                              string_of_int num_terms,
-                              " witness term",
-                              if num_terms = 1 then " was" else "s were",
-                              " provided"
-                            ]
-                     in raise Minilang.OPR_FAIL (Minilang.INVALID_OPR, msg)
-                    end
+          (* Allow partial instantiation: 1 <= num_terms <= num_typs. Witnesses
+             bind the leading existentials left-to-right; any un-witnessed suffix
+             is left as a residual existential goal for a later Witness step. *)
+          val _ = if num_typs = 0 then
+                    raise Minilang.OPR_FAIL (Minilang.INVALID_OPR,
+                      "The proof goal is not led by an existential quantification")
+                  else if num_terms > num_typs then
+                    raise Minilang.OPR_FAIL (Minilang.INVALID_OPR, String.concat [
+                      "Too many witness terms: the goal has ",
+                      string_of_int num_typs,
+                      " leading existential quantifier",
+                      if num_typs = 1 then "" else "s",
+                      " but ",
+                      string_of_int num_terms,
+                      " were provided"
+                    ])
+                  else ()
           val typed_terms = ListPair.zip (typs, terms)
        in WITNESS (read_terms_with_type ctxt typed_terms)
       end

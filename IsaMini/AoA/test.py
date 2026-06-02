@@ -552,7 +552,7 @@ async def _test_Rewrite_DeleteSiblingNoChange(root: Root, file: MyIO):
     })])
     print_header("Quickview after Rewrite", file)
     root.quickview(0, file)
-    root.reset_changed()
+    root.reset()
     # Step 2: Add a Have after the Rewrite and prove it.
     root.session.age += 1
     await root.fill("2", [Have.gen_single({
@@ -564,7 +564,7 @@ async def _test_Rewrite_DeleteSiblingNoChange(root: Root, file: MyIO):
     await root.fill("2.1", [Obvious.gen_single({"facts": []})])
     print_header("Quickview after Have+Obvious", file)
     root.quickview(0, file)
-    root.reset_changed()
+    root.reset()
     # Delete the Have — Rewrite must NOT be marked (changed).
     root.session.age += 1
     await root.delete(["2"])
@@ -632,7 +632,7 @@ async def _test_Witness1(root: Root, file: MyIO):
     # Use Witness to provide a witness for the existential goal
     await root.fill("1", [Witness.gen_single({
         "thought": "Provide 5 as witness for the existential",
-        "witness": "5"
+        "witnesses": ["5"]
     })])
     print_header("After Witness", file)
     root.print(0, file)
@@ -671,7 +671,7 @@ async def _test_Define_AutoProved(root: Root, file: MyIO):
     # Use `double` to instantiate the existential.
     await root.fill("2", [Witness.gen_single({
         "thought": "Pick the freshly-defined `double` as the witness",
-        "witness": "double",
+        "witnesses": ["double"],
     })])
     print_header("After Witness", file)
     root.print(0, file)
@@ -712,7 +712,7 @@ async def _test_Define_QuerySimps(root: Root, file: MyIO):
 
     await root.fill("2", [Witness.gen_single({
         "thought": "Use double as witness",
-        "witness": "double",
+        "witnesses": ["double"],
     })])
     await root.fill("3", [Obvious.gen_single({"facts": []})])
     print_header("After proof complete", file)
@@ -762,7 +762,7 @@ async def _test_Define_QueryConst(root: Root, file: MyIO):
     # Complete the proof so the test leaves a clean state
     await root.fill("2", [Witness.gen_single({
         "thought": "Use double as witness",
-        "witness": "double",
+        "witnesses": ["double"],
     })])
     await root.fill("3", [Obvious.gen_single({"facts": []})])
     print_header("After proof complete", file)
@@ -834,7 +834,7 @@ async def _test_Define_Manual(root: Root, file: MyIO):
     # Block auto-closes; proceed with the outer proof.
     await root.fill("2", [Witness.gen_single({
         "thought": "Pick the freshly-defined `halve` as the witness",
-        "witness": "halve",
+        "witnesses": ["halve"],
     })])
     print_header("After Witness", file)
     root.print(0, file)
@@ -924,7 +924,7 @@ async def _test_Define_SucPattern(root: Root, file: MyIO):
 
     await root.fill("2", [Witness.gen_single({
         "thought": "Use pow2 as witness",
-        "witness": "pow2",
+        "witnesses": ["pow2"],
     })])
     print_header("After Witness", file)
     root.print(0, file)
@@ -947,7 +947,84 @@ async def _test_Witness2(root: Root, file: MyIO):
 
     _outcome = await root.fill("1", [Witness.gen_single({
         "thought": "Provide 1 as witness, which is positive",
-        "witness": "1"
+        "witnesses": ["1"]
+    })])
+    file.write(f"outcome.failure: {_outcome.failure}\n")
+    print_header("After Witness (error visible in tree)", file)
+    root.print(0, file)
+
+@model_test("Witness3", "Test_Witness3.thy", 9)
+async def _test_Witness3(root: Root, file: MyIO):
+    """Multiple witnesses supplied at once: a single Witness leaf carrying
+    two terms instantiates both leading existentials of `∃ x y. x+y=10` in
+    one step, exercising the `witnesses:` block renderer and full
+    multi-instantiation."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("1", [Witness.gen_single({
+        "thought": "Provide 3 and 7 as witnesses for x and y",
+        "witnesses": ["3", "7"],
+    })])
+    print_header("After Witness (two witnesses at once)", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("2", [Obvious.gen_single({"facts": []})])
+    print_header("After Obvious", file)
+    root.print(0, file)
+
+    unfinished_nodes = set()
+    root.unfinished_nodes(unfinished_nodes)
+    file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+
+@model_test("Witness4", "Test_Witness4.thy", 9)
+async def _test_Witness4(root: Root, file: MyIO):
+    """Partial instantiation across separate Witness steps: witness x first
+    (leaving the residual `∃ y. 3+y=10`), then y, then close. Exercises the
+    relaxed gate allowing fewer witnesses than leading existentials."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("1", [Witness.gen_single({
+        "thought": "Provide 3 as the first witness (x), leaving the residual existential over y",
+        "witnesses": ["3"],
+    })])
+    print_header("After first Witness (partial: x:=3)", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("2", [Witness.gen_single({
+        "thought": "Provide 7 as the witness for the residual y",
+        "witnesses": ["7"],
+    })])
+    print_header("After second Witness (y:=7)", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("3", [Obvious.gen_single({"facts": []})])
+    print_header("After Obvious", file)
+    root.print(0, file)
+
+    unfinished_nodes = set()
+    root.unfinished_nodes(unfinished_nodes)
+    file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+
+@model_test("Witness5", "Test_Witness5.thy", 9)
+async def _test_Witness5(root: Root, file: MyIO):
+    """Too many witnesses: the goal `∃ x. x=0` has a single leading
+    existential, but two witness terms are supplied. The node stays in the
+    tree with a 'Too many witness terms' Error status, while
+    outcome.failure remains None (mirrors Witness2)."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    _outcome = await root.fill("1", [Witness.gen_single({
+        "thought": "Provide two witnesses for a single existential (too many)",
+        "witnesses": ["0", "1"],
     })])
     file.write(f"outcome.failure: {_outcome.failure}\n")
     print_header("After Witness (error visible in tree)", file)
@@ -1013,7 +1090,7 @@ async def _test_Delete1(root: Root, file: MyIO):
     root.print(0, MyIO(buffer), update_line=True)
     print_header("Overview", file)
     root.quickview(0, file)
-    root.reset_changed()
+    root.reset()
     # Delete the middle step (Have + its substep)
     root.session.age += 1
     await root.delete(["1"])
@@ -1021,7 +1098,7 @@ async def _test_Delete1(root: Root, file: MyIO):
     root.print(0, file)
     print_header("Overview", file)
     root.quickview(0, file)
-    root.reset_changed()
+    root.reset()
     # Insert a Have before step 2
     root.session.age += 1
     await root.insert_before("2", [Have.gen_single({
@@ -1035,7 +1112,7 @@ async def _test_Delete1(root: Root, file: MyIO):
     root.print(0, MyIO(buffer), update_line=True)
     print_header("Overview", file)
     root.quickview(0, file)
-    root.reset_changed()
+    root.reset()
 
 # @model_test("Delete2", "Test_Delete2.thy", 13)
 # async def _test_Delete2(root: Root, file: MyIO):
@@ -1066,7 +1143,7 @@ async def _test_Delete1(root: Root, file: MyIO):
 #     root.print(0, MyIO(buffer), update_line=True)
 #     print_header("Overview", file)
 #     root.quickview(0, file)
-#     root.reset_changed()
+#     root.reset()
 #     # Delete two steps at once
 #     root.session.age += 1
 #     await root.delete(["1", "2"])
@@ -1074,7 +1151,7 @@ async def _test_Delete1(root: Root, file: MyIO):
 #     root.print(0, file)
 #     print_header("Overview", file)
 #     root.quickview(0, file)
-#     root.reset_changed()
+#     root.reset()
 # 
 # @model_test("Delete3", "Test_Delete3.thy", 13)
 # async def _test_Delete3(root: Root, file: MyIO):
@@ -1097,7 +1174,7 @@ async def _test_Delete1(root: Root, file: MyIO):
 #     root.print(0, MyIO(buffer), update_line=True)
 #     print_header("Overview", file)
 #     root.quickview(0, file)
-#     root.reset_changed()
+#     root.reset()
 #     # Delete with duplicate ID — should deduplicate and not error
 #     root.session.age += 1
 #     await root.delete(["1", "1"])
@@ -1105,7 +1182,7 @@ async def _test_Delete1(root: Root, file: MyIO):
 #     root.print(0, file)
 #     print_header("Overview", file)
 #     root.quickview(0, file)
-#     root.reset_changed()
+#     root.reset()
 
 @model_test("ReferFactByProposition", "Test001.thy", 6)
 async def _test_ReferFactByProposition(root: Root, file: MyIO):
@@ -2082,7 +2159,7 @@ async def _test_imo_1966_p5(root: Root, file: MyIO):
     root.print(0, file)
     print_header("Overview", file)
     root.quickview(0, file)
-    root.reset_changed()
+    root.reset()
 
     # 1. Fill step 1 with Have eq1
     root.session.age += 1
@@ -2102,7 +2179,7 @@ async def _test_imo_1966_p5(root: Root, file: MyIO):
     root.print(0, file)
     print_header("Overview", file)
     root.quickview(0, file)
-    root.reset_changed()
+    root.reset()
 
     # 2. Try Obvious to prove eq1 — fails (non-trivial)
     root.session.age += 1
@@ -2121,7 +2198,7 @@ async def _test_imo_1966_p5(root: Root, file: MyIO):
     root.print(0, file)
     print_header("Overview", file)
     root.quickview(0, file)
-    root.reset_changed()
+    root.reset()
 
     # 3. Delete the failed Obvious step
     root.session.age += 1
@@ -2132,7 +2209,7 @@ async def _test_imo_1966_p5(root: Root, file: MyIO):
     root.print(0, file)
     print_header("Overview", file)
     root.quickview(0, file)
-    root.reset_changed()
+    root.reset()
 
     # 4. Fill with intermediate Have: a1_gt_a3
     root.session.age += 1
@@ -2158,7 +2235,7 @@ async def _test_imo_1966_p5(root: Root, file: MyIO):
     root.print(0, file)
     print_header("Overview", file)
     root.quickview(0, file)
-    root.reset_changed()
+    root.reset()
 
     # 5. Fill with intermediate Have: a1_gt_a4
     root.session.age += 1
@@ -2184,7 +2261,7 @@ async def _test_imo_1966_p5(root: Root, file: MyIO):
     root.print(0, file)
     print_header("Overview", file)
     root.quickview(0, file)
-    root.reset_changed()
+    root.reset()
 
 @model_test("SemanticKNN_patterns", "Test_RetrieveFact.thy", 8)
 async def _test_semantic_knn_patterns(root: Root, file: MyIO):
@@ -3663,7 +3740,7 @@ async def _test_GlobalEnv(root: Root, file: MyIO):
     file.write("---------------\n")
     # Verify: the Rewrite node IS in the tree (quickview just folded it
     # because its `changed` flag was cleared after the first edit_message's
-    # `root.reset_changed()` and the outer GoalNode didn't get re-flagged
+    # `root.reset()` and the outer GoalNode didn't get re-flagged
     # as changed by a trivial Rewrite).
     print_header("Full tree.print after Rewrite (node is present)", file)
     root.print(0, file)
@@ -3915,7 +3992,7 @@ async def _test_GlobalEnv_happy(root: Root, file: MyIO):
 @model_test("GlobalEnv_DoneQuickview", "Test_GlobalEnv_DoneQuickview.thy", 11)
 async def _test_GlobalEnv_DoneQuickview(root: Root, file: MyIO):
     """Bug reproduction: when all global declarations are proved and
-    `reset_changed` clears every `changed` flag, the next quickview
+    `reset()` clears every `changed` flag, the next quickview
     should still show global lemma headers (e.g. "step global.1: Have
     g_eq (done, ...)") instead of collapsing `global declarations:` to
     an empty section.
@@ -3944,12 +4021,12 @@ async def _test_GlobalEnv_DoneQuickview(root: Root, file: MyIO):
         "rewrite premises": []
     })])
 
-    # --- Step 3: edit_message — calls quickview then reset_changed ---
+    # --- Step 3: edit_message — calls quickview then reset() ---
     print_header("edit_message (completes everything)", file)
     file.write((await _P.edit_message(root, _outcome, root.session))[0])
     file.write("---------------\n")
 
-    # --- Step 4: quickview AFTER reset_changed ---
+    # --- Step 4: quickview AFTER reset() ---
     # At this point all nodes are SUCCESS and changed=False.
     # The bug: global.1 (g_eq) disappears entirely from quickview.
     print_header("Quickview after reset_changed (BUG REPRODUCTION)", file)
@@ -7930,7 +8007,7 @@ async def _test_Unfold_LocalDef(root: Root, file: MyIO):
         }),
         Witness.gen_single({
             "thought": "Provide the locally-defined double as witness",
-            "witness": "double",
+            "witnesses": ["double"],
         }),
     ])
     print_header("After Define + Witness", file)
@@ -7969,7 +8046,7 @@ async def _test_Unfold_LocalDef_Nested(root: Root, file: MyIO):
         }),
         Witness.gen_single({
             "thought": "Witness double",
-            "witness": "double",
+            "witnesses": ["double"],
         }),
     ])
 
@@ -8693,7 +8770,6 @@ async def _test_QuickviewCollapse(root: Root, file: MyIO):
         })])
         root.session.age += 1
         await root.fill(f"{i}.1", [Obvious.gen_single({"facts": []})])
-    root.reset_changed()
     root.reset()
     print_header("Quickview with 6 done steps (should collapse)", file)
     root.quickview(0, file)

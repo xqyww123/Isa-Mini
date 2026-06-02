@@ -363,6 +363,47 @@ async def _get_def_for_fetched(
 # ============================================================================
 
 
+async def _render_fetched_entities(
+    session: Session,
+    ml_state: Minilang_State,
+    entities: list[RetrievedEntity],
+    buf,
+    *,
+    indent: int = 0,
+) -> list[str]:
+    """Batch-fetch abbreviation definitions for ``entities`` and render each via
+    the unified ``_format_fetched_entity`` renderer (statement, ``[opaque]`` tag,
+    declaring definition, abbreviation expansions) into ``buf``.
+
+    Returns the compact ``name: expr`` summary lines (used for retrieval
+    logging). Shared by the ``query`` tool (``_semantic_search_direct``) and the
+    worker's "Useful lemmas" prompt block (``Session._render_useful_lemmas``) so
+    both print looked-up theorems identically. The caller owns any surrounding
+    warnings / ``[opaque]`` footer / logging."""
+    # Batch-fetch abbreviation definitions for unseen abbreviations
+    unseen_abbrevs: list[str] = []
+    for f in entities:
+        for name in f.entity.abbreviation_names:
+            if name not in session.seen_abbreviations and name not in unseen_abbrevs:
+                unseen_abbrevs.append(name)
+    abbrev_defs: dict = {}
+    if unseen_abbrevs:
+        defs = await ml_state.abbreviation_defs(unseen_abbrevs)
+        for name, defn in zip(unseen_abbrevs, defs):
+            if defn is not None:
+                abbrev_defs[name] = defn
+    # Format with unified renderer
+    retrieved: list[str] = []
+    for f in entities:
+        await _format_fetched_entity(f, buf, indent=indent, session=session,
+                                     def_info=True,
+                                     potential_defs=(f.score == 1.0),
+                                     abbreviation_defs=abbrev_defs)
+        expr_str = _trunc_expr(', '.join(e.unicode for e in f.entity.expression))
+        retrieved.append(f"{f.entity.short_name.unicode}: {expr_str}")
+    return retrieved
+
+
 async def _semantic_search_direct(
     session: Session, queries: list[dict],
 ) -> str:
@@ -406,28 +447,9 @@ async def _semantic_search_direct(
         session.log_tool_response(session.tool_name(TOOL_SEARCH), result)
         return result
 
-    # Batch-fetch abbreviation definitions for unseen abbreviations
-    unseen_abbrevs: list[str] = []
-    for f in new_items:
-        for name in f.entity.abbreviation_names:
-            if name not in session.seen_abbreviations and name not in unseen_abbrevs:
-                unseen_abbrevs.append(name)
-    abbrev_defs: dict = {}
-    if unseen_abbrevs:
-        defs = await ml_state.abbreviation_defs(unseen_abbrevs)
-        for name, defn in zip(unseen_abbrevs, defs):
-            if defn is not None:
-                abbrev_defs[name] = defn
-
     # Format with unified renderer
     buf = StringIO()
-    retrieved: list[str] = []
-    for f in new_items:
-        await _format_fetched_entity(f, buf, session=session, def_info=True,
-                                     potential_defs=(f.score == 1.0),
-                                     abbreviation_defs=abbrev_defs)
-        expr_str = _trunc_expr(', '.join(e.unicode for e in f.entity.expression))
-        retrieved.append(f"{f.entity.short_name.unicode}: {expr_str}")
+    retrieved = await _render_fetched_entities(session, ml_state, new_items, buf)
     for w in _format_warn_lines(queries, per_query_warnings):
         buf.write(w)
         buf.write('\n')

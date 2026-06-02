@@ -26,6 +26,8 @@ import socket
 from time import time
 from typing import Any
 
+from io import StringIO
+
 import jsoncomment
 import uvicorn
 from mcp.server.lowlevel import Server as MCPServer
@@ -51,6 +53,7 @@ from .model import (
     ALL_PROOF_TOOLS,
     Role_Worker,
     Surrender, Refute,
+    print_indent,
 )
 import yaml as _yaml
 from .retrieval import (
@@ -833,7 +836,7 @@ async def _request_lemmas_tool_logic(session: Session, args: dict) -> tuple[str,
         # immutable. Re-prefetch so the worker's premises/scope view reflect
         # them, then refresh proof.yaml (so a later `recall` does too). The
         # feedback string also names the proven lemmas.
-        await session.prefetch_worker_premises()
+        await session._prefetch_worker_premises()
         session.refresh_YAML()
         session.log_tool_response(_tn, feedback)
         return (feedback, False)
@@ -952,7 +955,15 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
         case "refute_accepted":
             msg = f"The sub-agent argues the goal is unprovable:\n{outcome.detail}"
         case _:  # "lemmas" — worker parked requesting helper lemmas
+            buf = StringIO()
+            for lem in (outcome.lemmas or []):
+                stmt = (lem.get("isabelle_statement") or "").replace("\n", " ")
+                buf.write(f"- {lem.get('name', '')}: {stmt}\n")
+                print_indent(2, buf)
+                buf.write(f"{lem.get('english', '')}\n")
+            formulas = buf.getvalue()
             msg = (f"The sub-agent requests helper lemmas to continue:\n"
+                   f"{formulas}\n"
                    f"{outcome.detail}\n"
                    f"Consider providing these lemmas, then call `subagent` on step "
                    f"{node.id} again to resume the sub-agent, listing the lemmas you "

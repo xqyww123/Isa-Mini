@@ -1,0 +1,24 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(x :: nat). x = (0 :: nat)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+outcome.failure: None
+--------------------------------------------------
+After Witness (error visible in tree)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(x :: nat). x = (0 :: nat)
+proof:
+  - step id: 1
+    thought: Provide two witnesses for a single existential (too many)
+    operation: Witness
+    witnesses:
+      - 0
+      - 1
+    Error: Too many witness terms: the goal has 1 leading existential quantifier but 2 were provided
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  ∃(x :: nat). x = (0 :: nat)

@@ -764,12 +764,12 @@ class APIDriver(LMDriver):
     # Main Agent Loop
     # ------------------------------------------------------------------
 
-    def _initial_messages(self) -> list[Msg]:
+    async def _initial_messages(self) -> list[Msg]:
         msgs: list[Msg] = []
         sp = self.system_prompt()
         if sp is not None:
             msgs.append(SystemMsg(sp))
-        msgs.append(UserMsg(self.initial_prompt()))
+        msgs.append(UserMsg(await self.initial_prompt()))
         return msgs
 
     async def _run_agent_loop(self):
@@ -779,7 +779,7 @@ class APIDriver(LMDriver):
         assert self._executor is not None
         if self._budget_start_time is None:
             self._budget_start_time = time()
-        self._messages = self._initial_messages()
+        self._messages = await self._initial_messages()
         self._last_response_id = None
         self._msgs_sent_through = 0
         tools = self._provider.format_tools(self._executor.tool_schemas())
@@ -848,7 +848,7 @@ class APIDriver(LMDriver):
             self._interrupted = False
             self.quit_info = None
             self.refresh_YAML()
-            self._messages = self._initial_messages()
+            self._messages = await self._initial_messages()
             self._last_response_id = None
             self._msgs_sent_through = 0
             self.log_AoA_opr("Context restarted")
@@ -891,20 +891,20 @@ class APIDriver(LMDriver):
         total = usage.input_tokens + usage.output_tokens
         return total > self._provider.context_window * self.COMPACTION_THRESHOLD
 
-    def _find_recent_start(self, messages: list[Msg]) -> int:
+    async def _find_recent_start(self, messages: list[Msg]) -> int:
         rounds_seen = 0
         for i in range(len(messages) - 1, -1, -1):
             if isinstance(messages[i], AssistantMsg):
                 rounds_seen += 1
                 if rounds_seen == self.COMPACTION_RECENT_ROUNDS:
                     return i
-        return len(self._initial_messages())
+        return len(await self._initial_messages())
 
     async def _compact(self, messages: list[Msg], tools: list[dict]) -> list[Msg]:
         self.log_AoA_opr(
             f"Compaction triggered: {len(messages)} messages, "
             f"input={self.total_input_tokens} output={self.total_output_tokens}")
-        recent_start = self._find_recent_start(messages)
+        recent_start = await self._find_recent_start(messages)
         recent_messages = messages[recent_start:]
 
         messages.append(UserMsg(COMPACTION_PROMPT))
@@ -925,7 +925,7 @@ class APIDriver(LMDriver):
         if sp is not None:
             new_messages.append(SystemMsg(sp))
         new_messages.append(UserMsg(
-            self.initial_prompt() + "\n\nPrevious progress:\n" + summary))
+            (await self.initial_prompt()) + "\n\nPrevious progress:\n" + summary))
         new_messages.extend(recent_messages)
         est = self.estimate_tokens(new_messages)
         self.log_AoA_opr(f"Compacted to ~{est} tokens ({len(new_messages)} messages). Summary: {summary[:200]}...")

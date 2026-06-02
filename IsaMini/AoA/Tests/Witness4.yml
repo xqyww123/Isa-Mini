@@ -1,0 +1,50 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.goal: ∃x (y :: nat). x + y = (10 :: nat)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After first Witness (partial: x:=3)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.goal: ∃x (y :: nat). x + y = (10 :: nat)
+proof:
+  - step id: 1
+    thought: Provide 3 as the first witness (x), leaving the residual existential over y
+    operation: Witness
+    witness: 3
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  ∃(y :: nat). (3 :: nat) + y = (10 :: nat)
+--------------------------------------------------
+After second Witness (y:=7)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.goal: ∃x (y :: nat). x + y = (10 :: nat)
+proof:
+  - step id: 1
+    thought: Provide 3 as the first witness (x), leaving the residual existential over y
+    operation: Witness
+    witness: 3
+  - step id: 2
+    thought: Provide 7 as the witness for the residual y
+    operation: Witness
+    witness: 7
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  (3 :: nat) + (7 :: nat) = (10 :: nat)
+--------------------------------------------------
+After Obvious
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.goal: ∃x (y :: nat). x + y = (10 :: nat)
+proof:
+  - step id: 1
+    thought: Provide 3 as the first witness (x), leaving the residual existential over y
+    operation: Witness
+    witness: 3
+  - step id: 2
+    thought: Provide 7 as the witness for the residual y
+    operation: Witness
+    witness: 7
+  - step id: 3
+    operation: Obvious
+Unfinished nodes: 0

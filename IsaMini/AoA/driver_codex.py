@@ -186,7 +186,7 @@ class Codex_Driver(LMDriver):
 
     async def _codex_loop(self):
         self._budget_start_time = time()
-        prompt = self.initial_prompt()
+        prompt = await self.initial_prompt()
         codex_session_id: str | None = None
 
         while True:  # outer restart loop
@@ -228,7 +228,7 @@ class Codex_Driver(LMDriver):
             self.quit_info = None
             self.refresh_YAML()
             codex_session_id = None
-            prompt = self.initial_prompt()
+            prompt = await self.initial_prompt()
             self.log_AoA_opr("Context restarted")
             self._log_meta("CONTEXT_RESTART")
 

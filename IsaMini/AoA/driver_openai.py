@@ -162,7 +162,7 @@ class OpenAI_Driver(LMDriver):
         try:
             async with mcp:
                 while True:  # outer restart loop (mirrors codex/api re-route)
-                    prompt: str | None = self.initial_prompt()
+                    prompt: str | None = await self.initial_prompt()
                     last_response_id: str | None = None
                     while True:
                         self._model_time_start = time()

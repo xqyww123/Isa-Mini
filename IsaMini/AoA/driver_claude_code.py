@@ -473,7 +473,7 @@ class ClaudeCode(LMDriver):
                 async with ClaudeSDKClient(options=self.options) as client:
                     self._client = client
                     self.refresh_YAML()
-                    await client.query(self.initial_prompt())
+                    await client.query(await self.initial_prompt())
                     self._model_time_start = time()
                     while True:
                         async for message in client.receive_response():
@@ -575,6 +575,7 @@ class ClaudeCode(LMDriver):
         allowed = ",".join(self._role_allowed_tools())
         launcher_path = os.path.join(self.working_dir, "launch_claude.sh")
         error_log = os.path.join(self.working_dir, "claude_error.log")
+        initial_prompt = await self.initial_prompt()
         with open(launcher_path, "w") as f:
             f.write("#!/bin/bash\n")
             f.write(f"cd {shlex.quote(self.working_dir)}\n")
@@ -585,7 +586,7 @@ class ClaudeCode(LMDriver):
                     f"--strict-mcp-config "
                     f"--allowed-tools {shlex.quote(allowed)} "
                     f"--settings {shlex.quote(settings)} "
-                    f"-- {shlex.quote(self.initial_prompt())} "
+                    f"-- {shlex.quote(initial_prompt)} "
                     f"2>{shlex.quote(error_log)}\n")
             f.write(f"echo \"EXIT CODE: $?\" >> {shlex.quote(error_log)}\n")
         os.chmod(launcher_path, 0o755)
