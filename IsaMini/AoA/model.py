@@ -8734,10 +8734,13 @@ class Session:
 
     async def _compute_initial_prompt(self) -> str:
         """Build the initial user message (uncached — call `initial_prompt`)."""
-        # Render the proof scope once for its side effect: ``update_line=True``
+        # Render the proof scope for its side effect: ``update_line=True``
         # populates each node's ``.line`` (shown by drivers that enable
         # ``quickview_line_numbers``). The rendered text itself is unused — the
-        # proof state is delivered to the agent via ``proof.yaml``.
+        # proof state is delivered to the agent via ``proof.yaml``. Because
+        # ``initial_prompt`` memoizes, this runs once per session; on later
+        # compaction/restart paths the drivers' ``refresh_YAML(update_line=True)``
+        # keeps ``.line`` current before the cached prompt is reused.
         self.print_proof_scope(0, MyIO(StringIO()), update_line=True, show_warnings=True)
 
         if self.is_worker:
@@ -8878,11 +8881,16 @@ class Session:
                 sp = self.system_prompt()
                 if sp is not None:
                     self._log_meta("SYS_PROMPT", text=sp)
-                self._log_meta("PROMPT", subtype="initial", text=await self.initial_prompt())
+                self.log_initial_prompt(await self.initial_prompt())
             case Role_Worker() | Role_Interaction():
                 assert self.root is root
                 self.working_block = root
                 await self._prefetch_worker_premises()
+                # A worker's opening message is `initial_prompt()` (sent by the
+                # driver loop); interaction forks use their own prompts instead,
+                # so only log here for genuine workers.
+                if self.is_worker:
+                    self.log_initial_prompt(await self.initial_prompt())
 
     def retrieval_state(self) -> Minilang_State:
         """The Isabelle proof state that name lookups / the `query` tool resolve
@@ -8963,6 +8971,17 @@ class Session:
         self._log(self.retrieval_log_file, "RETRIEVAL",
                   None if quiet else lambda: [f"[RETRIEVAL] {query!r}\n" + "\n".join(f"  {r}" for r in results)],
                   query=query, results=results)
+
+    def log_initial_prompt(self, prompt: str):
+        """Log the initial prompt (planner or worker) to interaction.yaml.
+
+        The planner used to log this to ``meta`` only; workers logged it nowhere,
+        so a sub-agent's opening message was invisible in the DEBUG stream. Route
+        both through here (interaction.yaml + meta + debug) for symmetry."""
+        self._log(self.interaction_log_file, "PROMPT",
+                  lambda: [f"[PROMPT] Initial prompt:\n{prompt}"],
+                  subtype="initial",
+                  text=prompt)
 
     def log_retry(self, unfinished_nodes: set[Any], retry_prompt: str):
         """Log retry attempt to interaction.yaml."""
@@ -9199,11 +9218,12 @@ class Session:
             return ""
         from .retrieval import _render_fetched_entities
         target = role.target
-        # Resolve the lemmas in the worker's own scope: the state INSIDE the
-        # target block (`_state_after_beginning`, StdBlock-only — sees the
-        # target's local fixes/assumptions, consistent with how
-        # `_prefetch_worker_premises` resolves the worker's premises). For a
-        # non-block target, fall back to its incoming state (`Node.ml_state`).
+        # Resolve the lemmas in the worker's own proving scope: the state INSIDE
+        # the target block (`_state_after_beginning`, StdBlock-only — sees the
+        # target's local fixes/assumptions). This is a DIFFERENT state from
+        # `_prefetch_worker_premises`, which resolves the *before*-target premises
+        # against `target.ml_state`; for global theorem names the two resolve
+        # identically. For a non-block target, fall back to `Node.ml_state`.
         ml_state = (target._state_after_beginning()
                     if isinstance(target, StdBlock)
                     else target.ml_state)
@@ -9289,7 +9309,7 @@ class Session:
         """Request a context restart.  Sets ``self.quit_info = Restart()`` to
         break this session's driver loop, then interrupts.  The loop's restart
         branch detects the ``Restart`` variant, clears ``quit_info`` and
-        re-enters with a fresh ``initial_prompt()``."""
+        re-enters with the (memoized) ``initial_prompt()``."""
         self._reset_view_state()
         self.quit_info = Restart()
         await self.interrupt()
