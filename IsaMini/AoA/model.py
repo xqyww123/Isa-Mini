@@ -35,7 +35,7 @@ def trunc_expr(s: 'str | IsaTerm') -> str:
     return _trunc_expr_base(s.unicode if isinstance(s, IsaTerm) else s, AGENT_EXPR_LIMIT)
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, auto
 import json
 import logging
 import os
@@ -5581,13 +5581,17 @@ class Obvious(Leaf):
         return indent
     def _print_subagent_hint(self, indent: int, file: MyIO) -> None:
         """A deeply-nested (>= _SUBAGENT_HINT_DEPTH) Obvious that FAILED: point the
-        main agent at the `subagent` tool to delegate this sub-goal. Shown only to
-        the planner — a worker cannot call `subagent`."""
+        main agent at the `subagent` tool to delegate this sub-goal, naming the
+        enclosing goal block (`_nearest_goal_for_subagent`) that `subagent` should
+        target. Shown only to the planner — a worker cannot call `subagent`."""
         if (_rendering_for_planner()
                 and self.status.status == EvaluationStatus.Status.FAILURE
                 and self._subgoal_level >= _SUBAGENT_HINT_DEPTH):
+            target = self._nearest_goal_for_subagent()
+            if target is None:
+                return
             print_indent(indent, file)
-            file.write("This sub-goal didn't close automatically — consider delegating it with the `subagent` tool.\n")
+            file.write(f"Don't grind through this goal inline when it's off your main line of reasoning. Call `subagent` with step {target.id} to delegate it.\n")
     async def _refresh_me_alone(self, auto_intro: bool) -> None:
         if self.fact_refs is None:
             if self._raw_facts:
@@ -9020,37 +9024,68 @@ class Session:
         self.proof_scope_root.unfinished_nodes(unfinished)
         return unfinished
 
-    def _worker_lock_for(self, step: 'step') -> "WorkerHandle | None":
-        """The parked/running worker (if any) that an ``edit`` targeting ``step``
-        must not disturb: a handle on ``step``'s node, an ancestor, or a
-        descendant (all the nodes "comparable to" a parked worker). On a
-        not-yet-created slot (e.g. a ``fill`` target) fall back to the parent
-        prefix, so filling a parked node's blank child slot is still blocked.
-        Returns the blocking handle, or ``None`` if the edit is allowed."""
-        try:
-            node = self.root.locate_node(step)
-        except NodeNotFound:
-            if '.' in step:
-                parent_step = step.rsplit('.', 1)[0]
-                try:
-                    parent = self.root.locate_node(parent_step)
-                except NodeNotFound:
-                    return None
-                return _handle_on_chain(parent, descendants=False)
-            return _handle_on_chain(self.root, descendants=False)
-        return _handle_on_chain(node, descendants=True)
+    def _edit_verdict(self, step: 'step', action: str) -> "tuple[EditVerdict, WorkerHandle | None]":
+        """May this session ``edit``/``delete`` ``step``? Returns (verdict, the
+        blocking handle for LOCKED). Scoped to the session's proof scope root
+        X_A (= ``role.target`` for a worker, ``root`` for main).
 
-    def _worker_in_scope_of(self, step: 'step') -> "WorkerHandle | None":
-        """A parked worker whose scope strictly CONTAINS ``step`` — i.e. a worker
-        is a strict ancestor of ``step``'s node, so ``step`` lies inside that
-        sub-agent's territory. Used to reject ``amend`` inside a worker's scope
-        (amend is otherwise allowed; the target's own worker, if any, is torn
-        down by ``_amend_child``). Returns the blocking handle, or ``None``."""
+        Two parts: (1) CONFINEMENT (worker only) — the target must lie inside
+        ``subtree(X_A)`` (a proper descendant; a new direct child slot of X_A is
+        allowed), else OUT_OF_SCOPE. (2) LOCK (all agents) — the target's region
+        must not hold another live sub-agent: ``fill``/``insert_before`` lock on
+        {target + descendants} ∪ {ancestors below X_A}; ``amend`` locks only on a
+        strict-ancestor sub-agent (it tears down its own target's worker via
+        ``_amend_child``, and keeps descendants); ``delete`` never locks (it tears
+        down whatever it removes).
+
+        For a worker this IGNORES handles at or above X_A (its blocked spawner
+        chain) — sound only because the dispatch gate (``_dispatch_blocked_by``)
+        keeps live handles an antichain, so no foreign parked worker encloses X_A.
+        The two are one inseparable package."""
+        stop = self.proof_scope_root
         try:
             node = self.root.locate_node(step)
+            new_slot = False
         except NodeNotFound:
-            return None
-        return _first_worker_in_ancestors(node)
+            parent_step = step.rsplit('.', 1)[0] if '.' in step else None
+            if parent_step is None:
+                return (EditVerdict.OUT_OF_SCOPE if self.is_worker else EditVerdict.OK), None
+            try:
+                node = self.root.locate_node(parent_step)
+            except NodeNotFound:
+                return (EditVerdict.OUT_OF_SCOPE if self.is_worker else EditVerdict.OK), None
+            new_slot = True
+        # (1) confinement (worker only)
+        if self.is_worker:
+            in_scope = (new_slot and node is stop) or _is_strict_ancestor(stop, node)
+            if not in_scope:
+                return EditVerdict.OUT_OF_SCOPE, None
+        # (2) lock (all agents)
+        if action == 'delete':
+            return EditVerdict.OK, None
+        anc_h = _first_worker_in_ancestors(node, stop=stop)
+        if action == 'amend':
+            return (EditVerdict.LOCKED, anc_h) if anc_h is not None else (EditVerdict.OK, None)
+        # fill / insert_before
+        if new_slot:
+            # the parent's OWN handle blocks (a parked node's blank child slot),
+            # but never X_A's own handle (that is the calling worker itself).
+            own = node.worker_handle if (isinstance(node, NonLeaf_Node) and node is not stop) else None
+            h = anc_h or own
+        else:
+            h = anc_h or _first_worker_in_subtree(node)
+        return (EditVerdict.LOCKED, h) if h is not None else (EditVerdict.OK, None)
+
+    def _dispatch_blocked_by(self, node: 'Node') -> "WorkerHandle | None":
+        """For a FRESH ``subagent`` dispatch on ``node`` (one not already holding a
+        handle): the existing handle that makes ``node`` comparable to a live
+        worker — an ancestor up to X_A, or any descendant — or ``None`` if dispatch
+        is allowed. Keeps live handles an antichain. ``stop = X_A`` ignores the
+        dispatcher's OWN handle (on X_A) so a worker may dispatch within its own
+        territory; the subtree side still rejects dispatch over its own parked
+        sub-workers."""
+        stop = self.proof_scope_root
+        return _first_worker_in_ancestors(node, stop=stop) or _first_worker_in_subtree(node)
 
     async def prefetch_worker_premises(self) -> None:
         """Resolve the standard-printed propositions of every fact in scope before the
@@ -9497,6 +9532,24 @@ class WorkerHandle:
             self.target.worker_handle = None
 
 
+class EditVerdict(Enum):
+    """Result of ``Session._edit_verdict``: may the session touch this step?"""
+    OK = auto()
+    OUT_OF_SCOPE = auto()      # a worker editing outside its own subtree
+    LOCKED = auto()            # the target is comparable to a live sub-agent's node
+
+
+def _is_strict_ancestor(anc: 'Node', node: 'Node') -> bool:
+    """True if ``anc`` is a PROPER ancestor of ``node`` (walks ``.parent``;
+    excludes ``node`` itself)."""
+    cur = node.parent
+    while cur is not None:
+        if cur is anc:
+            return True
+        cur = cur.parent
+    return False
+
+
 def _first_worker_in_subtree(n: 'Node') -> 'WorkerHandle | None':
     """First ``worker_handle`` at ``n`` or anywhere below it (DFS), else None."""
     if isinstance(n, NonLeaf_Node):
@@ -9509,24 +9562,17 @@ def _first_worker_in_subtree(n: 'Node') -> 'WorkerHandle | None':
     return None
 
 
-def _first_worker_in_ancestors(n: 'Node') -> 'WorkerHandle | None':
-    """First ``worker_handle`` strictly above ``n`` (its ancestors), else None."""
+def _first_worker_in_ancestors(n: 'Node', stop: 'Node | None' = None) -> 'WorkerHandle | None':
+    """First ``worker_handle`` strictly above ``n`` (its ancestors), else None.
+    When ``stop`` is given, the walk halts BEFORE it (exclusive) — a handle on
+    ``stop`` or above is never returned, so the caller's own scope root and its
+    spawner chain are ignored. ``stop=None`` walks to the root (the original
+    behaviour)."""
     cur = n.parent
     while cur is not None:
+        if cur is stop:
+            return None
         if isinstance(cur, NonLeaf_Node) and cur.worker_handle is not None:
             return cur.worker_handle
         cur = cur.parent
     return None
-
-
-def _handle_on_chain(n: 'Node', descendants: bool) -> 'WorkerHandle | None':
-    """First ``worker_handle`` among {``n``, its ancestors} and — when
-    ``descendants`` — ``n``'s subtree. Used by the edit-lock (``_worker_lock_for``)
-    to reject an edit whose target is comparable to a parked worker's node."""
-    if descendants:
-        h = _first_worker_in_subtree(n)            # n itself + descendants
-        if h is not None:
-            return h
-    elif isinstance(n, NonLeaf_Node) and n.worker_handle is not None:
-        return n.worker_handle                     # n itself (no descendants)
-    return _first_worker_in_ancestors(n)
