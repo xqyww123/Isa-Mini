@@ -1941,6 +1941,7 @@ TOOL_READ:   tool = "recall"
 TOOL_REQUEST_LEMMAS: tool = "request_lemmas"
 TOOL_REFUTE_OR_SURRENDER: tool = "refute_or_surrender"
 TOOL_SUBAGENT: tool = "subagent"
+TOOL_CLOSE_SUBAGENT: tool = "close_subagent"
 
 TOOL_ANSWER_INDEXES:        tool = "answer_indexes"
 TOOL_ANSWER_INDEX:          tool = "answer_index"
@@ -1958,6 +1959,7 @@ ANSWER_TOOLS: frozenset[tool] = frozenset({
 ALL_PROOF_TOOLS: tuple[tool, ...] = (
     TOOL_EDIT, TOOL_DELETE, TOOL_SEARCH, TOOL_READ,
     TOOL_REQUEST_LEMMAS, TOOL_REFUTE_OR_SURRENDER, TOOL_SUBAGENT,
+    TOOL_CLOSE_SUBAGENT,
     *ANSWER_TOOLS,
 )
 
@@ -4078,10 +4080,11 @@ class StdBlock(NonLeaf_Node):
         return indent
     def _print_suspended_worker_hint(self, indent: int, file: MyIO) -> None:
         """When a sub-agent is parked on this node, tell the main agent how to
-        resume it. Shown only to the planner (workers never render this)."""
+        resume or terminate it. Shown only to the planner (workers never render
+        this)."""
         if self.worker_handle is not None and _rendering_for_planner():
             print_indent(indent, file)
-            file.write(f"A sub-agent is suspended, call `subagent` tool with step {self.id} to resume it.\n")
+            file.write(f"A sub-agent is suspended on step {self.id}: call `subagent` with step {self.id} to resume it, or `close_subagent` with step {self.id} to terminate it.\n")
     def does_quickview_need_detail(self) -> bool:
         if super().does_quickview_need_detail():
             return True
@@ -8466,6 +8469,9 @@ class Session:
         # The top-level (main) session — no parent. This is the planner / main
         # agent; workers and interaction forks are sub-sessions. Owns log files
         # and working-dir cleanup, and gates the planner-only `subagent` tool.
+        # Invariant: parent is None  <==>  role is Role_Major  (workers/forks
+        # always have a parent and a non-major role); so is_major is the
+        # canonical planner test.
         return self.parent is None
 
     @property
@@ -9298,6 +9304,10 @@ class WorkerHandle:
         # Pending lemma-request review (resolved with a feedback STRING — a
         # distinct result type from _pending_review's (accepted, reason) tuple).
         self._pending_lemma_request: 'asyncio.Future[str] | None' = None
+        # Set once the worker's accumulated cost has been rolled into the parent
+        # (see _settle_costs) — makes the roll-up exactly-once across the _run
+        # finally and the aclose fallback.
+        self._costs_accumulated: bool = False
 
     def start(self, suggestions: str = "",
               useful_lemmas: list[str] | None = None) -> None:
@@ -9340,11 +9350,27 @@ class WorkerHandle:
             raise InternalError(
                 f"sub-agent on {self.target.id} crashed: {type(e).__name__}: {e}") from e
         finally:
-            session._accumulate_subagent_costs(sub)
+            self._settle_costs()
             try:
                 await sub.close()
             except Exception as e:
                 session.warn_AoA_opr(f"{tag} close failed: {e}")
+
+    def _settle_costs(self) -> None:
+        """Roll the worker sub-session's accumulated cost into the parent
+        EXACTLY ONCE. Called both from ``_run``'s finally (normal or cancelled
+        exit) and as a fallback from ``aclose``; the ``_costs_accumulated`` flag
+        makes the two paths idempotent — never double-counting, never skipping.
+        (It cannot recover the final, interrupted turn's tokens — those never
+        reached an SDK ``ResultMessage`` — only what the sub already recorded.)"""
+        if self._costs_accumulated or self._sub is None:
+            return
+        try:
+            self.session._accumulate_subagent_costs(self._sub)
+        finally:
+            # Mark settled even if accumulation raised midway: a retry would
+            # re-apply the already-added fields and double-count.
+            self._costs_accumulated = True
 
     async def _wait_next_event(self):
         """Return the next worker event. A queued event (refute/surrender)
@@ -9465,6 +9491,8 @@ class WorkerHandle:
         ``Node.aclose_all_workers`` (session-close sweep and delete teardown)."""
         self.cancel()
         await self.wait_finish()
+        self._settle_costs()  # fallback: ensure cost is rolled up if _run's
+                              # finally somehow didn't (idempotent via the flag)
         if self.target.worker_handle is self:
             self.target.worker_handle = None
 

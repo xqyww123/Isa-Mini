@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "properties": {
+    "step_id": {
+      "type": "string",
+      "description": "The exact step the sub-agent is attached to (no redirection — must be precise)."
+    }
+  },
+  "required": ["step_id"],
+  "additionalProperties": false
+}

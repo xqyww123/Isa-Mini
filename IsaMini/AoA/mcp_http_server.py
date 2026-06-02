@@ -43,7 +43,7 @@ from .model import (
     AnswerIndexes, AnswerIndex, AnswerIndexesOrName, AnswerIndexesOrSpec,
     AnswerInstantiate, AnswerRefutation,
     TOOL_EDIT, TOOL_DELETE, TOOL_READ, TOOL_REQUEST_LEMMAS,
-    TOOL_REFUTE_OR_SURRENDER, TOOL_SUBAGENT,
+    TOOL_REFUTE_OR_SURRENDER, TOOL_SUBAGENT, TOOL_CLOSE_SUBAGENT,
     TOOL_ANSWER_INDEXES, TOOL_ANSWER_INDEX, TOOL_ANSWER_INDEXES_OR_NAME,
     TOOL_ANSWER_INDEXES_OR_SPEC, TOOL_ANSWER_INSTANTIATE,
     TOOL_ANSWER_REFUTATION,
@@ -84,6 +84,7 @@ _cc_answer_indexes_or_spec_schema = _load_schema("cc_answer_indexes_or_spec.json
 _cc_answer_instantiate_schema = _load_schema("cc_answer_instantiate.jsonc")
 _cc_answer_refutation_schema = _load_schema("cc_answer_refutation.jsonc")
 _cc_subagent_schema = _load_schema("cc_subagent.jsonc")
+_cc_close_subagent_schema = _load_schema("cc_close_subagent.jsonc")
 
 
 
@@ -933,6 +934,50 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
     return (msg, False)
 
 
+async def _close_subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
+    """Planner-only `close_subagent`: terminate the sub-agent parked/running on a
+    PRECISELY named step, detaching its handle but keeping the partial proof. Pure
+    exact match — no redirection, no ancestor/descendant search: the agent always
+    has the exact worker step id (Hint B / the amend-in-scope error), so searching
+    would only risk killing the wrong sub-agent. (NO broad try/except per the
+    expose-errors rule — only the expected `NodeNotFound` is caught.)"""
+    _tn = session.tool_name(TOOL_CLOSE_SUBAGENT)
+    session.log_tool_call(_tn, args)
+
+    def _err(msg: str) -> tuple[str, bool]:
+        session.log_tool_response(_tn, f"ERROR: {msg}")
+        return (msg, True)
+
+    # Planner-only (role gating lives here, not in _check_tool_permission).
+    if isinstance(session.role, Role_Worker):
+        return _err("The `close_subagent` tool is available to the main agent only.")
+
+    step_id = str(args.get("step_id", ""))
+    try:
+        node = session.root.locate_node(step_id)
+    except NodeNotFound:
+        return _err(f"No step `{step_id}` found.")
+
+    # Pure exact match — NO search up or down. The handle must live on THIS node.
+    if not (isinstance(node, NonLeaf_Node) and node.worker_handle is not None):
+        return _err(f"No sub-agent is attached to step {step_id}.")
+    handle = node.worker_handle
+
+    # Cancel the worker (its parked _pending_lemma_request future is cancelled →
+    # it unblocks; wait_finish swallows the CancelledError) and detach the handle.
+    # aclose never reverts — the node keeps its current (unfinished) state with the
+    # worker's partial proof intact, so the `if finished: interrupt()` completion
+    # handshake stays correct. refresh_YAML is REQUIRED (drops the now-stale
+    # suspended hint) because aclose bypasses _detach (the only auto-refresh path);
+    # it runs in the planner session, satisfying Hint B's _rendering_for_planner gate.
+    await handle.aclose()
+    session.refresh_YAML()
+
+    msg = "The sub-agent is removed."
+    session.log_tool_response(_tn, msg)
+    return (msg, False)
+
+
 # ============================================================================
 # ToolExecutor — Direct In-Process Tool Dispatch
 # ============================================================================
@@ -961,19 +1006,22 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "answer_instantiate": {"description": "Answer by providing schematic-variable instantiations", "schema": _cc_answer_instantiate_schema, "annotations": _ACT},
     "answer_refutation": {"description": "Accept or reject a worker's claim that the goal is unprovable", "schema": _cc_answer_refutation_schema, "annotations": _ACT},
     "subagent": {"description": "Launch a sub-agent to prove a goal in isolation. Call this when a goal is tedious and its proof would derail your main line of reasoning.", "schema": _cc_subagent_schema, "annotations": _ACT},
+    "close_subagent": {"description": "Terminate a sub-agent you dispatched, freeing its step for editing again. Point it exactly at the step the sub-agent is on — it does NOT redirect, to avoid killing the wrong one. The sub-agent's partial proof is kept.", "schema": _cc_close_subagent_schema, "annotations": _ACT},
 }
 
 
-# ``subagent`` is the main (planner) agent's tool only; precompute the
-# worker/fork view (all tools except subagent) once at import time.
-_TOOL_SCHEMAS_NO_SUBAGENT: dict[str, dict[str, Any]] = {
-    k: v for k, v in _TOOL_SCHEMAS.items() if k != TOOL_SUBAGENT}
+# These tools belong to the main (planner) agent only; precompute the
+# worker/fork view (all tools except the planner-only set) once at import time.
+_PLANNER_ONLY_TOOLS: frozenset[str] = frozenset({TOOL_SUBAGENT, TOOL_CLOSE_SUBAGENT})
+_TOOL_SCHEMAS_WORKER: dict[str, dict[str, Any]] = {
+    k: v for k, v in _TOOL_SCHEMAS.items() if k not in _PLANNER_ONLY_TOOLS}
 
 
 def _tool_schemas_for(session: Session) -> dict[str, dict[str, Any]]:
-    """Tool schemas advertised to ``session``. ``subagent`` is hidden entirely
-    from workers and interaction forks (they never see it in the tool list)."""
-    return _TOOL_SCHEMAS if session.is_major else _TOOL_SCHEMAS_NO_SUBAGENT
+    """Tool schemas advertised to ``session``. The planner-only tools
+    (``subagent`` / ``close_subagent``) are hidden entirely from workers and
+    interaction forks (they never see them in the tool list)."""
+    return _TOOL_SCHEMAS if session.is_major else _TOOL_SCHEMAS_WORKER
 
 
 class ToolExecutor:
@@ -1047,6 +1095,15 @@ class ToolExecutor:
                     # its OWN executor lock (no contention, no deadlock).
                     async with self._tool_lock:
                         result, is_error = await _subagent_tool_logic(session, arguments)
+                    session.last_proof_op_time = time()
+                case "close_subagent":
+                    # Hold the lock to serialize against a `subagent` resume (also
+                    # under it): keeps resolve_lemma_request's fut.set_result from
+                    # racing aclose's fut.cancel on the same future. Deadlock-free —
+                    # the planner owns its own executor lock; the worker's teardown
+                    # touches the worker's lock, never the planner's.
+                    async with self._tool_lock:
+                        result, is_error = await _close_subagent_tool_logic(session, arguments)
                     session.last_proof_op_time = time()
                 case _:
                     return (f"Unknown tool: {name}", True)

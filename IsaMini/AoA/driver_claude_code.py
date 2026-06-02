@@ -102,6 +102,7 @@ class ClaudeCode(LMDriver):
         "request_lemmas": "mcp__proof__request_lemmas",
         "refute_or_surrender": "mcp__proof__refute_or_surrender",
         "subagent": "mcp__proof__subagent",
+        "close_subagent": "mcp__proof__close_subagent",
         "answer_indexes": "mcp__proof__answer_indexes",
         "answer_index": "mcp__proof__answer_index",
         "answer_indexes_or_name": "mcp__proof__answer_indexes_or_name",
@@ -110,11 +111,13 @@ class ClaudeCode(LMDriver):
         "answer_refutation": "mcp__proof__answer_refutation",
     }
     TOOL_WHITELIST = _NON_PROOF_TOOLS + list(_TOOL_NAME_MAP.values())
-    # subagent is the planner's tool only; precompute the worker/fork allow-list
-    # (TOOL_WHITELIST minus subagent) once at class-definition time. (Statements,
-    # not a comprehension, so the class-body name _TOOL_NAME_MAP stays in scope.)
+    # subagent/close_subagent are the planner's tools only; precompute the
+    # worker/fork allow-list (TOOL_WHITELIST minus those) once at class-definition
+    # time. (Statements, not a comprehension, so the class-body name
+    # _TOOL_NAME_MAP stays in scope.)
     _WORKER_TOOL_WHITELIST = list(TOOL_WHITELIST)
     _WORKER_TOOL_WHITELIST.remove(_TOOL_NAME_MAP["subagent"])
+    _WORKER_TOOL_WHITELIST.remove(_TOOL_NAME_MAP["close_subagent"])
     COMPACT_THRESHOLD = 0.85
     FORK_COMPACT_THRESHOLD = 0.99
 
