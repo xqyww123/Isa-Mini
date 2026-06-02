@@ -4125,8 +4125,7 @@ fun END' param SH_override ID (stack as (_, HHF _ :: _)) =
   | END' _ _ _ _ = raise BROKEN_INVARIANT
 
 fun NXT' param SH_override ID (origin as stack as (_, HHF _ :: _)) =
-  let val _ = chk_block_next stack
-      val ctxt0 = #1 stack
+  let val ctxt0 = #1 stack
       val prover = default_prover NONE SH_override ctxt0
       val F = HAMMER_i prover (string_of_int ID)
       fun on_end () =
@@ -4134,7 +4133,23 @@ fun NXT' param SH_override ID (origin as stack as (_, HHF _ :: _)) =
             "RELAXED" => origin
           | _ => raise OPR_FAIL (INVALID_OPR,
                    "This block should be closed by the END command.")
-  in gen_NXT' param F on_end stack end
+      (* A standalone closing op (e.g. HAMMER) may have already discharged
+         the current case before NEXT is issued, leaving the top frame
+         finished (`prop C`).  `chk_block_next` only inspects the top frame
+         and would reject this, even though the `ENDBLK T_NXT` directly below
+         means a sibling case is still pending and advancing is exactly the
+         right move.  In that situation NEXT degenerates to a pure advance:
+         skip both `chk_block_next` and the now-redundant hammer, and let the
+         existing T_NXT pop / MAGIC-rebuild path inside `gen_NXT'` run with an
+         identity closer.  `stack_top_finished` / `chk_block_end` are left
+         untouched, so END's behaviour is unaffected. *)
+      val advance_finished =
+        stack_top_finished stack andalso
+        (case stack of (_, _ :: ENDBLK T_NXT :: _) => true | _ => false)
+  in if advance_finished
+     then gen_NXT' param I on_end stack
+     else (chk_block_next stack; gen_NXT' param F on_end stack)
+  end
   | NXT' _ _ _ _ = raise BROKEN_INVARIANT
 
 (* The polymorphic "auto-advance" helper used by the legacy SORRY
