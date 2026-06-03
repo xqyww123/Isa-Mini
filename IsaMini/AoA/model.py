@@ -8538,6 +8538,21 @@ class Session:
         return isinstance(self.role, Role_Interaction)
 
     @property
+    def role_label(self) -> str:
+        """Short semantic tag for this session's role, prefixed onto every log
+        entry (a ``role`` field in YAML/meta, a ``[...]`` prefix in the debug
+        stream) so each line is attributable to the planner / a worker / an
+        interaction fork. Derived from ``self.role`` (always set), so it is safe
+        on the base test session, not just live drivers."""
+        match self.role:
+            case Role_Worker(target=t):
+                return f"worker:{t.id}"
+            case Role_Interaction(pending=p):
+                return "interaction:" + type(p.interaction).__name__.removeprefix("Interaction_")
+            case _:  # Role_Major
+                return "planner"
+
+    @property
     def fork_pending(self) -> 'Fork_Pending | None':
         if isinstance(self.role, Role_Interaction):
             return self.role.pending
@@ -8665,7 +8680,11 @@ class Session:
         if self._meta_log_writer is None:
             return
         import zstandard
-        entry = {"event": event_type, "ts": datetime.now().isoformat(), **data}
+        # ``role`` is stamped here (not at each call site) so EVERY meta entry —
+        # including direct _log_meta callers (SESSION_START, SYS_PROMPT, USAGE,
+        # COMPACTION, …) — is attributable. A caller-supplied role in **data wins.
+        entry = {"event": event_type, "ts": datetime.now().isoformat(),
+                 "role": self.role_label, **data}
         line = json.dumps(entry, ensure_ascii=False, default=str) + "\n"
         self._meta_log_writer.write(line.encode("utf-8"))
         self._meta_log_writer.flush(zstandard.FLUSH_FRAME)
@@ -8912,17 +8931,19 @@ class Session:
             debug_messages: Callable that returns list of debug messages (only called if logger is not None)
             **data: Additional data fields for the YAML log entry
         """
+        role = self.role_label
         if log_file_handle is not None:
             log_entry = {
                 "event": event_type,
                 "timestamp": datetime.now().isoformat(),
+                "role": role,
                 **data
             }
             self._append_yaml(log_file_handle, log_entry)
-        self._log_meta(event_type, **data)
+        self._log_meta(event_type, **data)  # _log_meta stamps role itself
         if self.logger is not None and debug_messages is not None:
             for msg in debug_messages():
-                self.logger.debug(msg)
+                self.logger.debug(f"[{role}] {msg}")
         self.on_log(event_type, data)
 
     # Model interaction logging methods
@@ -8957,7 +8978,7 @@ class Session:
         """Log an AoA warning to interaction.yaml and logger at WARNING level."""
         self._log(self.interaction_log_file, "AOA_WARNING", None, message=message)
         if self.logger is not None:
-            self.logger.warning(f"[AOA_WARN] {message}")
+            self.logger.warning(f"[{self.role_label}] [AOA_WARN] {message}")
 
     def log_interaction(self, tool_name: str, prompt: str):
         """Log interaction prompt to interaction.yaml."""
@@ -9054,7 +9075,7 @@ class Session:
                 with open(proof_yaml_path, 'w', encoding='utf-8') as f:
                     self.root.print(0, MyIO(f))
                 if self.logger is not None:
-                    self.logger.debug(f"[PROOF] Written to {proof_yaml_path}")
+                    self.logger.debug(f"[{self.role_label}] [PROOF] Written to {proof_yaml_path}")
             except Exception as e:
                 if self.logger is not None:
                     self.logger.error(f"Failed to write proof to {proof_yaml_path}: {e}")
