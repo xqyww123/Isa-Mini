@@ -3,7 +3,7 @@ Initial YAML
 --------------------------------------------------
 variables:
   - n: nat
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: n + (0 :: nat) = n
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
@@ -23,7 +23,7 @@ name: helper
 proof:
   - step id: global.1.1
     operation: Obvious
-You can write global declarations by calling command `edit` with action `fill` and target step `global.2`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.2`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: n + (0 :: nat) = n
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
@@ -63,7 +63,7 @@ proof:
         proof: empty
 notice:
   - Due to changes in the proof structure, previous proof step step global.1.1 has been discarded
-You can write global declarations by calling command `edit` with action `fill` and target step `global.2`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.2`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: n + (0 :: nat) = n
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.

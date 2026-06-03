@@ -3,7 +3,7 @@ Initial YAML
 --------------------------------------------------
 variables:
   - m: nat
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: (∃(k :: nat). k = m) ⟶ m = m
 proof:
   - step id: 1
@@ -18,7 +18,7 @@ After Obtain
 --------------------------------------------------
 variables:
   - m: nat
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: (∃(k :: nat). k = m) ⟶ m = m
 proof:
   - step id: 1
@@ -45,7 +45,7 @@ After Obvious with k_def
 --------------------------------------------------
 variables:
   - m: nat
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: (∃(k :: nat). k = m) ⟶ m = m
 proof:
   - step id: 1
@@ -73,7 +73,7 @@ After deleting Obtain
 --------------------------------------------------
 variables:
   - m: nat
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: (∃(k :: nat). k = m) ⟶ m = m
 proof:
   - step id: 1

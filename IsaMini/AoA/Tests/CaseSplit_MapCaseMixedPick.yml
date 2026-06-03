@@ -4,7 +4,7 @@ Initial YAML
 variables:
   - b: bool
   - P: bool ⇒ bool
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: P b
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
@@ -17,14 +17,14 @@ The case-split operation produced a case `False` (as follows) that does not matc
   goal: P False
 Is any of your supplied proof intended for this case?
   0. new-xxx
-Answer with the index if so, or with null to leave this case without a proof for now.
+Call `answer_index` with the `index` if so, or with null to leave this case without a proof for now.
 --------------------------------------------------
 After CaseSplit (mixed exact + mapped)
 --------------------------------------------------
 variables:
   - b: bool
   - P: bool ⇒ bool
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: P b
 proof:
   - step id: 1

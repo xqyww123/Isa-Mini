@@ -9,7 +9,7 @@ premises:
   - h1: x mod q = y mod q
   - h2: coprime q (2 :: nat)
   - h3: int x + int y = z
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 variables:
   - z: int
 goal: x mod q = y mod q
@@ -33,7 +33,7 @@ premises:
   - h1: x mod q = y mod q
   - h2: coprime q (2 :: nat)
   - h3: int x + int y = z
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 variables:
   - z: int
 goal: x mod q = y mod q

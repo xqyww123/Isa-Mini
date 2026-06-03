@@ -8,7 +8,7 @@ premises:
   - h1: log (2 :: real) (log (8 :: real) x) = log (8 :: real) (log (2 :: real) x)
   - valid(1): (0 :: real) < log (8 :: real) x
   - valid(2): (0 :: real) < log (2 :: real) x
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: (log (2 :: real) x)² = (27 :: real)
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
@@ -22,7 +22,7 @@ premises:
   - h1: log (2 :: real) (log (8 :: real) x) = log (8 :: real) (log (2 :: real) x)
   - valid(1): (0 :: real) < log (8 :: real) x
   - valid(2): (0 :: real) < log (2 :: real) x
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: (log (2 :: real) x)² = (27 :: real)
 proof:
   - step id: 1
@@ -66,7 +66,7 @@ premises:
   - h1: log (2 :: real) (log (8 :: real) x) = log (8 :: real) (log (2 :: real) x)
   - valid(1): (0 :: real) < log (8 :: real) x
   - valid(2): (0 :: real) < log (2 :: real) x
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: (log (2 :: real) x)² = (27 :: real)
 proof:
   - step id: 1

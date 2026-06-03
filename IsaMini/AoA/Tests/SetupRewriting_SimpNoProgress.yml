@@ -6,7 +6,7 @@ variables:
 premises:
   - h0: ∀(x :: int). f x + f (x - (1 :: int)) = x²
   - h1: f (2 :: int) = (5 :: int)
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: f (5 :: int) = (13 :: int)
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
@@ -18,7 +18,7 @@ variables:
 premises:
   - h0: ∀(x :: int). f x + f (x - (1 :: int)) = x²
   - h1: f (2 :: int) = (5 :: int)
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: f (5 :: int) = (13 :: int)
 proof:
   - step id: 1
@@ -50,7 +50,7 @@ variables:
 premises:
   - h0: ∀(x :: int). f x + f (x - (1 :: int)) = x²
   - h1: f (2 :: int) = (5 :: int)
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: f (5 :: int) = (13 :: int)
 proof:
   - step id: 1

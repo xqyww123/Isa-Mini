@@ -1,13 +1,13 @@
 --------------------------------------------------
 Initial YAML
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: True
 proof: empty
 --------------------------------------------------
 After Contradiction (ccontr path)
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: True
 proof:
   - step id: 1
@@ -28,7 +28,7 @@ bindings: ([], [FactBinding(expr=[8, [[3, ['HOL.Trueprop', [0, ['fun', [[0, ['HO
 --------------------------------------------------
 After Obvious to close False
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: True
 proof:
   - step id: 1

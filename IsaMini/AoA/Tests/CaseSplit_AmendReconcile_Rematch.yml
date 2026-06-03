@@ -4,7 +4,7 @@ Initial YAML
 variables:
   - b: bool
   - P: bool ⇒ bool
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: P b
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
@@ -14,7 +14,7 @@ After initial fill
 variables:
   - b: bool
   - P: bool ⇒ bool
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: P b
 proof:
   - step id: 1
@@ -55,7 +55,7 @@ Is any of your supplied proof intended for this case?
   0. new-alt1
   1. new-alt2
   2. old-True
-Answer with the index if so, or with null to leave this case without a proof for now.
+Call `answer_index` with the `index` if so, or with null to leave this case without a proof for now.
 --------------------------------------------------
 MapCase for `False`
 --------------------------------------------------
@@ -66,14 +66,14 @@ The case-split operation produced a case `False` (as follows) that does not matc
 Is any of your supplied proof intended for this case?
   0. new-alt2
   1. old-False
-Answer with the index if so, or with null to leave this case without a proof for now.
+Call `answer_index` with the `index` if so, or with null to leave this case without a proof for now.
 --------------------------------------------------
 After amend (rematch: new- for True, old- for False)
 --------------------------------------------------
 variables:
   - b: bool
   - P: bool ⇒ bool
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: P b
 proof:
   - step id: 1

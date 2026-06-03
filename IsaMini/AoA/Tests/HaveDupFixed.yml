@@ -1,7 +1,7 @@
 --------------------------------------------------
 Initial YAML
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∀a (b :: nat). a * b + (1 :: nat) dvd a² + b² ⟶ (∃(x :: nat). real (x²) = real (a² + b²) / real (a * b + (1 :: nat)))
 proof:
   - step id: 1
@@ -17,7 +17,7 @@ pending proof goal:
 --------------------------------------------------
 After Intro (a, b now fixed)
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∀a (b :: nat). a * b + (1 :: nat) dvd a² + b² ⟶ (∃(x :: nat). real (x²) = real (a² + b²) / real (a * b + (1 :: nat)))
 proof:
   - step id: 1
@@ -33,7 +33,7 @@ pending proof goal:
 --------------------------------------------------
 After Have with for_any (duplicate a, b)
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∀a (b :: nat). a * b + (1 :: nat) dvd a² + b² ⟶ (∃(x :: nat). real (x²) = real (a² + b²) / real (a * b + (1 :: nat)))
 proof:
   - step id: 1

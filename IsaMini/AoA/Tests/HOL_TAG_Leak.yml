@@ -5,7 +5,7 @@ variables:
   - P: nat ⇒ bool
   - p: nat
   - i: nat
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: i ≤ p ⟶ P i
 proof:
   - step id: 1
@@ -22,7 +22,7 @@ variables:
   - P: nat ⇒ bool
   - p: nat
   - i: nat
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: i ≤ p ⟶ P i
 proof:
   - step id: 1

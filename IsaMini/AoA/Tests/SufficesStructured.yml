@@ -1,7 +1,7 @@
 --------------------------------------------------
 Initial YAML
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: (∀(n :: nat). n ≤ n * n) ⟶ (3 :: nat) ≤ (3 :: nat) * (3 :: nat)
 proof:
   - step id: 1
@@ -14,7 +14,7 @@ pending proof goal:
 --------------------------------------------------
 After Intro
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: (∀(n :: nat). n ≤ n * n) ⟶ (3 :: nat) ≤ (3 :: nat) * (3 :: nat)
 proof:
   - step id: 1
@@ -27,7 +27,7 @@ pending proof goal:
 --------------------------------------------------
 After Suffices with for_any
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: (∀(n :: nat). n ≤ n * n) ⟶ (3 :: nat) ≤ (3 :: nat) * (3 :: nat)
 proof:
   - step id: 1
@@ -55,7 +55,7 @@ pending proof goal:
 --------------------------------------------------
 After proving implication
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: (∀(n :: nat). n ≤ n * n) ⟶ (3 :: nat) ≤ (3 :: nat) * (3 :: nat)
 proof:
   - step id: 1
@@ -81,7 +81,7 @@ pending proof goal:
 --------------------------------------------------
 After closing suffices goal
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: (∀(n :: nat). n ≤ n * n) ⟶ (3 :: nat) ≤ (3 :: nat) * (3 :: nat)
 proof:
   - step id: 1

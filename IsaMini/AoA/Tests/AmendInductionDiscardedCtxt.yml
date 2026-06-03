@@ -4,7 +4,7 @@ Initial YAML
 variables:
   - n: nat
   - P: nat ⇒ bool
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: P n
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
@@ -14,7 +14,7 @@ After fill (nat.induct, 2 cases)
 variables:
   - n: nat
   - P: nat ⇒ bool
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: P n
 proof:
   - step id: 1
@@ -38,7 +38,7 @@ After amend (less_induct, 1 case) — show_warnings=True
 variables:
   - n: nat
   - P: nat ⇒ bool
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: P n
 proof:
   - step id: 1

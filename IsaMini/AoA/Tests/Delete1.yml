@@ -7,7 +7,8 @@ variables:
 premises:
   - h1: y = x + (0 :: int)
   - h2: z = y * (1 :: int)
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.variables:
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+variables:
   - y: int
 goal: x = z
 proof: empty
@@ -21,7 +22,8 @@ variables:
 premises:
   - h1: y = x + (0 :: int)
   - h2: z = y * (1 :: int)
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.variables:
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+variables:
   - y: int
 goal: x = z
 proof:
@@ -64,7 +66,8 @@ variables:
 premises:
   - h1: y = x + (0 :: int)
   - h2: z = y * (1 :: int)
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.variables:
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+variables:
   - y: int
 goal: x = z
 proof:
@@ -95,7 +98,8 @@ variables:
 premises:
   - h1: y = x + (0 :: int)
   - h2: z = y * (1 :: int)
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.variables:
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+variables:
   - y: int
 goal: x = z
 proof:

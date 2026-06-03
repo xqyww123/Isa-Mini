@@ -7,7 +7,7 @@ premises:
   - h1: P (0 :: nat)
   - h2: P (0 :: nat) ⟶ Q (0 :: nat)
   - h3: Q (0 :: nat) ⟶ R (0 :: nat)
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 variables:
   - Q: nat ⇒ bool
   - P: nat ⇒ bool
@@ -25,7 +25,7 @@ premises:
   - h1: P (0 :: nat)
   - h2: P (0 :: nat) ⟶ Q (0 :: nat)
   - h3: Q (0 :: nat) ⟶ R (0 :: nat)
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 variables:
   - Q: nat ⇒ bool
   - P: nat ⇒ bool

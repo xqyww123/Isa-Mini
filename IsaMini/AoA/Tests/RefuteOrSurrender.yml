@@ -1,6 +1,6 @@
 worker surrender result: Complaint recorded (surrender).
 worker surrender is_error: False
-worker surrender sets quit_info: False
+worker surrender sets quit_info: True
 surrender event: WorkerSurrender
 surrender event detail: I need more lemmas
 refute event: WorkerRefute

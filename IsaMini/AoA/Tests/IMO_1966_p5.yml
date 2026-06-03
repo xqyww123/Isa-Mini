@@ -12,7 +12,7 @@ premises:
   - h7: ¦a (2 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (2 :: nat) - a (3 :: nat)¦ * x (3 :: nat) + ¦a (2 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
   - h8: ¦a (3 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (3 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (3 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
   - h9: ¦a (4 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (4 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (4 :: nat) - a (3 :: nat)¦ * x (3 :: nat) = (1 :: real)
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: x (2 :: nat) = (0 :: real) ∧ x (3 :: nat) = (0 :: real) ∧ x (1 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦ ∧ x (4 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
@@ -35,7 +35,7 @@ premises:
   - h7: ¦a (2 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (2 :: nat) - a (3 :: nat)¦ * x (3 :: nat) + ¦a (2 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
   - h8: ¦a (3 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (3 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (3 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
   - h9: ¦a (4 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (4 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (4 :: nat) - a (3 :: nat)¦ * x (3 :: nat) = (1 :: real)
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: x (2 :: nat) = (0 :: real) ∧ x (3 :: nat) = (0 :: real) ∧ x (1 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦ ∧ x (4 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦
 proof:
   - step id: 1
@@ -71,7 +71,7 @@ premises:
   - h7: ¦a (2 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (2 :: nat) - a (3 :: nat)¦ * x (3 :: nat) + ¦a (2 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
   - h8: ¦a (3 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (3 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (3 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
   - h9: ¦a (4 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (4 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (4 :: nat) - a (3 :: nat)¦ * x (3 :: nat) = (1 :: real)
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: x (2 :: nat) = (0 :: real) ∧ x (3 :: nat) = (0 :: real) ∧ x (1 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦ ∧ x (4 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦
 proof:
   - step id: 1
@@ -110,7 +110,7 @@ premises:
   - h7: ¦a (2 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (2 :: nat) - a (3 :: nat)¦ * x (3 :: nat) + ¦a (2 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
   - h8: ¦a (3 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (3 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (3 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
   - h9: ¦a (4 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (4 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (4 :: nat) - a (3 :: nat)¦ * x (3 :: nat) = (1 :: real)
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: x (2 :: nat) = (0 :: real) ∧ x (3 :: nat) = (0 :: real) ∧ x (1 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦ ∧ x (4 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦
 proof:
   - step id: 1
@@ -146,7 +146,7 @@ premises:
   - h7: ¦a (2 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (2 :: nat) - a (3 :: nat)¦ * x (3 :: nat) + ¦a (2 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
   - h8: ¦a (3 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (3 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (3 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
   - h9: ¦a (4 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (4 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (4 :: nat) - a (3 :: nat)¦ * x (3 :: nat) = (1 :: real)
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: x (2 :: nat) = (0 :: real) ∧ x (3 :: nat) = (0 :: real) ∧ x (1 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦ ∧ x (4 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦
 proof:
   - step id: 1
@@ -195,7 +195,7 @@ premises:
   - h7: ¦a (2 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (2 :: nat) - a (3 :: nat)¦ * x (3 :: nat) + ¦a (2 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
   - h8: ¦a (3 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (3 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (3 :: nat) - a (4 :: nat)¦ * x (4 :: nat) = (1 :: real)
   - h9: ¦a (4 :: nat) - a (1 :: nat)¦ * x (1 :: nat) + ¦a (4 :: nat) - a (2 :: nat)¦ * x (2 :: nat) + ¦a (4 :: nat) - a (3 :: nat)¦ * x (3 :: nat) = (1 :: real)
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: x (2 :: nat) = (0 :: real) ∧ x (3 :: nat) = (0 :: real) ∧ x (1 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦ ∧ x (4 :: nat) = (1 :: real) / ¦a (1 :: nat) - a (4 :: nat)¦
 proof:
   - step id: 1

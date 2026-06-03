@@ -1,7 +1,7 @@
 --------------------------------------------------
 Initial YAML
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∀n (m :: nat). n + m = m + n
 proof:
   - step id: 1
@@ -15,7 +15,7 @@ pending proof goal:
 --------------------------------------------------
 After Intro amend (single binding 'm')
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∀n (m :: nat). n + m = m + n
 proof:
   - step id: 1
@@ -30,7 +30,7 @@ pending proof goal:
 --------------------------------------------------
 Final state
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∀n (m :: nat). n + m = m + n
 proof:
   - step id: 1

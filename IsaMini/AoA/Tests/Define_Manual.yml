@@ -1,14 +1,14 @@
 --------------------------------------------------
 Initial YAML
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After Define (deferred block opened)
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
 proof:
   - step id: 1
@@ -42,7 +42,7 @@ pending proof goal:
 --------------------------------------------------
 After Obvious on residual 1 (well-foundedness)
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
 proof:
   - step id: 1
@@ -77,7 +77,7 @@ pending proof goal:
 --------------------------------------------------
 After Obvious on residual 2 (decrease)
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
 proof:
   - step id: 1
@@ -111,7 +111,7 @@ pending proof goal:
 --------------------------------------------------
 After Witness
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
 proof:
   - step id: 1
@@ -149,7 +149,7 @@ pending proof goal:
 --------------------------------------------------
 After Obvious on halve 4 = 2
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
 proof:
   - step id: 1

@@ -1,7 +1,7 @@
 --------------------------------------------------
 After Define + Witness + Intro
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∃(f :: nat ⇒ nat). f (2 :: nat) = (4 :: nat) ∧ f (3 :: nat) = (6 :: nat)
 proof:
   - step id: 1
@@ -32,7 +32,7 @@ Unfold in nested case is_error: False
 --------------------------------------------------
 After nested Unfold
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∃(f :: nat ⇒ nat). f (2 :: nat) = (4 :: nat) ∧ f (3 :: nat) = (6 :: nat)
 proof:
   - step id: 1

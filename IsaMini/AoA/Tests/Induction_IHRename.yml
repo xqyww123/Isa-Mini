@@ -1,7 +1,7 @@
 --------------------------------------------------
 Initial YAML
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 variables:
   - p: nat
   - i: nat
@@ -11,7 +11,7 @@ proof: empty
 --------------------------------------------------
 After Have gen
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 variables:
   - p: nat
   - i: nat
@@ -38,7 +38,7 @@ proof:
 --------------------------------------------------
 After Induction (IH should use `n`, not internal variant)
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 variables:
   - p: nat
   - i: nat

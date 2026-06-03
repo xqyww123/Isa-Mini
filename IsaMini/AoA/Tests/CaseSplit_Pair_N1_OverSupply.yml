@@ -7,7 +7,7 @@ variables:
 type variables:
   - 'b: type
   - 'a: type
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: P p
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
@@ -24,7 +24,7 @@ The case-split operation produced a case `Pair` (as follows) that does not match
 Is any of your supplied proof intended for this case?
   0. alpha
   1. beta
-Answer with the index if so, or with null to leave this case without a proof for now.
+Call `answer_index` with the `index` if so, or with null to leave this case without a proof for now.
 --------------------------------------------------
 After splice (N==1, over-supply)
 --------------------------------------------------
@@ -34,7 +34,7 @@ variables:
 type variables:
   - 'b: type
   - 'a: type
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: P p
 proof:
   - step id: 1

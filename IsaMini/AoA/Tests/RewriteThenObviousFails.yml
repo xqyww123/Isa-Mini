@@ -6,7 +6,7 @@ variables:
   - P: nat ⇒ bool
 premises:
   - h: x = y
-You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 variables:
   - y: nat
 goal: P x
@@ -21,7 +21,7 @@ variables:
   - P: nat ⇒ bool
 premises:
   - h: x = y
-You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 variables:
   - y: nat
 goal: P x
@@ -49,7 +49,7 @@ variables:
   - P: nat ⇒ bool
 premises:
   - h: x = y
-You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `$global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 variables:
   - y: nat
 goal: P x

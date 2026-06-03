@@ -6,7 +6,7 @@ variables:
 premises:
   - h0: ∀(n :: nat). f n = (∑k | k dvd (n :: nat). (1 :: real)) / real n
   - h1: ∀(p :: nat). p ≠ n ⟶ f p < f n
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 variables:
   - f: nat ⇒ real
 goal: n = (2520 :: nat)
@@ -20,7 +20,7 @@ variables:
 premises:
   - h0: ∀(n :: nat). f n = (∑k | k dvd (n :: nat). (1 :: real)) / real n
   - h1: ∀(p :: nat). p ≠ n ⟶ f p < f n
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 variables:
   - f: nat ⇒ real
 goal: n = (2520 :: nat)
@@ -42,7 +42,7 @@ variables:
 premises:
   - h0: ∀(n :: nat). f n = (∑k | k dvd (n :: nat). (1 :: real)) / real n
   - h1: ∀(p :: nat). p ≠ n ⟶ f p < f n
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 variables:
   - f: nat ⇒ real
 goal: n = (2520 :: nat)
@@ -73,7 +73,7 @@ variables:
 premises:
   - h0: ∀(n :: nat). f n = (∑k | k dvd (n :: nat). (1 :: real)) / real n
   - h1: ∀(p :: nat). p ≠ n ⟶ f p < f n
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 variables:
   - f: nat ⇒ real
 goal: n = (2520 :: nat)

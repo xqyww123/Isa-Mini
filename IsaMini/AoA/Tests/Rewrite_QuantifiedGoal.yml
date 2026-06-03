@@ -1,7 +1,7 @@
 --------------------------------------------------
 Initial YAML
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∃(y :: nat). f y = (0 :: nat)
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
@@ -11,11 +11,11 @@ Interaction Prompt
 Rule 'my_wrap' (f ?x = g (f ?x)) would cause infinite rewriting.
 To use this rule safely, select which specific subterm to rewrite:
   0. f y
-Answer with the index of the subterm to rewrite, or leave empty to drop this rule.
+Call `answer_indexes` with the `indexes` of the subterm to rewrite, or with empty `indexes` to drop this rule.
 --------------------------------------------------
 After Rewrite (quantified goal)
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∃(y :: nat). f y = (0 :: nat)
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.

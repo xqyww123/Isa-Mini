@@ -7,7 +7,7 @@ premises:
   - ha: A
   - hb: B
   - rule: A ⟶ B ⟶ C
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 variables:
   - B: bool
   - A: bool
@@ -23,7 +23,7 @@ premises:
   - ha: A
   - hb: B
   - rule: A ⟶ B ⟶ C
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 variables:
   - B: bool
   - A: bool

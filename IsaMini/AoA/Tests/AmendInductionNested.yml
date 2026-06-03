@@ -3,7 +3,7 @@ Initial YAML
 --------------------------------------------------
 variables:
   - n: nat
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∑ {..n} = n * (n + (1 :: nat)) div (2 :: nat)
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
@@ -12,7 +12,7 @@ After fill
 --------------------------------------------------
 variables:
   - n: nat
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∑ {..n} = n * (n + (1 :: nat)) div (2 :: nat)
 proof:
   - step id: 1

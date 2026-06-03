@@ -9,7 +9,7 @@ type variables:
 premises:
   - h1: y = x + (0 :: 'a)
   - h2: ∃(aAa :: 'a). z = y * (1 :: 'a) + aAa
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 variables:
   - y: 'a
 goal: x = z
@@ -26,7 +26,7 @@ type variables:
 premises:
   - h1: y = x + (0 :: 'a)
   - h2: ∃(aAa :: 'a). z = y * (1 :: 'a) + aAa
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 variables:
   - y: 'a
 goal: x = z
@@ -55,7 +55,7 @@ type variables:
 premises:
   - h1: y = x + (0 :: 'a)
   - h2: ∃(aAa :: 'a). z = y * (1 :: 'a) + aAa
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 variables:
   - y: 'a
 goal: x = z

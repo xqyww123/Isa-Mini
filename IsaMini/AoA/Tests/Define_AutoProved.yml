@@ -1,14 +1,14 @@
 --------------------------------------------------
 Initial YAML
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∃(f :: nat ⇒ nat). f (2 :: nat) = (4 :: nat)
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After Define (auto-proved)
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∃(f :: nat ⇒ nat). f (2 :: nat) = (4 :: nat)
 proof:
   - step id: 1
@@ -25,7 +25,7 @@ pending proof goal:
 --------------------------------------------------
 After Witness
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∃(f :: nat ⇒ nat). f (2 :: nat) = (4 :: nat)
 proof:
   - step id: 1
@@ -46,7 +46,7 @@ pending proof goal:
 --------------------------------------------------
 After Obvious
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∃(f :: nat ⇒ nat). f (2 :: nat) = (4 :: nat)
 proof:
   - step id: 1

@@ -4,7 +4,7 @@ Initial State
 variables:
   - B: bool
   - A: bool
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: A ∧ B ⟶ A ∧ B ⟶ A ∧ B
 proof:
   - step id: 1
@@ -34,7 +34,7 @@ After Obvious on 2
 variables:
   - B: bool
   - A: bool
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: A ∧ B ⟶ A ∧ B ⟶ A ∧ B
 proof:
   - step id: 1

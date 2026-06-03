@@ -1,7 +1,7 @@
 --------------------------------------------------
 Initial YAML
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∀f ∈{(g :: real ⇒ real). ∃a (c :: real). (0 :: real) ≤ a ∧ g = (λ(x :: real). a / ((1 :: real) - c * x)²)}. hfinf f ∨ (∃e>(0 :: real). hf e f)
 proof:
   - step id: 1
@@ -16,7 +16,7 @@ pending proof goal:
 --------------------------------------------------
 After Rewrite with Ball_def
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∀f ∈{(g :: real ⇒ real). ∃a (c :: real). (0 :: real) ≤ a ∧ g = (λ(x :: real). a / ((1 :: real) - c * x)²)}. hfinf f ∨ (∃e>(0 :: real). hf e f)
 proof:
   - step id: 1
@@ -32,7 +32,7 @@ Branch fill succeeded
 --------------------------------------------------
 After Branch attempt
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∀f ∈{(g :: real ⇒ real). ∃a (c :: real). (0 :: real) ≤ a ∧ g = (λ(x :: real). a / ((1 :: real) - c * x)²)}. hfinf f ∨ (∃e>(0 :: real). hf e f)
 proof:
   - step id: 1
@@ -70,7 +70,7 @@ Fill 2.0.1 succeeded
 --------------------------------------------------
 Final state
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∀f ∈{(g :: real ⇒ real). ∃a (c :: real). (0 :: real) ≤ a ∧ g = (λ(x :: real). a / ((1 :: real) - c * x)²)}. hfinf f ∨ (∃e>(0 :: real). hf e f)
 proof:
   - step id: 1

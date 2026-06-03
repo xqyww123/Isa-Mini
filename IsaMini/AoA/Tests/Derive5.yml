@@ -8,7 +8,7 @@ variables:
 premises:
   - h1: x mod q = y mod q
   - h2: coprime q (2 :: int)
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: x mod q = y mod q
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
@@ -27,7 +27,7 @@ variables:
 premises:
   - h1: x mod q = y mod q
   - h2: coprime q (2 :: int)
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: x mod q = y mod q
 proof:
   - step id: 1

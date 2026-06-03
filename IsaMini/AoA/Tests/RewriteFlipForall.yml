@@ -5,7 +5,7 @@ variables:
   - f: nat ⇒ nat
 premises:
   - h: ∀(z :: nat). f z = z + (1 :: nat)
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: (3 :: nat) + (1 :: nat) = f (3 :: nat)
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
@@ -16,7 +16,7 @@ variables:
   - f: nat ⇒ nat
 premises:
   - h: ∀(z :: nat). f z = z + (1 :: nat)
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: (3 :: nat) + (1 :: nat) = f (3 :: nat)
 proof:
   - step id: 1

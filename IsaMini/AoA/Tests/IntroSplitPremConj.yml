@@ -26,7 +26,7 @@ variables:
   - A: bool
 type variables:
   - 'a: type
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: A ∧ B ∧ C ⟶ (∀(x :: 'a). P x ∧ Q x) ⟶ (D ⟶ E ∧ F) ⟶ (big1 ∧ big2 ∧ big3 ∧ big4 ∧ big5 ∧ big6 ∧ big7 ∧ big8 ∧ big9 ∧ big10 ∧ big11 ∧ big12 ⟶ G ∧ H) ⟶ A ∧ B ∧ C ∧ P (SOME (x :: 'a). True) ∧ Q (SOME (x :: 'a). True) ∧ (D ⟶ E) ∧ (D ⟶ F)
 proof:
   - step id: 1
@@ -86,7 +86,7 @@ variables:
   - A: bool
 type variables:
   - 'a: type
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: A ∧ B ∧ C ⟶ (∀(x :: 'a). P x ∧ Q x) ⟶ (D ⟶ E ∧ F) ⟶ (big1 ∧ big2 ∧ big3 ∧ big4 ∧ big5 ∧ big6 ∧ big7 ∧ big8 ∧ big9 ∧ big10 ∧ big11 ∧ big12 ⟶ G ∧ H) ⟶ A ∧ B ∧ C ∧ P (SOME (x :: 'a). True) ∧ Q (SOME (x :: 'a). True) ∧ (D ⟶ E) ∧ (D ⟶ F)
 proof:
   - step id: 1

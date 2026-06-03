@@ -7,7 +7,7 @@ variables:
 premises:
   - h0: f ?x = ?x² + ?x + p
   - h1: int ?k ≤ ⌊sqrt (real p / (3 :: real))⌋ ⟶ prime (f ?k)
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∀i≤p - (2 :: nat). prime (f i)
 proof:
   - step id: 1
@@ -28,7 +28,7 @@ variables:
 premises:
   - h0: f ?x = ?x² + ?x + p
   - h1: int ?k ≤ ⌊sqrt (real p / (3 :: real))⌋ ⟶ prime (f ?k)
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∀i≤p - (2 :: nat). prime (f i)
 proof:
   - step id: 1
@@ -58,7 +58,7 @@ variables:
 premises:
   - h0: f ?x = ?x² + ?x + p
   - h1: int ?k ≤ ⌊sqrt (real p / (3 :: real))⌋ ⟶ prime (f ?k)
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∀i≤p - (2 :: nat). prime (f i)
 proof:
   - step id: 1
@@ -111,7 +111,7 @@ variables:
 premises:
   - h0: f ?x = ?x² + ?x + p
   - h1: int ?k ≤ ⌊sqrt (real p / (3 :: real))⌋ ⟶ prime (f ?k)
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∀i≤p - (2 :: nat). prime (f i)
 proof:
   - step id: 1
@@ -275,7 +275,7 @@ variables:
 premises:
   - h0: f ?x = ?x² + ?x + p
   - h1: int ?k ≤ ⌊sqrt (real p / (3 :: real))⌋ ⟶ prime (f ?k)
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∀i≤p - (2 :: nat). prime (f i)
 proof:
   - step id: 1

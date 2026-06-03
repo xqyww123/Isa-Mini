@@ -9,7 +9,7 @@ variables:
 premises:
   - h1: f a = c
   - h2: f b = d
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: g (f a) + f b = c + d
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
@@ -20,7 +20,7 @@ Rule 'my_wrap' (f ?x = g (f ?x)) would cause infinite rewriting.
 To use this rule safely, select which specific subterms to rewrite:
   0. f a
   1. f b
-Answer with the indices of the subterms to rewrite, or leave empty to drop this rule.
+Call `answer_indexes` with the `indexes` of the subterms to rewrite, or with empty `indexes` to drop this rule.
 --------------------------------------------------
 After Targeted Rewrite
 --------------------------------------------------
@@ -32,7 +32,7 @@ variables:
 premises:
   - h1: f a = c
   - h2: f b = d
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: g (f a) + f b = c + d
 proof:
   - step id: 1
