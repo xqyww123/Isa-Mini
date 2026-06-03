@@ -916,7 +916,26 @@ def _validate_union(args: tuple[type, ...], data: Any, path: str) -> Any:
         if t in (str, int, bool, float):
             if isinstance(data, t):
                 return data
-    return data
+    # No union member matched. Reject instead of silently passing `data`
+    # through: list the acceptable forms in declaration order, naming
+    # TypedDict members by their class name (matches the `$defs` keys the
+    # agent sees in the raw tool schema), literal members by their value,
+    # and the None member as JSON `null`.
+    options: list[str] = []
+    for t in args:
+        if t is type(None):
+            options.append("null")
+        elif get_origin(t) is Literal:
+            options.extend(f"`{v}`" for v in get_args(t))
+        else:
+            options.append(f"`{getattr(t, '__name__', str(t))}`")
+    if len(options) >= 3:
+        joined = ", ".join(options[:-1]) + ", or " + options[-1]
+    elif len(options) == 2:
+        joined = " or ".join(options)
+    else:
+        joined = options[0]
+    raise ArgumentError(data, f"`{path}` must be one of {joined}")
 
 ## Minilang Runtime
 ### Evaluation Status
