@@ -852,9 +852,9 @@ class ArgumentError_UnparsedTerm(ArgumentError):
         """
         return ArgumentError_UnparsedTerm(arg, internal_error.term, internal_error.reason)
 
-VALIDATORS: dict[type, Callable[[Any, str], Any]] = {}
+VALIDATORS: dict['type | TypeAliasType', Callable[[Any, str], Any]] = {}
 
-def validator(typ: type):
+def validator(typ: 'type | TypeAliasType'):
     """Decorator to register a custom validator for a type."""
     def decorator(fn: Callable[[Any, str], Any]):
         VALIDATORS[typ] = fn
@@ -872,7 +872,7 @@ def _validate_raw_proof(data: Any, path: str) -> Any:
 def _is_union_origin(origin) -> bool:
     return origin is Union or origin is _types.UnionType
 
-def validate(typ: type, data: Any, path: str) -> Any:
+def validate(typ: 'type | TypeAliasType', data: Any, path: str) -> Any:
     """Validate and normalize `data` against `typ`. Returns canonical form."""
     if typ in VALIDATORS:
         return VALIDATORS[typ](data, path)
@@ -904,7 +904,7 @@ def _validate_typed_dict(typ: type, data: Any, path: str) -> Any:
             data[key] = validate(field_type, data[key], f"{path}.{key}")
     return data
 
-def _validate_list(elem_type: type, data: Any, path: str) -> Any:
+def _validate_list(elem_type: 'type | TypeAliasType', data: Any, path: str) -> Any:
     if not isinstance(data, list):
         raise ArgumentError({}, f"{path}: expected an array, got {type(data).__name__}")
     for i, item in enumerate(data):
@@ -2429,7 +2429,7 @@ class Interaction_RetrieveForProof(Interaction_Retrieve):
 
     fork_allowed_tools = [TOOL_ANSWER_INDEXES_OR_SPEC, TOOL_SEARCH]
 
-    async def answer(self, answer: AnswerIndexesOrSpec) -> 'list[IsabelleEntity | IsabelleFact]':
+    async def answer(self, answer: AnswerIndexesOrSpec) -> 'list[IsabelleEntity | IsabelleFact]':  # type: ignore[override]  — intentionally accepts a richer answer shape than the base
         """Priority order: indexes > statement (> empty-expand).
 
         `indexes`   → select from the candidate list (delegates to super).
@@ -8771,7 +8771,7 @@ class Session:
         role.pending = Fork_Pending(new_interaction, role.pending.answer)
 
     @property
-    def lemma_anchor(self) -> 'Have | None':
+    def lemma_anchor(self) -> 'Have | None':  # type: ignore  — `Have`'s class identity is erased to type[Any] by @proof_operation, so it can't form a union annotation
         if isinstance(self.role, Role_Worker) and isinstance(self.role.target, Have):
             return self.role.target
         return None
@@ -8969,7 +8969,7 @@ class Session:
         if self.is_worker:
             target = self.role.target  # type: ignore[attr-defined]  — is_worker ⟹ role is Role_Worker
             if isinstance(target, Have):
-                header = f"Prove the lemma `{target.name}`: {target.statement['english']}\n"
+                header = f"Prove the lemma `{target.name}`: {target.statement['english']}\n"  # type: ignore[attr-defined]  — isinstance(target, Have) narrowing is erased by @proof_operation's type[Any] return
             else:
                 header = f"Prove step `{target.id}`.\n"
             guidance = ""
@@ -9640,7 +9640,7 @@ def agent_driver(name : str):
         Session.Driver[name] = constructor
         if isinstance(constructor, type) and issubclass(constructor, Session):
             constructor._driver_name = name  # type: ignore[attr-defined]
-        return constructor
+        return constructor  # type: ignore[return-value]  — isinstance-narrowing above makes Pyright lose the T binding at the join
     return decorator
 
 
@@ -9710,20 +9710,23 @@ class WorkerYield:
     reason: 'str | None' = None
     lemmas: 'list | None' = None
 
+    # Constructors are UPPER-CASE so they cannot collide with the data fields
+    # (notably the ``lemmas`` field — a lower-case ``lemmas`` classmethod would
+    # shadow it and become the field's dataclass default).
     @classmethod
-    def proved(cls) -> 'WorkerYield':
+    def PROVED(cls) -> 'WorkerYield':
         return cls(kind="proved")
     @classmethod
-    def could_not_prove(cls, detail: str = "") -> 'WorkerYield':
+    def COULD_NOT_PROVE(cls, detail: str = "") -> 'WorkerYield':
         return cls(kind="could_not_prove", detail=detail)
     @classmethod
-    def surrendered(cls, detail: str) -> 'WorkerYield':
+    def SURRENDERED(cls, detail: str) -> 'WorkerYield':
         return cls(kind="surrendered", detail=detail)
     @classmethod
-    def refute_accepted(cls, reason: 'str | None', detail: str) -> 'WorkerYield':
+    def REFUTE_ACCEPTED(cls, reason: 'str | None', detail: str) -> 'WorkerYield':
         return cls(kind="refute_accepted", reason=reason, detail=detail)
     @classmethod
-    def lemmas(cls, detail: str, lemmas: 'list | None') -> 'WorkerYield':
+    def LEMMAS(cls, detail: str, lemmas: 'list | None') -> 'WorkerYield':
         return cls(kind="lemmas", detail=detail, lemmas=lemmas)
 
 
@@ -9882,23 +9885,23 @@ class WorkerHandle:
                     if accepted:                  # worker is winding down
                         await self.wait_finish()
                         self._detach()
-                        return WorkerYield.refute_accepted(reason, event.detail)
+                        return WorkerYield.REFUTE_ACCEPTED(reason, event.detail)
                     continue                      # rejected → worker resumed in-loop
                 case WorkerRequestLemmas():
                     self._pending_lemma_request = event.response_future
-                    return WorkerYield.lemmas(event.detail, event.lemmas)  # PARK
+                    return WorkerYield.LEMMAS(event.detail, event.lemmas)  # PARK
                 case WorkerSurrender():
                     await self.wait_finish()
                     self._detach()
-                    return WorkerYield.surrendered(event.detail)
+                    return WorkerYield.SURRENDERED(event.detail)
                 case WorkerDone(success=True):
                     await self.wait_finish()
                     self._detach()
-                    return WorkerYield.proved()
+                    return WorkerYield.PROVED()
                 case _:  # WorkerDone(success=False)
                     await self.wait_finish()
                     self._detach()
-                    return WorkerYield.could_not_prove(event.detail)
+                    return WorkerYield.COULD_NOT_PROVE(event.detail)
 
     def _detach(self) -> None:
         """Clear this handle from its node on a terminal outcome, then refresh."""
