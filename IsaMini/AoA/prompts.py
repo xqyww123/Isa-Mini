@@ -166,7 +166,10 @@ async def subagent_overall(root: Root, session: 'model.Session') -> tuple[str, b
     finished = False
     file = MyIO(StringIO())
     file.write("Overall:\n")
-    root.quickview(1, file)
+    # Scope the outline to the dispatcher's own proof scope: the whole `root` for
+    # the main agent (proof_scope_root IS root), or just the target subtree for a
+    # worker dispatcher — consistent with `print_proof_scope`.
+    session.proof_scope_root.quickview(1, file)
     if not session.proof_scope_unfinished_nodes():
         file.write("Congratulations! All goals are proven.\n")
         finished = True

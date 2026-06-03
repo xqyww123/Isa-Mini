@@ -3080,17 +3080,31 @@ class Node(ABC):
     def unfinished_nodes(self, ret: set['Node']) -> None:
         if self.status.status != EvaluationStatus.Status.SUCCESS:
             ret.add(self)
-    async def discard(self) -> None:
-        """Release THIS node's own resources as it leaves the tree — currently:
-        tear down its sub-agent worker. Non-recursive: call it on each node that
-        is actually removed (a node whose children survive keeps theirs). Base
-        case (covers ``Leaf``): nothing to release. ``NonLeaf_Node`` overrides."""
+    async def aclose_all_subagents(self) -> None:
+        """Recursively close every sub-agent in this node's subtree (cancel +
+        detach, keeping each partial proof). The nodes THEMSELVES STAY in the tree —
+        use when a node is KEPT but its sub-agents must be released: ``close_subagent``
+        (the target stays; its worker and nested downstream go), a worker winding
+        down its own leftover parked sub-agents, the session-close sweep.
+
+        Deliberately a SEPARATE recursion from ``discard`` (which disposes a node
+        that is LEAVING the tree): the two have the same effect today but mean
+        different things and are kept independent so each can evolve on its own.
+        Base case (``Leaf``): none; ``NonLeaf_Node`` overrides to recurse."""
         return None
-    async def aclose_all_workers(self) -> None:
-        """Recursively ``discard`` this node and its whole subtree (close every
-        attached sub-agent worker). Used by the session-close sweep and by
-        ``delete`` (whole-subtree removal). ``NonLeaf_Node`` overrides to recurse."""
-        await self.discard()
+    async def discard(self) -> None:
+        """Dispose of this node as it LEAVES the tree — ``delete`` (the whole subtree
+        is removed) or ``amend`` (the node is replaced; its descendants are
+        re-parented onto the replacement, so only this node itself truly departs).
+        Recursively closes every sub-agent in the subtree — that proof is being
+        deleted or redone, so its workers are released — and is the hook for any
+        other per-node resource a departing node may hold.
+
+        Deliberately a SEPARATE recursion from ``aclose_all_subagents`` (which KEEPS
+        the nodes and only frees their sub-agents): same effect today, different
+        meaning, kept independent. Base case (``Leaf``): nothing to release;
+        ``NonLeaf_Node`` overrides to recurse."""
+        return None
     def _nearest_goal_for_subagent(self) -> 'Node | None':
         """The node a ``subagent`` call on `self` should actually target — the
         nearest delegatable goal. Default: `self` is not a goal → redirect to the
@@ -3297,7 +3311,7 @@ class Node(ABC):
         # deleted node + its descendants) before unlinking — never ancestors, so
         # deleting a strict descendant of a parked node leaves that worker parked.
         for node in nodes:
-            await node.aclose_all_workers()
+            await node.discard()
         # Delete all, collect refresh points
         deleted_ids = seen
         refresh_points: list['Node'] = []
@@ -3761,12 +3775,16 @@ class NonLeaf_Node(Node):
         for child in self.sub_nodes:
             child.unfinished_nodes(ret)
     async def discard(self) -> None:
+        for child in self.sub_nodes:
+            await child.discard()
         if self.worker_handle is not None:
             await self.worker_handle.aclose()
-    async def aclose_all_workers(self) -> None:
-        await self.discard()
+        await super().discard()
+    async def aclose_all_subagents(self) -> None:
         for child in self.sub_nodes:
-            await child.aclose_all_workers()
+            await child.aclose_all_subagents()
+        if self.worker_handle is not None:
+            await self.worker_handle.aclose()
     def _print_all_warnings(self, file: MyIO) -> None:
         self._print_warnings(0, file, [Warning.Position.HEADER], show_at=True)
         for child in self.sub_nodes:
@@ -3815,8 +3833,15 @@ class NonLeaf_Node(Node):
                 self._is_trivial = None
                 for sibling in self.sub_nodes[i+1:]:
                     sibling._on_upstream_change()
-                # `child` is being replaced (its children move to new_node);
-                # release child's own resources — tear down its sub-agent worker.
+                # `child` is being replaced; its descendants are kept and
+                # re-parented onto new_node by `_amend_from`. `discard` first
+                # recursively closes EVERY sub-agent in child's subtree (not just
+                # child's own): amending `child` rewrites this part of the proof, so
+                # its sub-agents — whoever dispatched them — are released to be
+                # re-evaluated against the new statement, and a nested grandchild
+                # whose dispatcher is gone would otherwise orphan as a live task no
+                # one can see. Only the sub-agents are freed; the descendant proof
+                # structure survives the re-parent.
                 await child.discard()
                 new_node._amend_from(child)
                 if self._can_continue_before_child(new_node):
@@ -5521,6 +5546,26 @@ def _validate_constraint_binding(data: Any, path: str) -> ConstraintBinding:
             data["name"] = name
     return _validate_typed_dict(ConstraintBinding, data, path)
 
+class SuggestedLemma(TypedDict):
+    """One item of the `request_lemmas` tool's `suggested_lemmas` wish-list
+    (a worker→planner channel)."""
+    name: str
+    english: str
+    isabelle_statement: str
+
+@validator(SuggestedLemma)
+def _validate_suggested_lemma(data: Any, path: str) -> SuggestedLemma:
+    # `_validate_typed_dict` checks dict-ness + required keys; then enforce that
+    # each field is genuinely a string (the framework's plain-`str` validation is
+    # a no-op). Enforce, never coerce: a non-string here is the LLM's mistake,
+    # and `str()`-coercing it would silently fabricate a bogus lemma.
+    data = _validate_typed_dict(SuggestedLemma, data, path)
+    for key in ("name", "english", "isabelle_statement"):
+        if not isinstance(data[key], str):
+            raise ArgumentError(
+                {}, f"{path}.{key}: expected a string, got {type(data[key]).__name__}")
+    return data
+
 def print_statement(self: LongStatement, indent: int, file: MyIO):
     print_indent(indent, file)
     file.write(f"- english: {self["english"]}\n")
@@ -5625,8 +5670,8 @@ _SUBAGENT_HINT_DEPTH = 2
 
 # Maximum worker-nesting depth: main -> worker is layer 1, so a worker already at
 # this depth may not dispatch a further sub-worker. Bounds recursive delegation
-# (see Session._worker_nesting_depth and the dispatch guard in _subagent_tool_logic).
-WORKER_NESTING_DEPTH = 8
+# (see Session._subagent_nesting_depth and the dispatch guard in _subagent_tool_logic).
+SUBAGENT_NESTING_DEPTH = 8
 
 class Obvious_ToolArg(TypedDict):
     facts: list[FactByName | FactByProposition]
@@ -8814,13 +8859,20 @@ class Session:
                 f"- {self.tool_name(TOOL_READ)}: Recall proof state from `proof.yaml`. Use only when you have lost track.\n"
                 f"- {self.tool_name(TOOL_REQUEST_LEMMAS)}: Report missing background lemmas and request that they be supplied.\n"
             )
+        parts = [PROMPT]
         # refute_or_surrender is shown to workers only.
         if self.is_worker:
-            return PROMPT + (
+            parts.append(
                 f"- {self.tool_name(TOOL_REFUTE_OR_SURRENDER)}: Report that the goal is unprovable (refute) or that you need help (surrender)\n"
             )
-        else:
-            return PROMPT
+        # subagent/close_subagent are dispatch tools — shown to dispatchers (the main
+        # agent AND workers, which may delegate nested sub-goals), not interaction forks.
+        if self.is_major or self.is_worker:
+            parts.append(
+                f"- {self.tool_name(TOOL_SUBAGENT)}: Launch a sub-agent to prove a subgoal whose proof would derail your main line of reasoning.\n"
+                f"- {self.tool_name(TOOL_CLOSE_SUBAGENT)}: Terminate a sub-agent you dispatched.\n"
+            )
+        return "".join(parts)
 
     async def initial_prompt(self) -> str:
         """The initial user message to start the proof session, memoized.
@@ -8930,7 +8982,7 @@ class Session:
         # parked on a review/lemma future) so their asyncio tasks don't leak on
         # shutdown. `aclose` is idempotent and tolerates already-finished workers.
         if getattr(self, 'root', None) is not None:
-            await self.root.aclose_all_workers()
+            await self.root.aclose_all_subagents()
         # Major session: write end markers and close log files
         if self.log_dir is not None:
             session_end = {
@@ -9280,7 +9332,43 @@ class Session:
         stop = self.proof_scope_root
         return _first_worker_in_ancestors(node, stop=stop) or _first_worker_in_subtree(node)
 
-    def _worker_nesting_depth(self) -> int:
+    def _enclosing_dispatched_subagent(self, node: 'Node') -> "WorkerHandle | None":
+        """The worker THIS session dispatched whose territory ENCLOSES ``node`` —
+        the nearest ancestor of ``node`` (within this session's scope) carrying a
+        handle this session itself created (``worker_handle.session is self``), or
+        ``None``. By the antichain invariant a session's own live handles are
+        pairwise incomparable, so at most one lies on any ancestor chain; it is the
+        *immediate* sub-agent the caller can actually see and resume/close. Unlike
+        ``_first_worker_in_ancestors`` this skips deeper foreign handles (a nested
+        grandchild's spawner), so under 3+ levels of nesting it still points the
+        caller at the worker IT owns rather than one it cannot operate on."""
+        cur = node.parent
+        stop = self.proof_scope_root
+        while cur is not None and cur is not stop:
+            if (isinstance(cur, NonLeaf_Node) and cur.worker_handle is not None
+                    and cur.worker_handle.session is self):
+                return cur.worker_handle
+            cur = cur.parent
+        return None
+
+    def _subagent_blocker(self, node: 'Node') -> "WorkerHandle | None":
+        """For a ``subagent`` call on ``node`` (START *or* RESUME): the worker I
+        dispatched whose territory overlaps ``node`` and which I should resume/close
+        instead — or ``None`` if ``node`` is free for me to act on. Covers ``node``
+        lying inside one of my parked sub-agents (ancestor side, also catches a
+        RESUME aimed at a nested grandchild handle I cannot see) and, only when
+        starting fresh, ``node`` enclosing one of mine (descendant side). A foreign
+        handle ON ``node`` itself with no such enclosing worker is an orphan —
+        impossible after cascade-close — and is deliberately returned as ``None`` so
+        the caller's assertion surfaces the broken invariant rather than masking it."""
+        anc = self._enclosing_dispatched_subagent(node)
+        if anc is not None:
+            return anc
+        if node.worker_handle is None:
+            return _first_worker_in_subtree(node)
+        return None
+
+    def _subagent_nesting_depth(self) -> int:
         """How many ``Role_Worker`` sessions enclose this one, counting itself —
         i.e. this session's worker-nesting layer (main = 0, its worker = 1, that
         worker's sub-worker = 2, ...). A worker fork's ``parent`` is its dispatcher
@@ -9637,6 +9725,18 @@ class WorkerHandle:
             raise InternalError(
                 f"sub-agent on {self.target.id} crashed: {type(e).__name__}: {e}") from e
         finally:
+            # Defensive: close any sub-agents this worker left parked under its
+            # target. A cooperative worker closes/resumes its own sub-agents before
+            # finishing; on an early or abnormal exit they would leak as orphaned
+            # live tasks no agent can see (immediate-only rendering). Done BEFORE
+            # _settle_costs so a leftover's cost rolls up into this worker first.
+            # Iterates target's children (never target itself — this worker's own
+            # handle lives there). (Single-layer: no nested sub-agents → a no-op.)
+            try:
+                for child in self.target.sub_nodes:
+                    await child.aclose_all_subagents()
+            except Exception as e:
+                session.warn_AoA_opr(f"{tag} sub-agent cleanup failed: {e}")
             self._settle_costs()
             try:
                 await sub.close()
@@ -9774,8 +9874,10 @@ class WorkerHandle:
     async def aclose(self) -> None:
         """Idempotent teardown that GUARANTEES the worker is gone: cancel it,
         then await the task (swallowing ``CancelledError``). Safe to call when
-        the worker already finished. Detaches the handle from its node. Used by
-        ``Node.aclose_all_workers`` (session-close sweep and delete teardown)."""
+        the worker already finished. Detaches the handle from its node. Called per
+        node by the two recursive teardowns: ``Node.discard`` (node leaves the tree
+        — delete, amend) and ``Node.aclose_all_subagents`` (node stays —
+        close_subagent, a worker's own wind-down, the session-close sweep)."""
         self.cancel()
         await self.wait_finish()
         self._settle_costs()  # fallback: ensure cost is rolled up if _run's

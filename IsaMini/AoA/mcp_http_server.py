@@ -40,7 +40,8 @@ from .model import (
     IsaTerm, ContinuingInteraction, ImmediateAnswer,
     AoA_Error, ArgumentError, IsabelleError, InternalError,
     CannotDelete_Root, NodeNotFound, ProofTreeTooDeep,
-    EvaluationStatus, WorkerHandle, EditVerdict,
+    EvaluationStatus, WorkerHandle, EditVerdict, _is_strict_ancestor,
+    SUBAGENT_NESTING_DEPTH,
     Parse_Op_List, Interaction_BadAnswer,
     AnswerIndexes, AnswerIndex, AnswerIndexesOrName, AnswerIndexesOrSpec,
     AnswerInstantiate, AnswerRefutation,
@@ -813,7 +814,7 @@ async def _request_lemmas_tool_logic(session: Session, args: dict) -> tuple[str,
     session.log_tool_call(_tn, args)
 
     if isinstance(session.role, Role_Worker):
-        from .model import WorkerRequestLemmas
+        from .model import WorkerRequestLemmas, validate, SuggestedLemma
         handle = session.role.worker_handle
         if handle is None:
             raise InternalError(
@@ -824,6 +825,16 @@ async def _request_lemmas_tool_logic(session: Session, args: dict) -> tuple[str,
         if not suggested_lemmas:
             msg = ("The `suggested_lemmas` argument is compulsory for the "
                    "`request_lemmas` tool.")
+            session.log_tool_response(_tn, f"ERROR: {msg}")
+            return (msg, True)
+        # Don't trust the MCP/SDK JSON-schema (some drivers don't enforce it):
+        # validate the wish-list shape in Python so the downstream renderer can
+        # trust each item is a dict with three string fields.
+        try:
+            suggested_lemmas = validate(
+                list[SuggestedLemma], suggested_lemmas, "suggested_lemmas")
+        except ArgumentError as e:
+            msg = str(e)
             session.log_tool_response(_tn, f"ERROR: {msg}")
             return (msg, True)
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
@@ -863,10 +874,11 @@ def _subagent_resume_feedback(suggestions: str, helpful_lemmas: list) -> str:
 
 
 async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
-    """Planner-only `subagent`: delegate a sub-goal to a forked worker agent, or
-    resume a parked worker on the same node. Drives the worker's event loop
-    (`WorkerHandle.run_until_yield`) until it yields control back to the main
-    agent (a terminal outcome, or a request_lemmas park)."""
+    """`subagent`: delegate a sub-goal to a forked worker agent, or resume a parked
+    worker on the same node. Available to the main agent AND to workers (nested
+    delegation). Drives the worker's event loop (`WorkerHandle.run_until_yield`)
+    until it yields control back to the dispatcher (a terminal outcome, or a
+    request_lemmas park)."""
     _tn = session.tool_name(TOOL_SUBAGENT)
     session.log_tool_call(_tn, args)
 
@@ -879,10 +891,6 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
         full = redirect_note + msg
         session.log_tool_response(_tn, f"ERROR: {full}")
         return (full, True)
-
-    # Planner-only (role gating lives here, not in _check_tool_permission).
-    if isinstance(session.role, Role_Worker):
-        return _err("The `subagent` tool is unavailable for you. Call `request_lemmas` instead.")
 
     step_id = str(args.get("step_id", ""))
     suggestions = args.get("suggestions", "")
@@ -918,25 +926,41 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
     if node.is_proof_finished():
         return _err("That step is already proved.")
 
-    # Dispatch gate: starting a FRESH worker must keep live handles an antichain —
-    # `node` must not be comparable (ancestor OR descendant) to an existing handle.
-    # Resuming an existing handle on `node` (the branch below) is exempt.
-    if node.worker_handle is None:
-        blocker = session._dispatch_blocked_by(node)
-        if blocker is not None:
-            return _err(f"A sub-agent is already working on step {blocker.target.id}, which "
-                        f"overlaps the step you asked for; this is not allowed.")
+    # ⑦ Worker confinement: a worker may only delegate a sub-goal STRICTLY inside
+    # its own sub-proof (mirrors the edit-lock's confinement; the dispatch gate
+    # below is orthogonal — it guards the antichain, not scope).
+    if session.is_worker and not _is_strict_ancestor(session.proof_scope_root, node):
+        return _err("This step is outside the goal you were asked to prove — you "
+                    "may only delegate sub-goals within your own sub-proof.")
 
-    # Resume the parked worker on this node, or start a fresh one. Unexpected
-    # errors are intentionally NOT caught here — they propagate to the executor's
-    # fatal handler (sys.exit(1)) so latent bugs surface early rather than being
-    # silently reported back to the agent.
-    if node.worker_handle is not None:
+    # Resume MY OWN direct sub-agent parked on this node, or start a fresh worker.
+    # Either way `node` must not lie inside — or, when starting fresh, over — a
+    # DIFFERENT sub-agent I dispatched: that keeps my live handles an antichain and
+    # stops me from disturbing a parked worker's territory (including a step that
+    # secretly holds a nested grandchild handle I cannot see — `subagent` on it
+    # would otherwise "resume" a sub-agent I don't own). `_subagent_blocker` points
+    # me at the worker I own and can resume/close. Unexpected errors below are
+    # intentionally NOT caught — they propagate to the executor's fatal handler
+    # (sys.exit(1)) so latent bugs surface early.
+    if node.worker_handle is not None and node.worker_handle.session is session:
         handle = node.worker_handle
         handle.resolve_lemma_request(
             _subagent_resume_feedback(suggestions, helpful_lemmas))
         outcome = await handle.run_until_yield()
     else:
+        blocker = session._subagent_blocker(node)
+        if blocker is not None:
+            return _err(f"A sub-agent is already working on step {blocker.target.id}, which "
+                        f"overlaps the step you asked for; this is not allowed.")
+        # A foreign handle ON `node` with no enclosing worker of mine is an orphan
+        # (cascade-close prevents it) — surface the broken antichain invariant.
+        assert node.worker_handle is None, (
+            f"orphan sub-agent on {node.id}: handle without an enclosing dispatched worker")
+        # ② Bound recursive delegation (main -> worker is layer 1).
+        if session._subagent_nesting_depth() >= SUBAGENT_NESTING_DEPTH:
+            return _err(f"You are too deeply nested to delegate further (limit: "
+                        f"{SUBAGENT_NESTING_DEPTH} levels of sub-agents). Prove this goal "
+                        f"yourself, or simplify the plan.")
         handle = WorkerHandle(node, session)
         node.worker_handle = handle
         handle.start(suggestions, helpful_lemmas)
@@ -980,12 +1004,14 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
 
 
 async def _close_subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
-    """Planner-only `close_subagent`: terminate the sub-agent parked/running on a
-    PRECISELY named step, detaching its handle but keeping the partial proof. Pure
-    exact match — no redirection, no ancestor/descendant search: the agent always
-    has the exact worker step id (Hint B / the amend-in-scope error), so searching
-    would only risk killing the wrong sub-agent. (NO broad try/except per the
-    expose-errors rule — only the expected `NodeNotFound` is caught.)"""
+    """`close_subagent`: terminate a sub-agent YOU dispatched — cascading to any
+    workers nested under it — on a PRECISELY named step, keeping the partial proof.
+    Available to the main agent AND to workers. Pure exact match — no redirection,
+    no ancestor/descendant search: the agent always has the exact worker step id
+    (Hint B / the amend-in-scope error), so searching would only risk killing the
+    wrong sub-agent. A handle that is not the caller's own direct sub-agent reports
+    "no sub-agent here" (immediate-only — a nested grandchild is invisible to it).
+    (NO broad try/except per the expose-errors rule — only `NodeNotFound` is caught.)"""
     _tn = session.tool_name(TOOL_CLOSE_SUBAGENT)
     session.log_tool_call(_tn, args)
 
@@ -993,29 +1019,30 @@ async def _close_subagent_tool_logic(session: Session, args: dict) -> tuple[str,
         session.log_tool_response(_tn, f"ERROR: {msg}")
         return (msg, True)
 
-    # Planner-only (role gating lives here, not in _check_tool_permission).
-    if isinstance(session.role, Role_Worker):
-        return _err("The `close_subagent` tool is available to the main agent only.")
-
     step_id = str(args.get("step_id", ""))
     try:
         node = session.root.locate_node(step_id)
     except NodeNotFound:
         return _err(f"No step `{step_id}` found.")
 
-    # Pure exact match — NO search up or down. The handle must live on THIS node.
-    if not (isinstance(node, NonLeaf_Node) and node.worker_handle is not None):
+    # Pure exact match — NO search up or down. The handle must be MY OWN direct
+    # sub-agent on THIS node: a foreign/nested handle (someone else's, or a
+    # grandchild I cannot see) reports "no sub-agent here" — from my view it does
+    # not exist, mirroring the immediate-only rendering.
+    if not (isinstance(node, NonLeaf_Node) and node.worker_handle is not None
+            and node.worker_handle.session is session):
         return _err(f"No sub-agent is attached to step {step_id}.")
-    handle = node.worker_handle
 
-    # Cancel the worker (its parked _pending_lemma_request future is cancelled →
-    # it unblocks; wait_finish swallows the CancelledError) and detach the handle.
-    # aclose never reverts — the node keeps its current (unfinished) state with the
-    # worker's partial proof intact, so the `if finished: interrupt()` completion
-    # handshake stays correct. refresh_YAML is REQUIRED (drops the now-stale
-    # suspended hint) because aclose bypasses _detach (the only auto-refresh path);
-    # it runs in the planner session, satisfying Hint B's _rendering_for_planner gate.
-    await handle.aclose()
+    # ⑧ Cascade: terminate this sub-agent AND every sub-agent nested under it (a
+    # parked sub-sub-agent). Otherwise those deeper handles would be orphaned —
+    # invisible to every agent (immediate-only rendering) yet still live tasks.
+    # `aclose_all_subagents` closes `node`'s own handle and recurses its subtree
+    # (NOT `discard` — `node` STAYS in the tree, keeping its partial proof),
+    # cancelling each sub-agent and detaching it WITHOUT reverting, so the
+    # `if finished: interrupt()` handshake stays correct. refresh_YAML is REQUIRED
+    # (drops the now-stale suspended hint) because aclose bypasses _detach (the only
+    # auto-refresh path).
+    await node.aclose_all_subagents()
     session.refresh_YAML()
 
     msg = "The sub-agent is removed."
@@ -1055,18 +1082,22 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
-# These tools belong to the main (planner) agent only; precompute the
-# worker/fork view (all tools except the planner-only set) once at import time.
+# Dispatch tools (subagent/close_subagent): available to dispatchers — the main
+# agent AND workers — but hidden from interaction forks. Precompute the non-dispatcher
+# (interaction-fork) view once at import time. The name `_PLANNER_ONLY_TOOLS` is kept
+# for stability but now means "tools an interaction fork does not get".
 _PLANNER_ONLY_TOOLS: frozenset[str] = frozenset({TOOL_SUBAGENT, TOOL_CLOSE_SUBAGENT})
 _TOOL_SCHEMAS_WORKER: dict[str, dict[str, Any]] = {
     k: v for k, v in _TOOL_SCHEMAS.items() if k not in _PLANNER_ONLY_TOOLS}
 
 
 def _tool_schemas_for(session: Session) -> dict[str, dict[str, Any]]:
-    """Tool schemas advertised to ``session``. The planner-only tools
-    (``subagent`` / ``close_subagent``) are hidden entirely from workers and
-    interaction forks (they never see them in the tool list)."""
-    return _TOOL_SCHEMAS if session.is_major else _TOOL_SCHEMAS_WORKER
+    """Tool schemas advertised to ``session``. ``subagent`` / ``close_subagent`` are
+    DISPATCH tools, shown to any agent that can delegate — the main agent AND workers
+    (nested delegation) — but hidden from interaction forks (which never delegate).
+    (``_PLANNER_ONLY_TOOLS`` / ``_TOOL_SCHEMAS_WORKER`` keep their names but now gate
+    only interaction forks; a worker counts as a dispatcher and gets the full set.)"""
+    return _TOOL_SCHEMAS if (session.is_major or session.is_worker) else _TOOL_SCHEMAS_WORKER
 
 
 class ToolExecutor:
@@ -1168,7 +1199,8 @@ class ToolExecutor:
 
     def tool_schemas(self) -> dict[str, dict[str, Any]]:
         """Return {name: {"description": ..., "schema": ...}} for the tools
-        advertised to this session's role (``subagent`` is planner-only)."""
+        advertised to this session's role (``subagent``/``close_subagent`` are
+        dispatch tools — for the main agent and workers, not interaction forks)."""
         return _tool_schemas_for(self._session)
 
 
@@ -1186,7 +1218,8 @@ def _create_mcp_server(session: Session, extra_sdk_tools: list | None = None) ->
     server = MCPServer(f"proof-{id(session)}")
     executor = ToolExecutor(session)
 
-    # Build tool list: built-in (role-scoped — `subagent` is planner-only) + extras
+    # Build tool list: built-in (role-scoped — `subagent`/`close_subagent` go to
+    # dispatchers: the main agent and workers, not interaction forks) + extras
     tools: list[Tool] = [
         Tool(name=name, description=t["description"],
              inputSchema=t["schema"], annotations=t["annotations"])

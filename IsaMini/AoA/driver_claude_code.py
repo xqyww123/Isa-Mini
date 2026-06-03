@@ -111,10 +111,10 @@ class ClaudeCode(LMDriver):
         "answer_refutation": "mcp__proof__answer_refutation",
     }
     TOOL_WHITELIST = _NON_PROOF_TOOLS + list(_TOOL_NAME_MAP.values())
-    # subagent/close_subagent are the planner's tools only; precompute the
-    # worker/fork allow-list (TOOL_WHITELIST minus those) once at class-definition
-    # time. (Statements, not a comprehension, so the class-body name
-    # _TOOL_NAME_MAP stays in scope.)
+    # subagent/close_subagent are dispatch tools (the main agent AND workers); only
+    # interaction forks lack them. Precompute that non-dispatcher allow-list
+    # (TOOL_WHITELIST minus those two) once at class-definition time. (Statements,
+    # not a comprehension, so the class-body name _TOOL_NAME_MAP stays in scope.)
     _WORKER_TOOL_WHITELIST = list(TOOL_WHITELIST)
     _WORKER_TOOL_WHITELIST.remove(_TOOL_NAME_MAP["subagent"])
     _WORKER_TOOL_WHITELIST.remove(_TOOL_NAME_MAP["close_subagent"])
@@ -122,9 +122,11 @@ class ClaudeCode(LMDriver):
     FORK_COMPACT_THRESHOLD = 0.99
 
     def _role_allowed_tools(self) -> list[str]:
-        """SDK tool allow-list for this session's role. `subagent` is hidden from
-        workers and interaction forks (also absent from their MCP tool list)."""
-        return self.TOOL_WHITELIST if self.is_major else self._WORKER_TOOL_WHITELIST
+        """SDK tool allow-list for this session's role. `subagent`/`close_subagent`
+        are dispatch tools, allowed for the main agent AND workers (nested
+        delegation) but hidden from interaction forks (mirrors the MCP tool list)."""
+        return (self.TOOL_WHITELIST if (self.is_major or self.is_worker)
+                else self._WORKER_TOOL_WHITELIST)
 
     def tool_name(self, t: str) -> str:
         return self._TOOL_NAME_MAP.get(t, t)

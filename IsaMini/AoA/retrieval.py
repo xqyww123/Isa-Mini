@@ -492,10 +492,21 @@ async def _semantic_search_with_filtering(session: Session, queries: list[dict])
     Sub-agents run concurrently via ``asyncio.gather``. Each sub-agent returns
     the list of entities it selected; the parent formats them into the final
     search result string.
+
+    ``exact_name`` queries are NOT fork-filtered (there is nothing to choose once
+    the name is known): they are routed through the direct path
+    (``_semantic_search_direct``, as in NO mode), which honours ``exact_name`` and
+    surfaces its warnings (e.g. ``Undefined: "<name>"``). Only the remaining
+    queries get the fork-filtering treatment.
     """
     ml_state = session.retrieval_state()
+    exact_queries = [q for q in queries if q.get("exact_name")]
+    filter_queries = [q for q in queries if not q.get("exact_name")]
+    exact_result = (await _semantic_search_direct(session, exact_queries)
+                    if exact_queries else None)
+
     interactions: list[Interaction] = []
-    for q in queries:
+    for q in filter_queries:
         try:
             kinds = [EntityKind.from_label(label) for label in (q.get("kinds") or ["constant"])]
         except KeyError:
@@ -513,7 +524,7 @@ async def _semantic_search_with_filtering(session: Session, queries: list[dict])
         interactions.append(interaction)
 
     if not interactions:
-        return "No relevant entities found."
+        return exact_result if exact_result is not None else "No relevant entities found."
 
     _empty_msg = ("No relevant entities exist. "
         "Exhaustive search completed — you MUST consider alternative proof strategies."
@@ -582,7 +593,9 @@ async def _semantic_search_with_filtering(session: Session, queries: list[dict])
         if multi:
             buf.write("\n")
 
-    return buf.getvalue().rstrip('\n') or _empty_msg
+    filter_result = buf.getvalue().rstrip('\n') or _empty_msg
+    return (f"{exact_result}\n\n{filter_result}"
+            if exact_result is not None else filter_result)
 
 
 async def _semantic_search_extend_candidates(
