@@ -6067,7 +6067,8 @@ class Witness(Leaf):
         super().__init__(config, arg["thought"])
         self.witnesses = list(arg["witnesses"])
     def quickview_title(self) -> str:
-        return f"Witness {', '.join(self.witnesses)}"
+        # The witness terms can be long; the full list is shown in `print`.
+        return "Witness"
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
         self._print_thought(indent, file)
