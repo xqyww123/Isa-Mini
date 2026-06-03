@@ -6121,6 +6121,59 @@ async def _test_ValidatorNestedPath(root: Root, file: MyIO):
     file.write("recursive parse path annotation verified.\n")
 
 
+@model_test("ValidateUnion_Reject", "Test_ValidateUnion_Reject.thy", 8)
+async def _test_ValidateUnion_Reject(root: Root, file: MyIO):
+    """Parse-time validation: a value matching NONE of a union's >=2 real
+    members is rejected by `_validate_union` with a path-annotated
+    `ArgumentError` listing the acceptable forms (TypedDict members by
+    class name, literals by value, None as `null`), instead of the old
+    silent pass-through.  Covers a 2-member union (`facts`), a
+    2-member+None union (`InferenceRule.rule`), and a Literal+2-member
+    union (`CaseSplit.rule`).  Also checks valid values still parse."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    # (label, op, expected substrings in the rejection message)
+    bad_cases = [
+        ("InferenceRule.rule = {bogus}  (FactByName | FactByDescription | None)",
+         {"operation": "InferenceRule", "thought": "x", "rule": {"bogus": 1}},
+         ["must be one of", "`FactByName`", "`FactByDescription`", "null"]),
+        ("Obvious.facts[0] = {bogus}  (FactByName | FactByProposition)",
+         {"operation": "Obvious", "facts": [{"bogus": 1}]},
+         ["must be one of", "`FactByName`", "`FactByProposition`"]),
+        ("CaseSplit.rule = {bogus}  (Literal['default'] | FactByName | FactByDescription)",
+         {"operation": "CaseSplit", "thought": "x",
+          "target_isabelle_term": "b", "rule": {"bogus": 1}},
+         ["must be one of", "`default`", "`FactByName`", "`FactByDescription`"]),
+    ]
+    for label, op, expected in bad_cases:
+        print_header(label, file)
+        try:
+            Parse_Op_List([op], "proof_operations")
+            file.write("UNEXPECTED: accepted\n")
+            assert False, f"{label} should have been rejected"
+        except AoA_Error as e:
+            msg = str(e)
+            file.write(f"rejected: {all(s in msg for s in expected)}\n")
+            file.write(f"message: {msg}\n")
+            for s in expected:
+                assert s in msg, f"missing {s!r} in: {msg}"
+
+    # Single-real-member unions and matching values are unaffected: these parse.
+    print_header("valid values still parse (no reject)", file)
+    for label, op in [
+        ("InferenceRule.rule = {name: conjI}  (FactByName matches)",
+         {"operation": "InferenceRule", "thought": "x", "rule": {"name": "conjI"}}),
+        ("InferenceRule.rule = None  (None member)",
+         {"operation": "InferenceRule", "thought": "x", "rule": None}),
+        ("CaseSplit.rule = 'default'  (Literal matches)",
+         {"operation": "CaseSplit", "thought": "x",
+          "target_isabelle_term": "b", "rule": "default"}),
+    ]:
+        Parse_Op_List([op], "proof_operations")
+        file.write(f"parsed ok: {label}\n")
+    file.write("multi-member-union rejection verified.\n")
+
+
 @model_test("CaseSplitNestedProofAllCases", "Test_CaseSplitNestedProofAllCases.thy", 8)
 async def _test_CaseSplitNestedProofAllCases(root: Root, file: MyIO):
     """CaseSplit with per-case `proofs: [{case_name, body}]` — each entry's
