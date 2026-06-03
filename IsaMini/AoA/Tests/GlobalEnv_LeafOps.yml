@@ -16,7 +16,8 @@ GlobalEnv children: 0
 committed: 0
 failure: True
   type: CannotEdit_NonDeclarative
-  message: Operation Obvious is a proof operation and cannot be used as a global declaration. Use it inside a proof step instead.
+  message: Cannot fill a node with id global
+Operation Obvious is a proof operation and cannot be used as a global declaration. Use it inside a proof step instead.
   is_error: True
 GlobalEnv children: 0
 --------------------------------------------------
@@ -25,7 +26,8 @@ GlobalEnv children: 0
 committed: 0
 failure: True
   type: CannotEdit_NonDeclarative
-  message: Operation Rewrite is a proof operation and cannot be used as a global declaration. Use it inside a proof step instead.
+  message: Cannot fill a node with id global
+Operation Rewrite is a proof operation and cannot be used as a global declaration. Use it inside a proof step instead.
 GlobalEnv children: 0
 --------------------------------------------------
 3: InferenceRule in GlobalEnv (should fail)
@@ -33,7 +35,8 @@ GlobalEnv children: 0
 committed: 0
 failure: True
   type: CannotEdit_NonDeclarative
-  message: Operation InferenceRule is a proof operation and cannot be used as a global declaration. Use it inside a proof step instead.
+  message: Cannot fill a node with id global
+Operation InferenceRule is a proof operation and cannot be used as a global declaration. Use it inside a proof step instead.
 GlobalEnv children: 0
 --------------------------------------------------
 4: Have in GlobalEnv (should succeed)

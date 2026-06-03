@@ -591,20 +591,56 @@ class EditFailureBehavior(Enum):
 
 
 class CannotEdit(AoA_Error):
-    """Unified failure carrier for fill/insert_before/amend."""
+    """Unified failure carrier for fill/insert_before/amend.
+
+    Subclasses supply ONLY their specific cause via `_reason()`; the base
+    `__str__` owns the full-vs-partial framing:
+      - full failure (`is_error`, nothing committed): the action could not be
+        performed at all → "Cannot fill a node with id X\n<reason>".
+      - partial apply (`not is_error`, some ops committed): the batch advanced
+        but stopped at one operation → "While filling step X, could not apply
+        operation #N (Kind); it and K later operations were left unapplied:
+        <reason>".
+    """
+    # Present-participle of each action, for the partial-apply framing.
+    _VERB_ING = {
+        EditOperation.FILL: "filling",
+        EditOperation.INSERT: "inserting before",
+        EditOperation.AMEND: "amending",
+    }
+
     def __init__(self,
                  target_step: step,
                  operation: 'EditOperation | None' = None,
                  unapplied_oprs: 'list[Parsed_Opr] | None' = None,
-                 is_error: bool = True):
+                 is_error: bool = True,
+                 failed_opr: 'Parsed_Opr | None' = None,
+                 failed_index: 'int | None' = None):
         # `operation` is None when raised from a node factory (only site:
         # Obvious → GoalIsNontrivial); the enclosing edit method fills it
         # in at catch time.
+        # `is_error` is the tool-call error flag surfaced to the agent. Callers
+        # set it `len(outcome.committed) == 0`: True when nothing committed (the
+        # whole edit failed → full framing); False on a partial apply (some ops
+        # committed, the rest left in `unapplied_oprs` → partial framing).
+        # `failed_opr` / `failed_index` identify the operation the batch could
+        # not apply (== `unapplied_oprs[0]`, the 0-based `failed_index`-th item
+        # of the original request). Read only by the partial framing.
         self.target_step = target_step
         self.operation = operation
         self.unapplied_oprs = list(unapplied_oprs) if unapplied_oprs else []
         self.is_error = is_error
-    def __str__(self) -> str:
+        self.failed_opr = failed_opr
+        self.failed_index = failed_index
+
+    def _reason(self) -> str:
+        """The specific cause of this failure, one self-contained sentence.
+        Implemented by every subclass; framed (full vs partial) by `__str__`."""
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement `_reason`")
+
+    def _action_phrase(self) -> str:
+        """Full-failure lead: the action could not be performed at all."""
         match self.operation:
             case EditOperation.FILL:
                 return (f"Cannot fill a node with id {self.target_step}"
@@ -617,7 +653,27 @@ class CannotEdit(AoA_Error):
                         if self.target_step else "Cannot amend this step")
             case _:
                 raise InternalError(
-                    f"CannotEdit.__str__: unknown operation {self.operation!r}")
+                    f"CannotEdit._action_phrase: unknown operation {self.operation!r}")
+
+    def _partial_phrase(self) -> str:
+        """Partial-apply lead: the batch committed some ops, then stopped at
+        `failed_opr`; name it, its 1-based position, and how many ops dropped."""
+        op = self.operation
+        verb = self._VERB_ING.get(op, "editing") if op is not None else "editing"
+        op_name = (OPERATION_REGISTRY_BY_CLS.get(
+                       self.failed_opr.cls, self.failed_opr.cls.__name__)
+                   if self.failed_opr is not None else "?")
+        pos = f"#{self.failed_index + 1} " if self.failed_index is not None else ""
+        later = len(self.unapplied_oprs) - 1
+        tail = (f"; it and {later} later operation{'s' if later != 1 else ''} "
+                f"were left unapplied") if later > 0 else ""
+        return (f"While {verb} step {self.target_step}, could not apply "
+                f"operation {pos}({op_name}){tail}")
+
+    def __str__(self) -> str:
+        if self.is_error:
+            return f"{self._action_phrase()}\n{self._reason()}"
+        return f"{self._partial_phrase()}: {self._reason()}"
 
 
 class CannotEdit_BlockClosed(CannotEdit):
@@ -625,33 +681,30 @@ class CannotEdit_BlockClosed(CannotEdit):
     def __init__(self, closed_by: 'step | None', *args, **kw):
         super().__init__(*args, **kw)
         self.closed_by = closed_by
-    def __str__(self) -> str:
+    def _reason(self) -> str:
         if self.closed_by is None:
-            tail = "The proof block is closed."
-        else:
-            tail = (f"The proof block is closed. "
-                    f"You should edit node {self.closed_by} instead.")
-        return f"{super().__str__()}\n{tail}"
+            return "The proof block is closed."
+        return (f"The proof block is closed. "
+                f"You should edit node {self.closed_by} instead.")
 
 
 class CannotEdit_NodeNotFound(CannotEdit):
     """Locate failed: the target step id does not exist."""
-    def __str__(self) -> str:
-        return f"{super().__str__()}\nThe node is not found."
+    def _reason(self) -> str:
+        return "The node is not found."
 
 
 class CannotEdit_BadNode(CannotEdit):
     """`fill` target has a SUCCESS step at or below it."""
-    def __str__(self) -> str:
-        return (f"{super().__str__()}\n"
-                f"The target already exists. "
-                f"Fill does not overwrite existing successful steps.")
+    def _reason(self) -> str:
+        return ("The target already exists. "
+                "Fill does not overwrite existing successful steps.")
 
 
 class CannotEdit_Root(CannotEdit):
     """`amend` was called on the root node."""
-    def __str__(self) -> str:
-        return f"{super().__str__()}\nIt is the root node."
+    def _reason(self) -> str:
+        return "It is the root node."
 
 
 class CannotEdit_EvaluationFailed(CannotEdit):
@@ -659,8 +712,8 @@ class CannotEdit_EvaluationFailed(CannotEdit):
     def __init__(self, reason: 'FailureReason', *args, **kw):
         super().__init__(*args, **kw)
         self.reason = reason
-    def __str__(self) -> str:
-        return f"{super().__str__()}\n{self.reason.reason}"
+    def _reason(self) -> str:
+        return self.reason.reason
 
 
 class GoalIsNontrivial(CannotEdit):
@@ -670,8 +723,8 @@ class GoalIsNontrivial(CannotEdit):
     def __init__(self, parent: 'Node', **kw):
         super().__init__(target_step=parent.id, **kw)
         self.parent = parent
-    def __str__(self) -> str:
-        return f"{super().__str__()}\n{self._message}"
+    def _reason(self) -> str:
+        return self._message
 
 
 class ProofTreeTooDeep(CannotEdit):
@@ -680,7 +733,7 @@ class ProofTreeTooDeep(CannotEdit):
         super().__init__(target_step=parent.id if parent else "")
         self.depth = depth
         self.limit = limit
-    def __str__(self) -> str:
+    def _reason(self) -> str:
         return f"Proof tree depth {self.depth} exceeds the limit of {self.limit}."
 
 class CannotEdit_NonDeclarative(CannotEdit):
@@ -689,7 +742,7 @@ class CannotEdit_NonDeclarative(CannotEdit):
     def __init__(self, operation_name: str, target_step: str = ""):
         super().__init__(target_step=target_step)
         self.operation_name = operation_name
-    def __str__(self) -> str:
+    def _reason(self) -> str:
         return (f"Operation {self.operation_name} is a proof operation and "
                 f"cannot be used as a global declaration. "
                 f"Use it inside a proof step instead.")
@@ -2941,6 +2994,10 @@ class Node(ABC):
             e.operation = op
             e.unapplied_oprs = list(gns)
             e.is_error = True
+            idx = result.stopped_at
+            assert idx is not None  # set together with result.error
+            e.failed_opr = gns[idx] if idx < len(gns) else None
+            e.failed_index = idx
             outcome.failure = e
             return outcome
         cascade_from: Node | None = None
@@ -2981,8 +3038,12 @@ class Node(ABC):
         if result.error is not None:
             e = result.error
             e.operation = op
-            e.unapplied_oprs = list(gns[result.stopped_at:])
+            idx = result.stopped_at
+            assert idx is not None  # set together with result.error
+            e.unapplied_oprs = list(gns[idx:])
             e.is_error = len(outcome.committed) == 0
+            e.failed_opr = gns[idx] if idx < len(gns) else None
+            e.failed_index = idx
             outcome.failure = e
         return outcome
     async def insert_before(
@@ -4104,10 +4165,13 @@ class StdBlock(NonLeaf_Node):
         self._print_footer(indent, file, show_warnings=show_warnings)
         return indent
     def _print_suspended_worker_hint(self, indent: int, file: MyIO) -> None:
-        """When a sub-agent is parked on this node, tell the main agent how to
-        resume or terminate it. Shown only to the planner (workers never render
-        this)."""
-        if self.worker_handle is not None and _rendering_for_planner():
+        """When a sub-agent is parked on this node, tell the agent that dispatched
+        it how to resume or terminate it. Shown only to that sub-agent's *direct*
+        dispatcher — ``worker_handle.session`` is the dispatching session — so an
+        agent sees markers for its own immediate sub-agents but never for nested
+        grandchildren (whose handle.session is the intermediate worker)."""
+        if (self.worker_handle is not None
+                and self.worker_handle.session is _session_var.get(None)):
             print_indent(indent, file)
             file.write(f"A sub-agent is suspended on step {self.id}: call `subagent` with step {self.id} to resume it, or `close_subagent` with step {self.id} to terminate it.\n")
     def does_quickview_need_detail(self) -> bool:
@@ -4266,26 +4330,31 @@ class StdBlock(NonLeaf_Node):
         When the user's next item is already an Intro, ``auto_intro`` is
         set to False to suppress auto-injection."""
         outcome = EditOutcome(operation=op, request=gns)
-        def _block_closed(unapplied: 'list[Parsed_Opr]') -> CannotEdit_BlockClosed:
+        def _block_closed(unapplied: 'list[Parsed_Opr]',
+                          failed_index: int) -> CannotEdit_BlockClosed:
             return CannotEdit_BlockClosed(
                 self._closed_by.id if self._closed_by is not None else None,
                 self.id,
                 operation=op, unapplied_oprs=unapplied,
-                is_error=len(outcome.committed) == 0)
+                is_error=len(outcome.committed) == 0,
+                failed_opr=gns[failed_index] if failed_index < len(gns) else None,
+                failed_index=failed_index)
         if not self.opening():
-            outcome.failure = _block_closed(list(gns))
+            outcome.failure = _block_closed(list(gns), 0)
             return outcome
         if not gns:
             return outcome
         for i, gn in enumerate(gns):
             if not self.opening():
-                outcome.failure = _block_closed(list(gns[i:]))
+                outcome.failure = _block_closed(list(gns[i:]), i)
                 return outcome
             child_err = self._validate_child_class(gn.cls)
             if child_err is not None:
                 child_err.operation = op
                 child_err.unapplied_oprs = list(gns[i:])
                 child_err.is_error = len(outcome.committed) == 0
+                child_err.failed_opr = gn
+                child_err.failed_index = i
                 outcome.failure = child_err
                 return outcome
             local_step = self._local_step_of_next_proof_step()
@@ -4299,6 +4368,8 @@ class StdBlock(NonLeaf_Node):
                 e.operation = op
                 e.unapplied_oprs = list(gns[i:])
                 e.is_error = len(outcome.committed) == 0
+                e.failed_opr = gn
+                e.failed_index = i
                 outcome.failure = e
                 return outcome
             if node is None:
@@ -5552,6 +5623,11 @@ def _fetched_to_facts(fetched: 'list[IsabelleFact | Interaction_RetrieveForProof
 # tool. Formerly the deep-Obvious auto-sorry threshold; now used only by the hint.
 _SUBAGENT_HINT_DEPTH = 2
 
+# Maximum worker-nesting depth: main -> worker is layer 1, so a worker already at
+# this depth may not dispatch a further sub-worker. Bounds recursive delegation
+# (see Session._worker_nesting_depth and the dispatch guard in _subagent_tool_logic).
+WORKER_NESTING_DEPTH = 8
+
 class Obvious_ToolArg(TypedDict):
     facts: list[FactByName | FactByProposition]
 
@@ -5608,8 +5684,8 @@ class Obvious(Leaf):
         """A deeply-nested (>= _SUBAGENT_HINT_DEPTH) Obvious that FAILED: point the
         main agent at the `subagent` tool to delegate this sub-goal, naming the
         enclosing goal block (`_nearest_goal_for_subagent`) that `subagent` should
-        target. Shown only to the planner — a worker cannot call `subagent`."""
-        if (_rendering_for_planner()
+        target. Shown to any agent that can dispatch (main or worker)."""
+        if (_rendering_for_dispatcher()
                 and self.status.status == EvaluationStatus.Status.FAILURE
                 and self._subgoal_level >= _SUBAGENT_HINT_DEPTH):
             target = self._nearest_goal_for_subagent()
@@ -8254,6 +8330,13 @@ def _rendering_for_planner() -> bool:
     sess = _session_var.get(None)
     return sess is not None and sess.is_major
 
+def _rendering_for_dispatcher() -> bool:
+    """True when the current rendering session can dispatch sub-agents — the main
+    agent OR a worker (both may call `subagent`). Excludes interaction forks; never
+    crashes outside a session. Used for the "delegate this goal" hint."""
+    sess = _session_var.get(None)
+    return sess is not None and (sess.is_major or sess.is_worker)
+
 def tn(t: tool) -> str:
     """Resolve abstract tool id to driver-specific name via the current session."""
     return the_session().tool_name(t)
@@ -9196,6 +9279,20 @@ class Session:
         sub-workers."""
         stop = self.proof_scope_root
         return _first_worker_in_ancestors(node, stop=stop) or _first_worker_in_subtree(node)
+
+    def _worker_nesting_depth(self) -> int:
+        """How many ``Role_Worker`` sessions enclose this one, counting itself —
+        i.e. this session's worker-nesting layer (main = 0, its worker = 1, that
+        worker's sub-worker = 2, ...). A worker fork's ``parent`` is its dispatcher
+        (``WorkerHandle._run`` forks with ``parent = handle.session``), so the
+        ``parent`` chain records the full delegation stack; interaction forks on the
+        chain are skipped (only ``Role_Worker`` counts)."""
+        depth, s = 0, self
+        while s is not None:
+            if isinstance(s.role, Role_Worker):
+                depth += 1
+            s = s.parent
+        return depth
 
     async def _prefetch_worker_premises(self) -> None:
         """Resolve the standard-printed propositions of every fact in scope before the
