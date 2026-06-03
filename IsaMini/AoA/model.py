@@ -7,13 +7,20 @@ from pathlib import Path
 from .helper import split_id_into_segs, cat_segs_into_id, incr_id_major, incr_id_minor, MyIO
 from .linked_list import Cons, LinkedList, from_iterable, iterate, concat
 import types as _types
-from typing import Any, Awaitable, ClassVar, Iterable, Mapping, NamedTuple, Protocol, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired, TypeAliasType, Union, get_type_hints, get_origin, get_args, is_typeddict
+from typing import Any, Awaitable, ClassVar, Iterable, Mapping, NamedTuple, Protocol, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired, TypeAliasType, Union, get_type_hints, get_origin, get_args, is_typeddict, TYPE_CHECKING
 from Isabelle_RPC_Host import Connection, IsabelleError, pretty_unicode, ascii_of_unicode
 from Isabelle_RPC_Host.position import IsabellePosition
 from Isabelle_RPC_Host.universal_key import (
     EntityKind, universal_key, universal_key_of, universal_key_and_name_of, UndefinedEntity,
 )
 from Isabelle_Semantic_Embedding.semantics import Semantic_Vector_Store, SemanticRecord, trunc_expr as _trunc_expr_base
+
+if TYPE_CHECKING:
+    # `LMDriver` (the session/driver base) lives in `language_model_driver`, which
+    # imports `Session` from this module — so a runtime import would be circular.
+    # The annotations that reference it are string forward-refs; this guarded
+    # import only feeds the type checker and runs no code at import time.
+    from .language_model_driver import LMDriver
 
 AGENT_EXPR_LIMIT = 200
 AGENT_GOAL_CHAR_LIMIT = 400
@@ -3187,6 +3194,13 @@ class Node(ABC):
         rp: 'Node | None' = None
         for i, child in enumerate(node.sub_nodes):
             if child.id == id:
+                # The target and every successor sibling leave the tree here
+                # (the gate above guarantees none is SUCCESS). Close their
+                # sub-agents before unlinking, or a worker parked on one of
+                # these failed goals orphans — under nesting no live dispatcher
+                # could ever resume or close it.
+                for d in node.sub_nodes[i:]:
+                    await d.discard()
                 rp = child._delete_me()
                 while i < len(node.sub_nodes):
                     node._delete_child(node.sub_nodes[i])
@@ -3419,6 +3433,10 @@ class Node(ABC):
                         if idx_in_parent + 1 < len(parent.sub_nodes)
                         else None)
         old_self = self
+        # `old_self` and its whole subtree leave the tree (its sub_nodes are
+        # dropped, not re-parented). Close every sub-agent below it before
+        # unlinking, or they orphan.
+        await old_self.discard()
         rp = old_self._delete_me()
         if rp is not None:
             await rp._refresh_me_alone(auto_intro=False)
@@ -3431,7 +3449,7 @@ class Node(ABC):
                 "amend of last child requires StdBlock parent (for append)")
             sub_outcome = await parent.append(gns, op=op)
         return sub_outcome, old_self
-    def _amend_from(self, old: 'Node') -> None:
+    async def _amend_from(self, old: 'Node') -> None:
         self._first_time = False
     async def amend(self, id: step, gns: 'list[Parsed_Opr]') -> 'EditOutcome':
         """Replace the node at `id` with nodes built from `gns`.  Returns
@@ -3565,7 +3583,7 @@ class NonLeaf_Node(Node):
         return self._closed_by is None
     def _open(self) -> None:
         self._closed_by = None
-    def _close_by(self, child: Node) -> None:
+    async def _close_by(self, child: Node) -> None:
         for i, c in enumerate(self.sub_nodes):
             if c is child:
                 self._closed_by = child
@@ -3575,6 +3593,9 @@ class NonLeaf_Node(Node):
                     self._warn_discarded_nodes(
                         discarded_nodes,
                         Warning.Position.FOOTER)
+                # The truncated siblings leave the tree; close their sub-agents.
+                for d in discarded_nodes:
+                    await d.aclose_all_subagents()
                 return
         raise InternalError("The target node is not my children")
     async def _refresh_footer(self) -> FailureReason | None:
@@ -3853,16 +3874,19 @@ class NonLeaf_Node(Node):
                 for sibling in self.sub_nodes[i+1:]:
                     sibling._on_upstream_change()
                 # `child` is being replaced; its descendants are kept and
-                # re-parented onto new_node by `_amend_from`. `discard` first
-                # recursively closes EVERY sub-agent in child's subtree (not just
-                # child's own): amending `child` rewrites this part of the proof, so
-                # its sub-agents — whoever dispatched them — are released to be
-                # re-evaluated against the new statement, and a nested grandchild
-                # whose dispatcher is gone would otherwise orphan as a live task no
-                # one can see. Only the sub-agents are freed; the descendant proof
-                # structure survives the re-parent.
-                await child.discard()
-                new_node._amend_from(child)
+                # re-parented onto new_node by `_amend_from`. Only tear down the
+                # sub-agents that this amend actually invalidates:
+                #   - `child` has its OWN worker ⟺ (dispatch gate) its entire
+                #     subtree is that worker's exclusive territory → amending
+                #     `child` kills that worker → cascade-close the whole subtree.
+                #   - `child` has NO worker ⟺ any sub-agent below it was
+                #     dispatched from OUTSIDE this subtree (dispatcher + target
+                #     both survive the re-parent) → leave them intact.
+                # The discarded *children* of an amended SubgoalMaker (old case
+                # GoalNodes that don't survive) are torn down by `_amend_from`.
+                if isinstance(child, NonLeaf_Node) and child.worker_handle is not None:
+                    await child.aclose_all_subagents()
+                await new_node._amend_from(child)
                 if self._can_continue_before_child(new_node):
                     await new_node._refresh_me_alone(auto_intro=True)
                 else:
@@ -3870,8 +3894,8 @@ class NonLeaf_Node(Node):
                 await new_node._refresh_all_after_me()
                 return new_node, child
         raise InternalError("The target node is not my children")
-    def _amend_from(self, old: 'Node') -> None:
-        super()._amend_from(old)
+    async def _amend_from(self, old: 'Node') -> None:
+        await super()._amend_from(old)
         if not isinstance(old, NonLeaf_Node):
             return
         self.sub_nodes[:] = old.sub_nodes
@@ -4342,6 +4366,10 @@ class StdBlock(NonLeaf_Node):
                     self._warn_discarded_nodes(
                         inherited,
                         Warning.Position.FOOTER)
+                    # No host for the inherited children — they leave the tree;
+                    # close their sub-agents.
+                    for d in inherited:
+                        await d.aclose_all_subagents()
             return None
         if (auto_intro
                 and not self.sub_nodes
@@ -4734,8 +4762,8 @@ class SubgoalMaker(GoalContainer, StdBlock):
             return node
         return Parsed_Opr(cls=type(node), factory=factory, raw={})
 
-    def _amend_from(self, old: 'Node') -> None:
-        Node._amend_from(self, old)
+    async def _amend_from(self, old: 'Node') -> None:
+        await Node._amend_from(self, old)
         if isinstance(old, type(self)) and isinstance(old, NonLeaf_Node):
             if self._supplied_proofs is None:
                 self._supplied_proofs = {}
@@ -4745,12 +4773,20 @@ class SubgoalMaker(GoalContainer, StdBlock):
                         None, [self._node_to_parsed_opr(n) for n in gn.sub_nodes])
             if not self._supplied_proofs:
                 self._supplied_proofs = None
+            # The old case GoalNode objects leave the tree (only their proof
+            # *bodies* are salvaged into `_supplied_proofs`, as parsed oprs). Close
+            # any sub-agent parked inside them before they go, or it orphans. This
+            # branch warns nowhere, so it is the only teardown for these nodes.
+            for d in old.sub_nodes:
+                await d.aclose_all_subagents()
             old.sub_nodes.clear()
         elif isinstance(old, NonLeaf_Node) and old.sub_nodes:
             self._warn_discarded_nodes(
                 list(old.sub_nodes),
                 Warning.Position.HEADER,
             )
+            for d in old.sub_nodes:
+                await d.aclose_all_subagents()
             old.sub_nodes.clear()
 
     @classmethod
@@ -4848,7 +4884,7 @@ class SubgoalMaker(GoalContainer, StdBlock):
         return (f"The supplied proof{s} for subgoal{s} {keys} "
                 f"{verb} not used (no matching runtime subgoal).")
 
-    def _truncate_siblings_for_splice(self) -> None:
+    async def _truncate_siblings_for_splice(self) -> None:
         parent = self.parent
         if parent is None:
             return
@@ -4859,6 +4895,9 @@ class SubgoalMaker(GoalContainer, StdBlock):
             parent._warn_discarded_nodes(
                 discarded,
                 Warning.Position.FOOTER)
+        # The truncated siblings leave the tree; close their sub-agents.
+        for d in discarded:
+            await d.aclose_all_subagents()
 
     async def _splice_body(self, body: 'proof', my_idx: int) -> None:
         """Insert each op in `body` as a parent-sibling right after self."""
@@ -4956,7 +4995,7 @@ class SubgoalMaker(GoalContainer, StdBlock):
             # Exact match shortcut
             if goal_key in self._supplied_proofs:
                 (_, body) = self._supplied_proofs.pop(goal_key)
-                self._truncate_siblings_for_splice()
+                await self._truncate_siblings_for_splice()
                 await self._splice_body(body, my_idx)
                 self._cleanup_inherited_proofs()
                 return
@@ -4968,12 +5007,12 @@ class SubgoalMaker(GoalContainer, StdBlock):
                 self._cleanup_inherited_proofs()
                 return
             if picked is None:
-                self._truncate_siblings_for_splice()
+                await self._truncate_siblings_for_splice()
                 self._cleanup_inherited_proofs()
                 return
             entry = self._supplied_proofs.pop(picked, None)
             if entry is not None:
-                self._truncate_siblings_for_splice()
+                await self._truncate_siblings_for_splice()
                 await self._splice_body(entry[1], my_idx)
             self._cleanup_inherited_proofs()
 
@@ -5029,11 +5068,15 @@ class SubgoalMaker(GoalContainer, StdBlock):
                 self._on_regenerating_goals(goals_count)
                 if (decision == _OpenSubgoalBlock.YES_AND_CLOSE_PARENT_BLOCK
                         and self.parent is not None):
-                    self.parent._close_by(self)
+                    await self.parent._close_by(self)
                 if self.sub_nodes:
                     self._warn_discarded_nodes(
                         list(self.sub_nodes),
                         Warning.Position.FOOTER)
+                    # The old subgoal nodes are being regenerated and leave the
+                    # tree; close their sub-agents before dropping them.
+                    for d in list(self.sub_nodes):
+                        await d.aclose_all_subagents()
                 self.sub_nodes = []
                 ml_state = await s0.clone(None)
                 for i in range(goals_count):
@@ -5050,6 +5093,10 @@ class SubgoalMaker(GoalContainer, StdBlock):
                 self._warn_discarded_nodes(
                     list(self.sub_nodes),
                     Warning.Position.FOOTER)
+                # This refresh opens no block; the old subgoal nodes leave the
+                # tree — close their sub-agents before dropping them.
+                for d in list(self.sub_nodes):
+                    await d.aclose_all_subagents()
                 self.sub_nodes = []
             # Re-open the parent iff the parent is currently closed (by any
             # closer) AND we are the tail of its sub_nodes — i.e., whatever
@@ -8386,13 +8433,6 @@ _session_var: contextvars.ContextVar['Session'] = contextvars.ContextVar('_sessi
 
 def the_session() -> 'Session':
     return _session_var.get()
-
-def _rendering_for_planner() -> bool:
-    """True when the current rendering session is the main (planner) agent.
-    Hints that point at the planner-only `subagent` tool are shown only then —
-    never to workers or interaction forks (and never crash outside a session)."""
-    sess = _session_var.get(None)
-    return sess is not None and sess.is_major
 
 def _rendering_for_dispatcher() -> bool:
     """True when the current rendering session can dispatch sub-agents — the main
