@@ -738,10 +738,11 @@ class APIDriver(LMDriver):
     async def initialize(self, root: Root):
         await super().initialize(root)
         self._executor = ToolExecutor(self)
-        if self.is_major:
-            with open(self.YAML_path, "w", encoding="utf-8") as f:
-                root.print(0, MyIO(f), update_line=True, show_warnings=True)
-        elif self.is_worker:
+        # Seed proof.yaml. `refresh_YAML` -> `print_proof_scope`, which renders
+        # the full `root` for a major (non-worker) and the scoped view for a
+        # worker — so a single call covers both. Interaction forks are neither
+        # and intentionally write no YAML.
+        if self.is_major or self.is_worker:
             self.refresh_YAML()
 
     async def interrupt(self):

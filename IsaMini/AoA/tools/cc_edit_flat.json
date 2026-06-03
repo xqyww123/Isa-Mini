@@ -1155,7 +1155,7 @@
             "type": "object"
           },
           {
-            "description": "provide a witness to reduce a existential proof goal",
+            "description": "provide witness term(s) to instantiate the leading existential quantifier(s) of the proof goal",
             "properties": {
               "operation": {
                 "const": "Witness",
@@ -1165,15 +1165,19 @@
                 "description": "A brief thought that justifies the chosen operation",
                 "type": "string"
               },
-              "witness": {
-                "description": "an Isabelle term with all literal numbers annotated with their types",
-                "type": "string"
+              "witnesses": {
+                "description": "Isabelle term(s), from left to right, with literal numbers type-annotated",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array"
               }
             },
             "required": [
               "operation",
               "thought",
-              "witness"
+              "witnesses"
             ],
             "title": "Witness",
             "type": "object"

@@ -102,10 +102,11 @@ class Codex_Driver(LMDriver):
         if self.is_major:
             self._write_codex_config()
             self._init_git_repo()
-        if self.is_major:
-            with open(self.YAML_path, "w", encoding="utf-8") as f:
-                root.print(0, MyIO(f), update_line=True, show_warnings=True)
-        elif self.is_worker:
+        # Seed proof.yaml. `refresh_YAML` -> `print_proof_scope`, which renders
+        # the full `root` for a major (non-worker) and the scoped view for a
+        # worker — so a single call covers both. Interaction forks are neither
+        # and intentionally write no YAML.
+        if self.is_major or self.is_worker:
             self.refresh_YAML()
 
     def _write_codex_config(self):

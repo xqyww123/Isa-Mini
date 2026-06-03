@@ -22,3 +22,10 @@ proof:
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   ∃(x :: nat). x = (0 :: nat)
+--------------------------------------------------
+Quickview (multi-witness title)
+--------------------------------------------------
+step 1: Witness 0, 1 (failed)
+  Error: Too many witness terms: the goal has 1 leading existential quantifier but 2 were provided
+Error: Unfinished Proof. Call command `edit` with action `fill` and target step `2`
+goal: ∃(x :: nat). x = (0 :: nat)

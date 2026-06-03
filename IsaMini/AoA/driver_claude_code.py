@@ -225,10 +225,12 @@ class ClaudeCode(LMDriver):
         self._mcp_url = await self._http_server.register_session(
             self._session_id, self)
 
-        if self.is_major:
-            with open(self.YAML_path, "w", encoding="utf-8") as f:
-                root.print(0, MyIO(f), update_line=True, show_warnings=True)
-        elif self.is_worker:
+        # Seed proof.yaml. `refresh_YAML` -> `print_proof_scope`, which renders
+        # the full `root` for a major (non-worker) and the scoped view for a
+        # worker — so a single call covers both. Interaction forks are neither
+        # and intentionally write no YAML. (`_on_yaml_refresh` is still None here
+        # — it is set later in `_run_standalone` — so no UI push fires at init.)
+        if self.is_major or self.is_worker:
             self.refresh_YAML()
 
         if not self._interactive_web_terminal:
@@ -905,7 +907,7 @@ class ClaudeCode(LMDriver):
         return fork.fork_pending.answer.result()
 
     def refresh_YAML(self):
-        with open(self.YAML_path, 'w') as f:
+        with open(self.YAML_path, 'w', encoding="utf-8") as f:
             self.print_proof_scope(0, MyIO(f), update_line=True, show_warnings=True)
         if self._on_yaml_refresh is not None:
             buf = StringIO()

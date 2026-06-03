@@ -1393,9 +1393,12 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
           val typs = get_witness_types s
           val num_typs = length typs
           val num_terms = length terms
-          (* Allow partial instantiation: 1 <= num_terms <= num_typs. Witnesses
-             bind the leading existentials left-to-right; any un-witnessed suffix
-             is left as a residual existential goal for a later Witness step. *)
+          (* Allow partial instantiation: witnesses (left-to-right) may be fewer
+             than the leading existentials; any un-witnessed suffix is left as a
+             residual existential goal for a later Witness step. This gate rejects
+             only a non-existential goal and more witnesses than quantifiers;
+             num_terms = 0 is a harmless no-op here (the empty list is rejected
+             upstream by the Python Witness validator). *)
           val _ = if num_typs = 0 then
                     raise Minilang.OPR_FAIL (Minilang.INVALID_OPR,
                       "The proof goal is not led by an existential quantification")

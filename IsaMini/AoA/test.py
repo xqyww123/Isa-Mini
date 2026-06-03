@@ -1029,6 +1029,26 @@ async def _test_Witness5(root: Root, file: MyIO):
     file.write(f"outcome.failure: {_outcome.failure}\n")
     print_header("After Witness (error visible in tree)", file)
     root.print(0, file)
+    # Exercise the multi-witness quickview_title (`', '.join`) on the
+    # two-witness node; this case is never proof-cached (it errors), so the
+    # test body actually runs.
+    print_header("Quickview (multi-witness title)", file)
+    root.quickview(0, file)
+
+@model_test("Witness6", "Test_Witness6.thy", 9)
+async def _test_Witness6(root: Root, file: MyIO):
+    """The empty-witness guard: an empty `witnesses` list is rejected by the
+    Python validator inside `gen_single`, before any proof operation runs.
+    The tree is never rendered so this golden is independent of goal/global
+    rendering."""
+    try:
+        Witness.gen_single({
+            "thought": "Provide no witnesses",
+            "witnesses": [],
+        })
+        file.write("ERROR: empty witnesses was NOT rejected\n")
+    except model.ArgumentError as e:
+        file.write(f"ArgumentError: {e}\n")
 
 @model_test("Unfold1", "Test_Unfold1.thy", 15)
 async def _test_Unfold1(root: Root, file: MyIO):
@@ -9790,8 +9810,9 @@ async def _test_RefuteOrSurrender(root: Root, file: MyIO):
     handle = WorkerHandle(have_node, session)
     session.role = model.Role_Worker(target=have_node, worker_handle=handle)
 
-    # Surrender: enqueues a WorkerSurrender, and sets NO quit_info (the planner
-    # learns of it via the event; the worker never writes its own quit_info).
+    # Surrender: enqueues a WorkerSurrender AND sets a terminal quit_info=Surrender
+    # so the worker's agent loop winds down cleanly (the planner also learns of it
+    # via the event). See _refute_or_surrender_tool_logic.
     result, is_error = await _refute_or_surrender_tool_logic(session, {
         "reason": "surrender",
         "detail": "I need more lemmas",
