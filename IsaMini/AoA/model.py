@@ -2142,7 +2142,7 @@ class Interaction_ReviewRefutation(Interaction):
         self.worker_handle = worker_handle
 
     async def prompt(self, indent: int, file: MyIO) -> None:
-        goal = self.target.goal() if hasattr(self.target, 'goal') else None
+        goal = self.target.goal() if hasattr(self.target, 'goal') else None  # type: ignore[attr-defined]  — target is role.target (NonLeaf_Node), guarded by hasattr
         goal_str = f"\nGoal: {goal.conclusion.unicode}" if goal else ""
         file.write(
             f"A sub-agent attempted {self.target.id} but claims the goal is unprovable.{goal_str}\n\n"
@@ -8957,7 +8957,7 @@ class Session:
         self.print_proof_scope(0, MyIO(StringIO()), update_line=True, show_warnings=True)
 
         if self.is_worker:
-            target = self.role.target
+            target = self.role.target  # type: ignore[attr-defined]  — is_worker ⟹ role is Role_Worker
             if isinstance(target, Have):
                 header = f"Prove the lemma `{target.name}`: {target.statement['english']}\n"
             else:
@@ -9319,7 +9319,7 @@ class Session:
         see ``print_proof_scope``), otherwise the whole ``root``. This is the
         single source of truth for "what subtree does this session render to
         ``proof.yaml``"; line numbers and scoped views outside it are stale."""
-        return self.role.target if self.is_worker else self.root
+        return self.role.target if self.is_worker else self.root  # type: ignore[attr-defined]  — is_worker ⟹ role is Role_Worker
 
     def proof_scope_unfinished_nodes(self) -> 'set[Node]':
         """Return unfinished nodes scoped to this session's proof responsibility.
@@ -9423,7 +9423,7 @@ class Session:
         anc = self._enclosing_dispatched_subagent(node)
         if anc is not None:
             return anc
-        if node.worker_handle is None:
+        if node.worker_handle is None:  # type: ignore[attr-defined]  — node is a StdBlock (caller asserts); base Node lacks worker_handle
             return _first_worker_in_subtree(node)
         return None
 
@@ -9517,7 +9517,7 @@ class Session:
             return
         target = self.proof_scope_root
 
-        goal = target.goal() if hasattr(target, 'goal') else None
+        goal = target.goal() if hasattr(target, 'goal') else None  # type: ignore[attr-defined]  — target is role.target (NonLeaf_Node), guarded by hasattr
         before = target._ctxt_before_me()
         gctx = goal.context if goal is not None else Context({}, {}, {})
 
@@ -9550,16 +9550,16 @@ class Session:
         if show_warnings:
             target._print_warnings(indent, file, [Warning.Position.HEADER])
 
-        if target.sub_nodes:
+        if target.sub_nodes:  # type: ignore[attr-defined]  — target is role.target (NonLeaf_Node)
             print_indent(indent, file)
             file.write("proof:\n")
-            for s in target.sub_nodes:
+            for s in target.sub_nodes:  # type: ignore[attr-defined]
                 s.print(indent + 1, file, update_line, show_warnings=show_warnings)
         else:
             print_indent(indent, file)
             file.write("proof: empty\n")
 
-        target._print_footer(indent, file, show_warnings=show_warnings)
+        target._print_footer(indent, file, show_warnings=show_warnings)  # type: ignore[attr-defined]  — target is role.target (NonLeaf_Node)
 
     def quickview_proof_scope(self, indent: int, file: MyIO):
         """Quickview scoped to this session's proof responsibility."""
@@ -9567,8 +9567,8 @@ class Session:
             self.root.quickview(indent, file)
             return
         target = self.proof_scope_root
-        _quickview_children_compressed(target.sub_nodes, indent, file)
-        target._quickview_pending_footer(indent, file)
+        _quickview_children_compressed(target.sub_nodes, indent, file)  # type: ignore[attr-defined]  — target is role.target (NonLeaf_Node)
+        target._quickview_pending_footer(indent, file)  # type: ignore[attr-defined]
 
     async def request_restart(self):
         """Request a context restart.  Sets ``self.quit_info = Restart()`` to
@@ -9759,7 +9759,7 @@ class WorkerHandle:
                                           suggestions=suggestions,
                                           useful_lemmas=useful_lemmas,
                                           worker_handle=self))
-            sub._fork_name = f"{session._fork_name}.worker_{self.target.id}"
+            sub._fork_name = f"{session._fork_name}.worker_{self.target.id}" # type: ignore
             self._sub = sub
             await sub.initialize(session.root)
         except Exception as e:
@@ -9769,7 +9769,7 @@ class WorkerHandle:
             raise InternalError(
                 f"sub-agent on {self.target.id} failed to initialize: {e}") from e
 
-        tag = f"[{sub._fork_name}]"
+        tag = f"[{sub._fork_name}]" # type: ignore
         session.log_interaction("worker", f"{tag} spawned")
         try:
             await sub.run()
