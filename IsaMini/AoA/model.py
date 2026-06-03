@@ -163,7 +163,14 @@ def fact_kind(fact: Fact) -> Literal["name", "proposition", "description"]:
         return "proposition"
     return "description"
 
-def _where_suffix(fact: Fact) -> str:
+# The clauses below return the *bracket-less* attribute text; `_fact_suffix`
+# assembles the non-empty ones into a SINGLE comma-separated `[...]` group.
+# They must not each emit their own `[...]`: `read_fact`'s `Parse.thm` accepts
+# only one attribute bracket group (`Scan.optional attribs`, no `Scan.repeat`),
+# so `name[xwhere ...][xOF ...]` leaves the second group unconsumed and fails to
+# parse. `thm[a, b]` and `thm[a][b]` are semantically equivalent (attributes
+# applied left-to-right), so merging preserves the where→OF→symmetric order.
+def _where_clause(fact: Fact) -> str:
     if "name" not in fact:
         return ""
     insts = cast(FactByName, fact).get("instantiations", [])
@@ -172,9 +179,9 @@ def _where_suffix(fact: Fact) -> str:
     where_parts = " and ".join(
         f"{i['name']} = \N{SINGLE LEFT-POINTING ANGLE QUOTATION MARK}{i['value']}\N{SINGLE RIGHT-POINTING ANGLE QUOTATION MARK}"
         for i in insts)
-    return f"[xwhere {where_parts}]"
+    return f"xwhere {where_parts}"
 
-def _of_suffix(fact: Fact) -> str:
+def _of_clause(fact: Fact) -> str:
     if "name" not in fact:
         return ""
     discharge = cast(FactByName, fact).get("discharge", [])
@@ -186,17 +193,19 @@ def _of_suffix(fact: Fact) -> str:
             of_parts.append("_")
         else:
             of_parts.append(item["name"] + _fact_suffix(item))
-    return "[xOF " + " ".join(of_parts) + "]"
+    return "xOF " + " ".join(of_parts)
 
-def _symmetric_suffix(fact: Fact) -> str:
+def _symmetric_clause(fact: Fact) -> str:
     if "name" not in fact:
         return ""
     if cast(FactByName, fact).get("flip", False):
-        return "[xsymmetric]"
+        return "xsymmetric"
     return ""
 
 def _fact_suffix(fact: Fact) -> str:
-    return _where_suffix(fact) + _of_suffix(fact) + _symmetric_suffix(fact)
+    clauses = [c for c in (_where_clause(fact), _of_clause(fact),
+                           _symmetric_clause(fact)) if c]
+    return f"[{', '.join(clauses)}]" if clauses else ""
 
 class FailureReason(NamedTuple):
     """A human-readable failure reason, used in Interaction.answer() returns

@@ -1,0 +1,32 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - R: nat ⇒ bool
+premises:
+  - hs: S (7 :: nat)
+  - rule: ∀(x :: nat). S x ⟶ R x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+variables:
+  - S: nat ⇒ bool
+goal: R (7 :: nat)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Obvious with FactByName[xwhere + xOF]
+--------------------------------------------------
+variables:
+  - R: nat ⇒ bool
+premises:
+  - hs: S (7 :: nat)
+  - rule: ∀(x :: nat). S x ⟶ R x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+variables:
+  - S: nat ⇒ bool
+goal: R (7 :: nat)
+proof:
+  - step id: 1
+    operation: Obvious
+    with facts:
+      - rule[xwhere x = ‹7 :: nat›, xOF hs]: ∀(x :: nat). S x ⟶ R x
+Unfinished nodes: 0

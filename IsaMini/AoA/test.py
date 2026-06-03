@@ -8696,6 +8696,34 @@ async def _test_FactByNameOF(root: Root, file: MyIO):
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
 
+@model_test("FactByNameWhereOF", "Test_FactByNameWhereOF.thy", 10)
+async def _test_FactByNameWhereOF(root: Root, file: MyIO):
+    """Regression: a FactByName carrying BOTH `instantiations` (→xwhere) and
+    `discharge` (→xOF) must render as ONE comma-separated attribute bracket
+    `rule[xwhere x = ‹7 :: nat›, xOF hs]`, NOT two adjacent groups
+    `rule[xwhere ...][xOF ...]`. `read_fact`'s `Parse.thm` accepts only a
+    single `[...]` group (`Scan.optional attribs`, no repeat), so the old
+    two-bracket form left the second group unconsumed and raised
+    `Cannot parse "..." as a fact reference`, leaving the goal unproved.
+    The merged single-bracket form instantiates ∀x with 7 then discharges
+    `S 7` via hs, yielding exactly `R 7`, so Obvious closes the goal."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    outcome = await root.fill("1", [Obvious.gen_single({
+        "facts": [{"name": "rule",
+                   "instantiations": [{"name": "x", "value": "7 :: nat"}],
+                   "discharge": [{"name": "hs"}]}]
+    })])
+    if outcome.failure is not None:
+        file.write(f"Fill failed: {outcome.failure}\n")
+    print_header("After Obvious with FactByName[xwhere + xOF]", file)
+    root.print(0, file)
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+
 @model_test("Rewrite_WhereBadVar", "Test_Rewrite_WhereBadVar.thy", 11)
 async def _test_Rewrite_WhereBadVar(root: Root, file: MyIO):
     """Reproduce: [where] with wrong variable name from display renaming.
