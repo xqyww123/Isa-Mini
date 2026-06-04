@@ -16,12 +16,15 @@ worker-LOCKED (sub-worker on 1.1)
          fill 1.1.5     -> LOCKED        blocker=1.1
         amend 1.1.1     -> LOCKED        blocker=1.1
 --------------------------------------------------
-worker fill 2 -> OUT_OF_SCOPE message
+worker 'fill 2' resolves in-scope to 1.2 (sibling unreachable)
 --------------------------------------------------
 is_error=True
-This step is outside the goal you were asked to prove — you may only edit within your own sub-proof. If you need a fact established elsewhere, use `request_lemmas`.
+Filled nothing.
+Cannot fill a node with id 1.2
+The target already exists. Fill does not overwrite existing successful steps.
+
 --------------------------------------------------
-worker fill 1.1.1 -> worker-LOCKED message (names 1.1)
+worker fill 1.1.1 -> worker-LOCKED message (relativized id)
 --------------------------------------------------
 is_error=True
-A sub-agent is working on step 1.1, which overlaps the step you are editing. You cannot edit it before you close the sub-agent, but you are recommended to resume the sub-agent with your suggestions and let it carry out the work. You can resume it by calling `subagent` on step 1.1.
+A sub-agent is working on step 1, which overlaps the step you are editing. You cannot edit it before you close the sub-agent, but you are recommended to resume the sub-agent with your suggestions and let it carry out the work. You can resume it by calling `subagent` on step 1.
