@@ -14,7 +14,7 @@ from time import time
 import platformdirs
 
 from .model import *
-from .language_model_driver import LMDriver, _TransientError, _QuotaError, PRICING, pricing_for
+from .language_model_driver import LMDriver, _TransientError, _QuotaError, PRICING, pricing_for, Usage
 
 from .mcp_http_server import ProofMCPHTTPServer
 
@@ -201,7 +201,7 @@ class Codex_Driver(LMDriver):
                         self._codex_session_jsonl = self._find_session_jsonl(
                             codex_session_id)
 
-                self._accumulate_usage(events.get("usage", {}))
+                self._record_codex_usage(events.get("usage", {}))
 
                 if self.check_budget():
                     break
@@ -316,14 +316,15 @@ class Codex_Driver(LMDriver):
     # Cost tracking
     # ------------------------------------------------------------------
 
-    def _accumulate_usage(self, usage: dict):
-        self.total_input_tokens += usage.get("input_tokens", 0)
-        self.total_output_tokens += usage.get("output_tokens", 0)
-        self.total_cache_read_input_tokens += usage.get("cached_input_tokens", 0)
-        self._log_meta("USAGE", **usage)
+    def _record_codex_usage(self, usage: dict):
+        # Codex reports input_tokens INCLUSIVE of cached_input_tokens → normalize.
+        self._accumulate_usage(Usage.from_inclusive(
+            prompt_tokens=usage.get("input_tokens", 0),
+            output_tokens=usage.get("output_tokens", 0),
+            cached=usage.get("cached_input_tokens", 0)))
 
-    def _compute_cost(self):
-        self.total_cost_usd = self._cost_from(pricing_for(self._model, PRICING["gpt-4.1"]))
+    def _pricing(self) -> dict[str, float]:
+        return pricing_for(self._model, PRICING["gpt-4.1"])
 
     # ------------------------------------------------------------------
     # Forking
@@ -419,7 +420,7 @@ class Codex_Driver(LMDriver):
                 fork.total_model_time += time() - fork._model_time_start
                 fork._model_time_start = None
 
-            fork._accumulate_usage(events.get("usage", {}))
+            fork._record_codex_usage(events.get("usage", {}))
 
             assert fork.fork_pending is not None
             if not fork.fork_pending.answer.done():

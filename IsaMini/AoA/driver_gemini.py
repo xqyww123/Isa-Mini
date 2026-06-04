@@ -12,9 +12,9 @@ from google.genai import types as genai_types
 from google.genai import errors as genai_errors
 
 from .model import *
-from .language_model_driver import _TransientError, _QuotaError, PRICING, pricing_for
+from .language_model_driver import _TransientError, _QuotaError, PRICING, pricing_for, Usage
 from .driver_api import (
-    Provider, ToolCall, Usage, ProviderResponse,
+    Provider, ToolCall, ProviderResponse,
     Msg, SystemMsg, UserMsg, AssistantMsg, ToolResultMsg,
     APIDriver, ForkingMode, agent_driver,
 )
@@ -139,10 +139,11 @@ class GeminiProvider(Provider):
 
         self._last_response_content = genai_types.Content(
             role="model", parts=all_parts) if all_parts else None
-        usage = Usage(
-            input_tokens=(um.prompt_token_count or 0) if um else 0,
+        # Gemini promptTokenCount INCLUDES cachedContentTokenCount → normalize.
+        usage = Usage.from_inclusive(
+            prompt_tokens=(um.prompt_token_count or 0) if um else 0,
             output_tokens=(um.candidates_token_count or 0) if um else 0,
-            cached_tokens=(um.cached_content_token_count or 0) if um else 0,
+            cached=(um.cached_content_token_count or 0) if um else 0,
         )
 
         return ProviderResponse(

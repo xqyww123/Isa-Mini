@@ -22,7 +22,7 @@ from agents.mcp import MCPServerStreamableHttp
 from agents.retry import ModelRetrySettings
 
 from .model import *
-from .language_model_driver import LMDriver, _TransientError, _QuotaError, PRICING, pricing_for
+from .language_model_driver import LMDriver, _TransientError, _QuotaError, PRICING, pricing_for, Usage as LMUsage
 
 from .mcp_http_server import ProofMCPHTTPServer
 
@@ -215,8 +215,8 @@ class OpenAI_Driver(LMDriver):
         self._compute_cost()
         self.log_proof()
 
-    def _compute_cost(self):
-        self.total_cost_usd = self._cost_from(pricing_for(self._model, PRICING["gpt-4.1"]))
+    def _pricing(self) -> dict[str, float]:
+        return pricing_for(self._model, PRICING["gpt-4.1"])
 
     # ------------------------------------------------------------------
     # Forking
@@ -360,16 +360,9 @@ class OpenAI_Driver(LMDriver):
 
         async def on_llm_end(self, context, agent, response: ModelResponse):
             s = self.session
-            u: Usage = response.usage
-            s.total_input_tokens += u.input_tokens
-            s.total_output_tokens += u.output_tokens
-            cached = 0
-            if u.input_tokens_details:
-                cached = u.input_tokens_details.cached_tokens
-                s.total_cache_read_input_tokens += cached
-            s._log_meta("USAGE",
-                        input_tokens=u.input_tokens,
-                        output_tokens=u.output_tokens,
-                        cached_tokens=cached)
+            u: Usage = response.usage  # the agents-SDK Usage (input_tokens INCLUDES cache)
+            cached = u.input_tokens_details.cached_tokens if u.input_tokens_details else 0
+            s._accumulate_usage(LMUsage.from_inclusive(
+                prompt_tokens=u.input_tokens, output_tokens=u.output_tokens, cached=cached))
             if response.response_id:
                 s._last_response_id = response.response_id

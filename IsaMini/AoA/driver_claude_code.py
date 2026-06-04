@@ -9,7 +9,7 @@ import shlex
 import tempfile
 import shutil
 from .model import *
-from .language_model_driver import LMDriver, _TransientError, _QuotaError
+from .language_model_driver import LMDriver, _TransientError, _QuotaError, PRICING, pricing_for, Usage
 from . import prompts as P
 from .mcp_http_server import ProofMCPHTTPServer
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, HookMatcher, ResultMessage
@@ -35,34 +35,6 @@ def _derive_cheaper_model(model: str) -> str:
     if m:
         return f"{m.group(1)}sonnet{m.group(3)}{m.group(4)}"
     return model
-
-_PRICING_TABLE: dict[str, dict[str, float]] = {
-    "claude-opus-4-6": {
-        "input":        5.00 / 1_000_000,
-        "cache_write": 10.00 / 1_000_000,
-        "cache_read":   0.50 / 1_000_000,
-        "output":      25.00 / 1_000_000,
-    },
-    "claude-opus-4-5": {
-        "input":       15.00 / 1_000_000,
-        "cache_write": 18.75 / 1_000_000,
-        "cache_read":   1.50 / 1_000_000,
-        "output":      75.00 / 1_000_000,
-    },
-    "claude-sonnet-4-6": {
-        "input":        3.00 / 1_000_000,
-        "cache_write":  3.75 / 1_000_000,
-        "cache_read":   0.30 / 1_000_000,
-        "output":      15.00 / 1_000_000,
-    },
-    "claude-sonnet-4-5": {
-        "input":        3.00 / 1_000_000,
-        "cache_write":  3.75 / 1_000_000,
-        "cache_read":   0.30 / 1_000_000,
-        "output":      15.00 / 1_000_000,
-    },
-}
-_DEFAULT_PRICING_KEY = "claude-opus-4-6"
 
 def _pricing_key(model: str) -> str:
     return re.sub(r'\[.*\]$', '', model)
@@ -666,9 +638,10 @@ class ClaudeCode(LMDriver):
         self._read_cost_from_session_log()
         self.log_proof()
 
-    def _get_pricing(self) -> dict[str, float]:
-        return _PRICING_TABLE.get(_pricing_key(self._model),
-                                 _PRICING_TABLE[_DEFAULT_PRICING_KEY])
+    def _pricing(self) -> dict[str, float]:
+        # `_pricing_key` strips a context-window suffix (e.g. `[1m]`); unknown
+        # Claude versions fall back to the opus default. See docs/COST_ACCOUNTING.md.
+        return pricing_for(_pricing_key(self._model), PRICING["claude-opus-4-6"])
 
     def _read_cost_from_session_log(self) -> None:
         """Read token usage from Claude Code JSONL session logs (standalone mode).
@@ -720,19 +693,15 @@ class ClaudeCode(LMDriver):
         self.total_cache_creation_input_tokens = 0
         self.total_cache_read_input_tokens = 0
 
+        # Anthropic-native usage: input_tokens already excludes cache → from_uncached.
         for usage in usage_by_request.values():
-            self.total_input_tokens += usage.get("input_tokens", 0)
-            self.total_output_tokens += usage.get("output_tokens", 0)
-            self.total_cache_creation_input_tokens += usage.get("cache_creation_input_tokens", 0)
-            self.total_cache_read_input_tokens += usage.get("cache_read_input_tokens", 0)
+            self._accumulate_usage(Usage.from_uncached(
+                input_tokens=usage.get("input_tokens", 0),
+                output_tokens=usage.get("output_tokens", 0),
+                cache_read=usage.get("cache_read_input_tokens", 0),
+                cache_creation=usage.get("cache_creation_input_tokens", 0)))
 
-        p = self._get_pricing()
-        self.total_cost_usd = (
-            self.total_input_tokens * p["input"]
-            + self.total_cache_creation_input_tokens * p["cache_write"]
-            + self.total_cache_read_input_tokens * p["cache_read"]
-            + self.total_output_tokens * p["output"]
-        )
+        self._compute_cost()
 
     async def _monitor_tmux(self, session_name: str):
         """Poll tmux session status. Returns when session dies."""
@@ -746,18 +715,18 @@ class ClaudeCode(LMDriver):
                 return
 
     def _accumulate_cost(self, message: ResultMessage) -> None:
-        """Accumulate per-turn cost from a ResultMessage."""
+        """Per-turn accounting from a ResultMessage. Cost is the REMOTE-reported
+        ``total_cost_usd`` (authoritative); tokens go through the shared
+        ``_accumulate_usage`` (Anthropic-native input already excludes cache)."""
         self.log_cost(f"usage={message.usage} total_cost_usd={message.total_cost_usd}")
         if message.total_cost_usd:
             self.total_cost_usd += message.total_cost_usd
         if message.usage:
-            self.total_input_tokens += message.usage.get("input_tokens", 0)
-            self.total_output_tokens += message.usage.get("output_tokens", 0)
-            self.total_cache_creation_input_tokens += message.usage.get("cache_creation_input_tokens", 0)
-            self.total_cache_read_input_tokens += message.usage.get("cache_read_input_tokens", 0)
-            self._log_meta("USAGE",
-                           total_cost_usd=message.total_cost_usd,
-                           **(message.usage or {}))
+            self._accumulate_usage(Usage.from_uncached(
+                input_tokens=message.usage.get("input_tokens", 0),
+                output_tokens=message.usage.get("output_tokens", 0),
+                cache_read=message.usage.get("cache_read_input_tokens", 0),
+                cache_creation=message.usage.get("cache_creation_input_tokens", 0)))
 
     async def fork_interaction(self, interaction: Interaction) -> Any:
         """Spawn a sub-agent to answer ``interaction`` and return its result.

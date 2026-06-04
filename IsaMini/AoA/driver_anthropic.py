@@ -10,9 +10,9 @@ import anthropic
 import httpx
 
 from .model import *
-from .language_model_driver import _TransientError, _QuotaError, PRICING, pricing_for
+from .language_model_driver import _TransientError, _QuotaError, PRICING, pricing_for, Usage
 from .driver_api import (
-    Provider, ToolCall, Usage, ProviderResponse,
+    Provider, ToolCall, ProviderResponse,
     Msg, SystemMsg, UserMsg, AssistantMsg, ToolResultMsg,
     APIDriver, agent_driver,
 )
@@ -191,11 +191,12 @@ class AnthropicProvider(Provider):
                 ))
 
         u = response.usage
-        usage = Usage(
+        # Anthropic input_tokens ALREADY excludes cache → pass through.
+        usage = Usage.from_uncached(
             input_tokens=u.input_tokens,
             output_tokens=u.output_tokens,
-            cached_tokens=getattr(u, 'cache_read_input_tokens', 0) or 0,
-            cache_creation_tokens=getattr(u, 'cache_creation_input_tokens', 0) or 0,
+            cache_read=getattr(u, 'cache_read_input_tokens', 0) or 0,
+            cache_creation=getattr(u, 'cache_creation_input_tokens', 0) or 0,
         )
 
         return ProviderResponse(

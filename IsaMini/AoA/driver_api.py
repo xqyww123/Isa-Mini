@@ -25,7 +25,7 @@ import httpx
 import openai
 
 from .model import *
-from .language_model_driver import LMDriver, _TransientError, _QuotaError, PRICING, pricing_for
+from .language_model_driver import LMDriver, _TransientError, _QuotaError, PRICING, pricing_for, Usage
 
 from .mcp_http_server import ToolExecutor, _cc_edit_schema_flat
 from .helper import MyIO
@@ -40,14 +40,6 @@ class ToolCall:
     id: str
     name: str
     arguments: str  # raw JSON string from API
-
-
-@dataclass
-class Usage:
-    input_tokens: int
-    output_tokens: int
-    cached_tokens: int
-    cache_creation_tokens: int = 0
 
 
 @dataclass
@@ -345,10 +337,11 @@ class OpenAIChatProvider(OpenAIBase):
             if details:
                 cached = getattr(details, 'cached_tokens', 0) or 0
 
-        usage = Usage(
-            input_tokens=stream_usage.prompt_tokens if stream_usage else 0,
+        # OpenAI prompt_tokens INCLUDES cached → normalize to uncached input.
+        usage = Usage.from_inclusive(
+            prompt_tokens=stream_usage.prompt_tokens if stream_usage else 0,
             output_tokens=stream_usage.completion_tokens if stream_usage else 0,
-            cached_tokens=cached,
+            cached=cached,
         )
 
         return ProviderResponse(
@@ -531,10 +524,11 @@ class OpenAIResponsesProvider(OpenAIBase):
             if details:
                 cached = getattr(details, 'cached_tokens', 0) or 0
 
-        usage = Usage(
-            input_tokens=(um.input_tokens or 0) if um else 0,
+        # OpenAI input_tokens INCLUDES cached → normalize to uncached input.
+        usage = Usage.from_inclusive(
+            prompt_tokens=(um.input_tokens or 0) if um else 0,
             output_tokens=(um.output_tokens or 0) if um else 0,
-            cached_tokens=cached,
+            cached=cached,
         )
 
         self._last_output_items = output_items
@@ -1108,17 +1102,6 @@ class APIDriver(LMDriver):
     # Cost Tracking
     # ------------------------------------------------------------------
 
-    def _accumulate_usage(self, usage: Usage):
-        self.total_input_tokens += usage.input_tokens
-        self.total_output_tokens += usage.output_tokens
-        self.total_cache_read_input_tokens += usage.cached_tokens
-        self.total_cache_creation_input_tokens += usage.cache_creation_tokens
-        self._log_meta("USAGE",
-                       input_tokens=usage.input_tokens,
-                       output_tokens=usage.output_tokens,
-                       cached_tokens=usage.cached_tokens,
-                       cache_creation_tokens=usage.cache_creation_tokens)
-
     def estimate_tokens(self, messages: list[Msg]) -> int:
         total = 0
         for m in messages:
@@ -1134,8 +1117,8 @@ class APIDriver(LMDriver):
                         total += len(tc.name) + len(tc.arguments)
         return total // 4
 
-    def _compute_cost(self):
-        self.total_cost_usd = self._cost_from(self._provider.pricing())
+    def _pricing(self) -> dict[str, float]:
+        return self._provider.pricing()
 
 
 # ============================================================================

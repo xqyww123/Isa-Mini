@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from time import time
 from typing import Awaitable, Callable, TypeVar
 
@@ -23,13 +24,16 @@ class _QuotaError(AoA_Error):
 
 
 # --- Cost accounting (shared by every driver / provider) ---
+# Token-accounting standard for this package: docs/COST_ACCOUNTING.md.
 
 # Per-model token prices in USD *per token* (= published price-per-1M ÷ 1e6),
 # keyed by model name across all providers. Names do not collide between
 # providers (``gpt-*``/``o*`` vs ``claude-*`` vs ``gemini-*``), so one table
-# serves them all. The optional ``cache_write`` rate applies only to providers
-# that bill cache *creation* (Anthropic); when absent, ``compute_cost`` falls
-# back to the ``input`` rate. Verified against published pricing 2026-06.
+# serves them all. ``cached`` is the cache-READ rate; the optional ``cache_write``
+# rate applies only to providers that bill cache *creation* (Anthropic) — when
+# absent, ``_compute_cost`` falls back to the ``input`` rate. For Claude the cache
+# convention is the 5-min ephemeral TTL: cache_write = 1.25× input, cache read =
+# 0.1× input. Verified against published pricing 2026-06.
 PRICING: dict[str, dict[str, float]] = {
     # OpenAI
     "gpt-5.5-pro":  {"input": 30.00e-6, "cached": 30.00e-6, "output": 180.00e-6},
@@ -40,9 +44,11 @@ PRICING: dict[str, dict[str, float]] = {
     "gpt-4.1-nano": {"input": 0.10e-6,  "cached": 0.025e-6, "output": 0.40e-6},
     "o3":           {"input": 2.00e-6,  "cached": 0.50e-6,  "output": 8.00e-6},
     "o4-mini":      {"input": 1.10e-6,  "cached": 0.275e-6, "output": 4.40e-6},
-    # Anthropic
-    "claude-opus-4-6":   {"input": 5.00e-6, "cache_write": 10.00e-6, "cached": 0.50e-6, "output": 25.00e-6},
-    "claude-sonnet-4-6": {"input": 3.00e-6, "cache_write": 3.75e-6,  "cached": 0.30e-6, "output": 15.00e-6},
+    # Anthropic (cache_write = 5-min TTL = 1.25× input; cached = 0.1× input)
+    "claude-opus-4-6":   {"input": 5.00e-6,  "cache_write": 6.25e-6,  "cached": 0.50e-6, "output": 25.00e-6},
+    "claude-opus-4-5":   {"input": 15.00e-6, "cache_write": 18.75e-6, "cached": 1.50e-6, "output": 75.00e-6},
+    "claude-sonnet-4-6": {"input": 3.00e-6,  "cache_write": 3.75e-6,  "cached": 0.30e-6, "output": 15.00e-6},
+    "claude-sonnet-4-5": {"input": 3.00e-6,  "cache_write": 3.75e-6,  "cached": 0.30e-6, "output": 15.00e-6},
     # Gemini
     "gemini-2.5-pro":         {"input": 1.25e-6, "cached": 0.3125e-6, "output": 10.00e-6},
     "gemini-2.5-flash":       {"input": 0.15e-6, "cached": 0.0375e-6, "output": 0.60e-6},
@@ -55,6 +61,37 @@ def pricing_for(model: str, default: dict[str, float]) -> dict[str, float]:
     """Per-token price dict for *model*, or *default* (the caller's family
     flagship, e.g. ``PRICING["gpt-4.1"]``) when the model is unknown."""
     return PRICING.get(model, default)
+
+
+@dataclass
+class Usage:
+    """Canonical per-call token usage (see docs/COST_ACCOUNTING.md).
+
+    INVARIANT: ``input_tokens`` is UNCACHED-only. Cache reads/writes are the
+    separate, mutually-exclusive ``cached_tokens`` / ``cache_creation_tokens``
+    partitions, so ``total_prompt = input + cached + cache_creation``. Always
+    build via the factories below — they encode each provider's convention so
+    the invariant holds by construction rather than by remembering to subtract.
+    """
+    input_tokens: int
+    output_tokens: int
+    cached_tokens: int
+    cache_creation_tokens: int = 0
+
+    @classmethod
+    def from_uncached(cls, input_tokens: int, output_tokens: int,
+                      cache_read: int, cache_creation: int = 0) -> 'Usage':
+        """Provider whose reported input ALREADY excludes cache (Anthropic /
+        Claude Code) — pass straight through."""
+        return cls(input_tokens, output_tokens, cache_read, cache_creation)
+
+    @classmethod
+    def from_inclusive(cls, prompt_tokens: int, output_tokens: int,
+                       cached: int, cache_creation: int = 0) -> 'Usage':
+        """Provider whose reported prompt count INCLUDES cache (OpenAI / Gemini /
+        Codex) — subtract the cache share once to recover uncached input."""
+        return cls(max(0, prompt_tokens - cached - cache_creation),
+                   output_tokens, cached, cache_creation)
 
 
 class LMDriver(Session):
@@ -116,20 +153,38 @@ class LMDriver(Session):
                     raise
         assert False  # unreachable
 
-    def _cost_from(self, p: dict[str, float]) -> float:
-        """Total USD cost of this session's token usage under price dict *p*.
-        Generalises every driver: providers that do not bill cache *creation*
-        leave ``total_cache_creation_input_tokens`` at 0 and pass a *p* without
-        ``cache_write``, so both the subtraction and the cache-write term vanish."""
-        non_cached = max(0, self.total_input_tokens
-                         - self.total_cache_read_input_tokens
-                         - self.total_cache_creation_input_tokens)
-        return (
-            non_cached * p["input"]
+    def _pricing(self) -> dict[str, float]:
+        """Price dict for this driver's model. Each concrete driver supplies it —
+        a provider lookup (``self._provider.pricing()``) or
+        ``pricing_for(self._model, <family default>)``."""
+        raise NotImplementedError
+
+    def _compute_cost(self) -> None:
+        """Recompute ``total_cost_usd`` from the canonical token partition and the
+        driver's pricing (see docs/COST_ACCOUNTING.md). Partition sum with NO
+        subtraction — ``total_input_tokens`` is already uncached. ``cache_write``
+        falls back to the input rate for providers that don't bill cache creation."""
+        p = self._pricing()
+        self.total_cost_usd = (
+            self.total_input_tokens * p["input"]
             + self.total_cache_creation_input_tokens * p.get("cache_write", p["input"])
             + self.total_cache_read_input_tokens * p["cached"]
             + self.total_output_tokens * p["output"]
         )
+
+    def _accumulate_usage(self, usage: Usage) -> None:
+        """Add one call's canonical ``Usage`` into the running token totals (and log
+        it). Touches ONLY the token counters — never ``total_cost_usd`` — so it is
+        safe alongside drivers that take a remote-reported cost (e.g. Claude Code)."""
+        self.total_input_tokens += usage.input_tokens
+        self.total_output_tokens += usage.output_tokens
+        self.total_cache_read_input_tokens += usage.cached_tokens
+        self.total_cache_creation_input_tokens += usage.cache_creation_tokens
+        self._log_meta("USAGE",
+                       input_tokens=usage.input_tokens,
+                       output_tokens=usage.output_tokens,
+                       cached_tokens=usage.cached_tokens,
+                       cache_creation_tokens=usage.cache_creation_tokens)
 
     # --- Worker spawning ---
 
