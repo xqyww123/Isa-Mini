@@ -1,0 +1,27 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(P :: nat). P = (5 :: nat)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Define (nullary constant, now supported)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(P :: nat). P = (5 :: nat)
+proof:
+  - step id: 1
+    thought: Name the constant 5 as P for shorter computations
+    operation: Define
+    name: P
+    type: nat
+    equations:
+      - P = 5
+    proof of termination: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  ∃(P :: nat). P = (5 :: nat)
+is_error: False
+reason: None
+Unfinished nodes: 1

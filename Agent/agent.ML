@@ -1208,21 +1208,50 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
           end)
     | DEFINE (name, ty_opt, equations, metric) =>
         let
-          val fixes : (binding * string option * mixfix) list =
+          val decls : (binding * string option * mixfix) list =
             [(Binding.name name, ty_opt, NoSyn)]
           val specs : Specification.multi_specs_cmd =
             map (fn eq => ((Binding.empty_atts, eq), [], [])) equations
-          val s' = Minilang.FUN'' fixes specs
-                     {metric = metric, open_on_fail = true} s
-          (* Report the function's type so the Python side can update
-             Define._fixed_vars_at_me / _after_me even when the user
-             omitted the type field. *)
-          val ctxt' = Minilang.context_of s'
-          val ty_str =
-            case Function_Common.import_last_function ctxt' of
-              SOME {fs = f :: _, ...} =>
-                string_of_type ctxt' (fastype_of f)
-            | _ => the_default "?" ty_opt
+          val ctxt0 = Minilang.context_of s
+          (* A nullary constant (head applied to no arguments, e.g.
+             `P = 5`) cannot go through the function/fun package — it
+             rejects an argument-free LHS with "Function has no
+             arguments". Route such definitions through the plain Isar
+             `define` command instead; all other (function-style)
+             definitions keep going through FUN'' unchanged.
+
+             The defined head's type is reported back (via DEFINE_RESULT)
+             so the Python side can update Define._fixed_vars_at_me /
+             _after_me even when the user omitted the type field. The two
+             paths obtain it differently and MUST NOT share a fallback:
+             import_last_function returns the *last function in the
+             ambient context*, which on the define path is some unrelated
+             leftover — so the define path reads the freshly-fixed head
+             directly instead. *)
+          val (s', ty_str) =
+            if Minilang.is_nullary_def_cmd decls specs ctxt0
+            then
+              let
+                val defs : (Attrib.binding * (string * string list) list) list =
+                  map (fn eq => (Binding.empty_atts, [(eq, [])])) equations
+                val s' = Minilang.DEFINE'' decls defs [] s
+                val ctxt' = Minilang.context_of s'
+                val ty_str =
+                  case try (Syntax.read_term ctxt') name of
+                    SOME t => string_of_type ctxt' (fastype_of t)
+                  | NONE => the_default "?" ty_opt
+              in (s', ty_str) end
+            else
+              let
+                val s' = Minilang.FUN'' decls specs
+                           {metric = metric, open_on_fail = true} s
+                val ctxt' = Minilang.context_of s'
+                val ty_str =
+                  case Function_Common.import_last_function ctxt' of
+                    SOME {fs = f :: _, ...} =>
+                      string_of_type ctxt' (fastype_of f)
+                  | _ => the_default "?" ty_opt
+              in (s', ty_str) end
           val _ = Minilang.get_reporter ()
                     (Minilang.Internal (DEFINE_RESULT (name, ty_str)))
         in s' end

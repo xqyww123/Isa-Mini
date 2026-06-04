@@ -848,6 +848,44 @@ async def _test_Define_Manual(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
 
+@model_test("Define_Nullary", "Test_Define_Nullary.thy", 16)
+async def _test_Define_Nullary(root: Root, file: MyIO):
+    """Define DOES support a nullary constant. The function/fun package
+    rejects an argument-free left-hand side ("Function has no
+    arguments"), so AoA's Define op (ML side) detects the nullary case
+    via Minilang.is_nullary_def_cmd and routes it through the plain Isar
+    `define` command instead of Minilang.FUN''. The bare constant
+    `P = 5` is therefore introduced successfully: the Define node carries
+    no error and is satisfied, leaving only the outer existential goal
+    unfinished. (Regression test for the nullary-define fix.)
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Introduce P = 5 as a nullary constant. Detected as nullary on the
+    # ML side and routed through plain `define` (not the fun package).
+    _outcome = await root.fill("1", [Define.gen_single({
+        "thought": "Name the constant 5 as P for shorter computations",
+        "name": "P",
+        "type": "nat",
+        "equations": ["P = 5"],
+    })])
+    is_error = _outcome.failure is not None and _outcome.failure.is_error
+    reason = _outcome.failure
+    print_header("After Define (nullary constant, now supported)", file)
+    root.print(0, file)
+    file.write(f"is_error: {is_error}\n")
+    file.write(f"reason: {reason.reason if isinstance(reason, FailureReason) else reason}\n")
+
+    # The nullary Define is satisfied (no residual termination /
+    # pat-completeness obligations); only the outer existential remains.
+    unfinished_nodes = set()
+    root.unfinished_nodes(unfinished_nodes)
+    file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+    assert len(unfinished_nodes) == 1, \
+        f"Nullary Define should be satisfied (only outer goal left), " \
+        f"got {len(unfinished_nodes)} unfinished"
+
 @model_test("Define_CaseExpr", "Test_Define_CaseExpr.thy", 16)
 async def _test_Define_CaseExpr(root: Root, file: MyIO):
     """Reproducer for fastype_of: Bound.
@@ -10248,7 +10286,9 @@ async def _test_nested_worker_scope(root: Root, file: MyIO):
     refutation-review reason conversion. Every path here resolves BEFORE the
     live-dispatch point (`handle.start`/`run_until_yield`, which needs an LLM),
     so it is exercised by calling the helpers / tool-logic directly."""
-    from .mcp_http_server import _subagent_tool_logic, _delete_tool_logic
+    from .mcp_http_server import (_subagent_tool_logic, _delete_tool_logic,
+                                  _refute_or_surrender_tool_logic,
+                                  _close_subagent_tool_logic)
     session = root.session
     session.age += 1
     goal = root.sub_nodes[1]
@@ -10392,6 +10432,42 @@ async def _test_nested_worker_scope(root: Root, file: MyIO):
     H111 = root.locate_node("1.1.1")
     print_header("retry_prompt (worker scope 1.1)", file)
     file.write(session.retry_prompt({H111}) + "\n")
+
+    # --- 12. worker→planner detail is ABSOLUTIZED at emission. A worker on scope
+    # 1.1 surrenders citing relative "step 1.1" (= absolute 1.1.1.1); the enqueued
+    # event must carry the absolute id (the dispatcher re-relativizes for its view).
+    # `step 2` is single-component -> left as-is (documented limitation). ---
+    h_emit = WorkerHandle(H11, session)
+    session.role = model.Role_Worker(target=H11, worker_handle=h_emit)
+    await _refute_or_surrender_tool_logic(session, {
+        "reason": "surrender", "detail": "blocked by step 1.1 and step 2"})
+    ev = h_emit._event_queue.get_nowait()
+    print_header("worker detail absolutized at emit (worker scope 1.1)", file)
+    file.write(f"event={type(ev).__name__}; detail={ev.detail!r}\n")
+    session.quit_info = None
+
+    # --- 13. close_subagent: a worker closes its own sub-agent by RELATIVE id;
+    # the id resolves to the right node, the handle detaches, and a relative id
+    # with no handle yields a relativized "no sub-agent" error. ---
+    session.role = model.Role_Worker(target=H1, worker_handle=WorkerHandle(H1, session))
+    H11.worker_handle = WorkerHandle(H11, session)          # sub-agent parked on 1.1
+    r_c, e_c = await _close_subagent_tool_logic(session, {"step_id": "1"})   # relative 1 -> 1.1
+    print_header("close_subagent relative '1' (->1.1): detach", file)
+    file.write(f"is_error={e_c}; {r_c}\n")
+    file.write(f"handle on 1.1 detached: {H11.worker_handle is None}\n")
+    r_c2, e_c2 = await _close_subagent_tool_logic(session, {"step_id": "2"})  # relative 2 -> 1.2 (no handle)
+    file.write(f"no-handle is_error={e_c2}; {r_c2}\n")
+
+    # --- 14. redirect_note relativized for a worker dispatcher. Delegating a LEAF
+    # (1.2.1.1, an Obvious) redirects UP to its enclosing goal 1.2.1, which is
+    # already proved -> errors before any live dispatch, with both ids shown in
+    # the worker's relative form. ---
+    await root.fill("1.2.1", [Have.gen_single({"thought": "p", "statement": {"english": "t", "conclusion": "True"}, "name": "hp"})])
+    await root.fill("1.2.1.1", [Obvious.gen_single({"facts": []})])
+    session.role = model.Role_Worker(target=H1, worker_handle=WorkerHandle(H1, session))
+    r_r, e_r = await _subagent_tool_logic(session, {"step_id": "2.1.1", "suggestions": "", "helpful_lemmas": []})
+    print_header("subagent on leaf '2.1.1' redirects up to '2.1' (relativized note)", file)
+    file.write(f"is_error={e_r}\n{r_r}\n")
 
     session.role = model.Role_Major()
 

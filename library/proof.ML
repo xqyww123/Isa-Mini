@@ -333,6 +333,15 @@ val FUN'' : (binding * string option * mixfix) list
 val FUN_CMD : command
 val FUN_DEBUG_CMD : command
 
+(* True iff the command-level definition is a single NULLARY equation
+   (defined head applied to no arguments, e.g. `c = rhs`). Such
+   constants must go through DEFINE'' (plain Isar `define`), not FUN''
+   — the function/fun package rejects an argument-free head. *)
+val is_nullary_def_cmd : (binding * string option * mixfix) list
+                      -> Specification.multi_specs_cmd
+                      -> Proof.context
+                      -> bool
+
 (* Create simprocs that fire only on specific target terms.
    Unlike thms_to_once_simprocs, these fire on ALL indicated targets, not just once.
    Each (thm, targets) pair produces simprocs whose proc checks aconv against targets. *)
@@ -4618,18 +4627,38 @@ fun can_use_definition fnames eq =
         (fn Free (n, _) => member (op =) fnames n | _ => false) rhs)
   | _ => false)
 
-(* Decision: can we use definition or do we need fun?
-   Single equation + definition-compatible => true *)
-fun can_use_definition_cmd fixes specs ctxt =
-  length specs = 1 andalso
+(* A *nullary* definition: the LHS is the bare defined head applied to
+   NO arguments (e.g. `c = rhs`), non-recursive and premise-free. The
+   function/fun package rejects an argument-free head ("Function has no
+   arguments"), so such constants must be introduced via the plain Isar
+   `define` command instead. Strict subset of can_use_definition. *)
+fun is_nullary_definition fnames eq =
+  (case decompose_equation eq of
+    SOME (((Free _, []), rhs), has_prems) =>
+      not has_prems
+      andalso not (Term.exists_subterm
+        (fn Free (n, _) => member (op =) fnames n | _ => false) rhs)
+  | _ => false)
+
+(* Parse a command-level definition (fixes, specs) and test every
+   resulting equation with [pred fnames eq]. Any parse failure ⇒ false. *)
+fun all_parsed_eqs pred fixes specs ctxt =
   \<^try>\<open>
     let
       val ctxt0 = Variable.set_body false ctxt
       val ((params, named_specs), _) =
         Specification.read_multi_specs fixes specs ctxt0
       val fnames = map (Binding.name_of o fst o fst) params
-    in forall (fn (_, eq) => can_use_definition fnames eq) named_specs end
+    in forall (fn (_, eq) => pred fnames eq) named_specs end
   catch exn => false\<close>
+
+(* Decision: can we use definition or do we need fun?
+   Single equation + definition-compatible => true *)
+fun can_use_definition_cmd fixes specs ctxt =
+  length specs = 1 andalso all_parsed_eqs can_use_definition fixes specs ctxt
+
+fun is_nullary_def_cmd fixes specs ctxt =
+  length specs = 1 andalso all_parsed_eqs is_nullary_definition fixes specs ctxt
 
 (* ====== FUN: extended pipeline with metric + deferred proof blocks ====== *)
 
