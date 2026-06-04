@@ -19,13 +19,13 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from io import StringIO
 from time import time
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import httpx
 import openai
 
 from .model import *
-from .language_model_driver import LMDriver, _TransientError, _QuotaError, PRICING, pricing_for, Usage
+from .language_model_driver import LMDriver, _TransientError, _QuotaError, _T, PRICING, pricing_for, Usage
 
 from .mcp_http_server import ToolExecutor, _cc_edit_schema_flat
 from .helper import MyIO
@@ -213,6 +213,10 @@ class OpenAIBase(Provider):
         self._temperature = temperature
         self._reasoning_effort = reasoning_effort
         self._extra_params = extra_params or {}
+        # Logging hook for the internal retry loop (Layer 2). The driver injects
+        # its ``warn_AoA_opr`` here so transient-error handling is no longer
+        # silent; defaults to a no-op for providers used outside a driver.
+        self._log: Callable[[str], None] = lambda _m: None
 
     @property
     def context_window(self) -> int:
@@ -450,24 +454,35 @@ class OpenAIResponsesProvider(OpenAIBase):
         attempt = 0
         while True:
             if time() - _chat_t0 >= _MAX_CHAT_TIME:
+                self._log("chat() retry budget exhausted (1 hour); giving up")
                 raise _TransientError("chat() retry budget exhausted (1 hour)")
             t0 = time()
             try:
                 stream = await self._client.responses.create(**params, stream=True)
-            except (openai.BadRequestError, openai.NotFoundError):
+            except (openai.BadRequestError, openai.NotFoundError) as e:
                 if params.get("previous_response_id") is not None:
+                    self._log(f"responses.create rejected previous_response_id "
+                              f"({type(e).__name__}); retrying without it: {e}")
                     params.pop("previous_response_id", None)
                     continue
+                self._log(f"responses.create failed, non-retryable ({type(e).__name__}): {e}")
                 raise
             except openai.RateLimitError as e:
                 if "insufficient_quota" in str(e):
+                    self._log(f"responses.create quota exhausted: {e}")
                     raise _QuotaError(str(e)) from e
                 attempt += 1
-                await asyncio.sleep(min(2 ** attempt, _BACKOFF_CAP))
+                wait = min(2 ** attempt, _BACKOFF_CAP)
+                self._log(f"responses.create rate-limited "
+                          f"(attempt {attempt}, retry in {wait:.0f}s): {e}")
+                await asyncio.sleep(wait)
                 continue
-            except openai.APIError:
+            except openai.APIError as e:
                 attempt += 1
-                await asyncio.sleep(min(2 ** attempt, _BACKOFF_CAP))
+                wait = min(2 ** attempt, _BACKOFF_CAP)
+                self._log(f"responses.create API error "
+                          f"(attempt {attempt}, retry in {wait:.0f}s): {e}")
+                await asyncio.sleep(wait)
                 continue
             attempt = 0
 
@@ -478,18 +493,28 @@ class OpenAIResponsesProvider(OpenAIBase):
                         break
                 else:
                     attempt += 1
-                    await asyncio.sleep(min(2 ** attempt, _BACKOFF_CAP))
+                    wait = min(2 ** attempt, _BACKOFF_CAP)
+                    self._log(f"stream ended without response.completed "
+                              f"(attempt {attempt}, retry in {wait:.0f}s)")
+                    await asyncio.sleep(wait)
                     continue
             except httpx.ReadTimeout:
+                self._log("read timeout while streaming; falling back to background mode")
                 response = await self._resubmit_background(params)
             except (openai.APIError, httpx.TransportError) as e:
                 if time() - t0 > _BACKGROUND_THRESHOLD:
+                    self._log(f"streaming failed after {time() - t0:.0f}s "
+                              f"({type(e).__name__}); falling back to background mode: {e}")
                     response = await self._resubmit_background(params)
                 elif isinstance(e, openai.APIStatusError) and e.status_code < 500 and not isinstance(e, openai.RateLimitError):
+                    self._log(f"streaming failed, non-retryable ({type(e).__name__}): {e}")
                     raise
                 else:
                     attempt += 1
-                    await asyncio.sleep(min(2 ** attempt, _BACKOFF_CAP))
+                    wait = min(2 ** attempt, _BACKOFF_CAP)
+                    self._log(f"streaming error ({type(e).__name__}, "
+                              f"attempt {attempt}, retry in {wait:.0f}s): {e}")
+                    await asyncio.sleep(wait)
                     continue
             finally:
                 await stream.close()
@@ -556,11 +581,16 @@ class OpenAIResponsesProvider(OpenAIBase):
                 break
             except openai.RateLimitError as e:
                 if "insufficient_quota" in str(e):
+                    self._log(f"background create quota exhausted: {e}")
                     raise _QuotaError(str(e)) from e
+                self._log(f"background create rate-limited; retrying in {_POLL_INTERVAL}s: {e}")
             except openai.APIError as e:
                 if isinstance(e, openai.APIStatusError) and e.status_code < 500 and not isinstance(e, openai.RateLimitError):
+                    self._log(f"background create failed, non-retryable ({type(e).__name__}): {e}")
                     raise
+                self._log(f"background create API error; retrying in {_POLL_INTERVAL}s: {e}")
             if time() - t0 >= _MAX_TIME:
+                self._log("background create timed out (1 hour); giving up")
                 raise _TransientError("Background create timed out")
             await asyncio.sleep(_POLL_INTERVAL)
 
@@ -569,6 +599,7 @@ class OpenAIResponsesProvider(OpenAIBase):
         while resp.status in ("queued", "in_progress"):
             await asyncio.sleep(_POLL_INTERVAL)
             if time() - t0 >= _MAX_TIME:
+                self._log(f"background response {response_id} timed out after {_MAX_TIME}s; giving up")
                 raise _TransientError(
                     f"Background response {response_id} timed out after {_MAX_TIME}s")
             try:
@@ -576,13 +607,19 @@ class OpenAIResponsesProvider(OpenAIBase):
                 _not_found_count = 0
             except openai.NotFoundError:
                 _not_found_count += 1
+                self._log(f"background response {response_id} not found "
+                          f"({_not_found_count}/15); retrying")
                 if _not_found_count > 15:
+                    self._log(f"background response {response_id} not found after "
+                              f"{_not_found_count} attempts; giving up")
                     raise _TransientError(
                         f"Background response {response_id} not found after {_not_found_count} attempts")
-            except (httpx.TimeoutException, openai.APIConnectionError):
-                pass
+            except (httpx.TimeoutException, openai.APIConnectionError) as e:
+                self._log(f"transient error polling background response {response_id} "
+                          f"({type(e).__name__}); retrying: {e}")
         if resp.status == "completed":
             return resp
+        self._log(f"background response {response_id} finished with status '{resp.status}'; giving up")
         raise _TransientError(
             f"Background response {response_id} finished with status '{resp.status}'")
 
@@ -684,6 +721,10 @@ class APIDriver(LMDriver):
                  parent: 'APIDriver | None' = None, **kwargs):
         super().__init__(*args, parent=parent, **kwargs)
         self._provider = provider
+        # Route the provider's internal-retry logging (Layer 2) to this
+        # driver's warning log so transient errors are recorded.
+        if isinstance(self._provider, OpenAIBase):
+            self._provider._log = self.warn_AoA_opr
         self._messages: list[Msg] = []
         self._interrupted = False
         self._executor: ToolExecutor | None = None
@@ -1155,6 +1196,14 @@ class APIDriver_ChatGPT(APIDriver):
             )
         super().__init__(*args, provider=provider, **kwargs)
 
+    async def _retry_transient(self, fn: Callable[[], Awaitable[_T]]) -> _T:
+        """No-op override: ``OpenAIResponsesProvider`` already retries transient
+        errors internally and only raises ``_TransientError`` after its 1-hour
+        budget is exhausted. The base 10-attempt wrapper would just restart that
+        budget each time (~10h worst case), so we skip it and let the error go
+        straight to Layer 0 (``_with_retry`` / ``_run_fork``)."""
+        return await fn()
+
     def __str__(self) -> str:
         prov = self._provider
         effort = f"-{prov._reasoning_effort}" if isinstance(prov, OpenAIBase) and prov._reasoning_effort else ""
@@ -1185,11 +1234,15 @@ class APIDriver_ChatGPT(APIDriver):
             parent_prov = self._provider
             effort = (parent_prov._reasoning_effort
                       if isinstance(parent_prov, OpenAIBase) else None)
-            return OpenAIResponsesProvider(
+            cheaper = OpenAIResponsesProvider(
                 model=self.FORK_CHEAPER_MODEL,
                 cache_key=None,
                 reasoning_effort=effort,
             )
+            # Freshly built provider never passes through APIDriver.__init__,
+            # so wire its Layer-2 logging hook here too.
+            cheaper._log = self.warn_AoA_opr
+            return cheaper
         return self._provider
 
 
