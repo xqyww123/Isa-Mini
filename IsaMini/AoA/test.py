@@ -10469,6 +10469,88 @@ async def _test_nested_worker_scope(root: Root, file: MyIO):
     print_header("subagent on leaf '2.1.1' redirects up to '2.1' (relativized note)", file)
     file.write(f"is_error={e_r}\n{r_r}\n")
 
+    # --- 15. COMPREHENSIVE depth-2/3 nesting + edge cases. Stack:
+    # planner -> W1(scope 1) -> W2(scope 1.1) -> W3(scope 1.1.1). Relativization
+    # keys only off each session's OWN target (never the parent chain), so
+    # switching the role faithfully models the worker stack. Extend the deep
+    # branch to 1.1.1.1.1 so depth-3 relative ids stay multi-component. ---
+    await root.fill("1.1.1.1.1", [Have.gen_single({"thought": "d5", "statement": {"english": "t", "conclusion": "True"}, "name": "h5"})])
+    Wd3 = root.locate_node("1.1.1")
+    def _W(target):  # set a fresh worker role on `target`
+        session.role = model.Role_Worker(target=target, worker_handle=WorkerHandle(target, session))
+
+    # (a) ONE node (1.1.1.1.1) shown at all FOUR levels — each its own namespace.
+    session.role = model.Role_Major(); a_p = session._display_id("1.1.1.1.1")
+    _W(H1);  a_w1 = session._display_id("1.1.1.1.1")
+    _W(H11); a_w2 = session._display_id("1.1.1.1.1")
+    _W(Wd3); a_w3 = session._display_id("1.1.1.1.1")
+    show("depth (a): node 1.1.1.1.1 at planner / W1(1) / W2(1.1) / W3(1.1.1)", [
+        ("planner",   a_p),    # 1.1.1.1.1
+        ("W1(1)",     a_w1),   # 1.1.1.1
+        ("W2(1.1)",   a_w2),   # 1.1.1
+        ("W3(1.1.1)", a_w3),   # 1.1
+        ("round-trip W3 resolve(display)==id", session._resolve_display_id(a_w3) == "1.1.1.1.1"),
+    ])
+
+    # (b) a detail authored by the INNERMOST W3 round-trips UP three levels; the
+    # same node renders in each viewer's namespace.
+    _W(Wd3)
+    d_emit = session._absolutize_text(f"see step {session._display_id('1.1.1.1.1')}")  # 'see step 1.1' -> absolute
+    chain = [("W3 authors", f"see step {a_w3}"), ("absolutized at emit", d_emit)]
+    _W(H11); chain.append(("W2(1.1) view", session._relativize_text(d_emit)))
+    _W(H1);  chain.append(("W1(1) view",   session._relativize_text(d_emit)))
+    session.role = model.Role_Major(); chain.append(("planner view", session._relativize_text(d_emit)))
+    show("depth (b): W3-authored detail re-relativized up the stack", chain)
+
+    # (c) cross-namespace suggestion rebase at the W1->W2 dispatch boundary: an
+    # in-scope ref relativizes into W2; a ref outside W2 but inside W1 -> external.
+    _W(H1)  # dispatcher W1 (scope 1)
+    rb_d = session._rebase_suggestion_ids(H11, "good: step 1.1.1 ; avoid: step 2.1")  # recipient W2 = 1.1
+    show("depth (c): W1->W2 suggestion rebase", [("rebased+external", rb_d)])  # ('good: step 1.1 ; avoid: step 2.1', ['2.1'])
+
+    # (d) edge id shapes: Branch/CaseSplit named children + the 'A' suffix all
+    # relativize (component-wise), in direct ids and in free text.
+    _W(H11)  # scope 1.1
+    show("depth (d): edge id shapes (worker scope 1.1)", [
+        ("display 1.1.True.1",  session._display_id("1.1.True.1")),    # True.1
+        ("display 1.1.0.2",     session._display_id("1.1.0.2")),       # 0.2
+        ("display 1.1.1.1A.2",  session._display_id("1.1.1.1A.2")),    # 1.1A.2
+        ("relativize_text",     session._relativize_text("step 1.1.True.1 and Subgoal 1.1.0.1 and step 1.2.9")),
+    ])
+
+    # (e) the SAME node 1.2 is internal to W1 but external to W2 (scope asymmetry).
+    _W(H1);  e_w1 = session._display_id("1.2")
+    _W(H11); e_w2 = session._display_id("1.2")
+    show("depth (e): node 1.2 internal-to-W1 / external-to-W2", [
+        ("W1(1)",   e_w1),   # 2
+        ("W2(1.1)", e_w2),   # <external>
+    ])
+
+    # (f) W1 (a worker) DISPATCHES W2 (step 1 => node 1.1) with a suggestion that
+    # is external to W2 -> rejected at the W1->W2 boundary, before live dispatch.
+    _W(H1)
+    session._subagent_extstep_bypass.clear()
+    r_d2, e_d2 = await _subagent_tool_logic(session, {"step_id": "1", "suggestions": "see step 2.1", "helpful_lemmas": []})
+    print_header("depth (f): W1 dispatches W2 (step 1=>1.1) w/ external suggestion", file)
+    file.write(f"is_error={e_d2}\n{r_d2}\n")
+
+    # --- 16. cancelled-line relativization: a CANCELLED node's `_cancelled_by`
+    # is relativized (in-scope) / masked (out-of-scope) in the rendered reason. ---
+    from io import StringIO
+    session.role = model.Role_Worker(target=H11, worker_handle=WorkerHandle(H11, session))  # scope 1.1
+    victim = root.locate_node("1.1.2")
+    victim.status = EVALUATION_CACNCELLED
+    victim._cancelled_by = "1.1.1"                 # in-scope sibling -> 1
+    session.showed_cancelled_notice = False
+    fa = MyIO(StringIO()); victim._print_evaluation_status(0, fa)
+    victim._cancelled_by = "1.2"                   # out of scope -> <external>
+    session.showed_cancelled_notice = True
+    fb = MyIO(StringIO()); victim._print_evaluation_status(0, fb)
+    show("cancelled-line relativization (worker scope 1.1)", [
+        ("in-scope cancelled_by 1.1.1", fa.getvalue().strip()),
+        ("external cancelled_by 1.2",   fb.getvalue().strip()),
+    ])
+
     session.role = model.Role_Major()
 
 

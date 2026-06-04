@@ -86,3 +86,45 @@ subagent on leaf '2.1.1' redirects up to '2.1' (relativized note)
 is_error=True
 Instead of step 2.1.1, the sub-agent is working on step 2.1.
 That step is already proved.
+--------------------------------------------------
+depth (a): node 1.1.1.1.1 at planner / W1(1) / W2(1.1) / W3(1.1.1)
+--------------------------------------------------
+planner = '1.1.1.1.1'
+W1(1) = '1.1.1.1'
+W2(1.1) = '1.1.1'
+W3(1.1.1) = '1.1'
+round-trip W3 resolve(display)==id = True
+--------------------------------------------------
+depth (b): W3-authored detail re-relativized up the stack
+--------------------------------------------------
+W3 authors = 'see step 1.1'
+absolutized at emit = 'see step 1.1.1.1.1'
+W2(1.1) view = 'see step 1.1.1'
+W1(1) view = 'see step 1.1.1.1'
+planner view = 'see step 1.1.1.1.1'
+--------------------------------------------------
+depth (c): W1->W2 suggestion rebase
+--------------------------------------------------
+rebased+external = ('good: step 1.1 ; avoid: step 2.1', ['2.1'])
+--------------------------------------------------
+depth (d): edge id shapes (worker scope 1.1)
+--------------------------------------------------
+display 1.1.True.1 = 'True.1'
+display 1.1.0.2 = '0.2'
+display 1.1.1.1A.2 = '1.1A.2'
+relativize_text = 'step True.1 and Subgoal 0.1 and step <external>'
+--------------------------------------------------
+depth (e): node 1.2 internal-to-W1 / external-to-W2
+--------------------------------------------------
+W1(1) = '2'
+W2(1.1) = '<external>'
+--------------------------------------------------
+depth (f): W1 dispatches W2 (step 1=>1.1) w/ external suggestion
+--------------------------------------------------
+is_error=True
+Your suggestions reference steps the sub-agent cannot see (2.1): it only sees its own sub-proof. Describe the facts by name (in `helpful_lemmas`) or the concrete proof operation instead of citing those steps. If this is a false positive, resubmit verbatim to proceed.
+--------------------------------------------------
+cancelled-line relativization (worker scope 1.1)
+--------------------------------------------------
+in-scope cancelled_by 1.1.1 = 'Error: the evaluation is cancelled due to failure of step `1`'
+external cancelled_by 1.2 = 'Error: cancelled (step `<external>` failed)'
