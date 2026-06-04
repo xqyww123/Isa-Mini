@@ -10240,6 +10240,162 @@ async def _test_dispatch_gate(root: Root, file: MyIO):
         n11.worker_handle = None
 
 
+@model_test("NestedWorkerScope", "Test_NestedWorkerScope.thy", 9)
+async def _test_nested_worker_scope(root: Root, file: MyIO):
+    """Deterministic coverage of worker-relative-id translation across nesting:
+    the pure id/text helpers, cross-namespace suggestion re-basing, the
+    `subagent` external-ref rejection + one-shot bypass, and the
+    refutation-review reason conversion. Every path here resolves BEFORE the
+    live-dispatch point (`handle.start`/`run_until_yield`, which needs an LLM),
+    so it is exercised by calling the helpers / tool-logic directly."""
+    from .mcp_http_server import _subagent_tool_logic, _delete_tool_logic
+    session = root.session
+    session.age += 1
+    goal = root.sub_nodes[1]
+    s = {"english": "nonneg", "conclusion": r"(0::int) \<le> x * x"}
+    # Deep tree: 1 { 1.1 { 1.1.1 { 1.1.1.1 }, 1.1.2 }, 1.2 } — depth lets the
+    # in-scope/external ids be multi-component (the free-text regex needs a dot).
+    await goal.fill("1",       [Have.gen_single({"thought": "h1",   "statement": s, "name": "h1"})])
+    await root.fill("1.1",     [Have.gen_single({"thought": "h11",  "statement": s, "name": "h11"})])
+    await root.fill("1.1.1",   [Have.gen_single({"thought": "h111", "statement": s, "name": "h111"})])
+    await root.fill("1.1.1.1", [Have.gen_single({"thought": "h1111","statement": s, "name": "h1111"})])
+    H1  = goal.sub_nodes[0]
+    H11 = root.locate_node("1.1")
+    await H11.append([Have.gen_single({"thought": "h112", "statement": s, "name": "h112"})])  # 1.1.2
+    await H1.append([Have.gen_single({"thought": "h12",  "statement": s, "name": "h12"})])    # 1.2
+
+    def show(label, pairs):
+        print_header(label, file)
+        for k, v in pairs:
+            file.write(f"{k} = {v!r}\n")
+
+    # --- 1. direct id translation, worker scope = 1.1 ---
+    session.role = model.Role_Worker(target=H11, worker_handle=WorkerHandle(H11, session))
+    show("_display_id (worker scope 1.1)", [
+        ("1.1.1",   session._display_id("1.1.1")),     # in-scope child   -> 1
+        ("1.1.1.1", session._display_id("1.1.1.1")),   # deeper in-scope  -> 1.1
+        ("1.1.2",   session._display_id("1.1.2")),     # in-scope         -> 2
+        ("1.1",     session._display_id("1.1")),       # scope root       -> ''
+        ("1.2",     session._display_id("1.2")),       # sibling          -> <external>
+        ("1",       session._display_id("1")),         # ancestor         -> <external>
+    ])
+    show("_resolve_display_id (worker scope 1.1)", [
+        ("1",   session._resolve_display_id("1")),     # -> 1.1.1
+        ("1.1", session._resolve_display_id("1.1")),   # -> 1.1.1.1
+        ("2",   session._resolve_display_id("2")),     # -> 1.1.2
+    ])
+
+    # --- 2. free-text round-trip + <external> masking + the `Subgoal` anchor.
+    # Single-component refs (`step 2`) are intentionally NOT translated (regex
+    # needs a dot) — asserted here so the limitation is regression-locked.
+    show("free text (worker scope 1.1)", [
+        ("relativize", session._relativize_text(
+            "Subgoal 1.1.1.1 fails; step 1.2 elsewhere; step 1.1.1 ok")),
+        ("absolutize", session._absolutize_text("step 1.1 plus step 2")),
+    ])
+
+    # --- 3. cross-namespace suggestion re-base: SAME input, different dispatcher
+    # namespace -> different result (the nested-specific behavior).
+    session.role = model.Role_Major()
+    rb_planner = session._rebase_suggestion_ids(H11, "use step 1.1.1 then step 1.2")
+    session.role = model.Role_Worker(target=H1, worker_handle=WorkerHandle(H1, session))  # dispatcher W on scope 1
+    rb_worker = session._rebase_suggestion_ids(H11, "use step 1.1 then step 1.1.2")
+    show("_rebase_suggestion_ids", [
+        ("planner -> recipient 1.1",  rb_planner),   # ('use step 1 then step 1.2', ['1.2'])
+        ("worker(1) -> recipient 1.1", rb_worker),   # resolved via W's scope first
+    ])
+
+    # --- 4. subagent external-ref rejection + one-shot bypass (returns before dispatch) ---
+    session.role = model.Role_Major()
+    session._subagent_extstep_bypass.clear()
+    print_header("subagent external suggestion -> reject + arm bypass", file)
+    r, e = await _subagent_tool_logic(session, {
+        "step_id": "1.1", "suggestions": "see step 1.2", "helpful_lemmas": []})
+    file.write(f"is_error={e}\n{r}\n")
+    file.write(f"bypass armed for 1.1: {'1.1' in session._subagent_extstep_bypass}\n")
+
+    # --- 5. refutation-review reason conversion (accept absolutizes; reject
+    # rebases into the worker's scope and rejects external refs). ---
+    class _C:
+        detail = "x"
+    print_header("review accept (worker reviewer absolutizes its reason)", file)
+    session.role = model.Role_Worker(target=H1, worker_handle=WorkerHandle(H1, session))  # reviewer = nested worker on 1
+    iv = Interaction_ReviewRefutation(target=H11, complaint=_C(), worker_handle=WorkerHandle(H11, session))
+    acc = await iv.answer(AnswerRefutation(accept=True, reason="step 1.1 contradicts the axiom"))
+    file.write(f"accept reason -> {acc!r}\n")
+    print_header("review reject citing an out-of-worker-scope step -> BadAnswer", file)
+    session.role = model.Role_Major()
+    iv2 = Interaction_ReviewRefutation(target=H11, complaint=_C(), worker_handle=WorkerHandle(H11, session))
+    try:
+        await iv2.answer(AnswerRefutation(accept=False, reason="look at step 1.2 instead"))
+        file.write("UNEXPECTED: no BadAnswer raised\n")
+    except Interaction_BadAnswer as ex:
+        file.write(f"BadAnswer raised; mentions external ref: {'1.2' in str(ex)}\n")
+
+    # --- 6. round-trip closure + the prefix-DOT boundary. The boundary catches a
+    # `startswith(prefix)` (missing the ".") bug: `1.10` is a SIBLING of `1.1`,
+    # not a descendant, so it must mask to <external>, while `1.1.10` is a real
+    # descendant -> 10. (Pure string logic; the nodes need not exist.) ---
+    session.role = model.Role_Worker(target=H11, worker_handle=WorkerHandle(H11, session))
+    show("round-trip + dot-boundary (worker scope 1.1)", [
+        ("resolve.display == id  (1.1.1 / 1.1.1.1 / 1.1.2)",
+            all(session._resolve_display_id(session._display_id(x)) == x
+                for x in ("1.1.1", "1.1.1.1", "1.1.2"))),
+        ("display.resolve == rel (1 / 1.1 / 2)",
+            all(session._display_id(session._resolve_display_id(r)) == r
+                for r in ("1", "1.1", "2"))),
+        ("1.10  (sibling of 1.1, NOT a descendant)", session._display_id("1.10")),
+        ("1.1.10 (genuine descendant)",              session._display_id("1.1.10")),
+    ])
+
+    # --- 7. non-worker identity: planners/interaction forks must NOT touch ids ---
+    session.role = model.Role_Major()
+    show("non-worker (planner) identity", [
+        ("display_id 1.1.1",      session._display_id("1.1.1")),
+        ("resolve 2.3.1",         session._resolve_display_id("2.3.1")),
+        ("relativize_text",       session._relativize_text("step 1.1.1 and Subgoal 2.4 ok")),
+    ])
+
+    # --- 8. _rebase_suggestion_ids: SAME input, planner vs worker dispatcher.
+    # Identical text on the SAME recipient must give DIFFERENT results because
+    # the worker resolves through its own scope first (proves namespace is used,
+    # not just that different inputs differ). ---
+    same = "apply step 1.1.1 like step 1.2"
+    session.role = model.Role_Major()
+    rb_p = session._rebase_suggestion_ids(H11, same)
+    session.role = model.Role_Worker(target=H1, worker_handle=WorkerHandle(H1, session))
+    rb_w = session._rebase_suggestion_ids(H11, same)
+    show("_rebase same input, planner vs worker(scope 1)", [
+        ("planner",   rb_p),     # ('apply step 1 like step 1.2', ['1.2'])
+        ("worker(1)", rb_w),     # ('apply step 1.1 like step 2', [])
+    ])
+
+    # --- 9. bypass keys are per-node independent (arming one does not arm another) ---
+    session.role = model.Role_Major()
+    session._subagent_extstep_bypass.clear()
+    await _subagent_tool_logic(session, {"step_id": "1.1",   "suggestions": "see step 1.2", "helpful_lemmas": []})
+    await _subagent_tool_logic(session, {"step_id": "1.1.1", "suggestions": "see step 1.2", "helpful_lemmas": []})
+    show("bypass keys are per-node independent", [
+        ("1.1 armed",   "1.1"   in session._subagent_extstep_bypass),
+        ("1.1.1 armed", "1.1.1" in session._subagent_extstep_bypass),
+        ("unrelated 1.2 NOT armed", "1.2" in session._subagent_extstep_bypass),
+    ])
+
+    # --- 10. delete inbound resolution + relativized not-found (no tree mutation:
+    # the relative id resolves to an absent in-scope node). ---
+    session.role = model.Role_Worker(target=H11, worker_handle=WorkerHandle(H11, session))
+    print_header("delete relative '9' -> resolves in-scope, not found (relativized)", file)
+    r, e = await _delete_tool_logic(session, {"target_steps": ["9"]})
+    file.write(f"is_error={e}\n{r}\n")
+
+    # --- 11. retry_prompt lists UNFINISHED ids in the worker's relative form ---
+    H111 = root.locate_node("1.1.1")
+    print_header("retry_prompt (worker scope 1.1)", file)
+    file.write(session.retry_prompt({H111}) + "\n")
+
+    session.role = model.Role_Major()
+
+
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
     import msgpack as mp
     from IsaREPL import Client

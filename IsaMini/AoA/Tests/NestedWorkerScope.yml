@@ -1,0 +1,72 @@
+--------------------------------------------------
+_display_id (worker scope 1.1)
+--------------------------------------------------
+1.1.1 = '1'
+1.1.1.1 = '1.1'
+1.1.2 = '2'
+1.1 = ''
+1.2 = '<external>'
+1 = '<external>'
+--------------------------------------------------
+_resolve_display_id (worker scope 1.1)
+--------------------------------------------------
+1 = '1.1.1'
+1.1 = '1.1.1.1'
+2 = '1.1.2'
+--------------------------------------------------
+free text (worker scope 1.1)
+--------------------------------------------------
+relativize = 'Subgoal 1.1 fails; step <external> elsewhere; step 1 ok'
+absolutize = 'step 1.1.1.1 plus step 2'
+--------------------------------------------------
+_rebase_suggestion_ids
+--------------------------------------------------
+planner -> recipient 1.1 = ('use step 1 then step 1.2', ['1.2'])
+worker(1) -> recipient 1.1 = ('use step 1 then step 1.2', [])
+--------------------------------------------------
+subagent external suggestion -> reject + arm bypass
+--------------------------------------------------
+is_error=True
+Your suggestions reference steps the sub-agent cannot see (1.2): it only sees its own sub-proof. Describe the facts by name (in `helpful_lemmas`) or the concrete proof operation instead of citing those steps. If this is a false positive, resubmit verbatim to proceed.
+bypass armed for 1.1: True
+--------------------------------------------------
+review accept (worker reviewer absolutizes its reason)
+--------------------------------------------------
+accept reason -> (True, 'step 1.1.1 contradicts the axiom')
+--------------------------------------------------
+review reject citing an out-of-worker-scope step -> BadAnswer
+--------------------------------------------------
+BadAnswer raised; mentions external ref: True
+--------------------------------------------------
+round-trip + dot-boundary (worker scope 1.1)
+--------------------------------------------------
+resolve.display == id  (1.1.1 / 1.1.1.1 / 1.1.2) = True
+display.resolve == rel (1 / 1.1 / 2) = True
+1.10  (sibling of 1.1, NOT a descendant) = '<external>'
+1.1.10 (genuine descendant) = '10'
+--------------------------------------------------
+non-worker (planner) identity
+--------------------------------------------------
+display_id 1.1.1 = '1.1.1'
+resolve 2.3.1 = '2.3.1'
+relativize_text = 'step 1.1.1 and Subgoal 2.4 ok'
+--------------------------------------------------
+_rebase same input, planner vs worker(scope 1)
+--------------------------------------------------
+planner = ('apply step 1 like step 1.2', ['1.2'])
+worker(1) = ('apply step 1.1 like step 2', [])
+--------------------------------------------------
+bypass keys are per-node independent
+--------------------------------------------------
+1.1 armed = True
+1.1.1 armed = True
+unrelated 1.2 NOT armed = False
+--------------------------------------------------
+delete relative '9' -> resolves in-scope, not found (relativized)
+--------------------------------------------------
+is_error=True
+Error: step 9 not found.
+--------------------------------------------------
+retry_prompt (worker scope 1.1)
+--------------------------------------------------
+Steps 1 are incomplete. You must call the `edit` tool to complete the steps. Continue building the proof until `proof.yaml` contains no remaining errors.
