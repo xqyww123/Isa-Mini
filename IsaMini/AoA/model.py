@@ -6069,7 +6069,7 @@ class Compute(Leaf):
         self._prev_result_fact: tuple[varname, term] | None = None
 
     def quickview_title(self) -> str:
-        return f"Compute {self.term_str}"
+        return f"Compute (resulting fact: {self.result_name})"
 
     def quickview(self, indent: int, file: MyIO) -> int:
         indent = super().quickview(indent, file)

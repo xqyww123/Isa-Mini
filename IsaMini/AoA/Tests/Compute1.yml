@@ -26,7 +26,7 @@ pending proof goal:
 --------------------------------------------------
 Quickview after Compute
 --------------------------------------------------
-step 1: Compute (3::nat) * 7
+step 1: Compute (resulting fact: computed)
   results:
     computed: (3 :: nat) * (7 :: nat) = (21 :: nat)
 Error: Unfinished Proof. Call command `edit` with action `fill` and target step `2`
