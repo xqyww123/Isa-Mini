@@ -1712,6 +1712,37 @@ async def _test_Have1(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1.1", [Obvious.gen_single({"facts": []})])
 
+@model_test("SubagentSlotResolve", "Test_SubagentSlotResolve.thy", 8)
+async def _test_SubagentSlotResolve(root: Root, file: MyIO):
+    """`Node.locate_node_or_slot` resolves the address space that `subagent`
+    now accepts (existing node OR unfilled proof slot), mirroring `fill`.
+    After a top-level `Have` at step 1, the open slots are `1.1` (the Have's
+    body) and `2` (the top-level continuation) — see the `Have1` golden."""
+    await root.fill("1", [Have.gen_single({
+        "thought": "helper",
+        "statement": {"english": "z squared is non-negative",
+                      "conclusion": r"(0::int) \<le> z * z"},
+        "name": "lem1"
+    })])
+    def probe(id: str) -> str:
+        try:
+            r = root.locate_node_or_slot(id)
+        except model.NodeNotFound:
+            return "NodeNotFound"
+        if isinstance(r, model.Resolved_Node):
+            return f"Resolved_Node(node.id={r.node.id!r})"
+        if isinstance(r, model.Resolved_Slot):
+            return f"Resolved_Slot(parent.id={r.parent.id!r}, slot_id={r.slot_id!r})"
+        return f"UNEXPECTED {r!r}"
+    print_header("locate_node_or_slot resolution", file)
+    # 1     : existing materialized node           -> Resolved_Node
+    # 1.1   : the Have's open body slot            -> Resolved_Slot(parent=Have 1)
+    # 2     : top-level continuation slot          -> Resolved_Slot(parent=GoalNode "")
+    # 1.9   : a non-open slot under existing parent -> NodeNotFound
+    # 1.1.1 : slot whose parent (1.1) doesn't exist -> NodeNotFound
+    for id in ["1", "1.1", "2", "1.9", "1.1.1"]:
+        file.write(f"{id} -> {probe(id)}\n")
+
 @model_test("HaveAutoApply", "Test_Have_AutoApply.thy", 10)
 async def _test_HaveAutoApply(root: Root, file: MyIO):
     """Have with auto_apply=True auto-registers the proven equation as a simp

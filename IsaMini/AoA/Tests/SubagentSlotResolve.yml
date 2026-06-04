@@ -1,0 +1,8 @@
+--------------------------------------------------
+locate_node_or_slot resolution
+--------------------------------------------------
+1 -> Resolved_Node(node.id='1')
+1.1 -> Resolved_Slot(parent.id='1', slot_id='1.1')
+2 -> Resolved_Slot(parent.id='', slot_id='2')
+1.9 -> NodeNotFound
+1.1.1 -> NodeNotFound
