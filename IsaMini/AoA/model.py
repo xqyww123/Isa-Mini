@@ -10158,7 +10158,10 @@ def _first_worker_in_ancestors(n: 'Node', stop: 'Node | None' = None) -> 'Worker
     When ``stop`` is given, the walk halts BEFORE it (exclusive) — a handle on
     ``stop`` or above is never returned, so the caller's own scope root and its
     spawner chain are ignored. ``stop=None`` walks to the root (the original
-    behaviour)."""
+    behaviour). ``n is stop`` has no in-scope ancestor (the walk would start
+    above ``stop`` and the guard never fire), so it returns None directly."""
+    if n is stop:
+        return None
     cur = n.parent
     while cur is not None:
         if cur is stop:
