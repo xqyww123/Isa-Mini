@@ -37,6 +37,7 @@ from mcp.types import Tool, ToolAnnotations, TextContent, CallToolResult
 from Isabelle_RPC_Host import pretty_unicode
 from .model import (
     _session_var, Session, Node, NonLeaf_Node, StdBlock,
+    Resolved_Node, Resolved_Slot,
     IsaTerm, ContinuingInteraction, ImmediateAnswer,
     AoA_Error, ArgumentError, IsabelleError, InternalError,
     CannotDelete_Root, NodeNotFound, ProofTreeTooDeep,
@@ -910,10 +911,22 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
     suggestions = args.get("suggestions", "")
     helpful_lemmas = args.get("helpful_lemmas") or []
 
+    # Accept an unfilled (open) proof slot id too — the address space `fill`
+    # accepts and the system advertises in "Fill step `N`". A slot `P.k` is the
+    # single open frontier of its parent block `P`, so delegating it ≡ delegating
+    # `P`; `from_slot` records the redirect so the note below always fires.
+    from_slot = False
     try:
-        node = session.root.locate_node(abs_step_id)
+        located = session.root.locate_node_or_slot(abs_step_id)
     except NodeNotFound:
         return _err(f"No step `{step_id}` found.")
+    match located:
+        case Resolved_Node(node=node):
+            pass
+        case Resolved_Slot(parent=node):
+            from_slot = True
+        case _:                      # defensive: a future Resolved_Step variant
+            raise InternalError(f"unexpected Resolved_Step: {located!r}")
 
     # Redirect to the node's nearest delegatable goal (a leaf or any non-goal
     # node walks up to its enclosing goal; containers/directives return None).
@@ -933,11 +946,12 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
     psr = session.proof_scope_root
     if target is psr or (not session.is_worker and target.parent is psr):
         return _err(
-            f"Delegating step `{step_id}` would hand the sub-agent your entire "
-            f"goal — there is no narrower sub-goal to scope it to. Call "
-            f"`{_tn}` on a specific subgoal like Have, Suffices, Obtain etc, "
-            f"or prove this step yourself.")
-    if target is not node:
+            f"Delegating step `{step_id}` would hand the sub-agent the whole "
+            f"goal you are responsible for — there is no narrower sub-goal to "
+            f"scope it to. You should call `{_tn}` on a specific subgoal like "
+            f"Have, Suffices, Obtain etc, or prove the step `{step_id}` "
+            f"yourself.")
+    if target is not node or from_slot:
         redirect_note = (f"Instead of step {step_id}, the sub-agent is working "
                          f"on step {session._display_id(target.id)}.\n")
     node = target

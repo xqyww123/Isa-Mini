@@ -2738,6 +2738,25 @@ class _RawOp(NamedTuple):
     op: raw_op
     path: str
 
+# Result of resolving a `step` id that may name either an existing node OR an
+# unfilled (open) proof slot — see `Node.locate_node_or_slot`.  The two variants
+# use *different* field names on purpose: `Resolved_Slot.parent` cannot be
+# misread as "the node I asked for" (it is the slot's owning block, not the slot
+# itself, which has no node).
+@dataclass
+class Resolved_Node:
+    """`id` named an existing materialized node."""
+    node: 'Node'
+
+@dataclass
+class Resolved_Slot:
+    """`id` named an unfilled slot: `parent` is its (existing) owning block,
+    `slot_id` echoes the slot id (== parent._id_of_openning_prf_to_fill())."""
+    parent: 'Node'
+    slot_id: step
+
+Resolved_Step = Resolved_Node | Resolved_Slot
+
 class Node(ABC):
     parent: 'NonLeaf_Node | None'
     id: 'step'
@@ -3136,6 +3155,22 @@ class Node(ABC):
     def locate_node(self, id: step) -> 'Node':
         parts = id.split('.')
         return self._locate_node(parts, id)
+    def locate_node_or_slot(self, id: step) -> 'Resolved_Step':
+        """Resolve `id` to either an existing node or an unfilled proof slot,
+        unifying the address space `subagent` accepts with the one `fill`
+        accepts.  A slot `P.k` is resolved exactly as `Node.fill` does — locate
+        the parent block and ask it for its open slot id
+        (`_id_of_openning_prf_to_fill`).  A genuinely nonexistent id still
+        raises `NodeNotFound`."""
+        try:
+            return Resolved_Node(self.locate_node(id))
+        except NodeNotFound:
+            pass
+        ids = id.split('.')
+        parent = self._locate_node(ids[:-1], id, 0)  # bad parent path → NodeNotFound
+        if parent._id_of_openning_prf_to_fill() == id:
+            return Resolved_Slot(parent, id)
+        raise NodeNotFound(id)
     def unfinished_nodes(self, ret: set['Node']) -> None:
         if self.status.status != EvaluationStatus.Status.SUCCESS:
             ret.add(self)
@@ -8328,7 +8363,12 @@ class Root(GoalContainer, StdBlock):
             if self.num_goals == 1:
                 return self.sub_nodes[1]
             else:
-                raise InternalError(f"Bad id, {id}")
+                # Empty id path reaches here only via `ids[:-1]` slicing in
+                # `fill` / `locate_node_or_slot` (a no-dot id with no locatable
+                # parent block). Under multiple top-level goals that is simply an
+                # unresolvable id — NodeNotFound (caught and reported gracefully),
+                # not an internal invariant violation.
+                raise NodeNotFound(id)
         if ids[0] == "global":
             return self.sub_nodes[0]._locate_node(ids, id, 1)
         else:
