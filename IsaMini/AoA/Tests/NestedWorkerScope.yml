@@ -70,3 +70,19 @@ Error: step 9 not found.
 retry_prompt (worker scope 1.1)
 --------------------------------------------------
 Steps 1 are incomplete. You must call the `edit` tool to complete the steps. Continue building the proof until `proof.yaml` contains no remaining errors.
+--------------------------------------------------
+worker detail absolutized at emit (worker scope 1.1)
+--------------------------------------------------
+event=WorkerSurrender; detail='blocked by step 1.1.1.1 and step 2'
+--------------------------------------------------
+close_subagent relative '1' (->1.1): detach
+--------------------------------------------------
+is_error=False; The sub-agent is removed.
+handle on 1.1 detached: True
+no-handle is_error=True; No sub-agent is attached to step 2.
+--------------------------------------------------
+subagent on leaf '2.1.1' redirects up to '2.1' (relativized note)
+--------------------------------------------------
+is_error=True
+Instead of step 2.1.1, the sub-agent is working on step 2.1.
+That step is already proved.
