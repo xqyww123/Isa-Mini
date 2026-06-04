@@ -7,7 +7,7 @@
     },
     "suggestions": {
       "type": "string",
-      "description": "Strategy hints and proof suggestions for the sub-agent."
+      "description": "Strategy hints and proof suggestions for the sub-agent. Refer to facts by name (and list them in `helpful_lemmas`); do not cite step ids — the sub-agent cannot see steps outside its own goal."
     },
     "helpful_lemmas": {
       "type": "array",

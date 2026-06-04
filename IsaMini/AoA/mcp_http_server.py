@@ -271,13 +271,16 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             error_msg = "proof_operations must be a non-empty array of proof operations"
             session.log_tool_response(_tn, f"ERROR: {error_msg}")
             return (error_msg, True)
+        # A worker addresses steps relative to its own scope; map to the absolute
+        # tree id for engine calls, but keep `step` (as supplied) for messages.
+        abs_step = session._resolve_display_id(step)
         # Edit-lock + worker confinement, unified in `_edit_verdict` (all agents):
         #  - OUT_OF_SCOPE: a worker edit outside its own subtree.
         #  - LOCKED: the target is comparable to a live sub-agent's node. `amend`
         #    only locks on a strict-ancestor sub-agent (it tears down its own
         #    target's worker via `_amend_child`); `fill`/`insert_before` lock on
         #    the whole comparable region. Main is never OUT_OF_SCOPE.
-        verdict, blocker = session._edit_verdict(step, action)
+        verdict, blocker = session._edit_verdict(abs_step, action)
         if verdict is EditVerdict.OUT_OF_SCOPE:
             error_msg = ("This step is outside the goal you were asked to prove — you may "
                          "only edit within your own sub-proof. If you need a fact established "
@@ -286,7 +289,7 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             return (error_msg, True)
         if verdict is EditVerdict.LOCKED:
             assert blocker is not None  # LOCKED always carries the blocking handle
-            wstep = blocker.target.id
+            wstep = session._display_id(blocker.target.id)
             _resume_hint = (
                 f"You cannot edit it before you close the sub-agent, but you are "
                 f"recommended to resume the sub-agent with your suggestions and let it "
@@ -319,11 +322,11 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         session.age += 1
         match action:
             case "fill":
-                outcome = await root.fill(step, gns)
+                outcome = await root.fill(abs_step, gns)
             case "insert_before":
-                outcome = await root.insert_before(step, gns)
+                outcome = await root.insert_before(abs_step, gns)
             case "amend":
-                outcome = await root.amend(step, gns)
+                outcome = await root.amend(abs_step, gns)
             case _:
                 error_msg = P.invalid_action_error(action)
                 session.log_tool_response(_tn, f"ERROR: {error_msg}")
@@ -335,7 +338,7 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             await session.interrupt()
         is_error = outcome.failure is not None and outcome.failure.is_error
         session.log_tool_response(_tn, response)
-        session.log_proof_tree_snapshot(f"after_{action}_step_{step}")
+        session.log_proof_tree_snapshot(f"after_{action}_step_{abs_step}")
 
         depth_exceeded = session._depth_limit_exceeded
         session._depth_limit_exceeded = False
@@ -381,9 +384,11 @@ async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             return (error_msg, True)
         session.age += 1
         steps = [str(s) for s in target_steps]
+        # A worker addresses steps relative to its scope; map to absolute ids.
+        abs_steps = [session._resolve_display_id(s) for s in steps]
         # Worker confinement: a worker may only delete inside its own subtree.
         # (No lock — delete is always allowed and tears down what it removes.)
-        for sid in steps:
+        for sid in abs_steps:
             verdict, _ = session._edit_verdict(sid, "delete")
             if verdict is EditVerdict.OUT_OF_SCOPE:
                 error_msg = ("This step is outside the goal you were asked to prove — you may "
@@ -392,18 +397,20 @@ async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
                 session.log_tool_response(_tn, f"ERROR: {error_msg}")
                 return (error_msg, True)
         try:
-            not_found = await session.root.delete(steps)
-            if len(not_found) == len(steps):
+            not_found = await session.root.delete(abs_steps)
+            if len(not_found) == len(abs_steps):
                 noun = "step" if len(not_found) == 1 else "steps"
-                error_msg = f"Error: {noun} {', '.join(not_found)} not found."
+                shown = ', '.join(session._display_id(s) for s in not_found)
+                error_msg = f"Error: {noun} {shown} not found."
                 session.log_tool_response(_tn, f"ERROR: {error_msg}")
                 return (error_msg, True)
-            deleted = [s for s in steps if s not in not_found]
+            deleted = [s for s in abs_steps if s not in not_found]
             session.refresh_YAML()
             response, finished = await P.deleted_steps_message(deleted, session.root, session)
             if not_found:
                 noun = "step" if len(not_found) == 1 else "steps"
-                response += f"\nWarning: {noun} {', '.join(not_found)} not found and skipped."
+                shown = ', '.join(session._display_id(s) for s in not_found)
+                response += f"\nWarning: {noun} {shown} not found and skipped."
             if finished:
                 await session.interrupt()
         except AoA_Error as e:
@@ -681,13 +688,15 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         end = min(end, total_lines)
         selected = all_lines[node_start - 1 : end]
         end_line = node_start + len(selected) - 1
-        return (f"[Step {node.id} is at Line {node_start}, showing Line "
+        return (f"[Step {session._display_id(node.id)} is at Line {node_start}, showing Line "
                 f"{node_start}-{end_line}]\n" + "".join(selected))
 
     segments: list[str] = []
     for sid in step_ids:
+        # `sid` is worker-relative (as supplied) — keep it for messages, resolve
+        # to the absolute tree id for the lookup.
         try:
-            node = session.root.locate_node(sid)
+            node = session.root.locate_node(session._resolve_display_id(sid))
         except NodeNotFound:
             if single_step:
                 if total_lines <= 40:
@@ -730,7 +739,10 @@ async def _refute_or_surrender_tool_logic(session: Session, args: dict) -> tuple
     _tn = session.tool_name(TOOL_REFUTE_OR_SURRENDER)
     session.log_tool_call(_tn, args)
     reason = args.get("reason", "surrender")
-    detail = args.get("detail", "")
+    # Worker-authored: expand its scope-relative step ids to absolute so the
+    # detail still reads correctly once surfaced to the (differently-scoped)
+    # dispatcher; the dispatcher re-relativizes for its own view.
+    detail = session._absolutize_text(args.get("detail", ""))
     if reason not in ("refute", "surrender"):
         msg = (f"Invalid reason: {reason!r}. Must be `refute` or `surrender`.")
         session.log_tool_response(_tn, f"ERROR: {msg}")
@@ -820,7 +832,8 @@ async def _request_lemmas_tool_logic(session: Session, args: dict) -> tuple[str,
             raise InternalError(
                 "Role_Worker has no worker_handle (worker must be spawned "
                 "via WorkerHandle).")
-        detail = args.get("detail", "")
+        # Worker-authored: absolutize its relative step ids for the dispatcher.
+        detail = session._absolutize_text(args.get("detail", ""))
         suggested_lemmas = args.get("suggested_lemmas")
         if not suggested_lemmas:
             msg = ("The `suggested_lemmas` argument is compulsory for the "
@@ -892,12 +905,13 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
         session.log_tool_response(_tn, f"ERROR: {full}")
         return (full, True)
 
-    step_id = str(args.get("step_id", ""))
+    step_id = str(args.get("step_id", ""))          # dispatcher-relative (for display)
+    abs_step_id = session._resolve_display_id(step_id)
     suggestions = args.get("suggestions", "")
     helpful_lemmas = args.get("helpful_lemmas") or []
 
     try:
-        node = session.root.locate_node(step_id)
+        node = session.root.locate_node(abs_step_id)
     except NodeNotFound:
         return _err(f"No step `{step_id}` found.")
 
@@ -925,7 +939,7 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
             f"or prove this step yourself.")
     if target is not node:
         redirect_note = (f"Instead of step {step_id}, the sub-agent is working "
-                         f"on step {target.id}.\n")
+                         f"on step {session._display_id(target.id)}.\n")
     node = target
     # Invariant: _nearest_goal_for_subagent only ever returns a provable goal
     # block (Have / Obtain / Suffices / GoalNode), all StdBlock subtypes.
@@ -950,6 +964,23 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
         return _err("This step is outside the goal you were asked to prove — you "
                     "may only delegate sub-goals within your own sub-proof.")
 
+    # Re-base suggestion step ids from the dispatcher's namespace into the new
+    # worker's (rooted at `node`).  In-scope refs are relativized; refs outside
+    # the worker's scope are rejected (it cannot see them) — unless a prior
+    # reject on this node armed the one-shot bypass (planner "resubmit verbatim
+    # to proceed").  Covers both the start and resume paths below, since both
+    # read this same `suggestions` value.
+    suggestions, external_refs = session._rebase_suggestion_ids(node, suggestions)
+    if external_refs and node.id not in session._subagent_extstep_bypass:
+        session._subagent_extstep_bypass.add(node.id)
+        ext = ", ".join(external_refs)
+        return _err(
+            f"Your suggestions reference steps the sub-agent cannot see ({ext}): it "
+            f"only sees its own sub-proof. Describe the facts by name (in "
+            f"`helpful_lemmas`) or the concrete proof operation instead of citing "
+            f"those steps. If this is a false positive, resubmit verbatim to proceed.")
+    session._subagent_extstep_bypass.discard(node.id)
+
     # Resume MY OWN direct sub-agent parked on this node, or start a fresh worker.
     # Either way `node` must not lie inside — or, when starting fresh, over — a
     # DIFFERENT sub-agent I dispatched: that keeps my live handles an antichain and
@@ -967,12 +998,12 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
     else:
         blocker = session._subagent_blocker(node)
         if blocker is not None:
-            return _err(f"A sub-agent is already working on step {blocker.target.id}, which "
+            return _err(f"A sub-agent is already working on step {session._display_id(blocker.target.id)}, which "
                         f"overlaps the step you asked for; this is not allowed.")
         # A foreign handle ON `node` with no enclosing worker of mine is an orphan
         # (cascade-close prevents it) — surface the broken antichain invariant.
         assert node.worker_handle is None, (
-            f"orphan sub-agent on {node.id}: handle without an enclosing dispatched worker")
+            f"orphan sub-agent on {session._display_id(node.id)}: handle without an enclosing dispatched worker")
         # ② Bound recursive delegation (main -> worker is layer 1).
         if session._subagent_nesting_depth() >= SUBAGENT_NESTING_DEPTH:
             return _err(f"You are too deeply nested to delegate further (limit: "
@@ -983,18 +1014,22 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
         handle.start(suggestions, helpful_lemmas)
         outcome = await handle.run_until_yield()
 
+    # The worker authored `outcome.detail` with absolute ids (it absolutized them
+    # on emission); re-relativize for THIS dispatcher's view (identity for a
+    # planner, dispatcher-scope-relative for a nested worker).
+    detail_shown = session._relativize_text(outcome.detail or "")
     match outcome.kind:
         case "proved":
             msg = "The sub-agent proved the goal."
         case "surrendered":
-            msg = (f"The sub-agent surrendered:\n{outcome.detail}\n"
+            msg = (f"The sub-agent surrendered:\n{detail_shown}\n"
                    f"Reconsider the proof plan for this step.")
         case "could_not_prove":
-            why = f" (it stopped: {outcome.detail})" if outcome.detail else ""
+            why = f" (it stopped: {detail_shown})" if outcome.detail else ""
             msg = (f"The sub-agent could not prove the goal{why}.\n"
                    f"Reconsider the proof plan for this step.")
         case "refute_accepted":
-            msg = f"The sub-agent argues the goal is unprovable:\n{outcome.detail}"
+            msg = f"The sub-agent argues the goal is unprovable:\n{detail_shown}"
         case _:  # "lemmas" — worker parked requesting helper lemmas
             buf = StringIO()
             for lem in (outcome.lemmas or []):
@@ -1005,9 +1040,9 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
             formulas = buf.getvalue()
             msg = (f"The sub-agent requests helper lemmas to continue:\n"
                    f"{formulas}\n"
-                   f"{outcome.detail}\n"
+                   f"{detail_shown}\n"
                    f"Consider providing these lemmas, then call `subagent` on step "
-                   f"{node.id} again to resume the sub-agent, listing the lemmas you "
+                   f"{session._display_id(node.id)} again to resume the sub-agent, listing the lemmas you "
                    f"built in `helpful_lemmas`.")
     # Append the whole-proof outline (mirrors the `edit`/`delete` tools) so the
     # planner sees the tree the worker just mutated without a `recall` round-trip.
@@ -1036,9 +1071,9 @@ async def _close_subagent_tool_logic(session: Session, args: dict) -> tuple[str,
         session.log_tool_response(_tn, f"ERROR: {msg}")
         return (msg, True)
 
-    step_id = str(args.get("step_id", ""))
+    step_id = str(args.get("step_id", ""))          # dispatcher-relative (for display)
     try:
-        node = session.root.locate_node(step_id)
+        node = session.root.locate_node(session._resolve_display_id(step_id))
     except NodeNotFound:
         return _err(f"No step `{step_id}` found.")
 

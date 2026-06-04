@@ -12,7 +12,7 @@ from google.genai import types as genai_types
 from google.genai import errors as genai_errors
 
 from .model import *
-from .language_model_driver import _TransientError, _QuotaError
+from .language_model_driver import _TransientError, _QuotaError, PRICING, pricing_for
 from .driver_api import (
     Provider, ToolCall, Usage, ProviderResponse,
     Msg, SystemMsg, UserMsg, AssistantMsg, ToolResultMsg,
@@ -29,13 +29,6 @@ class GeminiProvider(Provider):
         "gemini-2.5-flash": 1_048_576,
         "gemini-3.1-pro-preview": 1_048_576,
         "gemini-3-flash-preview": 1_048_576,
-    }
-
-    _PRICING: dict[str, dict[str, float]] = {
-        "gemini-2.5-pro":           {"input": 1.25e-6, "cached": 0.3125e-6, "output": 10.00e-6},
-        "gemini-2.5-flash":         {"input": 0.15e-6, "cached": 0.0375e-6, "output": 0.60e-6},
-        "gemini-3.1-pro-preview":   {"input": 2.00e-6, "cached": 0.20e-6,   "output": 12.00e-6},
-        "gemini-3-flash-preview":   {"input": 0.50e-6, "cached": 0.05e-6,   "output": 3.00e-6},
     }
 
     def __init__(self, model: str, api_key: str | None = None,
@@ -180,8 +173,7 @@ class GeminiProvider(Provider):
         return self._model
 
     def pricing(self) -> dict[str, float]:
-        return self._PRICING.get(self._model,
-            {"input": 1.25e-6, "cached": 0.3125e-6, "output": 10.00e-6})
+        return pricing_for(self._model, PRICING["gemini-2.5-pro"])
 
 
 @agent_driver("Gemini")

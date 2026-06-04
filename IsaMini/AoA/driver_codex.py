@@ -14,7 +14,7 @@ from time import time
 import platformdirs
 
 from .model import *
-from .language_model_driver import LMDriver, _TransientError, _QuotaError
+from .language_model_driver import LMDriver, _TransientError, _QuotaError, PRICING, pricing_for
 
 from .mcp_http_server import ProofMCPHTTPServer
 
@@ -23,15 +23,6 @@ from .mcp_http_server import ProofMCPHTTPServer
 class Codex_Driver(LMDriver):
     DEFAULT_MODEL = "gpt-5.3-codex"
 
-    _PRICING: dict[str, dict[str, float]] = {
-        "gpt-5.5":      {"input": 5.00e-6, "cached": 0.50e-6, "output": 15.00e-6},
-        "gpt-5.4":      {"input": 2.50e-6, "cached": 0.25e-6, "output": 10.00e-6},
-        "gpt-4.1":      {"input": 2.00e-6, "cached": 0.50e-6, "output": 8.00e-6},
-        "gpt-4.1-mini": {"input": 0.40e-6, "cached": 0.10e-6, "output": 1.60e-6},
-        "gpt-4.1-nano": {"input": 0.10e-6, "cached": 0.025e-6, "output": 0.40e-6},
-        "o3":           {"input": 2.00e-6, "cached": 0.50e-6, "output": 8.00e-6},
-        "o4-mini":      {"input": 1.10e-6, "cached": 0.275e-6, "output": 4.40e-6},
-    }
 
     working_dir: str
     _fork_counter: int
@@ -332,13 +323,7 @@ class Codex_Driver(LMDriver):
         self._log_meta("USAGE", **usage)
 
     def _compute_cost(self):
-        p = self._PRICING.get(self._model, self._PRICING["gpt-4.1"])
-        non_cached = max(0, self.total_input_tokens - self.total_cache_read_input_tokens)
-        self.total_cost_usd = (
-            non_cached * p["input"]
-            + self.total_cache_read_input_tokens * p["cached"]
-            + self.total_output_tokens * p["output"]
-        )
+        self.total_cost_usd = self._cost_from(pricing_for(self._model, PRICING["gpt-4.1"]))
 
     # ------------------------------------------------------------------
     # Forking

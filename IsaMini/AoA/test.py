@@ -10055,28 +10055,29 @@ async def _test_recall_worker_scope(root: Root, file: MyIO):
     last = H.sub_nodes[-1]                 # "1.2", H's last child
     nonlast = H.sub_nodes[0]               # "1.1", in-scope, not last
 
+    # A worker addresses steps relative to its scope, so recall is called with
+    # the relative id (what the worker sees in proof.yaml); it resolves back to
+    # the absolute node internally.
     print_header("recall last child of target (in scope)", file)
-    res, err = await _read_tool_logic(session, {"step_id": [last.id]})
+    res, err = await _read_tool_logic(session, {"step_id": [session._display_id(last.id)]})
     a, b = _span(res)
     file.write(f"is_error: {err}\n")
     file.write(f"non-empty range (end >= start): {b >= a}\n")
     file.write(f"reaches end of scoped file: {b == total_lines}\n")
 
     print_header("recall non-last child of target (in scope)", file)
-    res, err = await _read_tool_logic(session, {"step_id": [nonlast.id]})
+    res, err = await _read_tool_logic(session, {"step_id": [session._display_id(nonlast.id)]})
     a, b = _span(res)
     file.write(f"is_error: {err}\n")
     file.write(f"non-empty range (end >= start): {b >= a}\n")
 
-    print_header("recall target itself (out of scope)", file)
-    res, err = await _read_tool_logic(session, {"step_id": [H.id]})
-    file.write(f"is_error: {err}\n")
-    file.write(f"out-of-scope message: {res}\n")
-
-    print_header("recall sibling (out of scope)", file)
-    res, err = await _read_tool_logic(session, {"step_id": [G.id]})
-    file.write(f"is_error: {err}\n")
-    file.write(f"out-of-scope message: {res}\n")
+    # Out-of-scope nodes are no longer addressable: a worker only ever sees/uses
+    # ids relative to its own scope, so the target's siblings/ancestors have no
+    # id it can express — the relativized display id of the sibling is
+    # `<external>`, and the scope root itself relativizes to the empty id.
+    print_header("out-of-scope nodes are not worker-addressable", file)
+    file.write(f"sibling G display id: {session._display_id(G.id)}\n")
+    file.write(f"scope-root H display id: {session._display_id(H.id)!r}\n")
 
     print_header("helper predicates", file)
     file.write(f"_line_is_fresh(last child)  : {_line_is_fresh(last, H, True)}\n")
@@ -10190,11 +10191,18 @@ async def _test_editconfine_worker(root: Root, file: MyIO):
             ("1.1.1", "amend"),     # ancestor "1.1" -> LOCKED
         ])
 
-        print_header("worker fill 2 -> OUT_OF_SCOPE message", file)
+        # A worker's tool ids are relative to its scope ("1"), so "2" resolves to
+        # its OWN child "1.2" — it can never address the top-level sibling "2".
+        # Confinement is now structural; the explicit OUT_OF_SCOPE verdict is
+        # unreachable via the tool (it remains as a belt-and-suspenders guard,
+        # exercised directly by `_dump_verdicts` above).
+        print_header("worker 'fill 2' resolves in-scope to 1.2 (sibling unreachable)", file)
         r, e = await _edit_tool_logic(session, {"target_step": "2", "action": "fill",
             "proof_operations": [{"operation": "Obvious", "facts": []}]})
         file.write(f"is_error={e}\n{r}\n")
-        print_header("worker fill 1.1.1 -> worker-LOCKED message (names 1.1)", file)
+        # Relative "1.1.1" (= absolute "1.1.1.1", under the nested sub-worker on
+        # "1.1") is LOCKED; the blocker id is shown relativized ("1.1" -> "1").
+        print_header("worker fill 1.1.1 -> worker-LOCKED message (relativized id)", file)
         r, e = await _edit_tool_logic(session, {"target_step": "1.1.1", "action": "fill",
             "proof_operations": [{"operation": "Obvious", "facts": []}]})
         file.write(f"is_error={e}\n{r}\n")

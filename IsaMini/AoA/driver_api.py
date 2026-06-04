@@ -25,7 +25,7 @@ import httpx
 import openai
 
 from .model import *
-from .language_model_driver import LMDriver, _TransientError, _QuotaError
+from .language_model_driver import LMDriver, _TransientError, _QuotaError, PRICING, pricing_for
 
 from .mcp_http_server import ToolExecutor, _cc_edit_schema_flat
 from .helper import MyIO
@@ -202,17 +202,6 @@ class OpenAIBase(Provider):
         "o4-mini": 200_000,
     }
 
-    _PRICING: dict[str, dict[str, float]] = {
-        "gpt-5.5-pro":  {"input": 30.00e-6, "cached": 30.00e-6, "output": 180.00e-6},
-        "gpt-5.5":      {"input": 5.00e-6, "cached": 0.50e-6, "output": 30.00e-6},
-        "gpt-5.4":      {"input": 2.50e-6, "cached": 0.25e-6, "output": 15.00e-6},
-        "gpt-4.1":      {"input": 2.00e-6, "cached": 0.50e-6, "output": 8.00e-6},
-        "gpt-4.1-mini": {"input": 0.40e-6, "cached": 0.10e-6, "output": 1.60e-6},
-        "gpt-4.1-nano": {"input": 0.10e-6, "cached": 0.025e-6, "output": 0.40e-6},
-        "o3":           {"input": 2.00e-6, "cached": 0.50e-6, "output": 8.00e-6},
-        "o4-mini":      {"input": 1.10e-6, "cached": 0.275e-6, "output": 4.40e-6},
-    }
-
     def __init__(self, model: str, api_key: str | None = None,
                  base_url: str | None = None, cache_key: str | None = None,
                  default_context_window: int = 128_000,
@@ -242,7 +231,7 @@ class OpenAIBase(Provider):
         return self._model
 
     def pricing(self) -> dict[str, float]:
-        return self._PRICING.get(self._model, {"input": 2.00e-6, "cached": 0.50e-6, "output": 8.00e-6})
+        return pricing_for(self._model, PRICING["gpt-4.1"])
 
     def _strict_schema(self, name: str, schema: dict) -> dict:
         if name == "edit":
@@ -1146,17 +1135,7 @@ class APIDriver(LMDriver):
         return total // 4
 
     def _compute_cost(self):
-        p = self._provider.pricing()
-        non_cached = max(0, self.total_input_tokens
-                         - self.total_cache_read_input_tokens
-                         - self.total_cache_creation_input_tokens)
-        cache_write_rate = p.get("cache_write", p["input"])
-        self.total_cost_usd = (
-            non_cached * p["input"]
-            + self.total_cache_creation_input_tokens * cache_write_rate
-            + self.total_cache_read_input_tokens * p["cached"]
-            + self.total_output_tokens * p["output"]
-        )
+        self.total_cost_usd = self._cost_from(self._provider.pricing())
 
 
 # ============================================================================

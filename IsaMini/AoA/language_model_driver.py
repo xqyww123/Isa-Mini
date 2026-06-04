@@ -22,6 +22,41 @@ class _QuotaError(AoA_Error):
     pass
 
 
+# --- Cost accounting (shared by every driver / provider) ---
+
+# Per-model token prices in USD *per token* (= published price-per-1M ÷ 1e6),
+# keyed by model name across all providers. Names do not collide between
+# providers (``gpt-*``/``o*`` vs ``claude-*`` vs ``gemini-*``), so one table
+# serves them all. The optional ``cache_write`` rate applies only to providers
+# that bill cache *creation* (Anthropic); when absent, ``compute_cost`` falls
+# back to the ``input`` rate. Verified against published pricing 2026-06.
+PRICING: dict[str, dict[str, float]] = {
+    # OpenAI
+    "gpt-5.5-pro":  {"input": 30.00e-6, "cached": 30.00e-6, "output": 180.00e-6},
+    "gpt-5.5":      {"input": 5.00e-6,  "cached": 0.50e-6,  "output": 30.00e-6},
+    "gpt-5.4":      {"input": 2.50e-6,  "cached": 0.25e-6,  "output": 15.00e-6},
+    "gpt-4.1":      {"input": 2.00e-6,  "cached": 0.50e-6,  "output": 8.00e-6},
+    "gpt-4.1-mini": {"input": 0.40e-6,  "cached": 0.10e-6,  "output": 1.60e-6},
+    "gpt-4.1-nano": {"input": 0.10e-6,  "cached": 0.025e-6, "output": 0.40e-6},
+    "o3":           {"input": 2.00e-6,  "cached": 0.50e-6,  "output": 8.00e-6},
+    "o4-mini":      {"input": 1.10e-6,  "cached": 0.275e-6, "output": 4.40e-6},
+    # Anthropic
+    "claude-opus-4-6":   {"input": 5.00e-6, "cache_write": 10.00e-6, "cached": 0.50e-6, "output": 25.00e-6},
+    "claude-sonnet-4-6": {"input": 3.00e-6, "cache_write": 3.75e-6,  "cached": 0.30e-6, "output": 15.00e-6},
+    # Gemini
+    "gemini-2.5-pro":         {"input": 1.25e-6, "cached": 0.3125e-6, "output": 10.00e-6},
+    "gemini-2.5-flash":       {"input": 0.15e-6, "cached": 0.0375e-6, "output": 0.60e-6},
+    "gemini-3.1-pro-preview": {"input": 2.00e-6, "cached": 0.20e-6,   "output": 12.00e-6},
+    "gemini-3-flash-preview": {"input": 0.50e-6, "cached": 0.05e-6,   "output": 3.00e-6},
+}
+
+
+def pricing_for(model: str, default: dict[str, float]) -> dict[str, float]:
+    """Per-token price dict for *model*, or *default* (the caller's family
+    flagship, e.g. ``PRICING["gpt-4.1"]``) when the model is unknown."""
+    return PRICING.get(model, default)
+
+
 class LMDriver(Session):
     """Session subclass that adds unified retry logic for LLM drivers.
 
@@ -80,6 +115,21 @@ class LMDriver(Session):
                 else:
                     raise
         assert False  # unreachable
+
+    def _cost_from(self, p: dict[str, float]) -> float:
+        """Total USD cost of this session's token usage under price dict *p*.
+        Generalises every driver: providers that do not bill cache *creation*
+        leave ``total_cache_creation_input_tokens`` at 0 and pass a *p* without
+        ``cache_write``, so both the subtraction and the cache-write term vanish."""
+        non_cached = max(0, self.total_input_tokens
+                         - self.total_cache_read_input_tokens
+                         - self.total_cache_creation_input_tokens)
+        return (
+            non_cached * p["input"]
+            + self.total_cache_creation_input_tokens * p.get("cache_write", p["input"])
+            + self.total_cache_read_input_tokens * p["cached"]
+            + self.total_output_tokens * p["output"]
+        )
 
     # --- Worker spawning ---
 

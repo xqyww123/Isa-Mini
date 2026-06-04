@@ -27,14 +27,14 @@ _VERB = {
 }
 
 
-def _headline(outcome: 'model.EditOutcome') -> str:
+def _headline(outcome: 'model.EditOutcome', session: 'model.Session') -> str:
     verb = _VERB[outcome.operation]
     c = outcome.committed
     if not c:
         return f"{verb} nothing.\n"
     if len(c) == 1:
-        return f"{verb} step {c[0].id}.\n"
-    return f"{verb} step {c[0].id}-{c[-1].id}.\n"
+        return f"{verb} step {session._display_id(c[0].id)}.\n"
+    return f"{verb} step {session._display_id(c[0].id)}-{session._display_id(c[-1].id)}.\n"
 
 
 def _collect_completed_ancestors(committed: list[Node]) -> list[str]:
@@ -67,7 +67,7 @@ def _render_auto_intro_warning(session: 'model.Session', file: MyIO) -> None:
     session.auto_intro_nodes.clear()
     if not live:
         return
-    ids = ', '.join(n.id for n in live)
+    ids = ', '.join(session._display_id(n.id) for n in live)
     noun = "steps" if len(live) > 1 else "step"
     file.write(
         f"Note: {noun} {ids} {'were' if len(live) > 1 else 'was'} "
@@ -93,7 +93,7 @@ async def edit_message(
     failure = outcome.failure
     finished = False
     file = MyIO(StringIO())
-    file.write(_headline(outcome))
+    file.write(_headline(outcome, session))
     if failure is not None and failure.is_error:
         file.write(str(failure))
         file.write("\n")
@@ -134,7 +134,7 @@ async def deleted_steps_message(steps: list[str], root: Root, session: 'model.Se
     finished = False
     file = MyIO(StringIO())
     noun = "steps" if len(steps) > 1 else "step"
-    file.write(f"Deleted {noun} {', '.join(steps)}.\n")
+    file.write(f"Deleted {noun} {', '.join(session._display_id(s) for s in steps)}.\n")
     if session.warnings:
         file.write("Warnings:\n")
         for w in session.warnings:

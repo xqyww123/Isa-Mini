@@ -10,7 +10,7 @@ import anthropic
 import httpx
 
 from .model import *
-from .language_model_driver import _TransientError, _QuotaError
+from .language_model_driver import _TransientError, _QuotaError, PRICING, pricing_for
 from .driver_api import (
     Provider, ToolCall, Usage, ProviderResponse,
     Msg, SystemMsg, UserMsg, AssistantMsg, ToolResultMsg,
@@ -24,11 +24,6 @@ class AnthropicProvider(Provider):
     _CONTEXT_WINDOWS: dict[str, int] = {
         "claude-opus-4-6": 1_048_576,
         "claude-sonnet-4-6": 1_048_576,
-    }
-
-    _PRICING: dict[str, dict[str, float]] = {
-        "claude-opus-4-6":   {"input": 5.00e-6, "cache_write": 10.00e-6, "cached": 0.50e-6, "output": 25.00e-6},
-        "claude-sonnet-4-6": {"input": 3.00e-6, "cache_write": 3.75e-6,  "cached": 0.30e-6, "output": 15.00e-6},
     }
 
     def __init__(self, model: str, api_key: str | None = None,
@@ -245,8 +240,7 @@ class AnthropicProvider(Provider):
         return self._model
 
     def pricing(self) -> dict[str, float]:
-        return self._PRICING.get(self._model,
-            {"input": 5.00e-6, "cache_write": 10.00e-6, "cached": 0.50e-6, "output": 25.00e-6})
+        return pricing_for(self._model, PRICING["claude-opus-4-6"])
 
 
 @agent_driver("Claude")

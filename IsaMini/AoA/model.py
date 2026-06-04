@@ -509,14 +509,15 @@ def print_pending_goal(goal: Goal, step: step, indent: int, file : MyIO, suppres
                        show_goal: bool = True, replace_existing: bool = False) -> int:
     line = file.current_line()
     print_indent(indent, file)
+    shown_step = the_session()._display_id(step)
     if replace_existing:
-        file.write(f"Error: Unfinished Proof! Call command `edit` with action `fill` and target step `{step}`"
+        file.write(f"Error: Unfinished Proof! Call command `edit` with action `fill` and target step `{shown_step}`"
             " to replace it with a proof.\n")
     elif show_goal:
-        file.write(f"Error: Unfinished Proof! Call command `edit` with action `fill` and target step `{step}`"
+        file.write(f"Error: Unfinished Proof! Call command `edit` with action `fill` and target step `{shown_step}`"
             " to provide the proof for the following goal.\n")
     else:
-        file.write(f"Error: Unfinished Proof! Call command `edit` with action `fill` and target step `{step}`"
+        file.write(f"Error: Unfinished Proof! Call command `edit` with action `fill` and target step `{shown_step}`"
             " to provide the proof.\n")
     if show_goal:
         print_indent(indent, file)
@@ -777,7 +778,9 @@ class NodeNotFound(OprError):
     def __init__(self, id: step):
         self.id = id
     def __str__(self) -> str:
-        return f"Step with id {self.id} is not found"
+        sess = _session_var.get(None)
+        shown = sess._display_id(self.id) if sess is not None else self.id
+        return f"Step with id {shown} is not found"
 
 class InvalidAnswer(OprError):
     """Raised when user provides an invalid answer to an interaction."""
@@ -809,7 +812,9 @@ class CannotDelete_NodeNotFound(CannotDelete):
     def __init__(self, id: step):
         self.id = id
     def __str__(self) -> str:
-        return f"Cannot delete {self.id} because the node is not found"
+        sess = _session_var.get(None)
+        shown = sess._display_id(self.id) if sess is not None else self.id
+        return f"Cannot delete {shown} because the node is not found"
 class CannotDelete_Root(CannotDelete):
     def __str__(self) -> str:
         return f"Cannot delete the root node"
@@ -1599,10 +1604,7 @@ class Minilang_State:
         return ret
     async def reset(self) -> None:
         """Remove this state from the Isabelle state table and mark as uninitialized."""
-        try:
-            await self.connection.callback("IsaMini.reset_state", self.name)
-        except:
-            pass
+        await self.connection.callback("IsaMini.reset_state", self.name)
         self.leading_goal = None
         self.display_goals_count = 0
         self._initialized = False
@@ -2154,8 +2156,8 @@ class Interaction_ReviewRefutation(Interaction):
         goal = self.target.goal() if hasattr(self.target, 'goal') else None  # type: ignore[attr-defined]  — target is role.target (NonLeaf_Node), guarded by hasattr
         goal_str = f"\nGoal: {goal.conclusion.unicode}" if goal else ""
         file.write(
-            f"A sub-agent attempted {self.target.id} but claims the goal is unprovable.{goal_str}\n\n"
-            f"Refutation: {self.complaint.detail}\n\n"
+            f"A sub-agent attempted {the_session()._display_id(self.target.id)} but claims the goal is unprovable.{goal_str}\n\n"
+            f"Refutation: {the_session()._relativize_text(self.complaint.detail)}\n\n"
             f"Do you accept this refutation? Use `{tn(TOOL_ANSWER_REFUTATION)}` with:\n"
             f"  - accept: true to accept (goal is unprovable), false to reject\n"
             f"  - reason: explanation of your judgment\n")
@@ -2163,10 +2165,27 @@ class Interaction_ReviewRefutation(Interaction):
     async def answer(self, answer: AnswerRefutation) -> 'tuple[bool, str | None]':
         the_session().log_interaction("refutation_review",
             f"target={self.target.id} accept={answer.accept} reason={answer.reason}")
+        # Normalize the reason's step ids for its consumer's namespace before it
+        # leaves the reviewer's session.  An ACCEPTED reason is stored absolute
+        # (the dispatcher re-relativizes it at display); a REJECTED reason goes
+        # straight to the refuting worker, so rebase it into the worker's scope
+        # (rooted at ``self.target``) and reject any reference the worker cannot
+        # see — mirroring the suggestions policy (planner input is corrected).
+        reason = answer.reason
+        if reason:
+            if answer.accept:
+                reason = the_session()._absolutize_text(reason)
+            else:
+                reason, external = the_session()._rebase_suggestion_ids(self.target, reason)
+                if external:
+                    raise Interaction_BadAnswer(
+                        f"Your reason references steps the sub-agent cannot see "
+                        f"({', '.join(external)}): it only sees its own sub-proof. Describe the "
+                        f"facts by name or rephrase without citing those steps.")
         # Unblock the worker either way; the WorkerHandle.run_until_yield loop
         # acts on the verdict (accept → wind down, reject → resume in-loop).
-        self.worker_handle.resolve_review(accepted=answer.accept, reason=answer.reason)
-        return (answer.accept, answer.reason)
+        self.worker_handle.resolve_review(accepted=answer.accept, reason=reason)
+        return (answer.accept, reason)
 
     @property
     def session(self) -> 'Session':
@@ -2812,8 +2831,8 @@ class Node(ABC):
 
     @property
     def titled_id(self) -> str:
-        """Return e.g. 'step 1' or 'goal 2.1'."""
-        return f"{self._kind} {self.id}"
+        """Return e.g. 'step 1' or 'goal 2.1' (worker-relative id)."""
+        return f"{self._kind} {the_session()._display_id(self.id)}"
     def id_of_goal(self) -> step | None:
         return self.id
     def _reset_local_step(self, new_local_step: str) -> None:
@@ -2830,7 +2849,7 @@ class Node(ABC):
         if update_line:
             self.line = file.current_line()
         print_indent(indent, file)
-        file.write(f"- {self._kind} id: {self.id}\n")
+        file.write(f"- {self._kind} id: {the_session()._display_id(self.id)}\n")
         return indent + 1
     def print(self, indent: int, file : MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         return self._print_step_id(indent, file, update_line)
@@ -2852,7 +2871,7 @@ class Node(ABC):
         line_mark = f"line {self.line}, " if the_session().quickview_line_numbers else ""
         marks = f"{changed_mark}{status_mark}{done_mark}{line_mark}".rstrip(", ")
         suffix = f" ({marks})" if marks else ""
-        file.write(f"{self._kind} {self.id}: {self.quickview_title()}{suffix}\n")
+        file.write(f"{self._kind} {the_session()._display_id(self.id)}: {self.quickview_title()}{suffix}\n")
         return indent + 1
     def does_quickview_need_detail(self) -> bool:
         return self.changed or self.status.status != EvaluationStatus.Status.SUCCESS
@@ -2875,15 +2894,16 @@ class Node(ABC):
                 file.write("Error:")
                 reason = self.status.reason
                 assert reason is not None
-                print_paragraph(indent, file, reason.reason)
+                print_paragraph(indent, file, the_session()._relativize_text(reason.reason))
             case EvaluationStatus.Status.CANCELLED:
                 print_indent(indent, file)
                 if self._cancelled_by:
+                    cb = the_session()._display_id(self._cancelled_by)
                     if not the_session().showed_cancelled_notice:
-                        file.write(f"Error: the evaluation is cancelled due to failure of step `{self._cancelled_by}`\n")
+                        file.write(f"Error: the evaluation is cancelled due to failure of step `{cb}`\n")
                         the_session().showed_cancelled_notice = True
                     else:
-                        file.write(f"Error: cancelled (step `{self._cancelled_by}` failed)\n")
+                        file.write(f"Error: cancelled (step `{cb}` failed)\n")
                 else:
                     file.write("Error: the evaluation is cancelled due to failures in preceding nodes\n")
     def _print_evaluation_status_quickview(self, indent: int, file: MyIO) -> None:
@@ -2906,12 +2926,16 @@ class Node(ABC):
                 file.write("notice")
                 if show_at:
                     file.write(" at ")
-                    file.write(self.id)
+                    file.write(the_session()._display_id(self.id))
                 file.write(f":\n")
                 for warning in warnings:
                     if isinstance(warning.printer, str):
-                        if '\n' in warning.printer:
-                            for i, line in enumerate(warning.printer.splitlines()):
+                        # Warning text is built at refresh time (possibly by a
+                        # different session than the one rendering now), so any
+                        # embedded step id is relativized here at render time.
+                        printer = the_session()._relativize_text(warning.printer)
+                        if '\n' in printer:
+                            for i, line in enumerate(printer.splitlines()):
                                 if i == 0:
                                     print_indent(indent+1, file)
                                     file.write(f"- ")
@@ -2920,7 +2944,7 @@ class Node(ABC):
                                 file.write(f"{line}\n")
                         else:
                             print_indent(indent+1, file)
-                            file.write(f"- {warning.printer}\n")
+                            file.write(f"- {printer}\n")
                     else:
                         warning.printer(indent+1, file)
     def _print_all_warnings(self, file: MyIO) -> None:
@@ -4250,7 +4274,8 @@ class StdBlock(NonLeaf_Node):
         if (self.worker_handle is not None
                 and self.worker_handle.session is _session_var.get(None)):
             print_indent(indent, file)
-            file.write(f"A sub-agent is suspended on step {self.id}: call `subagent` with step {self.id} to resume it, or `close_subagent` with step {self.id} to terminate it.\n")
+            sid = the_session()._display_id(self.id)
+            file.write(f"A sub-agent is suspended on step {sid}: call `subagent` with step {sid} to resume it, or `close_subagent` with step {sid} to terminate it.\n")
     def does_quickview_need_detail(self) -> bool:
         if super().does_quickview_need_detail():
             return True
@@ -4268,10 +4293,11 @@ class StdBlock(NonLeaf_Node):
                 goal, step_to_fill = goal_and_step
                 print_indent(indent, file)
                 line_hint = f" (line {self.open_pending_proof_line})" if self.open_pending_proof_line is not None and the_session().quickview_line_numbers else ""
+                shown_fill = the_session()._display_id(step_to_fill)
                 if the_session().showed_fill_hint:
-                    file.write(f"Error: Unfinished Proof{line_hint}. Fill step `{step_to_fill}`\n")
+                    file.write(f"Error: Unfinished Proof{line_hint}. Fill step `{shown_fill}`\n")
                 else:
-                    file.write(f"Error: Unfinished Proof{line_hint}. Call command `edit` with action `fill` and target step `{step_to_fill}`\n")
+                    file.write(f"Error: Unfinished Proof{line_hint}. Call command `edit` with action `fill` and target step `{shown_fill}`\n")
                     the_session().showed_fill_hint = True
                 suppressed = self._ctxt_of_filling()
                 visible = goal.visible(suppressed)
@@ -4537,9 +4563,10 @@ class GoalNode(StdBlock):
         self._pending_proof: 'proof | None' = pending_proof
     @property
     def titled_id(self) -> str:
-        if self.id.startswith("goal"):
-            return self.id
-        return f"goal {self.id}"
+        shown = the_session()._display_id(self.id)
+        if shown.startswith("goal"):
+            return shown
+        return f"goal {shown}"
     def goal(self) -> Goal | None:
         return self.ml_state.leading_goal
     def id_of_goal(self) -> step | None:
@@ -4683,7 +4710,7 @@ class GoalNode(StdBlock):
             marks = f"{done_mark}{line_mark}".rstrip(", ")
             suffix = f" ({marks})" if marks else ""
             print_indent(indent, file)
-            file.write(f"- {self.id}{suffix}\n")
+            file.write(f"- {the_session()._display_id(self.id)}{suffix}\n")
             child_indent = indent + 1
             if self.show_goal:
                 goal = self.goal()
@@ -5812,7 +5839,7 @@ class Obvious(Leaf):
             if target is None:
                 return
             print_indent(indent, file)
-            file.write(f"Don't grind through this goal inline when it's off your main line of reasoning. Call `subagent` with step {target.id} to delegate it.\n")
+            file.write(f"Don't grind through this goal inline when it's off your main line of reasoning. Call `subagent` with step {the_session()._display_id(target.id)} to delegate it.\n")
     async def _refresh_me_alone(self, auto_intro: bool) -> None:
         if self.fact_refs is None:
             if self._raw_facts:
@@ -5863,7 +5890,7 @@ class Obvious(Leaf):
                 return super()._on_edit_failure(outcome)
             file = MyIO(StringIO())
             if self.status.reason:
-                file.write(self.status.reason.reason)
+                file.write(the_session()._relativize_text(self.status.reason.reason))
             if self.warnings:
                 self._print_warnings(0, file, list(Warning.Position))
             outcome.failure = CannotEdit_EvaluationFailed(
@@ -5978,7 +6005,7 @@ class Chaining(Leaf):
                 return super()._on_edit_failure(outcome)
             file = MyIO(StringIO())
             if self.status.reason:
-                file.write(self.status.reason.reason)
+                file.write(the_session()._relativize_text(self.status.reason.reason))
             if self.warnings:
                 self._print_warnings(0, file, list(Warning.Position))
             outcome.failure = CannotEdit_EvaluationFailed(
@@ -6359,7 +6386,7 @@ class Unfold(Leaf):
                 return super()._on_edit_failure(outcome)
             file = MyIO(StringIO())
             if self.status.reason:
-                file.write(self.status.reason.reason)
+                file.write(the_session()._relativize_text(self.status.reason.reason))
             if self.warnings:
                 self._print_warnings(0, file, list(Warning.Position))
             outcome.failure = CannotEdit_EvaluationFailed(
@@ -6491,7 +6518,7 @@ class Derive(Leaf):
                 return super()._on_edit_failure(outcome)
             file = MyIO(StringIO())
             if self.status.reason:
-                file.write(self.status.reason.reason)
+                file.write(the_session()._relativize_text(self.status.reason.reason))
             if self.warnings:
                 self._print_warnings(0, file, list(Warning.Position))
             outcome.failure = CannotEdit_EvaluationFailed(
@@ -6895,7 +6922,7 @@ class Rewrite(Leaf):
                 return super()._on_edit_failure(outcome)
             file = MyIO(StringIO())
             if self.status.reason:
-                file.write(self.status.reason.reason)
+                file.write(the_session()._relativize_text(self.status.reason.reason))
             if self.warnings:
                 self._print_warnings(0, file, list(Warning.Position))
             outcome.failure = CannotEdit_EvaluationFailed(
@@ -8456,6 +8483,39 @@ def tn(t: tool) -> str:
     return the_session().tool_name(t)
 
 
+# ---------------------------------------------------------------------------
+# Worker-scoped relative step ids
+# ---------------------------------------------------------------------------
+# A worker renders and uses step ids RELATIVE to its proof scope (its target's
+# absolute id prefix stripped), so it sees `step 2.1` instead of the global
+# `step 1.1.1.1A.2.1`; non-workers are unchanged.  Translation lives entirely
+# at the agent boundary (`Session._display_id` / `_resolve_display_id` /
+# `_relativize_text` / `_absolutize_text`); the tree and proof cache stay
+# absolute.  See the design plan for the full rationale.
+
+EXTERNAL_STEP = "<external>"   # marker shown for an out-of-scope id (placeholder wording)
+
+def _relativize_id(abs_id: str, scope_prefix: str) -> 'str | None':
+    """Strip `scope_prefix` from a descendant's absolute id.  Returns the
+    relative suffix, "" for the scope root itself, or None when `abs_id` is not
+    under `scope_prefix` (out of scope — caller masks it)."""
+    if abs_id == scope_prefix:
+        return ""
+    if abs_id.startswith(scope_prefix + "."):
+        return abs_id[len(scope_prefix) + 1:]
+    return None
+
+def _absolutize_id(rel: str, scope_prefix: str) -> str:
+    """Inverse of `_relativize_id`: a worker-relative id back to absolute."""
+    rel = rel.strip()
+    return scope_prefix if rel == "" else f"{scope_prefix}.{rel}"
+
+# Matches a step-id reference inside free text: a kind word (`step`/`goal`/
+# `Subgoal`) + a dotted id, with optional surrounding backtick.  The `\.`
+# requirement filters bare English ("step 2" is never matched).
+_ID_IN_TEXT_RE = re.compile(r'\b(step|goal|Subgoal)(\s+`?)(\w+(?:\.\w+)+)(`?)')
+
+
 # Custom string representer for literal block style on multiline strings
 def _str_representer(dumper, data):
     """
@@ -8615,6 +8675,11 @@ class Session:
         self.showed_fill_hint: bool = False
         self.showed_cancelled_notice: bool = False
         self.shown_HAVE_fact_names: 'dict[str, list[tuple[varname, typ]]]' = {}
+        # One-shot bypass of the suggestions external-step check, keyed by the
+        # dispatched node's id: a rejected `subagent` call records the node here
+        # so an immediate retry on the same node is let through (see
+        # `_subagent_tool_logic`).
+        self._subagent_extstep_bypass: 'set[str]' = set()
         # Worker-only: ascii fact name -> standard-printed proposition (IsaTerm),
         # prefetched once at init (see _prefetch_worker_premises).
         self._worker_premise_cache: 'dict[str, IsaTerm]' = {}
@@ -8971,7 +9036,9 @@ class Session:
             if isinstance(target, Have):
                 header = f"Prove the lemma `{target.name}`: {target.statement['english']}\n"  # type: ignore[attr-defined]  — isinstance(target, Have) narrowing is erased by @proof_operation's type[Any] return
             else:
-                header = f"Prove step `{target.id}`.\n"
+                # The worker's whole target IS its scope, so it has no short id
+                # to name (relativizing to itself is empty) — name it in prose.
+                header = "Prove the following goal.\n"
             guidance = ""
             if isinstance(self.role, Role_Worker):
                 g = []
@@ -9022,7 +9089,9 @@ class Session:
 
     def retry_prompt(self, unfinished_nodes: set['Node']) -> str:
         """Return the retry message when proof steps remain incomplete."""
-        step_ids = [node.id for node in unfinished_nodes if node.id]
+        # `_display_id` returns "" for the worker's own scope root; drop those so
+        # the list names only addressable descendants.
+        step_ids = [s for s in (self._display_id(node.id) for node in unfinished_nodes if node.id) if s]
         if step_ids:
             steps_desc = f"Steps {', '.join(step_ids)} are incomplete. "
         else:
@@ -9330,6 +9399,62 @@ class Session:
         single source of truth for "what subtree does this session render to
         ``proof.yaml``"; line numbers and scoped views outside it are stale."""
         return self.role.target if self.is_worker else self.root  # type: ignore[attr-defined]  — is_worker ⟹ role is Role_Worker
+
+    # --- Worker-scoped relative step ids (no-ops for non-workers) ----------
+    def _display_id(self, abs_id: str) -> str:
+        """Outbound: render an absolute node id the way the current session
+        should see it.  A worker gets the id relative to its proof scope (or
+        ``EXTERNAL_STEP`` if out of scope); everyone else gets it unchanged."""
+        if not self.is_worker:
+            return abs_id
+        rel = _relativize_id(abs_id, self.proof_scope_root.id)
+        return EXTERNAL_STEP if rel is None else rel
+
+    def _resolve_display_id(self, shown_id: str) -> str:
+        """Inbound: turn an id the worker supplied (relative to its scope) back
+        into the absolute id the tree uses.  Identity for non-workers."""
+        return _absolutize_id(shown_id, self.proof_scope_root.id) if self.is_worker else shown_id
+
+    def _relativize_text(self, text: str) -> str:
+        """Outbound free text (e.g. a failure/cancel reason that embeds ids):
+        relativize each ``step``/``goal``/``Subgoal`` id reference for a worker,
+        masking out-of-scope ones as ``EXTERNAL_STEP``.  Identity otherwise."""
+        if not self.is_worker:
+            return text
+        prefix = self.proof_scope_root.id
+        def repl(m: 're.Match[str]') -> str:
+            rel = _relativize_id(m.group(3), prefix)
+            return f"{m.group(1)}{m.group(2)}{EXTERNAL_STEP if rel is None else rel}{m.group(4)}"
+        return _ID_IN_TEXT_RE.sub(repl, text)
+
+    def _absolutize_text(self, text: str) -> str:
+        """Inbound free text from a worker (e.g. a refutation reason surfaced to
+        the planner): expand each relative id reference back to absolute.  A
+        worker can only express in-scope ids, so this never hits the
+        out-of-scope case.  Identity for non-workers."""
+        if not self.is_worker:
+            return text
+        prefix = self.proof_scope_root.id
+        return _ID_IN_TEXT_RE.sub(
+            lambda m: f"{m.group(1)}{m.group(2)}{_absolutize_id(m.group(3), prefix)}{m.group(4)}",
+            text)
+
+    def _rebase_suggestion_ids(self, target: 'Node', text: str) -> 'tuple[str, list[str]]':
+        """Rewrite step-id references in dispatcher-authored `text` (this
+        session is the dispatcher) into the dispatched worker's namespace,
+        rooted at `target`.  In-scope refs are relativized in place; refs
+        outside `target`'s subtree are left untouched and returned for the
+        caller to reject.  Returns ``(rewritten_text, external_refs)``."""
+        prefix = target.id
+        external: list[str] = []
+        def repl(m: 're.Match[str]') -> str:
+            abs_id = self._resolve_display_id(m.group(3))   # dispatcher ns -> absolute
+            rel = _relativize_id(abs_id, prefix)            # absolute -> recipient ns
+            if rel is None:
+                external.append(m.group(3))
+                return m.group(0)
+            return f"{m.group(1)}{m.group(2)}{rel}{m.group(4)}"
+        return _ID_IN_TEXT_RE.sub(repl, text), external
 
     def proof_scope_unfinished_nodes(self) -> 'set[Node]':
         """Return unfinished nodes scoped to this session's proof responsibility.
