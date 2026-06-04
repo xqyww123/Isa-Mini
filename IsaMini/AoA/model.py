@@ -8747,7 +8747,7 @@ class Session:
             case Role_Interaction(pending=p):
                 return "interaction:" + type(p.interaction).__name__.removeprefix("Interaction_")
             case _:  # Role_Major
-                return "planner"
+                return "main"
 
     @property
     def fork_pending(self) -> 'Fork_Pending | None':

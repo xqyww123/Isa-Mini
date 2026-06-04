@@ -906,6 +906,23 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
     target = node._nearest_goal_for_subagent()
     if target is None:
         return _err("That step has no enclosing goal to prove.")
+    # A goal-transforming step (e.g. Contradiction, or a freshly-emptied slot)
+    # has no delegatable sub-goal of its own, so `_nearest_goal_for_subagent`
+    # redirects UP to its enclosing goal. When that lands on the WHOLE goal the
+    # session is responsible for, delegating it would hand the sub-agent the
+    # entire proof — reject rather than silently scope the worker to it.
+    #   - worker: its own target IS `proof_scope_root` → `target is psr`.
+    #   - main: `proof_scope_root` is the `Root` *container* (it oversees every
+    #     top-level theorem goal), and the redirect can only reach a top-level
+    #     `GoalNode` (never the container itself, which yields None above) — so
+    #     the whole-goal case is `target.parent is psr`.
+    psr = session.proof_scope_root
+    if target is psr or (not session.is_worker and target.parent is psr):
+        return _err(
+            f"Delegating step `{step_id}` would hand the sub-agent your entire "
+            f"goal — there is no narrower sub-goal to scope it to. Call "
+            f"`{_tn}` on a specific subgoal like Have, Suffices, Obtain etc, "
+            f"or prove this step yourself.")
     if target is not node:
         redirect_note = (f"Instead of step {step_id}, the sub-agent is working "
                          f"on step {target.id}.\n")
