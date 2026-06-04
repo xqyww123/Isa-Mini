@@ -194,6 +194,15 @@ class OpenAIBase(Provider):
         "o4-mini": 200_000,
     }
 
+    # Per-model documented max output tokens (reasoning/CoT + visible output
+    # combined — the Responses API counts both against this cap). Sent as
+    # ``max_output_tokens`` to give the server a hard ceiling against runaway
+    # generation. Models absent here are sent with no cap.
+    _MAX_OUTPUT_TOKENS: dict[str, int] = {
+        "gpt-5.5": 128_000,
+        "gpt-5.5-pro": 128_000,
+    }
+
     def __init__(self, model: str, api_key: str | None = None,
                  base_url: str | None = None, cache_key: str | None = None,
                  default_context_window: int = 128_000,
@@ -221,6 +230,10 @@ class OpenAIBase(Provider):
     @property
     def context_window(self) -> int:
         return self._CONTEXT_WINDOWS.get(self._model, self._default_context_window)
+
+    @property
+    def max_output_tokens(self) -> int | None:
+        return self._MAX_OUTPUT_TOKENS.get(self._model)
 
     @property
     def model_name(self) -> str:
@@ -441,6 +454,8 @@ class OpenAIResponsesProvider(OpenAIBase):
         params["store"] = True
         params["include"] = ["reasoning.encrypted_content"]
         params["prompt_cache_retention"] = "24h"
+        if self.max_output_tokens is not None:
+            params["max_output_tokens"] = self.max_output_tokens
         if previous_response_id is not None:
             params["previous_response_id"] = previous_response_id
 
@@ -450,6 +465,12 @@ class OpenAIResponsesProvider(OpenAIBase):
         _BACKOFF_CAP = 30
         _BACKGROUND_THRESHOLD = 900
         _MAX_CHAT_TIME = 3600
+        # Wall-clock cap on consuming a SINGLE stream. The read timeout only
+        # catches inactivity; a server that keeps trickling delta events forever
+        # (e.g. a runaway generation that never emits response.completed) resets
+        # it indefinitely. This bounds how long one stream may run before we
+        # abort and retry, so _MAX_CHAT_TIME is actually enforced.
+        _MAX_STREAM_TIME = 1800
         _chat_t0 = time()
         attempt = 0
         while True:
@@ -487,17 +508,26 @@ class OpenAIResponsesProvider(OpenAIBase):
             attempt = 0
 
             try:
-                async for event in stream:
-                    if event.type == "response.completed":
-                        response = event.response
-                        break
-                else:
-                    attempt += 1
-                    wait = min(2 ** attempt, _BACKOFF_CAP)
-                    self._log(f"stream ended without response.completed "
-                              f"(attempt {attempt}, retry in {wait:.0f}s)")
-                    await asyncio.sleep(wait)
-                    continue
+                async with asyncio.timeout(_MAX_STREAM_TIME):
+                    async for event in stream:
+                        if event.type == "response.completed":
+                            response = event.response
+                            break
+                    else:
+                        attempt += 1
+                        wait = min(2 ** attempt, _BACKOFF_CAP)
+                        self._log(f"stream ended without response.completed "
+                                  f"(attempt {attempt}, retry in {wait:.0f}s)")
+                        await asyncio.sleep(wait)
+                        continue
+            except TimeoutError:
+                attempt += 1
+                wait = min(2 ** attempt, _BACKOFF_CAP)
+                self._log(f"stream stalled: no response.completed within "
+                          f"{_MAX_STREAM_TIME}s; aborting and retrying "
+                          f"(attempt {attempt}, retry in {wait:.0f}s)")
+                await asyncio.sleep(wait)
+                continue
             except httpx.ReadTimeout:
                 self._log("read timeout while streaming; falling back to background mode")
                 response = await self._resubmit_background(params)
