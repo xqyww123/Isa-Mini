@@ -75,13 +75,13 @@ premises:
   - h_triv: True
 goal: (1 :: int) = (2 :: int)
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `global.2.1` to provide the proof for the following goal.
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
 pending proof goal:
   (1 :: int) = (2 :: int)
 --------------------------------------------------
 quickview_proof_scope (lemma_anchor = h_target)
 --------------------------------------------------
-Error: Unfinished Proof. Call command `edit` with action `fill` and target step `global.2.1`
+Error: Unfinished Proof. Call command `edit` with action `fill` and target step `1`
 goal: (1 :: int) = (2 :: int)
 
 print_proof_scope contains 'available declarations': False

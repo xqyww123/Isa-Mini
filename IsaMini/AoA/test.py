@@ -10585,6 +10585,518 @@ async def _test_nested_worker_scope(root: Root, file: MyIO):
     session.role = model.Role_Major()
 
 
+@model_test("WorkerHandleLifecycle", "Test_WorkerHandleLifecycle.thy", 9)
+async def _test_worker_handle_lifecycle(root: Root, file: MyIO):
+    """Deterministic coverage of the WorkerHandle lifecycle *mechanism* itself
+    (not the relative-id layer): cost settlement idempotence, cancel(), the
+    aclose() cascade across nesting, the run_until_yield terminal-outcome mapping,
+    the nesting-depth guard, the orphan-handle assertion, and parked-vs-in-flight
+    close. None of this needs a live LLM: a worker task is stubbed by a trivial
+    completed (or sleeping) coroutine, so `run_until_yield`/`_wait_next_event`
+    run their real logic against a controllable `_task` + event queue."""
+    import types
+    from .mcp_http_server import _subagent_tool_logic, _close_subagent_tool_logic
+    from .model import WorkerHandle, WorkerSurrender
+    session = root.session
+    session.age += 1
+    goal, H = await _make_lock_tree(root)
+    H11 = root.locate_node("1.1")          # finished subtree (1.1.1 Obvious closes it)
+    H12 = root.locate_node("1.2")          # open Have (unfinished)
+
+    async def _completed():
+        return None
+
+    def _done_task():
+        # A stub for handle._task: a coroutine that is driven to completion by the
+        # event loop inside _wait_next_event's asyncio.wait — no LLM involved.
+        return asyncio.ensure_future(_completed())
+
+    # --- 1. _settle_costs rolls the sub-session cost up EXACTLY ONCE ----------
+    print_header("1. _settle_costs exactly-once", file)
+    calls = []
+    session._accumulate_subagent_costs = lambda sub: calls.append(sub)   # monkeypatch
+    try:
+        h = WorkerHandle(H, session)
+        h._sub = object()                  # pretend a forked sub-session exists
+        h._settle_costs(); h._settle_costs(); h._settle_costs()
+        file.write(f"accumulate called: {len(calls)}\n")
+        file.write(f"_costs_accumulated flag set: {h._costs_accumulated}\n")
+        # A handle that never forked a sub (no _sub) settles to a no-op.
+        h2 = WorkerHandle(H, session)
+        before = len(calls); h2._settle_costs()
+        file.write(f"no-_sub settle is a no-op: {len(calls) == before}\n")
+    finally:
+        del session._accumulate_subagent_costs
+
+    # --- 2. cancel() unblocks pending reviews and cancels the task -----------
+    print_header("2. cancel() tears down futures + task", file)
+    h = WorkerHandle(H, session)
+    loop = asyncio.get_running_loop()
+    fr = loop.create_future(); fl = loop.create_future()
+    h._pending_review = fr; h._pending_lemma_request = fl
+    h._task = asyncio.ensure_future(asyncio.sleep(100))
+    h.cancel()
+    file.write(f"pending_review cancelled: {fr.cancelled()}\n")
+    file.write(f"pending_lemma_request cancelled: {fl.cancelled()}\n")
+    file.write(f"futures cleared: {h._pending_review is None and h._pending_lemma_request is None}\n")
+    await h.wait_finish()                  # lets the cancellation settle
+    file.write(f"task cancelled after cancel(): {h._task.cancelled()}\n")
+
+    # --- 3. aclose() detaches its handle and is idempotent -------------------
+    print_header("3. aclose() detach + idempotent", file)
+    h = WorkerHandle(H11, session); H11.worker_handle = h
+    await h.aclose()
+    file.write(f"detached after aclose: {H11.worker_handle is None}\n")
+    await h.aclose()                       # second call must be a safe no-op
+    file.write(f"still detached after 2nd aclose: {H11.worker_handle is None}\n")
+
+    # --- 4. aclose_all_subagents cascades across nesting (depth-3) -----------
+    # Attach unstarted handles at 1, 1.1, 1.1.1... but 1.1.1 is a Leaf, so build a
+    # deeper chain of Have blocks first: 3 { 3.1 { 3.1.1 } }, all NonLeaf.
+    print_header("4. aclose_all_subagents cascade (depth-3)", file)
+    s = {"english": "nonneg", "conclusion": r"(0::int) \<le> x * x"}
+    await goal.append([Have.gen_single({"thought": "d1", "statement": s, "name": "hD1"})])  # 3
+    D1 = root.locate_node("3")
+    await root.fill("3.1", [Have.gen_single({"thought": "d2", "statement": s, "name": "hD2"})])
+    D2 = root.locate_node("3.1")
+    await root.fill("3.1.1", [Have.gen_single({"thought": "d3", "statement": s, "name": "hD3"})])
+    D3 = root.locate_node("3.1.1")
+    D1.worker_handle = WorkerHandle(D1, session)
+    D2.worker_handle = WorkerHandle(D2, session)
+    D3.worker_handle = WorkerHandle(D3, session)
+    await D1.aclose_all_subagents()        # closes D1's whole subtree of handles
+    file.write(f"D1 detached: {D1.worker_handle is None}\n")
+    file.write(f"D2 detached: {D2.worker_handle is None}\n")
+    file.write(f"D3 detached: {D3.worker_handle is None}\n")
+
+    # --- 5. run_until_yield terminal-outcome mapping (stub _task) ------------
+    # PROVED: target subtree has no unfinished nodes (1.1 is fully proved).
+    print_header("5. run_until_yield terminal mapping", file)
+    h = WorkerHandle(H11, session); H11.worker_handle = h
+    h._task = _done_task()
+    y = await h.run_until_yield()
+    file.write(f"proved subtree -> kind={y.kind} detached={H11.worker_handle is None}\n")
+
+    # COULD_NOT_PROVE: target still unfinished; quit_info detail surfaces.
+    h = WorkerHandle(H12, session); H12.worker_handle = h
+    h._task = _done_task()
+    h._sub = types.SimpleNamespace(
+        quit_info=types.SimpleNamespace(detail="ran out of budget", reason="budget"))
+    y = await h.run_until_yield()
+    file.write(f"unfinished subtree -> kind={y.kind} detail={y.detail!r}\n")
+
+    # SURRENDERED: an event in the queue wins over task completion.
+    h = WorkerHandle(H12, session); H12.worker_handle = h
+    h._task = _done_task()
+    h._event_queue.put_nowait(WorkerSurrender(detail="cannot proceed"))
+    y = await h.run_until_yield()
+    file.write(f"surrender event -> kind={y.kind} detail={y.detail!r}\n")
+
+    # --- 6. nesting-depth guard ---------------------------------------------
+    print_header("6. nesting-depth", file)
+    # 6a. _subagent_nesting_depth counts only Role_Worker on the parent chain.
+    orig_parent = session.parent
+    orig_role = session.role
+    session.role = model.Role_Worker(target=H)
+    session.parent = types.SimpleNamespace(
+        role=model.Role_Worker(target=H11),
+        parent=types.SimpleNamespace(role=model.Role_Major(), parent=None))
+    d = session._subagent_nesting_depth()
+    session.parent = orig_parent
+    file.write(f"nesting depth (self-worker + 1 worker ancestor + major): {d}\n")
+    # 6b. the dispatch guard rejects when the depth limit is reached.
+    session.role = model.Role_Worker(target=H, worker_handle=WorkerHandle(H, session))
+    session._subagent_nesting_depth = lambda: model.SUBAGENT_NESTING_DEPTH       # monkeypatch
+    try:
+        r, e = await _subagent_tool_logic(
+            session, {"step_id": "2", "suggestions": "", "helpful_lemmas": []})  # rel "2" -> 1.2
+        file.write(f"depth-limit dispatch is_error: {e}\n")
+        file.write(f"depth-limit message mentions 'deeply nested': {'deeply nested' in r}\n")
+    finally:
+        del session._subagent_nesting_depth
+        session.role = orig_role
+
+    # --- 7. orphan-handle assertion surfaces a broken antichain invariant ----
+    print_header("7. orphan-handle assertion", file)
+    session.role = model.Role_Major()
+    H12.worker_handle = WorkerHandle(H12, object())   # foreign handle, no enclosing owner
+    try:
+        await _subagent_tool_logic(
+            session, {"step_id": "1.2", "suggestions": "", "helpful_lemmas": []})
+        file.write("orphan: NO assertion raised (UNEXPECTED)\n")
+    except AssertionError:
+        file.write("orphan: AssertionError raised\n")
+    finally:
+        H12.worker_handle = None
+
+    # --- 8. close_subagent: parked vs in-flight vs no-handle ----------------
+    print_header("8. close_subagent parked / in-flight / none", file)
+    H11.worker_handle = WorkerHandle(H11, session)     # parked (no task)
+    r, e = await _close_subagent_tool_logic(session, {"step_id": "1.1"})
+    file.write(f"parked close is_error={e} detached={H11.worker_handle is None}\n")
+
+    inflight = WorkerHandle(H11, session)
+    inflight._task = asyncio.ensure_future(asyncio.sleep(100))   # live worker task
+    H11.worker_handle = inflight
+    r, e = await _close_subagent_tool_logic(session, {"step_id": "1.1"})
+    file.write(f"in-flight close is_error={e} task_cancelled={inflight._task.cancelled()} "
+               f"detached={H11.worker_handle is None}\n")
+
+    r, e = await _close_subagent_tool_logic(session, {"step_id": "1.2"})   # no handle there
+    file.write(f"no-handle close is_error={e}\n")
+
+    session.role = model.Role_Major()
+
+
+@model_test("NestedRequestLemmas", "Test_NestedRequestLemmas.thy", 9)
+async def _test_nested_request_lemmas(root: Root, file: MyIO):
+    """The request_lemmas PARK -> resume cycle exercised NESTED — the dispatcher
+    is a worker W1 (scope 1), and its sub-agent W2 (scope 1.1) is the one parking
+    on a lemma request. RefuteOrSurrender covers the depth-1 (planner dispatcher)
+    case; this covers the genuinely stateful nesting transition through both the
+    handle API and the real `subagent` resume tool path. Deterministic: the W2
+    worker task is a stub coroutine that enqueues a WorkerRequestLemmas event,
+    blocks on its future, and completes once the dispatcher resolves it."""
+    from .mcp_http_server import _subagent_tool_logic, _subagent_resume_feedback
+    from .model import WorkerHandle, WorkerRequestLemmas
+    session = root.session
+    session.age += 1
+    goal, H = await _make_lock_tree(root)
+    H11 = root.locate_node("1.1")          # W2's target (proved subtree)
+    loop = asyncio.get_running_loop()
+
+    # W1 is the dispatcher session (a worker scoped to node 1).
+    session.role = model.Role_Worker(target=H, worker_handle=WorkerHandle(H, session))
+    await session._prefetch_worker_premises()
+
+    # --- 1. Handle-level PARK -> resume cycle (nested under W1) --------------
+    print_header("1. handle-level park/resume (W1 dispatches W2 on 1.1)", file)
+    ev_fut = loop.create_future()
+    async def _w2_requests_then_finishes():
+        # Model W2's request_lemmas tool: enqueue the event, then block until the
+        # dispatcher answers; once resumed, W2 finishes (subtree already proved).
+        handle._event_queue.put_nowait(WorkerRequestLemmas(
+            detail="need a squares lemma", lemmas=[{
+                "name": "sq_nonneg", "english": "squares are non-negative",
+                "isabelle_statement": "0 ≤ x * x"}],
+            response_future=ev_fut))
+        await ev_fut
+        return None
+    handle = WorkerHandle(H11, session)
+    handle._task = asyncio.ensure_future(_w2_requests_then_finishes())
+    H11.worker_handle = handle
+
+    y = await handle.run_until_yield()     # should PARK on the lemma request
+    file.write(f"park yield kind: {y.kind}\n")
+    file.write(f"park yield detail: {y.detail!r}\n")
+    file.write(f"park yield lemma count: {len(y.lemmas)}\n")
+    file.write(f"handle still attached while parked: {H11.worker_handle is handle}\n")
+    file.write(f"pending_lemma_request stored: {handle._pending_lemma_request is not None}\n")
+
+    handle.resolve_lemma_request("Added lemma sq_nonneg; continue.")   # dispatcher answers
+    y2 = await handle.run_until_yield()    # resumes, then W2 finishes
+    file.write(f"resume yield kind: {y2.kind}\n")
+    file.write(f"detached after finish: {H11.worker_handle is None}\n")
+
+    # --- 2. Tool-level resume path with suggestion rebase-on-resume ----------
+    # The real `subagent` tool rejects a finished node ("already proved"), so a
+    # worker parked on a lemma request must sit on an UNFINISHED target. Give 1.2
+    # an open child 1.2.1 so node 1.2 stays unfinished yet has an in-scope step to
+    # cite. W1 resumes a worker parked on 1.2, passing a suggestion that cites a
+    # W1-relative id (2.1 == node 1.2.1) plus a helper lemma. Verify: the resume
+    # branch fires, the feedback reaches the worker, and the cited id is re-based
+    # into W2's namespace (1.2.1 -> "1"); the worker can't actually close 1.2, so
+    # the dispatcher sees could_not_prove.
+    print_header("2. tool resume path + rebase-on-resume", file)
+    session.role = model.Role_Major()
+    s2 = {"english": "child", "conclusion": r"(0::int) \<le> x * x"}
+    await root.fill("1.2.1", [Have.gen_single({"thought": "c", "statement": s2, "name": "hGC"})])
+    H12 = root.locate_node("1.2")          # unfinished (1.2.1 open)
+    session.role = model.Role_Worker(target=H, worker_handle=WorkerHandle(H, session))
+    await session._prefetch_worker_premises()
+
+    received = []
+    resume_fut = loop.create_future()
+    async def _w2_resume_then_finishes():
+        fb = await resume_fut
+        received.append(fb)
+        return None
+    handle2 = WorkerHandle(H12, session)
+    handle2._task = asyncio.ensure_future(_w2_resume_then_finishes())
+    handle2._pending_lemma_request = resume_fut
+    H12.worker_handle = handle2
+
+    r, e = await _subagent_tool_logic(session, {
+        "step_id": "2",                    # W1-relative for node 1.2
+        "suggestions": "reuse step 2.1",   # W1-relative for node 1.2.1
+        "helpful_lemmas": ["sq_nonneg"]})
+    file.write(f"resume tool is_error: {e}\n")
+    file.write(f"feedback delivered to worker: {len(received) == 1}\n")
+    fb = received[0] if received else ""
+    file.write(f"feedback carries rebased 'step 1' (1.2.1 -> 1): {'reuse step 1' in fb and 'step 2.1' not in fb}\n")
+    file.write(f"feedback carries helpful lemma: {'sq_nonneg' in fb}\n")
+    file.write(f"dispatcher outcome (worker can't close 1.2): {'could not' in r.lower()}\n")
+    file.write(f"detached after tool resume: {H12.worker_handle is None}\n")
+
+    session.role = model.Role_Major()
+
+
+@model_test("FailurePropagation", "Test_FailurePropagation.thy", 9)
+async def _test_failure_propagation(root: Root, file: MyIO):
+    """Failure outcomes bubbling UP a nesting chain with per-level step-id
+    relativization. NestedWorkerScope §15b traces a SUCCESS detail up the stack;
+    this covers the genuinely-uncovered FAILURE channels: the could_not_prove and
+    surrender branches of the real `subagent` tool rendered at a NESTED (worker)
+    dispatcher, plus the multi-level relativize/absolutize chain for a failure
+    detail. Deterministic via the resume path + stubbed worker task (could_not /
+    surrender both reachable without a live fork)."""
+    import types
+    from .mcp_http_server import _subagent_tool_logic
+    from .model import WorkerHandle, WorkerSurrender
+    session = root.session
+    session.age += 1
+    goal = root.sub_nodes[1]
+    s = {"english": "nonneg", "conclusion": r"(0::int) \<le> x * x"}
+    await goal.fill("1", [Have.gen_single({"thought": "A", "statement": s, "name": "hA"})])
+    await root.fill("1.1", [Have.gen_single({"thought": "B", "statement": s, "name": "hB"})])
+    await root.fill("1.1.1", [Have.gen_single({"thought": "C", "statement": s, "name": "hC"})])
+    await root.fill("1.1.1.1", [Have.gen_single({"thought": "D", "statement": s, "name": "hD"})])
+    H = root.locate_node("1")
+    H1B = root.locate_node("1.1")
+    H111 = root.locate_node("1.1.1")       # unfinished (1.1.1.1 open); W2's target
+    loop = asyncio.get_running_loop()
+
+    def _as_W1():
+        # W1 dispatcher: a worker scoped to node 1.1 (so 1.1.1 is a strict descendant).
+        session.role = model.Role_Worker(target=H1B, worker_handle=WorkerHandle(H1B, session))
+
+    # --- 1. could_not_prove: worker's absolute detail relativized at W1 view --
+    print_header("1. could_not_prove detail relativized at nested dispatcher", file)
+    session.role = model.Role_Major()
+    _as_W1()
+    await session._prefetch_worker_premises()
+    resume_fut = loop.create_future()
+    async def _w2_cant_finish():
+        await resume_fut
+        return None
+    h = WorkerHandle(H111, session)
+    h._task = asyncio.ensure_future(_w2_cant_finish())
+    h._pending_lemma_request = resume_fut
+    # quit_info.detail is W2-authored, already absolutized on emission (cites 1.1.1.1).
+    h._sub = types.SimpleNamespace(
+        quit_info=types.SimpleNamespace(detail="stuck proving step 1.1.1.1", reason="budget"))
+    H111.worker_handle = h
+    r, e = await _subagent_tool_logic(session, {
+        "step_id": "1", "suggestions": "", "helpful_lemmas": []})   # rel 1.1.1 in scope 1.1
+    file.write(f"is_error: {e}\n")
+    file.write(f"message says could not: {'could not' in r.lower()}\n")
+    file.write(f"detail relativized to W1 (1.1.1.1 -> step 1.1): {'step 1.1' in r and '1.1.1.1' not in r}\n")
+
+    # --- 2. surrender: worker's absolute detail relativized at W1 view -------
+    print_header("2. surrender detail relativized at nested dispatcher", file)
+    session.role = model.Role_Major()
+    _as_W1()
+    await session._prefetch_worker_premises()
+    resume_fut2 = loop.create_future()
+    async def _w2_surrenders():
+        await resume_fut2
+        h2._event_queue.put_nowait(WorkerSurrender(detail="abandoning step 1.1.1.1"))
+        return None
+    h2 = WorkerHandle(H111, session)
+    h2._task = asyncio.ensure_future(_w2_surrenders())
+    h2._pending_lemma_request = resume_fut2
+    H111.worker_handle = h2
+    r, e = await _subagent_tool_logic(session, {
+        "step_id": "1", "suggestions": "", "helpful_lemmas": []})
+    file.write(f"is_error: {e}\n")
+    file.write(f"message says surrendered: {'surrender' in r.lower()}\n")
+    file.write(f"detail relativized to W1 (1.1.1.1 -> step 1.1): {'step 1.1' in r and '1.1.1.1' not in r}\n")
+
+    # --- 3. multi-level chain: same failure detail seen at W2 / W1 / planner --
+    # W2 (scope 1.1) authors a detail citing its descendant 1.1.1.1 as relative
+    # "1.1" (multi-component, so it round-trips through the free-text regex). On
+    # emit it absolutizes; each dispatcher above re-relativizes to its own scope.
+    # (A single-component relative id like "1" is deliberately NOT rewritten in
+    # free text — the documented limitation — so the chain must cite a dotted id.)
+    print_header("3. failure detail relativized at every level of the stack", file)
+    session.role = model.Role_Major()
+    # W2 authoring scope = 1.1, cites descendant 1.1.1.1 (relative "1.1").
+    session.role = model.Role_Worker(target=H1B, worker_handle=WorkerHandle(H1B, session))
+    w2_absolute = session._absolutize_text("blocked at step 1.1")      # 1.1 -> 1.1.1.1
+    # W1 view (scope 1).
+    session.role = model.Role_Worker(target=H, worker_handle=WorkerHandle(H, session))
+    w1_view = session._relativize_text(w2_absolute)                    # 1.1.1.1 -> step 1.1.1
+    # planner view (scope root) — identity.
+    session.role = model.Role_Major()
+    planner_view = session._relativize_text(w2_absolute)
+    file.write(f"W2-absolutized:  {w2_absolute!r}\n")
+    file.write(f"W1 view:         {w1_view!r}\n")
+    file.write(f"planner view:    {planner_view!r}\n")
+
+    session.role = model.Role_Major()
+
+
+@model_test("RequestLemmas_FocusedView", "Test_RequestLemmas_FocusedView.thy", 11)
+async def _test_RequestLemmas_FocusedView(root: Root, file: MyIO):
+    """Worker focused-view rendering on a Have-lemma target: print_proof_scope /
+    quickview_proof_scope + goal.context inspection. Restored from the driver
+    removed at 2de6e43 (only the orphan .thy/.yml lingered); adapted to the
+    current API (Role_Major, _prefetch_worker_premises). Snapshot test of the
+    worker-scoped renderer."""
+    session = root.session
+
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # --- Setup: Insert three HAVE nodes into the global env ---
+    session.age += 1
+    [h_triv] = (await root.global_env.append([Have.gen_single({
+        "thought": "trivial lemma",
+        "statement": {"english": "trivial truth", "conclusion": "True"},
+        "name": "h_triv",
+    })])).committed
+    session.age += 1
+    [h_target] = (await root.global_env.append([Have.gen_single({
+        "thought": "target lemma",
+        "statement": {"english": "one equals two", "conclusion": "1 = (2::int)"},
+        "name": "h_target",
+    })])).committed
+    session.age += 1
+    [h_forany] = (await root.global_env.append([Have.gen_single({
+        "thought": "lemma with for_any and premises",
+        "statement": {
+            "english": "y squared is non-negative",
+            "for_any": [{"name": "y", "type": "int"}],
+            "premises": [{"name": "hy", "term": "y ≥ 0"}],
+            "conclusion": "y * y ≥ 0",
+        },
+        "name": "h_forany",
+    })])).committed
+
+    # Inspect goal.context for each HAVE
+    print_header("Goal context inspection", file)
+    for label, have in [("h_target", h_target), ("h_forany", h_forany)]:
+        goal = have._state_after_beginning().leading_goal
+        if goal is not None:
+            file.write(f"{label} goal.context.vars: {[(n.unicode, t.unicode) for n, t in goal.context.vars.items()]}\n")
+            file.write(f"{label} goal.context.hyps: {[(n.unicode, t.unicode) for n, t in goal.context.hyps.items()]}\n")
+            file.write(f"{label} goal.conclusion: {goal.conclusion.unicode}\n")
+        else:
+            file.write(f"{label} goal: None\n")
+
+    # Obvious fails on the false goal — h_target stays open with children
+    session.age += 1
+    await h_target.append([Obvious.gen_single({"facts": []})])
+
+    print_header("Tree with two HAVEs", file)
+    root.print(0, file)
+    file.write(f"h_triv status: {h_triv.status.status.value}\n")
+    file.write(f"h_target status: {h_target.status.status.value}\n")
+
+    # --- Set role to Role_Worker and test focused view ---
+    session.role = model.Role_Worker(target=h_target)
+    await session._prefetch_worker_premises()
+
+    print_header("print_proof_scope (lemma_anchor = h_target)", file)
+    session.print_proof_scope(0, file, show_warnings=True)
+
+    print_header("quickview_proof_scope (lemma_anchor = h_target)", file)
+    session.quickview_proof_scope(0, file)
+
+    # --- Verify content assertions ---
+    buf_ps = MyIO(io.StringIO())
+    session.print_proof_scope(0, buf_ps)
+    ps_text = buf_ps.getvalue()
+    file.write(f"\nprint_proof_scope contains 'available declarations': {'available declarations' in ps_text}\n")
+    file.write(f"print_proof_scope contains 'h_triv': {'h_triv' in ps_text}\n")
+    file.write(f"print_proof_scope contains 'goal:': {'goal:' in ps_text}\n")
+    file.write(f"print_proof_scope contains main goal 'x * x': {'x * x' in ps_text}\n")
+
+    buf_qv = MyIO(io.StringIO())
+    session.quickview_proof_scope(0, buf_qv)
+    qv_text = buf_qv.getvalue()
+    file.write(f"quickview contains 'available declarations': {'available declarations' in qv_text}\n")
+    file.write(f"quickview contains 'Unfinished Proof': {'Unfinished Proof' in qv_text}\n")
+
+    # --- Reset and verify full view is restored ---
+    session.role = model.Role_Major()
+
+    print_header("print_proof_scope (lemma_anchor = None, full view)", file)
+    session.print_proof_scope(0, file)
+
+    print_header("Final tree (reference)", file)
+    root.print(0, file)
+
+
+@model_test("WorkerGoalNodeScope", "Test_WorkerGoalNodeScope.thy", 11)
+async def _test_WorkerGoalNodeScope(root: Root, file: MyIO):
+    """Worker scope rendering when the target is a GoalNode (not a Have).
+
+    Restored from the driver removed at 2de6e43, but REDESIGNED: the original
+    pointed the worker at the *top-level* GoalNode (``root.sub_nodes[1]``), which
+    the dispatch guard would never permit — delegating a whole top-level goal is
+    rejected (``target.parent is psr``). That node also has the empty id ``''``, so
+    every child relativized to ``<external>`` (the relativizer being honest about
+    an empty scope prefix). A worker is only ever scoped to a GoalNode that is a
+    Branch/CaseSplit CASE (parent = the SubgoalMaker, not root; non-empty id like
+    ``1.1``). This targets that REACHABLE case GoalNode, so children relativize
+    to proper in-scope ids."""
+    session = root.session
+
+    # Branch the top-level goal into three cases (pos/neg/zero); the case GoalNodes
+    # (1.1 / 1.2 / 1.3) are legitimate worker-delegation targets.
+    session.age += 1
+    await root.fill("1", [Branch.gen_single({
+        "thought": "split on the sign of x",
+        "cases": [
+            {"statement": {"english": "x positive", "isabelle": "x > 0", "name": "pos"}},
+            {"statement": {"english": "x negative", "isabelle": "x < 0", "name": "neg"}},
+            {"statement": {"english": "x zero", "isabelle": "x = 0", "name": "zero"}},
+        ]})])
+    session.age += 1
+    await root.fill("1.0.1", [Obvious.gen_single({"facts": []})])   # exhaustiveness
+    # Branch case GoalNodes are numbered: 1.0 = exhaustiveness, 1.1/1.2/1.3 = the
+    # pos/neg/zero cases. Put a (still-open) sub-lemma under the first case (1.1)
+    # so the worker view has a child step to relativize.
+    session.age += 1
+    await root.fill("1.1.1", [Have.gen_single({
+        "thought": "helper in the positive case",
+        "statement": {"english": "trivial", "conclusion": "True"}, "name": "hp"})])
+    case = root.locate_node("1.1")          # the reachable case GoalNode
+
+    print_header("Full tree (Plan role)", file)
+    session.print_proof_scope(0, file)
+
+    # --- Set role to Worker targeting the CASE GoalNode (reachable scope) ---
+    session.role = model.Role_Worker(target=case)
+    await session._prefetch_worker_premises()
+
+    print_header("Worker scope (target=case GoalNode 1.1)", file)
+    session.print_proof_scope(0, file)
+
+    buf = MyIO(io.StringIO())
+    session.print_proof_scope(0, buf)
+    ps_text = buf.getvalue()
+    file.write(f"\ncontains 'goal:': {'goal:' in ps_text}\n")
+    file.write(f"contains 'proof:': {'proof:' in ps_text}\n")
+    # The whole point of the redesign: a reachable GoalNode scope relativizes its
+    # children to proper in-scope ids — NOT <external>.
+    file.write(f"child relativizes to in-scope id (no <external>): {'<external>' not in ps_text}\n")
+    file.write(f"child shown as relative 'step id: 1': {'step id: 1' in ps_text}\n")
+
+    print_header("Worker quickview (target=case GoalNode 1.1)", file)
+    session.quickview_proof_scope(0, file)
+
+    # --- Verify unfinished_nodes scoping: case scope vs full proof ---
+    unfinished = session.proof_scope_unfinished_nodes()
+    file.write(f"\nunfinished count (case GoalNode scope): {len(unfinished)}\n")
+
+    # --- Switch back to Plan ---
+    session.role = model.Role_Major()
+    unfinished_full = session.proof_scope_unfinished_nodes()
+    file.write(f"unfinished count (full scope): {len(unfinished_full)}\n")
+
+
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
     import msgpack as mp
     from IsaREPL import Client

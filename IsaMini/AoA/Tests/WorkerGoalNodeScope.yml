@@ -9,43 +9,71 @@ You can write global declarations by calling command `edit` with action `fill` a
 goal: (0 :: int) ≤ x * x
 proof:
   - step id: 1
-    thought: a lemma
-    operation: Have
-    statement:
-      english: trivial
-      conclusion: True
-    name: h1
-    proof: empty
-  - step id: 2
-    operation: Obvious
+    thought: split on the sign of x
+    operation: Branch
+    cases:
+      - goal id: 1.0
+        thought: We first show exhaustiveness of the case split
+        goal: (0 :: int) < x ∨ x < (0 :: int) ∨ x = (0 :: int)
+        proof:
+          - step id: 1.0.1
+            operation: Obvious
+      - goal id: 1.1
+        premises:
+          - pos: (0 :: int) < x
+        goal: (0 :: int) ≤ x * x
+        proof:
+          - step id: 1.1.1
+            thought: helper in the positive case
+            operation: Have
+            statement:
+              english: trivial
+              conclusion: True
+            name: hp
+            proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.2` to provide the proof.
+      - goal id: 1.2
+        premises:
+          - neg: x < (0 :: int)
+        goal: (0 :: int) ≤ x * x
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.1` to provide the proof.
+      - goal id: 1.3
+        premises:
+          - zero: x = (0 :: int)
+        goal: (0 :: int) ≤ x * x
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.3.1` to provide the proof.
 --------------------------------------------------
-Worker scope (target=GoalNode)
+Worker scope (target=case GoalNode 1.1)
 --------------------------------------------------
 variables:
   - x: int
 premises:
   - h1: (0 :: int) ≤ x
+  - pos: (0 :: int) < x
 goal: (0 :: int) ≤ x * x
 proof:
   - step id: 1
-    thought: a lemma
+    thought: helper in the positive case
     operation: Have
     statement:
       english: trivial
       conclusion: True
-    name: h1
+    name: hp
     proof: empty
-  - step id: 2
-    operation: Obvious
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
 
-contains 'available declarations': False
 contains 'goal:': True
 contains 'proof:': True
+child relativizes to in-scope id (no <external>): True
+child shown as relative 'step id: 1': True
 --------------------------------------------------
-Worker quickview (target=GoalNode)
+Worker quickview (target=case GoalNode 1.1)
 --------------------------------------------------
-step 1: Have h1 (done)
-step 2: Obvious
+step 1: Have hp (done)
+Error: Unfinished Proof. Call command `edit` with action `fill` and target step `2`
+goal: (0 :: int) ≤ x * x
 
-unfinished count (GoalNode scope): 0
-unfinished count (full scope): 0
+unfinished count (case GoalNode scope): 1
+unfinished count (full scope): 3

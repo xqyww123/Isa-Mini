@@ -1,0 +1,46 @@
+--------------------------------------------------
+1. _settle_costs exactly-once
+--------------------------------------------------
+accumulate called: 1
+_costs_accumulated flag set: True
+no-_sub settle is a no-op: True
+--------------------------------------------------
+2. cancel() tears down futures + task
+--------------------------------------------------
+pending_review cancelled: True
+pending_lemma_request cancelled: True
+futures cleared: True
+task cancelled after cancel(): True
+--------------------------------------------------
+3. aclose() detach + idempotent
+--------------------------------------------------
+detached after aclose: True
+still detached after 2nd aclose: True
+--------------------------------------------------
+4. aclose_all_subagents cascade (depth-3)
+--------------------------------------------------
+D1 detached: True
+D2 detached: True
+D3 detached: True
+--------------------------------------------------
+5. run_until_yield terminal mapping
+--------------------------------------------------
+proved subtree -> kind=proved detached=True
+unfinished subtree -> kind=could_not_prove detail='ran out of budget'
+surrender event -> kind=surrendered detail='cannot proceed'
+--------------------------------------------------
+6. nesting-depth
+--------------------------------------------------
+nesting depth (self-worker + 1 worker ancestor + major): 2
+depth-limit dispatch is_error: True
+depth-limit message mentions 'deeply nested': True
+--------------------------------------------------
+7. orphan-handle assertion
+--------------------------------------------------
+orphan: AssertionError raised
+--------------------------------------------------
+8. close_subagent parked / in-flight / none
+--------------------------------------------------
+parked close is_error=False detached=True
+in-flight close is_error=False task_cancelled=True detached=True
+no-handle close is_error=True

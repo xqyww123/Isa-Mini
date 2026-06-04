@@ -1,0 +1,19 @@
+--------------------------------------------------
+1. handle-level park/resume (W1 dispatches W2 on 1.1)
+--------------------------------------------------
+park yield kind: lemmas
+park yield detail: 'need a squares lemma'
+park yield lemma count: 1
+handle still attached while parked: True
+pending_lemma_request stored: True
+resume yield kind: proved
+detached after finish: True
+--------------------------------------------------
+2. tool resume path + rebase-on-resume
+--------------------------------------------------
+resume tool is_error: False
+feedback delivered to worker: True
+feedback carries rebased 'step 1' (1.2.1 -> 1): True
+feedback carries helpful lemma: True
+dispatcher outcome (worker can't close 1.2): True
+detached after tool resume: True

@@ -1,0 +1,11 @@
+theory Test_NestedRequestLemmas
+  imports Minilang_Agent.Minilang_Agent
+begin
+
+declare [[agent_AoA_driver="test.NestedRequestLemmas"]]
+
+(* Distinctive goal, left unfinished by the test, to avoid the shared proof cache *)
+lemma nested_request_lemmas_test: "(0::int) \<le> x * x + (13::int)"
+  by Agent AoA
+
+end

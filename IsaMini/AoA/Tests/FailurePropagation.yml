@@ -1,0 +1,18 @@
+--------------------------------------------------
+1. could_not_prove detail relativized at nested dispatcher
+--------------------------------------------------
+is_error: False
+message says could not: True
+detail relativized to W1 (1.1.1.1 -> step 1.1): True
+--------------------------------------------------
+2. surrender detail relativized at nested dispatcher
+--------------------------------------------------
+is_error: False
+message says surrendered: True
+detail relativized to W1 (1.1.1.1 -> step 1.1): True
+--------------------------------------------------
+3. failure detail relativized at every level of the stack
+--------------------------------------------------
+W2-absolutized:  'blocked at step 1.1.1.1'
+W1 view:         'blocked at step 1.1.1'
+planner view:    'blocked at step 1.1.1.1'
