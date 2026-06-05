@@ -8,6 +8,7 @@ val agent_aoa_driver: string Config.T
 val AoA_log_dir: string Config.T
 val AoA_interactive_retrieval: string Config.T
 val AoA_retrieval_forking: string Config.T
+val AoA_use_proof_cache: bool Config.T
 
 type state_id = string
 type states = Minilang.state Symtab.table
@@ -289,6 +290,15 @@ val AoA_retrieval_forking = Attrib.setup_config_string \<^binding>\<open>AoA_ret
       (K "with_ctxt");
 val _ = Config.register_rpc_option "AoA_retrieval_forking"
           (Config.string_value AoA_retrieval_forking);
+
+(* Whether the `aoa` method may READ from the proof cache.
+   true (default) — consult both cache levels (L1 Python SQLite, L2 ML
+   Phi_Cache_DB) before running the agent, replaying a hit if found.
+   false           — bypass cache lookup entirely and always run the agent.
+   Writing is unaffected: a finished proof is still stored into BOTH levels
+   on success regardless of this option. *)
+val AoA_use_proof_cache = Attrib.setup_config_bool \<^binding>\<open>AoA_use_proof_cache\<close>
+      (K true);
 
 fun make_invocation_id () =
   let val ms = Time.toMilliseconds (Time.now ())
@@ -968,13 +978,18 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
       val goal_hash = Hasher.goal (ctxt, sequent)
       val thy = Proof_Context.theory_of ctxt
       val aoa_cache_key = "aoa:" ^ goal_hash
-      val cached_xcmd_json = case Phi_Cache_DB.get_cached_proof thy aoa_cache_key of
-          SOME (_, json) => SOME json
-        | NONE => NONE
+      val use_cache = Config.get ctxt AoA_use_proof_cache
+      val cached_xcmd_json =
+            if use_cache
+            then case Phi_Cache_DB.get_cached_proof thy aoa_cache_key of
+                    SOME (_, json) => SOME json
+                  | NONE => NONE
+            else NONE
       val _ = tracing (String.concat [
         "[AoA-cache] L2 Phi_Cache_DB get key=", aoa_cache_key,
         " thy=", Context.theory_name {long=true} thy,
-        " : ", (case cached_xcmd_json
+        " : ", (if not use_cache then "BYPASSED (AoA_use_proof_cache=false)"
+                else case cached_xcmd_json
                   of SOME json => "HIT (" ^ Int.toString (size json) ^ "B)"
                    | NONE => "MISS")])
 
@@ -994,11 +1009,11 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
             in packTuple10 (context_packer ctxt, minilang_flat_goal_packer ctxt,
                            packString, packString, packString, packString, packString,
                            packTuple3 (packInt, packInt, packInt),
-                           packString, packOption packString)
+                           packString, packPair (packBool, packOption packString))
                           (global_context, s0_flat_goal, driver, log_dir, invocation_id,
                            retrieval_forking, interactive_retrieval,
                            (#timeout_seconds budget, #max_tool_calls budget, #max_retries budget),
-                           goal_hash, cached_xcmd_json)
+                           goal_hash, (use_cache, cached_xcmd_json))
             end),
         ret_schema = unpackTuple6 (unpackList MiniLang_Agent.xcmd_unpacker,
                                    unpackOption unpackString,

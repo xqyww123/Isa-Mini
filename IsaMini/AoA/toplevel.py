@@ -65,7 +65,9 @@ async def _replay_cached_proof(connection: Connection, packed_ops: list[Any],
 async def IsaMini_AoA(data: tuple, connection: Connection):
     (global_context, ptree, driver, log_dir, invocation_id,
      retrieval_forking_str, interactive_retrieval_str, budget_tuple,
-     goal_hash, cached_xcmd_json) = data
+     goal_hash, cache_flags) = data
+    # ML pairs the read-cache toggle with the L2 (Phi_Cache_DB) payload.
+    use_cache, cached_xcmd_json = cache_flags
     timeout_seconds, max_tool_calls, max_retries = budget_tuple
 
     # Environment variable AoA_LOG_DIR overrides user-provided log_dir
@@ -88,36 +90,46 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
 
     logger = connection.server.logger
     pc = get_proof_cache()
-    logger.info(
-        "[AoA-cache] lookup goal_hash=%s | sqlite_db=%s | phi_cache_json=%s",
-        goal_hash, pc.db_path,
-        f"present({len(cached_xcmd_json)}B)" if cached_xcmd_json else "absent")
 
-    # Level 1: Python SQLite
-    cached_ops = pc.lookup(goal_hash)
-    logger.info("[AoA-cache] L1 SQLite: %s",
-                "HIT" if cached_ops is not None else "MISS")
+    # Cache READING is gated by the AoA_use_proof_cache config (passed from ML).
+    # When disabled, both levels are bypassed for lookup; a finished proof is
+    # still WRITTEN to both levels on success (see L1 SQLite store below and the
+    # ML-side L2 Phi_Cache_DB store).
+    if not use_cache:
+        logger.info(
+            "[AoA-cache] lookup BYPASSED (AoA_use_proof_cache=false) "
+            "goal_hash=%s; will still store on success", goal_hash)
+    else:
+        logger.info(
+            "[AoA-cache] lookup goal_hash=%s | sqlite_db=%s | phi_cache_json=%s",
+            goal_hash, pc.db_path,
+            f"present({len(cached_xcmd_json)}B)" if cached_xcmd_json else "absent")
 
-    # Level 2: Phi_Cache_DB (from ML)
-    if cached_ops is None and cached_xcmd_json:
-        try:
-            cached_ops = json.loads(cached_xcmd_json)
-            logger.info("[AoA-cache] L2 Phi_Cache_DB: HIT (%d ops)", len(cached_ops))
-        except (json.JSONDecodeError, TypeError) as e:
-            cached_ops = None
-            logger.warning("[AoA-cache] L2 Phi_Cache_DB: JSON parse FAILED: %r", e)
-    elif cached_ops is None:
-        logger.info("[AoA-cache] L2 Phi_Cache_DB: MISS (no json from ML)")
+        # Level 1: Python SQLite
+        cached_ops = pc.lookup(goal_hash)
+        logger.info("[AoA-cache] L1 SQLite: %s",
+                    "HIT" if cached_ops is not None else "MISS")
 
-    if cached_ops is not None:
-        cache_source = "SQLite" if not cached_xcmd_json or pc.lookup(goal_hash) is not None else "Phi_Cache_DB"
-        ok, final_state = await _replay_cached_proof(connection, cached_ops, cache_source)
-        logger.info("[AoA-cache] replay from %s: %s (%d ops)",
-                    cache_source, "OK" if ok else "FAILED", len(cached_ops))
-        if ok:
-            proof_json = json.dumps(cached_ops)
-            return (cached_ops, final_state, zero_cost, None, None, proof_json)
-        # replay failed — fall through to agent
+        # Level 2: Phi_Cache_DB (from ML)
+        if cached_ops is None and cached_xcmd_json:
+            try:
+                cached_ops = json.loads(cached_xcmd_json)
+                logger.info("[AoA-cache] L2 Phi_Cache_DB: HIT (%d ops)", len(cached_ops))
+            except (json.JSONDecodeError, TypeError) as e:
+                cached_ops = None
+                logger.warning("[AoA-cache] L2 Phi_Cache_DB: JSON parse FAILED: %r", e)
+        elif cached_ops is None:
+            logger.info("[AoA-cache] L2 Phi_Cache_DB: MISS (no json from ML)")
+
+        if cached_ops is not None:
+            cache_source = "SQLite" if not cached_xcmd_json or pc.lookup(goal_hash) is not None else "Phi_Cache_DB"
+            ok, final_state = await _replay_cached_proof(connection, cached_ops, cache_source)
+            logger.info("[AoA-cache] replay from %s: %s (%d ops)",
+                        cache_source, "OK" if ok else "FAILED", len(cached_ops))
+            if ok:
+                proof_json = json.dumps(cached_ops)
+                return (cached_ops, final_state, zero_cost, None, None, proof_json)
+            # replay failed — fall through to agent
 
     # --- Level 3: Full agent run ---
     if "." in driver:
