@@ -44,3 +44,12 @@ orphan: AssertionError raised
 parked close is_error=False detached=True
 in-flight close is_error=False task_cancelled=True detached=True
 no-handle close is_error=True
+--------------------------------------------------
+9. run_until_yield refute ACCEPTED
+--------------------------------------------------
+refute accepted -> kind=refute_accepted reason='agreed: the goal is unprovable' detail='the goal contradicts premise hH' detached=True
+--------------------------------------------------
+10. run_until_yield refute REJECTED -> continue -> surrender
+--------------------------------------------------
+refute rejected -> fork_interaction calls=1
+after reject the worker resumed then -> kind=surrendered detail='ok, surrendering' detached=True

@@ -10596,7 +10596,7 @@ async def _test_worker_handle_lifecycle(root: Root, file: MyIO):
     run their real logic against a controllable `_task` + event queue."""
     import types
     from .mcp_http_server import _subagent_tool_logic, _close_subagent_tool_logic
-    from .model import WorkerHandle, WorkerSurrender
+    from .model import WorkerHandle, WorkerSurrender, WorkerRefute
     session = root.session
     session.age += 1
     goal, H = await _make_lock_tree(root)
@@ -10744,6 +10744,64 @@ async def _test_worker_handle_lifecycle(root: Root, file: MyIO):
 
     r, e = await _close_subagent_tool_logic(session, {"step_id": "1.2"})   # no handle there
     file.write(f"no-handle close is_error={e}\n")
+
+    # --- 9. run_until_yield REFUTE branch: ACCEPT -> wind-down -> refute_accepted
+    # The most intricate control flow in run_until_yield, previously untested: a
+    # WorkerRefute is dequeued, reviewed via fork_interaction, and on acceptance the
+    # worker winds down. fork_interaction is mocked to stand in for the planner's
+    # verdict (it also resolves the worker's review future, like the real
+    # Interaction_ReviewRefutation.answer), so no live planner is needed.
+    print_header("9. run_until_yield refute ACCEPTED", file)
+    async def _worker_refutes_accept():
+        f = loop.create_future()
+        h9._event_queue.put_nowait(
+            WorkerRefute(detail="the goal contradicts premise hH", response_future=f))
+        await f                       # blocks until the dispatcher reviews it
+        return None                   # accepted -> the worker winds down
+    h9 = WorkerHandle(H12, session)
+    h9._task = asyncio.ensure_future(_worker_refutes_accept())
+    H12.worker_handle = h9
+    async def _fi_accept(interaction):
+        h9.resolve_review(True, "agreed: the goal is unprovable")   # mock planner accept
+        return (True, "agreed: the goal is unprovable")
+    session.fork_interaction = _fi_accept
+    try:
+        y = await h9.run_until_yield()
+    finally:
+        del session.fork_interaction
+    file.write(f"refute accepted -> kind={y.kind} reason={y.reason!r} "
+               f"detail={y.detail!r} detached={H12.worker_handle is None}\n")
+
+    # --- 10. run_until_yield REFUTE branch: REJECT -> continue -> re-yield -------
+    # On rejection the loop `continue`s and the worker resumes IN-LOOP (the planner
+    # never sees a terminal yield); here the resumed worker then surrenders, so the
+    # SAME run_until_yield excursion returns a `surrendered` yield. This exercises
+    # the reject->continue->re-dequeue path that nothing else covered.
+    print_header("10. run_until_yield refute REJECTED -> continue -> surrender", file)
+    fork_calls = []
+    async def _worker_refutes_reject():
+        f = loop.create_future()
+        h10._event_queue.put_nowait(
+            WorkerRefute(detail="claims unprovable", response_future=f))
+        accepted, _reason = await f
+        if not accepted:              # resumed in-loop; now gives up for real
+            h10._event_queue.put_nowait(WorkerSurrender(detail="ok, surrendering"))
+        return None
+    h10 = WorkerHandle(H12, session)
+    h10._task = asyncio.ensure_future(_worker_refutes_reject())
+    H12.worker_handle = h10
+    async def _fi_reject(interaction):
+        fork_calls.append(interaction)
+        h10.resolve_review(False, "not convinced; keep trying")     # mock planner reject
+        return (False, "not convinced; keep trying")
+    session.fork_interaction = _fi_reject
+    try:
+        y = await h10.run_until_yield()
+    finally:
+        del session.fork_interaction
+    file.write(f"refute rejected -> fork_interaction calls={len(fork_calls)}\n")
+    file.write(f"after reject the worker resumed then -> kind={y.kind} "
+               f"detail={y.detail!r} detached={H12.worker_handle is None}\n")
 
     session.role = model.Role_Major()
 
@@ -11095,6 +11153,75 @@ async def _test_WorkerGoalNodeScope(root: Root, file: MyIO):
     session.role = model.Role_Major()
     unfinished_full = session.proof_scope_unfinished_nodes()
     file.write(f"unfinished count (full scope): {len(unfinished_full)}\n")
+
+
+@model_test("NestedAntichain", "Test_NestedAntichain.thy", 9)
+async def _test_nested_antichain(root: Root, file: MyIO):
+    """Deterministic coverage of the nested-subagent ANTICHAIN + teardown logic
+    that the lifecycle test didn't reach: (A) 3+-level disambiguation — a session
+    sees the worker IT owns, skipping a deeper FOREIGN grandchild handle it cannot
+    operate on; (B) concurrent sibling workers are independent (a worker on one
+    sibling neither blocks dispatch nor locks edits in the other); (C) the two
+    cascade-close recursions, ``discard`` (delete) and ``_amend_child`` (amend),
+    each tear down the workers they remove."""
+    from .model import WorkerHandle, _first_worker_in_ancestors
+    session = root.session
+    session.age += 1
+    goal = root.sub_nodes[1]
+    s = {"english": "nonneg", "conclusion": r"(0::int) \<le> x * x"}
+    await goal.fill("1", [Have.gen_single({"thought": "H", "statement": s, "name": "hH"})])
+    H = root.locate_node("1")
+    await root.fill("1.1", [Have.gen_single({"thought": "A", "statement": s, "name": "hA"})])
+    await root.fill("1.1.1", [Have.gen_single({"thought": "B", "statement": s, "name": "hB"})])
+    await root.fill("1.1.1.1", [Have.gen_single({"thought": "C", "statement": s, "name": "hC"})])
+    await H.append([Have.gen_single({"thought": "sib", "statement": s, "name": "hSib"})])  # 1.2
+    A = root.locate_node("1.1"); B = root.locate_node("1.1.1")
+    C = root.locate_node("1.1.1.1"); sib = root.locate_node("1.2")
+    session.role = model.Role_Major()
+
+    # --- A. 3+-level antichain disambiguation -------------------------------
+    # MINE on 1.1; a FOREIGN sub-worker's handle on 1.1.1 (a grandchild I can't
+    # operate on). For a node under both, the ownership-blind nearest-ancestor
+    # walk finds the foreign one, but _enclosing_dispatched_subagent / the dispatch
+    # blocker must point me at the worker I OWN (1.1).
+    print_header("A. 3+-level antichain disambiguation", file)
+    A.worker_handle = WorkerHandle(A, session)        # mine
+    B.worker_handle = WorkerHandle(B, object())       # foreign (a sub-worker's)
+    near = _first_worker_in_ancestors(C, stop=root)   # ownership-blind: nearest = 1.1.1
+    mine = session._enclosing_dispatched_subagent(C)  # ownership-aware: skips foreign -> 1.1
+    blk = session._subagent_blocker(C)
+    file.write(f"nearest ancestor handle (ownership-blind): {near.target.id}\n")
+    file.write(f"_enclosing_dispatched_subagent (mine, skips foreign grandchild): {mine.target.id}\n")
+    file.write(f"_subagent_blocker points at the worker I own: {blk.target.id}\n")
+    A.worker_handle = None; B.worker_handle = None
+
+    # --- B. concurrent sibling workers are independent ----------------------
+    print_header("B. concurrent sibling workers independent", file)
+    sib.worker_handle = WorkerHandle(sib, session)    # worker on sibling 1.2 only
+    blk_sib = session._dispatch_blocked_by(A)         # dispatch on 1.1 — not blocked by 1.2
+    v_free, _ = session._edit_verdict("1.1.1.1.1", "fill")  # new slot deep under 1.1 — free
+    v_lock, h_lock = session._edit_verdict("1.2.1", "fill") # new slot under 1.2 — its own worker locks
+    file.write(f"dispatch on sibling 1.1 blocked by worker on 1.2: {blk_sib is not None}\n")
+    file.write(f"edit under sibling 1.1 verdict: {v_free.name}\n")
+    file.write(f"edit under the worker's own 1.2 verdict: {v_lock.name} blocker={h_lock.target.id if h_lock else '-'}\n")
+    sib.worker_handle = None
+
+    # --- C. cascade-close: discard (delete) and _amend_child (amend) --------
+    print_header("C. cascade-close via delete and amend", file)
+    # C1. delete 1.1.1 -> discard recurses, closing the workers on 1.1.1 AND 1.1.1.1.
+    hB = WorkerHandle(B, session); hB._task = asyncio.ensure_future(asyncio.sleep(100)); B.worker_handle = hB
+    hC = WorkerHandle(C, session); hC._task = asyncio.ensure_future(asyncio.sleep(100)); C.worker_handle = hC
+    await root.delete(["1.1.1"])
+    file.write(f"delete cascade: 1.1.1 worker cancelled={hB._task.cancelled()}, "
+               f"nested 1.1.1.1 worker cancelled={hC._task.cancelled()}, detached={B.worker_handle is None}\n")
+    # C2. amend 1.1 -> _amend_child tears down the amended node's own worker.
+    hA = WorkerHandle(A, session); hA._task = asyncio.ensure_future(asyncio.sleep(100)); A.worker_handle = hA
+    await root.amend("1.1", [Have.gen_single({
+        "thought": "A'", "statement": s, "name": "hA2"})])
+    file.write(f"amend cascade: amended-node worker cancelled={hA._task.cancelled()}, "
+               f"old node detached={A.worker_handle is None}\n")
+
+    session.role = model.Role_Major()
 
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):

@@ -1,0 +1,17 @@
+--------------------------------------------------
+A. 3+-level antichain disambiguation
+--------------------------------------------------
+nearest ancestor handle (ownership-blind): 1.1.1
+_enclosing_dispatched_subagent (mine, skips foreign grandchild): 1.1
+_subagent_blocker points at the worker I own: 1.1
+--------------------------------------------------
+B. concurrent sibling workers independent
+--------------------------------------------------
+dispatch on sibling 1.1 blocked by worker on 1.2: False
+edit under sibling 1.1 verdict: OK
+edit under the worker's own 1.2 verdict: LOCKED blocker=1.2
+--------------------------------------------------
+C. cascade-close via delete and amend
+--------------------------------------------------
+delete cascade: 1.1.1 worker cancelled=True, nested 1.1.1.1 worker cancelled=True, detached=True
+amend cascade: amended-node worker cancelled=True, old node detached=True
