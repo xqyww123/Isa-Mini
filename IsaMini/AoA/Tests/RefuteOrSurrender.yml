@@ -13,8 +13,14 @@ request_lemmas event lemmas count: 1
 request_lemmas resume mentions sq_nonneg: True
 request_lemmas resume is_error: False
 empty request_lemmas is_error: True
-invalid reason is_error: True
-invalid reason result contains 'Invalid': True
+difficulty event: WorkerDifficulty
+difficulty event detail: stuck on the inductive step
+difficulty resume mentions induction: True
+difficulty resume is_error: False
+empty difficulty is_error: True
+invalid type is_error: True
+invalid type result contains 'Invalid': True
 no-handle worker: InternalError raised
 planner request_lemmas is_error: False
 planner request_lemmas mentions global: True
+planner difficulty is_error: False

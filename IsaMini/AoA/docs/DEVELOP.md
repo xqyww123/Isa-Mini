@@ -24,7 +24,7 @@ operations. Two kinds of agent operate on that tree:
 The agents never speak raw Isar. They emit **Minilang operations** (a small high-level vocabulary),
 which the ML side executes against a live Isabelle proof state. Agents perceive the proof as a
 YAML-shaped rendering (`proof.yaml`) and act through a handful of MCP tools (`edit`, `delete`,
-`query`, `recall`, `refute_or_surrender`, `request_lemmas`).
+`query`, `recall`, `report`, `request_lemmas`).
 
 ---
 
@@ -227,7 +227,10 @@ A worker communicates back through events rather than dying:
   planner decides, preserving its context.
 - `WorkerRequestLemmas` — "I need a background lemma" (via the worker-side `request_lemmas` tool);
   the worker *blocks* while the planner authors + proves helper lemmas, then resumes (non-terminal).
-- `WorkerSurrender` — "I'm stuck / need help" (terminal).
+- `WorkerDifficulty` — "I'm stuck, here's why" (via the worker-side `report` tool, `type=difficulty`);
+  the worker *blocks* (PARK) while the dispatcher advises, then resumes (non-terminal). Shares the
+  same `_pending_resume` slot + `resolve_resume` path as `WorkerRequestLemmas`.
+- `WorkerSurrender` — "I give up" (terminal).
 - `WorkerDone` — synthesised when the task ends; `success` reflects `target.is_proof_finished()`.
 
 A lemma sub-agent is a first-class `WorkerHandle` driven by a `LemmaDrive` (in
@@ -268,7 +271,7 @@ retry layers (`_with_retry` for quota — 20-minute wait; `_retry_transient` —
 | `driver_openai/anthropic/gemini/codex.py` | Provider variants, lazily imported in `toplevel.py`. |
 
 **Tools** (abstract ids in `model.py`) map to external names per driver: `edit`, `delete`,
-`query` (search), `recall` (read `proof.yaml`), `refute_or_surrender` (refute/surrender),
+`query` (search), `recall` (read `proof.yaml`), `report` (refute/surrender/difficulty),
 `request_lemmas` (dual-role: a worker→planner channel, or a planner self-formalize hint), answer-*. The tool→operation logic is in `mcp_http_server.py`: `_edit_tool_logic` parses the agent's
 `proof_operations` and dispatches to `root.fill` / `insert_before` / `amend`; structural completion
 in PLANNING hands off to `Session.complete_proof`. Tool JSON schemas live in `tools/*.jsonc`.
@@ -313,6 +316,10 @@ through `print_proof_scope`; the `recall` tool reads it back.
   `agent_server.ML`.
 - Caching (in `IsaMini_AoA`): Python SQLite (`proof_cache.py`) → ML Phi_Cache JSON → full agent run.
   Hits replay packed ops via `set_replay_mode` + `proof_opr` (`_replay_cached_proof`).
+  The bool config `AoA_use_proof_cache` (default `true`, `Attrib.setup_config_bool` in
+  `agent_server.ML`) gates only cache *reading*: set it `false` (`declare [[AoA_use_proof_cache =
+  false]]`) to bypass both levels of lookup and always run the agent. Writing is unconditional — a
+  finished proof is still stored into both levels (Python L1 SQLite + ML L2 Phi_Cache_DB) on success.
 
 ---
 

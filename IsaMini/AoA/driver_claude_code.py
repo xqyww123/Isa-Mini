@@ -72,7 +72,7 @@ class ClaudeCode(LMDriver):
         "delete": "mcp__proof__delete",
         "recall": "Read",
         "request_lemmas": "mcp__proof__request_lemmas",
-        "refute_or_surrender": "mcp__proof__refute_or_surrender",
+        "report": "mcp__proof__report",
         "subagent": "mcp__proof__subagent",
         "close_subagent": "mcp__proof__close_subagent",
         "answer_indexes": "mcp__proof__answer_indexes",

@@ -5,7 +5,7 @@ park yield kind: lemmas
 park yield detail: 'need a squares lemma'
 park yield lemma count: 1
 handle still attached while parked: True
-pending_lemma_request stored: True
+pending_resume stored: True
 resume yield kind: proved
 detached after finish: True
 --------------------------------------------------

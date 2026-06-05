@@ -9939,14 +9939,14 @@ async def _test_GlobalEnv_LeafOps(root: Root, file: MyIO):
 @model_test("RefuteOrSurrender", "Test_RefuteOrSurrender.thy", 11)
 async def _test_RefuteOrSurrender(root: Root, file: MyIO):
     """Test the split tools for Worker (event-based) and Plan roles:
-    `refute_or_surrender` (refute / surrender) and the dual-role
+    `report` (refute / surrender / difficulty) and the dual-role
     `request_lemmas` (worker channel + planner no-arg hint)."""
     from .mcp_http_server import (
-        _refute_or_surrender_tool_logic, _request_lemmas_tool_logic)
+        _report_tool_logic, _request_lemmas_tool_logic)
     from .model import WorkerHandle
     session = root.session
 
-    # --- Worker: refute_or_surrender communicates via the WorkerHandle queue ---
+    # --- Worker: report communicates via the WorkerHandle queue ---
     session.age += 1
     goal_node = root.sub_nodes[1]
     await goal_node.fill("1", [Have.gen_single({
@@ -9962,9 +9962,9 @@ async def _test_RefuteOrSurrender(root: Root, file: MyIO):
 
     # Surrender: enqueues a WorkerSurrender AND sets a terminal quit_info=Surrender
     # so the worker's agent loop winds down cleanly (the planner also learns of it
-    # via the event). See _refute_or_surrender_tool_logic.
-    result, is_error = await _refute_or_surrender_tool_logic(session, {
-        "reason": "surrender",
+    # via the event). See _report_tool_logic.
+    result, is_error = await _report_tool_logic(session, {
+        "type": "surrender",
         "detail": "I need more lemmas",
     })
     file.write(f"worker surrender result: {result}\n")
@@ -9976,8 +9976,8 @@ async def _test_RefuteOrSurrender(root: Root, file: MyIO):
 
     # Refute, planner REJECTS: the tool blocks on the review future until it is
     # resolved, then tells the worker to keep going.
-    task = asyncio.ensure_future(_refute_or_surrender_tool_logic(session, {
-        "reason": "refute",
+    task = asyncio.ensure_future(_report_tool_logic(session, {
+        "type": "refute",
         "detail": "The goal contradicts premises",
     }))
     ev = await handle._event_queue.get()
@@ -9989,8 +9989,8 @@ async def _test_RefuteOrSurrender(root: Root, file: MyIO):
     file.write(f"refute rejected is_error: {is_error}\n")
 
     # Refute, planner ACCEPTS.
-    task = asyncio.ensure_future(_refute_or_surrender_tool_logic(session, {
-        "reason": "refute",
+    task = asyncio.ensure_future(_report_tool_logic(session, {
+        "type": "refute",
         "detail": "genuinely unprovable",
     }))
     ev = await handle._event_queue.get()
@@ -10018,18 +10018,37 @@ async def _test_RefuteOrSurrender(root: Root, file: MyIO):
         "detail": "vague", "suggested_lemmas": []})
     file.write(f"empty request_lemmas is_error: {is_error}\n")
 
-    # Invalid reason (validated before the role branch).
-    result, is_error = await _refute_or_surrender_tool_logic(session, {
-        "reason": "invalid_reason",
+    # --- Worker: report(type=difficulty) PARKs on a feedback future, then resumes
+    # (non-terminal, like request_lemmas; shares the _pending_resume slot). ---
+    task = asyncio.ensure_future(_report_tool_logic(session, {
+        "type": "difficulty",
+        "detail": "stuck on the inductive step",
+    }))
+    ev = await handle._event_queue.get()
+    file.write(f"difficulty event: {type(ev).__name__}\n")
+    file.write(f"difficulty event detail: {ev.detail}\n")
+    ev.response_future.set_result("Try strong induction; see lemma foo.")
+    result, is_error = await task
+    file.write(f"difficulty resume mentions induction: {'induction' in result.lower()}\n")
+    file.write(f"difficulty resume is_error: {is_error}\n")
+
+    # Worker report difficulty with empty detail is rejected.
+    result, is_error = await _report_tool_logic(session, {
+        "type": "difficulty", "detail": ""})
+    file.write(f"empty difficulty is_error: {is_error}\n")
+
+    # Invalid type (validated before the role branch).
+    result, is_error = await _report_tool_logic(session, {
+        "type": "invalid_type",
         "detail": "test",
     })
-    file.write(f"invalid reason is_error: {is_error}\n")
-    file.write(f"invalid reason result contains 'Invalid': {'Invalid' in result}\n")
+    file.write(f"invalid type is_error: {is_error}\n")
+    file.write(f"invalid type result contains 'Invalid': {'Invalid' in result}\n")
 
     # A Role_Worker with no handle is a programming error → InternalError.
     session.role = model.Role_Worker(target=goal_node)
     try:
-        await _refute_or_surrender_tool_logic(session, {"reason": "surrender", "detail": "x"})
+        await _report_tool_logic(session, {"type": "surrender", "detail": "x"})
         file.write("no-handle worker: NO error raised (UNEXPECTED)\n")
     except model.InternalError:
         file.write("no-handle worker: InternalError raised\n")
@@ -10039,6 +10058,11 @@ async def _test_RefuteOrSurrender(root: Root, file: MyIO):
     result, is_error = await _request_lemmas_tool_logic(session, {})
     file.write(f"planner request_lemmas is_error: {is_error}\n")
     file.write(f"planner request_lemmas mentions global: {'global' in result.lower()}\n")
+
+    # Plan: report(type=difficulty) is rejected — the planner has no dispatcher.
+    result, is_error = await _report_tool_logic(session, {
+        "type": "difficulty", "detail": "x"})
+    file.write(f"planner difficulty is_error: {is_error}\n")
 
     # NOTE: the Role_Major surrender path is intentionally NOT exercised here.
     # It calls request_restart(), which leaves a transient quit_info=Restart()
@@ -10318,7 +10342,7 @@ async def _test_nested_worker_scope(root: Root, file: MyIO):
     live-dispatch point (`handle.start`/`run_until_yield`, which needs an LLM),
     so it is exercised by calling the helpers / tool-logic directly."""
     from .mcp_http_server import (_subagent_tool_logic, _delete_tool_logic,
-                                  _refute_or_surrender_tool_logic,
+                                  _report_tool_logic,
                                   _close_subagent_tool_logic)
     session = root.session
     session.age += 1
@@ -10470,8 +10494,8 @@ async def _test_nested_worker_scope(root: Root, file: MyIO):
     # `step 2` is single-component -> left as-is (documented limitation). ---
     h_emit = WorkerHandle(H11, session)
     session.role = model.Role_Worker(target=H11, worker_handle=h_emit)
-    await _refute_or_surrender_tool_logic(session, {
-        "reason": "surrender", "detail": "blocked by step 1.1 and step 2"})
+    await _report_tool_logic(session, {
+        "type": "surrender", "detail": "blocked by step 1.1 and step 2"})
     ev = h_emit._event_queue.get_nowait()
     print_header("worker detail absolutized at emit (worker scope 1.1)", file)
     file.write(f"event={type(ev).__name__}; detail={ev.detail!r}\n")
@@ -10633,12 +10657,12 @@ async def _test_worker_handle_lifecycle(root: Root, file: MyIO):
     h = WorkerHandle(H, session)
     loop = asyncio.get_running_loop()
     fr = loop.create_future(); fl = loop.create_future()
-    h._pending_review = fr; h._pending_lemma_request = fl
+    h._pending_review = fr; h._pending_resume = fl
     h._task = asyncio.ensure_future(asyncio.sleep(100))
     h.cancel()
     file.write(f"pending_review cancelled: {fr.cancelled()}\n")
-    file.write(f"pending_lemma_request cancelled: {fl.cancelled()}\n")
-    file.write(f"futures cleared: {h._pending_review is None and h._pending_lemma_request is None}\n")
+    file.write(f"pending_resume cancelled: {fl.cancelled()}\n")
+    file.write(f"futures cleared: {h._pending_review is None and h._pending_resume is None}\n")
     await h.wait_finish()                  # lets the cancellation settle
     file.write(f"task cancelled after cancel(): {h._task.cancelled()}\n")
 
@@ -10849,9 +10873,9 @@ async def _test_nested_request_lemmas(root: Root, file: MyIO):
     file.write(f"park yield detail: {y.detail!r}\n")
     file.write(f"park yield lemma count: {len(y.lemmas)}\n")
     file.write(f"handle still attached while parked: {H11.worker_handle is handle}\n")
-    file.write(f"pending_lemma_request stored: {handle._pending_lemma_request is not None}\n")
+    file.write(f"pending_resume stored: {handle._pending_resume is not None}\n")
 
-    handle.resolve_lemma_request("Added lemma sq_nonneg; continue.")   # dispatcher answers
+    handle.resolve_resume("Added lemma sq_nonneg; continue.")   # dispatcher answers
     y2 = await handle.run_until_yield()    # resumes, then W2 finishes
     file.write(f"resume yield kind: {y2.kind}\n")
     file.write(f"detached after finish: {H11.worker_handle is None}\n")
@@ -10881,7 +10905,7 @@ async def _test_nested_request_lemmas(root: Root, file: MyIO):
         return None
     handle2 = WorkerHandle(H12, session)
     handle2._task = asyncio.ensure_future(_w2_resume_then_finishes())
-    handle2._pending_lemma_request = resume_fut
+    handle2._pending_resume = resume_fut
     H12.worker_handle = handle2
 
     r, e = await _subagent_tool_logic(session, {
@@ -10939,7 +10963,7 @@ async def _test_failure_propagation(root: Root, file: MyIO):
         return None
     h = WorkerHandle(H111, session)
     h._task = asyncio.ensure_future(_w2_cant_finish())
-    h._pending_lemma_request = resume_fut
+    h._pending_resume = resume_fut
     # quit_info.detail is W2-authored, already absolutized on emission (cites 1.1.1.1).
     h._sub = types.SimpleNamespace(
         quit_info=types.SimpleNamespace(detail="stuck proving step 1.1.1.1", reason="budget"))
@@ -10962,7 +10986,7 @@ async def _test_failure_propagation(root: Root, file: MyIO):
         return None
     h2 = WorkerHandle(H111, session)
     h2._task = asyncio.ensure_future(_w2_surrenders())
-    h2._pending_lemma_request = resume_fut2
+    h2._pending_resume = resume_fut2
     H111.worker_handle = h2
     r, e = await _subagent_tool_logic(session, {
         "step_id": "1", "suggestions": "", "helpful_lemmas": []})

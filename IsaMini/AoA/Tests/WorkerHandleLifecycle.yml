@@ -8,7 +8,7 @@ no-_sub settle is a no-op: True
 2. cancel() tears down futures + task
 --------------------------------------------------
 pending_review cancelled: True
-pending_lemma_request cancelled: True
+pending_resume cancelled: True
 futures cleared: True
 task cancelled after cancel(): True
 --------------------------------------------------

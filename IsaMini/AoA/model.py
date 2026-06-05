@@ -2055,7 +2055,7 @@ TOOL_DELETE: tool = "delete"
 TOOL_SEARCH: tool = "query"
 TOOL_READ:   tool = "recall"
 TOOL_REQUEST_LEMMAS: tool = "request_lemmas"
-TOOL_REFUTE_OR_SURRENDER: tool = "refute_or_surrender"
+TOOL_REPORT: tool = "report"
 TOOL_SUBAGENT: tool = "subagent"
 TOOL_CLOSE_SUBAGENT: tool = "close_subagent"
 
@@ -2074,7 +2074,7 @@ ANSWER_TOOLS: frozenset[tool] = frozenset({
 
 ALL_PROOF_TOOLS: tuple[tool, ...] = (
     TOOL_EDIT, TOOL_DELETE, TOOL_SEARCH, TOOL_READ,
-    TOOL_REQUEST_LEMMAS, TOOL_REFUTE_OR_SURRENDER, TOOL_SUBAGENT,
+    TOOL_REQUEST_LEMMAS, TOOL_REPORT, TOOL_SUBAGENT,
     TOOL_CLOSE_SUBAGENT,
     *ANSWER_TOOLS,
 )
@@ -2156,10 +2156,10 @@ class Interaction_ReviewRefutation(Interaction):
         goal = self.target.goal() if hasattr(self.target, 'goal') else None  # type: ignore[attr-defined]  — target is role.target (NonLeaf_Node), guarded by hasattr
         goal_str = f"\nGoal: {goal.conclusion.unicode}" if goal else ""
         file.write(
-            f"A sub-agent attempted {the_session()._display_id(self.target.id)} but claims the goal is unprovable.{goal_str}\n\n"
-            f"Refutation: {the_session()._relativize_text(self.complaint.detail)}\n\n"
-            f"Do you accept this refutation? Use `{tn(TOOL_ANSWER_REFUTATION)}` with:\n"
-            f"  - accept: true to accept (goal is unprovable), false to reject\n"
+            f"A sub-agent attempted {the_session()._display_id(self.target.id)} but argues the goal is flawed — unprovable or extremely hard to prove as stated.{goal_str}\n\n"
+            f"Complaint: {the_session()._relativize_text(self.complaint.detail)}\n\n"
+            f"Do you accept this complaint and want to revise the proof goal or your proof strategy? Use `{tn(TOOL_ANSWER_REFUTATION)}` with:\n"
+            f"  - accept: true to accept (and revise the goal/strategy), false to reject\n"
             f"  - reason: explanation of your judgment\n")
 
     async def answer(self, answer: AnswerRefutation) -> 'tuple[bool, str | None]':
@@ -5806,13 +5806,13 @@ def _fetched_to_facts(fetched: 'list[IsabelleFact | Interaction_RetrieveForProof
 _SUBAGENT_HINT_DEPTH = 2
 
 # Maximum worker-nesting depth: main -> worker (sub-agent) is layer 1, its worker
-# (sub-sub-agent) is layer 2. A session already at this depth may not dispatch a
-# further sub-worker — so delegation bottoms out at sub-sub-agents. Enforced two
-# ways: the dispatch tools are not even advertised to a session at this depth
-# (Session._can_offer_dispatch_tools, gating _tool_schemas_for / _role_allowed_tools),
-# and a runtime backstop guard in _subagent_tool_logic rejects a too-deep dispatch
-# even if a model calls the unadvertised tool.
-SUBAGENT_NESTING_DEPTH = 2
+# (sub-sub-agent) is layer 2, and so on. A session already at this depth may not
+# dispatch a further sub-worker — so delegation bottoms out at this many layers.
+# Enforced two ways: the dispatch tools are not even advertised to a session at
+# this depth (Session._can_offer_dispatch_tools, gating _tool_schemas_for /
+# _role_allowed_tools), and a runtime backstop guard in _subagent_tool_logic
+# rejects a too-deep dispatch even if a model calls the unadvertised tool.
+SUBAGENT_NESTING_DEPTH = 3
 
 class Obvious_ToolArg(TypedDict):
     facts: list[FactByName | FactByProposition]
@@ -9018,13 +9018,19 @@ class Session:
 
     def system_prompt(self) -> str | None:
         """Return the system prompt, or None if the driver folds it into the initial message."""
+        report_line = (
+            "If you run into any difficulty or obstacle — or the goal itself looks "
+            f"flawed — report it with `{self.tool_name(TOOL_REPORT)}`; don't hesitate.\n"
+            if self.is_worker else
+            "A proof goal can be buggy and thus unprovable — "
+            f"call `{self.tool_name(TOOL_REPORT)}` with your analysis if you believe so.\n"
+        )
         PROMPT = (
                 "You are a formal theorem proving agent.\n"
                 "A proof goal and an incomplete proof are provided in `./proof.yaml` under the current directory.\n"
                 "Analyze the proof goal, plan a proof, and complete it using the MCP proof tools.\n"
                 "Continue until no errors remain.\n"
-                "A proof goal can be buggy and thus unprovable — "
-                f"call `{self.tool_name(TOOL_REFUTE_OR_SURRENDER)}` with your analysis if you believe so.\n"
+                + report_line +
                 "The goal may rely on background lemmas that are not yet available. "
                 f"Search for them with `{self.tool_name(TOOL_SEARCH)}` first; "
                 f"if a needed lemma truly does not exist, prove it as a `Have` node{" under `global`" if self.is_major else ""}.\n"
@@ -9038,10 +9044,10 @@ class Session:
                 f"- {self.tool_name(TOOL_REQUEST_LEMMAS)}: Report missing background lemmas and request that they be supplied.\n"
             )
         parts = [PROMPT]
-        # refute_or_surrender is shown to workers only.
+        # report is shown to workers only.
         if self.is_worker:
             parts.append(
-                f"- {self.tool_name(TOOL_REFUTE_OR_SURRENDER)}: Report that the goal is unprovable (refute) or that you need help (surrender)\n"
+                f"- {self.tool_name(TOOL_REPORT)}: Report that the goal is unprovable (refute), that you give up (surrender), or any difficulty or obstacle you run into (difficulty)\n"
             )
         # subagent/close_subagent are dispatch tools — shown to dispatchers (the main
         # agent AND workers, which may delegate nested sub-goals), not interaction forks.
@@ -9106,8 +9112,8 @@ class Session:
                     + "The proof state is in `proof.yaml` — read it to see the goal and current proof.\n"
                     f"Analyze the proof goal, plan a proof, and complete it using tools `{self.tool_name(TOOL_EDIT)}` and `{self.tool_name(TOOL_DELETE)}`.\n"
                     "Continue building the proof until no error remains.\n"
-                    "If you believe the goal is unprovable or you need help, "
-                    f"call `{self.tool_name(TOOL_REFUTE_OR_SURRENDER)}` to report back."
+                    "If you run into any difficulty or obstacle — or the goal itself "
+                    f"looks flawed — report it with `{self.tool_name(TOOL_REPORT)}`; don't hesitate."
                 )
         elif self.system_prompt() is not None:
             return (
@@ -9128,7 +9134,7 @@ class Session:
                 "Continue building the proof until no error remains.\n"
                 f"{planner_hint}"
                 "A proof goal can be buggy and thus unprovable — "
-                f"call `{self.tool_name(TOOL_REFUTE_OR_SURRENDER)}` with your analysis if you believe so."
+                f"call `{self.tool_name(TOOL_REPORT)}` with your analysis if you believe so."
             )
 
     def retry_prompt(self, unfinished_nodes: set['Node']) -> str:
@@ -9847,7 +9853,7 @@ class WorkerRefute:
     """Worker claims the goal is unprovable and awaits the planning agent's
     review. ``response_future`` is resolved with ``(accepted, reason)`` by
     ``WorkerHandle.resolve_review``; the worker blocks on it inside the
-    ``refute_or_surrender`` tool until then."""
+    ``report`` tool until then."""
     detail: str
     response_future: 'asyncio.Future[tuple[bool, str | None]]'
 
@@ -9864,10 +9870,22 @@ class WorkerRequestLemmas:
     refutation). ``lemmas`` is the worker's *loose* wish-list
     (``{name, english, isabelle_statement}`` items); the planner re-authors them
     precisely. ``response_future`` is resolved with a feedback STRING by
-    ``WorkerHandle.resolve_lemma_request``; the worker blocks on it inside the
+    ``WorkerHandle.resolve_resume``; the worker blocks on it inside the
     ``request_lemmas`` tool until then."""
     detail: str
     lemmas: list | None
+    response_future: 'asyncio.Future[str]'
+
+@dataclass
+class WorkerDifficulty:
+    """Worker reports a difficulty it is stuck on and asks its dispatcher for
+    guidance, then resumes. NON-terminal (like ``WorkerRequestLemmas``, the worker
+    keeps working afterwards). The only difference from ``WorkerRequestLemmas`` is
+    semantic: a free-form "I'm stuck, here's why" status rather than a lemma
+    wish-list. ``response_future`` is resolved with a feedback STRING by
+    ``WorkerHandle.resolve_resume``; the worker blocks on it inside the ``report``
+    tool until then."""
+    detail: str
     response_future: 'asyncio.Future[str]'
 
 @dataclass
@@ -9886,7 +9904,7 @@ class WorkerYield:
     """The outcome of one ``WorkerHandle.run_until_yield`` excursion, consumed by
     the ``subagent`` tool logic. ``kind`` discriminates; the other fields are
     kind-specific. ``lemmas`` (the park case) is the worker's wish-list."""
-    kind: str  # proved | could_not_prove | surrendered | refute_accepted | lemmas
+    kind: str  # proved | could_not_prove | surrendered | refute_accepted | lemmas | difficulty
     detail: str = ""
     reason: 'str | None' = None
     lemmas: 'list | None' = None
@@ -9909,6 +9927,9 @@ class WorkerYield:
     @classmethod
     def LEMMAS(cls, detail: str, lemmas: 'list | None') -> 'WorkerYield':
         return cls(kind="lemmas", detail=detail, lemmas=lemmas)
+    @classmethod
+    def DIFFICULTY(cls, detail: str) -> 'WorkerYield':
+        return cls(kind="difficulty", detail=detail)
 
 
 class WorkerHandle:
@@ -9916,11 +9937,12 @@ class WorkerHandle:
     main (planner) agent.
 
     The worker runs as its own asyncio task. Its lifecycle events arrive either
-    through ``_event_queue`` (refute / surrender / request_lemmas, pushed by the
+    through ``_event_queue`` (refute / surrender / request_lemmas / difficulty, pushed by the
     worker's tools) or as task completion (mapped to ``WorkerDone``). The handle
     is attached to its target ``NonLeaf_Node`` (``node.worker_handle``) while the
     worker runs or is parked; ``run_until_yield`` drives it until it yields
-    control back to the main agent (terminal outcome or a request_lemmas park)."""
+    control back to the main agent (terminal outcome or a request_lemmas /
+    difficulty park)."""
 
     def __init__(self, target: NonLeaf_Node, session: 'LMDriver'):
         self.target = target
@@ -9929,9 +9951,11 @@ class WorkerHandle:
         self._task: 'asyncio.Task | None' = None
         self._sub: 'LMDriver | None' = None
         self._pending_review: 'asyncio.Future[tuple[bool, str | None]] | None' = None
-        # Pending lemma-request review (resolved with a feedback STRING — a
-        # distinct result type from _pending_review's (accepted, reason) tuple).
-        self._pending_lemma_request: 'asyncio.Future[str] | None' = None
+        # Pending resume future for a PARKed worker — shared by both park kinds
+        # (request_lemmas and report-difficulty), since a worker is only ever
+        # parked on one of them at a time. Resolved with a feedback STRING — a
+        # distinct result type from _pending_review's (accepted, reason) tuple.
+        self._pending_resume: 'asyncio.Future[str] | None' = None
         # Set once the worker's accumulated cost has been rolled into the parent
         # (see _settle_costs) — makes the roll-up exactly-once across the _run
         # finally and the aclose fallback.
@@ -10013,8 +10037,8 @@ class WorkerHandle:
             self._costs_accumulated = True
 
     async def _wait_next_event(self):
-        """Return the next worker event. A queued event (refute/surrender)
-        always wins over task completion: ``put_nowait`` synchronously
+        """Return the next worker event. A queued event (refute / surrender /
+        request_lemmas / difficulty) always wins over task completion: ``put_nowait`` synchronously
         resolves the pending ``queue.get()`` future, and FIFO callback
         ordering guarantees we observe it before the task's completion."""
         assert self._task is not None
@@ -10046,14 +10070,16 @@ class WorkerHandle:
 
     async def run_until_yield(self) -> 'WorkerYield':
         """Drive the worker until it yields control back to the main agent.
-        Re-entered on resume (after the main agent answers a request_lemmas).
+        Re-entered on resume (after the main agent answers a request_lemmas or a
+        report-difficulty park).
 
         - ``WorkerRefute`` → reviewed in-loop via a fork
           (``Interaction_ReviewRefutation``). Reject → the worker resumes
           transparently (loop continues, main agent never sees it); accept → the
           worker winds down and we return a ``refute_accepted`` yield.
-        - ``WorkerRequestLemmas`` → PARK: keep the handle on the node, store the
-          pending future, and return the wish-list to the main agent.
+        - ``WorkerRequestLemmas`` / ``WorkerDifficulty`` → PARK: keep the handle
+          on the node, store the pending resume future, and return the wish-list
+          (lemmas) / the difficulty to the main agent.
         - ``WorkerSurrender`` / ``WorkerDone`` → detach and return the outcome."""
         while True:
             event = await self._wait_next_event()
@@ -10069,8 +10095,11 @@ class WorkerHandle:
                         return WorkerYield.REFUTE_ACCEPTED(reason, event.detail)
                     continue                      # rejected → worker resumed in-loop
                 case WorkerRequestLemmas():
-                    self._pending_lemma_request = event.response_future
+                    self._pending_resume = event.response_future
                     return WorkerYield.LEMMAS(event.detail, event.lemmas)  # PARK
+                case WorkerDifficulty():
+                    self._pending_resume = event.response_future
+                    return WorkerYield.DIFFICULTY(event.detail)  # PARK
                 case WorkerSurrender():
                     await self.wait_finish()
                     self._detach()
@@ -10096,12 +10125,12 @@ class WorkerHandle:
         if fut is not None and not fut.done():
             fut.set_result((accepted, reason))
 
-    def resolve_lemma_request(self, feedback: str) -> None:
-        """Wake a worker blocked in a ``request_lemmas`` complaint, handing it
-        the planner's feedback string (mirrors ``resolve_review`` but with a
-        plain-string result)."""
-        fut = self._pending_lemma_request
-        self._pending_lemma_request = None
+    def resolve_resume(self, feedback: str) -> None:
+        """Wake a PARKed worker (blocked in a ``request_lemmas`` or a
+        report-``difficulty`` call), handing it the planner's feedback string
+        (mirrors ``resolve_review`` but with a plain-string result)."""
+        fut = self._pending_resume
+        self._pending_resume = None
         if fut is not None and not fut.done():
             fut.set_result(feedback)
 
@@ -10116,11 +10145,11 @@ class WorkerHandle:
         """Best-effort synchronous teardown: unblock a worker waiting on its
         review (so its ``await fut`` raises) and cancel the worker task. Does
         NOT await the task — use ``aclose`` for guaranteed cleanup."""
-        for fut in (self._pending_review, self._pending_lemma_request):
+        for fut in (self._pending_review, self._pending_resume):
             if fut is not None and not fut.done():
                 fut.cancel()
         self._pending_review = None
-        self._pending_lemma_request = None
+        self._pending_resume = None
         if self._task is not None and not self._task.done():
             self._task.cancel()
 
