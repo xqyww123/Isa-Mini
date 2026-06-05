@@ -5805,10 +5805,14 @@ def _fetched_to_facts(fetched: 'list[IsabelleFact | Interaction_RetrieveForProof
 # tool. Formerly the deep-Obvious auto-sorry threshold; now used only by the hint.
 _SUBAGENT_HINT_DEPTH = 2
 
-# Maximum worker-nesting depth: main -> worker is layer 1, so a worker already at
-# this depth may not dispatch a further sub-worker. Bounds recursive delegation
-# (see Session._subagent_nesting_depth and the dispatch guard in _subagent_tool_logic).
-SUBAGENT_NESTING_DEPTH = 8
+# Maximum worker-nesting depth: main -> worker (sub-agent) is layer 1, its worker
+# (sub-sub-agent) is layer 2. A session already at this depth may not dispatch a
+# further sub-worker — so delegation bottoms out at sub-sub-agents. Enforced two
+# ways: the dispatch tools are not even advertised to a session at this depth
+# (Session._can_offer_dispatch_tools, gating _tool_schemas_for / _role_allowed_tools),
+# and a runtime backstop guard in _subagent_tool_logic rejects a too-deep dispatch
+# even if a model calls the unadvertised tool.
+SUBAGENT_NESTING_DEPTH = 2
 
 class Obvious_ToolArg(TypedDict):
     facts: list[FactByName | FactByProposition]
@@ -9615,6 +9619,18 @@ class Session:
                 depth += 1
             s = s.parent
         return depth
+
+    def _can_offer_dispatch_tools(self) -> bool:
+        """Whether the dispatch tools (`subagent` / `close_subagent`) should be
+        advertised to this session. True for a dispatcher — the main agent or a
+        worker — that is NOT already at the maximum nesting depth; a sub-sub-agent
+        (depth == SUBAGENT_NESTING_DEPTH) cannot delegate further, so the tools are
+        hidden from it entirely. Interaction forks never dispatch and so never get
+        them. Shared by _tool_schemas_for (MCP registration / APIDriver schemas) and
+        the Claude SDK allow-list (_role_allowed_tools); the runtime guard in
+        _subagent_tool_logic remains as a backstop."""
+        return ((self.is_major or self.is_worker)
+                and self._subagent_nesting_depth() < SUBAGENT_NESTING_DEPTH)
 
     async def _prefetch_worker_premises(self) -> None:
         """Resolve the standard-printed propositions of every fact in scope before the

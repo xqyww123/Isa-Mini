@@ -1160,10 +1160,11 @@ _TOOL_SCHEMAS_WORKER: dict[str, dict[str, Any]] = {
 def _tool_schemas_for(session: Session) -> dict[str, dict[str, Any]]:
     """Tool schemas advertised to ``session``. ``subagent`` / ``close_subagent`` are
     DISPATCH tools, shown to any agent that can delegate — the main agent AND workers
-    (nested delegation) — but hidden from interaction forks (which never delegate).
-    (``_PLANNER_ONLY_TOOLS`` / ``_TOOL_SCHEMAS_WORKER`` keep their names but now gate
-    only interaction forks; a worker counts as a dispatcher and gets the full set.)"""
-    return _TOOL_SCHEMAS if (session.is_major or session.is_worker) else _TOOL_SCHEMAS_WORKER
+    (nested delegation) — but hidden from interaction forks (which never delegate) AND
+    from a session already at the maximum nesting depth (a sub-sub-agent cannot
+    delegate further). The gate is ``Session._can_offer_dispatch_tools``; ``_TOOL_SCHEMAS_WORKER``
+    keeps its name but is simply the full set minus the dispatch tools."""
+    return _TOOL_SCHEMAS if session._can_offer_dispatch_tools() else _TOOL_SCHEMAS_WORKER
 
 
 class ToolExecutor:

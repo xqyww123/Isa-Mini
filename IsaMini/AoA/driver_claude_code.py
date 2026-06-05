@@ -96,8 +96,10 @@ class ClaudeCode(LMDriver):
     def _role_allowed_tools(self) -> list[str]:
         """SDK tool allow-list for this session's role. `subagent`/`close_subagent`
         are dispatch tools, allowed for the main agent AND workers (nested
-        delegation) but hidden from interaction forks (mirrors the MCP tool list)."""
-        return (self.TOOL_WHITELIST if (self.is_major or self.is_worker)
+        delegation) but hidden from interaction forks and from a session already at
+        the maximum nesting depth (a sub-sub-agent cannot delegate further). Gated by
+        `_can_offer_dispatch_tools`, mirroring the MCP tool list (`_tool_schemas_for`)."""
+        return (self.TOOL_WHITELIST if self._can_offer_dispatch_tools()
                 else self._WORKER_TOOL_WHITELIST)
 
     def tool_name(self, t: str) -> str:
