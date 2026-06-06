@@ -441,6 +441,14 @@ class OpenAIChatProvider(OpenAIBase):
             if isinstance(e, openai.APIStatusError) and e.status_code < 500 and not isinstance(e, openai.RateLimitError):
                 raise
             raise _TransientError(str(e)) from e
+        except httpx.TransportError as e:
+            # A read/connection/protocol error (incl. httpx.ReadTimeout) raised
+            # *during* stream consumption is NOT wrapped by the openai SDK — it
+            # only wraps the initial request — so it escapes as a raw httpx
+            # exception that _retry_transient (which catches only _TransientError)
+            # would miss, crashing the whole run. Wrap it as transient so the
+            # turn is retried, matching OpenAIResponsesProvider's stream handling.
+            raise _TransientError(str(e)) from e
 
         tool_calls: list[ToolCall] = [
             ToolCall(id=v["id"], name=v["name"], arguments=v["arguments"])

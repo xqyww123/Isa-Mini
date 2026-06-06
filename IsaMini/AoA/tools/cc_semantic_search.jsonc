@@ -23,18 +23,21 @@
           },
           "term_patterns": {
             "type": "array",
-            "items": { "type": "string" },
-            "description": "Constrain lemmas/rules to contain subterms matching each of the patterns. Use _ for wildcard and ?name for named wildcards (example: ?P ⟶ ?Q ⟶ ?P ∧ ?Q).",
+            "items": {
+              "type": "string",
+              "description": "Must be syntactically valid Isabelle term (example: `_ ^ 2` but never `^2`)"
+            },
+            "description": "Term patterns that lemmas/rules must contain. Use _ for wildcard and ?name for named wildcards (example: ?P ⟶ ?Q ⟶ ?P ∧ ?Q)."
           },
           "type_patterns": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "Constrain results to involve types matching the patterns. Use _ for wildcard and ?name for named wildcards.",
+            "description": "Constrain results to involve types matching the patterns. Use _ for wildcard and ?name for named wildcards."
           },
           "theories_include": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "Constrain results to the given theories (short or full names).",
+            "description": "Restrict results to theories whose (fully qualified) name contains any of these substrings (case-insensitive). A short fragment like \"Transcendental\" or a full name like \"HOL.Transcendental\" both work."
           },
           "name_contains": {
             "type": "array",

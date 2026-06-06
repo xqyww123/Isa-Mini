@@ -21,7 +21,13 @@ ML_file "agent_server.old.ML"
 ML_file "tactic.ML.old" *)
 
 method_setup aoa = \<open>
-  Scan.succeed (K MiniLang_Agent_AoA.method)
+  (* CONTEXT_METHOD prepends `ALLGOALS Goal.conjunction_tac`, splitting a Pure
+     meta-conjunction goal `A &&& B` (as produced by multi-`shows` why3 VCs)
+     into separate subgoals before the agent runs — matching how every stock
+     Isabelle method handles `&&&`. A raw `K MiniLang_Agent_AoA.method` skips
+     this, leaving the agent a `&&&` goal that its object-level conjunction
+     ops (SplitConjs/conjI) cannot handle. *)
+  Scan.succeed (K (Method.CONTEXT_METHOD MiniLang_Agent_AoA.method))
 \<close>
 
 (* AoA-agent-specific INDUCT/CASE_SPLIT tuning (consumes_policy,

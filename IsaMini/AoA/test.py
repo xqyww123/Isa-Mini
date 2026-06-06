@@ -386,6 +386,62 @@ async def _test_Induction(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
 
+@model_test("Induction_IllTypedBoundVar", "Test_Induction_IllTypedBoundVar.thy", 7)
+async def _test_Induction_IllTypedBoundVar(root: Root, file: MyIO):
+    """Reproduces the "Ill-typed instantiation: n :: 'a" induction failure.
+
+    Root cause: the agent inducts on a variable that is universally
+    *bound* in the goal (here `n` in the Have statement `∀n. b n > 0`)
+    but has NOT been introduced/fixed into the proof context. The
+    INDUCT target string `"n"` is parsed by `check_term` against the
+    proof context, where no fixed `n` exists, so it resolves to a fresh
+    free variable of unconstrained type `'a`. With the default rule
+    Isabelle then cannot pick an induction rule ("Unable to figure out
+    induct rule"); with an explicit `nat.induct` (which fixes the
+    predicate type to `nat`) the `'a` free clashes with `nat`, yielding
+    "Ill-typed instantiation: n :: 'a". The fix on the agent side is to
+    `Intro n` first so `n` becomes a fixed `nat` variable.
+
+    This mirrors the live log: HAVE(pos_b, '∀n. b n > 0') followed by
+    INDUCT('n', rule='nat.induct'). We use a self-contained positive
+    function of `n` so the Have statement type-checks without extra
+    context."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    # Pose a helper whose conclusion universally quantifies `n` (bound,
+    # never introduced) — exactly like the live `pos_b: ∀n. b n > 0`.
+    await root.fill("1", [Have.gen_single({
+        "thought": "b is always positive",
+        "statement": {
+            "english": "two to the power n is positive for every n",
+            "conclusion": r"\<forall>n::nat. (2::int)^n > 0"},
+        "name": "pos_b"
+    })])
+    print_header("After Have pos_b", file)
+    root.print(0, file)
+    root.session.age += 1
+    # Default rule: Isabelle cannot even figure out the induction rule
+    # because the bound `n` resolves to a free of type 'a.
+    await root.fill("1.1", [Induction.gen_single({
+        "thought": "Induction on n",
+        "target_isabelle_term": r"n",
+        "variables": [{"name": "n", "status": "fixed"}],
+    })])
+    print_header("Induction n (default rule) — Unable to figure out induct rule", file)
+    root.print(0, file)
+    root.session.age += 1
+    # Explicit nat.induct: the free `n :: 'a` clashes with the rule's
+    # `nat` predicate type → "Ill-typed instantiation: n :: 'a".
+    await root.fill("1.1", [Induction.gen_single({
+        "thought": "Induction on n using nat induction rule",
+        "target_isabelle_term": r"n",
+        "rule": {"name": "nat.induct"},
+        "variables": [{"name": "n", "status": "fixed"}],
+    })])
+    print_header("Induction n (rule nat.induct) — Ill-typed instantiation n :: 'a", file)
+    root.print(0, file)
+
 @model_test("Suffices", "Test_Suffices.thy", 9)
 async def _test_Suffices(root: Root, file: MyIO):
     print_header("Initial YAML", file)
@@ -2487,19 +2543,19 @@ async def _test_semantic_knn_patterns(root: Root, file: MyIO):
 
     # --- Error cases ---
 
-    # 7a. Mix of valid and invalid theories: valid theory still searched,
-    # invalid one produces a warning.
+    # 7a. Mix of matching and non-matching theory substrings: matching theory
+    # still searched, the non-matching one produces a warning.
     results_mix, warnings_mix = await ml.semantic_knn(
         "logarithm", 5, [EntityKind.THEOREM],
         theories_include=["HOL.Transcendental", "Nonexistent_Theory_XYZ"])
     file.write(f"Mixed valid/invalid theories: {len(results_mix)} results, {len(warnings_mix)} warnings\n")
     for w in warnings_mix:
         file.write(f"  Warning: {w}\n")
-    assert len(results_mix) > 0, "Expected results from the valid theory"
+    assert len(results_mix) > 0, "Expected results from the matching theory"
     assert any("Nonexistent_Theory_XYZ" in w for w in warnings_mix), \
-        "Expected warning mentioning the unknown theory"
+        "Expected warning mentioning the non-matching substring"
 
-    # 7b. All invalid theories: zero results plus warnings for each.
+    # 7b. No substring matches any theory: zero results plus warnings for each.
     results_bad_thy, warnings_bad_thy = await ml.semantic_knn(
         "logarithm", 5, [EntityKind.THEOREM],
         theories_include=["Nonexistent_Theory_XYZ", "Also_Nonexistent_Theory"])
@@ -2541,62 +2597,76 @@ async def _test_semantic_knn_patterns(root: Root, file: MyIO):
 @model_test("SemanticKNN_theories_include",
             "Test_SemanticKNN_theories_include.thy", 8)
 async def _test_semantic_knn_theories_include(root: Root, file: MyIO):
-    """semantic_knn: unknown names in theories_include yield warnings,
-    not aborts. Reproduces agent log 2026-04-17 where an invalid
-    ``theories_include=['Discrete_Sqrt', 'Sqrt']`` killed the whole query.
+    """semantic_knn: theories_include is a case-insensitive substring match on
+    a theory's fully-qualified name (OR across entries). A substring that
+    matches no loaded theory yields a warning, not an abort. Reproduces agent
+    log 2026-04-17 where ``theories_include=['Discrete_Sqrt', 'Sqrt']`` killed
+    the whole query because names were matched exactly instead of as substrings.
 
-    Covers four behaviors:
-      1. Only unknown → zero results + warning (Option A semantics).
-      2. Mixed valid + unknown → valid theory still searched + warning.
-      3. Duplicate unknown names → warnings deduplicated.
-      4. Unknown name on a non-theorem kind (CONSTANT) → still yields warning.
+    Covers five behaviors:
+      1. Substring matching no theory → zero results + warning.
+      2. Mixed matching + non-matching → matching theory still searched + warning.
+      3. Duplicate non-matching names → warnings deduplicated.
+      4. Non-matching name on a non-theorem kind (CONSTANT) → still warns.
+      5. A short / lowercase fragment matches by substring → results, no warning.
     """
     from Isabelle_RPC_Host.universal_key import EntityKind
     ml = root.ml_state
 
-    # 1. Only an unknown theory: zero results + one warning, no abort.
+    # 1. A substring matching no theory: zero results + one warning, no abort.
     results1, warnings1 = await ml.semantic_knn(
         "list append", 5, [EntityKind.THEOREM],
         theories_include=["Nonexistent_XYZ"])
-    file.write(f"Only unknown: {len(results1)} results, {len(warnings1)} warnings\n")
+    file.write(f"No match: {len(results1)} results, {len(warnings1)} warnings\n")
     for w in warnings1:
         file.write(f"  Warning: {w}\n")
-    assert len(results1) == 0, "All-invalid theories_include must give zero results"
+    assert len(results1) == 0, "A substring matching no theory must give zero results"
     assert len(warnings1) == 1
     assert "Nonexistent_XYZ" in warnings1[0]
 
-    # 2. Mixed valid + unknown: still get results from the valid theory.
+    # 2. Mixed matching + non-matching: still get results from the matching theory.
     results2, warnings2 = await ml.semantic_knn(
         "list append", 5, [EntityKind.THEOREM],
         theories_include=["HOL.List", "Nonexistent_XYZ"])
-    file.write(f"Mixed valid/unknown: {len(results2)} results, {len(warnings2)} warnings\n")
+    file.write(f"Mixed match/no-match: {len(results2)} results, {len(warnings2)} warnings\n")
     for w in warnings2:
         file.write(f"  Warning: {w}\n")
-    assert len(results2) > 0, "Valid HOL.List should still yield results"
+    assert len(results2) > 0, "Matching HOL.List should still yield results"
     assert any("Nonexistent_XYZ" in w for w in warnings2)
     assert not any("HOL.List" in w for w in warnings2), \
-        "Valid theory must not produce a warning"
+        "A matching theory must not produce a warning"
 
-    # 3. Duplicated unknown name: warnings are deduplicated.
+    # 3. Duplicated non-matching name: warnings are deduplicated.
     results3, warnings3 = await ml.semantic_knn(
         "list append", 5, [EntityKind.THEOREM],
         theories_include=["Nonexistent_XYZ", "Nonexistent_XYZ"])
-    file.write(f"Duplicate unknown: {len(results3)} results, {len(warnings3)} warnings\n")
+    file.write(f"Duplicate no-match: {len(results3)} results, {len(warnings3)} warnings\n")
     for w in warnings3:
         file.write(f"  Warning: {w}\n")
-    assert len(warnings3) == 1, "Duplicate unknown names must dedup to one warning"
+    assert len(warnings3) == 1, "Duplicate non-matching names must dedup to one warning"
 
-    # 4. Unknown theory applied to CONSTANT kind (exercises make_constants_callback
+    # 4. Non-matching name applied to CONSTANT kind (exercises make_constants_callback
     #    path rather than make_theorems_callback).
     results4, warnings4 = await ml.semantic_knn(
         "append", 5, [EntityKind.CONSTANT],
         theories_include=["Nonexistent_XYZ"])
-    file.write(f"Constant kind with unknown: {len(results4)} results, {len(warnings4)} warnings\n")
+    file.write(f"Constant kind no-match: {len(results4)} results, {len(warnings4)} warnings\n")
     for w in warnings4:
         file.write(f"  Warning: {w}\n")
     assert len(results4) == 0
     assert len(warnings4) == 1
     assert "Nonexistent_XYZ" in warnings4[0]
+
+    # 5. A lowercase fragment matches HOL.List by case-insensitive substring:
+    #    results come back and there is no warning (the whole point of the fix).
+    results5, warnings5 = await ml.semantic_knn(
+        "list append", 5, [EntityKind.THEOREM],
+        theories_include=["hol.list"])
+    file.write(f"Substring fragment: {len(results5)} results, {len(warnings5)} warnings\n")
+    for w in warnings5:
+        file.write(f"  Warning: {w}\n")
+    assert len(results5) > 0, "Lowercase substring 'hol.list' must match HOL.List"
+    assert len(warnings5) == 0, "A substring that matches a theory must not warn"
 
 
 @model_test("SemanticKNN_lexerr", "Test_SemanticKNN_lexerr.thy", 8)
@@ -2788,6 +2858,49 @@ async def _test_intro_split_conj(root: Root, file: MyIO):
     print_header("After closing subgoals", file)
     root.print(0, file)
     print_header("Final overview", file)
+    root.quickview(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+
+@model_test("MetaConjFromMultiShows", "Test_MetaConjFromMultiShows.thy", 27)
+async def _test_meta_conj_from_multi_shows(root: Root, file: MyIO):
+    """Reproduce the 'meta conjunction' obstacle (mbzuai log e9912b2bf_8 =
+    avl_AVL_front_nodeqtvc).
+
+    A theorem with multiple `shows "A" and "B"` clauses (one per why3 VC) is
+    bundled by Isar into a single goal that is a Pure meta-conjunction
+    `A &&& B`, NOT a HOL `A ∧ B`. The Minilang goal printer atomizes `&&&` to
+    `∧` for display, so the goal below PRINTS as `P ∧ Q` — yet SplitConjs (and
+    every other object-level conjunction op) fails on it, because
+    `is_conj_goal` (proof.ML) only recognizes `HOL.conj`, not
+    `Pure.conjunction`.
+
+    The contradiction captured in the golden — goal displayed as `P ∧ Q` while
+    SplitConjs reports "the leading goal is not a conjunction" — IS the bug.
+    The real proof obligation `A &&& B` is only closeable via the meta-level
+    rule `Pure.conjunctionI`, which the agent has no first-class operation for.
+    """
+    print_header("Initial State (goal displays with HOL ∧, but is Pure &&&)", file)
+    root.print(0, file)
+    print_header("Overview", file)
+    root.quickview(0, file)
+
+    # The natural first move on a goal that LOOKS like `P ∧ Q`: split it.
+    # On the real `&&&` goal this fails with
+    #   "SPLIT_CONJS: the leading goal is not a conjunction".
+    root.session.age += 1
+    try:
+        await root.fill("1", [SplitConjs.gen_single({
+            "thought": "Goal looks like P ∧ Q, split it into two subgoals",
+        })])
+    except Exception as e:
+        file.write(f"SplitConjs raised: {type(e).__name__}: {e}\n")
+    print_header("After SplitConjs (expected to FAIL on the Pure &&& goal)", file)
+    root.print(0, file)
+    print_header("Overview after failed split", file)
     root.quickview(0, file)
 
     unfinished = set()
@@ -3096,48 +3209,67 @@ async def _test_prove_in_time_parse_error(root: Root, file: MyIO):
     root.print(0, file)
 
 
-@model_test("Obvious_ClassFactRSN", "Test_Obvious_ClassFactRSN.thy", 10)
+@model_test("Obvious_ClassFactRSN", "Test_Obvious_ClassFactRSN.thy", 11)
 async def _test_Obvious_ClassFactRSN(root: Root, file: MyIO):
     """Regression for the raw `exception THM 1 raised ... RSN: no unifiers`
     leak from `Obvious` (HAMMER).
 
-    Root cause: the improved-sledgehammer `fastforce` strategy
-    (`run_mepo_and_render` in auto_sledgehammer/library/sledgehammer_solver.ML)
-    force-classifies every supplied / MePo-selected fact via
-    `infer_type_of_rule` and registers it with `with_rule`
-    (`Thm.apply_attribute` of a Classical attribute). For some facts — e.g.
-    the type-class theorems named `*_class.super` / `*.intro_of_class` — that
-    classical-attribute application performs a resolution that has no unifiers
-    and raises a raw `THM` ("RSN: no unifiers", from thm.ML).
+    Root cause (auto_sledgehammer/library/sledgehammer_solver.ML): the
+    improved-sledgehammer `fastforce` path classifies every supplied /
+    MePo-selected fact via `infer_type_of_rule` -> `chk_split` ->
+    `Simpdata.mk_eq` -> `RS Eq_TrueI`. `Eq_TrueI : ?P ==> ?P == True` expects a
+    `Trueprop`; type-class theorems (`*_class.super` / `*.intro_of_class`) have a
+    raw Pure-prop conclusion `OFCLASS(?'a, c_class)`, so `RS Eq_TrueI` has no
+    unifiers and raised a raw `THM "RSN: no unifiers"`.
 
-    That `THM` is not an `Auto_Fail`, so it escapes every cleanup layer:
-    `try_stage`/`fastforce` only catch `Auto_Fail`/`Timeout`;
-    `Par_List.get_some` re-raises it (`Par_Exn.release_first`) when no strategy
-    found a proof; `Phi_Sledgehammer_Solver.auto` re-raises non-`ERROR`
-    exceptions (`Exn.reraise`); and `HAMMER_i` (library/proof.ML) only catches
-    `ERROR`. So the raw ML exception reaches the agent verbatim instead of a
-    clean "sledgehammer failed" message.
+    That `THM` is not an `Auto_Fail`, so it escaped every cleanup layer
+    (`try_stage`/`fastforce` catch only `Auto_Fail`/`Timeout`;
+    `Par_List.get_some` re-raises via `Par_Exn.release_first`;
+    `Phi_Sledgehammer_Solver.auto` re-raises non-`ERROR` via `Exn.reraise`;
+    `HAMMER_i` only catches `ERROR`) and surfaced to the agent verbatim instead
+    of a clean "sledgehammer failed" message.
+
+    Fix: detect & silently drop OFCLASS lemmas at the fact entry points, plus a
+    defensive `handle THM _ => false` in `chk_split`.
 
     This test supplies such a class theorem to `Obvious` on a goal hammer
-    cannot close. While the bug is present the failed leaf's reason is the raw
-    `THM ... RSN: no unifiers`; once fixed the hammer should fail cleanly
-    (a normal "fail to prove" reason), and this test passes.
+    cannot close. While the bug is present the failed leaf's reason / rendered
+    tree contains the raw `THM ... RSN: no unifiers`; once fixed the hammer
+    fails cleanly (a normal "fail to prove" reason) and this test passes.
     """
-    # `Orderings.preorder_class.super` is a plain-HOL type-class theorem; its
-    # `with_rule` classification triggers the unguarded resolution.
+    # Production-faithful: a `Have` whose proof sub-step is the `Obvious`
+    # (in the real run it was `Have term_cont` -> `step 6.1: Obvious`). The
+    # Have ("1") stays posed; filling "1.1" actually runs the HAMMER on `P n`
+    # with the OFCLASS fact supplied. `Orderings.preorder_class.super` has a
+    # raw Pure-prop conclusion `OFCLASS(?'a, ord_class)` and, pre-fix, made the
+    # fastforce classifier raise `THM "RSN: no unifiers"`.
     bad_fact = "Orderings.preorder_class.super"
-    await root.fill("1", [Obvious.gen_single({"facts": [{"name": bad_fact}]})])
-    node = root.locate_node("1")
-    status = node.status.status.value
-    reason = node.status.reason.reason if node.status.reason else ""
-    file.write(f"status: {status}\n")
-    file.write(f"reason: {reason}\n")
-    leaked = ("RSN: no unifiers" in reason
-              or ("exception THM" in reason and "raised" in reason))
+    await root.fill("1", [Have.gen_single({
+        "thought": "regression probe",
+        "statement": {"english": "arbitrary P n",
+                      "conclusion": r"(P::nat \<Rightarrow> bool) n"},
+        "name": "h"})])
+    ob = await root.fill("1.1", [Obvious.gen_single({"facts": [{"name": bad_fact}]})])
+
+    # The failed Obvious is reverted from the tree, but its failure cause is
+    # carried by `ob.failure` (and, if kept, on the committed node / rendered
+    # tree). Collect every place the cause could surface and assert it is NOT
+    # the raw ML exception.  Post-fix it is a clean "automatic proof fails"
+    # message; pre-fix it was `exception THM 1 raised ... RSN: no unifiers`.
+    parts = [str(ob.failure)]
+    parts += [n.status.reason.reason for n in ob.committed
+              if n.status.reason is not None]
+    _buf = io.StringIO()
+    root.print(0, MyIO(_buf))
+    parts.append(_buf.getvalue())
+    haystack = "\n".join(parts)
+    leaked = ("RSN: no unifiers" in haystack
+              or ("exception THM" in haystack and "raised" in haystack))
     if leaked:
         raise TestFailed(
             "Obvious (HAMMER) leaked a raw ML exception instead of failing "
-            f"cleanly: {reason!r}")
+            f"cleanly: {str(ob.failure)!r}")
+    file.write("Obvious failed cleanly (no raw THM / RSN leak)\n")
 
 
 @model_test("ObviousProofFail", "Test_ObviousProofFail.thy", 8)

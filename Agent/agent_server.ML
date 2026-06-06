@@ -687,6 +687,13 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
               val ctxt = Minilang.context_of s0
               val SOT = MiniLang_Agent.string_of_term ctxt
               val facts = Proof_Context.facts_of ctxt
+              (* Drop infrastructure / unciteable ("??.") definitions, mirroring
+                 the filter applied to the semantic-search enumeration path. The
+                 fact ref name may carry a "(i)" selector; strip it before the
+                 name-based infra checks (the "??." extern test included). *)
+              val {is_infra_thm, ...} = Infra_Filter.gen_infra_filters (Context.Proof ctxt)
+              fun strip_sel s =
+                case String.tokens (fn c => c = #"(") s of base :: _ => base | [] => s
               val results = List.concat (map (fn term =>
                 let val parsed_term = MiniLang_Agent.read_term ctxt term
                     val const_name = case Term.head_of parsed_term of
@@ -694,6 +701,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                                      | Free (name, _) => name
                                      | _ => error "term_head_not_const"
                     val defs = Minilang.potential_defs_of_const ctxt const_name
+                      |> filter (fn (name, thm) => not (is_infra_thm (strip_sel name, thm)))
                  in map (fn (name, thm) =>
                       (name, Facts.extern ctxt facts name, SOT (Thm.prop_of thm))) defs
                 end) terms)

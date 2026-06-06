@@ -69,10 +69,10 @@ Pattern-only with limit=3, name_contains=["ln"]: 3 results
   lemma norm_summable_ln_series: norm ?z < (1 :: real) ⟶ summable (λ(n :: nat). norm (?z ^ n / of_nat n))
 Pattern-only with limit=1: 1 results
 Mixed valid/invalid theories: 5 results, 1 warnings
-  Warning: Unknown theory "Nonexistent_Theory_XYZ" in theories_include; skipped
+  Warning: No loaded theory name contains "Nonexistent_Theory_XYZ" in theories_include; skipped
 All invalid theories: 0 results, 2 warnings
-  Warning: Unknown theory "Nonexistent_Theory_XYZ" in theories_include; skipped
-  Warning: Unknown theory "Also_Nonexistent_Theory" in theories_include; skipped
+  Warning: No loaded theory name contains "Nonexistent_Theory_XYZ" in theories_include; skipped
+  Warning: No loaded theory name contains "Also_Nonexistent_Theory" in theories_include; skipped
 Invalid term pattern: 5 results, 1 warnings
   Warning: Inner syntax error
 at "? ? ? bad syntax"
