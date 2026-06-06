@@ -54,6 +54,15 @@ PRICING: dict[str, dict[str, float]] = {
     "gemini-2.5-flash":       {"input": 0.15e-6, "cached": 0.0375e-6, "output": 0.60e-6},
     "gemini-3.1-pro-preview": {"input": 2.00e-6, "cached": 0.20e-6,   "output": 12.00e-6},
     "gemini-3-flash-preview": {"input": 0.50e-6, "cached": 0.05e-6,   "output": 3.00e-6},
+    # DeepSeek V4 — official api.deepseek.com rates (per api-docs.deepseek.com
+    # /quick_start/pricing, fetched 2026-06-06). "input" = cache-miss,
+    # "cached" = cache-hit; thinking-mode output is billed at the output rate.
+    # NOTE: only the official bare model ids match — proxy ids like
+    # "deepseek/deepseek-v4-flash" (openai-next) bill differently and fall back.
+    # (A third-party promo claim of $1.74/$3.48 standard for v4-pro is NOT on the
+    # official page, which still lists the rates below; revisit if that changes.)
+    "deepseek-v4-flash": {"input": 0.14e-6,  "cached": 0.0028e-6,   "output": 0.28e-6},
+    "deepseek-v4-pro":   {"input": 0.435e-6, "cached": 0.003625e-6, "output": 0.87e-6},
 }
 
 

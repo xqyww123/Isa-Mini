@@ -222,13 +222,33 @@ class OpenAIBase(Provider):
         "gpt-5.5-pro": 128_000,
     }
 
+    # Models whose API implements the OpenAI ``tool_choice: {"type":
+    # "allowed_tools", ...}`` extension. ONLY ids listed here receive a
+    # ``tool_choice`` when a fork requests ``allowed_tools``; every other model
+    # gets NO ``tool_choice`` at all. Sending the ``allowed_tools`` variant to a
+    # backend that doesn't model it (e.g. DeepSeek, whose Chat Completions only
+    # accepts the string forms ``auto``/``none``/``required`` or the object
+    # ``{"type": "function", ...}``) triggers a permanent 400
+    # ``invalid_request_error`` ("unknown variant `allowed_tools`") — which the
+    # retry layers then spin on forever, wedging the whole agent. Default-off is
+    # the safe choice: a missing ``tool_choice`` only means the fork's answer
+    # tool isn't *forced* (the fork loop re-prompts when no tool is called).
+    # Keys are the bare model id; a provider prefix like ``deepseek/`` is
+    # stripped before lookup (see ``_supports_allowed_tools_choice``).
+    _ALLOWED_TOOLS_CHOICE_MODELS: frozenset[str] = frozenset({
+        "gpt-5.5-pro", "gpt-5.5", "gpt-5.4",
+        "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
+        "o3", "o4-mini",
+    })
+
     def __init__(self, model: str, api_key: str | None = None,
                  base_url: str | None = None, cache_key: str | None = None,
                  default_context_window: int = 128_000,
                  temperature: float | None = None,
                  reasoning_effort: str | None = None,
                  extra_params: dict[str, Any] | None = None,
-                 strict_tools: bool = False):
+                 strict_tools: bool = False,
+                 cot_retention: str | None = None):
         self._model = model
         self._client = openai.AsyncOpenAI(
             api_key=api_key or os.environ.get("OPENAI_API_KEY"),
@@ -241,6 +261,20 @@ class OpenAIBase(Provider):
         self._temperature = temperature
         self._reasoning_effort = reasoning_effort
         self._extra_params = extra_params or {}
+        # How much of the assistant turns' chain-of-thought (DeepSeek-style
+        # plaintext ``reasoning_content``) to feed back on later requests:
+        #   "full"   – keep every assistant turn's CoT (default)
+        #   "latest" – keep only the most recent assistant turn's CoT
+        #   "none"   – strip all CoT before sending
+        # NOTE: CoT is always *captured* regardless; this only governs what is
+        # re-sent. On DeepSeek V4 thinking-mode models the API *requires* the
+        # CoT of any assistant turn that made a tool call to be passed back —
+        # so "latest"/"none" will trigger 400 on multi-turn tool calls there
+        # and are only safe for non-V4 providers or tool-free use. Unknown
+        # values are treated as "full".
+        self._cot_retention = (
+            cot_retention or os.environ.get("CHAT_COT_RETENTION") or "full"
+        ).lower()
         # Logging hook for the internal retry loop (Layer 2). The driver injects
         # its ``warn_AoA_opr`` here so transient-error handling is no longer
         # silent; defaults to a no-op for providers used outside a driver.
@@ -257,6 +291,14 @@ class OpenAIBase(Provider):
     @property
     def model_name(self) -> str:
         return self._model
+
+    def _supports_allowed_tools_choice(self) -> bool:
+        """Whether this model's backend accepts the OpenAI ``allowed_tools``
+        ``tool_choice`` variant. Exact match on the bare model id (any provider
+        prefix like ``deepseek/`` stripped) against
+        ``_ALLOWED_TOOLS_CHOICE_MODELS``; unknown ids default to ``False``."""
+        bare = self._model.rsplit("/", 1)[-1]
+        return bare in self._ALLOWED_TOOLS_CHOICE_MODELS
 
     def pricing(self) -> dict[str, float]:
         return pricing_for(self._model, PRICING["gpt-4.1"])
@@ -282,6 +324,8 @@ class OpenAIChatProvider(OpenAIBase):
                     out.append(n)
                 case AssistantMsg(response=r):
                     msg: dict[str, Any] = {"role": "assistant", "content": r.content}
+                    if r.thinking:
+                        msg["reasoning_content"] = r.thinking
                     if r.tool_calls:
                         msg["tool_calls"] = [
                             {"id": tc.id, "type": "function",
@@ -291,7 +335,24 @@ class OpenAIChatProvider(OpenAIBase):
                     out.append(msg)
                 case ToolResultMsg(call_id=cid, content=c):
                     out.append({"role": "tool", "tool_call_id": cid, "content": c})
+        self._apply_cot_retention(out)
         return out
+
+    def _apply_cot_retention(self, out: list[dict]) -> None:
+        """Drop assistant ``reasoning_content`` from *out* per ``_cot_retention``.
+
+        Operates in place but never mutates a stored ``native`` dict: entries to
+        be stripped are *replaced* with fresh copies sans ``reasoning_content``.
+        "full" (and any unknown value) leaves *out* untouched.
+        """
+        mode = self._cot_retention
+        if mode not in ("latest", "none"):
+            return
+        idxs = [i for i, d in enumerate(out)
+                if d.get("role") == "assistant" and "reasoning_content" in d]
+        strip = idxs if mode == "none" else idxs[:-1]
+        for i in strip:
+            out[i] = {k: v for k, v in out[i].items() if k != "reasoning_content"}
 
     async def chat(self, messages: list[Msg], tools: list[dict],
                    *, previous_response_id: str | None = None,
@@ -306,7 +367,7 @@ class OpenAIChatProvider(OpenAIBase):
             params["reasoning_effort"] = self._reasoning_effort
         if tools:
             params["tools"] = tools
-        if allowed_tools:
+        if allowed_tools and self._supports_allowed_tools_choice():
             params["tool_choice"] = {
                 "type": "allowed_tools",
                 "allowed_tools": {
@@ -331,9 +392,21 @@ class OpenAIChatProvider(OpenAIBase):
                 raise _QuotaError(str(e)) from e
             raise _TransientError(str(e)) from e
         except openai.APIError as e:
+            # Retry only where a retry can plausibly change the outcome: 5xx
+            # (server-side), plus 408 (request timeout) and 409 (conflict); 429
+            # is already handled by the RateLimitError branch above. A status
+            # error outside that set — 400/401/403/404/422/… — is a permanent
+            # request error: re-raise so it propagates instead of being retried
+            # forever (the bug behind the deepseek allowed_tools 400 wedge).
+            # Non-status APIErrors (connection/timeout, no ``status_code``) stay
+            # transient via the fall-through.
+            if isinstance(e, openai.APIStatusError) and \
+                    e.status_code < 500 and e.status_code not in (408, 409):
+                raise
             raise _TransientError(str(e)) from e
 
         text_parts: list[str] = []
+        rc_parts: list[str] = []
         tc_map: dict[int, dict[str, str]] = {}
         stream_usage: Any = None
 
@@ -344,6 +417,12 @@ class OpenAIChatProvider(OpenAIBase):
                 if not chunk.choices:
                     continue
                 delta = chunk.choices[0].delta
+                # DeepSeek-style plaintext CoT: a non-standard field the OpenAI
+                # SDK surfaces via model_extra / attribute. Capture it so it can
+                # be round-tripped (required on V4 thinking-mode tool calls).
+                rc = getattr(delta, "reasoning_content", None)
+                if rc:
+                    rc_parts.append(rc)
                 if delta.content:
                     text_parts.append(delta.content)
                 if delta.tool_calls:
@@ -383,7 +462,7 @@ class OpenAIChatProvider(OpenAIBase):
 
         return ProviderResponse(
             content="".join(text_parts) if text_parts else None,
-            thinking=None,
+            thinking="".join(rc_parts) if rc_parts else None,
             tool_calls=tool_calls,
             usage=usage,
         )
@@ -399,6 +478,12 @@ class OpenAIChatProvider(OpenAIBase):
 
     def format_assistant_msg(self, response: ProviderResponse) -> AssistantMsg:
         msg: dict[str, Any] = {"role": "assistant", "content": response.content}
+        if response.thinking:
+            # Round-trip the CoT. DeepSeek V4 thinking-mode requires this on
+            # assistant turns that made a tool call; harmless for providers
+            # that don't emit reasoning_content. ``_apply_cot_retention``
+            # governs how much survives on the way back out.
+            msg["reasoning_content"] = response.thinking
         if response.tool_calls:
             msg["tool_calls"] = [
                 {"id": tc.id, "type": "function",
@@ -460,7 +545,7 @@ class OpenAIResponsesProvider(OpenAIBase):
             params["temperature"] = self._temperature
         if tools:
             params["tools"] = tools
-        if allowed_tools:
+        if allowed_tools and self._supports_allowed_tools_choice():
             params["tool_choice"] = {
                 "type": "allowed_tools",
                 "mode": "required",
@@ -964,8 +1049,17 @@ class APIDriver(LMDriver):
     # ------------------------------------------------------------------
 
     def _should_compact(self, usage: Usage) -> bool:
-        total = usage.input_tokens + usage.output_tokens
-        return total > self._provider.context_window * self.COMPACTION_THRESHOLD
+        # Full context occupancy = the entire prompt we just sent + the output
+        # just generated (which becomes part of the next turn's prompt). The
+        # three prompt partitions are mutually disjoint and sum to the real
+        # prompt size (input_tokens is UNCACHED-only by the Usage invariant), so
+        # cached/cache_creation MUST be added back — cached tokens still occupy
+        # the context window even though they're cheap. Counting only uncached
+        # input would undercount badly under heavy caching (e.g. DeepSeek) and
+        # compact far too late, risking a context-overflow error.
+        occupancy = (usage.input_tokens + usage.cached_tokens
+                     + usage.cache_creation_tokens + usage.output_tokens)
+        return occupancy > self._provider.context_window * self.COMPACTION_THRESHOLD
 
     async def _find_recent_start(self, messages: list[Msg]) -> int:
         rounds_seen = 0
@@ -1311,5 +1405,110 @@ class APIDriver_K2Think(APIDriver):
                 api_key=os.environ.get("K2_THINK_API_KEY"),
             )
         super().__init__(*args, provider=provider, **kwargs)
+
+
+# Per-model context windows (tokens) for the generic Chat driver. The Chat driver
+# computes effective = min(this default, CHAT_CONTEXT_WINDOW) and hands it to a
+# _ChatProvider, whose context_window returns it verbatim — so this table (plus
+# the env cap) is authoritative even for ids that also live in
+# OpenAIBase._CONTEXT_WINDOWS (which would otherwise shadow the cap).
+# Values mirror each provider's own per-model table (true model maxima), except
+# DeepSeek V4 which *supports* 1M (official V4 Model Card, 2026-04-27) but is
+# capped here to 384K as a practical default. Unlisted ids fall back to
+# _CHAT_DEFAULT_CONTEXT; proxy ids like "deepseek/deepseek-v4-flash" don't match.
+_CHAT_DEFAULT_CONTEXT = 131_072
+_CHAT_CONTEXT_WINDOWS: dict[str, int] = {
+    # OpenAI — gpt series capped to 384K (true maxima: gpt-5.5* / gpt-5.4 = 1.05M
+    # per developers.openai.com; gpt-4.1* = 1M). o3 / o4-mini are natively 200K.
+    "gpt-5.5-pro":   384_000,
+    "gpt-5.5":       384_000,
+    "gpt-5.4":       384_000,
+    "gpt-4.1":       384_000,
+    "gpt-4.1-mini":  384_000,
+    "gpt-4.1-nano":  384_000,
+    "o3":            200_000,
+    "o4-mini":       200_000,
+    # Anthropic — 4-6 (1M-capable) capped to 384K; 4-5 are legacy 200k
+    # (platform.claude.com models overview).
+    "claude-opus-4-6":   384_000,
+    "claude-sonnet-4-6": 384_000,
+    "claude-opus-4-5":   200_000,
+    "claude-sonnet-4-5": 200_000,
+    # Gemini (per GeminiProvider._CONTEXT_WINDOWS)
+    "gemini-2.5-pro":         1_048_576,
+    "gemini-2.5-flash":       1_048_576,
+    "gemini-3.1-pro-preview": 1_048_576,
+    "gemini-3-flash-preview": 1_048_576,
+    # DeepSeek V4 (1M-capable, capped to 384K as a practical default)
+    "deepseek-v4-flash": 384_000,
+    "deepseek-v4-pro":   384_000,
+}
+
+
+class _ChatProvider(OpenAIChatProvider):
+    """OpenAIChatProvider whose context window is fully driver-controlled.
+
+    The base ``context_window`` consults ``OpenAIBase._CONTEXT_WINDOWS`` first,
+    which would shadow the per-model default + ``CHAT_CONTEXT_WINDOW`` cap the
+    Chat driver computes for OpenAI ids that live in that class table. This
+    override always returns the value the driver passed as
+    ``default_context_window``.
+    """
+
+    @property
+    def context_window(self) -> int:
+        return self._default_context_window
+
+
+@agent_driver("Chat")
+class APIDriver_Chat(APIDriver):
+    """Generic OpenAI-compatible Chat Completions driver.
+
+    Point it at any ``/v1/chat/completions`` endpoint via environment:
+
+      * ``CHAT_BASE_URL``  – e.g. ``https://api.deepseek.com`` or
+        ``https://api.openai-next.com/v1`` (required)
+      * ``CHAT_API_KEY``   – bearer token for that endpoint
+      * ``CHAT_MODEL``     – fallback model id when the driver argument omits one
+      * ``CHAT_CONTEXT_WINDOW`` – a *cap* on the context window in tokens. The
+        effective window is ``min(per-model default, CHAT_CONTEXT_WINDOW)``; when
+        unset the per-model default (``_CHAT_CONTEXT_WINDOWS``, else 131072) is
+        used as-is. Use it to compact earlier than the model's real limit, never
+        above it. (Compaction fires at 80% of the effective window.)
+      * ``CHAT_COT_RETENTION`` – full (default) / latest / none; how much of the
+        plaintext ``reasoning_content`` CoT to round-trip (see OpenAIChatProvider)
+
+    The model id is the driver argument after the dot, e.g.
+    ``Chat.deepseek-v4-flash`` or ``Chat.deepseek/deepseek-v4-flash``
+    (``toplevel`` splits only on the first dot, so slashes survive).
+    """
+
+    def __init__(self, *args, provider: Provider | None = None,
+                 argument: str | None = None, **kwargs):
+        if provider is None:
+            model = argument or os.environ.get("CHAT_MODEL")
+            if not model:
+                raise InternalError(
+                    "Chat driver needs a model id: use 'Chat.<model>' "
+                    "(e.g. Chat.deepseek-v4-flash) or set CHAT_MODEL.")
+            base_url = os.environ.get("CHAT_BASE_URL")
+            if not base_url:
+                raise InternalError(
+                    "Chat driver needs CHAT_BASE_URL set "
+                    "(e.g. https://api.deepseek.com).")
+            ctx = _CHAT_CONTEXT_WINDOWS.get(model, _CHAT_DEFAULT_CONTEXT)
+            cap = os.environ.get("CHAT_CONTEXT_WINDOW")
+            if cap:
+                ctx = min(ctx, int(cap))
+            provider = _ChatProvider(
+                model=model,
+                base_url=base_url,
+                api_key=os.environ.get("CHAT_API_KEY"),
+                default_context_window=ctx,
+            )
+        super().__init__(*args, provider=provider, **kwargs)
+
+    def __str__(self) -> str:
+        return f"{self._driver_name}({self._provider.model_name})"
 
 
