@@ -1,0 +1,22 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(g :: real × real ⇒ real). g ((0 :: real), (0 :: real)) = (0 :: real)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+outcome.failure: None
+--------------------------------------------------
+After Witness (type-mismatch error visible in tree)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(g :: real × real ⇒ real). g ((0 :: real), (0 :: real)) = (0 :: real)
+proof:
+  - step id: 1
+    thought: Curry the witness over x and y instead of pairing them
+    operation: Witness
+    witness: \<lambda>(x::real) (y::real). 0
+    Error: exception THM 1 raised (line 2601 of "thm.ML"): RSN: no unifiers
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  ∃(g :: real × real ⇒ real). g ((0 :: real), (0 :: real)) = (0 :: real)

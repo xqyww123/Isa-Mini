@@ -1384,7 +1384,7 @@ class Minilang_Operation(NamedTuple):
         ))
     @staticmethod
     def OBTAIN(variables: list[Explicit_Var], constraints: list[tuple[str, xterm]]) -> 'Minilang_Operation':
-        vars = [(v["name"], ascii_of_unicode(v["type"]) if "type" in v else None) for v in variables]
+        vars = [(v["name"], ascii_of_unicode(v["type"]) if v.get("type") else None) for v in variables]
         return Minilang_Operation("OBTAIN", (vars, [(n, ascii_of_unicode(c)) for n, c in constraints]))
     @staticmethod
     def RULE(rule_ref: 'IsabelleFact | None') -> 'Minilang_Operation':
@@ -6213,7 +6213,7 @@ class Define(SubgoalMaker):
     def __init__(self, config: NodeConfig, arg: Define_ToolArg):
         super().__init__(config, arg["thought"], [])
         self.name = arg["name"]
-        self.type: str | None = arg.get("type")
+        self.type: str | None = arg.get("type") or None
         self.equations = list(arg["equations"])
         self.metric = list(arg.get("metric") or [])
         # Set by _refresh_the_beginning_opr based on reporter messages
@@ -8470,9 +8470,14 @@ def _parse_optional_raw_proof(
     raw: 'raw_proof | None', path: str,
 ) -> 'proof | None':
     """Parse the optional `proof` body of Have / Suffices / Obtain /
-    Branch-case.  `None` stays `None`; a list is recursively parsed into
-    a flat `list[Parsed_Opr]`."""
-    if raw is None:
+    Branch-case.  `None` *and* an empty list `[]` both stay `None`; a
+    non-empty list is recursively parsed into a flat `list[Parsed_Opr]`.
+
+    Normalizing `[]` to `None` (mirroring `_parse_positional_proofs`)
+    makes `proof: []` behave identically to an absent `proof` everywhere:
+    on a fresh fill both leave an empty/auto-intro'd open block, and on
+    `amend` both *preserve* an inherited body rather than wiping it."""
+    if raw is None or raw == []:
         return None
     return Parse_Op_List(raw, path)
 
