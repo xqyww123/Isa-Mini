@@ -386,7 +386,7 @@ async def _test_Induction(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
 
-@model_test("Induction_IllTypedBoundVar", "Test_Induction_IllTypedBoundVar.thy", 7)
+@model_test("Induction_IllTypedBoundVar", "Test_Induction_IllTypedBoundVar.thy", 8)
 async def _test_Induction_IllTypedBoundVar(root: Root, file: MyIO):
     """Reproduces the "Ill-typed instantiation: n :: 'a" induction failure.
 
@@ -398,19 +398,26 @@ async def _test_Induction_IllTypedBoundVar(root: Root, file: MyIO):
     free variable of unconstrained type `'a`. With the default rule
     Isabelle then cannot pick an induction rule ("Unable to figure out
     induct rule"); with an explicit `nat.induct` (which fixes the
-    predicate type to `nat`) the `'a` free clashes with `nat`, yielding
-    "Ill-typed instantiation: n :: 'a". The fix on the agent side is to
-    `Intro n` first so `n` becomes a fixed `nat` variable.
+    predicate type to `nat`) the `'a` free clashes with `nat`, raised by
+    `ind_prep_inst` in library/proof.ML via `Type.could_unify('a, nat)`
+    = false → "Ill-typed instantiation: n :: 'a".
 
-    This mirrors the live log: HAVE(pos_b, '∀n. b n > 0') followed by
-    INDUCT('n', rule='nat.induct'). We use a self-contained positive
-    function of `n` so the Have statement type-checks without extra
-    context."""
+    Faithful to the live log: after `HAVE(pos_b, '∀n. b n > 0')` the
+    framework's auto-Intro fixes `n :: nat` at step 1.1. The agent then
+    issued `edit{action: amend, target_step: 4.1, operation: Induction}`
+    — i.e. it AMENDED the auto-Intro node into an Induction. Amending
+    removes the Intro, so `n` reverts to bound/un-introduced and the
+    induction instantiation goes ill-typed. The fix on the agent side is
+    to keep the `Intro n` (induct only on a fixed `nat`), not replace it.
+
+    We use a self-contained positive function of `n` so the Have
+    statement type-checks without extra context."""
     print_header("Initial YAML", file)
     root.print(0, file)
     root.session.age += 1
-    # Pose a helper whose conclusion universally quantifies `n` (bound,
-    # never introduced) — exactly like the live `pos_b: ∀n. b n > 0`.
+    # Pose a helper whose conclusion universally quantifies `n`. The
+    # framework auto-introduces `n :: nat` at step 1.1 (mirrors the live
+    # `pos_b: ∀n. b n > 0`, whose `n` was likewise auto-fixed).
     await root.fill("1", [Have.gen_single({
         "thought": "b is always positive",
         "statement": {
@@ -418,28 +425,31 @@ async def _test_Induction_IllTypedBoundVar(root: Root, file: MyIO):
             "conclusion": r"\<forall>n::nat. (2::int)^n > 0"},
         "name": "pos_b"
     })])
-    print_header("After Have pos_b", file)
+    print_header("After Have pos_b (auto-Intro fixes n at 1.1)", file)
     root.print(0, file)
     root.session.age += 1
-    # Default rule: Isabelle cannot even figure out the induction rule
-    # because the bound `n` resolves to a free of type 'a.
-    await root.fill("1.1", [Induction.gen_single({
+    # Amend the auto-Intro node (1.1) into an Induction — this is the
+    # exact `action: amend, target_step: 4.1` from the live log. The
+    # Intro is dropped, so `n` is bound again. Default rule: Isabelle
+    # cannot figure out the induction rule (target type is 'a).
+    await root.amend("1.1", [Induction.gen_single({
         "thought": "Induction on n",
         "target_isabelle_term": r"n",
         "variables": [{"name": "n", "status": "fixed"}],
     })])
-    print_header("Induction n (default rule) — Unable to figure out induct rule", file)
+    print_header("Amend 1.1 → Induction n (default rule) — Unable to figure out induct rule", file)
     root.print(0, file)
     root.session.age += 1
-    # Explicit nat.induct: the free `n :: 'a` clashes with the rule's
-    # `nat` predicate type → "Ill-typed instantiation: n :: 'a".
-    await root.fill("1.1", [Induction.gen_single({
+    # Amend again with explicit nat.induct: the free `n :: 'a` clashes
+    # with the rule's `nat` predicate type → "Ill-typed instantiation:
+    # n :: 'a" (raised by ind_prep_inst in library/proof.ML).
+    await root.amend("1.1", [Induction.gen_single({
         "thought": "Induction on n using nat induction rule",
         "target_isabelle_term": r"n",
         "rule": {"name": "nat.induct"},
         "variables": [{"name": "n", "status": "fixed"}],
     })])
-    print_header("Induction n (rule nat.induct) — Ill-typed instantiation n :: 'a", file)
+    print_header("Amend 1.1 → Induction n (rule nat.induct) — Ill-typed instantiation n :: 'a", file)
     root.print(0, file)
 
 @model_test("Suffices", "Test_Suffices.thy", 9)
@@ -2825,6 +2835,67 @@ async def _test_query_scalar_string_field(root: Root, file: MyIO):
     result, is_error = await _query_tool_logic(root.session, args)
     file.write(f"Result (is_error={is_error}):\n{result}\n")
     assert not is_error, f"query with scalar-string name_contains must not error: {result}"
+
+
+@model_test("QuerySearchSummary", "Test_QuerySearchSummary.thy", 8)
+async def _test_query_search_summary(root: Root, file: MyIO):
+    """query tool: each call appends a per-query summary line
+    'XX entities match the filters — YY shown (ZZ already shown earlier).'.
+    Asserts (format-based, count-agnostic):
+      - the first 5 summary lines per session use the verbose phrasing, the
+        rest a terse one;
+      - the XX clause appears only when the query has a structural filter;
+      - ZZ ('already shown') grows when the same filtered query is repeated.
+    Only the (deterministic) summary lines are written to the golden — the
+    entity list itself is embedding-ranking dependent."""
+    import re
+    from .retrieval import _query_tool_logic
+
+    # Force the direct (non-fork) search path.
+    root.session.interactive_retrieval = InteractiveRetrievalMode.NO
+
+    def summary_lines(result: str) -> list[str]:
+        return [ln.strip() for ln in result.splitlines() if "shown (" in ln]
+
+    async def run(q: dict) -> str:
+        result, is_error = await _query_tool_logic(root.session, {'queries': [q]})
+        assert not is_error, f"query must not error: {result}"
+        lines = summary_lines(result)
+        assert len(lines) == 1, f"expected one summary line, got {lines}"
+        return lines[0]
+
+    # 6 filtered single-query calls (distinct substrings) → 6 summary lines in
+    # one session, crossing the verbose→terse boundary at the 6th.
+    fragments = ["plus", "less", "mult", "diff", "power", "abs"]
+    collected: list[str] = []
+    for frag in fragments:
+        line = await run({'kinds': ['lemma'],
+                          'long_description': f'lemmas mentioning {frag}',
+                          'name_contains': [frag], 'number': 5})
+        collected.append(line)
+    for i, line in enumerate(collected):
+        file.write(f"call {i+1}: {line}\n")
+    for line in collected[:5]:
+        assert "already shown earlier" in line, f"first 5 must be verbose: {line}"
+        assert "match the filters" in line, f"filtered query must show XX: {line}"
+    assert "already shown earlier" not in collected[5], f"6th must be terse: {collected[5]}"
+    assert "match —" in collected[5] and "before)" in collected[5], \
+        f"6th must be terse with XX: {collected[5]}"
+
+    # ZZ grows on repeat: re-run the first fragment; its entities are now seen.
+    repeat = await run({'kinds': ['lemma'],
+                        'long_description': 'lemmas mentioning plus',
+                        'name_contains': ['plus'], 'number': 5})
+    file.write(f"repeat: {repeat}\n")
+    m = re.search(r"\((\d+) before\)", repeat)
+    assert m and int(m.group(1)) > 0, f"repeat must report ZZ>0 already shown: {repeat}"
+
+    # XX gate: a bare semantic query (no structural filter) omits the XX clause.
+    bare = await run({'kinds': ['lemma'],
+                      'long_description': 'induction over natural numbers',
+                      'number': 5})
+    file.write(f"no-filter: {bare}\n")
+    assert "match" not in bare, f"bare semantic query must omit XX: {bare}"
 
 
 @model_test("IntroSplitConj", "Test_IntroSplitConj.thy", 10)
@@ -8582,7 +8653,7 @@ async def _test_AmendInductionNested(root: Root, file: MyIO):
 
 @model_test("SimpRoles", "Test_SimpRoles.thy", 12)
 async def _test_simp_roles(root: Root, file: MyIO):
-    """Bug repro: fun-defined .simps facts are marked [opaque] despite being
+    """Bug repro: fun-defined .simps facts are marked [manual] despite being
     registered in the simplifier.  The root cause is in thm_roles
     (agent_server.ML) which checks Thm.get_name_hint against a pre-computed
     simp_rule_names set.
@@ -10430,6 +10501,87 @@ async def _test_recall_worker_scope(root: Root, file: MyIO):
     os.remove(tmp)
 
 
+@model_test("RecallContainment", "Test_RecallContainment.thy", 9)
+async def _test_recall_containment(root: Root, file: MyIO):
+    """Multi-step `recall` containment (planner / whole-tree scope).
+
+    When several `step_id`s are requested at once, a step whose *printed* line
+    range falls inside another requested step's printed range is already shown
+    within that enclosing segment, so it renders header-only (`... ; content
+    already shown above`) instead of repeating the lines. Covers:
+      - nesting chains (1 ⊃ 1.1 ⊃ 1.1.1) + a non-contained sibling (2);
+      - order independence (child listed before parent still collapses);
+      - printed-range (NOT tree-ancestry) semantics: a small `range` that
+        truncates the parent before the child's lines leaves the child in full;
+      - single-step recall never suppresses;
+      - a nonexistent id warns inline without disturbing the others.
+
+    Reuses `_make_lock_tree`:
+        1 (Have H){ 1.1 (Have){1.1.1 Obvious}, 1.2 (Have, open) },  2 (Have sib)
+    1.2 stays open so the proof is unfinished (mirrors the worker recall test).
+    """
+    import re
+    from .mcp_http_server import _read_tool_logic
+
+    session = root.session
+    session.role = model.Role_Major()                 # planner: whole tree in scope
+    goal, H = await _make_lock_tree(root)
+
+    # Render the whole-tree proof.yaml the planner reads, with fresh line nums.
+    fd, tmp = tempfile.mkstemp(prefix="recall_contain_", suffix=".yaml")
+    os.close(fd)
+    session.YAML_path = tmp
+    with open(tmp, "w", encoding="utf-8") as f:
+        session.print_proof_scope(0, MyIO(f), update_line=True, show_warnings=True)
+
+    _HDR = re.compile(r"^\[Step (\S+) is at Line ")
+    def _summary(res: str) -> str:
+        """One robust line per segment: id, mode (full|contained) and whether
+        any content followed the header. Deliberately omits exact line numbers /
+        YAML body so the golden is stable against layout drift — the feature is
+        captured by mode + content_present."""
+        segs: list[dict] = []
+        cur: dict | None = None
+        for ln in res.split("\n"):
+            m = _HDR.match(ln)
+            if m:
+                cur = {"id": m.group(1),
+                       "mode": "contained" if "content already shown above" in ln else "full",
+                       "content": False}
+                segs.append(cur)
+            elif ln.startswith("WARNING"):
+                cur = {"warn": ln}
+                segs.append(cur)
+            elif ln.strip() and cur is not None and "id" in cur:
+                cur["content"] = True
+        out = []
+        for s in segs:
+            if "warn" in s:
+                out.append(s["warn"])
+            else:
+                out.append(f"{s['id']:<10} {s['mode']:<9} content_present={s['content']}")
+        return "\n".join(out)
+
+    async def _recall(label: str, **kw):
+        print_header(label, file)
+        res, err = await _read_tool_logic(session, kw)
+        file.write(f"is_error: {err}\n")
+        file.write(_summary(res) + "\n")
+
+    # Full nest + sibling: 1 full; 1.1/1.1.1/1.2 collapse (shown within 1); 2 full.
+    await _recall("recall [1, 1.1, 1.1.1, 1.2, 2]", step_id=["1", "1.1", "1.1.1", "1.2", "2"])
+    # Child listed before its parent: output order is preserved, child still collapses.
+    await _recall("recall [1.1, 1] (child before parent)", step_id=["1.1", "1"])
+    # range=2 truncates 1's print before 1.2's lines -> 1.2 not contained -> full.
+    await _recall("recall [1, 1.2] range=2 (parent truncated)", step_id=["1", "1.2"], range=2)
+    # Single id: nothing can contain it.
+    await _recall("recall [1] (single step)", step_id=["1"])
+    # Nonexistent id warns inline; 1 full, 1.1 collapses regardless.
+    await _recall("recall [1, 1.1, 9.9] (missing id)", step_id=["1", "1.1", "9.9"])
+
+    os.remove(tmp)
+
+
 async def _make_lock_tree(root):
     """Build the shared tree used by the edit-lock tests:
         1 (Have H) { 1.1 (Have){1.1.1 Obvious}, 1.2 (Have) },  2 (Have, sibling)
@@ -11489,6 +11641,35 @@ async def _test_nested_antichain(root: Root, file: MyIO):
                f"old node detached={A.worker_handle is None}\n")
 
     session.role = model.Role_Major()
+
+
+@model_test("ZZTmpOfIntCheck", "Test_ZZTmpOfIntCheck.thy", 7)
+async def _test_zztmp_of_int_check(root: Root, file: MyIO):
+    """THROWAWAY validation: replay the exact query from the bug log
+    (exact_name real_of_int/of_int/floor) in the Minilang_Agent context and
+    confirm the 'Relevant definitions' block no longer contains '??.' facts."""
+    from .retrieval import _query_tool_logic
+    root.session.interactive_retrieval = InteractiveRetrievalMode.NO
+    args = {'queries': [
+        {'kinds': ['constant'], 'exact_name': 'real_of_int'},
+        {'kinds': ['constant'], 'exact_name': 'floor'},
+        {'kinds': ['constant'], 'exact_name': 'of_int'},
+    ]}
+    result, is_error = await _query_tool_logic(root.session, args)
+    qq = [ln for ln in result.splitlines() if '??.' in ln]
+    rel = [ln for ln in result.splitlines() if ln.strip().startswith('- of_int')]
+    with open('/tmp/ofint_check.txt', 'w') as fh:
+        fh.write(f"is_error={is_error}\n")
+        fh.write(f"[CHECK] lines containing '??.': {len(qq)}\n")
+        for ln in qq:
+            fh.write("  QQ " + ln + "\n")
+        fh.write(f"[CHECK] sample legitimate of_int defs kept: {len(rel)}\n")
+        for ln in rel[:8]:
+            fh.write("  OK " + ln + "\n")
+        fh.write("\n===== FULL RESULT =====\n")
+        fh.write(result + "\n")
+    file.write(f"qq={len(qq)} rel={len(rel)} is_error={is_error}\n")
+    assert not qq, f"Found {len(qq)} '??.' lines (see /tmp/ofint_check.txt)"
 
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):

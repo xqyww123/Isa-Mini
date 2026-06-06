@@ -684,7 +684,8 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     # line numbers (see ``Session.proof_scope_root``); bounds must not be
     # derived from nodes outside it (stale `.line`).
     scope_root: Node = session.proof_scope_root
-    def _render_node_segment(node: Node) -> str:
+    def _segment_range(node: Node) -> tuple[int, int, list[str]]:
+        """Return the (start, end_line, lines) actually printed for ``node``."""
         node_start = node.line
         node_end = _node_end_line(node, total_lines, scope_root)
         if explicit_range is None:
@@ -694,10 +695,12 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         end = min(end, total_lines)
         selected = all_lines[node_start - 1 : end]
         end_line = node_start + len(selected) - 1
-        return (f"[Step {session._display_id(node.id)} is at Line {node_start}, showing Line "
-                f"{node_start}-{end_line}]\n" + "".join(selected))
+        return node_start, end_line, selected
 
-    segments: list[str] = []
+    # First pass: resolve/validate each id. Failures become inline warnings;
+    # successes record the node and its printed range so the second pass can
+    # detect containment.
+    entries: list[tuple[str, Any]] = []   # ("warn", text) | ("node", (node, start, end, lines))
     for sid in step_ids:
         # `sid` is worker-relative (as supplied) — keep it for messages, resolve
         # to the absolute tree id for the lookup.
@@ -714,7 +717,7 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
                              "Read the proof by line number instead.")
                 session.log_tool_response(_tn, f"ERROR: {error_msg}")
                 return (error_msg, True)
-            segments.append(f"WARNING: Step '{sid}' doesn't exist.")
+            entries.append(("warn", f"WARNING: Step '{sid}' doesn't exist."))
             continue
         if node.line == 0:
             error_msg = (
@@ -723,7 +726,7 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             if single_step:
                 session.log_tool_response(_tn, f"ERROR: {error_msg}")
                 return (error_msg, True)
-            segments.append(f"WARNING: {error_msg}")
+            entries.append(("warn", f"WARNING: {error_msg}"))
             continue
         if not _line_is_fresh(node, scope_root, session.is_worker):
             error_msg = (
@@ -732,9 +735,34 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             if single_step:
                 session.log_tool_response(_tn, f"ERROR: {error_msg}")
                 return (error_msg, True)
-            segments.append(f"WARNING: {error_msg}")
+            entries.append(("warn", f"WARNING: {error_msg}"))
             continue
-        segments.append(_render_node_segment(node))
+        start, end_line, selected = _segment_range(node)
+        entries.append(("node", (node, start, end_line, selected)))
+
+    # Second pass: a step whose printed range is strictly inside another
+    # requested step's printed range is already shown within that enclosing
+    # segment, so we print only its header (not its content).
+    ranges = [e[1] for e in entries if e[0] == "node"]
+    segments: list[str] = []
+    for kind, payload in entries:
+        if kind == "warn":
+            segments.append(payload)
+            continue
+        node, start, end_line, selected = payload
+        disp = session._display_id(node.id)
+        contained = any(
+            o_node is not node and o_start <= start and end_line <= o_end
+            and (o_start < start or o_end > end_line)
+            for o_node, o_start, o_end, _ in ranges)
+        if contained:
+            segments.append(
+                f"[Step {disp} is at Line {start}-{end_line}; "
+                f"content already shown above]")
+        else:
+            segments.append(
+                f"[Step {disp} is at Line {start}, showing Line "
+                f"{start}-{end_line}]\n" + "".join(selected))
 
     result = "\n".join(segments)
     session.log_tool_response(_tn, result)
@@ -1182,7 +1210,7 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "recall": {"description": "Recall proof state from `proof.yaml`. Use only when you have lost track.", "schema": _cc_read_schema, "annotations": _RO},
     "request_lemmas": {"description": "Report missing background lemmas and request that the external environment supply them.",
                        "schema": _cc_request_lemmas_schema, "annotations": _ACT},
-    "report": {"description": "Report that the goal is unprovable, or surrender and admit you cannot prove it yourself, or report any difficulty or obstacle you run into.",
+    "report": {"description": "Report difficulties or obstacles you run into, or surrender and admit you cannot prove it yourself, or refutate that the goal is unprovable.",
                  "schema": _cc_report_schema, "annotations": _ACT},
     "answer_indexes": {"description": "Answer by selecting indexes from the presented options", "schema": _cc_answer_indexes_schema, "annotations": _ACT},
     "answer_index": {"description": "Answer by selecting a single index, or null to skip", "schema": _cc_answer_index_schema, "annotations": _ACT},
@@ -1460,7 +1488,7 @@ class _SessionRouter:
             if session is not None:
                 session.seen_commands.clear()
                 session.seen_entities.clear()
-                session.seen_opaque_note = False
+                session.seen_manual_note = False
                 session.seen_abbreviations.clear()
                 session.showed_suffices_notice = False
                 session.showed_fill_hint = False

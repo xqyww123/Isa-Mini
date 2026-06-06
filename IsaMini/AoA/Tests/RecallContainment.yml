@@ -1,0 +1,33 @@
+--------------------------------------------------
+recall [1, 1.1, 1.1.1, 1.2, 2]
+--------------------------------------------------
+is_error: False
+1          full      content_present=True
+1.1        contained content_present=False
+1.1.1      contained content_present=False
+1.2        contained content_present=False
+2          full      content_present=True
+--------------------------------------------------
+recall [1.1, 1] (child before parent)
+--------------------------------------------------
+is_error: False
+1.1        contained content_present=False
+1          full      content_present=True
+--------------------------------------------------
+recall [1, 1.2] range=2 (parent truncated)
+--------------------------------------------------
+is_error: False
+1          full      content_present=True
+1.2        full      content_present=True
+--------------------------------------------------
+recall [1] (single step)
+--------------------------------------------------
+is_error: False
+1          full      content_present=True
+--------------------------------------------------
+recall [1, 1.1, 9.9] (missing id)
+--------------------------------------------------
+is_error: False
+1          full      content_present=True
+1.1        contained content_present=False
+WARNING: Step '9.9' doesn't exist.
