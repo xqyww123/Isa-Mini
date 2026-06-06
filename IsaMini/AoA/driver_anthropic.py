@@ -136,7 +136,15 @@ class AnthropicProvider(Provider):
                             json_parts.append(delta.partial_json)
                 elif event.type == "content_block_stop":
                     if cur.get("type") == "tool_use" and json_parts:
-                        cur["input"] = json.loads("".join(json_parts))
+                        # Malformed tool-call arguments (e.g. concatenated
+                        # objects) must re-request the turn via _retry_transient,
+                        # not crash the run. Mirrors Provider.validate_tool_call_json.
+                        try:
+                            cur["input"] = json.loads("".join(json_parts))
+                        except json.JSONDecodeError as e:
+                            raise _TransientError(
+                                f"provider returned malformed tool-call arguments "
+                                f"for '{cur.get('name')}': {e}") from e
                     btype = cur.get("type")
                     if btype == "thinking":
                         built_blocks.append(anthropic.types.ThinkingBlock.model_construct(**cur))

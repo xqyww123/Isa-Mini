@@ -119,6 +119,25 @@ class Provider(ABC):
         """Returns {"input": rate, "cached": rate, "output": rate} per token."""
         ...
 
+    @staticmethod
+    def validate_tool_call_json(tool_calls: list[ToolCall]) -> None:
+        """Reject a turn whose tool-call ``arguments`` is not parseable JSON.
+
+        A provider can occasionally emit malformed tool-call arguments — e.g.
+        two concatenated objects when streaming deltas reuse a tool-call
+        ``index`` (decodes as "Extra data"). Raising ``_TransientError`` here
+        lets the caller's ``_retry_transient`` re-request the turn rather than
+        crashing the run on the downstream ``json.loads`` in
+        ``_execute_tool_calls``. Concrete providers call this before returning.
+        """
+        for tc in tool_calls:
+            try:
+                json.loads(tc.arguments)
+            except json.JSONDecodeError as e:
+                raise _TransientError(
+                    f"provider returned malformed tool-call arguments for "
+                    f"'{tc.name}': {e}") from e
+
 
 # ============================================================================
 # OpenAI-Compatible Provider
@@ -347,6 +366,7 @@ class OpenAIChatProvider(OpenAIBase):
         tool_calls: list[ToolCall] = [
             ToolCall(id=v["id"], name=v["name"], arguments=v["arguments"])
             for _, v in sorted(tc_map.items())]
+        self.validate_tool_call_json(tool_calls)
 
         cached = 0
         if stream_usage:
@@ -587,6 +607,7 @@ class OpenAIResponsesProvider(OpenAIBase):
         )
 
         self._last_output_items = output_items
+        self.validate_tool_call_json(tool_calls)
 
         return ProviderResponse(
             content="\n".join(text_parts) if text_parts else None,
