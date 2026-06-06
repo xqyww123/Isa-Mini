@@ -788,6 +788,34 @@ def _normalize_query_string_list_fields(q: dict) -> dict:
     return out
 
 
+def _parenthesize_query_term_strings(q: dict) -> dict:
+    """Wrap the query's *term*-valued fields in parentheses so a bare operator
+    parses.
+
+    A pattern like ``≤`` / ``<`` / ``*`` is not a parseable term on its own,
+    but Isabelle reads the parenthesized operator section ``(≤)`` as the
+    underlying constant (which then matches the operator wherever it occurs in a
+    proposition, even partially applied). For any already-valid term ``t``,
+    ``(t)`` parses to the identical term — outer parens are pure grouping —
+    so wrapping is a no-op for normal patterns and only rescues bare operators.
+
+    Only the two term-valued query fields are touched: ``term_patterns`` (list)
+    and ``exact_term`` (scalar). ``type_patterns`` / ``target_type`` are *types*,
+    and the name/description/theory fields are never parsed as terms, so they are
+    left untouched. Must run after ``_normalize_query_string_list_fields`` so
+    ``term_patterns`` is already coerced to a list. Empty/blank entries are
+    dropped (``()`` would not parse)."""
+    out = dict(q)
+    tps = out.get("term_patterns")
+    if isinstance(tps, list):
+        out["term_patterns"] = [
+            f"({p.strip()})" for p in tps if isinstance(p, str) and p.strip()]
+    et = out.get("exact_term")
+    if isinstance(et, str) and et.strip():
+        out["exact_term"] = f"({et.strip()})"
+    return out
+
+
 async def _query_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     session.log_tool_call(session.tool_name(TOOL_SEARCH), args)
     try:
@@ -800,6 +828,11 @@ async def _query_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         # Coerce array-of-string fields the LLM may have sent as scalars, so
         # they survive the ML callbacks' `unpackList unpackString` arg schema.
         queries = [_normalize_query_string_list_fields(q) for q in queries]
+        # Parenthesize the term-valued fields (term_patterns, exact_term) so bare
+        # operators like `≤` / `<` / `*` parse: Isabelle reads `(≤)` as the
+        # operator constant, and `(t)` == `t` for any already-valid term, so this
+        # is a no-op for normal patterns.
+        queries = [_parenthesize_query_term_strings(q) for q in queries]
 
         # Separate exact_term queries from regular queries
         exact_term_queries = [q for q in queries if q.get("exact_term")]
