@@ -4291,10 +4291,40 @@ fun CHOOSE' prep_terms raw_terms (ctxt, HHF (st, items) :: SK) =
                 Proof_Context.get_thm ctxt "Set.bexI"
              | _ => raise OPR_FAIL (INVALID_OPR, "The leading goal is not about existential quantification")
 
+      (* Type of the variable bound by the leading existential, as `typ option`
+         (NONE if the leading goal is not, after all, a recognisable
+         existential). The predicate of Ex/Ex1/Bex has type `\<tau> \<Rightarrow> bool`, so the
+         bound-variable type \<tau> is its domain. Used to produce a readable error
+         when the witness type does not match (otherwise `rule RS st` below
+         leaks a raw, agent-unfriendly `THM 1 ... RSN: no unifiers`). *)
+      fun pred_dom P =
+          (case Term.fastype_of P of Type(\<^type_name>\<open>fun\<close>, [T, _]) => SOME T | _ => NONE)
+      fun ex_var_type tm =
+          (case tm
+             of Const(\<^const_name>\<open>Trueprop\<close>, _) $ t => ex_var_type t
+              | Const(\<^const_name>\<open>Ex\<close>, _) $ P => pred_dom P
+              | Const(\<^const_name>\<open>Ex1\<close>, _) $ P => pred_dom P
+              | Const(\<^const_name>\<open>Set.Bex\<close>, _) $ _ $ P => pred_dom P
+              | _ => NONE)
+
       val st' = fold (fn term => fn st =>
             let val rule = rule_of st
                         |> Drule.infer_instantiate ctxt [(("x",0), Thm.cterm_of ctxt term)]
              in rule RS st
+                handle THM _ =>
+                  let val wit = Syntax.string_of_term ctxt term
+                      val act = Syntax.string_of_typ ctxt (Term.fastype_of term)
+                      val msg =
+                        case ex_var_type (Thm.major_prem_of st)
+                          of SOME expT => String.concat [
+                               "The witness `", wit, "` has type `", act,
+                               "`, which does not match the expected type `",
+                               Syntax.string_of_typ ctxt expT,
+                               "` of the existential variable."]
+                           | NONE => String.concat [
+                               "The witness `", wit, "` has type `", act,
+                               "`, which does not match the type of the existential variable."]
+                   in raise OPR_FAIL (INVALID_OPR, msg) end
             end ) terms st
    in report_goal (ctxt, HHF (st', items) :: SK)
   end
@@ -5076,7 +5106,24 @@ fun FUN_by_fun_ext fixes specs config metric_strs open_on_fail
         "Suc resolves to: " ^ suc_const,
         "equations:"] @ eq_strs @ ["=== END ===", ""])
     in File.write (Path.explode trace_file) msg end
-    fun post lthy = remove_looping_simps lthy
+    (* After the function is defined, also expose its defining
+       equations under the conventional `<name>_def` name, as an alias
+       for `<name>.simps`. The function/fun package only registers
+       `.simps`, so an agent reaching for `<name>_def` (the name a plain
+       Isar `definition` — and hence minilang's nullary DEFINE'' path —
+       produces) would otherwise get "fact not found". This makes the
+       FUN'' and DEFINE'' Define paths expose a consistent name. No
+       `[simp]` attribute: simpset membership is already handled by
+       `.simps` (and pruned by remove_looping_simps). *)
+    fun bind_def_alias lthy =
+      (case Function_Common.import_last_function lthy of
+         SOME {simps = SOME simps, ...} =>
+           fold (fn (b, _, _) =>
+                   snd o Proof_Context.note_thms ""
+                     ((Binding.suffix_name "_def" b, []), [(simps, [])]))
+                fixes lthy
+       | _ => lthy)
+    fun post lthy = bind_def_alias (remove_looping_simps lthy)
     val {pat_goal_state, pat_afterqed, lthy_after_prepare} =
       Proof_Local_Function.prepare_pat_goal fixes specs config false ctxt_fn
     val pat_state = escalate_pat lthy_after_prepare pat_goal_state
