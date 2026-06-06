@@ -1504,13 +1504,43 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
   | check_command_i s (COMPUTE (name, raw_term)) =
       let val ctxt = Minilang.context_of s
           val term = read_term ctxt raw_term
-          val _ = if not (Ground_Eval.is_ground term)
-                  then raise Minilang.OPR_FAIL (Minilang.INVALID_OPR,
-                         String.concat [
-                           "Compute requires a fully concrete ground term, but the given term contains ",
-                           "free or schematic variables: ",
-                           string_of_term ctxt term])
-                  else ()
+          (* Enumerate exactly which atoms make the term non-ground, so the
+             agent can spot e.g. a free variable that merely *looks* like a
+             type (an induction case var named `nat` reads as `nat :: nat`). *)
+          val _ =
+            if Ground_Eval.is_ground term then ()
+            else
+              let
+                fun bullet line = "\n  - " ^ line
+                val free_lines =
+                  map (fn (n, T) =>
+                        bullet ("free variable: "
+                                ^ string_of_term ctxt (Free (n, T))
+                                ^ " :: " ^ string_of_type ctxt T))
+                      (Term.add_frees term [])
+                val var_lines =
+                  map (fn (ni, T) =>
+                        bullet ("schematic variable: "
+                                ^ string_of_term ctxt (Var (ni, T))
+                                ^ " :: " ^ string_of_type ctxt T))
+                      (Term.add_vars term [])
+                val tfree_lines =
+                  map (fn (n, S) =>
+                        bullet ("free type variable: "
+                                ^ string_of_type ctxt (TFree (n, S))))
+                      (Term.add_tfrees term [])
+                val tvar_lines =
+                  map (fn (ni, S) =>
+                        bullet ("schematic type variable: "
+                                ^ string_of_type ctxt (TVar (ni, S))))
+                      (Term.add_tvars term [])
+              in raise Minilang.OPR_FAIL (Minilang.INVALID_OPR,
+                   String.concat (
+                     ["Compute requires a fully concrete ground term, but `",
+                      string_of_term ctxt term,
+                      "` contains the following free or schematic variables:"]
+                     @ free_lines @ var_lines @ tfree_lines @ tvar_lines))
+              end
       in COMPUTE (name, term)
       end
 
