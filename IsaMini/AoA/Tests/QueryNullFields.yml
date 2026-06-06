@@ -1,65 +1,72 @@
 Result (is_error=False):
-- dvd_minus_add [opaque]: ?q ≤ ?n ⟶ ?q ≤ ?r * ?m ⟶ (?m dvd ?n - ?q) = (?m dvd ?n + (?r * ?m - ?q))
-- take_bit_eq_mask_iff_exp_dvd [opaque]: (take_bit ?n ?k = mask ?n) = ((2 :: int) ^ ?n dvd ?k + (1 :: int))
-- premise0 [opaque]: a * b + (1 :: nat) dvd a² + b²
+Query: divisibility and square result; term patterns: (_ dvd _ + _); type patterns: nat; name contains: dvd
+  3 entities match the filters — 3 shown (0 already shown earlier).
+Query: quotient is a perfect square
+  50 shown (0 already shown earlier).
+
+- dvd_minus_add [manual]: ?q ≤ ?n ⟶ ?q ≤ ?r * ?m ⟶ (?m dvd ?n - ?q) = (?m dvd ?n + (?r * ?m - ?q))
+- take_bit_eq_mask_iff_exp_dvd [manual]: (take_bit ?n ?k = mask ?n) = ((2 :: int) ^ ?n dvd ?k + (1 :: int))
+- premise0 [manual]: a * b + (1 :: nat) dvd a² + b²
   where `x²` abbreviates `x ^ (2 :: nat)`
-- real_sqrt_divide [opaque]: sqrt (?x / ?y) = sqrt ?x / sqrt ?y
+- real_sqrt_divide [manual]: sqrt (?x / ?y) = sqrt ?x / sqrt ?y
   where `(/)` abbreviates `(div)`
-- real_root_divide [opaque]: root ?n (?x / ?y) = root ?n ?x / root ?n ?y
+- real_root_divide [manual]: root ?n (?x / ?y) = root ?n ?x / root ?n ?y
 - real_divide_square_eq: ?r * ?a / (?r * ?r) = ?a / ?r
-- four_x_squared [opaque]: (4 :: real) * ?x² = ((2 :: real) * ?x)²
-- real_div_sqrt [opaque]: (0 :: real) ≤ ?x ⟶ ?x / sqrt ?x = sqrt ?x
+- four_x_squared [manual]: (4 :: real) * ?x² = ((2 :: real) * ?x)²
+- real_div_sqrt [manual]: (0 :: real) ≤ ?x ⟶ ?x / sqrt ?x = sqrt ?x
 - real_sqrt_eq_1_iff: (sqrt ?x = (1 :: real)) = (?x = (1 :: real))
-- quotient_of_denom_pos' [opaque]: (0 :: int) < snd (quotient_of ?r)
-- sqrt_divide_self_eq [opaque]: (0 :: real) ≤ ?x ⟶ sqrt ?x / ?x = inverse (sqrt ?x)
+- quotient_of_denom_pos' [manual]: (0 :: int) < snd (quotient_of ?r)
+- sqrt_divide_self_eq [manual]: (0 :: real) ≤ ?x ⟶ sqrt ?x / ?x = inverse (sqrt ?x)
 - real_sqrt_sum_squares_mult_squared_eq: (sqrt ((?x² + ?y²) * (?xa² + ?ya²)))² = (?x² + ?y²) * (?xa² + ?ya²)
 - real_sqrt_four: sqrt (4 :: real) = (2 :: real)
-- quotient_of_denom_pos [opaque]: quotient_of ?r = (?p, ?q) ⟶ (0 :: int) < ?q
-- square_eq_iff [opaque]: (?a * ?a = ?b * ?b) = (?a = ?b ∨ ?a = - ?b)
-- real_sqrt_sum_squares_eq_cancel [opaque]: sqrt (?x² + ?y²) = ?x ⟶ ?y = (0 :: real)
-- lemma_real_divide_sqrt_less [opaque]: (0 :: real) < ?u ⟶ ?u / sqrt (2 :: real) < ?u
-- real_sqrt_unique [opaque]: ?y² = ?x ⟶ (0 :: real) ≤ ?y ⟶ sqrt ?x = ?y
-- real_sqrt_sum_squares_eq_cancel2 [opaque]: sqrt (?x² + ?y²) = ?y ⟶ ?x = (0 :: real)
+- quotient_of_denom_pos [manual]: quotient_of ?r = (?p, ?q) ⟶ (0 :: int) < ?q
+- square_eq_iff [manual]: (?a * ?a = ?b * ?b) = (?a = ?b ∨ ?a = - ?b)
+- real_sqrt_sum_squares_eq_cancel [manual]: sqrt (?x² + ?y²) = ?x ⟶ ?y = (0 :: real)
+- lemma_real_divide_sqrt_less [manual]: (0 :: real) < ?u ⟶ ?u / sqrt (2 :: real) < ?u
+- real_sqrt_unique [manual]: ?y² = ?x ⟶ (0 :: real) ≤ ?y ⟶ sqrt ?x = ?y
+- real_sqrt_sum_squares_eq_cancel2 [manual]: sqrt (?x² + ?y²) = ?y ⟶ ?x = (0 :: real)
 - real_sqrt_eq_iff: (sqrt ?x = sqrt ?y) = (?x = ?y)
-- quotient_of_coprime [opaque]: quotient_of ?r = (?p, ?q) ⟶ coprime ?p ?q
+- quotient_of_coprime [manual]: quotient_of ?r = (?p, ?q) ⟶ coprime ?p ?q
 - real_sqrt_pow2: (0 :: real) ≤ ?x ⟶ (sqrt ?x)² = ?x
-- sqrt_even_pow2 [opaque]: even ?n ⟶ sqrt ((2 :: real) ^ ?n) = (2 :: real) ^ (?n div (2 :: nat))
+- sqrt_even_pow2 [manual]: even ?n ⟶ sqrt ((2 :: real) ^ ?n) = (2 :: real) ^ (?n div (2 :: nat))
   where `even a` abbreviates `(2 :: ?'a) dvd a`
-- le_square [opaque]: ?m ≤ ?m * ?m
-- power2_eq_square [opaque]: ?a² = ?a * ?a
+- le_square [manual]: ?m ≤ ?m * ?m
+- power2_eq_square [manual]: ?a² = ?a * ?a
 - abs_power2: ¦?a²¦ = ?a²
 - real_sqrt_eq_0_iff: (sqrt ?x = (0 :: real)) = (?x = (0 :: real))
-- real_inv_sqrt_pow2 [opaque]: (0 :: real) < ?x ⟶ (inverse (sqrt ?x))² = inverse ?x
+- real_inv_sqrt_pow2 [manual]: (0 :: real) < ?x ⟶ (inverse (sqrt ?x))² = inverse ?x
 - real_sqrt_pow2_iff: ((sqrt ?x)² = ?x) = ((0 :: real) ≤ ?x)
-- real_sqrt_power [opaque]: sqrt (?x ^ ?k) = sqrt ?x ^ ?k
+- real_sqrt_power [manual]: sqrt (?x ^ ?k) = sqrt ?x ^ ?k
 - real_sqrt_one: sqrt (1 :: real) = (1 :: real)
 - complex_cnj_divide: cnj (?x / ?y) = cnj ?x / cnj ?y
-- real_sqrt_mult [opaque]: sqrt (?x * ?y) = sqrt ?x * sqrt ?y
-- real_sqrt_inverse [opaque]: sqrt (inverse ?x) = inverse (sqrt ?x)
+- real_sqrt_mult [manual]: sqrt (?x * ?y) = sqrt ?x * sqrt ?y
+- real_sqrt_inverse [manual]: sqrt (inverse ?x) = inverse (sqrt ?x)
 - csqrt_1: csqrt (1 :: complex) = (1 :: complex)
 - power2_less_0: ¬ ?a² < (0 :: ?'a)
-- sqrt_le_D [opaque]: sqrt ?x ≤ ?y ⟶ ?x ≤ ?y²
+- sqrt_le_D [manual]: sqrt ?x ≤ ?y ⟶ ?x ≤ ?y²
 - real_sqrt_mult_self: sqrt ?a * sqrt ?a = ¦?a¦
 - power2_abs: ¦?a¦² = ?a²
 - real_sqrt_abs: sqrt (?x²) = ¦?x¦
-- cis_divide [opaque]: cis ?a / cis ?b = cis (?a - ?b)
-- sqrt_ge_absD [opaque]: ¦?x¦ ≤ sqrt ?y ⟶ ?x² ≤ ?y
+- cis_divide [manual]: cis ?a / cis ?b = cis (?a - ?b)
+- sqrt_ge_absD [manual]: ¦?x¦ ≤ sqrt ?y ⟶ ?x² ≤ ?y
 - not_real_square_gt_zero: (¬ (0 :: real) < ?x * ?x) = (?x = (0 :: real))
-- sqrt_def [opaque]: sqrt = root (2 :: nat)
+- sqrt_def [manual]: sqrt = root (2 :: nat)
   definition sqrt :: "real ⇒ real"
     where "sqrt = root 2"
 - real_sqrt_zero: sqrt (0 :: real) = (0 :: real)
-- power2_eq_iff [opaque]: (?x² = ?y²) = (?x = ?y ∨ ?x = - ?y)
-- real_less_rsqrt [opaque]: ?x² < ?y ⟶ ?x < sqrt ?y
-- power2_eq_1_iff [opaque]: (?a² = (1 :: ?'a)) = (?a = (1 :: ?'a) ∨ ?a = - (1 :: ?'a))
-- power2_eq_imp_eq [opaque]: ?x² = ?y² ⟶ (0 :: ?'a) ≤ ?x ⟶ (0 :: ?'a) ≤ ?y ⟶ ?x = ?y
-- real_sqrt_eq_zero_cancel [opaque]: (0 :: real) ≤ ?x ⟶ sqrt ?x = (0 :: real) ⟶ ?x = (0 :: real)
+- power2_eq_iff [manual]: (?x² = ?y²) = (?x = ?y ∨ ?x = - ?y)
+- real_less_rsqrt [manual]: ?x² < ?y ⟶ ?x < sqrt ?y
+- power2_eq_1_iff [manual]: (?a² = (1 :: ?'a)) = (?a = (1 :: ?'a) ∨ ?a = - (1 :: ?'a))
+- power2_eq_imp_eq [manual]: ?x² = ?y² ⟶ (0 :: ?'a) ≤ ?x ⟶ (0 :: ?'a) ≤ ?y ⟶ ?x = ?y
+- real_sqrt_eq_zero_cancel [manual]: (0 :: real) ≤ ?x ⟶ sqrt ?x = (0 :: real) ⟶ ?x = (0 :: real)
 - square_powr_half: ?x² powr ((1 :: real) / (2 :: real)) = ¦?x¦
-- real_le_rsqrt [opaque]: ?x² ≤ ?y ⟶ ?x ≤ sqrt ?y
+- real_le_rsqrt [manual]: ?x² ≤ ?y ⟶ ?x ≤ sqrt ?y
 - real_sqrt_abs2: sqrt (?x * ?x) = ¦?x¦
 
-[opaque] — will not be used automatically unless supplied explicitly.
+Lemmas marked with [manual] must be specified manually for Rewrite/Obvious to use them.
 Null kinds result (is_error=False):
+5 shown (0 already shown earlier).
+
 - Code_Numeral.Suc: natural ⇒ natural
   The successor function on the `natural` type, mapping a natural number to the next one.
   lift_definition Suc :: "natural ⇒ natural"

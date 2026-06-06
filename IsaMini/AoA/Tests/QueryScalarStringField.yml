@@ -1,32 +1,37 @@
 Result (is_error=False):
-- iff_conv_conj_imp [opaque]: (?P = ?Q) = ((?P ⟶ ?Q) ∧ (?Q ⟶ ?P))
+Query: P = Q if and only if P ⟶ Q ∧ Q ⟶ P; name contains: iff
+  1936 entities match the filters — 15 shown (0 already shown earlier).
+Query: equality of booleans is equivalence: (P = Q) = (P ⟶ Q ∧ Q ⟶ P)
+  7 shown (0 already shown earlier).
+
+- iff_conv_conj_imp [manual]: (?P = ?Q) = ((?P ⟶ ?Q) ∧ (?Q ⟶ ?P))
 - iffI: (?P ⟶ ?Q) ⟶ (?Q ⟶ ?P) ⟶ ?P = ?Q
-- eq_iff_swap [opaque]: (?x = ?y) = ?P ⟶ (?y = ?x) = ?P
-- rev_iffD1 [opaque]: ?Q ⟶ ?Q = ?P ⟶ ?P
-- iffD2 [opaque]: ?P = ?Q ⟶ ?Q ⟶ ?P
-- rev_iffD2 [opaque]: ?Q ⟶ ?P = ?Q ⟶ ?P
-- iffD1 [opaque]: ?Q = ?P ⟶ ?Q ⟶ ?P
-- iffE [opaque]: ?P = ?Q ⟶ ((?P ⟶ ?Q) ⟶ (?Q ⟶ ?P) ⟶ ?R) ⟶ ?R
-- iffI_np [opaque]: (?x ⟶ ¬ ?y) ⟶ (¬ ?x ⟶ ?y) ⟶ (¬ ?x) = ?y
-- imp_conj_iff [opaque]: ((?P ⟶ ?Q) ∧ ?P) = (?P ∧ ?Q)
-- Meson.iff_to_disjD [opaque]: ?P = ?Q ⟶ (¬ ?P ∨ ?Q) ∧ (¬ ?Q ∨ ?P)
+- eq_iff_swap [manual]: (?x = ?y) = ?P ⟶ (?y = ?x) = ?P
+- rev_iffD1 [manual]: ?Q ⟶ ?Q = ?P ⟶ ?P
+- iffD2 [manual]: ?P = ?Q ⟶ ?Q ⟶ ?P
+- rev_iffD2 [manual]: ?Q ⟶ ?P = ?Q ⟶ ?P
+- iffD1 [manual]: ?Q = ?P ⟶ ?Q ⟶ ?P
+- iffE [manual]: ?P = ?Q ⟶ ((?P ⟶ ?Q) ⟶ (?Q ⟶ ?P) ⟶ ?R) ⟶ ?R
+- iffI_np [manual]: (?x ⟶ ¬ ?y) ⟶ (¬ ?x ⟶ ?y) ⟶ (¬ ?x) = ?y
+- imp_conj_iff [manual]: ((?P ⟶ ?Q) ∧ ?P) = (?P ∧ ?Q)
+- Meson.iff_to_disjD [manual]: ?P = ?Q ⟶ (¬ ?P ∨ ?Q) ∧ (¬ ?Q ∨ ?P)
 - simp_thms(2): ((¬ ?P) = (¬ ?Q)) = (?P = ?Q)
 - simp_thms(3): (?P ≠ ?Q) = (?P = (¬ ?Q))
   where `x ≠ y` abbreviates `¬ x = y`
-- cnf.iff_trans [opaque]: ?P = ?Q ⟶ ?Q = ?R ⟶ ?P = ?R
+- cnf.iff_trans [manual]: ?P = ?Q ⟶ ?Q = ?R ⟶ ?P = ?R
 - iffCE: ?P = ?Q ⟶ (?P ⟶ ?Q ⟶ ?R) ⟶ (¬ ?P ⟶ ¬ ?Q ⟶ ?R) ⟶ ?R
-- bool.expand [opaque]: (?bool = True) = (?bool' = True) ⟶ ?bool = ?bool'
+- bool.expand [manual]: (?bool = True) = (?bool' = True) ⟶ ?bool = ?bool'
   free_constructors (discs_sels) case_bool for True | False
-- eq_ac(1) [opaque]: (?a = ?b) = (?b = ?a)
-- eq_sym_Unity_conv [opaque]: (?x = (() = ())) = ?x
-- eq_ac(3) [opaque]: ((?P = ?Q) = ?R) = (?P = (?Q = ?R))
-- eq_ac(2) [opaque]: (?P = (?Q = ?R)) = (?Q = (?P = ?R))
-- True_or_False [opaque]: ?P = True ∨ ?P = False
+- eq_ac(1) [manual]: (?a = ?b) = (?b = ?a)
+- eq_sym_Unity_conv [manual]: (?x = (() = ())) = ?x
+- eq_ac(3) [manual]: ((?P = ?Q) = ?R) = (?P = (?Q = ?R))
+- eq_ac(2) [manual]: (?P = (?Q = ?R)) = (?Q = (?P = ?R))
+- True_or_False [manual]: ?P = True ∨ ?P = False
   axiomatization where
     impI: "(P ⟹ Q) ⟹ P ⟶ Q" and
     mp: "⟦P ⟶ Q; P⟧ ⟹ Q" and
   
     True_or_False: "(P = True) ∨ (P = False)"
-- refl_conj_eq [opaque]: ?Q = ?R ⟶ (?P ∧ ?Q) = (?P ∧ ?R)
+- refl_conj_eq [manual]: ?Q = ?R ⟶ (?P ∧ ?Q) = (?P ∧ ?R)
 
-[opaque] — will not be used automatically unless supplied explicitly.
+Lemmas marked with [manual] must be specified manually for Rewrite/Obvious to use them.

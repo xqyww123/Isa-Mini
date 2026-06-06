@@ -38,6 +38,17 @@ from .model import (
 )
 
 
+# Note appended (once per session) whenever a [manual] lemma is shown — both in
+# `query` results (`_semantic_search_direct`) and the worker's "Useful lemmas"
+# initial-prompt block (`Session._render_useful_lemmas`). A [manual] lemma is a
+# real, in-scope theorem that carries no simp/intro/elim role, so automation
+# won't apply it on its own.
+MANUAL_LEMMA_NOTE = (
+    "Lemmas marked with [manual] must be specified manually "
+    "for Rewrite/Obvious to use them."
+)
+
+
 # ============================================================================
 # Schema Loading
 # ============================================================================
@@ -188,7 +199,7 @@ async def _format_fetched_entity(
     """
     exprs = f.entity.expression
     roles = getattr(f.entity, 'roles', [])
-    tag = "" if (roles or f.entity.kind not in _THEOREM_KINDS) else " [opaque]"
+    tag = "" if (roles or f.entity.kind not in _THEOREM_KINDS) else " [manual]"
     print_indent(indent, buf)
     if exprs:
         buf.write(f"{prefix}{f.entity.short_name.unicode}{tag}:")
@@ -286,15 +297,15 @@ def _format_query_header(q: dict) -> str:
 # Warning Collection / Formatting
 # ============================================================================
 
-_KnnQueryResult = tuple[list[RetrievedEntity], list[str], str | None]
-# (fetched, warnings, error)
+_KnnQueryResult = tuple[list[RetrievedEntity], list[str], str | None, int]
+# (fetched, warnings, error, total) — total = entities matching the filters
 
 def _collect_query_warnings(
     knn_results: list[_KnnQueryResult],
 ) -> list[list[str]]:
     """Collect warnings from each knn result into per-query lists."""
     per_query: list[list[str]] = []
-    for _fetched, warnings, error in knn_results:
+    for _fetched, warnings, error, _total in knn_results:
         qwarns: list[str] = []
         if error:
             qwarns.append(f"Warning: {error}")
@@ -323,6 +334,52 @@ def _format_warn_lines(
     return lines
 
 
+def _has_structural_filter(q: dict) -> bool:
+    """Whether a query carries a structural filter that makes the total match
+    count (XX) meaningful. A bare semantic query (no filters) matches the whole
+    corpus, so its XX is noise and omitted."""
+    return bool(q.get("term_patterns") or q.get("type_patterns")
+                or q.get("theories_include") or q.get("name_contains")
+                or q.get("target_type"))
+
+
+def _format_search_summary(q: dict, total: int, shown: int, before: int,
+                           verbose: bool) -> str:
+    """One-line per-query count summary: how many entities match the filters
+    (XX, only when the query is filtered), how many are shown this call (YY),
+    and how many were already shown in earlier calls (ZZ). The first few lines
+    per session use a self-explanatory phrasing; the rest a terse one."""
+    show_xx = _has_structural_filter(q)
+    if verbose:
+        tail = f"{shown} shown ({before} already shown earlier)."
+        return f"{total} entities match the filters — {tail}" if show_xx else tail
+    tail = f"{shown} shown ({before} before)."
+    return f"{total} match — {tail}" if show_xx else tail
+
+
+def _format_search_report(
+    queries: list[dict],
+    summaries: list[str],
+    per_query_warnings: list[list[str]],
+) -> list[str]:
+    """Per-query summary line followed by that query's warnings, grouped under a
+    'Query:' header when there is more than one query (mirrors
+    _format_warn_lines)."""
+    lines: list[str] = []
+    multi = len(queries) > 1
+    for q, summ, ws in zip(queries, summaries, per_query_warnings):
+        if multi:
+            lines.append(f"Query: {_format_query_header(q)}")
+            if summ:
+                lines.append(f"  {summ}")
+            lines.extend(f"  {w}" for w in ws)
+        else:
+            if summ:
+                lines.append(summ)
+            lines.extend(ws)
+    return lines
+
+
 # ============================================================================
 # KNN Query
 # ============================================================================
@@ -331,12 +388,20 @@ async def _run_knn_for_query(
     ml_state: Minilang_State, q: dict,
 ) -> _KnnQueryResult:
     """Parse a query dict and run semantic_knn. Reads ``k`` from the query dict."""
-    try:
-        kinds = [EntityKind.from_label(label) for label in (q.get("kinds") or ["constant"])]
-    except KeyError as e:
-        return ([], [], f"Invalid entity kind: {e}")
     exact_name = q.get("exact_name") or None
-    fetched, warnings = await ml_state.semantic_knn(
+    # An exact_name lookup resolves the name in one namespace chosen by `kinds`,
+    # with no cross-kind fallback. When the agent omits `kinds` it would default
+    # to `constant` only, so a real theorem (e.g. `card_Un_le`) is reported
+    # "Undefined". Default an exact_name lookup to constant+theorem instead;
+    # other kinds (type/typeclass/locale) still require an explicit `kinds`. A
+    # semantic query keeps the `constant` default (consistent with the filter
+    # path in `_semantic_search_with_filtering`).
+    default_kinds = ["constant", "theorem"] if exact_name else ["constant"]
+    try:
+        kinds = [EntityKind.from_label(label) for label in (q.get("kinds") or default_kinds)]
+    except KeyError as e:
+        return ([], [], f"Invalid entity kind: {e}", 0)
+    fetched, warnings, total = await ml_state.semantic_knn_counted(
         q.get("long_description") or None, _query_k(q), kinds,
         term_patterns=q.get("term_patterns") or [],
         type_patterns=q.get("type_patterns") or [],
@@ -344,7 +409,7 @@ async def _run_knn_for_query(
         name_contains=q.get("name_contains") or [],
         exact_name=exact_name,
         target_type=q.get("target_type") or "")
-    return (fetched, warnings, None)
+    return (fetched, warnings, None, total)
 
 
 async def _get_def_for_fetched(
@@ -372,14 +437,14 @@ async def _render_fetched_entities(
     indent: int = 0,
 ) -> list[str]:
     """Batch-fetch abbreviation definitions for ``entities`` and render each via
-    the unified ``_format_fetched_entity`` renderer (statement, ``[opaque]`` tag,
+    the unified ``_format_fetched_entity`` renderer (statement, ``[manual]`` tag,
     declaring definition, abbreviation expansions) into ``buf``.
 
     Returns the compact ``name: expr`` summary lines (used for retrieval
     logging). Shared by the ``query`` tool (``_semantic_search_direct``) and the
     worker's "Useful lemmas" prompt block (``Session._render_useful_lemmas``) so
     both print looked-up theorems identically. The caller owns any surrounding
-    warnings / ``[opaque]`` footer / logging."""
+    warnings / ``[manual]`` footer / logging."""
     # Batch-fetch abbreviation definitions for unseen abbreviations
     unseen_abbrevs: list[str] = []
     for f in entities:
@@ -417,32 +482,39 @@ async def _semantic_search_direct(
 
     seen = session.seen_entities
     per_query_warnings = _collect_query_warnings(knn_results)
-    # Collect new entities, tracking totals for the empty-result message
+    # Collect new entities, tracking per-query (total / shown / shown-before)
+    # counts for the summary lines.
     new_items: list[RetrievedEntity] = []
     total_found = 0
-    total_k = 0
     encountered: set[short_name] = set()
-    for q, (fetched, _warnings, _error) in zip(queries, knn_results):
+    summary_lines: list[str] = []
+    for q, (fetched, _warnings, _error, total) in zip(queries, knn_results):
         k = _query_k(q)
-        total_k += k
+        shown = 0   # YY: newly shown by this query
+        before = 0  # ZZ: this query's top-k already shown in earlier calls
         for f in fetched[:k]:
-            if f.entity.short_name in encountered:
+            sn = f.entity.short_name
+            if sn in encountered:
                 continue
-            encountered.add(f.entity.short_name)
+            encountered.add(sn)
             total_found += 1
-            if f.entity.short_name in seen:
+            if sn in seen:
+                before += 1
                 continue
             new_items.append(f)
-            seen.add(f.entity.short_name)
+            seen.add(sn)
+            shown += 1
+        verbose = (session.search_summary_count + len(summary_lines)) < 5
+        summary_lines.append(_format_search_summary(q, total, shown, before, verbose))
 
     if not new_items:
-        if total_found == 0:
+        totals = [r[3] for r in knn_results]
+        if total_found == 0 and not any(totals):
             no_new_lines: list[str] = ["No relevant entities found."]
-        elif total_found >= total_k:
-            no_new_lines = [f"All top {total_k} relevant entities were already returned in previous queries."]
+            no_new_lines.extend(_format_warn_lines(queries, per_query_warnings))
         else:
-            no_new_lines = [f"Found {total_found} relevant entities. All were already returned in previous queries."]
-        no_new_lines.extend(_format_warn_lines(queries, per_query_warnings))
+            no_new_lines = _format_search_report(queries, summary_lines, per_query_warnings)
+            session.search_summary_count += len(summary_lines)
         result = "\n".join(no_new_lines)
         session.log_tool_response(session.tool_name(TOOL_SEARCH), result)
         return result
@@ -450,14 +522,15 @@ async def _semantic_search_direct(
     # Format with unified renderer
     buf = StringIO()
     retrieved = await _render_fetched_entities(session, ml_state, new_items, buf)
-    for w in _format_warn_lines(queries, per_query_warnings):
-        buf.write(w)
+    for line in _format_search_report(queries, summary_lines, per_query_warnings):
+        buf.write(line)
         buf.write('\n')
-    if not session.seen_opaque_note and any(
+    session.search_summary_count += len(summary_lines)
+    if not session.seen_manual_note and any(
             f.entity.kind in _THEOREM_KINDS and not getattr(f.entity, 'roles', [])
             for f in new_items):
-        buf.write("\n[opaque] — will not be used automatically unless supplied explicitly.\n")
-        session.seen_opaque_note = True
+        buf.write("\n" + MANUAL_LEMMA_NOTE + "\n")
+        session.seen_manual_note = True
     if retrieved:
         query_str = "; ".join(_format_query_header(q) for q in queries)
         session.log_retrieval(query_str, retrieved, quiet=True)
@@ -616,7 +689,7 @@ async def _semantic_search_extend_candidates(
     existing_names = {f.entity.full_name for f in existing}
     new_facts: list[RetrievedEntity] = []
     seen_new: set[str] = set()
-    for fetched_list, _warnings, _error in knn_results:
+    for fetched_list, _warnings, _error, _total in knn_results:
         for f in fetched_list:
             name = f.entity.full_name
             if name in existing_names or name in seen_new:

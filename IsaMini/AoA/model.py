@@ -1691,14 +1691,33 @@ class Minilang_State:
                      exact_name: str | None = None,
                      target_type: str = "",
                      ) -> tuple[list[RetrievedEntity], list[str]]:
+        """Backward-compatible 2-tuple wrapper around ``semantic_knn_counted``.
+        Returns (results, warnings); drops the total match count."""
+        results, warnings, _total = await self.semantic_knn_counted(
+            query, k, kinds, term_patterns=term_patterns,
+            type_patterns=type_patterns, theories_include=theories_include,
+            name_contains=name_contains, exact_name=exact_name,
+            target_type=target_type)
+        return results, warnings
+
+    async def semantic_knn_counted(self, query: str | None, k: int,
+                     kinds: list[EntityKind],
+                     term_patterns: list[str] = [],
+                     type_patterns: list[str] = [],
+                     theories_include: list[str] = [],
+                     name_contains: list[str] = [],
+                     exact_name: str | None = None,
+                     target_type: str = "",
+                     ) -> tuple[list[RetrievedEntity], list[str], int]:
         """Search k nearest entities by semantic similarity, returning resolved entities.
         If exact_name is given, does an exact lookup (score=1.0), ignoring other criteria.
         If query is None, returns pattern-filtered entities without semantic ranking.
         For TheoremK, extends the domain with local contextual thm keys.
         Pattern/theory filters (empty = no restriction) are forwarded to
         the entity enumeration callbacks for ML-side filtering.
-        Returns (results, warnings) where warnings include notices about
-        undeclared free variables in term patterns."""
+        Returns (results, warnings, total) where warnings include notices about
+        undeclared free variables in term patterns and total is the number of
+        entities matching the filters (the full pool before the top-k cut)."""
         from Isabelle_Semantic_Embedding.semantics import Semantic_DB
 
         # Exact name lookup — bypass all search criteria
@@ -1724,8 +1743,9 @@ class Minilang_State:
                 else:
                     scored_recs.append((1.0, SemanticRecord(tag, full_name, None, None)))
             if not scored_recs:
-                return [], [f'Undefined: "{exact_name}"']
+                return [], [f'Undefined: "{exact_name}"'], 0
             warnings: list[str] = []
+            total = len(scored_recs)
             # Skip to entity resolution below
         else:
 
@@ -1744,7 +1764,7 @@ class Minilang_State:
                 domain = Semantic_Vector_Store.ContextAll
             store: Semantic_Vector_Store = await self.connection.semantic_vector_store()  # type: ignore
             if query is not None:
-                raw_results, warnings_raw = await store.lookup(query, k, kinds, domain,
+                raw_results, warnings_raw, total = await store.lookup(query, k, kinds, domain,
                                        term_patterns=term_patterns,
                                        type_patterns=type_patterns,
                                        theories_include=theories_include,
@@ -1754,26 +1774,29 @@ class Minilang_State:
                 warnings = [_clean_warning(w) for w in warnings_raw]
                 scored_recs = [(score, rec) for score, rec in raw_results]
             else:
-                # Pattern-only search: get filtered entities, look up records, no ranking
+                # Pattern-only search: get filtered entities, look up records, no ranking.
+                # Enumerate ALL matches (limit=-1) to know the total, then resolve
+                # records only for the top-k slice (avoid resolving thousands).
                 from Isabelle_RPC_Host.context import entities_of
                 entries, warnings_raw = await entities_of(self.connection, kinds,
                                          term_patterns=term_patterns,
                                          type_patterns=type_patterns,
                                          theories_include=theories_include,
                                          name_contains=name_contains,
-                                         limit=k,
+                                         limit=-1,
                                          target_type=target_type,
                                          ctxt=self.name)
                 warnings = [_clean_warning(w) for w in warnings_raw]
+                total = len(entries)
                 scored_recs = []
-                for uk, name, _ in entries:
+                for uk, name, _ in entries[:k]:
                     rec = Semantic_DB[uk]
                     if rec is not None:
                         scored_recs.append((0.0, rec))
                     else:
                         scored_recs.append((0.0, SemanticRecord(EntityKind(uk[16]), name, None, None)))
         if not scored_recs:
-            return [], warnings
+            return [], warnings, total
         # Resolve entities via RPC
         entity_keys = [(rec.kind, rec.name) for _, rec in scored_recs]
         infos = await self._retrieve_entity(entity_keys)
@@ -1782,7 +1805,7 @@ class Minilang_State:
             out.append(self._make_retrieved_entity(
                 rec.kind, rec.name, info, score,
                 ' '.join(rec.interpretation.split()) if rec.interpretation else None))
-        return out, warnings
+        return out, warnings, total
     async def compute_bindings(self, var_names: list[varname], fact_names: list[varname]) -> Bindings:
         """
         Compute bindings for the leading proof goal by binding provided names in order.
@@ -2796,6 +2819,11 @@ class Node(ABC):
         self.age = session.age
         self.line = 0
         self._prev_eval_status: tuple[EvaluationStatus.Status, str | None] | None = None
+        # Whether this node's subtree has already been announced as fully proved
+        # in a tool response. Set by `Session.newly_completed_topmost` so the same
+        # completion is reported only once; reset there when the subtree regresses
+        # to unfinished (so a re-completion is announced afresh).
+        self._completion_announced: bool = False
 
     def _on_upstream_change(self) -> None:
         """Called when a predecessor is amended or inserted, meaning
@@ -8712,15 +8740,28 @@ class Session:
         self.interactive_retrieval: InteractiveRetrievalMode = (
             parent.interactive_retrieval if parent is not None
             else interactive_retrieval)
+        # A worker sub-agent is a fresh chat that never inherits the planner's
+        # conversation, so it must NOT inherit the planner's view-dedup caches
+        # either — otherwise entities / commands / abbreviations / the [manual]
+        # note that the planner already saw (but the worker never did) would be
+        # silently suppressed in the worker's prompts. Interactions keep
+        # inheriting (they may resume the parent's context).
+        # Only inherit the view caches from a non-worker parent; a worker gets a
+        # fresh (empty) view, never copying the planner's.
+        _view_parent = None if isinstance(self.role, Role_Worker) else parent
         self.seen_entities: 'set[short_name]' = (
-            set(parent.seen_entities) if parent is not None else set())
+            set(_view_parent.seen_entities) if _view_parent is not None else set())
         self.seen_commands: dict[IsabellePosition, str] = (
-            dict(parent.seen_commands) if parent is not None else {})
-        self.seen_opaque_note: bool = (
-            parent.seen_opaque_note if parent is not None else False)
+            dict(_view_parent.seen_commands) if _view_parent is not None else {})
+        self.seen_manual_note: bool = (
+            _view_parent.seen_manual_note if _view_parent is not None else False)
+        # Number of per-query search summary lines emitted so far; the first few
+        # use the verbose phrasing, the rest a terse one (see retrieval.py).
+        self.search_summary_count: int = (
+            _view_parent.search_summary_count if _view_parent is not None else 0)
         self.showed_suffices_notice: bool = False
         self.seen_abbreviations: set[str] = (
-            set(parent.seen_abbreviations) if parent is not None else set())
+            set(_view_parent.seen_abbreviations) if _view_parent is not None else set())
         self.showed_fill_hint: bool = False
         self.showed_cancelled_notice: bool = False
         self.shown_HAVE_fact_names: 'dict[str, list[tuple[varname, typ]]]' = {}
@@ -9439,7 +9480,8 @@ class Session:
         context restart."""
         self.seen_entities.clear()
         self.seen_commands.clear()
-        self.seen_opaque_note = False
+        self.seen_manual_note = False
+        self.search_summary_count = 0
         self.seen_abbreviations.clear()
         self.showed_suffices_notice = False
         self.showed_fill_hint = False
@@ -9517,6 +9559,53 @@ class Session:
         unfinished: 'set[Node]' = set()
         self.proof_scope_root.unfinished_nodes(unfinished)
         return unfinished
+
+    def newly_completed_topmost(self) -> 'list[Node]':
+        """Steps whose whole subtree just became proved and have not yet been
+        announced, scoped to this session's proof responsibility.
+
+        A node qualifies when its subtree holds no unfinished node and no
+        ancestor inside the scope is also fully proved — i.e. the maximal proved
+        subtrees, a non-overlapping antichain. Of those, only ones not previously
+        announced are returned (delta), and they are marked announced here so a
+        completion is reported once. The flag is reset on any node found
+        unfinished, so a step that regresses and is re-proved is announced again.
+
+        The proof-scope root itself is excluded: a fully proved scope is surfaced
+        by the caller's dedicated "all goals proven" path, not as a step here."""
+        unfinished = self.proof_scope_unfinished_nodes()
+        root = self.proof_scope_root
+        finished: 'dict[int, bool]' = {}
+
+        def compute(node: 'Node') -> bool:
+            # subtree fully proved iff no node in it is unfinished
+            ok = node not in unfinished
+            if isinstance(node, NonLeaf_Node):
+                for c in node.sub_nodes:
+                    if not compute(c):
+                        ok = False
+            finished[id(node)] = ok
+            return ok
+
+        compute(root)
+
+        newly: 'list[Node]' = []
+
+        def walk(node: 'Node', ancestor_finished: bool) -> None:
+            fin = finished[id(node)]
+            if not fin:
+                node._completion_announced = False
+            elif not ancestor_finished and node is not root:
+                if not node._completion_announced:
+                    node._completion_announced = True
+                    newly.append(node)
+            if isinstance(node, NonLeaf_Node):
+                child_anc = ancestor_finished or fin
+                for c in node.sub_nodes:
+                    walk(c, child_anc)
+
+        walk(root, False)
+        return newly
 
     def _edit_verdict(self, step: 'step', action: str) -> "tuple[EditVerdict, WorkerHandle | None]":
         """May this session ``edit``/``delete`` ``step``? Returns (verdict, the
@@ -9676,14 +9765,14 @@ class Session:
         embedding/vector-store machinery is far too heavy for a by-name lookup),
         then reuses the ``query`` tool's entity renderer
         (``retrieval._render_fetched_entities``) so a suggested lemma reads
-        exactly as it would in a ``query`` result — statement, ``[opaque]`` tag,
+        exactly as it would in a ``query`` result — statement, ``[manual]`` tag,
         declaring definition. Names that do not resolve are listed bare (the same
         shape ``_format_fetched_entity`` uses for an entity with no expression).
         Returns "" when there are no lemmas or this is not a worker."""
         role = self.role
         if not isinstance(role, Role_Worker) or not role.useful_lemmas:
             return ""
-        from .retrieval import _render_fetched_entities
+        from .retrieval import _render_fetched_entities, MANUAL_LEMMA_NOTE
         target = role.target
         # Resolve the lemmas in the worker's own proving scope: the state INSIDE
         # the target block (`_state_after_beginning`, StdBlock-only — sees the
@@ -9707,6 +9796,16 @@ class Session:
         body = buf.getvalue().rstrip("\n")
         if not body:
             return ""
+        # Explain the [manual] tag the same way `query` results do — the renderer
+        # above tags theorems with no simp/intro/elim role as [manual]. The note
+        # lives only in the `query` path otherwise, so a worker whose suggested
+        # lemmas are [manual] would never see why. Gate on `seen_manual_note` so a
+        # later `query` in the worker's run doesn't repeat it.
+        if not self.seen_manual_note and any(
+                e.entity.kind in _THEOREM_KINDS and not getattr(e.entity, 'roles', [])
+                for e in found):
+            body += "\n\n" + MANUAL_LEMMA_NOTE
+            self.seen_manual_note = True
         return "Useful lemmas:\n" + body
 
     def print_proof_scope(self, indent: int, file: MyIO,
@@ -9984,6 +10083,9 @@ class WorkerHandle:
                                           worker_handle=self))
             sub._fork_name = f"{session._fork_name}.worker_{self.target.id}" # type: ignore
             self._sub = sub
+            # The worker does NOT inherit the planner's view-dedup caches: that
+            # is enforced at construction in Session.__init__ (gated on
+            # Role_Worker), so it starts from scratch in its initial prompt.
             await sub.initialize(session.root)
         except Exception as e:
             session.warn_AoA_opr(f"Worker init failed for {self.target.id}: {e}")

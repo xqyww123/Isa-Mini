@@ -37,7 +37,7 @@
           "theories_include": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "Restrict results to theories whose (fully qualified) name contains any of these substrings (case-insensitive). A short fragment like \"Transcendental\" or a full name like \"HOL.Transcendental\" both work."
+            "description": "Restrict results to theories whose name contains any of these substrings (case-insensitive)."
           },
           "name_contains": {
             "type": "array",

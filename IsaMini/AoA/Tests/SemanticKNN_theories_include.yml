@@ -1,8 +1,9 @@
-Only unknown: 0 results, 1 warnings
-  Warning: Unknown theory "Nonexistent_XYZ" in theories_include; skipped
-Mixed valid/unknown: 5 results, 1 warnings
-  Warning: Unknown theory "Nonexistent_XYZ" in theories_include; skipped
-Duplicate unknown: 0 results, 1 warnings
-  Warning: Unknown theory "Nonexistent_XYZ" in theories_include; skipped
-Constant kind with unknown: 0 results, 1 warnings
-  Warning: Unknown theory "Nonexistent_XYZ" in theories_include; skipped
+No match: 0 results, 1 warnings
+  Warning: No loaded theory name contains "Nonexistent_XYZ" in theories_include; skipped
+Mixed match/no-match: 5 results, 1 warnings
+  Warning: No loaded theory name contains "Nonexistent_XYZ" in theories_include; skipped
+Duplicate no-match: 0 results, 1 warnings
+  Warning: No loaded theory name contains "Nonexistent_XYZ" in theories_include; skipped
+Constant kind no-match: 0 results, 1 warnings
+  Warning: No loaded theory name contains "Nonexistent_XYZ" in theories_include; skipped
+Substring fragment: 5 results, 0 warnings

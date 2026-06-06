@@ -81,4 +81,4 @@ Invalid type pattern: 5 results, 1 warnings
   Warning: Undefined type name: "not_a_real_type_XYZ"
 Failed to parse type
 Misspelled pattern: 0 results, 1 warnings
-  Warning: Term pattern "misspeled_ln ?x" contains undeclared free variable: "misspeled_ln". It is likely a misspelled constant.
+  Warning: Term pattern "misspeled_ln ?x" contains undeclared free variable: "misspeled_ln". Use "?misspeled_ln" to express a named wildcard.
