@@ -1088,6 +1088,32 @@ async def _test_Witness6(root: Root, file: MyIO):
     except model.ArgumentError as e:
         file.write(f"ArgumentError: {e}\n")
 
+@model_test("WitnessTypeMismatch", "Test_WitnessTypeMismatch.thy", 14)
+async def _test_WitnessTypeMismatch(root: Root, file: MyIO):
+    """Reproduces the `exception THM 1 ... RSN: no unifiers` crash.
+
+    The goal binds `g :: real × real ⇒ real` (a function on a *pair*), but
+    the witness is supplied *curried* (`λ x y. ...`), i.e. of type
+    `real ⇒ real ⇒ real`. The two types are incompatible, yet the term
+    survives `read_terms_with_type`'s `_type_constraint_` check and the
+    mismatch only surfaces deep inside `CHOOSE'` (proof.ML) when
+    `exI`-instantiated-with-the-witness is resolved against the goal via
+    `RS` — there it raises a raw `THM 1 (... RSN: no unifiers)` instead of a
+    clean, agent-readable type error. The node stays in the tree with that
+    Error status (default `_on_edit_failure` returns CONTINUE), mirroring
+    Witness2 / Witness5."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    _outcome = await root.fill("1", [Witness.gen_single({
+        "thought": "Curry the witness over x and y instead of pairing them",
+        "witnesses": [r"\<lambda>(x::real) (y::real). 0"],
+    })])
+    file.write(f"outcome.failure: {_outcome.failure}\n")
+    print_header("After Witness (type-mismatch error visible in tree)", file)
+    root.print(0, file)
+
 @model_test("Unfold1", "Test_Unfold1.thy", 15)
 async def _test_Unfold1(root: Root, file: MyIO):
     print_header("Initial YAML", file)
@@ -2690,6 +2716,47 @@ async def _test_query_null_fields(root: Root, file: MyIO):
     assert not is_error2, f"query with null kinds must not error: {result2}"
 
 
+@model_test("QueryScalarStringField", "Test_QueryScalarStringField.thy", 8)
+async def _test_query_scalar_string_field(root: Root, file: MyIO):
+    """query tool: LLM sends a bare string for a list-typed optional field.
+    Reproduces agent log 2026-06-06 13:30:34:
+        query {'queries': [{'kinds': ['lemma'],
+                            'long_description': 'P = Q iff P --> Q & Q --> P',
+                            'name_contains': 'iff'}, ...]}
+    -> 'Failed to unpack callback argument'.
+
+    Root cause: `name_contains` (also term_patterns/type_patterns/
+    theories_include) is declared as an array in the query tool schema, but the
+    model passed the SCALAR string 'iff'. `_run_knn_for_query` only normalizes
+    falsy values via ``q.get("name_contains") or []`` — a non-empty string is
+    truthy, so 'iff' is forwarded unchanged down to the ML entity-enumeration
+    callback whose arg_schema unpacks name_contains with ``unpackList
+    unpackString`` (contrib/Isabelle_RPC/Tools/context.ML). msgpack encodes the
+    Python str as a msgpack Str, the ML ``unpackList`` rejects it, the callback
+    raises Unpack -> ``error "Failed to unpack callback argument"`` (RPC.ML),
+    which surfaces back as the tool error.
+
+    Fix should coerce a scalar string into a singleton list (or validate/warn)
+    for every list-typed query field, before it reaches the callback."""
+    from .retrieval import _query_tool_logic
+
+    # Force direct search path (test session has no fork_interaction)
+    root.session.interactive_retrieval = InteractiveRetrievalMode.NO
+
+    # Exact args from the failing agent log: name_contains is a bare string.
+    args = {'queries': [
+        {'kinds': ['lemma'],
+         'long_description': 'P = Q if and only if P ⟶ Q ∧ Q ⟶ P',
+         'name_contains': 'iff'},
+        {'kinds': ['lemma'],
+         'long_description': 'equality of booleans is equivalence: (P = Q) = (P ⟶ Q ∧ Q ⟶ P)'},
+    ]}
+
+    result, is_error = await _query_tool_logic(root.session, args)
+    file.write(f"Result (is_error={is_error}):\n{result}\n")
+    assert not is_error, f"query with scalar-string name_contains must not error: {result}"
+
+
 @model_test("IntroSplitConj", "Test_IntroSplitConj.thy", 10)
 async def _test_intro_split_conj(root: Root, file: MyIO):
     """Test SplitConjs splits P ∧ Q ∧ R into separate subgoals.
@@ -3027,6 +3094,50 @@ async def _test_prove_in_time_parse_error(root: Root, file: MyIO):
 
     print_header("Final State", file)
     root.print(0, file)
+
+
+@model_test("Obvious_ClassFactRSN", "Test_Obvious_ClassFactRSN.thy", 10)
+async def _test_Obvious_ClassFactRSN(root: Root, file: MyIO):
+    """Regression for the raw `exception THM 1 raised ... RSN: no unifiers`
+    leak from `Obvious` (HAMMER).
+
+    Root cause: the improved-sledgehammer `fastforce` strategy
+    (`run_mepo_and_render` in auto_sledgehammer/library/sledgehammer_solver.ML)
+    force-classifies every supplied / MePo-selected fact via
+    `infer_type_of_rule` and registers it with `with_rule`
+    (`Thm.apply_attribute` of a Classical attribute). For some facts — e.g.
+    the type-class theorems named `*_class.super` / `*.intro_of_class` — that
+    classical-attribute application performs a resolution that has no unifiers
+    and raises a raw `THM` ("RSN: no unifiers", from thm.ML).
+
+    That `THM` is not an `Auto_Fail`, so it escapes every cleanup layer:
+    `try_stage`/`fastforce` only catch `Auto_Fail`/`Timeout`;
+    `Par_List.get_some` re-raises it (`Par_Exn.release_first`) when no strategy
+    found a proof; `Phi_Sledgehammer_Solver.auto` re-raises non-`ERROR`
+    exceptions (`Exn.reraise`); and `HAMMER_i` (library/proof.ML) only catches
+    `ERROR`. So the raw ML exception reaches the agent verbatim instead of a
+    clean "sledgehammer failed" message.
+
+    This test supplies such a class theorem to `Obvious` on a goal hammer
+    cannot close. While the bug is present the failed leaf's reason is the raw
+    `THM ... RSN: no unifiers`; once fixed the hammer should fail cleanly
+    (a normal "fail to prove" reason), and this test passes.
+    """
+    # `Orderings.preorder_class.super` is a plain-HOL type-class theorem; its
+    # `with_rule` classification triggers the unguarded resolution.
+    bad_fact = "Orderings.preorder_class.super"
+    await root.fill("1", [Obvious.gen_single({"facts": [{"name": bad_fact}]})])
+    node = root.locate_node("1")
+    status = node.status.status.value
+    reason = node.status.reason.reason if node.status.reason else ""
+    file.write(f"status: {status}\n")
+    file.write(f"reason: {reason}\n")
+    leaked = ("RSN: no unifiers" in reason
+              or ("exception THM" in reason and "raised" in reason))
+    if leaked:
+        raise TestFailed(
+            "Obvious (HAMMER) leaked a raw ML exception instead of failing "
+            f"cleanly: {reason!r}")
 
 
 @model_test("ObviousProofFail", "Test_ObviousProofFail.thy", 8)

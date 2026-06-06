@@ -751,6 +751,43 @@ def _normalize_array_field(args: dict, field: str) -> dict:
     return {**args, field: normalized}
 
 
+# Per-query fields that the tool schema declares as arrays of strings. The ML
+# entity-enumeration callbacks unpack these with `unpackList unpackString`
+# (contrib/Isabelle_RPC/Tools/context.ML), so a scalar value sent by the LLM
+# (e.g. name_contains="iff" instead of ["iff"]) makes the msgpack arg fail to
+# unpack -> "Failed to unpack callback argument". Normalize before dispatch.
+_QUERY_STRING_LIST_FIELDS = (
+    "kinds", "term_patterns", "type_patterns", "theories_include", "name_contains",
+)
+
+
+def _normalize_query_string_list_fields(q: dict) -> dict:
+    """Coerce the array-of-string query fields into actual lists of strings.
+
+    Tolerates the common LLM malformation of passing a bare scalar (or a
+    JSON-encoded array string) where the schema requires an array — mirroring
+    ``_normalize_array_field``'s single-value-to-list handling. ``None`` /
+    missing are left untouched (callers already default them via ``or []``).
+    Returns a shallow copy with the affected fields normalized."""
+    out = dict(q)
+    for field in _QUERY_STRING_LIST_FIELDS:
+        if field not in out:
+            continue
+        value = out[field]
+        if value is None or isinstance(value, list):
+            continue
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except (json.JSONDecodeError, ValueError):
+                parsed = None
+            out[field] = parsed if isinstance(parsed, list) else [value]
+        else:
+            # Any other scalar (int/bool/…): wrap so packing as a list succeeds.
+            out[field] = [value]
+    return out
+
+
 async def _query_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     session.log_tool_call(session.tool_name(TOOL_SEARCH), args)
     try:
@@ -759,6 +796,10 @@ async def _query_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             queries = args["queries"]
         else:
             queries = [args]
+
+        # Coerce array-of-string fields the LLM may have sent as scalars, so
+        # they survive the ML callbacks' `unpackList unpackString` arg schema.
+        queries = [_normalize_query_string_list_fields(q) for q in queries]
 
         # Separate exact_term queries from regular queries
         exact_term_queries = [q for q in queries if q.get("exact_term")]

@@ -451,7 +451,12 @@ def _extract_instantiations(args: dict) -> list[tuple[str, str]]:
         instantiations = [instantiations]
     if instantiations is not None and not isinstance(instantiations, list):
         instantiations = None
-    return [(i["variable"], i["term"]) for i in instantiations] if instantiations else []
+    # Defensively drop malformed items (non-dicts / missing keys) and coerce
+    # values to str, mirroring _extract_indexes / _delete_tool_logic — so a
+    # malformed answer arg can't crash the handler or send a non-string where
+    # ML expects a string (the same failure class as the query bug).
+    return [(str(i["variable"]), str(i["term"])) for i in instantiations
+            if isinstance(i, dict) and "variable" in i and "term" in i] if instantiations else []
 
 
 async def _answer_tool_dispatch(session: Session, tool_name: str, args: dict) -> tuple[str, bool]:
