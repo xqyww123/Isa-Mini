@@ -1,0 +1,69 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: nat ⇒ nat
+premises:
+  - br: (∀(x1 :: nat). x1 ∈ {(0 :: nat)..(1 :: nat)} - {(0 :: nat), (1 :: nat)} ⟶ pderiv x x1) ⟶ contp x ⟶ hasI x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: contp x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+(A) After Obvious (br in scope)
+--------------------------------------------------
+A is_error: True
+A reason: Cannot fill a node with id 1
+Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
+variables:
+  - x: nat ⇒ nat
+premises:
+  - br: (∀(x1 :: nat). x1 ∈ {(0 :: nat)..(1 :: nat)} - {(0 :: nat), (1 :: nat)} ⟶ pderiv x x1) ⟶ contp x ⟶ hasI x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: contp x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+(B) After Derive (prem4)
+--------------------------------------------------
+derive is_error: False
+variables:
+  - x: nat ⇒ nat
+premises:
+  - br: (∀(x1 :: nat). x1 ∈ {(0 :: nat)..(1 :: nat)} - {(0 :: nat), (1 :: nat)} ⟶ pderiv x x1) ⟶ contp x ⟶ hasI x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: contp x
+proof:
+  - step id: 1
+    thought: re-derive the conditional rule as a local fact
+    operation: Derive
+    rule:
+      - br: (∀(x1 :: nat). x1 ∈ {(0 :: nat)..(1 :: nat)} - {(0 :: nat), (1 :: nat)} ⟶ pderiv x x1) ⟶ contp x ⟶ hasI x
+    resulting facts:
+      - prem4: (∀(x1 :: nat). x1 ∈ {(0 :: nat)..(1 :: nat)} - {(0 :: nat), (1 :: nat)} ⟶ pderiv x x1) ⟶ contp x ⟶ hasI x
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  contp x
+--------------------------------------------------
+(B) After Obvious (HAMMER over prem4)
+--------------------------------------------------
+B is_error: True
+B reason: Cannot fill a node with id 2
+Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
+variables:
+  - x: nat ⇒ nat
+premises:
+  - br: (∀(x1 :: nat). x1 ∈ {(0 :: nat)..(1 :: nat)} - {(0 :: nat), (1 :: nat)} ⟶ pderiv x x1) ⟶ contp x ⟶ hasI x
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: contp x
+proof:
+  - step id: 1
+    thought: re-derive the conditional rule as a local fact
+    operation: Derive
+    rule:
+      - br: (∀(x1 :: nat). x1 ∈ {(0 :: nat)..(1 :: nat)} - {(0 :: nat), (1 :: nat)} ⟶ pderiv x x1) ⟶ contp x ⟶ hasI x
+    resulting facts:
+      - prem4: (∀(x1 :: nat). x1 ∈ {(0 :: nat)..(1 :: nat)} - {(0 :: nat), (1 :: nat)} ⟶ pderiv x x1) ⟶ contp x ⟶ hasI x
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  contp x

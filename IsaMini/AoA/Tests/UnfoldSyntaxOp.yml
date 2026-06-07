@@ -1,0 +1,11 @@
+=== operator section (*) ===
+  head: Groups.times_class.times
+  normal: (*)
+  raw: (*)
+=== operator section (+) ===
+  head: Groups.plus_class.plus
+  normal: (+)
+  raw: (+)
+--------------------------------------------------
+Done
+--------------------------------------------------

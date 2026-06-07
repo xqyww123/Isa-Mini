@@ -636,6 +636,11 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     line_num = args.get("line")
     if line_num is not None:
         line_num = int(line_num)
+        # ``line`` is 1-indexed; 0 is not a valid line, so treat it as the
+        # first line rather than letting ``start - 1 == -1`` wrap to the file's
+        # tail (negative ``line`` still indexes from the end intentionally).
+        if line_num == 0:
+            line_num = 1
     explicit_range = args.get("range")
     range_lines = int(explicit_range or 50)
 

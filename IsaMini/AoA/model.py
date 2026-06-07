@@ -4848,6 +4848,24 @@ class SubgoalMaker(GoalContainer, StdBlock):
         self._initial_goal_index : int = 1
         self._supplied_proofs: 'dict[str, proof_with_case_vars] | None' = None
 
+    def _all_fixed_facts_before_a_child(self, child: 'Node', ret: Hyps) -> Hyps:
+        super()._all_fixed_facts_before_a_child(child, ret)
+        # A case's own freshly-introduced hypotheses must be shown even when
+        # they shadow an ancestor's same-named hyp: an induction/case-split
+        # specialises a carried premise per case (e.g. `premise0: k ≤ n` becomes
+        # `premise0: n ≤ 0` in the base case). Drop the case's own hyp names
+        # from the child's suppression context so the specialised version shows.
+        for name, _ in (getattr(child, "case_hyps", None) or []):
+            ret.pop(name, None)
+        return ret
+    def _all_fixed_vars_before_a_child(self, child: 'Node', ret: Vars) -> Vars:
+        super()._all_fixed_vars_before_a_child(child, ret)
+        # Likewise a case's own fresh variables (e.g. a generalized var whose
+        # smart-rename reused the consumed induction target's name).
+        for name, _ in (getattr(child, "case_vars", None) or []):
+            ret.pop(name, None)
+        return ret
+
     @staticmethod
     def _node_to_parsed_opr(node: 'Node') -> Parsed_Opr:
         def factory(config: NodeConfig) -> 'Node':
@@ -5370,12 +5388,20 @@ class CaseSplit_Like(SubgoalMaker):
             if kind == "induction"
             else (state_id, target_ascii, [], rule_name))
         try:
-            analysis = await self.ml_state.connection.callback(
+            dvars, candidates, analysis = await self.ml_state.connection.callback(
                 callback_name, callback_args)
         except IsabelleError as err:
             return FailureReason(
                 f"Pre-flight analysis of {kind} rule failed: "
                 f"{''.join(err.errors)}")
+        # Offer in-scope facts mentioning the relevant vars (`dvars` = induction
+        # target frees ∪ generalized) for the agent to carry into the IH
+        # (induction only; no-op for case-split, where `candidates` is empty).
+        # Done BEFORE the rule-analysis check because `analysis` is None for
+        # default inductions that don't pick a named rule — the common case —
+        # yet the IH-fact offer must still fire. Runs once per object under this
+        # `_rule_resolved` gate; amend rebuilds the node and re-prompts.
+        await self._choose_ih_facts(candidates, dvars)
         # 3. instantiate schematic vars if any
         if analysis is not None:
             picked_name, _, consume_prems, _, schematic_vars = analysis
@@ -5399,6 +5425,12 @@ class CaseSplit_Like(SubgoalMaker):
         self._resolved_rule_str = (IsaTerm.from_isabelle(rule_name)
                                    if rule_name is not None else None)
         self._rule_resolved = True
+        return None
+    async def _choose_ih_facts(self, candidates: list[tuple[str, str]],
+                               dvars: list[str]) -> None:
+        """Hook called from `_resolve_rule` to let the agent pick which facts
+        to carry into the induction hypothesis. No-op by default (case-split
+        has no IH); overridden by `Induction`."""
         return None
     def _case_vars_of_child(self, child_ind: int) -> list[varname_spec] | None:
         if self.sub_nodes:
@@ -6688,6 +6720,34 @@ class Interaction_SelectRewriteTargets(Interaction):
                             selected_terms.append(matches[idx][1])
                     result.append((fact_idx, selected_terms))
         return result
+
+class Interaction_SelectIHFacts(Interaction):
+    """Pre-flight selection of in-scope facts to carry into the induction
+    hypothesis (alongside the `arbitrary:` generalization). Multi-select; the
+    chosen fact names supplement the agent-supplied `facts_to_generalize`."""
+    fork_allowed_tools = [TOOL_ANSWER_INDEXES, TOOL_SEARCH]
+    def __init__(self, candidates: list[tuple[str, IsaTerm]],
+                 relevant_vars: list[str]):
+        self.candidates = candidates
+        self.relevant_vars = relevant_vars
+    async def prompt(self, indent: int, file: MyIO) -> None:
+        if not self.candidates:
+            raise ImmediateAnswer([])
+        vars_str = string_of_and_list(self.relevant_vars)
+        print_indent(indent, file)
+        file.write(
+            f"These in-scope facts mention {vars_str}. Select which to carry "
+            f"into the induction hypothesis (call `{tn(TOOL_ANSWER_INDEXES)}` "
+            f"with their indexes; empty = none).\n")
+        for i, (name, prop) in enumerate(self.candidates):
+            print_indent(indent + 1, file)
+            file.write(f"{i}. {name}: {prop.unicode}\n")
+    async def answer(self, answer: AnswerIndexes) -> list[str]:
+        chosen: list[str] = []
+        for idx in answer.indexes:
+            _check_index(idx, len(self.candidates))
+            chosen.append(self.candidates[idx][0])
+        return chosen
 
 Rewrite_ToolArg = TypedDict('Rewrite_ToolArg', {
     'thought': str,
@@ -8171,6 +8231,44 @@ class Induction(CaseSplit_Like):
                         f"induction — skipped."))
                 else:
                     self.fact_refs_to_generalize.append(f)
+    async def _choose_ih_facts(self, candidates: list[tuple[str, str]],
+                               dvars: list[str]) -> None:
+        """Pre-flight: offer the in-scope facts mentioning the relevant vars
+        (`dvars` = induction target frees ∪ generalized) and let the agent pick
+        which to carry into the induction hypothesis. Picks SUPPLEMENT the
+        agent-supplied `facts_to_generalize` (unioned into
+        `_raw_facts_to_generalize`, which `_resolve_facts_to_generalize` then
+        resolves). Candidate names are the standard local-fact names (incl.
+        indexed `h(i)` for a multi-thm fact); facts already supplied are not
+        re-offered — and a bare supplied `h` subsumes every offered `h(i)`."""
+        if not candidates:
+            return
+        def _norm(name: 'str | None') -> str:
+            # Local-fact names arrive bare; agent-supplied ones may carry a
+            # `local.` prefix — normalise both before comparing.
+            return (name or "").removeprefix("local.")
+        def _split(name: str) -> 'tuple[str, int | None]':
+            # Standard indexed fact name `base(i)` (1-based); idx None if plain.
+            m = re.fullmatch(r"(.+)\((\d+)\)", name)
+            return (m.group(1), int(m.group(2))) if m else (name, None)
+        supplied = [_norm(f.get("name")) for f in self._raw_facts_to_generalize]
+        supplied_exact = set(supplied)
+        # A bare supplied name `h` (no index) subsumes every `h(i)`.
+        supplied_bare = {b for (b, i) in map(_split, supplied) if i is None}
+        def _already(name: str) -> bool:
+            n = _norm(name)
+            return n in supplied_exact or _split(n)[0] in supplied_bare
+        # Display the prop via IsaTerm so the picker renders unicode, not ascii.
+        offered = [(n, IsaTerm.from_isabelle(p))
+                   for (n, p) in candidates if not _already(n)]
+        if not offered:
+            return
+        chosen = await the_session().fork_interaction(
+            Interaction_SelectIHFacts(offered, dvars))
+        for n in chosen:
+            if not _already(n):
+                self._raw_facts_to_generalize.append({"name": n})
+                supplied_exact.add(_norm(n))
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         self._print_thought(indent, file)
         print_indent(indent, file)

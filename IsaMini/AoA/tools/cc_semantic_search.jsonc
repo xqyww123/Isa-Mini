@@ -19,7 +19,7 @@
           },
           "long_description": {
             "type": "string",
-            "description": "MUST wrap formulas in backticks (like `ln 1`). MUST be LONG",
+            "description": "MUST wrap formulas in backticks (like `ln 1`). Longer is better."
           },
           "term_patterns": {
             "type": "array",

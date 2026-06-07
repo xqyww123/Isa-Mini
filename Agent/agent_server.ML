@@ -873,13 +873,25 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
        * `schematic_vars` is the list of (varname, type) pairs appearing
        * inside consume_premises (the vars the user must either instantiate
        * or discharge via `using`). *)
+      (* Return shape: a TRIPLE <dirty_var_names, relevant_facts, analysis>.
+       * `dirty_var_names` = the variables a relevant fact may mention (the
+       * induction target's frees ∪ `arbitrary`); shown in the picker prompt.
+       * `relevant_facts` (the named local facts mentioning those vars; empty
+       * for case-split) and `dirty_var_names` are carried OUTSIDE the analysis
+       * option, so they are delivered even when no named rule is picked
+       * (`analyze_*` returns NONE) — the common case for default structural
+       * inductions. `analysis` keeps its original 5-tuple-option shape
+       * (rule_name, consumes, consume_prems, remaining_prems, schematic_vars). *)
       val analyze_ret_schema =
-        packOption (packTuple5 (
-          packOption packString,
-          packInt,
+        packTuple3 (
           packList packString,
-          packList packString,
-          packList (packPair (packString, packString))))
+          packList (packPair (packString, packString)),
+          packOption (packTuple5 (
+            packOption packString,
+            packInt,
+            packList packString,
+            packList packString,
+            packList (packPair (packString, packString)))))
       fun format_analysis ctxt (opt : Minilang.induct_analysis option) =
         case opt of
           NONE => NONE
@@ -923,7 +935,32 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
               (* Match the INDUCT arg shape in Agent/agent.ML's dispatcher. *)
               val args = (false, ([[SOME (NONE, (target_term, false))]],
                                   (([arbitrary_vs], []), opt_rule)))
-          in format_analysis ctxt (Minilang.analyze_induct ctxt args [])
+              (* Candidate IH facts: in-scope local facts whose proposition
+               * mentions the induction target ∪ `arbitrary` vars. Read straight
+               * from the leading goal's `local_facts`, which already carries one
+               * (name, prop) entry per theorem with the standard indexed name
+               * (`h`, or `h(1)`/`h(2)` for a multi-thm fact — see
+               * Minilang_Aux.flatten_facts). So every DIRTY theorem of a
+               * multi-thm fact is surfaced under its own selectable, 1-based
+               * `h(i)` name, which the carry-through (retrieve_entity /
+               * Attrib.eval_thms) resolves. *)
+              val dirty_frees = Term.add_frees target_term arbitrary_vs
+              val dirty = member (op =) dirty_frees
+              (* Keep only the INNERMOST binding for each name: a name shared
+               * across nested scopes resolves (in the carry-through, via
+               * Facts.lookup) to the innermost one, and `context_of_leading_goal`
+               * accumulates outer→inner, so `AList.update` (last wins) makes the
+               * displayed prop equal the theorem that will actually be carried. *)
+              val ((_, local_facts), _) =
+                Minilang.context_of_leading_goal (Minilang.print_state s0)
+              val relevant_facts =
+                fold (AList.update (op =)) local_facts []
+                |> filter (fn (_, t) =>
+                     Term.exists_subterm (fn Free f => dirty f | _ => false) t)
+                |> map (fn (name, t) => (name, sot t))
+              val dirty_var_names = distinct (op =) (map fst dirty_frees)
+          in (dirty_var_names, relevant_facts,
+              format_analysis ctxt (Minilang.analyze_induct ctxt args []))
           end handle ERROR msg => analyze_error "analyze_induct" msg
                    | TERM (msg, _) => analyze_error "analyze_induct" msg
                    | TYPE (msg, _, _) => analyze_error "analyze_induct" msg),
@@ -947,7 +984,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
               val opt_rule = Option.map (Proof_Context.get_thm ctxt) rule_name_opt
               (* Match the CASE_SPLIT arg shape in Agent/agent.ML's dispatcher. *)
               val args = (false, ([[SOME target_term]], opt_rule))
-          in format_analysis ctxt (Minilang.analyze_case_split ctxt args [])
+          in ([], [], format_analysis ctxt (Minilang.analyze_case_split ctxt args []))
           end handle ERROR msg => analyze_error "analyze_case_split" msg
                    | TERM (msg, _) => analyze_error "analyze_case_split" msg
                    | TYPE (msg, _, _) => analyze_error "analyze_case_split" msg),

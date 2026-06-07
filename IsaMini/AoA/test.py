@@ -53,6 +53,22 @@ class ModelTestCase(TestCase):
         async with Session(connection.server.logger, log_dir) as session:
             root = Root((global_context, ptree), connection)
             await session.initialize(root)
+            # Test-harness default: by-hand model tests don't drive an LLM, so
+            # the IH-fact picker (Interaction_SelectIHFacts) has no one to
+            # answer it. An induction whose in-scope context mentions the
+            # induction target ∪ generalized vars fires this picker during the
+            # pre-flight; without a stub the base Session.fork_interaction would
+            # raise. Default to declining (select none) so such tests behave as
+            # they did before the feature; any test wanting a selection just
+            # reassigns root.session.fork_interaction itself (which overrides
+            # this). Other interactions still raise, as before.
+            async def _default_fork_interaction(interaction):
+                if isinstance(interaction, Interaction_SelectIHFacts):
+                    return await interaction.answer(AnswerIndexes(indexes=[]))
+                raise NotImplementedError(
+                    "Unstubbed interaction in model test: "
+                    f"{type(interaction).__name__}")
+            session.fork_interaction = _default_fork_interaction
             buffer = io.StringIO()
             result = self.opr(root, MyIO(buffer))
             if inspect.iscoroutine(result):
@@ -5353,6 +5369,139 @@ async def _test_Induction_IHFactRef(root: Root, file: MyIO):
         "reason: " + reason_text)
 
 
+@model_test("Induction_SelectIHFacts", "Test_Induction_IHFacts.thy", 19)
+async def _test_Induction_SelectIHFacts(root: Root, file: MyIO):
+    """The Induction pre-flight offers the in-scope facts mentioning the
+    generalized variable(s); the agent's selection is unioned into
+    `facts_to_generalize` (supplementing any explicitly supplied). Mirrors the
+    lcm sublemma `∀n k. k ≤ n → a k dvd b n`: `Intro` assumes `k ≤ n`, then
+    induction on `n` generalizing `k` must carry that premise into the IH.
+    Here the agent supplies NO `facts_to_generalize`; the picker selection
+    alone carries the premise.
+    """
+    fork_count = 0
+    async def stub_fork(interaction):
+        nonlocal fork_count
+        if isinstance(interaction, Interaction_SelectIHFacts):
+            fork_count += 1
+            print_header("IH-fact selection prompt", file)
+            await interaction.prompt(0, file)
+            # Select every offered candidate.
+            return await interaction.answer(
+                AnswerIndexes(indexes=list(range(len(interaction.candidates)))))
+        raise TestFailed(
+            f"Unexpected interaction in this test: {type(interaction).__name__}")
+    root.session.fork_interaction = stub_fork
+
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Intro: fix n, k; assume `k ≤ n` (auto-named premise0).
+    root.session.age += 1
+    await root.fill("1", [Intro.gen_single({
+        "thought": "fix n, k and assume k ≤ n",
+    })])
+    print_header("After Intro (fixes n, k; assumes k ≤ n)", file)
+    root.print(0, file)
+
+    # Induction on n, generalize k, with NO facts_to_generalize supplied:
+    # the pre-flight should offer `k ≤ n` and the stub selects it.
+    root.session.age += 1
+    await root.fill("2", [Induction.gen_single({
+        "thought": "induct on n, generalize k; carry the premise via the picker",
+        "target_isabelle_term": "n :: nat",
+        "variables": [
+            {"name": "n", "status": "fixed"},
+            {"name": "k", "status": "generalized"},
+        ],
+    })])
+    print_header("After Induction (selected facts carried into IH)", file)
+    root.print(0, file)
+
+    # The carried premise reaches the BASE case too, not just the IH. The
+    # rendered tree above omits carried case-hypotheses (a pre-existing display
+    # behaviour), so assert on the base case's internal hypotheses directly:
+    # `premise0` (k ≤ 0, with the generalized k smart-renamed to n) must be
+    # present — confirming the fact was generalized into every case.
+    base_hyps = root.locate_node("2.0").case_hyps or []
+    base_hyp_names = [h.unicode if hasattr(h, "unicode") else str(h)
+                      for h, _t in base_hyps]
+    file.write(f"base case (2.0) hypotheses: {base_hyp_names}\n")
+    assert any("premise0" in n for n in base_hyp_names), (
+        "the carried premise should reach the induction base case "
+        f"(got base hyps {base_hyp_names})")
+
+    induct_node = root.locate_node("2")
+    carried = sorted(r.short_name.unicode
+                     for r in induct_node.fact_refs_to_generalize)
+    file.write(f"\nfork_count: {fork_count}\n")
+    file.write(f"facts carried into IH: {carried}\n")
+    assert fork_count == 1, (
+        f"Expected exactly one IH-fact selection fork, got {fork_count}.")
+    assert carried, (
+        "Expected the agent-selected premise to be unioned into "
+        "facts_to_generalize, but fact_refs_to_generalize is empty.")
+
+
+@model_test("Induction_SelectIHFacts_MultiThm",
+            "Test_Induction_IHFacts_MultiThm.thy", 19)
+async def _test_Induction_SelectIHFacts_MultiThm(root: Root, file: MyIO):
+    """Multi-theorem fact coverage (LOW 4). The conjunctive premise
+    `(k ≤ n ∧ k ≤ n+n)` destructures into ONE multi-theorem fact `premise0`,
+    surfaced under indexed names `premise0(1)`, `premise0(2)`. Both conjuncts
+    mention the generalized `k`, so the picker must offer BOTH; selecting a
+    strict SUBSET (only the first) must carry exactly that one indexed theorem,
+    which then resolves through the standard fact scheme (`Attrib.eval_thms`)."""
+    offered_names: list[str] = []
+    async def stub_fork(interaction):
+        if isinstance(interaction, Interaction_SelectIHFacts):
+            offered_names.extend(n for n, _ in interaction.candidates)
+            print_header("IH-fact picker (multi-thm)", file)
+            await interaction.prompt(0, file)
+            # Select ONLY the first offered candidate — a strict subset.
+            return await interaction.answer(AnswerIndexes(indexes=[0]))
+        raise TestFailed(
+            f"Unexpected interaction in this test: {type(interaction).__name__}")
+    root.session.fork_interaction = stub_fork
+
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("1", [Intro.gen_single({
+        "thought": "fix n, k; split the conjunctive premise into premise0(1), premise0(2)",
+    })])
+    print_header("After Intro (premise0 split into premise0(1), premise0(2))", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("2", [Induction.gen_single({
+        "thought": "induct on n, generalize k; pick a subset of the multi-thm fact",
+        "target_isabelle_term": "n :: nat",
+        "variables": [
+            {"name": "n", "status": "fixed"},
+            {"name": "k", "status": "generalized"},
+        ],
+    })])
+    print_header("After Induction (only the selected indexed theorem carried)", file)
+    root.print(0, file)
+
+    induct_node = root.locate_node("2")
+    carried = sorted(r.short_name.unicode
+                     for r in induct_node.fact_refs_to_generalize)
+    file.write(f"\noffered candidates: {offered_names}\n")
+    file.write(f"carried into IH: {carried}\n")
+    # The picker must surface BOTH indexed theorems of the multi-thm fact.
+    assert len(offered_names) == 2 and all("premise0(" in n for n in offered_names), (
+        f"expected the two indexed candidates premise0(1)/premise0(2), "
+        f"got {offered_names}")
+    # Selecting only index 0 carries exactly that one indexed theorem.
+    assert len(carried) == 1, (
+        f"expected exactly one carried fact (strict subset), got {carried}")
+    assert "premise0" in carried[0] and "(" in carried[0], (
+        f"expected an indexed premise0(i) carried, got {carried}")
+
+
 @model_test("FactsToGeneralize_Filter",
             "Test_FactsToGeneralize_Filter.thy", 29)
 async def _test_FactsToGeneralize_Filter(root: Root, file: MyIO):
@@ -6128,6 +6277,41 @@ async def _test_unfold_syntax(root: Root, file: MyIO):
     file.write("=== query output: nested ===\n")
     result = await _handle_exact_term_query(root.session, "∀⇩m x ∈ {1,2,3::nat}. (Σ⇩m y ∈ {0..<x}. y ⊕ x) > 0")
     file.write(result + "\n")
+
+    print_header("Done", file)
+
+
+@model_test("UnfoldSyntaxOp", "Test_UnfoldSyntaxOp.thy", 8)
+async def _test_unfold_syntax_op(root: Root, file: MyIO):
+    """Probe whether `unfold_syntax` can resolve a *bare operator symbol* when it
+    is wrapped as an operator section `(OP)`.
+
+    This underpins the proposed `exact_name` improvement: to look up a notation
+    symbol like `*` (or `**`) by name, we parse `(OP)` — Isabelle reads it as the
+    operator constant — and take `Term.head_of` to recover the underlying const
+    name, which can then be fed to `universal_key_and_name_of`.
+
+    Uses only Main-level operators (`*`, `+`) so the fixture needs just `Main`.
+    """
+    ml = root.ml_state
+
+    # 1. Times operator section `(*)` — must parse to the times constant.
+    file.write("=== operator section (*) ===\n")
+    head, raw, normal = await ml.unfold_syntax("(*)")
+    file.write(f"  head: {head}\n")
+    file.write(f"  normal: {normal}\n")
+    file.write(f"  raw: {raw}\n")
+    assert head, f"Expected a non-empty head const for (*), got '{head}'"
+    assert "times" in head, f"Expected the times constant for (*), got {head}"
+
+    # 2. Plus operator section `(+)` — generality check, another Main operator.
+    file.write("=== operator section (+) ===\n")
+    head, raw, normal = await ml.unfold_syntax("(+)")
+    file.write(f"  head: {head}\n")
+    file.write(f"  normal: {normal}\n")
+    file.write(f"  raw: {raw}\n")
+    assert head, f"Expected a non-empty head const for (+), got '{head}'"
+    assert "plus" in head, f"Expected the plus constant for (+), got {head}"
 
     print_header("Done", file)
 
@@ -7194,6 +7378,10 @@ async def _test_CaseSplit_NestedCaseNameShadow(root: Root, file: MyIO):
                 f"actual_case={interaction.actual_case!r} "
                 f"options={list(interaction.supplied_options)}\n")
             return await interaction.answer(AnswerIndex(index=None))
+        if isinstance(interaction, Interaction_SelectIHFacts):
+            # Decline the IH-fact picker (select none) so this induction
+            # test's output is unaffected by that feature.
+            return await interaction.answer(AnswerIndexes(indexes=[]))
         file.write(
             f"Other (non-MapCase) interaction: "
             f"{type(interaction).__name__}\n")
@@ -11641,6 +11829,121 @@ async def _test_nested_antichain(root: Root, file: MyIO):
                f"old node detached={A.worker_handle is None}\n")
 
     session.role = model.Role_Major()
+
+@model_test("HammerLooseBound", "Test_HammerLooseBound.thy", 24)
+async def _test_HammerLooseBound(root: Root, file: MyIO):
+    """Faithful replay of the production case putnam_1970_b4 up to the crashing
+    Obvious at step `x_cont`, which raises
+        exception TERM raised (line 375 of "term.ML"): fastype_of: Bound.
+
+    The proof: Contradiction → Intro → push negation, then derive g_diff /
+    g_endpoints / g_cont, then block g_has_integral (Derive FTC → Rewrite to
+    premise4 → Have x_diff → Have x_cont → Obvious [x_diff]). The final Obvious
+    (HAMMER) crashes when sledgehammer's run_mepo_and_render / fast_force
+    traverses a HOL ∀-binder among the mepo-selected facts and calls fastype_of
+    on a subterm carrying a loose de Bruijn Bound."""
+    import traceback as _tb
+    _prog = open("/tmp/hlb_progress.txt", "w")
+    def report(tag, o):
+        err = o.failure is not None and o.failure.is_error
+        file.write(f"{tag} is_error: {err}\n")
+        msg = f"{tag} is_error: {err}"
+        if o.failure is not None:
+            r = o.failure
+            rr = r.reason if isinstance(r, FailureReason) else r
+            file.write(f"{tag} reason: {rr}\n")
+            msg += f" | reason: {rr}"
+        _prog.write(msg + "\n"); _prog.flush()
+
+    async def step(tag, sid, ops):
+        try:
+            o = await root.fill(sid, ops)
+            report(tag, o)
+            return o
+        except Exception as e:
+            _prog.write(f"{tag} EXCEPTION at {sid}: {type(e).__name__}: {e}\n")
+            _prog.write(_tb.format_exc() + "\n"); _prog.flush()
+            file.write(f"{tag} EXCEPTION at {sid}: {type(e).__name__}: {e}\n")
+            return None
+
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # 1. Contradiction: assume the negation, goal becomes False.
+    root.session.age += 1
+    await step("contradiction", "1", [Contradiction.gen_single({
+        "hypothesis_name": "h_bound"})])
+    # 2. Intro.
+    root.session.age += 1
+    await step("intro", "2", [Intro.gen_single({"thought": "push the negation"})])
+    # 3. Rewrite h_bound (system simps) -> premise0.
+    root.session.age += 1
+    await step("rewrite_hbound", "3", [Rewrite.gen_single({
+        "thought": "push the negation through h_bound",
+        "using": [{"name": "h_bound"}],
+        "use system simplifiers": True,
+        "rewrite goal": False,
+        "rewrite premises": ["h_bound"]})])
+    # 4. Have g_diff (extract 2nd conjunct of hdiff).
+    root.session.age += 1
+    await step("have_gdiff", "4", [Have.gen_single({
+        "thought": "deriv x differentiable on [0,1]", "name": "g_diff",
+        "statement": {"english": "deriv x differentiable on [0,1]",
+                      "conclusion": r"deriv x differentiable_on {(0::real)..(1::real)}"}})])
+    root.session.age += 1
+    await step("gdiff_rewrite", "4.1", [Rewrite.gen_single({
+        "thought": "from hdiff", "using": [{"name": "hdiff"}],
+        "use system simplifiers": True, "rewrite goal": True, "rewrite premises": []})])
+    # 5. Have g_endpoints.
+    root.session.age += 1
+    await step("have_gendpoints", "5", [Have.gen_single({
+        "thought": "endpoints", "name": "g_endpoints",
+        "statement": {"english": "g(0)=0 and g(1)=0",
+                      "conclusion": r"deriv x (0::real) = (0::real) \<and> deriv x (1::real) = (0::real)"}})])
+    root.session.age += 1
+    await step("gendpoints_rewrite", "5.1", [Rewrite.gen_single({
+        "thought": "from hv", "using": [{"name": "hv"}],
+        "use system simplifiers": True, "rewrite goal": True, "rewrite premises": []})])
+    # 6. Have g_cont (deriv x continuous) by Obvious.
+    root.session.age += 1
+    await step("have_gcont", "6", [Have.gen_single({
+        "thought": "deriv x continuous on [0,1]", "name": "g_cont",
+        "statement": {"english": "deriv x continuous on [0,1]",
+                      "conclusion": r"continuous_on {(0::real)..(1::real)} (deriv x)"}})])
+    root.session.age += 1
+    await step("gcont_obvious", "6.1", [Obvious.gen_single({"facts": []})])
+    # 7. Derive ftc_result (forward, at root level to avoid deep-nesting state issues).
+    root.session.age += 1
+    await step("derive_ftc", "7", [Derive.gen_single({
+        "thought": "Apply FTC-strong with S={0,1}",
+        "rule": {"name": "fundamental_theorem_of_calculus_strong"},
+        "instantiations": [
+            {"name": "?f", "value": "x"},
+            {"name": "?f'", "value": "deriv x"},
+            {"name": "?a", "value": "(0::real)"},
+            {"name": "?b", "value": "(1::real)"},
+            {"name": "?S", "value": "{(0::real), (1::real)}"}],
+        "result_name": "ftc_result"})])
+    # 8. Rewrite ftc_result (system simps) -> premise4.
+    root.session.age += 1
+    await step("rewrite_ftc", "8", [Rewrite.gen_single({
+        "thought": "discharge finite {0,1} and 0<=1",
+        "using": [], "use system simplifiers": True,
+        "rewrite goal": False, "rewrite premises": ["ftc_result"]})])
+    # 9. Have x_cont, discharge by Obvious [hdiff]  <-- production crash site
+    #    (production's FIRST attempt: x_diff was NOT yet in scope, so fast_force
+    #    cannot take the trivial differentiable->continuous shortcut and must
+    #    grind through the binder-bearing facts).
+    root.session.age += 1
+    await step("have_xcont", "9", [Have.gen_single({
+        "thought": "x continuous on [0,1] because differentiable", "name": "x_cont",
+        "statement": {"english": "x continuous on [0,1]",
+                      "conclusion": r"continuous_on {(0::real)..(1::real)} x"}})])
+    root.session.age += 1
+    print_header("After Obvious x_cont (HAMMER) -- crash site", file)
+    await step("xcont_obvious", "9.1", [Obvious.gen_single({"facts": [{"name": "hdiff"}]})])
+    root.print(0, file)
+    _prog.write("DONE\n"); _prog.close()
 
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
