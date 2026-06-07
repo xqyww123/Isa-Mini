@@ -11643,35 +11643,6 @@ async def _test_nested_antichain(root: Root, file: MyIO):
     session.role = model.Role_Major()
 
 
-@model_test("ZZTmpOfIntCheck", "Test_ZZTmpOfIntCheck.thy", 7)
-async def _test_zztmp_of_int_check(root: Root, file: MyIO):
-    """THROWAWAY validation: replay the exact query from the bug log
-    (exact_name real_of_int/of_int/floor) in the Minilang_Agent context and
-    confirm the 'Relevant definitions' block no longer contains '??.' facts."""
-    from .retrieval import _query_tool_logic
-    root.session.interactive_retrieval = InteractiveRetrievalMode.NO
-    args = {'queries': [
-        {'kinds': ['constant'], 'exact_name': 'real_of_int'},
-        {'kinds': ['constant'], 'exact_name': 'floor'},
-        {'kinds': ['constant'], 'exact_name': 'of_int'},
-    ]}
-    result, is_error = await _query_tool_logic(root.session, args)
-    qq = [ln for ln in result.splitlines() if '??.' in ln]
-    rel = [ln for ln in result.splitlines() if ln.strip().startswith('- of_int')]
-    with open('/tmp/ofint_check.txt', 'w') as fh:
-        fh.write(f"is_error={is_error}\n")
-        fh.write(f"[CHECK] lines containing '??.': {len(qq)}\n")
-        for ln in qq:
-            fh.write("  QQ " + ln + "\n")
-        fh.write(f"[CHECK] sample legitimate of_int defs kept: {len(rel)}\n")
-        for ln in rel[:8]:
-            fh.write("  OK " + ln + "\n")
-        fh.write("\n===== FULL RESULT =====\n")
-        fh.write(result + "\n")
-    file.write(f"qq={len(qq)} rel={len(rel)} is_error={is_error}\n")
-    assert not qq, f"Found {len(qq)} '??.' lines (see /tmp/ofint_check.txt)"
-
-
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
     import msgpack as mp
     from IsaREPL import Client

@@ -9596,7 +9596,14 @@ class Session:
             if not fin:
                 node._completion_announced = False
             elif not ancestor_finished and node is not root:
-                if not node._completion_announced:
+                # Announce only structured goal blocks: skip bare leaves (a lone
+                # solved Obvious is already conveyed by "Filled step X" + the
+                # outline) and the declaration-only global env (id_of_goal() is
+                # None). Finishedness still propagates below regardless of type,
+                # so a finished leaf neither reports nor un-suppresses siblings.
+                if (isinstance(node, NonLeaf_Node)
+                        and node.id_of_goal() is not None
+                        and not node._completion_announced):
                     node._completion_announced = True
                     newly.append(node)
             if isinstance(node, NonLeaf_Node):

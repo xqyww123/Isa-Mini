@@ -60,6 +60,19 @@ def _collect_completed_ancestors(committed: list[Node]) -> list[str]:
     return completed_ids
 
 
+def _write_newly_completed(session: 'model.Session', file: MyIO) -> None:
+    """Append one line naming the steps whose whole subtree became proved this
+    call and were not announced before (delta, top-most/no-overlap — see
+    `Session.newly_completed_topmost`). Writes nothing when there are none,
+    which includes the case where the entire scope is now proved (reported via
+    the caller's "all goals proven" path instead)."""
+    newly = session.newly_completed_topmost()
+    if not newly:
+        return
+    ids = ', '.join(n.titled_id for n in newly)
+    file.write(f"All proof goals of {ids} are now completed.\n")
+
+
 def _render_auto_intro_warning(session: 'model.Session', file: MyIO) -> None:
     if not session.auto_intro_nodes:
         return
@@ -97,13 +110,11 @@ async def edit_message(
     if failure is not None and failure.is_error:
         file.write(str(failure))
         file.write("\n")
-    # Completion hint only for fill/amend; insert intentionally skips it.
-    if outcome.committed and outcome.operation is not model.EditOperation.INSERT:
-        completed_ids = _collect_completed_ancestors(outcome.committed)
-        if len(completed_ids) == 1:
-            file.write(f"All proof goals of {completed_ids[0]} are completed.\n")
-        elif completed_ids:
-            file.write(f"All proof goals of {', '.join(completed_ids)} are completed.\n")
+    # Report steps newly proved this call — unconditionally (even when the edit
+    # failed or committed nothing): a reverted/no-op edit can still flip a step
+    # to proved as a side effect, and the agent must learn about it. Delta + top-
+    # most/no-overlap is handled by `newly_completed_topmost`.
+    _write_newly_completed(session, file)
     if session.warnings:
         file.write("Warnings:\n")
         for w in session.warnings:
@@ -135,6 +146,7 @@ async def deleted_steps_message(steps: list[str], root: Root, session: 'model.Se
     file = MyIO(StringIO())
     noun = "steps" if len(steps) > 1 else "step"
     file.write(f"Deleted {noun} {', '.join(session._display_id(s) for s in steps)}.\n")
+    _write_newly_completed(session, file)
     if session.warnings:
         file.write("Warnings:\n")
         for w in session.warnings:

@@ -1,0 +1,85 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Have pos_b (auto-Intro fixes n at 1.1)
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: b is always positive
+    operation: Have
+    statement:
+      english: two to the power n is positive for every n
+      conclusion: \<forall>n::nat. (2::int)^n > 0
+    name: pos_b
+    proof:
+      - step id: 1.1
+        operation: Intro
+        fixing variables:
+          - n: nat
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: int) < (2 :: int) ^ n
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+--------------------------------------------------
+Amend 1.1 → Induction n (default rule) — Unable to figure out induct rule
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: b is always positive
+    operation: Have
+    statement:
+      english: two to the power n is positive for every n
+      conclusion: \<forall>n::nat. (2::int)^n > 0
+    name: pos_b
+    proof:
+      - step id: 1.1
+        thought: Induction on n
+        operation: Induction
+        target term: n
+        Error: Induction failed because: Unable to figure out induct rule
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2` to provide the proof for the following goal.
+    pending proof goal:
+      ∀(n :: nat). (0 :: int) < (2 :: int) ^ n
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+--------------------------------------------------
+Amend 1.1 → Induction n (rule nat.induct) — Ill-typed instantiation n :: 'a
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: b is always positive
+    operation: Have
+    statement:
+      english: two to the power n is positive for every n
+      conclusion: \<forall>n::nat. (2::int)^n > 0
+    name: pos_b
+    proof:
+      - step id: 1.1
+        thought: Induction on n using nat induction rule
+        operation: Induction
+        target term: n
+        Error: |
+          Induction failed because: Ill-typed instantiation:
+          n :: 'a
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2` to provide the proof for the following goal.
+    pending proof goal:
+      ∀(n :: nat). (0 :: int) < (2 :: int) ^ n
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
