@@ -1,0 +1,15 @@
+=== infix: * ===
+  resolved: Groups.times_class.times
+=== infix: + ===
+  resolved: Groups.plus_class.plus
+=== ambiguous: - (infix wins) ===
+  resolved: Groups.minus_class.minus
+=== prefix: not ===
+  resolved: HOL.Not
+=== postfix: rtrancl ===
+  resolved: Transitive_Closure.rtrancl
+=== unresolvable ===
+  resolved: None
+--------------------------------------------------
+Done
+--------------------------------------------------

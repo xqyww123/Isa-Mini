@@ -6348,6 +6348,102 @@ async def _test_unfold_syntax_op(root: Root, file: MyIO):
     print_header("Done", file)
 
 
+@model_test("ResolveNotation", "Test_ResolveNotation.thy", 8)
+async def _test_resolve_notation(root: Root, file: MyIO):
+    """Verify `IsaMini.resolve_notation` maps a bare notation symbol to its
+    underlying constant across fixities (operator section / infix / prefix /
+    postfix), and returns None when nothing resolves.
+
+    This is the resolver behind the `exact_name` symbol fallback. Uses only
+    Main-level notation so the fixture needs just `Main`.
+    """
+    ml = root.ml_state
+
+    # infix `*` — operator-section probe resolves to the times constant
+    file.write("=== infix: * ===\n")
+    res = await ml.resolve_notation("*")
+    file.write(f"  resolved: {res}\n")
+    assert res is not None and "times" in res, f"Expected times const, got {res}"
+
+    # infix `+`
+    file.write("=== infix: + ===\n")
+    res = await ml.resolve_notation("+")
+    file.write(f"  resolved: {res}\n")
+    assert res is not None and "plus" in res, f"Expected plus const, got {res}"
+
+    # `-` is both infix (minus) and prefix (uminus); infix wins by probe order
+    file.write("=== ambiguous: - (infix wins) ===\n")
+    res = await ml.resolve_notation("-")
+    file.write(f"  resolved: {res}\n")
+    assert res is not None and "minus" in res, f"Expected minus const, got {res}"
+
+    # prefix `\<not>` (negation) — exercises the prefix probe
+    file.write("=== prefix: not ===\n")
+    res = await ml.resolve_notation(r"\<not>")
+    file.write(f"  resolved: {res}\n")
+    assert res == "HOL.Not", f"Expected HOL.Not, got {res}"
+
+    # postfix `\<^sup>*` (reflexive-transitive closure) — exercises postfix probe
+    file.write("=== postfix: rtrancl ===\n")
+    res = await ml.resolve_notation(r"\<^sup>*")
+    file.write(f"  resolved: {res}\n")
+
+    # an unresolvable token returns None
+    file.write("=== unresolvable ===\n")
+    res = await ml.resolve_notation("zzz_no_such_op")
+    file.write(f"  resolved: {res}\n")
+    assert res is None, f"Expected None, got {res}"
+
+    print_header("Done", file)
+
+
+@model_test("QueryExactNameOp", "Test_QueryExactNameOp.thy", 8)
+async def _test_query_exact_name_op(root: Root, file: MyIO):
+    """End-to-end: a bare operator symbol given as `exact_name` resolves to its
+    underlying constant via the resolve_notation fallback — both at the
+    semantic_knn layer (where the fallback lives) and through the full `query`
+    tool (_query_tool_logic).
+
+    `*` is not in the constant name space, so the direct universal_key lookup
+    fails; the CONSTANT-kind fallback parses `(*)` → Groups.times_class.times.
+    """
+    from Isabelle_RPC_Host.universal_key import EntityKind
+    from .retrieval import _query_tool_logic
+
+    ml = root.session.retrieval_state()
+
+    # --- Layer 1: semantic_knn exact_name path (where the fallback lives) ---
+    file.write("=== semantic_knn exact_name='*' (constant) ===\n")
+    results, warnings = await ml.semantic_knn(
+        None, 1, [EntityKind.CONSTANT], exact_name="*")
+    file.write(f"  results: {len(results)}, warnings: {warnings}\n")
+    assert len(results) == 1, f"Expected 1 result for '*', got {len(results)}"
+    full = results[0].entity.full_name
+    file.write(f"  resolved full_name: {full}\n")
+    assert "times" in full, f"Expected times constant, got {full}"
+
+    # A genuinely unresolvable symbol still reports Undefined (safe degradation).
+    file.write("=== semantic_knn exact_name unresolvable ===\n")
+    res_none, warn_none = await ml.semantic_knn(
+        None, 1, [EntityKind.CONSTANT], exact_name="zzz_no_such_op")
+    file.write(f"  results: {len(res_none)}, warnings: {warn_none}\n")
+    assert len(res_none) == 0, "Expected no results for an unresolvable symbol"
+
+    # --- Layer 2: full query tool (_query_tool_logic), direct (non-fork) path ---
+    root.session.interactive_retrieval = InteractiveRetrievalMode.NO
+    file.write("=== query tool exact_name='*' ===\n")
+    result, is_error = await _query_tool_logic(
+        root.session, {'queries': [{'kinds': ['constant'], 'exact_name': '*'}]})
+    file.write(f"  is_error: {is_error}\n")
+    file.write(f"  mentions times: {'times' in result}\n")
+    file.write(f"  mentions Undefined: {'Undefined' in result}\n")
+    assert not is_error, f"query tool must not error: {result}"
+    assert "times" in result, f"query tool result must mention times: {result}"
+    assert "Undefined" not in result, f"must not be Undefined: {result}"
+
+    print_header("Done", file)
+
+
 @model_test("AmendLeafToNonLeaf", "Test_AmendLeafToNonLeaf.thy", 8)
 async def _test_AmendLeafToNonLeaf(root: Root, file: MyIO):
     """Reproduce: AttributeError: 'Obvious' object has no attribute 'sub_nodes'

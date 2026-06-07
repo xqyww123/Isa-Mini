@@ -1,0 +1,12 @@
+=== semantic_knn exact_name='*' (constant) ===
+  results: 1, warnings: []
+  resolved full_name: Groups.times_class.times
+=== semantic_knn exact_name unresolvable ===
+  results: 0, warnings: ['Undefined: "zzz_no_such_op"']
+=== query tool exact_name='*' ===
+  is_error: False
+  mentions times: True
+  mentions Undefined: False
+--------------------------------------------------
+Done
+--------------------------------------------------

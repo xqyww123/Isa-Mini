@@ -695,6 +695,41 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         timeout = NONE
       }
 
+      (* Resolve a bare notation symbol (e.g. "*", "\<le>", "\<^sup>*") to the
+         underlying constant name, covering all fixities via ordered probes:
+         operator section, infix, prefix, postfix, then a simple binder form.
+         The first probe that parses to a `Const` head wins (so e.g. "-" resolves
+         to its infix reading, subtraction, before the prefix reading uminus).
+         Returns "" when no probe resolves — callers treat that as "not a
+         resolvable notation" and fall back. Unlike `unfold_syntax`, this NEVER
+         raises on an unparseable probe: each probe is guarded, because feeding a
+         bare symbol is expected to fail for most templates. *)
+      val resolve_notation_callback = {
+        name = "IsaMini.resolve_notation",
+        arg_schema = unpackPair (unpackString, unpackString),
+        ret_schema = packString,
+        function = (fn (state_id, sym) =>
+          let val s0 = get_state state_id
+              val ctxt = Minilang.context_of s0
+              val probes =
+                ["(" ^ sym ^ ")",            (* operator section, e.g. \<le> *)
+                 "xPa " ^ sym ^ " yPb",      (* infix:   _ OP _ *)
+                 sym ^ " xPa",               (* prefix:  OP _ *)
+                 "xPa " ^ sym,               (* postfix: _ OP *)
+                 sym ^ " xPa. xPa"]          (* binder:  OP x. _ *)
+              fun head_const_of probe =
+                \<^try>\<open>
+                  (case Term.head_of (MiniLang_Agent.read_term ctxt probe) of
+                     Const (name, _) => SOME name
+                   | _ => NONE)
+                 catch _ => NONE\<close>
+          in case get_first head_const_of probes of
+               SOME name => name
+             | NONE => ""
+          end),
+        timeout = NONE
+      }
+
       val schematic_vars_callback = {
         name = "IsaMini.schematic_variables_of",
         arg_schema = unpackString,
@@ -1127,7 +1162,9 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
           mk_callback check_term_callback,
           mk_callback induction_target_hits_binder_callback,
           mk_callback unfold_syntax_callback,
+          mk_callback resolve_notation_callback,
           mk_callback schematic_vars_callback,
+          mk_callback goal_variables_callback,
           mk_callback potential_defs_callback,
           mk_callback abbreviation_defs_callback,
           mk_callback analyze_induct_callback,

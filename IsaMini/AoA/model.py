@@ -1727,14 +1727,28 @@ class Minilang_State:
                 try:
                     uk, full_name = await universal_key_and_name_of(self.connection, tag, exact_name, ctxt=self.name)
                 except UndefinedEntity:
+                    resolved: tuple[universal_key, str] | None = None
+                    # Retry with the short (base) name for a qualified xname.
                     if "." in exact_name:
                         short = exact_name.rsplit(".", 1)[1]
                         try:
-                            uk, full_name = await universal_key_and_name_of(self.connection, tag, short, ctxt=self.name)
+                            resolved = await universal_key_and_name_of(self.connection, tag, short, ctxt=self.name)
                         except Exception:
-                            continue
-                    else:
+                            resolved = None
+                    # Fall back to notation resolution: a bare operator symbol
+                    # like `*` / `≤` isn't in the const name space, but it parses
+                    # (as an operator section / infix / prefix / …) to a constant
+                    # we can then look up by name. Only constants carry notation.
+                    if resolved is None and tag == EntityKind.CONSTANT:
+                        const_name = await self.resolve_notation(exact_name)
+                        if const_name is not None:
+                            try:
+                                resolved = await universal_key_and_name_of(self.connection, tag, const_name, ctxt=self.name)
+                            except Exception:
+                                resolved = None
+                    if resolved is None:
                         continue
+                    uk, full_name = resolved
                 except IsabelleError:
                     continue
                 rec = Semantic_DB[uk]
@@ -1937,6 +1951,18 @@ class Minilang_State:
                 raise InternalError_UnparsedTerm(term_str, e.errors[0][len(_PREFIX):])
             else:
                 raise
+
+    async def resolve_notation(self, symbol: str) -> str | None:
+        """Resolve a bare notation symbol (e.g. ``*``, ``≤``, a postfix marker)
+        to its underlying constant full name, trying operator-section / infix /
+        prefix / postfix / binder probes ML-side. Returns the const name, or
+        None when the symbol resolves to no constant (so callers can fall back).
+        Never raises on an unresolvable symbol — the ML callback guards each
+        probe and returns an empty string for "not a resolvable notation"."""
+        name = await self.connection.callback(
+            "IsaMini.resolve_notation",
+            (self.name, ascii_of_unicode(symbol)))
+        return name or None
 
     async def schematic_variables_of(self) -> Vars:
         """
