@@ -5696,6 +5696,10 @@ async def _test_Induction_ClassifyVars_PartialPremise(root: Root, file: MyIO):
             j_idx = [i for i, (n, _t) in enumerate(interaction.unclassified)
                      if n == "j"]
             return await interaction.answer(AnswerIndexes(indexes=j_idx))
+        if isinstance(interaction, Interaction_SelectIHFacts):
+            # Generalizing `j` makes the premise `j < n` an IH-fact candidate;
+            # not under test here — decline it.
+            return await interaction.answer(AnswerIndexes(indexes=[]))
         raise TestFailed(
             f"Unexpected interaction in this test: {type(interaction).__name__}")
     root.session.fork_interaction = stub_fork

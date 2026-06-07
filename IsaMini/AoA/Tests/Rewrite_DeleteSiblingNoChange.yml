@@ -9,7 +9,7 @@ Error: Unfinished Proof. Call command `edit` with action `fill` and target step 
 Quickview after Have+Obvious
 --------------------------------------------------
 step 1: Rewrite goal
-step 2: Have helper (done)
+step 2: Have helper (proven)
 Error: Unfinished Proof. Fill step `3`
 --------------------------------------------------
 Quickview after deleting Have (Rewrite must not be changed)

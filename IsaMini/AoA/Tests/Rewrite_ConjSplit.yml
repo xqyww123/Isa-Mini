@@ -1,0 +1,35 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - t: real
+premises:
+  - h: mypred t
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: t < (1 :: real)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Rewrite (unfold mypred)
+--------------------------------------------------
+variables:
+  - t: real
+premises:
+  - h: mypred t
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: t < (1 :: real)
+proof:
+  - step id: 1
+    thought: Unfold mypred to expose the conjunction
+    operation: Rewrite
+    using:
+      - mypred_def: mypred ?x = ((0 :: real) < ?x ∧ ?x < (1 :: real))
+    targets:
+      - h
+    resulting premises:
+      - premise0(1): (0 :: real) < t
+      - premise0(2): t < (1 :: real)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  t < (1 :: real)
+SUCCESS

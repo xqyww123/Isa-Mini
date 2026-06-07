@@ -798,13 +798,20 @@ fun AUTO_SIMPLIFY
              typ_pretty = string_of_type ctxt' ty})
           (!vars_before_ref) params'
 
-        (* Build final premise bindings from facts' returned by SIMPLIFY *)
+        (* Build final premise bindings from facts' returned by SIMPLIFY.
+           INTRO' may split conjunction premises (INTRO_split_prem_conj),
+           so facts' can have more entries than prems_before_ref.
+           Group by base name to restore 1:1 alignment with the original
+           premise terms, then flatten the per-atom bindings. *)
+        val facts_grouped = Minilang_Aux.unflatten_facts facts'
         val prem_bindings_final =
-          map2 (fn prem_term => fn (name, exterm) =>
-            {internal_term = prem_term,
-             external_name = name,
-             pretty = string_of_term ctxt' exterm})
-          (!prems_before_ref) facts'
+          map2 (fn prem_term => fn (_, atoms) =>
+            map (fn (flat_name, exterm) =>
+              {internal_term = prem_term,
+               external_name = flat_name,
+               pretty = string_of_term ctxt' exterm}) atoms
+          ) (!prems_before_ref) facts_grouped
+          |> flat
 
         (* Compute missing variable bindings - provided but not in vars_before *)
         val missing_vars =

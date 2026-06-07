@@ -1,0 +1,30 @@
+--------------------------------------------------
+After Induction (k declined -> stays fixed)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∀n (k :: nat). n + k = k + n
+proof:
+  - step id: 1
+    operation: Intro
+    fixing variables:
+      - n: nat
+      - k: nat
+  - step id: 2
+    thought: induct on n; decline to generalize k
+    operation: Induction
+    target term: n :: nat
+    cases:
+      - goal id: 2.0
+        goal: (0 :: nat) + k = k + (0 :: nat)
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.0.1` to provide the proof.
+      - goal id: 2.Suc
+        variables:
+          - n: nat
+        premises:
+          - Suc.IH: n + k = k + n
+        goal: True
+        proof: empty
+
+classify_fork_count: 1
+variable statuses after decline: {'k': 'fixed'}

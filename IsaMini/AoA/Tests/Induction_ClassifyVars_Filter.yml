@@ -1,0 +1,35 @@
+--------------------------------------------------
+After Induction (f excluded; k offered+generalized)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+variables:
+  - f: nat ⇒ nat
+goal: ∀n (k :: nat). n + k = k + n
+proof:
+  - step id: 1
+    operation: Intro
+    fixing variables:
+      - n: nat
+      - k: nat
+  - step id: 2
+    thought: induct on n; leave k for the prompt; f must not be offered
+    operation: Induction
+    target term: n :: nat
+    generalized variables: k
+    cases:
+      - goal id: 2.0
+        variables:
+          - n: nat
+        goal: (0 :: nat) + n = n + (0 :: nat)
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.0.1` to provide the proof.
+      - goal id: 2.Suc
+        variables:
+          - n: nat
+          - k1: nat
+        premises:
+          - Suc.IH: n + ?k = ?k + n
+        goal: True
+        proof: empty
+
+offered (unclassified) vars: ['k']

@@ -1223,7 +1223,7 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "answer_indexes_or_spec": {"description": "Answer by selecting indexes or providing an Isabelle proposition", "schema": _cc_answer_indexes_or_spec_schema, "annotations": _ACT},
     "answer_instantiate": {"description": "Answer by providing schematic-variable instantiations", "schema": _cc_answer_instantiate_schema, "annotations": _ACT},
     "answer_refutation": {"description": "Accept or reject a worker's claim that the goal is unprovable", "schema": _cc_answer_refutation_schema, "annotations": _ACT},
-    "subagent": {"description": "Launch a sub-agent to prove a goal in isolation. Call this when a goal is tedious and its proof would derail your main line of reasoning.", "schema": _cc_subagent_schema, "annotations": _ACT},
+    "subagent": {"description": "Launch a sub-agent to prove a goal or repair a proof in isolation. Call this when a goal is tedious and its proof would derail your main line of reasoning.", "schema": _cc_subagent_schema, "annotations": _ACT},
     "close_subagent": {"description": "Terminate a sub-agent you dispatched, freeing its step for editing again. Point it exactly at the step the sub-agent is on — it does NOT redirect, to avoid killing the wrong one. The sub-agent's partial proof is kept.", "schema": _cc_close_subagent_schema, "annotations": _ACT},
 }
 

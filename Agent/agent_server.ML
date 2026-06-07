@@ -758,9 +758,16 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         function = (fn state_id =>
           let val s0 = get_state state_id
               val ctxt = Minilang.context_of s0
-              val goal = Thm.prop_of (Minilang.leading_proof_sequent_of s0)
+              (* Only the LEADING subgoal — `leading_proof_sequent_of` returns
+               * the whole HHF frame (its prop holds every sibling subgoal), so
+               * take `hd (goals_of' …)` as elsewhere in this codebase. The
+               * reversion must match the context-var names exactly (Python
+               * compares by string): `Variable.revert_fixed` WITHOUT
+               * `Name.clean`, mirroring how `Newly_Fixed` items are reverted. *)
+              val goal = hd (Minilang.goals_of'
+                               (Minilang.leading_proof_sequent_of s0))
            in Term.add_frees goal []
-                |> map (Name.clean o Variable.revert_fixed ctxt o fst)
+                |> map (Variable.revert_fixed ctxt o fst)
                 |> distinct (op =)
           end handle ERROR msg => error (String.concat ["goal_variables: ", msg])
             | TERM (msg, _) => error (String.concat ["goal_variables: ", msg])
