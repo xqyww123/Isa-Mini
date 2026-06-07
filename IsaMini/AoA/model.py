@@ -2939,12 +2939,13 @@ class Node(ABC):
         return self._print_step_id(indent, file, update_line)
     def quickview_title(self) -> str:
         return type(self).__name__
+    _done_label: str = "proven"
     def _should_print_done(self) -> bool:
         return not self.does_quickview_need_detail()
     def quickview_header(self, indent: int, file: MyIO) -> int:
         print_indent(indent, file)
         changed_mark = "changed, " if self.changed else ""
-        done_mark = "done, " if self._should_print_done() else ""
+        done_mark = f"{self._done_label}, " if self._should_print_done() else ""
         match self.status.status:
             case EvaluationStatus.Status.FAILURE:
                 status_mark = "failed, "
@@ -4820,10 +4821,10 @@ class GoalNode(StdBlock):
         if self.is_single_goal:
             if self._should_print_done():
                 print_indent(indent, file)
-                file.write(f"done\n")
+                file.write(f"{self._done_label}\n")
             return indent
         else:
-            done_mark = "done, " if self._should_print_done() else ""
+            done_mark = f"{self._done_label}, " if self._should_print_done() else ""
             line_mark = f"line {self.line}, " if the_session().quickview_line_numbers else ""
             marks = f"{done_mark}{line_mark}".rstrip(", ")
             suffix = f" ({marks})" if marks else ""
@@ -6293,6 +6294,7 @@ class Define_ToolArg(TypedDict):
 @proof_operation("Define", Define_ToolArg)
 class Define(SubgoalMaker):
     _is_declarative = True
+    _done_label = "done"
     """Define a (recursive) function proof-locally via minilang's FUN
     command. The Minilang.FUN'' ML API is invoked with
     `open_on_fail = true` so that if pat-completeness or termination
@@ -6802,6 +6804,38 @@ class Interaction_SelectIHFacts(Interaction):
         for idx in answer.indexes:
             _check_index(idx, len(self.candidates))
             chosen.append(self.candidates[idx][0])
+        return chosen
+
+class Interaction_ClassifyInductionVars(Interaction):
+    """Pre-flight classification of in-scope variables the agent left
+    unspecified in an Induction: each is either fixed (held constant across
+    the induction hypotheses and cases) or generalized (universally
+    quantified in the induction hypothesis). Multi-select; the chosen
+    variables become `generalized`, the rest `fixed`. The answer is the list
+    of variable names to generalize."""
+    fork_allowed_tools = [TOOL_ANSWER_INDEXES, TOOL_SEARCH]
+    def __init__(self, unclassified: list[tuple[str, str]]):
+        # (name, type) of each in-scope variable left unclassified.
+        self.unclassified = unclassified
+    async def prompt(self, indent: int, file: MyIO) -> None:
+        if not self.unclassified:
+            raise ImmediateAnswer([])
+        print_indent(indent, file)
+        file.write(
+            "Your Induction operation did not classify the following "
+            "variables. Should each be treated as fixed (held constant "
+            "across the induction hypotheses and cases), or generalized "
+            "(universally quantified in the induction hypothesis)? Select "
+            f"the indexes of all variables to generalize (call "
+            f"`{tn(TOOL_ANSWER_INDEXES)}`; unselected ones stay fixed).\n")
+        for i, (name, typ) in enumerate(self.unclassified):
+            print_indent(indent + 1, file)
+            file.write(f"{i}. {name} :: {typ}\n")
+    async def answer(self, answer: AnswerIndexes) -> list[str]:
+        chosen: list[str] = []
+        for idx in answer.indexes:
+            _check_index(idx, len(self.unclassified))
+            chosen.append(self.unclassified[idx][0])
         return chosen
 
 Rewrite_ToolArg = TypedDict('Rewrite_ToolArg', {
@@ -8204,6 +8238,7 @@ class Induction(CaseSplit_Like):
         # forbids target-in-arbitrary on both fresh fill and amend.
         self.variables[:] = [var for var in self.variables if IsaTerm.from_agent(var["name"]) not in frees]
         if not self._rule_resolved:
+            await self._classify_unclassified_vars(frees)
             arbitrary = [v["name"] for v in self.variables if v["status"] == "generalized"]
             fail = await self._resolve_rule(
                 self.rule_spec, self.target_isabelle_term, arbitrary, "induction")
@@ -8236,14 +8271,13 @@ class Induction(CaseSplit_Like):
                 if v in vars:
                     del vars[v]
             var_names_as_isa = [IsaTerm.from_agent(var["name"]) for var in self.variables]
+            # Unclassified in-scope vars are now resolved up front by the
+            # pre-flight `_classify_unclassified_vars` Interaction (which asks
+            # the agent which to generalize), so `new_var_names` is normally
+            # empty here. The default-to-fixed below is kept purely as a
+            # silent safety net for any var that escapes that classification;
+            # no warning is emitted (the agent was already asked).
             new_var_names = [v for v in vars if v not in var_names_as_isa]
-            if new_var_names:
-                msg = (
-                    f"The {titled_string_of_and_list(new_var_names, 'variable', 'variables')} are not classified "
-                    "as fixed or generalized; fixed is assumed. "
-                    f"Change this by calling the `edit` tool with action `amend` and target step `{self.id}`"
-                )
-                self.warnings.append(Warning(Warning.Position.HEADER, msg))
             not_used_vars = [var["name"] for var in self.variables if IsaTerm.from_agent(var["name"]) not in vars]
             if not_used_vars:
                 msg = (
@@ -8286,6 +8320,37 @@ class Induction(CaseSplit_Like):
                         f"induction — skipped."))
                 else:
                     self.fact_refs_to_generalize.append(f)
+    async def _classify_unclassified_vars(self, frees: Vars) -> None:
+        """Pre-flight: when the agent left in-scope variables unclassified
+        (neither fixed nor generalized), ask which to generalize via
+        `Interaction_ClassifyInductionVars`. Selected vars are appended as
+        `generalized`, the rest as `fixed`. Runs BEFORE `arbitrary` is
+        computed (under the `_rule_resolved` gate, so once per node;
+        re-prompted on amend) so the choice flows into the induction tactic,
+        rule analysis, and the IH-fact picker's `dvars`. Only variables that
+        actually appear in the leading goal (premises ⟹ conclusion) are
+        offered — fetched via the `IsaMini.goal_variables` callback — so the
+        lemma's fixed signature and other in-scope-but-irrelevant variables are
+        not surfaced. Target frees are excluded — they cannot be generalized as
+        `arbitrary:`."""
+        vars = self._all_fixed_vars_before_me({})
+        for v in frees:
+            if v in vars:
+                del vars[v]
+        listed = [IsaTerm.from_agent(var["name"]) for var in self.variables]
+        goal_var_names = set(await self.ml_state.connection.callback(
+            "IsaMini.goal_variables", self.ml_state.name))
+        unclassified = [(name, typ) for name, typ in vars.items()
+                        if name not in listed and name.unicode in goal_var_names]
+        if not unclassified:
+            return
+        to_generalize = await the_session().fork_interaction(
+            Interaction_ClassifyInductionVars(
+                [(name.unicode, typ.unicode) for name, typ in unclassified]))
+        gen_set = set(to_generalize)
+        for name, _ in unclassified:
+            status = "generalized" if name.unicode in gen_set else "fixed"
+            self.variables.append({"name": name.unicode, "status": status})
     async def _choose_ih_facts(self, candidates: list[tuple[str, str]],
                                dvars: list[str]) -> None:
         """Pre-flight: offer the in-scope facts mentioning the relevant vars
@@ -9229,6 +9294,10 @@ class Session:
                 "A proof goal and an incomplete proof are provided in `./proof.yaml` under the current directory.\n"
                 "Analyze the proof goal, plan a proof, and complete it using the MCP proof tools.\n"
                 "Continue until no errors remain.\n"
+                + (f"For complex goals, first formalize the overall proof sketch before diving into details "
+                   f"— lay out the high-level structure that decomposes the goal into subgoals, "
+                   f"leaving holes unproved — then call `{self.tool_name(TOOL_SUBAGENT)}` to prove each one.\n"
+                   if self.is_major else "")
                 + report_line +
                 "The goal may rely on background lemmas that are not yet available. "
                 f"Search for them with `{self.tool_name(TOOL_SEARCH)}` first; "

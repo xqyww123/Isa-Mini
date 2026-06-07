@@ -1,0 +1,50 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Have with for_any and premises
+--------------------------------------------------
+variables:
+  - x: int
+- step id: global.1
+thought: lemma with for_any and premises
+operation: Have
+statement:
+  english: y squared is non-negative given y >= 0
+  for_any:
+    y: int
+  premises:
+    hy: (0::int) \<le> y
+  conclusion: (0::int) \<le> y * y
+name: h_forany
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `global.1.1` to provide the proof for the following goal.
+pending proof goal:
+  (0 :: int) ≤ y * y
+You can write global declarations by calling command `edit` with action `fill` and target step `global.2`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+Worker print_proof_scope (target = h_forany)
+--------------------------------------------------
+variables:
+  - x: int
+goal: (0 :: int) ≤ y * y
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+pending proof goal:
+  (0 :: int) ≤ y * y
+
+worker scope contains 'y': True
+worker scope contains 'hy': False
+worker scope contains goal: True
+goal.context.vars: []
+goal.context.hyps: []
+goal.conclusion: (0 :: int) ≤ y * y

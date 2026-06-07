@@ -58,9 +58,9 @@ Result (is_error=False):
 - real_le_rsqrt [manual]: ?x² ≤ ?y ⟶ ?x ≤ sqrt ?y
 - real_sqrt_abs2: sqrt (?x * ?x) = ¦?x¦
 Query: divisibility and square result; term patterns: (_ dvd _ + _); type patterns: nat; name contains: dvd
-  3 entities match the filters — 3 shown (0 already shown earlier).
+  3 entities match the filters — 3 new, 0 shown earlier are not shown again.
 Query: quotient is a perfect square
-  50 shown (0 already shown earlier).
+  50 new, 0 shown earlier are not shown again.
 
 Lemmas marked with [manual] must be specified manually for Rewrite/Obvious to use them.
 Null kinds result (is_error=False):
@@ -86,4 +86,4 @@ Null kinds result (is_error=False):
     where
       "of_nat_aux inc 0 i = i"
     | "of_nat_aux inc (Suc n) i = of_nat_aux inc n (inc i)" ― ‹tail recursive›
-5 shown (0 already shown earlier).
+5 new, 0 shown earlier are not shown again.

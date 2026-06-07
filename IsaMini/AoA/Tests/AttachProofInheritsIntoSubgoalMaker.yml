@@ -49,8 +49,6 @@ proof:
     thought: induct on m
     operation: Induction
     target term: m
-    notice:
-      - The variable n are not classified as fixed or generalized; fixed is assumed. Change this by calling the `edit` tool with action `amend` and target step `global.1.1`
     cases:
       - goal id: global.1.1.0
         goal: (0 :: nat) + (0 :: nat) = (0 :: nat)
@@ -77,8 +75,6 @@ global declarations:
     notice:
       - Due to changes in the proof structure, previous proof step step global.1.1 has been discarded
     step global.1.1: Induction m
-      notice:
-        - The variable n are not classified as fixed or generalized; fixed is assumed. Change this by calling the `edit` tool with action `amend` and target step `global.1.1`
       - global.1.1.0
         Error: Unfinished Proof. Call command `edit` with action `fill` and target step `global.1.1.0.1`
         goal: (0 :: nat) + (0 :: nat) = (0 :: nat)

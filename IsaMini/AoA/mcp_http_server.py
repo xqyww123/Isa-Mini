@@ -1129,7 +1129,7 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
                    f"or statement, NEVER by step id (the sub-agent cannot see your step numbering).")
         case _:  # "difficulty" — worker parked reporting a difficulty it is stuck on
             msg = (f"The sub-agent met some difficulties:\n"
-                   f"{detail_shown}\n"
+                   f"{detail_shown}\n\n"
                    f"Address this however you judge best — for example, prove additional "
                    f"lemmas, restructure the surrounding proof, or rethink the overall "
                    f"strategy. When you choose to resume the sub-agent, call `subagent` on "

@@ -746,6 +746,28 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         timeout = NONE
       }
 
+      (* All free variables of the ENTIRE leading goal (premises ⟹ conclusion),
+       * reverted to agent-facing names. Used by the Induction pre-flight to
+       * restrict the variable-classification offer to variables that actually
+       * appear in the goal, rather than every in-scope fixed variable (which
+       * would include the lemma's `fixes` signature). *)
+      val goal_variables_callback = {
+        name = "IsaMini.goal_variables",
+        arg_schema = unpackString,
+        ret_schema = packList packString,
+        function = (fn state_id =>
+          let val s0 = get_state state_id
+              val ctxt = Minilang.context_of s0
+              val goal = Thm.prop_of (Minilang.leading_proof_sequent_of s0)
+           in Term.add_frees goal []
+                |> map (Name.clean o Variable.revert_fixed ctxt o fst)
+                |> distinct (op =)
+          end handle ERROR msg => error (String.concat ["goal_variables: ", msg])
+            | TERM (msg, _) => error (String.concat ["goal_variables: ", msg])
+            | TYPE (msg, _, _) => error (String.concat ["goal_variables: ", msg])),
+        timeout = NONE
+      }
+
       val potential_defs_callback = {
         name = "IsaMini.potential_defs_of",
         arg_schema = unpackPair (unpackString, unpackList unpackString),

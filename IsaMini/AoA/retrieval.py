@@ -343,18 +343,31 @@ def _has_structural_filter(q: dict) -> bool:
                 or q.get("target_type"))
 
 
-def _format_search_summary(q: dict, total: int, shown: int, before: int,
+def _format_search_summary(q: dict, total: int, k: int, new: int,
+                           before_names: 'list[short_name]',
                            verbose: bool) -> str:
     """One-line per-query count summary: how many entities match the filters
-    (XX, only when the query is filtered), how many are shown this call (YY),
-    and how many were already shown in earlier calls (ZZ). The first few lines
-    per session use a self-explanatory phrasing; the rest a terse one."""
+    (XX, only when the query is filtered), how many are new this call (YY),
+    and which were already shown earlier. The first few lines per session use
+    a self-explanatory phrasing; the rest a terse one."""
     show_xx = _has_structural_filter(q)
+    before = len(before_names)
+    if before_names:
+        if before <= 5:
+            names_suffix = ": " + ", ".join(n.unicode for n in before_names)
+            end = "."
+        else:
+            names_suffix = ": " + ", ".join(n.unicode for n in before_names[:5]) + "..."
+            end = ""
+    else:
+        names_suffix = ""
+        end = "."
+    k_shown = f" {k} shown" if k < total else ""
     if verbose:
-        tail = f"{shown} shown ({before} already shown earlier)."
-        return f"{total} entities match the filters — {tail}" if show_xx else tail
-    tail = f"{shown} shown ({before} before)."
-    return f"{total} match — {tail}" if show_xx else tail
+        tail = f"{new} new, {before} shown earlier are not shown again{names_suffix}{end}"
+        return f"{total} entities match the filters{k_shown} — {tail}" if show_xx else tail
+    tail = f"{new} new, {before} shown earlier{names_suffix}{end}"
+    return f"{total} match{k_shown} — {tail}" if show_xx else tail
 
 
 def _format_search_report(
@@ -481,31 +494,37 @@ async def _semantic_search_direct(
         *[_run_knn_for_query(ml_state, q) for q in queries])
 
     seen = session.seen_entities
+    seen_before = set(seen)
     per_query_warnings = _collect_query_warnings(knn_results)
-    # Collect new entities, tracking per-query (total / shown / shown-before)
-    # counts for the summary lines.
+    # Collect new entities, tracking per-query (new / shown-before) counts for
+    # the summary lines.
     new_items: list[RetrievedEntity] = []
     total_found = 0
     encountered: set[short_name] = set()
     summary_lines: list[str] = []
     for q, (fetched, _warnings, _error, total) in zip(queries, knn_results):
         k = _query_k(q)
-        shown = 0   # YY: newly shown by this query
-        before = 0  # ZZ: this query's top-k already shown in earlier calls
+        new = 0
+        before_names: list[short_name] = []
         for f in fetched[:k]:
             sn = f.entity.short_name
             if sn in encountered:
+                if sn in seen_before:
+                    if sn not in before_names:
+                        before_names.append(sn)
+                else:
+                    new += 1
                 continue
             encountered.add(sn)
             total_found += 1
             if sn in seen:
-                before += 1
+                before_names.append(sn)
                 continue
             new_items.append(f)
             seen.add(sn)
-            shown += 1
-        verbose = (session.search_summary_count + len(summary_lines)) < 5
-        summary_lines.append(_format_search_summary(q, total, shown, before, verbose))
+            new += 1
+        verbose = (session.search_summary_count + len(summary_lines)) < 15
+        summary_lines.append(_format_search_summary(q, total, k, new, before_names, verbose))
 
     if not new_items:
         totals = [r[3] for r in knn_results]

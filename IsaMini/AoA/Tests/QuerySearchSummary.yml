@@ -1,8 +1,8 @@
-call 1: 92 entities match the filters — 5 shown (0 already shown earlier).
-call 2: 902 entities match the filters — 5 shown (0 already shown earlier).
-call 3: 714 entities match the filters — 5 shown (0 already shown earlier).
-call 4: 509 entities match the filters — 5 shown (0 already shown earlier).
-call 5: 408 entities match the filters — 5 shown (0 already shown earlier).
-call 6: 459 match — 5 shown (0 before).
-repeat: 92 match — 0 shown (5 before).
-no-filter: 5 shown (0 before).
+call 1: 92 entities match the filters 5 shown — 5 new, 0 shown earlier are not shown again.
+call 2: 902 match 5 shown — 5 new, 0 shown earlier.
+call 3: 714 match 5 shown — 5 new, 0 shown earlier.
+call 4: 509 match 5 shown — 5 new, 0 shown earlier.
+call 5: 408 match 5 shown — 5 new, 0 shown earlier.
+call 6: 459 match 5 shown — 5 new, 0 shown earlier.
+repeat: 92 match 5 shown — 0 new, 5 shown earlier.
+no-filter: 5 new, 0 shown earlier.

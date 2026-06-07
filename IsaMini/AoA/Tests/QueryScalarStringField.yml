@@ -29,8 +29,8 @@ Result (is_error=False):
     True_or_False: "(P = True) ∨ (P = False)"
 - refl_conj_eq [manual]: ?Q = ?R ⟶ (?P ∧ ?Q) = (?P ∧ ?R)
 Query: P = Q if and only if P ⟶ Q ∧ Q ⟶ P; name contains: iff
-  1936 entities match the filters — 15 shown (0 already shown earlier).
+  1936 entities match the filters 15 shown — 15 new, 0 shown earlier are not shown again.
 Query: equality of booleans is equivalence: (P = Q) = (P ⟶ Q ∧ Q ⟶ P)
-  7 shown (0 already shown earlier).
+  7 new, 0 shown earlier are not shown again.
 
 Lemmas marked with [manual] must be specified manually for Rewrite/Obvious to use them.

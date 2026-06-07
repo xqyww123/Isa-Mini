@@ -63,7 +63,8 @@ class ModelTestCase(TestCase):
             # reassigns root.session.fork_interaction itself (which overrides
             # this). Other interactions still raise, as before.
             async def _default_fork_interaction(interaction):
-                if isinstance(interaction, Interaction_SelectIHFacts):
+                if isinstance(interaction, (Interaction_SelectIHFacts,
+                                            Interaction_ClassifyInductionVars)):
                     return await interaction.answer(AnswerIndexes(indexes=[]))
                 raise NotImplementedError(
                     "Unstubbed interaction in model test: "
@@ -2888,7 +2889,7 @@ async def _test_query_scalar_string_field(root: Root, file: MyIO):
 @model_test("QuerySearchSummary", "Test_QuerySearchSummary.thy", 8)
 async def _test_query_search_summary(root: Root, file: MyIO):
     """query tool: each call appends a per-query summary line
-    'XX entities match the filters — YY shown (ZZ already shown earlier).'.
+    'XX entities match the filters — YY new, ZZ shown earlier are not shown again.'.
     Asserts (format-based, count-agnostic):
       - the first 5 summary lines per session use the verbose phrasing, the
         rest a terse one;
@@ -2903,7 +2904,7 @@ async def _test_query_search_summary(root: Root, file: MyIO):
     root.session.interactive_retrieval = InteractiveRetrievalMode.NO
 
     def summary_lines(result: str) -> list[str]:
-        return [ln.strip() for ln in result.splitlines() if "shown (" in ln]
+        return [ln.strip() for ln in result.splitlines() if "shown earlier" in ln]
 
     async def run(q: dict) -> str:
         result, is_error = await _query_tool_logic(root.session, {'queries': [q]})
@@ -2912,8 +2913,9 @@ async def _test_query_search_summary(root: Root, file: MyIO):
         assert len(lines) == 1, f"expected one summary line, got {lines}"
         return lines[0]
 
-    # 6 filtered single-query calls (distinct substrings) → 6 summary lines in
-    # one session, crossing the verbose→terse boundary at the 6th.
+    # 6 filtered single-query calls (distinct substrings) → 6 summary lines.
+    # Pre-set the counter so the boundary (15) is crossed at the 2nd call.
+    root.session.search_summary_count = 14
     fragments = ["plus", "less", "mult", "diff", "power", "abs"]
     collected: list[str] = []
     for frag in fragments:
@@ -2923,19 +2925,19 @@ async def _test_query_search_summary(root: Root, file: MyIO):
         collected.append(line)
     for i, line in enumerate(collected):
         file.write(f"call {i+1}: {line}\n")
-    for line in collected[:5]:
-        assert "already shown earlier" in line, f"first 5 must be verbose: {line}"
-        assert "match the filters" in line, f"filtered query must show XX: {line}"
-    assert "already shown earlier" not in collected[5], f"6th must be terse: {collected[5]}"
-    assert "match —" in collected[5] and "before)" in collected[5], \
-        f"6th must be terse with XX: {collected[5]}"
+    assert "not shown again" in collected[0], f"1st must be verbose: {collected[0]}"
+    assert "match the filters" in collected[0], f"filtered query must show XX: {collected[0]}"
+    for line in collected[1:]:
+        assert "not shown again" not in line, f"must be terse: {line}"
+    assert "match" in collected[1] and "shown earlier." in collected[1], \
+        f"2nd must be terse with XX: {collected[1]}"
 
     # ZZ grows on repeat: re-run the first fragment; its entities are now seen.
     repeat = await run({'kinds': ['lemma'],
                         'long_description': 'lemmas mentioning plus',
                         'name_contains': ['plus'], 'number': 5})
     file.write(f"repeat: {repeat}\n")
-    m = re.search(r"\((\d+) before\)", repeat)
+    m = re.search(r"(\d+) shown earlier", repeat)
     assert m and int(m.group(1)) > 0, f"repeat must report ZZ>0 already shown: {repeat}"
 
     # XX gate: a bare semantic query (no structural filter) omits the XX clause.
@@ -5421,6 +5423,9 @@ async def _test_Induction_SelectIHFacts(root: Root, file: MyIO):
             # Select every offered candidate.
             return await interaction.answer(
                 AnswerIndexes(indexes=list(range(len(interaction.candidates)))))
+        if isinstance(interaction, Interaction_ClassifyInductionVars):
+            # Not under test here — decline (leave such variables fixed).
+            return await interaction.answer(AnswerIndexes(indexes=[]))
         raise TestFailed(
             f"Unexpected interaction in this test: {type(interaction).__name__}")
     root.session.fork_interaction = stub_fork
@@ -5492,6 +5497,9 @@ async def _test_Induction_SelectIHFacts_MultiThm(root: Root, file: MyIO):
             await interaction.prompt(0, file)
             # Select ONLY the first offered candidate — a strict subset.
             return await interaction.answer(AnswerIndexes(indexes=[0]))
+        if isinstance(interaction, Interaction_ClassifyInductionVars):
+            # Not under test here — decline (leave such variables fixed).
+            return await interaction.answer(AnswerIndexes(indexes=[]))
         raise TestFailed(
             f"Unexpected interaction in this test: {type(interaction).__name__}")
     root.session.fork_interaction = stub_fork
@@ -5532,6 +5540,71 @@ async def _test_Induction_SelectIHFacts_MultiThm(root: Root, file: MyIO):
         f"expected exactly one carried fact (strict subset), got {carried}")
     assert "premise0" in carried[0] and "(" in carried[0], (
         f"expected an indexed premise0(i) carried, got {carried}")
+
+
+@model_test("Induction_ClassifyVars", "Test_Induction_ClassifyVars.thy", 18)
+async def _test_Induction_ClassifyVars(root: Root, file: MyIO):
+    """When an Induction leaves an in-scope variable unclassified (neither
+    fixed nor generalized), the pre-flight asks via
+    `Interaction_ClassifyInductionVars` which to generalize, BEFORE `arbitrary`
+    is computed. Here `Intro` fixes `n`, `k` (no premise → the IH-fact picker
+    stays silent); the induction classifies only `n` and leaves `k`
+    unclassified. The stub selects `k`, so it becomes a generalized
+    (universally quantified) variable rather than defaulting to fixed."""
+    classify_fork_count = 0
+    offered_vars: list[str] = []
+    async def stub_fork(interaction):
+        nonlocal classify_fork_count
+        if isinstance(interaction, Interaction_ClassifyInductionVars):
+            classify_fork_count += 1
+            offered_vars.extend(n for n, _t in interaction.unclassified)
+            print_header("Variable-classification prompt", file)
+            await interaction.prompt(0, file)
+            # Generalize every offered (unclassified) variable.
+            return await interaction.answer(
+                AnswerIndexes(indexes=list(range(len(interaction.unclassified)))))
+        if isinstance(interaction, Interaction_ClassifyInductionVars):
+            # Not under test here — decline (leave such variables fixed).
+            return await interaction.answer(AnswerIndexes(indexes=[]))
+        raise TestFailed(
+            f"Unexpected interaction in this test: {type(interaction).__name__}")
+    root.session.fork_interaction = stub_fork
+
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Intro: fix n, k (the goal has no premise to assume).
+    root.session.age += 1
+    await root.fill("1", [Intro.gen_single({
+        "thought": "fix n, k",
+    })])
+    print_header("After Intro (fixes n, k)", file)
+    root.print(0, file)
+
+    # Induction on n, classifying ONLY n; k is left unclassified so the
+    # pre-flight must ask. The stub generalizes k.
+    root.session.age += 1
+    await root.fill("2", [Induction.gen_single({
+        "thought": "induct on n; leave k for the classification prompt",
+        "target_isabelle_term": "n :: nat",
+        "variables": [
+            {"name": "n", "status": "fixed"},
+        ],
+    })])
+    print_header("After Induction (k classified as generalized via prompt)", file)
+    root.print(0, file)
+
+    induct_node = root.locate_node("2")
+    var_status = {v["name"]: v["status"] for v in induct_node.variables}
+    file.write(f"\nclassify_fork_count: {classify_fork_count}\n")
+    file.write(f"offered (unclassified) vars: {offered_vars}\n")
+    file.write(f"variable statuses after classification: {var_status}\n")
+    assert classify_fork_count == 1, (
+        f"Expected exactly one classification fork, got {classify_fork_count}.")
+    assert offered_vars == ["k"], (
+        f"Expected the unclassified `k` to be offered, got {offered_vars}.")
+    assert var_status.get("k") == "generalized", (
+        f"Expected `k` to be generalized after selection, got {var_status}.")
 
 
 @model_test("FactsToGeneralize_Filter",
@@ -12073,6 +12146,74 @@ async def _test_HammerLooseBound(root: Root, file: MyIO):
     print_header("After g_has_integral batch (crash site = x_cont Obvious)", file)
     root.print(0, file)
     _prog.write("DONE\n"); _prog.close()
+
+
+@model_test("HaveWorkerForAny", "Test_HaveWorkerForAny.thy", 10)
+async def _test_HaveWorkerForAny(root: Root, file: MyIO):
+    """Worker scope must include the target Have's for_any variables and premises.
+
+    Regression: when a worker is dispatched to a Have with for_any/premises,
+    print_proof_scope used _ctxt_before_me() which excludes the Have's own
+    fixed vars and assumed premises. The goal's context (from leading_goal_data)
+    is also empty because gen_HAVE' pushes HHF(goal, ([],[])) with empty items.
+    Result: the worker sees the bare conclusion with free variables but no
+    corresponding variable declarations or premises, making the goal unprovable.
+
+    This test creates a global Have with for_any:[y:int] and premises:[hy: y>=0],
+    switches to a worker scoped to that Have, and verifies that both y and hy
+    appear in the rendered proof scope."""
+    session = root.session
+
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Create a Have with for_any and premises in the global env
+    session.age += 1
+    [h_forany] = (await root.global_env.append([Have.gen_single({
+        "thought": "lemma with for_any and premises",
+        "statement": {
+            "english": "y squared is non-negative given y >= 0",
+            "for_any": [{"name": "y", "type": "int"}],
+            "premises": [{"name": "hy", "term": r"(0::int) \<le> y"}],
+            "conclusion": r"(0::int) \<le> y * y",
+        },
+        "name": "h_forany",
+    })])).committed
+
+    print_header("After Have with for_any and premises", file)
+    root.print(0, file)
+
+    # Switch to worker scope targeting h_forany
+    session.role = model.Role_Worker(target=h_forany)
+    await session._prefetch_worker_premises()
+
+    # Render the worker-scoped view
+    print_header("Worker print_proof_scope (target = h_forany)", file)
+    session.print_proof_scope(0, file, show_warnings=True)
+
+    # Capture the rendered text for assertions
+    buf = MyIO(io.StringIO())
+    session.print_proof_scope(0, buf)
+    ps_text = buf.getvalue()
+
+    # Check: the for_any variable 'y' should appear in the variables section
+    file.write(f"\nworker scope contains 'y': {'y' in ps_text}\n")
+    # Check: the premise 'hy' should appear in the premises section
+    file.write(f"worker scope contains 'hy': {'hy' in ps_text}\n")
+    # Check: the goal should be the bare conclusion (not the meta-quantified form)
+    file.write(f"worker scope contains goal: {'goal:' in ps_text}\n")
+
+    # Also inspect goal.context directly
+    goal = h_forany._state_after_beginning().leading_goal
+    if goal is not None:
+        file.write(f"goal.context.vars: {[(n.unicode, t.unicode) for n, t in goal.context.vars.items()]}\n")
+        file.write(f"goal.context.hyps: {[(n.unicode, t.unicode) for n, t in goal.context.hyps.items()]}\n")
+        file.write(f"goal.conclusion: {goal.conclusion.unicode}\n")
+    else:
+        file.write("goal: None\n")
+
+    # Restore role
+    session.role = model.Role_Major()
 
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):

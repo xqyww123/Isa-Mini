@@ -1,0 +1,68 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∀n (k :: nat). n + k = k + n
+proof:
+  - step id: 1
+    operation: Intro
+    fixing variables:
+      - n: nat
+      - k: nat
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  n + k = k + n
+--------------------------------------------------
+After Intro (fixes n, k)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∀n (k :: nat). n + k = k + n
+proof:
+  - step id: 1
+    operation: Intro
+    fixing variables:
+      - n: nat
+      - k: nat
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  n + k = k + n
+--------------------------------------------------
+Variable-classification prompt
+--------------------------------------------------
+Your Induction operation did not classify the following variables. Should each be treated as fixed (held constant across the induction hypotheses and cases), or generalized (universally quantified in the induction hypothesis)? Select the indexes of all variables to generalize (call `answer_indexes`; unselected ones stay fixed).
+  0. k :: nat
+--------------------------------------------------
+After Induction (k classified as generalized via prompt)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∀n (k :: nat). n + k = k + n
+proof:
+  - step id: 1
+    operation: Intro
+    fixing variables:
+      - n: nat
+      - k: nat
+  - step id: 2
+    thought: induct on n; leave k for the classification prompt
+    operation: Induction
+    target term: n :: nat
+    generalized variables: k
+    cases:
+      - goal id: 2.0
+        variables:
+          - n: nat
+        goal: (0 :: nat) + n = n + (0 :: nat)
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.0.1` to provide the proof.
+      - goal id: 2.Suc
+        variables:
+          - n: nat
+          - k1: nat
+        premises:
+          - Suc.IH: n + ?k = ?k + n
+        goal: True
+        proof: empty
+
+classify_fork_count: 1
+offered (unclassified) vars: ['k']
+variable statuses after classification: {'k': 'generalized'}
