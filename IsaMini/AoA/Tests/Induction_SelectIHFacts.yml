@@ -39,8 +39,8 @@ pending proof goal:
 --------------------------------------------------
 IH-fact selection prompt
 --------------------------------------------------
-These in-scope facts mention k. Select which to carry into the induction hypothesis (call `answer_indexes` with their indexes; empty = none).
-  0. premise0: k \<le> n
+These in-scope facts mention n and k. Select which to carry into the induction hypothesis (call `answer_indexes` with their indexes; empty = none).
+  0. premise0: k ≤ n
 --------------------------------------------------
 After Induction (selected facts carried into IH)
 --------------------------------------------------
@@ -62,20 +62,27 @@ proof:
     operation: Induction
     target term: n :: nat
     generalized variables: k
-    facts to generalize: premise0
+    IH facts: premise0
     cases:
       - goal id: 2.0
+        variables:
+          - n: nat
+        premises:
+          - premise0: n ≤ (0 :: nat)
         goal: a n dvd b (0 :: nat)
         proof: empty
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.0.1` to provide the proof.
       - goal id: 2.Suc
         variables:
+          - n: nat
           - k1: nat
         premises:
+          - premise0: k1 ≤ Suc n
           - Suc.IH: ?k ≤ n ⟶ a ?k dvd b n
         goal: a k1 dvd b (Suc n)
         proof: empty
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.Suc.1` to provide the proof.
+base case (2.0) hypotheses: ['premise0']
 
 fork_count: 1
 facts carried into IH: ['premise0']

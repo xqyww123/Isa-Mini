@@ -11,6 +11,7 @@ Error: Unfinished Proof! Call command `edit` with action `fill` and target step 
 edit_message: seed Have { proof: [Obvious] }
 --------------------------------------------------
 Filled step 1.
+All proof goals of step 1 are now completed.
 Outline:
   step 1: Have outer (done)
   Error: Unfinished Proof. Call command `edit` with action `fill` and target step `2`
@@ -20,6 +21,7 @@ Outline:
 edit_message: amend into Suffices; Q6 folds Obvious into inner Have
 --------------------------------------------------
 Amended step 1.
+All proof goals of step 1.1 are now completed.
 Outline:
   step 1: Suffices
     step 1.1: Have inner (done)

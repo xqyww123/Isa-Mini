@@ -95,7 +95,7 @@ proof:
         thought: induct on n with four kinds of facts_to_generalize
         operation: Induction
         target term: n :: nat
-        facts to generalize: premise0
+        IH facts: premise0
         fixing variables:
           - n: nat
         assuming premises:
@@ -104,6 +104,6 @@ proof:
 
 Surviving facts_to_generalize (full names): ['premise0']
 Warnings (sorted):
-  - Fact `bogus_name` in `facts_to_generalize` was not found; skipped.
-  - Fact `nat_less_induct` in `facts_to_generalize` is a global theorem; only local proof-context facts can be carried through induction — skipped.
-  - Fact `trivial_fact` in `facts_to_generalize` does not mention any generalized variable; it would not be affected by induction — skipped.
+  - Fact `bogus_name` in `IH_facts` was not found; skipped.
+  - Fact `nat_less_induct` in `IH_facts` is a global theorem; only local proof-context facts can be carried through induction — skipped.
+  - Fact `trivial_fact` in `IH_facts` does not mention any generalized variable; it would not be affected by induction — skipped.

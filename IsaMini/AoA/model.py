@@ -1910,6 +1910,17 @@ class Minilang_State:
             else:
                 raise
 
+    async def induction_target_hits_leading_binder(self, target: xterm) -> bool:
+        """True iff the induction `target` mentions a free variable that is a
+        not-yet-introduced leading ∀/⋀ binder of the current goal — decided
+        entirely ML-side in one context (see the
+        ``IsaMini.induction_target_hits_leading_binder`` callback in
+        agent_server.ML). Used to auto-inject an Intro before a body-leading
+        Induction on a ∀/⋀-bound variable."""
+        return await self.connection.callback(
+            "IsaMini.induction_target_hits_leading_binder",
+            (self.name, ascii_of_unicode(target)))
+
     async def unfold_syntax(self, term_str: str) -> tuple[str, str, str]:
         """Parse term and unfold higher-theory syntax.
         Returns (head_const_name, raw_main_display, normal_display).
@@ -4427,9 +4438,8 @@ class StdBlock(NonLeaf_Node):
             self.sub_nodes = []
             gns = list(self._proof)
             self._proof = None
-            if (auto_intro
-                    and not any(gn.cls is Intro or gn.cls is Induction for gn in gns)
-                    and await self._state_after_beginning().need_intro(False)):
+            if auto_intro and await self._should_inject_leading_intro(
+                    self._state_after_beginning(), gns):
                 local_step = self._local_step_of_next_proof_step()
                 ml_state = await self._state_after_beginning().clone(None)
                 config = NodeConfig(local_step, ml_state, self)
@@ -4483,6 +4493,26 @@ class StdBlock(NonLeaf_Node):
                 self.sub_nodes.append(intro)
                 the_session().auto_intro_nodes.append(intro)
         return None
+    async def _should_inject_leading_intro(
+            self, state: 'Minilang_State', gns: 'list[Parsed_Opr]') -> bool:
+        """Decide whether to auto-inject an Intro before the body `gns`,
+        evaluated against `state` (the body's pre-state).
+
+        Mirrors the historical gate — inject when the goal needs intro and the
+        body does not already lead with structured introduction — with ONE
+        loosening: a body whose FIRST step is an Induction whose target hits a
+        not-yet-introduced leading ∀/⋀ binder still gets the Intro. (The agent
+        wrote `[Induction]` where it should have written `[Intro, Induction]`;
+        inducting on a still-bound variable is ill-typed otherwise.)"""
+        if not await state.need_intro(False):
+            return False
+        if not any(gn.cls is Intro or gn.cls is Induction for gn in gns):
+            return True
+        first = gns[0]
+        if first.cls is Induction:
+            tgt = first.raw.get("target_isabelle_term")
+            return bool(tgt) and await state.induction_target_hits_leading_binder(tgt)
+        return False
     async def append(
         self, gns: 'list[Parsed_Opr]',
         op: 'EditOperation' = EditOperation.FILL,
@@ -4710,8 +4740,7 @@ class GoalNode(StdBlock):
         if self._pending_proof is not None and not self.sub_nodes:
             gns = self._pending_proof
             self._pending_proof = None
-            if (not any(gn.cls is Intro or gn.cls is Induction for gn in gns)
-                    and await self.ml_state.need_intro(False)):
+            if await self._should_inject_leading_intro(self.ml_state, gns):
                 local_step = self._local_step_of_next_proof_step()
                 ml_state = await self.ml_state.clone(None)
                 config = NodeConfig(local_step, ml_state, self)
@@ -6724,7 +6753,7 @@ class Interaction_SelectRewriteTargets(Interaction):
 class Interaction_SelectIHFacts(Interaction):
     """Pre-flight selection of in-scope facts to carry into the induction
     hypothesis (alongside the `arbitrary:` generalization). Multi-select; the
-    chosen fact names supplement the agent-supplied `facts_to_generalize`."""
+    chosen fact names supplement the agent-supplied `IH_facts`."""
     fork_allowed_tools = [TOOL_ANSWER_INDEXES, TOOL_SEARCH]
     def __init__(self, candidates: list[tuple[str, IsaTerm]],
                  relevant_vars: list[str]):
@@ -8103,7 +8132,7 @@ class Induction_ToolArg(TypedDict):
     target_isabelle_term: xterm
     rule: NotRequired[Literal["default"] | FactByName | FactByDescription]
     variables: list[Induction_ToolArg_Variable]
-    facts_to_generalize: NotRequired[list[FactByName]]
+    IH_facts: NotRequired[list[FactByName]]
     proofs: NotRequired[list[Proof_PerCase] | None]
     simplify: NotRequired[bool]
 
@@ -8125,7 +8154,7 @@ class Induction(CaseSplit_Like):
         # amend; resolved refs hold only the surviving local facts that
         # mention at least one generalized variable.
         self._raw_facts_to_generalize: list[FactByName] = [
-            f for f in (arg.get("facts_to_generalize") or []) if f is not None]
+            f for f in (arg.get("IH_facts") or []) if f is not None]
         self.fact_refs_to_generalize: list[IsabelleFact_Presented] = []
         self._supplied_proofs = proofs_by_case
         self.no_simp: bool = not arg.get("simplify", True)
@@ -8168,7 +8197,7 @@ class Induction(CaseSplit_Like):
                         display = ref.short_name.unicode if ref is not None else n
                         self.warnings.append(Warning(
                             Warning.Position.HEADER,
-                            f"Fact `{display}` in `facts_to_generalize` does not mention any "
+                            f"Fact `{display}` in `IH_facts` does not mention any "
                             f"generalized variable; it would not be affected by induction — skipped."))
                     dropped_set = set(m.dropped_names)
                     self.fact_refs_to_generalize = [
@@ -8221,12 +8250,12 @@ class Induction(CaseSplit_Like):
             if isinstance(f, IsabelleFact_Unfound):
                 self.warnings.append(Warning(
                     Warning.Position.HEADER,
-                    f"Fact `{f.name().unicode}` in `facts_to_generalize` was not found; skipped."))
+                    f"Fact `{f.name().unicode}` in `IH_facts` was not found; skipped."))
             elif isinstance(f, IsabelleFact_Presented):
                 if not f.is_local:
                     self.warnings.append(Warning(
                         Warning.Position.HEADER,
-                        f"Fact `{f.short_name.unicode}` in `facts_to_generalize` is a global "
+                        f"Fact `{f.short_name.unicode}` in `IH_facts` is a global "
                         f"theorem; only local proof-context facts can be carried through "
                         f"induction — skipped."))
                 else:
@@ -8282,7 +8311,7 @@ class Induction(CaseSplit_Like):
             file.write(f"generalized variables: {string_of_and_list([var["name"] for var in self.variables if var["status"] == "generalized"])}\n")
         if self.fact_refs_to_generalize:
             print_indent(indent, file)
-            file.write(f"facts to generalize: {string_of_and_list([r.short_name.unicode for r in self.fact_refs_to_generalize])}\n")
+            file.write(f"IH facts: {string_of_and_list([r.short_name.unicode for r in self.fact_refs_to_generalize])}\n")
         super()._print_header(indent, file)
         self._print_evaluation_status(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])

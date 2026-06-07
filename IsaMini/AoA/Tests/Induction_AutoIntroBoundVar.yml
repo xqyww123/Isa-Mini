@@ -2,45 +2,45 @@
 Initial YAML
 --------------------------------------------------
 variables:
-  - n: nat
+  - x: int
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
-goal: ∑ {..n} = n * (n + (1 :: nat)) div (2 :: nat)
+goal: (0 :: int) ≤ x * x
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
-After fill
+After Have (auto-Intro injected before body-leading Induction)
 --------------------------------------------------
 variables:
-  - n: nat
+  - x: int
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
-goal: ∑ {..n} = n * (n + (1 :: nat)) div (2 :: nat)
+goal: (0 :: int) ≤ x * x
 proof:
   - step id: 1
-    thought: helper lemma by induction
+    thought: two to the power n is positive
     operation: Have
     statement:
-      english: sum identity
-      conclusion: (\<Sum>i\<le>n. i) = n * (n + 1) div 2
-    name: helper
+      english: 2^n > 0 for every n
+      conclusion: \<forall>n::nat. (2::int)^n > 0
+    name: pos_pow
     proof:
       - step id: 1.1
-        thought: intro
         operation: Intro
+        fixing variables:
+          - n: nat
       - step id: 1.2
         thought: induction on n
         operation: Induction
         target term: n
         cases:
           - goal id: 1.2.0
-            goal: ∑ {..(0 :: nat)} = (0 :: nat) * ((0 :: nat) + (1 :: nat)) div (2 :: nat)
+            goal: (0 :: int) < (2 :: int) ^ (0 :: nat)
             proof: empty
             Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.0.1` to provide the proof.
           - goal id: 1.2.Suc
             variables:
               - n: nat
             premises:
-              - Suc.IH: ∑ {..n} = n * (n + (1 :: nat)) div (2 :: nat)
-            goal: (n + n * n) div (2 :: nat) + n = (n + (n + (n + n * n))) div (2 :: nat)
+              - Suc.IH: (0 :: int) < (2 :: int) ^ n
+            goal: True
             proof: empty
-            Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.Suc.1` to provide the proof.
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.

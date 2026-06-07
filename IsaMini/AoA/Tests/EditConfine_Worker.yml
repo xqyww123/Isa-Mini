@@ -22,6 +22,7 @@ is_error=True
 Filled nothing.
 Cannot fill a node with id 1.2
 The target already exists. Fill does not overwrite existing successful steps.
+All proof goals of step 1 are now completed.
 
 --------------------------------------------------
 worker fill 1.1.1 -> worker-LOCKED message (relativized id)

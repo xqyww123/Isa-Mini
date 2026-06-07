@@ -7,11 +7,13 @@ declare [[agent_AoA_driver="test.HammerLooseBound"]]
 text \<open>
   Regression reproducer for
     exception TERM raised (line 375 of "term.ML"): fastype_of: Bound
+  observed on this exact problem (putnam_1970_b4 from PutnamBench).
 
-  This is the production case putnam_1970_b4 (data/PutnamBench/isabelle), with
-  the SAME imports (HOL-Analysis.Derivative) so the sledgehammer/mepo background
-  fact database matches the original run. The driver (test.HammerLooseBound)
-  replays the production proof up to the crashing Obvious at step `x_cont`.
+  The crash happens when the agent drives the FTC block: after Derive
+  fundamental_theorem_of_calculus_strong and Rewrite (yielding premise4 with
+  a HOL \<forall>x1 binder), the Obvious (HAMMER) on `continuous_on {0..1} x` crashes
+  inside run_mepo_and_render / fast_force when traversing the binder and calling
+  fastype_of on a subterm carrying a loose de Bruijn Bound.
 \<close>
 
 theorem putnam_1970_b4:

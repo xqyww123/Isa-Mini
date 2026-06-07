@@ -22,7 +22,7 @@ Outline:
 edit_message: fill 1.1 (should complete step 1)
 --------------------------------------------------
 Filled step 1.1.
-All proof goals of step 1 are completed.
+All proof goals of step 1 are now completed.
 Outline:
   step 1: Have h1 (done)
   Error: Unfinished Proof. Fill step `2`
@@ -55,7 +55,7 @@ Outline:
 edit_message: fill 2.1.1 (should complete step 2.1 only)
 --------------------------------------------------
 Filled step 2.1.1.
-All proof goals of step 2.1 are completed.
+All proof goals of step 2.1 are now completed.
 Outline:
   step 1: Have h1 (done)
   step 2: Have h2
@@ -67,7 +67,7 @@ Outline:
 edit_message: fill 2.2 (should complete step 2.2 AND cascade to step 2)
 --------------------------------------------------
 Filled step 2.2.
-All proof goals of step 2 are completed.
+All proof goals of step 2 are now completed.
 Outline:
   step 1: Have h1 (done)
   step 2: Have h2 (done)
@@ -123,7 +123,7 @@ Outline:
 edit_message: fill 3.1.1 (should complete step 3.1 AND step 3)
 --------------------------------------------------
 Filled step 3.1.1.
-All proof goals of step 3.1, step 3 are completed.
+All proof goals of step 3 are now completed.
 Outline:
   step 1: Have h1 (done)
   step 2: Have h2 (done)

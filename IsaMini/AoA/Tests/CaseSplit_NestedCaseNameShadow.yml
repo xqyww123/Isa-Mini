@@ -32,6 +32,8 @@ proof:
         pending proof goal:
           P (0 :: nat)
       - goal id: 1.Suc
+        variables:
+          - n: nat
         premises:
           - Suc.IH: P n
         goal: P (Suc n)
@@ -51,6 +53,8 @@ proof:
                 pending proof goal:
                   P (Suc (0 :: nat))
               - goal id: 1.Suc.1.Suc1
+                variables:
+                  - n: nat
                 premises:
                   - Suc1.IH: P (Suc n)
                 goal: P (Suc (Suc n))

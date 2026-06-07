@@ -54,17 +54,22 @@ proof:
     thought: int_le_induct with schematic ?k and carried fact h
     operation: Induction
     target term: i
-    facts to generalize: h
+    IH facts: h
     cases:
       - goal id: 2.base
         goal: i ≤ k
         proof: empty
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.base.1` to provide the proof.
       - goal id: 2.Prem0
+        premises:
+          - h: (0 :: int) ≤ k
         goal: True
         proof: empty
       - goal id: 2.Prem1
+        variables:
+          - i: int
         premises:
+          - h: (0 :: int) ≤ i - (1 :: int)
           - Prem1.prem0: i ≤ k
           - Prem1.prem1: (0 :: int) ≤ i ⟶ True
         goal: True

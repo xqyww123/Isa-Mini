@@ -43,7 +43,7 @@ proof:
     thought: strong induction on i; init call (is_init=True strips i even if listed)
     operation: Induction
     target term: i
-    facts to generalize: premise0
+    IH facts: premise0
     fixing variables:
       - i: nat
     assuming premises:
@@ -75,7 +75,7 @@ proof:
     thought: amend: re-list i as generalized; replay the bug path
     operation: Induction
     target term: i
-    facts to generalize: premise0
+    IH facts: premise0
     fixing variables:
       - i: nat
     assuming premises:

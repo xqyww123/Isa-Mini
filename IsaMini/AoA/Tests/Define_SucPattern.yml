@@ -64,7 +64,6 @@ proof:
     thought: Use pow2 as witness
     operation: Witness
     witness: pow2
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
-pending proof goal:
-  pow2 (3 :: nat) = (8 :: nat)
-Unfinished nodes: 1
+  - step id: 3
+    operation: Obvious
+Unfinished nodes: 0

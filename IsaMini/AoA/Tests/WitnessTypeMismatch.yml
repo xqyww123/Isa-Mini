@@ -16,7 +16,7 @@ proof:
     thought: Curry the witness over x and y instead of pairing them
     operation: Witness
     witness: \<lambda>(x::real) (y::real). 0
-    Error: exception THM 1 raised (line 2601 of "thm.ML"): RSN: no unifiers
+    Error: The witness `λx y. 0` has type `real ⇒ real ⇒ 'a`, which does not match the expected type `real × real ⇒ real` of the existential variable.
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   ∃(g :: real × real ⇒ real). g ((0 :: real), (0 :: real)) = (0 :: real)

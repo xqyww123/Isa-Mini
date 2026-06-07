@@ -1,9 +1,4 @@
 Result (is_error=False):
-Query: P = Q if and only if P ⟶ Q ∧ Q ⟶ P; name contains: iff
-  1936 entities match the filters — 15 shown (0 already shown earlier).
-Query: equality of booleans is equivalence: (P = Q) = (P ⟶ Q ∧ Q ⟶ P)
-  7 shown (0 already shown earlier).
-
 - iff_conv_conj_imp [manual]: (?P = ?Q) = ((?P ⟶ ?Q) ∧ (?Q ⟶ ?P))
 - iffI: (?P ⟶ ?Q) ⟶ (?Q ⟶ ?P) ⟶ ?P = ?Q
 - eq_iff_swap [manual]: (?x = ?y) = ?P ⟶ (?y = ?x) = ?P
@@ -33,5 +28,9 @@ Query: equality of booleans is equivalence: (P = Q) = (P ⟶ Q ∧ Q ⟶ P)
   
     True_or_False: "(P = True) ∨ (P = False)"
 - refl_conj_eq [manual]: ?Q = ?R ⟶ (?P ∧ ?Q) = (?P ∧ ?R)
+Query: P = Q if and only if P ⟶ Q ∧ Q ⟶ P; name contains: iff
+  1936 entities match the filters — 15 shown (0 already shown earlier).
+Query: equality of booleans is equivalence: (P = Q) = (P ⟶ Q ∧ Q ⟶ P)
+  7 shown (0 already shown earlier).
 
 Lemmas marked with [manual] must be specified manually for Rewrite/Obvious to use them.

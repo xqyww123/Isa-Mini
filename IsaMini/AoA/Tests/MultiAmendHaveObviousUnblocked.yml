@@ -51,6 +51,7 @@ Error: Unfinished Proof! Call command `edit` with action `fill` and target step 
 [3] multi-amend 1.1 → [Have(True), Obvious] — must not be blocked
 --------------------------------------------------
 Filled step 1.1-1.2.
+All proof goals of step 1.1 are now completed.
 Outline:
   step 1: Have absurd
     step 1.1: Have triv (done)

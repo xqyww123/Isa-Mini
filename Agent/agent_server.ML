@@ -643,6 +643,39 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         timeout = NONE
       }
 
+      (* Pre-flight predicate for the auto-Intro-before-Induction feature:
+       * does the induction `target` mention a free variable that is a
+       * not-yet-introduced leading ∀/⋀ binder of the current goal?  Decided
+       * entirely in one context: parse the target here, strip the leading
+       * binders of THIS goal (raw Abs names, no deconflict), and check
+       * membership — avoiding any cross-pipeline name reconciliation on the
+       * Python side.  `Variable.is_fixed` excludes a target that is actually
+       * an already-fixed (declarable) variable, which inducts fine. *)
+      val induction_target_hits_binder_callback = {
+        name = "IsaMini.induction_target_hits_leading_binder",
+        arg_schema = unpackPair (unpackString, unpackString),
+        ret_schema = packBool,
+        function = (fn (state_id, target) =>
+          let val s0 = get_state state_id
+              val ctxt = Minilang.context_of s0
+           in if not (MiniLang_Agent.check_need_intro s0) then false
+              else
+                let val target_term = MiniLang_Agent.read_term ctxt target
+                    val frees = Term.add_frees target_term []
+                    val goal = Thm.prop_of (Minilang.leading_proof_sequent_of s0)
+                                 |> Logic.dest_implies |> fst
+                    val (binders, _, _) = Minilang.strip_meta_and_hol_hhf goal
+                    val binder_names = map fst binders
+                 in exists (fn (nm, _) =>
+                      not (Variable.is_fixed ctxt nm)
+                      andalso member (op =) binder_names nm) frees
+                end
+          end handle ERROR _ => false
+                   | TERM _ => false
+                   | TYPE _ => false),
+        timeout = NONE
+      }
+
       val unfold_syntax_callback = {
         name = "IsaMini.unfold_syntax",
         arg_schema = unpackPair (unpackString, unpackString),
@@ -946,19 +979,29 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                * Attrib.eval_thms) resolves. *)
               val dirty_frees = Term.add_frees target_term arbitrary_vs
               val dirty = member (op =) dirty_frees
-              (* Keep only the INNERMOST binding for each name: a name shared
-               * across nested scopes resolves (in the carry-through, via
-               * Facts.lookup) to the innermost one, and `context_of_leading_goal`
-               * accumulates outer→inner, so `AList.update` (last wins) makes the
-               * displayed prop equal the theorem that will actually be carried. *)
               val ((_, local_facts), _) =
                 Minilang.context_of_leading_goal (Minilang.print_state s0)
+              (* Keep only the INNERMOST binding for each name: a name shared
+               * across nested scopes resolves (in the carry-through, via
+               * Facts.lookup) to the innermost one. `context_of_leading_goal`
+               * lists outer→inner, so `fold_rev` (right-to-left) keeps the
+               * rightmost (innermost) occurrence while rebuilding left-to-right
+               * display order. *)
+              val dedup_facts =
+                fold_rev (fn (n, t) => fn acc =>
+                            if AList.defined (op =) acc n then acc
+                            else (n, t) :: acc)
+                         local_facts []
               val relevant_facts =
-                fold (AList.update (op =)) local_facts []
+                dedup_facts
                 |> filter (fn (_, t) =>
                      Term.exists_subterm (fn Free f => dirty f | _ => false) t)
                 |> map (fn (name, t) => (name, sot t))
-              val dirty_var_names = distinct (op =) (map fst dirty_frees)
+              (* Revert internal fixed-var names (`n__`) to the agent-facing
+               * names (`n`) for the picker prompt. *)
+              val dirty_var_names =
+                dirty_frees |> map (Variable.revert_fixed ctxt o fst)
+                            |> distinct (op =)
           in (dirty_var_names, relevant_facts,
               format_analysis ctxt (Minilang.analyze_induct ctxt args []))
           end handle ERROR msg => analyze_error "analyze_induct" msg
@@ -1082,6 +1125,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
           mk_callback compute_bindings_callback,
           mk_callback need_intro_callback,
           mk_callback check_term_callback,
+          mk_callback induction_target_hits_binder_callback,
           mk_callback unfold_syntax_callback,
           mk_callback schematic_vars_callback,
           mk_callback potential_defs_callback,

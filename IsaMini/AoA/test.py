@@ -468,6 +468,38 @@ async def _test_Induction_IllTypedBoundVar(root: Root, file: MyIO):
     print_header("Amend 1.1 → Induction n (rule nat.induct) — Ill-typed instantiation n :: 'a", file)
     root.print(0, file)
 
+@model_test("Induction_AutoIntroBoundVar", "Test_Induction_AutoIntroBoundVar.thy", 8)
+async def _test_Induction_AutoIntroBoundVar(root: Root, file: MyIO):
+    """A1′ fix: a `Have` whose body LEADS with an `Induction` on a ∀-bound
+    variable `n` (no explicit `Intro`). This is the faithful fill-with-body
+    trigger from the live log — supplying the Induction body used to SUPPRESS
+    the auto-Intro, leaving `Induction n` to run on the still-`∀`-bound `n` and
+    fail with `Ill-typed instantiation: n :: 'a`.
+
+    With A1′ the framework detects (ML-side) that the body's first step is an
+    Induction whose target hits an un-introduced leading binder, and injects a
+    full `Intro` (fixing `n :: nat`) BEFORE the Induction — so the induction
+    runs on a fixed `n` and opens the base/Suc cases instead of ill-typed."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    await root.fill("1", [Have.gen_single({
+        "thought": "two to the power n is positive",
+        "statement": {
+            "english": "2^n > 0 for every n",
+            "conclusion": r"\<forall>n::nat. (2::int)^n > 0"},
+        "name": "pos_pow",
+        "proof": [
+            {"operation": "Induction",
+             "thought": "induction on n",
+             "target_isabelle_term": "n",
+             "variables": [{"name": "n", "status": "fixed"}],
+             "proofs": "GivenLater"},
+        ],
+    })])
+    print_header("After Have (auto-Intro injected before body-leading Induction)", file)
+    root.print(0, file)
+
 @model_test("Suffices", "Test_Suffices.thy", 9)
 async def _test_Suffices(root: Root, file: MyIO):
     print_header("Initial YAML", file)
@@ -5086,7 +5118,7 @@ async def _test_Induction_IHRename(root: Root, file: MyIO):
         # so the IH reads `∀m<n. m ≤ p - 2 ⟶ f m < p` (matching the
         # pre-auto-insert-off behavior that this reproducer was written
         # against).
-        "facts_to_generalize": [{"name": "premise0"}],
+        "IH_facts": [{"name": "premise0"}],
     })])
     print_header("After Induction (IH should use `n`, not internal variant)", file)
     root.print(0, file)
@@ -5188,7 +5220,7 @@ async def _test_Induction_AmendTargetFree(root: Root, file: MyIO):
         # Carry the auto-Intro's `premise0` (`i \<le> p - 2`) through
         # induction so the IH preserves the pre-auto-insert-off shape
         # that this regression was originally filed against.
-        "facts_to_generalize": [{"name": "premise0"}],
+        "IH_facts": [{"name": "premise0"}],
     })])
     print_header("After fill step 2 (init path --- is_init=True strips i)", file)
     root.print(0, file)
@@ -5210,7 +5242,7 @@ async def _test_Induction_AmendTargetFree(root: Root, file: MyIO):
             {"name": "p", "status": "fixed"},
             {"name": "Q", "status": "fixed"},
         ],
-        "facts_to_generalize": [{"name": "premise0"}],
+        "IH_facts": [{"name": "premise0"}],
     })])
     print_header("After amend step 2 (amend path --- must still strip i)", file)
     root.print(0, file)
@@ -5322,7 +5354,7 @@ async def _test_Induction_IHFactRef(root: Root, file: MyIO):
         ],
         # Carry the Intro's `premise0` (`n < p`) through induction so
         # the IH is strengthened to `∀m<n. m < p ⟶ True`.
-        "facts_to_generalize": [{"name": "premise0"}],
+        "IH_facts": [{"name": "premise0"}],
     })])
     print_header("After Induction (case 1 produced with hyp `1.IH`)", file)
     root.print(0, file)
@@ -5564,7 +5596,7 @@ async def _test_FactsToGeneralize_Filter(root: Root, file: MyIO):
             {"name": "p", "status": "fixed"},
             {"name": "n", "status": "generalized"},
         ],
-        "facts_to_generalize": [
+        "IH_facts": [
             {"name": "premise0"},
             {"name": "trivial_fact"},
             {"name": "nat_less_induct"},
@@ -5675,7 +5707,7 @@ async def _test_FactsToGeneralize_ConsumingRule(root: Root, file: MyIO):
             {"name": "k", "status": "fixed"},
             {"name": "Q", "status": "fixed"},
         ],
-        "facts_to_generalize": [{"name": "h"}],
+        "IH_facts": [{"name": "h"}],
     })])
     print_header("After Induction (consumes=1 rule + facts_to_generalize)", file)
     root.print(0, file)
@@ -5759,7 +5791,7 @@ async def _test_HOL_TAG_Leak(root: Root, file: MyIO):
         # carries `m ≤ p ⟶ P m` — the same IH shape that used to trip
         # the original TAG-unwrap bug. Assertion below guards against
         # regressions where HOL.TAG leaks via the insertion path too.
-        "facts_to_generalize": [{"name": "premise0"}],
+        "IH_facts": [{"name": "premise0"}],
     })])
     print_header("After Induction (HOL.TAG should leak into IH)", file)
     root.print(0, file)
@@ -11830,7 +11862,7 @@ async def _test_nested_antichain(root: Root, file: MyIO):
 
     session.role = model.Role_Major()
 
-@model_test("HammerLooseBound", "Test_HammerLooseBound.thy", 24)
+@model_test("HammerLooseBound", "Test_HammerLooseBound.thy", 26)
 async def _test_HammerLooseBound(root: Root, file: MyIO):
     """Faithful replay of the production case putnam_1970_b4 up to the crashing
     Obvious at step `x_cont`, which raises
@@ -11912,36 +11944,37 @@ async def _test_HammerLooseBound(root: Root, file: MyIO):
                       "conclusion": r"continuous_on {(0::real)..(1::real)} (deriv x)"}})])
     root.session.age += 1
     await step("gcont_obvious", "6.1", [Obvious.gen_single({"facts": []})])
-    # 7. Derive ftc_result (forward, at root level to avoid deep-nesting state issues).
+    # 7. Have g_has_integral — batch fill with inline proof containing the
+    #    Derive FTC → Rewrite → Have x_cont → Obvious sequence.
+    #    The crucial property: x_cont's Obvious runs INSIDE the nested g_has_integral
+    #    block, where premise4/ftc_result are LOCAL facts in the ML proof state.
     root.session.age += 1
-    await step("derive_ftc", "7", [Derive.gen_single({
-        "thought": "Apply FTC-strong with S={0,1}",
-        "rule": {"name": "fundamental_theorem_of_calculus_strong"},
-        "instantiations": [
-            {"name": "?f", "value": "x"},
-            {"name": "?f'", "value": "deriv x"},
-            {"name": "?a", "value": "(0::real)"},
-            {"name": "?b", "value": "(1::real)"},
-            {"name": "?S", "value": "{(0::real), (1::real)}"}],
-        "result_name": "ftc_result"})])
-    # 8. Rewrite ftc_result (system simps) -> premise4.
-    root.session.age += 1
-    await step("rewrite_ftc", "8", [Rewrite.gen_single({
-        "thought": "discharge finite {0,1} and 0<=1",
-        "using": [], "use system simplifiers": True,
-        "rewrite goal": False, "rewrite premises": ["ftc_result"]})])
-    # 9. Have x_cont, discharge by Obvious [hdiff]  <-- production crash site
-    #    (production's FIRST attempt: x_diff was NOT yet in scope, so fast_force
-    #    cannot take the trivial differentiable->continuous shortcut and must
-    #    grind through the binder-bearing facts).
-    root.session.age += 1
-    await step("have_xcont", "9", [Have.gen_single({
-        "thought": "x continuous on [0,1] because differentiable", "name": "x_cont",
-        "statement": {"english": "x continuous on [0,1]",
-                      "conclusion": r"continuous_on {(0::real)..(1::real)} x"}})])
-    root.session.age += 1
-    print_header("After Obvious x_cont (HAMMER) -- crash site", file)
-    await step("xcont_obvious", "9.1", [Obvious.gen_single({"facts": [{"name": "hdiff"}]})])
+    print_header("Before g_has_integral batch fill", file)
+    await step("ghi_batch", "7", [Have.gen_single({
+        "thought": "FTC: deriv x integrates to x(1)-x(0)", "name": "g_has_integral",
+        "statement": {"english": "(deriv x has_integral x 1 - x 0) [0,1]",
+                      "conclusion": r"(deriv x has_integral x (1::real) - x (0::real)) {(0::real)..(1::real)}"},
+        "proof": [
+            {"operation": "Derive", "thought": "Apply FTC-strong with S={0,1}",
+             "rule": {"name": "fundamental_theorem_of_calculus_strong"},
+             "instantiations": [
+                 {"name": "?f", "value": "x"},
+                 {"name": "?f'", "value": "deriv x"},
+                 {"name": "?a", "value": "(0::real)"},
+                 {"name": "?b", "value": "(1::real)"},
+                 {"name": "?S", "value": "{(0::real), (1::real)}"}],
+             "result_name": "ftc_result"},
+            {"operation": "Rewrite", "thought": "discharge finite {0,1} and 0<=1",
+             "using": [], "use system simplifiers": True,
+             "rewrite goal": True, "rewrite premises": ["ftc_result"]},
+            {"operation": "Have",
+             "thought": "x continuous on [0,1] because differentiable",
+             "name": "x_cont",
+             "statement": {"english": "x continuous on [0,1]",
+                           "conclusion": r"continuous_on {(0::real)..(1::real)} x"},
+             "proof": [{"operation": "Obvious", "facts": [{"name": "hdiff"}]}]},
+        ]})])
+    print_header("After g_has_integral batch (crash site = x_cont Obvious)", file)
     root.print(0, file)
     _prog.write("DONE\n"); _prog.close()
 

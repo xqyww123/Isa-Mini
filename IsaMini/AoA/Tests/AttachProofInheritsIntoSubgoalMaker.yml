@@ -57,6 +57,8 @@ proof:
         proof: empty
         Error: Unfinished Proof! Call command `edit` with action `fill` and target step `global.1.1.0.1` to provide the proof.
       - goal id: global.1.1.Suc
+        variables:
+          - m: nat
         premises:
           - Suc.IH: m + (0 :: nat) = m
         goal: True

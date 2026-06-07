@@ -2,68 +2,150 @@
 Initial YAML
 --------------------------------------------------
 variables:
-  - x: nat ⇒ nat
+  - x: real ⇒ real
 premises:
-  - br: (∀(x1 :: nat). x1 ∈ {(0 :: nat)..(1 :: nat)} - {(0 :: nat), (1 :: nat)} ⟶ pderiv x x1) ⟶ contp x ⟶ hasI x
+  - hdiff: x differentiable_on {(0 :: real)..(1 :: real)} ∧ deriv x differentiable_on {(0 :: real)..(1 :: real)}
+  - hs: ∀t ∈{(0 :: real)<..<(1 :: real)}. ¦deriv x t¦ ≤ (3 :: real) / (2 :: real)
+  - hv: deriv x (0 :: real) = (0 :: real) ∧ deriv x (1 :: real) = (0 :: real)
+  - hx: x (1 :: real) - x (0 :: real) = (1 :: real)
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
-goal: contp x
+goal: ∃t ∈{(0 :: real)..(1 :: real)}. (9 :: real) / (2 :: real) ≤ ¦deriv (deriv x) t¦
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+contradiction is_error: False
+intro is_error: False
+rewrite_hbound is_error: False
+have_gdiff is_error: False
+gdiff_rewrite is_error: False
+have_gendpoints is_error: False
+gendpoints_rewrite is_error: False
+have_gcont is_error: False
+gcont_obvious is_error: False
 --------------------------------------------------
-(A) After Obvious (br in scope)
+Before g_has_integral batch fill
 --------------------------------------------------
-A is_error: True
-A reason: Cannot fill a node with id 1
-Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
+ghi_batch is_error: False
+--------------------------------------------------
+After g_has_integral batch (crash site = x_cont Obvious)
+--------------------------------------------------
 variables:
-  - x: nat ⇒ nat
+  - x: real ⇒ real
 premises:
-  - br: (∀(x1 :: nat). x1 ∈ {(0 :: nat)..(1 :: nat)} - {(0 :: nat), (1 :: nat)} ⟶ pderiv x x1) ⟶ contp x ⟶ hasI x
+  - hdiff: x differentiable_on {(0 :: real)..(1 :: real)} ∧ deriv x differentiable_on {(0 :: real)..(1 :: real)}
+  - hs: ∀t ∈{(0 :: real)<..<(1 :: real)}. ¦deriv x t¦ ≤ (3 :: real) / (2 :: real)
+  - hv: deriv x (0 :: real) = (0 :: real) ∧ deriv x (1 :: real) = (0 :: real)
+  - hx: x (1 :: real) - x (0 :: real) = (1 :: real)
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
-goal: contp x
-proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
---------------------------------------------------
-(B) After Derive (prem4)
---------------------------------------------------
-derive is_error: False
-variables:
-  - x: nat ⇒ nat
-premises:
-  - br: (∀(x1 :: nat). x1 ∈ {(0 :: nat)..(1 :: nat)} - {(0 :: nat), (1 :: nat)} ⟶ pderiv x x1) ⟶ contp x ⟶ hasI x
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
-goal: contp x
+goal: ∃t ∈{(0 :: real)..(1 :: real)}. (9 :: real) / (2 :: real) ≤ ¦deriv (deriv x) t¦
 proof:
   - step id: 1
-    thought: re-derive the conditional rule as a local fact
-    operation: Derive
-    rule:
-      - br: (∀(x1 :: nat). x1 ∈ {(0 :: nat)..(1 :: nat)} - {(0 :: nat), (1 :: nat)} ⟶ pderiv x x1) ⟶ contp x ⟶ hasI x
-    resulting facts:
-      - prem4: (∀(x1 :: nat). x1 ∈ {(0 :: nat)..(1 :: nat)} - {(0 :: nat), (1 :: nat)} ⟶ pderiv x x1) ⟶ contp x ⟶ hasI x
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+    operation: Contradiction
+    hypothesis_name: h_bound
+    assuming hypothesis:
+      - h_bound: ¬ (∃t ∈{(0 :: real)..(1 :: real)}. (9 :: real) / (2 :: real) ≤ ¦deriv (deriv x) t¦)
+  - step id: 2
+    thought: push the negation
+    operation: Intro
+  - step id: 3
+    thought: push the negation through h_bound
+    operation: Rewrite
+    using:
+      - h_bound: ¬ (∃t ∈{(0 :: real)..(1 :: real)}. (9 :: real) / (2 :: real) ≤ ¦deriv (deriv x) t¦)
+      - system simplifiers
+    targets:
+      - h_bound
+    resulting premises:
+      - premise0: ∀t ∈{(0 :: real)..(1 :: real)}. ¬ (9 :: real) ≤ ¦deriv (deriv x) t¦ * (2 :: real)
+  - step id: 4
+    thought: deriv x differentiable on [0,1]
+    operation: Have
+    statement:
+      english: deriv x differentiable on [0,1]
+      conclusion: deriv x differentiable_on {(0::real)..(1::real)}
+    name: g_diff
+    proof:
+      - step id: 4.1
+        thought: from hdiff
+        operation: Rewrite
+        using:
+          - hdiff: x differentiable_on {(0 :: real)..(1 :: real)} ∧ deriv x differentiable_on {(0 :: real)..(1 :: real)}
+          - system simplifiers
+        targets:
+          - the goal
+        goal is solved.
+  - step id: 5
+    thought: endpoints
+    operation: Have
+    statement:
+      english: g(0)=0 and g(1)=0
+      conclusion: deriv x (0::real) = (0::real) \<and> deriv x (1::real) = (0::real)
+    name: g_endpoints
+    proof:
+      - step id: 5.1
+        thought: from hv
+        operation: Rewrite
+        using:
+          - hv: deriv x (0 :: real) = (0 :: real) ∧ deriv x (1 :: real) = (0 :: real)
+          - system simplifiers
+        targets:
+          - the goal
+        goal is solved.
+  - step id: 6
+    thought: deriv x continuous on [0,1]
+    operation: Have
+    statement:
+      english: deriv x continuous on [0,1]
+      conclusion: continuous_on {(0::real)..(1::real)} (deriv x)
+    name: g_cont
+    proof:
+      - step id: 6.1
+        operation: Obvious
+  - step id: 7
+    thought: FTC: deriv x integrates to x(1)-x(0)
+    operation: Have
+    statement:
+      english: (deriv x has_integral x 1 - x 0) [0,1]
+      conclusion: (deriv x has_integral x (1::real) - x (0::real)) {(0::real)..(1::real)}
+    name: g_has_integral
+    proof:
+      - step id: 7.1
+        thought: Apply FTC-strong with S={0,1}
+        operation: Derive
+        rule:
+          - fundamental_theorem_of_calculus_strong: finite ?S ⟶ ?a ≤ ?b ⟶ (∀(x :: real). x ∈ {?a..?b} - ?S ⟶ (?f has_vector_derivative ?f' x) (at x)) ⟶ continuous_on {?a..?b} ?f ⟶ (?f' has_integral ?f ?b - ?f ?a) {?a..?b}
+        instantiations:
+          - ?f = x
+          - ?f' = deriv x
+          - ?a = (0::real)
+          - ?b = (1::real)
+          - ?S = {(0::real), (1::real)}
+        resulting facts:
+          - ftc_result: finite {(0 :: real), (1 :: real)} ⟶ (0 :: real) ≤ (1 :: real) ⟶ (∀(x1 :: real). x1 ∈ {(0 :: real)..(1 :: real)} - {(0 :: real), (1 :: real)} ⟶ (x has_vector_derivative deriv x x1) (at x1)) ⟶ continuous_on {(0 :: real)..(1 :: real)} x ⟶ (deriv x has_integral x (1 :: real) - x (0 :: real)) {(0 :: real)..(1 :: real)}
+      - step id: 7.2
+        thought: discharge finite {0,1} and 0<=1
+        operation: Rewrite
+        using:
+          - system simplifiers
+        targets:
+          - the goal
+          - ftc_result
+        resulting premises:
+          - premise1: (∀(x1 :: real). (0 :: real) ≤ x1 ∧ x1 ≤ (1 :: real) ∧ x1 ≠ (0 :: real) ∧ x1 ≠ (1 :: real) ⟶ (x has_vector_derivative deriv x x1) (at x1)) ⟶ continuous_on {(0 :: real)..(1 :: real)} x ⟶ (deriv x has_integral x (1 :: real) - x (0 :: real)) {(0 :: real)..(1 :: real)}
+      - step id: 7.3
+        thought: x continuous on [0,1] because differentiable
+        operation: Have
+        statement:
+          english: x continuous on [0,1]
+          conclusion: continuous_on {(0::real)..(1::real)} x
+        name: x_cont
+        proof:
+          - step id: 7.3.1
+            operation: Obvious
+            with facts:
+              - hdiff: x differentiable_on {(0 :: real)..(1 :: real)} ∧ deriv x differentiable_on {(0 :: real)..(1 :: real)}
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `7.4` to provide the proof for the following goal.
+    pending proof goal:
+      (deriv x has_integral x (1 :: real) - x (0 :: real)) {(0 :: real)..(1 :: real)}
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `8` to provide the proof for the following goal.
 pending proof goal:
-  contp x
---------------------------------------------------
-(B) After Obvious (HAMMER over prem4)
---------------------------------------------------
-B is_error: True
-B reason: Cannot fill a node with id 2
-Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
-variables:
-  - x: nat ⇒ nat
-premises:
-  - br: (∀(x1 :: nat). x1 ∈ {(0 :: nat)..(1 :: nat)} - {(0 :: nat), (1 :: nat)} ⟶ pderiv x x1) ⟶ contp x ⟶ hasI x
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
-goal: contp x
-proof:
-  - step id: 1
-    thought: re-derive the conditional rule as a local fact
-    operation: Derive
-    rule:
-      - br: (∀(x1 :: nat). x1 ∈ {(0 :: nat)..(1 :: nat)} - {(0 :: nat), (1 :: nat)} ⟶ pderiv x x1) ⟶ contp x ⟶ hasI x
-    resulting facts:
-      - prem4: (∀(x1 :: nat). x1 ∈ {(0 :: nat)..(1 :: nat)} - {(0 :: nat), (1 :: nat)} ⟶ pderiv x x1) ⟶ contp x ⟶ hasI x
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
-pending proof goal:
-  contp x
+  False
