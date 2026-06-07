@@ -5563,9 +5563,6 @@ async def _test_Induction_ClassifyVars(root: Root, file: MyIO):
             # Generalize every offered (unclassified) variable.
             return await interaction.answer(
                 AnswerIndexes(indexes=list(range(len(interaction.unclassified)))))
-        if isinstance(interaction, Interaction_ClassifyInductionVars):
-            # Not under test here — decline (leave such variables fixed).
-            return await interaction.answer(AnswerIndexes(indexes=[]))
         raise TestFailed(
             f"Unexpected interaction in this test: {type(interaction).__name__}")
     root.session.fork_interaction = stub_fork
@@ -5605,6 +5602,126 @@ async def _test_Induction_ClassifyVars(root: Root, file: MyIO):
         f"Expected the unclassified `k` to be offered, got {offered_vars}.")
     assert var_status.get("k") == "generalized", (
         f"Expected `k` to be generalized after selection, got {var_status}.")
+
+
+@model_test("Induction_ClassifyVars_Filter",
+            "Test_Induction_ClassifyVars_Filter.thy", 16)
+async def _test_Induction_ClassifyVars_Filter(root: Root, file: MyIO):
+    """The classification offer is restricted to variables that appear in the
+    leading goal (via the `IsaMini.goal_variables` callback). The lemma fixes
+    `f :: nat ⇒ nat`, which is in scope but never appears in `n + k = k + n`,
+    so `f` must NOT be offered — only `k` is. This is the assertion that
+    actually exercises the goal-vars filter (the plain `Induction_ClassifyVars`
+    fixture has no such excluded variable, so there the filter is a no-op)."""
+    offered_vars: list[str] = []
+    async def stub_fork(interaction):
+        if isinstance(interaction, Interaction_ClassifyInductionVars):
+            offered_vars.extend(n for n, _t in interaction.unclassified)
+            return await interaction.answer(
+                AnswerIndexes(indexes=list(range(len(interaction.unclassified)))))
+        raise TestFailed(
+            f"Unexpected interaction in this test: {type(interaction).__name__}")
+    root.session.fork_interaction = stub_fork
+
+    root.session.age += 1
+    await root.fill("1", [Intro.gen_single({"thought": "fix n, k"})])
+    root.session.age += 1
+    await root.fill("2", [Induction.gen_single({
+        "thought": "induct on n; leave k for the prompt; f must not be offered",
+        "target_isabelle_term": "n :: nat",
+        "variables": [{"name": "n", "status": "fixed"}],
+    })])
+    print_header("After Induction (f excluded; k offered+generalized)", file)
+    root.print(0, file)
+    file.write(f"\noffered (unclassified) vars: {offered_vars}\n")
+    assert offered_vars == ["k"], (
+        f"Expected only the goal variable `k` to be offered; the in-scope "
+        f"lemma signature `f` (absent from the goal) must be excluded. "
+        f"Got {offered_vars}.")
+    assert "f" not in offered_vars, (
+        f"`f` appears in no goal subterm and must not be offered; got {offered_vars}.")
+
+
+@model_test("Induction_ClassifyVars_Decline",
+            "Test_Induction_ClassifyVars_Decline.thy", 14)
+async def _test_Induction_ClassifyVars_Decline(root: Root, file: MyIO):
+    """Decline path: the agent selects NONE of the offered variables, so each
+    stays `fixed` (the same end state as the old silent default, but now an
+    explicit choice). Asserts the var is fixed and the prompt fired once."""
+    classify_fork_count = 0
+    async def stub_fork(interaction):
+        nonlocal classify_fork_count
+        if isinstance(interaction, Interaction_ClassifyInductionVars):
+            classify_fork_count += 1
+            # Decline — select nothing.
+            return await interaction.answer(AnswerIndexes(indexes=[]))
+        raise TestFailed(
+            f"Unexpected interaction in this test: {type(interaction).__name__}")
+    root.session.fork_interaction = stub_fork
+
+    root.session.age += 1
+    await root.fill("1", [Intro.gen_single({"thought": "fix n, k"})])
+    root.session.age += 1
+    await root.fill("2", [Induction.gen_single({
+        "thought": "induct on n; decline to generalize k",
+        "target_isabelle_term": "n :: nat",
+        "variables": [{"name": "n", "status": "fixed"}],
+    })])
+    print_header("After Induction (k declined -> stays fixed)", file)
+    root.print(0, file)
+    induct_node = root.locate_node("2")
+    var_status = {v["name"]: v["status"] for v in induct_node.variables}
+    file.write(f"\nclassify_fork_count: {classify_fork_count}\n")
+    file.write(f"variable statuses after decline: {var_status}\n")
+    assert classify_fork_count == 1, (
+        f"Expected exactly one classification fork, got {classify_fork_count}.")
+    assert var_status.get("k") == "fixed", (
+        f"Expected `k` to stay fixed after declining, got {var_status}.")
+
+
+@model_test("Induction_ClassifyVars_PartialPremise",
+            "Test_Induction_ClassifyVars_PartialPremise.thy", 16)
+async def _test_Induction_ClassifyVars_PartialPremise(root: Root, file: MyIO):
+    """Two points: (a) a premise-only variable `j` (appearing only in `j < n`,
+    not in the conclusion) is still offered — confirming the callback reads the
+    whole leading sequent; (b) partial selection — of the offered `j`, `k`, the
+    stub generalizes only `j`, leaving `k` fixed."""
+    offered_vars: list[str] = []
+    async def stub_fork(interaction):
+        if isinstance(interaction, Interaction_ClassifyInductionVars):
+            offered_vars.extend(n for n, _t in interaction.unclassified)
+            print_header("Variable-classification prompt (partial/premise)", file)
+            await interaction.prompt(0, file)
+            # Generalize only `j`, leave the rest (k) fixed.
+            j_idx = [i for i, (n, _t) in enumerate(interaction.unclassified)
+                     if n == "j"]
+            return await interaction.answer(AnswerIndexes(indexes=j_idx))
+        raise TestFailed(
+            f"Unexpected interaction in this test: {type(interaction).__name__}")
+    root.session.fork_interaction = stub_fork
+
+    root.session.age += 1
+    await root.fill("1", [Intro.gen_single({
+        "thought": "fix n, j, k; assume j < n"})])
+    root.session.age += 1
+    await root.fill("2", [Induction.gen_single({
+        "thought": "induct on n; classify only n; generalize only j",
+        "target_isabelle_term": "n :: nat",
+        "variables": [{"name": "n", "status": "fixed"}],
+    })])
+    print_header("After Induction (j generalized, k fixed)", file)
+    root.print(0, file)
+    induct_node = root.locate_node("2")
+    var_status = {v["name"]: v["status"] for v in induct_node.variables}
+    file.write(f"\noffered (unclassified) vars: {sorted(offered_vars)}\n")
+    file.write(f"variable statuses: {var_status}\n")
+    assert set(offered_vars) == {"j", "k"}, (
+        f"Expected the premise-only `j` AND conclusion `k` to be offered "
+        f"(callback reads premises ⟹ conclusion); got {offered_vars}.")
+    assert var_status.get("j") == "generalized", (
+        f"Expected `j` generalized, got {var_status}.")
+    assert var_status.get("k") == "fixed", (
+        f"Expected `k` to stay fixed (not selected), got {var_status}.")
 
 
 @model_test("FactsToGeneralize_Filter",
@@ -12148,28 +12265,35 @@ async def _test_HammerLooseBound(root: Root, file: MyIO):
     _prog.write("DONE\n"); _prog.close()
 
 
-@model_test("HaveWorkerForAny", "Test_HaveWorkerForAny.thy", 10)
+@model_test("HaveWorkerForAny", "Test_HaveWorkerForAny.thy", 11)
 async def _test_HaveWorkerForAny(root: Root, file: MyIO):
-    """Worker scope must include the target Have's for_any variables and premises.
+    """Worker scope must include the target Have/Suffices for_any variables and premises.
 
     Regression: when a worker is dispatched to a Have with for_any/premises,
-    print_proof_scope used _ctxt_before_me() which excludes the Have's own
+    print_proof_scope used _ctxt_before_me() which excludes the target's own
     fixed vars and assumed premises. The goal's context (from leading_goal_data)
     is also empty because gen_HAVE' pushes HHF(goal, ([],[])) with empty items.
     Result: the worker sees the bare conclusion with free variables but no
     corresponding variable declarations or premises, making the goal unprovable.
 
-    This test creates a global Have with for_any:[y:int] and premises:[hy: y>=0],
-    switches to a worker scoped to that Have, and verifies that both y and hy
-    appear in the rendered proof scope."""
+    Tests: Have with for_any+premises, for_any only, premises only,
+    multiple for_any, Suffices with for_any+premises."""
     session = root.session
+
+    async def worker_scope_text(target) -> str:
+        session.role = model.Role_Worker(target=target)
+        await session._prefetch_worker_premises()
+        buf = MyIO(io.StringIO())
+        session.print_proof_scope(0, buf)
+        session.role = model.Role_Major()
+        return buf.getvalue()
 
     print_header("Initial YAML", file)
     root.print(0, file)
 
-    # Create a Have with for_any and premises in the global env
+    # --- Case 1: Have with for_any + premises ---
     session.age += 1
-    [h_forany] = (await root.global_env.append([Have.gen_single({
+    [h_both] = (await root.global_env.append([Have.gen_single({
         "thought": "lemma with for_any and premises",
         "statement": {
             "english": "y squared is non-negative given y >= 0",
@@ -12177,43 +12301,125 @@ async def _test_HaveWorkerForAny(root: Root, file: MyIO):
             "premises": [{"name": "hy", "term": r"(0::int) \<le> y"}],
             "conclusion": r"(0::int) \<le> y * y",
         },
-        "name": "h_forany",
+        "name": "h_both",
     })])).committed
 
-    print_header("After Have with for_any and premises", file)
+    print_header("Case 1: Have with for_any + premises", file)
+    session.role = model.Role_Worker(target=h_both)
+    await session._prefetch_worker_premises()
+    session.print_proof_scope(0, file, show_warnings=True)
+    ps = await worker_scope_text(h_both)
+    file.write(f"\nfor_any var 'y: int' visible: {'y: int' in ps}\n")
+    file.write(f"premise 'hy' visible: {'hy' in ps}\n")
+    file.write(f"outer premise 'hx' visible: {'hx' in ps}\n")
+    file.write(f"outer var 'x: int' visible: {'x: int' in ps}\n")
+    goal = h_both._state_after_beginning().leading_goal
+    file.write(f"goal.context.vars: {[(n.unicode, t.unicode) for n, t in goal.context.vars.items()]}\n")
+    file.write(f"goal.context.hyps: {[(n.unicode, t.unicode) for n, t in goal.context.hyps.items()]}\n")
+
+    # --- Case 2: Have with for_any only (no premises) ---
+    session.age += 1
+    [h_forany_only] = (await root.global_env.append([Have.gen_single({
+        "thought": "lemma with for_any only",
+        "statement": {
+            "english": "n plus 1 is positive",
+            "for_any": [{"name": "n", "type": "nat"}],
+            "conclusion": r"(0::nat) < n + 1",
+        },
+        "name": "h_forany_only",
+    })])).committed
+
+    print_header("Case 2: Have with for_any only", file)
+    ps = await worker_scope_text(h_forany_only)
+    file.write(f"for_any var 'n: nat' visible: {'n: nat' in ps}\n")
+    file.write(f"no extra premises (only hx): {ps.count('premises:') <= 1}\n")
+
+    # --- Case 3: Have with premises only (no for_any) ---
+    session.age += 1
+    [h_prem_only] = (await root.global_env.append([Have.gen_single({
+        "thought": "lemma with premises only",
+        "statement": {
+            "english": "from x >= 0, x * x >= 0",
+            "premises": [{"name": "hp", "term": r"(0::int) \<le> x"}],
+            "conclusion": r"(0::int) \<le> x * x",
+        },
+        "name": "h_prem_only",
+    })])).committed
+
+    print_header("Case 3: Have with premises only", file)
+    ps = await worker_scope_text(h_prem_only)
+    file.write(f"premise 'hp' visible: {'hp' in ps}\n")
+
+    # --- Case 4: Have with multiple for_any ---
+    session.age += 1
+    [h_multi] = (await root.global_env.append([Have.gen_single({
+        "thought": "lemma with multiple for_any",
+        "statement": {
+            "english": "a + b >= 0 given both non-negative",
+            "for_any": [{"name": "a", "type": "int"}, {"name": "b", "type": "int"}],
+            "premises": [{"name": "ha", "term": r"(0::int) \<le> a"},
+                         {"name": "hb", "term": r"(0::int) \<le> b"}],
+            "conclusion": r"(0::int) \<le> a + b",
+        },
+        "name": "h_multi",
+    })])).committed
+
+    print_header("Case 4: Have with multiple for_any", file)
+    ps = await worker_scope_text(h_multi)
+    file.write(f"var 'a: int' visible: {'a: int' in ps}\n")
+    file.write(f"var 'b: int' visible: {'b: int' in ps}\n")
+    file.write(f"premise 'ha' visible: {'ha' in ps}\n")
+    file.write(f"premise 'hb' visible: {'hb' in ps}\n")
+
+    # --- Case 5: Suffices with for_any + premises ---
+    session.age += 1
+    goal_node = root.sub_nodes[1]
+    [s_forany] = (await goal_node.fill("1", [Suffices.gen_single({
+        "thought": "suffices with for_any and premises",
+        "statement": {
+            "english": "it suffices to show y*y >= 0 for y >= 0",
+            "for_any": [{"name": "y", "type": "int"}],
+            "premises": [{"name": "sy", "term": r"(0::int) \<le> y"}],
+            "conclusion": r"(0::int) \<le> y * y",
+        },
+    })])).committed
+
+    print_header("Case 5: Suffices with for_any + premises", file)
+    ps = await worker_scope_text(s_forany)
+    file.write(f"for_any var 'y: int' visible: {'y: int' in ps}\n")
+    file.write(f"premise 'sy' visible: {'sy' in ps}\n")
+
+
+@model_test("Rewrite_ConjSplit", "Test_Rewrite_ConjSplit.thy", 12)
+async def _test_Rewrite_ConjSplit(root: Root, file: MyIO):
+    """Reproduce UnequalLengths when Rewrite produces a conjunction in a premise.
+
+    Root cause: SIMPLIFY_GOAL_AND_PREMISES' calls the naming function
+    (naming_prems_fn) with the pre-split premise terms, storing them in
+    prems_before_ref.  Then INTRO' splits conjunction premises
+    (INTRO_split_prem_conj = true) and returns facts' with more entries
+    than prems_before_ref.  AUTO_SIMPLIFY's map2 over the two lists
+    raises UnequalLengths.
+
+    Scenario: rewrite `mypred t` (= `0 < t ∧ t < 1`) via mypred_def.
+    The rewritten premise is a conjunction → INTRO splits it → crash."""
+    print_header("Initial YAML", file)
     root.print(0, file)
 
-    # Switch to worker scope targeting h_forany
-    session.role = model.Role_Worker(target=h_forany)
-    await session._prefetch_worker_premises()
-
-    # Render the worker-scoped view
-    print_header("Worker print_proof_scope (target = h_forany)", file)
-    session.print_proof_scope(0, file, show_warnings=True)
-
-    # Capture the rendered text for assertions
-    buf = MyIO(io.StringIO())
-    session.print_proof_scope(0, buf)
-    ps_text = buf.getvalue()
-
-    # Check: the for_any variable 'y' should appear in the variables section
-    file.write(f"\nworker scope contains 'y': {'y' in ps_text}\n")
-    # Check: the premise 'hy' should appear in the premises section
-    file.write(f"worker scope contains 'hy': {'hy' in ps_text}\n")
-    # Check: the goal should be the bare conclusion (not the meta-quantified form)
-    file.write(f"worker scope contains goal: {'goal:' in ps_text}\n")
-
-    # Also inspect goal.context directly
-    goal = h_forany._state_after_beginning().leading_goal
-    if goal is not None:
-        file.write(f"goal.context.vars: {[(n.unicode, t.unicode) for n, t in goal.context.vars.items()]}\n")
-        file.write(f"goal.context.hyps: {[(n.unicode, t.unicode) for n, t in goal.context.hyps.items()]}\n")
-        file.write(f"goal.conclusion: {goal.conclusion.unicode}\n")
+    root.session.age += 1
+    outcome = await root.fill("1", [Rewrite.gen_single({
+        "thought": "Unfold mypred to expose the conjunction",
+        "using": [{"name": "mypred_def"}],
+        "use system simplifiers": False,
+        "rewrite goal": False,
+        "rewrite premises": ["h"]
+    })])
+    print_header("After Rewrite (unfold mypred)", file)
+    root.print(0, file)
+    if outcome.failure is not None:
+        file.write(f"FAILURE: {outcome.failure}\n")
     else:
-        file.write("goal: None\n")
-
-    # Restore role
-    session.role = model.Role_Major()
+        file.write("SUCCESS\n")
 
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):

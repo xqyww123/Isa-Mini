@@ -7484,6 +7484,14 @@ class Suffices(StdBlock):
             return FailureReason("Each of the following proof steps above is valid, but the implication doesn't trivially follow from these steps. Please provide more detailed proof steps.")
         else:
             return FailureReason("The implication is nontrivial. Detailed proofs are required to establish that the sufficient condition implies the goal.")
+    def _fixed_vars_at_me(self, ret: Vars) -> Vars:
+        for name, typ in self.for_any:
+            ret[name] = typ
+        return ret
+    def _fixed_facts_at_me(self, ret: Hyps) -> Hyps:
+        for p in self._input_premises:
+            ret[IsaTerm.from_agent(p["name"])] = IsaTerm.from_agent(p["term"])
+        return ret
 
 #### Obtain
 
@@ -10048,13 +10056,15 @@ class Session:
         target = self.proof_scope_root
 
         goal = target.goal() if hasattr(target, 'goal') else None  # type: ignore[attr-defined]  — target is role.target (NonLeaf_Node), guarded by hasattr
-        before = target._ctxt_before_me()
+        before = target._ctxt_at_me()
         gctx = goal.context if goal is not None else Context({}, {}, {})
 
         # Unify in-scope context (root + enclosing + target-local) into one block.
-        # `before` carries everything in scope before the target (original assumptions,
-        # Intro/Have/Obtain/Derive/... — Define/SetupRewriting are no-ops); `gctx` adds
-        # the target's own live local context (e.g. the worker's own Intro assumptions).
+        # `before` carries everything in scope at the target (original assumptions,
+        # Intro/Have/Obtain/Derive/... — Define/SetupRewriting are no-ops, plus
+        # the target's own _fixed_*_at_me contributions such as Have/Suffices
+        # for_any variables and premises); `gctx` adds the target's own live
+        # local context from the Isabelle goal (e.g. GoalNode case vars).
         merged_vars = {**before.vars, **gctx.vars}
         merged_tvars = {**before.tvars, **gctx.tvars}
         merged_hyps: Hyps = {}

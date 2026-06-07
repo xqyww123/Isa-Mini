@@ -3,48 +3,51 @@ Initial YAML
 --------------------------------------------------
 variables:
   - x: int
+premises:
+  - hx: (0 :: int) ≤ x
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: (0 :: int) ≤ x * x
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
-After Have with for_any and premises
+Case 1: Have with for_any + premises
 --------------------------------------------------
 variables:
   - x: int
-- step id: global.1
-thought: lemma with for_any and premises
-operation: Have
-statement:
-  english: y squared is non-negative given y >= 0
-  for_any:
-    y: int
-  premises:
-    hy: (0::int) \<le> y
-  conclusion: (0::int) \<le> y * y
-name: h_forany
-proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `global.1.1` to provide the proof for the following goal.
-pending proof goal:
-  (0 :: int) ≤ y * y
-You can write global declarations by calling command `edit` with action `fill` and target step `global.2`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
-goal: (0 :: int) ≤ x * x
-proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
---------------------------------------------------
-Worker print_proof_scope (target = h_forany)
---------------------------------------------------
-variables:
-  - x: int
+  - y: int
+premises:
+  - hx: (0 :: int) ≤ x
+  - hy: (0::int) \<le> y
 goal: (0 :: int) ≤ y * y
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
 pending proof goal:
   (0 :: int) ≤ y * y
 
-worker scope contains 'y': True
-worker scope contains 'hy': False
-worker scope contains goal: True
+for_any var 'y: int' visible: True
+premise 'hy' visible: True
+outer premise 'hx' visible: True
+outer var 'x: int' visible: True
 goal.context.vars: []
 goal.context.hyps: []
-goal.conclusion: (0 :: int) ≤ y * y
+--------------------------------------------------
+Case 2: Have with for_any only
+--------------------------------------------------
+for_any var 'n: nat' visible: True
+no extra premises (only hx): True
+--------------------------------------------------
+Case 3: Have with premises only
+--------------------------------------------------
+premise 'hp' visible: True
+--------------------------------------------------
+Case 4: Have with multiple for_any
+--------------------------------------------------
+var 'a: int' visible: True
+var 'b: int' visible: True
+premise 'ha' visible: True
+premise 'hb' visible: True
+--------------------------------------------------
+Case 5: Suffices with for_any + premises
+--------------------------------------------------
+for_any var 'y: int' visible: True
+premise 'sy' visible: True

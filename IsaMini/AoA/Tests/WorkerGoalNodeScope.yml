@@ -71,7 +71,7 @@ child shown as relative 'step id: 1': True
 --------------------------------------------------
 Worker quickview (target=case GoalNode 1.1)
 --------------------------------------------------
-step 1: Have hp (done)
+step 1: Have hp (proven)
 Error: Unfinished Proof. Call command `edit` with action `fill` and target step `2`
 goal: (0 :: int) ≤ x * x
 
