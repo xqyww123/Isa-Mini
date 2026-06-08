@@ -3538,6 +3538,7 @@ fun SPECIALIZE' prep_thms prep_insts opt_name raw_rules raw_insts raw_facts
        prove_discharge=true: if OF unification fails, fall back to proving
        the discharge via insert_tac + fast_mepo_tac. *)
     val facts = prep_thms ctxt raw_facts
+                 handle ERROR msg => raise OPR_FAIL (INVALID_OPR, msg)
     val result = if null facts then rule'
                  else Minilang_Aux.xOF true ctxt (map SOME facts) rule'
                       handle THM _ =>

@@ -1384,7 +1384,7 @@ class Minilang_Operation(NamedTuple):
         ))
     @staticmethod
     def OBTAIN(variables: list[Explicit_Var], constraints: list[tuple[str, xterm]]) -> 'Minilang_Operation':
-        vars = [(v["name"], ascii_of_unicode(v["type"]) if v.get("type") else None) for v in variables]
+        vars = [(v["name"], ascii_of_unicode(t) if (t := v.get("type")) else None) for v in variables]
         return Minilang_Operation("OBTAIN", (vars, [(n, ascii_of_unicode(c)) for n, c in constraints]))
     @staticmethod
     def RULE(rule_ref: 'IsabelleFact | None') -> 'Minilang_Operation':
@@ -2117,7 +2117,7 @@ TOOL_READ:   tool = "recall"
 TOOL_REQUEST_LEMMAS: tool = "request_lemmas"
 TOOL_REPORT: tool = "report"
 TOOL_SUBAGENT: tool = "subagent"
-TOOL_CLOSE_SUBAGENT: tool = "close_subagent"
+TOOL_CLOSE_SUBAGENT: tool = "cancel_subagent"
 
 TOOL_ANSWER_INDEXES:        tool = "answer_indexes"
 TOOL_ANSWER_INDEX:          tool = "answer_index"
@@ -3243,7 +3243,7 @@ class Node(ABC):
     async def aclose_all_subagents(self) -> None:
         """Recursively close every sub-agent in this node's subtree (cancel +
         detach, keeping each partial proof). The nodes THEMSELVES STAY in the tree —
-        use when a node is KEPT but its sub-agents must be released: ``close_subagent``
+        use when a node is KEPT but its sub-agents must be released: ``cancel_subagent``
         (the target stays; its worker and nested downstream go), a worker winding
         down its own leftover parked sub-agents, the session-close sweep.
 
@@ -3679,7 +3679,7 @@ def _quickview_children_compressed(children: 'Sequence[Node]', indent: int, file
             if run_len >= 5:
                 children[run_start].quickview(indent, file)
                 print_indent(indent, file)
-                file.write("...\n")
+                file.write("... all ok\n")
                 children[i - 2].quickview(indent, file)
                 children[i - 1].quickview(indent, file)
             else:
@@ -4376,7 +4376,8 @@ class StdBlock(NonLeaf_Node):
                 and self.worker_handle.session is _session_var.get(None)):
             print_indent(indent, file)
             sid = the_session()._display_id(self.id)
-            file.write(f"A sub-agent is suspended on step {sid}: call `subagent` with step {sid} to resume it, or `close_subagent` with step {sid} to terminate it.\n")
+            s = the_session()
+            file.write(f"A sub-agent is suspended on step {sid}: call `{s.tool_name(TOOL_SUBAGENT)}` with step {sid} to resume it, or `{s.tool_name(TOOL_CLOSE_SUBAGENT)}` with step {sid} to cancel and remove it.\n")
     def does_quickview_need_detail(self) -> bool:
         if super().does_quickview_need_detail():
             return True
@@ -7925,12 +7926,26 @@ class InferenceRule(SubgoalMaker):
         elif not isinstance(self.rule_ref, (type(None), IsabelleFact_Unfound)) and self.ml_state.initialized():
             [self.rule_ref] = await self.ml_state.refresh_facts([self.rule_ref])
         await super()._refresh_me_alone(auto_intro)
+    def _rule_name_str(self) -> str | None:
+        if self.rule_ref is not None:
+            return self.rule_ref.name().unicode
+        if self.rule is not None and "name" in self.rule:
+            return self.rule["name"]
+        return None
+    def _is_induction_rule(self) -> bool:
+        name = self._rule_name_str()
+        return name is not None and (name.endswith("_ind") or name.endswith("_induct"))
+    def _print_induction_notice(self, indent: int, file: MyIO):
+        if self._is_induction_rule():
+            print_indent(indent, file)
+            file.write(f"Notice: \"{self._rule_name_str()}\" is an induction rule. Use `Induction` operation with `rule: {self._rule_name_str()}` instead.\n")
     def quickview_title(self) -> str:
         if self.rule_ref is not None:
             return f"Inference Rule {self.rule_ref.name().unicode}"
         return "Inference Rule"
     def quickview(self, indent: int, file: MyIO) -> int:
         indent = super().quickview(indent, file)
+        self._print_induction_notice(indent, file)
         if len(self.sub_nodes) <= 1:
             s0 = self._state_after_beginning()
             goal = s0.leading_goal
@@ -7957,6 +7972,7 @@ class InferenceRule(SubgoalMaker):
             _print_raw_fact(self.rule, indent+1, file)
         else:
             file.write("rule: default\n")
+        self._print_induction_notice(indent, file)
         self._print_evaluation_status(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
         if len(self.sub_nodes) <= 1:
@@ -9325,12 +9341,12 @@ class Session:
             parts.append(
                 f"- {self.tool_name(TOOL_REPORT)}: Report that the goal is unprovable (refute), that you give up (surrender), or any difficulty or obstacle you run into (difficulty)\n"
             )
-        # subagent/close_subagent are dispatch tools — shown to dispatchers (the main
+        # subagent/cancel_subagent are dispatch tools — shown to dispatchers (the main
         # agent AND workers, which may delegate nested sub-goals), not interaction forks.
         if self.is_major or self.is_worker:
             parts.append(
                 f"- {self.tool_name(TOOL_SUBAGENT)}: Launch a sub-agent to prove a subgoal whose proof would derail your main line of reasoning.\n"
-                f"- {self.tool_name(TOOL_CLOSE_SUBAGENT)}: Terminate a sub-agent you dispatched.\n"
+                f"- {self.tool_name(TOOL_CLOSE_SUBAGENT)}: Cancel and remove a sub-agent you dispatched (the sub-agent is terminated; to resume it instead, call `subagent` again).\n"
             )
         return "".join(parts)
 
@@ -9943,6 +9959,12 @@ class Session:
             return _first_worker_in_subtree(node)
         return None
 
+    # Maximum worker-nesting depth for THIS session's driver (main -> worker is
+    # layer 1, its sub-worker layer 2, ...). Overridable per driver as a class var
+    # (e.g. 1 to permit only a single layer of sub-agents). Defaults to the
+    # module-level ``SUBAGENT_NESTING_DEPTH``.
+    SUBAGENT_NESTING_DEPTH: int = SUBAGENT_NESTING_DEPTH
+
     def _subagent_nesting_depth(self) -> int:
         """How many ``Role_Worker`` sessions enclose this one, counting itself —
         i.e. this session's worker-nesting layer (main = 0, its worker = 1, that
@@ -9958,7 +9980,7 @@ class Session:
         return depth
 
     def _can_offer_dispatch_tools(self) -> bool:
-        """Whether the dispatch tools (`subagent` / `close_subagent`) should be
+        """Whether the dispatch tools (`subagent` / `cancel_subagent`) should be
         advertised to this session. True for a dispatcher — the main agent or a
         worker — that is NOT already at the maximum nesting depth; a sub-sub-agent
         (depth == SUBAGENT_NESTING_DEPTH) cannot delegate further, so the tools are
@@ -9967,7 +9989,7 @@ class Session:
         the Claude SDK allow-list (_role_allowed_tools); the runtime guard in
         _subagent_tool_logic remains as a backstop."""
         return ((self.is_major or self.is_worker)
-                and self._subagent_nesting_depth() < SUBAGENT_NESTING_DEPTH)
+                and self._subagent_nesting_depth() < self.SUBAGENT_NESTING_DEPTH)
 
     async def _prefetch_worker_premises(self) -> None:
         """Resolve the standard-printed propositions of every fact in scope before the
@@ -10505,7 +10527,7 @@ class WorkerHandle:
         the worker already finished. Detaches the handle from its node. Called per
         node by the two recursive teardowns: ``Node.discard`` (node leaves the tree
         — delete, amend) and ``Node.aclose_all_subagents`` (node stays —
-        close_subagent, a worker's own wind-down, the session-close sweep)."""
+        cancel_subagent, a worker's own wind-down, the session-close sweep)."""
         self.cancel()
         await self.wait_finish()
         self._settle_costs()  # fallback: ensure cost is rolled up if _run's

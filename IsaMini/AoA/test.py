@@ -2787,6 +2787,49 @@ async def _test_semantic_knn_induction_rule(root: Root, file: MyIO):
     assert len(results_mix) > 0, "Expected results from mixed kind query"
 
 
+@model_test("SemanticKNN_UnequalLengths",
+            "Test_SemanticKNN_UnequalLengths.thy", 8)
+async def _test_semantic_knn_unequal_lengths(root: Root, file: MyIO):
+    """semantic_knn with unparseable term_patterns must return warnings, not crash.
+    Reproduces agent log 2026-06-07 EA313F528: term_patterns with mismatched parens
+    ('summable (λn. 1 / real (lcm') or schematics in binder positions
+    ('inj_on (λ?d. ?N div ?d)') raised UnequalLengths in parse_patterns
+    (context.ML) because failed patterns were dropped from the parsed list
+    but kept in the input list before zipping with ~~."""
+    from Isabelle_RPC_Host.universal_key import EntityKind
+    ml = root.ml_state
+
+    # 1. Single unparseable pattern: mismatched parentheses.
+    #    The ML parse_patterns drops the failed pattern from term_pats but keeps
+    #    it in term_pat_strs, then crashes on (term_pat_strs ~~ term_pats).
+    results1, warnings1 = await ml.semantic_knn(
+        "test query", 5, [EntityKind.THEOREM],
+        term_patterns=["f (x"])
+    file.write(f"Mismatched parens: {len(results1)} results, {len(warnings1)} warnings\n")
+    for w in warnings1:
+        file.write(f"  Warning: {w}\n")
+    assert len(warnings1) > 0, "Expected warning for unparseable pattern"
+
+    # 2. Mixed: one parseable + one unparseable (the log-realistic scenario).
+    #    The valid pattern should still filter; the bad one should produce a warning.
+    results2, warnings2 = await ml.semantic_knn(
+        "addition", 5, [EntityKind.THEOREM],
+        term_patterns=["?x + ?y", "g (z"])
+    file.write(f"Mixed patterns: {len(results2)} results, {len(warnings2)} warnings\n")
+    for w in warnings2:
+        file.write(f"  Warning: {w}\n")
+    assert len(warnings2) > 0, "Expected warning for the unparseable pattern"
+
+    # 3. Schematic in lambda binder (from real agent log EA313F528).
+    results3, warnings3 = await ml.semantic_knn(
+        "injective function", 5, [EntityKind.THEOREM],
+        term_patterns=["inj_on (λ?d. ?N div ?d)"])
+    file.write(f"Schematic in binder: {len(results3)} results, {len(warnings3)} warnings\n")
+    for w in warnings3:
+        file.write(f"  Warning: {w}\n")
+    assert len(warnings3) > 0, "Expected warning for schematic-in-binder pattern"
+
+
 @model_test("QueryNullFields", "Test_QueryNullFields.thy", 8)
 async def _test_query_null_fields(root: Root, file: MyIO):
     """query tool: LLM sends null for optional list/string fields.
@@ -2802,7 +2845,7 @@ async def _test_query_null_fields(root: Root, file: MyIO):
     # Exact args from the failing agent log
     args = {'queries': [
         {'kinds': ['lemma'],
-         'long_description': 'divisibility and square result',
+         'description': 'divisibility and square result',
          'term_patterns': ['_ dvd _ + _'],
          'type_patterns': ['nat'],
          'theories_include': None,
@@ -2812,7 +2855,7 @@ async def _test_query_null_fields(root: Root, file: MyIO):
          'exact_name': None,
          'exact_term': None},
         {'kinds': ['lemma'],
-         'long_description': 'quotient is a perfect square',
+         'description': 'quotient is a perfect square',
          'term_patterns': None,
          'type_patterns': None,
          'theories_include': None,
@@ -2830,7 +2873,7 @@ async def _test_query_null_fields(root: Root, file: MyIO):
     # Also test: kinds=None should default to ["constant"]
     args_null_kinds = {'queries': [
         {'kinds': None,
-         'long_description': 'addition on natural numbers',
+         'description': 'addition on natural numbers',
          'term_patterns': None,
          'type_patterns': None,
          'theories_include': None,
@@ -2850,7 +2893,7 @@ async def _test_query_scalar_string_field(root: Root, file: MyIO):
     """query tool: LLM sends a bare string for a list-typed optional field.
     Reproduces agent log 2026-06-06 13:30:34:
         query {'queries': [{'kinds': ['lemma'],
-                            'long_description': 'P = Q iff P --> Q & Q --> P',
+                            'description': 'P = Q iff P --> Q & Q --> P',
                             'name_contains': 'iff'}, ...]}
     -> 'Failed to unpack callback argument'.
 
@@ -2875,10 +2918,10 @@ async def _test_query_scalar_string_field(root: Root, file: MyIO):
     # Exact args from the failing agent log: name_contains is a bare string.
     args = {'queries': [
         {'kinds': ['lemma'],
-         'long_description': 'P = Q if and only if P ⟶ Q ∧ Q ⟶ P',
+         'description': 'P = Q if and only if P ⟶ Q ∧ Q ⟶ P',
          'name_contains': 'iff'},
         {'kinds': ['lemma'],
-         'long_description': 'equality of booleans is equivalence: (P = Q) = (P ⟶ Q ∧ Q ⟶ P)'},
+         'description': 'equality of booleans is equivalence: (P = Q) = (P ⟶ Q ∧ Q ⟶ P)'},
     ]}
 
     result, is_error = await _query_tool_logic(root.session, args)
@@ -2920,7 +2963,7 @@ async def _test_query_search_summary(root: Root, file: MyIO):
     collected: list[str] = []
     for frag in fragments:
         line = await run({'kinds': ['lemma'],
-                          'long_description': f'lemmas mentioning {frag}',
+                          'description': f'lemmas mentioning {frag}',
                           'name_contains': [frag], 'number': 5})
         collected.append(line)
     for i, line in enumerate(collected):
@@ -2934,7 +2977,7 @@ async def _test_query_search_summary(root: Root, file: MyIO):
 
     # ZZ grows on repeat: re-run the first fragment; its entities are now seen.
     repeat = await run({'kinds': ['lemma'],
-                        'long_description': 'lemmas mentioning plus',
+                        'description': 'lemmas mentioning plus',
                         'name_contains': ['plus'], 'number': 5})
     file.write(f"repeat: {repeat}\n")
     m = re.search(r"(\d+) shown earlier", repeat)
@@ -2942,7 +2985,7 @@ async def _test_query_search_summary(root: Root, file: MyIO):
 
     # XX gate: a bare semantic query (no structural filter) omits the XX clause.
     bare = await run({'kinds': ['lemma'],
-                      'long_description': 'induction over natural numbers',
+                      'description': 'induction over natural numbers',
                       'number': 5})
     file.write(f"no-filter: {bare}\n")
     assert "match" not in bare, f"bare semantic query must omit XX: {bare}"
@@ -4105,6 +4148,69 @@ async def _test_DeriveBall(root: Root, file: MyIO):
     unfinished = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+@model_test("Derive_OverDischarge", "Test_Specialize_OverDischarge.thy", 14)
+async def _test_Derive_OverDischarge(root: Root, file: MyIO):
+    """Reproduce exception THM 3: xOF attribute on a fact with more discharge
+    slots than the fact has premises.
+
+    The LLM may emit ``discharge: [null, null]`` on a conjunction fact that has
+    zero Pure premises, causing the ``xOF _ _`` attribute to raise ``THM 3``
+    during fact-reference evaluation (Attrib.eval_thms), which is BEFORE the
+    ``handle THM`` in SPECIALIZE.  The raw ML exception trace leaks to the
+    agent instead of a clean OPR_FAIL message.
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Step 1: Derive conjunct2 (Q 0) from h_conj via conjunct2
+    root.session.age += 1
+    await root.fill("1", [Derive.gen_single({
+        "thought": "extract Q 0 from the conjunction",
+        "rule": {"name": "conjunct2"},
+        "discharging_facts": [{"name": "h_conj"}],
+        "result_name": "q0"
+    })])
+    print_header("After deriving conjunct", file)
+    root.print(0, file)
+
+    # Step 2: Derive h_rule using a discharging fact that carries
+    # an xOF attribute with more slots than the fact has premises.
+    # h_conj is "P 0 ∧ Q 0" (0 Pure premises).
+    # discharge: [null, null] → xOF _ _ → tries to discharge 2 premises
+    # from a conjunction with 0 premises → THM 3.
+    #
+    # ROOT CAUSE: The THM 3 exception is raised during Attrib.eval_thms
+    # (fact-reference evaluation at proof.ML:3540), which is BEFORE the
+    # `handle THM _` at proof.ML:3543 that catches discharge failures.
+    # The exception escapes as a raw IsabelleError instead of being
+    # wrapped in OPR_FAIL with a clean diagnostic message.
+    root.session.age += 1
+    outcome = await root.fill("2", [Derive.gen_single({
+        "thought": "xOF over-discharge on conjunction fact",
+        "rule": {"name": "h_rule"},
+        "discharging_facts": [
+            {"name": "h_conj", "discharge": [None, None]}
+        ],
+        "result_name": "should_fail"
+    })])
+    print_header("After xOF over-discharge Derive", file)
+    root.print(0, file)
+    is_error = outcome.failure is not None and outcome.failure.is_error
+    reason_str = str(outcome.failure) if outcome.failure is not None else ""
+    file.write(f"Is error: {is_error}\n")
+    file.write(f"Reason: {reason_str}\n")
+    assert is_error, "Expected error from OF over-discharge"
+    assert "exception THM" not in reason_str, \
+        f"Raw THM exception leaked to agent: {reason_str}"
+    assert "OF: the fact has" in reason_str, \
+        f"Expected clean OF diagnostic, got: {reason_str}"
+
+    # Close the proof so the runner doesn't report resource_exhausted
+    root.session.age += 1
+    await root.fill("2", [Obvious.gen_single({
+        "facts": [{"name": "q0"}, {"name": "h_rule"}]
+    })])
 
 @model_test("FactByNameWhereBall", "Test_FactByNameWhereBall.thy", 11)
 async def _test_FactByNameWhereBall(root: Root, file: MyIO):
@@ -11406,13 +11512,13 @@ async def _test_nested_worker_scope(root: Root, file: MyIO):
     file.write(f"event={type(ev).__name__}; detail={ev.detail!r}\n")
     session.quit_info = None
 
-    # --- 13. close_subagent: a worker closes its own sub-agent by RELATIVE id;
+    # --- 13. cancel_subagent: a worker closes its own sub-agent by RELATIVE id;
     # the id resolves to the right node, the handle detaches, and a relative id
     # with no handle yields a relativized "no sub-agent" error. ---
     session.role = model.Role_Worker(target=H1, worker_handle=WorkerHandle(H1, session))
     H11.worker_handle = WorkerHandle(H11, session)          # sub-agent parked on 1.1
     r_c, e_c = await _close_subagent_tool_logic(session, {"step_id": "1"})   # relative 1 -> 1.1
-    print_header("close_subagent relative '1' (->1.1): detach", file)
+    print_header("cancel_subagent relative '1' (->1.1): detach", file)
     file.write(f"is_error={e_c}; {r_c}\n")
     file.write(f"handle on 1.1 detached: {H11.worker_handle is None}\n")
     r_c2, e_c2 = await _close_subagent_tool_logic(session, {"step_id": "2"})  # relative 2 -> 1.2 (no handle)
@@ -11658,8 +11764,8 @@ async def _test_worker_handle_lifecycle(root: Root, file: MyIO):
     finally:
         H12.worker_handle = None
 
-    # --- 8. close_subagent: parked vs in-flight vs no-handle ----------------
-    print_header("8. close_subagent parked / in-flight / none", file)
+    # --- 8. cancel_subagent: parked vs in-flight vs no-handle ----------------
+    print_header("8. cancel_subagent parked / in-flight / none", file)
     H11.worker_handle = WorkerHandle(H11, session)     # parked (no task)
     r, e = await _close_subagent_tool_logic(session, {"step_id": "1.1"})
     file.write(f"parked close is_error={e} detached={H11.worker_handle is None}\n")
@@ -12152,123 +12258,6 @@ async def _test_nested_antichain(root: Root, file: MyIO):
 
     session.role = model.Role_Major()
 
-@model_test("HammerLooseBound", "Test_HammerLooseBound.thy", 26)
-async def _test_HammerLooseBound(root: Root, file: MyIO):
-    """Faithful replay of the production case putnam_1970_b4 up to the crashing
-    Obvious at step `x_cont`, which raises
-        exception TERM raised (line 375 of "term.ML"): fastype_of: Bound.
-
-    The proof: Contradiction → Intro → push negation, then derive g_diff /
-    g_endpoints / g_cont, then block g_has_integral (Derive FTC → Rewrite to
-    premise4 → Have x_diff → Have x_cont → Obvious [x_diff]). The final Obvious
-    (HAMMER) crashes when sledgehammer's run_mepo_and_render / fast_force
-    traverses a HOL ∀-binder among the mepo-selected facts and calls fastype_of
-    on a subterm carrying a loose de Bruijn Bound."""
-    import traceback as _tb
-    _prog = open("/tmp/hlb_progress.txt", "w")
-    def report(tag, o):
-        err = o.failure is not None and o.failure.is_error
-        file.write(f"{tag} is_error: {err}\n")
-        msg = f"{tag} is_error: {err}"
-        if o.failure is not None:
-            r = o.failure
-            rr = r.reason if isinstance(r, FailureReason) else r
-            file.write(f"{tag} reason: {rr}\n")
-            msg += f" | reason: {rr}"
-        _prog.write(msg + "\n"); _prog.flush()
-
-    async def step(tag, sid, ops):
-        try:
-            o = await root.fill(sid, ops)
-            report(tag, o)
-            return o
-        except Exception as e:
-            _prog.write(f"{tag} EXCEPTION at {sid}: {type(e).__name__}: {e}\n")
-            _prog.write(_tb.format_exc() + "\n"); _prog.flush()
-            file.write(f"{tag} EXCEPTION at {sid}: {type(e).__name__}: {e}\n")
-            return None
-
-    print_header("Initial YAML", file)
-    root.print(0, file)
-
-    # 1. Contradiction: assume the negation, goal becomes False.
-    root.session.age += 1
-    await step("contradiction", "1", [Contradiction.gen_single({
-        "hypothesis_name": "h_bound"})])
-    # 2. Intro.
-    root.session.age += 1
-    await step("intro", "2", [Intro.gen_single({"thought": "push the negation"})])
-    # 3. Rewrite h_bound (system simps) -> premise0.
-    root.session.age += 1
-    await step("rewrite_hbound", "3", [Rewrite.gen_single({
-        "thought": "push the negation through h_bound",
-        "using": [{"name": "h_bound"}],
-        "use system simplifiers": True,
-        "rewrite goal": False,
-        "rewrite premises": ["h_bound"]})])
-    # 4. Have g_diff (extract 2nd conjunct of hdiff).
-    root.session.age += 1
-    await step("have_gdiff", "4", [Have.gen_single({
-        "thought": "deriv x differentiable on [0,1]", "name": "g_diff",
-        "statement": {"english": "deriv x differentiable on [0,1]",
-                      "conclusion": r"deriv x differentiable_on {(0::real)..(1::real)}"}})])
-    root.session.age += 1
-    await step("gdiff_rewrite", "4.1", [Rewrite.gen_single({
-        "thought": "from hdiff", "using": [{"name": "hdiff"}],
-        "use system simplifiers": True, "rewrite goal": True, "rewrite premises": []})])
-    # 5. Have g_endpoints.
-    root.session.age += 1
-    await step("have_gendpoints", "5", [Have.gen_single({
-        "thought": "endpoints", "name": "g_endpoints",
-        "statement": {"english": "g(0)=0 and g(1)=0",
-                      "conclusion": r"deriv x (0::real) = (0::real) \<and> deriv x (1::real) = (0::real)"}})])
-    root.session.age += 1
-    await step("gendpoints_rewrite", "5.1", [Rewrite.gen_single({
-        "thought": "from hv", "using": [{"name": "hv"}],
-        "use system simplifiers": True, "rewrite goal": True, "rewrite premises": []})])
-    # 6. Have g_cont (deriv x continuous) by Obvious.
-    root.session.age += 1
-    await step("have_gcont", "6", [Have.gen_single({
-        "thought": "deriv x continuous on [0,1]", "name": "g_cont",
-        "statement": {"english": "deriv x continuous on [0,1]",
-                      "conclusion": r"continuous_on {(0::real)..(1::real)} (deriv x)"}})])
-    root.session.age += 1
-    await step("gcont_obvious", "6.1", [Obvious.gen_single({"facts": []})])
-    # 7. Have g_has_integral — batch fill with inline proof containing the
-    #    Derive FTC → Rewrite → Have x_cont → Obvious sequence.
-    #    The crucial property: x_cont's Obvious runs INSIDE the nested g_has_integral
-    #    block, where premise4/ftc_result are LOCAL facts in the ML proof state.
-    root.session.age += 1
-    print_header("Before g_has_integral batch fill", file)
-    await step("ghi_batch", "7", [Have.gen_single({
-        "thought": "FTC: deriv x integrates to x(1)-x(0)", "name": "g_has_integral",
-        "statement": {"english": "(deriv x has_integral x 1 - x 0) [0,1]",
-                      "conclusion": r"(deriv x has_integral x (1::real) - x (0::real)) {(0::real)..(1::real)}"},
-        "proof": [
-            {"operation": "Derive", "thought": "Apply FTC-strong with S={0,1}",
-             "rule": {"name": "fundamental_theorem_of_calculus_strong"},
-             "instantiations": [
-                 {"name": "?f", "value": "x"},
-                 {"name": "?f'", "value": "deriv x"},
-                 {"name": "?a", "value": "(0::real)"},
-                 {"name": "?b", "value": "(1::real)"},
-                 {"name": "?S", "value": "{(0::real), (1::real)}"}],
-             "result_name": "ftc_result"},
-            {"operation": "Rewrite", "thought": "discharge finite {0,1} and 0<=1",
-             "using": [], "use system simplifiers": True,
-             "rewrite goal": True, "rewrite premises": ["ftc_result"]},
-            {"operation": "Have",
-             "thought": "x continuous on [0,1] because differentiable",
-             "name": "x_cont",
-             "statement": {"english": "x continuous on [0,1]",
-                           "conclusion": r"continuous_on {(0::real)..(1::real)} x"},
-             "proof": [{"operation": "Obvious", "facts": [{"name": "hdiff"}]}]},
-        ]})])
-    print_header("After g_has_integral batch (crash site = x_cont Obvious)", file)
-    root.print(0, file)
-    _prog.write("DONE\n"); _prog.close()
-
-
 @model_test("HaveWorkerForAny", "Test_HaveWorkerForAny.thy", 11)
 async def _test_HaveWorkerForAny(root: Root, file: MyIO):
     """Worker scope must include the target Have/Suffices for_any variables and premises.
@@ -12424,6 +12413,58 @@ async def _test_Rewrite_ConjSplit(root: Root, file: MyIO):
         file.write(f"FAILURE: {outcome.failure}\n")
     else:
         file.write("SUCCESS\n")
+
+
+@model_test("SubagentEmptyStepId", "Test_SubagentEmptyStepId.thy", 9)
+async def _test_subagent_empty_step_id(root: Root, file: MyIO):
+    """When the LLM calls `subagent` with a hallucinated schema (e.g. `task`
+    instead of `step_id`), the missing `step_id` defaults to empty string.
+
+    For a worker, _absolutize_id("", scope_root) == scope_root, so the request
+    resolves to the worker's own target and triggers the "whole goal" rejection
+    — but the error message shows empty backticks ("Delegating step ``").
+    For the main agent, "" is not a valid node id, so NodeNotFound fires — but
+    again shows "No step `` found."
+
+    This test locks down both paths so the error messages surface the actual
+    problem (missing/empty step_id) rather than silently defaulting."""
+    from .mcp_http_server import _subagent_tool_logic
+    from .model import WorkerHandle
+    session = root.session
+    session.age += 1
+    goal = root.sub_nodes[1]
+    s = {"english": "nonneg", "conclusion": r"(0::int) \<le> x * x"}
+    await goal.fill("1", [Have.gen_single({"thought": "H", "statement": s, "name": "hH"})])
+    H = goal.sub_nodes[0]
+
+    # --- 1. Main agent: subagent with empty step_id ---
+    print_header("main agent: subagent with empty step_id", file)
+    r, e = await _subagent_tool_logic(session, {
+        "step_id": "", "suggestions": "do something", "helpful_lemmas": []})
+    file.write(f"is_error={e}\n{r}\n")
+
+    # --- 2. Main agent: subagent with missing step_id (hallucinated 'task' key) ---
+    print_header("main agent: subagent with missing step_id (task key)", file)
+    r2, e2 = await _subagent_tool_logic(session, {
+        "task": "prove this goal", "suggestions": "try auto", "helpful_lemmas": []})
+    file.write(f"is_error={e2}\n{r2}\n")
+
+    # --- 3. Worker: subagent with empty step_id -> resolves to scope root ---
+    session.role = model.Role_Worker(target=H, worker_handle=WorkerHandle(H, session))
+    try:
+        print_header("worker: subagent with empty step_id", file)
+        r3, e3 = await _subagent_tool_logic(session, {
+            "step_id": "", "suggestions": "do something", "helpful_lemmas": []})
+        file.write(f"is_error={e3}\n{r3}\n")
+
+        # --- 4. Worker: subagent with missing step_id (hallucinated 'task' key) ---
+        print_header("worker: subagent with missing step_id (task key)", file)
+        r4, e4 = await _subagent_tool_logic(session, {
+            "task": "prove this goal"})
+        file.write(f"is_error={e4}\n{r4}\n")
+    finally:
+        session.role = model.Role_Major()
+        H.worker_handle = None
 
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):

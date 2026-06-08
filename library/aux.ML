@@ -225,6 +225,31 @@ fun xOF prove_discharge ctxt opt_thms st =
   let open Conv
       val thms = map (fn NONE => Drule.asm_rl | SOME th => th) opt_thms
       val LEN = length thms
+
+      (* Upper bound on premises that rulify could expose (Pure.imp + HOL.implies,
+         traversing through Pure.all / HOL.All). *)
+      fun count_prems (Const (\<^const_name>\<open>Pure.all\<close>, _) $ Abs (_, _, body)) =
+            count_prems body
+        | count_prems (Const (\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ body) =
+            1 + count_prems body
+        | count_prems (Const (\<^const_name>\<open>HOL.Trueprop\<close>, _) $ hol) =
+            count_prems_hol hol
+        | count_prems _ = 0
+      and count_prems_hol (Const (\<^const_name>\<open>HOL.All\<close>, _) $ Abs (_, _, body)) =
+            count_prems_hol body
+        | count_prems_hol (Const (\<^const_name>\<open>HOL.implies\<close>, _) $ _ $ body) =
+            1 + count_prems_hol body
+        | count_prems_hol _ = 0
+
+      val max_prems = count_prems (Thm.prop_of st)
+      val _ = if LEN > max_prems
+              then error ("OF: the fact has " ^ string_of_int max_prems ^
+                          " premise(s), but " ^ string_of_int LEN ^
+                          " discharge argument(s) were given\n\
+                          \the fact is:\n  " ^
+                          Thm.string_of_thm ctxt st)
+              else ()
+
       fun rulify N ctxt ctm =
         if N <= Logic.count_prems (Thm.term_of ctm)
         then all_conv ctm

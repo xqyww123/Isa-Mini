@@ -42,7 +42,6 @@ from .model import (
     AoA_Error, ArgumentError, IsabelleError, InternalError,
     CannotDelete_Root, NodeNotFound, ProofTreeTooDeep,
     EvaluationStatus, WorkerHandle, EditVerdict, _is_strict_ancestor,
-    SUBAGENT_NESTING_DEPTH,
     Parse_Op_List, Interaction_BadAnswer,
     AnswerIndexes, AnswerIndex, AnswerIndexesOrName, AnswerIndexesOrSpec,
     AnswerInstantiate, AnswerRefutation,
@@ -89,7 +88,7 @@ _cc_answer_indexes_or_spec_schema = _load_schema("cc_answer_indexes_or_spec.json
 _cc_answer_instantiate_schema = _load_schema("cc_answer_instantiate.jsonc")
 _cc_answer_refutation_schema = _load_schema("cc_answer_refutation.jsonc")
 _cc_subagent_schema = _load_schema("cc_subagent.jsonc")
-_cc_close_subagent_schema = _load_schema("cc_close_subagent.jsonc")
+_cc_close_subagent_schema = _load_schema("cc_cancel_subagent.jsonc")
 
 
 
@@ -712,6 +711,19 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         try:
             node = session.root.locate_node(session._resolve_display_id(sid))
         except NodeNotFound:
+            abs_id = session._resolve_display_id(sid)
+            try:
+                slot = session.root.locate_node_or_slot(abs_id)
+            except NodeNotFound:
+                slot = None
+            if isinstance(slot, Resolved_Slot):
+                error_msg = (f"Step '{sid}' is a filling slot that has not been "
+                             "written yet.")
+                if single_step:
+                    session.log_tool_response(_tn, f"ERROR: {error_msg}")
+                    return (error_msg, True)
+                entries.append(("warn", f"WARNING: {error_msg}"))
+                continue
             if single_step:
                 if total_lines <= 40:
                     result = (f"WARNING: Step '{sid}' doesn't exist.\n"
@@ -1087,9 +1099,9 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
         assert node.worker_handle is None, (
             f"orphan sub-agent on {session._display_id(node.id)}: handle without an enclosing dispatched worker")
         # ② Bound recursive delegation (main -> worker is layer 1).
-        if session._subagent_nesting_depth() >= SUBAGENT_NESTING_DEPTH:
+        if session._subagent_nesting_depth() >= session.SUBAGENT_NESTING_DEPTH:
             return _err(f"You are too deeply nested to delegate further (limit: "
-                        f"{SUBAGENT_NESTING_DEPTH} levels of sub-agents). Prove this goal "
+                        f"{session.SUBAGENT_NESTING_DEPTH} levels of sub-agents). Prove this goal "
                         f"yourself, or simplify the plan.")
         handle = WorkerHandle(node, session)
         node.worker_handle = handle
@@ -1136,7 +1148,7 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
                    f"this step with `suggestions` describing how it should proceed and any "
                    f"facts you've made available to it — refer to those facts by name or "
                    f"statement, NEVER by step id (the sub-agent cannot see your step "
-                   f"numbering). Or, to rework its sub-proof directly, close it with "
+                   f"numbering). Or, to rework its sub-proof directly, cancel it with "
                    f"`{session.tool_name(TOOL_CLOSE_SUBAGENT)}` first, then re-dispatch.")
     # Append the whole-proof outline (mirrors the `edit`/`delete` tools) so the
     # planner sees the tree the worker just mutated without a `recall` round-trip.
@@ -1150,7 +1162,7 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
 
 
 async def _close_subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
-    """`close_subagent`: terminate a sub-agent YOU dispatched — cascading to any
+    """`cancel_subagent`: terminate a sub-agent YOU dispatched — cascading to any
     workers nested under it — on a PRECISELY named step, keeping the partial proof.
     Available to the main agent AND to workers. Pure exact match — no redirection,
     no ancestor/descendant search: the agent always has the exact worker step id
@@ -1210,7 +1222,10 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "query":  {"description": "Search for Isabelle entities by semantic similarity, patterns, or exact name/term. "
                 "Use exact_name to look up definitions; "
                 "use exact_term to unfold fancy syntax and retrieve semantic explanations; "
-                "use long_description and filters for discovery.",
+                "use description and filters for discovery. "
+                "If you fail to find a key lemma, increase `number`, retry with only `description`, "
+                "and drop all other constraints like `term_patterns`, `exact_name`, and `name_contains`. "
+                "Conversely, if a query returns too many irrelevant results, add the constraints to narrow down.",
                "schema": _cc_query_schema, "annotations": _RO},
     "recall": {"description": "Recall proof state from `proof.yaml`. Use only when you have lost track.", "schema": _cc_read_schema, "annotations": _RO},
     "request_lemmas": {"description": "Report missing background lemmas and request that the external environment supply them.",
@@ -1223,12 +1238,12 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "answer_indexes_or_spec": {"description": "Answer by selecting indexes or providing an Isabelle proposition", "schema": _cc_answer_indexes_or_spec_schema, "annotations": _ACT},
     "answer_instantiate": {"description": "Answer by providing schematic-variable instantiations", "schema": _cc_answer_instantiate_schema, "annotations": _ACT},
     "answer_refutation": {"description": "Accept or reject a worker's claim that the goal is unprovable", "schema": _cc_answer_refutation_schema, "annotations": _ACT},
-    "subagent": {"description": "Launch a sub-agent to prove a goal or repair a proof in isolation. Call this when a goal is tedious and its proof would derail your main line of reasoning.", "schema": _cc_subagent_schema, "annotations": _ACT},
-    "close_subagent": {"description": "Terminate a sub-agent you dispatched, freeing its step for editing again. Point it exactly at the step the sub-agent is on — it does NOT redirect, to avoid killing the wrong one. The sub-agent's partial proof is kept.", "schema": _cc_close_subagent_schema, "annotations": _ACT},
+    "subagent": {"description": "Launch or resume a sub-agent to prove a goal or repair a proof in isolation. Call this when a goal is tedious and its proof would derail your main line of reasoning. Also call this to resume a suspended sub-agent.", "schema": _cc_subagent_schema, "annotations": _ACT},
+    "cancel_subagent": {"description": "Permanently cancel and delete a sub-agent you dispatched.", "schema": _cc_close_subagent_schema, "annotations": _ACT},
 }
 
 
-# Dispatch tools (subagent/close_subagent): available to dispatchers — the main
+# Dispatch tools (subagent/cancel_subagent): available to dispatchers — the main
 # agent AND workers — but hidden from interaction forks. Precompute the non-dispatcher
 # (interaction-fork) view once at import time. The name `_PLANNER_ONLY_TOOLS` is kept
 # for stability but now means "tools an interaction fork does not get".
@@ -1238,7 +1253,7 @@ _TOOL_SCHEMAS_WORKER: dict[str, dict[str, Any]] = {
 
 
 def _tool_schemas_for(session: Session) -> dict[str, dict[str, Any]]:
-    """Tool schemas advertised to ``session``. ``subagent`` / ``close_subagent`` are
+    """Tool schemas advertised to ``session``. ``subagent`` / ``cancel_subagent`` are
     DISPATCH tools, shown to any agent that can delegate — the main agent AND workers
     (nested delegation) — but hidden from interaction forks (which never delegate) AND
     from a session already at the maximum nesting depth (a sub-sub-agent cannot
@@ -1319,7 +1334,7 @@ class ToolExecutor:
                     async with self._tool_lock:
                         result, is_error = await _subagent_tool_logic(session, arguments)
                     session.last_proof_op_time = time()
-                case "close_subagent":
+                case "cancel_subagent":
                     # Hold the lock to serialize against a `subagent` resume (also
                     # under it): keeps resolve_resume's fut.set_result from
                     # racing aclose's fut.cancel on the same future. Deadlock-free —
@@ -1346,7 +1361,7 @@ class ToolExecutor:
 
     def tool_schemas(self) -> dict[str, dict[str, Any]]:
         """Return {name: {"description": ..., "schema": ...}} for the tools
-        advertised to this session's role (``subagent``/``close_subagent`` are
+        advertised to this session's role (``subagent``/``cancel_subagent`` are
         dispatch tools — for the main agent and workers, not interaction forks)."""
         return _tool_schemas_for(self._session)
 
@@ -1365,7 +1380,7 @@ def _create_mcp_server(session: Session, extra_sdk_tools: list | None = None) ->
     server = MCPServer(f"proof-{id(session)}")
     executor = ToolExecutor(session)
 
-    # Build tool list: built-in (role-scoped — `subagent`/`close_subagent` go to
+    # Build tool list: built-in (role-scoped — `subagent`/`cancel_subagent` go to
     # dispatchers: the main agent and workers, not interaction forks) + extras
     tools: list[Tool] = [
         Tool(name=name, description=t["description"],

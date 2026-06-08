@@ -27,7 +27,7 @@ import openai
 from .model import *
 from .language_model_driver import LMDriver, _TransientError, _QuotaError, _T, PRICING, pricing_for, Usage
 
-from .mcp_http_server import ToolExecutor, _cc_edit_schema_flat
+from .mcp_http_server import ToolExecutor, _cc_edit_schema_flat, _cc_edit_schema_raw
 from .helper import MyIO
 
 
@@ -143,11 +143,14 @@ class Provider(ABC):
 # OpenAI-Compatible Provider
 # ============================================================================
 
-def _strictify_schema(schema: dict) -> dict:
+def _strictify_schema(schema: dict, *, nullify: bool = True) -> dict:
     """Transform a JSON Schema for OpenAI strict mode.
 
     - ``additionalProperties: false`` on every object
-    - All properties listed in ``required``; optional ones made nullable
+    - All properties listed in ``required``; when ``nullify`` (default), optional
+      ones are made nullable. Pass ``nullify=False`` to force-require every
+      property without widening its type — for callers that rely on the parser
+      treating an empty value (``[]``/``""``/``false``) the same as an absent one.
     """
     import copy
     schema = copy.deepcopy(schema)
@@ -170,9 +173,10 @@ def _strictify_schema(schema: dict) -> dict:
                 node["additionalProperties"] = False
                 props = node["properties"]
                 required = set(node.get("required") or [])
-                for prop_name in props:
-                    if prop_name not in required:
-                        _make_nullable(props, prop_name)
+                if nullify:
+                    for prop_name in props:
+                        if prop_name not in required:
+                            _make_nullable(props, prop_name)
                 node["required"] = list(props.keys())
             for v in node.values():
                 _walk(v)
@@ -199,6 +203,83 @@ def _strictify_schema(schema: dict) -> dict:
                 t.append("null")
 
     return _walk(schema)
+
+
+def _flatten_edit_schema_deepseek(raw: dict) -> dict:
+    """Build the ``edit`` schema for DeepSeek V4 ``/beta`` strict mode.
+
+    DeepSeek strict compiles the tool schema into a constrained-decoding grammar
+    that CANNOT resolve ``$ref`` — any ``$ref`` makes compilation fall back to a
+    path that silently drops the schema from the prompt (the model then
+    hallucinates field names). See memory ``deepseek-v4-strict-not-enforced``.
+    So we fully inline (no ``$ref``) and additionally:
+      - remove every ``proof``/``proofs`` field (no inline sub-proofs; the agent
+        builds the tree incrementally — a bodiless op auto-opens a fillable
+        child, so absent==open-block on the parser side);
+      - collapse the self-recursive ``FactByName.discharge`` to plain name
+        strings (``null`` kept for skip-a-premise; DeepSeek strict accepts null);
+      - ``const`` (string) -> single-value ``enum`` (strict has no string const);
+      - drop ``minItems``/``maxItems``/``default`` (unsupported by strict);
+      - all object props ``required`` + ``additionalProperties:false`` WITHOUT
+        nullify (the model sends empty values; parser treats empty == absent).
+    """
+    import copy
+    raw = copy.deepcopy(raw)
+    defs = raw.pop("$defs", {})
+    _PROOF_KEYS = {"proof", "proofs"}
+    _DROP_KEYS = {"minItems", "maxItems", "default"}
+    _flat_fbn: dict | None = None
+
+    def _factbyname() -> dict:
+        nonlocal _flat_fbn
+        if _flat_fbn is None:
+            fbn = copy.deepcopy(defs["FactByName"])
+            props = fbn.get("properties", {})
+            if "discharge" in props:  # break the self-recursion: facts -> name strings
+                props["discharge"]["items"] = {
+                    "anyOf": [{"type": "string"}, {"type": "null"}]}
+            _flat_fbn = fbn
+        return copy.deepcopy(_flat_fbn)
+
+    def _resolve(node: Any) -> Any:
+        if isinstance(node, dict):
+            ref = node.get("$ref")
+            if isinstance(ref, str) and ref.startswith("#/$defs/"):
+                name = ref[len("#/$defs/"):]
+                if name == "FactByName":
+                    return _resolve(_factbyname())
+                return _resolve(copy.deepcopy(defs[name]))
+            out: dict[str, Any] = {}
+            for k, v in node.items():
+                if k in _PROOF_KEYS or k in _DROP_KEYS:
+                    continue
+                if k == "const" and isinstance(v, str):
+                    out["enum"] = [v]
+                    out.setdefault("type", "string")
+                    continue
+                rv = _resolve(v)
+                if k == "simplify" and isinstance(rv, dict) and rv.get("description"):
+                    rv["description"] = rv["description"].rstrip() + " Most cases: true."
+                out[k] = rv
+            return out
+        if isinstance(node, list):
+            return [_resolve(x) for x in node]
+        return node
+
+    flat = _resolve(raw)
+    # all-required + additionalProperties:false, but NO nullify (empty == absent).
+    return _strictify_schema(flat, nullify=False)
+
+
+_cc_edit_schema_deepseek_cache: dict | None = None
+
+
+def _deepseek_edit_schema() -> dict:
+    """Lazily build + cache the DeepSeek-strict ``edit`` schema (import-safe)."""
+    global _cc_edit_schema_deepseek_cache
+    if _cc_edit_schema_deepseek_cache is None:
+        _cc_edit_schema_deepseek_cache = _flatten_edit_schema_deepseek(_cc_edit_schema_raw)
+    return _cc_edit_schema_deepseek_cache
 
 
 class OpenAIBase(Provider):
@@ -241,6 +322,8 @@ class OpenAIBase(Provider):
         "o3", "o4-mini",
     })
 
+    _DEFAULT_TIMEOUT = httpx.Timeout(connect=5.0, read=1500.0, write=600.0, pool=600.0)
+
     def __init__(self, model: str, api_key: str | None = None,
                  base_url: str | None = None, cache_key: str | None = None,
                  default_context_window: int = 128_000,
@@ -248,13 +331,16 @@ class OpenAIBase(Provider):
                  reasoning_effort: str | None = None,
                  extra_params: dict[str, Any] | None = None,
                  strict_tools: bool = False,
-                 cot_retention: str | None = None):
+                 cot_retention: str | None = None,
+                 timeout: httpx.Timeout | None = None,
+                 max_stream_time: float = 1800):
         self._model = model
         self._client = openai.AsyncOpenAI(
             api_key=api_key or os.environ.get("OPENAI_API_KEY"),
             base_url=base_url,
-            timeout=httpx.Timeout(connect=5.0, read=1500.0, write=600.0, pool=600.0),
+            timeout=timeout or self._DEFAULT_TIMEOUT,
         )
+        self._max_stream_time = max_stream_time
         self._cache_key = cache_key
         self._default_context_window = default_context_window
         self._strict_tools = strict_tools
@@ -307,6 +393,11 @@ class OpenAIBase(Provider):
         if name == "edit":
             return _strictify_schema(_cc_edit_schema_flat)
         return _strictify_schema(schema)
+
+    def _strict_for_tool(self, name: str) -> bool:
+        """Whether THIS tool is sent in strict mode. Base: all tools when
+        ``strict_tools`` is enabled; subclasses may restrict per tool."""
+        return self._strict_tools
 
 
 class OpenAIChatProvider(OpenAIBase):
@@ -411,32 +502,36 @@ class OpenAIChatProvider(OpenAIBase):
         stream_usage: Any = None
 
         try:
-            async for chunk in stream:
-                if chunk.usage:
-                    stream_usage = chunk.usage
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta
-                # DeepSeek-style plaintext CoT: a non-standard field the OpenAI
-                # SDK surfaces via model_extra / attribute. Capture it so it can
-                # be round-tripped (required on V4 thinking-mode tool calls).
-                rc = getattr(delta, "reasoning_content", None)
-                if rc:
-                    rc_parts.append(rc)
-                if delta.content:
-                    text_parts.append(delta.content)
-                if delta.tool_calls:
-                    for tcd in delta.tool_calls:
-                        idx = tcd.index
-                        if idx not in tc_map:
-                            tc_map[idx] = {"id": "", "name": "", "arguments": ""}
-                        if tcd.id:
-                            tc_map[idx]["id"] = tcd.id
-                        if tcd.function:
-                            if tcd.function.name:
-                                tc_map[idx]["name"] = tcd.function.name
-                            if tcd.function.arguments:
-                                tc_map[idx]["arguments"] += tcd.function.arguments
+            async with asyncio.timeout(self._max_stream_time):
+                async for chunk in stream:
+                    if chunk.usage:
+                        stream_usage = chunk.usage
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    # DeepSeek-style plaintext CoT: a non-standard field the OpenAI
+                    # SDK surfaces via model_extra / attribute. Capture it so it can
+                    # be round-tripped (required on V4 thinking-mode tool calls).
+                    rc = getattr(delta, "reasoning_content", None)
+                    if rc:
+                        rc_parts.append(rc)
+                    if delta.content:
+                        text_parts.append(delta.content)
+                    if delta.tool_calls:
+                        for tcd in delta.tool_calls:
+                            idx = tcd.index
+                            if idx not in tc_map:
+                                tc_map[idx] = {"id": "", "name": "", "arguments": ""}
+                            if tcd.id:
+                                tc_map[idx]["id"] = tcd.id
+                            if tcd.function:
+                                if tcd.function.name:
+                                    tc_map[idx]["name"] = tcd.function.name
+                                if tcd.function.arguments:
+                                    tc_map[idx]["arguments"] += tcd.function.arguments
+        except TimeoutError:
+            raise _TransientError(
+                f"stream stalled: not completed within {self._max_stream_time}s")
         except openai.APIError as e:
             if isinstance(e, openai.APIStatusError) and e.status_code < 500 and not isinstance(e, openai.RateLimitError):
                 raise
@@ -476,13 +571,18 @@ class OpenAIChatProvider(OpenAIBase):
         )
 
     def format_tools(self, tool_info: dict[str, dict[str, Any]]) -> list[dict]:
-        strict = self._strict_tools
-        return [{"type": "function", "function": {
-            "name": name,
-            "description": info["description"],
-            "parameters": self._strict_schema(name, info["schema"]) if strict else info["schema"],
-            **({"strict": True} if strict else {}),
-        }} for name, info in tool_info.items()]
+        out: list[dict] = []
+        for name, info in tool_info.items():
+            strict = self._strict_for_tool(name)
+            fn: dict[str, Any] = {
+                "name": name,
+                "description": info["description"],
+                "parameters": self._strict_schema(name, info["schema"]) if strict else info["schema"],
+            }
+            if strict:
+                fn["strict"] = True
+            out.append({"type": "function", "function": fn})
+        return out
 
     def format_assistant_msg(self, response: ProviderResponse) -> AssistantMsg:
         msg: dict[str, Any] = {"role": "assistant", "content": response.content}
@@ -578,12 +678,7 @@ class OpenAIResponsesProvider(OpenAIBase):
         _BACKOFF_CAP = 30
         _BACKGROUND_THRESHOLD = 900
         _MAX_CHAT_TIME = 3600
-        # Wall-clock cap on consuming a SINGLE stream. The read timeout only
-        # catches inactivity; a server that keeps trickling delta events forever
-        # (e.g. a runaway generation that never emits response.completed) resets
-        # it indefinitely. This bounds how long one stream may run before we
-        # abort and retry, so _MAX_CHAT_TIME is actually enforced.
-        _MAX_STREAM_TIME = 1800
+        _MAX_STREAM_TIME = self._max_stream_time
         _chat_t0 = time()
         attempt = 0
         while True:
@@ -1196,7 +1291,12 @@ class APIDriver(LMDriver):
                 fork_messages.append(SystemMsg(sp))
             fork_messages.append(UserMsg(prompt_text))
 
-        all_schemas = fork._executor.tool_schemas()
+        # Use the PARENT's tool schemas so the API request shares the same
+        # tools-prefix as the main loop.  This preserves DeepSeek-style automatic
+        # prefix caching (tools are serialised before messages in the prompt).
+        # The fork's _check_tool_permission already blocks disallowed tools at
+        # execution time, so advertising extra tools is safe.
+        all_schemas = self._executor.tool_schemas()
         fork_tools = self._provider.format_tools(all_schemas)
 
         fork_provider = self._fork_provider(mode)
@@ -1319,18 +1419,19 @@ class APIDriver(LMDriver):
 # Concrete Driver Registrations
 # ============================================================================
 
-def _parse_effort_suffix(argument: str | None, default_model: str
+def _parse_effort_suffix(argument: str | None, default_model: str,
+                         default_effort: str = "medium",
                          ) -> tuple[str, str]:
     """Parse ``"model-effort"`` into ``(model, effort)``.
 
-    Recognised suffixes: ``-high``, ``-medium``, ``-low``.
-    Default effort when no suffix is given: ``"medium"``.
+    Recognised suffixes: ``-low``, ``-medium``, ``-high``, ``-xhigh``, ``-max``.
+    *default_effort* is returned when no suffix is present.
     """
     raw = argument or default_model
-    for suffix in ("-high", "-medium", "-low"):
+    for suffix in ("-xhigh", "-medium", "-high", "-low", "-max"):
         if raw.endswith(suffix):
             return raw[: -len(suffix)], suffix[1:]
-    return raw, "medium"
+    return raw, default_effort
 
 
 @agent_driver("ChatGPT")
@@ -1494,11 +1595,12 @@ class APIDriver_Chat(APIDriver):
     def __init__(self, *args, provider: Provider | None = None,
                  argument: str | None = None, **kwargs):
         if provider is None:
-            model = argument or os.environ.get("CHAT_MODEL")
-            if not model:
+            raw = argument or os.environ.get("CHAT_MODEL")
+            if not raw:
                 raise InternalError(
                     "Chat driver needs a model id: use 'Chat.<model>' "
                     "(e.g. Chat.deepseek-v4-flash) or set CHAT_MODEL.")
+            model, effort = _parse_effort_suffix(raw, raw, default_effort="high")
             base_url = os.environ.get("CHAT_BASE_URL")
             if not base_url:
                 raise InternalError(
@@ -1513,6 +1615,76 @@ class APIDriver_Chat(APIDriver):
                 base_url=base_url,
                 api_key=os.environ.get("CHAT_API_KEY"),
                 default_context_window=ctx,
+                reasoning_effort=effort,
+            )
+        super().__init__(*args, provider=provider, **kwargs)
+
+    def __str__(self) -> str:
+        prov = self._provider
+        effort = f"-{prov._reasoning_effort}" if isinstance(prov, OpenAIBase) and prov._reasoning_effort else ""
+        return f"{self._driver_name}({prov.model_name}{effort})"
+
+
+class DeepSeekV4Provider(OpenAIChatProvider):
+    """Chat Completions provider for DeepSeek V4 (``/beta`` strict).
+
+    Strict mode is applied to the ``edit`` tool ONLY — its schema is sent fully
+    inlined (no ``$ref``) with proof fields removed, the only form that keeps the
+    schema in the prompt under DeepSeek strict (memory:
+    ``deepseek-v4-strict-not-enforced``). All other tools are sent non-strict with
+    their raw schemas; ``/beta`` accepts the mix (verified). Enforcement is soft
+    even so — the existing error->tool-result->next-turn self-correction is the
+    real safety net.
+    """
+
+    def _strict_for_tool(self, name: str) -> bool:
+        return self._strict_tools and name == "edit"
+
+    def _strict_schema(self, name: str, schema: dict) -> dict:
+        if name == "edit":
+            return _deepseek_edit_schema()
+        return schema
+
+
+@agent_driver("DeepSeekV4")
+class APIDriver_DeepSeekV4(APIDriver):
+    """DeepSeek V4 driver — ``/beta``, strict on the ``edit`` tool only.
+
+    Driver string ``DeepSeekV4.pro`` / ``DeepSeekV4.flash`` (default ``flash``);
+    a full model id (``deepseek-v4-...``) may also be passed after the dot.
+    Reads ``DEEPSEEK_API_KEY`` (fallback ``CHAT_API_KEY``); base url defaults to
+    ``https://api.deepseek.com/beta`` (overridable via ``DEEPSEEK_BASE_URL`` — strict
+    needs ``/beta``). CoT retention is pinned to ``full`` (V4 thinking 400s on
+    multi-turn tool calls otherwise).
+    """
+
+    DEFAULT_MODEL = "deepseek-v4-flash"
+    SUBAGENT_NESTING_DEPTH = 1  # allow only a single layer of sub-agents
+
+    def __init__(self, *args, provider: Provider | None = None,
+                 argument: str | None = None, **kwargs):
+        if provider is None:
+            arg = (argument or "flash").strip().lower()
+            model = f"deepseek-v4-{arg}" if arg in ("pro", "flash") else arg
+            api_key = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("CHAT_API_KEY")
+            if not api_key:
+                raise InternalError(
+                    "DeepSeekV4 driver needs DEEPSEEK_API_KEY (or CHAT_API_KEY) set.")
+            # DeepSeek V4 flash & pro both support up to 1M; 384K is a practical
+            # default. CHAT_CONTEXT_WINDOW may cap it lower to compact earlier.
+            ctx = 384_000
+            cap = os.environ.get("CHAT_CONTEXT_WINDOW")
+            if cap:
+                ctx = min(ctx, int(cap))
+            provider = DeepSeekV4Provider(
+                model=model,
+                base_url=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/beta"),
+                api_key=api_key,
+                default_context_window=ctx,
+                strict_tools=True,
+                cot_retention="full",
+                timeout=httpx.Timeout(connect=5.0, read=600.0, write=600.0, pool=600.0),
+                max_stream_time=900,
             )
         super().__init__(*args, provider=provider, **kwargs)
 

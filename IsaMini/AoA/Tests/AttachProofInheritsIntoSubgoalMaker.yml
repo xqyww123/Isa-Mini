@@ -78,7 +78,7 @@ global declarations:
       - global.1.1.0
         Error: Unfinished Proof. Call command `edit` with action `fill` and target step `global.1.1.0.1`
         goal: (0 :: nat) + (0 :: nat) = (0 :: nat)
-      - global.1.1.Suc (done)
+      - global.1.1.Suc (proven)
     the statement is quantified over m
 proof:
   Error: Unfinished Proof. Fill step `1`

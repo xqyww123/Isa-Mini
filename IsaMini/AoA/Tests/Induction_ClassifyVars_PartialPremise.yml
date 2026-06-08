@@ -1,0 +1,40 @@
+--------------------------------------------------
+Variable-classification prompt (partial/premise)
+--------------------------------------------------
+Your Induction operation did not classify the following variables. Should each be treated as fixed (held constant across the induction hypotheses and cases), or generalized (universally quantified in the induction hypothesis)? Select the indexes of all variables to generalize (call `answer_indexes`; unselected ones stay fixed).
+  0. j :: nat
+  1. k :: nat
+--------------------------------------------------
+After Induction (j generalized, k fixed)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∀n j (k :: nat). j < n ⟶ n + k = k + n
+proof:
+  - step id: 1
+    operation: Intro
+    fixing variables:
+      - n: nat
+      - j: nat
+      - k: nat
+    assuming premises:
+      - premise0: j < n
+  - step id: 2
+    thought: induct on n; classify only n; generalize only j
+    operation: Induction
+    target term: n :: nat
+    generalized variables: j
+    cases:
+      - goal id: 2.0
+        goal: (0 :: nat) + k = k + (0 :: nat)
+        proof: empty
+        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.0.1` to provide the proof.
+      - goal id: 2.Suc
+        variables:
+          - n: nat
+        premises:
+          - Suc.IH: n + k = k + n
+        goal: True
+        proof: empty
+
+offered (unclassified) vars: ['j', 'k']
+variable statuses: {'j': 'generalized', 'k': 'fixed'}

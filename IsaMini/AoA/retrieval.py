@@ -275,7 +275,7 @@ def _format_query_header(q: dict) -> str:
     exact = q.get("exact_name", "")
     if exact:
         parts.append(f"exact name: {exact}")
-    desc = q.get("long_description", "")
+    desc = q.get("description") or q.get("long_description") or ""
     if desc:
         parts.append(desc)
     target_type = q.get("target_type", "")
@@ -315,6 +315,15 @@ def _collect_query_warnings(
     return per_query
 
 
+def _indent_continuation(text: str, indent: str) -> str:
+    """Indent continuation lines of *text* by *indent* (first line unchanged)."""
+    first, *rest = text.split('\n')
+    if not rest:
+        return first
+    return first + '\n' + '\n'.join(
+        (indent + line if line else line) for line in rest)
+
+
 def _format_warn_lines(
     queries: list[dict],
     per_query_warnings: list[list[str]],
@@ -326,11 +335,11 @@ def _format_warn_lines(
         return lines
     if len(queries) <= 1:
         for _, ws in queries_with_warnings:
-            lines.extend(ws)
+            lines.extend(_indent_continuation(w, "  ") for w in ws)
     else:
         for q, ws in queries_with_warnings:
             lines.append(f"Query: {_format_query_header(q)}")
-            lines.extend(f"  {w}" for w in ws)
+            lines.extend(f"  {_indent_continuation(w, '    ')}" for w in ws)
     return lines
 
 
@@ -385,11 +394,11 @@ def _format_search_report(
             lines.append(f"Query: {_format_query_header(q)}")
             if summ:
                 lines.append(f"  {summ}")
-            lines.extend(f"  {w}" for w in ws)
+            lines.extend(f"  {_indent_continuation(w, '    ')}" for w in ws)
         else:
             if summ:
                 lines.append(summ)
-            lines.extend(ws)
+            lines.extend(_indent_continuation(w, "  ") for w in ws)
     return lines
 
 
@@ -415,7 +424,7 @@ async def _run_knn_for_query(
     except KeyError as e:
         return ([], [], f"Invalid entity kind: {e}", 0)
     fetched, warnings, total = await ml_state.semantic_knn_counted(
-        q.get("long_description") or None, _query_k(q), kinds,
+        q.get("description") or q.get("long_description") or None, _query_k(q), kinds,
         term_patterns=q.get("term_patterns") or [],
         type_patterns=q.get("type_patterns") or [],
         theories_include=q.get("theories_include") or [],
@@ -604,7 +613,7 @@ async def _semantic_search_with_filtering(session: Session, queries: list[dict])
         except KeyError:
             continue
         interaction = Interaction_RetrieveForSearch(
-            state=ml_state, query=q.get("long_description", "") or "", kinds=kinds,
+            state=ml_state, query=q.get("description") or q.get("long_description") or "", kinds=kinds,
             initial_k=50,
             single_choice=False,
             term_patterns=q.get("term_patterns") or [],
@@ -881,27 +890,26 @@ def _normalize_query_string_list_fields(q: dict) -> dict:
 
 
 def _parenthesize_query_term_strings(q: dict) -> dict:
-    """Wrap the query's *term*-valued fields in parentheses so a bare operator
+    """Wrap the query's ``exact_term`` field in parentheses so a bare operator
     parses.
 
     A pattern like ``≤`` / ``<`` / ``*`` is not a parseable term on its own,
     but Isabelle reads the parenthesized operator section ``(≤)`` as the
-    underlying constant (which then matches the operator wherever it occurs in a
-    proposition, even partially applied). For any already-valid term ``t``,
-    ``(t)`` parses to the identical term — outer parens are pure grouping —
-    so wrapping is a no-op for normal patterns and only rescues bare operators.
+    underlying constant. For any already-valid term ``t``, ``(t)`` parses to
+    the identical term, so wrapping is a no-op for normal patterns.
 
-    Only the two term-valued query fields are touched: ``term_patterns`` (list)
-    and ``exact_term`` (scalar). ``type_patterns`` / ``target_type`` are *types*,
-    and the name/description/theory fields are never parsed as terms, so they are
-    left untouched. Must run after ``_normalize_query_string_list_fields`` so
-    ``term_patterns`` is already coerced to a list. Empty/blank entries are
-    dropped (``()`` would not parse)."""
+    ``term_patterns`` are NOT wrapped here — the ML-side ``parse_patterns``
+    handles the parenthesized-fallback per-pattern (retrying with parens only
+    when the bare parse fails), which avoids breaking terms like ``CARD`` that
+    have special syntax incompatible with outer parens.
+
+    Only ``exact_term`` is touched.  ``type_patterns`` / ``target_type`` are
+    *types*, and name/description/theory fields are never parsed as terms."""
     out = dict(q)
     tps = out.get("term_patterns")
     if isinstance(tps, list):
         out["term_patterns"] = [
-            f"({p.strip()})" for p in tps if isinstance(p, str) and p.strip()]
+            p.strip() for p in tps if isinstance(p, str) and p.strip()]
     et = out.get("exact_term")
     if isinstance(et, str) and et.strip():
         out["exact_term"] = f"({et.strip()})"

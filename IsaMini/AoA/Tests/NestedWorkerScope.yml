@@ -75,7 +75,7 @@ worker detail absolutized at emit (worker scope 1.1)
 --------------------------------------------------
 event=WorkerSurrender; detail='blocked by step 1.1.1.1 and step 2'
 --------------------------------------------------
-close_subagent relative '1' (->1.1): detach
+cancel_subagent relative '1' (->1.1): detach
 --------------------------------------------------
 is_error=False; The sub-agent is removed.
 handle on 1.1 detached: True

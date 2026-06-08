@@ -39,7 +39,7 @@ depth-limit message mentions 'deeply nested': True
 --------------------------------------------------
 orphan: AssertionError raised
 --------------------------------------------------
-8. close_subagent parked / in-flight / none
+8. cancel_subagent parked / in-flight / none
 --------------------------------------------------
 parked close is_error=False detached=True
 in-flight close is_error=False task_cancelled=True detached=True

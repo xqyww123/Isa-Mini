@@ -17,6 +17,7 @@
       "required": [
         "name"
       ],
+      "additionalProperties": false,
       "type": "object"
     },
     "LongStatement": {
@@ -258,6 +259,7 @@
         "cases": {
           "items": {
             "type": "object",
+            "additionalProperties": false,
             "properties": {
               "name": { "type": "string", "description": "binding name for this case" },
               "statement": { "$ref": "#/$defs/ShortStatement" },
@@ -347,6 +349,7 @@
           "description": "for each variable in the context, indicate whether it is fixed or generalized (universally quantified) across the induction",
           "items": {
             "type": "object",
+            "additionalProperties": false,
             "properties": {
               "name": { "type": "string" },
               "status": { "type": "string", "enum": [ "fixed", "generalized" ] }
@@ -476,7 +479,10 @@
         "statement": {
           "$ref": "#/$defs/LongStatement"
         },
-        "proof": { "$ref": "#/$defs/Proof" }
+        "proof": {
+          "$ref": "#/$defs/Proof",
+          "description": "prove that the provided statement implies the goal"
+        }
       },
       "required": [
         "operation",
@@ -669,6 +675,7 @@
       "required": [
         "operation",
         "thought",
+        "name",
         "facts"
       ],
       "type": "object"

@@ -758,15 +758,21 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         function = (fn state_id =>
           let val s0 = get_state state_id
               val ctxt = Minilang.context_of s0
-              (* Only the LEADING subgoal — `leading_proof_sequent_of` returns
-               * the whole HHF frame (its prop holds every sibling subgoal), so
-               * take `hd (goals_of' …)` as elsewhere in this codebase. The
+              (* Free variables of the ENTIRE leading goal — premises AND
+               * conclusion. Minilang's Intro moves the goal's premises out of
+               * the goal term into local hypotheses, so the leading subgoal
+               * term holds only the conclusion; we union the conclusion's
+               * frees with the in-scope hypotheses' frees to capture
+               * premise-only variables. `context_of_leading_goal` targets the
+               * LEADING goal specifically (no sibling-subgoal leakage). The
                * reversion must match the context-var names exactly (Python
                * compares by string): `Variable.revert_fixed` WITHOUT
                * `Name.clean`, mirroring how `Newly_Fixed` items are reverted. *)
-              val goal = hd (Minilang.goals_of'
-                               (Minilang.leading_proof_sequent_of s0))
-           in Term.add_frees goal []
+              val ((_, local_facts), concl) =
+                Minilang.context_of_leading_goal (Minilang.print_state s0)
+              val frees = fold (fn (_, t) => Term.add_frees t) local_facts
+                               (Term.add_frees concl [])
+           in frees
                 |> map (Variable.revert_fixed ctxt o fst)
                 |> distinct (op =)
           end handle ERROR msg => error (String.concat ["goal_variables: ", msg])

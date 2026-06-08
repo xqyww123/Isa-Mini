@@ -10,7 +10,7 @@
                  "induction rule", "case-split rule"]
       }
     },
-    "long_description": {
+    "description": {
       "type": "string",
       "description": "MUST wrap formulas in backticks (like `ln 1`). MUST be LONG",
       "default": ""

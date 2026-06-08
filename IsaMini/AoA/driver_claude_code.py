@@ -74,7 +74,7 @@ class ClaudeCode(LMDriver):
         "request_lemmas": "mcp__proof__request_lemmas",
         "report": "mcp__proof__report",
         "subagent": "mcp__proof__subagent",
-        "close_subagent": "mcp__proof__close_subagent",
+        "cancel_subagent": "mcp__proof__cancel_subagent",
         "answer_indexes": "mcp__proof__answer_indexes",
         "answer_index": "mcp__proof__answer_index",
         "answer_indexes_or_name": "mcp__proof__answer_indexes_or_name",
@@ -83,18 +83,18 @@ class ClaudeCode(LMDriver):
         "answer_refutation": "mcp__proof__answer_refutation",
     }
     TOOL_WHITELIST = _NON_PROOF_TOOLS + list(_TOOL_NAME_MAP.values())
-    # subagent/close_subagent are dispatch tools (the main agent AND workers); only
+    # subagent/cancel_subagent are dispatch tools (the main agent AND workers); only
     # interaction forks lack them. Precompute that non-dispatcher allow-list
     # (TOOL_WHITELIST minus those two) once at class-definition time. (Statements,
     # not a comprehension, so the class-body name _TOOL_NAME_MAP stays in scope.)
     _WORKER_TOOL_WHITELIST = list(TOOL_WHITELIST)
     _WORKER_TOOL_WHITELIST.remove(_TOOL_NAME_MAP["subagent"])
-    _WORKER_TOOL_WHITELIST.remove(_TOOL_NAME_MAP["close_subagent"])
+    _WORKER_TOOL_WHITELIST.remove(_TOOL_NAME_MAP["cancel_subagent"])
     COMPACT_THRESHOLD = 0.85
     FORK_COMPACT_THRESHOLD = 0.99
 
     def _role_allowed_tools(self) -> list[str]:
-        """SDK tool allow-list for this session's role. `subagent`/`close_subagent`
+        """SDK tool allow-list for this session's role. `subagent`/`cancel_subagent`
         are dispatch tools, allowed for the main agent AND workers (nested
         delegation) but hidden from interaction forks and from a session already at
         the maximum nesting depth (a sub-sub-agent cannot delegate further). Gated by
