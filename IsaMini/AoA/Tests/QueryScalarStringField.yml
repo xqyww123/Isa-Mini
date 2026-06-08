@@ -31,6 +31,6 @@ Result (is_error=False):
 Query: P = Q if and only if P ⟶ Q ∧ Q ⟶ P; name contains: iff
   1936 entities match the filters 15 shown — 15 new, 0 shown earlier are not shown again.
 Query: equality of booleans is equivalence: (P = Q) = (P ⟶ Q ∧ Q ⟶ P)
-  7 new, 0 shown earlier are not shown again.
+  15 new, 0 shown earlier are not shown again.
 
 Lemmas marked with [manual] must be specified manually for Rewrite/Obvious to use them.

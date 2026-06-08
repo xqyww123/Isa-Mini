@@ -513,19 +513,26 @@ async def _semantic_search_direct(
     seen_before = set(seen)
     per_query_warnings = _collect_query_warnings(knn_results)
     # Collect new entities, tracking per-query (new / shown-before) counts for
-    # the summary lines.
+    # the summary lines.  exact_name queries bypass the seen_entities dedup so
+    # the agent always gets the full entity info on an explicit lookup.
     new_items: list[RetrievedEntity] = []
+    force_names: set[short_name] = set()
     total_found = 0
     encountered: set[short_name] = set()
     summary_lines: list[str] = []
     for q, (fetched, _warnings, _error, total) in zip(queries, knn_results):
         k = _query_k(q)
+        is_exact = bool(q.get("exact_name"))
         new = 0
         before_names: list[short_name] = []
         for f in fetched[:k]:
             sn = f.entity.short_name
             if sn in encountered:
-                if sn in seen_before:
+                if is_exact and sn not in force_names:
+                    new_items.append(f)
+                    force_names.add(sn)
+                    new += 1
+                elif sn in seen_before:
                     if sn not in before_names:
                         before_names.append(sn)
                 else:
@@ -533,11 +540,13 @@ async def _semantic_search_direct(
                 continue
             encountered.add(sn)
             total_found += 1
-            if sn in seen:
+            if sn in seen and not is_exact:
                 before_names.append(sn)
                 continue
             new_items.append(f)
             seen.add(sn)
+            if is_exact:
+                force_names.add(sn)
             new += 1
         verbose = (session.search_summary_count + len(summary_lines)) < 15
         summary_lines.append(_format_search_summary(q, total, k, new, before_names, verbose))
@@ -556,7 +565,8 @@ async def _semantic_search_direct(
 
     # Format with unified renderer
     buf = StringIO()
-    retrieved = await _render_fetched_entities(session, ml_state, new_items, buf)
+    retrieved = await _render_fetched_entities(session, ml_state, new_items, buf,
+                                               force_names=force_names)
     for line in _format_search_report(queries, summary_lines, per_query_warnings):
         buf.write(line)
         buf.write('\n')

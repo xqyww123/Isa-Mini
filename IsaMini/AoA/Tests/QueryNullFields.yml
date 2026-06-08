@@ -57,7 +57,7 @@ Result (is_error=False):
 - square_powr_half: ?x² powr ((1 :: real) / (2 :: real)) = ¦?x¦
 - real_le_rsqrt [manual]: ?x² ≤ ?y ⟶ ?x ≤ sqrt ?y
 - real_sqrt_abs2: sqrt (?x * ?x) = ¦?x¦
-Query: divisibility and square result; term patterns: (_ dvd _ + _); type patterns: nat; name contains: dvd
+Query: divisibility and square result; term patterns: _ dvd _ + _; type patterns: nat; name contains: dvd
   3 entities match the filters — 3 new, 0 shown earlier are not shown again.
 Query: quotient is a perfect square
   50 new, 0 shown earlier are not shown again.

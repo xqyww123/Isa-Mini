@@ -4,5 +4,5 @@ call 3: 714 match 5 shown — 5 new, 0 shown earlier.
 call 4: 509 match 5 shown — 5 new, 0 shown earlier.
 call 5: 408 match 5 shown — 5 new, 0 shown earlier.
 call 6: 459 match 5 shown — 5 new, 0 shown earlier.
-repeat: 92 match 5 shown — 0 new, 5 shown earlier.
+repeat: 92 match 5 shown — 0 new, 5 shown earlier: plus_nat.simps(2), plus_nat.simps(1), plus_finite_1_def, Suc_eq_plus1_left, Suc_eq_plus1.
 no-filter: 5 new, 0 shown earlier.
