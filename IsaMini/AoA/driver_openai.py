@@ -237,17 +237,12 @@ class OpenAI_Driver(LMDriver):
     # Forking
     # ------------------------------------------------------------------
 
-    async def fork_interaction(self, interaction: Interaction) -> Any:
-        buffer = StringIO()
-        try:
-            await interaction.prompt(0, MyIO(buffer))
-        except ImmediateAnswer as e:
-            return e.answer
-
+    async def _do_fork(self, interaction: Interaction,
+                       prompt_text: str) -> Any:
         loop = asyncio.get_running_loop()
         ctx = contextvars.copy_context()
         task = loop.create_task(
-            self._run_fork(interaction, buffer.getvalue()), context=ctx)
+            self._run_fork(interaction, prompt_text), context=ctx)
         return await task
 
     async def _run_fork(self, interaction: Interaction, prompt_text: str) -> Any:

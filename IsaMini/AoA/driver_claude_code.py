@@ -747,27 +747,17 @@ class ClaudeCode(LMDriver):
                 cache_read=message.usage.get("cache_read_input_tokens", 0),
                 cache_creation=message.usage.get("cache_creation_input_tokens", 0)))
 
-    async def fork_interaction(self, interaction: Interaction) -> Any:
+    async def _do_fork(self, interaction: Interaction,
+                       prompt_text: str) -> Any:
         """Spawn a sub-agent to answer ``interaction`` and return its result.
 
-        Short-circuits via ``ImmediateAnswer`` from ``prompt()`` without
-        spawning a subprocess. Otherwise runs a forked ``ClaudeCode`` session
-        whose ``answer`` tool resolves the interaction. Concurrent
-        callers (e.g. ``asyncio.gather(*fork_interaction(i) for i in ...)``)
-        each get their own fork. All fork body work runs in a fresh
-        ``contextvars`` context so the per-call ``_session_var`` does not
-        leak into the caller.
+        Runs a forked ``ClaudeCode`` session whose ``answer`` tool resolves
+        the interaction. All fork body work runs in a fresh ``contextvars``
+        context so the per-call ``_session_var`` does not leak into the caller.
         """
-        # Render prompt — short-circuit on ImmediateAnswer
-        buffer = StringIO()
-        try:
-            await interaction.prompt(0, MyIO(buffer))
-        except ImmediateAnswer as e:
-            return e.answer
-
         loop = asyncio.get_running_loop()
         ctx = contextvars.copy_context()
-        task = loop.create_task(self._run_fork(interaction, buffer.getvalue()), context=ctx)
+        task = loop.create_task(self._run_fork(interaction, prompt_text), context=ctx)
         return await task
 
     async def _run_fork(self, interaction: Interaction, prompt_text: str) -> Any:

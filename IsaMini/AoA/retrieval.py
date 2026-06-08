@@ -652,7 +652,7 @@ async def _semantic_search_with_filtering(session: Session, queries: list[dict])
     seen = session.seen_entities
 
     results: list[list[IsabelleEntity]] = await asyncio.gather(
-        *[session.fork_interaction(i) for i in interactions])
+        *[session.launch_interaction(i) for i in interactions])
 
     # Build lookup from full_name → RetrievedEntity for each interaction
     fetched_maps: list[dict[str, RetrievedEntity]] = []

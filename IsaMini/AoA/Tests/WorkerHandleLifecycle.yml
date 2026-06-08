@@ -51,5 +51,5 @@ refute accepted -> kind=refute_accepted reason='agreed: the goal is unprovable' 
 --------------------------------------------------
 10. run_until_yield refute REJECTED -> continue -> surrender
 --------------------------------------------------
-refute rejected -> fork_interaction calls=1
+refute rejected -> launch_interaction calls=1
 after reject the worker resumed then -> kind=surrendered detail='ok, surrendering' detached=True

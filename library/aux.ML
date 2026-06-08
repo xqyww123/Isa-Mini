@@ -241,13 +241,35 @@ fun xOF prove_discharge ctxt opt_thms st =
             1 + count_prems_hol body
         | count_prems_hol _ = 0
 
+      fun list_prems (Const (\<^const_name>\<open>Pure.all\<close>, _) $ Abs (_, _, body)) =
+            list_prems body
+        | list_prems (Const (\<^const_name>\<open>Pure.imp\<close>, _) $ prem $ body) =
+            Syntax.string_of_term ctxt prem :: list_prems body
+        | list_prems (Const (\<^const_name>\<open>HOL.Trueprop\<close>, _) $ hol) =
+            list_prems_hol hol
+        | list_prems _ = []
+      and list_prems_hol (Const (\<^const_name>\<open>HOL.All\<close>, _) $ Abs (_, _, body)) =
+            list_prems_hol body
+        | list_prems_hol (Const (\<^const_name>\<open>HOL.implies\<close>, _) $ prem $ body) =
+            Syntax.string_of_term ctxt (HOLogic.mk_Trueprop prem) :: list_prems_hol body
+        | list_prems_hol _ = []
+
       val max_prems = count_prems (Thm.prop_of st)
       val _ = if LEN > max_prems
-              then error ("OF: the fact has " ^ string_of_int max_prems ^
-                          " premise(s), but " ^ string_of_int LEN ^
-                          " discharge argument(s) were given\n\
-                          \the fact is:\n  " ^
-                          Thm.string_of_thm ctxt st)
+              then let
+                val prem_strs = list_prems (Thm.prop_of st)
+                val prem_section = case prem_strs of
+                    [] => "the fact has no premises.\n"
+                  | _ => "the premises are:\n" ^
+                         String.concat (map_index (fn (i, s) =>
+                           "  " ^ string_of_int (i + 1) ^ ". " ^ s ^ "\n") prem_strs)
+              in error ("OF: the fact has " ^ string_of_int max_prems ^
+                        " premise(s), but " ^ string_of_int LEN ^
+                        " discharge argument(s) were given\n" ^
+                        prem_section ^
+                        "the fact is:\n  " ^
+                        Thm.string_of_thm ctxt st)
+              end
               else ()
 
       fun rulify N ctxt ctm =

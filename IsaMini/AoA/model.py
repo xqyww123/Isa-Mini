@@ -2204,6 +2204,10 @@ class Interaction:
             f"{type(self).__name__}.fork_allowed_tools must declare an "
             f"ANSWER_TOOLS member")
 
+    @property
+    def is_non_forking(self) -> bool:
+        return False
+
     async def prompt(self, indent: int, file: MyIO) -> None:
         raise NotImplementedError("`prompt` must be implemented by subclass")
     async def answer(self, answer: Any) -> Any:
@@ -2312,17 +2316,14 @@ class Interaction_StruggleCheckpoint(Interaction):
     async def prompt(self, indent: int, file: MyIO) -> None:
         session = the_session()
         file.write(
-            f"A sub-agent working on step {session._display_id(self.target.id)} "
-            f"has called the edit tool {self.edit_count} times and the delete "
-            f"tool {self.delete_count} times (checkpoint #{self.checkpoint_number}).\n\n"
-            f"Current proof state of this sub-agent:\n")
+            f"You have been working for a while "
+            f"({self.edit_count} edits, {self.delete_count} deletes).\n\n")
         session.quickview_proof_scope(indent, file)
         file.write(
-            f"\nIs this worker genuinely stuck (repeating failed approaches, "
-            f"no visible progress) or making slow but meaningful progress?\n"
+            f"\nAre you stuck?\n"
             f"Call `{tn(TOOL_ANSWER_STRUGGLE_ASSESSMENT)}` with:\n"
-            f"  - is_stuck: true if the worker appears stuck, false if making progress\n"
-            f"  - summary: brief assessment of the worker's situation\n")
+            f"  - is_stuck: true if you are stuck, false if making progress\n"
+            f"  - summary: brief assessment of your situation\n")
 
     async def answer(self, answer: 'AnswerStruggleAssessment') -> 'tuple[bool, str]':
         return (answer.is_stuck, answer.summary)
@@ -2341,6 +2342,32 @@ class Fork_Pending(NamedTuple):
     """
     interaction: Interaction
     answer: asyncio.Future[Any]
+
+
+# --- Non-forking interaction channel ---
+
+class InteractionPrompt(NamedTuple):
+    interaction: Interaction
+    text: str
+
+class InteractionError(NamedTuple):
+    text: str
+
+class EditResult(NamedTuple):
+    text: str
+    is_error: bool
+
+class InteractionChannel:
+    """Persistent bidirectional channel between a tool task and ToolExecutor.
+
+    ``outbox`` (tool task → executor): ``InteractionPrompt``, ``InteractionError``,
+    or ``EditResult``.
+    ``inbox`` (executor → tool task): parsed ``AnswerPayload``.
+    """
+    def __init__(self):
+        self.outbox: asyncio.Queue = asyncio.Queue(maxsize=1)
+        self.inbox: asyncio.Queue = asyncio.Queue(maxsize=1)
+
 
 #### Fact Retrieval
 
@@ -3731,6 +3758,9 @@ class Node(ABC):
         sub_outcome, _ = await old_node.amend_me(gns, op=op)
         return sub_outcome
 
+_OF_PREMISE_MISMATCH_RE = re.compile(
+    r'OF: the fact has (\d+) premise\(s\), but (\d+) discharge argument\(s\) were given')
+
 class Leaf(Node):
     def _should_print_done(self) -> bool:
         return False
@@ -3759,9 +3789,11 @@ class Leaf(Node):
             self.status = EvaluationStatus.Success(time() - now)
         except IsabelleError as err:
             msg = ''.join(err.errors)
-            if 'OF: the fact has' in msg and 'discharge argument(s) were given' in msg:
-                msg += ("\nThe `discharge` list has more entries than the fact has premises. "
-                        "Set `discharge` to `[]` or remove it for facts with no premises.")
+            m = _OF_PREMISE_MISMATCH_RE.search(msg)
+            if m:
+                n_prems = int(m.group(1))
+                msg += (f"\nEach `discharge` entry corresponds to one premise of the fact (left-to-right). "
+                        f"`discharge` must have at most {n_prems} entries.")
             self.status = EvaluationStatus.Failure(time() - now, FailureReason(msg))
             return
         if auto_intro and not self._has_considered_auto_intro:
@@ -4083,10 +4115,15 @@ class NonLeaf_Node(Node):
     def does_quickview_need_detail(self) -> bool:
         return super().does_quickview_need_detail() or \
             any(child.does_quickview_need_detail() for child in self.sub_nodes)
+    def _print_suspended_worker_hint(self, indent: int, file: MyIO) -> None:
+        pass
     def quickview(self, indent: int, file: MyIO) -> int:
         if not self.does_quickview_need_detail():
-            return self.quickview_header(indent, file)
+            indent = self.quickview_header(indent, file)
+            self._print_suspended_worker_hint(indent, file)
+            return indent
         indent = super().quickview(indent, file)
+        self._print_suspended_worker_hint(indent, file)
         _quickview_children_compressed(self.sub_nodes, indent, file)
         return indent
     def _rename_var(self, old_name: varname, new_name: varname) -> 'Node | None':
@@ -4493,7 +4530,7 @@ class StdBlock(NonLeaf_Node):
             print_indent(indent, file)
             sid = the_session()._display_id(self.id)
             s = the_session()
-            file.write(f"A sub-agent is suspended on step {sid}: call `{s.tool_name(TOOL_SUBAGENT)}` with step {sid} to resume it, or `{s.tool_name(TOOL_CLOSE_SUBAGENT)}` with step {sid} to cancel and remove it.\n")
+            file.write(f"A sub-agent is suspended on this step. Call `{s.tool_name(TOOL_SUBAGENT)}` with step {sid} to resume it, or `{s.tool_name(TOOL_CLOSE_SUBAGENT)}` with step {sid} to cancel and remove it.\n")
     def does_quickview_need_detail(self) -> bool:
         if super().does_quickview_need_detail():
             return True
@@ -4537,7 +4574,6 @@ class StdBlock(NonLeaf_Node):
             self._prev_pending_goal = None
     def quickview(self, indent: int, file: MyIO) -> int:
         indent = super().quickview(indent, file)
-        self._print_suspended_worker_hint(indent, file)
         self._quickview_pending_footer(indent, file)
         return indent
     def quickview_string(self, indent: int) -> str:
@@ -5533,7 +5569,7 @@ class CaseSplit_Like(SubgoalMaker):
                            else EntityKind.CASE_SPLIT_RULE)
             retrieve = Interaction_RetrieveForProof(
                 self.ml_state, desc, [entity_kind], single_choice=True)
-            results = await the_session().fork_interaction(retrieve)
+            results = await the_session().launch_interaction(retrieve)
             if not results:
                 return FailureReason(f"No rule matching `{desc}` was found.")
             r = results[0]
@@ -5588,7 +5624,7 @@ class CaseSplit_Like(SubgoalMaker):
                     schematic_vars=schematic_vars,
                     kind=kind)
                 self._resolved_rule_str = \
-                    await the_session().fork_interaction(instantiate)
+                    await the_session().launch_interaction(instantiate)
                 self._rule_resolved = True
                 return None
         self._resolved_rule_str = (IsaTerm.from_isabelle(rule_name)
@@ -5788,7 +5824,7 @@ class CaseSplit_Like(SubgoalMaker):
             kind=self._case_kind,
             goal=goal,
             ctxt_before=self._ctxt_before_me())
-        return await the_session().fork_interaction(interaction)
+        return await the_session().launch_interaction(interaction)
 
     def _splice_goal(self) -> 'tuple[str, Goal] | None':
         s0 = self._state_after_beginning()
@@ -6641,7 +6677,7 @@ class Unfold(Leaf):
             elif len(all_defs) == 1:
                 self.fact_refs = [all_defs[0]]
             else:
-                self.fact_refs = await the_session().fork_interaction(
+                self.fact_refs = await the_session().launch_interaction(
                     Interaction_ChooseDef(self.targets, all_defs, state=self.ml_state))
         elif self.ml_state.initialized():
             self.fact_refs = await self.ml_state.refresh_facts(self.fact_refs)
@@ -7129,7 +7165,7 @@ class Rewrite(Leaf):
                     fact_names, self.rewrite_goal, self.rewrite_premises)
                 if looping_info:
                     selections: list[tuple[int, list[lambda_term]]] = \
-                        await the_session().fork_interaction(
+                        await the_session().launch_interaction(
                             Interaction_SelectRewriteTargets(looping_info, fact_names))
                     fact_targets: list[list[lambda_term] | None] = [None] * len(self.using)
                     for fact_idx, selected_terms in selections:
@@ -8030,7 +8066,7 @@ class InferenceRule(SubgoalMaker):
                 self.rule_ref = result
             else:
                 # FactByDescription → delegate to a sub-agent
-                selected = await the_session().fork_interaction(result)
+                selected = await the_session().launch_interaction(result)
                 if selected:
                     self.rule_ref = selected[0]
                 else:
@@ -8485,7 +8521,7 @@ class Induction(CaseSplit_Like):
                         if name not in listed and name.unicode in goal_var_names]
         if not unclassified:
             return
-        to_generalize = await the_session().fork_interaction(
+        to_generalize = await the_session().launch_interaction(
             Interaction_ClassifyInductionVars(
                 [(name.unicode, typ.unicode) for name, typ in unclassified]))
         gen_set = set(to_generalize)
@@ -8524,7 +8560,7 @@ class Induction(CaseSplit_Like):
                    for (n, p) in candidates if not _already(n)]
         if not offered:
             return
-        chosen = await the_session().fork_interaction(
+        chosen = await the_session().launch_interaction(
             Interaction_SelectIHFacts(offered, dvars))
         for n in chosen:
             if not _already(n):
@@ -9144,6 +9180,8 @@ class Session:
         # so an immediate retry on the same node is let through (see
         # `_subagent_tool_logic`).
         self._subagent_extstep_bypass: 'set[str]' = set()
+        self._nf_pending_interaction: 'Interaction | None' = None
+        self._channel: 'InteractionChannel | None' = None
         # Worker-only: ascii fact name -> standard-printed proposition (IsaTerm),
         # prefetched once at init (see _prefetch_worker_premises).
         self._worker_premise_cache: 'dict[str, IsaTerm]' = {}
@@ -9284,10 +9322,17 @@ class Session:
             return self.role.pending
         return None
 
+    @property
+    def pending_interaction(self) -> 'Interaction | None':
+        """The active interaction, if any — forking or non-forking."""
+        if isinstance(self.role, Role_Interaction):
+            return self.role.pending.interaction
+        return self._nf_pending_interaction
+
     def replace_pending_interaction(self, new_interaction: 'Interaction') -> None:
         """Swap the pending interaction of this fork for a different one, reusing
         the existing answer future (only one final answer is ever returned to the
-        operation that called fork_interaction). The replacement must match this
+        operation that called launch_interaction). The replacement must match this
         fork's forking mode (fixed at fork creation); a mismatch is a programming
         bug and raises InternalError."""
         role = self.role
@@ -10313,16 +10358,93 @@ class Session:
         drivers such as ``ClaudeCode`` override this to write/push the file."""
         pass
 
-    async def fork_interaction(self, interaction: 'Interaction') -> Any:
-        """Run ``interaction`` by spawning a sub-agent and awaiting its answer.
+    async def launch_interaction(self, interaction: 'Interaction') -> Any:
+        """Run ``interaction`` and return the answer.
 
-        Short-circuits via ``ImmediateAnswer`` without spawning a subprocess.
-        Otherwise spawns a forked session with its own MCP endpoint, queries
-        the LLM with the rendered prompt, and drives the answer loop
-        (including ``ContinuingInteraction`` re-prompts) until the fork
-        submits a final answer. Returns the answer produced by
-        ``interaction.answer``. Must be implemented by subclass."""
-        raise NotImplementedError("`fork_interaction` must be implemented by subclass")
+        Three paths, tried in order:
+        1. ``ImmediateAnswer`` from ``prompt()`` — short-circuit, no LLM.
+        2. Non-forking inline (``_inline_interaction``) — if a channel is
+           active and the interaction opts in via ``is_non_forking``.
+        3. Forking (``_do_fork``) — spawn a sub-agent session.
+        """
+        buffer = StringIO()
+        try:
+            await interaction.prompt(0, MyIO(buffer))
+        except ImmediateAnswer as e:
+            return e.answer
+        prompt_text = buffer.getvalue()
+
+        if self._channel is not None and interaction.is_non_forking:
+            return await self._inline_interaction(interaction, prompt_text)
+
+        return await self._do_fork(interaction, prompt_text)
+
+    async def _inline_interaction(
+            self, interaction: 'Interaction', prompt_text: str) -> Any:
+        """Drive a non-forking interaction via the bidirectional channel."""
+        channel = self._channel
+        assert channel is not None
+        self._nf_pending_interaction = interaction
+        try:
+            answer_tool = self.tool_name(interaction.answer_tool_name)
+            if answer_tool not in prompt_text:
+                prompt_text += (
+                    f"\nAnswer the question above by calling "
+                    f"the `{answer_tool}` tool.")
+
+            self.log_interaction("nf_prompt",
+                f"[inline] {type(interaction).__name__}:\n{prompt_text}")
+            await channel.outbox.put(
+                InteractionPrompt(interaction, prompt_text))
+
+            while True:
+                payload = await channel.inbox.get()
+                try:
+                    result = await interaction.answer(payload)
+                    self.log_interaction("nf_answered",
+                        f"[inline] answered: {result}")
+                    return result
+                except Interaction_BadAnswer as e:
+                    self.log_interaction("nf_bad_answer",
+                        f"[inline] bad answer: {e}")
+                    await channel.outbox.put(InteractionError(str(e)))
+                except IsabelleError as e:
+                    error_msg = f"Isabelle error: {'; '.join(pretty_unicode(err) for err in e.errors)}"
+                    self.log_interaction("nf_isabelle_error",
+                        f"[inline] {error_msg}")
+                    await channel.outbox.put(InteractionError(error_msg))
+                except ContinuingInteraction as exp:
+                    if exp.new_interaction is not None:
+                        new_it = exp.new_interaction
+                        assert new_it.is_non_forking, (
+                            f"ContinuingInteraction replacement "
+                            f"{type(new_it).__name__} must be non-forking")
+                        try:
+                            text = await new_it._render_prompt()
+                        except ImmediateAnswer as ia:
+                            self.log_interaction("nf_immediate",
+                                f"[inline] replacement resolved: {ia.answer}")
+                            return ia.answer
+                        interaction = new_it
+                        self._nf_pending_interaction = new_it
+                        self.log_interaction("nf_continuing",
+                            f"[inline] replaced: {type(new_it).__name__}")
+                        await channel.outbox.put(
+                            InteractionPrompt(new_it, text))
+                    else:
+                        assert exp.new_prompt is not None
+                        self.log_interaction("nf_continuing",
+                            f"[inline] re-prompt")
+                        await channel.outbox.put(
+                            InteractionPrompt(interaction, exp.new_prompt))
+        finally:
+            self._nf_pending_interaction = None
+
+    async def _do_fork(self, interaction: 'Interaction',
+                       prompt_text: str) -> Any:
+        """Spawn a forked sub-agent session. Drivers override this."""
+        raise NotImplementedError(
+            "`_do_fork` must be implemented by driver subclass")
 
     def on_log(self, event_type: str, data: dict[str, Any]):
         """Called on every _log invocation. Override to push logs externally."""
@@ -10615,7 +10737,7 @@ class WorkerHandle:
                 case WorkerRefute():
                     self._pending_review = event.response_future
                     complaint = WorkerComplaint(kind="refute", detail=event.detail)
-                    accepted, reason = await self.session.fork_interaction(
+                    accepted, reason = await self.session.launch_interaction(
                         Interaction_ReviewRefutation(self.target, complaint, self))
                     if accepted:                  # worker is winding down
                         await self.wait_finish()

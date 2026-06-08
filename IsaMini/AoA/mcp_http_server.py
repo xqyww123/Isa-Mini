@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import json
 import os
@@ -52,6 +53,7 @@ from .model import (
     TOOL_ANSWER_INDEXES_OR_SPEC, TOOL_ANSWER_INSTANTIATE,
     TOOL_ANSWER_REFUTATION, TOOL_ANSWER_STRUGGLE_ASSESSMENT,
     Interaction_StruggleCheckpoint,
+    InteractionPrompt, InteractionError, EditResult, InteractionChannel,
     ANSWER_TOOLS,
     ALL_PROOF_TOOLS,
     Role_Worker,
@@ -209,30 +211,48 @@ _assert_no_refs(_cc_edit_schema_flat)
 # Permission Check (both modes)
 # ============================================================================
 
+_MUTATION_TOOLS = frozenset({
+    TOOL_EDIT, TOOL_DELETE, TOOL_SUBAGENT, TOOL_CLOSE_SUBAGENT,
+})
+
 def _check_tool_permission(session: Session, tool_name: str) -> str | None:
     """Check interaction state. Returns error message or None.
 
-    Only the fork session assigned to answer an interaction may call an
-    ``answer_*`` tool. The parent session never has a pending interaction
-    because all interactions are delegated to forks via ``fork_interaction``.
+    Uses the unified ``session.pending_interaction`` which covers both
+    forking (fork session with ``Role_Interaction``) and non-forking
+    (main session with ``_nf_pending_interaction``) paths.
 
     Fork sessions are additionally restricted to the tools declared in
-    ``interaction.fork_allowed_tools`` — typically one ``answer_*`` tool
-    plus ``query``.
+    ``interaction.fork_allowed_tools``.
     """
-    if tool_name in ANSWER_TOOLS and (
-            session.fork_pending is None or session.fork_pending.answer.done()):
+    pi = session.pending_interaction
+    if pi is not None:
+        if tool_name in ANSWER_TOOLS:
+            if tool_name == pi.answer_tool_name:
+                return None
+            answer_tn = session.tool_name(pi.answer_tool_name)
+            return (f"Wrong answer tool. Use `{answer_tn}` "
+                    f"to answer the current question.")
+        if session.fork_pending is not None and tool_name in ALL_PROOF_TOOLS:
+            allowed = pi.fork_allowed_tools
+            if tool_name not in allowed:
+                allowed_list = ", ".join(
+                    f"`{session.tool_name(t)}`" for t in allowed)
+                answer_tn = session.tool_name(pi.answer_tool_name)
+                return (f"Tool `{session.tool_name(tool_name)}` is not allowed. "
+                        f"Only {allowed_list} "
+                        f"{'is' if len(allowed) == 1 else 'are'} available. "
+                        f"Use the `{answer_tn}` tool to submit your answer.")
+        if session._nf_pending_interaction is not None:
+            if tool_name in _MUTATION_TOOLS:
+                answer_tn = session.tool_name(pi.answer_tool_name)
+                return (f"An interaction question is pending. "
+                        f"Answer it with `{answer_tn}` first.")
+        return None
+    if tool_name in ANSWER_TOOLS:
         answer_tn = session.tool_name(tool_name)
-        return f"No question pending. The `{answer_tn}` tool can only be used when there is a question for you to answer."
-    if session.fork_pending is not None and tool_name in ALL_PROOF_TOOLS:
-        allowed = session.fork_pending.interaction.fork_allowed_tools
-        if tool_name not in allowed:
-            allowed_list = ", ".join(f"`{session.tool_name(t)}`" for t in allowed)
-            interaction = session.fork_pending.interaction
-            answer_tn = session.tool_name(interaction.answer_tool_name)
-            return (f"Tool `{session.tool_name(tool_name)}` is not allowed. "
-                    f"Only {allowed_list} {'is' if len(allowed) == 1 else 'are'} available. "
-                    f"Use the `{answer_tn}` tool to submit your answer.")
+        return (f"No question pending. The `{answer_tn}` tool can only "
+                f"be used when there is a question for you to answer.")
     return None
 
 
@@ -526,6 +546,40 @@ def _extract_instantiations(args: dict) -> list[tuple[str, str]]:
             if isinstance(i, dict) and "variable" in i and "term" in i] if instantiations else []
 
 
+def _parse_answer_payload(tool_name: str, args: dict):
+    """Parse raw tool arguments into a typed answer payload.
+
+    Returns the payload on success, or an error message string on unknown tool.
+    """
+    match tool_name:
+        case "answer_indexes":
+            return AnswerIndexes(indexes=_extract_indexes(args))
+        case "answer_index":
+            raw = args.get("index")
+            return AnswerIndex(index=raw if isinstance(raw, int) else None)
+        case "answer_indexes_or_name":
+            return AnswerIndexesOrName(
+                indexes=_extract_indexes(args),
+                name=args.get("name") or None)
+        case "answer_indexes_or_spec":
+            return AnswerIndexesOrSpec(
+                indexes=_extract_indexes(args),
+                statement=args.get("statement") or None)
+        case "answer_instantiate":
+            return AnswerInstantiate(
+                instantiations=_extract_instantiations(args))
+        case "answer_refutation":
+            return AnswerRefutation(
+                accept=bool(args["accept"]),
+                reason=args["reason"])
+        case "answer_struggle_assessment":
+            return AnswerStruggleAssessment(
+                is_stuck=bool(args["is_stuck"]),
+                summary=args.get("summary", ""))
+        case _:
+            return f"Unknown answer tool: {tool_name}"
+
+
 async def _answer_tool_dispatch(session: Session, tool_name: str, args: dict) -> tuple[str, bool]:
     _tn = session.tool_name(tool_name)
     session.log_tool_call(_tn, args)
@@ -546,35 +600,10 @@ async def _answer_tool_dispatch(session: Session, tool_name: str, args: dict) ->
             session.log_tool_response(_tn, f"ERROR: {error_msg}")
             return (error_msg, True)
 
-        match tool_name:
-            case "answer_indexes":
-                payload = AnswerIndexes(indexes=_extract_indexes(args))
-            case "answer_index":
-                raw = args.get("index")
-                payload = AnswerIndex(index=raw if isinstance(raw, int) else None)
-            case "answer_indexes_or_name":
-                payload = AnswerIndexesOrName(
-                    indexes=_extract_indexes(args),
-                    name=args.get("name") or None)
-            case "answer_indexes_or_spec":
-                payload = AnswerIndexesOrSpec(
-                    indexes=_extract_indexes(args),
-                    statement=args.get("statement") or None)
-            case "answer_instantiate":
-                payload = AnswerInstantiate(
-                    instantiations=_extract_instantiations(args))
-            case "answer_refutation":
-                payload = AnswerRefutation(
-                    accept=bool(args["accept"]),
-                    reason=args["reason"])
-            case "answer_struggle_assessment":
-                payload = AnswerStruggleAssessment(
-                    is_stuck=bool(args["is_stuck"]),
-                    summary=args.get("summary", ""))
-            case _:
-                error_msg = f"Unknown answer tool: {tool_name}"
-                session.log_tool_response(_tn, f"ERROR: {error_msg}")
-                return (error_msg, True)
+        payload = _parse_answer_payload(tool_name, args)
+        if isinstance(payload, str):
+            session.log_tool_response(_tn, f"ERROR: {payload}")
+            return (payload, True)
 
         try:
             result = await pending.interaction.answer(payload)
@@ -689,7 +718,8 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     it never spills into the next node."""
     _tn = session.tool_name(TOOL_READ)
     session.log_tool_call(_tn, args)
-    session.refresh_YAML()
+    if session._nf_pending_interaction is None:
+        session.refresh_YAML()
 
     # Normalize ``step_id`` to a list (the schema requires an array; a bare
     # scalar is tolerated defensively). Requesting exactly one id keeps the
@@ -966,7 +996,7 @@ async def _run_struggle_checkpoint(session: Session) -> str | None:
     )
 
     try:
-        is_stuck, summary = await session.fork_interaction(interaction)
+        is_stuck, summary = await session.launch_interaction(interaction)
     except Exception as e:
         session.warn_AoA_opr(
             f"Struggle checkpoint fork failed: {type(e).__name__}: {e}")
@@ -1531,14 +1561,133 @@ class ToolExecutor:
 
     def __init__(self, session: Session):
         self._session = session
-        self._tool_lock = asyncio.Lock()
+        self._subagent_lock = asyncio.Lock()
         self._last_mutate_fail_time: float = 0.0
+        self._channel = InteractionChannel()
+        self._suspended_task: asyncio.Task | None = None
+        session._channel = self._channel
+
+    # ------------------------------------------------------------------
+    # Channel helpers
+    # ------------------------------------------------------------------
+
+    async def _race_outbox(self, task: asyncio.Task):
+        """Await the next outbox message, or propagate task exception.
+
+        Uses ``asyncio.wait`` to race ``outbox.get()`` against the task.
+        If the task completes (normally or with an exception) before a
+        message appears, the task's result/exception is propagated.
+        ``outbox_fut`` is always cancelled on exit if not consumed.
+        """
+        outbox_fut = asyncio.ensure_future(self._channel.outbox.get())
+        try:
+            done, _ = await asyncio.wait(
+                [outbox_fut, task], return_when=asyncio.FIRST_COMPLETED)
+            if task in done and not outbox_fut.done():
+                outbox_fut.cancel()
+                task.result()
+            return outbox_fut.result()
+        finally:
+            if not outbox_fut.done():
+                outbox_fut.cancel()
+
+    async def _run_tool_via_channel(
+            self, coro, session: Session, is_edit: bool,
+            is_batch: bool = False) -> tuple[str, bool]:
+        """Start *coro* as a Task, communicate via the channel.
+
+        If the tool logic completes without triggering a non-forking
+        interaction, the result is returned directly. If an interaction
+        fires (``InteractionPrompt`` on the outbox), the task is
+        suspended and the prompt returned to the agent.
+        """
+        if self._suspended_task is not None:
+            return ("An edit/delete operation is in progress. "
+                    "Answer the pending interaction question first.", True)
+
+        task = asyncio.create_task(coro)
+        try:
+            msg = await self._race_outbox(task)
+        except BaseException:
+            task.cancel()
+            with contextlib.suppress(BaseException):
+                await task
+            raise
+
+        match msg:
+            case EditResult(text, ie):
+                await task
+                if ie and is_edit and not is_batch:
+                    self._last_mutate_fail_time = time()
+                elif ie and not is_edit:
+                    self._last_mutate_fail_time = time()
+                session.last_proof_op_time = time()
+                return (text, ie)
+            case InteractionPrompt():
+                self._suspended_task = task
+                return (msg.text, False)
+            case _:
+                raise InternalError(f"Unexpected channel message: {msg!r}")
+
+    async def _handle_nf_answer(
+            self, session: Session, tool_name: str,
+            arguments: dict) -> tuple[str, bool]:
+        """Handle an answer tool call for a suspended non-forking edit/delete."""
+        _tn = session.tool_name(tool_name)
+        session.log_tool_call(_tn, arguments)
+        task = self._suspended_task
+        assert task is not None
+
+        pi = session.pending_interaction
+        if pi is None:
+            error_msg = f"No interaction pending (internal state error)."
+            session.log_tool_response(_tn, f"ERROR: {error_msg}")
+            return (error_msg, True)
+        if tool_name != pi.answer_tool_name:
+            expected = session.tool_name(pi.answer_tool_name)
+            error_msg = f"Wrong answer tool. Use `{expected}` to answer the current question."
+            session.log_tool_response(_tn, f"ERROR: {error_msg}")
+            return (error_msg, True)
+
+        payload = _parse_answer_payload(tool_name, arguments)
+        if isinstance(payload, str):
+            session.log_tool_response(_tn, f"ERROR: {payload}")
+            return (payload, True)
+
+        await self._channel.inbox.put(payload)
+
+        try:
+            msg = await self._race_outbox(task)
+        except BaseException:
+            self._suspended_task = None
+            raise
+
+        match msg:
+            case InteractionError(text):
+                session.log_tool_response(_tn, f"BAD ANSWER: {text}")
+                return (text, True)
+            case InteractionPrompt(interaction, text):
+                session.log_tool_response(_tn, text)
+                return (text, False)
+            case EditResult(text, ie):
+                await task
+                self._suspended_task = None
+                session.last_proof_op_time = time()
+                session.log_tool_response(_tn, text)
+                return (text, ie)
+            case _:
+                raise InternalError(f"Unexpected channel message: {msg!r}")
+
+    # ------------------------------------------------------------------
+    # Main dispatch
+    # ------------------------------------------------------------------
 
     async def execute(self, name: str, arguments: dict) -> tuple[str, bool]:
         """Execute a tool call. Returns (result_text, is_error).
 
-        Handles permission checks, serialization locks, cooldown logic,
-        and the search hint — same semantics as the MCP call_tool handler.
+        Handles permission checks, cooldown logic, and the search hint.
+        Edit and delete run as channel-connected Tasks (supporting
+        non-forking interactions); other tools run inline.
         """
         session = self._session
         _session_var.set(session)
@@ -1551,28 +1700,34 @@ class ToolExecutor:
         try:
             match name:
                 case "edit":
-                    async with self._tool_lock:
-                        ops = arguments.get("proof_operations") if isinstance(arguments, dict) else None
-                        is_batch = isinstance(ops, list) and len(ops) > 1
-                        if not is_batch and time() - self._last_mutate_fail_time < 0.7:
-                            result, is_error = self._BATCH_CANCEL_MSG, True
-                        else:
-                            result, is_error = await _edit_tool_logic(session, arguments)
-                            if is_error and not is_batch:
-                                self._last_mutate_fail_time = time()
-                    session.last_proof_op_time = time()
+                    ops = arguments.get("proof_operations") if isinstance(arguments, dict) else None
+                    is_batch = isinstance(ops, list) and len(ops) > 1
+                    if not is_batch and time() - self._last_mutate_fail_time < 0.7:
+                        result, is_error = self._BATCH_CANCEL_MSG, True
+                        session.last_proof_op_time = time()
+                    else:
+                        async def _run_edit():
+                            r, e = await _edit_tool_logic(session, arguments)
+                            await self._channel.outbox.put(EditResult(r, e))
+                        result, is_error = await self._run_tool_via_channel(
+                            _run_edit(), session, is_edit=True, is_batch=is_batch)
                 case "delete":
-                    async with self._tool_lock:
-                        if time() - self._last_mutate_fail_time < 0.7:
-                            result, is_error = self._BATCH_CANCEL_MSG, True
-                        else:
-                            result, is_error = await _delete_tool_logic(session, arguments)
-                            if is_error:
-                                self._last_mutate_fail_time = time()
-                    session.last_proof_op_time = time()
+                    if time() - self._last_mutate_fail_time < 0.7:
+                        result, is_error = self._BATCH_CANCEL_MSG, True
+                        session.last_proof_op_time = time()
+                    else:
+                        async def _run_delete():
+                            r, e = await _delete_tool_logic(session, arguments)
+                            await self._channel.outbox.put(EditResult(r, e))
+                        result, is_error = await self._run_tool_via_channel(
+                            _run_delete(), session, is_edit=False)
                 case n if n in ANSWER_TOOLS:
-                    async with self._tool_lock:
-                        result, is_error = await _answer_tool_dispatch(session, n, arguments)
+                    if self._suspended_task is not None:
+                        result, is_error = await self._handle_nf_answer(
+                            session, n, arguments)
+                    else:
+                        result, is_error = await _answer_tool_dispatch(
+                            session, n, arguments)
                 case "query":
                     result, is_error = await _query_tool_logic(session, arguments)
                 case "recall":
@@ -1586,19 +1741,11 @@ class ToolExecutor:
                 case "report":
                     result, is_error = await _report_tool_logic(session, arguments)
                 case "subagent":
-                    # The held lock spans the worker's whole run: safe because the
-                    # main loop is single-flight and each forked worker/review uses
-                    # its OWN executor lock (no contention, no deadlock).
-                    async with self._tool_lock:
+                    async with self._subagent_lock:
                         result, is_error = await _subagent_tool_logic(session, arguments)
                     session.last_proof_op_time = time()
                 case "cancel_subagent":
-                    # Hold the lock to serialize against a `subagent` resume (also
-                    # under it): keeps resolve_resume's fut.set_result from
-                    # racing aclose's fut.cancel on the same future. Deadlock-free —
-                    # the planner owns its own executor lock; the worker's teardown
-                    # touches the worker's lock, never the planner's.
-                    async with self._tool_lock:
+                    async with self._subagent_lock:
                         result, is_error = await _close_subagent_tool_logic(session, arguments)
                     session.last_proof_op_time = time()
                 case "refresh":

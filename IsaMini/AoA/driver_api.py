@@ -1236,16 +1236,11 @@ class APIDriver(LMDriver):
     # Forking
     # ------------------------------------------------------------------
 
-    async def fork_interaction(self, interaction: 'Interaction') -> Any:
-        buffer = StringIO()
-        try:
-            await interaction.prompt(0, MyIO(buffer))
-        except ImmediateAnswer as e:
-            return e.answer
-
+    async def _do_fork(self, interaction: 'Interaction',
+                       prompt_text: str) -> Any:
         ctx = contextvars.copy_context()
         task = asyncio.get_running_loop().create_task(
-            self._run_fork(interaction, buffer.getvalue()), context=ctx)
+            self._run_fork(interaction, prompt_text), context=ctx)
         return await task
 
     def _fork_provider(self, mode: ForkingMode) -> Provider:
