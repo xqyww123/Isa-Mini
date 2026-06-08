@@ -33,7 +33,7 @@ proof:
     thought: Apply my_looping with x instantiated to a
     operation: Rewrite
     using:
-      - my_looping[xwhere ?x = ‹a::nat›]: f ?x = g (f ?x)
+      - my_looping[where ?x = ‹a::nat›]: f ?x = g (f ?x)
     targets:
       - the goal
     goal changes into:

@@ -19,7 +19,7 @@ proof:
     thought: Unfold outer myf with variable name from display
     operation: Rewrite
     using:
-      - myf.simps[xwhere n1 = ‹myf n›]: myf ?n = ?n + (1 :: nat)
+      - myf.simps[where n1 = ‹myf n›]: myf ?n = ?n + (1 :: nat)
     targets:
       - the goal
     goal changes into:

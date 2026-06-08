@@ -4,23 +4,41 @@ Initial YAML
 variables:
   - P: nat ⇒ bool
 premises:
-  - h: ∀(x :: nat). P x
+  - h: P (0 :: nat) ∧ Q (0 :: nat)
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+variables:
+  - Q: nat ⇒ bool
 goal: P (0 :: nat)
 proof: empty
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
-After Obvious with FactByName[where]
+After Derive (print)
 --------------------------------------------------
 variables:
   - P: nat ⇒ bool
 premises:
-  - h: ∀(x :: nat). P x
+  - h: P (0 :: nat) ∧ Q (0 :: nat)
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+variables:
+  - Q: nat ⇒ bool
 goal: P (0 :: nat)
 proof:
   - step id: 1
-    operation: Obvious
-    with facts:
-      - h[where x = ‹0 :: nat›]: ∀(x :: nat). P x
-Unfinished nodes: 0
+    thought: Extract first conjunct via conjunct1
+    operation: Derive
+    rule:
+      - conjunct1[OF h]: ?P ∧ ?Q ⟶ ?P
+    resulting facts:
+      - fst: P (0 :: nat)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  P (0 :: nat)
+--------------------------------------------------
+After Derive (quickview)
+--------------------------------------------------
+step 1: Derive conjunct1
+  resulting facts:
+    - fst: P (0 :: nat)
+Error: Unfinished Proof. Call command `edit` with action `fill` and target step `2`
+goal: P (0 :: nat)
+Unfinished nodes: 1

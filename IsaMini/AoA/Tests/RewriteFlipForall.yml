@@ -23,7 +23,7 @@ proof:
     thought: Rewrite the goal using h flipped
     operation: Rewrite
     using:
-      - h[xsymmetric]: ∀(z :: nat). f z = z + (1 :: nat)
+      - h[symmetric]: ∀(z :: nat). f z = z + (1 :: nat)
     targets:
       - the goal
     goal is solved.

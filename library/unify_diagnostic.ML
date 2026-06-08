@@ -20,7 +20,9 @@ sig
 
   val diagnostic_unify : Context.generic -> term * term -> Envir.env -> Envir.env
 
+  val format_diag_body : Proof.context -> unify_diagnostic -> string
   val diagnose_of_failure : Proof.context -> thm -> thm list -> string option
+  val diagnose_rule_vs_goal : Proof.context -> (bool * thm) list -> term -> string option
 end
 
 structure Unify_Diagnostic : UNIFY_DIAGNOSTIC =
@@ -258,6 +260,25 @@ fun diagnostic_unify context = unif context []
 
 (* ---- Formatting diagnostics ---- *)
 
+fun format_diag_body ctxt diag =
+  case diag of
+    Type_Clash (T, U) =>
+      let val ctxt_sorts = ctxt |> Config.put show_sorts true
+          val sT = Syntax.string_of_typ ctxt_sorts T
+          val sU = Syntax.string_of_typ ctxt_sorts U
+      in "because type " ^ sT ^ " does not unify with " ^ sU end
+  | Clash (a, b) =>
+      "because head symbol " ^ a ^ " clashes with " ^ b
+  | BoundVar_Clash (i, j) =>
+      "because bound variable at depth " ^
+      string_of_int i ^ " clashes with depth " ^ string_of_int j
+  | Projection_Fail (F, _, _) =>
+      "because variable " ^ Term.string_of_vname F ^
+      " cannot be projected to match the term"
+  | Occurs_Check (F, _) =>
+      "because variable " ^ Term.string_of_vname F ^
+      " occurs in its own unifier (occurs check)"
+
 fun format_diagnostic ctxt fact_thm prem diag =
   let
     val fact_desc =
@@ -267,28 +288,10 @@ fun format_diagnostic ctxt fact_thm prem diag =
     val prem_str = Syntax.string_of_term ctxt prem
     val header = "the given fact " ^ fact_desc ^
                  " mismatches the target premise \<open>" ^ prem_str ^ "\<close>"
-  in
-    case diag of
-      Type_Clash (T, U) =>
-        let val ctxt_sorts = ctxt |> Config.put show_sorts true
-            val sT = Syntax.string_of_typ ctxt_sorts T
-            val sU = Syntax.string_of_typ ctxt_sorts U
-        in header ^ "\nbecause type " ^ sT ^ " does not unify with " ^ sU end
-    | Clash (a, b) =>
-        header ^ "\nbecause head symbol " ^ a ^ " clashes with " ^ b
-    | BoundVar_Clash (i, j) =>
-        header ^ "\nbecause bound variable at depth " ^
-        string_of_int i ^ " clashes with depth " ^ string_of_int j
-    | Projection_Fail (F, _, _) =>
-        header ^ "\nbecause variable " ^ Term.string_of_vname F ^
-        " cannot be projected to match the term"
-    | Occurs_Check (F, _) =>
-        header ^ "\nbecause variable " ^ Term.string_of_vname F ^
-        " occurs in its own unifier (occurs check)"
-  end
+  in header ^ "\n" ^ format_diag_body ctxt diag end
 
 
-(* ---- Top-level entry point ---- *)
+(* ---- Top-level entry points ---- *)
 
 fun diagnose_of_failure ctxt rule facts =
   let
@@ -313,6 +316,44 @@ fun diagnose_of_failure ctxt rule facts =
       SOME ("more discharge facts (" ^ string_of_int nfacts ^
             ") than premises (" ^ string_of_int nprems ^ ")")
     else try_pairs env0 facts prems
+  end
+
+fun diagnose_rule_vs_goal ctxt rules goal =
+  let
+    val context = Context.Proof ctxt
+    val goal_concl = Logic.strip_assums_concl goal
+
+    fun try_one (eres, rule) =
+      let
+        val target =
+          if eres then case Thm.prems_of rule of (p :: _) => SOME (Logic.strip_assums_concl p)
+                                                | _ => NONE
+          else SOME (Logic.strip_assums_concl (Thm.prop_of rule))
+      in
+        case target of NONE => NONE | SOME rule_concl =>
+        let val maxidx = Int.max (Thm.maxidx_of rule, Term.maxidx_of_term goal)
+            val env0 = Envir.empty maxidx
+        in (diagnostic_unify context (rule_concl, goal_concl) env0; NONE)
+           handle Unif_Diagnostic diag => SOME (rule, diag)
+                | Pattern.Pattern => NONE
+        end
+      end
+      handle General.Subscript => NONE
+
+    fun first [] = NONE
+      | first (r :: rs) = case try_one r of SOME x => SOME x | NONE => first rs
+  in
+    case first rules of
+      SOME (rule, diag) =>
+        let val rule_desc =
+              if Thm.has_name_hint rule
+              then Minilang_Aux.simp_fact_name' (Thm.get_name_hint rule)
+              else "\<open>" ^ Thm.string_of_thm ctxt rule ^ "\<close>"
+        in SOME ("the conclusion of rule " ^ rule_desc ^
+                 " does not match the current proof goal\n" ^
+                 format_diag_body ctxt diag)
+        end
+    | NONE => NONE
   end
 
 end

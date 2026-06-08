@@ -30,7 +30,11 @@ Filled node: InferenceRule, id=2
       - (8::nat) = 2^3
     Error: |
       Fail to apply the inference rule.
-      Fail to apply the rules
+      Fail to apply the rules.
+      the conclusion of rule P__I__T__0 does not match the current proof goal
+      because type nat ⇒ nat ⇒ bool does not unify with real ⇒ real ⇒ bool
+      The current proof goal is:
+        ln (x ^ n) = real n * ln x
 --------------------------------------------------
 After fill
 --------------------------------------------------
@@ -51,7 +55,11 @@ proof:
       - (8::nat) = 2^3
     Error: |
       Fail to apply the inference rule.
-      Fail to apply the rules
+      Fail to apply the rules.
+      the conclusion of rule P__I__T__0 does not match the current proof goal
+      because type nat ⇒ nat ⇒ bool does not unify with real ⇒ real ⇒ bool
+      The current proof goal is:
+        ln (x ^ n) = real n * ln x
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
   ln (x ^ n) = real n * ln x

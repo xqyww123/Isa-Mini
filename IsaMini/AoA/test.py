@@ -4116,6 +4116,30 @@ async def _test_Derive_NullGap(root: Root, file: MyIO):
     await root.fill("1" if _outcome.failure is not None else "2",
                     [Obvious.gen_single({"facts": [{"name": "h1"}, {"name": "h2"}, {"name": "h3"}]})])
 
+@model_test("DeriveWhereOF_Quickview", "Test_DeriveWhereOF_Quickview.thy", 10)
+async def _test_DeriveWhereOF_Quickview(root: Root, file: MyIO):
+    """Test two rendering fixes:
+    1. Derive quickview_title shows only the rule name, not attribute brackets.
+    2. Fact display uses 'where'/'OF' (not 'xwhere'/'xOF') for the agent."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    # Derive using conjunct1[OF h] — rule-level discharge triggers OF display
+    root.session.age += 1
+    outcome = await root.fill("1", [Derive.gen_single({
+        "thought": "Extract first conjunct via conjunct1",
+        "rule": {"name": "conjunct1", "discharge": [{"name": "h"}]},
+        "result_name": "fst"
+    })])
+    if outcome.failure is not None:
+        file.write(f"Fill failure: {outcome.failure}\n")
+    print_header("After Derive (print)", file)
+    root.print(0, file)
+    print_header("After Derive (quickview)", file)
+    root.quickview(0, file)
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 @model_test("DeriveBall", "Test_DeriveBall.thy", 11)
 async def _test_DeriveBall(root: Root, file: MyIO):
     """Test Derive on a Ball-quantified rule: ∀x∈A. P x.

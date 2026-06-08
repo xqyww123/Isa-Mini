@@ -154,13 +154,16 @@ def _format_with_definition(
     cmd_pos: IsabellePosition,
     indent: int,
     out,
+    *,
+    force: bool = False,
 ) -> None:
     """Write definition source with show-once tracking.
 
     First time for a given *cmd_pos*: writes full indented source.
     Subsequent times: writes ``associated with `{header}```.
+    *force*: bypass the show-once check (for exact_name lookups).
     """
-    if cmd_pos in session.seen_commands:
+    if not force and cmd_pos in session.seen_commands:
         header = session.seen_commands[cmd_pos]
         print_indent(indent, out)
         out.write(f"associated with `{header}`\n")
@@ -187,6 +190,7 @@ async def _format_fetched_entity(
     def_info: tuple[str, IsabellePosition] | bool | None = None,
     potential_defs: bool = False,
     abbreviation_defs: dict[str, tuple[str, str]] = {},
+    force_definition: bool = False,
 ) -> None:
     """Render a single retrieved entity in unified format.
 
@@ -216,7 +220,8 @@ async def _format_fetched_entity(
     if isinstance(def_info, tuple) and session is not None:
         source, cmd_pos = def_info
         if not _PROOF_COMMAND_RE.match(source):
-            _format_with_definition(session, source, cmd_pos, indent=indent + 1, out=buf)
+            _format_with_definition(session, source, cmd_pos, indent=indent + 1, out=buf,
+                                    force=force_definition)
     if abbreviation_defs and session is not None:
         abbrev_names = f.entity.abbreviation_names
         for aname in abbrev_names:
@@ -457,6 +462,7 @@ async def _render_fetched_entities(
     buf,
     *,
     indent: int = 0,
+    force_names: 'frozenset[short_name] | set[short_name]' = frozenset(),
 ) -> list[str]:
     """Batch-fetch abbreviation definitions for ``entities`` and render each via
     the unified ``_format_fetched_entity`` renderer (statement, ``[manual]`` tag,
@@ -485,7 +491,8 @@ async def _render_fetched_entities(
         await _format_fetched_entity(f, buf, indent=indent, session=session,
                                      def_info=True,
                                      potential_defs=(f.score == 1.0),
-                                     abbreviation_defs=abbrev_defs)
+                                     abbreviation_defs=abbrev_defs,
+                                     force_definition=(f.entity.short_name in force_names))
         expr_str = _trunc_expr(', '.join(e.unicode for e in f.entity.expression))
         retrieved.append(f"{f.entity.short_name.unicode}: {expr_str}")
     return retrieved

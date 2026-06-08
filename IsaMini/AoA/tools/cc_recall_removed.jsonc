@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "properties": {
+    "index": {
+      "type": "integer",
+      "description": "Index of the archived entry to view (from the listing). Omit to list all."
+    },
+    "line": {
+      "type": "integer",
+      "description": "Start line within the archived entry (1-indexed). Requires index."
+    },
+    "range": {
+      "type": "integer",
+      "description": "Number of lines to show from the start line.",
+      "default": 50
+    }
+  },
+  "additionalProperties": false
+}

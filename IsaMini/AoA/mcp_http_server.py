@@ -45,8 +45,9 @@ from .model import (
     Parse_Op_List, Interaction_BadAnswer,
     AnswerIndexes, AnswerIndex, AnswerIndexesOrName, AnswerIndexesOrSpec,
     AnswerInstantiate, AnswerRefutation,
-    TOOL_EDIT, TOOL_DELETE, TOOL_READ, TOOL_REQUEST_LEMMAS,
-    TOOL_REPORT, TOOL_SUBAGENT, TOOL_CLOSE_SUBAGENT,
+    TOOL_EDIT, TOOL_DELETE, TOOL_READ, TOOL_RECALL_REMOVED,
+    TOOL_REQUEST_LEMMAS, TOOL_REPORT, TOOL_SUBAGENT, TOOL_CLOSE_SUBAGENT,
+    DeletedEntry,
     TOOL_ANSWER_INDEXES, TOOL_ANSWER_INDEX, TOOL_ANSWER_INDEXES_OR_NAME,
     TOOL_ANSWER_INDEXES_OR_SPEC, TOOL_ANSWER_INSTANTIATE,
     TOOL_ANSWER_REFUTATION,
@@ -89,6 +90,7 @@ _cc_answer_instantiate_schema = _load_schema("cc_answer_instantiate.jsonc")
 _cc_answer_refutation_schema = _load_schema("cc_answer_refutation.jsonc")
 _cc_subagent_schema = _load_schema("cc_subagent.jsonc")
 _cc_close_subagent_schema = _load_schema("cc_cancel_subagent.jsonc")
+_cc_recall_removed_schema = _load_schema("cc_recall_removed.jsonc")
 
 
 
@@ -369,12 +371,33 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         return (error_msg, True)
 
 
+def _archive_node(node: Node, session: Session) -> DeletedEntry:
+    title = node.quickview_title()
+    goal_str = ""
+    if isinstance(node, StdBlock):
+        try:
+            goal = node.goal()
+            if goal is not None:
+                goal_str = f" | {goal.conclusion.unicode}"
+        except Exception:
+            pass
+    if isinstance(node, StdBlock):
+        was_proved = node.is_proof_finished()
+    else:
+        was_proved = node.status.status == EvaluationStatus.Status.SUCCESS
+    proved_str = "proved" if was_proved else "unproved"
+    summary = f"{title}{goal_str} [{proved_str}]"
+    rendered_yaml = node.print_string(0)
+    return DeletedEntry(summary=summary, rendered_yaml=rendered_yaml, was_proved=was_proved)
+
+
 async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     _tn = session.tool_name(TOOL_DELETE)
     session.log_tool_call(_tn, args)
     # IsabelleError caught here (not in execute) so it stays a recoverable
     # (msg, True) return and still triggers the mutate cooldown; other
     # exceptions propagate to ToolExecutor.execute for unified handling.
+    archive_len_before = len(session.runtime.deleted_archive)
     try:
         target_steps = args.get("target_steps")
         if isinstance(target_steps, str):
@@ -403,9 +426,28 @@ async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
                              "elsewhere, use `request_lemmas`.")
                 session.log_tool_response(_tn, f"ERROR: {error_msg}")
                 return (error_msg, True)
+        should_archive = args.get("archive", True)
+        if isinstance(should_archive, str):
+            should_archive = should_archive.lower() not in ("false", "0", "no")
+        archived_indices: list[int] = []
+        if should_archive:
+            archived_ids: set[str] = set()
+            for sid in abs_steps:
+                if sid in archived_ids:
+                    continue
+                try:
+                    node = session.root.locate_node(sid)
+                    idx = len(session.runtime.deleted_archive)
+                    entry = _archive_node(node, session)
+                    session.runtime.deleted_archive.append(entry)
+                    archived_ids.add(sid)
+                    archived_indices.append(idx)
+                except NodeNotFound:
+                    pass
         try:
             not_found = await session.root.delete(abs_steps)
             if len(not_found) == len(abs_steps):
+                del session.runtime.deleted_archive[archive_len_before:]
                 noun = "step" if len(not_found) == 1 else "steps"
                 shown = ', '.join(session._display_id(s) for s in not_found)
                 error_msg = f"Error: {noun} {shown} not found."
@@ -418,9 +460,17 @@ async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
                 noun = "step" if len(not_found) == 1 else "steps"
                 shown = ', '.join(session._display_id(s) for s in not_found)
                 response += f"\nWarning: {noun} {shown} not found and skipped."
+            if archived_indices:
+                _tn_rr = session.tool_name(TOOL_RECALL_REMOVED)
+                if len(archived_indices) == 1:
+                    response += f"\nArchived as entry {archived_indices[0]}. Use `{_tn_rr}` to review."
+                else:
+                    idx_str = ", ".join(str(i) for i in archived_indices)
+                    response += f"\nArchived as entries {idx_str}. Use `{_tn_rr}` to review."
             if finished:
                 await session.interrupt()
         except AoA_Error as e:
+            del session.runtime.deleted_archive[archive_len_before:]
             error_msg = str(e)
             session.log_tool_response(_tn, f"ERROR: {error_msg}")
             return (error_msg, True)
@@ -428,6 +478,7 @@ async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         session.log_proof_tree_snapshot("after_delete")
         return (response, False)
     except IsabelleError as e:
+        del session.runtime.deleted_archive[archive_len_before:]
         error_msg = f"Isabelle error: {'; '.join(pretty_unicode(err) for err in e.errors)}"
         session.log_tool_response(_tn, f"ERROR: {error_msg}")
         return (error_msg, True)
@@ -789,6 +840,71 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
                 f"{start}-{end_line}]\n" + "".join(selected))
 
     result = "\n".join(segments)
+    session.log_tool_response(_tn, result)
+    return (result, False)
+
+
+async def _recall_removed_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
+    _tn = session.tool_name(TOOL_RECALL_REMOVED)
+    session.log_tool_call(_tn, args)
+
+    archive = session.runtime.deleted_archive
+    if not archive:
+        msg = "The archive is empty — no proof steps have been deleted yet."
+        session.log_tool_response(_tn, msg)
+        return (msg, False)
+
+    index = args.get("index")
+    line_num = args.get("line")
+    range_lines = int(args.get("range", 50))
+
+    if index is None and line_num is not None:
+        msg = "`line` requires `index`. Call with no arguments to list all entries."
+        session.log_tool_response(_tn, f"ERROR: {msg}")
+        return (msg, True)
+
+    if index is None:
+        lines = []
+        for i, entry in enumerate(archive):
+            lines.append(f"  {i}: {entry.summary}")
+        result = f"Deleted node archive ({len(archive)} entries):\n" + "\n".join(lines)
+        session.log_tool_response(_tn, result)
+        return (result, False)
+
+    index = int(index)
+    if index < 0 or index >= len(archive):
+        msg = f"Invalid index {index}. Archive has {len(archive)} entries (0–{len(archive) - 1})."
+        session.log_tool_response(_tn, f"ERROR: {msg}")
+        return (msg, True)
+
+    entry = archive[index]
+    yaml_lines = entry.rendered_yaml.splitlines(keepends=True)
+    total = len(yaml_lines)
+
+    if line_num is None:
+        header = f"Archived entry {index} ({entry.summary}):\n"
+        if total <= 200:
+            result = header + entry.rendered_yaml
+        else:
+            shown = "".join(yaml_lines[:200])
+            result = (header + f"[Line 1–200 of {total}]\n" + shown
+                      + f"\n... ({total - 200} more lines. Use `line` and `range` to navigate.)")
+        session.log_tool_response(_tn, result)
+        return (result, False)
+
+    line_num = int(line_num)
+    if line_num < 1:
+        line_num = 1
+    if line_num > total:
+        msg = f"Line {line_num} is past the end of the entry ({total} lines)."
+        session.log_tool_response(_tn, f"ERROR: {msg}")
+        return (msg, True)
+    start = line_num
+    end = min(start + range_lines - 1, total)
+    selected = yaml_lines[start - 1 : end]
+    end_line = start + len(selected) - 1
+    header = f"Archived entry {index} ({entry.summary}):\n"
+    result = header + f"[Line {start}–{end_line} of {total}]\n" + "".join(selected)
     session.log_tool_response(_tn, result)
     return (result, False)
 
@@ -1237,6 +1353,7 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "Conversely, if a query returns too many irrelevant results, add the constraints to narrow down.",
                "schema": _cc_query_schema, "annotations": _RO},
     "recall": {"description": "Recall proof state from `proof.yaml`. Use only when you have lost track.", "schema": _cc_read_schema, "annotations": _RO},
+    "recall_removed": {"description": "Browse proof steps that were archived before deletion.", "schema": _cc_recall_removed_schema, "annotations": _RO},
     "request_lemmas": {"description": "Report missing background lemmas and request that the external environment supply them.",
                        "schema": _cc_request_lemmas_schema, "annotations": _ACT},
     "report": {"description": "Report difficulties or obstacles you run into, or surrender and admit you cannot prove it yourself, or refutate that the goal is unprovable.",
@@ -1330,6 +1447,8 @@ class ToolExecutor:
                     result, is_error = await _query_tool_logic(session, arguments)
                 case "recall":
                     result, is_error = await _read_tool_logic(session, arguments)
+                case "recall_removed":
+                    result, is_error = await _recall_removed_tool_logic(session, arguments)
                 case "request_lemmas":
                     result, is_error = await _request_lemmas_tool_logic(
                         session, arguments)

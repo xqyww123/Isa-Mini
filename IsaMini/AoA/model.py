@@ -165,11 +165,10 @@ def fact_kind(fact: Fact) -> Literal["name", "proposition", "description"]:
 
 # The clauses below return the *bracket-less* attribute text; `_fact_suffix`
 # assembles the non-empty ones into a SINGLE comma-separated `[...]` group.
-# They must not each emit their own `[...]`: `read_fact`'s `Parse.thm` accepts
-# only one attribute bracket group (`Scan.optional attribs`, no `Scan.repeat`),
-# so `name[xwhere ...][xOF ...]` leaves the second group unconsumed and fails to
-# parse. `thm[a, b]` and `thm[a][b]` are semantically equivalent (attributes
-# applied left-to-right), so merging preserves the where→OF→symmetric order.
+# Display uses `where`/`OF`/`symmetric`; `for_pack=True` emits `xwhere`/`xOF`/
+# `xsymmetric` for `read_fact`'s `Parse.thm`, which accepts only one attribute
+# bracket group (`Scan.optional attribs`, no `Scan.repeat`) — merging into a
+# single `[...]` preserves the where→OF→symmetric order.
 def _where_clause(fact: Fact, *, for_pack: bool = False) -> str:
     if "name" not in fact:
         return ""
@@ -931,11 +930,25 @@ def _validate_union(args: tuple[type, ...], data: Any, path: str) -> Any:
             if data in get_args(t):
                 return data
     non_literal = [t for t in real_types if get_origin(t) is not Literal]
+    errors: list[tuple[type, Exception]] = []
     for t in non_literal:
         try:
             return validate(t, data, path)
-        except (ArgumentError, KeyError, TypeError, ValueError):
-            pass
+        except (ArgumentError, KeyError, TypeError, ValueError) as e:
+            errors.append((t, e))
+    # If the data is a dict and exactly one TypedDict member's required keys
+    # match, the user clearly intended that member — re-raise its specific
+    # nested error instead of the generic "must be one of" message.
+    if isinstance(data, dict):
+        structural_matches: list[tuple[type, Exception]] = []
+        for t, e in errors:
+            if is_typeddict(t):
+                required = getattr(t, "__required_keys__",
+                    set(getattr(t, "__annotations__", {}).keys()))
+                if required <= data.keys():
+                    structural_matches.append((t, e))
+        if len(structural_matches) == 1:
+            raise structural_matches[0][1] from None
     for t in non_literal:
         if t in (str, int, bool, float):
             if isinstance(data, t):
@@ -2111,12 +2124,18 @@ AnswerPayload = (AnswerIndexes | AnswerIndex | AnswerIndexesOrName
                  | AnswerIndexesOrSpec | AnswerInstantiate
                  | AnswerRefutation)
 
+class DeletedEntry(NamedTuple):
+    summary: str
+    rendered_yaml: str
+    was_proved: bool
+
 # Abstract tool identifiers (driver-agnostic)
 type tool = str
 TOOL_EDIT:   tool = "edit"
 TOOL_DELETE: tool = "delete"
 TOOL_SEARCH: tool = "query"
 TOOL_READ:   tool = "recall"
+TOOL_RECALL_REMOVED: tool = "recall_removed"
 TOOL_REQUEST_LEMMAS: tool = "request_lemmas"
 TOOL_REPORT: tool = "report"
 TOOL_SUBAGENT: tool = "subagent"
@@ -2137,8 +2156,8 @@ ANSWER_TOOLS: frozenset[tool] = frozenset({
 
 ALL_PROOF_TOOLS: tuple[tool, ...] = (
     TOOL_EDIT, TOOL_DELETE, TOOL_SEARCH, TOOL_READ,
-    TOOL_REQUEST_LEMMAS, TOOL_REPORT, TOOL_SUBAGENT,
-    TOOL_CLOSE_SUBAGENT,
+    TOOL_RECALL_REMOVED, TOOL_REQUEST_LEMMAS, TOOL_REPORT,
+    TOOL_SUBAGENT, TOOL_CLOSE_SUBAGENT,
     *ANSWER_TOOLS,
 )
 
@@ -2940,6 +2959,10 @@ class Node(ABC):
         return indent + 1
     def print(self, indent: int, file : MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         return self._print_step_id(indent, file, update_line)
+    def print_string(self, indent: int, show_warnings: bool = True) -> str:
+        buffer = StringIO()
+        self.print(indent, MyIO(buffer), show_warnings=show_warnings)
+        return buffer.getvalue()
     def quickview_title(self) -> str:
         return type(self).__name__
     _done_label: str = "proven"
@@ -4427,10 +4450,6 @@ class StdBlock(NonLeaf_Node):
         self._print_suspended_worker_hint(indent, file)
         self._quickview_pending_footer(indent, file)
         return indent
-    def print_string(self, indent: int, show_warnings: bool = True) -> str:
-        buffer = StringIO()
-        self.print(indent, MyIO(buffer), show_warnings=show_warnings)
-        return buffer.getvalue()
     def quickview_string(self, indent: int) -> str:
         buffer = StringIO()
         self.quickview(indent, MyIO(buffer))
@@ -6596,8 +6615,8 @@ class Derive(Leaf):
         self._prev_result_facts: list[tuple[varname, term]] | None = None
 
     def quickview_title(self) -> str:
-        if self.rule_ref is not None:
-            return f"Derive {self.rule_ref.name().unicode}"
+        if isinstance(self.rule_ref, IsabelleFact_Presented):
+            return f"Derive {self.rule_ref.short_name.unicode}"
         return f"Derive {self.rule['name']}"
     def quickview(self, indent: int, file: MyIO) -> int:
         indent = super().quickview(indent, file)
@@ -7943,8 +7962,8 @@ class InferenceRule(SubgoalMaker):
             print_indent(indent, file)
             file.write(f"Notice: \"{self._rule_name_str()}\" is an induction rule. Use `Induction` operation with `rule: {self._rule_name_str()}` instead.\n")
     def quickview_title(self) -> str:
-        if self.rule_ref is not None:
-            return f"Inference Rule {self.rule_ref.name().unicode}"
+        if isinstance(self.rule_ref, IsabelleFact_Presented):
+            return f"Inference Rule {self.rule_ref.short_name.unicode}"
         return "Inference Rule"
     def quickview(self, indent: int, file: MyIO) -> int:
         indent = super().quickview(indent, file)
@@ -7990,7 +8009,12 @@ class InferenceRule(SubgoalMaker):
             return FailureReason(f"Inference rule fact \"{self.rule_ref.name().unicode}\" not found")
         return Minilang_Operation.RULE(self.rule_ref)
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
-        return FailureReason(f"Fail to apply the inference rule.{"".join(["\n"+e for e in err.errors])}")
+        parts = ["Fail to apply the inference rule."]
+        parts.extend(err.errors)
+        goal = self.ml_state.leading_goal
+        if goal is not None and not any("current proof goal" in e for e in err.errors):
+            parts.append(f"The current proof goal is:\n  {goal.conclusion.unicode}")
+        return FailureReason("\n".join(parts))
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
         return FailureReason(f"Subgoal {child.id} fails to be proven.")
     def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
@@ -8892,6 +8916,7 @@ class Runtime:
         self.total_tool_calls: int = 0
         self._budget_start_time: float | None = None
         self.worker_max_tool_calls: int = 500
+        self.deleted_archive: list[DeletedEntry] = []
 
     def next_pit_name(self) -> str:
         i = self._pit_counter
@@ -9336,6 +9361,7 @@ class Session:
                 f"- {self.tool_name(TOOL_DELETE)}: Delete proof steps\n"
                 f"- {self.tool_name(TOOL_SEARCH)}: Search for theorems, constants, types, and rules; help you understand unfamiliar terms\n"
                 f"- {self.tool_name(TOOL_READ)}: Recall proof state from `proof.yaml`. Use only when you have lost track.\n"
+                f"- {self.tool_name(TOOL_RECALL_REMOVED)}: Browse deleted proof steps that were archived before removal.\n"
                 f"- {self.tool_name(TOOL_REQUEST_LEMMAS)}: Report missing background lemmas and request that they be supplied.\n"
             )
         parts = [PROMPT]

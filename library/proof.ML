@@ -3103,7 +3103,18 @@ fun RULE' [] raw_facts (SK as (ctxt, _)) =
                in get_reporter () (Goals new_goals)
                 ; (ctxt, HHF (protect_goals st', items) :: SK)
               end
-          | NONE => raise OPR_FAIL (PROOF_FAIL, "Fail to apply the rules" ))
+          | NONE =>
+              let val goal = hd (Thm.prems_of st)
+                  val goal_str = Syntax.string_of_term ctxt goal
+                  val diag = if null rules then NONE
+                             else Unify_Diagnostic.diagnose_rule_vs_goal ctxt rules goal
+                  val extra = if null rules
+                              then "\nAll rule OF-instantiations failed."
+                              else case diag of SOME msg => "\n" ^ msg | NONE => ""
+              in raise OPR_FAIL (PROOF_FAIL,
+                   "Fail to apply the rules." ^ extra ^
+                   "\nThe current proof goal is:\n  " ^ goal_str)
+              end)
      |> maintain
     end
   | RULE' _ _ _ = raise BROKEN_INVARIANT

@@ -24,5 +24,5 @@ proof:
   - step id: 1
     operation: Obvious
     with facts:
-      - h[xsymmetric]: a = b
+      - h[symmetric]: a = b
 Unfinished nodes: 0

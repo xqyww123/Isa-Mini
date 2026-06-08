@@ -28,5 +28,5 @@ proof:
   - step id: 1
     operation: Obvious
     with facts:
-      - rule[xwhere x = ‹7 :: nat›, xOF hs]: ∀(x :: nat). S x ⟶ R x
+      - rule[where x = ‹7 :: nat›, OF hs]: ∀(x :: nat). S x ⟶ R x
 Unfinished nodes: 0
