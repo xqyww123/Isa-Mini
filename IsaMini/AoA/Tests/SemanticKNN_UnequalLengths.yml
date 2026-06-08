@@ -1,0 +1,10 @@
+Mismatched parens: 5 results, 1 warnings
+  Warning: Inner syntax error: unexpected end of input
+Failed to parse term
+Mixed patterns: 5 results, 1 warnings
+  Warning: Inner syntax error: unexpected end of input
+Failed to parse term
+Schematic in binder: 5 results, 1 warnings
+  Warning: Inner syntax error
+at ". ?N div ?d )"
+Failed to parse term
