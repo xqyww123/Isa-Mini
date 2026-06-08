@@ -1,0 +1,82 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+variables:
+  - n: nat
+  - f: nat ⇒ nat
+goal: True
+proof: empty
+--------------------------------------------------
+After Have h (meta-level fact)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+variables:
+  - n: nat
+  - f: nat ⇒ nat
+goal: True
+proof:
+  - step id: 1
+    thought: bound on f, quantified over i with premise i < n
+    operation: Have
+    statement:
+      english: for every i less than n, f i is less than n
+      for_any:
+        i: nat
+      premises:
+        hi: i < n
+      conclusion: f i < n
+    name: h
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      f i < n
+--------------------------------------------------
+After Induction (should not crash with Trueprop_conv)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+variables:
+  - n: nat
+  - f: nat ⇒ nat
+goal: True
+proof:
+  - step id: 1
+    thought: bound on f, quantified over i with premise i < n
+    operation: Have
+    statement:
+      english: for every i less than n, f i is less than n
+      for_any:
+        i: nat
+      premises:
+        hi: i < n
+      conclusion: f i < n
+    name: h
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      f i < n
+  - step id: 2
+    thought: induct on n, generalize f, carry the meta-level fact h
+    operation: Induction
+    target term: n :: nat
+    generalized variables: f
+    IH facts: h
+    cases:
+      - goal id: 2.0
+        variables:
+          - f1: nat ⇒ nat
+        premises:
+          - h: ?i < (0 :: nat) ⟶ f1 ?i < (0 :: nat)
+        goal: True
+        proof: empty
+      - goal id: 2.Suc
+        variables:
+          - n: nat
+          - f1: nat ⇒ nat
+        premises:
+          - h: ?i < Suc n ⟶ f1 ?i < Suc n
+          - Suc.IH: (∀i<n. ?f i < n) ⟶ True
+        goal: True
+        proof: empty
+
+Induction status: Status.SUCCESS

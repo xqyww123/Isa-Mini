@@ -187,6 +187,10 @@ def _of_clause(fact: Fact, *, for_pack: bool = False) -> str:
     discharge = cast(FactByName, fact).get("discharge", [])
     if not discharge:
         return ""
+    while discharge and discharge[-1] is None:
+        discharge = discharge[:-1]
+    if not discharge:
+        return ""
     of_parts = []
     for item in discharge:
         if item is None:
@@ -2853,7 +2857,15 @@ class EditOutcome:
             return (EditFailureBehavior.CONTINUE, cancelled)
         behavior, _ = node._on_edit_failure(self)
         if behavior is EditFailureBehavior.TERMINATE_AND_REVERT:
+            parent = node.parent
             rp = node._delete_me()
+            # The reverted node's refresh may have set _is_trivial on its
+            # parent (e.g. a failed Obvious sets _is_trivial=False).  Now
+            # that the node is gone, clear the flag so the slot is usable
+            # again — otherwise GoalIsNontrivial blocks all future Obvious
+            # attempts on that parent.
+            if parent is not None:
+                parent._is_trivial = None
             await rp._refresh_me_alone(auto_intro=False)
             if rp.parent is not None:
                 await rp._refresh_all_after_me()
@@ -3433,7 +3445,12 @@ class Node(ABC):
             await rp._refresh_me_alone(auto_intro=False)
             if rp.parent is not None:
                 await rp._refresh_all_after_me()
-        return await node.append(gns, op=op)
+        outcome = await node.append(gns, op=op)
+        if (outcome.failure is not None
+                and isinstance(outcome.failure, GoalIsNontrivial)
+                and outcome.failure.target_step != id):
+            outcome.failure.target_step = id
+        return outcome
     def _id_of_openning_prf_to_fill(self) -> step | None:
         return None
 
@@ -3741,7 +3758,11 @@ class Leaf(Node):
             await self.ml_state.execute(op, self.resulting_state())
             self.status = EvaluationStatus.Success(time() - now)
         except IsabelleError as err:
-            self.status = EvaluationStatus.Failure(time() - now, FailureReason(''.join(err.errors)))
+            msg = ''.join(err.errors)
+            if 'OF: the fact has' in msg and 'discharge argument(s) were given' in msg:
+                msg += ("\nThe `discharge` list has more entries than the fact has premises. "
+                        "Set `discharge` to `[]` or remove it for facts with no premises.")
+            self.status = EvaluationStatus.Failure(time() - now, FailureReason(msg))
             return
         if auto_intro and not self._has_considered_auto_intro:
             self._has_considered_auto_intro = True
@@ -9077,8 +9098,15 @@ class Session:
         self.quit_info: 'QuitInfo | None' = None
         self._session_edit_count: int = 0
         self._session_delete_count: int = 0
-        self._struggle_edit_threshold: int = 30
-        self._struggle_delete_threshold: int = 5
+        _is_sub_subagent = (isinstance(self.role, Role_Worker)
+                            and parent is not None
+                            and isinstance(parent.role, Role_Worker))
+        if _is_sub_subagent:
+            self._struggle_edit_threshold: int = 20
+            self._struggle_delete_threshold: int = 4
+        else:
+            self._struggle_edit_threshold: int = 30
+            self._struggle_delete_threshold: int = 5
         self._struggle_checkpoint_count: int = 0
         self.retrieval_forking_mode: ForkingMode = (
             parent.retrieval_forking_mode if parent is not None
@@ -9776,8 +9804,15 @@ class Session:
         Drivers may override to change the escalation policy."""
         self._session_delete_count = 0
         self._session_edit_count = 0
-        self._struggle_delete_threshold = 3
-        self._struggle_edit_threshold = 15
+        _is_sub_subagent = (isinstance(self.role, Role_Worker)
+                            and self.parent is not None
+                            and isinstance(self.parent.role, Role_Worker))
+        if _is_sub_subagent:
+            self._struggle_delete_threshold = 3
+            self._struggle_edit_threshold = 10
+        else:
+            self._struggle_delete_threshold = 3
+            self._struggle_edit_threshold = 15
 
     # Proof tree logging methods
     def log_proof_operation(self, step: str, operation: str, details: dict[str, Any]):

@@ -1054,7 +1054,8 @@ fun deep_destruct_term ctxt term =
    in map (unprop o Thm.concl_of) atoms end
 
 fun wraps ctxt ths = ths
-      |> map (Conv.fconv_rule (HOLogic.Trueprop_conv (Conv.rewr_conv Thms.TAG_def'sym)))
+      |> map (Conv.fconv_rule (Object_Logic.atomize ctxt
+              then_conv HOLogic.Trueprop_conv (Conv.rewr_conv Thms.TAG_def'sym)))
       |> foldr1 (fn (A,B) => MP ctxt (MP ctxt Thms.conjI A) B)
 
 val is_tagged =

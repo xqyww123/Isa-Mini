@@ -639,48 +639,50 @@ async def _test_Rewrite_NoProgress(root: Root, file: MyIO):
 
 @model_test("Rewrite_OF_ZeroPremise", "Test_Rewrite_OF_ZeroPremise.thy", 10)
 async def _test_Rewrite_OF_ZeroPremise(root: Root, file: MyIO):
-    """Reproduces: discharge: [null] (OF _) on a zero-premise fact causes a hard
-    error in Rewrite but is silently tolerated in Obvious (HAMMER).
+    """Regression test for OF _ on zero-premise facts.
 
-    The SIMPLIFY path evaluates facts via Attrib.eval_thms → xOF in aux.ML,
-    which strictly checks premise count.  The HAMMER path passes facts as refs
-    to Sledgehammer's override, bypassing that check.
+    LLM agents habitually attach discharge: [null] (→ OF _) to every fact
+    reference because HAMMER tolerates it.  SIMPLIFY evaluates facts via
+    Attrib.eval_thms → xOF (aux.ML), which strictly checks premise count and
+    raises a hard error on zero-premise facts.
 
-    LLM agents learn from Obvious that OF _ is universally safe, then hit this
-    error on every Rewrite/Derive with a fully-instantiated zero-premise fact.
+    After the fix: _of_clause strips trailing null entries, so discharge: [null]
+    on a zero-premise fact no longer emits OF _ and the Rewrite succeeds.
 
     See /tmp/problem_4.md for the original incident (EA6E9592F_20F38CE)."""
     print_header("Initial YAML", file)
     root.print(0, file)
 
     # Step 1: Rewrite with discharge: [null] on h1 (a zero-premise equation).
-    # This should fail: "OF: the fact has 0 premise(s), but 1 discharge
-    # argument(s) were given".  The node is reverted (TERMINATE_AND_REVERT).
+    # After fix: trailing null is stripped, so this succeeds (was: hard error).
     _outcome = await root.fill("1", [Rewrite.gen_single({
-        "thought": "Rewrite using h1 with spurious discharge",
+        "thought": "Rewrite using h1 with trailing-null discharge",
         "using": [{"name": "h1", "discharge": [None]}],
         "use system simplifiers": True,
         "rewrite goal": True,
         "rewrite premises": []
     })])
-    is_error = _outcome.failure is not None and _outcome.failure.is_error
-    reason = _outcome.failure
-    print_header("Rewrite with discharge: [null] on zero-premise fact", file)
-    file.write(f"is_error: {is_error}\n")
-    file.write(f"reason: {reason}\n")
+    print_header("Rewrite with discharge: [null] (trailing null stripped)", file)
+    file.write(f"failure: {_outcome.failure}\n")
+    root.print(0, file)
 
     root.session.age += 1
 
-    # Step 2: Retry Rewrite without discharge — should succeed.
+    # Step 2: Non-trailing discharge on a zero-premise fact still fails,
+    # but now with an enhanced error message suggesting the fix.
+    await root.delete(["1"])
+    root.session.age += 1
     _outcome2 = await root.fill("1", [Rewrite.gen_single({
-        "thought": "Rewrite using h1 without discharge",
-        "using": [{"name": "h1"}],
+        "thought": "Rewrite using h1 with non-null discharge",
+        "using": [{"name": "h1", "discharge": [{"name": "h1"}]}],
         "use system simplifiers": True,
         "rewrite goal": True,
         "rewrite premises": []
     })])
-    print_header("Rewrite without discharge (should succeed)", file)
-    root.print(0, file)
+    is_error = _outcome2.failure is not None and _outcome2.failure.is_error
+    print_header("Rewrite with discharge: [h1] on zero-premise fact", file)
+    file.write(f"is_error: {is_error}\n")
+    file.write(f"reason: {_outcome2.failure}\n")
 
 @model_test("SuppressParentGoal", "Test_SuppressParentGoal.thy", 10)
 async def _test_SuppressParentGoal(root: Root, file: MyIO):
@@ -12811,6 +12813,28 @@ async def _test_StruggleCheckpoint(root: Root, file: MyIO):
             target=have_node, delete_count=5, edit_count=30, checkpoint_number=1)
         result = await session.fork_interaction(interaction)
         file.write(f"fork result: {result}\n")
+
+        # --- 8. Sub-subagent thresholds (depth >= 2) ---
+        print_header("sub-subagent thresholds", file)
+        # Simulate a sub-subagent: parent is a worker, this session is also a worker
+        original_parent_role = session.parent  # save (None for test session)
+        # Create a fake parent that looks like a worker
+        class _FakeParent:
+            role = model.Role_Worker(target=have_node)
+        session.parent = _FakeParent()  # type: ignore
+        session._struggle_checkpoint_count = 0
+        session._reset_struggle_counters()
+        file.write(f"sub-subagent subsequent thresholds: edit={session._struggle_edit_threshold} delete={session._struggle_delete_threshold}\n")
+        # Check initial thresholds for sub-subagent by re-init
+        _is_sub_sub = (isinstance(session.role, Role_Worker)
+                       and session.parent is not None
+                       and isinstance(session.parent.role, Role_Worker))
+        file.write(f"detected as sub-subagent: {_is_sub_sub}\n")
+        # Restore
+        session.parent = original_parent_role
+        # Verify normal agent reset thresholds
+        session._reset_struggle_counters()
+        file.write(f"normal worker subsequent thresholds: edit={session._struggle_edit_threshold} delete={session._struggle_delete_threshold}\n")
 
     finally:
         session.role = model.Role_Major()

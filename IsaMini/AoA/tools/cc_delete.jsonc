@@ -5,11 +5,6 @@
       "type": "array",
       "items": { "type": "string" },
       "description": "List of step IDs to delete"
-    },
-    "archive": {
-      "type": "boolean",
-      "description": "Whether to archive the deleted steps for later retrieval (default: true). Set to false for trivial deletions you won't need again.",
-      "default": true
     }
   },
   "required": ["target_steps"],

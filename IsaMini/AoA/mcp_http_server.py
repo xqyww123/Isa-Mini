@@ -432,24 +432,20 @@ async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
                              "elsewhere, use `request_lemmas`.")
                 session.log_tool_response(_tn, f"ERROR: {error_msg}")
                 return (error_msg, True)
-        should_archive = args.get("archive", True)
-        if isinstance(should_archive, str):
-            should_archive = should_archive.lower() not in ("false", "0", "no")
         archived_indices: list[int] = []
-        if should_archive:
-            archived_ids: set[str] = set()
-            for sid in abs_steps:
-                if sid in archived_ids:
-                    continue
-                try:
-                    node = session.root.locate_node(sid)
-                    idx = len(session.runtime.deleted_archive)
-                    entry = _archive_node(node, session)
-                    session.runtime.deleted_archive.append(entry)
-                    archived_ids.add(sid)
-                    archived_indices.append(idx)
-                except NodeNotFound:
-                    pass
+        archived_ids: set[str] = set()
+        for sid in abs_steps:
+            if sid in archived_ids:
+                continue
+            try:
+                node = session.root.locate_node(sid)
+                idx = len(session.runtime.deleted_archive)
+                entry = _archive_node(node, session)
+                session.runtime.deleted_archive.append(entry)
+                archived_ids.add(sid)
+                archived_indices.append(idx)
+            except NodeNotFound:
+                pass
         try:
             not_found = await session.root.delete(abs_steps)
             if len(not_found) == len(abs_steps):
