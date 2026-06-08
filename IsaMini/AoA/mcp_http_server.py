@@ -44,17 +44,19 @@ from .model import (
     EvaluationStatus, WorkerHandle, EditVerdict, _is_strict_ancestor,
     Parse_Op_List, Interaction_BadAnswer,
     AnswerIndexes, AnswerIndex, AnswerIndexesOrName, AnswerIndexesOrSpec,
-    AnswerInstantiate, AnswerRefutation,
+    AnswerInstantiate, AnswerRefutation, AnswerStruggleAssessment,
     TOOL_EDIT, TOOL_DELETE, TOOL_READ, TOOL_RECALL_REMOVED,
     TOOL_REQUEST_LEMMAS, TOOL_REPORT, TOOL_SUBAGENT, TOOL_CLOSE_SUBAGENT,
     DeletedEntry,
     TOOL_ANSWER_INDEXES, TOOL_ANSWER_INDEX, TOOL_ANSWER_INDEXES_OR_NAME,
     TOOL_ANSWER_INDEXES_OR_SPEC, TOOL_ANSWER_INSTANTIATE,
-    TOOL_ANSWER_REFUTATION,
+    TOOL_ANSWER_REFUTATION, TOOL_ANSWER_STRUGGLE_ASSESSMENT,
+    Interaction_StruggleCheckpoint,
     ANSWER_TOOLS,
     ALL_PROOF_TOOLS,
     Role_Worker,
-    Surrender, Refute,
+    Surrender, Refute, Refresh,
+    TOOL_REFRESH,
     print_indent,
 )
 import yaml as _yaml
@@ -88,9 +90,11 @@ _cc_answer_indexes_or_name_schema = _load_schema("cc_answer_indexes_or_name.json
 _cc_answer_indexes_or_spec_schema = _load_schema("cc_answer_indexes_or_spec.jsonc")
 _cc_answer_instantiate_schema = _load_schema("cc_answer_instantiate.jsonc")
 _cc_answer_refutation_schema = _load_schema("cc_answer_refutation.jsonc")
+_cc_answer_struggle_assessment_schema = _load_schema("cc_answer_struggle_assessment.jsonc")
 _cc_subagent_schema = _load_schema("cc_subagent.jsonc")
 _cc_close_subagent_schema = _load_schema("cc_cancel_subagent.jsonc")
 _cc_recall_removed_schema = _load_schema("cc_recall_removed.jsonc")
+_cc_refresh_schema = _load_schema("cc_refresh.jsonc")
 
 
 
@@ -346,6 +350,8 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         if finished:
             await session.interrupt()
         is_error = outcome.failure is not None and outcome.failure.is_error
+        if not is_error:
+            session._session_edit_count += 1
         session.log_tool_response(_tn, response)
         session.log_proof_tree_snapshot(f"after_{action}_step_{abs_step}")
 
@@ -469,6 +475,14 @@ async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
                     response += f"\nArchived as entries {idx_str}. Use `{_tn_rr}` to review."
             if finished:
                 await session.interrupt()
+            if deleted:
+                session._session_delete_count += 1
+            if (not finished
+                    and session.is_worker
+                    and session._should_struggle_checkpoint()):
+                checkpoint_feedback = await _run_struggle_checkpoint(session)
+                if checkpoint_feedback is not None:
+                    response = response + "\n\n---\n" + checkpoint_feedback
         except AoA_Error as e:
             del session.runtime.deleted_archive[archive_len_before:]
             error_msg = str(e)
@@ -557,6 +571,10 @@ async def _answer_tool_dispatch(session: Session, tool_name: str, args: dict) ->
                 payload = AnswerRefutation(
                     accept=bool(args["accept"]),
                     reason=args["reason"])
+            case "answer_struggle_assessment":
+                payload = AnswerStruggleAssessment(
+                    is_stuck=bool(args["is_stuck"]),
+                    summary=args.get("summary", ""))
             case _:
                 error_msg = f"Unknown answer tool: {tool_name}"
                 session.log_tool_response(_tn, f"ERROR: {error_msg}")
@@ -907,6 +925,69 @@ async def _recall_removed_tool_logic(session: Session, args: dict) -> tuple[str,
     result = header + f"[Line {start}–{end_line} of {total}]\n" + "".join(selected)
     session.log_tool_response(_tn, result)
     return (result, False)
+
+
+async def _run_struggle_checkpoint(session: Session) -> str | None:
+    """Fork an assessment of whether the worker is stuck, and if so park it
+    via ``WorkerDifficulty`` so the dispatcher can intervene.
+
+    Returns the dispatcher's feedback string when the worker was parked and
+    resumed, or ``None`` if the assessment concluded the worker is not stuck
+    (or the assessment fork failed)."""
+    from .model import WorkerDifficulty, Role_Worker, MyIO
+    if not isinstance(session.role, Role_Worker):
+        return None
+    handle = session.role.worker_handle
+    target = session.role.target
+    if handle is None:
+        return None
+
+    delete_count = session._session_delete_count
+    edit_count = session._session_edit_count
+    checkpoint_num = session._struggle_checkpoint_count + 1
+
+    interaction = Interaction_StruggleCheckpoint(
+        target=target,
+        delete_count=delete_count,
+        edit_count=edit_count,
+        checkpoint_number=checkpoint_num,
+    )
+
+    try:
+        is_stuck, summary = await session.fork_interaction(interaction)
+    except Exception as e:
+        session.warn_AoA_opr(
+            f"Struggle checkpoint fork failed: {type(e).__name__}: {e}")
+        session._reset_struggle_counters()
+        return None
+
+    session._struggle_checkpoint_count = checkpoint_num
+    session._reset_struggle_counters()
+
+    if not is_stuck:
+        session.log_interaction("struggle_checkpoint",
+            f"checkpoint #{checkpoint_num}: not stuck. {summary}")
+        return None
+
+    buf = StringIO()
+    session.quickview_proof_scope(0, MyIO(buf))
+    quickview = buf.getvalue()
+    detail = (
+        f"[System checkpoint #{checkpoint_num}] "
+        f"After {edit_count} edit calls and {delete_count} delete calls, "
+        f"an assessment found this worker is stuck:\n{summary}\n\n"
+        f"Current proof state:\n{quickview}")
+
+    fut: asyncio.Future = asyncio.get_running_loop().create_future()
+    handle._event_queue.put_nowait(
+        WorkerDifficulty(detail=detail, response_future=fut))
+    feedback = await fut
+
+    await session._prefetch_worker_premises()
+    session.refresh_YAML()
+    session.log_interaction("struggle_checkpoint",
+        f"checkpoint #{checkpoint_num}: stuck, parked, resumed with: {feedback}")
+    return feedback
 
 
 async def _report_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
@@ -1333,6 +1414,38 @@ async def _close_subagent_tool_logic(session: Session, args: dict) -> tuple[str,
     return (msg, False)
 
 
+_REFRESH_COOLDOWN_CALLS = 50
+
+async def _refresh_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
+    _tn = session.tool_name(TOOL_REFRESH)
+    session.log_tool_call(_tn, args)
+    if session.fork_pending is not None:
+        msg = "Refresh is not applicable in this context."
+        session.log_tool_response(_tn, msg)
+        return (msg, True)
+    if session.quit_info is not None:
+        msg = "Cannot refresh — another operation is pending."
+        session.log_tool_response(_tn, msg)
+        return (msg, True)
+    calls_since = session.total_tool_calls - session._total_calls_at_last_refresh
+    if calls_since < _REFRESH_COOLDOWN_CALLS:
+        remaining = _REFRESH_COOLDOWN_CALLS - calls_since
+        msg = (f"Cannot refresh yet — you must make at least {remaining} more "
+               "tool calls first. Keep working: try a different approach.")
+        session.log_tool_response(_tn, msg)
+        return (msg, True)
+    text = (args.get("briefing") or "").strip()
+    if not text:
+        msg = "The `briefing` field must not be empty."
+        session.log_tool_response(_tn, msg)
+        return (msg, True)
+    session.quit_info = Refresh(briefing=text)
+    await session.interrupt()
+    msg = "Context refresh initiated."
+    session.log_tool_response(_tn, msg)
+    return (msg, False)
+
+
 # ============================================================================
 # ToolExecutor — Direct In-Process Tool Dispatch
 # ============================================================================
@@ -1363,9 +1476,14 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "answer_indexes_or_name": {"description": "Answer by selecting indexes or providing an exact fact name", "schema": _cc_answer_indexes_or_name_schema, "annotations": _ACT},
     "answer_indexes_or_spec": {"description": "Answer by selecting indexes or providing an Isabelle proposition", "schema": _cc_answer_indexes_or_spec_schema, "annotations": _ACT},
     "answer_instantiate": {"description": "Answer by providing schematic-variable instantiations", "schema": _cc_answer_instantiate_schema, "annotations": _ACT},
-    "answer_refutation": {"description": "Accept or reject a worker's claim that the goal is unprovable", "schema": _cc_answer_refutation_schema, "annotations": _ACT},
+    "answer_refutation": {"description": "Accept or reject a subagent's claim that the goal is unprovable", "schema": _cc_answer_refutation_schema, "annotations": _ACT},
+    "answer_struggle_assessment": {"description": "Internal tool; you will be explicitly prompted when to use it.", "schema": _cc_answer_struggle_assessment_schema, "annotations": _ACT},
     "subagent": {"description": "Launch or resume a sub-agent to prove a goal or repair a proof in isolation. Call this when a goal is tedious and its proof would derail your main line of reasoning. Also call this to resume a suspended sub-agent.", "schema": _cc_subagent_schema, "annotations": _ACT},
     "cancel_subagent": {"description": "Permanently cancel and delete a sub-agent you dispatched.", "schema": _cc_close_subagent_schema, "annotations": _ACT},
+    "refresh": {"description": "Reset the conversation and start over (the proof tree is kept). "
+                "Write a briefing for your future self in `briefing` — "
+                "it becomes your only memory. Use when your edits keep failing.",
+                "schema": _cc_refresh_schema, "annotations": _ACT},
 }
 
 
@@ -1471,6 +1589,8 @@ class ToolExecutor:
                     async with self._tool_lock:
                         result, is_error = await _close_subagent_tool_logic(session, arguments)
                     session.last_proof_op_time = time()
+                case "refresh":
+                    result, is_error = await _refresh_tool_logic(session, arguments)
                 case _:
                     return (f"Unknown tool: {name}", True)
         except (ConnectionError, EOFError):

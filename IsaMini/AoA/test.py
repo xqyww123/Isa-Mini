@@ -66,6 +66,8 @@ class ModelTestCase(TestCase):
                 if isinstance(interaction, (Interaction_SelectIHFacts,
                                             Interaction_ClassifyInductionVars)):
                     return await interaction.answer(AnswerIndexes(indexes=[]))
+                if isinstance(interaction, Interaction_StruggleCheckpoint):
+                    return (False, "test: not stuck")
                 raise NotImplementedError(
                     "Unstubbed interaction in model test: "
                     f"{type(interaction).__name__}")
@@ -3735,6 +3737,49 @@ async def _test_SufficesStructured(root: Root, file: MyIO):
     })])
     print_header("After Suffices with for_any", file)
     root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("2.1", [Obvious.gen_single({"facts": []})])
+    print_header("After proving implication", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("3", [Obvious.gen_single({"facts": []})])
+    print_header("After closing suffices goal", file)
+    root.print(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+@model_test("SufficesPartialForAny", "Test_SufficesPartialForAny.thy", 8)
+async def _test_SufficesPartialForAny(root: Root, file: MyIO):
+    """Suffices where for_any fixes only some variables and the conclusion
+    contains additional ∀-quantifiers.  Previously raised
+    'SUFFICES: expected 2 variable binding(s) but got 1'."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("1", [Intro.gen_single({
+        "thought": "introduce the universal quantifier"
+    })])
+    print_header("After Intro", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    outcome = await root.fill("2", [Suffices.gen_single({
+        "thought": "suffices to show universally for n, with m still quantified",
+        "statement": {
+            "english": "n + m >= n for any m",
+            "for_any": [{"name": "n", "type": "nat"}],
+            "conclusion": r"\<forall>(m::nat). n + m \<ge> n"
+        },
+    })])
+    [suffices_node] = outcome.committed
+    print_header("After Suffices with partial for_any", file)
+    root.print(0, file)
+    file.write(f"Suffices status: {suffices_node.status.status.value}\n")
 
     root.session.age += 1
     await root.fill("2.1", [Obvious.gen_single({"facts": []})])
@@ -12489,6 +12534,91 @@ async def _test_subagent_empty_step_id(root: Root, file: MyIO):
     finally:
         session.role = model.Role_Major()
         H.worker_handle = None
+
+
+@model_test("StruggleCheckpoint", "Test_StruggleCheckpoint.thy", 11)
+async def _test_StruggleCheckpoint(root: Root, file: MyIO):
+    """Test the struggle checkpoint detection and reset logic.
+
+    Verifies:
+    - _should_struggle_checkpoint returns False for planners
+    - _should_struggle_checkpoint returns True when thresholds are met for workers
+    - _reset_struggle_counters zeros counters and lowers thresholds
+    - fork_interaction stub returns (False, "test: not stuck")
+    - Counters interact correctly with the Interaction_StruggleCheckpoint type
+    """
+    from .model import WorkerHandle
+    session = root.session
+
+    # --- 1. Planner never triggers ---
+    print_header("planner: never triggers", file)
+    session._session_edit_count = 100
+    session._session_delete_count = 100
+    file.write(f"planner _should_struggle_checkpoint: {session._should_struggle_checkpoint()}\n")
+    session._session_edit_count = 0
+    session._session_delete_count = 0
+
+    # --- 2. Set up a worker ---
+    session.age += 1
+    goal_node = root.sub_nodes[1]
+    await goal_node.fill("1", [Have.gen_single({
+        "thought": "target",
+        "statement": {"english": "trivial", "conclusion": "True"},
+        "name": "h_target",
+    })])
+    have_node = goal_node.sub_nodes[0]
+    handle = WorkerHandle(have_node, session)
+    session.role = model.Role_Worker(target=have_node, worker_handle=handle)
+
+    try:
+        # --- 3. Below threshold: should NOT trigger ---
+        print_header("worker: below threshold", file)
+        session._session_edit_count = 29
+        session._session_delete_count = 5
+        file.write(f"edit=29 delete=5: {session._should_struggle_checkpoint()}\n")
+
+        session._session_edit_count = 30
+        session._session_delete_count = 4
+        file.write(f"edit=30 delete=4: {session._should_struggle_checkpoint()}\n")
+
+        # --- 4. At threshold: SHOULD trigger ---
+        print_header("worker: at threshold", file)
+        session._session_edit_count = 30
+        session._session_delete_count = 5
+        file.write(f"edit=30 delete=5: {session._should_struggle_checkpoint()}\n")
+
+        session._session_edit_count = 50
+        session._session_delete_count = 10
+        file.write(f"edit=50 delete=10: {session._should_struggle_checkpoint()}\n")
+
+        # --- 5. Reset and verify escalation ---
+        print_header("reset and escalation", file)
+        session._session_edit_count = 30
+        session._session_delete_count = 5
+        session._reset_struggle_counters()
+        file.write(f"after reset: edit={session._session_edit_count} delete={session._session_delete_count}\n")
+        file.write(f"new thresholds: edit={session._struggle_edit_threshold} delete={session._struggle_delete_threshold}\n")
+
+        # --- 6. After reset: lower thresholds ---
+        print_header("after reset: lower thresholds", file)
+        session._session_edit_count = 14
+        session._session_delete_count = 2
+        file.write(f"edit=14 delete=2: {session._should_struggle_checkpoint()}\n")
+
+        session._session_edit_count = 15
+        session._session_delete_count = 3
+        file.write(f"edit=15 delete=3: {session._should_struggle_checkpoint()}\n")
+
+        # --- 7. Fork interaction stub returns "not stuck" ---
+        print_header("fork interaction stub", file)
+        interaction = Interaction_StruggleCheckpoint(
+            target=have_node, delete_count=5, edit_count=30, checkpoint_number=1)
+        result = await session.fork_interaction(interaction)
+        file.write(f"fork result: {result}\n")
+
+    finally:
+        session.role = model.Role_Major()
+        have_node.worker_handle = None
 
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):

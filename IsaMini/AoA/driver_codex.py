@@ -178,10 +178,16 @@ class Codex_Driver(LMDriver):
 
     async def _codex_loop(self):
         self._budget_start_time = time()
-        prompt = await self.initial_prompt()
+        prompt: str = await self.initial_prompt()
         codex_session_id: str | None = None
 
         while True:  # outer restart loop
+            if self._refresh_summary is not None:
+                prompt = ((await self.initial_prompt())
+                          + "\n\nPrevious attempts (do NOT repeat these):\n"
+                          + self._refresh_summary
+                          + "\n\nTry a completely different proof strategy.")
+                self._refresh_summary = None
             while True:
                 if codex_session_id is None:
                     cmd = self._build_exec_cmd(prompt)
@@ -215,8 +221,21 @@ class Codex_Driver(LMDriver):
                 else:
                     break
 
-            if not isinstance(self.quit_info, Restart):
+            if not isinstance(self.quit_info, (Restart, Refresh)):
                 break
+
+            if isinstance(self.quit_info, Refresh):
+                self._refresh_summary = self.quit_info.briefing
+                self.quit_info = None
+                self._reset_view_state()
+                self.runtime.age += 1
+                self.refresh_YAML()
+                codex_session_id = None
+                self._total_calls_at_last_refresh = self.total_tool_calls
+                self.log_AoA_opr("Context refreshed")
+                self._log_meta("REFRESH", briefing=self._refresh_summary)
+                continue
+
             self.quit_info = None
             self.refresh_YAML()
             codex_session_id = None

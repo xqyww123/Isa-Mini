@@ -82,6 +82,7 @@ class ClaudeCode(LMDriver):
         "answer_indexes_or_spec": "mcp__proof__answer_indexes_or_spec",
         "answer_instantiate": "mcp__proof__answer_instantiate",
         "answer_refutation": "mcp__proof__answer_refutation",
+        "answer_struggle_assessment": "mcp__proof__answer_struggle_assessment",
     }
     TOOL_WHITELIST = _NON_PROOF_TOOLS + list(_TOOL_NAME_MAP.values())
     # subagent/cancel_subagent are dispatch tools (the main agent AND workers); only
@@ -452,7 +453,13 @@ class ClaudeCode(LMDriver):
                 async with ClaudeSDKClient(options=self.options) as client:
                     self._client = client
                     self.refresh_YAML()
-                    await client.query(await self.initial_prompt())
+                    prompt = await self.initial_prompt()
+                    if self._refresh_summary is not None:
+                        prompt += ("\n\nPrevious attempts (do NOT repeat these):\n"
+                                   + self._refresh_summary
+                                   + "\n\nTry a completely different proof strategy.")
+                        self._refresh_summary = None
+                    await client.query(prompt)
                     self._model_time_start = time()
                     while True:
                         async for message in client.receive_response():
@@ -491,8 +498,18 @@ class ClaudeCode(LMDriver):
             finally:
                 self._client = None
 
-            if not isinstance(self.quit_info, Restart):
+            if not isinstance(self.quit_info, (Restart, Refresh)):
                 break
+
+            if isinstance(self.quit_info, Refresh):
+                self._refresh_summary = self.quit_info.briefing
+                self.quit_info = None
+                self._reset_view_state()
+                self.runtime.age += 1
+                self._total_calls_at_last_refresh = self.total_tool_calls
+                self.log_AoA_opr("Context refreshed")
+                self._log_meta("REFRESH", briefing=self._refresh_summary)
+                continue
 
             self.quit_info = None
             self.log_AoA_opr("Context restarted")

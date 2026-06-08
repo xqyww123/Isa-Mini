@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "properties": {
+    "is_stuck": {
+      "type": "boolean",
+      "description": "true if the worker appears stuck (repeating failed approaches, no progress), false if making slow but meaningful progress"
+    },
+    "summary": {
+      "type": "string",
+      "description": "Brief assessment of the worker's situation"
+    }
+  },
+  "required": ["is_stuck", "summary"],
+  "additionalProperties": false
+}

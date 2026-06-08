@@ -584,7 +584,14 @@ class Restart:
     is_terminal: ClassVar[bool] = False
     detail: str | None = None
 
-QuitInfo = ResourceExhausted | Surrender | Refute | Restart
+@dataclass
+class Refresh:
+    reason: ClassVar[str] = "refresh"
+    is_terminal: ClassVar[bool] = False
+    briefing: str = ""
+    detail: str | None = None
+
+QuitInfo = ResourceExhausted | Surrender | Refute | Restart | Refresh
 
 
 class DriverArgumentError(AoA_Error):
@@ -2120,9 +2127,14 @@ class AnswerRefutation:
     accept: bool
     reason: str
 
+@dataclass(frozen=True)
+class AnswerStruggleAssessment:
+    is_stuck: bool
+    summary: str
+
 AnswerPayload = (AnswerIndexes | AnswerIndex | AnswerIndexesOrName
                  | AnswerIndexesOrSpec | AnswerInstantiate
-                 | AnswerRefutation)
+                 | AnswerRefutation | AnswerStruggleAssessment)
 
 class DeletedEntry(NamedTuple):
     summary: str
@@ -2140,6 +2152,7 @@ TOOL_REQUEST_LEMMAS: tool = "request_lemmas"
 TOOL_REPORT: tool = "report"
 TOOL_SUBAGENT: tool = "subagent"
 TOOL_CLOSE_SUBAGENT: tool = "cancel_subagent"
+TOOL_REFRESH: tool = "refresh"
 
 TOOL_ANSWER_INDEXES:        tool = "answer_indexes"
 TOOL_ANSWER_INDEX:          tool = "answer_index"
@@ -2147,17 +2160,18 @@ TOOL_ANSWER_INDEXES_OR_NAME: tool = "answer_indexes_or_name"
 TOOL_ANSWER_INDEXES_OR_SPEC: tool = "answer_indexes_or_spec"
 TOOL_ANSWER_INSTANTIATE:    tool = "answer_instantiate"
 TOOL_ANSWER_REFUTATION:     tool = "answer_refutation"
+TOOL_ANSWER_STRUGGLE_ASSESSMENT: tool = "answer_struggle_assessment"
 
 ANSWER_TOOLS: frozenset[tool] = frozenset({
     TOOL_ANSWER_INDEXES, TOOL_ANSWER_INDEX, TOOL_ANSWER_INDEXES_OR_NAME,
     TOOL_ANSWER_INDEXES_OR_SPEC, TOOL_ANSWER_INSTANTIATE,
-    TOOL_ANSWER_REFUTATION,
+    TOOL_ANSWER_REFUTATION, TOOL_ANSWER_STRUGGLE_ASSESSMENT,
 })
 
 ALL_PROOF_TOOLS: tuple[tool, ...] = (
     TOOL_EDIT, TOOL_DELETE, TOOL_SEARCH, TOOL_READ,
     TOOL_RECALL_REMOVED, TOOL_REQUEST_LEMMAS, TOOL_REPORT,
-    TOOL_SUBAGENT, TOOL_CLOSE_SUBAGENT,
+    TOOL_SUBAGENT, TOOL_CLOSE_SUBAGENT, TOOL_REFRESH,
     *ANSWER_TOOLS,
 )
 
@@ -2272,6 +2286,42 @@ class Interaction_ReviewRefutation(Interaction):
     @property
     def session(self) -> 'Session':
         return self.worker_handle.session
+
+
+class Interaction_StruggleCheckpoint(Interaction):
+    """Assess whether a worker is genuinely stuck or making slow progress.
+
+    Spawned automatically when a worker's delete/edit counters hit the struggle
+    thresholds.  A cheap fork (Sonnet, no parent context) views the proof state
+    and returns ``(is_stuck, summary)``."""
+    forking = ForkingMode.FORKING_CHEAPER_NO_CTXT
+    fork_allowed_tools = [TOOL_ANSWER_STRUGGLE_ASSESSMENT]
+
+    def __init__(self, target: 'NonLeaf_Node',
+                 delete_count: int, edit_count: int,
+                 checkpoint_number: int):
+        self.target = target
+        self.delete_count = delete_count
+        self.edit_count = edit_count
+        self.checkpoint_number = checkpoint_number
+
+    async def prompt(self, indent: int, file: MyIO) -> None:
+        session = the_session()
+        file.write(
+            f"A sub-agent working on step {session._display_id(self.target.id)} "
+            f"has called the edit tool {self.edit_count} times and the delete "
+            f"tool {self.delete_count} times (checkpoint #{self.checkpoint_number}).\n\n"
+            f"Current proof state of this sub-agent:\n")
+        session.quickview_proof_scope(indent, file)
+        file.write(
+            f"\nIs this worker genuinely stuck (repeating failed approaches, "
+            f"no visible progress) or making slow but meaningful progress?\n"
+            f"Call `{tn(TOOL_ANSWER_STRUGGLE_ASSESSMENT)}` with:\n"
+            f"  - is_stuck: true if the worker appears stuck, false if making progress\n"
+            f"  - summary: brief assessment of the worker's situation\n")
+
+    async def answer(self, answer: 'AnswerStruggleAssessment') -> 'tuple[bool, str]':
+        return (answer.is_stuck, answer.summary)
 
 
 class Fork_Pending(NamedTuple):
@@ -8994,6 +9044,8 @@ class Session:
         self.total_isabelle_time: float = 0.0
         self.total_model_time: float = 0.0
         self.total_quota_wait_time: float = 0.0
+        self._total_calls_at_last_refresh: int = 0
+        self._refresh_summary: str | None = None
         if parent is not None:
             self.timeout_seconds = parent.timeout_seconds
             self.max_tool_calls = parent.max_tool_calls
@@ -9004,6 +9056,11 @@ class Session:
             self.max_retries = max_retries
         self._retry_count: int = 0
         self.quit_info: 'QuitInfo | None' = None
+        self._session_edit_count: int = 0
+        self._session_delete_count: int = 0
+        self._struggle_edit_threshold: int = 30
+        self._struggle_delete_threshold: int = 5
+        self._struggle_checkpoint_count: int = 0
         self.retrieval_forking_mode: ForkingMode = (
             parent.retrieval_forking_mode if parent is not None
             else retrieval_forking_mode)
@@ -9363,6 +9420,9 @@ class Session:
                 f"- {self.tool_name(TOOL_READ)}: Recall proof state from `proof.yaml`. Use only when you have lost track.\n"
                 f"- {self.tool_name(TOOL_RECALL_REMOVED)}: Browse deleted proof steps that were archived before removal.\n"
                 f"- {self.tool_name(TOOL_REQUEST_LEMMAS)}: Report missing background lemmas and request that they be supplied.\n"
+                f"- {self.tool_name(TOOL_REFRESH)}: Reset the conversation and start over (the proof tree is kept). "
+                "Write a briefing for your future self in `briefing` — it becomes your only memory. "
+                "Use when your edits keep failing.\n"
             )
         parts = [PROMPT]
         # report is shown to workers only.
@@ -9682,6 +9742,23 @@ class Session:
             self.log_budget_exhausted(reason)
             return True
         return False
+
+    def _should_struggle_checkpoint(self) -> bool:
+        """True when this worker's edit/delete counters hit the struggle
+        thresholds.  Only fires for workers; planners and interaction forks
+        are excluded.  Drivers may override."""
+        if not self.is_worker:
+            return False
+        return (self._session_delete_count >= self._struggle_delete_threshold
+                and self._session_edit_count >= self._struggle_edit_threshold)
+
+    def _reset_struggle_counters(self) -> None:
+        """Zero the counters and lower thresholds for subsequent checkpoints.
+        Drivers may override to change the escalation policy."""
+        self._session_delete_count = 0
+        self._session_edit_count = 0
+        self._struggle_delete_threshold = 3
+        self._struggle_edit_threshold = 15
 
     # Proof tree logging methods
     def log_proof_operation(self, step: str, operation: str, details: dict[str, Any]):

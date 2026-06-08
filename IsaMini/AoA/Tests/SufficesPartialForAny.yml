@@ -1,0 +1,107 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (∀n (m :: nat). n ≤ n + m) ⟶ (2 :: nat) ≤ (2 :: nat) + (3 :: nat)
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: ∀n (m :: nat). n ≤ n + m
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  (2 :: nat) ≤ (2 :: nat) + (3 :: nat)
+--------------------------------------------------
+After Intro
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (∀n (m :: nat). n ≤ n + m) ⟶ (2 :: nat) ≤ (2 :: nat) + (3 :: nat)
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: ∀n (m :: nat). n ≤ n + m
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  (2 :: nat) ≤ (2 :: nat) + (3 :: nat)
+--------------------------------------------------
+After Suffices with partial for_any
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (∀n (m :: nat). n ≤ n + m) ⟶ (2 :: nat) ≤ (2 :: nat) + (3 :: nat)
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: ∀n (m :: nat). n ≤ n + m
+  - step id: 2
+    thought: suffices to show universally for n, with m still quantified
+    operation: Suffices
+    statement:
+      english: n + m >= n for any m
+      for_any:
+        n: nat
+      conclusion: \<forall>(m::nat). n + m \<ge> n
+    notice: Need to show the provided statement implies the goal
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
+    pending proof goal:
+      (∀n (m :: nat). n ≤ n + m) ⟶ (2 :: nat) ≤ (2 :: nat) + (3 :: nat)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  variables:
+    - n: nat
+    - m: nat
+  goal: n ≤ n + m
+Suffices status: success
+--------------------------------------------------
+After proving implication
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (∀n (m :: nat). n ≤ n + m) ⟶ (2 :: nat) ≤ (2 :: nat) + (3 :: nat)
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: ∀n (m :: nat). n ≤ n + m
+  - step id: 2
+    thought: suffices to show universally for n, with m still quantified
+    operation: Suffices
+    statement:
+      english: n + m >= n for any m
+      for_any:
+        n: nat
+      conclusion: \<forall>(m::nat). n + m \<ge> n
+    proof:
+      - step id: 2.1
+        operation: Obvious
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  variables:
+    - n: nat
+    - m: nat
+  goal: n ≤ n + m
+--------------------------------------------------
+After closing suffices goal
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (∀n (m :: nat). n ≤ n + m) ⟶ (2 :: nat) ≤ (2 :: nat) + (3 :: nat)
+proof:
+  - step id: 1
+    operation: Intro
+    assuming premises:
+      - premise0: ∀n (m :: nat). n ≤ n + m
+  - step id: 2
+    thought: suffices to show universally for n, with m still quantified
+    operation: Suffices
+    statement:
+      english: n + m >= n for any m
+      for_any:
+        n: nat
+      conclusion: \<forall>(m::nat). n + m \<ge> n
+    proof:
+      - step id: 2.1
+        operation: Obvious
+  - step id: 3
+    operation: Obvious
+Unfinished nodes: 0

@@ -1106,8 +1106,24 @@ class APIDriver(LMDriver):
                         self._msgs_sent_through = 0
                     self._messages = compacted
 
-            if not isinstance(self.quit_info, Restart):
+            if not isinstance(self.quit_info, (Restart, Refresh)):
                 break
+
+            if isinstance(self.quit_info, Refresh):
+                refresh_info = self.quit_info
+                self._interrupted = False
+                self.quit_info = None
+                self.runtime.age += 1
+                self._messages = await self._compact(
+                    self._messages, tools,
+                    recent_rounds=0,
+                    append_briefing=refresh_info.briefing)
+                self._last_response_id = None
+                self._msgs_sent_through = 0
+                self._total_calls_at_last_refresh = self.total_tool_calls
+                self.log_AoA_opr("Context refreshed")
+                self._log_meta("REFRESH", briefing=refresh_info.briefing)
+                continue
 
             self._interrupted = False
             self.quit_info = None
@@ -1173,12 +1189,20 @@ class APIDriver(LMDriver):
                     return i
         return len(await self._initial_messages())
 
-    async def _compact(self, messages: list[Msg], tools: list[dict]) -> list[Msg]:
+    async def _compact(self, messages: list[Msg], tools: list[dict], *,
+                       recent_rounds: int | None = None,
+                       summary_label: str = "Previous progress",
+                       append_briefing: str | None = None) -> list[Msg]:
         self.log_AoA_opr(
             f"Compaction triggered: {len(messages)} messages, "
             f"input={self.total_input_tokens} output={self.total_output_tokens}")
-        recent_start = await self._find_recent_start(messages)
-        recent_messages = messages[recent_start:]
+
+        effective_rounds = recent_rounds if recent_rounds is not None else self.COMPACTION_RECENT_ROUNDS
+        if effective_rounds == 0:
+            recent_messages: list[Msg] = []
+        else:
+            recent_start = await self._find_recent_start(messages)
+            recent_messages = messages[recent_start:]
 
         messages.append(UserMsg(COMPACTION_PROMPT))
         try:
@@ -1197,8 +1221,13 @@ class APIDriver(LMDriver):
         sp = self.system_prompt()
         if sp is not None:
             new_messages.append(SystemMsg(sp))
+        suffix = f"\n\n{summary_label}:\n" + summary
+        if append_briefing is not None:
+            suffix += ("\n\nAgent's briefing (do NOT repeat these dead ends):\n"
+                       + append_briefing
+                       + "\n\nTry a completely different proof strategy.")
         new_messages.append(UserMsg(
-            (await self.initial_prompt()) + "\n\nPrevious progress:\n" + summary))
+            (await self.initial_prompt()) + suffix))
         new_messages.extend(recent_messages)
         est = self.estimate_tokens(new_messages)
         self.log_AoA_opr(f"Compacted to ~{est} tokens ({len(new_messages)} messages). Summary: {summary[:200]}...")
@@ -1659,7 +1688,7 @@ class APIDriver_DeepSeekV4(APIDriver):
     """
 
     DEFAULT_MODEL = "deepseek-v4-flash"
-    SUBAGENT_NESTING_DEPTH = 1  # allow only a single layer of sub-agents
+    SUBAGENT_NESTING_DEPTH = 2
 
     def __init__(self, *args, provider: Provider | None = None,
                  argument: str | None = None, **kwargs):

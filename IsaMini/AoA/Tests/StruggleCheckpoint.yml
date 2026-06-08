@@ -1,0 +1,28 @@
+--------------------------------------------------
+planner: never triggers
+--------------------------------------------------
+planner _should_struggle_checkpoint: False
+--------------------------------------------------
+worker: below threshold
+--------------------------------------------------
+edit=29 delete=5: False
+edit=30 delete=4: False
+--------------------------------------------------
+worker: at threshold
+--------------------------------------------------
+edit=30 delete=5: True
+edit=50 delete=10: True
+--------------------------------------------------
+reset and escalation
+--------------------------------------------------
+after reset: edit=0 delete=0
+new thresholds: edit=15 delete=3
+--------------------------------------------------
+after reset: lower thresholds
+--------------------------------------------------
+edit=14 delete=2: False
+edit=15 delete=3: True
+--------------------------------------------------
+fork interaction stub
+--------------------------------------------------
+fork result: (False, 'test: not stuck')

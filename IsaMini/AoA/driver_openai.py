@@ -153,6 +153,11 @@ class OpenAI_Driver(LMDriver):
             async with mcp:
                 while True:  # outer restart loop (mirrors codex/api re-route)
                     prompt: str | None = await self.initial_prompt()
+                    if self._refresh_summary is not None:
+                        prompt += ("\n\nPrevious attempts (do NOT repeat these):\n"
+                                   + self._refresh_summary
+                                   + "\n\nTry a completely different proof strategy.")
+                        self._refresh_summary = None
                     last_response_id: str | None = None
                     while True:
                         self._model_time_start = time()
@@ -196,8 +201,20 @@ class OpenAI_Driver(LMDriver):
                     # Restart re-route: a pending Restart() exits the inner loop
                     # (via the quit_info guard / check_budget) and is re-entered
                     # here; any other exit (terminal / proof-complete) breaks out.
-                    if not isinstance(self.quit_info, Restart):
+                    if not isinstance(self.quit_info, (Restart, Refresh)):
                         break
+
+                    if isinstance(self.quit_info, Refresh):
+                        self._refresh_summary = self.quit_info.briefing
+                        self.quit_info = None
+                        self._reset_view_state()
+                        self.runtime.age += 1
+                        self.refresh_YAML()
+                        self._total_calls_at_last_refresh = self.total_tool_calls
+                        self.log_AoA_opr("Context refreshed")
+                        self._log_meta("REFRESH", briefing=self._refresh_summary)
+                        continue
+
                     self.quit_info = None
                     self.refresh_YAML()
                     self.log_AoA_opr("Context restarted")

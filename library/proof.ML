@@ -3432,7 +3432,9 @@ fun gen_SUFFICES mk_stmt raw_fixes raw_assumes raw_shows =
             if null raw_fixes andalso null raw_assumes then NONE
             else SOME (intro_var_names, intro_prem_names)
 
-        val _ = case intro_bindings of NONE => ()
+        (* Pad intro_bindings with NONE entries when the conclusion contains
+           additional quantifiers/premises beyond those from for_any/assumes. *)
+        val intro_bindings' = case intro_bindings of NONE => NONE
               | SOME (var_names, prem_names) =>
           let fun count (Const(\<^const_name>\<open>Trueprop\<close>, _) $ t) = count t
                 | count (Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs(_, _, body)) =
@@ -3443,19 +3445,25 @@ fun gen_SUFFICES mk_stmt raw_fixes raw_assumes raw_shows =
               val (nq, np) = count hol_prop
               val nv = length (the_default [] var_names)
               val nn = length (the_default [] prem_names)
-              val _ = if nv > 0 andalso nq <> nv
+              val _ = if nv > nq
                       then raise OPR_FAIL (INVALID_OPR,
                         "SUFFICES: expected " ^ string_of_int nq ^
                         " variable binding(s) but got " ^ string_of_int nv)
                       else ()
-              val _ = if nn > 0 andalso np <> nn
+              val _ = if nn > np
                       then raise OPR_FAIL (INVALID_OPR,
                         "SUFFICES: expected " ^ string_of_int np ^
                         " premise binding(s) but got " ^ string_of_int nn)
                       else ()
-          in () end
+              val var_names' = if nv > 0 andalso nv < nq
+                      then SOME (the_default [] var_names @ replicate (nq - nv) NONE)
+                      else var_names
+              val prem_names' = if nn > 0 andalso nn < np
+                      then SOME (the_default [] prem_names @ replicate (np - nn) NONE)
+                      else prem_names
+          in SOME (var_names', prem_names') end
 
-    in SUFFICES' intro_bindings (K I) hol_prop (ctxt0, SK)
+    in SUFFICES' intro_bindings' (K I) hol_prop (ctxt0, SK)
     end ))
 
 val SUFFICES   = gen_SUFFICES Proof_Context.read_stmt
