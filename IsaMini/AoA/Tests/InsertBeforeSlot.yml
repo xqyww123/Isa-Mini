@@ -1,0 +1,73 @@
+--------------------------------------------------
+Initial
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After fill step 1 (Have)
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: helper lemma
+    operation: Have
+    statement:
+      english: x squared is non-negative
+      conclusion: (0::int) \<le> x * x
+    name: sq_nonneg
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: int) ≤ x * x
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+insert_before('1.1') on slot: failure=None
+insert_before('1.1') committed count: 1
+--------------------------------------------------
+After insert_before on sub-slot 1.1 (fell through to fill)
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: helper lemma
+    operation: Have
+    statement:
+      english: x squared is non-negative
+      conclusion: (0::int) \<le> x * x
+    name: sq_nonneg
+    proof:
+      - step id: 1.1
+        operation: Obvious
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+insert_before('2') on slot: failure=None
+insert_before('2') committed count: 1
+--------------------------------------------------
+After insert_before on top-level slot 2 (fell through to fill)
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: helper lemma
+    operation: Have
+    statement:
+      english: x squared is non-negative
+      conclusion: (0::int) \<le> x * x
+    name: sq_nonneg
+    proof:
+      - step id: 1.1
+        operation: Obvious
+  - step id: 2
+    operation: Obvious
+insert_before('99') nonexistent: failure=CannotEdit_NodeNotFound

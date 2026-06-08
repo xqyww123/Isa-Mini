@@ -154,9 +154,7 @@ class OpenAI_Driver(LMDriver):
                 while True:  # outer restart loop (mirrors codex/api re-route)
                     prompt: str | None = await self.initial_prompt()
                     if self._refresh_summary is not None:
-                        prompt += ("\n\nPrevious attempts (do NOT repeat these):\n"
-                                   + self._refresh_summary
-                                   + "\n\nTry a completely different proof strategy.")
+                        prompt += "\n\nAgent's briefing:\n" + self._refresh_summary
                         self._refresh_summary = None
                     last_response_id: str | None = None
                     while True:

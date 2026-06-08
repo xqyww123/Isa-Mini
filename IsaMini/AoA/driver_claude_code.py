@@ -83,6 +83,7 @@ class ClaudeCode(LMDriver):
         "answer_instantiate": "mcp__proof__answer_instantiate",
         "answer_refutation": "mcp__proof__answer_refutation",
         "answer_struggle_assessment": "mcp__proof__answer_struggle_assessment",
+        "refresh": "mcp__proof__refresh",
     }
     TOOL_WHITELIST = _NON_PROOF_TOOLS + list(_TOOL_NAME_MAP.values())
     # subagent/cancel_subagent are dispatch tools (the main agent AND workers); only
@@ -455,9 +456,7 @@ class ClaudeCode(LMDriver):
                     self.refresh_YAML()
                     prompt = await self.initial_prompt()
                     if self._refresh_summary is not None:
-                        prompt += ("\n\nPrevious attempts (do NOT repeat these):\n"
-                                   + self._refresh_summary
-                                   + "\n\nTry a completely different proof strategy.")
+                        prompt += "\n\nAgent's briefing:\n" + self._refresh_summary
                         self._refresh_summary = None
                     await client.query(prompt)
                     self._model_time_start = time()

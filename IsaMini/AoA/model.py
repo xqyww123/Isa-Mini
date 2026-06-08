@@ -3270,7 +3270,11 @@ class Node(ABC):
         self, step: step, gns: 'list[Parsed_Opr]',
     ) -> 'EditOutcome':
         """Insert `gns` as siblings before `step`, in order.  Returns an
-        `EditOutcome` — never raises AoA_Error."""
+        `EditOutcome` — never raises AoA_Error.
+
+        When `step` names a filling slot rather than an existing node,
+        falls through to `fill` — the agent's intent ("add before the
+        next position") is equivalent to filling that slot."""
         op = EditOperation.INSERT
         outcome = EditOutcome(operation=op, request=gns)
         if not gns:
@@ -3278,6 +3282,15 @@ class Node(ABC):
         try:
             node = self.locate_node(step)
         except NodeNotFound:
+            ids = step.split('.')
+            try:
+                parent = self._locate_node(ids[:-1], step, 0)
+            except NodeNotFound:
+                outcome.failure = CannotEdit_NodeNotFound(
+                    target_step=step, operation=op, unapplied_oprs=list(gns), is_error=True)
+                return outcome
+            if parent._id_of_openning_prf_to_fill() == step:
+                return await self.fill(step, gns)
             outcome.failure = CannotEdit_NodeNotFound(
                 target_step=step, operation=op, unapplied_oprs=list(gns), is_error=True)
             return outcome
@@ -3416,7 +3429,7 @@ class Node(ABC):
                     node._delete_child(node.sub_nodes[i])
                 node._is_trivial = None
                 break
-        if rp is not None:
+        if rp is not None and rp.status.status == EvaluationStatus.Status.SUCCESS:
             await rp._refresh_me_alone(auto_intro=False)
             if rp.parent is not None:
                 await rp._refresh_all_after_me()
@@ -3568,6 +3581,8 @@ class Node(ABC):
         # Refresh each point, skip if already refreshed this session age
         for rp in refresh_points:
             if rp.age < the_session().age:
+                if rp.status.status != EvaluationStatus.Status.SUCCESS:
+                    continue
                 await rp._refresh_me_alone(auto_intro=False)
                 if rp.parent is not None:
                     await rp._refresh_all_after_me()
@@ -3648,7 +3663,7 @@ class Node(ABC):
         # unlinking, or they orphan.
         await old_self.discard()
         rp = old_self._delete_me()
-        if rp is not None:
+        if rp is not None and rp.status.status == EvaluationStatus.Status.SUCCESS:
             await rp._refresh_me_alone(auto_intro=False)
             if rp.parent is not None:
                 await rp._refresh_all_after_me()
@@ -3821,7 +3836,11 @@ class NonLeaf_Node(Node):
         for i, c in enumerate(self.sub_nodes):
             if c is child:
                 if i > 0 and self.sub_nodes[i-1].status.status != EvaluationStatus.Status.SUCCESS:
-                    return self.sub_nodes[i-1].id
+                    pred = self.sub_nodes[i-1]
+                    if (pred.status.status == EvaluationStatus.Status.CANCELLED
+                            and pred._cancelled_by is not None):
+                        return pred._cancelled_by
+                    return pred.id
                 return None
         return None
     async def _refresh_all_children_after(self, after: 'Node | Literal["end"]', can_continue_i: bool) -> None:

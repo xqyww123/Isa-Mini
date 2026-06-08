@@ -1223,9 +1223,7 @@ class APIDriver(LMDriver):
             new_messages.append(SystemMsg(sp))
         suffix = f"\n\n{summary_label}:\n" + summary
         if append_briefing is not None:
-            suffix += ("\n\nAgent's briefing (do NOT repeat these dead ends):\n"
-                       + append_briefing
-                       + "\n\nTry a completely different proof strategy.")
+            suffix += "\n\nAgent's briefing:\n" + append_briefing
         new_messages.append(UserMsg(
             (await self.initial_prompt()) + suffix))
         new_messages.extend(recent_messages)

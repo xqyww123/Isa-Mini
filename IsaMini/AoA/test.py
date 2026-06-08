@@ -637,6 +637,51 @@ async def _test_Rewrite_NoProgress(root: Root, file: MyIO):
     print_header("After Rewrite", file)
     root.print(0, file)
 
+@model_test("Rewrite_OF_ZeroPremise", "Test_Rewrite_OF_ZeroPremise.thy", 10)
+async def _test_Rewrite_OF_ZeroPremise(root: Root, file: MyIO):
+    """Reproduces: discharge: [null] (OF _) on a zero-premise fact causes a hard
+    error in Rewrite but is silently tolerated in Obvious (HAMMER).
+
+    The SIMPLIFY path evaluates facts via Attrib.eval_thms → xOF in aux.ML,
+    which strictly checks premise count.  The HAMMER path passes facts as refs
+    to Sledgehammer's override, bypassing that check.
+
+    LLM agents learn from Obvious that OF _ is universally safe, then hit this
+    error on every Rewrite/Derive with a fully-instantiated zero-premise fact.
+
+    See /tmp/problem_4.md for the original incident (EA6E9592F_20F38CE)."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Step 1: Rewrite with discharge: [null] on h1 (a zero-premise equation).
+    # This should fail: "OF: the fact has 0 premise(s), but 1 discharge
+    # argument(s) were given".  The node is reverted (TERMINATE_AND_REVERT).
+    _outcome = await root.fill("1", [Rewrite.gen_single({
+        "thought": "Rewrite using h1 with spurious discharge",
+        "using": [{"name": "h1", "discharge": [None]}],
+        "use system simplifiers": True,
+        "rewrite goal": True,
+        "rewrite premises": []
+    })])
+    is_error = _outcome.failure is not None and _outcome.failure.is_error
+    reason = _outcome.failure
+    print_header("Rewrite with discharge: [null] on zero-premise fact", file)
+    file.write(f"is_error: {is_error}\n")
+    file.write(f"reason: {reason}\n")
+
+    root.session.age += 1
+
+    # Step 2: Retry Rewrite without discharge — should succeed.
+    _outcome2 = await root.fill("1", [Rewrite.gen_single({
+        "thought": "Rewrite using h1 without discharge",
+        "using": [{"name": "h1"}],
+        "use system simplifiers": True,
+        "rewrite goal": True,
+        "rewrite premises": []
+    })])
+    print_header("Rewrite without discharge (should succeed)", file)
+    root.print(0, file)
+
 @model_test("SuppressParentGoal", "Test_SuppressParentGoal.thy", 10)
 async def _test_SuppressParentGoal(root: Root, file: MyIO):
     """When Rewrite changes the goal, quickview should show 'goal changes into'
@@ -6116,6 +6161,67 @@ async def _test_FactsToGeneralize_ConsumingRule(root: Root, file: MyIO):
         f"`update_tampered` round-trip broke under consumes >= 1.")
 
 
+@model_test("Induction_MetaIHFact", "Test_Induction_MetaIHFact.thy", 10)
+async def _test_Induction_MetaIHFact(root: Root, file: MyIO):
+    """Reproduces CTERM/Trueprop_conv crash when a carried IH fact has
+    meta-level structure (⋀/⟹).
+
+    A Have with `for_any`/`premises` stores a theorem whose prop is
+    `⋀i. Trueprop(...) ⟹ Trueprop(...)`, not a bare `Trueprop(X)`.
+    When this fact is selected for `facts_to_generalize`, `wraps` in
+    proof.ML applies `HOLogic.Trueprop_conv` to it, which raises
+    `CTERM ("Trueprop_conv", ...)` because the theorem's top-level
+    connective is `Pure.all`/`Pure.imp`, not `Trueprop`.
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # Step 1: Have with for_any + premises → meta-level fact
+    root.session.age += 1
+    await root.fill("1", [Have.gen_single({
+        "thought": "bound on f, quantified over i with premise i < n",
+        "statement": {
+            "english": "for every i less than n, f i is less than n",
+            "for_any": [{"name": "i", "type": "nat"}],
+            "premises": [{"name": "hi", "term": "i < n"}],
+            "conclusion": "f i < n",
+        },
+        "name": "h",
+    })])
+    print_header("After Have h (meta-level fact)", file)
+    root.print(0, file)
+
+    # Step 2: Induction on n, generalize f, carry h.
+    # h has prop `⋀i. Trueprop(i < n) ⟹ Trueprop(f i < n)` — NOT
+    # Trueprop at top level → wraps should crash with Trueprop_conv.
+    root.session.age += 1
+    await root.fill("2", [Induction.gen_single({
+        "thought": "induct on n, generalize f, carry the meta-level fact h",
+        "target_isabelle_term": "n :: nat",
+        "variables": [
+            {"name": "n", "status": "fixed"},
+            {"name": "f", "status": "generalized"},
+        ],
+        "IH_facts": [{"name": "h"}],
+    })])
+    print_header("After Induction (should not crash with Trueprop_conv)", file)
+    root.print(0, file)
+
+    # Check whether the induction raised CTERM Trueprop_conv.
+    induct_node = root.locate_node("2")
+    status_str = str(induct_node.status.status)
+    file.write(f"\nInduction status: {status_str}\n")
+    if induct_node.status.status == EvaluationStatus.Status.FAILURE:
+        reason = induct_node.status.reason
+        reason_str = str(reason) if reason else ""
+        file.write(f"Failure reason: {reason_str}\n")
+        if "Trueprop_conv" in reason_str or "CTERM" in reason_str:
+            raise TestFailed(
+                "REPRODUCED: Induction crashes with CTERM/Trueprop_conv "
+                "when an IH fact has meta-level structure (⋀/⟹). "
+                f"Reason: {reason_str}")
+
+
 @model_test("HOL_TAG_Leak", "Test_HOL_TAG_Leak.thy", 31)
 async def _test_HOL_TAG_Leak(root: Root, file: MyIO):
     """REGRESSION: HOL.TAG leaks into the induction hypothesis presented
@@ -10838,6 +10944,96 @@ async def _test_Branch_SorryNextFail_Real(root: Root, file: MyIO):
     root.print(0, file)
 
 
+@model_test("FillCancelledPredecessor", "Test_FillCancelledPredecessor.thy", 11)
+async def _test_FillCancelledPredecessor(root: Root, file: MyIO):
+    """Reproduce: filling a cancelled step whose predecessor's ml_state was
+    reset by the cancellation cascade crashes with InternalError
+    "The beginning state of the execution is not initialized!"
+
+    Scenario (from log EA68457EB): a GoalNode has children
+    [Have(h1), Derive(h1), Derive(hP), Derive(hQ), Obvious].  All succeed.
+    Deleting the Have removes h1 from scope; the parent re-evaluates and
+    the first Derive fails (h1 unfound).  The cancellation cascade resets
+    downstream ml_states: cancel of Derive(hP) resets Derive(hQ).ml_state,
+    cancel of Derive(hQ) resets Obvious.ml_state.  Filling the Obvious
+    deletes it and refreshes the predecessor (Derive(hQ)), whose ml_state
+    was reset — execute hits "beginning_state_not_found" on the ML side."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # The GoalNode for a single-goal proof has id="" — its children are
+    # addressed as "1", "2", ... (no prefix).
+    root.session.age += 1
+    outcome0 = await root.fill("1", [
+        Have.gen_single({
+            "thought": "introduce P from premise",
+            "statement": {"english": "P holds", "conclusion": "P"},
+            "name": "h1"
+        }),
+        Derive.gen_single({
+            "thought": "copy h1",
+            "rule": {"name": "h1"},
+            "result_name": "d1"
+        }),
+        Derive.gen_single({
+            "thought": "copy hP",
+            "rule": {"name": "hP"},
+            "result_name": "d2"
+        }),
+        Derive.gen_single({
+            "thought": "copy hQ",
+            "rule": {"name": "hQ"},
+            "result_name": "d3"
+        }),
+        Obvious.gen_single({"facts": []})
+    ])
+    file.write(f"batch fill failure: {outcome0.failure}\n")
+    print_header("After batch fill (all should succeed)", file)
+    root.print(0, file)
+
+    # The GoalNode is root.sub_nodes[1] (after GlobalEnv)
+    gn = root.sub_nodes[1]
+    file.write(f"GoalNode children: {len(gn.sub_nodes)}\n")
+    for c in gn.sub_nodes:
+        file.write(f"  {c.id}: {type(c).__name__} status={c.status.status.value}\n")
+
+    # Delete the Have (step "1") — triggers re-evaluation cascade.
+    # The GoalNode is re-evaluated: Derive(h1) at step 2 fails (h1 gone),
+    # subsequent steps 3, 4, 5 are CANCELLED.  Cancel of step 3 resets
+    # step 4's ml_state; cancel of step 4 resets step 5's ml_state.
+    root.session.age += 1
+    await root.delete(["1"])
+
+    print_header("After deleting Have h1 (cascade: Derive(h1) fails, rest cancelled)", file)
+    root.print(0, file)
+    gn = root.sub_nodes[1]
+    file.write(f"GoalNode children after delete: {len(gn.sub_nodes)}\n")
+    for c in gn.sub_nodes:
+        file.write(f"  {c.id}: {type(c).__name__} status={c.status.status.value}\n")
+        file.write(f"    ml_state initialized: {c.ml_state.initialized()}\n")
+
+    # Try to fill the last cancelled step (Obvious at step "5").
+    # BUG: fill deletes Obvious, predecessor is Derive(hQ) at step 4
+    # whose ml_state was reset by step 3's cancel → execute hits
+    # "beginning_state_not_found" on the ML side.
+    root.session.age += 1
+    try:
+        outcome = await root.fill("5", [Obvious.gen_single({"facts": []})])
+        if outcome.failure:
+            file.write(f"Fill 5 returned failure (graceful): {outcome.failure}\n")
+        else:
+            file.write("Fill 5 succeeded\n")
+    except InternalError as e:
+        file.write(f"BUG: Fill 5 raised InternalError: {e}\n")
+    except IsabelleError as e:
+        file.write(f"Fill 5 raised IsabelleError: {e}\n")
+    except Exception as e:
+        file.write(f"Fill 5 raised {type(e).__name__}: {e}\n")
+
+    print_header("Final state", file)
+    root.print(0, file)
+
+
 @model_test("GlobalEnv_LeafOps", "Test_GlobalEnv_LeafOps.thy", 11)
 async def _test_GlobalEnv_LeafOps(root: Root, file: MyIO):
     """Verify that non-declarative operations (Obvious, Rewrite, InferenceRule)
@@ -12619,6 +12815,61 @@ async def _test_StruggleCheckpoint(root: Root, file: MyIO):
     finally:
         session.role = model.Role_Major()
         have_node.worker_handle = None
+
+
+@model_test("InsertBeforeSlot", "Test_InsertBeforeSlot.thy", 8)
+async def _test_InsertBeforeSlot(root: Root, file: MyIO):
+    """insert_before targeting a filling slot should fall through to fill.
+
+    Scenario: fill step 1 with a Have, then call insert_before on "2"
+    which is the next filling slot (not an existing node). The operation
+    should succeed identically to fill("2", ...).
+
+    Also tests: insert_before on a sub-block slot (1.1), and
+    insert_before on a genuinely nonexistent node still fails.
+    """
+    print_header("Initial", file)
+    root.print(0, file)
+
+    # Fill step 1 with a Have — creates a sub-block needing proof
+    root.session.age += 1
+    await root.fill("1", [Have.gen_single({
+        "thought": "helper lemma",
+        "statement": {"english": "x squared is non-negative",
+                      "conclusion": r"(0::int) \<le> x * x"},
+        "name": "sq_nonneg",
+    })])
+    print_header("After fill step 1 (Have)", file)
+    root.print(0, file)
+
+    # Step "1.1" is a filling slot inside the Have's proof block.
+    # insert_before("1.1", ...) should fall through to fill.
+    root.session.age += 1
+    outcome_sub = await root.insert_before("1.1", [Obvious.gen_single({"facts": []})])
+    file.write(f"insert_before('1.1') on slot: failure={outcome_sub.failure}\n")
+    file.write(f"insert_before('1.1') committed count: {len(outcome_sub.committed)}\n")
+    assert outcome_sub.failure is None, \
+        f"insert_before on sub-block slot should succeed, got: {outcome_sub.failure}"
+    print_header("After insert_before on sub-slot 1.1 (fell through to fill)", file)
+    root.print(0, file)
+
+    # Step "2" is the next filling slot at the top level.
+    # insert_before("2", ...) should fall through to fill.
+    root.session.age += 1
+    outcome_top = await root.insert_before("2", [Obvious.gen_single({"facts": []})])
+    file.write(f"insert_before('2') on slot: failure={outcome_top.failure}\n")
+    file.write(f"insert_before('2') committed count: {len(outcome_top.committed)}\n")
+    assert outcome_top.failure is None, \
+        f"insert_before on top-level slot should succeed, got: {outcome_top.failure}"
+    print_header("After insert_before on top-level slot 2 (fell through to fill)", file)
+    root.print(0, file)
+
+    # Genuinely nonexistent node should still fail.
+    root.session.age += 1
+    outcome_bad = await root.insert_before("99", [Obvious.gen_single({"facts": []})])
+    file.write(f"insert_before('99') nonexistent: failure={type(outcome_bad.failure).__name__}\n")
+    assert outcome_bad.failure is not None, \
+        "insert_before on genuinely nonexistent node should fail"
 
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):

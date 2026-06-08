@@ -3,7 +3,7 @@
   "properties": {
     "briefing": {
       "type": "string",
-      "description": "IMPORTANT: this will be your ONLY memory after the refresh — everything else is erased. Write down everything the next version of you needs to continue: (1) current proof state and strategy, (2) what you tried and why it failed — dead ends that MUST NOT be retried, (3) useful lemmas, facts, or type information you discovered."
+      "description": "WARNING: After refresh, this briefing is your ONLY memory — all other context is permanently erased. This is not a brief note — it is an authoritative record so faithful that the original conversation adds no value. Be EXHAUSTIVE on what matters, yet LEAN — strip noise, keep pure signal. Cover: (1) current proof state and strategy, (2) what you tried and why it failed — dead ends that MUST NOT be retried, (3) useful lemmas, facts, or type information you discovered."
     }
   },
   "required": ["briefing"],

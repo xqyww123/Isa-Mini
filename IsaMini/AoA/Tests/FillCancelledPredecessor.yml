@@ -1,0 +1,158 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - Q: bool
+  - P: bool
+premises:
+  - hP: P
+  - hQ: Q
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: P ∧ Q
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+batch fill failure: None
+--------------------------------------------------
+After batch fill (all should succeed)
+--------------------------------------------------
+variables:
+  - Q: bool
+  - P: bool
+premises:
+  - hP: P
+  - hQ: Q
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: P ∧ Q
+proof:
+  - step id: 1
+    thought: introduce P from premise
+    operation: Have
+    statement:
+      english: P holds
+      conclusion: P
+    name: h1
+    proof: empty
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      P
+  - step id: 2
+    thought: copy h1
+    operation: Derive
+    rule:
+      - h1: P
+    resulting facts:
+      - d1: P
+  - step id: 3
+    thought: copy hP
+    operation: Derive
+    rule:
+      - hP: P
+    resulting facts:
+      - d2: P
+  - step id: 4
+    thought: copy hQ
+    operation: Derive
+    rule:
+      - hQ: Q
+    resulting facts:
+      - d3: Q
+  - step id: 5
+    operation: Obvious
+GoalNode children: 5
+  1: Have status=success
+  2: Derive status=success
+  3: Derive status=success
+  4: Derive status=success
+  5: Obvious status=success
+--------------------------------------------------
+After deleting Have h1 (cascade: Derive(h1) fails, rest cancelled)
+--------------------------------------------------
+variables:
+  - Q: bool
+  - P: bool
+premises:
+  - hP: P
+  - hQ: Q
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: P ∧ Q
+proof:
+  - step id: 2
+    thought: copy h1
+    operation: Derive
+    rule:
+      - Error: fact "h1" not found
+    resulting facts:
+      - d1: P
+    Error: Rule fact "h1" not found
+  - step id: 3
+    thought: copy hP
+    operation: Derive
+    rule:
+      - hP: P
+    resulting facts:
+      - d2: P
+    Error: the evaluation is cancelled due to failure of step `2`
+  - step id: 4
+    thought: copy hQ
+    operation: Derive
+    rule:
+      - hQ: Q
+    resulting facts:
+      - d3: Q
+    Error: cancelled (step `2` failed)
+  - step id: 5
+    operation: Obvious
+    Error: cancelled (step `2` failed)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `5` to replace it with a proof.
+pending proof goal:
+  P ∧ Q
+GoalNode children after delete: 4
+  2: Derive status=failure
+    ml_state initialized: True
+  3: Derive status=cancelled
+    ml_state initialized: True
+  4: Derive status=cancelled
+    ml_state initialized: False
+  5: Obvious status=cancelled
+    ml_state initialized: False
+Fill 5 succeeded
+--------------------------------------------------
+Final state
+--------------------------------------------------
+variables:
+  - Q: bool
+  - P: bool
+premises:
+  - hP: P
+  - hQ: Q
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: P ∧ Q
+proof:
+  - step id: 2
+    thought: copy h1
+    operation: Derive
+    rule:
+      - Error: fact "h1" not found
+    resulting facts:
+      - d1: P
+    Error: Rule fact "h1" not found
+  - step id: 3
+    thought: copy hP
+    operation: Derive
+    rule:
+      - hP: P
+    resulting facts:
+      - d2: P
+    Error: cancelled (step `2` failed)
+  - step id: 4
+    thought: copy hQ
+    operation: Derive
+    rule:
+      - hQ: Q
+    resulting facts:
+      - d3: Q
+    Error: cancelled (step `2` failed)
+  - step id: 5
+    operation: Obvious
+    Error: cancelled (step `2` failed)
+Error: Evaluation cancelled due to failures above

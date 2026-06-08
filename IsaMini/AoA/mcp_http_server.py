@@ -57,7 +57,7 @@ from .model import (
     Role_Worker,
     Surrender, Refute, Refresh,
     TOOL_REFRESH,
-    print_indent,
+    print_indent, print_goal, MyIO,
 )
 import yaml as _yaml
 from .retrieval import (
@@ -793,6 +793,22 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             except NodeNotFound:
                 slot = None
             if isinstance(slot, Resolved_Slot):
+                parent = slot.parent
+                if isinstance(parent, StdBlock):
+                    goal_info = parent.should_I_show_pending_goal()
+                    if goal_info is not None:
+                        goal, to_fill = goal_info
+                        buf = StringIO()
+                        f = MyIO(buf)
+                        f.write(f"Step '{sid}' is a filling slot.\n")
+                        f.write("pending proof goal:\n")
+                        print_goal(goal, 1, False, f, parent._ctxt_of_filling())
+                        result_text = buf.getvalue()
+                        if single_step:
+                            session.log_tool_response(_tn, result_text)
+                            return (result_text, False)
+                        entries.append(("warn", result_text))
+                        continue
                 error_msg = (f"Step '{sid}' is a filling slot that has not been "
                              "written yet.")
                 if single_step:

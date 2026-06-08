@@ -184,9 +184,8 @@ class Codex_Driver(LMDriver):
         while True:  # outer restart loop
             if self._refresh_summary is not None:
                 prompt = ((await self.initial_prompt())
-                          + "\n\nPrevious attempts (do NOT repeat these):\n"
-                          + self._refresh_summary
-                          + "\n\nTry a completely different proof strategy.")
+                          + "\n\nAgent's briefing:\n"
+                          + self._refresh_summary)
                 self._refresh_summary = None
             while True:
                 if codex_session_id is None:
