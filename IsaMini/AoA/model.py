@@ -170,7 +170,7 @@ def fact_kind(fact: Fact) -> Literal["name", "proposition", "description"]:
 # so `name[xwhere ...][xOF ...]` leaves the second group unconsumed and fails to
 # parse. `thm[a, b]` and `thm[a][b]` are semantically equivalent (attributes
 # applied left-to-right), so merging preserves the where→OF→symmetric order.
-def _where_clause(fact: Fact) -> str:
+def _where_clause(fact: Fact, *, for_pack: bool = False) -> str:
     if "name" not in fact:
         return ""
     insts = cast(FactByName, fact).get("instantiations", [])
@@ -179,9 +179,10 @@ def _where_clause(fact: Fact) -> str:
     where_parts = " and ".join(
         f"{i['name']} = \N{SINGLE LEFT-POINTING ANGLE QUOTATION MARK}{i['value']}\N{SINGLE RIGHT-POINTING ANGLE QUOTATION MARK}"
         for i in insts)
-    return f"xwhere {where_parts}"
+    keyword = "xwhere" if for_pack else "where"
+    return f"{keyword} {where_parts}"
 
-def _of_clause(fact: Fact) -> str:
+def _of_clause(fact: Fact, *, for_pack: bool = False) -> str:
     if "name" not in fact:
         return ""
     discharge = cast(FactByName, fact).get("discharge", [])
@@ -192,19 +193,21 @@ def _of_clause(fact: Fact) -> str:
         if item is None:
             of_parts.append("_")
         else:
-            of_parts.append(item["name"] + _fact_suffix(item))
-    return "xOF " + " ".join(of_parts)
+            of_parts.append(item["name"] + _fact_suffix(item, for_pack=for_pack))
+    keyword = "xOF" if for_pack else "OF"
+    return keyword + " " + " ".join(of_parts)
 
-def _symmetric_clause(fact: Fact) -> str:
+def _symmetric_clause(fact: Fact, *, for_pack: bool = False) -> str:
     if "name" not in fact:
         return ""
     if cast(FactByName, fact).get("flip", False):
-        return "xsymmetric"
+        return "xsymmetric" if for_pack else "symmetric"
     return ""
 
-def _fact_suffix(fact: Fact) -> str:
-    clauses = [c for c in (_where_clause(fact), _of_clause(fact),
-                           _symmetric_clause(fact)) if c]
+def _fact_suffix(fact: Fact, *, for_pack: bool = False) -> str:
+    clauses = [c for c in (_where_clause(fact, for_pack=for_pack),
+                           _of_clause(fact, for_pack=for_pack),
+                           _symmetric_clause(fact, for_pack=for_pack)) if c]
     return f"[{', '.join(clauses)}]" if clauses else ""
 
 class FailureReason(NamedTuple):
@@ -298,7 +301,7 @@ class IsabelleFact_Presented(IsabelleFact, IsabelleEntity):
         else:
             file.write(f"- {display_name}\n")
     def pack(self) -> tuple[str, str | None]:
-        suffix = _fact_suffix(self.fact)
+        suffix = _fact_suffix(self.fact, for_pack=True)
         if suffix:
             suffix = ascii_of_unicode(suffix)
         return (self.full_name + suffix, None)

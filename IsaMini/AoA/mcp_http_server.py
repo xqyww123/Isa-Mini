@@ -247,6 +247,13 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         args = {**args, "proof_operations": ops}
     _tn = session.tool_name(TOOL_EDIT)
     session.log_tool_call(_tn, args)
+
+    # Tolerant redirect: the LLM sometimes calls `edit` with delete-style args
+    # (`action: "delete"` + `target_steps` instead of `target_step`).  Proxy to
+    # the real delete handler instead of erroring on missing `target_step`.
+    if args.get("action") == "delete" and "target_steps" in args:
+        return await _delete_tool_logic(session, args)
+
     # IsabelleError is caught here (not in ToolExecutor.execute) so it stays a
     # recoverable (msg, True) return: a malformed/ill-typed term in a block
     # statement (HAVE/OBTAIN/Induction/Intro) escapes root.fill/amend as an
@@ -986,7 +993,9 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
         session.log_tool_response(_tn, f"ERROR: {full}")
         return (full, True)
 
-    step_id = str(args.get("step_id", ""))          # dispatcher-relative (for display)
+    step_id = str(args.get("step_id", "")).strip()   # dispatcher-relative (for display)
+    if not step_id:
+        return _err("`step_id` is required — specify which step to delegate.")
     abs_step_id = session._resolve_display_id(step_id)
     suggestions = args.get("suggestions", "")
     helpful_lemmas = args.get("helpful_lemmas") or []

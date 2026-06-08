@@ -1,0 +1,20 @@
+--------------------------------------------------
+main agent: subagent with empty step_id
+--------------------------------------------------
+is_error=True
+`step_id` is required — specify which step to delegate.
+--------------------------------------------------
+main agent: subagent with missing step_id (task key)
+--------------------------------------------------
+is_error=True
+`step_id` is required — specify which step to delegate.
+--------------------------------------------------
+worker: subagent with empty step_id
+--------------------------------------------------
+is_error=True
+`step_id` is required — specify which step to delegate.
+--------------------------------------------------
+worker: subagent with missing step_id (task key)
+--------------------------------------------------
+is_error=True
+`step_id` is required — specify which step to delegate.

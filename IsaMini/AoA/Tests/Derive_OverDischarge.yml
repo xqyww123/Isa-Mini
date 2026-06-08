@@ -1,0 +1,72 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - R: nat ⇒ bool
+premises:
+  - h_conj: P (0 :: nat) ∧ Q (0 :: nat)
+  - h_rule: Q (0 :: nat) ⟶ R (0 :: nat)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+variables:
+  - Q: nat ⇒ bool
+  - P: nat ⇒ bool
+goal: R (0 :: nat)
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After deriving conjunct
+--------------------------------------------------
+variables:
+  - R: nat ⇒ bool
+premises:
+  - h_conj: P (0 :: nat) ∧ Q (0 :: nat)
+  - h_rule: Q (0 :: nat) ⟶ R (0 :: nat)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+variables:
+  - Q: nat ⇒ bool
+  - P: nat ⇒ bool
+goal: R (0 :: nat)
+proof:
+  - step id: 1
+    thought: extract Q 0 from the conjunction
+    operation: Derive
+    rule:
+      - conjunct2: ?P ∧ ?Q ⟶ ?Q
+    discharging facts:
+      - h_conj: P (0 :: nat) ∧ Q (0 :: nat)
+    resulting facts:
+      - q0: Q (0 :: nat)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  R (0 :: nat)
+--------------------------------------------------
+After xOF over-discharge Derive
+--------------------------------------------------
+variables:
+  - R: nat ⇒ bool
+premises:
+  - h_conj: P (0 :: nat) ∧ Q (0 :: nat)
+  - h_rule: Q (0 :: nat) ⟶ R (0 :: nat)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+variables:
+  - Q: nat ⇒ bool
+  - P: nat ⇒ bool
+goal: R (0 :: nat)
+proof:
+  - step id: 1
+    thought: extract Q 0 from the conjunction
+    operation: Derive
+    rule:
+      - conjunct2: ?P ∧ ?Q ⟶ ?Q
+    discharging facts:
+      - h_conj: P (0 :: nat) ∧ Q (0 :: nat)
+    resulting facts:
+      - q0: Q (0 :: nat)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  R (0 :: nat)
+Is error: True
+Reason: Cannot fill a node with id 2
+OF: the fact has 0 premise(s), but 2 discharge argument(s) were given
+the fact is:
+  P 0 ∧ Q 0
