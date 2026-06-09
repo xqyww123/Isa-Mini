@@ -2335,6 +2335,42 @@ class Interaction_StruggleCheckpoint(Interaction):
         return (answer.is_stuck, answer.summary)
 
 
+class Interaction_DifficultyEvaluation(Interaction):
+    """Non-forking interaction presented to the parent agent when a system
+    checkpoint detects that a worker is struggling.  The parent evaluates the
+    target step's importance and chooses to let the worker continue or to
+    abandon the step (auto-cancel + comment out)."""
+    fork_allowed_tools = [TOOL_ANSWER_INDEX]
+
+    @property
+    def is_non_forking(self) -> bool:
+        return True
+
+    def __init__(self, target: 'NonLeaf_Node', detail: str):
+        self.target = target
+        self.detail = detail
+
+    async def prompt(self, indent: int, file: MyIO) -> None:
+        session = the_session()
+        file.write(
+            f"A system checkpoint detected that the sub-agent on step "
+            f"{session._display_id(self.target.id)} is struggling:\n\n"
+            f"{self.detail}\n\n"
+            f"Current proof state:\n")
+        session.quickview_proof_scope(indent, file)
+        file.write(
+            f"\nEvaluate this step's importance in the overall proof.\n\n"
+            f"  0. Continue — let the sub-agent keep trying\n"
+            f"  1. Abandon — cancel the sub-agent and comment out this step\n\n"
+            f"Call `{tn(TOOL_ANSWER_INDEX)}` with your choice.\n")
+
+    async def answer(self, answer: 'AnswerIndex') -> int:
+        if answer.index is None:
+            return 0
+        _check_index(answer.index, 2)
+        return answer.index
+
+
 class Fork_Pending(NamedTuple):
     """Carried by a fork session during its single-interaction lifetime.
 
@@ -9578,8 +9614,8 @@ class Session:
     def system_prompt(self) -> str | None:
         """Return the system prompt, or None if the driver folds it into the initial message."""
         report_line = (
-            "If you run into any difficulty or obstacle — or the goal itself looks "
-            f"flawed — report it with `{self.tool_name(TOOL_REPORT)}`; don't hesitate.\n"
+            "If the goal itself looks flawed or unprovable, or you have exhausted "
+            f"your strategies — report it with `{self.tool_name(TOOL_REPORT)}`.\n"
             if self.is_worker else
             "A proof goal can be buggy and thus unprovable — "
             f"call `{self.tool_name(TOOL_REPORT)}` with your analysis if you believe so.\n"
@@ -9615,7 +9651,7 @@ class Session:
         # report is shown to workers only.
         if self.is_worker:
             parts.append(
-                f"- {self.tool_name(TOOL_REPORT)}: Report that the goal is unprovable (refute), that you give up (surrender), or any difficulty or obstacle you run into (difficulty)\n"
+                f"- {self.tool_name(TOOL_REPORT)}: Report that the goal is unprovable (refute) or that you give up (surrender)\n"
             )
         # subagent/cancel_subagent are dispatch tools — shown to dispatchers (the main
         # agent AND workers, which may delegate nested sub-goals), not interaction forks.
@@ -9680,8 +9716,8 @@ class Session:
                     + "The proof state is in `proof.yaml` — read it to see the goal and current proof.\n"
                     f"Analyze the proof goal, plan a proof, and complete it using tools `{self.tool_name(TOOL_EDIT)}` and `{self.tool_name(TOOL_DELETE)}`.\n"
                     "Continue building the proof until no error remains.\n"
-                    "If you run into any difficulty or obstacle — or the goal itself "
-                    f"looks flawed — report it with `{self.tool_name(TOOL_REPORT)}`; don't hesitate."
+                    "If the goal itself looks flawed or unprovable, or you want to "
+                    f"give up — report it with `{self.tool_name(TOOL_REPORT)}`."
                 )
         elif self.system_prompt() is not None:
             return (
@@ -9813,6 +9849,23 @@ class Session:
         if self.working_block is not None:
             return self.working_block.latest_refreshed_state()
         return self.root.ml_state
+
+    def resolve_context_at(self, step_id: str) -> Minilang_State:
+        """Resolve an agent-supplied step id to the proof state at that node.
+        Leaf → resulting_state; StdBlock → state after the beginning op.
+        Raises ValueError on bad id or unevaluated node."""
+        abs_id = self._resolve_display_id(step_id)
+        try:
+            node = self.root.locate_node(abs_id)
+        except NodeNotFound:
+            raise ValueError(f"Step {step_id} not found.")
+        if not _status_can_continue(node.status.status):
+            raise ValueError(
+                f"Step {step_id} has not been evaluated successfully; "
+                "cannot use it as query context.")
+        if isinstance(node, StdBlock):
+            return node._state_after_beginning()
+        return node.resulting_state()
 
     def _log(self, log_file_handle: Any, event_type: str, debug_messages: Callable[[], list[str]] | None, **data):
         """
@@ -10622,13 +10675,11 @@ class WorkerRequestLemmas:
 
 @dataclass
 class WorkerDifficulty:
-    """Worker reports a difficulty it is stuck on and asks its dispatcher for
-    guidance, then resumes. NON-terminal (like ``WorkerRequestLemmas``, the worker
-    keeps working afterwards). The only difference from ``WorkerRequestLemmas`` is
-    semantic: a free-form "I'm stuck, here's why" status rather than a lemma
-    wish-list. ``response_future`` is resolved with a feedback STRING by
-    ``WorkerHandle.resolve_resume``; the worker blocks on it inside the ``report``
-    tool until then."""
+    """Emitted by a system struggle checkpoint when it detects a stuck worker.
+    NON-terminal: the worker blocks on ``response_future`` (inside the ``delete``
+    tool handler) while the dispatcher decides whether to continue or abandon.
+    ``response_future`` is resolved with a feedback STRING by
+    ``WorkerHandle.resolve_resume``."""
     detail: str
     response_future: 'asyncio.Future[str]'
 
@@ -10681,12 +10732,13 @@ class WorkerHandle:
     main (planner) agent.
 
     The worker runs as its own asyncio task. Its lifecycle events arrive either
-    through ``_event_queue`` (refute / surrender / request_lemmas / difficulty, pushed by the
-    worker's tools) or as task completion (mapped to ``WorkerDone``). The handle
-    is attached to its target ``NonLeaf_Node`` (``node.worker_handle``) while the
-    worker runs or is parked; ``run_until_yield`` drives it until it yields
-    control back to the main agent (terminal outcome or a request_lemmas /
-    difficulty park)."""
+    through ``_event_queue`` (refute / surrender / request_lemmas — pushed by
+    the worker's tools; difficulty — pushed by the system struggle checkpoint)
+    or as task completion
+    (mapped to ``WorkerDone``). The handle is attached to its target
+    ``NonLeaf_Node`` (``node.worker_handle``) while the worker runs or is parked;
+    ``run_until_yield`` drives it until it yields control back to the main agent
+    (terminal outcome or a request_lemmas / difficulty park)."""
 
     def __init__(self, target: NonLeaf_Node, session: 'LMDriver'):
         self.target = target
@@ -10696,9 +10748,9 @@ class WorkerHandle:
         self._sub: 'LMDriver | None' = None
         self._pending_review: 'asyncio.Future[tuple[bool, str | None]] | None' = None
         # Pending resume future for a PARKed worker — shared by both park kinds
-        # (request_lemmas and report-difficulty), since a worker is only ever
-        # parked on one of them at a time. Resolved with a feedback STRING — a
-        # distinct result type from _pending_review's (accepted, reason) tuple.
+        # (request_lemmas and struggle-checkpoint difficulty), since a worker is
+        # only ever parked on one of them at a time. Resolved with a feedback
+        # STRING — a distinct result type from _pending_review's tuple.
         self._pending_resume: 'asyncio.Future[str] | None' = None
         # Set once the worker's accumulated cost has been rolled into the parent
         # (see _settle_costs) — makes the roll-up exactly-once across the _run
@@ -10817,8 +10869,8 @@ class WorkerHandle:
 
     async def run_until_yield(self) -> 'WorkerYield':
         """Drive the worker until it yields control back to the main agent.
-        Re-entered on resume (after the main agent answers a request_lemmas or a
-        report-difficulty park).
+        Re-entered on resume (after the main agent answers a request_lemmas or
+        a struggle-checkpoint difficulty park).
 
         - ``WorkerRefute`` → reviewed in-loop via a fork
           (``Interaction_ReviewRefutation``). Reject → the worker resumes
@@ -10873,9 +10925,9 @@ class WorkerHandle:
             fut.set_result((accepted, reason))
 
     def resolve_resume(self, feedback: str) -> None:
-        """Wake a PARKed worker (blocked in a ``request_lemmas`` or a
-        report-``difficulty`` call), handing it the planner's feedback string
-        (mirrors ``resolve_review`` but with a plain-string result)."""
+        """Wake a PARKed worker (blocked in ``request_lemmas`` or a
+        struggle-checkpoint difficulty park), handing it the planner's feedback
+        string (mirrors ``resolve_review`` but with a plain-string result)."""
         fut = self._pending_resume
         self._pending_resume = None
         if fut is not None and not fut.done():

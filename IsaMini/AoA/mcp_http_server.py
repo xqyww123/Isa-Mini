@@ -52,7 +52,7 @@ from .model import (
     TOOL_ANSWER_INDEXES, TOOL_ANSWER_INDEX, TOOL_ANSWER_INDEXES_OR_NAME,
     TOOL_ANSWER_INDEXES_OR_SPEC, TOOL_ANSWER_INSTANTIATE,
     TOOL_ANSWER_REFUTATION, TOOL_ANSWER_STRUGGLE_ASSESSMENT,
-    Interaction_StruggleCheckpoint,
+    Interaction_StruggleCheckpoint, Interaction_DifficultyEvaluation,
     InteractionPrompt, InteractionError, EditResult, InteractionChannel,
     ANSWER_TOOLS,
     ALL_PROOF_TOOLS,
@@ -1096,14 +1096,13 @@ async def _report_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     # detail still reads correctly once surfaced to the (differently-scoped)
     # dispatcher; the dispatcher re-relativizes for its own view.
     detail = session._absolutize_text(args.get("detail", ""))
-    if kind not in ("refute", "surrender", "difficulty"):
-        msg = (f"Invalid type: {kind!r}. Must be `refute`, `surrender`, or "
-               f"`difficulty`.")
+    if kind not in ("refute", "surrender"):
+        msg = f"Invalid type: {kind!r}. Must be `refute` or `surrender`."
         session.log_tool_response(_tn, f"ERROR: {msg}")
         return (msg, True)
 
     if isinstance(session.role, Role_Worker):
-        from .model import WorkerRefute, WorkerSurrender, WorkerDifficulty
+        from .model import WorkerRefute, WorkerSurrender
         handle = session.role.worker_handle
         if handle is None:
             # A worker is always spawned via WorkerHandle, which sets
@@ -1112,26 +1111,6 @@ async def _report_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             raise InternalError(
                 "Role_Worker has no worker_handle (worker must be spawned "
                 "via WorkerHandle).")
-
-        if kind == "difficulty":
-            # NON-terminal PARK (like request_lemmas): suspend the worker, hand
-            # control back to the dispatcher, and resume once it answers.
-            if not detail:
-                msg = "The `detail` argument is required when reporting a difficulty."
-                session.log_tool_response(_tn, f"ERROR: {msg}")
-                return (msg, True)
-            fut: asyncio.Future = asyncio.get_running_loop().create_future()
-            handle._event_queue.put_nowait(
-                WorkerDifficulty(detail=detail, response_future=fut))
-            feedback = await fut
-            # The dispatcher may have added helper lemmas to the global env (into
-            # the facts in scope before this worker's target) while we were
-            # parked. Re-prefetch premises + refresh proof.yaml so the worker's
-            # view picks them up — identical to the request_lemmas resume path.
-            await session._prefetch_worker_premises()
-            session.refresh_YAML()
-            session.log_tool_response(_tn, feedback)
-            return (feedback, False)
 
         if kind == "refute":
             # Stay alive and block until the planning agent reviews the claim.
@@ -1164,14 +1143,6 @@ async def _report_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         return (msg, False)
 
     # Role_Major: conclude / restart the planning session.
-    if kind == "difficulty":
-        # No enclosing agent to park under here — respond with encouragement and
-        # let the agent carry on (role-neutral: never reveal a sub/top hierarchy).
-        msg = ("You're a powerful expert and these difficulties are nothing you "
-               "can't handle. Trust your skills, try a fresh angle, and push on. "
-               "You can do it.")
-        session.log_tool_response(_tn, msg)
-        return (msg, False)
     if kind == "surrender":
         session._retry_count += 1
         if session._retry_count >= session.max_retries:
@@ -1273,8 +1244,10 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
     """`subagent`: delegate a sub-goal to a forked worker agent, or resume a parked
     worker on the same node. Available to the main agent AND to workers (nested
     delegation). Drives the worker's event loop (`WorkerHandle.run_until_yield`)
-    until it yields control back to the dispatcher (a terminal outcome, or a
-    request_lemmas / difficulty park)."""
+    until it yields control back to the dispatcher (a terminal outcome, a
+    request_lemmas park, or a difficulty park from a system checkpoint).
+    When difficulty is yielded, a non-forking ``Interaction_DifficultyEvaluation``
+    asks the dispatcher to continue or abandon (auto-cancel + comment)."""
     _tn = session.tool_name(TOOL_SUBAGENT)
     session.log_tool_call(_tn, args)
 
@@ -1443,17 +1416,21 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
                    f"{session._display_id(node.id)} again to resume the sub-agent, listing the lemmas you "
                    f"built in `helpful_lemmas` and describing them in `suggestions` by name "
                    f"or statement, NEVER by step id (the sub-agent cannot see your step numbering).")
-        case _:  # "difficulty" — worker parked reporting a difficulty it is stuck on
-            msg = (f"The sub-agent met some difficulties:\n"
-                   f"{detail_shown}\n\n"
-                   f"Address this however you judge best — for example, prove additional "
-                   f"lemmas, restructure the surrounding proof, or rethink the overall "
-                   f"strategy. When you choose to resume the sub-agent, call `subagent` on "
-                   f"this step with `suggestions` describing how it should proceed and any "
-                   f"facts you've made available to it — refer to those facts by name or "
-                   f"statement, NEVER by step id (the sub-agent cannot see your step "
-                   f"numbering). Or, to rework its sub-proof directly, cancel it with "
-                   f"`{session.tool_name(TOOL_CLOSE_SUBAGENT)}` first, then re-dispatch.")
+        case _:  # "difficulty" — system checkpoint detected worker is struggling
+            interaction = Interaction_DifficultyEvaluation(node, detail_shown)
+            choice = await session.launch_interaction(interaction)
+            if choice == 1:  # abandon
+                await node.aclose_all_subagents()
+                try:
+                    await session.root.comment([node.id])
+                except (AoA_Error, IsabelleError):
+                    pass  # GoalNode or structural container — just cancel
+                session.refresh_YAML()
+                msg = "The sub-agent has been cancelled."
+            else:  # continue
+                msg = (f"Noted. Resume the sub-agent by calling "
+                       f"`{session.tool_name(TOOL_SUBAGENT)}` on step "
+                       f"{session._display_id(node.id)} with suggestions.")
     # Append the whole-proof outline (mirrors the `edit`/`delete` tools) so the
     # planner sees the tree the worker just mutated without a `recall` round-trip.
     outline, finished = await P.subagent_overall(session.root, session)
@@ -1568,7 +1545,7 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "recall_removed": {"description": "Browse proof steps that were archived before deletion.", "schema": _cc_recall_removed_schema, "annotations": _RO},
     "request_lemmas": {"description": "Report missing background lemmas and request that the external environment supply them.",
                        "schema": _cc_request_lemmas_schema, "annotations": _ACT},
-    "report": {"description": "Report difficulties or obstacles you run into, or surrender and admit you cannot prove it yourself, or refutate that the goal is unprovable.",
+    "report": {"description": "Report that the goal is unprovable (refute), or surrender when you have exhausted your strategies.",
                  "schema": _cc_report_schema, "annotations": _ACT},
     "answer_indexes": {"description": "Answer by selecting indexes from the presented options", "schema": _cc_answer_indexes_schema, "annotations": _ACT},
     "answer_index": {"description": "Answer by selecting a single index, or null to skip", "schema": _cc_answer_index_schema, "annotations": _ACT},
@@ -1805,11 +1782,19 @@ class ToolExecutor:
                     result, is_error = await _report_tool_logic(session, arguments)
                 case "subagent":
                     async with self._subagent_lock:
-                        result, is_error = await _subagent_tool_logic(session, arguments)
+                        async def _run_subagent():
+                            r, e = await _subagent_tool_logic(session, arguments)
+                            await self._channel.outbox.put(EditResult(r, e))
+                        result, is_error = await self._run_tool_via_channel(
+                            _run_subagent(), session, is_edit=False)
                     session.last_proof_op_time = time()
                 case "cancel_subagent":
-                    async with self._subagent_lock:
-                        result, is_error = await _close_subagent_tool_logic(session, arguments)
+                    if self._suspended_task is not None:
+                        result = "Answer the pending interaction question first."
+                        is_error = True
+                    else:
+                        async with self._subagent_lock:
+                            result, is_error = await _close_subagent_tool_logic(session, arguments)
                     session.last_proof_op_time = time()
                 case "refresh":
                     result, is_error = await _refresh_tool_logic(session, arguments)

@@ -3,8 +3,8 @@
   "properties": {
     "type": {
       "type": "string",
-      "enum": ["refute", "surrender", "difficulty"],
-      "description": "'refute' if you believe the goal is unprovable; 'surrender' when you have exhausted your strategies and are giving up; 'difficulty' to report ANY difficulty or obstacle you run into."
+      "enum": ["refute", "surrender"],
+      "description": "'refute' if you believe the goal is unprovable; 'surrender' when you have exhausted your strategies and are giving up."
     },
     "detail": { "type": "string", "description": "Explanations." }
   },

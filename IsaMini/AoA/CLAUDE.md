@@ -79,7 +79,7 @@ The Python `Session` is **not** an Isabelle session. Workers do not open a new I
 - `driver_claude_code.py` — **default** (`ClaudeCode`); uses the Claude Agent SDK pointed at the singleton HTTP MCP server (`mcp_servers={"proof": {type: http, url}}`).
 - `driver_api.py` — `APIDriver`: owns its own chat loop, calls `Provider.chat()`, executes tools via in-process `ToolExecutor`, compacts at ~80% context.
 - `driver_openai.py` / `driver_anthropic.py` / `driver_gemini.py` / `driver_codex.py` — provider variants (lazy-imported in `toplevel.py`).
-- **Tools** (abstract ids in `model.py`): `edit` (TOOL_EDIT), `delete`, `query` (TOOL_SEARCH), `recall` (TOOL_READ), `report` (worker→dispatcher: refute / surrender / difficulty), `request_lemmas` (dual-role: worker→planner channel, or planner self-formalize hint), answer-*. Tool→op mapping in `mcp_http_server.py` (`_edit_tool_logic` → `root.fill` / `insert_before` / `amend`; `_delete_tool_logic` → `root.delete`). Schemas are JSONC in `tools/`.
+- **Tools** (abstract ids in `model.py`): `edit` (TOOL_EDIT), `delete`, `query` (TOOL_SEARCH), `recall` (TOOL_READ), `report` (worker→dispatcher: refute / surrender), `request_lemmas` (dual-role: worker→planner channel, or planner self-formalize hint), answer-*. Tool→op mapping in `mcp_http_server.py` (`_edit_tool_logic` → `root.fill` / `insert_before` / `amend`; `_delete_tool_logic` → `root.delete`). Schemas are JSONC in `tools/`.
 - **MCP server** (`ProofMCPHTTPServer` in `mcp_http_server.py`): singleton multi-session HTTP server, per-session endpoints `/mcp/<session_id>` (`_SessionRouter`); `call_tool` sets `_session_var`, permission-checks (`_check_tool_permission`), delegates to a per-session `ToolExecutor`.
 
 ### Rendering

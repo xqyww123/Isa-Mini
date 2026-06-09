@@ -68,6 +68,8 @@ class ModelTestCase(TestCase):
                     return await interaction.answer(AnswerIndexes(indexes=[]))
                 if isinstance(interaction, Interaction_StruggleCheckpoint):
                     return (False, "test: not stuck")
+                if isinstance(interaction, Interaction_DifficultyEvaluation):
+                    return 0  # continue
                 raise NotImplementedError(
                     "Unstubbed interaction in model test: "
                     f"{type(interaction).__name__}")
@@ -4327,6 +4329,73 @@ async def _test_Derive_OverDischarge(root: Root, file: MyIO):
     await root.fill("2", [Obvious.gen_single({
         "facts": [{"name": "q0"}, {"name": "h_rule"}]
     })])
+
+@model_test("Derive_DischargeNullName", "Test_Derive_DischargeNullName.thy", 10)
+async def _test_Derive_DischargeNullName(root: Root, file: MyIO):
+    """A nested `discharge` entry `{"name": None, ...}` — an object with a
+    null `name`, instead of the literal `null` the schema prescribes for
+    skipping a premise — must be rejected at parse time with a
+    path-annotated ArgumentError.
+
+    Today `validate` never checks scalar leaf types (it falls through
+    `return data` for `str` fields), so the dict passes
+    `_validate_typed_dict` and the bad value survives until rendering:
+    `_of_clause` evaluates `item["name"] + _fact_suffix(item)` with
+    `item["name"] is None`, and the raw TypeError crashes the whole edit
+    tool.  Reproduces the log:
+
+        [TOOL_CALL] edit: {'action': 'fill', ..., 'rule': {'name': 'Min_le',
+          'discharge': [{'name': None, ...}, {'name': None, ...}]}, ...}
+        [TOOL_RESPONSE] edit: UNEXPECTED ERROR: TypeError:
+          unsupported operand type(s) for +: 'NoneType' and 'str'
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    bad_rule = {"name": "conjunct1",
+                "instantiations": [],
+                "discharge": [
+                    {"name": None, "instantiations": [],
+                     "discharge": [], "flip": False}]}
+    bugs: list[str] = []
+
+    # --- Sub-test 1: Parse_Op_List must reject a null `name` ---
+    print_header("Parse_Op_List with discharge entry name=None", file)
+    try:
+        Parse_Op_List([
+            {"operation": "Derive", "thought": "null-name discharge",
+             "rule": bad_rule, "result_name": "fst"}
+        ], "proof_operations")
+        file.write("ACCEPTED (bug: validator missed name=None)\n")
+        bugs.append("Parse_Op_List accepted a discharge entry with name=None")
+    except ArgumentError as e:
+        file.write(f"rejected: {e}\n")
+    except TypeError as e:
+        bugs.append(f"Parse_Op_List crashed with TypeError: {e}")
+
+    # --- Sub-test 2: end-to-end fill must not crash the system ---
+    print_header("fill with discharge entry name=None", file)
+    op = None
+    try:
+        op = Derive.gen_single({
+            "thought": "Extract first conjunct, null-name discharge",
+            "rule": bad_rule,
+            "result_name": "fst"})
+    except ArgumentError as e:
+        file.write(f"gen_single rejected: {e}\n")
+    if op is not None:
+        root.session.age += 1
+        try:
+            outcome = await root.fill("1", [op])
+            file.write(f"fill failure: {outcome.failure}\n")
+        except TypeError as e:
+            bugs.append(f"fill crashed the system with TypeError: {e}")
+
+    if bugs:
+        raise TestFailed("Derive_DischargeNullName: " + "; ".join(bugs))
+
+    # Close the proof so the runner doesn't report resource_exhausted
+    root.session.age += 1
+    await root.fill("1", [Obvious.gen_single({"facts": [{"name": "h"}]})])
 
 @model_test("FactByNameWhereBall", "Test_FactByNameWhereBall.thy", 11)
 async def _test_FactByNameWhereBall(root: Root, file: MyIO):
@@ -11136,7 +11205,7 @@ async def _test_GlobalEnv_LeafOps(root: Root, file: MyIO):
 @model_test("RefuteOrSurrender", "Test_RefuteOrSurrender.thy", 11)
 async def _test_RefuteOrSurrender(root: Root, file: MyIO):
     """Test the split tools for Worker (event-based) and Plan roles:
-    `report` (refute / surrender / difficulty) and the dual-role
+    `report` (refute / surrender) and the dual-role
     `request_lemmas` (worker channel + planner no-arg hint)."""
     from .mcp_http_server import (
         _report_tool_logic, _request_lemmas_tool_logic)
@@ -11215,25 +11284,6 @@ async def _test_RefuteOrSurrender(root: Root, file: MyIO):
         "detail": "vague", "suggested_lemmas": []})
     file.write(f"empty request_lemmas is_error: {is_error}\n")
 
-    # --- Worker: report(type=difficulty) PARKs on a feedback future, then resumes
-    # (non-terminal, like request_lemmas; shares the _pending_resume slot). ---
-    task = asyncio.ensure_future(_report_tool_logic(session, {
-        "type": "difficulty",
-        "detail": "stuck on the inductive step",
-    }))
-    ev = await handle._event_queue.get()
-    file.write(f"difficulty event: {type(ev).__name__}\n")
-    file.write(f"difficulty event detail: {ev.detail}\n")
-    ev.response_future.set_result("Try strong induction; see lemma foo.")
-    result, is_error = await task
-    file.write(f"difficulty resume mentions induction: {'induction' in result.lower()}\n")
-    file.write(f"difficulty resume is_error: {is_error}\n")
-
-    # Worker report difficulty with empty detail is rejected.
-    result, is_error = await _report_tool_logic(session, {
-        "type": "difficulty", "detail": ""})
-    file.write(f"empty difficulty is_error: {is_error}\n")
-
     # Invalid type (validated before the role branch).
     result, is_error = await _report_tool_logic(session, {
         "type": "invalid_type",
@@ -11255,11 +11305,6 @@ async def _test_RefuteOrSurrender(root: Root, file: MyIO):
     result, is_error = await _request_lemmas_tool_logic(session, {})
     file.write(f"planner request_lemmas is_error: {is_error}\n")
     file.write(f"planner request_lemmas mentions global: {'global' in result.lower()}\n")
-
-    # Plan: report(type=difficulty) is rejected — the planner has no dispatcher.
-    result, is_error = await _report_tool_logic(session, {
-        "type": "difficulty", "detail": "x"})
-    file.write(f"planner difficulty is_error: {is_error}\n")
 
     # NOTE: the Role_Major surrender path is intentionally NOT exercised here.
     # It calls request_restart(), which leaves a transient quit_info=Restart()

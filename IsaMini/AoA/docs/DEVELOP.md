@@ -227,9 +227,9 @@ A worker communicates back through events rather than dying:
   planner decides, preserving its context.
 - `WorkerRequestLemmas` — "I need a background lemma" (via the worker-side `request_lemmas` tool);
   the worker *blocks* while the planner authors + proves helper lemmas, then resumes (non-terminal).
-- `WorkerDifficulty` — "I'm stuck, here's why" (via the worker-side `report` tool, `type=difficulty`);
-  the worker *blocks* (PARK) while the dispatcher advises, then resumes (non-terminal). Shares the
-  same `_pending_resume` slot + `resolve_resume` path as `WorkerRequestLemmas`.
+- `WorkerDifficulty` — emitted by the system struggle checkpoint when it detects a stuck worker;
+  the worker *blocks* (PARK) while the dispatcher decides to continue or abandon (non-terminal).
+  Shares the same `_pending_resume` slot + `resolve_resume` path as `WorkerRequestLemmas`.
 - `WorkerSurrender` — "I give up" (terminal).
 - `WorkerDone` — synthesised when the task ends; `success` reflects `target.is_proof_finished()`.
 
@@ -271,7 +271,7 @@ retry layers (`_with_retry` for quota — 20-minute wait; `_retry_transient` —
 | `driver_openai/anthropic/gemini/codex.py` | Provider variants, lazily imported in `toplevel.py`. |
 
 **Tools** (abstract ids in `model.py`) map to external names per driver: `edit`, `delete`,
-`query` (search), `recall` (read `proof.yaml`), `report` (refute/surrender/difficulty),
+`query` (search), `recall` (read `proof.yaml`), `report` (refute/surrender),
 `request_lemmas` (dual-role: a worker→planner channel, or a planner self-formalize hint), answer-*. The tool→operation logic is in `mcp_http_server.py`: `_edit_tool_logic` parses the agent's
 `proof_operations` and dispatches to `root.fill` / `insert_before` / `amend`; structural completion
 in PLANNING hands off to `Session.complete_proof`. Tool JSON schemas live in `tools/*.jsonc`.
