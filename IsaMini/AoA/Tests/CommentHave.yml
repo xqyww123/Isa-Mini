@@ -1,0 +1,69 @@
+--------------------------------------------------
+Proof built (Have + Obvious)
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: helper
+    operation: Have
+    statement:
+      english: non-negative
+      conclusion: (0::int) \<le> x * x
+    name: sq
+    proof:
+      - step id: 1.1
+        operation: Obvious
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+unfinished before comment: 1
+comment Have affected: ['1']
+--------------------------------------------------
+After commenting Have (step 1)
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: helper
+    operation: Have
+    statement:
+      english: non-negative
+      conclusion: (0::int) \<le> x * x
+    name: sq
+    (commented out)
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+--------------------------------------------------
+Quickview after commenting Have
+--------------------------------------------------
+step 1: Have sq (commented)
+  (commented out)
+Error: Unfinished Proof. Call command `edit` with action `fill` and target step `2`
+goal: (0 :: int) ≤ x * x
+unfinished after comment Have: 1
+assembled ops count: 1
+uncomment Have affected: ['1']
+--------------------------------------------------
+After uncommenting Have (step 1)
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: helper
+    operation: Have
+    statement:
+      english: non-negative
+      conclusion: (0::int) \<le> x * x
+    name: sq
+    proof:
+      - step id: 1.1
+        operation: Obvious
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+unfinished after uncomment Have: 1
+assembled ops count after uncomment: 4

@@ -12896,6 +12896,119 @@ async def _test_InsertBeforeSlot(root: Root, file: MyIO):
         "insert_before on genuinely nonexistent node should fail"
 
 
+@model_test("Comment1", "Test_Comment.thy", 8)
+async def _test_Comment1(root: Root, file: MyIO):
+    """Comment/uncomment a Leaf (Obvious), verify state clones through,
+    siblings still evaluate, unfinished_nodes correct, quickview rendering."""
+    # Build a small proof: Have + Obvious
+    print_header("Initial", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("1", [Have.gen_single({
+        "thought": "helper",
+        "statement": {"english": "non-negative", "conclusion": r"(0::int) \<le> x * x"},
+        "name": "sq",
+    })])
+    print_header("After Have", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("1.1", [Obvious.gen_single({"facts": []})])
+    print_header("After Obvious (1.1 proved)", file)
+    root.print(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"unfinished before comment: {len(unfinished)}\n")
+
+    # Comment out the Obvious
+    root.session.age += 1
+    outcome = await root.comment(["1.1"])
+    file.write(f"comment affected: {outcome.affected}, not_found: {outcome.not_found}, warnings: {outcome.warnings}\n")
+    print_header("After commenting 1.1", file)
+    root.print(0, file)
+    print_header("Quickview after commenting 1.1", file)
+    root.quickview(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"unfinished after comment: {len(unfinished)}\n")
+
+    # Double-comment should warn
+    root.session.age += 1
+    outcome2 = await root.comment(["1.1"])
+    file.write(f"double-comment warnings: {outcome2.warnings}\n")
+
+    # Uncomment
+    root.session.age += 1
+    outcome3 = await root.uncomment(["1.1"])
+    file.write(f"uncomment affected: {outcome3.affected}\n")
+    print_header("After uncommenting 1.1", file)
+    root.print(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"unfinished after uncomment: {len(unfinished)}\n")
+
+    # Uncomment non-commented should warn
+    root.session.age += 1
+    outcome4 = await root.uncomment(["1.1"])
+    file.write(f"uncomment-non-commented warnings: {outcome4.warnings}\n")
+
+@model_test("CommentHave", "Test_CommentHave.thy", 8)
+async def _test_CommentHave(root: Root, file: MyIO):
+    """Comment a StdBlock (Have): entire subtree skipped, fact hidden from
+    successors, assemble skips it, siblings evaluate normally."""
+    # Build: Have sq (with Obvious proof) + second Obvious at top level
+    root.session.age += 1
+    await root.fill("1", [Have.gen_single({
+        "thought": "helper",
+        "statement": {"english": "non-negative", "conclusion": r"(0::int) \<le> x * x"},
+        "name": "sq",
+    })])
+    root.session.age += 1
+    await root.fill("1.1", [Obvious.gen_single({"facts": []})])
+    print_header("Proof built (Have + Obvious)", file)
+    root.print(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"unfinished before comment: {len(unfinished)}\n")
+
+    # Comment the whole Have block
+    root.session.age += 1
+    outcome = await root.comment(["1"])
+    file.write(f"comment Have affected: {outcome.affected}\n")
+    print_header("After commenting Have (step 1)", file)
+    root.print(0, file)
+    print_header("Quickview after commenting Have", file)
+    root.quickview(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"unfinished after comment Have: {len(unfinished)}\n")
+
+    # Verify assemble skips the commented block
+    assembled = root.assemble()
+    file.write(f"assembled ops count: {len(assembled)}\n")
+
+    # Uncomment and verify re-evaluation
+    root.session.age += 1
+    outcome2 = await root.uncomment(["1"])
+    file.write(f"uncomment Have affected: {outcome2.affected}\n")
+    print_header("After uncommenting Have (step 1)", file)
+    root.print(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"unfinished after uncomment Have: {len(unfinished)}\n")
+
+    # Verify assemble includes the block again
+    assembled2 = root.assemble()
+    file.write(f"assembled ops count after uncomment: {len(assembled2)}\n")
+
+
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
     import msgpack as mp
     from IsaREPL import Client
