@@ -5,7 +5,7 @@ System/initial/retry prompts are methods on Session (model.py).
 
 from . import model
 from .model import Node, NonLeaf_Node, Root
-from .model import tn, TOOL_EDIT, TOOL_DELETE
+from .model import tn, TOOL_EDIT, TOOL_DELETE, TOOL_COMMENT, CommentOutcome
 from io import StringIO
 from .helper import MyIO
 
@@ -146,6 +146,44 @@ async def deleted_steps_message(steps: list[str], root: Root, session: 'model.Se
     file = MyIO(StringIO())
     noun = "steps" if len(steps) > 1 else "step"
     file.write(f"Deleted {noun} {', '.join(session._display_id(s) for s in steps)}.\n")
+    _write_newly_completed(session, file)
+    if session.warnings:
+        file.write("Warnings:\n")
+        for w in session.warnings:
+            file.write(f"  - {w}\n")
+        session.warnings.clear()
+    file.write("Outline:\n")
+    session.quickview_proof_scope(1, file)
+    _render_auto_intro_warning(session, file)
+    unfinished = session.proof_scope_unfinished_nodes()
+    if not unfinished:
+        file.write("Congratulations! All goals are proven.\n")
+        finished = True
+    root.reset()
+    return file.getvalue(), finished
+
+
+async def comment_message(
+    outcome: CommentOutcome,
+    action: str,
+    root: Root,
+    session: 'model.Session',
+) -> tuple[str, bool]:
+    finished = False
+    file = MyIO(StringIO())
+    if outcome.affected:
+        noun = "steps" if len(outcome.affected) > 1 else "step"
+        ids = ', '.join(session._display_id(s) for s in outcome.affected)
+        if action == "comment":
+            file.write(f"Commented out {noun} {ids}.\n")
+        else:
+            file.write(f"Uncommented {noun} {ids}.\n")
+    if outcome.not_found:
+        noun = "steps" if len(outcome.not_found) > 1 else "step"
+        ids = ', '.join(session._display_id(s) for s in outcome.not_found)
+        file.write(f"Warning: {noun} {ids} not found.\n")
+    for w in outcome.warnings:
+        file.write(f"Warning: {w}\n")
     _write_newly_completed(session, file)
     if session.warnings:
         file.write("Warnings:\n")

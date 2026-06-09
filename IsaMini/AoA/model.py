@@ -993,6 +993,7 @@ class EvaluationStatus(NamedTuple):
         SUCCESS = "success"
         CANCELLED = "cancelled"
         FAILURE = "failure"
+        COMMENTED = "commented"
     status: Status
     time: timedelta
     reason: 'FailureReason | None'
@@ -1005,6 +1006,10 @@ class EvaluationStatus(NamedTuple):
         return EvaluationStatus(EvaluationStatus.Status.FAILURE, time, reason)
 EVALUATION_CACNCELLED = EvaluationStatus(EvaluationStatus.Status.CANCELLED, 0.0, None)
 EVALUATION_NOT_YET = EvaluationStatus.Failure(0.0, FailureReason("Not yet evaluated"))
+EVALUATION_COMMENTED = EvaluationStatus(EvaluationStatus.Status.COMMENTED, 0.0, None)
+
+def _status_can_continue(status: EvaluationStatus.Status) -> bool:
+    return status in (EvaluationStatus.Status.SUCCESS, EvaluationStatus.Status.COMMENTED)
 
 ### Bindings
 
@@ -2157,6 +2162,7 @@ TOOL_REPORT: tool = "report"
 TOOL_SUBAGENT: tool = "subagent"
 TOOL_CLOSE_SUBAGENT: tool = "cancel_subagent"
 TOOL_REFRESH: tool = "refresh"
+TOOL_COMMENT: tool = "comment"
 
 TOOL_ANSWER_INDEXES:        tool = "answer_indexes"
 TOOL_ANSWER_INDEX:          tool = "answer_index"
@@ -2173,7 +2179,7 @@ ANSWER_TOOLS: frozenset[tool] = frozenset({
 })
 
 ALL_PROOF_TOOLS: tuple[tool, ...] = (
-    TOOL_EDIT, TOOL_DELETE, TOOL_SEARCH, TOOL_READ,
+    TOOL_EDIT, TOOL_DELETE, TOOL_COMMENT, TOOL_SEARCH, TOOL_READ,
     TOOL_RECALL_REMOVED, TOOL_REQUEST_LEMMAS, TOOL_REPORT,
     TOOL_SUBAGENT, TOOL_CLOSE_SUBAGENT, TOOL_REFRESH,
     *ANSWER_TOOLS,
@@ -3056,6 +3062,8 @@ class Node(ABC):
         return type(self).__name__
     _done_label: str = "proven"
     def _should_print_done(self) -> bool:
+        if self.status.status == EvaluationStatus.Status.COMMENTED:
+            return False
         return not self.does_quickview_need_detail()
     def quickview_header(self, indent: int, file: MyIO) -> int:
         print_indent(indent, file)
@@ -3066,6 +3074,8 @@ class Node(ABC):
                 status_mark = "failed, "
             case EvaluationStatus.Status.CANCELLED:
                 status_mark = "pending, "
+            case EvaluationStatus.Status.COMMENTED:
+                status_mark = "commented, "
             case _:
                 status_mark = ""
         line_mark = f"line {self.line}, " if the_session().quickview_line_numbers else ""
@@ -3074,7 +3084,7 @@ class Node(ABC):
         file.write(f"{self._kind} {the_session()._display_id(self.id)}: {self.quickview_title()}{suffix}\n")
         return indent + 1
     def does_quickview_need_detail(self) -> bool:
-        return self.changed or self.status.status != EvaluationStatus.Status.SUCCESS
+        return self.changed or not _status_can_continue(self.status.status)
     def quickview(self, indent: int, file: MyIO) -> int:
         indent = self.quickview_header(indent, file)
         eval_key = (self.status.status,
@@ -3106,6 +3116,9 @@ class Node(ABC):
                         file.write(f"Error: cancelled (step `{cb}` failed)\n")
                 else:
                     file.write("Error: the evaluation is cancelled due to failures in preceding nodes\n")
+            case EvaluationStatus.Status.COMMENTED:
+                print_indent(indent, file)
+                file.write("(commented out)\n")
     def _print_evaluation_status_quickview(self, indent: int, file: MyIO) -> None:
         match self.status.status:
             case EvaluationStatus.Status.SUCCESS:
@@ -3174,7 +3187,8 @@ class Node(ABC):
             return self.parent._resulting_state_of_child(self)
 
     async def _cancel(self, cancelled_by: str | None = None) -> None:
-        if self.status.status == EvaluationStatus.Status.CANCELLED:
+        if self.status.status in (EvaluationStatus.Status.CANCELLED,
+                                  EvaluationStatus.Status.COMMENTED):
             return
         self._cancelled_by = cancelled_by
         self.status = EVALUATION_CACNCELLED
@@ -3227,7 +3241,7 @@ class Node(ABC):
         if self.parent is None:
             raise InternalError("Don't know how to refresh a node and all its after nodes when the node's parent is none")
         else:
-            await self.parent._refresh_all_children_after(self, self.status.status == EvaluationStatus.Status.SUCCESS)
+            await self.parent._refresh_all_children_after(self, _status_can_continue(self.status.status))
     async def insert_before_me(
         self, gns: 'list[Parsed_Opr]',
         op: 'EditOperation' = EditOperation.INSERT,
@@ -3366,7 +3380,7 @@ class Node(ABC):
             return Resolved_Slot(parent, id)
         raise NodeNotFound(id)
     def unfinished_nodes(self, ret: set['Node']) -> None:
-        if self.status.status != EvaluationStatus.Status.SUCCESS:
+        if not _status_can_continue(self.status.status):
             ret.add(self)
     async def aclose_all_subagents(self) -> None:
         """Recursively close every sub-agent in this node's subtree (cancel +
@@ -3440,7 +3454,7 @@ class Node(ABC):
                     found_i = i
                     break
             if found_i is None or any(
-                c.status.status == EvaluationStatus.Status.SUCCESS
+                _status_can_continue(c.status.status)
                 for c in node.sub_nodes[found_i:]
             ):
                 outcome.failure = CannotEdit_BadNode(
@@ -3468,7 +3482,7 @@ class Node(ABC):
                     node._delete_child(node.sub_nodes[i])
                 node._is_trivial = None
                 break
-        if rp is not None and rp.status.status == EvaluationStatus.Status.SUCCESS:
+        if rp is not None and _status_can_continue(rp.status.status):
             await rp._refresh_me_alone(auto_intro=False)
             if rp.parent is not None:
                 await rp._refresh_all_after_me()
@@ -3625,7 +3639,7 @@ class Node(ABC):
         # Refresh each point, skip if already refreshed this session age
         for rp in refresh_points:
             if rp.age < the_session().age:
-                if rp.status.status != EvaluationStatus.Status.SUCCESS:
+                if not _status_can_continue(rp.status.status):
                     continue
                 await rp._refresh_me_alone(auto_intro=False)
                 if rp.parent is not None:
@@ -3707,7 +3721,7 @@ class Node(ABC):
         # unlinking, or they orphan.
         await old_self.discard()
         rp = old_self._delete_me()
-        if rp is not None and rp.status.status == EvaluationStatus.Status.SUCCESS:
+        if rp is not None and _status_can_continue(rp.status.status):
             await rp._refresh_me_alone(auto_intro=False)
             if rp.parent is not None:
                 await rp._refresh_all_after_me()
@@ -3772,12 +3786,18 @@ class Leaf(Node):
     def assemble(self, output: list[Minilang_Operation] | None = None) -> list[Minilang_Operation]:
         if output is None:
             output = []
+        if self.status.status == EvaluationStatus.Status.COMMENTED:
+            return output
         op = self.the_operation()
         if isinstance(op, FailureReason):
             raise InternalError(f"Cannot assemble a node with failed operation: {op.reason}")
         output.append(op)
         return output
     async def _refresh_me_alone(self, auto_intro: bool) -> None:
+        if self.status.status == EvaluationStatus.Status.COMMENTED:
+            await self.ml_state.clone(self.resulting_state())
+            self.age = the_session().age
+            return
         now = time()
         await super()._refresh_me_alone(auto_intro)
         op = self.the_operation()
@@ -3883,12 +3903,12 @@ class NonLeaf_Node(Node):
             if c is child:
                 if i == 0:
                     return True
-                return self.sub_nodes[i-1].status.status == EvaluationStatus.Status.SUCCESS
+                return _status_can_continue(self.sub_nodes[i-1].status.status)
         raise InternalError("The target node is not my children")
     def _failed_predecessor_id(self, child: 'Node') -> str | None:
         for i, c in enumerate(self.sub_nodes):
             if c is child:
-                if i > 0 and self.sub_nodes[i-1].status.status != EvaluationStatus.Status.SUCCESS:
+                if i > 0 and not _status_can_continue(self.sub_nodes[i-1].status.status):
                     pred = self.sub_nodes[i-1]
                     if (pred.status.status == EvaluationStatus.Status.CANCELLED
                             and pred._cancelled_by is not None):
@@ -3914,7 +3934,7 @@ class NonLeaf_Node(Node):
                 else:
                     if can_continue:
                         await child._refresh_me_alone(auto_intro=True)
-                        if child.status.status != EvaluationStatus.Status.SUCCESS:
+                        if not _status_can_continue(child.status.status):
                             can_continue = False
                             failed_id = child.id
                     else:
@@ -4071,7 +4091,7 @@ class NonLeaf_Node(Node):
         for c in self.sub_nodes:
             if c is child:
                 return ret
-            else:
+            elif c.status.status != EvaluationStatus.Status.COMMENTED:
                 c._fixed_vars_after_me(ret)
         raise InternalError("The target node is not my children")
     def _all_fixed_facts_before_a_child(self, child: Node, ret: Hyps) -> Hyps:
@@ -4080,7 +4100,7 @@ class NonLeaf_Node(Node):
         for c in self.sub_nodes:
             if c is child:
                 return ret
-            else:
+            elif c.status.status != EvaluationStatus.Status.COMMENTED:
                 c._fixed_facts_after_me(ret)
         raise InternalError("The target node is not my children")
     def _all_fixed_tvars_before_a_child(self, child: Node, ret: TVars) -> TVars:
@@ -4089,13 +4109,14 @@ class NonLeaf_Node(Node):
         for c in self.sub_nodes:
             if c is child:
                 return ret
-            else:
+            elif c.status.status != EvaluationStatus.Status.COMMENTED:
                 c._fixed_tvars_after_me(ret)
         raise InternalError("The target node is not my children")
     def unfinished_nodes(self, ret: set['Node']) -> None:
         super().unfinished_nodes(ret)
-        for child in self.sub_nodes:
-            child.unfinished_nodes(ret)
+        if self.status.status != EvaluationStatus.Status.COMMENTED:
+            for child in self.sub_nodes:
+                child.unfinished_nodes(ret)
     async def discard(self) -> None:
         for child in self.sub_nodes:
             await child.discard()
@@ -4113,18 +4134,17 @@ class NonLeaf_Node(Node):
             child._print_all_warnings(file)
         self._print_warnings(0, file, [Warning.Position.FOOTER], show_at=True)
     def does_quickview_need_detail(self) -> bool:
+        if self.status.status == EvaluationStatus.Status.COMMENTED:
+            return self.changed
         return super().does_quickview_need_detail() or \
             any(child.does_quickview_need_detail() for child in self.sub_nodes)
     def _print_suspended_worker_hint(self, indent: int, file: MyIO) -> None:
         pass
     def quickview(self, indent: int, file: MyIO) -> int:
-        if not self.does_quickview_need_detail():
-            indent = self.quickview_header(indent, file)
-            self._print_suspended_worker_hint(indent, file)
-            return indent
         indent = super().quickview(indent, file)
         self._print_suspended_worker_hint(indent, file)
-        _quickview_children_compressed(self.sub_nodes, indent, file)
+        if self.does_quickview_need_detail():
+            _quickview_children_compressed(self.sub_nodes, indent, file)
         return indent
     def _rename_var(self, old_name: varname, new_name: varname) -> 'Node | None':
         for child in self.sub_nodes:
@@ -4232,7 +4252,8 @@ class StdBlock(NonLeaf_Node):
             factory=lambda cfg: cast(Any, cls)(cfg, arg, parsed),
             raw=arg)
     async def _cancel(self, cancelled_by: str | None = None) -> None:
-        if self.status.status == EvaluationStatus.Status.CANCELLED:
+        if self.status.status in (EvaluationStatus.Status.CANCELLED,
+                                  EvaluationStatus.Status.COMMENTED):
             return
         await super()._cancel(cancelled_by)
         await self._state_before_ending_.reset()
@@ -4281,6 +4302,8 @@ class StdBlock(NonLeaf_Node):
     def assemble(self, output: list[Minilang_Operation] | None = None) -> list[Minilang_Operation]:
         if output is None:
             output = []
+        if self.status.status == EvaluationStatus.Status.COMMENTED:
+            return output
         opr = self.beginning_opr()
         if isinstance(opr, FailureReason):
             raise InternalError(f"Cannot assemble a node with failed beginning operation: {opr.reason}")
@@ -4336,7 +4359,7 @@ class StdBlock(NonLeaf_Node):
                 else:
                     if can_continue:
                         await child._refresh_me_alone(auto_intro=True)
-                        if child.status.status != EvaluationStatus.Status.SUCCESS:
+                        if not _status_can_continue(child.status.status):
                             can_continue = False
                             failed_child = child
                     else:
@@ -4364,6 +4387,11 @@ class StdBlock(NonLeaf_Node):
             if self.parent is not None:
                 await self.parent._refresh_all_children_after(self, can_continue)
     async def _refresh_me_alone(self, auto_intro: bool):
+        if self.status.status == EvaluationStatus.Status.COMMENTED:
+            await self.ml_state.clone(self.resulting_state())
+            await self._state_before_ending_.reset()
+            self.age = the_session().age
+            return
         begin_opr = self.beginning_opr()
         now = time()
         reason: FailureReason | None = None
@@ -4386,11 +4414,12 @@ class StdBlock(NonLeaf_Node):
         for child in self.sub_nodes:
             if can_continue:
                 await child._refresh_me_alone(auto_intro=True)
-                can_continue = child.status.status == EvaluationStatus.Status.SUCCESS
-                if not can_continue:
-                    reason = self._child_refresh_failure_err_msgs(child)
-                    failed_child = child
-                    cancel_by = child.id
+                if child.status.status != EvaluationStatus.Status.COMMENTED:
+                    can_continue = child.status.status == EvaluationStatus.Status.SUCCESS
+                    if not can_continue:
+                        reason = self._child_refresh_failure_err_msgs(child)
+                        failed_child = child
+                        cancel_by = child.id
             else:
                 await child._cancel(cancel_by)
         if can_continue:
@@ -4421,9 +4450,10 @@ class StdBlock(NonLeaf_Node):
         self._fixed_tvars_at_me(tvars)
         self._fixed_facts_at_me(hyps)
         for child in self.sub_nodes:
-            child._fixed_vars_after_me(vars)
-            child._fixed_tvars_after_me(tvars)
-            child._fixed_facts_after_me(hyps)
+            if child.status.status != EvaluationStatus.Status.COMMENTED:
+                child._fixed_vars_after_me(vars)
+                child._fixed_tvars_after_me(tvars)
+                child._fixed_facts_after_me(hyps)
         return Context(vars, tvars, hyps)
     @abstractmethod
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False) -> None:
@@ -4473,6 +4503,8 @@ class StdBlock(NonLeaf_Node):
         return len(unfinished_nodes) == 0
     def unfinished_nodes(self, ret: set['Node']) -> None:
         super().unfinished_nodes(ret)
+        if self.status.status == EvaluationStatus.Status.COMMENTED:
+            return
         if self.opening():
             if not self._state_before_ending_.initialized() or self.has_pending_goal():
                 ret.add(self)
@@ -4488,7 +4520,7 @@ class StdBlock(NonLeaf_Node):
         i = len(self.sub_nodes)
         while i > 0:
             child = self.sub_nodes[i - 1]
-            if isinstance(child, Obvious) and child.status.status != EvaluationStatus.Status.SUCCESS:
+            if isinstance(child, Obvious) and not _status_can_continue(child.status.status):
                 i -= 1
             else:
                 break
@@ -4501,6 +4533,8 @@ class StdBlock(NonLeaf_Node):
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False):
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
         self._print_header(indent, file, show_warnings=show_warnings)
+        if self.status.status == EvaluationStatus.Status.COMMENTED:
+            return indent
         self._print_suspended_worker_hint(indent, file)
         title, child_indent = self._title_of_children(indent)
         if title is None:
@@ -4532,6 +4566,8 @@ class StdBlock(NonLeaf_Node):
             s = the_session()
             file.write(f"A sub-agent is suspended on this step. Call `{s.tool_name(TOOL_SUBAGENT)}` with step {sid} to resume it, or `{s.tool_name(TOOL_CLOSE_SUBAGENT)}` with step {sid} to cancel and remove it.\n")
     def does_quickview_need_detail(self) -> bool:
+        if self.status.status == EvaluationStatus.Status.COMMENTED:
+            return self.changed
         if super().does_quickview_need_detail():
             return True
         if self.opening():
@@ -4539,6 +4575,8 @@ class StdBlock(NonLeaf_Node):
                 return True
         return False
     def _quickview_pending_footer(self, indent: int, file: MyIO) -> None:
+        if self.status.status == EvaluationStatus.Status.COMMENTED:
+            return
         if self.opening():
             if not self._state_before_ending_.initialized():
                 print_indent(indent, file)
@@ -6180,6 +6218,8 @@ class Obvious(Leaf):
     def assemble(self, output: 'list[Minilang_Operation] | None' = None) -> 'list[Minilang_Operation]':
         if output is None:
             output = []
+        if self.status.status == EvaluationStatus.Status.COMMENTED:
+            return output
         facts = self.fact_refs if self.fact_refs is not None else []
         cached: tuple[str, int] | None = None
         if self._found_tactic and self._found_tactic != "" and self._eval_time_ms is not None:
@@ -7989,37 +8029,43 @@ class SplitConjs(SubgoalMaker):
     def _all_fixed_facts_before_a_child(self, child: Node, ret: Hyps) -> Hyps:
         self._all_fixed_facts_before_me(ret)
         self._fixed_facts_at_me(ret)
+        _COMMENTED = EvaluationStatus.Status.COMMENTED
         for c in self.sub_nodes:
             if c is child:
                 return ret
             elif isinstance(c, GoalNode):
                 for gc in c.sub_nodes:
-                    gc._fixed_facts_after_me(ret)
-            else:
+                    if gc.status.status != _COMMENTED:
+                        gc._fixed_facts_after_me(ret)
+            elif c.status.status != _COMMENTED:
                 c._fixed_facts_after_me(ret)
         raise InternalError("The target node is not my children")
     def _all_fixed_vars_before_a_child(self, child: Node, ret: Vars) -> Vars:
         self._all_fixed_vars_before_me(ret)
         self._fixed_vars_at_me(ret)
+        _COMMENTED = EvaluationStatus.Status.COMMENTED
         for c in self.sub_nodes:
             if c is child:
                 return ret
             elif isinstance(c, GoalNode):
                 for gc in c.sub_nodes:
-                    gc._fixed_vars_after_me(ret)
-            else:
+                    if gc.status.status != _COMMENTED:
+                        gc._fixed_vars_after_me(ret)
+            elif c.status.status != _COMMENTED:
                 c._fixed_vars_after_me(ret)
         raise InternalError("The target node is not my children")
     def _all_fixed_tvars_before_a_child(self, child: Node, ret: TVars) -> TVars:
         self._all_fixed_tvars_before_me(ret)
         self._fixed_tvars_at_me(ret)
+        _COMMENTED = EvaluationStatus.Status.COMMENTED
         for c in self.sub_nodes:
             if c is child:
                 return ret
             elif isinstance(c, GoalNode):
                 for gc in c.sub_nodes:
-                    gc._fixed_tvars_after_me(ret)
-            else:
+                    if gc.status.status != _COMMENTED:
+                        gc._fixed_tvars_after_me(ret)
+            elif c.status.status != _COMMENTED:
                 c._fixed_tvars_after_me(ret)
         raise InternalError("The target node is not my children")
 
@@ -8647,24 +8693,22 @@ class GlobalEnv(StdBlock):
             self.line = file.current_line()
         return indent
     def _fixed_vars_after_me(self, ret: Vars) -> Vars:
-        # Aggregate vars introduced by children (e.g. a global Obtain), so
-        # that sibling GoalNodes see them in their Python-side context.
+        _COMMENTED = EvaluationStatus.Status.COMMENTED
         for child in self.sub_nodes:
-            child._fixed_vars_after_me(ret)
+            if child.status.status != _COMMENTED:
+                child._fixed_vars_after_me(ret)
         return ret
     def _fixed_tvars_after_me(self, ret: TVars) -> TVars:
+        _COMMENTED = EvaluationStatus.Status.COMMENTED
         for child in self.sub_nodes:
-            child._fixed_tvars_after_me(ret)
+            if child.status.status != _COMMENTED:
+                child._fixed_tvars_after_me(ret)
         return ret
     def _fixed_facts_after_me(self, ret: Hyps) -> Hyps:
-        # Aggregate facts established by children (e.g. global Have's) so that
-        # sibling GoalNodes see them in their Python-side context. Without
-        # this, Root's _all_fixed_facts_before_a_child(GoalNode, ...) walk
-        # would call the default no-op on GlobalEnv and drop every global
-        # declaration on the floor, even though the underlying Isabelle state
-        # does carry them.
+        _COMMENTED = EvaluationStatus.Status.COMMENTED
         for child in self.sub_nodes:
-            child._fixed_facts_after_me(ret)
+            if child.status.status != _COMMENTED:
+                child._fixed_facts_after_me(ret)
         return ret
     def _print_footer(self, indent: int, file: MyIO, show_warnings: bool = False) -> None:
         print_indent(indent, file)
@@ -8818,6 +8862,56 @@ class Root(GoalContainer, StdBlock):
 
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         raise InternalError("Depreciated")
+
+    async def comment(self, steps: list[step]) -> 'CommentOutcome':
+        affected: list[step] = []
+        not_found: list[step] = []
+        warnings: list[str] = []
+        for sid in steps:
+            try:
+                node = self.locate_node(sid)
+            except NodeNotFound:
+                not_found.append(sid)
+                continue
+            if isinstance(node, (Root, GlobalEnv, GoalNode)):
+                raise AoA_Error(
+                    f"Step {the_session()._display_id(sid)} is a structural container "
+                    f"({type(node).__name__}) and cannot be commented out.")
+            if node.status.status == EvaluationStatus.Status.COMMENTED:
+                warnings.append(
+                    f"Step {the_session()._display_id(sid)} is already commented out.")
+                continue
+            node.status = EVALUATION_COMMENTED
+            await node._refresh_me_alone(auto_intro=False)
+            await node._refresh_all_after_me()
+            affected.append(sid)
+        return CommentOutcome(affected, not_found, warnings)
+
+    async def uncomment(self, steps: list[step]) -> 'CommentOutcome':
+        affected: list[step] = []
+        not_found: list[step] = []
+        warnings: list[str] = []
+        for sid in steps:
+            try:
+                node = self.locate_node(sid)
+            except NodeNotFound:
+                not_found.append(sid)
+                continue
+            if node.status.status != EvaluationStatus.Status.COMMENTED:
+                warnings.append(
+                    f"Step {the_session()._display_id(sid)} is not commented out.")
+                continue
+            node.status = EVALUATION_NOT_YET
+            node._has_considered_auto_intro = False
+            await node._refresh_me_alone(auto_intro=True)
+            await node._refresh_all_after_me()
+            affected.append(sid)
+        return CommentOutcome(affected, not_found, warnings)
+
+class CommentOutcome(NamedTuple):
+    affected: list[step]
+    not_found: list[step]
+    warnings: list[str]
 
 # class Hierarchy
 
@@ -9508,6 +9602,7 @@ class Session:
                 "## Tools\n"
                 f"- {self.tool_name(TOOL_EDIT)}: Fill, insert, or amend proof steps (your primary tool)\n"
                 f"- {self.tool_name(TOOL_DELETE)}: Delete proof steps\n"
+                f"- {self.tool_name(TOOL_COMMENT)}: Comment out or uncomment proof steps\n"
                 f"- {self.tool_name(TOOL_SEARCH)}: Search for theorems, constants, types, and rules; help you understand unfamiliar terms\n"
                 f"- {self.tool_name(TOOL_READ)}: Recall proof state from `proof.yaml`. Use only when you have lost track.\n"
                 f"- {self.tool_name(TOOL_RECALL_REMOVED)}: Browse deleted proof steps that were archived before removal.\n"
@@ -9699,7 +9794,9 @@ class Session:
                 self.log_initial_prompt(await self.initial_prompt())
             case Role_Worker() | Role_Interaction():
                 assert self.root is root
-                self.working_block = root
+                self.working_block = (
+                    self.role.target if isinstance(self.role, Role_Worker)
+                    else root)
                 await self._prefetch_worker_premises()
                 # A worker's opening message is `initial_prompt()` (sent by the
                 # driver loop); interaction forks use their own prompts instead,
