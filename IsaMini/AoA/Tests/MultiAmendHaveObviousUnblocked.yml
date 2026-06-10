@@ -28,7 +28,7 @@ proof:
       False
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
 --------------------------------------------------
-[2] fill 1.1 with Obvious — fails, _is_trivial=False
+[2] fill 1.1 with [Have True, Obvious] — Obvious fails and is kept, _is_trivial=False
 --------------------------------------------------
 variables:
   - x: int
@@ -42,22 +42,36 @@ proof:
       english: False
       conclusion: False
     name: absurd
-    proof: empty
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    proof:
+      - step id: 1.1
+        thought: warm-up helper
+        operation: Have
+        statement:
+          english: True
+          conclusion: True
+        name: warm
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+      - step id: 1.2
+        operation: Obvious
+        Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2` to replace it with a proof.
     pending proof goal:
       False
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
 --------------------------------------------------
-[3] multi-amend 1.1 → [Have(True), Obvious] — must not be blocked
+[3] multi-amend 1.2 → [Have(True), Obvious] — must not be blocked
 --------------------------------------------------
-Filled step 1.1-1.2.
-All proof goals of step 1.1 are now completed.
+Amended step 1.2-1.3.
+All proof goals of step 1.1, step 1.2 are now completed.
 Outline:
   step 1: Have absurd
-    step 1.1: Have triv (done)
-    step 1.2: Obvious (failed)
+    step 1.1: Have warm (proven)
+    step 1.2: Have triv (proven)
+    step 1.3: Obvious (failed)
       Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
-    Error: Unfinished Proof. Call command `edit` with action `fill` and target step `1.2`
+    Error: Unfinished Proof. Call command `edit` with action `fill` and target step `1.3`
     goal: False
   Error: Unfinished Proof. Fill step `2`
   goal: (0 :: int) ≤ x * x
@@ -79,6 +93,16 @@ proof:
     name: absurd
     proof:
       - step id: 1.1
+        thought: warm-up helper
+        operation: Have
+        statement:
+          english: True
+          conclusion: True
+        name: warm
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+      - step id: 1.2
         thought: trivial truth
         operation: Have
         statement:
@@ -86,14 +110,14 @@ proof:
           conclusion: True
         name: triv
         proof:
-          - step id: 1.1.1
+          - step id: 1.2.1
             operation: Obvious
-      - step id: 1.2
+      - step id: 1.3
         operation: Obvious
         with facts:
           - triv: True
         Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2` to replace it with a proof.
+    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.3` to replace it with a proof.
     pending proof goal:
       False
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.

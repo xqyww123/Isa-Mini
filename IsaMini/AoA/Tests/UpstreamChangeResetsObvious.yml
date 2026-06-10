@@ -68,8 +68,9 @@ proof:
     pending proof goal:
       False
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof.
+Single-op Obvious failure reverted; _is_trivial cleared to None
 --------------------------------------------------
-After step 2.1 (Obvious fails on False)
+After step 2.1 (Obvious fails on False, reverted)
 --------------------------------------------------
 variables:
   - y: nat
@@ -102,7 +103,8 @@ proof:
     pending proof goal:
       False
 Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof.
-Obvious retry correctly blocked by GoalIsNontrivial
+Obvious retry allowed (fails on the hammer, not GoalIsNontrivial)
+Obvious correctly blocked by GoalIsNontrivial while flag is False
 After amend: step2._is_trivial correctly reset to None
 --------------------------------------------------
 After amending step 1
