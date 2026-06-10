@@ -67,6 +67,10 @@
         "required": ["kinds"],
         "additionalProperties": false
       }
+    },
+    "context_at": {
+      "type": "string",
+      "description": "Use the proof context at this step for name resolution and fact lookup."
     }
   },
   "required": ["queries"],

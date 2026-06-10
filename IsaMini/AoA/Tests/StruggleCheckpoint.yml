@@ -26,3 +26,9 @@ edit=15 delete=3: True
 fork interaction stub
 --------------------------------------------------
 fork result: (False, 'test: not stuck')
+--------------------------------------------------
+sub-subagent thresholds
+--------------------------------------------------
+sub-subagent subsequent thresholds: edit=10 delete=3
+detected as sub-subagent: True
+normal worker subsequent thresholds: edit=15 delete=3

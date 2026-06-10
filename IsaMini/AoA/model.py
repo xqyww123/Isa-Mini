@@ -887,6 +887,39 @@ def _validate_raw_proof(data: Any, path: str) -> Any:
         data = [data]
     return _validate_list(raw_op, data, path)
 
+# Scalar leaf validation. Without these, `validate` silently passes any
+# value for a scalar-typed field (e.g. `{"name": None}` as a FactByName),
+# and the bad value crashes far from the parse site (e.g. a raw TypeError
+# in `_of_clause` rendering the fact suffix).
+@validator(str)
+def _validate_str(data: Any, path: str) -> str:
+    if isinstance(data, str):
+        return data
+    # LLMs routinely emit bare numbers for term/name fields; int/float → str
+    # is the only unambiguous coercion, so accept it. Everything else
+    # (null, bool, objects, arrays) is rejected.
+    if isinstance(data, (int, float)) and not isinstance(data, bool):
+        return str(data)
+    raise ArgumentError({}, f"{path}: expected a string, got {type(data).__name__}")
+
+@validator(bool)
+def _validate_bool(data: Any, path: str) -> bool:
+    if isinstance(data, bool):
+        return data
+    raise ArgumentError({}, f"{path}: expected a boolean, got {type(data).__name__}")
+
+@validator(int)
+def _validate_int(data: Any, path: str) -> int:
+    if isinstance(data, int) and not isinstance(data, bool):
+        return data
+    raise ArgumentError({}, f"{path}: expected an integer, got {type(data).__name__}")
+
+@validator(float)
+def _validate_float(data: Any, path: str) -> float:
+    if isinstance(data, (int, float)) and not isinstance(data, bool):
+        return data
+    raise ArgumentError({}, f"{path}: expected a number, got {type(data).__name__}")
+
 def _is_union_origin(origin) -> bool:
     return origin is Union or origin is _types.UnionType
 
@@ -903,6 +936,11 @@ def validate(typ: 'type | TypeAliasType', data: Any, path: str) -> Any:
         return _validate_list(get_args(typ)[0], data, path)
     if _is_union_origin(origin):
         return _validate_union(get_args(typ), data, path)
+    if origin is Literal:
+        if data in get_args(typ):
+            return data
+        joined = _join_options([f"`{v}`" for v in get_args(typ)])
+        raise ArgumentError(data, f"`{path}` must be one of {joined}")
     return data
 
 def _validate_typed_dict(typ: type, data: Any, path: str) -> Any:
@@ -977,13 +1015,12 @@ def _validate_union(args: tuple[type, ...], data: Any, path: str) -> Any:
             options.extend(f"`{v}`" for v in get_args(t))
         else:
             options.append(f"`{getattr(t, '__name__', str(t))}`")
+    raise ArgumentError(data, f"`{path}` must be one of {_join_options(options)}")
+
+def _join_options(options: list[str]) -> str:
     if len(options) >= 3:
-        joined = ", ".join(options[:-1]) + ", or " + options[-1]
-    elif len(options) == 2:
-        joined = " or ".join(options)
-    else:
-        joined = options[0]
-    raise ArgumentError(data, f"`{path}` must be one of {joined}")
+        return ", ".join(options[:-1]) + ", or " + options[-1]
+    return " or ".join(options)
 
 ## Minilang Runtime
 ### Evaluation Status

@@ -1157,7 +1157,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
 
       val s0_flat_goal = Minilang.leading_goal_data s0
       val au = agent_context_unpacker
-      val {constants, theorems, types, classes, locales,
+      val {constants, theorems, types, classes, locales, named_theorems, methods,
            introduction_rules, elimination_rules,
            induction_rules, case_split_rules} =
         Semantic_Store.make_entity_callbacks (Context.Proof ctxt) au
@@ -1211,7 +1211,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
           mk_callback check_looping_rules_callback,
           Universal_Key.make_universal_key_callback' (SOME thm_cache) au,
           Config.make_config_lookup_callback au,
-          constants, theorems, types, classes, locales,
+          constants, theorems, types, classes, locales, named_theorems, methods,
           introduction_rules, elimination_rules,
           induction_rules, case_split_rules,
           Context_Callbacks.make_theory_long_name_callback au,

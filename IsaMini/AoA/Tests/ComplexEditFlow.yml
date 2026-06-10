@@ -12,7 +12,7 @@ Error: Unfinished Proof! Call command `edit` with action `fill` and target step 
 --------------------------------------------------
 Filled step 1.
 Outline:
-  done
+  proven
 Congratulations! All goals are proven.
 ---------------
 is_error: False
@@ -55,7 +55,7 @@ is_error: False
 Amended step 1.
 All proof goals of step 1 are now completed.
 Outline:
-  step 1: Have aux2 (done)
+  step 1: Have aux2 (proven)
   Error: Unfinished Proof. Fill step `2`
 ---------------
 is_error: False
@@ -65,9 +65,9 @@ is_error: False
 Inserted step 0A-0B.
 All proof goals of step 0A, step 0B are now completed.
 Outline:
-  step 0A: Have h1 (done)
-  step 0B: Have h2 (done)
-  step 1: Have aux2 (done)
+  step 0A: Have h1 (proven)
+  step 0B: Have h2 (proven)
+  step 1: Have aux2 (proven)
   Error: Unfinished Proof. Fill step `2`
 ---------------
 is_error: False

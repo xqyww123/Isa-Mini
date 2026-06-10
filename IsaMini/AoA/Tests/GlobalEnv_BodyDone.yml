@@ -30,7 +30,7 @@ Outline:
     step global.1: Have g1
       Error: Unfinished Proof. Fill step `global.1.1`
   proof:
-    done
+    proven
 ---------------
 --------------------------------------------------
 edit_message: ADD global g2 (unfinished)
@@ -45,7 +45,7 @@ Outline:
       goal: P
       the statement is quantified over P
   proof:
-    done
+    proven
 ---------------
 --------------------------------------------------
 edit_message: ADD global g3 (unfinished)
@@ -62,5 +62,5 @@ Outline:
       goal: P
       the statement is quantified over P
   proof:
-    done
+    proven
 ---------------

@@ -19,7 +19,7 @@ step 1: SplitConjs
 After closing case 1.1 with Have 'helper'
 --------------------------------------------------
 step 1: SplitConjs
-  - 1.1 (done)
+  - 1.1 (proven)
   - 1.2
     Error: Unfinished Proof. Fill step `1.2.1`
 OK: no Have facts leaked into sibling case

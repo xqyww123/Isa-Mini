@@ -187,6 +187,7 @@ async def _format_fetched_entity(
     prefix: str = "- ",
     indent: int = 0,
     session: Session | None = None,
+    ml_state: Minilang_State | None = None,
     def_info: tuple[str, IsabellePosition] | bool | None = None,
     potential_defs: bool = False,
     abbreviation_defs: dict[str, tuple[str, str]] = {},
@@ -215,8 +216,8 @@ async def _format_fetched_entity(
         print_indent(indent + 1, buf)
         buf.write(f"{f.interpretation}\n")
     if def_info is True and session is not None:
-        def_info = await _get_def_for_fetched(
-            session.retrieval_state().connection, f, ctxt=session.retrieval_state().name)
+        rs = ml_state or session.retrieval_state()
+        def_info = await _get_def_for_fetched(rs.connection, f, ctxt=rs.name)
     if isinstance(def_info, tuple) and session is not None:
         source, cmd_pos = def_info
         if not _PROOF_COMMAND_RE.match(source):
@@ -232,7 +233,8 @@ async def _format_fetched_entity(
                 buf.write(f"where `{_trunc_expr(lhs)}` abbreviates `{_trunc_expr(rhs)}`\n")
     if potential_defs and session is not None and f.entity.kind == EntityKind.CONSTANT:
         try:
-            candidates = await session.retrieval_state().potential_defs_of([f.entity.short_name])
+            rs = ml_state or session.retrieval_state()
+            candidates = await rs.potential_defs_of([f.entity.short_name])
             if candidates:
                 seen = session.seen_entities
                 print_indent(indent + 1, buf)
@@ -489,6 +491,7 @@ async def _render_fetched_entities(
     retrieved: list[str] = []
     for f in entities:
         await _format_fetched_entity(f, buf, indent=indent, session=session,
+                                     ml_state=ml_state,
                                      def_info=True,
                                      potential_defs=(f.score == 1.0),
                                      abbreviation_defs=abbrev_defs,
@@ -500,10 +503,11 @@ async def _render_fetched_entities(
 
 async def _semantic_search_direct(
     session: Session, queries: list[dict],
+    override_state: Minilang_State | None = None,
 ) -> str:
     """Run semantic search queries concurrently, returning formatted results.
     Each query carries its own ``k`` (see ``_query_k``)."""
-    ml_state = session.retrieval_state()
+    ml_state = override_state or session.retrieval_state()
 
     # Run all queries concurrently (knn + entity retrieval in one step)
     knn_results = await asyncio.gather(
@@ -604,7 +608,10 @@ class Interaction_RetrieveForSearch(Interaction_Retrieve):
         file.write("Answer with the indices of all relevant entries.\n")
 
 
-async def _semantic_search_with_filtering(session: Session, queries: list[dict]) -> str:
+async def _semantic_search_with_filtering(
+    session: Session, queries: list[dict],
+    override_state: Minilang_State | None = None,
+) -> str:
     """Run semantic search and spawn one sub-agent per query to filter candidates.
 
     Sub-agents run concurrently via ``asyncio.gather``. Each sub-agent returns
@@ -617,10 +624,10 @@ async def _semantic_search_with_filtering(session: Session, queries: list[dict])
     surfaces its warnings (e.g. ``Undefined: "<name>"``). Only the remaining
     queries get the fork-filtering treatment.
     """
-    ml_state = session.retrieval_state()
+    ml_state = override_state or session.retrieval_state()
     exact_queries = [q for q in queries if q.get("exact_name")]
     filter_queries = [q for q in queries if not q.get("exact_name")]
-    exact_result = (await _semantic_search_direct(session, exact_queries)
+    exact_result = (await _semantic_search_direct(session, exact_queries, override_state)
                     if exact_queries else None)
 
     interactions: list[Interaction] = []
@@ -701,7 +708,8 @@ async def _semantic_search_with_filtering(session: Session, queries: list[dict])
 
             for f in new_fetched:
                 await _format_fetched_entity(f, buf, indent=indent,
-                                             session=session, def_info=True,
+                                             session=session, ml_state=ml_state,
+                                             def_info=True,
                                              potential_defs=(f.score == 1.0),
                                              abbreviation_defs=abbrev_defs)
 
@@ -718,10 +726,11 @@ async def _semantic_search_with_filtering(session: Session, queries: list[dict])
 
 async def _semantic_search_extend_candidates(
     session: Session, queries: list[dict], interaction: Interaction_Retrieve,
+    override_state: Minilang_State | None = None,
 ) -> str:
     """Run semantic search queries and extend the active interaction's candidate list.
     Output uses the same format as the interaction prompt, with continuing indices."""
-    ml_state = session.retrieval_state()
+    ml_state = override_state or session.retrieval_state()
 
     # Run all queries concurrently (knn + entity retrieval in one step)
     knn_results = await asyncio.gather(
@@ -754,7 +763,8 @@ async def _semantic_search_extend_candidates(
     # Format with unified renderer (numbered for fork prompt)
     buf = StringIO()
     for i, fetched in enumerate(new_facts):
-        await _format_fetched_entity(fetched, buf, prefix=f"{start_idx + i}. ")
+        await _format_fetched_entity(fetched, buf, prefix=f"{start_idx + i}. ",
+                                     ml_state=ml_state)
     for w in _format_warn_lines(queries, per_query_warnings):
         buf.write(w)
         buf.write('\n')
@@ -802,9 +812,12 @@ async def _query_entity_core(connection, tag: EntityKind, name: str,
     return (buf.getvalue().rstrip('\n'), False, uk)
 
 
-async def _handle_exact_term_query(session: Session, term_str: str) -> str:
+async def _handle_exact_term_query(
+    session: Session, term_str: str,
+    override_state: Minilang_State | None = None,
+) -> str:
     """Handle an exact_term query: parse, show unfolded form, get head semantics."""
-    ml_state = session.retrieval_state()
+    ml_state = override_state or session.retrieval_state()
     try:
         head_name, raw_display, normal_display = await ml_state.unfold_syntax(term_str)
     except InternalError_UnparsedTerm as e:
@@ -942,6 +955,17 @@ async def _query_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         else:
             queries = [args]
 
+        # Resolve optional context_at override
+        context_at_id = (args.get("context_at") or "").strip() or None
+        override_state: Minilang_State | None = None
+        if context_at_id is not None:
+            try:
+                override_state = session.resolve_context_at(context_at_id)
+            except ValueError as e:
+                error_msg = str(e)
+                session.log_tool_response(session.tool_name(TOOL_SEARCH), f"ERROR: {error_msg}")
+                return (error_msg, True)
+
         # Coerce array-of-string fields the LLM may have sent as scalars, so
         # they survive the ML callbacks' `unpackList unpackString` arg schema.
         queries = [_normalize_query_string_list_fields(q) for q in queries]
@@ -959,7 +983,8 @@ async def _query_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
 
         # Handle exact_term queries
         for q in exact_term_queries:
-            results.append(await _handle_exact_term_query(session, q["exact_term"]))
+            results.append(await _handle_exact_term_query(session, q["exact_term"],
+                                                          override_state))
 
         # Handle regular queries
         if regular_queries:
@@ -968,11 +993,13 @@ async def _query_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
                     and isinstance(pending.interaction, Interaction_Retrieve)):
                 # Fork session extending its own candidate list
                 results.append(await _semantic_search_extend_candidates(
-                    session, regular_queries, pending.interaction))
+                    session, regular_queries, pending.interaction, override_state))
             elif session.interactive_retrieval == InteractiveRetrievalMode.NO:
-                results.append(await _semantic_search_direct(session, regular_queries))
+                results.append(await _semantic_search_direct(session, regular_queries,
+                                                             override_state))
             else:
-                results.append(await _semantic_search_with_filtering(session, regular_queries))
+                results.append(await _semantic_search_with_filtering(session, regular_queries,
+                                                                      override_state))
 
         return ("\n\n".join(results), False)
     except ArgumentError as e:

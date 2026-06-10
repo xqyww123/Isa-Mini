@@ -6541,9 +6541,19 @@ async def _test_Obtain_Rewrite_Scope(root: Root, file: MyIO):
 
 @model_test("UpstreamChangeResetsObvious", "Test_UpstreamChangeResetsObvious.thy", 11)
 async def _test_UpstreamChangeResetsObvious(root: Root, file: MyIO):
-    """After Obvious fails, _is_trivial=False blocks retries.  Amending or
-    inserting before the parent step should call _on_upstream_change, resetting
-    _is_trivial so Obvious can be attempted again."""
+    """_is_trivial lifecycle around failed Obvious attempts.
+
+    Since the _is_trivial reset on TERMINATE_AND_REVERT (923e624), a failed
+    single-op Obvious fill reverts AND clears the parent's flag, so retries
+    are no longer blocked — the flag only persists while a failed Obvious
+    is actually in the tree.  This test pins both halves:
+
+    1. single-op fill fails → node reverted, _is_trivial=None, an identical
+       retry is allowed (fails the same way, not GoalIsNontrivial);
+    2. with a stale _is_trivial=False (white-boxed, as an in-tree failed
+       Obvious would leave it), the GoalIsNontrivial gate blocks a new
+       Obvious, and amend / insert_before of an upstream step reset the
+       flag via _on_upstream_change so Obvious can be attempted again."""
     print_header("Initial YAML", file)
     root.print(0, file)
 
@@ -6569,23 +6579,44 @@ async def _test_UpstreamChangeResetsObvious(root: Root, file: MyIO):
     print_header("After step 2 (Have False, open proof)", file)
     root.print(0, file)
 
-    # Step 2.1: Obvious — must fail (can't prove False)
+    # Step 2.1: Obvious — fails (can't prove False), single-op fill is
+    # auto-reverted and the revert clears _is_trivial back to None.
     root.session.age += 1
-    await root.fill("2.1", [Obvious.gen_single({"facts": []})])
+    _outcome = await root.fill("2.1", [Obvious.gen_single({"facts": []})])
     step2 = root.locate_node("2")
-    assert step2._is_trivial is False, \
-        f"Expected _is_trivial=False after Obvious failure, got {step2._is_trivial}"
-    print_header("After step 2.1 (Obvious fails on False)", file)
+    assert isinstance(_outcome.failure, CannotEdit_EvaluationFailed), \
+        f"Expected CannotEdit_EvaluationFailed but got {_outcome.failure!r}"
+    assert step2._is_trivial is None, \
+        f"Expected _is_trivial=None after single-op fill revert, got {step2._is_trivial}"
+    file.write("Single-op Obvious failure reverted; _is_trivial cleared to None\n")
+    print_header("After step 2.1 (Obvious fails on False, reverted)", file)
     root.print(0, file)
 
-    # Retry Obvious on step 2.1 — should be BLOCKED by GoalIsNontrivial
+    # Retry Obvious on step 2.1 — must NOT be blocked: it fails on the
+    # hammer again (CannotEdit_EvaluationFailed), not GoalIsNontrivial.
+    root.session.age += 1
+    _outcome = await root.fill("2.1", [Obvious.gen_single({"facts": []})])
+    assert isinstance(_outcome.failure, CannotEdit_EvaluationFailed), \
+        f"Expected CannotEdit_EvaluationFailed on retry but got {_outcome.failure!r}"
+    assert step2._is_trivial is None, \
+        f"Expected _is_trivial=None after retried revert, got {step2._is_trivial}"
+    file.write("Obvious retry allowed (fails on the hammer, not GoalIsNontrivial)\n")
+
+    # --- GoalIsNontrivial gate + _on_upstream_change reset ---
+    # White-box a stale _is_trivial=False: an in-tree failed Obvious (kept
+    # by a multi-op batch, or re-failed during a refresh cascade) leaves
+    # the parent in exactly this state; a reverted single-op fill no
+    # longer does, and keeping a failed Obvious in the tree here would let
+    # the post-amend refresh cascade re-set the flag and mask the reset
+    # under test.
+    step2._is_trivial = False
     root.session.age += 1
     _outcome = await root.fill("2.1", [Obvious.gen_single({"facts": []})])
     assert isinstance(_outcome.failure, GoalIsNontrivial), \
         f"Expected GoalIsNontrivial failure but got {_outcome.failure!r}"
-    file.write("Obvious retry correctly blocked by GoalIsNontrivial\n")
+    file.write("Obvious correctly blocked by GoalIsNontrivial while flag is False\n")
 
-    # --- Test amend: amend step 1 → _on_upstream_change should reset step2._is_trivial ---
+    # amend step 1 → _on_upstream_change should reset step2._is_trivial
     root.session.age += 1
     await root.amend("1", [Have.gen_single({
         "thought": "amended helper",
@@ -6599,23 +6630,26 @@ async def _test_UpstreamChangeResetsObvious(root: Root, file: MyIO):
     print_header("After amending step 1", file)
     root.print(0, file)
 
-    # Obvious on step 2.1 should now be ALLOWED (not blocked), though it will still fail
+    # Obvious on step 2.1 is allowed again (still fails on False + reverts)
     root.session.age += 1
-    await root.fill("2.1", [Obvious.gen_single({"facts": []})])
+    _outcome = await root.fill("2.1", [Obvious.gen_single({"facts": []})])
+    assert isinstance(_outcome.failure, CannotEdit_EvaluationFailed), \
+        f"Expected CannotEdit_EvaluationFailed but got {_outcome.failure!r}"
     file.write("Obvious retry allowed after amend (fails on False, as expected)\n")
-    assert step2._is_trivial is False, \
-        f"Expected _is_trivial=False after Obvious fails again, got {step2._is_trivial}"
     print_header("After Obvious retry (allowed, fails)", file)
     root.print(0, file)
 
     # --- Test insert_before: insert before step 2 → _on_upstream_change resets again ---
+    # Keep asserting on the same node object: the insertion renumbers the
+    # "bad" block from step 2 to step 3, so re-locating "2" would find the
+    # freshly inserted Have instead.
+    step2._is_trivial = False
     root.session.age += 1
     await root.insert_before("2", [Have.gen_single({
         "thought": "inserted step",
         "statement": {"english": "True", "conclusion": "True"},
         "name": "ins",
     })])
-    step2 = root.locate_node("2")
     assert step2._is_trivial is None, \
         f"Expected _is_trivial=None after insert_before, got {step2._is_trivial}"
     file.write("After insert_before: step2._is_trivial correctly reset to None\n")
@@ -6637,9 +6671,15 @@ async def _test_MultiAmendHaveObviousUnblocked(root: Root, file: MyIO):
     Obvious.  The Have step changes the proof state, so the subsequent
     Obvious should be allowed to construct and evaluate.
 
-    Scenario: fill step 1 with Have(False), fill 1.1 with Obvious (fails,
-    sets _is_trivial=False on the 1-block), then multi-amend 1.1 with
-    [Have(True), Obvious(using it)]."""
+    Since the _is_trivial reset on TERMINATE_AND_REVERT (923e624), a failed
+    single-op Obvious fill no longer leaves the flag False — the failed
+    Obvious must stay in the tree, which a multi-op fill batch provides
+    (its failure path is CONTINUE, no auto-revert).
+
+    Scenario: fill step 1 with Have(False), multi-op fill 1.1 with
+    [Have(True), Obvious] whose trailing Obvious fails on the False goal
+    and is kept (sets _is_trivial=False on the 1-block), then multi-amend
+    the failed Obvious at 1.2 with [Have(True), Obvious(using it)]."""
     from .mcp_http_server import _edit_tool_logic
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -6654,17 +6694,27 @@ async def _test_MultiAmendHaveObviousUnblocked(root: Root, file: MyIO):
     print_header("[1] Have False — open subgoal", file)
     root.print(0, file)
 
-    # Step 1.1: Obvious on the False subgoal — must fail.
+    # Steps 1.1 + 1.2: multi-op fill whose trailing Obvious fails on the
+    # False goal.  The multi-op failure path is CONTINUE (no auto-revert),
+    # so the failed Obvious stays at 1.2 and _is_trivial=False persists.
     root.session.age += 1
-    await root.fill("1.1", [Obvious.gen_single({"facts": []})])
+    await root.fill("1.1", [
+        Have.gen_single({
+            "thought": "warm-up helper",
+            "statement": {"english": "True", "conclusion": "True"},
+            "name": "warm",
+            "proof": [{"operation": "Obvious", "facts": []}],
+        }),
+        Obvious.gen_single({"facts": []}),
+    ])
     step1 = root.locate_node("1")
     assert step1._is_trivial is False, \
-        f"Expected _is_trivial=False after Obvious failure, got {step1._is_trivial}"
-    print_header("[2] fill 1.1 with Obvious — fails, _is_trivial=False", file)
+        f"Expected _is_trivial=False after kept Obvious failure, got {step1._is_trivial}"
+    print_header("[2] fill 1.1 with [Have True, Obvious] — Obvious fails and is kept, _is_trivial=False", file)
     root.print(0, file)
 
-    # Multi-amend step 1.1 with [Have(True), Obvious].
-    # amend_me sees len(gns)==2 → delete 1.1, then _insert_before_child
+    # Multi-amend the failed Obvious at step 1.2 with [Have(True), Obvious].
+    # amend_me sees len(gns)==2 → delete 1.2, then _insert_before_child
     # inserts [Have, Obvious] at the former slot.
     # BUG (before fix): _is_trivial=False on step-1 block rejects the Obvious
     # during construction via GoalIsNontrivial, even though the Have changes
@@ -6672,7 +6722,7 @@ async def _test_MultiAmendHaveObviousUnblocked(root: Root, file: MyIO):
     root.session.age += 1
     result, is_error = await _edit_tool_logic(
         root.session,
-        {"target_step": "1.1", "action": "amend", "proof_operations": [
+        {"target_step": "1.2", "action": "amend", "proof_operations": [
             {"operation": "Have", "thought": "trivial truth",
              "statement": {"english": "True", "conclusion": "True"},
              "name": "triv",
@@ -6680,7 +6730,7 @@ async def _test_MultiAmendHaveObviousUnblocked(root: Root, file: MyIO):
             {"operation": "Obvious",
              "facts": [{"name": "triv"}]},
         ]})
-    print_header("[3] multi-amend 1.1 → [Have(True), Obvious] — must not be blocked", file)
+    print_header("[3] multi-amend 1.2 → [Have(True), Obvious] — must not be blocked", file)
     file.write(result)
     file.write(f"is_error: {is_error}\n")
 

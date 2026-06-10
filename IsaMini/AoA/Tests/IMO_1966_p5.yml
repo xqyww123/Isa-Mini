@@ -94,7 +94,7 @@ Error: Unfinished Proof! Call command `edit` with action `fill` and target step 
 --------------------------------------------------
 Overview
 --------------------------------------------------
-step 1: Have eq1 (done)
+step 1: Have eq1 (proven)
 Error: Unfinished Proof. Fill step `2`
 --------------------------------------------------
 After deleting failed Obvious
@@ -178,7 +178,7 @@ Error: Unfinished Proof! Call command `edit` with action `fill` and target step 
 Overview
 --------------------------------------------------
 step 1: Have eq1
-  step 1.1: Have a1_gt_a3 (done)
+  step 1.1: Have a1_gt_a3 (proven)
   Error: Unfinished Proof. Fill step `1.2`
 Error: Unfinished Proof. Fill step `2`
 --------------------------------------------------
@@ -240,7 +240,7 @@ Error: Unfinished Proof! Call command `edit` with action `fill` and target step 
 Overview
 --------------------------------------------------
 step 1: Have eq1
-  step 1.1: Have a1_gt_a3 (done)
-  step 1.2: Have a1_gt_a4 (done)
+  step 1.1: Have a1_gt_a3 (proven)
+  step 1.2: Have a1_gt_a4 (proven)
   Error: Unfinished Proof. Fill step `1.3`
 Error: Unfinished Proof. Fill step `2`

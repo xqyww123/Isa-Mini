@@ -52,7 +52,7 @@ pending proof goal:
 --------------------------------------------------
 Overview
 --------------------------------------------------
-step 1: Have lem1 (done)
+step 1: Have lem1 (proven)
 step 2: Rewrite goal
   goal changes into:
     y = z

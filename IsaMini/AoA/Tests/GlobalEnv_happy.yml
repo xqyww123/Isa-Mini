@@ -46,7 +46,7 @@ Error: Unfinished Proof! Call command `edit` with action `fill` and target step 
 Overview after ADD
 --------------------------------------------------
 global declarations:
-  step global.1: Have g_eq (done)
+  step global.1: Have g_eq (proven)
 proof:
   Error: Unfinished Proof. Fill step `1`
 GoalNode context hyps: ['g_eq', 'h1']
@@ -153,9 +153,9 @@ proof:
 Overview after AMEND
 --------------------------------------------------
 global declarations:
-  step global.1: Have g_eq (done)
+  step global.1: Have g_eq (proven)
 proof:
-  done
+  proven
 Delete global.1 not_found: []
 GlobalEnv children after delete: 0
 --------------------------------------------------

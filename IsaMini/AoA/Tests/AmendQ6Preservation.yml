@@ -13,7 +13,7 @@ edit_message: seed Have { proof: [Obvious] }
 Filled step 1.
 All proof goals of step 1 are now completed.
 Outline:
-  step 1: Have outer (done)
+  step 1: Have outer (proven)
   Error: Unfinished Proof. Call command `edit` with action `fill` and target step `2`
   goal: (0 :: int) ≤ x * x
 ---------------
@@ -24,7 +24,7 @@ Amended step 1.
 All proof goals of step 1.1 are now completed.
 Outline:
   step 1: Suffices
-    step 1.1: Have inner (done)
+    step 1.1: Have inner (proven)
     step 1.2: Intro
       assuming premises:
         - premise0: (0 :: int) ≤ x * x
