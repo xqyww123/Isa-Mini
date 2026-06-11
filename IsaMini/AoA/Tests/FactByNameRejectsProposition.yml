@@ -1,0 +1,15 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - k: nat
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (GREATEST (k1 :: nat). k1 ≤ k) = k
+proof: empty
+Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+ArgumentError: Bad Argument
+<direct>.facts[0].discharge[0]: "k ≤ k" is a proposition, not a fact reference. Each discharge entry must NAME an existing fact (a premise, a proved step, or a library lemma), optionally with [where ...]. To discharge a premise you have not proved yet: state it first as a Have step and reference its name, or pass null to leave that premise position open.
+ArgumentError: Bad Argument
+<direct>.facts[0].name: "k ≤ k" is a proposition, not a fact name. Use {"proposition": "..."} instead to cite a proposition, or NAME an existing fact (a premise, a proved step, or a library lemma).
+ArgumentError: Bad Argument
+rule.name: "k ≤ k" is a proposition, not a fact name. NAME an existing fact (a premise, a proved step, or a library lemma).

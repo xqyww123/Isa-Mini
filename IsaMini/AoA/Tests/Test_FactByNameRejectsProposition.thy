@@ -1,0 +1,12 @@
+theory Test_FactByNameRejectsProposition
+  imports Minilang_Agent.Minilang_Agent
+begin
+
+declare [[agent_AoA_driver="test.FactByNameRejectsProposition"]]
+
+lemma factbyname_rejects_proposition_test:
+  fixes k :: nat
+  shows "(GREATEST k1. k1 \<le> k) = k"
+  by aoa
+
+end

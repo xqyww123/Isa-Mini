@@ -10170,6 +10170,44 @@ async def _test_FactByNameWhereOF(root: Root, file: MyIO):
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
 
+@model_test("FactByNameRejectsProposition", "Test_FactByNameRejectsProposition.thy", 10)
+async def _test_FactByNameRejectsProposition(root: Root, file: MyIO):
+    """A proposition pasted where a fact NAME belongs is rejected at
+    validation time, per slot, before anything reaches ML. Replays the
+    missing-lemma-loop incident (putnam_1987_a2, eb6c5d71c_1): the model put
+    the propositions to discharge into `discharge` instead of fact names,
+    and the old feedback was an opaque `Cannot parse "...[xwhere ..., xOF
+    ...]" as a fact reference` echo of the internal pack syntax. Records all
+    three message variants: discharge entry / facts name (FactByProposition
+    alternative offered) / rule name (no alternative)."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    try:
+        Obvious.gen_single({"facts": [{
+            "name": "Greatest_equality",
+            "instantiations": [
+                {"name": "?P", "value": "λ(k1::nat). k1 ≤ k"},
+                {"name": "?x", "value": "k"}],
+            "discharge": [
+                "k ≤ k",
+                "∀(y::nat). y ≤ k ⟶ y ≤ k"],
+            "flip": False}]})
+    except ArgumentError as e:
+        file.write(f"ArgumentError: {e}\n")
+    try:
+        Obvious.gen_single({"facts": [{"name": "k ≤ k"}]})
+    except ArgumentError as e:
+        file.write(f"ArgumentError: {e}\n")
+    try:
+        # `rule` slots are validated at the central raw-op entry
+        # (`Parse_Op`), not in `InferenceRule.gen_single`; validate the
+        # field directly the way that entry does.
+        validate(FactByName, {"name": "k ≤ k"}, "rule")
+    except ArgumentError as e:
+        file.write(f"ArgumentError: {e}\n")
+
+
 @model_test("Rewrite_WhereBadVar", "Test_Rewrite_WhereBadVar.thy", 11)
 async def _test_Rewrite_WhereBadVar(root: Root, file: MyIO):
     """Reproduce: [where] with wrong variable name from display renaming.

@@ -27,8 +27,28 @@ lemma pull_Ball_eq:
   unfolding atomize_eq
   by (auto simp add: Ball_def)
 
+(* Base layer (formerly in Minilang_Base.thy): definitions required by
+   aux_thms.ML, whose MINILANG_AUX / Minilang_Aux / Thms are extended by
+   aux.ML and used throughout proof.ML and the agent. *)
+
+definition ‹TAG X ≡ X›
+definition ‹GOAL (X::prop) ≡ X›
+definition ‹PROTECT X ≡ X›
+definition ‹ISO_ALL ≡ HOL.All›
+definition ‹ISO_IMP ≡ HOL.implies›
+definition ‹ISO_PROP (X::bool) ≡ X›
+
+lemma ISO_PROP:
+  ‹Trueprop (ISO_PROP P) ≡ Pure.prop (Trueprop P)›
+  unfolding ISO_PROP_def Pure.prop_def .
+
+ML_file ‹./library/aux_thms.ML›
+
+hide_fact ISO_PROP
+hide_const (open) TAG GOAL PROTECT ISO_ALL ISO_IMP ISO_PROP
+
+ML_file ‹./library/unify_diagnostic.ML›  (* before aux.ML: xOF uses Unify_Diagnostic *)
 ML_file ‹./library/aux.ML›
-ML_file ‹./library/unify_diagnostic.ML›
 ML_file ‹./library/function/proof_local_lthy.ML›
 ML_file ‹./library/function/proof_local_inductive.ML›
 ML_file ‹./library/function/proof_local_function.ML›

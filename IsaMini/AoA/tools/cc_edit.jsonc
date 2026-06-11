@@ -84,7 +84,7 @@
           "type": "array"
         },
         "discharge": {
-          "description": "facts to discharge the premises left-to-right; use null to skip a premise position",
+          "description": "facts to discharge the premises left-to-right; use null to skip a premise position; each entry is the NAME of a fact, never a proposition",
           "items": {
             "anyOf": [
               { "$ref": "#/$defs/FactByName" },

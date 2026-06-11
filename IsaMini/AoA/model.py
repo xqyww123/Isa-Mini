@@ -6070,11 +6070,85 @@ class LongStatement(TypedDict):
     premises: NotRequired[list[PremiseBinding]]
     conclusion: xterm
 
+# Characters that can never occur at top level of a fact reference — neither
+# in a (possibly qualified) fact name, nor in a `(i)`/`(i-j)` selector, nor
+# between `[...]` attribute groups.  Their presence proves the string is a
+# proposition pasted where a fact NAME belongs.  Deliberately NOT listed:
+# `.` `'` `_` (legal in names), `,` `-` (legal in selectors), `(` `)` `[` `]`
+# `‹` `›` (handled structurally below).
+_FACT_REF_BANNED_CHARS = frozenset(
+    '\\"?=<>+*/|&%@!;:~^'
+    '∀∃λ⟶⟹⟷↔→⇒↦∧∨¬≤≥≠∈∉⊆⊂⊇⊃∪∩⋀⋁⋂⋃≡−×÷±√∑∏')
+
+def _fact_ref_is_proposition(s: str) -> bool:
+    """High-precision test that `s` is a proposition pasted where a fact
+    reference belongs.  Only top-level characters are inspected — content
+    inside `‹...›` cartouches (literal facts, `where`-values), `[...]`
+    attribute groups, and `(...)` selectors is legitimately arbitrary, so
+    whitespace or a banned character there proves nothing.  Anything not
+    clearly propositional (including empty or ill-nested strings) returns
+    False and flows through to the ML-side fact parser unchanged: a false
+    positive here would block a legal reference, a false negative merely
+    costs one ML round-trip."""
+    cart = brack = paren = 0
+    for ch in s:
+        if ch == '\N{SINGLE LEFT-POINTING ANGLE QUOTATION MARK}':
+            cart += 1
+        elif ch == '\N{SINGLE RIGHT-POINTING ANGLE QUOTATION MARK}':
+            if cart == 0:
+                return False
+            cart -= 1
+        elif cart > 0:
+            continue
+        elif ch == '[':
+            brack += 1
+        elif ch == ']':
+            if brack == 0:
+                return False
+            brack -= 1
+        elif brack > 0:
+            continue
+        elif ch == '(':
+            paren += 1
+        elif ch == ')':
+            if paren == 0:
+                return False
+            paren -= 1
+        elif paren == 0 and (ch.isspace() or ch in _FACT_REF_BANNED_CHARS):
+            return True
+    return False
+
 @validator(FactByName)
 def _validate_fact_by_name(data: Any, path: str) -> FactByName:
-    if isinstance(data, str):
+    was_bare_str = isinstance(data, str)
+    if was_bare_str:
         data = {"name": data}
-    return _validate_typed_dict(FactByName, data, path)
+    data = _validate_typed_dict(FactByName, data, path)
+    name = data.get("name")
+    if isinstance(name, str) and _fact_ref_is_proposition(name):
+        loc = path if was_bare_str else f"{path}.name"
+        field = path.rsplit(".", 1)[-1]
+        if field.startswith("discharg"):  # discharge / discharging_facts
+            raise ArgumentError({},
+                f'{loc}: "{name}" is a proposition, not a fact reference. '
+                f'Each discharge entry must NAME an existing fact (a premise, '
+                f'a proved step, or a library lemma), optionally with '
+                f'[where ...]. To discharge a premise you have not proved '
+                f'yet: state it first as a Have step and reference its name, '
+                f'or pass null to leave that premise position open.')
+        elif field.startswith("facts") or field.startswith("using"):
+            # contexts whose schema offers FactByProposition as an alternative
+            raise ArgumentError({},
+                f'{loc}: "{name}" is a proposition, not a fact name. '
+                f'Use {{"proposition": "..."}} instead to cite a proposition, '
+                f'or NAME an existing fact (a premise, a proved step, or a '
+                f'library lemma).')
+        else:  # e.g. `rule`, `IH_facts` — no proposition alternative exists
+            raise ArgumentError({},
+                f'{loc}: "{name}" is a proposition, not a fact name. '
+                f'NAME an existing fact (a premise, a proved step, or a '
+                f'library lemma).')
+    return data
 
 @validator(LongStatement)
 def _validate_long_statement(data: Any, path: str) -> LongStatement:
