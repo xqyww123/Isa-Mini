@@ -1,0 +1,43 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+premises:
+  - A: Q ⟶ Q2 ⟶ Q3
+  - B: P1 ⟶ P2 ⟶ Q
+  - C: True ⟶ Q2
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+variables:
+  - Q3: bool
+  - Q2: bool
+  - P2: bool
+  - P1: bool
+  - Q: bool
+goal: True
+proof: empty
+order-safe: C consumed Q2 via rulify; B's premises preserved
+--------------------------------------------------
+After Derive
+--------------------------------------------------
+premises:
+  - A: Q ⟶ Q2 ⟶ Q3
+  - B: P1 ⟶ P2 ⟶ Q
+  - C: True ⟶ Q2
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+variables:
+  - Q3: bool
+  - Q2: bool
+  - P2: bool
+  - P1: bool
+  - Q: bool
+goal: True
+proof:
+  - step id: 1
+    thought: B inserts premises P1 P2; C must still land on Q2
+    operation: Derive
+    rule:
+      - A: Q ⟶ Q2 ⟶ Q3
+    discharging facts:
+      - B: P1 ⟶ P2 ⟶ Q
+      - C: True ⟶ Q2
+    resulting facts:
+      - combined: P1 ⟶ P2 ⟶ True ⟶ Q3

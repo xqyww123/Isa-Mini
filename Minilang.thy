@@ -59,7 +59,7 @@ ML_file \<open>./library/proof.ML\<close>
 
 attribute_setup xOF = \<open>Scan.repeat (Scan.lift (Args.$$$ "_") >> K NONE || Attrib.thm >> SOME) >> (fn Bs =>
       Thm.rule_attribute (map_filter I Bs)
-        (fn ctxt => Minilang_Aux.xOF true (Context.proof_of ctxt) Bs))\<close>
+        (fn ctxt => Minilang_Aux.xOF false (Context.proof_of ctxt) Bs))\<close>
 
 attribute_setup xof = \<open>let
      val inst = Args.maybe Parse.embedded_inner_syntax;

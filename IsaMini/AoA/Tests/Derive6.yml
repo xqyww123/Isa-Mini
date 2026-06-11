@@ -17,8 +17,15 @@ Response
 --------------------------------------------------
 Is error: True
 Reason: Cannot fill a node with id 1
-the given fact h1 mismatches the target premise ‹(?n::?'a::{euclidean_ring_cancel,semiring_gcd}) * (?a::?'a::{euclidean_ring_cancel,semiring_gcd}) mod (?m::?'a::{euclidean_ring_cancel,semiring_gcd}) = ?n * (?b::?'a::{euclidean_ring_cancel,semiring_gcd}) mod ?m›
+OF: cannot discharge premise 1 of GCD.mult_mod_cancel_left with discharge argument 1 (h1)
+the premise is:
+  (?n::?'a::{euclidean_ring_cancel,semiring_gcd}) * (?a::?'a::{euclidean_ring_cancel,semiring_gcd}) mod (?m::?'a::{euclidean_ring_cancel,semiring_gcd}) = ?n * (?b::?'a::{euclidean_ring_cancel,semiring_gcd}) mod ?m
+the discharge argument is:
+  (x::nat) mod (q::nat) = (y::nat) mod q
 because type nat ⇒ nat ⇒ bool does not unify with ?'a::{euclidean_ring_cancel,semiring_gcd} ⇒ ?'a::{euclidean_ring_cancel,semiring_gcd} ⇒ bool
+the premises of GCD.mult_mod_cancel_left are:
+  1. (?n::?'a::{euclidean_ring_cancel,semiring_gcd}) * (?a::?'a::{euclidean_ring_cancel,semiring_gcd}) mod (?m::?'a::{euclidean_ring_cancel,semiring_gcd}) = ?n * (?b::?'a::{euclidean_ring_cancel,semiring_gcd}) mod ?m
+  2. coprime (?m::?'a::{euclidean_ring_cancel,semiring_gcd}) (?n::?'a::{euclidean_ring_cancel,semiring_gcd})
 --------------------------------------------------
 After Derive
 --------------------------------------------------

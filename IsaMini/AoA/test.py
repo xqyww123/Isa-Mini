@@ -4289,8 +4289,48 @@ async def _test_Derive_NestedDischargeTHMLeak(root: Root, file: MyIO):
         raise TestFailed(
             "Derive leaked a raw ML THM exception for a nested-discharge "
             f"unification failure: {str(outcome.failure)!r}")
-    file.write("Derive reported the nested-discharge mismatch without "
-               "leaking a raw THM exception\n")
+    file.write("Derive succeeded (rulify resolved the nested discharge); "
+               "no raw THM leak\n")
+
+@model_test("Derive_OrderSafety", "Test_Derive_OrderSafety.thy", 16)
+async def _test_Derive_OrderSafety(root: Root, file: MyIO):
+    r"""Order safety of the per-argument discharge fallback in xOF.
+
+    A = ⟦Q; Q2⟧ ⟹ Q3, B = ⟦P1; P2⟧ ⟹ Q, C = True ⟶ Q2.  Discharging A's
+    premises with [B, C]: B's own premises P1/P2 replace Q, so a naive
+    left-to-right fallback re-targets C at P1 instead of Q2 (the pre-refactor
+    `discharge_all` bug).  C is object-level so the bulk `st OF thms` fails
+    and the fallback necessarily runs; the index-anchored right-to-left loop
+    plus the rulify retry must attach C to the ORIGINAL premise 2 (Q2),
+    yielding ⟦P1; P2; True⟧ ⟹ Q3.  Pre-refactor this Derive failed with a
+    misleading "C mismatches P1" error (after a wasted 3s prover call on P1).
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    outcome = await root.fill("1", [Derive.gen_single({
+        "thought": "B inserts premises P1 P2; C must still land on Q2",
+        "rule": {"name": "A"},
+        "discharging_facts": [{"name": "B"}, {"name": "C"}],
+        "result_name": "combined"
+    })])
+    if outcome.failure is not None:
+        raise TestFailed(
+            f"Derive_OrderSafety: discharge failed: {outcome.failure}")
+    [node] = outcome.committed
+    exprs = [e.unicode for _, e in (node.result_facts or [])]
+    ok = any(("P1" in s) and ("True" in s) and ("Q3" in s) and ("Q2" not in s)
+             for s in exprs)
+    if not ok:
+        raise TestFailed(
+            f"Derive_OrderSafety: C did not consume Q2 (wrong target?); "
+            f"result facts: {exprs}")
+    file.write("order-safe: C consumed Q2 via rulify; B's premises preserved\n")
+    print_header("After Derive", file)
+    root.print(0, file)
+    # close the trivial goal so the run doesn't end resource_exhausted
+    root.session.age += 1
+    await root.fill("2", [Obvious.gen_single({"facts": []})])
 
 @model_test("DeriveBall", "Test_DeriveBall.thy", 11)
 async def _test_DeriveBall(root: Root, file: MyIO):

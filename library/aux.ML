@@ -47,7 +47,7 @@ val rule_of_ind : Context.generic -> Token.T list -> thm list option
 val case_synt' : (bool * (term option list list * thm option)) context_parser
 val case_synt : Context.generic -> (bool * (term option list list * thm option)) parser
 
-val simp_fact_name' : string -> string
+(* simp_fact_name' is inherited via `include MINILANG_AUX` (aux_thms.ML) *)
 val simp_fact_name : Proof.context -> string -> string
 
 val flatten_facts : (string * term list) list -> (string * term) list
@@ -292,22 +292,42 @@ fun xOF prove_discharge ctxt opt_thms st =
         else fconv_rule (Object_Logic.atomize ctxt)
 
       (* ---- informative failure (DRAFT wording) ---- *)
-      fun fact_desc fact =
-        if Thm.has_name_hint fact
-        then simp_fact_name' (Thm_Name.print (Thm.get_name_hint fact))
-        else "\<open>" ^ Thm.string_of_thm ctxt fact ^ "\<close>"
+      fun thm_desc fallback th =
+        if Thm.has_name_hint th
+        then simp_fact_name' (Thm_Name.print (Thm.get_name_hint th))
+        else fallback
+      val st_desc = thm_desc "the fact" st
       val prems_section =
         case list_prems (Thm.prop_of st) of
           [] => ""
         | prem_strs =>
-            "the premises of the fact are:\n" ^
+            "the premises of " ^ st_desc ^ " are:\n" ^
             String.concat (map_index (fn (i, s) =>
               "  " ^ string_of_int (i + 1) ^ ". " ^ s ^ "\n") prem_strs)
-      fun discharge_fail i fact rule =
+      (* Report the LEFTMOST diagnosable mismatch (agents read arguments left
+         to right), not the position where the right-to-left loop happened to
+         stop.  A position is blamed only if both the plain and the rulified
+         form of its argument fail the pairwise diagnosis. *)
+      fun discharge_fail i0 fact0 rule =
         let
-          val prem = nth (Thm.prems_of rule) (i - 1)
+          fun pair_diag f prem =
+            Unify_Diagnostic.diagnose_pair ctxt (Thm.prop_of f) prem
+          fun blame (j, NONE) = NONE
+            | blame (j, SOME f) =
+                let val prem = nth (Thm.prems_of st') (j - 1)
+                in case (pair_diag f prem,
+                         pair_diag (Object_Logic.rulify ctxt f) prem)
+                     of (SOME d, SOME _) => SOME (j, f, prem, SOME d)
+                      | _ => NONE
+                end
+          val (i, fact, prem, diag) =
+            case get_first blame (map_index (fn (k, f) => (k + 1, f)) opt_thms) of
+              SOME x => x
+            | NONE =>
+                let val prem0 = nth (Thm.prems_of rule) (i0 - 1)
+                in (i0, fact0, prem0, pair_diag fact0 prem0) end
           val reason =
-            case Unify_Diagnostic.diagnose_pair ctxt (Thm.prop_of fact) prem of
+            case diag of
               SOME d =>
                 Unify_Diagnostic.format_diag_body ctxt d ^
                 (if is_meta_object_clash d
@@ -320,12 +340,13 @@ fun xOF prove_discharge ctxt opt_thms st =
                 \failure comes from instantiations conflicting across the \
                 \other discharge arguments (or a non-unique unifier)"
         in
-          error ("OF: cannot discharge premise " ^ string_of_int i ^
-                 " of the fact with discharge argument " ^ string_of_int i ^
-                 " (" ^ fact_desc fact ^ ")\n" ^
+          error (trim_line
+                ("OF: cannot discharge premise " ^ string_of_int i ^
+                 " of " ^ st_desc ^ " with discharge argument " ^
+                 string_of_int i ^ " (" ^ thm_desc "<unnamed>" fact ^ ")\n" ^
                  "the premise is:\n  " ^ Syntax.string_of_term ctxt prem ^ "\n" ^
                  "the discharge argument is:\n  " ^ Thm.string_of_thm ctxt fact ^ "\n" ^
-                 reason ^ "\n" ^ prems_section)
+                 reason ^ "\n" ^ prems_section))
         end
 
       (* Index-anchored discharge, right to left (mirrors Drule's multi_res):
