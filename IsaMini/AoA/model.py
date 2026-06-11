@@ -2178,9 +2178,17 @@ class AnswerStruggleAssessment:
     is_stuck: bool
     summary: str
 
+@dataclass(frozen=True)
+class AnswerMissingLemmas:
+    """Payload of `answer_missing_lemmas`: the missing-lemma survey's report.
+    Each item is a plain dict (see tools/cc_answer_missing_lemmas.jsonc);
+    an empty list means "nothing is missing"."""
+    missing_lemmas: list
+
 AnswerPayload = (AnswerIndexes | AnswerIndex | AnswerIndexesOrName
                  | AnswerIndexesOrSpec | AnswerInstantiate
-                 | AnswerRefutation | AnswerStruggleAssessment)
+                 | AnswerRefutation | AnswerStruggleAssessment
+                 | AnswerMissingLemmas)
 
 class DeletedEntry(NamedTuple):
     summary: str
@@ -2208,11 +2216,13 @@ TOOL_ANSWER_INDEXES_OR_SPEC: tool = "answer_indexes_or_spec"
 TOOL_ANSWER_INSTANTIATE:    tool = "answer_instantiate"
 TOOL_ANSWER_REFUTATION:     tool = "answer_refutation"
 TOOL_ANSWER_STRUGGLE_ASSESSMENT: tool = "answer_struggle_assessment"
+TOOL_ANSWER_MISSING_LEMMAS: tool = "answer_missing_lemmas"
 
 ANSWER_TOOLS: frozenset[tool] = frozenset({
     TOOL_ANSWER_INDEXES, TOOL_ANSWER_INDEX, TOOL_ANSWER_INDEXES_OR_NAME,
     TOOL_ANSWER_INDEXES_OR_SPEC, TOOL_ANSWER_INSTANTIATE,
     TOOL_ANSWER_REFUTATION, TOOL_ANSWER_STRUGGLE_ASSESSMENT,
+    TOOL_ANSWER_MISSING_LEMMAS,
 })
 
 ALL_PROOF_TOOLS: tuple[tool, ...] = (
@@ -2370,6 +2380,64 @@ class Interaction_StruggleCheckpoint(Interaction):
 
     async def answer(self, answer: 'AnswerStruggleAssessment') -> 'tuple[bool, str]':
         return (answer.is_stuck, answer.summary)
+
+
+def _missing_lemma_survey_interval_from_env() -> int:
+    """Query-call interval of the missing-lemma survey, from the environment
+    variable ``AOA_MISSING_LEMMA_SURVEY``: unset/empty/"0"/"off"/"false"/"no"
+    disables (returns 0); "on"/"yes"/"true" enables with the default interval
+    (10); a positive integer enables with that interval. Read per top-level
+    Session (forks inherit), so the value is fixed for one invocation but a
+    host restart picks up a changed environment."""
+    raw = os.environ.get("AOA_MISSING_LEMMA_SURVEY", "").strip().lower()
+    if raw in ("", "0", "off", "false", "no"):
+        return 0
+    if raw in ("on", "yes", "true"):
+        return 10
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        # Fail CLOSED: an unparseable value (typo like "tru", "1.5") must not
+        # silently enable an opt-in feature.
+        return 0
+
+
+class Interaction_MissingLemmaSurvey(Interaction):
+    """Ask the agent whether it needs general-purpose background lemmas that it
+    could not find in the loaded libraries.
+
+    Spawned every ``AOA_MISSING_LEMMA_SURVEY`` `query` tool calls and once
+    before a worker winds down (see ``Session.run_missing_lemma_survey``).
+    The fork inherits the parent context — it must see the search history to
+    judge what was looked for and not found — and may only answer; the report
+    is recorded to ``missing_lemmas.yaml`` for the external import-expansion
+    loop. Nothing is fed back into the proof."""
+    forking = ForkingMode.FORKING_WITH_CTXT
+    fork_allowed_tools = [TOOL_ANSWER_MISSING_LEMMAS]
+
+    def __init__(self, trigger: str):
+        self.trigger = trigger
+
+    async def prompt(self, indent: int, file: MyIO) -> None:
+        file.write(
+            f"[System checkpoint] Review your proof attempt and your search "
+            f"history so far.\n\n"
+            f"Are there background facts — lemmas, theorems, or definitions you "
+            f"would expect a standard mathematical library (the Isabelle/HOL "
+            f"distribution or the AFP) to provide — that you needed but could "
+            f"NOT find with the `{tn(TOOL_SEARCH)}` tool?\n\n"
+            f"Report ONLY general-purpose library facts (e.g. a classical "
+            f"inequality, a property of a standard function), not "
+            f"problem-specific steps you must prove yourself.\n\n"
+            f"Call `{tn(TOOL_ANSWER_MISSING_LEMMAS)}` with one entry per "
+            f"missing fact — or an empty `missing_lemmas` array if nothing is "
+            f"missing. For each entry give your best-guess conventional name, "
+            f"a precise English statement, an Isabelle statement sketch if you "
+            f"can write one, the query descriptions that failed to find it, "
+            f"and why your proof needs it.\n")
+
+    async def answer(self, answer: 'AnswerMissingLemmas') -> list:
+        return answer.missing_lemmas
 
 
 class Interaction_DifficultyEvaluation(Interaction):
@@ -9311,6 +9379,14 @@ class Session:
             self._struggle_edit_threshold: int = 30
             self._struggle_delete_threshold: int = 5
         self._struggle_checkpoint_count: int = 0
+        # Missing-lemma survey (external import-expansion loop). Interval = how
+        # many `query` tool calls between surveys; 0 disables. Read once from the
+        # environment for the top-level session; forks/workers inherit the value
+        # but keep their own per-session query counter.
+        self._missing_lemma_survey_interval: int = (
+            parent._missing_lemma_survey_interval if parent is not None
+            else _missing_lemma_survey_interval_from_env())
+        self._query_calls_since_survey: int = 0
         self.retrieval_forking_mode: ForkingMode = (
             parent.retrieval_forking_mode if parent is not None
             else retrieval_forking_mode)
@@ -9363,10 +9439,12 @@ class Session:
             self.proofs_log_path = parent.proofs_log_path
             self.proof_oprs_log_path = parent.proof_oprs_log_path
             self.retrieval_log_path = parent.retrieval_log_path
+            self.missing_lemmas_log_path = parent.missing_lemmas_log_path
             self.interaction_log_file = parent.interaction_log_file
             self.proofs_log_file = parent.proofs_log_file
             self.proof_oprs_log_file = parent.proof_oprs_log_file
             self.retrieval_log_file = parent.retrieval_log_file
+            self.missing_lemmas_log_file = parent.missing_lemmas_log_file
             # Forks share meta writer; asyncio-concurrent (single thread), no lock needed
             self.meta_log_path = parent.meta_log_path
             self._meta_log_file = parent._meta_log_file
@@ -9377,10 +9455,12 @@ class Session:
             self.proofs_log_path = None
             self.proof_oprs_log_path = None
             self.retrieval_log_path = None
+            self.missing_lemmas_log_path = None
             self.interaction_log_file = None
             self.proofs_log_file = None
             self.proof_oprs_log_file = None
             self.retrieval_log_file = None
+            self.missing_lemmas_log_file = None
             self.meta_log_path = None
             self._meta_log_file = None
             self._meta_log_writer = None
@@ -9562,12 +9642,14 @@ class Session:
         self.proofs_log_path = self.log_dir / "proofs.yaml"
         self.proof_oprs_log_path = self.log_dir / "proof_oprs.yaml"
         self.retrieval_log_path = self.log_dir / "retrieval.yaml"
+        self.missing_lemmas_log_path = self.log_dir / "missing_lemmas.yaml"
 
         # Open log files in append mode, keep them open
         self.interaction_log_file = open(self.interaction_log_path, 'a', encoding='utf-8')
         self.proofs_log_file = open(self.proofs_log_path, 'a', encoding='utf-8')
         self.proof_oprs_log_file = open(self.proof_oprs_log_path, 'a', encoding='utf-8')
         self.retrieval_log_file = open(self.retrieval_log_path, 'a', encoding='utf-8')
+        self.missing_lemmas_log_file = open(self.missing_lemmas_log_path, 'a', encoding='utf-8')
 
         # Open compressed meta log
         import zstandard
@@ -9589,6 +9671,7 @@ class Session:
         self._append_yaml(self.proofs_log_file, session_start)
         self._append_yaml(self.proof_oprs_log_file, session_start)
         self._append_yaml(self.retrieval_log_file, session_start)
+        self._append_yaml(self.missing_lemmas_log_file, session_start)
         self._log_meta("SESSION_START")
 
     def _append_yaml(self, file_handle: Any, data: dict[str, Any]):
@@ -9834,6 +9917,10 @@ class Session:
                 self._append_yaml(self.retrieval_log_file, session_end)
                 self.retrieval_log_file.close()
                 self.retrieval_log_file = None
+            if self.missing_lemmas_log_file is not None:
+                self._append_yaml(self.missing_lemmas_log_file, session_end)
+                self.missing_lemmas_log_file.close()
+                self.missing_lemmas_log_file = None
             if self._meta_log_writer is not None:
                 self._log_meta("SESSION_END")
                 self._meta_log_writer.close()
@@ -9976,6 +10063,16 @@ class Session:
                   None if quiet else lambda: [f"[RETRIEVAL] {query!r}\n" + "\n".join(f"  {r}" for r in results)],
                   query=query, results=results)
 
+    def log_missing_lemmas(self, trigger: str, lemmas: list):
+        """Record a missing-lemma report to missing_lemmas.yaml — either a
+        survey answer (trigger "query_interval" / "worker_end") or a worker's
+        `request_lemmas` wish-list (trigger "request_lemmas"). ``lemmas`` is a
+        list of plain dicts as reported; an empty list is still logged so the
+        external watcher can tell "surveyed, nothing missing" from "no survey"."""
+        self._log(self.missing_lemmas_log_file, "MISSING_LEMMAS",
+                  lambda: [f"[MISSING_LEMMAS] {trigger}: {len(lemmas)} reported"],
+                  trigger=trigger, lemmas=lemmas)
+
     def log_initial_prompt(self, prompt: str):
         """Log the initial prompt (planner or worker) to interaction.yaml.
 
@@ -10045,6 +10142,32 @@ class Session:
         else:
             self._struggle_delete_threshold = 3
             self._struggle_edit_threshold = 15
+
+    async def run_missing_lemma_survey(self, trigger: str) -> None:
+        """Fork an ``Interaction_MissingLemmaSurvey`` and record its report to
+        ``missing_lemmas.yaml``. No-op when the survey is disabled
+        (``AOA_MISSING_LEMMA_SURVEY`` unset) or for interaction forks.
+        Best-effort: a failing survey fork is logged and swallowed — the
+        survey must never break the proof loop."""
+        if self._missing_lemma_survey_interval <= 0 or self.is_interaction:
+            return
+        self._query_calls_since_survey = 0
+        _t0 = time()
+        try:
+            lemmas = await self.launch_interaction(
+                Interaction_MissingLemmaSurvey(trigger))
+        except Exception as e:
+            self.warn_AoA_opr(
+                f"Missing-lemma survey fork failed: {type(e).__name__}: {e}")
+            return
+        finally:
+            # The survey is instrumentation, not proof work: exclude its
+            # wall-clock from the session budget (用户拍板 2026-06-11), else
+            # every survey eats into timeout_seconds and confounds the
+            # before/after comparison the loop exists to make.
+            if self._budget_start_time is not None:
+                self._budget_start_time += time() - _t0
+        self.log_missing_lemmas(trigger, lemmas)
 
     # Proof tree logging methods
     def log_proof_operation(self, step: str, operation: str, details: dict[str, Any]):
@@ -10827,6 +10950,10 @@ class WorkerHandle:
         session.log_interaction("worker", f"{tag} spawned")
         try:
             await sub.run()
+            # Final missing-lemma survey before the worker winds down — runs on
+            # every natural exit (proved / surrendered / budget exhausted), not
+            # on cancellation. No-op unless AOA_MISSING_LEMMA_SURVEY is set.
+            await sub.run_missing_lemma_survey("worker_end")
         except asyncio.CancelledError:
             session.warn_AoA_opr(f"{tag} cancelled")
             raise

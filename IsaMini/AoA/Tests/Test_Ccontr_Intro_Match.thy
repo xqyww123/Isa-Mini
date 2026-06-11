@@ -13,6 +13,6 @@ theorem rabinowitz:
   shows "\<And>i. (i \<le> p - 2) \<Longrightarrow> prime (f i)"
   by ao a
 
-term HOL.TAG
+term Minilang.TAG
 
 end

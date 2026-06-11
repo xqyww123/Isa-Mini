@@ -21,6 +21,7 @@ sig
   val diagnostic_unify : Context.generic -> term * term -> Envir.env -> Envir.env
 
   val format_diag_body : Proof.context -> unify_diagnostic -> string
+  val diagnose_pair : Proof.context -> term -> term -> unify_diagnostic option
   val diagnose_of_failure : Proof.context -> thm -> thm list -> string option
   val diagnose_rule_vs_goal : Proof.context -> (bool * thm) list -> term -> string option
 end
@@ -283,7 +284,7 @@ fun format_diagnostic ctxt fact_thm prem diag =
   let
     val fact_desc =
       if Thm.has_name_hint fact_thm
-      then Minilang_Aux.simp_fact_name' (Thm.get_name_hint fact_thm)
+      then Minilang_Aux.simp_fact_name' (Thm_Name.print (Thm.get_name_hint fact_thm))
       else "\<open>" ^ Thm.string_of_thm ctxt fact_thm ^ "\<close>"
     val prem_str = Syntax.string_of_term ctxt prem
     val header = "the given fact " ^ fact_desc ^
@@ -292,6 +293,20 @@ fun format_diagnostic ctxt fact_thm prem diag =
 
 
 (* ---- Top-level entry points ---- *)
+
+(* Why does [lhs] (e.g. a fact's prop) not unify with [rhs] (e.g. a rule's
+   premise)?  NONE = the pair is unifiable in isolation (or beyond the
+   pattern fragment), so the failure must be a global/uniqueness issue. *)
+fun diagnose_pair ctxt lhs rhs =
+  let
+    val context = Context.Proof ctxt
+    val maxidx = Int.max (Term.maxidx_of_term lhs, Term.maxidx_of_term rhs)
+    val env0 = Envir.empty maxidx
+  in
+    (diagnostic_unify context (lhs, rhs) env0; NONE)
+    handle Unif_Diagnostic diag => SOME diag
+         | Pattern.Pattern => NONE
+  end
 
 fun diagnose_of_failure ctxt rule facts =
   let
@@ -347,7 +362,7 @@ fun diagnose_rule_vs_goal ctxt rules goal =
       SOME (rule, diag) =>
         let val rule_desc =
               if Thm.has_name_hint rule
-              then Minilang_Aux.simp_fact_name' (Thm.get_name_hint rule)
+              then Minilang_Aux.simp_fact_name' (Thm_Name.print (Thm.get_name_hint rule))
               else "\<open>" ^ Thm.string_of_thm ctxt rule ^ "\<close>"
         in SOME ("the conclusion of rule " ^ rule_desc ^
                  " does not match the current proof goal\n" ^

@@ -439,7 +439,9 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         arg_schema = unpackPair (unpackString, unpackList (unpackList (unpackPair (unpackBool, unpack_criterion)))),
         ret_schema = (fn (ctxt, rets) =>
           let val SOT = MiniLang_Agent.string_of_term ctxt
-           in packList (packPair (pack_FactRef, packString o SOT o Thm.prop_of)) rets
+              (* Thm_Name.print emits the same wire format FactRef_to_string did:
+                 "name" or "name(i)".  Find_Theorems returns Thm_Name.T since 2025. *)
+           in packList (packPair (packString o Thm_Name.print, packString o SOT o Thm.prop_of)) rets
           end),
         function = (fn (state_id, criterions) =>
           let val s0 = get_state state_id
@@ -475,15 +477,21 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         fold (fn (_, thm) =>
           let val p = Thm.prop_of thm
           in iNet.insert_term_safe (op aconv) (p, p) end)
-          (#simps (dest_ss (simpset_of ctxt))) iNet.empty
+          (#simps (Raw_Simplifier.dest_ss (simpset_of ctxt))) iNet.empty
       val (intro_rule_net : term iNet.net, elim_rule_net : term iNet.net) =
-        let val cs = Classical.rep_cs (Classical.claset_of ctxt)
-            fun build_net items =
-              fold (fn (thm, _, _) =>
+        let (* Declared (original) forms.  Unlike the 2024 nets, dest rules are
+               NOT make_elim'd here, so a queried dest theorem now matches the
+               elim net and gets the "elim" role (2024 silently never matched
+               dest rules because the stored form was the hint-stripped
+               make_elim derivative). *)
+            fun rules is_elim =
+              map #1 (Classical.dest_decls ctxt (fn (_, {kind, ...}) =>
+                  Bires.kind_is_elim kind = is_elim andalso not (Bires.kind_extra kind)))
+            fun build_net thms =
+              fold (fn thm =>
                 let val p = Thm.prop_of thm
-                in iNet.insert_term_safe (op aconv) (p, p) end) items iNet.empty
-        in (build_net (Item_Net.content (#safeIs cs) @ Item_Net.content (#unsafeIs cs)),
-            build_net (Item_Net.content (#safeEs cs) @ Item_Net.content (#unsafeEs cs)))
+                in iNet.insert_term_safe (op aconv) (p, p) end) thms iNet.empty
+        in (build_net (rules false), build_net (rules true))
         end
       fun in_rule_net net prop =
         exists (fn stored => prop aconv stored) (iNet.match_term net prop)
@@ -589,6 +597,19 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                     SOME (Name_Space.extern ctxt class_space name, [], [], [], false)
                 | retrieve (Universal_Key.LocaleK, name) =
                     SOME (Name_Space.extern ctxt locale_space name, [], [], [], false)
+                | retrieve (Universal_Key.NamedTheoremsK, name) =
+                    (* Collection entity: render name + up to 5 member props, with a
+                       "... (N more)" sentinel when there are more. No inner handler:
+                       Named_Theorems.get raises on a stale/non-collection name, which
+                       the outer `the_default NONE (try retrieve e)` turns into NONE. *)
+                    let val full = Facts.intern facts name
+                        val members = Named_Theorems.get ctxt full
+                        val n = length members
+                        val shown = map (SOT o Thm.prop_of) (take 5 members)
+                        val props = if n > 5
+                                    then shown @ ["... (" ^ string_of_int (n - 5) ^ " more)"]
+                                    else shown
+                    in SOME (Facts.extern ctxt facts full, props, [], [], false) end
           in map (fn e => the_default NONE (try retrieve e)) entities end),
         timeout = NONE
       }

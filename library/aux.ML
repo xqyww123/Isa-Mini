@@ -186,38 +186,35 @@ fun induction_tac IH_map =
 (** Aux Attributes **)
 
 fun beta_eta_contract_cterm x =
-  if Term.could_beta_eta_contract (Thm.term_of x)
+  if (fn t => Term.could_beta_contract t orelse Term.could_eta_contract t) (Thm.term_of x)
   then Thm.dest_arg (Thm.cprop_of (Drule.beta_eta_conversion x))
   else x
 
 local
 
-(* Discharge a single premise of [rule] using [fact].
-   Fast path: ordinary OF unification.
-   Fallback (when prove_discharge): construct a goal from the premise,
-   insert the fact as an assumption via insert_tac, and prove with fast_mepo_tac. *)
-fun discharge_one _ rule fact =
-      rule OF [fact]
+(* Last-resort discharge (when prove_discharge): prove [premise] outright —
+   insert [fact] as an assumption and run a 3s fast_mepo search.
+   NONE if the search fails. *)
+fun prove_premise ctxt fact premise =
+  let val goal = Goal.init (Thm.cterm_of ctxt premise)
+      val tac = Method.insert_tac ctxt [fact] 1
+                THEN Phi_Sledgehammer_Solver.fast_mepo_tac
+                       (Time.fromSeconds 3) ctxt 1
+   in case Seq.pull (tac goal)
+        of SOME (st', _) => (SOME (Goal.finish ctxt st') handle ERROR _ => NONE)
+         | NONE => NONE
+  end
 
-fun discharge_one_prove ctxt rule fact =
-      (rule OF [fact])
-      handle THM _ =>
-        let val premise = hd (Thm.prems_of rule)
-            val goal = Goal.init (Thm.cterm_of ctxt premise)
-            val tac = Method.insert_tac ctxt [fact] 1
-                      THEN Phi_Sledgehammer_Solver.fast_mepo_tac
-                             (Time.fromSeconds 3) ctxt 1
-        in case Seq.pull (tac goal)
-             of SOME (st', _) =>
-                  let val proved = Goal.finish ctxt st'
-                  in rule OF [proved] end
-              | NONE => raise THM ("the given fact mismatches the target premise",
-                                   1, [fact, rule])
-        end
-
-fun discharge_all _ _ rule [] = rule
-  | discharge_all discharge1 ctxt rule (fact :: rest) =
-      discharge_all discharge1 ctxt (discharge1 ctxt rule fact) rest
+(* Object-level fact (\<forall>/\<longrightarrow>) against meta-level rule premise (\<And>/\<Longrightarrow>) — the
+   single most frequent discharge failure in agent runs; reported with a
+   dedicated hint. *)
+fun is_meta_object_clash (Unify_Diagnostic.Clash (a, b)) =
+      let val meta = [\<^const_name>\<open>Pure.all\<close>, \<^const_name>\<open>Pure.imp\<close>]
+          val obj  = [\<^const_name>\<open>HOL.Trueprop\<close>]
+       in (member (op =) meta a andalso member (op =) obj b) orelse
+          (member (op =) obj a andalso member (op =) meta b)
+      end
+  | is_meta_object_clash _ = false
 
 in
 
@@ -286,22 +283,76 @@ fun xOF prove_discharge ctxt opt_thms st =
               (rewr_conv Thms.atomize_imp'sym then_conv rulify N ctxt) ctm
            | _ => raise THM ("more facts are given than the number of premises of the rule",
                               LEN + 1, st :: thms)
-      val discharge1 = if prove_discharge then discharge_one_prove else discharge_one
-   in if LEN <= Thm.nprems_of st
-    then (st OF thms
-          handle THM _ =>
-            if not prove_discharge then st OF thms  (* re-raise *)
-            else discharge_all discharge1 ctxt st thms)
-    else let
-         val i = Thm.maxidx_of st + 1
-         val st' = fconv_rule (rulify LEN ctxt) st
-                |> Thm.forall_elim_vars i
-      in (st' OF thms
-          handle THM _ =>
-            if not prove_discharge then st' OF thms  (* re-raise *)
-            else discharge_all discharge1 ctxt st' thms)
-      |> fconv_rule (Object_Logic.atomize ctxt)
-     end
+      val st' =
+        if LEN <= Thm.nprems_of st then st
+        else fconv_rule (rulify LEN ctxt) st
+             |> Thm.forall_elim_vars (Thm.maxidx_of st + 1)
+      val atomize_back =
+        if LEN <= Thm.nprems_of st then I
+        else fconv_rule (Object_Logic.atomize ctxt)
+
+      (* ---- informative failure (DRAFT wording) ---- *)
+      fun fact_desc fact =
+        if Thm.has_name_hint fact
+        then simp_fact_name' (Thm_Name.print (Thm.get_name_hint fact))
+        else "\<open>" ^ Thm.string_of_thm ctxt fact ^ "\<close>"
+      val prems_section =
+        case list_prems (Thm.prop_of st) of
+          [] => ""
+        | prem_strs =>
+            "the premises of the fact are:\n" ^
+            String.concat (map_index (fn (i, s) =>
+              "  " ^ string_of_int (i + 1) ^ ". " ^ s ^ "\n") prem_strs)
+      fun discharge_fail i fact rule =
+        let
+          val prem = nth (Thm.prems_of rule) (i - 1)
+          val reason =
+            case Unify_Diagnostic.diagnose_pair ctxt (Thm.prop_of fact) prem of
+              SOME d =>
+                Unify_Diagnostic.format_diag_body ctxt d ^
+                (if is_meta_object_clash d
+                 then "\nnote: the premise is a meta-level rule (\<And>/\<Longrightarrow>) but the \
+                      \discharge argument is an object-level statement (\<forall>/\<longrightarrow>); \
+                      \the two forms do not unify"
+                 else "")
+            | NONE =>
+                "the argument unifies with this premise in isolation; the \
+                \failure comes from instantiations conflicting across the \
+                \other discharge arguments (or a non-unique unifier)"
+        in
+          error ("OF: cannot discharge premise " ^ string_of_int i ^
+                 " of the fact with discharge argument " ^ string_of_int i ^
+                 " (" ^ fact_desc fact ^ ")\n" ^
+                 "the premise is:\n  " ^ Syntax.string_of_term ctxt prem ^ "\n" ^
+                 "the discharge argument is:\n  " ^ Thm.string_of_thm ctxt fact ^ "\n" ^
+                 reason ^ "\n" ^ prems_section)
+        end
+
+      (* Index-anchored discharge, right to left (mirrors Drule's multi_res):
+         each argument meets the ORIGINAL i-th premise even when a more-left
+         argument inserts its own premises, and skipped (NONE) positions stay
+         skipped.  Per argument: unify; retry with the rulified form
+         (\<forall>/\<longrightarrow> \<Rightarrow> \<And>/\<Longrightarrow>); when prove_discharge, prove the premise outright. *)
+      fun seq_discharge rule =
+        let
+          fun step (_, NONE) rule = rule
+            | step (i, SOME fact) rule =
+                fact RSN (i, rule)
+                handle THM _ =>
+                  (Object_Logic.rulify ctxt fact RSN (i, rule)
+                   handle THM _ =>
+                     (case (if prove_discharge
+                            then prove_premise ctxt fact
+                                   (nth (Thm.prems_of rule) (i - 1))
+                            else NONE)
+                        of SOME proved =>
+                             (proved RSN (i, rule)
+                              handle THM _ => discharge_fail i fact rule)
+                         | NONE => discharge_fail i fact rule))
+        in fold step (rev (map_index (fn (k, f) => (k + 1, f)) opt_thms)) rule
+        end
+   in (st' OF thms handle THM _ => seq_discharge st')
+      |> atomize_back
   end
 
 end
@@ -861,10 +912,9 @@ val case_synt' =
 
 fun case_synt ctxt toks = case case_synt' (ctxt, toks) of (x, (_, toks)) => (x,toks)
 
-fun simp_fact_name' name =
-  if String.isPrefix "local." name
-  then String.substring (name, 6, size name - 6)
-  else name
+(* moved to aux_thms.ML (load-order: unify_diagnostic.ML needs it before
+   this file loads); re-exported here for existing callers *)
+val simp_fact_name' = Minilang_Aux.simp_fact_name'
 
 fun simp_fact_name ctxt name =
   if String.isPrefix "local." name

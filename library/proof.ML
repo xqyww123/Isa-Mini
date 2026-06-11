@@ -17,7 +17,7 @@ val num_goals   : state -> int
 val goals_of'   : thm -> term list  (* extract the list of subgoal terms
                                        from a (possibly-protected) proof
                                        state theorem — walks through the
-                                       nested `HOL.GOAL` wrappers that
+                                       nested `Minilang.GOAL` wrappers that
                                        `protect_goals` produces, whereas
                                        `Thm.prems_of` would stop at the
                                        outer `Pure.imp` chain *)
@@ -135,7 +135,7 @@ val UNFOLD_CMD : command
  *   using     : facts intended to discharge the rule's major premises
  *               (the `consumes` count). Required: |using| >= consumes.
  *               When `strict_consumes_check` is true, also |using| <= consumes.
- *   insertion : named facts to be wrapped with HOL.TAG + conjI, inserted
+ *   insertion : named facts to be wrapped with Minilang.TAG + conjI, inserted
  *               as a goal premise via a dedicated `Method.insert_tac`
  *               call (NOT via `induction_tac`'s `facts` parameter, so
  *               `Rule_Cases.consume` never touches them), and restored
@@ -524,7 +524,7 @@ fun protect_goals th =
           of Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ X =>
             (case X
                of Const(\<^const_name>\<open>Pure.prop\<close>, _) $ _ => Conv.all_conv ctm
-                | Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ _ => Conv.all_conv ctm
+                | Const(\<^const_name>\<open>Minilang.GOAL\<close>, _) $ _ => Conv.all_conv ctm
                 | _ => (Conv.arg_conv (conv then_conv 
                                        Conv.rewr_conv Thms.GOAL_def'sym)) ctm)
            | _ => Conv.all_conv ctm
@@ -537,7 +537,7 @@ fun pop_n_goals n th =
         if N <= 1 then all_conv ctm
         else case Thm.term_of ctm
           of Const (\<^const_name>\<open>Pure.imp\<close>, _) $ _
-                $ (Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ _ ) =>
+                $ (Const(\<^const_name>\<open>Minilang.GOAL\<close>, _) $ _ ) =>
              (arg_conv (rewr_conv Thms.GOAL_def) then_conv
               arg_conv (conv (N-1)) then_conv
               rewr_conv Thms.conjunction_imp'sym) ctm
@@ -550,10 +550,10 @@ fun init_goal ctxt th = th
       |> protect_goals
 
 val num_goals_of =
-  let fun calc ret (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ (Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ X))
+  let fun calc ret (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ (Const(\<^const_name>\<open>Minilang.GOAL\<close>, _) $ X))
             = calc (ret+1) X
         | calc ret (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ (Const(\<^const_name>\<open>Pure.prop\<close>, _) $ _)) = ret + 1
-        | calc ret (Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ X) = calc (ret+1) X
+        | calc ret (Const(\<^const_name>\<open>Minilang.GOAL\<close>, _) $ X) = calc (ret+1) X
         | calc _ _ = raise BROKEN_INVARIANT
    in fn Const (\<^const_name>\<open>Pure.prop\<close>, _) $ _ => 0
        | tm => calc 0 tm
@@ -562,21 +562,21 @@ val num_goals_of' = num_goals_of o Thm.prop_of
 fun num_goals ((_, HHF (st, _) :: _), _, _) = num_goals_of' st
   | num_goals _ = raise BROKEN_INVARIANT
 
-fun no_goal (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ (Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ _)) = false
+fun no_goal (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ (Const(\<^const_name>\<open>Minilang.GOAL\<close>, _) $ _)) = false
   | no_goal (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ (Const(\<^const_name>\<open>Pure.prop\<close>, _) $ _)) = false
-  | no_goal (Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ _) = false
+  | no_goal (Const(\<^const_name>\<open>Minilang.GOAL\<close>, _) $ _) = false
   | no_goal _ = true
 val no_goal' = no_goal o Thm.prop_of
 
 fun no_subgoal (Const(\<^const_name>\<open>Pure.prop\<close>, _) $ _) = true
-  | no_subgoal (Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ _) = true
+  | no_subgoal (Const(\<^const_name>\<open>Minilang.GOAL\<close>, _) $ _) = true
   | no_subgoal _ = false
 val no_subgoal' = no_subgoal o Thm.prop_of
 
 val goals_of =
-  let fun collect (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ G $ (Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ X))
+  let fun collect (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ G $ (Const(\<^const_name>\<open>Minilang.GOAL\<close>, _) $ X))
             = G :: collect X
-        | collect (Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ X)
+        | collect (Const(\<^const_name>\<open>Minilang.GOAL\<close>, _) $ X)
             = \<^prop>\<open>True\<close> :: collect X
         | collect (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ G $ (Const(\<^const_name>\<open>Pure.prop\<close>, _) $ _))
             = [G]
@@ -611,8 +611,8 @@ fun schematic_vars_of_leading_goal ((_, HHF (st, _) :: _), _, _) =
   end
   | schematic_vars_of_leading_goal _ = raise BROKEN_INVARIANT
 
-fun concl_of (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ (Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ X)) = concl_of X
-  | concl_of (Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ X) = concl_of X
+fun concl_of (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ (Const(\<^const_name>\<open>Minilang.GOAL\<close>, _) $ X)) = concl_of X
+  | concl_of (Const(\<^const_name>\<open>Minilang.GOAL\<close>, _) $ X) = concl_of X
   | concl_of (Const(\<^const_name>\<open>Pure.prop\<close>, _) $ X) = X
   | concl_of (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ (Const(\<^const_name>\<open>Pure.prop\<close>, _) $ X)) = X
   | concl_of _ = raise BROKEN_INVARIANT
@@ -621,7 +621,7 @@ fun concl_of (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ (Const(\<^co
 fun conclude_goal th =
   let fun conv ctm =
         (case Thm.term_of ctm
-           of Const(\<^const_name>\<open>HOL.GOAL\<close>, _) $ _ => Conv.rewr_conv Thms.GOAL_def ctm
+           of Const(\<^const_name>\<open>Minilang.GOAL\<close>, _) $ _ => Conv.rewr_conv Thms.GOAL_def ctm
             | Const(\<^const_name>\<open>Pure.prop\<close>, _) $ _ => Conv.all_conv ctm
             | _ => raise THM ("conclude_goal", 0, [th]))
    in Conv.fconv_rule conv th
@@ -869,7 +869,7 @@ fun map_fact_counter f ctxt =
 
 
 fun beta_eta_contract th =
-  if Term.could_beta_eta_contract (Thm.prop_of th)
+  if (fn t => Term.could_beta_contract t orelse Term.could_eta_contract t) (Thm.prop_of th)
   then Thm.equal_elim (Drule.beta_eta_conversion (Thm.cprop_of th)) th
   else th
 
@@ -926,8 +926,8 @@ fun MP ctxt thAB thA =
           then (Thm.instantiate (Thm.match (LHS, Thm.cprop_of thA)) thAB |> beta_eta_contract,
                 thA)
           else let
-              val frees = Term.declare_term_frees (Thm.prop_of thA)
-                              (Term.declare_term_frees (Thm.term_of LHS) Name.context)
+              val frees = Term.declare_free_names (Thm.prop_of thA)
+                              (Term.declare_free_names (Thm.term_of LHS) Name.context)
               val names = Name.invent frees "x" diff 
               val (fixes, LHS') = fold_map (fn name => Thm.dest_abs_fresh name o Thm.dest_arg)
                                            names LHS
@@ -1060,7 +1060,7 @@ fun wraps ctxt ths = ths
 
 val is_tagged =
   let fun chk (\<^Const>\<open>Trueprop\<close> $ X) = chk X
-        | chk (\<^Const>\<open>HOL.TAG _\<close> $ _) = true
+        | chk (\<^Const>\<open>Minilang.TAG _\<close> $ _) = true
         | chk (\<^Const>\<open>HOL.conj\<close> $ A $ B) = chk A andalso chk B
         | chk (\<^Const>\<open>Pure.imp\<close> $ A $ B) = chk A orelse chk B
         | chk (\<^Const>\<open>Pure.all _\<close> $ Abs (_, _, X)) = chk X
@@ -1084,7 +1084,7 @@ fun remove_TAG_premises ctxt th =
                   of \<^Const>\<open>Trueprop\<close> $ (\<^Const>\<open>conj\<close> $ _ $ _) =>
                       (Conv.rewr_conv Thms.conj_imp_eq_imp_imp
                        then_conv conv ctxt) ctm
-                   | \<^Const>\<open>Trueprop\<close> $ (\<^Const>\<open>HOL.TAG _\<close> $ _) =>
+                   | \<^Const>\<open>Trueprop\<close> $ (\<^Const>\<open>Minilang.TAG _\<close> $ _) =>
                       (Conv.arg1_conv (HOLogic.Trueprop_conv (Conv.rewr_conv Thms.TAG_def))
                        then_conv conv ctxt) ctm)
                 else Conv.combination_conv (Conv.arg_conv (conv ctxt)) (conv ctxt) ctm
@@ -1108,7 +1108,7 @@ fun unwrap_conjs ctxt th =
 
 fun unwrap_tags ctxt th =
   let val has_tag = Term.exists_Const
-        (fn (\<^const_name>\<open>HOL.TAG\<close>, _) => true | _ => false)
+        (fn (\<^const_name>\<open>Minilang.TAG\<close>, _) => true | _ => false)
       fun conv ctxt ctm =
         if not (has_tag (Thm.term_of ctm)) then Conv.all_conv ctm
         else case Thm.term_of ctm
@@ -1117,7 +1117,7 @@ fun unwrap_tags ctxt th =
             | Const(\<^const_name>\<open>Pure.imp\<close>, _)
                 $ (Const(\<^const_name>\<open>HOL.Trueprop\<close>, _)
                     $ (Const(\<^const_name>\<open>HOL.conj\<close>, _)
-                        $ (Const(\<^const_name>\<open>HOL.TAG\<close>, _) $ _)
+                        $ (Const(\<^const_name>\<open>Minilang.TAG\<close>, _) $ _)
                         $ _ ) )
                 $ _ =>
               ( Conv.rewr_conv Thms.conj_imp_eq_imp_imp
@@ -1125,7 +1125,7 @@ fun unwrap_tags ctxt th =
               ) ctm
             | Const(\<^const_name>\<open>Pure.imp\<close>, _)
                 $ (Const(\<^const_name>\<open>HOL.Trueprop\<close>, _)
-                    $ (Const(\<^const_name>\<open>HOL.TAG\<close>, _) $ _) )
+                    $ (Const(\<^const_name>\<open>Minilang.TAG\<close>, _) $ _) )
                 $ _ =>
               ( Conv.arg1_conv (HOLogic.Trueprop_conv (Conv.rewr_conv Thms.TAG_def))
               then_conv conv ctxt
@@ -1133,7 +1133,7 @@ fun unwrap_tags ctxt th =
             (* Bare TAG anywhere (HOL-level): unfold and continue inside.
                Subsumes the prior `Trueprop $ TAG _` premise case via the
                generic `_ $ _` recursion below. *)
-            | Const(\<^const_name>\<open>HOL.TAG\<close>, _) $ _ =>
+            | Const(\<^const_name>\<open>Minilang.TAG\<close>, _) $ _ =>
               (Conv.rewr_conv Thms.TAG_def then_conv conv ctxt) ctm
             (* Generic descent. Per-subterm `has_tag` short-circuit above
                keeps this O(size of TAG-bearing region), not O(prop). This
@@ -1765,7 +1765,7 @@ fun potential_defs_of_const ctxt const_name =
                 val (_, results) =
                   Find_Theorems.find_theorems ctxt NONE NONE true criterion
               in
-                map (fn (fact_ref, thm) => (Facts.string_of_ref fact_ref, thm)) results
+                map (fn (thm_name, thm) => (Thm_Name.print thm_name, thm)) results
               end
               handle ERROR _ => []
           in
@@ -2492,7 +2492,7 @@ fun parse_consumes_policy s =
  * The helpers below (align_left, align_right, prep_inst, special_rename_params,
  * get_inductP_local, mk_inst_rule, get_casesT_local, get_casesP_local,
  * mk_inst_cases_rule) are verbatim copies of private functions from
- *   contrib/Isabelle2024/src/Tools/induct.ML
+ *   contrib/Isabelle2025-2/src/Tools/induct.ML
  *
  * They exist so that pick_induct_rule / pick_case_split_rule can replicate
  * Isabelle's rule-discovery logic without modifying the system induction
@@ -2500,9 +2500,12 @@ fun parse_consumes_policy s =
  * opt_rule = SOME [picked_rule], forcing Isabelle to use exactly the rule
  * we pre-analyzed.
  *
- * Last synced with: Isabelle2024
+ * Last synced with: Isabelle2025-2 (audit 2026-06-10: all listed regions
+ * byte-identical to Isabelle2024; rule_cases.ML deps only saw the pure
+ * renames Raw_Simplifier.rewrite->rewrite_wrt and Drule.cprems_of->
+ * Thm.take_cprems_of, both semantics-preserving)
  * When upgrading Isabelle, verify these are still correct by diffing:
- *   - contrib/Isabelle2024/src/Tools/induct.ML:
+ *   - contrib/Isabelle2025-2/src/Tools/induct.ML:
  *     align_left/align_right (lines 401-407),
  *     prep_inst (line 412),
  *     special_rename_params (line 633),
@@ -2510,7 +2513,7 @@ fun parse_consumes_policy s =
  *     get_casesP/get_casesT (lines 485-488),
  *     inst_rule inside gen_induct_context_tactic (line 763),
  *     inst_rule inside cases_context_tactic (line 496).
- *   - contrib/Isabelle2024/src/Pure/Isar/rule_cases.ML:
+ *   - contrib/Isabelle2025-2/src/Pure/Isar/rule_cases.ML:
  *     consume (line 198), get_consumes.
  *
  * Symptom of missed sync: analyze_induct / analyze_case_split reports a
@@ -2709,7 +2712,7 @@ fun mk_analysis (raw_rule, consumes_n, inst_thm) : induct_analysis =
     val prems = Thm.prems_of inst_thm
     val name_final =
       if Thm.has_name_hint raw_rule
-      then let val s = Thm.get_name_hint raw_rule
+      then let val s = Thm_Name.print (Thm.get_name_hint raw_rule)
            in if s = "" then NONE else SOME s end
       else NONE
   in
@@ -2831,7 +2834,7 @@ fun INDUCT' (no_simp, (insts, ((arbitrary, taking), opt_rule))) first_vars
         | SOME (raw_rule, ((_, consumes_n), inst_thm)) =>
             let val name_str =
                   if Thm.has_name_hint raw_rule
-                  then Thm.get_name_hint raw_rule
+                  then Thm_Name.print (Thm.get_name_hint raw_rule)
                   else "<auto-picked rule>"
                 val forced_rule =
                   case opt_rule of
@@ -2981,7 +2984,7 @@ fun CASE_SPLIT' (no_simp, (insts, opt_rule)) vars (using : thm list) (ctxt, SK) 
         | SOME (raw_rule, ((_, consumes_n), inst_thm)) =>
             let val name_str =
                   if Thm.has_name_hint raw_rule
-                  then Thm.get_name_hint raw_rule
+                  then Thm_Name.print (Thm.get_name_hint raw_rule)
                   else "<auto-picked rule>"
                 val forced_rule =
                   case opt_rule of
@@ -3533,8 +3536,10 @@ val INST_VAR_CMD =
 fun SPECIALIZE' prep_thms prep_insts opt_name raw_rules raw_insts raw_facts
                 (ctxt, HHF (st, items) :: SK) =
   let
-    (* 1. Resolve the rule *)
+    (* 1. Resolve the rule (a rule-ref suffix like [xwhere ..., xOF ...] is
+       evaluated here; xOF failures arrive as informative ERRORs) *)
     val rules = prep_thms ctxt raw_rules
+                handle ERROR msg => raise OPR_FAIL (INVALID_OPR, msg)
     val rule = case rules of [r] => r
               | _ => raise OPR_FAIL (INVALID_OPR,
                       "SPECIALIZE expects exactly one rule, got " ^
@@ -3546,26 +3551,23 @@ fun SPECIALIZE' prep_thms prep_insts opt_name raw_rules raw_insts raw_facts
                 handle ERROR msg =>
                   let val rule_name =
                         if Thm.has_name_hint rule
-                        then Minilang_Aux.simp_fact_name' (Thm.get_name_hint rule)
+                        then Minilang_Aux.simp_fact_name' (Thm_Name.print (Thm.get_name_hint rule))
                         else "<anonymous>"
                   in raise OPR_FAIL (INVALID_OPR, String.concat [
                        "cannot instantiate rule \<open>", rule_name, "\<close>:\n",
                        msg, "\n",
                        "the rule is:\n  ", Thm.string_of_thm ctxt rule]) end
 
-    (* 3. Discharge premises left-to-right with facts.
-       xOF handles both Pure.imp and HOL.implies/HOL.All.
-       prove_discharge=true: if OF unification fails, fall back to proving
-       the discharge via insert_tac + fast_mepo_tac. *)
+    (* 3. Discharge premises with facts, anchored to original positions.
+       xOF handles both Pure.imp and HOL.implies/HOL.All; on unification
+       failure it retries with the rulified fact, then (prove_discharge)
+       proves the premise via insert_tac + fast_mepo_tac, and raises an
+       ERROR carrying the Unify_Diagnostic explanation when all fail. *)
     val facts = prep_thms ctxt raw_facts
                  handle ERROR msg => raise OPR_FAIL (INVALID_OPR, msg)
     val result = if null facts then rule'
                  else Minilang_Aux.xOF true ctxt (map SOME facts) rule'
-                      handle THM _ =>
-                        raise OPR_FAIL (INVALID_OPR,
-                          case Unify_Diagnostic.diagnose_of_failure ctxt rule' facts of
-                            SOME msg => msg
-                          | NONE => "the given facts mismatch the rule premises")
+                      handle ERROR msg => raise OPR_FAIL (INVALID_OPR, msg)
 
     (* 4. Generate name if not provided *)
     val (name, ctxt') = case opt_name of
@@ -3691,7 +3693,7 @@ fun CONSIDER'i raw_dnf (ctxt0, HHF (st0, items0) :: S) =
                           = ex_var_of X ((name,ty) :: ret)
                      | ex_var_of _ ret = rev ret
                    val vs = fold (fold ex_var_of) conclss []
-                         |> Variable.variant_frees params_ctxt []
+                         |> Variable.variant_names params_ctxt
                 in if null vs
                  then (params_ctxt, decls, conclss)
                  else let
@@ -4471,7 +4473,7 @@ fun read_arg (c, mx) ctxt =
       let
         val ctxt' =
           ctxt |> is_none (Variable.default_type ctxt x) ?
-            Variable.declare_constraints (Free (x, Mixfix.default_constraint mx));
+            Variable.declare_constraints (Free (x, Mixfix.default_constraint ctxt mx));
         val t = Free (#1 (Proof_Context.inferred_param x ctxt'));
       in ((t, mx), ctxt') end
   | t => ((t, mx), ctxt));
@@ -5006,7 +5008,7 @@ fun run_phase_2 outer_ctxt lthy2 {term_goal, term_afterqed}
               body flag. *)
            val lthy_for_user = Variable.restore_body outer_ctxt lthy2
            (* Convert the raw prepped state into minilang's
-              HOL.GOAL-wrapped shape so the HHF satisfies minilang's
+              Minilang.GOAL-wrapped shape so the HHF satisfies minilang's
               invariants. init_goal = iso_atomize + protect_goals;
               for our Pure-level termination goal iso_atomize is a
               no-op, so this is effectively just protect_goals. *)
@@ -5047,7 +5049,7 @@ fun run_phase_2 outer_ctxt lthy2 {term_goal, term_afterqed}
               `(*goal: ...*)` annotations) see both the correct count
               and the correct contents.  Use `goals_of'` because `init_st`
               is in Minilang's protected form (`protect_goals` nests
-              subgoals inside `HOL.GOAL` wrappers); `Thm.prems_of` would
+              subgoals inside `Minilang.GOAL` wrappers); `Thm.prems_of` would
               only walk the outer `Pure.imp` chain and under-count. *)
            val _ = get_reporter () (Goals (goals_of' init_st))
          in
@@ -5084,6 +5086,7 @@ fun thms_to_targeted_simprocs ctxt (entries: (thm * term list) list) : simproc l
           in
             SOME (Simplifier.make_simproc ctxt
               { name = "targeted_simproc_" ^ string_of_int i ^ "_" ^ string_of_int j,
+                kind = Simproc,
                 lhss = [lhs],
                 proc = K proc,
                 identifier = [] })
@@ -5169,7 +5172,7 @@ fun FUN_by_fun_ext fixes specs config metric_strs open_on_fail
           Variable.restore_body outer_ctxt lthy_after_prepare
         (* Convert the raw Goal.init'd pat-completeness state (which
            has shape `G1 ⟹ G2 ⟹ ... ⟹ Pure.prop C` with multiple
-           Pure.imp premises) into minilang's HOL.GOAL-wrapped shape
+           Pure.imp premises) into minilang's Minilang.GOAL-wrapped shape
            via init_goal (= iso_atomize + protect_goals). The
            matching un-wrap happens in pat_cb via
            Goal.conclude |> finalize_goal |> Conjunction.elim_conjunctions,
@@ -5294,7 +5297,7 @@ val CONFIG_FACTS'' = timed_OPR 10 o CONFIG' (fn ctxt =>
      in map (CFG_NOTE o parse_fact)
     end )
 val CONFIG_BUNDL'' = timed_OPR 10 o CONFIG' (fn ctxt =>
-    let fun parse name = CFG_BUNDLE (Bundle.check ctxt (name, Position.none))
+    let fun parse name = CFG_BUNDLE (true, Bundle.check ctxt (name, Position.none))
      in map parse
     end )
 
@@ -5306,7 +5309,7 @@ val CONFIG_CMD = Parse_Spec.name_facts >> (
                  #> apsnd (map (Attrib.attribute_cmd ctxt))) facts)
         fun parse (origin as ((b,[]), [(Facts.Named (name,_), [])])) =
               if Binding.is_empty b
-              then CFG_BUNDLE (Bundle.check ctxt name)
+              then CFG_BUNDLE (true, Bundle.check ctxt name)
               else CFG_NOTE (parse_fact origin)
           | parse fact = CFG_NOTE (parse_fact fact)
      in map parse facts

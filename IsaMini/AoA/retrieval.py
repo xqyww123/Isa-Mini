@@ -413,6 +413,23 @@ def _format_search_report(
 # KNN Query
 # ============================================================================
 
+def _augment_kinds_with_named_theorems(
+    kinds: list[EntityKind], q: dict,
+) -> list[EntityKind]:
+    """Append NAMED_THEOREMS when the agent asked for lemmas AND gave a semantic
+    description (the ranked discovery path). exact_name and pure-pattern (no
+    description) queries are excluded: a named_theorems collection can be neither
+    pattern-filtered nor ranked there, so it would only add noise / crowd out the
+    structural matches the agent asked for. To target a collection on those paths
+    the agent passes ``kinds: ["named theorems"]`` explicitly."""
+    has_description = bool(q.get("description") or q.get("long_description"))
+    if (not q.get("exact_name")
+            and EntityKind.THEOREM in kinds and has_description
+            and EntityKind.NAMED_THEOREMS not in kinds):
+        return kinds + [EntityKind.NAMED_THEOREMS]
+    return kinds
+
+
 async def _run_knn_for_query(
     ml_state: Minilang_State, q: dict,
 ) -> _KnnQueryResult:
@@ -430,6 +447,7 @@ async def _run_knn_for_query(
         kinds = [EntityKind.from_label(label) for label in (q.get("kinds") or default_kinds)]
     except KeyError as e:
         return ([], [], f"Invalid entity kind: {e}", 0)
+    kinds = _augment_kinds_with_named_theorems(kinds, q)
     fetched, warnings, total = await ml_state.semantic_knn_counted(
         q.get("description") or q.get("long_description") or None, _query_k(q), kinds,
         term_patterns=q.get("term_patterns") or [],
@@ -636,6 +654,7 @@ async def _semantic_search_with_filtering(
             kinds = [EntityKind.from_label(label) for label in (q.get("kinds") or ["constant"])]
         except KeyError:
             continue
+        kinds = _augment_kinds_with_named_theorems(kinds, q)
         interaction = Interaction_RetrieveForSearch(
             state=ml_state, query=q.get("description") or q.get("long_description") or "", kinds=kinds,
             initial_k=50,

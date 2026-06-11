@@ -250,7 +250,6 @@ fun string_of_term ctxt =
               |> Config.put Printer.show_markup false
               |> Config.put Printer.show_structs false
               |> Config.put Printer.show_question_marks true
-              |> Config.put Printer.show_brackets false
      in Object_Logic.atomize_term ctxt'
      #> Minilang.deconflict_bound_names
      #> RPC_Pretty.print_term printing_cfg ctxt'
@@ -266,7 +265,6 @@ fun string_of_type ctxt =
               |> Config.put Printer.show_markup false
               |> Config.put Printer.show_structs false
               |> Config.put Printer.show_question_marks true
-              |> Config.put Printer.show_brackets false
      in RPC_Pretty.print_typ printing_cfg ctxt'
     end
 
@@ -277,7 +275,6 @@ fun string_of_type_full_sort ctxt =
               |> Config.put Printer.show_markup false
               |> Config.put Printer.show_structs false
               |> Config.put Printer.show_question_marks true
-              |> Config.put Printer.show_brackets false
      in Syntax.string_of_typ ctxt'
      #> REPL.trim_makrup
     end
@@ -861,7 +858,7 @@ fun AUTO_SIMPLIFY
             else ()
     val _ = if fell_back_targets_stale
             then let val stale_names = map (fn (thm, _) =>
-                        Thm.get_name_hint thm
+                        Thm_Name.print (Thm.get_name_hint thm)
                         handle ERROR _ => "<unnamed>") stale_targeted
                  in Minilang.get_reporter ()
                       (Minilang.Internal (SIMPLIFY_TARGETS_STALE stale_names))

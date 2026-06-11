@@ -84,6 +84,7 @@ class ClaudeCode(LMDriver):
         "answer_instantiate": "mcp__proof__answer_instantiate",
         "answer_refutation": "mcp__proof__answer_refutation",
         "answer_struggle_assessment": "mcp__proof__answer_struggle_assessment",
+        "answer_missing_lemmas": "mcp__proof__answer_missing_lemmas",
         "refresh": "mcp__proof__refresh",
     }
     TOOL_WHITELIST = _NON_PROOF_TOOLS + list(_TOOL_NAME_MAP.values())

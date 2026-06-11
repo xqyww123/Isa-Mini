@@ -27,8 +27,28 @@ lemma pull_Ball_eq:
   unfolding atomize_eq
   by (auto simp add: Ball_def)
 
+(* Base layer (formerly in Minilang_Base.thy): definitions required by
+   aux_thms.ML, whose MINILANG_AUX / Minilang_Aux / Thms are extended by
+   aux.ML and used throughout proof.ML and the agent. *)
+
+definition \<open>TAG X \<equiv> X\<close>
+definition \<open>GOAL (X::prop) \<equiv> X\<close>
+definition \<open>PROTECT X \<equiv> X\<close>
+definition \<open>ISO_ALL \<equiv> HOL.All\<close>
+definition \<open>ISO_IMP \<equiv> HOL.implies\<close>
+definition \<open>ISO_PROP (X::bool) \<equiv> X\<close>
+
+lemma ISO_PROP:
+  \<open>Trueprop (ISO_PROP P) \<equiv> Pure.prop (Trueprop P)\<close>
+  unfolding ISO_PROP_def Pure.prop_def .
+
+ML_file \<open>./library/aux_thms.ML\<close>
+
+hide_fact ISO_PROP
+hide_const (open) TAG GOAL PROTECT ISO_ALL ISO_IMP ISO_PROP
+
+ML_file \<open>./library/unify_diagnostic.ML\<close>  (* before aux.ML: xOF uses Unify_Diagnostic *)
 ML_file \<open>./library/aux.ML\<close>
-ML_file \<open>./library/unify_diagnostic.ML\<close>
 ML_file \<open>./library/function/proof_local_lthy.ML\<close>
 ML_file \<open>./library/function/proof_local_inductive.ML\<close>
 ML_file \<open>./library/function/proof_local_function.ML\<close>
@@ -39,7 +59,7 @@ ML_file \<open>./library/proof.ML\<close>
 
 attribute_setup xOF = \<open>Scan.repeat (Scan.lift (Args.$$$ "_") >> K NONE || Attrib.thm >> SOME) >> (fn Bs =>
       Thm.rule_attribute (map_filter I Bs)
-        (fn ctxt => Minilang_Aux.xOF false (Context.proof_of ctxt) Bs))\<close>
+        (fn ctxt => Minilang_Aux.xOF true (Context.proof_of ctxt) Bs))\<close>
 
 attribute_setup xof = \<open>let
      val inst = Args.maybe Parse.embedded_inner_syntax;

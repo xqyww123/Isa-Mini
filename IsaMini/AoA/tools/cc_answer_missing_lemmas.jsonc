@@ -1,0 +1,38 @@
+{
+  "type": "object",
+  "properties": {
+    "missing_lemmas": {
+      "type": "array",
+      "description": "General-purpose library facts (standard-library or AFP lemmas/theorems/definitions) you needed but could not find. Empty array if nothing is missing.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name_guess": {
+            "type": "string",
+            "description": "Your best guess of the lemma's conventional name (e.g. 'AM_GM_inequality', 'sum_of_two_squares')"
+          },
+          "english": {
+            "type": "string",
+            "description": "Precise plain-English statement of the missing fact"
+          },
+          "isabelle_statement": {
+            "type": "string",
+            "description": "Isabelle/HOL statement sketch, if you can write one"
+          },
+          "queries_tried": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "The query descriptions you tried that failed to find it"
+          },
+          "why_needed": {
+            "type": "string",
+            "description": "Why your proof needs this fact"
+          }
+        },
+        "required": ["name_guess", "english", "why_needed"]
+      }
+    }
+  },
+  "required": ["missing_lemmas"],
+  "additionalProperties": false
+}

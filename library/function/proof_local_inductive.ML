@@ -101,7 +101,7 @@ val bad_app = "Inductive predicate must be applied to parameter(s) ";
 
 fun check_rule ctxt cs params ((binding, att), rule) =
   let
-    val params' = Term.variant_frees rule (Logic.strip_params rule);
+    val params' = Variable.variant_names (Variable.declare_names rule ctxt) (Logic.strip_params rule);
     val frees = rev (map Free params');
     val concl = subst_bounds (frees, Logic.strip_assums_concl rule);
     val prems = map (curry subst_bounds frees) (Logic.strip_assums_hyp rule);
@@ -446,11 +446,13 @@ fun mk_ind_def quiet_mode skip_mono alt_name coind cs intr_ts monos params cname
     val argTs = fold (combine (op =) o arg_types_of (length params)) cs [];
     val k = log 2 1 (length cs);
     val predT = replicate k HOLogic.boolT ---> argTs ---> HOLogic.boolT;
+    val ctxt1 = fold Variable.declare_names intr_ts lthy
     val p :: xs =
-      map Free (Variable.variant_frees lthy intr_ts
+      map Free (Variable.variant_names ctxt1
         (("p", predT) :: (mk_names "x" (length argTs) ~~ argTs)));
+    val ctxt2 = fold Variable.declare_names (p :: xs) ctxt1
     val bs =
-      map Free (Variable.variant_frees lthy (p :: xs @ intr_ts)
+      map Free (Variable.variant_names ctxt2
         (map (rpair HOLogic.boolT) (mk_names "b" k)));
 
     fun subst t =
@@ -515,8 +517,9 @@ fun mk_ind_def quiet_mode skip_mono alt_name coind cs intr_ts monos params cname
         map_index (fn (i, ((b, mx), c)) =>
           let
             val Ts = arg_types_of (length params) c;
+            val ctxt = fold Variable.declare_names intr_ts lthy';
             val xs =
-              map Free (Variable.variant_frees lthy' intr_ts (mk_names "x" (length Ts) ~~ Ts));
+              map Free (Variable.variant_names ctxt (mk_names "x" (length Ts) ~~ Ts));
           in
             ((b, mx),
               ((Thm.make_def_binding internals b, []), fold_rev lambda (params @ xs)
@@ -663,7 +666,9 @@ val add_ind_def: Inductive.add_ind_def =
        raw_induct = Inductive.rulify lthy3 raw_induct,
        induct = induct,
        inducts = inducts,
-       eqs = eqs'};
+       eqs = eqs',
+       def = fp_def,
+       mono = mono};
 
     (* PROOF-LOCAL: skip Local_Theory.declaration (no global registration) *)
   in (result, lthy3) end;

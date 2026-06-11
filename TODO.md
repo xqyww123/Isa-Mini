@@ -1,6 +1,6 @@
 ### Isabelle version upgrade checklist
 
-When upgrading the bundled Isabelle (currently **Isabelle2024**), the
+When upgrading the bundled Isabelle (currently **Isabelle2025-2**), the
 following pieces of `library/proof.ML` were forked/replicated from
 Isabelle internals and MUST be resynced:
 

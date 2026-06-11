@@ -5,7 +5,7 @@
       "type": "array",
       "items": {
         "type": "string",
-        "enum": ["constant", "lemma", "type", "typeclass", "locale",
+        "enum": ["constant", "lemma", "named theorems", "type", "typeclass", "locale",
                  "introduction rule", "elimination rule",
                  "induction rule", "case-split rule"]
       }

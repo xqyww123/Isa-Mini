@@ -40,6 +40,8 @@ val iso_atomize': Proof.context -> thm -> thm
 val iso_rulify' : Proof.context -> thm -> thm
 val concl_conv : (Proof.context -> conv) -> Proof.context -> conv
 
+val simp_fact_name' : string -> string
+
 end
 
 structure Minilang_Aux : MINILANG_AUX = struct
@@ -140,5 +142,12 @@ fun concl_conv C ctxt ctm =
      | Const(\<^const_name>\<open>GOAL\<close>, _) $ _ =>
           ( Conv.arg_conv (concl_conv C ctxt) ) ctm
      | _ => C ctxt ctm
+
+(* Lives here (not aux.ML) so that unify_diagnostic.ML can load before
+   aux.ML: aux.ML's xOF needs Unify_Diagnostic for its failure messages. *)
+fun simp_fact_name' name =
+  if String.isPrefix "local." name
+  then String.substring (name, 6, size name - 6)
+  else name
 
 end

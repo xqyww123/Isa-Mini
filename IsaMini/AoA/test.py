@@ -4234,6 +4234,64 @@ async def _test_DeriveWhereOF_Quickview(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
+@model_test("Derive_NestedDischargeTHMLeak", "Test_Derive_NestedDischargeTHMLeak.thy", 15)
+async def _test_Derive_NestedDischargeTHMLeak(root: Root, file: MyIO):
+    r"""Regression for the raw `exception THM 0 raised (line 311 of "drule.ML"):
+    OF: no unifiers` leak from Derive when the discharge facts are nested in
+    the RULE reference instead of Derive's top-level `discharging_facts`.
+
+    Root cause: a FactByName's `discharge` field is packed as the attribute
+    suffix `[xwhere ..., xOF fact ...]` (`_fact_suffix` / `IsabelleFact_
+    Presented.pack` in model.py). On the ML side SPECIALIZE' (proof.ML)
+    resolves the rule via `Attrib.eval_thms` with NO THM handler, and the
+    `xOF` attribute (Minilang.thy) calls `Minilang_Aux.xOF false`: with
+    prove_discharge=false, aux.ML deliberately re-runs `st OF thms` to
+    re-raise on failure, so the raw `THM ("OF: no unifiers", 0, ...)` from
+    drule.ML escapes to the agent verbatim. Every friendly path — `xOF true`
+    with the sledgehammer-fallback discharge, `Unify_Diagnostic.
+    diagnose_of_failure`, and the Python `_OF_PREMISE_MISMATCH_RE` hint —
+    applies only to `discharging_facts`, never to a nested `discharge`.
+
+    Reproduction (mirrors the production log of 2026-06-10, step 4 `Derive
+    nat_induct`): `base` (P 0) resolves nat_induct's first premise, but
+    `step` is the object-level `\<forall>k. P k \<longrightarrow> P (Suc k)` while the second
+    premise is the meta-level `\<And>n. ?P n \<Longrightarrow> ?P (Suc n)` — OF has no
+    unifiers and the fact is not rulified. While the bug is present the
+    failure reason / rendered tree contains the raw `exception THM 0 raised
+    ... OF: no unifiers` and this test FAILS; once Derive reports the
+    mismatch informatively (or discharges it) without leaking the raw ML
+    exception, it passes."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    outcome = await root.fill("1", [Derive.gen_single({
+        "thought": "nat_induct with discharge nested in the rule reference",
+        "rule": {"name": "nat_induct",
+                 "instantiations": [{"name": "?P", "value": "P"},
+                                    {"name": "?n", "value": "n"}],
+                 "discharge": [{"name": "base"}, {"name": "step"}]},
+        "result_name": "allk"
+    })])
+    # The failed Derive may be reverted from the tree; its failure cause is
+    # carried by `outcome.failure` (and, if kept, on the committed node /
+    # rendered tree). Collect every place the cause could surface and assert
+    # none of them is the raw ML exception.
+    parts = [str(outcome.failure)]
+    parts += [n.status.reason.reason for n in outcome.committed
+              if n.status.reason is not None]
+    _buf = io.StringIO()
+    root.print(0, MyIO(_buf))
+    parts.append(_buf.getvalue())
+    haystack = "\n".join(parts)
+    leaked = ("OF: no unifiers" in haystack
+              or ("exception THM" in haystack and "raised" in haystack))
+    if leaked:
+        raise TestFailed(
+            "Derive leaked a raw ML THM exception for a nested-discharge "
+            f"unification failure: {str(outcome.failure)!r}")
+    file.write("Derive reported the nested-discharge mismatch without "
+               "leaking a raw THM exception\n")
+
 @model_test("DeriveBall", "Test_DeriveBall.thy", 11)
 async def _test_DeriveBall(root: Root, file: MyIO):
     """Test Derive on a Ball-quantified rule: ∀x∈A. P x.
@@ -6352,7 +6410,7 @@ async def _test_HOL_TAG_Leak(root: Root, file: MyIO):
         case_hyps = getattr(node, "case_hyps", None)
         if case_hyps:
             for name, term in case_hyps:
-                if "HOL.TAG" in term.unicode:
+                if "HOL.TAG" in term.unicode or "Minilang.TAG" in term.unicode:
                     leaked.append((name.unicode, term.unicode))
         for sub in getattr(node, "sub_nodes", []) or []:
             collect(sub)

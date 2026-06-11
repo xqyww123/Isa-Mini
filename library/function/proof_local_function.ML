@@ -774,7 +774,7 @@ fun mk_domain_intro ctxt (Globals {domT, ...}) R R_cases clause =
 
 (** Termination rule **)
 
-val wf_induct_rule = @{thm Wellfounded.wfP_induct_rule}
+val wf_induct_rule = @{thm Wellfounded.wfp_induct_rule}
 val wf_in_rel = @{thm Fun_Def.wf_in_rel}
 val in_rel_def = @{thm Fun_Def.in_rel_def}
 
@@ -1138,7 +1138,7 @@ fun recover_mutual_psimp all_orig_fdefs parts ctxt (fname, _, _, args, rhs)
 
     val psimp = import sum_psimp_eq
     val (simp, restore_cond) =
-      case cprems_of psimp of
+      case Thm.cprems_of psimp of
         [] => (psimp, I)
       | [cond] => (Thm.implies_elim psimp (Thm.assume cond), Thm.implies_intr cond)
       | _ => raise General.Fail "Too many conditions"
@@ -1209,7 +1209,7 @@ fun mutual_induct_rules ctxt induct all_f_defs (Mutual {n, ST, parts, ...}) =
 fun mutual_cases_rule ctxt cases_rule n ST (MutualPart {i, cargTs = Ts, ...}) =
   let
     val [P, x] =
-      Variable.variant_frees ctxt [] [("P", \<^typ>\<open>bool\<close>), ("x", HOLogic.mk_tupleT Ts)]
+      Variable.variant_names ctxt [("P", \<^typ>\<open>bool\<close>), ("x", HOLogic.mk_tupleT Ts)]
       |> map (Thm.cterm_of ctxt o Free);
     val sumtree_inj = Thm.cterm_of ctxt (Sum_Tree.mk_inj ST n i (Thm.term_of x));
 
@@ -1353,7 +1353,10 @@ fun prepare_function_top do_print prep fixspec eqns config lthy =
 
     val spec = map (fn (bnd, prop) => (bnd, [prop])) spec0'
     val (eqs, post, sort_cont, cnames) = get_preproc lthy config ctxt' fixes spec
-
+    val props0 = map snd spec0'
+    fun varify (ps,prop) =
+      Term.subst_bounds (rev (map (fn (a,T) => Var((a,0),T)) ps), Term.strip_all_body prop)
+    val input_eqns = map varify (map Term.strip_all_vars props0 ~~ props0)
     val fnames = map (fst o fst) fixes0
     val defname = Binding.conglomerate fnames;
 
@@ -1403,7 +1406,7 @@ fun prepare_function_top do_print prep fixspec eqns config lthy =
           { add_simps=addsmps, fnames=fnames, case_names=cnames, psimps=psimps',
           pinducts=snd pinducts', simps=NONE, inducts=NONE, termination=termination', totality=NONE,
           fs=fs, R=R, dom=dom, defname=defname, is_partial=true, cases=flat cases',
-          pelims=pelims',elims=NONE}
+          pelims=pelims',elims=NONE, input_eqns = input_eqns}
 
         val _ =
           Proof_Display.print_consts do_print (Position.thread_data ()) lthy2
@@ -1452,7 +1455,7 @@ fun prepare_termination_proof_local prep_binding prep_term raw_term_opt lthy =
           | NONE => error "Not a function"))
 
     val { termination, fs, R, add_simps=info_add_simps, case_names, psimps,
-      pinducts, defname, fnames, cases, dom, pelims, ...} = info
+      pinducts, defname, fnames, cases, dom, pelims, input_eqns, ...} = info
     val domT = domain_type (fastype_of R)
     val goal = HOLogic.mk_Trueprop (HOLogic.mk_all ("x", domT, mk_acc domT R $ Free ("x", domT)))
     fun afterqed [[raw_totality]] lthy1 =
@@ -1477,7 +1480,7 @@ fun prepare_termination_proof_local prep_binding prep_term raw_term_opt lthy =
           let val info' = { is_partial=false, defname=defname, fnames=fnames, add_simps=info_add_simps,
             case_names=case_names, fs=fs, R=R, dom=dom, psimps=psimps, pinducts=pinducts,
             simps=SOME simps, inducts=SOME inducts, termination=termination, totality=SOME totality,
-            cases=cases, pelims=pelims, elims=SOME elims}
+            cases=cases, pelims=pelims, elims=SOME elims, input_eqns = input_eqns}
             |> transform_function_data (Morphism.binding_morphism "" prep_binding)
           in
             (info',

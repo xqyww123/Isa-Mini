@@ -46,6 +46,7 @@ from .model import (
     Parse_Op_List, Interaction_BadAnswer,
     AnswerIndexes, AnswerIndex, AnswerIndexesOrName, AnswerIndexesOrSpec,
     AnswerInstantiate, AnswerRefutation, AnswerStruggleAssessment,
+    AnswerMissingLemmas,
     TOOL_EDIT, TOOL_DELETE, TOOL_COMMENT, TOOL_READ, TOOL_RECALL_REMOVED,
     TOOL_REQUEST_LEMMAS, TOOL_REPORT, TOOL_SUBAGENT, TOOL_CLOSE_SUBAGENT,
     DeletedEntry, CommentOutcome,
@@ -93,6 +94,7 @@ _cc_answer_indexes_or_spec_schema = _load_schema("cc_answer_indexes_or_spec.json
 _cc_answer_instantiate_schema = _load_schema("cc_answer_instantiate.jsonc")
 _cc_answer_refutation_schema = _load_schema("cc_answer_refutation.jsonc")
 _cc_answer_struggle_assessment_schema = _load_schema("cc_answer_struggle_assessment.jsonc")
+_cc_answer_missing_lemmas_schema = _load_schema("cc_answer_missing_lemmas.jsonc")
 _cc_subagent_schema = _load_schema("cc_subagent.jsonc")
 _cc_close_subagent_schema = _load_schema("cc_cancel_subagent.jsonc")
 _cc_recall_removed_schema = _load_schema("cc_recall_removed.jsonc")
@@ -632,6 +634,18 @@ def _parse_answer_payload(tool_name: str, args: dict):
             return AnswerStruggleAssessment(
                 is_stuck=bool(args["is_stuck"]),
                 summary=args.get("summary", ""))
+        case "answer_missing_lemmas":
+            raw = args.get("missing_lemmas")
+            if isinstance(raw, str):
+                try:
+                    raw = json.loads(raw)
+                except (json.JSONDecodeError, ValueError):
+                    raw = None
+            # Defensive (mirrors _extract_indexes): keep only dict items so a
+            # malformed answer can't crash the logger downstream.
+            items = ([i for i in raw if isinstance(i, dict)]
+                     if isinstance(raw, list) else [])
+            return AnswerMissingLemmas(missing_lemmas=items)
         case _:
             return f"Unknown answer tool: {tool_name}"
 
@@ -1203,6 +1217,12 @@ async def _request_lemmas_tool_logic(session: Session, args: dict) -> tuple[str,
             msg = str(e)
             session.log_tool_response(_tn, f"ERROR: {msg}")
             return (msg, True)
+        # Mirror the wish-list into missing_lemmas.yaml: a worker explicitly
+        # asking for lemmas is a free signal for the external import-expansion
+        # loop, independent of whether the planner can supply them.
+        session.log_missing_lemmas(
+            "request_lemmas",
+            [dict(l, detail=detail) for l in suggested_lemmas])
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         handle._event_queue.put_nowait(
             WorkerRequestLemmas(detail=detail, lemmas=suggested_lemmas,
@@ -1554,6 +1574,7 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "answer_instantiate": {"description": "Answer by providing schematic-variable instantiations", "schema": _cc_answer_instantiate_schema, "annotations": _ACT},
     "answer_refutation": {"description": "Accept or reject a subagent's claim that the goal is unprovable", "schema": _cc_answer_refutation_schema, "annotations": _ACT},
     "answer_struggle_assessment": {"description": "Internal tool; you will be explicitly prompted when to use it.", "schema": _cc_answer_struggle_assessment_schema, "annotations": _ACT},
+    "answer_missing_lemmas": {"description": "Internal tool; you will be explicitly prompted when to use it.", "schema": _cc_answer_missing_lemmas_schema, "annotations": _ACT},
     "subagent": {"description": "Launch or resume a sub-agent to prove a goal or repair a proof in isolation. Call this when a goal is tedious and its proof would derail your main line of reasoning. Also call this to resume a suspended sub-agent.", "schema": _cc_subagent_schema, "annotations": _ACT},
     "cancel_subagent": {"description": "Permanently cancel and delete a sub-agent you dispatched.", "schema": _cc_close_subagent_schema, "annotations": _ACT},
     "refresh": {"description": "Reset the conversation and start over (the proof tree is kept). "
@@ -1770,6 +1791,22 @@ class ToolExecutor:
                             session, n, arguments)
                 case "query":
                     result, is_error = await _query_tool_logic(session, arguments)
+                    # Missing-lemma survey checkpoint: every N successful
+                    # `query` TOOL CALLS (not batched sub-queries; errored
+                    # calls deliberately don't count — they carry no retrieval
+                    # signal; user-confirmed 2026-06-11) per session,
+                    # fork a survey asking what the agent searched for but
+                    # could not find. Counts planner and worker sessions;
+                    # interaction forks are excluded (run_missing_lemma_survey
+                    # also guards, this just avoids counting them).
+                    if (not is_error
+                            and not session.is_interaction
+                            and session._missing_lemma_survey_interval > 0):
+                        session._query_calls_since_survey += 1
+                        if (session._query_calls_since_survey
+                                >= session._missing_lemma_survey_interval):
+                            await session.run_missing_lemma_survey(
+                                "query_interval")
                 case "recall":
                     result, is_error = await _read_tool_logic(session, arguments)
                 case "recall_removed":
