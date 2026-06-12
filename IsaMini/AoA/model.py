@@ -244,6 +244,10 @@ class RetrievedEntity(NamedTuple):
     entity: IsabelleEntity
     score: float              # semantic similarity score
     interpretation: str | None  # human-readable description from SemanticRecord
+    # Heading line printed above the interpretation, for abbreviation constants
+    # hit by exact_name lookups ("Abbreviation constant ..." / "Raw constant ...").
+    # None everywhere else (KNN / pattern paths never set it).
+    semantics_heading: str | None = None
 
 class IsabelleFact(ABC):
     """A fact referenced in proof operations.
@@ -1791,8 +1795,13 @@ class Minilang_State:
         from Isabelle_Semantic_Embedding.semantics import Semantic_DB
 
         # Exact name lookup — bypass all search criteria
+        # scored_recs elements are (score, rec, override) in ALL branches below:
+        # override is None except for abbreviation constants hit by exact_name,
+        # where it carries (semantics_heading, interpretation) from
+        # constant_semantics_layers. The shapes MUST stay in sync — the three
+        # construction sites converge on one shared unpacking loop at the end.
         if exact_name is not None:
-            scored_recs: list[tuple[float, SemanticRecord]] = []
+            scored_recs: list[tuple[float, SemanticRecord, tuple[str, str | None] | None]] = []
             for tag in kinds:
                 try:
                     uk, full_name = await universal_key_and_name_of(self.connection, tag, exact_name, ctxt=self.name)
@@ -1822,10 +1831,17 @@ class Minilang_State:
                 except IsabelleError:
                     continue
                 rec = Semantic_DB[uk]
+                override: tuple[str, str | None] | None = None
+                if tag == EntityKind.CONSTANT:
+                    layered = await self.constant_semantics_layers(uk, full_name)
+                    if layered is not None:
+                        l_heading, l_rec = layered
+                        override = (l_heading,
+                                    l_rec.interpretation if l_rec is not None else None)
                 if rec is not None:
-                    scored_recs.append((1.0, rec))
+                    scored_recs.append((1.0, rec, override))
                 else:
-                    scored_recs.append((1.0, SemanticRecord(tag, full_name, None, None)))
+                    scored_recs.append((1.0, SemanticRecord(tag, full_name, None, None), override))
             if not scored_recs:
                 return [], [f'Undefined: "{exact_name}"'], 0
             warnings: list[str] = []
@@ -1856,7 +1872,7 @@ class Minilang_State:
                                        target_type=target_type,
                                        ctxt=self.name)
                 warnings = [_clean_warning(w) for w in warnings_raw]
-                scored_recs = [(score, rec) for score, rec in raw_results]
+                scored_recs = [(score, rec, None) for score, rec in raw_results]
             else:
                 # Pattern-only search: get filtered entities, look up records, no ranking.
                 # Enumerate ALL matches (limit=-1) to know the total, then resolve
@@ -1876,19 +1892,21 @@ class Minilang_State:
                 for uk, name, _ in entries[:k]:
                     rec = Semantic_DB[uk]
                     if rec is not None:
-                        scored_recs.append((0.0, rec))
+                        scored_recs.append((0.0, rec, None))
                     else:
-                        scored_recs.append((0.0, SemanticRecord(EntityKind(uk[16]), name, None, None)))
+                        scored_recs.append((0.0, SemanticRecord(EntityKind(uk[16]), name, None, None), None))
         if not scored_recs:
             return [], warnings, total
         # Resolve entities via RPC
-        entity_keys = [(rec.kind, rec.name) for _, rec in scored_recs]
+        entity_keys = [(rec.kind, rec.name) for _, rec, _ in scored_recs]
         infos = await self._retrieve_entity(entity_keys)
         out: list[RetrievedEntity] = []
-        for (score, rec), info in zip(scored_recs, infos):
+        for (score, rec, override), info in zip(scored_recs, infos):
+            heading, interp = override if override is not None else (None, rec.interpretation)
             out.append(self._make_retrieved_entity(
                 rec.kind, rec.name, info, score,
-                ' '.join(rec.interpretation.split()) if rec.interpretation else None))
+                ' '.join(interp.split()) if interp else None,
+                semantics_heading=heading))
         return out, warnings, total
     async def compute_bindings(self, var_names: list[varname], fact_names: list[varname]) -> Bindings:
         """
@@ -1931,6 +1949,7 @@ class Minilang_State:
         self, kind: EntityKind, full_name: str,
         info: 'tuple[short_name, list[term], list[str], list[full_name], bool] | None',
         score: float, interpretation: 'str | None',
+        semantics_heading: 'str | None' = None,
     ) -> RetrievedEntity:
         """Build a ``RetrievedEntity`` from a ``_retrieve_entity`` result tuple
         (or a ``None`` placeholder → empty expression). Pure construction: no RPC,
@@ -1956,7 +1975,8 @@ class Minilang_State:
                 full_name=full_name, short_name=sname,
                 expression=exprs, kind=kind, roles=roles,
                 abbreviation_names=abbrev_names)
-        return RetrievedEntity(entity=entity, score=score, interpretation=interpretation)
+        return RetrievedEntity(entity=entity, score=score, interpretation=interpretation,
+                               semantics_heading=semantics_heading)
 
     async def retrieve_entities_by_name(
         self, names: list[str], kind: EntityKind = EntityKind.THEOREM,
@@ -2005,16 +2025,20 @@ class Minilang_State:
             "IsaMini.induction_target_hits_leading_binder",
             (self.name, ascii_of_unicode(target)))
 
-    async def unfold_syntax(self, term_str: str) -> tuple[str, str, str]:
+    async def unfold_syntax(self, term_str: str) -> tuple[str, str, str, str]:
         """Parse term and unfold higher-theory syntax.
-        Returns (head_const_name, raw_main_display, normal_display).
+        Returns (head_const_name, raw_main_display, normal_display, abbrev_head).
+        ``head_const_name`` is the head of the fully expanded term; ``abbrev_head``
+        is the head of the abbreviation-preserving parse — when the term's head is
+        an abbreviation, it names the abbreviation constant itself (else it equals
+        ``head_const_name``, or is "" when that parse fails / heads a non-constant).
         Raises InternalError_UnparsedTerm if parsing fails."""
         try:
-            head_name, raw_display, normal_display = await self.connection.callback(
+            head_name, raw_display, normal_display, abbrev_head = await self.connection.callback(
                 "IsaMini.unfold_syntax",
                 (self.name, ascii_of_unicode(term_str)))
             raw = pretty_unicode(raw_display).replace("??.", "")
-            return (head_name, raw, pretty_unicode(normal_display))
+            return (head_name, raw, pretty_unicode(normal_display), abbrev_head)
         except IsabelleError as e:
             _PREFIX = "Unparsed: "
             if e.errors and e.errors[0].startswith(_PREFIX):
@@ -2025,14 +2049,63 @@ class Minilang_State:
     async def resolve_notation(self, symbol: str) -> str | None:
         """Resolve a bare notation symbol (e.g. ``*``, ``≤``, a postfix marker)
         to its underlying constant full name, trying operator-section / infix /
-        prefix / postfix / binder probes ML-side. Returns the const name, or
-        None when the symbol resolves to no constant (so callers can fall back).
-        Never raises on an unresolvable symbol — the ML callback guards each
-        probe and returns an empty string for "not a resolvable notation"."""
+        prefix / postfix / binder probes ML-side. A notation attached to an
+        abbreviation resolves to the abbreviation constant itself (abbreviations
+        are first-class entities), not to its expansion's head. Returns the const
+        name, or None when the symbol resolves to no constant (so callers can
+        fall back). Never raises on an unresolvable symbol — the ML callback
+        guards each probe and returns an empty string for "not a resolvable
+        notation"."""
         name = await self.connection.callback(
             "IsaMini.resolve_notation",
             (self.name, ascii_of_unicode(symbol)))
         return name or None
+
+    async def abbrev_expansion_head(self, const_full_name: str) -> tuple[bool, str | None]:
+        """Whether ``const_full_name`` (an internal full constant name) is an
+        abbreviation, and the head constant of its expansion (None when the
+        expansion's head is not a constant). The rhs is NOT normalized ML-side:
+        the head may itself be another abbreviation (one expansion layer only)."""
+        is_abbrev, exp_head = await self.connection.callback(
+            "IsaMini.abbrev_expansion_head",
+            (self.name, ascii_of_unicode(const_full_name)))
+        return (bool(is_abbrev), exp_head or None)
+
+    async def constant_semantics_layers(self, uk: universal_key, full_name: str
+        ) -> 'tuple[str, SemanticRecord | None] | None':
+        """Two-layer semantics for a constant that may be an abbreviation
+        (abbreviations are first-class entities and are interpreted on a par
+        with ordinary constants):
+        1. not an abbreviation -> None (caller renders as today);
+        2. the abbreviation's own interpretation, when Semantic_DB has one;
+        3. else the interpretation of its expansion's head constant;
+        4. else a bare "Abbreviation constant ..." heading, no interpretation.
+        For layers 2-4 returns (heading, record) where record is the
+        SemanticRecord the heading describes — the abbreviation's own for
+        layers 2/4 (possibly None in 4), the expansion head's for layer 3 —
+        so callers can render its type and interpretation consistently."""
+        from Isabelle_Semantic_Embedding.semantics import Semantic_DB
+        is_abbrev, exp_head = await self.abbrev_expansion_head(full_name)
+        if not is_abbrev:
+            return None
+        rec = Semantic_DB[uk]
+        if rec is not None and rec.interpretation:
+            return (f"Abbreviation constant {full_name}", rec)
+        if exp_head is not None:
+            # Best-effort: an expansion head that fails to intern ML-side
+            # (e.g. a hidden constant) must not abort the whole query.
+            try:
+                exp_uk, exp_full = await universal_key_and_name_of(
+                    self.connection, EntityKind.CONSTANT, exp_head, ctxt=self.name)
+            except (UndefinedEntity, IsabelleError):
+                exp_uk, exp_full = None, None
+            if exp_uk is not None:
+                exp_rec = Semantic_DB[exp_uk]
+                if exp_rec is not None and exp_rec.interpretation:
+                    return (f"Raw constant {exp_full}"
+                            f" (head of the unfolded abbreviation {full_name})",
+                            exp_rec)
+        return (f"Abbreviation constant {full_name}", rec)
 
     async def schematic_variables_of(self) -> Vars:
         """
@@ -2403,6 +2476,104 @@ def _missing_lemma_survey_interval_from_env() -> int:
         return 0
 
 
+def _load_missing_lemma_feedback() -> list:
+    """Adjudication feedback the external missing-lemma loop's watcher writes
+    for the survey (path via ``AOA_MISSING_LEMMA_FEEDBACK``; the watcher
+    rewrites the file mid-run, so read at CALL time, never cache). Any
+    failure — env unset, file missing, bad JSON, wrong shape — returns []:
+    the survey must behave exactly as before for non-watcher users."""
+    path = os.environ.get("AOA_MISSING_LEMMA_FEEDBACK")
+    if not path:
+        return []
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+_MISSING_LEMMA_FEEDBACK_OUTCOME = {
+    "already_in_heap":
+        "already exists as `{lemma_name}` in `{theory}` — use it",
+    "provided_but_unfindable":
+        "already provided as `{lemma_name}` in `{theory}` (a known retrieval "
+        "issue) — use it directly",
+    "not_found":
+        "verified absent from both the distribution and the AFP; prove it "
+        "yourself",
+    "import_failed":
+        "its theory cannot be imported into this environment; prove it "
+        "yourself",
+}
+_MISSING_LEMMA_FEEDBACK_CAP = 30
+
+
+def _missing_lemma_key(item: dict) -> str:
+    """Dedup key matching the watcher ledger's claim_key convention: the
+    normalized name guess (survey items say ``name_guess``, request_lemmas
+    wish-list items say ``name``), english prefix as the nameless fallback."""
+    name = str(item.get("name_guess") or item.get("name") or "").strip().lower()
+    if name:
+        return "name:" + re.sub(r"[^a-z0-9]+", "_", name)
+    eng = str(item.get("english") or "").strip().lower()
+    return "eng:" + re.sub(r"\s+", " ", eng)[:80]
+
+
+def _render_missing_lemma_feedback(feedback: list, runtime_reported: list) -> str:
+    """The survey prompt's "already reported" section (文案用户签字
+    2026-06-12). Pure function over plain data; returns "" when there is
+    nothing to say, so the prompt stays byte-identical to the pre-feedback
+    behavior. The result is written as a LITERAL — callers must never run it
+    through further f-string/format interpolation (lemma names and english
+    statements are model-generated text and may contain braces)."""
+    lines: list[str] = []
+    seen: set[str] = set()
+
+    def add(item: dict, outcome: str) -> None:
+        name = str(item.get("name_guess") or item.get("name") or "").strip()
+        english = str(item.get("english") or "").strip()[:200]
+        if not (name or english):
+            return  # nothing identifiable to render
+        lines.append(f"- `{name}` — {english} → {outcome}")
+
+    for item in feedback:
+        if not isinstance(item, dict):
+            continue
+        key = _missing_lemma_key(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        tmpl = _MISSING_LEMMA_FEEDBACK_OUTCOME.get(item.get("status"))
+        outcome = (tmpl.format(lemma_name=item.get("lemma_name") or "?",
+                               theory=item.get("theory") or "?")
+                   if tmpl else
+                   "already reported and processed — do not re-report")
+        add(item, outcome)
+
+    # Runtime entries (reported this run, not adjudicated yet): self-dedup
+    # latest-wins — the model re-reports one fact under many names/wordings —
+    # then dedup against the feedback above, cap to keep the prompt bounded.
+    pending: list[dict] = []
+    pending_seen: set[str] = set()
+    for item in reversed(runtime_reported):
+        if not isinstance(item, dict):
+            continue
+        key = _missing_lemma_key(item)
+        if key in seen or key in pending_seen:
+            continue
+        pending_seen.add(key)
+        pending.append(item)
+    for item in reversed(pending[:_MISSING_LEMMA_FEEDBACK_CAP]):
+        add(item, "reported, adjudication pending")
+
+    if not lines:
+        return ""
+    return ("The facts below were ALREADY reported by you earlier in this "
+            "run and processed. Do NOT report them again:\n\n"
+            + "\n".join(lines) + "\n\n")
+
+
 class Interaction_MissingLemmaSurvey(Interaction):
     """Ask the agent whether it needs general-purpose background lemmas that it
     could not find in the loaded libraries.
@@ -2412,7 +2583,9 @@ class Interaction_MissingLemmaSurvey(Interaction):
     The fork inherits the parent context — it must see the search history to
     judge what was looked for and not found — and may only answer; the report
     is recorded to ``missing_lemmas.yaml`` for the external import-expansion
-    loop. Nothing is fed back into the proof."""
+    loop. Nothing is fed back into the proof: the anti-repeat feedback
+    section below enters ONLY this fork's prompt (the fork can only answer),
+    never the proof mainline."""
     forking = ForkingMode.FORKING_WITH_CTXT
     fork_allowed_tools = [TOOL_ANSWER_MISSING_LEMMAS]
 
@@ -2420,6 +2593,15 @@ class Interaction_MissingLemmaSurvey(Interaction):
         self.trigger = trigger
 
     async def prompt(self, indent: int, file: MyIO) -> None:
+        # Anti-repeat feedback: best-effort and fail-open — the survey must
+        # never break on a feedback-channel fault (same philosophy as
+        # run_missing_lemma_survey itself).
+        try:
+            feedback_section = _render_missing_lemma_feedback(
+                _load_missing_lemma_feedback(),
+                list(the_session().runtime.reported_missing_lemmas))
+        except Exception:
+            feedback_section = ""
         file.write(
             f"[System checkpoint] Review your proof attempt and your search "
             f"history so far.\n\n"
@@ -2429,7 +2611,10 @@ class Interaction_MissingLemmaSurvey(Interaction):
             f"NOT find with the `{tn(TOOL_SEARCH)}` tool?\n\n"
             f"Report ONLY general-purpose library facts (e.g. a classical "
             f"inequality, a property of a standard function), not "
-            f"problem-specific steps you must prove yourself.\n\n"
+            f"problem-specific steps you must prove yourself.\n\n")
+        if feedback_section:
+            file.write(feedback_section)  # literal — never re-interpolated
+        file.write(
             f"Call `{tn(TOOL_ANSWER_MISSING_LEMMAS)}` with one entry per "
             f"missing fact — or an empty `missing_lemmas` array if nothing is "
             f"missing. For each entry give your best-guess conventional name, "
@@ -9464,6 +9649,11 @@ class Runtime:
         self._budget_start_time: float | None = None
         self.worker_max_tool_calls: int = 500
         self.deleted_archive: list[DeletedEntry] = []
+        # Every missing-lemma item reported this invocation (survey answers +
+        # worker request_lemmas mirrors), shared planner/workers/forks via the
+        # runtime singleton. Rendered into later survey prompts so the model
+        # stops re-reporting the same fact within one run.
+        self.reported_missing_lemmas: list = []
 
     def next_pit_name(self) -> str:
         i = self._pit_counter
@@ -10280,6 +10470,11 @@ class Session:
         self._log(self.missing_lemmas_log_file, "MISSING_LEMMAS",
                   lambda: [f"[MISSING_LEMMAS] {trigger}: {len(lemmas)} reported"],
                   trigger=trigger, lemmas=lemmas)
+        # Within-run anti-repeat memory: this is the single funnel for both
+        # survey answers and request_lemmas wish-lists, so extending here
+        # covers everything later surveys must not re-report.
+        self.runtime.reported_missing_lemmas.extend(
+            l for l in lemmas if isinstance(l, dict))
 
     def log_initial_prompt(self, prompt: str):
         """Log the initial prompt (planner or worker) to interaction.yaml.
