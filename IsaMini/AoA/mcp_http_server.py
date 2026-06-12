@@ -38,6 +38,7 @@ from mcp.types import Tool, ToolAnnotations, TextContent, CallToolResult
 from Isabelle_RPC_Host import pretty_unicode
 from .model import (
     _session_var, Session, Node, NonLeaf_Node, StdBlock,
+    Root, GlobalEnv, GoalNode,
     Resolved_Node, Resolved_Slot,
     IsaTerm, ContinuingInteraction, ImmediateAnswer,
     AoA_Error, ArgumentError, IsabelleError, InternalError,
@@ -54,6 +55,8 @@ from .model import (
     TOOL_ANSWER_INDEXES_OR_SPEC, TOOL_ANSWER_INSTANTIATE,
     TOOL_ANSWER_REFUTATION, TOOL_ANSWER_STRUGGLE_ASSESSMENT,
     Interaction_StruggleCheckpoint, Interaction_DifficultyEvaluation,
+    Interaction_ConfirmLargeDelete,
+    LARGE_DELETE_PROVED_THRESHOLD, LARGE_DELETE_TOTAL_THRESHOLD,
     InteractionPrompt, InteractionError, EditResult, InteractionChannel,
     ANSWER_TOOLS,
     ALL_PROOF_TOOLS,
@@ -455,20 +458,68 @@ async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
                              "elsewhere, use `request_lemmas`.")
                 session.log_tool_response(_tn, f"ERROR: {error_msg}")
                 return (error_msg, True)
+        # Locate every unique target once; reused by the large-delete gate and
+        # the archive loop. Unfound ids fall through to root.delete's
+        # not-found handling below.
+        located: dict[str, Node] = {}
+        for sid in abs_steps:
+            if sid in located:
+                continue
+            try:
+                located[sid] = session.root.locate_node(sid)
+            except NodeNotFound:
+                pass
+
+        # Large-delete gate: when the targets carry substantial proved work,
+        # ask the agent to reconsider before anything is torn down. Skipped
+        # without a channel (`launch_interaction` would fork a sub-agent
+        # instead of asking inline — e.g. test sessions) and in interaction
+        # forks (which must never nest a non-forking interaction; today they
+        # cannot reach `delete` at all — this is a defensive guard).
+        if session._channel is not None and not session.is_interaction:
+            # Stats must not double-count nested targets: keep only targets
+            # with no targeted proper ancestor (order-independent).
+            nodes = set(located.values())
+            entries = [
+                (sid, *node.subtree_stats())
+                for sid, node in located.items()
+                if not any(anc is not node and _is_strict_ancestor(anc, node)
+                           for anc in nodes)]
+            total = sum(t for _, t, _ in entries)
+            proved = sum(p for _, _, p in entries)
+            if (proved >= LARGE_DELETE_PROVED_THRESHOLD
+                    and total >= LARGE_DELETE_TOTAL_THRESHOLD):
+                comment_available = not any(
+                    isinstance(n, (Root, GlobalEnv, GoalNode)) for n in nodes)
+                choice = await session.launch_interaction(
+                    Interaction_ConfirmLargeDelete(entries, comment_available))
+                if choice == "cancel":
+                    response = P.delete_cancelled_message()
+                    session.log_tool_response(_tn, response)
+                    return (response, False)
+                if choice == "comment":
+                    outcome = await session.root.comment(abs_steps)
+                    session.refresh_YAML()
+                    response, finished = await P.comment_message(
+                        outcome, "comment", session.root, session)
+                    if finished:
+                        await session.interrupt()
+                    session.log_tool_response(_tn, response)
+                    session.log_proof_tree_snapshot("after_comment")
+                    return (response, False)
+                # choice == "proceed": fall through to the normal delete path.
+
         archived_indices: list[int] = []
         archived_ids: set[str] = set()
         for sid in abs_steps:
-            if sid in archived_ids:
+            node = located.get(sid)
+            if node is None or sid in archived_ids:
                 continue
-            try:
-                node = session.root.locate_node(sid)
-                idx = len(session.runtime.deleted_archive)
-                entry = _archive_node(node, session)
-                session.runtime.deleted_archive.append(entry)
-                archived_ids.add(sid)
-                archived_indices.append(idx)
-            except NodeNotFound:
-                pass
+            idx = len(session.runtime.deleted_archive)
+            entry = _archive_node(node, session)
+            session.runtime.deleted_archive.append(entry)
+            archived_ids.add(sid)
+            archived_indices.append(idx)
         try:
             not_found = await session.root.delete(abs_steps)
             if len(not_found) == len(abs_steps):
@@ -1660,7 +1711,9 @@ class ToolExecutor:
             return ("An edit/delete/comment operation is in progress. "
                     "Answer the pending interaction question first.", True)
 
-        task = asyncio.create_task(coro)
+        # Adopted by the session so a task suspended on a non-forking
+        # interaction is cancelled at session close instead of dangling.
+        task = session.adopt_task(asyncio.create_task(coro))
         try:
             msg = await self._race_outbox(task)
         except BaseException:

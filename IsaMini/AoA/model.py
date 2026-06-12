@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import re
 from time import time
 from datetime import datetime
@@ -2476,6 +2477,75 @@ class Interaction_DifficultyEvaluation(Interaction):
         return answer.index
 
 
+# Large-delete confirmation gate: both thresholds must be met (AND) over the
+# merged stats of all targets of one delete call (nested targets deduped).
+LARGE_DELETE_PROVED_THRESHOLD = 5
+LARGE_DELETE_TOTAL_THRESHOLD = 10
+
+
+class Interaction_ConfirmLargeDelete(Interaction):
+    """Confirmation gate for deletions that would discard substantial
+    completed proof work (see the ``LARGE_DELETE_*`` thresholds). Non-forking:
+    the same agent that issued the ``delete`` answers inline, mid-call. The
+    answer is ``"comment"`` / ``"cancel"`` / ``"proceed"``; a ``null`` index
+    takes the recommended option (comment when available, else cancel).
+    ``comment_available`` is False when a target is a structural container
+    that ``Root.comment`` rejects — the comment option is then omitted."""
+    fork_allowed_tools = [TOOL_ANSWER_INDEX]
+
+    @property
+    def is_non_forking(self) -> bool:
+        return True
+
+    def __init__(self, entries: 'list[tuple[step, int, int]]',
+                 comment_available: bool):
+        # entries: (absolute id, subtree total, subtree proved)
+        self.entries = entries
+        self.comment_available = comment_available
+
+    async def prompt(self, indent: int, file: MyIO) -> None:
+        session = the_session()
+        singular = len(self.entries) == 1
+        noun = "a step" if singular else f"{len(self.entries)} steps"
+        file.write(
+            f"You are about to delete {noun} containing substantial completed work:\n")
+        for sid, total, proved in self.entries:
+            op_noun = "operation" if total == 1 else "operations"
+            file.write(
+                f"  - step {session._display_id(sid)},"
+                f" total {total} {op_noun}, {proved} proved\n")
+        file.write(
+            "This would discard a large amount of your previous proof work.\n\n"
+            "Please reconsider whether you want to:\n")
+        if self.comment_available:
+            if singular:
+                file.write(
+                    "  0. Comment the step out instead (recommended) — it remains visible\n"
+                    "     and can be restored later with `uncomment`.\n")
+            else:
+                file.write(
+                    "  0. Comment the steps out instead (recommended) — they remain visible\n"
+                    "     and can be restored later with `uncomment`.\n")
+            file.write(
+                "  1. Cancel the deletion and keep everything as is.\n"
+                "  2. Proceed with the deletion anyway.\n")
+        else:
+            file.write(
+                "  0. Cancel the deletion and keep everything as is.\n"
+                "  1. Proceed with the deletion anyway.\n")
+
+    async def answer(self, answer: 'AnswerIndex') -> str:
+        if self.comment_available:
+            if answer.index is None:
+                return "comment"
+            _check_index(answer.index, 3)
+            return ("comment", "cancel", "proceed")[answer.index]
+        if answer.index is None:
+            return "cancel"
+        _check_index(answer.index, 2)
+        return ("cancel", "proceed")[answer.index]
+
+
 class Fork_Pending(NamedTuple):
     """Carried by a fork session during its single-interaction lifetime.
 
@@ -3524,6 +3594,23 @@ class Node(ABC):
     def unfinished_nodes(self, ret: set['Node']) -> None:
         if not _status_can_continue(self.status.status):
             ret.add(self)
+    def subtree_stats(self) -> 'tuple[int, int]':
+        """Size of this subtree as ``(total, proved)``. ``total`` counts every
+        node including self. ``proved`` counts nodes covered by completed
+        proof work: the whole subtree of a maximal ``is_proof_finished()``
+        block (``StdBlock`` override), plus SUCCESS ``Obvious`` leaves (goals
+        closed by the hammer; ``Obvious`` override) outside such blocks.
+        Cheap structural successes (``Intro``, ``SplitConjs``, …) do not
+        count on their own. A COMMENTED node and its entire subtree count as
+        ``(0, 0)`` — comments are not code. Subclasses override
+        ``_subtree_stats_live``, not this method."""
+        if self.status.status == EvaluationStatus.Status.COMMENTED:
+            return (0, 0)
+        return self._subtree_stats_live()
+    def _subtree_stats_live(self) -> 'tuple[int, int]':
+        """`subtree_stats` of a non-COMMENTED node. Base case covers plain
+        leaves; ``NonLeaf_Node`` overrides to recurse."""
+        return (1, 0)
     async def aclose_all_subagents(self) -> None:
         """Recursively close every sub-agent in this node's subtree (cancel +
         detach, keeping each partial proof). The nodes THEMSELVES STAY in the tree —
@@ -4259,6 +4346,14 @@ class NonLeaf_Node(Node):
         if self.status.status != EvaluationStatus.Status.COMMENTED:
             for child in self.sub_nodes:
                 child.unfinished_nodes(ret)
+    def _subtree_stats_live(self) -> 'tuple[int, int]':
+        total = 1
+        proved = 0
+        for child in self.sub_nodes:
+            t, p = child.subtree_stats()
+            total += t
+            proved += p
+        return (total, proved)
     async def discard(self) -> None:
         for child in self.sub_nodes:
             await child.discard()
@@ -4643,6 +4738,12 @@ class StdBlock(NonLeaf_Node):
         unfinished_nodes = set()
         self.unfinished_nodes(unfinished_nodes)
         return len(unfinished_nodes) == 0
+    def _subtree_stats_live(self) -> 'tuple[int, int]':
+        total, proved = super()._subtree_stats_live()
+        # A completed block covers its whole subtree as proved work.
+        if self.is_proof_finished():
+            proved = total
+        return (total, proved)
     def unfinished_nodes(self, ret: set['Node']) -> None:
         super().unfinished_nodes(ret)
         if self.status.status == EvaluationStatus.Status.COMMENTED:
@@ -6347,6 +6448,11 @@ class Obvious(Leaf):
         self.fact_refs: list[IsabelleFact] | None = None
         self._found_tactic: str | None = None
         self._eval_time_ms: int | None = None
+
+    def _subtree_stats_live(self) -> 'tuple[int, int]':
+        # A SUCCESS Obvious is a goal closed by the hammer — proved work.
+        proved = 1 if self.status.status == EvaluationStatus.Status.SUCCESS else 0
+        return (1, proved)
 
     @classmethod
     def gen(cls, arg: Obvious_ToolArg, remaining: 'LinkedList[_RawOp]',
@@ -8876,6 +8982,11 @@ class GlobalEnv(StdBlock):
             raise InternalError("The parent of a GlobalEnv must be a Root")
         super().__init__(config, "", [])
         self.id = "global"
+    def _subtree_stats_live(self) -> 'tuple[int, int]':
+        # GlobalEnv has no goal of its own, so StdBlock's finished-block
+        # promotion would make an EMPTY environment read as proved work.
+        # Count only the children (plain container recursion).
+        return NonLeaf_Node._subtree_stats_live(self)
     async def _auto_intro_after_me(self) -> None:
         pass
     def id_of_goal(self) -> step | None:
@@ -9500,6 +9611,10 @@ class Session:
         self._subagent_extstep_bypass: 'set[str]' = set()
         self._nf_pending_interaction: 'Interaction | None' = None
         self._channel: 'InteractionChannel | None' = None
+        # Background tasks owned by this session (e.g. a tool task suspended on
+        # a non-forking interaction); still-pending ones are cancelled by
+        # `close()` so they never outlive the session (see `adopt_task`).
+        self._owned_tasks: 'set[asyncio.Task]' = set()
         # Worker-only: ascii fact name -> standard-printed proposition (IsaTerm),
         # prefetched once at init (see _prefetch_worker_premises).
         self._worker_premise_cache: 'dict[str, IsaTerm]' = {}
@@ -9960,9 +10075,27 @@ class Session:
         """Check whether an external tool name corresponds to a proof tool."""
         return any(self.tool_name(t) == external_name for t in ALL_PROOF_TOOLS)
 
+    def adopt_task(self, task: 'asyncio.Task') -> 'asyncio.Task':
+        """Register a background task owned by this session. Still-pending
+        tasks are cancelled and awaited by ``close()``. Completed tasks
+        remove themselves via the done-callback."""
+        self._owned_tasks.add(task)
+        task.add_done_callback(self._owned_tasks.discard)
+        return task
+
     async def close(self):
         """Clean up the session and release resources.
         Subsessions do not close shared log files — only major sessions do."""
+        # Kill owned background tasks FIRST — and before the is_major early-out:
+        # a tool task suspended on a non-forking interaction (e.g. the
+        # large-delete gate) must not outlive its session, and such tasks
+        # mostly belong to worker sub-sessions.
+        pending = [t for t in self._owned_tasks if not t.done()]
+        for t in pending:
+            t.cancel()
+        for t in pending:
+            with contextlib.suppress(BaseException):
+                await t
         if not self.is_major:
             return
         # Tear down any worker sub-agents still attached to the tree (running or

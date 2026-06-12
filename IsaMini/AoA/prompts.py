@@ -163,6 +163,11 @@ async def deleted_steps_message(steps: list[str], root: Root, session: 'model.Se
     return file.getvalue(), finished
 
 
+def delete_cancelled_message() -> str:
+    """Receipt when the agent cancels a deletion at the large-delete gate."""
+    return "Deletion cancelled — the proof tree is unchanged."
+
+
 async def comment_message(
     outcome: CommentOutcome,
     action: str,

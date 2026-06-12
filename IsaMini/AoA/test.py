@@ -13240,6 +13240,104 @@ async def _test_CommentHave(root: Root, file: MyIO):
     file.write(f"assembled ops count after uncomment: {len(assembled2)}\n")
 
 
+@model_test("SubtreeStats", "Test_SubtreeStats.thy", 8)
+async def _test_SubtreeStats(root: Root, file: MyIO):
+    """Pin `Node.subtree_stats` = (total, proved), the metric of the
+    large-delete confirmation gate: a finished block covers its whole subtree
+    as proved; SUCCESS Obvious leaves count individually; cheap structural
+    successes (Intro, SplitConjs) do not; FAILURE/CANCELLED never count;
+    a COMMENTED subtree counts (0, 0) entirely — comments are not code. Only
+    numeric stat lines and statuses go into the golden — no tree prints
+    (hammer output is nondeterministic)."""
+    def stats_line(label: str, sid: str | None) -> None:
+        node = root if sid is None else root.locate_node(sid)
+        t, p = node.subtree_stats()
+        file.write(f"{label}: total={t}, proved={p}\n")
+
+    stats_line("root initial", None)
+
+    # Step 1: fully proved Have block (Have + SUCCESS Obvious).
+    root.session.age += 1
+    await root.fill("1", [Have.gen_single({
+        "thought": "helper",
+        "statement": {"english": "square is non-negative",
+                      "conclusion": r"(0::int) \<le> x * x"},
+        "name": "sq",
+    })])
+    root.session.age += 1
+    await root.fill("1.1", [Obvious.gen_single({"facts": []})])
+    file.write(f"step 1.1 status: {root.locate_node('1.1').status.status.value}\n")
+    stats_line("proved Have (1)", "1")
+    stats_line("SUCCESS Obvious leaf (1.1)", "1.1")
+
+    # Step 2: Have left open after a structural Intro — a SUCCESS Intro leaf
+    # alone is not proved work.
+    root.session.age += 1
+    await root.fill("2", [Have.gen_single({
+        "thought": "identity implication, deliberately left unproved",
+        "statement": {"english": "non-negativity is preserved",
+                      "for_any": [{"name": "y", "type": "int"}],
+                      "premises": [{"name": "hy", "term": r"(0::int) \<le> y"}],
+                      "conclusion": r"(0::int) \<le> y"},
+        "name": "h2",
+    })])
+    root.session.age += 1
+    await root.fill("2.1", [Intro.gen_single({
+        "thought": "fix y and assume the premise",
+    })])
+    file.write(f"step 2.1 status: {root.locate_node('2.1').status.status.value}\n")
+    stats_line("open Have with SUCCESS Intro (2)", "2")
+
+    # Step 3: Have over a conjunction; SplitConjs; close ONLY the first
+    # subgoal. The finished GoalNode covers itself + its Obvious as proved;
+    # the SplitConjs block and the Have stay unproved.
+    root.session.age += 1
+    await root.fill("3", [Have.gen_single({
+        "thought": "conjunction to split",
+        "statement": {"english": "both squares are non-negative",
+                      "conclusion": r"(0::int) \<le> x * x \<and> (0::int) \<le> x * x + 1"},
+        "name": "h3",
+    })])
+    root.session.age += 1
+    await root.fill("3.1", [SplitConjs.gen_single({
+        "thought": "split the conjunction",
+    })])
+    root.session.age += 1
+    await root.fill("3.1.1.1", [Obvious.gen_single({"facts": []})])
+    file.write(f"step 3.1 status: {root.locate_node('3.1').status.status.value}\n")
+    stats_line("half-proved SplitConjs Have (3)", "3")
+    stats_line("finished subgoal (3.1.1)", "3.1.1")
+    stats_line("open subgoal (3.1.2)", "3.1.2")
+
+    # Step 4: ill-typed Have -> FAILURE; step 5 after it -> CANCELLED.
+    root.session.age += 1
+    await root.fill("4", [Have.gen_single({
+        "thought": "intentionally bad step",
+        "statement": {"english": "invalid", "conclusion": "1 1 1"},
+        "name": "bad",
+    })])
+    root.session.age += 1
+    await root.fill("5", [Obvious.gen_single({"facts": []})])
+    file.write(f"step 4 status: {root.locate_node('4').status.status.value}\n")
+    file.write(f"step 5 status: {root.locate_node('5').status.status.value}\n")
+    stats_line("FAILURE Have (4)", "4")
+    stats_line("CANCELLED Obvious (5)", "5")
+
+    stats_line("root with all steps", None)
+
+    # A COMMENTED subtree counts (0, 0) entirely — comments are not code.
+    root.session.age += 1
+    await root.comment(["1"])
+    file.write(f"step 1 status after comment: {root.locate_node('1').status.status.value}\n")
+    stats_line("commented Have (1)", "1")
+    stats_line("root with step 1 commented", None)
+
+    root.session.age += 1
+    await root.uncomment(["1"])
+    stats_line("uncommented Have (1)", "1")
+    stats_line("root after uncomment", None)
+
+
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
     import msgpack as mp
     from IsaREPL import Client

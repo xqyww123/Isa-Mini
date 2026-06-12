@@ -1,0 +1,20 @@
+root initial: total=3, proved=0
+step 1.1 status: success
+proved Have (1): total=2, proved=2
+SUCCESS Obvious leaf (1.1): total=1, proved=1
+step 2.1 status: success
+open Have with SUCCESS Intro (2): total=2, proved=0
+step 3.1 status: success
+half-proved SplitConjs Have (3): total=5, proved=2
+finished subgoal (3.1.1): total=2, proved=2
+open subgoal (3.1.2): total=1, proved=0
+step 4 status: failure
+step 5 status: cancelled
+FAILURE Have (4): total=1, proved=0
+CANCELLED Obvious (5): total=1, proved=0
+root with all steps: total=14, proved=4
+step 1 status after comment: commented
+commented Have (1): total=0, proved=0
+root with step 1 commented: total=12, proved=2
+uncommented Have (1): total=2, proved=2
+root after uncomment: total=14, proved=4

@@ -46,3 +46,7 @@ proof:
 
 2. 实现 Tactic Opr Node：用 semantic embedding 来实现调用任何 tactics with arbitrary arguments
 
+3. `amend`/`fill` 的替换语义会整树删除旧节点（`Node._delete_me` / replacement path），但既不写
+   `deleted_archive`（`recall_removed` 找不回）也不过 large-delete 确认 gate（`_delete_tool_logic`
+   独有）。Agent 用 amend 覆盖大型已证明子树时保护是漏的，后续应补上。
+
