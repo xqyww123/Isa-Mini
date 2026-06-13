@@ -939,6 +939,57 @@ async def _test_Define_QueryConst(root: Root, file: MyIO):
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
     assert len(unfinished_nodes) == 0, "Expected proof to be complete"
 
+@model_test("QueryLocalScore_PatternOnly", "Test_QueryLocalScore_PatternOnly.thy", 9)
+async def _test_QueryLocalScore_PatternOnly(root: Root, file: MyIO):
+    """Documents (and guards) current behavior: the pattern-only path (query=None)
+    does NOT surface a posed proof-local `Have` fact -> 0 results. Pattern-only's
+    candidates come solely from entities_of, whose static-fact enumeration does
+    not include a posed-but-unproven Have (it is tracked in Minilang's
+    contextual_thms, not yet note_thmss'd into Proof_Context.facts_of), and the
+    pattern-only path has no contextual_thms force-add. Contrast with
+    QueryLocalScore_KNN, where the ContextExtended force-add surfaces it at 0.500.
+    If pattern-only is later given a local-fact force-add, this golden flags it."""
+    from Isabelle_RPC_Host.universal_key import EntityKind
+
+    await root.fill("1", [Have.gen_single({
+        "thought": "local helper",
+        "statement": {"english": "x squared is non-negative",
+                      "conclusion": r"(0::int) \<le> x * x"},
+        "name": "uniqLocalLemmaZZ",
+    })])
+
+    ml = root.session.retrieval_state()
+    results, warnings = await ml.semantic_knn(
+        None, 5, [EntityKind.THEOREM], name_contains=["uniqLocalLemmaZZ"])
+    file.write(f"pattern-only name_contains=[uniqLocalLemmaZZ]: {len(results)} results, warnings={warnings}\n")
+    for r in results:
+        file.write(f"  {r.score:.3f} {r.entity.kind.label} {r.entity.short_name.unicode}\n")
+
+@model_test("QueryLocalScore_KNN", "Test_QueryLocalScore_KNN.thy", 9)
+async def _test_QueryLocalScore_KNN(root: Root, file: MyIO):
+    """Same as QueryLocalScore_PatternOnly but via the semantic KNN path (a query
+    string, so store.lookup runs). The proof-local `Have` fact has no embedding
+    vector, so the merge assigns it the provider default_local_score (0.500): the
+    query is embedded but no candidate has a vector, so the score is deterministic
+    and independent of the embedding DB. name_contains pins the candidate set to
+    the local fact. Verifies the lookup() merge + is_local path (ML uncached flag
+    -> entities_of is_local_map -> _default_score)."""
+    from Isabelle_RPC_Host.universal_key import EntityKind
+
+    await root.fill("1", [Have.gen_single({
+        "thought": "local helper",
+        "statement": {"english": "x squared is non-negative",
+                      "conclusion": r"(0::int) \<le> x * x"},
+        "name": "uniqLocalLemmaZZ",
+    })])
+
+    ml = root.session.retrieval_state()
+    results, warnings = await ml.semantic_knn(
+        "x squared is non-negative", 5, [EntityKind.THEOREM], name_contains=["uniqLocalLemmaZZ"])
+    file.write(f"knn 'x squared is non-negative' name_contains=[uniqLocalLemmaZZ]: {len(results)} results, warnings={warnings}\n")
+    for r in results:
+        file.write(f"  {r.score:.3f} {r.entity.kind.label} {r.entity.short_name.unicode}\n")
+
 @model_test("Define_Manual", "Test_Define_Manual.thy", 16)
 async def _test_Define_Manual(root: Root, file: MyIO):
     """Manual-discharge path for the Define operation. The test .thy

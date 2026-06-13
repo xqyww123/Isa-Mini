@@ -1856,10 +1856,11 @@ class Minilang_State:
             if EntityKind.THEOREM in kinds:
                 local_entries: list[tuple] = await self.connection.callback(
                     "IsaMini.contextual_thms", self.name)
-                local_keys = [bytes(k_) for k_, _ in local_entries]
-                local_names = {bytes(k_): name for k_, name in local_entries}
+                # contextual_thms are the proof-context-local lemmas → tag them
+                # is_local=True so any no-embedding ones get the local default score.
                 domain: Semantic_Vector_Store.Domain = Semantic_Vector_Store.ContextExtended(
-                    local_keys, extra_names=local_names)
+                    [Semantic_Vector_Store.ExtraKey(key=bytes(k_), name=name, is_local=True)
+                     for k_, name in local_entries])
             else:
                 domain = Semantic_Vector_Store.ContextAll
             store: Semantic_Vector_Store = await self.connection.semantic_vector_store()  # type: ignore
@@ -1878,7 +1879,7 @@ class Minilang_State:
                 # Enumerate ALL matches (limit=-1) to know the total, then resolve
                 # records only for the top-k slice (avoid resolving thousands).
                 from Isabelle_RPC_Host.context import entities_of
-                entries, warnings_raw = await entities_of(self.connection, kinds,
+                entries, is_local_map, warnings_raw = await entities_of(self.connection, kinds,
                                          term_patterns=term_patterns,
                                          type_patterns=type_patterns,
                                          theories_include=theories_include,
@@ -1888,13 +1889,21 @@ class Minilang_State:
                                          ctxt=self.name)
                 warnings = [_clean_warning(w) for w in warnings_raw]
                 total = len(entries)
+                # No query vector → no semantic similarity. Score no-embedding entities
+                # by the provider default (local lemmas higher), then sort so local
+                # lemmas surface first. Sort BEFORE the top-k slice so locals aren't cut.
+                def _pat_score(uk: bytes) -> float:
+                    return (store.emb_provider.default_local_score
+                            if is_local_map.get(uk, False)
+                            else store.emb_provider.default_score)
+                entries.sort(key=lambda e: _pat_score(e[0]), reverse=True)
                 scored_recs = []
                 for uk, name, _ in entries[:k]:
                     rec = Semantic_DB[uk]
                     if rec is not None:
-                        scored_recs.append((0.0, rec, None))
+                        scored_recs.append((_pat_score(uk), rec, None))
                     else:
-                        scored_recs.append((0.0, SemanticRecord(EntityKind(uk[16]), name, None, None), None))
+                        scored_recs.append((_pat_score(uk), SemanticRecord(EntityKind(uk[16]), name, None, None), None))
         if not scored_recs:
             return [], warnings, total
         # Resolve entities via RPC
