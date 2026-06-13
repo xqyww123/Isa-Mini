@@ -126,6 +126,7 @@ val string_of_type_full_sort : Proof.context -> typ -> string
 val string_of_sort : Proof.context -> sort -> string
 
 val read_term : Proof.context -> string -> term
+val read_term_abbrev : Proof.context -> string -> term
 val read_terms : Proof.context -> string list -> term list
 val read_terms_with_type : Proof.context -> (typ * string) list -> term list
 val read_prop : Proof.context -> string -> term
@@ -301,6 +302,13 @@ fun release_par_error exn =
 
 fun read_term ctxt s =
   \<^try>\<open>Syntax.read_term ctxt s
+   catch exn => release_par_error exn\<close>
+  |> Minilang.deconflict_bound_names
+
+(* Like read_term, but in mode_abbrev: the checked term keeps non-internal
+   abbreviation constants instead of expanding them. *)
+fun read_term_abbrev ctxt s =
+  \<^try>\<open>Proof_Context.read_term_abbrev ctxt s
    catch exn => release_par_error exn\<close>
   |> Minilang.deconflict_bound_names
 

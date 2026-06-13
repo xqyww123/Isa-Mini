@@ -38,13 +38,33 @@ parser.add_argument(
     default=10,
     help="Sledgehammer timeout in seconds (default: 10)",
 )
+parser.add_argument(
+    "--rpc-addr",
+    default="127.0.0.1:27182",
+    help="RPC host address to serve on (host:port), default: 127.0.0.1:27182. "
+         "Must match the RPC_Host environment of the target REPL server; use a "
+         "non-default port to run isolated from other RPC hosts on this machine.",
+)
 args = parser.parse_args()
 if args.filter is not None:
     os.environ["TEST_FILTER"] = args.filter
 if args.exclude is not None:
     os.environ["TEST_EXCLUDE"] = args.exclude
-rpc_addr = "127.0.0.1:27182"
+rpc_addr = args.rpc_addr
 logger = Isabelle_RPC_Host.mk_logger_(rpc_addr, None)
+
+# Headless test harness: nobody can click a PIDE dialogue (Active.dialog_text
+# blocks forever in a REPL), so auto-answer every dialogue with its first
+# option — e.g. the Semantic_Embedding "N entities to embed. Proceed?" gate,
+# which fires after each heap rebuild invalidates the theory hashes.
+import Isabelle_RPC_Host.dialogue  # ensure Connection.dialogue exists before override
+from Isabelle_RPC_Host.rpc import Connection as _Connection
+
+async def _auto_dialogue(self, question: str, options: list) -> str:
+    logger.warning(f"[auto-dialogue] {question!r} -> answering {options[0]!r}")
+    return options[0]
+
+_Connection.dialogue = _auto_dialogue  # type: ignore[method-assign]
 
 async def run_tests():
     await run_all_tests(args.repl_addr, logger=logger, sh_timeout=args.sh_timeout)

@@ -6910,7 +6910,7 @@ async def _test_NamedFactResolution(root: Root, file: MyIO):
     print_header("Done", file)
 
 
-@model_test("UnfoldSyntax", "Test_UnfoldSyntax.thy", 33)
+@model_test("UnfoldSyntax", "Test_UnfoldSyntax.thy", 40)
 async def _test_unfold_syntax(root: Root, file: MyIO):
     """Test the unfold_syntax callback.
 
@@ -6920,38 +6920,50 @@ async def _test_unfold_syntax(root: Root, file: MyIO):
     3. The head constant name is correctly extracted
     4. A non-constant head (lambda) returns empty head_name
     5. An unparseable term raises InternalError_UnparsedTerm
+    Plus: abbrev_head (4th slot) names the abbreviation constant when the head
+    is an abbreviation, and the exact_term Head section renders the two-layer
+    abbreviation semantics (own interpretation first, expansion-head fallback).
     """
     ml = root.ml_state
 
     # 1. Standard HOL term — no higher-theory syntax to strip
     file.write("=== standard HOL term ===\n")
-    head, raw, normal = await ml.unfold_syntax("True ∧ False")
+    head, raw, normal, abbrev_head = await ml.unfold_syntax("True ∧ False")
     file.write(f"  head: {head}\n")
+    file.write(f"  abbrev_head: {abbrev_head}\n")
     file.write(f"  normal: {normal}\n")
     file.write(f"  raw: {raw}\n")
     assert head == "HOL.conj", f"Expected HOL.conj, got {head}"
+    assert abbrev_head == "HOL.conj", f"Expected HOL.conj abbrev_head, got {abbrev_head}"
 
     # 2. Term using the custom abbreviation `my_conj` defined in the theory
     file.write("=== custom abbreviation ===\n")
-    head, raw, normal = await ml.unfold_syntax("my_conj True False")
+    head, raw, normal, abbrev_head = await ml.unfold_syntax("my_conj True False")
     file.write(f"  head: {head}\n")
+    file.write(f"  abbrev_head: {abbrev_head}\n")
     file.write(f"  normal: {normal}\n")
     file.write(f"  raw: {raw}\n")
+    assert head == "HOL.conj", f"Expected HOL.conj, got {head}"
+    assert abbrev_head.endswith(".my_conj"), \
+        f"Expected the my_conj abbreviation constant, got {abbrev_head}"
 
     # 3. Term with `even` (abbreviation from Parity, above Main)
     file.write("=== even abbreviation ===\n")
-    head, raw, normal = await ml.unfold_syntax("even (n::nat)")
+    head, raw, normal, abbrev_head = await ml.unfold_syntax("even (n::nat)")
     file.write(f"  head: {head}\n")
+    file.write(f"  abbrev_head: {abbrev_head}\n")
     file.write(f"  normal: {normal}\n")
     file.write(f"  raw: {raw}\n")
 
     # 4. Lambda head — head_name should be empty
     file.write("=== lambda head ===\n")
-    head, raw, normal = await ml.unfold_syntax("λx::nat. x + 1")
+    head, raw, normal, abbrev_head = await ml.unfold_syntax("λx::nat. x + 1")
     file.write(f"  head: '{head}'\n")
+    file.write(f"  abbrev_head: '{abbrev_head}'\n")
     file.write(f"  normal: {normal}\n")
     file.write(f"  raw: {raw}\n")
     assert head == "", f"Expected empty head for lambda, got '{head}'"
+    assert abbrev_head == "", f"Expected empty abbrev_head for lambda, got '{abbrev_head}'"
 
     # 5. Unparseable term — should raise InternalError_UnparsedTerm
     file.write("=== unparseable term ===\n")
@@ -6963,38 +6975,41 @@ async def _test_unfold_syntax(root: Root, file: MyIO):
 
     # 6. Mixfix notation — the real syntax unfolding test
     file.write("=== mixfix: a ⊕ b ===\n")
-    head, raw, normal = await ml.unfold_syntax("(a::nat) ⊕ b")
+    head, raw, normal, abbrev_head = await ml.unfold_syntax("(a::nat) ⊕ b")
     file.write(f"  head: {head}\n")
+    file.write(f"  abbrev_head: {abbrev_head}\n")
     file.write(f"  normal: {normal}\n")
     file.write(f"  raw: {raw}\n")
+    # my_op is a definition, not an abbreviation: both heads agree
+    assert abbrev_head == head, f"Expected equal heads for a definition, got {abbrev_head} vs {head}"
 
     file.write("=== mixfix: (a ⊕ b) ⊕ c ===\n")
-    head, raw, normal = await ml.unfold_syntax("((a::nat) ⊕ b) ⊕ c")
+    head, raw, normal, abbrev_head = await ml.unfold_syntax("((a::nat) ⊕ b) ⊕ c")
     file.write(f"  head: {head}\n")
     file.write(f"  normal: {normal}\n")
     file.write(f"  raw: {raw}\n")
 
     # 7. Custom bind notation
     file.write("=== bind: m ⤜ f ===\n")
-    head, raw, normal = await ml.unfold_syntax("(Some (1::nat)) ⤜ (λx. if x > 0 then Some (x ⊕ x) else None)")
+    head, raw, normal, abbrev_head = await ml.unfold_syntax("(Some (1::nat)) ⤜ (λx. if x > 0 then Some (x ⊕ x) else None)")
     file.write(f"  normal: {normal}\n")
     file.write(f"  raw: {raw}\n")
 
     # 8. Custom quantifier with syntax translation
     file.write("=== custom forall ===\n")
-    head, raw, normal = await ml.unfold_syntax("∀⇩m x ∈ {1,2,3::nat}. x ⊕ x > 0")
+    head, raw, normal, abbrev_head = await ml.unfold_syntax("∀⇩m x ∈ {1,2,3::nat}. x ⊕ x > 0")
     file.write(f"  normal: {normal}\n")
     file.write(f"  raw: {raw}\n")
 
     # 9. Custom sum with syntax translation
     file.write("=== custom sum ===\n")
-    head, raw, normal = await ml.unfold_syntax("Σ⇩m x ∈ {1,2,3::nat}. x ⊕ x")
+    head, raw, normal, abbrev_head = await ml.unfold_syntax("Σ⇩m x ∈ {1,2,3::nat}. x ⊕ x")
     file.write(f"  normal: {normal}\n")
     file.write(f"  raw: {raw}\n")
 
     # 10. Nested: custom quantifier + custom operator + custom sum
     file.write("=== nested custom syntax ===\n")
-    head, raw, normal = await ml.unfold_syntax("∀⇩m x ∈ {1,2,3::nat}. (Σ⇩m y ∈ {0..<x}. y ⊕ x) > 0")
+    head, raw, normal, abbrev_head = await ml.unfold_syntax("∀⇩m x ∈ {1,2,3::nat}. (Σ⇩m y ∈ {0..<x}. y ⊕ x) > 0")
     file.write(f"  normal: {normal}\n")
     file.write(f"  raw: {raw}\n")
 
@@ -7003,6 +7018,49 @@ async def _test_unfold_syntax(root: Root, file: MyIO):
     file.write("=== query output: nested ===\n")
     result = await _handle_exact_term_query(root.session, "∀⇩m x ∈ {1,2,3::nat}. (Σ⇩m y ∈ {0..<x}. y ⊕ x) > 0")
     file.write(result + "\n")
+
+    # 12. Two-layer abbreviation semantics in the Head section.
+    # Only the heading (before any ':') goes into the golden — interpretation
+    # texts live in the machine-local Semantic_DB and must not be welded in.
+    def _head_heading(res: str) -> str:
+        line = next((l for l in res.split('\n') if l.startswith("Head ")), "")
+        return line.split(':')[0]
+
+    # 12a. Layer 3 fallback: my_conj itself has no DB record (local theory),
+    # so the expansion's head HOL.conj supplies the interpretation.
+    file.write("=== query head: my_conj (expansion-head fallback) ===\n")
+    result = await _handle_exact_term_query(root.session, "my_conj True False")
+    heading = _head_heading(result)
+    file.write(heading + "\n")
+    assert heading.startswith("Head Raw constant HOL.conj"), \
+        f"Expected expansion-head fallback for my_conj, got: {heading}"
+    assert "my_conj" in heading, f"Fallback heading must name the abbreviation: {heading}"
+
+    # 12b. Layer 2: a Main-level abbreviation interpreted in the DB.
+    file.write("=== query head: x ≠ y (abbreviation's own semantics) ===\n")
+    result = await _handle_exact_term_query(root.session, "(x::nat) ≠ y")
+    heading = _head_heading(result)
+    file.write(heading + "\n")
+    assert heading.startswith("Head Abbreviation constant HOL.not_equal"), \
+        f"Expected the abbreviation's own semantics for ≠, got: {heading}"
+
+    # 12c. Bare operator section: the expansion is a lambda (head_name == ""),
+    # but abbrev_head still resolves — the Head section must not vanish.
+    file.write("=== query head: (≠) bare section ===\n")
+    result = await _handle_exact_term_query(root.session, "(≠)")
+    heading = _head_heading(result)
+    file.write(heading + "\n")
+    assert heading.startswith("Head Abbreviation constant HOL.not_equal"), \
+        f"Expected abbreviation Head for the bare section, got: {heading}"
+
+    # 12d. Layer 4: local abbreviation over a local constant — neither has a
+    # DB record, so the heading stands alone (no type line, no interpretation).
+    file.write("=== query head: my_twice (no semantics anywhere) ===\n")
+    result = await _handle_exact_term_query(root.session, "my_twice (n::nat)")
+    heading = _head_heading(result)
+    file.write(heading + "\n")
+    assert heading.startswith("Head Abbreviation constant") and "my_twice" in heading, \
+        f"Expected a bare abbreviation heading for my_twice, got: {heading}"
 
     print_header("Done", file)
 
@@ -7023,21 +7081,23 @@ async def _test_unfold_syntax_op(root: Root, file: MyIO):
 
     # 1. Times operator section `(*)` — must parse to the times constant.
     file.write("=== operator section (*) ===\n")
-    head, raw, normal = await ml.unfold_syntax("(*)")
+    head, raw, normal, abbrev_head = await ml.unfold_syntax("(*)")
     file.write(f"  head: {head}\n")
     file.write(f"  normal: {normal}\n")
     file.write(f"  raw: {raw}\n")
     assert head, f"Expected a non-empty head const for (*), got '{head}'"
     assert "times" in head, f"Expected the times constant for (*), got {head}"
+    assert abbrev_head == head, f"times is no abbreviation: {abbrev_head} vs {head}"
 
     # 2. Plus operator section `(+)` — generality check, another Main operator.
     file.write("=== operator section (+) ===\n")
-    head, raw, normal = await ml.unfold_syntax("(+)")
+    head, raw, normal, abbrev_head = await ml.unfold_syntax("(+)")
     file.write(f"  head: {head}\n")
     file.write(f"  normal: {normal}\n")
     file.write(f"  raw: {raw}\n")
     assert head, f"Expected a non-empty head const for (+), got '{head}'"
     assert "plus" in head, f"Expected the plus constant for (+), got {head}"
+    assert abbrev_head == head, f"plus is no abbreviation: {abbrev_head} vs {head}"
 
     print_header("Done", file)
 
@@ -7082,6 +7142,14 @@ async def _test_resolve_notation(root: Root, file: MyIO):
     res = await ml.resolve_notation(r"\<^sup>*")
     file.write(f"  resolved: {res}\n")
 
+    # infix `\<noteq>` — notation on an ABBREVIATION: mode_abbrev probing
+    # resolves to the abbreviation constant itself, not the expansion's
+    # head HOL.Not (abbreviations are first-class entities)
+    file.write("=== infix: noteq (abbreviation) ===\n")
+    res = await ml.resolve_notation(r"\<noteq>")
+    file.write(f"  resolved: {res}\n")
+    assert res == "HOL.not_equal", f"Expected HOL.not_equal, got {res}"
+
     # an unresolvable token returns None
     file.write("=== unresolvable ===\n")
     res = await ml.resolve_notation("zzz_no_such_op")
@@ -7123,6 +7191,32 @@ async def _test_query_exact_name_op(root: Root, file: MyIO):
     file.write(f"  results: {len(res_none)}, warnings: {warn_none}\n")
     assert len(res_none) == 0, "Expected no results for an unresolvable symbol"
 
+    # --- Abbreviation notation: `≠` resolves to the abbreviation constant
+    # itself, with the two-layer semantics heading attached.
+    file.write("=== semantic_knn exact_name='≠' (abbreviation notation) ===\n")
+    res_abbr, warn_abbr = await ml.semantic_knn(
+        None, 1, [EntityKind.CONSTANT], exact_name=r"\<noteq>")
+    file.write(f"  results: {len(res_abbr)}, warnings: {warn_abbr}\n")
+    assert len(res_abbr) == 1, f"Expected 1 result for '≠', got {len(res_abbr)}"
+    file.write(f"  resolved full_name: {res_abbr[0].entity.full_name}\n")
+    assert res_abbr[0].entity.full_name == "HOL.not_equal", \
+        f"Expected HOL.not_equal, got {res_abbr[0].entity.full_name}"
+    heading = res_abbr[0].semantics_heading
+    file.write(f"  heading: {heading}\n")
+    assert heading is not None and heading.startswith("Abbreviation constant HOL.not_equal"), \
+        f"Expected the abbreviation's own semantics heading, got {heading}"
+
+    # --- Direct abbreviation name (no notation fallback involved) gets the
+    # same heading.
+    file.write("=== semantic_knn exact_name='HOL.not_equal' (direct name) ===\n")
+    res_direct, _ = await ml.semantic_knn(
+        None, 1, [EntityKind.CONSTANT], exact_name="HOL.not_equal")
+    assert len(res_direct) == 1
+    heading = res_direct[0].semantics_heading
+    file.write(f"  heading: {heading}\n")
+    assert heading is not None and heading.startswith("Abbreviation constant HOL.not_equal"), \
+        f"Expected the abbreviation's own semantics heading, got {heading}"
+
     # --- Layer 2: full query tool (_query_tool_logic), direct (non-fork) path ---
     root.session.interactive_retrieval = InteractiveRetrievalMode.NO
     file.write("=== query tool exact_name='*' ===\n")
@@ -7134,6 +7228,18 @@ async def _test_query_exact_name_op(root: Root, file: MyIO):
     assert not is_error, f"query tool must not error: {result}"
     assert "times" in result, f"query tool result must mention times: {result}"
     assert "Undefined" not in result, f"must not be Undefined: {result}"
+
+    # The same tool on `≠`: the rendered entity must carry the abbreviation
+    # heading (membership booleans only — no DB interpretation text in golden).
+    file.write("=== query tool exact_name='≠' ===\n")
+    result, is_error = await _query_tool_logic(
+        root.session, {'queries': [{'kinds': ['constant'], 'exact_name': '≠'}]})
+    file.write(f"  is_error: {is_error}\n")
+    file.write(f"  mentions abbreviation heading: "
+               f"{'Abbreviation constant HOL.not_equal' in result}\n")
+    assert not is_error, f"query tool must not error: {result}"
+    assert "Abbreviation constant HOL.not_equal" in result, \
+        f"rendered result must carry the abbreviation heading: {result}"
 
     print_header("Done", file)
 

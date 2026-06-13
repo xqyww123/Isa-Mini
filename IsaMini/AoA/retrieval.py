@@ -212,8 +212,14 @@ async def _format_fetched_entity(
     else:
         buf.write(f"{prefix}{f.entity.short_name.unicode}{tag}\n")
         truncated = False
-    if f.interpretation and (f.entity.kind not in _THEOREM_KINDS or truncated):
+    # The heading has its own guard, independent of f.interpretation: an
+    # abbreviation with no interpretation anywhere (heading set, interpretation
+    # None) must still announce itself as an abbreviation.
+    if f.semantics_heading:
         print_indent(indent + 1, buf)
+        buf.write(f"{f.semantics_heading}:\n")
+    if f.interpretation and (f.entity.kind not in _THEOREM_KINDS or truncated):
+        print_indent(indent + 2 if f.semantics_heading else indent + 1, buf)
         buf.write(f"{f.interpretation}\n")
     if def_info is True and session is not None:
         rs = ml_state or session.retrieval_state()
@@ -819,16 +825,27 @@ async def _query_entity_core(connection, tag: EntityKind, name: str,
     rec = Semantic_DB[uk]
     buf = StringIO()
     buf.write(prefix)
+    _format_record(buf,
+                   f"{rec.kind.label} {rec.name}" if rec is not None else f"{tag.label} {name}",
+                   rec)
+
+    return (buf.getvalue().rstrip('\n'), False, uk)
+
+
+def _format_record(buf, heading: str, rec) -> None:
+    """Write one entity-semantics block: ``{heading}:`` plus the record's type
+    and interpretation. ``heading`` must already contain the entity name (a
+    ``{kind.label} {name}`` pair, or an abbreviation heading like
+    ``Abbreviation constant …`` / ``Raw constant …``). With no record there is
+    nothing to take a type line from, so only the heading is written."""
     if rec is not None:
-        buf.write(f"{rec.kind.label} {rec.name}:")
+        buf.write(f"{heading}:")
         print_paragraph(2, buf, trunc_expr(rec.expr) if rec.expr else "")
         if rec.interpretation:
             buf.write(rec.interpretation)
             buf.write('\n')
     else:
-        buf.write(f"{tag.label} {name}\n")
-
-    return (buf.getvalue().rstrip('\n'), False, uk)
+        buf.write(f"{heading}\n")
 
 
 async def _handle_exact_term_query(
@@ -838,7 +855,7 @@ async def _handle_exact_term_query(
     """Handle an exact_term query: parse, show unfolded form, get head semantics."""
     ml_state = override_state or session.retrieval_state()
     try:
-        head_name, raw_display, normal_display = await ml_state.unfold_syntax(term_str)
+        head_name, raw_display, normal_display, abbrev_head = await ml_state.unfold_syntax(term_str)
     except InternalError_UnparsedTerm as e:
         return f"Failed to parse term: {pretty_unicode(e.reason)}"
     except IsabelleError as e:
@@ -847,7 +864,23 @@ async def _handle_exact_term_query(
     buf = StringIO()
     buf.write(f"{normal_display} ≡ {raw_display}\n")
 
-    if head_name:
+    # Abbreviation check first, NOT nested under `if head_name:` — for a bare
+    # operator section like `(≠)` the expansion is a lambda (head_name == "")
+    # while abbrev_head still names the abbreviation constant.
+    rendered_head = False
+    if abbrev_head and abbrev_head != head_name:
+        try:
+            uk = await universal_key_of(
+                ml_state.connection, EntityKind.CONSTANT, abbrev_head, ctxt=ml_state.name)
+            layered = await ml_state.constant_semantics_layers(uk, abbrev_head)
+        except (UndefinedEntity, IsabelleError):
+            layered = None
+        if layered is not None:
+            heading, rec = layered
+            buf.write("Head ")
+            _format_record(buf, heading, rec)
+            rendered_head = True
+    if not rendered_head and head_name:
         text, is_error, _uk = await _query_entity_core(
             ml_state.connection, EntityKind.CONSTANT, head_name, ctxt=ml_state.name)
         if not is_error:

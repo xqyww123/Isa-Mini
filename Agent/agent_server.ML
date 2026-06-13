@@ -700,16 +700,26 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
       val unfold_syntax_callback = {
         name = "IsaMini.unfold_syntax",
         arg_schema = unpackPair (unpackString, unpackString),
-        ret_schema = packTuple3 (packString, packString, packString),
+        ret_schema = packTuple4 (packString, packString, packString, packString),
         function = (fn (state_id, term_str) =>
           let val s0 = get_state state_id
               val ctxt = Minilang.context_of s0
               val parsed_term = MiniLang_Agent.read_term ctxt term_str
               val head = Term.head_of parsed_term
               val head_name = case head of Const (name, _) => name | _ => ""
+              (* Head of the abbreviation-preserving (mode_abbrev) parse: when the
+                 term's head is an abbreviation, this names the abbreviation
+                 constant itself while head_name names its expansion's head.
+                 "" when the abbrev parse fails or the head is not a Const. *)
+              val abbrev_head =
+                \<^try>\<open>
+                  (case Term.head_of (MiniLang_Agent.read_term_abbrev ctxt term_str) of
+                     Const (name, _) => name
+                   | _ => "")
+                 catch _ => ""\<close>
               val raw_display = MiniLang_Agent.string_of_term_main_syntax parsed_term
               val normal_display = MiniLang_Agent.string_of_term ctxt parsed_term
-          in (head_name, raw_display, normal_display)
+          in (head_name, raw_display, normal_display, abbrev_head)
           end handle ERROR msg => error (String.concat ["Unparsed: ", msg])
             | TERM (msg, _) => error (String.concat ["Unparsed: ", msg])
             | TYPE (msg, _, _) => error (String.concat ["Unparsed: ", msg])),
@@ -721,6 +731,10 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
          operator section, infix, prefix, postfix, then a simple binder form.
          The first probe that parses to a `Const` head wins (so e.g. "-" resolves
          to its infix reading, subtraction, before the prefix reading uminus).
+         Probes parse in mode_abbrev: a notation attached to an abbreviation
+         resolves to the abbreviation constant itself (e.g. "\<noteq>" yields
+         HOL.not_equal, not the expansion's head HOL.Not) — abbreviations are
+         first-class entities with their own semantics.
          Returns "" when no probe resolves — callers treat that as "not a
          resolvable notation" and fall back. Unlike `unfold_syntax`, this NEVER
          raises on an unparseable probe: each probe is guarded, because feeding a
@@ -740,13 +754,43 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                  sym ^ " xPa. xPa"]          (* binder:  OP x. _ *)
               fun head_const_of probe =
                 \<^try>\<open>
-                  (case Term.head_of (MiniLang_Agent.read_term ctxt probe) of
+                  (case Term.head_of (MiniLang_Agent.read_term_abbrev ctxt probe) of
                      Const (name, _) => SOME name
                    | _ => NONE)
                  catch _ => NONE\<close>
           in case get_first head_const_of probes of
                SOME name => name
              | NONE => ""
+          end),
+        timeout = NONE
+      }
+
+      (* Whether `const_full_name` is an abbreviation, and the head constant of
+         its expansion (for the query tool's semantics fallback layer).
+         Caveats, both deliberate:
+         - Consts.the_abbreviation yields the NON-normalized rhs: nested
+           abbreviations stay unexpanded, so exp_head may itself be an
+           abbreviation. We expand only one layer, relying on abbreviation
+           constants being interpreted on a par with ordinary constants.
+         - The argument must be an internal (interned) full constant name —
+           the callers feed names from resolve_notation / unfold_syntax /
+           universal_key_of, which all satisfy this. A short name or xname
+           silently yields (false, ""). *)
+      val abbrev_expansion_head_callback = {
+        name = "IsaMini.abbrev_expansion_head",
+        arg_schema = unpackPair (unpackString, unpackString),
+        ret_schema = packPair (packBool, packString),
+        function = (fn (state_id, const_name) =>
+          let val s0 = get_state state_id
+              val ctxt = Minilang.context_of s0
+              val consts = Proof_Context.consts_of ctxt
+          in case try (Consts.the_abbreviation consts) const_name of
+               SOME (_, rhs) =>
+                 (true,
+                  case Term.head_of (Term.strip_abs_body rhs) of
+                    Const (name, _) => name
+                  | _ => "")
+             | NONE => (false, "")
           end),
         timeout = NONE
       }
@@ -1219,6 +1263,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
           mk_callback induction_target_hits_binder_callback,
           mk_callback unfold_syntax_callback,
           mk_callback resolve_notation_callback,
+          mk_callback abbrev_expansion_head_callback,
           mk_callback schematic_vars_callback,
           mk_callback goal_variables_callback,
           mk_callback potential_defs_callback,
