@@ -1,23 +1,28 @@
 === standard HOL term ===
   head: HOL.conj
+  abbrev_head: HOL.conj
   normal: my_conj True False
   raw: True ∧ False
 === custom abbreviation ===
   head: HOL.conj
+  abbrev_head: Test_UnfoldSyntax.my_conj
   normal: my_conj True False
   raw: True ∧ False
 === even abbreviation ===
   head: Rings.dvd_class.dvd
+  abbrev_head: Parity.semiring_parity_class.even
   normal: even n
   raw: even n
 === lambda head ===
   head: ''
+  abbrev_head: ''
   normal: λ(x :: nat). x + (1 :: nat)
   raw: λ(x :: nat). x + (1 :: nat)
 === unparseable term ===
   raised InternalError_UnparsedTerm as expected
 === mixfix: a ⊕ b ===
   head: Test_UnfoldSyntax.my_op
+  abbrev_head: Test_UnfoldSyntax.my_op
   normal: a ⊕ b
   raw: Test_UnfoldSyntax.my_op a b
 === mixfix: (a ⊕ b) ⊕ c ===
@@ -34,11 +39,19 @@
   normal: Σₘ x ∈ {(1 :: nat), (2 :: nat), (3 :: nat)}. x ⊕ x
   raw: Test_UnfoldSyntax.my_sum {(1 :: nat), (2 :: nat), (3 :: nat)} (λ(x :: nat). Test_UnfoldSyntax.my_op x x)
 === nested custom syntax ===
-  normal: ∀ₘ x ∈ {(1 :: nat), (2 :: nat), (3 :: nat)}. (0 :: nat) < (Σₘ y ∈ {(0 :: nat)..<x}. y ⊕ x)
-  raw: Test_UnfoldSyntax.my_forall {(1 :: nat), (2 :: nat), (3 :: nat)} (λ(x :: nat). (0 :: nat) < Test_UnfoldSyntax.my_sum {(0 :: nat)..<x} (λ(y :: nat). Test_UnfoldSyntax.my_op y x))
+  normal: ∀ₘ x ∈ {(1 :: nat), (2 :: nat), (3 :: nat)}. (0 :: nat) < (Σₘ y ∈ {(0 :: nat) ..<x}. y ⊕ x)
+  raw: Test_UnfoldSyntax.my_forall {(1 :: nat), (2 :: nat), (3 :: nat)} (λ(x :: nat). (0 :: nat) < Test_UnfoldSyntax.my_sum {(0 :: nat) ..<x} (λ(y :: nat). Test_UnfoldSyntax.my_op y x))
 === query output: nested ===
-∀ₘ x ∈ {(1 :: nat), (2 :: nat), (3 :: nat)}. (0 :: nat) < (Σₘ y ∈ {(0 :: nat)..<x}. y ⊕ x) ≡ Test_UnfoldSyntax.my_forall {(1 :: nat), (2 :: nat), (3 :: nat)} (λ(x :: nat). (0 :: nat) < Test_UnfoldSyntax.my_sum {(0 :: nat)..<x} (λ(y :: nat). Test_UnfoldSyntax.my_op y x))
+∀ₘ x ∈ {(1 :: nat), (2 :: nat), (3 :: nat)}. (0 :: nat) < (Σₘ y ∈ {(0 :: nat) ..<x}. y ⊕ x) ≡ Test_UnfoldSyntax.my_forall {(1 :: nat), (2 :: nat), (3 :: nat)} (λ(x :: nat). (0 :: nat) < Test_UnfoldSyntax.my_sum {(0 :: nat) ..<x} (λ(y :: nat). Test_UnfoldSyntax.my_op y x))
 Head constant Test_UnfoldSyntax.my_forall
+=== query head: my_conj (expansion-head fallback) ===
+Head Raw constant HOL.conj (head of the unfolded abbreviation Test_UnfoldSyntax.my_conj)
+=== query head: x ≠ y (abbreviation's own semantics) ===
+Head Abbreviation constant HOL.not_equal
+=== query head: (≠) bare section ===
+Head Abbreviation constant HOL.not_equal
+=== query head: my_twice (no semantics anywhere) ===
+Head Abbreviation constant Test_UnfoldSyntax.my_twice
 --------------------------------------------------
 Done
 --------------------------------------------------

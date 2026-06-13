@@ -3,10 +3,19 @@
   resolved full_name: Groups.times_class.times
 === semantic_knn exact_name unresolvable ===
   results: 0, warnings: ['Undefined: "zzz_no_such_op"']
+=== semantic_knn exact_name='≠' (abbreviation notation) ===
+  results: 1, warnings: []
+  resolved full_name: HOL.not_equal
+  heading: Abbreviation constant HOL.not_equal
+=== semantic_knn exact_name='HOL.not_equal' (direct name) ===
+  heading: Abbreviation constant HOL.not_equal
 === query tool exact_name='*' ===
   is_error: False
   mentions times: True
   mentions Undefined: False
+=== query tool exact_name='≠' ===
+  is_error: False
+  mentions abbreviation heading: True
 --------------------------------------------------
 Done
 --------------------------------------------------

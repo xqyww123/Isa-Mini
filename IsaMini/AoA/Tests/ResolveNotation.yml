@@ -8,6 +8,8 @@
   resolved: HOL.Not
 === postfix: rtrancl ===
   resolved: Transitive_Closure.rtrancl
+=== infix: noteq (abbreviation) ===
+  resolved: HOL.not_equal
 === unresolvable ===
   resolved: None
 --------------------------------------------------
