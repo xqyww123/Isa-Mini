@@ -597,19 +597,22 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                     SOME (Name_Space.extern ctxt class_space name, [], [], [], false)
                 | retrieve (Universal_Key.LocaleK, name) =
                     SOME (Name_Space.extern ctxt locale_space name, [], [], [], false)
-                | retrieve (Universal_Key.NamedTheoremsK, name) =
+                | retrieve (Universal_Key.Theorem_CollectionK, name) =
                     (* Collection entity: render name + up to 5 member props, with a
-                       "... (N more)" sentinel when there are more. No inner handler:
-                       Named_Theorems.get raises on a stale/non-collection name, which
-                       the outer `the_default NONE (try retrieve e)` turns into NONE. *)
+                       "... (N more)" sentinel when there are more.  dynamic_fact_members
+                       returns NONE for a stale/non-collection (non-dynamic) name, which
+                       drops this entity from the result. *)
                     let val full = Facts.intern facts name
-                        val members = Named_Theorems.get ctxt full
-                        val n = length members
-                        val shown = map (SOT o Thm.prop_of) (take 5 members)
-                        val props = if n > 5
-                                    then shown @ ["... (" ^ string_of_int (n - 5) ^ " more)"]
-                                    else shown
-                    in SOME (Facts.extern ctxt facts full, props, [], [], false) end
+                    in case Context_Callbacks.dynamic_fact_members (Context.Proof ctxt) facts full of
+                         NONE => NONE
+                       | SOME members =>
+                           let val n = length members
+                               val shown = map (SOT o Thm.prop_of) (take 5 members)
+                               val props = if n > 5
+                                           then shown @ ["... (" ^ string_of_int (n - 5) ^ " more)"]
+                                           else shown
+                           in SOME (Facts.extern ctxt facts full, props, [], [], false) end
+                    end
           in map (fn e => the_default NONE (try retrieve e)) entities end),
         timeout = NONE
       }

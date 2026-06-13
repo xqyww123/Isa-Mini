@@ -2871,7 +2871,7 @@ class Interaction_Retrieve(Interaction):
             EntityKind.THEOREM: "theorems", EntityKind.CONSTANT: "constants",
             EntityKind.TYPE: "types", EntityKind.CLASS: "typeclasses",
             EntityKind.LOCALE: "locales",
-            EntityKind.NAMED_THEOREMS: "named-theorem bundles",
+            EntityKind.THEOREM_COLLECTION: "named theorem bundles",
             EntityKind.INTRODUCTION_RULE: "introduction rules",
             EntityKind.ELIMINATION_RULE: "elimination rules",
             EntityKind.INDUCTION_RULE: "induction rules",
