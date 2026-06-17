@@ -1677,7 +1677,8 @@ val APPLY_CMD = (Method.parse -- Scan.optional WITH_CLAUSE [])
    actually matches some subterm of the goal — this both filters out type-
    irrelevant overloaded instances (e.g. `(\<le>)` on nat/bool when the goal is
    about sets) and discards special-form rewrites that cannot fire here. Results
-   are ranked type-specific-and-unconditional first, and capped. *)
+   are ranked type-exact-and-unconditional first; the output cap is applied by
+   the caller after its infrastructure filter. *)
 fun potential_defs_of_const ctxt const_name goal_terms =
   let
     val thy = Proof_Context.theory_of ctxt
@@ -1783,9 +1784,18 @@ fun potential_defs_of_const ctxt const_name goal_terms =
           end
       | NONE => []
 
-    val all_defs = filter (fn (_, thm) => is_definitional_eq thm) (named_defs @ search_results)
-    val normalized_defs = map (fn (name, thm) => (name, normalize_thm thm)) all_defs
-    val deduped = distinct (Thm.eq_thm_prop o apply2 snd) normalized_defs
+    (* Tag each candidate as a precise NAMED-suffix def (`foo_def`/`foo.simps`,
+       authoritative — always offered) vs a Find_Theorems search hit (subject to
+       the goal-match filter below). This keeps proof-local definitions — whose
+       LHS may be headed by a Free, or disagree with the goal occurrence on the
+       Const/Free distinction — from being dropped by the match filter. *)
+    val all_defs =
+      filter (fn (_, (_, thm)) => is_definitional_eq thm)
+        (map (pair true) named_defs @ map (pair false) search_results)
+    val normalized_defs =
+      map (fn (named, (name, thm)) => (named, (name, normalize_thm thm))) all_defs
+    val deduped =
+      distinct (fn ((_, (_, t1)), (_, (_, t2))) => Thm.eq_thm_prop (t1, t2)) normalized_defs
 
     (* LHS of the (normalized) definitional equation *)
     fun lhs_of thm =
@@ -1796,59 +1806,74 @@ fun potential_defs_of_const ctxt const_name goal_terms =
           | go _ = NONE
       in go (Thm.concl_of thm) end
 
-    (* Keep a candidate only when its LHS matches a subterm of the goal. A
-       candidate's LHS is always headed by `const_name`, and Pattern matching
-       requires the rigid heads to align, so only goal subterms headed by
-       `const_name` can ever match — collect just those. *)
-    fun add_const_subterms t acc =
+    (* Keep a candidate only when its LHS matches an occurrence of the constant
+       in the goal. Collect the MAXIMAL applications headed by `const_name`
+       (Const or Free — the head may be a proof-local function); we do NOT also
+       emit their partial sub-spines (`f`, `f a` of a collected `f a b`), else
+       the arity-tolerant match below would match the bare head against every
+       candidate. We still descend into arguments and lambda bodies. *)
+    fun add_const_occs t acc =
       let
-        val acc1 =
-          case t of
-            u $ v => add_const_subterms u (add_const_subterms v acc)
-          | Abs (_, _, b) => add_const_subterms b acc
-          | _ => acc
+        val (h, args) = Term.strip_comb t
+        val acc1 = fold add_const_occs args acc
+        val acc2 = case h of Abs (_, _, b) => add_const_occs b acc1 | _ => acc1
       in
-        case Term.head_of t of
-          Const (n, _) => if n = const_name then t :: acc1 else acc1
-        | _ => acc1
+        case h of
+          Const (n, _) => if n = const_name then t :: acc2 else acc2
+        | Free (n, _) => if n = const_name then t :: acc2 else acc2
+        | _ => acc2
       end
-    val goal_occs = fold add_const_subterms goal_terms []
-    fun lhs_matches_goal lhs = exists (fn s => Pattern.matches thy (lhs, s)) goal_occs
+    val goal_occs = fold add_const_occs goal_terms []
+
+    (* Arity-tolerant: a goal occurrence may supply fewer arguments than the
+       candidate LHS (point-free / partial application, e.g. `mono (\<le>)`).
+       Truncate the LHS to the occurrence's argument count before matching, so
+       such uses still match while the supplied-prefix argument types must still
+       align (overloaded type-irrelevant instances stay rejected). *)
+    fun lhs_matches_goal lhs =
+      let val (lh, largs) = Term.strip_comb lhs
+      in exists (fn s =>
+           let val k = length (snd (Term.strip_comb s))
+           in Pattern.matches thy (Term.list_comb (lh, take k largs), s) end) goal_occs
+      end
 
     (* Rank key (lower = earlier):
-         (a) type-specific unfoldings first — the rule's first argument type
-             shares its outermost type constructor with a goal occurrence's
-             (e.g. both `_ set`), ahead of generic order/lattice rules whose
-             argument is a bare type variable;
+         (a) type-exact unfoldings first — the rule's operator type is a TYPE
+             VARIANT of a goal occurrence's operator type (mutually matchable
+             after varifying the goal type's TFrees to TVars), ahead of strictly
+             more-general order/lattice rules;
          (b) within that, unconditional rules ahead of conditional rewrites,
              which are weak as unfold rules. *)
-    fun head_constr (Type (c, _)) = SOME c
-      | head_constr _ = NONE
-    fun arg_constr T = case Term.binder_types T of (a :: _) => head_constr a | _ => NONE
-    val goal_arg_constrs =
-      distinct (op =) (maps (fn t => fold_aterms
-          (fn Const (n, T) => (fn a => if n = const_name then insert (op =) (arg_constr T) a else a)
-            | _ => I) t [])
-        goal_terms)
+    fun varifyT T = Term.map_atyps (fn TFree (a, s) => TVar ((a, 0), s) | U => U) T
+    fun type_variant (T1, T2) =
+      Sign.typ_instance thy (T1, T2) andalso Sign.typ_instance thy (T2, T1)
+    val goal_op_types =
+      map varifyT (fold (fn t => fold_aterms
+          (fn Const (n, T) => (fn a => if n = const_name then insert (op =) T a else a)
+            | Free (n, T) => (fn a => if n = const_name then insert (op =) T a else a)
+            | _ => I) t) goal_terms [])
     fun rank_key (thm, lhs) =
       let
-        val c = arg_constr (Term.fastype_of (Term.head_of lhs))
-        val specific = if is_some c andalso member (op =) goal_arg_constrs c then 0 else 1
+        val Tdef = Term.fastype_of (Term.head_of lhs)
+        val exact = exists (fn Tg => type_variant (Tg, Tdef)) goal_op_types
+        val specific = if exact then 0 else 1
         val conditional = if Thm.nprems_of thm > 0 then 1 else 0
       in (specific, conditional) end
-
-    val max_candidates = 100
   in
-    if null goal_terms then deduped
+    if null goal_terms then map snd deduped
     else
       deduped
-      |> map_filter (fn (name, thm) =>
+      |> map_filter (fn (named, (name, thm)) =>
            case lhs_of thm of
-             SOME lhs => if lhs_matches_goal lhs then SOME (rank_key (thm, lhs), (name, thm)) else NONE
-           | NONE => NONE)
+             SOME lhs =>
+               if named orelse lhs_matches_goal lhs
+               then SOME (rank_key (thm, lhs), (name, thm)) else NONE
+           | NONE => if named then SOME ((0, 0), (name, thm)) else NONE)
       |> sort (prod_ord int_ord int_ord o apply2 fst)
       |> map snd
-      |> (fn xs => if length xs > max_candidates then take max_candidates xs else xs)
+      (* The output cap is applied by the caller (IsaMini.potential_defs_of)
+         AFTER its infrastructure / "??." filter, so the limit measures the
+         citable defs rather than the pre-filter population. *)
   end
 
 fun UNFOLD' prep_thms raw_defs (ctxt, HHF (st, items) :: S) =

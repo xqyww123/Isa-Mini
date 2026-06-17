@@ -879,13 +879,18 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                                      | Free (name, _) => name
                                      | _ => error "term_head_not_const"
                     val defs = Minilang.potential_defs_of_const ctxt const_name goal_terms
-                 in map_filter (fn (name, thm) =>
-                      let val ext = Facts.extern ctxt facts name
-                      in if String.isPrefix "??." ext
-                            orelse is_infra_thm (strip_sel name, thm)
-                         then NONE
-                         else SOME (name, ext, SOT (Thm.prop_of thm))
-                      end) defs
+                 in defs
+                    |> map_filter (fn (name, thm) =>
+                         let val ext = Facts.extern ctxt facts name
+                         in if String.isPrefix "??." ext
+                               orelse is_infra_thm (strip_sel name, thm)
+                            then NONE
+                            else SOME (name, ext, SOT (Thm.prop_of thm))
+                         end)
+                    (* Cap AFTER the infra / "??." filter, so the limit counts
+                       citable defs (the ranking from potential_defs_of_const is
+                       preserved by map_filter). *)
+                    |> take 100
                 end) terms)
               val (_, deduped) = fold (fn (triple as (_, _, prop)) => fn (seen, acc) =>
                 if member (op =) seen prop then (seen, acc)
