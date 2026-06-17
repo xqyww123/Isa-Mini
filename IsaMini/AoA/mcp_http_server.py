@@ -347,6 +347,21 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
                     f"which overlaps step {step}. {_resume_hint}")
             session.log_tool_response(_tn, f"ERROR: {error_msg}")
             return (error_msg, True)
+        # Global-lemma delegation gate (opt-in, non-worker-major only): block a
+        # fill/insert_before/amend that writes INTO a global declaration's proof
+        # body, steering the major to dispatch a sub-agent instead. delete and
+        # one-shot inline-proof declarations stay allowed (location-only gate).
+        if (session.is_major and not session.is_worker
+                and session.gate_global_lemma_proofs):
+            _blocked, _gtarget = session._global_lemma_gate(abs_step, action)
+            if _blocked and _gtarget is not None:
+                error_msg = (
+                    "Declaring global lemmas is great though you shouldn't prove a global "
+                    "lemma yourself. Dispatch a sub-agent with `subagent` on step "
+                    f"{session._display_id(_gtarget.id)} to prove it.")
+                session.log_tool_response(_tn, f"ERROR: {error_msg}")
+                return (error_msg, True)
+
         # Parse atomically: validation, splice, and Parsed_Opr construction
         # all happen in one pass — on any failure, no tree mutation has
         # occurred.
@@ -1236,9 +1251,10 @@ async def _request_lemmas_tool_logic(session: Session, args: dict) -> tuple[str,
       proves any accepted helper lemmas into the global env, and hands back a
       feedback string. The worker then KEEPS WORKING (non-terminal, like a
       rejected refutation), now with the proven lemmas in scope.
-    - **Planning agent**: a no-argument hint. The planner edits the global env
-      itself, so this just points it at the right action — formalize and prove
-      the missing lemma under `global` via `edit`/`fill`.
+    - **Planning agent**: a no-argument hint pointing it at the right action —
+      formalize and prove the missing lemma under `global` via `edit`/`fill`, or,
+      when the global-lemma gate is on, declare it under `global` and dispatch a
+      sub-agent to prove it.
     """
     _tn = session.tool_name(TOOL_REQUEST_LEMMAS)
     session.log_tool_call(_tn, args)
@@ -1292,9 +1308,16 @@ async def _request_lemmas_tool_logic(session: Session, args: dict) -> tuple[str,
     # Role_Major: no-argument hint — the planner formalizes the lemma itself.
     global_env = session.root.global_env
     target_step = f"{global_env.id}.{len(global_env.sub_nodes) + 1}"
-    msg = ("You should formalize and prove the lemmas you need directly under "
-           f"`global`. Call command `edit` with action `fill` and target step "
-           f"`{target_step}`.")
+    if (session.is_major and not session.is_worker
+            and session.gate_global_lemma_proofs):
+        msg = ("You should declare the lemmas you need under `global` and dispatch a "
+               f"sub-agent to prove each. Call command `edit` with action `fill` and "
+               f"target step `{target_step}` to declare it, then call `subagent` on "
+               f"that step to prove it.")
+    else:
+        msg = ("You should formalize and prove the lemmas you need directly under "
+               f"`global`. Call command `edit` with action `fill` and target step "
+               f"`{target_step}`.")
     session.log_tool_response(_tn, msg)
     return (msg, False)
 
@@ -1384,7 +1407,7 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
                          f"on step {session._display_id(target.id)}.\n")
     node = target
     # Invariant: _nearest_goal_for_subagent only ever returns a provable goal
-    # block (Have / Obtain / Suffices / GoalNode), all StdBlock subtypes.
+    # block (Have / Obtain / Suffices / SetupRewriting / GoalNode), all StdBlock subtypes.
     assert isinstance(node, StdBlock)
 
     # The goal block's own operation must be sound, and the goal not yet proved.

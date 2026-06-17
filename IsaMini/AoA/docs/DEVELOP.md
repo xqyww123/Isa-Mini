@@ -203,24 +203,30 @@ other.
 
 ### 5.1 Roles
 
-`Session.role` is one of:
+`Session.role` is one of (`model.py`, all `@dataclass`):
 
-- `Role_Plan(stage ∈ {PLANNING, FINISHING})` — the planner.
+- `Role_Major` — the single continuous main/planner agent. **Stageless**: it runs real proofs
+  throughout and delegates hard sub-goals on demand; there is no PLANNING/FINISHING stage.
 - `Role_Worker(target, suggestions, useful_lemmas, worker_handle)` — proves one node (a `Have`/step).
 - `Role_Interaction(pending, prompt, resume_id, mode)` — a fork answering a retrieval / choose-target
   / refutation prompt.
 
-Predicates: `Session.is_major` (no parent), `is_planning`, `is_worker`, `is_interaction`. `Runtime`
-holds the shared `age`, depth limit (30), tool-call counters, and `worker_max_tool_calls` (500).
+Predicates (all `@property`): `Session.is_major` (no parent), `is_worker`, `is_interaction` — there is
+no `is_planning`. `Runtime` holds the shared `age`, depth limit (30), tool-call counters, and
+`worker_max_tool_calls` (500).
 
-### 5.2 The plan → finish → dispatch flow
+### 5.2 On-demand worker dispatch
 
-The planner builds the proof *structure* and closes what it can with `Obvious`. When the structure is
-complete, `Session.complete_proof` switches the role to `FINISHING`, re-evaluates to surface the
-deferred failures, collects the failed `Obvious` parents (`_collect_failed_obvious_parents`), and
-dispatches a **Worker per target** via `Interaction_ChooseTarget` + `fork_interaction`.
+There is **no** staged finish sweep — no `complete_proof`, no `FINISHING` role, no
+`_collect_failed_obvious_parents` (these names survive only in stale docs; zero hits in code). The
+main agent runs real proofs throughout: it reads a rendered failed `Obvious` (plus its
+`_print_subagent_hint` for deep ones) and *chooses* to delegate a sub-goal by calling the `subagent`
+tool (`_subagent_tool_logic` in `mcp_http_server.py`). That handler redirects to the target's nearest
+delegatable goal (`_nearest_goal_for_subagent`; the whole-goal case `target.parent is psr` is
+refused) and forks a worker. Workers may themselves dispatch nested sub-agents.
 
-`WorkerHandle` (in `language_model_driver.py`) owns the worker's asyncio task and an event queue.
+`WorkerHandle` (in `model.py`, attached as `node.worker_handle`) owns the worker's asyncio task and an
+event queue; `run_until_yield` drives it until it yields control back to the dispatcher.
 A worker communicates back through events rather than dying:
 
 - `WorkerRefute` — "this goal looks unprovable"; the worker *blocks* on a review future while the
@@ -233,11 +239,11 @@ A worker communicates back through events rather than dying:
 - `WorkerSurrender` — "I give up" (terminal).
 - `WorkerDone` — synthesised when the task ends; `success` reflects `target.is_proof_finished()`.
 
-A lemma sub-agent is a first-class `WorkerHandle` driven by a `LemmaDrive` (in
-`language_model_driver.py`), which proves the planner-authored lemmas one at a time through the same
-`ContinuingInteraction` trampoline (no extra fork). `WorkerHandle.aclose` (called from
-`complete_proof`'s `finally`, over the whole `worker_stack`) guarantees no worker is left blocked on
-a review future.
+When a worker raises `WorkerRequestLemmas`, the **planner itself** authors and proves the accepted
+helper lemmas into the global env (there is no separate lemma sub-agent / `LemmaDrive`); the worker
+then resumes with them in scope. `WorkerHandle.aclose`, called from the session-close sweep
+(`Session.close` → the `aclose_all_subagents` / `discard` recursion over the tree), guarantees no
+worker is left blocked on a review future.
 
 ### 5.3 The worker's scoped view
 
@@ -273,8 +279,7 @@ retry layers (`_with_retry` for quota — 20-minute wait; `_retry_transient` —
 **Tools** (abstract ids in `model.py`) map to external names per driver: `edit`, `delete`,
 `query` (search), `recall` (read `proof.yaml`), `report` (refute/surrender),
 `request_lemmas` (dual-role: a worker→planner channel, or a planner self-formalize hint), answer-*. The tool→operation logic is in `mcp_http_server.py`: `_edit_tool_logic` parses the agent's
-`proof_operations` and dispatches to `root.fill` / `insert_before` / `amend`; structural completion
-in PLANNING hands off to `Session.complete_proof`. Tool JSON schemas live in `tools/*.jsonc`.
+`proof_operations` and dispatches to `root.fill` / `insert_before` / `amend`. Tool JSON schemas live in `tools/*.jsonc`.
 
 The **MCP server** (`ProofMCPHTTPServer` in `mcp_http_server.py`) is a singleton, multi-session HTTP
 server with per-session endpoints `/mcp/<session_id>`; `call_tool` sets the ambient session,
@@ -413,7 +418,7 @@ async def _test_Have1(root: Root, file: MyIO):
 - **Emit output** for the golden with `root.print(0, file)`, `root.quickview(0, file)`,
   `print_header(msg, file)`, or plain `file.write(...)`. For **worker scoped views**:
   `session = root.session; session.role = model.Role_Worker(target=have_node)` then
-  `session.print_proof_scope(0, file)`; restore with `session.role = model.Role_Plan()`.
+  `session.print_proof_scope(0, file)`; restore with `session.role = model.Role_Major()`.
 - To assert completion, render the count — `s = set(); root.unfinished_nodes(s); file.write(f"…
   {len(s)}\n")`. **Never** assert on `node.status` (§2).
 - **`session.age += 1` between edits**: rendering is age-aware (it diffs against the previous render

@@ -1682,6 +1682,9 @@ class APIDriver_DeepSeekV4(APIDriver):
 
     DEFAULT_MODEL = "deepseek-v4-flash"
     SUBAGENT_NESTING_DEPTH = 2
+    # The global-lemma delegation gate is ON for DeepSeek (declare global lemmas,
+    # then dispatch a sub-agent to prove them — see model.py Session gate).
+    gate_global_lemma_proofs = True
 
     def __init__(self, *args, provider: Provider | None = None,
                  argument: str | None = None, **kwargs):

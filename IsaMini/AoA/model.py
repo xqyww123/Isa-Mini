@@ -522,13 +522,13 @@ def print_pending_goal(goal: Goal, step: step, indent: int, file : MyIO, suppres
     print_indent(indent, file)
     shown_step = the_session()._display_id(step)
     if replace_existing:
-        file.write(f"Error: Unfinished Proof! Call command `edit` with action `fill` and target step `{shown_step}`"
+        file.write(f"Unfinished Proof! Call command `edit` with action `fill` and target step `{shown_step}`"
             " to replace it with a proof.\n")
     elif show_goal:
-        file.write(f"Error: Unfinished Proof! Call command `edit` with action `fill` and target step `{shown_step}`"
+        file.write(f"Unfinished Proof! Call command `edit` with action `fill` and target step `{shown_step}`"
             " to provide the proof for the following goal.\n")
     else:
-        file.write(f"Error: Unfinished Proof! Call command `edit` with action `fill` and target step `{shown_step}`"
+        file.write(f"Unfinished Proof! Call command `edit` with action `fill` and target step `{shown_step}`"
             " to provide the proof.\n")
     if show_goal:
         print_indent(indent, file)
@@ -3834,9 +3834,9 @@ class Node(ABC):
         """The node a ``subagent`` call on `self` should actually target — the
         nearest delegatable goal. Default: `self` is not a goal → redirect to the
         parent; ``None`` at the top. Goal blocks (Have/Obtain/Suffices/GoalNode)
-        override to return `self`; non-delegatable containers (GoalContainer/Root,
-        GlobalEnv, SetupRewriting) override to return ``None`` directly (neither a
-        target nor transparent — pointing at them is an error)."""
+        and SetupRewriting override to return `self`; non-delegatable containers
+        (GoalContainer/Root, GlobalEnv) override to return ``None`` directly (neither
+        a target nor transparent — pointing at them is an error)."""
         return self.parent._nearest_goal_for_subagent() if self.parent is not None else None
     async def fill(self, id: step, gns: 'list[Parsed_Opr]') -> 'EditOutcome':
         """Fill a blank proof slot (or replace an existing failed step
@@ -5017,7 +5017,7 @@ class StdBlock(NonLeaf_Node):
         if self.opening():
             if not self._state_before_ending_.initialized():
                 print_indent(indent, file)
-                file.write("Error: Evaluation pending\n")
+                file.write("Evaluation pending\n")
                 self._prev_pending_goal = None
             elif (goal_and_step := self.should_I_show_pending_goal()) is not None:
                 goal, step_to_fill = goal_and_step
@@ -5025,9 +5025,9 @@ class StdBlock(NonLeaf_Node):
                 line_hint = f" (line {self.open_pending_proof_line})" if self.open_pending_proof_line is not None and the_session().quickview_line_numbers else ""
                 shown_fill = the_session()._display_id(step_to_fill)
                 if the_session().showed_fill_hint:
-                    file.write(f"Error: Unfinished Proof{line_hint}. Fill step `{shown_fill}`\n")
+                    file.write(f"Unfinished Proof{line_hint}. Fill step `{shown_fill}`\n")
                 else:
-                    file.write(f"Error: Unfinished Proof{line_hint}. Call command `edit` with action `fill` and target step `{shown_fill}`\n")
+                    file.write(f"Unfinished Proof{line_hint}. Call command `edit` with action `fill` and target step `{shown_fill}`\n")
                     the_session().showed_fill_hint = True
                 suppressed = self._ctxt_of_filling()
                 visible = goal.visible(suppressed)
@@ -8012,7 +8012,7 @@ class SetupRewriting(StdBlock):
     _is_declarative = True
     _changes_pending_goal = False
     def _nearest_goal_for_subagent(self) -> 'Node | None':
-        return None  # a rewriting-setup directive (empty body), not a goal
+        return self  # delegatable: a nontrivial rewriting equation has a provable body
     def __init__(self, config: NodeConfig, arg: SetupRewriting_ToolArg,
                  parsed_proof: 'proof | None' = None):
         super().__init__(config, arg["thought"], [])
@@ -8697,8 +8697,13 @@ class InferenceRule(SubgoalMaker):
             return FailureReason(f"Inference rule fact \"{self.rule_ref.name().unicode}\" not found")
         return Minilang_Operation.RULE(self.rule_ref)
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
-        parts = ["Fail to apply the inference rule."]
-        parts.extend(err.errors)
+        # The ML RULE operator already emits its own "Fail to apply the rules."
+        # header; only prepend our node-level one when it didn't, to avoid a
+        # duplicated near-identical prefix line.
+        if any(e.startswith("Fail to apply") for e in err.errors):
+            parts = list(err.errors)
+        else:
+            parts = ["Fail to apply the inference rule.", *err.errors]
         goal = self.ml_state.leading_goal
         if goal is not None and not any("current proof goal" in e for e in err.errors):
             parts.append(f"The current proof goal is:\n  {goal.conclusion.unicode}")
@@ -9233,10 +9238,18 @@ class GlobalEnv(StdBlock):
         return ret
     def _print_footer(self, indent: int, file: MyIO, show_warnings: bool = False) -> None:
         print_indent(indent, file)
-        file.write(
-            f"You can write global declarations by calling command `edit` with action `fill` "
-            f"and target step `{self.id}.{len(self.sub_nodes)+1}`. If you find the "
-            f"background theory is missing any lemmas you need, formalize and prove them here.\n")
+        sess = _session_var.get(None)
+        if (sess is not None and sess.is_major and not sess.is_worker
+                and sess.gate_global_lemma_proofs):
+            file.write(
+                f"You can write global declarations by calling command `edit` with action `fill` "
+                f"and target step `{self.id}.{len(self.sub_nodes)+1}`. If the background theory is "
+                f"missing any lemmas you need, declare them here and dispatch a sub-agent to prove each.\n")
+        else:
+            file.write(
+                f"You can write global declarations by calling command `edit` with action `fill` "
+                f"and target step `{self.id}.{len(self.sub_nodes)+1}`. If you find the "
+                f"background theory is missing any lemmas you need, formalize and prove them here.\n")
     def unfinished_nodes(self, ret: set['Node']) -> None:
         for child in self.sub_nodes:
             child.unfinished_nodes(ret)
@@ -9690,6 +9703,11 @@ class Session:
     Driver: dict[str, 'SessionConstructor'] = {}
     _driver_name: ClassVar[str] = ""
 
+    # Global-lemma delegation gate — each driver self-specifies via this class
+    # attribute (base default OFF; the DeepSeek driver overrides to True). Consulted
+    # only for a non-worker major (see `_edit_tool_logic` / `_global_lemma_gate`).
+    gate_global_lemma_proofs: bool = False
+
     def __init__(self, logger: logging.Logger | None = None, log_dir: str | Path = "",
                  parent: 'Session | None' = None,
                  argument: str | None = None,
@@ -10120,6 +10138,18 @@ class Session:
         await self.close()
         return False
 
+    def _lemma_guidance(self, under_global: bool) -> str:
+        """The "if a needed lemma doesn't exist, ..." guidance clause, shared by
+        ``system_prompt`` and ``_compute_initial_prompt`` so the two cannot drift.
+        When the global-lemma gate is active for this non-worker major, steer to
+        declare-then-delegate; otherwise keep the legacy "prove it" wording so
+        flag-off output is byte-identical and the worker string is unchanged."""
+        if self.is_major and not self.is_worker and self.gate_global_lemma_proofs:
+            return ("if a needed lemma truly does not exist, declare it as a `Have` node "
+                    "under `global`, then dispatch a sub-agent to prove it.\n")
+        suffix = " under `global`" if under_global else ""
+        return f"if a needed lemma truly does not exist, prove it as a `Have` node{suffix}.\n"
+
     def system_prompt(self) -> str | None:
         """Return the system prompt, or None if the driver folds it into the initial message."""
         report_line = (
@@ -10129,20 +10159,56 @@ class Session:
             "A proof goal can be buggy and thus unprovable — "
             f"call `{self.tool_name(TOOL_REPORT)}` with your analysis if you believe so.\n"
         )
-        PROMPT = (
+        if self.is_major:
+            # The main agent's job is to formalize a PLAN (BFS skeleton + delegate),
+            # not to prove stepwise. The worker / interaction-fork prompt is the
+            # unchanged legacy body in the `else` branch. Gate-aware lemma step: when
+            # the global-lemma gate is on, steer to declare-then-delegate; otherwise
+            # keep the legacy prove-under-global.
+            lemma_step = ("declare it as a `Have` under `global`, then dispatch a "
+                          "sub-agent to prove it"
+                          if self.gate_global_lemma_proofs
+                          else "prove it as a `Have` under `global`")
+            body = (
+                "You are a formal theorem-proving agent. Your first job is not to prove the "
+                "goal step by step — it is to formalize a *plan* for the proof. The MCP tools "
+                "below are the medium in which you write that plan; the goal and the current "
+                "(incomplete) plan are in `./proof.yaml`.\n"
+                "\n"
+                "Work breadth-first:\n"
+                "1. Formalize the top-level structure first — decompose the goal into a few "
+                "subgoals / intermediate lemmas (`Have`, `Suffices`, case splits), leaving each "
+                "proof as a hole. Don't dive into any single branch.\n"
+                "2. Refine one layer at a time, leaving deeper holes as you go.\n"
+                f"3. Delegate — call `{self.tool_name(TOOL_SUBAGENT)}` on each non-trivial "
+                "subgoal or lemma instead of working it out yourself.\n"
+                f"4. If you need a background lemma, `{self.tool_name(TOOL_SEARCH)}` for it "
+                f"first; if it truly doesn't exist, {lemma_step}.\n"
+                "\n"
+                "Holes are expected:\n"
+                "- Declaring structure and leaving holes is good — move on, don't grind.\n"
+                "- An unproved goal shows as `Unfinished Proof`, not an error — that's expected; "
+                "don't rush to close holes depth-first.\n"
+                "\n"
+                "Also:\n"
+                "- " + report_line +
+                "- Be concise in text output.\n"
+                "- Done when every hole is discharged (by you or your sub-agents) and no errors remain.\n"
+            )
+        else:
+            body = (
                 "You are a formal theorem proving agent.\n"
                 "A proof goal and an incomplete proof are provided in `./proof.yaml` under the current directory.\n"
                 "Analyze the proof goal, plan a proof, and complete it using the MCP proof tools.\n"
                 "Continue until no errors remain.\n"
-                + (f"For complex goals, first formalize the overall proof sketch before diving into details "
-                   f"— lay out the high-level structure that decomposes the goal into subgoals, "
-                   f"leaving holes unproved — then call `{self.tool_name(TOOL_SUBAGENT)}` to prove each one.\n"
-                   if self.is_major else "")
                 + report_line +
                 "The goal may rely on background lemmas that are not yet available. "
                 f"Search for them with `{self.tool_name(TOOL_SEARCH)}` first; "
-                f"if a needed lemma truly does not exist, prove it as a `Have` node{" under `global`" if self.is_major else ""}.\n"
+                + self._lemma_guidance(self.is_major) +
                 "Be concise in text output.\n"
+            )
+        PROMPT = (
+                body +
                 "\n"
                 "## Tools\n"
                 f"- {self.tool_name(TOOL_EDIT)}: Fill, insert, or amend proof steps (your primary tool)\n"
@@ -10239,7 +10305,7 @@ class Session:
             planner_hint = (
                 "The goal may rely on background lemmas that are not yet available. "
                 f"Search for them with `{self.tool_name(TOOL_SEARCH)}` first; "
-                "if a needed lemma truly does not exist, prove it as a `Have` node under `global`.\n"
+                + self._lemma_guidance(True)
             ) if self.is_major else ""
             return (
                 "An incomplete proof is provided in `proof.yaml` — read it to see the goal and current proof.\n"
@@ -10838,6 +10904,52 @@ class Session:
         else:
             h = anc_h or _first_worker_in_subtree(node)
         return (EditVerdict.LOCKED, h) if h is not None else (EditVerdict.OK, None)
+
+    def _global_lemma_gate(self, step: 'step', action: str) -> 'tuple[bool, Node | None]':
+        """The global-lemma delegation gate (the caller checks the predicate
+        ``is_major and not is_worker and gate_global_lemma_proofs``).
+
+        Returns ``(blocked, dispatch_target)``: ``blocked`` is True iff a
+        ``fill``/``insert_before``/``amend`` on ``step`` would write INTO the proof
+        body of a global declaration (a fresh child slot directly under a global
+        decl, or a target strictly inside one). ``dispatch_target`` is the node the
+        error message should tell the major to ``subagent`` on — computed via
+        ``_nearest_goal_for_subagent`` (exactly what ``_subagent_tool_logic`` will
+        re-resolve), so it is a step the dispatcher accepts: the decl itself for
+        Have/Obtain/SetupRewriting, the child GoalNode for a deferred Define. If a
+        sub-agent is already parked inside that subtree (reachable via ``amend``,
+        which does not LOCK on a descendant worker), the live worker's node is
+        returned so calling ``subagent`` on it RESUMES it instead of pointing at an
+        ancestor the dispatch gate would reject.
+
+        ``dispatch_target`` is None only for an INVALID fill directly on a Define
+        (which exposes no fillable slot — ``SubgoalMaker._id_of_openning_prf_to_fill``
+        is None); the caller's ``target is not None`` guard then falls through to the
+        normal fill-error path. Resolves the target like ``_edit_verdict``."""
+        if action not in ('fill', 'insert_before', 'amend'):
+            return (False, None)
+        try:
+            node = self.root.locate_node(step)
+            new_slot = False
+        except NodeNotFound:
+            parent_step = step.rsplit('.', 1)[0] if '.' in step else None
+            if parent_step is None:
+                return (False, None)
+            try:
+                node = self.root.locate_node(parent_step)
+            except NodeNotFound:
+                return (False, None)
+            new_slot = True
+        if new_slot and _is_direct_global_decl(node):
+            target = node._nearest_goal_for_subagent()
+        elif _enclosing_global_decl(node) is not None:
+            target = node._nearest_goal_for_subagent()
+        else:
+            return (False, None)
+        if target is None:
+            return (True, None)
+        live = _first_worker_in_subtree(target)
+        return (True, live.target if live is not None else target)
 
     def _dispatch_blocked_by(self, node: 'Node') -> "WorkerHandle | None":
         """For a FRESH ``subagent`` dispatch on ``node`` (one not already holding a
@@ -11548,6 +11660,26 @@ class EditVerdict(Enum):
     OK = auto()
     OUT_OF_SCOPE = auto()      # a worker editing outside its own subtree
     LOCKED = auto()            # the target is comparable to a live sub-agent's node
+
+
+def _is_direct_global_decl(n: 'Node') -> bool:
+    """True iff ``n`` is a provable declaration (Have/Obtain/SetupRewriting/Define)
+    sitting DIRECTLY under ``GlobalEnv`` — i.e. a global lemma header."""
+    return (isinstance(n, (Have, Obtain, SetupRewriting, Define))
+            and isinstance(n.parent, GlobalEnv))
+
+
+def _enclosing_global_decl(node: 'Node') -> 'Node | None':
+    """The nearest STRICT ancestor of ``node`` that is a direct global decl, or
+    None if ``node`` is not inside any global decl's body (walk stops at GlobalEnv)."""
+    n = node.parent
+    while n is not None:
+        if _is_direct_global_decl(n):
+            return n
+        if isinstance(n, GlobalEnv):
+            return None
+        n = n.parent
+    return None
 
 
 def _is_strict_ancestor(anc: 'Node', node: 'Node') -> bool:
