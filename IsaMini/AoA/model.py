@@ -1598,21 +1598,26 @@ class Minilang_State:
             case _:
                 raise InternalError(f"Bad flat goal data: {data!r}")
 
-    async def execute(self, opr: Extended_Minilang_Operation, assign_to: 'Minilang_State | None') -> 'Minilang_State':
+    async def execute(self, opr: Extended_Minilang_Operation, assign_to: 'Minilang_State | None', *, log: bool = True) -> 'Minilang_State':
+        # `log=False` is for throwaway probes (e.g. InferenceRule._rewrite_trial)
+        # whose operation must NOT leave a record in the live proof-op log; Isabelle
+        # time accounting (on_operation_start/end) stays unconditional so a probe
+        # still legitimately charges the time it spent.
         if assign_to is None:
             assign_to = Minilang_State(self.connection, type(self).assign_name())
         if isinstance(opr, Minilang_Operation):
             dest_name = assign_to.name
             session = the_session()
-            session.log_proof_operation(
-                step="execute",
-                operation=opr.command,
-                details={
-                    "from_state": self.name,
-                    "to_state": dest_name,
-                    "operation": str(opr),
-                }
-            )
+            if log:
+                session.log_proof_operation(
+                    step="execute",
+                    operation=opr.command,
+                    details={
+                        "from_state": self.name,
+                        "to_state": dest_name,
+                        "operation": str(opr),
+                    }
+                )
             session.on_operation_start(self.name, opr.command, opr.arg)
             now = time()
             try:
@@ -1621,11 +1626,12 @@ class Minilang_State:
             except IsabelleError as err:
                 session.on_operation_end(self.name, opr.command, opr.arg,
                     EvaluationStatus.Failure(time() - now, FailureReason(''.join(err.errors))))
-                session.log_proof_operation_error(
-                    error_message=str(err),
-                    errors=err.errors,
-                    operation=str(opr)
-                )
+                if log:
+                    session.log_proof_operation_error(
+                        error_message=str(err),
+                        errors=err.errors,
+                        operation=str(opr)
+                    )
                 if err.errors == ["beginning_state_not_found"]:
                     raise InternalError("The beginning state of the execution is not initialized!")
                 raise
@@ -3280,7 +3286,11 @@ class EditOutcome:
         cancelled = False
         if can_continue:
             try:
-                await node._refresh_me_alone(auto_intro=auto_intro)
+                # replace-aware: a fresh-fill InferenceRule that fails here may
+                # self-convert to a Rewrite (returned rebinds `node`), so the
+                # single cascade below, committed entry, and failure handling all
+                # see the converted node. ProofTreeTooDeep still propagates.
+                node = await _refresh_child_replace_aware(node, auto_intro)
             except ProofTreeTooDeep:
                 the_session()._depth_limit_exceeded = True
                 node.status = EvaluationStatus.Failure(
@@ -3684,7 +3694,10 @@ class Node(ABC):
             can_continue = parent._can_continue_before_child(node)
             cancelled = False
             if can_continue:
-                await node._refresh_me_alone(auto_intro=True)
+                # replace-aware: a fresh-fill InferenceRule may self-convert to a
+                # Rewrite (rebinds `node`); keep result.created in sync.
+                node = await _refresh_child_replace_aware(node, True)
+                result.created[i] = node
             else:
                 await node._cancel(parent._failed_predecessor_id(node))
                 cancelled = True
@@ -4107,6 +4120,9 @@ class Node(ABC):
                 e.is_error = True
                 outcome.failure = e
                 return outcome, self
+            # (auto-convert of a fresh-fill InferenceRule amended in here is
+            # handled inside `_amend_child` via `_refresh_child_replace_aware`, so
+            # `new_node` is already the converted Rewrite if it applied.)
             outcome.committed.append(new_node)
             if new_node.status.status == EvaluationStatus.Status.FAILURE:
                 behavior, outcome = new_node._on_edit_failure(outcome)
@@ -4280,6 +4296,38 @@ def _quickview_children_compressed(children: 'Sequence[Node]', indent: int, file
             child.quickview(indent, file)
             i += 1
 
+class NodeReplaced(Exception):
+    """Raised by a node that replaced itself in its parent's sub_nodes during its
+    own refresh (a failed fresh-fill InferenceRule that auto-converts to a Rewrite).
+    Only ever raised when the parent's `_child_replace_enabled` is set — which is
+    set exclusively by `_refresh_child_replace_aware`, the same frame that catches
+    it — so it never leaks to an unprepared caller. The catcher continues with
+    `new_node`."""
+    def __init__(self, new_node: 'Node'):
+        self.new_node = new_node
+
+async def _refresh_child_replace_aware(child: 'Node', auto_intro: bool) -> 'Node':
+    """Refresh `child`, allowing it to self-replace via `NodeReplaced`, and return
+    the (possibly replaced) child. Sets `_child_replace_enabled` on `child.parent`
+    — exactly the object an InferenceRule child reads in its guard — for the
+    duration of this one call (save/restore), so a raise is only produced where it
+    is caught right here. Drivers that want auto-convert support call this instead
+    of `child._refresh_me_alone(...)`. `NodeReplaced` is the only exception caught;
+    others (e.g. ProofTreeTooDeep) propagate unchanged."""
+    container = child.parent
+    if not isinstance(container, NonLeaf_Node):
+        await child._refresh_me_alone(auto_intro)
+        return child
+    prev = container._child_replace_enabled
+    container._child_replace_enabled = True
+    try:
+        await child._refresh_me_alone(auto_intro)
+        return child
+    except NodeReplaced as e:
+        return e.new_node
+    finally:
+        container._child_replace_enabled = prev
+
 class NonLeaf_Node(Node):
     _closed_by: Node | None # Some proof operation (e.g. Branch) may close a block, preventing all later appending to this block.
     sub_nodes: list['Node']
@@ -4299,6 +4347,10 @@ class NonLeaf_Node(Node):
         self.sub_nodes = sub_nodes
         self._closed_by = None
         self.worker_handle = None
+        # True while a child of this node is refreshed inside a context that
+        # catches NodeReplaced (set by `_refresh_child_replace_aware`); an
+        # InferenceRule child checks this before self-replacing.
+        self._child_replace_enabled = False
     def _on_upstream_change(self) -> None:
         super()._on_upstream_change()
         for child in self.sub_nodes:
@@ -4360,7 +4412,10 @@ class NonLeaf_Node(Node):
                             failed_id = child.id
                 else:
                     if can_continue:
-                        await child._refresh_me_alone(auto_intro=True)
+                        # replace-aware: a first-failing fresh-fill InferenceRule
+                        # (e.g. previously CANCELLED, now executing for the first
+                        # time on this cascade) may self-convert to a Rewrite.
+                        child = await _refresh_child_replace_aware(child, True)
                         if not _status_can_continue(child.status.status):
                             can_continue = False
                             failed_id = child.id
@@ -4630,7 +4685,9 @@ class NonLeaf_Node(Node):
                     await child.aclose_all_subagents()
                 await new_node._amend_from(child)
                 if self._can_continue_before_child(new_node):
-                    await new_node._refresh_me_alone(auto_intro=True)
+                    # replace-aware: a fresh-fill InferenceRule amended in may
+                    # self-convert to a Rewrite (rebinds new_node).
+                    new_node = await _refresh_child_replace_aware(new_node, True)
                 else:
                     await new_node._cancel(self._failed_predecessor_id(new_node))
                 await new_node._refresh_all_after_me()
@@ -4793,7 +4850,8 @@ class StdBlock(NonLeaf_Node):
                             failed_child = child
                 else:
                     if can_continue:
-                        await child._refresh_me_alone(auto_intro=True)
+                        # replace-aware: see NonLeaf_Node._refresh_all_children_after.
+                        child = await _refresh_child_replace_aware(child, True)
                         if not _status_can_continue(child.status.status):
                             can_continue = False
                             failed_child = child
@@ -4848,7 +4906,9 @@ class StdBlock(NonLeaf_Node):
         cancel_by: str | None = self.id if not can_continue else None
         for child in self.sub_nodes:
             if can_continue:
-                await child._refresh_me_alone(auto_intro=True)
+                # replace-aware: a fresh-fill InferenceRule child failing its first
+                # execution during whole-container re-refresh may self-convert.
+                child = await _refresh_child_replace_aware(child, True)
                 if child.status.status != EvaluationStatus.Status.COMMENTED:
                     can_continue = child.status.status == EvaluationStatus.Status.SUCCESS
                     if not can_continue:
@@ -7555,6 +7615,10 @@ Rewrite_ToolArg = TypedDict('Rewrite_ToolArg', {
     'rewrite premises': list[str]
 })
 
+AUTOCONVERT_REWRITE_MSG = (
+    "The rule does not apply as an inference rule, but it is a rewrite rule; "
+    "applied it as a Rewrite instead.")
+
 @proof_operation("Rewrite", Rewrite_ToolArg)
 class Rewrite(Leaf):
     def __init__(self, config: NodeConfig, arg: Rewrite_ToolArg):
@@ -7565,6 +7629,11 @@ class Rewrite(Leaf):
         self._raw_using: list[FactByName | FactByProposition] = [
             f for f in arg["using"] if f is not None]
         self.using: list[IsabelleFact] | None = None
+        # Set by `InferenceRule._autoconvert_to_rewrite` when this Rewrite was
+        # auto-synthesised from a failed InferenceRule. Live-only (not packed):
+        # `_refresh_me_alone` re-emits the provenance HEADER notice from it on
+        # every refresh (warnings are otherwise stripped each refresh).
+        self._was_autoconverted: bool = False
         self.fact_targets: list[list[lambda_term] | None] | None = None
         self.bindings: Bindings | None = None
         self.running_time = 0
@@ -7750,6 +7819,13 @@ class Rewrite(Leaf):
         # (unfound/unprovable facts): they are appended only on the first
         # refresh (the `using is None` branch above) and would otherwise be lost.
         self.warnings = [w for w in self.warnings if w.position is Warning.Position.FOOTER]
+        # Re-derive the auto-conversion provenance notice each refresh (same
+        # idempotency reason as the notices above): the strip just above would
+        # otherwise wipe it after the first render, collapsing the node in the
+        # compressed quickview.
+        if self._was_autoconverted:
+            self.warnings.append(
+                Warning(Warning.Position.HEADER, AUTOCONVERT_REWRITE_MSG))
         old_bindings = self.bindings
         # Execute the operation via parent Leaf implementation
         await super()._refresh_me_alone(auto_intro)
@@ -8641,6 +8717,9 @@ class InferenceRule(SubgoalMaker):
         self.rule_ref: IsabelleFact | None = None
         self._opening = False
         self._prev_quickview_derived_goal: term | None = None
+        # Latches after one auto-convert probe so re-refreshes don't re-run it;
+        # reset on upstream change (see _on_upstream_change).
+        self._autoconvert_tried = False
         if parsed_proofs is not None:
             self._supplied_proofs = {
                 str(i + self._initial_goal_index): (None, p)
@@ -8674,6 +8753,26 @@ class InferenceRule(SubgoalMaker):
         elif not isinstance(self.rule_ref, (type(None), IsabelleFact_Unfound)) and self.ml_state.initialized():
             [self.rule_ref] = await self.ml_state.refresh_facts([self.rule_ref])
         await super()._refresh_me_alone(auto_intro)
+        # Fresh-fill InferenceRule that failed its RULE op but whose rule works as
+        # a goal rewrite → self-replace with a genuine Rewrite. Only when the parent
+        # refresh is replace-aware (flag set by `_refresh_child_replace_aware`, the
+        # same frame that catches NodeReplaced), so the raise never leaks.
+        # `not sub_nodes` restricts to first-execution (never opened subgoals),
+        # excluding the dangerous previously-succeeded re-refresh.
+        if (self.status.status == EvaluationStatus.Status.FAILURE
+                and not self.sub_nodes
+                and not self._autoconvert_tried
+                and isinstance(self.parent, NonLeaf_Node)
+                and self.parent._child_replace_enabled):
+            self._autoconvert_tried = True
+            new = await self._autoconvert_to_rewrite()
+            if new is not None:
+                raise NodeReplaced(new)
+    def _on_upstream_change(self) -> None:
+        super()._on_upstream_change()
+        # Upstream changed → a prior "not a rewrite" probe result is stale; allow
+        # one fresh auto-convert attempt next time this node is refreshed.
+        self._autoconvert_tried = False
     def _rule_name_str(self) -> str | None:
         if self.rule_ref is not None:
             return self.rule_ref.name().unicode
@@ -8755,6 +8854,87 @@ class InferenceRule(SubgoalMaker):
             return (None, indent-1)
         else:
             return ("derived subgoals", indent+1)
+    async def _rewrite_trial(self) -> bool:
+        """Probe whether `self.rule_ref` works as a goal-only rewrite: run a
+        throwaway SIMPLIFY on a fresh scratch state and accept if the goal is
+        solved or merely changed (its LHS matched). Only called for non-looping
+        rules (a looping rule's SIMPLIFY could itself loop/error). `log=False`:
+        the probe must leave no record in the live proof-op log."""
+        assert isinstance(self.rule_ref, IsabelleFact_Presented)
+        op = Minilang_Operation.SIMPLIFY([(self.rule_ref, None)], False, [], True, None)
+        try:
+            scratch = await self.ml_state.execute(op, None, log=False)
+        # `execute` raises InternalError (not IsabelleError) on
+        # beginning_state_not_found / >1 Goals_Msg by design (internal-invariant
+        # guards, not transient faults); for the probe both equally mean "not a
+        # usable rewrite", so catch alongside IsabelleError.
+        except (IsabelleError, InternalError):
+            return False
+        try:
+            g0 = self.ml_state.leading_goal
+            return (scratch.leading_goal is None
+                    or (g0 is not None
+                        and scratch.leading_goal.conclusion != g0.conclusion))
+        finally:
+            if scratch._initialized:
+                await scratch.reset()
+
+    async def _autoconvert_to_rewrite(self) -> 'Node | None':
+        """Caller guarantees `self` failed its RULE op. If `self` is fresh-fill
+        (no opened subgoals) and its rule works as a goal rewrite, swap `self` in
+        place for a genuine Rewrite node and return it; else return None.
+
+        Swaps and refreshes ONLY the new node (no sibling cascade) — each caller
+        drives its own single cascade afterwards, so converting never
+        double-cascades siblings. Fresh-fill scope (RULE fails before opening
+        subgoals → empty sub_nodes) sidesteps sub-agent/teardown hazards.
+        See `_inference_rule_rewrite_fallback_plan.md`."""
+        if self.sub_nodes:                  # only fresh-fill (no opened subgoals)
+            return None
+        if not isinstance(self.rule_ref, IsabelleFact_Presented):
+            return None
+        if self.parent is None:
+            return None
+        # Applicability. A self-looping rule IS a rewrite rule (the live Rewrite
+        # will ask the agent to pick targets), so accept it without the probe —
+        # whose SIMPLIFY could loop/error. Otherwise probe by running it once. Any
+        # probe error leaves the original RULE failure intact, never crashing the edit.
+        try:
+            looping = await self.ml_state.check_looping_rules(
+                [self.rule_ref.pack()[0]], True, [])
+        except (IsabelleError, InternalError):
+            return None
+        if not looping and not await self._rewrite_trial():
+            return None
+        # Build a *genuine* Rewrite referencing the same theorem. Reuse the
+        # agent's original FactByName when it had one (exact instantiations
+        # preserved); else the resolved full name with baked attributes. `using`
+        # stays None at construction so the node runs the normal resolve +
+        # looping-target interaction path identically to a hand-authored Rewrite.
+        rule = self.rule
+        if rule is not None and "name" in rule:
+            using_ref: 'FactByName' = cast('FactByName', rule)
+        else:
+            using_ref = FactByName(name=self.rule_ref.pack()[0])
+        parent = self.parent
+        idx = parent.sub_nodes.index(self)
+        rw = Rewrite.gen_single({
+            "thought": self.thought,
+            "using": [using_ref],
+            "use system simplifiers": False,
+            "rewrite goal": True,
+            "rewrite premises": [],
+        })
+        config = NodeConfig(self.local_step, await self.ml_state.clone(None), parent)
+        new = rw.factory(config)
+        new._was_autoconverted = True  # type: ignore[attr-defined]  — Rewrite; narrowing erased by @proof_operation
+        parent.sub_nodes[idx] = new
+        await new._refresh_me_alone(auto_intro=True)
+        if new.status.status == EvaluationStatus.Status.FAILURE:
+            # Live execution diverged from the probe — restore the original failure.
+            parent.sub_nodes[idx] = self
+            return None
+        return new
 
 ### Contradiction
 

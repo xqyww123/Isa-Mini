@@ -1,0 +1,34 @@
+--------------------------------------------------
+Initial
+--------------------------------------------------
+variables:
+  - Q: nat ⇒ bool
+  - P: nat ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: {(x :: nat). P x} = {(x :: nat). Q x}
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After fill (InferenceRule auto-converted to Rewrite)
+--------------------------------------------------
+variables:
+  - Q: nat ⇒ bool
+  - P: nat ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: {(x :: nat). P x} = {(x :: nat). Q x}
+proof:
+  - step id: 1
+    thought: split the set equality into two subset directions
+    operation: Rewrite
+    using:
+      - set_eq_subset: (?A = ?B) = (?A ⊆ ?B ∧ ?B ⊆ ?A)
+    targets:
+      - the goal
+    goal changes into:
+      Collect P ⊆ Collect Q ∧ Collect Q ⊆ Collect P
+    notice:
+      - The rule does not apply as an inference rule, but it is a rewrite rule; applied it as a Rewrite instead.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  Collect P ⊆ Collect Q ∧ Collect Q ⊆ Collect P
+Unfinished nodes: 1
