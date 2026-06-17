@@ -1,0 +1,6 @@
+--------------------------------------------------
+Point-free Unfold (⊆): relevant set unfoldings present?
+--------------------------------------------------
+subset_eq: True
+subset_iff: True
+less_eq_set_def: True

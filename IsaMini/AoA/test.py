@@ -264,6 +264,25 @@ async def _test_InferenceRuleSolvesGoal(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
+@model_test("AutoRewriteFallback", "Test_AutoRewriteFallback.thy", 8)
+async def _test_AutoRewriteFallback(root: Root, file: MyIO):
+    print_header("Initial", file)
+    root.print(0, file)
+    root.session.age += 1
+    # `set_eq_subset` fails as an inference rule (its conclusion does not unify
+    # with the set-equality goal) but works as a goal rewrite, so the failed
+    # InferenceRule auto-converts in place to a genuine Rewrite (which carries the
+    # AUTOCONVERT_REWRITE_MSG notice and changes the goal to the two subset dirs).
+    await root.fill("1", [InferenceRule.gen_single({
+        "thought": "split the set equality into two subset directions",
+        "rule": {"name": "set_eq_subset"},
+    })])
+    print_header("After fill (InferenceRule auto-converted to Rewrite)", file)
+    root.print(0, file, show_warnings=True)
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 @model_test("CaseSplit", "Test006.thy", 9)
 async def _test_CaseSplit(root: Root, file: MyIO):
     print_header("Initial YAML", file)
@@ -7098,6 +7117,31 @@ async def _test_UnfoldDefTypeFilter(root: Root, file: MyIO):
            junk=lambda s: s in LE_JUNK)
 
 
+@model_test("UnfoldPointFree", "Test_UnfoldPointFree.thy", 7)
+async def _test_UnfoldPointFree(root: Root, file: MyIO):
+    r"""Regression guard for arity-tolerant goal matching.
+
+    The goal `reflp (⊆)` uses `(⊆)` POINT-FREE — the operator is an argument to
+    `reflp`, applied to zero arguments. Candidate-def LHSs are fully applied
+    (`less_eq ?A ?B`), so a naive `Pattern.matches(lhs, occurrence)` fails on the
+    bare `less_eq` occurrence and would drop EVERY set unfolding. The match is
+    arity-tolerant — it truncates the candidate LHS to the occurrence's argument
+    count — so the canonical set unfoldings are still offered for a point-free
+    occurrence. If that tolerance regresses, the booleans below flip to False.
+    """
+    ml_state = root.ml_state
+    defs = await ml_state.potential_defs_of([IsaTerm.from_agent("(⊆)")])
+    short = {d.short_name.unicode for d in defs}
+
+    # Pure presence assertions: stable across library changes, flip only if the
+    # arity-tolerant match regresses (the exact candidate set / ranking for a
+    # point-free occurrence is intentionally not snapshotted — it is library-
+    # dependent and undiscriminated, since every candidate is exact-set-typed).
+    print_header("Point-free Unfold (⊆): relevant set unfoldings present?", file)
+    for lem in ("subset_eq", "subset_iff", "less_eq_set_def"):
+        file.write(f"{lem}: {lem in short}\n")
+
+
 @model_test("UnfoldSyntax", "Test_UnfoldSyntax.thy", 40)
 async def _test_unfold_syntax(root: Root, file: MyIO):
     """Test the unfold_syntax callback.
@@ -13788,74 +13832,97 @@ async def _test_query_whole_file_dump(root: Root, file: MyIO):
     source", which starts with the `(* Title ... *)` header comment, slips past
     the proof-command guard, and got dumped verbatim into the agent's view.
     """
-    import re as _re, os as _os, glob as _glob
+    import re as _re, os as _os, traceback as _tb
     from Isabelle_RPC_Host.position import get_file_index, IsabellePosition
+    from Isabelle_RPC_Host.universal_key import EntityKind
+    from Isabelle_RPC_Host.context import entities_of
     from Isabelle_Semantic_Embedding.hover import command_at_position
 
     ml = root.session.retrieval_state()
     conn = ml.connection
 
-    # HUNT the root cause: scan precompiled theories via the DB-snapshot path
-    # (command_at_position on a file NOT in the live document → DB fallback).
-    # Primary suspects = FLAT-IMPORTED AFP theories (the a42f03c surface, whose
-    # snapshots only started resolving on 2026-06-16); Primes is a HOL control.
-    afp = "/home/qiyuan/Current/MLML/contrib/afp-2026-05-13/thys"
-    hl = _os.path.join(afp, "Hermite_Lindemann")
-    targets = sorted(_glob.glob(_os.path.join(hl, "*.thy")))
-    targets.append("/home/qiyuan/Current/MLML/contrib/Isabelle2025-2/"
-                   "src/HOL/Computational_Algebra/Primes.thy")  # control
+    # FAITHFUL production path: production resolved positions via entities_of(ctxt)
+    # where ctxt is the proof state that IMPORTS the cross-session theory, then fed
+    # that offset to command_at_position. We replicate by pointing ctxt INSIDE the
+    # precompiled MathBench_Prover.thy (imports everything; not a live node), enum
+    # theorems of a target theory there, and using ENTITIES_OF's offsets — NOT a
+    # disk-computed one — so we also test "does entities_of hand back a bad offset
+    # for cross-session theories?" by comparing the two offsets per decl.
+    mbp = "/home/qiyuan/Current/MLML/tasks/MathBench_Prover/MathBench_Prover.thy"
+    mbp_idx = get_file_index(mbp)
+    ctxt = (mbp, mbp_idx.end_of_line_offset(mbp_idx.num_lines))
 
+    # (short theory name as entities_of/theories_include sees it, disk path for the
+    #  offset cross-check)
+    afp = "/home/qiyuan/Current/MLML/contrib/afp-2026-05-13/thys/Hermite_Lindemann"
+    suspects = [
+        ("Primes", "/home/qiyuan/Current/MLML/contrib/Isabelle2025-2/"
+                   "src/HOL/Computational_Algebra/Primes.thy"),
+        ("More_Polynomial_HLW", _os.path.join(afp, "More_Polynomial_HLW.thy")),
+        ("Hermite_Lindemann", _os.path.join(afp, "Hermite_Lindemann.thy")),
+        ("More_Algebraic_Numbers_HLW", _os.path.join(afp, "More_Algebraic_Numbers_HLW.thy")),
+    ]
     decl_re = _re.compile(
         r"^\s*(?:lemma|theorem|corollary|proposition)\s+([A-Za-z][A-Za-z0-9_'.]*)\s*[:\[]")
+
     out_path = "/tmp/aoa_probe.txt"
-    total_scanned = 0
     total_dumps = []
     with open(out_path, "w") as pf:
-        for path in targets:
+        pf.write(f"ctxt = ({mbp}, off={ctxt[1]})\n\n")
+        for thy, disk_path in suspects:
+            pf.write(f"## theory {thy}\n")
+            # disk-computed offsets, for cross-checking entities_of's offsets
+            disk_off = {}
             try:
-                idx = get_file_index(path)
-                with open(path, "r", encoding="utf-8") as _f:
-                    src_lines = _f.read().split("\n")
+                fidx = get_file_index(disk_path)
+                with open(disk_path, encoding="utf-8") as _f:
+                    for i, ln in enumerate(_f.read().split("\n"), 1):
+                        m = decl_re.match(ln)
+                        if m:
+                            o = fidx.symbol_offsets(i, m.group(1))
+                            if o:
+                                disk_off[m.group(1)] = (i, o[0])
             except Exception as e:
-                pf.write(f"## {path}: SKIP ({e})\n")
+                pf.write(f"   (disk index failed: {e})\n")
+            # FAITHFUL: enumerate this theory's theorems THROUGH the ctxt
+            try:
+                entries, _loc, _w = await entities_of(
+                    conn, [EntityKind.THEOREM], ctxt=ctxt,
+                    theories_include=[thy], limit=400)
+            except Exception as e:
+                pf.write(f"   entities_of FAILED: {type(e).__name__}: {e}\n")
+                pf.write("   " + _tb.format_exc().replace(chr(10), chr(10)+"   ")[:1500] + "\n")
                 continue
-            decls = [(i, m.group(1)) for i, ln in enumerate(src_lines, 1)
-                     if (m := decl_re.match(ln))]
-            scanned = 0
-            dumps = []
-            none_cnt = 0
-            for line_no, name in decls:
-                offs = idx.symbol_offsets(line_no, name)
-                if not offs:
+            pf.write(f"   entities_of returned {len(entries)} theorems\n")
+            scanned = mism = dumps = 0
+            for uk, name, pos in entries:
+                if pos is None:
                     continue
-                pos = IsabellePosition(line_no, offs[0], path)
                 scanned += 1
+                short = name.rsplit(".", 1)[-1]
+                # offset fidelity check vs disk
+                d = disk_off.get(short)
+                if d is not None and pos.raw_offset != d[1]:
+                    mism += 1
+                    if mism <= 8:
+                        pf.write(f"   OFFSET MISMATCH {short}: entities_of={pos.raw_offset} "
+                                 f"disk={d[1]} (line {d[0]}), file={_os.path.basename(pos.file)}\n")
                 cmd = await command_at_position(pos, conn)
                 if cmd is None:
-                    none_cnt += 1
                     continue
-                source, start, end = cmd
-                n_lines = source.count("\n") + 1
-                first = source.split(chr(10), 1)[0][:90]
-                # whole-file tell: starts with header comment / `theory ` / very long
+                source, st, en = cmd
+                nlines = source.count("\n") + 1
                 whole = (source.lstrip().startswith("(*")
-                         or _re.match(r"\s*theory\s", source)
-                         or n_lines > 60)
+                         or _re.match(r"\s*theory\s", source) or nlines > 60)
                 if whole:
-                    dumps.append((name, line_no, n_lines, len(source),
-                                  start, end, first))
-            base = _os.path.basename(path)
-            pf.write(f"## {base}: {len(decls)} decls, scanned {scanned}, "
-                     f"None {none_cnt}, DUMPS {len(dumps)}\n")
-            for name, ln, nl, slen, st, en, fl in dumps[:40]:
-                pf.write(f"   DUMP {name} @L{ln}: {nl} lines, srclen={slen}, "
-                         f"span=({st},{en}), first={fl!r}\n")
-            total_scanned += scanned
-            total_dumps += [(base,) + d for d in dumps]
-        pf.write(f"\nTOTAL scanned {total_scanned}, TOTAL dumps {len(total_dumps)}\n")
+                    dumps += 1
+                    total_dumps.append((thy, short))
+                    pf.write(f"   *** DUMP {short}: {nlines} lines, span=({st},{en}), "
+                             f"off={pos.raw_offset}, first={source.split(chr(10),1)[0][:90]!r}\n")
+            pf.write(f"   => scanned {scanned}, offset-mismatches {mism}, dumps {dumps}\n\n")
+        pf.write(f"TOTAL whole-file dumps: {len(total_dumps)}\n")
 
-    file.write(f"scanned {total_scanned} decls across "
-               f"{len(targets)} theories, {len(total_dumps)} whole-file dumps "
+    file.write(f"faithful ctxt probe done: {len(total_dumps)} whole-file dumps "
                f"(details in {out_path})\n")
     print_header("Probe done", file)
 
