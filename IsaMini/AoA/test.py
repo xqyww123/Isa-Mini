@@ -283,6 +283,41 @@ async def _test_AutoRewriteFallback(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
+@model_test("AutoRewriteFallbackCascade", "Test_AutoRewriteFallbackCascade.thy", 8)
+async def _test_AutoRewriteFallbackCascade(root: Root, file: MyIO):
+    # Exercises the *cascade* auto-convert path (the coverage unique to the
+    # handler mechanism over a fill-only approach): an InferenceRule that is
+    # CANCELLED at introduction (a preceding step failed, so it never executes)
+    # must NOT convert; once the preceding step is fixed, the cascade re-refreshes
+    # it, its RULE op runs for the FIRST time, fails, and it auto-converts.
+    #
+    # Step 1: a Have with an ill-typed statement → its beginning op FAILS.
+    # Step 2: InferenceRule(set_eq_subset) → CANCELLED because step 1 failed.
+    await root.fill("1", [
+        Have.gen_single({
+            "thought": "ill-typed helper (will fail)",
+            "statement": {"english": "bad", "conclusion": r"(0::nat) = True"},
+            "name": "bad"}),
+        InferenceRule.gen_single({
+            "thought": "split the set equality into two subset directions",
+            "rule": {"name": "set_eq_subset"}}),
+    ])
+    print_header("After fill: step 1 fails → step 2 is CANCELLED, still InferenceRule (NOT converted)", file)
+    root.print(0, file, show_warnings=True)
+    root.session.age += 1
+    # Fix step 1: amend the ill-typed Have to a well-formed one (succeeds, leaves
+    # the main goal unchanged). The cascade re-refreshes step 2; its set_eq_subset
+    # now executes for the first time, fails as a rule, and auto-converts to Rewrite.
+    await root.amend("1", [Have.gen_single({
+        "thought": "well-formed helper now",
+        "statement": {"english": "ok", "conclusion": r"(0::nat) = 0"},
+        "name": "ok"})])
+    print_header("After amend (preceding fixed → cascade converts step 2 to Rewrite)", file)
+    root.print(0, file, show_warnings=True)
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 @model_test("CaseSplit", "Test006.thy", 9)
 async def _test_CaseSplit(root: Root, file: MyIO):
     print_header("Initial YAML", file)

@@ -1,0 +1,81 @@
+--------------------------------------------------
+After fill: step 1 fails → step 2 is CANCELLED, still InferenceRule (NOT converted)
+--------------------------------------------------
+variables:
+  - Q: nat ⇒ bool
+  - P: nat ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: {(x :: nat). P x} = {(x :: nat). Q x}
+proof:
+  - step id: 1
+    thought: ill-typed helper (will fail)
+    operation: Have
+    statement:
+      english: bad
+      conclusion: (0::nat) = True
+    name: bad
+    Error: |
+      Fail to claim the intermediate subgoal because: Type unification failed: No type arity bool :: zero
+      
+      Type error in application: incompatible operand type
+      
+      Operator:  (=) 0 :: ??'a ⇒ bool
+      Operand:   True :: bool
+      
+      Coercion Inference:
+      
+      Local coercion insertion on the operand failed:
+      No type arity bool :: zero
+      
+      Now trying to infer coercions globally.
+      
+      Coercion inference failed:
+      no supremum
+      
+      Cannot fulfil subtype constraints:
+      bool  <:  ??'a   from function application  0 = True
+      ??'a  <:  ??'b   from function application  (=) 0
+    proof: empty
+    Error: Evaluation cancelled due to failures above
+  - step id: 2
+    thought: split the set equality into two subset directions
+    operation: Inference Rule
+    rule:
+      - name: set_eq_subset (pending)
+    Error: the evaluation is cancelled due to failure of step `1`
+Error: Evaluation cancelled due to failures above
+--------------------------------------------------
+After amend (preceding fixed → cascade converts step 2 to Rewrite)
+--------------------------------------------------
+variables:
+  - Q: nat ⇒ bool
+  - P: nat ⇒ bool
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: {(x :: nat). P x} = {(x :: nat). Q x}
+proof:
+  - step id: 1
+    thought: well-formed helper now
+    operation: Have
+    statement:
+      english: ok
+      conclusion: (0::nat) = 0
+    name: ok
+    proof: empty
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: nat) = (0 :: nat)
+  - step id: 2
+    thought: split the set equality into two subset directions
+    operation: Rewrite
+    using:
+      - set_eq_subset: (?A = ?B) = (?A ⊆ ?B ∧ ?B ⊆ ?A)
+    targets:
+      - the goal
+    goal changes into:
+      Collect P ⊆ Collect Q ∧ Collect Q ⊆ Collect P
+    notice:
+      - The rule does not apply as an inference rule, but it is a rewrite rule; applied it as a Rewrite instead.
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  Collect P ⊆ Collect Q ∧ Collect Q ⊆ Collect P
+Unfinished nodes: 2
