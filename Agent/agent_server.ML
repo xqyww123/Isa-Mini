@@ -865,13 +865,20 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
               val {is_infra_thm, ...} = Infra_Filter.gen_infra_filters (Context.Proof ctxt)
               fun strip_sel s =
                 case String.tokens (fn c => c = #"(") s of base :: _ => base | [] => s
+              (* Terms of the leading goal — conclusion plus in-scope hypotheses
+                 (Minilang's Intro moves premises out of the goal term into local
+                 facts). Candidate definitions are kept only if their LHS matches
+                 a subterm here. *)
+              val ((_, goal_local_facts), goal_concl) =
+                    Minilang.context_of_leading_goal (Minilang.print_state s0)
+              val goal_terms = goal_concl :: map snd goal_local_facts
               val results = List.concat (map (fn term =>
                 let val parsed_term = MiniLang_Agent.read_term ctxt term
                     val const_name = case Term.head_of parsed_term of
                                        Const (name, _) => name
                                      | Free (name, _) => name
                                      | _ => error "term_head_not_const"
-                    val defs = Minilang.potential_defs_of_const ctxt const_name
+                    val defs = Minilang.potential_defs_of_const ctxt const_name goal_terms
                  in map_filter (fn (name, thm) =>
                       let val ext = Facts.extern ctxt facts name
                       in if String.isPrefix "??." ext

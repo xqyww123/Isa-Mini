@@ -1,0 +1,8 @@
+=== _get_definition_with_pos(Primes.prime_power_exp_nat) ===
+source lines: 4
+first line: 'lemma prime_power_exp_nat:'
+matches _PROOF_COMMAND_RE (would be suppressed): True
+contains 'theory Primes' marker: False
+--------------------------------------------------
+Done
+--------------------------------------------------

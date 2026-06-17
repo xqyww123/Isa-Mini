@@ -29,7 +29,6 @@ Filled node: InferenceRule, id=2
     rule:
       - (8::nat) = 2^3
     Error: |
-      Fail to apply the inference rule.
       Fail to apply the rules.
       the conclusion of rule P__I__T__0 does not match the current proof goal
       because type nat ⇒ nat ⇒ bool does not unify with real ⇒ real ⇒ bool
@@ -54,7 +53,6 @@ proof:
     rule:
       - (8::nat) = 2^3
     Error: |
-      Fail to apply the inference rule.
       Fail to apply the rules.
       the conclusion of rule P__I__T__0 does not match the current proof goal
       because type nat ⇒ nat ⇒ bool does not unify with real ⇒ real ⇒ bool

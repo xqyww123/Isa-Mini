@@ -1,0 +1,19 @@
+--------------------------------------------------
+After first fill (step 2)
+--------------------------------------------------
+no-op notice count: 1
+--------------------------------------------------
+After amending step 1 (cascade re-refresh of step 2)
+--------------------------------------------------
+no-op notice count: 1
+--------------------------------------------------
+Quickview outline (what the agent is shown)
+--------------------------------------------------
+  step 1: Have lem1
+    Unfinished Proof. Call command `edit` with action `fill` and target step `1.1`
+    goal: (0 :: real) ≤ ln (2 :: real) * ln (2 :: real) + (0 :: real)
+  step 2: Rewrite ln2_ne_0 (changed)
+    notice:
+      - The rewrite changed nothing — none of the provided rules matched the goal or the targeted premises. Check the rule's orientation and instantiation; if you meant to flip an (in)equality, `flip: true` may help.
+  Unfinished Proof. Fill step `3`
+  goal: (0 :: real) ≤ ln (2 :: real) * ln (2 :: real)

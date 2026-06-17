@@ -1,0 +1,44 @@
+--------------------------------------------------
+Initial
+--------------------------------------------------
+premises:
+  - ln2_ne_0: ln (2 :: real) ≠ (0 :: real)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ln (2 :: real) ≠ (0 :: real)
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+Outcome
+--------------------------------------------------
+failure: None
+committed: ['1']
+node warnings: ["The rewrite changed nothing — none of the provided rules matched the goal or the targeted premises. Check the rule's orientation and instantiation; if you meant to flip an (in)equality, `flip: true` may help."]
+--------------------------------------------------
+Quickview outline (what the agent is shown)
+--------------------------------------------------
+  step 1: Rewrite ln2_ne_0
+    notice:
+      - The rewrite changed nothing — none of the provided rules matched the goal or the targeted premises. Check the rule's orientation and instantiation; if you meant to flip an (in)equality, `flip: true` may help.
+  Unfinished Proof. Call command `edit` with action `fill` and target step `2`
+  goal: ln (2 :: real) ≠ (0 :: real)
+--------------------------------------------------
+Full print (with warnings)
+--------------------------------------------------
+premises:
+  - ln2_ne_0: ln (2 :: real) ≠ (0 :: real)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ln (2 :: real) ≠ (0 :: real)
+proof:
+  - step id: 1
+    thought: Flip inequality using neq_commute
+    operation: Rewrite
+    using:
+      - neq_commute[where ?a = ‹(0::real)› and ?b = ‹ln (2::real)›]: (?a ≠ ?b) = (?b ≠ ?a)
+      - system simplifiers
+    targets:
+      - ln2_ne_0
+    notice:
+      - The rewrite changed nothing — none of the provided rules matched the goal or the targeted premises. Check the rule's orientation and instantiation; if you meant to flip an (in)equality, `flip: true` may help.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  ln (2 :: real) ≠ (0 :: real)

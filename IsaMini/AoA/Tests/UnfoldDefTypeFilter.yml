@@ -1,0 +1,61 @@
+--------------------------------------------------
+Candidates offered for Unfold (⊆)
+--------------------------------------------------
+Set.less_eq_set_def: (?A ⊆ ?B) = ((λ(x :: ?'a). x ∈ ?A) ≤ (λ(x :: ?'a). x ∈ ?B))
+Set.subset_iff: (?A ⊆ ?B) = (∀(t :: ?'a). t ∈ ?A ⟶ t ∈ ?B)
+Set.subset_iff_psubset_eq: (?A ⊆ ?B) = (?A ⊂ ?B ∨ ?A = ?B)
+Set.subset_eq: (?A ⊆ ?B) = (∀x ∈?A. x ∈ ?B)
+Set.subset_Un_eq: (?A ⊆ ?B) = (?A ∪ ?B = ?B)
+BNF_Wellorder_Constructions.ofilter_subset_ordLeq: Well_order ?r ⟶ ofilter ?r ?A ⟶ ofilter ?r ?B ⟶ (?A ⊆ ?B) = (Restr ?r ?A ≤o Restr ?r ?B)
+BNF_Wellorder_Constructions.ofilter_subset_embed: Well_order ?r ⟶ ofilter ?r ?A ⟶ ofilter ?r ?B ⟶ (?A ⊆ ?B) = embed (Restr ?r ?A) (Restr ?r ?B) id
+Orderings.order_class.le_less: (?x ≤ ?y) = (?x < ?y ∨ ?x = ?y)
+Orderings.order_class.dual_order.order_iff_strict: (?b ≤ ?a) = (?b < ?a ∨ ?a = ?b)
+Orderings.order_class.order.order_iff_strict: (?a ≤ ?b) = (?a < ?b ∨ ?a = ?b)
+Lattices.semilattice_sup_class.le_iff_sup: (?x ≤ ?y) = (?x ⊔ ?y = ?y)
+Lattices.semilattice_sup_class.sup.absorb_iff1: (?b ≤ ?a) = (?a ⊔ ?b = ?a)
+Lattices.semilattice_sup_class.sup.order_iff: (?b ≤ ?a) = (?a = ?a ⊔ ?b)
+Lattices.semilattice_sup_class.sup.absorb_iff2: (?a ≤ ?b) = (?a ⊔ ?b = ?b)
+Lattices.semilattice_inf_class.le_iff_inf: (?x ≤ ?y) = (?x ⊓ ?y = ?x)
+Lattices.semilattice_inf_class.inf.absorb_iff2: (?b ≤ ?a) = (?a ⊓ ?b = ?b)
+Lattices.semilattice_inf_class.inf.absorb_iff1: (?a ≤ ?b) = (?a ⊓ ?b = ?a)
+Lattices.semilattice_inf_class.inf.order_iff: (?a ≤ ?b) = (?a = ?a ⊓ ?b)
+Orderings.order_class.antisym_conv1: ¬ ?x < ?y ⟶ (?x ≤ ?y) = (?x = ?y)
+Orderings.order_class.antisym_conv: ?y ≤ ?x ⟶ (?x ≤ ?y) = (?x = ?y)
+total candidates: 20
+--------------------------------------------------
+Relevant unfolding lemmas present? ((⊆))
+--------------------------------------------------
+subset_eq: True
+subset_iff: True
+less_eq_set_def: True
+--------------------------------------------------
+Type-irrelevant candidates leaked into the list ((⊆))
+--------------------------------------------------
+leaked irrelevant count: 0
+--------------------------------------------------
+Candidates offered for Unfold (=)
+--------------------------------------------------
+Set.set_eq_iff: (?A = ?B) = (∀(x :: ?'a). (x ∈ ?A) = (x ∈ ?B))
+Set.set_eq_subset: (?A = ?B) = (?A ⊆ ?B ∧ ?B ⊆ ?A)
+Equiv_Relations.quotient_eq_iff: equiv ?A ?r ⟶ ?X ∈ ?A // ?r ⟶ ?Y ∈ ?A // ?r ⟶ ?x ∈ ?X ⟶ ?y ∈ ?Y ⟶ (?X = ?Y) = ((?x, ?y) ∈ ?r)
+BNF_Composition.DEADID.in_rel: (?a = ?b) = (∃(z :: ?'b). z ∈ UNIV ∧ id z = ?a ∧ id z = ?b)
+Orderings.order_class.order_eq_iff: (?x = ?y) = (?x ≤ ?y ∧ ?y ≤ ?x)
+Orderings.order_class.dual_order.eq_iff: (?a = ?b) = (?b ≤ ?a ∧ ?a ≤ ?b)
+Orderings.eq_iff: (?a = ?b) = (?a ≤ ?b ∧ ?b ≤ ?a)
+HOL.eq_commute: (?a = ?b) = (?b = ?a)
+Lattices.semilattice_neutr_order.eq_neutr_iff: semilattice_neutr_order ?f ?z ?less_eq ?less ⟶ (?f ?a ?b = ?z) = (?a = ?z ∧ ?b = ?z)
+BNF_Composition.DEADID.rel_cong: ?x = ?ya ⟶ ?y = ?xa ⟶ (?x = ?y) = (?ya = ?xa)
+Orderings.ordering.eq_iff: ordering ?less_eq ?less ⟶ (?a = ?b) = (?less_eq ?a ?b ∧ ?less_eq ?b ?a)
+HOL.eq_iff_swap: (?x = ?y) = ?P ⟶ (?y = ?x) = ?P
+Orderings.order_class.less_imp_not_eq2: ?x < ?y ⟶ (?y = ?x) = False
+Orderings.order_class.less_imp_not_eq: ?x < ?y ⟶ (?x = ?y) = False
+total candidates: 14
+--------------------------------------------------
+Relevant unfolding lemmas present? ((=))
+--------------------------------------------------
+set_eq_iff: True
+set_eq_subset: True
+--------------------------------------------------
+Type-irrelevant candidates leaked into the list ((=))
+--------------------------------------------------
+leaked irrelevant count: 0

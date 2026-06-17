@@ -126,7 +126,7 @@ val SIMPLIFY_GOAL_AND_PREMISES : thm list -> simproc list -> bool -> string list
 val SIMPLIFY_GOAL_AND_PREMISES'' : fact list -> bool -> string list -> bool -> operation
 val SIMPLIFY_CMD : command
 
-val potential_defs_of_const : Proof.context -> string -> (string * thm) list
+val potential_defs_of_const : Proof.context -> string -> term list -> (string * thm) list
 
 val UNFOLD : thm list -> operation
 val UNFOLD_CMD : command
@@ -1671,7 +1671,14 @@ val APPLY_CMD = (Method.parse -- Scan.optional WITH_CLAUSE [])
 
 (* Retrieve all potential definitions of a constant by trying multiple naming suffixes
    and searching for definitional equations with all possible arities *)
-fun potential_defs_of_const ctxt const_name =
+(* Definitional-equation unfoldings of `const_name` that are applicable to the
+   current proof goal. `goal_terms` are the terms of the leading goal (its
+   conclusion plus in-scope hypotheses); a candidate is kept only when its LHS
+   actually matches some subterm of the goal — this both filters out type-
+   irrelevant overloaded instances (e.g. `(\<le>)` on nat/bool when the goal is
+   about sets) and discards special-form rewrites that cannot fire here. Results
+   are ranked type-specific-and-unconditional first, and capped. *)
+fun potential_defs_of_const ctxt const_name goal_terms =
   let
     val thy = Proof_Context.theory_of ctxt
     val base_name = Long_Name.base_name const_name
@@ -1757,13 +1764,16 @@ fun potential_defs_of_const ctxt const_name =
                 HOLogic.mk_eq (lhs, rhs)
               end
 
-            (* Search for each arity 0 to max_arity *)
+            (* Search for each arity 0 to max_arity. No result limit: the
+               goal-match filter below narrows the (over-general, all-types)
+               matches down, so truncating here would starve the relevant
+               instances. *)
             fun search_with_arity n =
               let
                 val pattern = make_pattern n
                 val criterion = [(true, Find_Theorems.Pattern pattern)]
                 val (_, results) =
-                  Find_Theorems.find_theorems ctxt NONE NONE true criterion
+                  Find_Theorems.find_theorems ctxt NONE (SOME 1000000000) true criterion
               in
                 map (fn (thm_name, thm) => (Thm_Name.print thm_name, thm)) results
               end
@@ -1775,8 +1785,70 @@ fun potential_defs_of_const ctxt const_name =
 
     val all_defs = filter (fn (_, thm) => is_definitional_eq thm) (named_defs @ search_results)
     val normalized_defs = map (fn (name, thm) => (name, normalize_thm thm)) all_defs
+    val deduped = distinct (Thm.eq_thm_prop o apply2 snd) normalized_defs
+
+    (* LHS of the (normalized) definitional equation *)
+    fun lhs_of thm =
+      let
+        fun go (Const (@{const_name HOL.eq}, _) $ l $ _) = SOME l
+          | go (Const (@{const_name Pure.eq}, _) $ l $ _) = SOME l
+          | go (@{const Trueprop} $ t) = go t
+          | go _ = NONE
+      in go (Thm.concl_of thm) end
+
+    (* Keep a candidate only when its LHS matches a subterm of the goal. A
+       candidate's LHS is always headed by `const_name`, and Pattern matching
+       requires the rigid heads to align, so only goal subterms headed by
+       `const_name` can ever match — collect just those. *)
+    fun add_const_subterms t acc =
+      let
+        val acc1 =
+          case t of
+            u $ v => add_const_subterms u (add_const_subterms v acc)
+          | Abs (_, _, b) => add_const_subterms b acc
+          | _ => acc
+      in
+        case Term.head_of t of
+          Const (n, _) => if n = const_name then t :: acc1 else acc1
+        | _ => acc1
+      end
+    val goal_occs = fold add_const_subterms goal_terms []
+    fun lhs_matches_goal lhs = exists (fn s => Pattern.matches thy (lhs, s)) goal_occs
+
+    (* Rank key (lower = earlier):
+         (a) type-specific unfoldings first — the rule's first argument type
+             shares its outermost type constructor with a goal occurrence's
+             (e.g. both `_ set`), ahead of generic order/lattice rules whose
+             argument is a bare type variable;
+         (b) within that, unconditional rules ahead of conditional rewrites,
+             which are weak as unfold rules. *)
+    fun head_constr (Type (c, _)) = SOME c
+      | head_constr _ = NONE
+    fun arg_constr T = case Term.binder_types T of (a :: _) => head_constr a | _ => NONE
+    val goal_arg_constrs =
+      distinct (op =) (maps (fn t => fold_aterms
+          (fn Const (n, T) => (fn a => if n = const_name then insert (op =) (arg_constr T) a else a)
+            | _ => I) t [])
+        goal_terms)
+    fun rank_key (thm, lhs) =
+      let
+        val c = arg_constr (Term.fastype_of (Term.head_of lhs))
+        val specific = if is_some c andalso member (op =) goal_arg_constrs c then 0 else 1
+        val conditional = if Thm.nprems_of thm > 0 then 1 else 0
+      in (specific, conditional) end
+
+    val max_candidates = 100
   in
-    distinct (Thm.eq_thm_prop o apply2 snd) normalized_defs
+    if null goal_terms then deduped
+    else
+      deduped
+      |> map_filter (fn (name, thm) =>
+           case lhs_of thm of
+             SOME lhs => if lhs_matches_goal lhs then SOME (rank_key (thm, lhs), (name, thm)) else NONE
+           | NONE => NONE)
+      |> sort (prod_ord int_ord int_ord o apply2 fst)
+      |> map snd
+      |> (fn xs => if length xs > max_candidates then take max_candidates xs else xs)
   end
 
 fun UNFOLD' prep_thms raw_defs (ctxt, HHF (st, items) :: S) =

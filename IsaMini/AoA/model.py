@@ -4010,9 +4010,13 @@ class Node(ABC):
         self.warnings.append(Warning(position, printer))
     def _on_reset(self) -> None:
         # End-of-response render cleanup: clear both the per-render `changed`
-        # highlight and the node's deferred render warnings. Their visibility is
-        # already co-gated (`does_quickview_need_detail` = `changed or status !=
-        # SUCCESS`), so they share one "show once, then clear" lifecycle.
+        # highlight and the node's deferred render warnings. For most nodes
+        # warning visibility is co-gated with `changed` via
+        # `does_quickview_need_detail` (`changed or status != SUCCESS`); note
+        # `Rewrite` overrides that predicate to also surface warnings on a fresh
+        # SUCCESS node, but the "show once, then clear" lifecycle still holds —
+        # `Rewrite._refresh_me_alone` re-derives its HEADER warnings each refresh
+        # and this reset clears them at end-of-response.
         self.warnings.clear()
         self.changed = False
     def reset(self) -> None:
@@ -7578,6 +7582,13 @@ class Rewrite(Leaf):
             targets.append("goal")
         targets.extend(self.rewrite_premises)
         return f"Rewrite {', '.join(targets)}"
+    def does_quickview_need_detail(self) -> bool:
+        # A fresh SUCCESS leaf is neither `changed` nor non-continuable, so the
+        # base predicate suppresses warnings in the outline (quickview) — the
+        # blind spot that hid the no-op notice (and would hide the fallback /
+        # once-simproc / stale-target notices on first fill too). A Rewrite that
+        # has something to say must always surface it.
+        return super().does_quickview_need_detail() or bool(self.warnings)
     def quickview(self, indent: int, file: MyIO) -> int:
         indent = super().quickview(indent, file)
         if self.bindings is not None and self.bindings != self._prev_bindings:
@@ -7730,6 +7741,15 @@ class Rewrite(Leaf):
                     self.fact_targets = fact_targets
         elif self.ml_state.initialized():
             self.using = await self.ml_state.refresh_facts(self.using)
+        # Idempotency: the HEADER notices below (no-op / system-simp fallback /
+        # once-simproc / stale-target / missing-binding) are re-derived from
+        # scratch on every refresh, but a node is re-refreshed several times per
+        # edit (upstream-change cascades) while warnings are cleared only at
+        # end-of-edit (`root.reset`). Drop stale HEADER notices now so a
+        # re-refresh cannot accumulate duplicates. Keep FOOTER warnings
+        # (unfound/unprovable facts): they are appended only on the first
+        # refresh (the `using is None` branch above) and would otherwise be lost.
+        self.warnings = [w for w in self.warnings if w.position is Warning.Position.FOOTER]
         old_bindings = self.bindings
         # Execute the operation via parent Leaf implementation
         await super()._refresh_me_alone(auto_intro)
@@ -7808,6 +7828,24 @@ class Rewrite(Leaf):
                 names = ", ".join(msg.discarded_names)
                 self.warnings.append(Warning(Warning.Position.HEADER,
                     f"Rewrite targets no longer exist in the current goal. Discarded rules: {names}."))
+
+            # No-op notice: the operation committed (CHANGED_PROP is satisfied
+            # whenever the *whole* proof state changes — and with system
+            # simplifiers on the full simpset usually normalizes something, so
+            # "no progress" is NOT raised) yet the agent's rules touched neither
+            # the goal conclusion nor the targeted premises. Without this notice
+            # the step renders as just its title and the agent gets no signal.
+            # Suppress when stale-target discarding already explained the no-op.
+            result_goal = self.resulting_state().leading_goal
+            prev_goal = self.ml_state.leading_goal
+            goal_unchanged = (result_goal is not None and prev_goal is not None
+                              and result_goal.conclusion == prev_goal.conclusion)
+            no_new_bindings = self.bindings is None or not (self.bindings[0] or self.bindings[1])
+            if goal_unchanged and no_new_bindings and not stale_msgs:
+                self.warnings.append(Warning(Warning.Position.HEADER,
+                    "The rewrite changed nothing — none of the provided rules matched the "
+                    "goal or the targeted premises. Check the rule's orientation and "
+                    "instantiation; if you meant to flip an (in)equality, `flip: true` may help."))
 
         if not is_init:
             if self.bindings != old_bindings:
@@ -10448,18 +10486,58 @@ class Session:
         return self.root.ml_state
 
     def resolve_context_at(self, step_id: str) -> Minilang_State:
-        """Resolve an agent-supplied step id to the proof state at that node.
-        Leaf → resulting_state; StdBlock → state after the beginning op.
-        Raises ValueError on bad id or unevaluated node."""
+        """Resolve an agent-supplied step id to the proof state at that step,
+        for use as the `query` tool's retrieval context.
+
+        The id may name an existing node OR an unfilled proof slot (the same
+        address space `fill`/`subagent` accept), so the agent can take the
+        context at the very slot it is about to fill:
+
+        - **open slot** `P.k` (no node yet): the state in effect at that slot,
+          i.e. `P`'s state after all current children — `P._resulting_state_of_all_children()`
+          (== the previous sibling's `resulting_state()`).
+        - **existing node, evaluated successfully**: StdBlock → state after its
+          beginning op; Leaf/other → its `resulting_state()`.
+        - **existing node, failed/cancelled** (e.g. a trailing failed `Obvious`
+          the agent means to replace): its `ml_state` — the state in effect just
+          before it ran (the position the agent would re-fill).
+
+        A position may, however, sit in a CANCELLED or head-FAILED region whose
+        server-side proof state has been reset (`StdBlock._cancel` /
+        `Node._cancel` reset the relevant `Minilang_State`) or was never
+        initialized (a block whose beginning op failed). Such a state has no live
+        server-side name, so feeding it to retrieval would surface an opaque
+        `beginning_state_not_found` from ML. We detect it with `.initialized()`
+        and raise a clear ValueError instead — no silent substitution.
+
+        Raises ValueError on a genuinely nonexistent id, or when the resolved
+        position has no usable (initialized) proof state."""
         abs_id = self._resolve_display_id(step_id)
         try:
-            node = self.root.locate_node(abs_id)
+            resolved = self.root.locate_node_or_slot(abs_id)
         except NodeNotFound:
             raise ValueError(f"Step {step_id} not found.")
+        dead_region_msg = (
+            f"Step {step_id} lies in a cancelled or failed region of the proof "
+            "and has no usable proof state; cannot use it as query context.")
+        if isinstance(resolved, Resolved_Slot):
+            # A slot only ever belongs to a block (NonLeaf_Node) — Leaf nodes
+            # expose no slot (`Node._id_of_openning_prf_to_fill` → None).
+            assert isinstance(resolved.parent, NonLeaf_Node)
+            st = resolved.parent._resulting_state_of_all_children()
+            if not st.initialized():
+                raise ValueError(dead_region_msg)
+            return st
+        node = resolved.node
         if not _status_can_continue(node.status.status):
-            raise ValueError(
-                f"Step {step_id} has not been evaluated successfully; "
-                "cannot use it as query context.")
+            # Failed/cancelled node (e.g. a to-be-replaced trailing Obvious):
+            # use its before-state — the context at the slot it occupies — but
+            # only when that state is still live (the first failure after a run
+            # of successes); a node in a deeper cancelled region had its
+            # before-state reset and is rejected above.
+            if not node.ml_state.initialized():
+                raise ValueError(dead_region_msg)
+            return node.ml_state
         if isinstance(node, StdBlock):
             return node._state_after_beginning()
         return node.resulting_state()

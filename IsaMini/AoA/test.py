@@ -3381,6 +3381,79 @@ async def _test_ForeNodeFail(root: Root, file: MyIO):
     root.print(0, file)
 
 
+@model_test("ResolveContextAt", "Test_ResolveContextAt.thy", 12)
+async def _test_resolve_context_at(root: Root, file: MyIO):
+    """`Session.resolve_context_at` backs the `query` tool's `context_at`. It must:
+      - resolve an unfilled OPEN SLOT to the state in effect there — the original
+        motivating bug, where `context_at` named the very slot being filled and
+        the old code raised "Step 1 not found";
+      - resolve a FAILED node to its still-live before-state (the first failure
+        after a run of successes — the step the agent means to replace);
+      - reject a position sitting in a CANCELLED / head-FAILED region (its proof
+        state was reset by `_cancel`, or never initialized) with a clear
+        ValueError, instead of feeding a dead server-side name into retrieval and
+        surfacing an opaque ML `beginning_state_not_found`.
+    Deadness is position-dependent (see the debate-verified BLOCKERs): the first
+    cancelled sibling keeps a live before-state while later ones do not."""
+    session = root.session
+
+    def probe(sid: str) -> None:
+        try:
+            st = session.resolve_context_at(sid)
+            g = st.leading_goal
+            concl = g.conclusion.unicode if g is not None else "<no leading goal>"
+            file.write(f"context_at({sid!r}): initialized={st.initialized()} goal={concl}\n")
+        except ValueError as e:
+            file.write(f"context_at({sid!r}): ValueError: {e}\n")
+
+    # --- A. Live open slot (the original bug): fresh tree, slot "1" has no node
+    #        yet; resolve_context_at must return the initial goal state. ---
+    print_header("A. Live open slot (fresh tree)", file)
+    probe("1")
+
+    # Build a tree with a failure in the middle so later siblings are cancelled:
+    #   1 : Have (valid)   -> SUCCESS (opening block, body left open)
+    #   2 : Have "1 1 1"   -> FAILURE (ill-typed beginning op)
+    #   3 : Have (valid)   -> CANCELLED (block; stays opening() so it has a slot)
+    #   4 : Obvious        -> CANCELLED (leaf)
+    session.age += 1
+    await root.fill("1", [Have.gen_single({
+        "thought": "ok", "statement": {"english": "x equals y", "conclusion": "x = y"},
+        "name": "lem1"})])
+    await root.fill("2", [Have.gen_single({
+        "thought": "intentionally ill-typed", "statement": {"english": "bad", "conclusion": "1 1 1"},
+        "name": "bad"})])
+    await root.fill("3", [Have.gen_single({
+        "thought": "cancelled block", "statement": {"english": "x equals z", "conclusion": "x = z"},
+        "name": "lem3"})])
+    await root.fill("4", [Obvious.gen_single({"facts": []})])
+    print_header("Tree built: 1 ok, 2 FAILURE, 3 & 4 cancelled", file)
+    root.print(0, file)
+
+    # --- B. Failed node, still-live before-state: node "2" failed, but its
+    #        before-state (= node "1"'s resulting state, a SUCCESS) is live. ---
+    print_header("B. Failed node with live before-state", file)
+    probe("2")
+
+    # --- C. Dead open slot: node "3" is a CANCELLED block, still opening(), so
+    #        its slot "3.1" resolves; its `_state_before_ending_` was reset by
+    #        `_cancel` -> dead -> clear ValueError. ---
+    print_header("C. Dead slot (cancelled block's open slot)", file)
+    probe("3.1")
+
+    # --- D. Position-dependent deadness among cancelled siblings: "3" (node)
+    #        may survive (its before-state = node 2's resulting, not reset),
+    #        while "4" (node) is dead (its before-state = node 3's resulting,
+    #        reset by node 3's `_cancel`). ---
+    print_header("D. Cancelled siblings: node 3 vs node 4", file)
+    probe("3")
+    probe("4")
+
+    # --- E. A genuinely nonexistent id still errors clearly. ---
+    print_header("E. Nonexistent id", file)
+    probe("9")
+
+
 @model_test("ProveInTime_ParseError", "Test_ProveInTime_ParseError.thy", 8)
 async def _test_prove_in_time_parse_error(root: Root, file: MyIO):
     """Reproduce: Obvious with an IsabelleFact_ProveInTime containing invalid
@@ -6961,6 +7034,70 @@ async def _test_NamedFactResolution(root: Root, file: MyIO):
     print_header("Done", file)
 
 
+@model_test("UnfoldDefTypeFilter", "Test_UnfoldDefTypeFilter.thy", 7)
+async def _test_UnfoldDefTypeFilter(root: Root, file: MyIO):
+    r"""Unfold candidate filtering must respect the goal's types.
+
+    `Minilang.potential_defs_of_const` (library/proof.ML) gathers the
+    definitional-equation unfoldings of a constant. The head constant of `(⊆)`
+    is the overloaded `less_eq` (= `(≤)`), so a naive Find_Theorems search at the
+    constant's most-general type `?'a ⇒ ?'a ⇒ bool` matches `(≤)` at EVERY type
+    instance (nat / int / bool / unit / lattice values / …) and, capped at the
+    default result limit, buries the genuinely relevant SET unfoldings. In the
+    field log this surfaced as a `ChooseDef` menu for `(⊆)` full of
+    `nat`/`bool`/`int` junk with `subset_eq` missing entirely.
+
+    The fix (this test guards it): search ALL matches, then keep only those whose
+    LHS actually matches a subterm of the proof goal, ranked type-specific-and-
+    unconditional first. The fixture goal is `A ⊆ B ⟹ A ∪ B = B`, exercising both
+    `(⊆)` (premise) and a set `(=)` (conclusion).
+
+    Expected after the fix:
+    - `(⊆)`: `subset_eq` / `subset_iff` / `less_eq_set_def` are present (and the
+      general-form set unfoldings lead the list); none of the type-irrelevant
+      `(≤)`-on-nat/bool/int/unit instances appear.
+    - `(=)`: `set_eq_iff` (the canonical set-equality unfolding) is present and
+      leads; only equalities whose LHS matches the goal's `A ∪ B = B` are offered.
+    """
+    ml_state = root.ml_state
+
+    # Type-irrelevant `(≤)` instances that must NEVER appear for a set goal.
+    LE_JUNK = ("nat_leq_as_int", "le_bool_def", "le_0_eq", "less_eq_unit_def",
+               "extremum_unique", "int_one_le_iff_zero_less", "le_zero_eq",
+               "top_unique", "bot_unique")
+
+    def report(target: str, defs, relevant: list[str], junk) -> None:
+        print_header(f"Candidates offered for Unfold {target}", file)
+        for d in defs:
+            file.write(f"{d.full_name}: "
+                       f"{', '.join(e.unicode for e in d.expression)}\n")
+        file.write(f"total candidates: {len(defs)}\n")
+        short_names = {d.short_name.unicode for d in defs}
+        print_header(f"Relevant unfolding lemmas present? ({target})", file)
+        for lem in relevant:
+            file.write(f"{lem}: {lem in short_names}\n")
+        print_header(f"Type-irrelevant candidates leaked into the list ({target})", file)
+        leaked = sorted(d.full_name for d in defs if junk(d.short_name.unicode))
+        for n in leaked:
+            file.write(f"- {n}\n")
+        file.write(f"leaked irrelevant count: {len(leaked)}\n")
+
+    # --- (⊆): head constant `less_eq`, occurs at set type in the goal premise ---
+    sub_defs = await ml_state.potential_defs_of([IsaTerm.from_agent("(⊆)")])
+    report("(⊆)", sub_defs,
+           relevant=["subset_eq", "subset_iff", "less_eq_set_def"],
+           junk=lambda s: (s in LE_JUNK
+                           or "less_eq_finite" in s
+                           or "less_eq_integer_code" in s
+                           or "less_eq_int_code" in s))
+
+    # --- (=): head constant `HOL.eq`; the goal conclusion is a set equality ---
+    eq_defs = await ml_state.potential_defs_of([IsaTerm.from_agent("(=)")])
+    report("(=)", eq_defs,
+           relevant=["set_eq_iff", "set_eq_subset"],
+           junk=lambda s: s in LE_JUNK)
+
+
 @model_test("UnfoldSyntax", "Test_UnfoldSyntax.thy", 40)
 async def _test_unfold_syntax(root: Root, file: MyIO):
     """Test the unfold_syntax callback.
@@ -10438,6 +10575,149 @@ async def _test_RewriteFlipForall(root: Root, file: MyIO):
     root.print(0, file)
 
 
+@model_test("RewriteNeqFlipNoOp", "Test_RewriteNeqFlipNoOp.thy", 10)
+async def _test_RewriteNeqFlipNoOp(root: Root, file: MyIO):
+    """Reproduces the 'Rewrite shows nothing' incident.
+
+    The agent wanted to flip a premise `ln2_ne_0 : ln 2 ≠ 0` into `0 ≠ ln 2`
+    using `neq_commute` but instantiated it BACKWARDS — `?a = 0, ?b = ln 2`,
+    giving the rule `(0 ≠ ln 2) = (ln 2 ≠ 0)`, whose LHS `0 ≠ ln 2` does NOT
+    occur in the premise `ln 2 ≠ 0`.  (Flipping `ln 2 ≠ 0` needs `?a = ln 2,
+    ?b = 0`, or simply `flip: True`.)  So the rule rewrites nothing.
+
+    With `use system simplifiers = True` the operation nevertheless COMMITS
+    (no "The simplification made no progress." error — contrast
+    `Rewrite_NoProgress`, which has system simplifiers OFF), yet the targeted
+    premise and the goal conclusion are both unchanged.  Rewrite.quickview only
+    prints a binding block when the bindings change and a "goal changes into"
+    block when the goal CONCLUSION changes — both empty here.
+
+    Regression guard for the fix: Rewrite._refresh_me_alone now detects this
+    (goal conclusion unchanged AND no resulting bindings) and appends a HEADER
+    notice + marks the node `changed`, so the outline (quickview) surfaces the
+    "The rewrite changed nothing …" notice instead of rendering just the title.
+    This test dumps the outcome, the committed node's warnings, the rendered
+    outline, and the full print (with warnings) to pin the notice down."""
+    print_header("Initial", file)
+    root.print(0, file)
+    root.session.age += 1
+    outcome = await root.fill("1", [Rewrite.gen_single({
+        "thought": "Flip inequality using neq_commute",
+        "using": [{
+            "name": "neq_commute",
+            "instantiations": [
+                {"name": "?a", "value": "(0::real)"},
+                {"name": "?b", "value": "ln (2::real)"},
+            ],
+            "discharge": [],
+            "flip": False,
+        }],
+        "use system simplifiers": True,
+        "rewrite goal": False,
+        "rewrite premises": ["ln2_ne_0"],
+    })])
+    print_header("Outcome", file)
+    file.write(f"failure: {outcome.failure}\n")
+    file.write(f"committed: {[n.id for n in outcome.committed]}\n")
+    node = outcome.committed[0]
+    file.write(f"node warnings: {[str(w.printer) for w in node.warnings]}\n")
+    print_header("Quickview outline (what the agent is shown)", file)
+    root.session.quickview_proof_scope(1, file)
+    print_header("Full print (with warnings)", file)
+    root.print(0, file, show_warnings=True)
+
+
+@model_test("RewriteNeqFlipNoOp2", "Test_RewriteNeqFlipNoOp2.thy", 10)
+async def _test_RewriteNeqFlipNoOp2(root: Root, file: MyIO):
+    """Probe variant of RewriteNeqFlipNoOp where the goal (0 ≤ ln 2 * ln 2)
+    DIFFERS from the targeted premise (ln 2 ≠ 0) — to confirm the silent no-op
+    (and the no-change notice) is not an artifact of goal==premise. Same
+    backwards neq_commute + system simplifiers ON."""
+    print_header("Initial", file)
+    root.print(0, file)
+    root.session.age += 1
+    outcome = await root.fill("1", [Rewrite.gen_single({
+        "thought": "Flip inequality using neq_commute",
+        "using": [{
+            "name": "neq_commute",
+            "instantiations": [
+                {"name": "?a", "value": "(0::real)"},
+                {"name": "?b", "value": "ln (2::real)"},
+            ],
+            "discharge": [],
+            "flip": False,
+        }],
+        "use system simplifiers": True,
+        "rewrite goal": False,
+        "rewrite premises": ["ln2_ne_0"],
+    })])
+    print_header("Outcome", file)
+    file.write(f"failure: {outcome.failure}\n")
+    file.write(f"committed: {[n.id for n in outcome.committed]}\n")
+    node = outcome.committed[0]
+    file.write(f"node warnings: {[str(w.printer) for w in node.warnings]}\n")
+    print_header("Quickview outline (what the agent is shown)", file)
+    root.session.quickview_proof_scope(1, file)
+
+
+def _noop_notice_count(node) -> int:
+    """How many copies of the no-op notice are attached to a Rewrite node."""
+    return sum(1 for w in node.warnings
+               if isinstance(w.printer, str) and "The rewrite changed nothing" in w.printer)
+
+
+@model_test("RewriteNeqFlipNoOpDup", "Test_RewriteNeqFlipNoOpDup.thy", 10)
+async def _test_RewriteNeqFlipNoOpDup(root: Root, file: MyIO):
+    """Regression for warning NON-IDEMPOTENCY exposed by surfacing the no-op
+    notice in the outline.
+
+    A no-op Rewrite is at step 2 (after a declarative Have at step 1). Amending
+    step 1 cascades a re-refresh onto step 2, re-running its
+    `_refresh_me_alone`. Because warnings are only cleared at end-of-edit
+    (`root.reset`), a method that merely `append`s its notice would accumulate a
+    DUPLICATE on the re-refresh — rendered as a repeated bullet under one
+    `notice:`. The fix clears HEADER warnings on refresh entry (keeping FOOTER),
+    so the count stays 1 across re-refreshes. This dumps the notice count before
+    and after the amend, plus the final outline."""
+    # Step 1: a trivial declarative Have (leaves the main goal open at step 2).
+    await root.fill("1", [Have.gen_single({
+        "thought": "trivial helper",
+        "statement": {"english": "ln 2 squared is non-negative",
+                      "conclusion": r"(0::real) \<le> ln 2 * ln 2"},
+        "name": "lem1"})])
+    root.session.age += 1
+    # Step 2: the no-op Rewrite (backwards neq_commute on premise ln2_ne_0).
+    outcome = await root.fill("2", [Rewrite.gen_single({
+        "thought": "Flip inequality using neq_commute",
+        "using": [{
+            "name": "neq_commute",
+            "instantiations": [
+                {"name": "?a", "value": "(0::real)"},
+                {"name": "?b", "value": "ln (2::real)"},
+            ],
+            "discharge": [],
+            "flip": False,
+        }],
+        "use system simplifiers": True,
+        "rewrite goal": False,
+        "rewrite premises": ["ln2_ne_0"],
+    })])
+    rewrite_node = outcome.committed[0]
+    print_header("After first fill (step 2)", file)
+    file.write(f"no-op notice count: {_noop_notice_count(rewrite_node)}\n")
+    # Amend step 1 → cascades a re-refresh onto step 2.
+    root.session.age += 1
+    await root.amend("1", [Have.gen_single({
+        "thought": "trivial helper (amended)",
+        "statement": {"english": "ln 2 squared is non-negative",
+                      "conclusion": r"(0::real) \<le> ln 2 * ln 2 + 0"},
+        "name": "lem1"})])
+    print_header("After amending step 1 (cascade re-refresh of step 2)", file)
+    file.write(f"no-op notice count: {_noop_notice_count(rewrite_node)}\n")
+    print_header("Quickview outline (what the agent is shown)", file)
+    root.session.quickview_proof_scope(1, file)
+
+
 @model_test("QuickviewCollapse", "Test_QuickviewCollapse.thy", 8)
 async def _test_QuickviewCollapse(root: Root, file: MyIO):
     """When 5+ consecutive sibling steps are done and unchanged,
@@ -13493,6 +13773,91 @@ async def _test_SubtreeStats(root: Root, file: MyIO):
     await root.uncomment(["1"])
     stats_line("uncommented Have (1)", "1")
     stats_line("root after uncomment", None)
+
+
+@model_test("QueryWholeFileDump", "Test_QueryWholeFileDump.thy", 8)
+async def _test_query_whole_file_dump(root: Root, file: MyIO):
+    """DIAGNOSTIC: reproduce the whole-theory source dump bug.
+
+    When `query` renders a retrieved *theorem*, it fetches the declaring
+    command source (`_get_def_for_fetched` -> `_get_definition_with_pos` ->
+    pide_state.command_at_position) and prints it only when it is NOT a proof
+    command (the `_PROOF_COMMAND_RE` guard).  For `prime_power_exp_nat` (an
+    ordinary `lemma` in HOL.Primes, precompiled, so resolved via the DB-snapshot
+    fallback) the backend returned the ENTIRE Primes.thy file as the "command
+    source", which starts with the `(* Title ... *)` header comment, slips past
+    the proof-command guard, and got dumped verbatim into the agent's view.
+    """
+    import re as _re, os as _os, glob as _glob
+    from Isabelle_RPC_Host.position import get_file_index, IsabellePosition
+    from Isabelle_Semantic_Embedding.hover import command_at_position
+
+    ml = root.session.retrieval_state()
+    conn = ml.connection
+
+    # HUNT the root cause: scan precompiled theories via the DB-snapshot path
+    # (command_at_position on a file NOT in the live document → DB fallback).
+    # Primary suspects = FLAT-IMPORTED AFP theories (the a42f03c surface, whose
+    # snapshots only started resolving on 2026-06-16); Primes is a HOL control.
+    afp = "/home/qiyuan/Current/MLML/contrib/afp-2026-05-13/thys"
+    hl = _os.path.join(afp, "Hermite_Lindemann")
+    targets = sorted(_glob.glob(_os.path.join(hl, "*.thy")))
+    targets.append("/home/qiyuan/Current/MLML/contrib/Isabelle2025-2/"
+                   "src/HOL/Computational_Algebra/Primes.thy")  # control
+
+    decl_re = _re.compile(
+        r"^\s*(?:lemma|theorem|corollary|proposition)\s+([A-Za-z][A-Za-z0-9_'.]*)\s*[:\[]")
+    out_path = "/tmp/aoa_probe.txt"
+    total_scanned = 0
+    total_dumps = []
+    with open(out_path, "w") as pf:
+        for path in targets:
+            try:
+                idx = get_file_index(path)
+                with open(path, "r", encoding="utf-8") as _f:
+                    src_lines = _f.read().split("\n")
+            except Exception as e:
+                pf.write(f"## {path}: SKIP ({e})\n")
+                continue
+            decls = [(i, m.group(1)) for i, ln in enumerate(src_lines, 1)
+                     if (m := decl_re.match(ln))]
+            scanned = 0
+            dumps = []
+            none_cnt = 0
+            for line_no, name in decls:
+                offs = idx.symbol_offsets(line_no, name)
+                if not offs:
+                    continue
+                pos = IsabellePosition(line_no, offs[0], path)
+                scanned += 1
+                cmd = await command_at_position(pos, conn)
+                if cmd is None:
+                    none_cnt += 1
+                    continue
+                source, start, end = cmd
+                n_lines = source.count("\n") + 1
+                first = source.split(chr(10), 1)[0][:90]
+                # whole-file tell: starts with header comment / `theory ` / very long
+                whole = (source.lstrip().startswith("(*")
+                         or _re.match(r"\s*theory\s", source)
+                         or n_lines > 60)
+                if whole:
+                    dumps.append((name, line_no, n_lines, len(source),
+                                  start, end, first))
+            base = _os.path.basename(path)
+            pf.write(f"## {base}: {len(decls)} decls, scanned {scanned}, "
+                     f"None {none_cnt}, DUMPS {len(dumps)}\n")
+            for name, ln, nl, slen, st, en, fl in dumps[:40]:
+                pf.write(f"   DUMP {name} @L{ln}: {nl} lines, srclen={slen}, "
+                         f"span=({st},{en}), first={fl!r}\n")
+            total_scanned += scanned
+            total_dumps += [(base,) + d for d in dumps]
+        pf.write(f"\nTOTAL scanned {total_scanned}, TOTAL dumps {len(total_dumps)}\n")
+
+    file.write(f"scanned {total_scanned} decls across "
+               f"{len(targets)} theories, {len(total_dumps)} whole-file dumps "
+               f"(details in {out_path})\n")
+    print_header("Probe done", file)
 
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
