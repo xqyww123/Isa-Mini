@@ -1,5 +1,6 @@
 from typing import Any
 import asyncio
+import contextlib
 import contextvars
 import glob
 import json
@@ -30,11 +31,11 @@ class Codex_Driver(LMDriver):
 
     def __init__(self, *args, parent: 'Codex_Driver | None' = None,
                  model: str | None = None, argument: str | None = None, **kwargs):
-        if argument is not None:
-            raise DriverArgumentError(
-                f"Driver 'Codex' does not accept arguments, but got '{argument}'")
         super().__init__(*args, parent=parent, **kwargs)
-        self._model = model or self.DEFAULT_MODEL
+        if parent is not None:
+            self._model = model or parent._model
+        else:
+            self._model = model or argument or self.DEFAULT_MODEL
         if parent is not None:
             self.working_dir = parent.working_dir
             self.YAML_path = parent.YAML_path
@@ -63,8 +64,13 @@ class Codex_Driver(LMDriver):
         self._fork_counter = 0
         self._exec_process: asyncio.subprocess.Process | None = None
 
+    def __str__(self) -> str:
+        if self._model == self.DEFAULT_MODEL:
+            return self._driver_name
+        return f"{self._driver_name}({self._model})"
+
     @classmethod
-    def _make_fork(cls, parent: 'Codex_Driver', role=None) -> 'Codex_Driver':
+    def _make_fork(cls, parent: 'LMDriver', role=None) -> 'Codex_Driver':
         from .model import _session_var
         try:
             current = _session_var.get()
@@ -74,6 +80,8 @@ class Codex_Driver(LMDriver):
             raise InternalError(
                 "_make_fork must be called in a fresh context "
                 "(use loop.create_task with context=contextvars.copy_context())")
+        if not isinstance(parent, Codex_Driver):
+            raise InternalError("Codex_Driver._make_fork got non-Codex parent")
         return cls(parent=parent, role=role)
 
     def system_prompt(self) -> str | None:
@@ -104,12 +112,18 @@ class Codex_Driver(LMDriver):
         config_dir = os.path.join(self.working_dir, ".codex")
         os.makedirs(config_dir, exist_ok=True)
         with open(os.path.join(config_dir, "config.toml"), "w") as f:
-            f.write(f'[mcp_servers.proof]\nurl = "{self._mcp_url}"\n')
+            f.write(f'[mcp_servers.proof]\nurl = {json.dumps(self._mcp_url)}\n')
 
     def _init_git_repo(self):
         subprocess.run(
             ["git", "init"], cwd=self.working_dir,
             capture_output=True, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "aoa-codex@example.invalid"],
+            cwd=self.working_dir, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "config", "user.name", "AoA Codex Driver"],
+            cwd=self.working_dir, capture_output=True, check=True)
         subprocess.run(
             ["git", "add", "."], cwd=self.working_dir,
             capture_output=True, check=True)
@@ -245,40 +259,82 @@ class Codex_Driver(LMDriver):
         self._compute_cost()
         self.log_proof()
 
-    def _build_exec_cmd(self, prompt: str) -> list[str]:
+    def _codex_common_args(self, mcp_url: str | None = None) -> list[str]:
+        url = mcp_url or self._mcp_url
+        if url is None:
+            raise InternalError("Codex MCP URL is not initialized")
         return [
-            "codex", "exec", prompt,
             "--json",
             "--dangerously-bypass-approvals-and-sandbox",
             "-m", self._model,
-            "-C", self.working_dir,
+            "-c", f"mcp_servers.proof.url={json.dumps(url)}",
         ]
 
-    def _build_resume_cmd(self, session_id: str, prompt: str) -> list[str]:
+    def _build_exec_cmd(self, prompt: str) -> list[str]:
         return [
-            "codex", "exec", "resume", session_id, prompt,
-            "--json",
-            "-m", self._model,
+            "codex", "exec",
+            *self._codex_common_args(),
+            "-C", self.working_dir,
+            prompt,
+        ]
+
+    def _build_resume_cmd(self, session_id: str, prompt: str,
+                          mcp_url: str | None = None) -> list[str]:
+        return [
+            "codex", "exec", "resume",
+            *self._codex_common_args(mcp_url),
+            session_id,
+            prompt,
         ]
 
     # ------------------------------------------------------------------
     # Subprocess execution
     # ------------------------------------------------------------------
 
+    def _raise_codex_failure(self, message: str):
+        lower = message.lower()
+        if "rate limit" in lower or "429" in lower:
+            raise _TransientError(message)
+        if ("insufficient_quota" in lower or "quota" in lower
+                or "billing" in lower or "402" in lower):
+            raise _QuotaError(message)
+        if any(marker in lower for marker in (
+                "temporarily unavailable", "timeout", "timed out",
+                "connection reset", "connection refused", "network error",
+                "502", "503", "504")):
+            raise _TransientError(message)
+        raise InternalError(f"Codex CLI failed: {message}")
+
     async def _run_codex_exec(self, cmd: list[str]) -> dict:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            limit=16 * 1024 * 1024,
-        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                cwd=self.working_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                limit=16 * 1024 * 1024,
+            )
+        except FileNotFoundError as e:
+            raise InternalError("Codex CLI executable `codex` was not found") from e
         self._exec_process = proc
 
         events: dict[str, Any] = {}
+        stderr_lines: list[str] = []
+        turn_failure: str | None = None
+
+        async def drain_stderr():
+            assert proc.stderr is not None
+            async for line in proc.stderr:
+                text = line.decode("utf-8", errors="replace").rstrip()
+                if text:
+                    stderr_lines.append(text)
+                    del stderr_lines[:-50]
+
+        stderr_task = asyncio.create_task(drain_stderr())
         try:
             assert proc.stdout is not None
             async for line in proc.stdout:
-                text = line.strip()
+                text = line.decode("utf-8", errors="replace").strip()
                 if not text:
                     continue
                 try:
@@ -292,9 +348,9 @@ class Codex_Driver(LMDriver):
                         events["usage"] = obj.get("usage", {})
                         u = obj.get("usage", {})
                         self.log_cost(
-                            f"input={u.get('input_tokens',0)} "
-                            f"cached={u.get('cached_input_tokens',0)} "
-                            f"output={u.get('output_tokens',0)}")
+                            f"input={u.get('input_tokens', 0)} "
+                            f"cached={u.get('cached_input_tokens', 0)} "
+                            f"output={u.get('output_tokens', 0)}")
                     case "item.started":
                         item = obj.get("item", {})
                         if item.get("type") == "mcp_tool_call":
@@ -319,14 +375,24 @@ class Codex_Driver(LMDriver):
                             f"Codex error: {obj.get('message', '')}")
                     case "turn.failed":
                         err = obj.get("error", {}).get("message", "")
-                        if "rate limit" in err.lower() or "429" in err:
-                            raise _TransientError(err)
-                        if "insufficient_quota" in err or "402" in err:
-                            raise _QuotaError(err)
-                        self.warn_AoA_opr(f"Turn failed: {err}")
-            await proc.wait()
+                        turn_failure = err or "turn.failed"
+                        self.warn_AoA_opr(f"Turn failed: {turn_failure}")
+            returncode = await proc.wait()
+            await stderr_task
         finally:
             self._exec_process = None
+            if not stderr_task.done():
+                stderr_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await stderr_task
+
+        if turn_failure is not None:
+            self._raise_codex_failure(turn_failure)
+        if returncode != 0:
+            detail = "\n".join(stderr_lines[-20:]).strip()
+            if not detail:
+                detail = f"process exited with status {returncode}"
+            self._raise_codex_failure(detail)
 
         return events
 
@@ -397,6 +463,7 @@ class Codex_Driver(LMDriver):
         finally:
             if self._http_server is not None and fork._session_id is not None:
                 await self._http_server.unregister_session(fork._session_id)
+                fork._session_id = None
             self.total_input_tokens += fork.total_input_tokens
             self.total_output_tokens += fork.total_output_tokens
             self.total_cache_creation_input_tokens += fork.total_cache_creation_input_tokens
@@ -419,13 +486,9 @@ class Codex_Driver(LMDriver):
 
         shutil.copy2(jsonl, bak)
         try:
-            cmd = [
-                "codex", "exec", "resume",
-                self._codex_session_id, fork_prompt,
-                "--json",
-                "-m", self._model,
-                "-c", f'mcp_servers.proof.url="{fork_url}"',
-            ]
+            assert self._codex_session_id is not None
+            cmd = self._build_resume_cmd(
+                self._codex_session_id, fork_prompt, mcp_url=fork_url)
 
             fork._model_time_start = time()
             events = await fork._run_codex_exec(cmd)
@@ -440,15 +503,11 @@ class Codex_Driver(LMDriver):
                 fork.log_interaction("fork", f"{tag} retrying: answer not received")
                 shutil.copy2(bak, jsonl)
                 shutil.copy2(jsonl, bak)
-                retry_cmd = [
-                    "codex", "exec", "resume",
+                retry_cmd = self._build_resume_cmd(
                     self._codex_session_id,
                     "You haven't submitted your answer. "
                     f"Call the `{self.tool_name(fork.fork_pending.interaction.answer_tool_name)}` tool to submit it.",
-                    "--json",
-                    "-m", self._model,
-                    "-c", f'mcp_servers.proof.url="{fork_url}"',
-                ]
+                    mcp_url=fork_url)
                 await fork._run_codex_exec(retry_cmd)
         finally:
             shutil.copy2(bak, jsonl)
