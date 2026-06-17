@@ -668,31 +668,40 @@ class CannotEdit(AoA_Error):
         self.failed_opr = failed_opr
         self.failed_index = failed_index
 
-    def _reason(self) -> str:
+    def _reason(self, display_id: 'Callable[[str], str]',
+                relativize_text: 'Callable[[str], str]') -> str:
         """The specific cause of this failure, one self-contained sentence.
-        Implemented by every subclass; framed (full vs partial) by `__str__`."""
+        Implemented by every subclass; framed (full vs partial) by `render`.
+
+        Subclasses store node ids ABSOLUTE (the tree's namespace) and project
+        them to the caller's namespace here, using `display_id` for a bare id
+        field (e.g. `closed_by`) and `relativize_text` for free text that may
+        embed `step …`/`goal …` references (e.g. an evaluation failure blob).
+        Both are the identity for a non-worker session."""
         raise NotImplementedError(
             f"{type(self).__name__} must implement `_reason`")
 
-    def _action_phrase(self) -> str:
-        """Full-failure lead: the action could not be performed at all."""
+    def _action_phrase(self, shown: 'step') -> str:
+        """Full-failure lead: the action could not be performed at all. `shown`
+        is `target_step` already projected into the caller's namespace."""
         match self.operation:
             case EditOperation.FILL:
-                return (f"Cannot fill a node with id {self.target_step}"
-                        if self.target_step else "Cannot fill this step")
+                return (f"Cannot fill a node with id {shown}"
+                        if shown else "Cannot fill this step")
             case EditOperation.INSERT:
-                return (f"Cannot insert before the node {self.target_step}"
-                        if self.target_step else "Cannot insert before this step")
+                return (f"Cannot insert before the node {shown}"
+                        if shown else "Cannot insert before this step")
             case EditOperation.AMEND:
-                return (f"Cannot amend the node {self.target_step}"
-                        if self.target_step else "Cannot amend this step")
+                return (f"Cannot amend the node {shown}"
+                        if shown else "Cannot amend this step")
             case _:
                 raise InternalError(
                     f"CannotEdit._action_phrase: unknown operation {self.operation!r}")
 
-    def _partial_phrase(self) -> str:
+    def _partial_phrase(self, shown: 'step') -> str:
         """Partial-apply lead: the batch committed some ops, then stopped at
-        `failed_opr`; name it, its 1-based position, and how many ops dropped."""
+        `failed_opr`; name it, its 1-based position, and how many ops dropped.
+        `shown` is `target_step` already projected into the caller's namespace."""
         op = self.operation
         verb = self._VERB_ING.get(op, "editing") if op is not None else "editing"
         op_name = (OPERATION_REGISTRY_BY_CLS.get(
@@ -702,13 +711,28 @@ class CannotEdit(AoA_Error):
         later = len(self.unapplied_oprs) - 1
         tail = (f"; it and {later} later operation{'s' if later != 1 else ''} "
                 f"were left unapplied") if later > 0 else ""
-        return (f"While {verb} step {self.target_step}, could not apply "
+        return (f"While {verb} step {shown}, could not apply "
                 f"operation {pos}({op_name}){tail}")
 
-    def __str__(self) -> str:
+    def render(self, display_id: 'Callable[[str], str]',
+               relativize_text: 'Callable[[str], str]') -> str:
+        """Render for an agent. Every node id this message exposes is projected
+        from the absolute tree namespace into the caller's namespace via the two
+        mappers (`Session._display_id` / `Session._relativize_text`): a worker
+        sees ids relative to its scope, everyone else sees them unchanged. This
+        is the single id-translation boundary for an edit failure — the stored
+        fields stay absolute (see model.py's worker-scoped-id design note)."""
+        shown = display_id(self.target_step) if self.target_step else self.target_step
+        reason = self._reason(display_id, relativize_text)
         if self.is_error:
-            return f"{self._action_phrase()}\n{self._reason()}"
-        return f"{self._partial_phrase()}: {self._reason()}"
+            return f"{self._action_phrase(shown)}\n{reason}"
+        return f"{self._partial_phrase(shown)}: {reason}"
+
+    def __str__(self) -> str:
+        """Absolute view for logs / tracebacks (ids in the tree's namespace).
+        Agent-facing rendering goes through `render` with the session's
+        projection mappers."""
+        return self.render(lambda s: s, lambda t: t)
 
 
 class CannotEdit_BlockClosed(CannotEdit):
@@ -716,39 +740,46 @@ class CannotEdit_BlockClosed(CannotEdit):
     def __init__(self, closed_by: 'step | None', *args, **kw):
         super().__init__(*args, **kw)
         self.closed_by = closed_by
-    def _reason(self) -> str:
+    def _reason(self, display_id: 'Callable[[str], str]',
+                relativize_text: 'Callable[[str], str]') -> str:
         if self.closed_by is None:
             return "The proof block is closed."
         return (f"The proof block is closed. "
-                f"You should edit node {self.closed_by} instead.")
+                f"You should edit node {display_id(self.closed_by)} instead.")
 
 
 class CannotEdit_NodeNotFound(CannotEdit):
     """Locate failed: the target step id does not exist."""
-    def _reason(self) -> str:
+    def _reason(self, display_id: 'Callable[[str], str]',
+                relativize_text: 'Callable[[str], str]') -> str:
         return "The node is not found."
 
 
 class CannotEdit_BadNode(CannotEdit):
     """`fill` target has a SUCCESS step at or below it."""
-    def _reason(self) -> str:
+    def _reason(self, display_id: 'Callable[[str], str]',
+                relativize_text: 'Callable[[str], str]') -> str:
         return ("The target already exists. "
                 "Fill does not overwrite existing successful steps.")
 
 
 class CannotEdit_Root(CannotEdit):
     """`amend` was called on the root node."""
-    def _reason(self) -> str:
+    def _reason(self, display_id: 'Callable[[str], str]',
+                relativize_text: 'Callable[[str], str]') -> str:
         return "It is the root node."
 
 
 class CannotEdit_EvaluationFailed(CannotEdit):
-    """Set by an `_on_edit_failure` hook that terminated the edit."""
+    """Set by an `_on_edit_failure` hook that terminated the edit. `reason`
+    is stored ABSOLUTE (it may embed `step …` references from the evaluation
+    blob); it is projected into the caller's namespace at render time."""
     def __init__(self, reason: 'FailureReason', *args, **kw):
         super().__init__(*args, **kw)
         self.reason = reason
-    def _reason(self) -> str:
-        return self.reason.reason
+    def _reason(self, display_id: 'Callable[[str], str]',
+                relativize_text: 'Callable[[str], str]') -> str:
+        return relativize_text(self.reason.reason)
 
 
 class GoalIsNontrivial(CannotEdit):
@@ -758,7 +789,8 @@ class GoalIsNontrivial(CannotEdit):
     def __init__(self, parent: 'Node', **kw):
         super().__init__(target_step=parent.id, **kw)
         self.parent = parent
-    def _reason(self) -> str:
+    def _reason(self, display_id: 'Callable[[str], str]',
+                relativize_text: 'Callable[[str], str]') -> str:
         return self._message
 
 
@@ -768,7 +800,8 @@ class ProofTreeTooDeep(CannotEdit):
         super().__init__(target_step=parent.id if parent else "")
         self.depth = depth
         self.limit = limit
-    def _reason(self) -> str:
+    def _reason(self, display_id: 'Callable[[str], str]',
+                relativize_text: 'Callable[[str], str]') -> str:
         return f"Proof tree depth {self.depth} exceeds the limit of {self.limit}."
 
 class CannotEdit_NonDeclarative(CannotEdit):
@@ -777,7 +810,8 @@ class CannotEdit_NonDeclarative(CannotEdit):
     def __init__(self, operation_name: str, target_step: str = ""):
         super().__init__(target_step=target_step)
         self.operation_name = operation_name
-    def _reason(self) -> str:
+    def _reason(self, display_id: 'Callable[[str], str]',
+                relativize_text: 'Callable[[str], str]') -> str:
         return (f"Operation {self.operation_name} is a proof operation and "
                 f"cannot be used as a global declaration. "
                 f"Use it inside a proof step instead.")
@@ -6812,9 +6846,13 @@ class Obvious(Leaf):
             # the failing node and can amend it.
             if len(outcome.request) > 1:
                 return super()._on_edit_failure(outcome)
+            # Store the blob ABSOLUTE; its `step …` refs and the carried node id
+            # are projected to the caller's namespace at render time (the single
+            # id-translation boundary, CannotEdit.render). Relativizing here too
+            # would double-project a worker's ids.
             file = MyIO(StringIO())
             if self.status.reason:
-                file.write(the_session()._relativize_text(self.status.reason.reason))
+                file.write(self.status.reason.reason)
             if self.warnings:
                 self._print_warnings(0, file, list(Warning.Position))
             outcome.failure = CannotEdit_EvaluationFailed(
@@ -6927,9 +6965,13 @@ class Chaining(Leaf):
             # the failing node and can amend it.
             if len(outcome.request) > 1:
                 return super()._on_edit_failure(outcome)
+            # Store the blob ABSOLUTE; its `step …` refs and the carried node id
+            # are projected to the caller's namespace at render time (the single
+            # id-translation boundary, CannotEdit.render). Relativizing here too
+            # would double-project a worker's ids.
             file = MyIO(StringIO())
             if self.status.reason:
-                file.write(the_session()._relativize_text(self.status.reason.reason))
+                file.write(self.status.reason.reason)
             if self.warnings:
                 self._print_warnings(0, file, list(Warning.Position))
             outcome.failure = CannotEdit_EvaluationFailed(
@@ -7309,9 +7351,13 @@ class Unfold(Leaf):
             # the failing node and can amend it.
             if len(outcome.request) > 1:
                 return super()._on_edit_failure(outcome)
+            # Store the blob ABSOLUTE; its `step …` refs and the carried node id
+            # are projected to the caller's namespace at render time (the single
+            # id-translation boundary, CannotEdit.render). Relativizing here too
+            # would double-project a worker's ids.
             file = MyIO(StringIO())
             if self.status.reason:
-                file.write(the_session()._relativize_text(self.status.reason.reason))
+                file.write(self.status.reason.reason)
             if self.warnings:
                 self._print_warnings(0, file, list(Warning.Position))
             outcome.failure = CannotEdit_EvaluationFailed(
@@ -7441,9 +7487,13 @@ class Derive(Leaf):
             # the failing node and can amend it.
             if len(outcome.request) > 1:
                 return super()._on_edit_failure(outcome)
+            # Store the blob ABSOLUTE; its `step …` refs and the carried node id
+            # are projected to the caller's namespace at render time (the single
+            # id-translation boundary, CannotEdit.render). Relativizing here too
+            # would double-project a worker's ids.
             file = MyIO(StringIO())
             if self.status.reason:
-                file.write(the_session()._relativize_text(self.status.reason.reason))
+                file.write(self.status.reason.reason)
             if self.warnings:
                 self._print_warnings(0, file, list(Warning.Position))
             outcome.failure = CannotEdit_EvaluationFailed(
@@ -7955,9 +8005,13 @@ class Rewrite(Leaf):
             # the failing node and can amend it.
             if len(outcome.request) > 1:
                 return super()._on_edit_failure(outcome)
+            # Store the blob ABSOLUTE; its `step …` refs and the carried node id
+            # are projected to the caller's namespace at render time (the single
+            # id-translation boundary, CannotEdit.render). Relativizing here too
+            # would double-project a worker's ids.
             file = MyIO(StringIO())
             if self.status.reason:
-                file.write(the_session()._relativize_text(self.status.reason.reason))
+                file.write(self.status.reason.reason)
             if self.warnings:
                 self._print_warnings(0, file, list(Warning.Position))
             outcome.failure = CannotEdit_EvaluationFailed(
@@ -10377,10 +10431,26 @@ class Session:
             "A proof goal can be buggy and thus unprovable — "
             f"call `{self.tool_name(TOOL_REPORT)}` with your analysis if you believe so.\n"
         )
+        # Declarative-style guidance, shared verbatim by the major (planner) and the
+        # worker (prover) so the two cannot drift. Interaction forks (focused Q&A /
+        # adjudication, not proof construction) do NOT receive it.
+        declarative_style = (
+            "Prove like a mathematician, not a machine:\n"
+            "- Write the proof the way you would on paper — state intermediate results and "
+            "introduce the objects you need, rather than grinding one symbolic manipulation at a time.\n"
+            "- Lean on the declarative steps: `Have` (claim an intermediate fact), `Obtain` "
+            "(introduce an object that exists), together with `Suffices` and case splits for "
+            "structure. Close each remaining gap with `Obvious`, which runs the hammer — so size "
+            "your claims such that the step between two of them is small enough for `Obvious` to discharge.\n"
+            "- Treat the low-level single-step ops (`Rewrite`, `Derive`, `Unfold`, `Compute`, "
+            "`Intro`, …) as an escape hatch, not the default. Reach for them only when a "
+            "declarative step genuinely cannot express the move.\n"
+        )
         if self.is_major:
             # The main agent's job is to formalize a PLAN (BFS skeleton + delegate),
             # not to prove stepwise. The worker / interaction-fork prompt is the
-            # unchanged legacy body in the `else` branch. Gate-aware lemma step: when
+            # legacy body in the `else` branch (workers additionally get the shared
+            # declarative-style guidance; interaction forks do not). Gate-aware lemma step: when
             # the global-lemma gate is on, steer to declare-then-delegate; otherwise
             # keep the legacy prove-under-global.
             lemma_step = ("declare it as a `Have` under `global`, then dispatch a "
@@ -10403,6 +10473,8 @@ class Session:
                 f"4. If you need a background lemma, `{self.tool_name(TOOL_SEARCH)}` for it "
                 f"first; if it truly doesn't exist, {lemma_step}.\n"
                 "\n"
+                + declarative_style +
+                "\n"
                 "Holes are expected:\n"
                 "- Declaring structure and leaving holes is good — move on, don't grind.\n"
                 "- An unproved goal shows as `Unfinished Proof`, not an error — that's expected; "
@@ -10414,11 +10486,15 @@ class Session:
                 "- Done when every hole is discharged (by you or your sub-agents) and no errors remain.\n"
             )
         else:
+            # Workers do the actual proving, so they get the same declarative-style
+            # guidance as the major; interaction forks keep the legacy body unchanged.
+            worker_style = declarative_style + "\n" if self.is_worker else ""
             body = (
                 "You are a formal theorem proving agent.\n"
                 "A proof goal and an incomplete proof are provided in `./proof.yaml` under the current directory.\n"
                 "Analyze the proof goal, plan a proof, and complete it using the MCP proof tools.\n"
                 "Continue until no errors remain.\n"
+                + worker_style
                 + report_line +
                 "The goal may rely on background lemmas that are not yet available. "
                 f"Search for them with `{self.tool_name(TOOL_SEARCH)}` first; "

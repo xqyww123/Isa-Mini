@@ -108,7 +108,7 @@ async def edit_message(
     file = MyIO(StringIO())
     file.write(_headline(outcome, session))
     if failure is not None and failure.is_error:
-        file.write(str(failure))
+        file.write(failure.render(session._display_id, session._relativize_text))
         file.write("\n")
     # Report steps newly proved this call — unconditionally (even when the edit
     # failed or committed nothing): a reverted/no-op edit can still flip a step
@@ -130,7 +130,7 @@ async def edit_message(
             finished = True
         root.reset()
     if failure is not None and not failure.is_error:
-        file.write(str(failure))
+        file.write(failure.render(session._display_id, session._relativize_text))
         file.write("\n")
     return file.getvalue(), finished
 

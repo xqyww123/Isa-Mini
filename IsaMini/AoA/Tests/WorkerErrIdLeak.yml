@@ -1,0 +1,15 @@
+worker scope root (absolute): 1
+body slot absolute id:        1.1
+body slot worker-relative id: 1
+--------------------------------------------------
+worker `edit fill` failure response
+--------------------------------------------------
+Filled nothing.
+Cannot fill a node with id 1
+Automatic proof fails on the subgoal:
+  False
+The goal is non-trivial and a step-by-step proof is required.
+---------------
+is_error: True
+id shown in error message:    1
+leaks absolute mount prefix:  False

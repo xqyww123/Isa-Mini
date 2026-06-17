@@ -9185,6 +9185,91 @@ async def _test_ComplexEditFlow(root: Root, file: MyIO):
     file.write(f"is_error: {is_error}\n")
 
 
+@model_test("WorkerErrIdLeak", "Test_WorkerErrIdLeak.thy", 8)
+async def _test_worker_err_id_leak(root: Root, file: MyIO):
+    """Reproduces the AoA defect in /tmp/report1.md: when a worker (sub-agent)
+    fills an open sub-step and the fill FAILS, the `edit` error message
+    ("Cannot fill a node with id X") leaks the UN-relativized ABSOLUTE node id
+    (carrying the worker's mount-point prefix), while recall / outline / the
+    success headline all show the worker-RELATIVE id. The diagnostic id (in the
+    error) and the actionable id (everywhere else) then live in two different
+    namespaces that the worker cannot reconcile — exactly the loop the report
+    observed (worker burns rounds re-`recall`-ing and rewriting its briefing).
+
+    Setup: a `Have` sub-lemma `sub` (the worker's target, absolute id "1") with a
+    deliberately unprovable body `(1::int) = 2`. A worker scoped to it fills its
+    open body subgoal — which it addresses by the RELATIVE id "1" — with a bare
+    `Obvious`. The hammer fails on the unprovable goal, the node is reverted
+    (is_error=True), and the failure renders via `prompts.edit_message` →
+    `CannotEdit._action_phrase`.
+
+    Root cause: `_action_phrase` prints `self.target_step`, which
+    `Obvious._on_edit_failure` set to the ABSOLUTE id "1.1" (via
+    `CannotEdit_EvaluationFailed(self.id, ...)`), with no
+    `Session._display_id` absolute→relative projection applied. Tellingly, the
+    reason text emitted right beside it on the same code path IS relativized
+    (`Obvious._on_edit_failure` wraps it in `the_session()._relativize_text(...)`)
+    — so the id leak is an inconsistency in that very method, not a missing
+    feature. We assert the id rendered in the error equals the worker-relative id
+    the worker actually used.
+    """
+    import re
+    from .mcp_http_server import _edit_tool_logic
+    session = root.session
+    goal = root.sub_nodes[1]
+
+    # The sub-lemma the worker will be dispatched on (absolute id "1"); its body
+    # `(1::int) = 2` is unprovable, so a bare Obvious inside it will fail.
+    await goal.fill("1", [Have.gen_single({
+        "thought": "sub-lemma to be discharged by a worker",
+        "statement": {"english": "one equals two", "conclusion": r"(1::int) = 2"},
+        "name": "sub"})])
+    H = goal.sub_nodes[0]
+    assert H.id == "1", f"expected the sub-lemma at absolute id '1', got {H.id!r}"
+
+    # Scope a worker to H. The worker addresses H's open body slot (absolute
+    # "1.1") by its relative id — what recall/outline show and what it must use.
+    body_abs = "1.1"
+    session.role = model.Role_Worker(target=H)
+    try:
+        worker_rel = session._display_id(body_abs)
+        file.write(f"worker scope root (absolute): {H.id}\n")
+        file.write(f"body slot absolute id:        {body_abs}\n")
+        file.write(f"body slot worker-relative id: {worker_rel}\n")
+
+        # Worker fills its open subgoal with a bare Obvious; the hammer fails, the
+        # step reverts, and the failure is rendered to the worker via the real
+        # tool path (`_edit_tool_logic` → `prompts.edit_message`).
+        session.age += 1
+        result, is_error = await _edit_tool_logic(session, {
+            "target_step": worker_rel, "action": "fill",
+            "proof_operations": [{"operation": "Obvious", "facts": []}]})
+    finally:
+        session.role = model.Role_Major()
+
+    print_header("worker `edit fill` failure response", file)
+    file.write(result)
+    file.write("---------------\n")
+    file.write(f"is_error: {is_error}\n")
+
+    # The error must name the step in the SAME namespace the worker uses.
+    m = re.search(r"Cannot fill a node with id (\S+)", result)
+    if m is None:
+        raise TestFailed(
+            "WorkerErrIdLeak: expected a 'Cannot fill a node with id X' failure "
+            f"(is_error={is_error}); got:\n{result}")
+    shown_id = m.group(1)
+    file.write(f"id shown in error message:    {shown_id}\n")
+    file.write(f"leaks absolute mount prefix:  {shown_id != worker_rel}\n")
+    if shown_id != worker_rel:
+        raise TestFailed(
+            "WorkerErrIdLeak: the fill-failure error leaked an un-relativized "
+            f"node id. The worker addresses the step as {worker_rel!r} (recall / "
+            f"outline / headline all use that), but the error says 'Cannot fill a "
+            f"node with id {shown_id}' — two namespaces the worker cannot "
+            f"reconcile (see /tmp/report1.md). Expected {worker_rel!r}.")
+
+
 @model_test("BatchInsertBefore", "Test_BatchInsertBefore.thy", 8)
 async def _test_BatchInsertBefore(root: Root, file: MyIO):
     """insert_before with a list of two Have ops — each carries its own
@@ -13960,6 +14045,47 @@ async def _test_query_whole_file_dump(root: Root, file: MyIO):
     file.write(f"faithful ctxt probe done: {len(total_dumps)} whole-file dumps "
                f"(details in {out_path})\n")
     print_header("Probe done", file)
+
+
+@model_test("UnfoldCertJoin", "Test_UnfoldCertJoin.thy", 8)
+async def _test_unfold_cert_join(root: Root, file: MyIO):
+    r"""Regression: gathering the unfoldings of a constant must NOT raise
+    'Cannot join unrelated theory certificates' when a candidate definition lives
+    in a theory unrelated to `Minilang`.
+
+    Field defect (tools/aoa_putnam_eval, putnam_1962_a2): the agent ran `Unfold`
+    on `f \<in> {(f::real\<Rightarrow>real). \<exists>a c. 0 \<le> a \<and> f = (\<lambda>x. a / (1 - c*x)\<^sup>2)}` and got
+    `Isabelle error: Error: Cannot join unrelated theory certificates Minilang:280
+    and Elementary_Metric_Spaces`.
+
+    Root cause — `Minilang.potential_defs_of_const` (library/proof.ML): each
+    candidate definitional equation is run through `normalize_thm`, which strips a
+    leading object `\<forall>`/`\<longrightarrow>` via `thm RS @{thm spec}` / `thm RS @{thm mp}`. Those
+    antiquotations are compiled inside `Minilang.thy` (proof.ML is loaded there by
+    `ML_file`), so they permanently carry a `Minilang:N` certificate. `Minilang`
+    imports only `HOL.List` + `Auto_Sledgehammer` (no reals/analysis); when the
+    proof runs in a theory that ALSO imports HOL-Analysis (the PutnamBench/MathBench
+    environment), a fetched def whose home theory is `Elementary_Metric_Spaces` is
+    UNRELATED to `Minilang:N`. `RS` joins the two certificates before unifying, so
+    it raises the error, which the callback surfaces to the agent as the `Unfold`
+    `edit` error. (`handle THM _` in `normalize_thm` does not catch it — it is an
+    `ERROR`, not a `THM`.)
+
+    The head constant of the field target `f \<in> {...}` is `Set.member`, so we
+    probe `(\<in>)`. The fixture imports `Elementary_Metric_Spaces` so that
+    `Find_Theorems` surfaces the metric-space membership defs that trigger it.
+    After a fix (e.g. transfer the antiquotation thms to the current theory before
+    `RS`), the call returns its candidate list without error and this test passes.
+    """
+    ml_state = root.ml_state
+    try:
+        defs = await ml_state.potential_defs_of([IsaTerm.from_agent(r"(\<in>)")])
+    except IsabelleError as e:
+        msg = " | ".join(e.errors) if e.errors else str(e)
+        if "Cannot join unrelated theory certificates" in msg:
+            raise TestFailed("REPRODUCED cert-join bug on Unfold of (\<in>): " + msg)
+        raise
+    file.write(f"potential_defs_of((\<in>)) returned {len(defs)} candidates without error\n")
 
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
