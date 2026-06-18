@@ -3115,7 +3115,12 @@ class Interaction_InstantiateSchematics(Interaction):
 
     Consumes the `instantiations` field of `AnswerInstantiate`. Every
     schematic variable listed in `schematic_vars` must appear exactly once
-    in the answer."""
+    in the answer. Non-forking: the agent that issued the
+    ``Induction``/``CaseSplit`` answers inline, mid-edit."""
+
+    @property
+    def is_non_forking(self) -> bool:
+        return True
 
     def __init__(self,
                  state: 'Minilang_State',
@@ -7622,8 +7627,14 @@ class Interaction_SelectRewriteTargets(Interaction):
 class Interaction_SelectIHFacts(Interaction):
     """Pre-flight selection of in-scope facts to carry into the induction
     hypothesis (alongside the `arbitrary:` generalization). Multi-select; the
-    chosen fact names supplement the agent-supplied `IH_facts`."""
+    chosen fact names supplement the agent-supplied `IH_facts`. Non-forking:
+    the agent that issued the ``Induction`` answers inline, mid-edit."""
     fork_allowed_tools = [TOOL_ANSWER_INDEXES, TOOL_SEARCH]
+
+    @property
+    def is_non_forking(self) -> bool:
+        return True
+
     def __init__(self, candidates: list[tuple[str, IsaTerm]],
                  relevant_vars: list[str]):
         self.candidates = candidates
@@ -7653,8 +7664,14 @@ class Interaction_ClassifyInductionVars(Interaction):
     the induction hypotheses and cases) or generalized (universally
     quantified in the induction hypothesis). Multi-select; the chosen
     variables become `generalized`, the rest `fixed`. The answer is the list
-    of variable names to generalize."""
+    of variable names to generalize. Non-forking: the agent that issued the
+    ``Induction`` answers inline, mid-edit."""
     fork_allowed_tools = [TOOL_ANSWER_INDEXES, TOOL_SEARCH]
+
+    @property
+    def is_non_forking(self) -> bool:
+        return True
+
     def __init__(self, unclassified: list[tuple[str, str]]):
         # (name, type) of each in-scope variable left unclassified.
         self.unclassified = unclassified
