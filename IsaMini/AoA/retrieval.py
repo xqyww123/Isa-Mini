@@ -221,7 +221,11 @@ async def _format_fetched_entity(
     if f.interpretation and (f.entity.kind not in _THEOREM_KINDS or truncated):
         print_indent(indent + 2 if f.semantics_heading else indent + 1, buf)
         buf.write(f"{f.interpretation}\n")
-    if def_info is True and session is not None:
+    # Skip the declaring-command source for theorem collections: the
+    # `named_theorems` declaration adds little beyond the entity's name and
+    # English interpretation (and often dumps a whole sibling-bundle list),
+    # so it is pure noise per the bundle's own description.
+    if def_info is True and session is not None and f.entity.kind != EntityKind.THEOREM_COLLECTION:
         rs = ml_state or session.retrieval_state()
         def_info = await _get_def_for_fetched(rs.connection, f, ctxt=rs.name)
     if isinstance(def_info, tuple) and session is not None:

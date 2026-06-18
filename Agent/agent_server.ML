@@ -598,7 +598,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                 | retrieve (Universal_Key.LocaleK, name) =
                     SOME (Name_Space.extern ctxt locale_space name, [], [], [], false)
                 | retrieve (Universal_Key.Theorem_CollectionK, name) =
-                    (* Collection entity: render name + up to 5 member props, with a
+                    (* Collection entity: render name + up to 3 member props, with a
                        "... (N more)" sentinel when there are more.  dynamic_fact_members
                        returns NONE for a stale/non-collection (non-dynamic) name, which
                        drops this entity from the result. *)
@@ -607,9 +607,9 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                          NONE => NONE
                        | SOME members =>
                            let val n = length members
-                               val shown = map (SOT o Thm.prop_of) (take 5 members)
-                               val props = if n > 5
-                                           then shown @ ["... (" ^ string_of_int (n - 5) ^ " more)"]
+                               val shown = map (SOT o Thm.prop_of) (take 3 members)
+                               val props = if n > 3
+                                           then shown @ ["... (" ^ string_of_int (n - 3) ^ " more)"]
                                            else shown
                            in SOME (Facts.extern ctxt facts full, props, [], [], false) end
                     end
@@ -800,16 +800,22 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
 
       val schematic_vars_callback = {
         name = "IsaMini.schematic_variables_of",
-        arg_schema = unpackString,
-        ret_schema = packList (packPair (packString, packString)),
-        function = (fn state_id =>
+        (* (state_id, whole): whole=false → leading subgoal only;
+           whole=true → the whole goal sequent. *)
+        arg_schema = unpackPair (unpackString, unpackBool),
+        (* (term-vars, type-vars): each a list of (display-name, type-or-sort). *)
+        ret_schema = packPair (packList (packPair (packString, packString)),
+                               packList (packPair (packString, packString))),
+        function = (fn (state_id, whole) =>
           let val s0 = get_state state_id
-              val vars = Minilang.schematic_vars_of_leading_goal s0
+              val (vars, tvars) = Minilang.schematic_vars_of_goal whole s0
               val ctxt = Minilang.context_of s0
               val string_of_type = MiniLang_Agent.string_of_type ctxt
-           in map (fn (name_idx, ty) =>
-                    (Term.string_of_vname name_idx, string_of_type ty))
-                  vars
+              val string_of_sort = MiniLang_Agent.string_of_sort ctxt
+           in (map (fn (name_idx, ty) =>
+                     (Term.string_of_vname name_idx, string_of_type ty)) vars,
+               map (fn (name_idx, srt) =>
+                     (Term.string_of_vname name_idx, string_of_sort srt)) tvars)
           end handle ERROR msg => error (String.concat ["Error: ", msg])),
         timeout = NONE
       }
@@ -1203,15 +1209,33 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
               val ctxt = Minilang.context_of s0
                          |> Config.put show_sorts true
               val raw_rule = Proof_Context.get_thm ctxt rule_name
-              fun parse_var v =
-                case Lexicon.read_variable v of
-                  SOME ix => ix
-                | NONE => error ("Malformed schematic variable name: `" ^ v ^ "`")
               val raw_insts =
-                map (fn (v, t) => ((parse_var v, Position.none), t)) insts
+                map (fn (v, t) => ((Minilang_Aux.parse_var v, Position.none), t)) insts
           in
             (Rule_Insts.where_rule ctxt raw_insts [] raw_rule; NONE)
             handle ERROR msg => SOME msg
+          end),
+        timeout = NONE
+      }
+
+      (* Pre-flight validation for instantiating residual schematic
+       * variables in the WHOLE goal AFTER a rule/case-split/induction has
+       * been applied. Takes one round of (var-name, value-string) pairs and
+       * applies it to the current (post-rule) goal state via the same
+       * 2-phase primitive used on replay. Returns NONE on success, or
+       * SOME error_msg on any failure (malformed name, unknown/non-goal
+       * variable, type/sort clash) — turned into a clean BadAnswer on the
+       * Python side. *)
+      val validate_inst_var_callback = {
+        name = "IsaMini.validate_inst_var",
+        arg_schema = unpackPair (unpackString,
+                       unpackList (unpackPair (unpackString, unpackString))),
+        ret_schema = packOption packString,
+        function = (fn (state_id, round) =>
+          let val s0 = get_state state_id
+          in \<^try>\<open>(MiniLang_Agent.apply_post_insts [round] s0; NONE)
+               catch ERROR msg => SOME (REPL.trim_makrup msg)
+                   | exn => SOME (REPL.trim_makrup (Runtime.exn_message exn))\<close>
           end),
         timeout = NONE
       }
@@ -1286,6 +1310,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
           mk_callback analyze_induct_callback,
           mk_callback analyze_case_split_callback,
           mk_callback validate_instantiation_callback,
+          mk_callback validate_inst_var_callback,
           mk_callback contextual_thms_callback,
           mk_callback fact_propositions_callback,
           mk_callback validate_prove_in_time_callback,
