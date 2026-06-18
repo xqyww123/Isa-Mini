@@ -2156,16 +2156,22 @@ class Minilang_State:
                             exp_rec)
         return (f"Abbreviation constant {full_name}", rec)
 
-    async def schematic_variables_of(self) -> Vars:
+    async def schematic_variables_of(self, whole: bool = False) -> tuple[Vars, TVars]:
         """
-        Get all schematic variables from the leading proof goal.
-        Returns a dict of {varname: type} where varnames are formatted as ?name.idx.
+        Get schematic variables from the proof goal(s).
+
+        `whole=False` scans only the leading subgoal; `whole=True` scans the
+        whole goal sequent (every open subgoal).
+
+        Returns `(term_vars, type_vars)`: `term_vars` maps each schematic term
+        variable (`?name.idx`) to its type, and `type_vars` maps each schematic
+        type variable (`?'name.idx`) to its sort.
         """
-        try:
-            vars_list = await self.connection.callback("IsaMini.schematic_variables_of", self.name)
-            return {IsaTerm.from_isabelle(k): IsaTerm.from_isabelle(v) for k, v in vars_list}
-        except IsabelleError as e:
-            raise
+        vars_list, tvars_list = await self.connection.callback(
+            "IsaMini.schematic_variables_of", (self.name, whole))
+        term_vars = {IsaTerm.from_isabelle(k): IsaTerm.from_isabelle(v) for k, v in vars_list}
+        type_vars = {IsaTerm.from_isabelle(k): IsaTerm.from_isabelle(v) for k, v in tvars_list}
+        return term_vars, type_vars
 
     async def potential_defs_of(self, constant_names: 'list[name]') -> list[IsabelleFact_Presented]:
         """
@@ -2476,9 +2482,9 @@ class Interaction_StruggleCheckpoint(Interaction):
     """Assess whether a worker is genuinely stuck or making slow progress.
 
     Spawned automatically when a worker's delete/edit counters hit the struggle
-    thresholds.  A cheap fork (Sonnet, no parent context) views the proof state
-    and returns ``(is_stuck, summary)``."""
-    forking = ForkingMode.FORKING_CHEAPER_NO_CTXT
+    thresholds.  The fork inherits the worker's conversation (its full attempt
+    history) so it can judge real progress, and returns ``(is_stuck, summary)``."""
+    forking = ForkingMode.FORKING_WITH_CTXT
     fork_allowed_tools = [TOOL_ANSWER_STRUGGLE_ASSESSMENT]
 
     def __init__(self, target: 'NonLeaf_Node',
@@ -2669,7 +2675,16 @@ class Interaction_MissingLemmaSurvey(Interaction):
             f"missing. For each entry give your best-guess conventional name, "
             f"a precise English statement, an Isabelle statement sketch if you "
             f"can write one, the query descriptions that failed to find it, "
-            f"and why your proof needs it.\n")
+            f"and why your proof needs it.\n\n"
+            f"State each fact in its MOST GENERAL, reusable form — "
+            f"quantified over arbitrary variables / functions / intervals "
+            f"— NOT specialised to the concrete values of your current "
+            f"goal. E.g. report the general \"for continuous f on [a,b], the "
+            f"uniform Riemann sum (b-a)/n·Σ f(a+i(b-a)/n) tends to "
+            f"∫ f over [a,b]\", NOT the instance for your specific "
+            f"function and interval. The `english` / `isabelle_statement` "
+            f"fields hold the GENERAL statement; put the specific instance you "
+            f"actually need (and why) in `why_needed`.\n")
 
     async def answer(self, answer: 'AnswerMissingLemmas') -> list:
         return answer.missing_lemmas
@@ -10443,21 +10458,21 @@ class Session:
         # adjudication, not proof construction) do NOT receive it.
         declarative_style = (
             "Prove like a mathematician, not a machine:\n"
-            "- Write the proof the way you would on paper — state intermediate results and "
-            "introduce the objects you need, rather than grinding one symbolic manipulation at a time.\n"
-            "- Lean on the declarative steps: `Have` (claim an intermediate fact), `Obtain` "
-            "(introduce an object that exists), together with `Suffices` and case splits for "
-            "structure. Close each remaining gap with `Obvious`, which runs the hammer — so size "
-            "your claims such that the step between two of them is small enough for `Obvious` to discharge.\n"
-            "- Treat the low-level single-step ops (`Rewrite`, `Derive`, `Unfold`, `Compute`, "
-            "`Intro`, …) as an escape hatch, not the default. Reach for them only when a "
-            "declarative step genuinely cannot express the move.\n"
+            "- Write the proof as you would on paper: use `Have` to state intermediate "
+            "results, `Obtain` to introduce the objects you need, and `Suffices` or case "
+            "splits to break the goal down.\n"
+            "- Typically, decompose until each subgoal is simple enough for `Obvious` to close.\n"
+            "- Some trivial facts (e.g. `prime 7`) may not be found by `query` — declare them "
+            "with `Have` and prove them with `Obvious`.\n"
+            "- Treat the low-level single-step ops (`Rewrite`, `Derive`) as an escape hatch, "
+            "not the default — reach for them only on rare occasions when you genuinely need "
+            "to spell out a fine-grained inference step.\n"
         )
         if self.is_major:
             # The main agent's job is to formalize a PLAN (BFS skeleton + delegate),
-            # not to prove stepwise. The worker / interaction-fork prompt is the
-            # legacy body in the `else` branch (workers additionally get the shared
-            # declarative-style guidance; interaction forks do not). Gate-aware lemma step: when
+            # not to prove stepwise. The worker gets its own structured body (intro +
+            # shared declarative-style guidance + points); interaction forks keep the
+            # legacy body in the final `else`. Gate-aware lemma step: when
             # the global-lemma gate is on, steer to declare-then-delegate; otherwise
             # keep the legacy prove-under-global.
             lemma_step = ("declare it as a `Have` under `global`, then dispatch a "
@@ -10492,16 +10507,33 @@ class Session:
                 "- Be concise in text output.\n"
                 "- Done when every hole is discharged (by you or your sub-agents) and no errors remain.\n"
             )
+        elif self.is_worker:
+            # The worker is handed one specific goal to prove (the planner already laid
+            # out the surrounding skeleton). Structured as intro + the shared
+            # declarative-style guidance + the remaining points concatenated directly.
+            body = (
+                "You are a formal theorem-proving agent. You have been handed a specific "
+                "goal to prove; it and the current (incomplete) proof are in `./proof.yaml`.\n"
+                "\n"
+                + declarative_style +
+                "\n"
+                "If a sub-part would derail your main line of reasoning, hand it to a "
+                f"sub-agent with `{self.tool_name(TOOL_SUBAGENT)}` rather than proving it inline.\n"
+                "The goal may rely on background lemmas that are not yet available. "
+                f"Search for them with `{self.tool_name(TOOL_SEARCH)}` first; "
+                + self._lemma_guidance(self.is_major) +
+                report_line +
+                "Be concise in text output.\n"
+                "Continue until the goal is fully proved and no errors remain.\n"
+            )
         else:
-            # Workers do the actual proving, so they get the same declarative-style
-            # guidance as the major; interaction forks keep the legacy body unchanged.
-            worker_style = declarative_style + "\n" if self.is_worker else ""
+            # Interaction forks (focused Q&A / adjudication, not proof construction)
+            # keep the legacy body unchanged.
             body = (
                 "You are a formal theorem proving agent.\n"
                 "A proof goal and an incomplete proof are provided in `./proof.yaml` under the current directory.\n"
                 "Analyze the proof goal, plan a proof, and complete it using the MCP proof tools.\n"
                 "Continue until no errors remain.\n"
-                + worker_style
                 + report_line +
                 "The goal may rely on background lemmas that are not yet available. "
                 f"Search for them with `{self.tool_name(TOOL_SEARCH)}` first; "
