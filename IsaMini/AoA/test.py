@@ -9270,6 +9270,78 @@ async def _test_worker_err_id_leak(root: Root, file: MyIO):
             f"reconcile (see /tmp/report1.md). Expected {worker_rel!r}.")
 
 
+@model_test("WorkerErrIdLeak_BlockClosed", "Test_WorkerErrIdLeak_BlockClosed.thy", 8)
+async def _test_worker_err_id_leak_blockclosed(root: Root, file: MyIO):
+    """Companion to `WorkerErrIdLeak` covering the OTHER id-bearing field of an
+    edit failure: `CannotEdit_BlockClosed.closed_by` (the report-driven fix had
+    to relativize this too, but no prior golden exercised it).
+
+    A worker fills a batch into its target's body. The first op — an
+    `InferenceRule` (`conjI`) — splits the conjunctive goal and CLOSES the body
+    block (`SubgoalMaker._should_open_proof_block` →
+    `YES_AND_CLOSE_PARENT_BLOCK`), so the trailing `Have` cannot attach and the
+    append raises `CannotEdit_BlockClosed`, whose `_reason` says
+    "…edit node {closed_by} instead". `closed_by` is the ABSOLUTE id of the
+    closing node ("1.1"); a worker scoped at "1" must see it RELATIVE ("1") —
+    the same projection bug class as the node-id leak, on the reason side.
+    """
+    import re
+    from .mcp_http_server import _edit_tool_logic
+    session = root.session
+    goal = root.sub_nodes[1]
+
+    # Have sub-lemma (worker target, absolute id "1"); its body is a conjunction
+    # so `conjI` splits it and closes the body block.
+    await goal.fill("1", [Have.gen_single({
+        "thought": "sub-lemma the worker discharges",
+        "statement": {"english": "trivial conjunction",
+                      "conclusion": r"(1::int) = 1 \<and> (2::int) = 2"},
+        "name": "sub"})])
+    H = goal.sub_nodes[0]
+    assert H.id == "1", f"expected the sub-lemma at absolute id '1', got {H.id!r}"
+
+    session.role = model.Role_Worker(target=H)
+    try:
+        # The closing InferenceRule lands at absolute "1.1"; worker-relative "1".
+        worker_rel = session._display_id("1.1")
+        expected_closed = worker_rel               # closed_by == the node just filled
+        session.age += 1
+        result, is_error = await _edit_tool_logic(session, {
+            "target_step": worker_rel, "action": "fill",
+            "proof_operations": [
+                {"operation": "InferenceRule", "thought": "split via conjI",
+                 "rule": {"name": "conjI"}},
+                {"operation": "Have", "thought": "misplaced trailing step",
+                 "statement": {"english": "x", "conclusion": r"(1::int) = 1"},
+                 "name": "mis",
+                 "proof": [{"operation": "Obvious", "facts": []}]},
+            ]})
+    finally:
+        session.role = model.Role_Major()
+
+    print_header("worker batch fill: trailing op hits block-closed", file)
+    file.write(result)
+    file.write("\n---------------\n")
+    file.write(f"is_error: {is_error}\n")
+    file.write(f"worker-relative closing-node id: {expected_closed}\n")
+
+    # The redirect hint must name the closing node in the worker's namespace.
+    m = re.search(r"edit node (\S+) instead", result)
+    if m is None:
+        raise TestFailed(
+            "WorkerErrIdLeak_BlockClosed: expected a block-closed "
+            f"'edit node X instead' hint; got:\n{result}")
+    shown = m.group(1)
+    file.write(f"id shown in block-closed hint:   {shown}\n")
+    file.write(f"leaks absolute mount prefix:     {shown != expected_closed}\n")
+    if shown != expected_closed:
+        raise TestFailed(
+            "WorkerErrIdLeak_BlockClosed: the block-closed reason leaked an "
+            f"un-relativized closed_by id — worker scope is '1', so the closing "
+            f"node 'edit node {shown} instead' should read "
+            f"{expected_closed!r} (see /tmp/report1.md).")
+
+
 @model_test("BatchInsertBefore", "Test_BatchInsertBefore.thy", 8)
 async def _test_BatchInsertBefore(root: Root, file: MyIO):
     """insert_before with a list of two Have ops — each carries its own

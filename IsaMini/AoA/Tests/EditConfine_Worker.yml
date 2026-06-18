@@ -20,7 +20,7 @@ worker 'fill 2' resolves in-scope to 1.2 (sibling unreachable)
 --------------------------------------------------
 is_error=True
 Filled nothing.
-Cannot fill a node with id 1.2
+Cannot fill a node with id 2
 The target already exists. Fill does not overwrite existing successful steps.
 All proof goals of step 1 are now completed.
 

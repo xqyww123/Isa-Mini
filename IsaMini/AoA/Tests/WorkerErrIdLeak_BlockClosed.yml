@@ -1,0 +1,19 @@
+--------------------------------------------------
+worker batch fill: trailing op hits block-closed
+--------------------------------------------------
+Filled step 1.
+Outline:
+  step 1: Inference Rule conjI
+    - 1.1
+      Unfinished Proof. Call command `edit` with action `fill` and target step `1.1.1`
+      goal: (1 :: int) = (1 :: int)
+    - 1.2
+      Unfinished Proof. Fill step `1.2.1`
+      goal: (2 :: int) = (2 :: int)
+While filling step , could not apply operation #2 (Have): The proof block is closed. You should edit node 1 instead.
+
+---------------
+is_error: False
+worker-relative closing-node id: 1
+id shown in block-closed hint:   1
+leaks absolute mount prefix:     False
