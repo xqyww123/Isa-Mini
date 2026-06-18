@@ -2633,8 +2633,10 @@ class Interaction_MissingLemmaSurvey(Interaction):
     """Ask the agent whether it needs general-purpose background lemmas that it
     could not find in the loaded libraries.
 
-    Spawned every ``AOA_MISSING_LEMMA_SURVEY`` `query` tool calls and once
-    before a worker winds down (see ``Session.run_missing_lemma_survey``).
+    Spawned every ``AOA_MISSING_LEMMA_SURVEY`` `query` tool calls, once before
+    a worker winds down, and once before the main agent winds down if it made
+    ≥1 query since its last survey (see ``Session.run_missing_lemma_survey``
+    and the ``session_end`` trigger at ``toplevel.run_case``).
     The fork inherits the parent context — it must see the search history to
     judge what was looked for and not found — and may only answer; the report
     is recorded to ``missing_lemmas.yaml`` for the external import-expansion
@@ -10928,7 +10930,8 @@ class Session:
 
     def log_missing_lemmas(self, trigger: str, lemmas: list):
         """Record a missing-lemma report to missing_lemmas.yaml — either a
-        survey answer (trigger "query_interval" / "worker_end") or a worker's
+        survey answer (trigger "query_interval" / "worker_end" / "session_end")
+        or a worker's
         `request_lemmas` wish-list (trigger "request_lemmas"). ``lemmas`` is a
         list of plain dicts as reported; an empty list is still logged so the
         external watcher can tell "surveyed, nothing missing" from "no survey"."""

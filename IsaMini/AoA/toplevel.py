@@ -180,6 +180,19 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
             root = Root((global_context, ptree), connection)
             await session.initialize(root)
             await session.run()
+            # Final missing-lemma survey before the MAIN agent winds down —
+            # mirrors the worker_end survey in Session.run (workers fire one
+            # when they wind down; the top-level major never did). Without it a
+            # main-agent case that proved/failed having made fewer than the
+            # query-interval count of successful queries — and dispatched no
+            # worker — logs ZERO surveys, losing the loop's entire signal.
+            # Only when it made ≥1 successful query since the last survey (else
+            # there is nothing new to report); no-op unless the survey is
+            # enabled (AOA_MISSING_LEMMA_SURVEY). Runs only on natural exit:
+            # if session.run() raised (timeout / cancellation) we never reach
+            # here, matching worker_end's "not on cancellation" semantics.
+            if session._query_calls_since_survey >= 1:
+                await session.run_missing_lemma_survey("session_end")
             quit_obj = session.quit_info
             cost = (session.total_input_tokens,
                     session.total_cache_creation_input_tokens,
