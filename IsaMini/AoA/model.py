@@ -7264,7 +7264,14 @@ class Define(SubgoalMaker):
 #### Unfold
 
 class Interaction_ChooseDef(Interaction):
+    """Pick which definition(s) an ``Unfold`` should use when its target
+    resolves to several candidate equations. Non-forking: the agent that
+    issued the ``Unfold`` answers inline, mid-edit."""
     fork_allowed_tools = [TOOL_ANSWER_INDEXES_OR_NAME, TOOL_SEARCH]
+
+    @property
+    def is_non_forking(self) -> bool:
+        return True
 
     def __init__(self, constants: list[str], candidate_defs: list[IsabelleFact_Presented],
                  state: 'Minilang_State | None' = None):
