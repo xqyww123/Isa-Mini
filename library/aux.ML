@@ -220,7 +220,15 @@ in
 
 fun xOF prove_discharge ctxt opt_thms st =
   let open Conv
-      val thms = map (fn NONE => Drule.asm_rl | SOME th => th) opt_thms
+      (* The rule `st` and the discharge facts may be cited from library theories
+         unrelated to one another / to Minilang (whose `@{thm ...}` antiquotations
+         appear in the resolution below). Move them all into the working theory —
+         which has every in-scope fact's home as an ancestor — so the `RSN`/`OF`
+         certificate joins below cannot raise "Cannot join unrelated theory
+         certificates". *)
+      val thy = Proof_Context.theory_of ctxt
+      val st = Thm.transfer thy st
+      val thms = map (fn NONE => Drule.asm_rl | SOME th => Thm.transfer thy th) opt_thms
       val LEN = length thms
 
       (* Upper bound on premises that rulify could expose (Pure.imp + HOL.implies,
@@ -379,7 +387,11 @@ fun xOF prove_discharge ctxt opt_thms st =
 end
 
 fun xof ctxt (args, concl_args) fixes thm =
-  let val num_var = length args - length (Term.add_vars (Thm.prop_of thm) [])
+  (* Transfer the cited rule into the working theory before `thm RS Thms.spec`
+     (Thms.spec = @{thm spec} carries Minilang's certificate): a rule cited from a
+     theory unrelated to Minilang would otherwise fail the certificate join. *)
+  let val thm = Thm.transfer (Proof_Context.theory_of ctxt) thm
+      val num_var = length args - length (Term.add_vars (Thm.prop_of thm) [])
       fun spec_rule thm =
         case Thm.concl_of thm
           of Const(\<^const_name>\<open>Trueprop\<close>, _) $ (Const(\<^const_name>\<open>HOL.All\<close>, _) $ _) =>
@@ -605,6 +617,12 @@ fun deconflict_bound_names term =
    appears in the theorem. *)
 fun inst_universal_quantifiers ctxt (insts, tinsts) thm =
   let
+    (* Transfer the cited rule into the working theory up front: the quantifier
+       instantiation below combines it with Minilang-compiled antiquotations
+       (`inst_hol_alls`'s `Conv.rewr_conv @{lemma ...}` / `@{thm ...}`, etc.). A
+       rule cited from a theory unrelated to Minilang would otherwise raise
+       "Cannot join unrelated theory certificates" during those rewrites. *)
+    val thm = Thm.transfer (Proof_Context.theory_of ctxt) thm
     (* === Phase 0: Instantiate type variables === *)
     val thm = if null tinsts then thm
               else let

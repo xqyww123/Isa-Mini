@@ -13939,7 +13939,7 @@ async def _test_SubtreeStats(root: Root, file: MyIO):
     stats_line("root after uncomment", None)
 
 
-@model_test("UnfoldCertJoin", "Test_UnfoldCertJoin.thy", 8)
+@model_test("UnfoldCertJoin", "Test_UnfoldCertJoin.thy", 12)
 async def _test_unfold_cert_join(root: Root, file: MyIO):
     r"""Regression: gathering the unfoldings of a constant must NOT raise
     'Cannot join unrelated theory certificates' when a candidate definition lives
@@ -13975,9 +13975,13 @@ async def _test_unfold_cert_join(root: Root, file: MyIO):
     except IsabelleError as e:
         msg = " | ".join(e.errors) if e.errors else str(e)
         if "Cannot join unrelated theory certificates" in msg:
-            raise TestFailed("REPRODUCED cert-join bug on Unfold of (\<in>): " + msg)
+            raise TestFailed(r"REPRODUCED cert-join bug on Unfold of (\<in>): " + msg)
         raise
-    file.write(f"potential_defs_of((\<in>)) returned {len(defs)} candidates without error\n")
+    # Count-independent assertion: the bug is the certificate-join failure, not
+    # the candidate count (which drifts with the library / infra filter). A bare
+    # success line keeps the golden stable.
+    assert isinstance(defs, list)
+    file.write(r"potential_defs_of((\<in>)) succeeded (no cert-join error)" + "\n")
 
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):

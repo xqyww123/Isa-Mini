@@ -1692,6 +1692,16 @@ fun potential_defs_of_const ctxt const_name goal_terms =
     (* Normalize theorem by eliminating universal quantifiers and implications *)
     fun normalize_thm thm =
       let
+        (* `@{thm spec}` / `@{thm mp}` are compiled in Minilang.thy, so they carry
+           Minilang's certificate. When the proof runs in a theory that imports
+           HOL-Analysis (etc.) but NOT through Minilang, a candidate fetched from
+           such a sibling theory (e.g. Elementary_Metric_Spaces) is UNRELATED to
+           Minilang's, and `RS` would raise "Cannot join unrelated theory
+           certificates". Transfer the candidate to the goal's theory first — it
+           has both Minilang and the candidate's home as ancestors — so the join
+           succeeds. (`thy = Proof_Context.theory_of ctxt`; every candidate here
+           comes from facts in scope of `ctxt`, hence ancestors of `thy`.) *)
+        val thm = Thm.transfer thy thm
         fun strip_concl (@{const Trueprop} $ t) = t
           | strip_concl t = t
         val concl = strip_concl (Thm.concl_of thm)
