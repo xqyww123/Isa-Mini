@@ -8285,6 +8285,103 @@ async def _test_AmendKeepsWorker(root: Root, file: MyIO):
     handle._task.cancel()
 
 
+@model_test("AmendRevertKeepsWorker", "Test_AmendRevertKeepsWorker.thy", 13)
+async def _test_AmendRevertKeepsWorker(root: Root, file: MyIO):
+    """A single-op amend that FAILS and reverts (Have -> a no-progress Rewrite ->
+    Rewrite._on_edit_failure -> TERMINATE_AND_REVERT) must NOT cancel the worker:
+    under the non-destructive-amend v2 the handle was never detached from `old`, so
+    when amend_me restores the original node the worker simply rides along on it.
+    Exercises the revert branch of amend_me (no worker code; handle kept on `old`)."""
+    from .model import WorkerHandle
+
+    def obs(line: str) -> None:
+        file.write(line + "\n")
+        print("[ARKW] " + line, file=sys.stderr, flush=True)
+
+    # Seed step "1" with an open Have and attach a live worker.
+    await root.fill("1", [Have.gen_single({
+        "thought": "init", "statement": {"english": "init", "conclusion": "(0::nat) = 0"},
+        "name": "orig"})])
+    H = root.locate_node("1")
+    assert isinstance(H, NonLeaf_Node), f"expected NonLeaf_Node, got {type(H).__name__}"
+    handle = WorkerHandle(H, root.session)
+    handle._task = asyncio.ensure_future(asyncio.sleep(3600))
+    H.worker_handle = handle
+    await asyncio.sleep(0)
+    obs(f"before: H.worker_handle is handle: {H.worker_handle is handle}")
+    obs(f"task.cancelled() before: {handle._task.cancelled()}")
+
+    # Amend Have -> a no-progress Rewrite (irrelevant rule on premise h1): the Rewrite
+    # resolves to FAILURE and Rewrite._on_edit_failure returns TERMINATE_AND_REVERT.
+    await root.amend("1", [Rewrite.gen_single({
+        "thought": "irrelevant rewrite -> no progress -> FAILURE -> revert",
+        "using": [{"name": "foo_def"}],
+        "use system simplifiers": False,
+        "rewrite goal": False,
+        "rewrite premises": ["h1"]})])
+
+    restored = root.locate_node("1")
+    obs("=== after revert ===")
+    obs(f"restored node is the original Have (want True): {restored is H}")
+    obs(f"restored kind (want Have): {type(restored).__name__}")
+    obs(f"worker task.cancelled() after (want False): {handle._task.cancelled()}")
+    obs(f"restored.worker_handle is handle (want True): {restored.worker_handle is handle}")
+    obs(f"handle.target is restored (want True): {handle.target is restored}")
+
+    assert restored is H, "REFUTED: revert did not restore the original node object"
+    assert not handle._task.cancelled(), "REFUTED: worker cancelled on revert (should be kept on old)"
+    assert restored.worker_handle is handle, "REFUTED: worker handle lost from the restored node"
+    assert handle.target is H, "REFUTED: handle.target not pointing at the restored node"
+    obs("CLAIM CONFIRMED: FAILURE+revert keeps the worker on the restored node.")
+    handle._task.cancel()
+
+
+@model_test("AmendCancelSweepsNested", "Test_AmendCancelSweepsNested.thy", 8)
+async def _test_AmendCancelSweepsNested(root: Root, file: MyIO):
+    """A CLASS-CHANGING (destructive) amend of a worker-bearing node must cancel
+    not only that node's own worker but ALSO any NESTED sub-agent that `_amend_from`
+    re-parents onto the new node. The cancel branch does `saved.aclose()` (the
+    node's own worker) THEN `new_node.aclose_all_subagents()` — the second call is
+    what sweeps the nested worker (the parked worker's own wind-down would iterate
+    the now-empty old sub_nodes and miss it)."""
+    from .model import WorkerHandle
+
+    def obs(line: str) -> None:
+        file.write(line + "\n")
+        print("[ACSN] " + line, file=sys.stderr, flush=True)
+
+    # X = a Have at "1" with a NESTED Have G at "1.1" (G survives _amend_from's
+    # re-parent onto the new node). Attach a worker on X AND a nested worker on G.
+    await root.fill("1", [Have.gen_single({
+        "thought": "X", "statement": {"english": "x", "conclusion": r"x * x \<ge> 0"},
+        "name": "X",
+        "proof": [{"operation": "Have", "thought": "G",
+                   "statement": {"english": "g", "conclusion": r"x * x \<ge> 0"},
+                   "name": "G"}]})])
+    X = root.locate_node("1")
+    G = root.locate_node("1.1")
+    assert isinstance(X, NonLeaf_Node) and isinstance(G, NonLeaf_Node), \
+        f"expected NonLeaf nodes, got {type(X).__name__}/{type(G).__name__}"
+    hX = WorkerHandle(X, root.session); hX._task = asyncio.ensure_future(asyncio.sleep(3600)); X.worker_handle = hX
+    hG = WorkerHandle(G, root.session); hG._task = asyncio.ensure_future(asyncio.sleep(3600)); G.worker_handle = hG
+    await asyncio.sleep(0)
+    obs(f"before: hX cancelled={hX._task.cancelled()}, hG (nested) cancelled={hG._task.cancelled()}")
+
+    # CLASS-CHANGING amend X -> Suffices: not _amend_preserves_worker, so cancel
+    # branch runs (hX.aclose + new_node.aclose_all_subagents sweeping nested hG).
+    await root.amend("1", [Suffices.gen_single({
+        "thought": "X'", "statement": {"english": "x", "conclusion": r"x * x \<ge> 0"}})])
+    obs("=== after class-changing amend ===")
+    obs(f"amended node kind: {type(root.locate_node('1')).__name__}")
+    obs(f"parent worker hX cancelled (want True): {hX._task.cancelled()}")
+    obs(f"nested worker hG cancelled (want True): {hG._task.cancelled()}")
+
+    assert hX._task.cancelled(), "REFUTED: the amended node's own worker not cancelled"
+    assert hG._task.cancelled(), \
+        "REFUTED: nested sub-agent not swept (new_node.aclose_all_subagents missing/broken)"
+    obs("CLAIM CONFIRMED: class-changing amend cancels the node's worker AND sweeps the nested sub-agent.")
+
+
 @model_test("ValidatorNestedPath", "Test_ValidatorNestedPath.thy", 8)
 async def _test_ValidatorNestedPath(root: Root, file: MyIO):
     """Verify `Parse_Op_List` reports path-annotated errors at the
@@ -13876,10 +13973,13 @@ async def _test_nested_antichain(root: Root, file: MyIO):
     await root.delete(["1.1.1"])
     file.write(f"delete cascade: 1.1.1 worker cancelled={hB._task.cancelled()}, "
                f"nested 1.1.1.1 worker cancelled={hC._task.cancelled()}, detached={B.worker_handle is None}\n")
-    # C2. amend 1.1 -> _amend_child tears down the amended node's own worker.
+    # C2. amend 1.1 with a CLASS-CHANGING op (Have->Suffices) is a DESTRUCTIVE
+    # amend: `_amend_preserves_worker` is False, so amend_me's commit branch tears
+    # down the amended node's own worker (saved.aclose()). (A SAME-class amend on an
+    # open goal would instead KEEP and migrate the worker via retarget — that path
+    # is covered by AmendKeepsWorker.)
     hA = WorkerHandle(A, session); hA._task = asyncio.ensure_future(asyncio.sleep(100)); A.worker_handle = hA
-    await root.amend("1.1", [Have.gen_single({
-        "thought": "A'", "statement": s, "name": "hA2"})])
+    await root.amend("1.1", [Suffices.gen_single({"thought": "A'", "statement": s})])
     file.write(f"amend cascade: amended-node worker cancelled={hA._task.cancelled()}, "
                f"old node detached={A.worker_handle is None}\n")
 

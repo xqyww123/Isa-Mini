@@ -1,0 +1,9 @@
+before: H.worker_handle is handle: True
+task.cancelled() before: False
+=== after revert ===
+restored node is the original Have (want True): True
+restored kind (want Have): Have
+worker task.cancelled() after (want False): False
+restored.worker_handle is handle (want True): True
+handle.target is restored (want True): True
+CLAIM CONFIRMED: FAILURE+revert keeps the worker on the restored node.

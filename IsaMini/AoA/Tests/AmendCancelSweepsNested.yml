@@ -1,0 +1,6 @@
+before: hX cancelled=False, hG (nested) cancelled=False
+=== after class-changing amend ===
+amended node kind: Suffices
+parent worker hX cancelled (want True): True
+nested worker hG cancelled (want True): True
+CLAIM CONFIRMED: class-changing amend cancels the node's worker AND sweeps the nested sub-agent.
