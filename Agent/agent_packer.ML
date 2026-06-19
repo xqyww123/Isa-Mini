@@ -115,6 +115,10 @@ val unpack_extended_fact =
   >> (fn (name, NONE) => FactByName name
        | (name, SOME stmt) => FactInTime (name, stmt))
 
+(* post-rule schematic instantiation: rounds of (var-name, value-string) pairs *)
+val unpack_post_insts = unpackList (unpackList (unpackPair (unpackString, unpackString)))
+val pack_post_insts   = packList   (packList   (packPair   (packString,   packString)))
+
 val unpacker =
   unpackPair_dep unpackString (
     fn "SIMPLIFY" => apfst SIMPLIFY o unpackTuple5 (
@@ -126,20 +130,25 @@ val unpacker =
                      )
      | "UNFOLD"   => apfst UNFOLD   o unpackList unpack_extended_fact
      | "WITNESS"  => apfst WITNESS  o unpackList unpackString
-     | "RULE"     => apfst RULE     o unpackList unpack_extended_fact
-     | "CASE_SPLIT" => apfst CASE_SPLIT o unpackTuple4 (
+     | "RULE"     => apfst RULE     o unpackPair (
+                        unpackList unpack_extended_fact,
+                        unpack_post_insts            (* post-rule instantiation rounds *)
+                     )
+     | "CASE_SPLIT" => apfst CASE_SPLIT o unpackTuple5 (
                         unpackString,
                         unpack_opt_var_names,
                         unpackOption unpackString,
-                        unpackBool                   (* no_simp *)
+                        unpackBool,                  (* no_simp *)
+                        unpack_post_insts            (* post-rule instantiation rounds *)
                      )
-     | "INDUCT"   => apfst INDUCT   o unpackTuple6 (
+     | "INDUCT"   => apfst INDUCT   o unpackTuple7 (
                         unpackString,                (* target *)
                         unpack_opt_var_names,        (* vars *)
                         unpackList unpackString,     (* arbitrary *)
                         unpackList unpackString,     (* facts_to_generalize *)
                         unpackOption unpackString,   (* rule *)
-                        unpackBool                   (* no_simp *)
+                        unpackBool,                  (* no_simp *)
+                        unpack_post_insts            (* post-rule instantiation rounds *)
                      )
      | "ATP"      => apfst (fn (facts, vars) => NEXT_OR_END (facts, vars))
                       o unpackPair (unpackList unpack_extended_fact, unpack_opt_var_names)
@@ -211,16 +220,19 @@ fun packer (SIMPLIFY data) =
   | packer (WITNESS data) =
       packPair (packString, packList packString) ("WITNESS", data)
   | packer (RULE data) =
-      packPair (packString, packList pack_extended_fact) ("RULE", data)
+      packPair (packString, packPair (packList pack_extended_fact, pack_post_insts))
+        ("RULE", data)
   | packer (CASE_SPLIT data) =
-      packPair (packString, packTuple4 (packString, pack_opt_var_names, packOption packString, packBool))
+      packPair (packString, packTuple5 (packString, pack_opt_var_names, packOption packString,
+                                         packBool, pack_post_insts))
         ("CASE_SPLIT", data)
   | packer (INDUCT data) =
-      packPair (packString, packTuple6 (packString, pack_opt_var_names,
+      packPair (packString, packTuple7 (packString, pack_opt_var_names,
                                          packList packString,
                                          packList packString,
                                          packOption packString,
-                                         packBool))
+                                         packBool,
+                                         pack_post_insts))
         ("INDUCT", data)
   | packer (NEXT_OR_END data) =
       packPair (packString, packPair (packList pack_extended_fact, pack_opt_var_names))

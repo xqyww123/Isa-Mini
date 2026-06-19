@@ -22,8 +22,12 @@ datatype ('term, 'thm, 'fact) command =
     UNFOLD   of ('term, 'fact) extended_fact list
   | WITNESS  of 'term list
   | RULE     of ('term, 'fact) extended_fact list
+              * (string * string) list list (*post-rule schematic instantiation rounds:
+                            each round a list of (var-name, value-string) pairs;
+                            same shape in xcmd and icmd, parsed at interpret time*)
   | CASE_SPLIT of 'term (*target*) * Minilang.opt_var_names
                 * 'thm option (*rule*) * bool (*no_simp*)
+                * (string * string) list list (*post-rule schematic instantiation rounds*)
   | INDUCT   of 'term (*target*) * Minilang.opt_var_names
               * 'term list (*arbitrary*)
               * 'fact list (*facts_to_generalize: in xcmd a raw name string; in
@@ -31,6 +35,7 @@ datatype ('term, 'thm, 'fact) command =
                             standard agent fact-ref path (see `read_fact`).
                             Supports `h`, `h(i)`, `h(1-3)`, `h[attr]`. *)
               * 'thm option (*rule*) * bool (*no_simp*)
+              * (string * string) list list (*post-rule schematic instantiation rounds*)
   | NEXT_OR_END of ('term, 'fact) extended_fact list (*add lemmas*) * Minilang.opt_var_names
   | NEXT     of ('term, 'fact) extended_fact list (*add lemmas*) * Minilang.opt_var_names
   | END      of ('term, 'fact) extended_fact list (*add lemmas*)
@@ -86,6 +91,11 @@ type config = cfg * budget * counters * exec_mode
 val check_command : Minilang.state -> xcmd -> icmd
 val interpret_i : config -> icmd -> Minilang.state -> Minilang.state
 val interpret : config -> xcmd -> Minilang.state -> Minilang.state
+
+(* Replay post-rule schematic instantiation rounds on the post-rule state,
+   folding Minilang.INST_GOAL_VARS over the (var-name, value-string) rounds.
+   Each round is split by leading-"'" into type insts and term insts. *)
+val apply_post_insts : (string * string) list list -> Minilang.state -> Minilang.state
 
 val default_cfg : cfg * budget
 
@@ -186,8 +196,12 @@ datatype ('term, 'thm, 'fact) command =
     UNFOLD   of ('term, 'fact) extended_fact list
   | WITNESS  of 'term list
   | RULE     of ('term, 'fact) extended_fact list
+              * (string * string) list list (*post-rule schematic instantiation rounds:
+                            each round a list of (var-name, value-string) pairs;
+                            same shape in xcmd and icmd, parsed at interpret time*)
   | CASE_SPLIT of 'term (*target*) * Minilang.opt_var_names
                 * 'thm option (*rule*) * bool (*no_simp*)
+                * (string * string) list list (*post-rule schematic instantiation rounds*)
   | INDUCT   of 'term (*target*) * Minilang.opt_var_names
               * 'term list (*arbitrary*)
               * 'fact list (*facts_to_generalize: in xcmd a raw name string; in
@@ -195,6 +209,7 @@ datatype ('term, 'thm, 'fact) command =
                             standard agent fact-ref path (see `read_fact`).
                             Supports `h`, `h(i)`, `h(1-3)`, `h[attr]`. *)
               * 'thm option (*rule*) * bool (*no_simp*)
+              * (string * string) list list (*post-rule schematic instantiation rounds*)
   | NEXT_OR_END of ('term, 'fact) extended_fact list (*add lemmas*) * Minilang.opt_var_names
   | NEXT     of ('term, 'fact) extended_fact list (*add lemmas*) * Minilang.opt_var_names
   | END      of ('term, 'fact) extended_fact list (*add lemmas*)
@@ -355,12 +370,17 @@ fun get_witness_types s =
    in extract_leading_ex_types goal
   end
 
+fun intro_subject_state (s: Minilang.state) : Minilang.state option =
+  let val st = Minilang.leading_proof_sequent_of s
+   in if Minilang.need_intro st
+      then SOME s
+      else Minilang.standard_intro_fallback s
+  end
+
 fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option)
                (s:Minilang.state)
   : bindings * Minilang.state =
   let
-    val ctxt = Minilang.context_of s
-            |> Config.put Printer.show_markup false
     val st = Minilang.leading_proof_sequent_of s
 
     (* Extract provided bindings, use empty lists if NONE *)
@@ -369,8 +389,10 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option)
     (* Flag: whether to report missing bindings *)
     val report_missing = is_some opt_bindings
   in
-    (* Step 1: Check if INTRO is applicable *)
-    if not (Minilang.need_intro st) then
+    (* Step 1: Check if INTRO is applicable, possibly after one silent
+       standard_tac step that exposes an intro-able goal. *)
+    case intro_subject_state s of
+      NONE =>
       let
         (* No leading ⋀/⟹/∀/⟶ to introduce: nothing is bound. Still emit
            INTRO_BINDINGS so the Python side's invariant (exactly one per
@@ -397,8 +419,12 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option)
         val _ = Minilang.get_reporter ()
                   (Minilang.Goals (Minilang.goals_of' st |> take 1))
       in (([], []), s) end
-    else
+    | SOME intro_s =>
       let
+        val ctxt = Minilang.context_of intro_s
+            |> Config.put Printer.show_markup false
+        val st = Minilang.leading_proof_sequent_of intro_s
+
         (* Step 2: Extract quantified variables and premises from goal *)
         val goal_term = Thm.prop_of st
                     |> Logic.dest_implies |> fst
@@ -476,7 +502,7 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option)
            base(1..N) entries in facts'. *)
         val ((params', facts'), s') =
           Minilang.INTRO Minilang.SINGLE_GOAL NONE
-                         minilang_var_names (SOME prem_names_for_intro) s
+                         minilang_var_names (SOME prem_names_for_intro) intro_s
 
         (* Step 6: Extract context from the new state *)
         val ctxt' = Minilang.context_of s'
@@ -568,16 +594,14 @@ fun AUTO_SPLIT_CONJS (s: Minilang.state) : Minilang.state =
 fun compute_bindings (s:Minilang.state)
                      (var_names: string list) (fact_names: string list)
   : bindings =
-  let
-    val ctxt = Minilang.context_of s
-              |> Config.put Printer.show_markup false
-    val st = Minilang.leading_proof_sequent_of s
-  in
-    (* Check if there's a quantified goal *)
-    if not (Minilang.need_intro st) then
-      ([], [])
-    else
+  case intro_subject_state s of
+    NONE => ([], [])
+  | SOME intro_s =>
       let
+        val ctxt = Minilang.context_of intro_s
+                  |> Config.put Printer.show_markup false
+        val st = Minilang.leading_proof_sequent_of intro_s
+
         (* Extract quantified variables and premises from goal *)
         val goal_term = Thm.prop_of st |> Logic.dest_implies |> fst
                      |> Minilang.deconflict_bound_names
@@ -651,7 +675,6 @@ fun compute_bindings (s:Minilang.state)
       in
         (var_bindings, prem_bindings)
       end
-  end
 
 (* Check if the leading proof goal needs INTRO (i.e., has quantified variables or premises) *)
 fun check_need_intro (s:Minilang.state) : bool =
@@ -987,6 +1010,20 @@ val auto_apply_attrib : attribute =
      in fold apply_kind kinds context
     end)
 
+(* Fold the recorded post-rule instantiation rounds onto the post-rule
+   state. Per round: parse each var-name to an indexname, partition into
+   type insts (?'a) and term insts (?x) by leading "'", then apply the
+   2-phase Minilang.INST_GOAL_VARS primitive (types first, then terms). *)
+fun apply_post_insts rounds state =
+  fold (fn round => fn st =>
+    let
+      val parsed = map (fn (name, value) => (Minilang_Aux.parse_var name, value)) round
+      val (tinsts, insts) =
+        List.partition (fn (idx, _) => Minilang_Aux.is_tvar_name (Minilang_Aux.VN_IndexName idx))
+          parsed
+    in Minilang.INST_GOAL_VARS (tinsts, insts) st end)
+  rounds state
+
 fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
   case cmd of
       SIMPLIFY (simp_facts_with_targets, use_system_simps, premise_names, simplify_goal, user_bindings_opt) =>
@@ -1015,12 +1052,13 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
         end
     | WITNESS terms =>
         Minilang.CHOOSE terms s
-    | RULE facts =>
+    | RULE (facts, insts) =>
         with_resolved_refs s facts (fn s' => fn refs =>
-          Minilang.RULE refs [] s')
-    | CASE_SPLIT (target, vars, rule, no_simp) =>
-        Minilang.CASE_SPLIT (no_simp, ([[SOME target]], rule)) vars [] s
-    | INDUCT (target, vars, arbitrary, gen_fact_refs, rule, no_simp) =>
+          apply_post_insts insts (Minilang.RULE refs [] s'))
+    | CASE_SPLIT (target, vars, rule, no_simp, insts) =>
+        apply_post_insts insts
+          (Minilang.CASE_SPLIT (no_simp, ([[SOME target]], rule)) vars [] s)
+    | INDUCT (target, vars, arbitrary, gen_fact_refs, rule, no_simp, insts) =>
         let val ctxt = Minilang.context_of s
             val vs = map (fn Free nt => nt
                            | x => error ("The `arbitrary` argument must be variables, but (" ^
@@ -1042,9 +1080,10 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
                         val thms = Attrib.eval_thms ctxt [(ref_, [])]
                     in (name, thms) end)
                   gen_fact_refs
-        in Minilang.INDUCT
+        in apply_post_insts insts
+             (Minilang.INDUCT
                     (no_simp, ([[SOME (NONE, (target, false))]], (([vs], []), Option.map single rule))) vars
-                    {using = [], insertion = named_insertion} s
+                    {using = [], insertion = named_insertion} s)
         end
     | NEXT_OR_END (lemmas, vars) =>
         with_resolved_override s lemmas (fn s' => fn ovr =>
@@ -1423,9 +1462,9 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
       let val ctxt = Minilang.context_of s
       in SIMPLIFY (map (fn (fact, targets) => (check_extended_fact ctxt fact, targets)) facts_with_targets,
                    use_sys, prems, simp_goal, bindings_opt) end
-  | check_command_i s (RULE facts) =
+  | check_command_i s (RULE (facts, insts)) =
       let val ctxt = Minilang.context_of s
-      in RULE (map (check_extended_fact ctxt) facts) end
+      in RULE (map (check_extended_fact ctxt) facts, insts) (*insts: parsed at interpret time*) end
   | check_command_i s (UNFOLD facts) =
       let val ctxt = Minilang.context_of s
       in UNFOLD (map (check_extended_fact ctxt) facts) end
@@ -1457,13 +1496,13 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
           val typed_terms = ListPair.zip (typs, terms)
        in WITNESS (read_terms_with_type ctxt typed_terms)
       end
-  | check_command_i s (CASE_SPLIT (target, vars, rule, no_simp)) =
+  | check_command_i s (CASE_SPLIT (target, vars, rule, no_simp, insts)) =
       let val ctxt = Minilang.context_of s
           val rule' = Option.map (chk_single ctxt rule o read_thms ctxt) rule
           val target' = read_term ctxt target
-       in CASE_SPLIT (target', vars, rule', no_simp)
+       in CASE_SPLIT (target', vars, rule', no_simp, insts) (*insts: parsed at interpret time*)
       end
-  | check_command_i s (INDUCT (target, vars, arbitrary, gen_fact_names, rule, no_simp)) =
+  | check_command_i s (INDUCT (target, vars, arbitrary, gen_fact_names, rule, no_simp, insts)) =
       let val ctxt = Minilang.context_of s
           val (target' :: arbitrary') = read_terms ctxt (target :: arbitrary)
           val rule' = Option.map (chk_single ctxt rule o read_thms ctxt) rule
@@ -1473,7 +1512,7 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
            * strip matches items-channel naming. *)
           val gen_fact_refs =
             map (read_fact o Minilang_Aux.simp_fact_name') gen_fact_names
-       in INDUCT (target', vars, arbitrary', gen_fact_refs, rule', no_simp)
+       in INDUCT (target', vars, arbitrary', gen_fact_refs, rule', no_simp, insts) (*insts: parsed at interpret time*)
       end
   | check_command_i s (NEXT_OR_END (facts, vars)) =
       let val ctxt = Minilang.context_of s
@@ -1577,4 +1616,3 @@ val _ = Theory.setup
      \reasoners (simp / intro / elim / split)")
 
 end
-

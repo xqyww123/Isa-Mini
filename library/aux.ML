@@ -19,6 +19,7 @@ val xof : Proof.context -> string option list * string option list ->
 datatype var_name = VN_IndexName of indexname | VN_Name of string
 val is_tvar_name : var_name -> bool
 val tvar_indexname : var_name -> indexname
+val parse_var : string -> indexname
 
 val xwhere : Proof.context ->
       ((var_name * Position.T) * (string * string)) list ->
@@ -566,6 +567,13 @@ fun is_tvar_name (VN_Name s) = String.isPrefix "'" s
 
 fun tvar_indexname (VN_Name s) = (s, 0)
   | tvar_indexname (VN_IndexName idx) = idx
+
+(* Parse a schematic-variable display name (e.g. "?x", "?'a", "?c.5") into
+   an indexname. Handles both term vars and type vars (leading "'"). *)
+fun parse_var v =
+  case Lexicon.read_variable v of
+    SOME ix => ix
+  | NONE => error ("Malformed schematic variable name: `" ^ v ^ "`")
 
 fun display_of_indexname (x, 0) = x
   | display_of_indexname xi = unprefix "?" (Term.string_of_vname xi)

@@ -1,0 +1,48 @@
+--------------------------------------------------
+Initial
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: P k
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+Post-rule instantiation prompt (kind=term)
+--------------------------------------------------
+The proof goal contains schematic variables that must be instantiated before you can continue:
+  - ?x :: ?'a
+Call `answer_instantiate` with `instantiations`, a list of {variable, term} objects; each `term` must be a type-correct Isabelle expression.
+--------------------------------------------------
+Post-rule instantiation prompt (kind=type)
+--------------------------------------------------
+The proof goal contains schematic type variables that are not yet determined and must be instantiated before you can continue:
+  - ?'b :: type
+Call `answer_instantiate` with `instantiations`, a list of {variable, term} objects; each `term` must be a well-formed Isabelle type.
+--------------------------------------------------
+After InferenceRule (term then type round)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: P k
+proof:
+  - step id: 1
+    thought: apply myrule4 (term round pins ?'a; type round handles ?'b)
+    operation: Inference Rule
+    rule:
+      - myrule4: S ?x ⟶ (∀(y :: ?'b). y = y) ⟶ P ?m
+    derived subgoals:
+      - goal id: 1.1
+        goal: S (0 :: nat)
+        proof: empty
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1` to provide the proof.
+      - goal id: 1.2
+        goal: ∀(y :: nat). y = y
+        proof:
+          - step id: 1.2.1
+            operation: Intro
+            fixing variables:
+              - y: nat
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.2` to provide the proof for the following goal.
+        pending proof goal:
+          y = y
+interaction kinds fired: ['term', 'type']
+residual term schematics: []
+residual type schematics: []

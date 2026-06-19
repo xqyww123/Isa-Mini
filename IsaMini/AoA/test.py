@@ -264,6 +264,255 @@ async def _test_InferenceRuleSolvesGoal(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
+# ----------------------------------------------------------------------------
+# Intro default semantics: silent `standard_tac` fallback.
+#
+# When the leading goal has no leading quantifier / premise (normal Intro
+# cannot proceed), Intro silently tries ONE `Classical.standard_tac ctxt []`
+# step and accepts it ONLY when it reduces to exactly one new proof goal that
+# itself needs Intro. Otherwise Intro is a no-op (goal unchanged), exactly as
+# before. The four cases below pin each branch of that decision; the goal
+# behaviour of one bare `rule` step on each fixture was verified empirically.
+# ----------------------------------------------------------------------------
+
+@model_test("IntroStandardSubset", "Test_IntroStandardSubset.thy", 8)
+async def _test_IntroStandardSubset(root: Root, file: MyIO):
+    """ACCEPT path. Goal `A ⊆ B` has no leading ⋀/⟹/∀/⟶, so normal Intro
+    cannot proceed. The silent standard_tac step applies subsetI, exposing the
+    single intro-able goal `⋀x. x ∈ A ⟹ x ∈ B`; Intro then fixes `x` and
+    assumes `x ∈ A`, leaving `x ∈ B`. The agent still sees one Intro."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    await root.fill("1", [Intro.gen_single({
+        "thought": "introduce an element and the membership premise"
+    })])
+    print_header("After Intro (standard_tac fallback: subsetI, then introduce)", file)
+    root.print(0, file)
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+@model_test("IntroStandardMultiGoal", "Test_IntroStandardMultiGoal.thy", 8)
+async def _test_IntroStandardMultiGoal(root: Root, file: MyIO):
+    """REJECT path — too many new goals. Goal `(∀x. P x) ∧ Q` does not need
+    Intro; the standard_tac step applies conjI, producing TWO goals
+    `∀x. P x` and `Q`. Even though the leading one (`∀x. P x`) would need
+    Intro, the `exactly one new goal` guard rejects the fallback, so Intro is
+    a no-op and the goal is unchanged."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    await root.fill("1", [Intro.gen_single({
+        "thought": "try to introduce"
+    })])
+    print_header("After Intro (no-op: standard_tac would split into 2 goals)", file)
+    root.print(0, file)
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+@model_test("IntroStandardNoIntroAfter", "Test_IntroStandardNoIntroAfter.thy", 8)
+async def _test_IntroStandardNoIntroAfter(root: Root, file: MyIO):
+    """REJECT path — one new goal, but it still does not need Intro. Goal
+    `P ∨ Q` does not need Intro; the standard_tac step applies disjI1, leaving
+    the single goal `P`, which is atomic (no leading ⋀/⟹/∀/⟶). The
+    `the new goal needs Intro` guard rejects the fallback, so Intro is a no-op
+    and the goal is unchanged."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    await root.fill("1", [Intro.gen_single({
+        "thought": "try to introduce"
+    })])
+    print_header("After Intro (no-op: standard_tac result still needs no Intro)", file)
+    root.print(0, file)
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+@model_test("IntroStandardSolves", "Test_IntroStandardSolves.thy", 8)
+async def _test_IntroStandardSolves(root: Root, file: MyIO):
+    """REJECT path — standard_tac fully solves the head goal (zero new goals).
+    Goal `0 < Suc n` does not need Intro; the standard_tac step closes it
+    outright (`zero_less_Suc`). With zero new goals the `exactly one new goal`
+    guard rejects the fallback — crucially the solving step is DISCARDED, so
+    Intro is a no-op and the goal is left intact for a later, explicit step."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    await root.fill("1", [Intro.gen_single({
+        "thought": "try to introduce"
+    })])
+    print_header("After Intro (no-op: standard_tac would solve the goal outright)", file)
+    root.print(0, file)
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+@model_test("PostInstRule", "Test_PostInstRule.thy", 19)
+async def _test_PostInstRule(root: Root, file: MyIO):
+    # `myrule` applied to `P k` pins ?m:=k but leaves ?c residual in the
+    # non-consume premise `Q ?c`. The consume-premise pre-flight misses it
+    # (0 consumes); the post-rule probe must surface it and ask for a value.
+    print_header("Initial", file)
+    root.print(0, file)
+
+    # Fixture answers for residual schematics, keyed by reported name. The stub
+    # answers EVERY variable the interaction reports, each round, so the probe's
+    # fixpoint loop converges (a one-shot answerer would loop forever).
+    fixture = {"?c": "0::nat"}
+    captured_kinds: list[str] = []
+    async def stub(interaction):
+        if isinstance(interaction, Interaction_InstantiatePostSchematics):
+            captured_kinds.append(interaction.kind)
+            print_header(f"Post-rule instantiation prompt (kind={interaction.kind})", file)
+            await interaction.prompt(0, file)
+            insts = [(n, fixture[n]) for n, _ in interaction.schematic_vars]
+            return await interaction.answer(AnswerInstantiate(instantiations=insts))
+        raise NotImplementedError(
+            f"Unstubbed interaction in PostInstRule: {type(interaction).__name__}")
+    root.session.launch_interaction = stub
+
+    root.session.age += 1
+    await root.fill("1", [InferenceRule.gen_single({
+        "thought": "apply myrule (leaves ?c residual in a non-consume premise)",
+        "rule": {"name": "myrule"}})])
+    print_header("After InferenceRule (residual ?c instantiated)", file)
+    root.print(0, file)
+
+    # The whole goal must now be schematic-free.
+    node = root.sub_nodes[1]
+    tvs, tyvs = await node._state_after_beginning().schematic_variables_of(whole=True)
+    file.write(f"interaction kinds fired: {captured_kinds}\n")
+    file.write(f"residual term schematics: {sorted(t.unicode for t in tvs)}\n")
+    file.write(f"residual type schematics: {sorted(t.unicode for t in tyvs)}\n")
+
+def _post_inst_stub(file: MyIO, fixture: dict[str, str], captured_kinds: list[str]):
+    """A `launch_interaction` stub for post-rule instantiation: answers every
+    variable the interaction reports, each round, from `fixture` (keyed by the
+    reported `?name`). Prints each round's prompt and records the round kind so
+    the multi-round fixpoint converges."""
+    async def stub(interaction):
+        if isinstance(interaction, Interaction_InstantiatePostSchematics):
+            captured_kinds.append(interaction.kind)
+            print_header(f"Post-rule instantiation prompt (kind={interaction.kind})", file)
+            await interaction.prompt(0, file)
+            insts = [(n, fixture[n]) for n, _ in interaction.schematic_vars]
+            return await interaction.answer(AnswerInstantiate(instantiations=insts))
+        raise NotImplementedError(
+            f"Unstubbed interaction: {type(interaction).__name__}")
+    return stub
+
+async def _assert_schematic_free(root: Root, file: MyIO, captured_kinds: list[str]):
+    node = root.sub_nodes[1]
+    tvs, tyvs = await node._state_after_beginning().schematic_variables_of(whole=True)
+    file.write(f"interaction kinds fired: {captured_kinds}\n")
+    file.write(f"residual term schematics: {sorted(t.unicode for t in tvs)}\n")
+    file.write(f"residual type schematics: {sorted(t.unicode for t in tyvs)}\n")
+
+@model_test("PostInstRuleType", "Test_PostInstRuleType.thy", 16)
+async def _test_PostInstRuleType(root: Root, file: MyIO):
+    # `?'a` occurs only in the premise → residual TYPE variable → kind=type.
+    print_header("Initial", file)
+    root.print(0, file)
+    kinds: list[str] = []
+    root.session.launch_interaction = _post_inst_stub(file, {"?'a": "nat"}, kinds)
+    root.session.age += 1
+    await root.fill("1", [InferenceRule.gen_single({
+        "thought": "apply myTrule (leaves residual type ?'a)",
+        "rule": {"name": "myTrule"}})])
+    print_header("After InferenceRule (residual ?'a instantiated to nat)", file)
+    root.print(0, file)
+    await _assert_schematic_free(root, file, kinds)
+
+@model_test("PostInstRuleMultiTerm", "Test_PostInstRuleMultiTerm.thy", 18)
+async def _test_PostInstRuleMultiTerm(root: Root, file: MyIO):
+    # Two residual term vars ?c, ?d surfaced together in one term round.
+    print_header("Initial", file)
+    root.print(0, file)
+    kinds: list[str] = []
+    root.session.launch_interaction = _post_inst_stub(
+        file, {"?c": "0::nat", "?d": "1::nat"}, kinds)
+    root.session.age += 1
+    await root.fill("1", [InferenceRule.gen_single({
+        "thought": "apply myrule2 (leaves residual ?c and ?d)",
+        "rule": {"name": "myrule2"}})])
+    print_header("After InferenceRule (?c, ?d instantiated)", file)
+    root.print(0, file)
+    await _assert_schematic_free(root, file, kinds)
+
+@model_test("PostInstRuleTermPinsType", "Test_PostInstRuleTermPinsType.thy", 18)
+async def _test_PostInstRuleTermPinsType(root: Root, file: MyIO):
+    # ?x :: ?'a; answering ?x:=0::nat pins ?'a, so only ONE term round fires.
+    print_header("Initial", file)
+    root.print(0, file)
+    kinds: list[str] = []
+    root.session.launch_interaction = _post_inst_stub(file, {"?x": "0::nat"}, kinds)
+    root.session.age += 1
+    await root.fill("1", [InferenceRule.gen_single({
+        "thought": "apply myrule3 (?x's type ?'a is pinned by the term value)",
+        "rule": {"name": "myrule3"}})])
+    print_header("After InferenceRule (?x and its type ?'a both eliminated)", file)
+    root.print(0, file)
+    await _assert_schematic_free(root, file, kinds)
+
+@model_test("PostInstRuleTermThenType", "Test_PostInstRuleTermThenType.thy", 18)
+async def _test_PostInstRuleTermThenType(root: Root, file: MyIO):
+    # ?x::?'a (term) plus independent type-only ?'b → term round, then type round.
+    print_header("Initial", file)
+    root.print(0, file)
+    kinds: list[str] = []
+    root.session.launch_interaction = _post_inst_stub(
+        file, {"?x": "0::nat", "?'b": "nat"}, kinds)
+    root.session.age += 1
+    await root.fill("1", [InferenceRule.gen_single({
+        "thought": "apply myrule4 (term round pins ?'a; type round handles ?'b)",
+        "rule": {"name": "myrule4"}})])
+    print_header("After InferenceRule (term then type round)", file)
+    root.print(0, file)
+    await _assert_schematic_free(root, file, kinds)
+
+@model_test("PostInstValidation", "Test_PostInstValidation.thy", 19)
+async def _test_PostInstValidation(root: Root, file: MyIO):
+    # Exercise the answer validator: empty / missing / unknown / duplicate /
+    # type-clash answers are each rejected with a clean BadAnswer; the final
+    # correct answer succeeds. All attempts happen within the single term round.
+    print_header("Initial", file)
+    root.print(0, file)
+    attempts = [
+        ("empty",         []),
+        ("missing ?d",    [("?c", "0::nat")]),
+        ("unknown ?zzz",  [("?c", "0::nat"), ("?d", "1::nat"), ("?zzz", "2::nat")]),
+        ("duplicate ?c",  [("?c", "0::nat"), ("?c", "9::nat"), ("?d", "1::nat")]),
+        ("type clash",    [("?c", "True"), ("?d", "1::nat")]),
+        ("correct",       [("?c", "0::nat"), ("?d", "1::nat")]),
+    ]
+    state = {"i": 0}
+    async def stub(interaction):
+        if not isinstance(interaction, Interaction_InstantiatePostSchematics):
+            raise NotImplementedError(f"Unstubbed: {type(interaction).__name__}")
+        print_header(f"Post-rule instantiation prompt (kind={interaction.kind})", file)
+        await interaction.prompt(0, file)
+        while state["i"] < len(attempts):
+            label, insts = attempts[state["i"]]
+            state["i"] += 1
+            try:
+                result = await interaction.answer(AnswerInstantiate(instantiations=insts))
+                file.write(f"[{label}] accepted\n")
+                return result
+            except Interaction_BadAnswer as e:
+                file.write(f"[{label}] rejected: {e}\n")
+        raise AssertionError("ran out of attempts without an accepted answer")
+    root.session.launch_interaction = stub
+    root.session.age += 1
+    await root.fill("1", [InferenceRule.gen_single({
+        "thought": "apply myrule2 (validate ?c, ?d answers)",
+        "rule": {"name": "myrule2"}})])
+    print_header("After InferenceRule (validation passed)", file)
+    root.print(0, file)
+    await _assert_schematic_free(root, file, ["term"])
+
 @model_test("AutoRewriteFallback", "Test_AutoRewriteFallback.thy", 8)
 async def _test_AutoRewriteFallback(root: Root, file: MyIO):
     print_header("Initial", file)

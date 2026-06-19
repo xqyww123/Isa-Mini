@@ -12,7 +12,7 @@
           },
           "term": {
             "type": "string",
-            "description": "The Isabelle term to instantiate the variable with, with all literal numbers annotated with their types"
+            "description": "The expression to instantiate the variable with: for a term variable (e.g. `?c`), an Isabelle term with all literal numbers annotated with their types; for a type variable (e.g. `?'a`), a well-formed Isabelle type."
           }
         },
         "required": ["variable", "term"],

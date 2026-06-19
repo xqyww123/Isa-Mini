@@ -23,7 +23,7 @@ val goals_of'   : thm -> term list  (* extract the list of subgoal terms
                                        outer `Pure.imp` chain *)
 val leading_goal_data : state -> (items * term) option * int
 val map_context : (Proof.context -> Proof.context) -> state -> state
-val schematic_vars_of_leading_goal : state -> (indexname * typ) list
+val schematic_vars_of_goal : bool -> state -> (indexname * typ) list * (indexname * sort) list
 
 datatype fail_reason = INVALID_OPR | PROOF_FAIL | TERMLANG
 exception OPR_FAIL of fail_reason * string
@@ -101,6 +101,7 @@ val SPLIT_CONJS_CMD : command
 
 (* Helper functions for INTRO *)
 val need_intro : thm -> bool
+val standard_intro_fallback : state -> state option
 val strip_meta_and_hol_hhf : term -> (string * typ) list * term list * term
 val deep_destruct_prem : Proof.context -> thm -> thm list
 val deep_destruct_term : Proof.context -> term -> term list
@@ -218,6 +219,12 @@ val SUFFICES_CMD : command
 val INST_VAR : (indexname * string) list -> operation
 val INST_VAR'' : (indexname * term) list -> operation
 val INST_VAR_CMD : command
+
+(* Instantiate residual schematic variables in the (whole) proof goal,
+   2-phase: type vars (?'a) via exact Thm.instantiate, then term vars (?x)
+   via Drule.infer_instantiate (which unifies and pins any type vars the
+   term values determine). Both inst lists are (indexname * value-string). *)
+val INST_GOAL_VARS : (indexname * string) list * (indexname * string) list -> operation
 
 val SPECIALIZE   : string option -> fact list -> (Minilang_Aux.var_name * string) list -> fact list -> operation
 val SPECIALIZE'' : string option -> thm list  -> (Minilang_Aux.var_name * term) list * (indexname * typ) list -> thm list  -> operation
@@ -596,20 +603,24 @@ fun leading_goal_data ((_, SK), _, _) =
            else (SOME (items, hd (goals_of' st)), num_goals_of' st)
        | _ => (NONE, 0))
 
-(* Extract all schematic variables from the leading proof goal *)
-fun schematic_vars_of_leading_goal ((_, HHF (st, _) :: _), _, _) =
+(* Extract schematic term-variables and type-variables from the proof goal(s).
+   `whole = false`: scan only the leading subgoal.
+   `whole = true` : scan the whole goal sequent (every open subgoal; the
+                    already-protected conclusion is excluded — `goals_of'`
+                    does not return it). *)
+fun schematic_vars_of_goal whole ((_, HHF (st, _) :: _), _, _) =
   let
-    (* Get the first goal from the HHF sequent *)
     val goals = goals_of' st
-    val goal = case goals of
-                 [] => \<^prop>\<open>True\<close>  (* No goals, return True *)
-               | (g :: _) => g
-
-    (* Collect all Vars from the goal term using Term.add_vars *)
-    val vars = Term.add_vars goal []
-   in vars |> distinct (op =)
+    val scanned =
+      if whole then goals
+      else (case goals of
+              [] => [\<^prop>\<open>True\<close>]  (* No goals: nothing to collect *)
+            | (g :: _) => [g])
+    val vars  = fold Term.add_vars  scanned [] |> distinct (op =)
+    val tvars = fold Term.add_tvars scanned [] |> distinct (op =)
+   in (vars, tvars)
   end
-  | schematic_vars_of_leading_goal _ = raise BROKEN_INVARIANT
+  | schematic_vars_of_goal _ _ = raise BROKEN_INVARIANT
 
 fun concl_of (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ (Const(\<^const_name>\<open>Minilang.GOAL\<close>, _) $ X)) = concl_of X
   | concl_of (Const(\<^const_name>\<open>Minilang.GOAL\<close>, _) $ X) = concl_of X
@@ -1591,6 +1602,23 @@ fun apply msg tac time s = apply' msg (get_reporter()) tac time s
       handle Timeout.TIMEOUT _ => raise OPR_FAIL (PROOF_FAIL, "Timeout")
 
 fun apply_method msg using meth timeout s = apply msg (meth using) timeout s
+
+fun standard_intro_fallback ((ctxt, HHF (st, items) :: L), his, ID) =
+      if need_intro st then NONE
+      else
+        (case try (SINGLE (Classical.standard_tac ctxt [])) st of
+          SOME (SOME st') =>
+            let
+              val n_new = Thm.nprems_of st' - Thm.nprems_of st + 1
+              val stack' = maintain (ctxt, HHF (protect_goals st', items) :: L)
+              val state' = (stack', his, ID)
+              val st'' = leading_proof_sequent_of state'
+            in
+              if n_new = 1 andalso need_intro st'' then SOME state'
+              else NONE
+            end
+        | _ => NONE)
+  | standard_intro_fallback _ = raise BROKEN_INVARIANT
 
 
 fun record_history name (s,his,ID) = (s, Symtab.update (name,s) his,ID)
@@ -3628,6 +3656,40 @@ fun gen_INST_VAR prep_term insts = timed_OPR 8 (INST_VAR' prep_term insts)
 
 val INST_VAR   = gen_INST_VAR Syntax.read_term
 val INST_VAR'' = gen_INST_VAR (K I)
+
+(** INST_GOAL_VARS — instantiate residual schematic vars in the whole goal **)
+
+fun INST_GOAL_VARS' (tinsts, insts) (ctxt, HHF (st, items) :: SK) =
+  let
+    (* Phase 1 — type vars (?'a): exact Thm.instantiate; sort comes from the goal *)
+    val st1 =
+      if null tinsts then st
+      else
+        let
+          val tvars   = Term.add_tvars (Thm.prop_of st) []   (* ((name,idx), sort) list *)
+          val sort_of = AList.lookup (op =) tvars
+          val tpairs  = map (fn (idx, raw) =>
+                case sort_of idx of
+                  SOME S => ((idx, S), Thm.ctyp_of ctxt (Syntax.read_typ ctxt raw))
+                | NONE   => raise OPR_FAIL (INVALID_OPR,
+                              "Type variable " ^ Term.string_of_vname idx ^
+                              " not found in goal")) tinsts
+        in Thm.instantiate (TVars.make tpairs, Vars.empty) st end
+    (* Phase 2 — term vars (?x): Drule.infer_instantiate unifies and pins
+       any type vars the term values determine. read_term (default mode)
+       rejects schematic ?x in the value, enforcing a committed value. *)
+    val st2 =
+      if null insts then st1
+      else
+        let
+          val pairs = map (fn (idx, raw) =>
+                (idx, Thm.cterm_of ctxt (Syntax.read_term ctxt raw))) insts
+        in Drule.infer_instantiate ctxt pairs st1 end
+   in (ctxt, HHF (st2, items) :: SK)
+  end
+  | INST_GOAL_VARS' _ _ = raise BROKEN_INVARIANT
+
+fun INST_GOAL_VARS args = timed_OPR 8 (INST_GOAL_VARS' args)
 
 (* Parser for INST_VAR_CMD *)
 val INST_VAR_CMD =

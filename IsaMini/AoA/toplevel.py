@@ -91,14 +91,22 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
     logger = connection.server.logger
     pc = get_proof_cache()
 
-    # Cache READING is gated by the AoA_use_proof_cache config (passed from ML).
-    # When disabled, both levels are bypassed for lookup; a finished proof is
-    # still WRITTEN to both levels on success (see L1 SQLite store below and the
-    # ML-side L2 Phi_Cache_DB store).
-    if not use_cache:
+    # Cache READING is gated by the AoA_use_proof_cache config (passed from ML)
+    # AND skipped entirely for the test driver: snapshot tests must run the
+    # model by hand (`case.run`), never short-circuit to a replayed cached proof.
+    # Replaying would (a) bypass the by-hand path under test — a successful
+    # replay returns before `case.run` is ever reached, a false pass — and
+    # (b) after a wire-format change, a stale cached proof fails to unpack
+    # mid-callback and corrupts the connection. When disabled, both levels are
+    # bypassed for lookup; a finished proof is still WRITTEN on success (see L1
+    # SQLite store below and the ML-side L2 Phi_Cache_DB store).
+    is_test_driver = driver.split(".", 1)[0] == "test"
+    if not use_cache or is_test_driver:
+        why = ("test driver: run by hand, never replay cache" if is_test_driver
+               else "AoA_use_proof_cache=false")
         logger.info(
-            "[AoA-cache] lookup BYPASSED (AoA_use_proof_cache=false) "
-            "goal_hash=%s; will still store on success", goal_hash)
+            "[AoA-cache] lookup BYPASSED (%s) goal_hash=%s; will still store on success",
+            why, goal_hash)
     else:
         logger.info(
             "[AoA-cache] lookup goal_hash=%s | sqlite_db=%s | phi_cache_json=%s",

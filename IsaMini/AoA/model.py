@@ -1413,6 +1413,16 @@ def _pack_varnames(varnames: list[varname_spec] | None) -> list[str | None] | No
         return None
     return [v.ascii if v is not None else None for v in varnames]
 
+def _pack_post_insts(insts: 'list[list[tuple[str, xterm | xtyp]]] | None') -> list[list[tuple[str, str]]]:
+    """Pack post-rule schematic-instantiation rounds for the wire: a list of
+    rounds, each a list of (var-name, value) pairs. Both components are
+    ASCII-encoded — the variable name may carry Isabelle symbols (`?\\<alpha>`),
+    and the value is an arbitrary term/type expression."""
+    if not insts:
+        return []
+    return [[(ascii_of_unicode(name), ascii_of_unicode(value)) for name, value in rnd]
+            for rnd in insts]
+
 class Minilang_Operation(NamedTuple):
     command: str
     arg: Any
@@ -1495,8 +1505,11 @@ class Minilang_Operation(NamedTuple):
         vars = [(v["name"], ascii_of_unicode(t) if (t := v.get("type")) else None) for v in variables]
         return Minilang_Operation("OBTAIN", (vars, [(n, ascii_of_unicode(c)) for n, c in constraints]))
     @staticmethod
-    def RULE(rule_ref: 'IsabelleFact | None') -> 'Minilang_Operation':
-        return Minilang_Operation("RULE", [rule_ref.pack()] if rule_ref is not None else [])
+    def RULE(rule_ref: 'IsabelleFact | None',
+             insts: 'list[list[tuple[str, xterm | xtyp]]] | None' = None) -> 'Minilang_Operation':
+        return Minilang_Operation("RULE", (
+            [rule_ref.pack()] if rule_ref is not None else [],
+            _pack_post_insts(insts)))
     @staticmethod
     def HAMMER(fact_refs: 'list[IsabelleFact]', timeout: int = 20,
                cached_proof: 'tuple[str, int] | None' = None) -> 'Minilang_Operation':
@@ -1540,20 +1553,22 @@ class Minilang_Operation(NamedTuple):
     def BRANCH(cases: list[tuple[str, xterm]]) -> 'Minilang_Operation':
         return Minilang_Operation("BRANCH", [(n, ascii_of_unicode(t)) for n, t in cases])
     @staticmethod
-    def CASE_SPLIT(target: xterm, vars: list[varname_spec] | None, rule: 'IsaTerm | None', no_simp: bool) -> 'Minilang_Operation':
+    def CASE_SPLIT(target: xterm, vars: list[varname_spec] | None, rule: 'IsaTerm | None', no_simp: bool,
+                   insts: 'list[list[tuple[str, xterm | xtyp]]] | None' = None) -> 'Minilang_Operation':
         return Minilang_Operation("CASE_SPLIT",
             (ascii_of_unicode(target), _pack_varnames(vars),
              rule.ascii if rule is not None else None,
-             no_simp))
+             no_simp, _pack_post_insts(insts)))
     @staticmethod
     def INDUCT(target: xterm, vars: list[varname_spec] | None, arbitrary: list[xvarname],
-               facts_to_generalize: list[str], rule: 'IsaTerm | None', no_simp: bool) -> 'Minilang_Operation':
+               facts_to_generalize: list[str], rule: 'IsaTerm | None', no_simp: bool,
+               insts: 'list[list[tuple[str, xterm | xtyp]]] | None' = None) -> 'Minilang_Operation':
         return Minilang_Operation("INDUCT",
             (ascii_of_unicode(target), _pack_varnames(vars),
              [ascii_of_unicode(t) for t in arbitrary],
              list(facts_to_generalize),
              rule.ascii if rule is not None else None,
-             no_simp))
+             no_simp, _pack_post_insts(insts)))
     @staticmethod
     def SPECIALIZE(
         name: str,
@@ -3104,6 +3119,46 @@ class Interaction_RetrieveForProof(Interaction_Retrieve):
         return await super().answer(AnswerIndexes(indexes=answer.indexes))
 
 
+def _validate_instantiation_answer(
+        answer: 'AnswerInstantiate',
+        schematic_vars: 'list[tuple[str, str]]') -> 'list[tuple[str, str]]':
+    """Shared front-half validation for an `answer_instantiate` response:
+    require a non-empty `instantiations`, reject duplicate / missing / unknown
+    variable names against `schematic_vars`, and return the (name, value) pairs
+    ordered to match `schematic_vars`. Raises Interaction_BadAnswer on any
+    violation."""
+    if not answer.instantiations:
+        names = ", ".join(n for n, _ in schematic_vars)
+        raise Interaction_BadAnswer(
+            f"This interaction requires `instantiations` for variables: {names}.")
+    required = {n for n, _ in schematic_vars}
+    provided: set[str] = set()
+    by_name: dict[str, str] = {}
+    for v, t in answer.instantiations:
+        if v in provided:
+            raise Interaction_BadAnswer(f"Variable `{v}` was instantiated twice.")
+        provided.add(v)
+        by_name[v] = t
+    missing = required - provided
+    if missing:
+        raise Interaction_BadAnswer(
+            f"Missing instantiations for: {', '.join(sorted(missing))}.")
+    extra = provided - required
+    if extra:
+        sorted_extra = [f"`{v}`" for v in sorted(extra)]
+        if len(sorted_extra) >= 3:
+            joined = ", ".join(sorted_extra[:-1]) + ", and " + sorted_extra[-1]
+        elif len(sorted_extra) == 2:
+            joined = " and ".join(sorted_extra)
+        else:
+            joined = sorted_extra[0]
+        plural = "variables" if len(sorted_extra) > 1 else "variable"
+        raise Interaction_BadAnswer(
+            f"Unknown schematic {plural}: {joined}. "
+            f"Expected one of: {', '.join(f'`{v}`' for v in sorted(required))}.")
+    return [(n, by_name[n]) for n, _ in schematic_vars]
+
+
 class Interaction_InstantiateSchematics(Interaction):
     """Prompt the LLM to instantiate schematic variables of an induction /
     case-split rule.
@@ -3161,36 +3216,7 @@ class Interaction_InstantiateSchematics(Interaction):
     fork_allowed_tools = [TOOL_ANSWER_INSTANTIATE, TOOL_SEARCH]
 
     async def answer(self, answer: AnswerInstantiate) -> IsaTerm:
-        if not answer.instantiations:
-            names = ", ".join(n for n, _ in self.schematic_vars)
-            raise Interaction_BadAnswer(
-                f"This interaction requires `instantiations` for variables: {names}.")
-        required = {n for n, _ in self.schematic_vars}
-        provided: set[str] = set()
-        by_name: dict[str, str] = {}
-        for v, t in answer.instantiations:
-            if v in provided:
-                raise Interaction_BadAnswer(f"Variable `{v}` was instantiated twice.")
-            provided.add(v)
-            by_name[v] = t
-        missing = required - provided
-        if missing:
-            raise Interaction_BadAnswer(
-                f"Missing instantiations for: {', '.join(sorted(missing))}.")
-        extra = provided - required
-        if extra:
-            sorted_extra = [f"`{v}`" for v in sorted(extra)]
-            if len(sorted_extra) >= 3:
-                joined = ", ".join(sorted_extra[:-1]) + ", and " + sorted_extra[-1]
-            elif len(sorted_extra) == 2:
-                joined = " and ".join(sorted_extra)
-            else:
-                joined = sorted_extra[0]
-            plural = "variables" if len(sorted_extra) > 1 else "variable"
-            raise Interaction_BadAnswer(
-                f"Unknown schematic {plural}: {joined}. "
-                f"Expected one of: {', '.join(f'`{v}`' for v in sorted(required))}.")
-        insts = [(n, by_name[n]) for n, _ in self.schematic_vars]
+        insts = _validate_instantiation_answer(answer, self.schematic_vars)
         err: str | None = await self.state.connection.callback(
             "IsaMini.validate_instantiation",
             (self.state.name, self.rule_name.ascii, insts))
@@ -3202,6 +3228,78 @@ class Interaction_InstantiateSchematics(Interaction):
             for v, t in insts)
         rule_src = f'"{self.rule_name.unicode}"[xwhere {where_parts}]'
         return IsaTerm.from_agent(rule_src)
+
+
+class Interaction_InstantiatePostSchematics(Interaction):
+    """Non-forking: after a RULE / CaseSplit / Induction op runs, residual
+    schematic variables may still occur in some open subgoal (the rule's
+    schematics were not all pinned by unification). This asks the agent —
+    inline, mid-edit — to instantiate them so the operation produces a
+    schematic-free state.
+
+    Fired by the probe loop in `SubgoalMaker._execute_opr`, once per round,
+    term variables first and then any remaining type variables (a term value
+    pins most type vars via `infer_instantiate`); the loop re-detects after each
+    round, so an under-instantiating or type-reintroducing round is caught next
+    time. `answer` returns the round as a `list[(name, value)]`; the probe
+    accumulates the rounds and bakes them into the op's `_post_insts` so the op
+    replays deterministically from cache.
+
+    Parameterized by `kind`: "term" offers `?x :: τ` and collects a term for
+    each; "type" offers `?'a :: sort` and collects a type for each. The "type"
+    prompt is self-contained — a pure-type-var goal hits it as the first/only
+    interaction, with no preceding term round."""
+
+    @property
+    def is_non_forking(self) -> bool:
+        return True
+
+    fork_allowed_tools = [TOOL_ANSWER_INSTANTIATE, TOOL_SEARCH]
+
+    def __init__(self,
+                 state: 'Minilang_State',
+                 schematic_vars: list[tuple[str, str]],
+                 kind: Literal["term", "type"]):
+        self.state = state
+        self.schematic_vars = schematic_vars
+        self.kind = kind
+
+    async def prompt(self, indent: int, file: MyIO) -> None:
+        print_indent(indent, file)
+        if self.kind == "term":
+            file.write(
+                "The proof goal contains schematic variables that must be "
+                "instantiated before you can continue:\n")
+        else:
+            file.write(
+                "The proof goal contains schematic type variables that are not "
+                "yet determined and must be instantiated before you can continue:\n")
+        for name, ty in self.schematic_vars:
+            print_indent(indent + 1, file)
+            file.write(f"- {name} :: {ty}\n")
+        print_indent(indent, file)
+        if self.kind == "term":
+            file.write(
+                f"Call `{tn(TOOL_ANSWER_INSTANTIATE)}` with `instantiations`, a list of "
+                "{variable, term} objects; each `term` must be a type-correct Isabelle "
+                "expression.\n")
+        else:
+            file.write(
+                f"Call `{tn(TOOL_ANSWER_INSTANTIATE)}` with `instantiations`, a list of "
+                "{variable, term} objects; each `term` must be a well-formed Isabelle "
+                "type.\n")
+
+    async def answer(self, answer: AnswerInstantiate) -> 'list[tuple[str, str]]':
+        insts = _validate_instantiation_answer(answer, self.schematic_vars)
+        # Validate against the actual post-rule state via the same 2-phase
+        # primitive used on replay (ASCII-encoded, matching the wire form).
+        err: str | None = await self.state.connection.callback(
+            "IsaMini.validate_inst_var",
+            (self.state.name, [(ascii_of_unicode(n), ascii_of_unicode(t)) for n, t in insts]))
+        if err is not None:
+            raise Interaction_BadAnswer(
+                f"Instantiation rejected by Isabelle:\n{err}")
+        return insts
 
 
 class Interaction_MapCase(Interaction):
@@ -3456,6 +3554,16 @@ class Node(ABC):
         the proof state flowing into this node may have changed.
         Override to clear caches that depend on upstream state."""
         self._is_trivial = None
+
+    async def _execute_opr(self, from_state: 'Minilang_State',
+                           opr: 'Minilang_Operation',
+                           dest: 'Minilang_State | None') -> None:
+        """Chokepoint for executing this node's own operation, taking an
+        explicit `from_state` (the four call sites execute from two different
+        receivers). The base is a plain execute; `SubgoalMaker` overrides it to
+        detect residual schematic variables after RULE/CaseSplit/Induction and
+        prompt the agent to instantiate them before the op is committed."""
+        await from_state.execute(opr, dest)
 
     @classmethod
     def _validate_arg(cls, arg: Any, path: str) -> Any:
@@ -4304,7 +4412,7 @@ class Leaf(Node):
             self.status = EvaluationStatus.Failure(time() - now, op)
             return
         try:
-            await self.ml_state.execute(op, self.resulting_state())
+            await self._execute_opr(self.ml_state, op, self.resulting_state())
             self.status = EvaluationStatus.Success(time() - now)
         except IsabelleError as err:
             msg = ''.join(err.errors)
@@ -4876,7 +4984,7 @@ class StdBlock(NonLeaf_Node):
         assert isinstance(opr, Minilang_Operation), \
             f"_refresh_the_beginning_opr expects a Minilang_Operation, got {type(opr).__name__}"
         try:
-            await self.ml_state.execute(opr, self._state_after_beginning())
+            await self._execute_opr(self.ml_state, opr, self._state_after_beginning())
             return None
         except IsabelleError as err:
             return self._beginning_opr_err_msgs(err)
@@ -4886,7 +4994,7 @@ class StdBlock(NonLeaf_Node):
             await self._state_before_ending_.clone(self.resulting_state())
         else:
             try:
-                await self._state_before_ending_.execute(ending_opr, self.resulting_state())
+                await self._execute_opr(self._state_before_ending_, ending_opr, self.resulting_state())
             except IsabelleError as err:
                 return self._ending_opr_err_msgs(err)
         return None
@@ -5635,6 +5743,13 @@ PREFIX_OLD = "old-"
 CASE_EXISTING = "the-existing-proof"
 
 
+# Operations whose result may carry residual schematic variables that the
+# post-rule instantiation probe must eliminate.
+_POST_INST_COMMANDS = frozenset({"RULE", "CASE_SPLIT", "INDUCT"})
+# Backstop on the post-instantiation fixpoint loop (real need is 1-3 rounds;
+# generous so cross-round type dependencies converge, not a shrink measure).
+_MAX_POST_INST_ROUNDS = 16
+
 class SubgoalMaker(GoalContainer, StdBlock):
     _can_host_inherited_children = False
     def _nearest_goal_for_subagent(self) -> 'Node | None':
@@ -5647,6 +5762,71 @@ class SubgoalMaker(GoalContainer, StdBlock):
         super().__init__(*args, **kwargs)
         self._initial_goal_index : int = 1
         self._supplied_proofs: 'dict[str, proof_with_case_vars] | None' = None
+        # Post-rule schematic instantiation (RULE/CaseSplit/Induction only).
+        # `None` = not yet probed; otherwise the ordered list of instantiation
+        # rounds (each a list of (var-name, value) pairs) baked into the op so
+        # it produces a schematic-free state and replays from cache. Reset on
+        # upstream change (see _on_upstream_change). For non-rule subgoal makers
+        # it stays None and is never read.
+        self._post_insts: 'list[list[tuple[str, xterm | xtyp]]] | None' = None
+
+    def _on_upstream_change(self) -> None:
+        super()._on_upstream_change()
+        # The state flowing in changed → any recorded instantiations were
+        # computed against a stale goal; re-probe from scratch next refresh.
+        self._post_insts = None
+
+    def _beginning_opr_with_insts(
+            self, rounds: 'list[list[tuple[str, xterm | xtyp]]]') -> 'Minilang_Operation | FailureReason | None':
+        """Rebuild this node's beginning op with `rounds` baked in, without
+        disturbing `self._post_insts` — used by the probe to re-execute the op
+        with the rounds accumulated so far on a throwaway scratch state."""
+        saved = self._post_insts
+        self._post_insts = rounds
+        try:
+            return self.beginning_opr()
+        finally:
+            self._post_insts = saved
+
+    async def _execute_opr(self, from_state: 'Minilang_State',
+                           opr: 'Minilang_Operation',
+                           dest: 'Minilang_State | None') -> None:
+        if opr.command in _POST_INST_COMMANDS and self._post_insts is None:
+            rounds: 'list[list[tuple[str, xterm | xtyp]]]' = []
+            for _ in range(_MAX_POST_INST_ROUNDS):
+                scratch_op = self._beginning_opr_with_insts(rounds)
+                if not isinstance(scratch_op, Minilang_Operation):
+                    break  # beginning_opr degraded (e.g. FailureReason); let the real execute handle it
+                try:
+                    # STATE-level execute (no recursion); throwaway scratch, not logged.
+                    scratch = await from_state.execute(scratch_op, None, log=False)
+                except (IsabelleError, InternalError):
+                    break  # the base op itself failed — let the real execute below surface it
+                try:
+                    term_vars, type_vars = await scratch.schematic_variables_of(whole=True)
+                    if not term_vars and not type_vars:
+                        self._post_insts = rounds
+                        break
+                    # Term-first: a term value pins most type vars via infer_instantiate,
+                    # so ask for types only once no term vars remain.
+                    if term_vars:
+                        offered, kind = term_vars, "term"
+                    else:
+                        offered, kind = type_vars, "type"
+                    schematic_vars = [(name.unicode, ty.unicode) for name, ty in offered.items()]
+                    rnd = await the_session().launch_interaction(
+                        Interaction_InstantiatePostSchematics(scratch, schematic_vars, kind))
+                    rounds = rounds + [rnd]
+                finally:
+                    if scratch._initialized:
+                        await scratch.reset()
+            else:
+                raise IsabelleError(
+                    [f"Could not eliminate the residual schematic variables of this "
+                     f"{opr.command} operation within {_MAX_POST_INST_ROUNDS} rounds of "
+                     f"instantiation."], None)
+            opr = cast(Minilang_Operation, self.beginning_opr())
+        await super()._execute_opr(from_state, opr, dest)
 
     def _all_fixed_facts_before_a_child(self, child: 'Node', ret: Hyps) -> Hyps:
         super()._all_fixed_facts_before_a_child(child, ret)
@@ -6345,7 +6525,7 @@ class CaseSplit_Like(SubgoalMaker):
             opr = self.beginning_opr()
             if isinstance(opr, Minilang_Operation):
                 try:
-                    await self.ml_state.execute(opr, self._state_after_beginning())
+                    await self._execute_opr(self.ml_state, opr, self._state_after_beginning())
                     await self._state_after_beginning().clone(self.sub_nodes[0].ml_state)
                 except IsabelleError:
                     pass
@@ -8927,7 +9107,7 @@ class InferenceRule(SubgoalMaker):
     def beginning_opr(self) -> 'Minilang_Operation | FailureReason':
         if isinstance(self.rule_ref, IsabelleFact_Unfound):
             return FailureReason(f"Inference rule fact \"{self.rule_ref.name().unicode}\" not found")
-        return Minilang_Operation.RULE(self.rule_ref)
+        return Minilang_Operation.RULE(self.rule_ref, self._post_insts)
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         # The ML RULE operator already emits its own "Fail to apply the rules."
         # header; only prepend our node-level one when it didn't, to avoid a
@@ -9224,7 +9404,8 @@ class CaseSplit(CaseSplit_Like):
             self.target_isabelle_term,
             cast(list[varname_spec] | None, self._case_vars_of_child(0)),
             self._resolved_rule_str,
-            self.no_simp)
+            self.no_simp,
+            self._post_insts)
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         return FailureReason(f"Case analysis failed because: {"\n".join(err.errors)}")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
@@ -9470,7 +9651,8 @@ class Induction(CaseSplit_Like):
             [var["name"] for var in self.variables if var["status"] == "generalized"],
             [r.full_name for r in self.fact_refs_to_generalize],
             self._resolved_rule_str,
-            self.no_simp)
+            self.no_simp,
+            self._post_insts)
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         return FailureReason(f"Induction failed because: {"\n".join(err.errors)}")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
@@ -10471,6 +10653,11 @@ class Session:
             if self.is_worker else
             "A proof goal can be buggy and thus unprovable — "
             f"call `{self.tool_name(TOOL_REPORT)}` with your analysis if you believe so.\n"
+        )
+        report_line += (
+            "Many Isabelle functions are partially specified (example: `x / 0`, "
+            "`hd []`, `inverse 0`). If contextual premises cannot constrain operands "
+            "into the domain, the goal is unprovable — refute it.\n"
         )
         # Declarative-style guidance, shared verbatim by the major (planner) and the
         # worker (prover) so the two cannot drift. Interaction forks (focused Q&A /
