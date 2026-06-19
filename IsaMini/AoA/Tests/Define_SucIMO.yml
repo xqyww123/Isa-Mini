@@ -4,7 +4,7 @@ Initial YAML
 variables:
   - n: nat
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
-goal: ¬ (5 :: nat) dvd (∑k≤n. ((2 :: nat) * n + (1 :: nat) choose ((2 :: nat) * k + (1 :: nat))) * (2 :: nat) ^ ((3 :: nat) * k))
+goal: ¬ (5 :: nat) dvd (∑k≤n. ((2 :: nat) * n + (1 :: nat) choose (2 :: nat) * k + (1 :: nat)) * (2 :: nat) ^ ((3 :: nat) * k))
 proof: empty
 Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
@@ -13,7 +13,7 @@ After Define
 variables:
   - n: nat
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
-goal: ¬ (5 :: nat) dvd (∑k≤n. ((2 :: nat) * n + (1 :: nat) choose ((2 :: nat) * k + (1 :: nat))) * (2 :: nat) ^ ((3 :: nat) * k))
+goal: ¬ (5 :: nat) dvd (∑k≤n. ((2 :: nat) * n + (1 :: nat) choose (2 :: nat) * k + (1 :: nat)) * (2 :: nat) ^ ((3 :: nat) * k))
 proof:
   - step id: 1
     thought: Define pow2 with Suc pattern under imo_1974_p3 imports
@@ -26,5 +26,5 @@ proof:
     proof of termination: empty
 Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
-  ¬ (5 :: nat) dvd (∑k≤n. ((2 :: nat) * n + (1 :: nat) choose ((2 :: nat) * k + (1 :: nat))) * (2 :: nat) ^ ((3 :: nat) * k))
+  ¬ (5 :: nat) dvd (∑k≤n. ((2 :: nat) * n + (1 :: nat) choose (2 :: nat) * k + (1 :: nat)) * (2 :: nat) ^ ((3 :: nat) * k))
 Unfinished nodes: 1
