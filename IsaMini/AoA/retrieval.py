@@ -431,9 +431,11 @@ def _augment_kinds_with_theorem_collection(
 ) -> list[EntityKind]:
     """Append THEOREM_COLLECTION when the agent asked for lemmas AND gave a semantic
     description (the ranked discovery path). exact_name and pure-pattern (no
-    description) queries are excluded: a theorem collection can be neither
-    pattern-filtered nor ranked there, so it would only add noise / crowd out the
-    structural matches the agent asked for. To target a collection on those paths
+    description) queries are excluded: a theorem collection IS now pattern-filterable
+    (the ML half-member-match gate), but without a description it cannot be semantically
+    ranked (the gate only filters, it does not rank), so auto-adding it there would only
+    add noise / crowd out the structural matches the agent asked for. To target a
+    collection on those paths
     the agent passes ``kinds: ["named theorem bundles"]`` explicitly (the legacy
     ``"named theorems"`` label is still accepted)."""
     has_description = bool(q.get("description") or q.get("long_description"))
