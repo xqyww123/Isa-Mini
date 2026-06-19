@@ -28,6 +28,8 @@ proof:
       - y: 'a    (renamed from "x")
     assuming premises:
       - hyp: y ∈ A
+    the proof goal has changed to:
+      y ∈ B
 Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   y ∈ B

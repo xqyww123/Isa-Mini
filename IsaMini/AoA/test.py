@@ -265,13 +265,17 @@ async def _test_InferenceRuleSolvesGoal(root: Root, file: MyIO):
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
 # ----------------------------------------------------------------------------
-# Intro default semantics: silent `standard_tac` fallback.
+# Intro default semantics: silent `standard_tac` fallback (explicit Intro only).
 #
 # When the leading goal has no leading quantifier / premise (normal Intro
-# cannot proceed), Intro silently tries ONE `Classical.standard_tac ctxt []`
-# step and accepts it ONLY when it reduces to exactly one new proof goal that
-# itself needs Intro. Otherwise Intro is a no-op (goal unchanged), exactly as
-# before. The four cases below pin each branch of that decision; the goal
+# cannot proceed), an explicit/agent-issued Intro silently tries ONE
+# `Classical.standard_tac ctxt []` step and accepts it ONLY when it reduces to
+# exactly one new proof goal that itself needs Intro. On acceptance the goal was
+# rewritten by a rule the agent did not request, so the resulting goal is shown
+# inline ("the proof goal has changed to:"). If even the standard_tac step
+# exposes nothing intro-able, the explicit Intro FAILS with "Nothing to intro"
+# (an auto-injected Intro instead stays a silent no-op). The five cases below
+# pin each branch of that decision plus the explicit-bindings coupling; the goal
 # behaviour of one bare `rule` step on each fixture was verified empirically.
 # ----------------------------------------------------------------------------
 
@@ -298,15 +302,15 @@ async def _test_IntroStandardMultiGoal(root: Root, file: MyIO):
     """REJECT path — too many new goals. Goal `(∀x. P x) ∧ Q` does not need
     Intro; the standard_tac step applies conjI, producing TWO goals
     `∀x. P x` and `Q`. Even though the leading one (`∀x. P x`) would need
-    Intro, the `exactly one new goal` guard rejects the fallback, so Intro is
-    a no-op and the goal is unchanged."""
+    Intro, the `exactly one new goal` guard rejects the fallback, so this
+    explicit Intro FAILS with "Nothing to intro" and shows the goal."""
     print_header("Initial YAML", file)
     root.print(0, file)
     root.session.age += 1
     await root.fill("1", [Intro.gen_single({
         "thought": "try to introduce"
     })])
-    print_header("After Intro (no-op: standard_tac would split into 2 goals)", file)
+    print_header("After Intro (FAILS: standard_tac would split into 2 goals)", file)
     root.print(0, file)
     unfinished = set()
     root.unfinished_nodes(unfinished)
@@ -317,15 +321,15 @@ async def _test_IntroStandardNoIntroAfter(root: Root, file: MyIO):
     """REJECT path — one new goal, but it still does not need Intro. Goal
     `P ∨ Q` does not need Intro; the standard_tac step applies disjI1, leaving
     the single goal `P`, which is atomic (no leading ⋀/⟹/∀/⟶). The
-    `the new goal needs Intro` guard rejects the fallback, so Intro is a no-op
-    and the goal is unchanged."""
+    `the new goal needs Intro` guard rejects the fallback, so this explicit
+    Intro FAILS with "Nothing to intro" and shows the goal."""
     print_header("Initial YAML", file)
     root.print(0, file)
     root.session.age += 1
     await root.fill("1", [Intro.gen_single({
         "thought": "try to introduce"
     })])
-    print_header("After Intro (no-op: standard_tac result still needs no Intro)", file)
+    print_header("After Intro (FAILS: standard_tac result still needs no Intro)", file)
     root.print(0, file)
     unfinished = set()
     root.unfinished_nodes(unfinished)
@@ -337,14 +341,15 @@ async def _test_IntroStandardSolves(root: Root, file: MyIO):
     Goal `0 < Suc n` does not need Intro; the standard_tac step closes it
     outright (`zero_less_Suc`). With zero new goals the `exactly one new goal`
     guard rejects the fallback — crucially the solving step is DISCARDED, so
-    Intro is a no-op and the goal is left intact for a later, explicit step."""
+    this explicit Intro FAILS with "Nothing to intro" and shows the goal
+    (telling the agent to use a closing tactic such as Obvious instead)."""
     print_header("Initial YAML", file)
     root.print(0, file)
     root.session.age += 1
     await root.fill("1", [Intro.gen_single({
         "thought": "try to introduce"
     })])
-    print_header("After Intro (no-op: standard_tac would solve the goal outright)", file)
+    print_header("After Intro (FAILS: standard_tac would solve the goal outright)", file)
     root.print(0, file)
     unfinished = set()
     root.unfinished_nodes(unfinished)
@@ -2200,22 +2205,25 @@ async def _test_Simplify_no_intro_bindings(root: Root, file: MyIO):
 
 @model_test("Intro_no_intro_bindings", "Test_Intro_no_intro_bindings.thy", 8)
 async def _test_Intro_no_intro_bindings(root: Root, file: MyIO):
-    """Reproduces 'Expected exactly one Intro_Bindings_Msg in Intro's messages, got 0'.
+    """Explicit Intro inside a case, on a residual goal with nothing to
+    introduce, now FAILS with "Nothing to intro" (and shows the goal).
 
-    Root cause: `AUTO_INTRO` (contrib/Isa-Mini/Agent/agent.ML) short-
-    circuits on `not (Minilang.need_intro st)` and returns
-    `(([], []), s)` without calling `Minilang.get_reporter () (INTRO_BINDINGS ...)`.
-    `need_intro` is false when the leading goal has no outer
-    Pure.imp / Pure.all / HOL.All / HOL.implies. The Python side
-    (model.py:5817, `Intro._refresh_the_beginning_opr`) then finds zero
-    `Intro_Bindings_Msg` and raises `InternalError`.
+    `CaseSplit` on a boolean brings the case hypothesis into the goal context
+    as a named premise (`True.prem0: b`), leaving the residual goal `P True`
+    with no outer ⋀ / ⟹ — and `standard_tac` exposes no single intro-able
+    goal either. An explicit `Intro` there (e.g. to rename the hypothesis via
+    `fact_bindings`) therefore has nothing to introduce, so AUTO_INTRO raises
+    `OPR_FAIL` ("Nothing to intro …"), marking the node FAILURE. This is the
+    intended behaviour after scoping the silent standard_tac fallback to
+    explicit Intro: a no-op explicit Intro is an agent mistake, not silently
+    tolerated.
 
-    Trigger here: `CaseSplit` on a boolean brings the case hypothesis into the
-    goal context as a named premise (`True.prem0: b`), leaving the residual
-    goal `P True` with no outer ⋀ / ⟹. An `Intro` inside that case (e.g. to
-    rename the hypothesis via `fact_bindings`) hits the early-return path.
-    This matches the real-world trace where `CaseSplit` on `q = (3 :: nat)`
-    was followed by `Intro { fact_bindings: ['q_eq_3'] }` inside the True case.
+    This also still guards the historical crash 'Expected exactly one
+    Intro_Bindings_Msg …, got 0': the FAILURE path raises BEFORE emitting
+    INTRO_BINDINGS, and Python's `Intro._refresh_me_alone` only checks for
+    INTRO_BINDINGS on SUCCESS, so it never trips the `got 0` InternalError.
+    (The original real-world trace was `CaseSplit` on `q = (3 :: nat)` followed
+    by `Intro { fact_bindings: ['q_eq_3'] }` inside the True case.)
     """
     print_header("Initial YAML", file)
     root.print(0, file)

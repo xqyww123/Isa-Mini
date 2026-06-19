@@ -105,6 +105,9 @@ exception INTRO_BINDINGS of {
     auto_introduced: bindings,
     final: bindings
   }
+(* The explicit Intro used the silent standard_tac fallback, which rewrote the
+   goal. Signals the Python side to print the resulting goal inline. *)
+exception INTRO_STANDARDIZED
 exception SIMPLIFY_FALLBACK_NOSYS
 exception SIMPLIFY_FALLBACK_ONCE_SIMPROC
 exception SIMPLIFY_TARGETS_STALE of string list (* names of discarded rules *)
@@ -172,6 +175,9 @@ exception INTRO_BINDINGS of {
     auto_introduced: bindings,
     final: bindings
   }
+(* The explicit Intro used the silent standard_tac fallback, which rewrote the
+   goal. Signals the Python side to print the resulting goal inline. *)
+exception INTRO_STANDARDIZED
 exception SIMPLIFY_FALLBACK_NOSYS
 exception SIMPLIFY_FALLBACK_ONCE_SIMPROC
 exception SIMPLIFY_TARGETS_STALE of string list
@@ -386,10 +392,11 @@ fun get_witness_types s =
    captured, not forwarded) via the no-`maintain` state-level raw_apply,
    accepting it only when it yields exactly one new goal that itself needs
    Intro. NONE means Intro cannot proceed. `report (Goals gs)` carries the new
-   subgoals, so its length is the new-goal count. *)
-fun resolve_intro_state allow_fallback (s: Minilang.state) : Minilang.state option =
+   subgoals, so its length is the new-goal count. The returned `bool` is whether
+   the standard_tac fallback was used (false for a direct need_intro hit). *)
+fun resolve_intro_state allow_fallback (s: Minilang.state) : (Minilang.state * bool) option =
   if Minilang.need_intro (Minilang.leading_proof_sequent_of s)
-  then SOME s
+  then SOME (s, false)
   else if not allow_fallback then NONE
   else
     let
@@ -403,7 +410,7 @@ fun resolve_intro_state allow_fallback (s: Minilang.state) : Minilang.state opti
         SOME s' =>
           if !n_new = 1
              andalso Minilang.need_intro (Minilang.leading_proof_sequent_of s')
-          then SOME s' else NONE
+          then SOME (s', true) else NONE
       | NONE => NONE
     end
 
@@ -423,6 +430,24 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (allow_fallba
        standard_tac step that exposes an intro-able goal (explicit Intro only). *)
     case resolve_intro_state allow_fallback s of
       NONE =>
+      if allow_fallback then
+        (* Explicit Intro with nothing to introduce, even after one silent
+           standard_tac step: an agent mistake — fail loudly and show the
+           current goal rather than silently doing nothing. (Auto-injected
+           Intro keeps the silent no-op below.) *)
+        let
+          val ctxt = Minilang.context_of s
+                       |> Config.put Printer.show_markup false
+          val goal_str =
+            (case Minilang.goals_of' st of
+               g :: _ => string_of_term ctxt g
+             | [] => string_of_term ctxt (Thm.prop_of st))
+        in
+          raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL,
+            "Nothing to intro. There is no leading variable or premise to introduce in the goal:\n  "
+            ^ goal_str)
+        end
+      else
       let
         (* No leading ⋀/⟹/∀/⟶ to introduce: nothing is bound. Still emit
            INTRO_BINDINGS so the Python side's invariant (exactly one per
@@ -449,7 +474,7 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (allow_fallba
         val _ = Minilang.get_reporter ()
                   (Minilang.Goals (Minilang.goals_of' st |> take 1))
       in (([], []), s) end
-    | SOME intro_s =>
+    | SOME (intro_s, used_fallback) =>
       let
         val ctxt = Minilang.context_of intro_s
             |> Config.put Printer.show_markup false
@@ -589,6 +614,12 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (allow_fallba
           final = (var_bindings_final, prem_bindings_final)
         }))
 
+        (* When the silent standard_tac fallback rewrote the goal, tell the
+           Python side so it prints the resulting goal inline at the node. *)
+        val _ = if used_fallback
+                then Minilang.get_reporter () (Minilang.Internal INTRO_STANDARDIZED)
+                else ()
+
         (* Step 11: Emit `Goals` with the actual subgoal terms Intro
            opened as direct children.  The state stored on the stack is
            in Minilang's protected form — `protect_goals` nests
@@ -628,7 +659,7 @@ fun compute_bindings (s:Minilang.state)
      (auto-injected Intros carry none), so the fallback is always allowed here. *)
   case resolve_intro_state true s of
     NONE => ([], [])
-  | SOME intro_s =>
+  | SOME (intro_s, _) =>
       let
         val ctxt = Minilang.context_of intro_s
                   |> Config.put Printer.show_markup false

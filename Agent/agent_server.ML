@@ -217,6 +217,8 @@ fun minilang_message_packer ctxt =
                  packInt 4
              | MiniLang_Agent.SIMPLIFY_FALLBACK_ONCE_SIMPROC =>
                  packInt 9
+             | MiniLang_Agent.INTRO_STANDARDIZED =>
+                 packInt 16
              | MiniLang_Agent.SIMPLIFY_TARGETS_STALE names =>
                  packPair (packInt, packList packString) (11, names)
              (* (fact_name, pretty_printed_proposition) list *)
@@ -241,6 +243,7 @@ fun minilang_message_packer ctxt =
    in packList pack o filter (fn Minilang.Internal (MiniLang_Agent.INTRO_BINDINGS _) => true
                                  | Minilang.Internal MiniLang_Agent.SIMPLIFY_FALLBACK_NOSYS => true
                                  | Minilang.Internal MiniLang_Agent.SIMPLIFY_FALLBACK_ONCE_SIMPROC => true
+                                 | Minilang.Internal MiniLang_Agent.INTRO_STANDARDIZED => true
                                  | Minilang.Internal (MiniLang_Agent.SIMPLIFY_TARGETS_STALE _) => true
                                  | Minilang.Internal (MiniLang_Agent.SPECIALIZE_RESULT _) => true
                                  | Minilang.Internal Minilang.PAT_COMPLETENESS_PROOF_OPENED => true
@@ -1242,7 +1245,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
 
       (* Build AoA command with local callbacks *)
       val raw_goal_hash = Hasher.goal (ctxt, sequent)
-      val goal_hash = "intro-standard-v3:" ^ raw_goal_hash
+      val goal_hash = "intro-standard-v4:" ^ raw_goal_hash
       val thy = Proof_Context.theory_of ctxt
       val aoa_cache_key = "aoa:" ^ goal_hash
       val use_cache = Config.get ctxt AoA_use_proof_cache

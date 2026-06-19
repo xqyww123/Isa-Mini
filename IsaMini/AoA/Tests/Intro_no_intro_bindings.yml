@@ -44,7 +44,10 @@ Outline:
     - 1.True
       premises:
         - True.prem0: b
-      step 1.True.1: Intro
+      step 1.True.1: Intro (failed)
+        Error: |
+          Nothing to intro. There is no leading variable or premise to introduce in the goal:
+            P True
       Unfinished Proof. Call command `edit` with action `fill` and target step `1.True.2`
       goal: P True
     - 1.False
@@ -59,7 +62,10 @@ Intro node print (1.True.1)
 - step id: 1.True.1
   thought: Rename the case hypothesis
   operation: Intro
-[probe] Intro: new_subgoals_count=1, display_goals_count=1
+  Error: |
+    Nothing to intro. There is no leading variable or premise to introduce in the goal:
+      P True
+[probe] Intro: new_subgoals_count=2, display_goals_count=1
 --------------------------------------------------
 Full tree after Intro
 --------------------------------------------------
@@ -82,6 +88,9 @@ proof:
           - step id: 1.True.1
             thought: Rename the case hypothesis
             operation: Intro
+            Error: |
+              Nothing to intro. There is no leading variable or premise to introduce in the goal:
+                P True
         Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.2` to provide the proof for the following goal.
         pending proof goal:
           P True

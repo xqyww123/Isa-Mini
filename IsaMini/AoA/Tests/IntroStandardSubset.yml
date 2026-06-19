@@ -28,6 +28,8 @@ proof:
       - x: 'a
     assuming premises:
       - premise0: x ∈ A
+    the proof goal has changed to:
+      x ∈ B
 Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   x ∈ B

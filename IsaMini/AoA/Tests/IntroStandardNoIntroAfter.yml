@@ -9,7 +9,7 @@ goal: P ∨ Q
 proof: empty
 Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
-After Intro (no-op: standard_tac result still needs no Intro)
+After Intro (FAILS: standard_tac result still needs no Intro)
 --------------------------------------------------
 variables:
   - Q: bool
@@ -20,7 +20,10 @@ proof:
   - step id: 1
     thought: try to introduce
     operation: Intro
+    Error: |
+      Nothing to intro. There is no leading variable or premise to introduce in the goal:
+        P ∨ Q
 Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   P ∨ Q
-Unfinished nodes: 1
+Unfinished nodes: 2

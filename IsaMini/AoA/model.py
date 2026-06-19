@@ -1215,6 +1215,12 @@ class Intro_Bindings_Msg(Message):
         ]
         return (var_bindings, fact_bindings)
 
+class Intro_Standardized_Msg(Message):
+    """The explicit Intro used the silent `standard_tac` fallback, which rewrote
+    the proof goal (e.g. `A ⊆ B` → `⋀x. x ∈ A ⟹ x ∈ B`). Signals the Intro node
+    to print the resulting goal inline."""
+    pass
+
 class Simplify_Fallback_Nosys_Msg(Message):
     """The simplification timed out with system simplifiers and succeeded without them."""
     pass
@@ -1317,6 +1323,8 @@ def unpack_message(data) -> Message:
             return Simplify_Fallback_Nosys_Msg()
         case 9:
             return Simplify_Fallback_Once_Simproc_Msg()
+        case 16:
+            return Intro_Standardized_Msg()
         case (5, x):
             return Specialize_Result_Msg.unpack(x)
         case (6, x):
@@ -8806,6 +8814,9 @@ class Intro(Leaf):
         # (not written by the agent). Only an explicit Intro may use the silent
         # standard_tac fallback, so it is gated on `not _auto_injected`.
         self._auto_injected = _auto_injected
+        # True iff the silent standard_tac fallback rewrote the goal on the last
+        # successful refresh; drives the inline "the proof goal has changed to:".
+        self._goal_rewritten = False
     @classmethod
     def gen_single(cls, arg: Intro_ToolArg,
                    path: str = "<direct>") -> Parsed_Opr:
@@ -8821,8 +8832,22 @@ class Intro(Leaf):
         if self.bindings is not None and self.bindings != self._prev_bindings:
             print_var_bindings(self.bindings[0], indent, file, "fixing variables")
             print_fact_bindings(self.bindings[1], indent, file, "assuming premises")
+            self._print_goal_rewritten(indent, file)
             self._prev_bindings = self.bindings
         return indent
+    def _print_goal_rewritten(self, indent: int, file: MyIO) -> None:
+        """When the silent standard_tac fallback rewrote the goal, show the
+        resulting goal inline at the node (the rule application was not asked
+        for by the agent, so make the new goal explicit)."""
+        if not self._goal_rewritten:
+            return
+        goal = self.resulting_state().leading_goal
+        if goal is None:
+            return
+        print_indent(indent, file)
+        file.write("the proof goal has changed to:\n")
+        print_indent(indent + 1, file)
+        file.write(f"{goal.conclusion.unicode}\n")
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
         self._print_thought(indent, file)
@@ -8845,6 +8870,7 @@ class Intro(Leaf):
                 for f in fact_bindings:
                     print_indent(indent + 1, file)
                     file.write(f"- {f}\n")
+        self._print_goal_rewritten(indent, file)
         self._print_evaluation_status(indent, file)
         if show_warnings:
             self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
@@ -8861,9 +8887,11 @@ class Intro(Leaf):
             self._pending_bindings = None
         old_bindings = self.bindings
         await super()._refresh_me_alone(auto_intro)
+        self._goal_rewritten = False
         if self.status.status == EvaluationStatus.Status.SUCCESS:
             self.running_time += 1
             messages = self.resulting_state().messages
+            self._goal_rewritten = any(isinstance(m, Intro_Standardized_Msg) for m in messages)
             intro_bindings_msgs = [m for m in messages if isinstance(m, Intro_Bindings_Msg)]
             match intro_bindings_msgs:
                 case [intro_bindings_msg]:

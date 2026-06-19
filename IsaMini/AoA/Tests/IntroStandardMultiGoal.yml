@@ -11,7 +11,7 @@ goal: (∀(x :: 'a). P x) ∧ Q
 proof: empty
 Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
-After Intro (no-op: standard_tac would split into 2 goals)
+After Intro (FAILS: standard_tac would split into 2 goals)
 --------------------------------------------------
 variables:
   - Q: bool
@@ -24,7 +24,10 @@ proof:
   - step id: 1
     thought: try to introduce
     operation: Intro
+    Error: |
+      Nothing to intro. There is no leading variable or premise to introduce in the goal:
+        (∀(x :: 'a). P x) ∧ Q
 Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   (∀(x :: 'a). P x) ∧ Q
-Unfinished nodes: 1
+Unfinished nodes: 2
