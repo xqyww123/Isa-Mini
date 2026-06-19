@@ -7,7 +7,7 @@ variables:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: P b
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After initial fill (True/False)
 --------------------------------------------------
@@ -30,7 +30,7 @@ proof:
           - step id: 1.True.1
             operation: Obvious
             Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.1` to replace it with a proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.1` to replace it with a proof.
         pending proof goal:
           P True
       - goal id: 1.False
@@ -41,7 +41,7 @@ proof:
           - step id: 1.False.1
             operation: Obvious
             Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.1` to replace it with a proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.1` to replace it with a proof.
         pending proof goal:
           P False
 --------------------------------------------------
@@ -71,7 +71,7 @@ proof:
               conclusion: True
             name: h
             proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.2` to provide the proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.2` to provide the proof.
       - goal id: 1.False
         premises:
           - False.prem0: ¬ b
@@ -85,5 +85,5 @@ proof:
               conclusion: True
             name: h
             proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.2` to provide the proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.2` to provide the proof.
 Interactions fired: 0 (expected 0)

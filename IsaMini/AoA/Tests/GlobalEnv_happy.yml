@@ -9,11 +9,11 @@ premises:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: x + y = x + x
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 Initial Overview
 --------------------------------------------------
-Error: Unfinished Proof. Call command `edit` with action `fill` and target step `1`
+Unfinished Proof. Call command `edit` with action `fill` and target step `1`
 goal: x + y = x + x
 GlobalEnv children: 0
 Added have1: id=global.1, local_step=1, status=success
@@ -41,14 +41,14 @@ proof:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.2`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: x + y = x + x
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 Overview after ADD
 --------------------------------------------------
 global declarations:
   step global.1: Have g_eq (proven)
 proof:
-  Error: Unfinished Proof. Fill step `1`
+  Unfinished Proof. Fill step `1`
 GoalNode context hyps: ['g_eq', 'h1']
 g_eq visible to GoalNode via context: True
 Rewrite step 1 using g_eq: status=success, is_error=False
@@ -177,7 +177,7 @@ proof:
     targets:
       - the goal
     Error: Fact "g_eq" not found
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   x + y = x + x
 --------------------------------------------------
@@ -185,6 +185,6 @@ Final Overview
 --------------------------------------------------
 step 1: Rewrite goal (failed)
   Error: Fact "g_eq" not found
-Error: Unfinished Proof. Fill step `2`
+Unfinished Proof. Fill step `2`
 goal: x + y = x + x
 Unfinished nodes: 2

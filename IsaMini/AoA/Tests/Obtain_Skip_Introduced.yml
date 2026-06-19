@@ -32,7 +32,7 @@ proof:
       english: the existential witness
       conclusion: k = m
     proof: empty
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
+    Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
     pending proof goal:
       ∃(k :: nat). k = m
 --------------------------------------------------
@@ -42,7 +42,7 @@ step 1: Intro
   assuming premises:
     - premise0: ∃(k :: nat). k = m
 step 2: Obtain k
-  Error: Unfinished Proof. Call command `edit` with action `fill` and target step `2.1`
+  Unfinished Proof. Call command `edit` with action `fill` and target step `2.1`
   goal: ∃(k :: nat). k = m
   obtained variables:
     - k: nat

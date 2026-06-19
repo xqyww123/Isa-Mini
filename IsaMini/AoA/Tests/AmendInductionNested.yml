@@ -6,7 +6,7 @@ variables:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∑ {..n} = n * (n + (1 :: nat)) div (2 :: nat)
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After fill
 --------------------------------------------------
@@ -34,7 +34,7 @@ proof:
           - goal id: 1.2.0
             goal: ∑ {..(0 :: nat)} = (0 :: nat) * ((0 :: nat) + (1 :: nat)) div (2 :: nat)
             proof: empty
-            Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.0.1` to provide the proof.
+            Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.0.1` to provide the proof.
           - goal id: 1.2.Suc
             variables:
               - n: nat
@@ -42,5 +42,5 @@ proof:
               - Suc.IH: ∑ {..n} = n * (n + (1 :: nat)) div (2 :: nat)
             goal: (n + n * n) div (2 :: nat) + n = (n + (n + (n + n * n))) div (2 :: nat)
             proof: empty
-            Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.Suc.1` to provide the proof.
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+            Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.Suc.1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.

@@ -11,7 +11,7 @@ variables:
   - A: nat set
 goal: P (0 :: nat)
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After Obvious with Ball xwhere
 --------------------------------------------------

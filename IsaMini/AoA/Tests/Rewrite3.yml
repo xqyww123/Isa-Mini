@@ -12,7 +12,7 @@ variables:
   - y: int
 goal: x = z
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After Have
 --------------------------------------------------
@@ -37,7 +37,7 @@ proof:
     proof:
       - step id: 1.1
         operation: Obvious
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
 --------------------------------------------------
 After Rewrite
 --------------------------------------------------
@@ -71,7 +71,7 @@ proof:
       - the goal
     goal changes into:
       y = z
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
   y = z
 --------------------------------------------------
@@ -107,7 +107,7 @@ proof:
       - the goal
     goal changes into:
       y * (1 :: int) = z
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
   y * (1 :: int) = z
 --------------------------------------------------
@@ -135,7 +135,7 @@ proof:
       - step id: 1.1
         operation: Obvious
         Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to replace it with a proof.
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to replace it with a proof.
     pending proof goal:
       x = y * (2 :: int)
   - step id: 2
@@ -147,6 +147,6 @@ proof:
       - the goal
     goal changes into:
       y * (2 :: int) = z
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
   y * (2 :: int) = z

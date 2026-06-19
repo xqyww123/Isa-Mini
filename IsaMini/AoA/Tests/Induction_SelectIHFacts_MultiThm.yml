@@ -15,7 +15,7 @@ proof:
     assuming premises:
       - premise0(1): k ≤ n
       - premise0(2): k ≤ n + n
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   a k dvd b n
 --------------------------------------------------
@@ -35,7 +35,7 @@ proof:
     assuming premises:
       - premise0(1): k ≤ n
       - premise0(2): k ≤ n + n
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   a k dvd b n
 --------------------------------------------------
@@ -75,7 +75,7 @@ proof:
           - premise0(1): n ≤ (0 :: nat)
         goal: a n dvd b (0 :: nat)
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.0.1` to provide the proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `2.0.1` to provide the proof.
       - goal id: 2.Suc
         variables:
           - n: nat
@@ -85,7 +85,7 @@ proof:
           - Suc.IH: ?k ≤ n ⟶ a ?k dvd b n
         goal: a k1 dvd b (Suc n)
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.Suc.1` to provide the proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `2.Suc.1` to provide the proof.
 
 offered candidates: ['premise0(1)', 'premise0(2)']
 carried into IH: ['premise0(1)']

@@ -4,7 +4,7 @@ Initial YAML
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: (1 :: int) = (1 :: int) ∧ (2 :: int) = (2 :: int)
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 edit_message: conjI
 --------------------------------------------------
@@ -12,10 +12,10 @@ Filled step 1.
 Outline:
   step 1: Inference Rule conjI
     - 1.1
-      Error: Unfinished Proof. Call command `edit` with action `fill` and target step `1.1.1`
+      Unfinished Proof. Call command `edit` with action `fill` and target step `1.1.1`
       goal: (1 :: int) = (1 :: int)
     - 1.2
-      Error: Unfinished Proof. Fill step `1.2.1`
+      Unfinished Proof. Fill step `1.2.1`
       goal: (2 :: int) = (2 :: int)
 ---------------
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
@@ -30,11 +30,11 @@ proof:
       - goal id: 1.1
         goal: (1 :: int) = (1 :: int)
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1` to provide the proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1` to provide the proof.
       - goal id: 1.2
         goal: (2 :: int) = (2 :: int)
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.1` to provide the proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.1` to provide the proof.
 child: id='1.1', titled_id='goal 1.1', type=GoalNode, _kind='goal', id_of_goal='1.1'
 child: id='1.2', titled_id='goal 1.2', type=GoalNode, _kind='goal', id_of_goal='1.2'
 --------------------------------------------------
@@ -46,7 +46,7 @@ Outline:
   step 1: Inference Rule conjI
     - 1.1 (done)
     - 1.2
-      Error: Unfinished Proof. Fill step `1.2.1`
+      Unfinished Proof. Fill step `1.2.1`
 ---------------
 --------------------------------------------------
 edit_message: fill 1.2.1 (second subgoal — should cascade)

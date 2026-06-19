@@ -22,7 +22,7 @@ proof:
           - n: nat
         goal: (0 :: nat) + n = n + (0 :: nat)
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.0.1` to provide the proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `2.0.1` to provide the proof.
       - goal id: 2.Suc
         variables:
           - n: nat

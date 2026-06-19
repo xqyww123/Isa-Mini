@@ -4,7 +4,7 @@ Initial YAML
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: myg (3 :: nat) = (8 :: nat)
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After SetupRewriting
 --------------------------------------------------
@@ -20,10 +20,10 @@ proof:
     for_any:
       n: nat
     proof: empty
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
     pending proof goal:
       myg n = n + (5 :: nat)
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   premises:
     - setup_rewriting__1: myg ?n = ?n + (5 :: nat)
@@ -47,7 +47,7 @@ proof:
         operation: Obvious
         with facts:
           - myg_def: myg ?n = ?n + (5 :: nat)
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   premises:
     - setup_rewriting__1: myg ?n = ?n + (5 :: nat)

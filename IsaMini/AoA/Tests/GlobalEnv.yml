@@ -9,7 +9,7 @@ premises:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: x * x = (0 :: int) ∨ P
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 GlobalEnv children: 0
 --------------------------------------------------
 edit_message: ADD global Have t1
@@ -18,10 +18,10 @@ Filled step global.1.
 Outline:
   global declarations:
     step global.1: Have t1
-      Error: Unfinished Proof. Call command `edit` with action `fill` and target step `global.1.1`
+      Unfinished Proof. Call command `edit` with action `fill` and target step `global.1.1`
       goal: P
   proof:
-    Error: Unfinished Proof. Fill step `1`
+    Unfinished Proof. Fill step `1`
     goal: x * x = (0 :: int) ∨ P
 ---------------
 Added have1: id=global.1, local_step=1, status=success
@@ -42,7 +42,7 @@ Filled step 1.
 Outline:
   global declarations:
     step global.1: Have t1
-      Error: Unfinished Proof. Fill step `global.1.1`
+      Unfinished Proof. Fill step `global.1.1`
   proof:
     proven
 ---------------
@@ -62,7 +62,7 @@ statement:
   conclusion: P
 name: t1
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `global.1.1` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `global.1.1` to provide the proof for the following goal.
 pending proof goal:
   P
 You can write global declarations by calling command `edit` with action `fill` and target step `global.2`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
@@ -84,7 +84,7 @@ Amended step global.1.
 Outline:
   global declarations:
     step global.1: Have t1
-      Error: Unfinished Proof. Fill step `global.1.1`
+      Unfinished Proof. Fill step `global.1.1`
       goal: x = (0 :: int)
   proof:
     step 1: Rewrite goal (changed)
@@ -95,7 +95,7 @@ Outline:
         - premise0: ¬ P
       goal changes into:
         (0 :: int) * (0 :: int) = (0 :: int)
-    Error: Unfinished Proof. Fill step `2`
+    Unfinished Proof. Fill step `2`
 ---------------
 Amend global.1: id=global.1, local_step=1, is_error=False
 Amended Have status: success

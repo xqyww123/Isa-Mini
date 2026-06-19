@@ -8,7 +8,7 @@ proof:
     operation: Intro
     fixing variables:
       - x: nat
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   x = x
 --------------------------------------------------
@@ -21,6 +21,6 @@ proof:
     operation: Intro
     fixing variables:
       - y: nat    (renamed from "x")
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   y = y

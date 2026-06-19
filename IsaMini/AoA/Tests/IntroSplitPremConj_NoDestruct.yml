@@ -14,7 +14,7 @@ proof:
       - premise0: P
       - premise1: Q
       - premise2: R
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   P ∧ Q ∧ R
 --------------------------------------------------

@@ -23,11 +23,11 @@ proof:
       - goal id: 3.1
         goal: double (2 :: nat) = (4 :: nat)
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3.1.1` to provide the proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `3.1.1` to provide the proof.
       - goal id: 3.2
         goal: double (3 :: nat) = (6 :: nat)
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3.2.1` to provide the proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `3.2.1` to provide the proof.
 Unfold in nested case is_error: False
 --------------------------------------------------
 After nested Unfold
@@ -59,10 +59,10 @@ proof:
             operation: Unfold
             targets:
               - double
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3.1.2` to provide the proof for the following goal.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `3.1.2` to provide the proof for the following goal.
         pending proof goal:
           double (2 :: nat) = (4 :: nat)
       - goal id: 3.2
         goal: double (3 :: nat) = (6 :: nat)
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3.2.1` to provide the proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `3.2.1` to provide the proof.

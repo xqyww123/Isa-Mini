@@ -8,7 +8,7 @@ proof:
     operation: Intro
     assuming premises:
       - premise0: ∀(n :: nat). n ≤ n * n
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   (3 :: nat) ≤ (3 :: nat) * (3 :: nat)
 --------------------------------------------------
@@ -21,7 +21,7 @@ proof:
     operation: Intro
     assuming premises:
       - premise0: ∀(n :: nat). n ≤ n * n
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   (3 :: nat) ≤ (3 :: nat) * (3 :: nat)
 --------------------------------------------------
@@ -44,10 +44,10 @@ proof:
       conclusion: n * n \<ge> n
     notice: Need to show the provided statement implies the goal
     proof: empty
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
+    Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
     pending proof goal:
       (∀(n :: nat). n ≤ n * n) ⟶ (3 :: nat) ≤ (3 :: nat) * (3 :: nat)
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
   variables:
     - n: nat
@@ -73,7 +73,7 @@ proof:
     proof:
       - step id: 2.1
         operation: Obvious
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
   variables:
     - n: nat

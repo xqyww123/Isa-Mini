@@ -10,7 +10,7 @@ type variables:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: P p
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 MapCase for `Pair`
 --------------------------------------------------
@@ -54,7 +54,7 @@ proof:
   - step id: 2
     operation: Obvious
     Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to replace it with a proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to replace it with a proof.
 pending proof goal:
   P (a, b)
 Interactions fired: 1 (expected 1)

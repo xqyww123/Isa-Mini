@@ -9,7 +9,7 @@ proof:
     fixing variables:
       - n: nat
       - m: nat
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   n + m = m + n
 --------------------------------------------------
@@ -24,7 +24,7 @@ proof:
     fixing variables:
       - m: nat    (renamed from "n")
       - m1: nat    (renamed from "m")
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   m + m1 = m1 + m
 --------------------------------------------------
@@ -39,6 +39,6 @@ proof:
     fixing variables:
       - m: nat    (renamed from "n")
       - m1: nat    (renamed from "m")
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   m + m1 = m1 + m

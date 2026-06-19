@@ -26,7 +26,7 @@ proof:
       conclusion: (0::int) \<le> i
     name: h
     proof: empty
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
     pending proof goal:
       (0 :: int) ≤ i
 --------------------------------------------------
@@ -47,7 +47,7 @@ proof:
       conclusion: (0::int) \<le> i
     name: h
     proof: empty
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
     pending proof goal:
       (0 :: int) ≤ i
   - step id: 2
@@ -59,7 +59,7 @@ proof:
       - goal id: 2.base
         goal: i ≤ k
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.base.1` to provide the proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `2.base.1` to provide the proof.
       - goal id: 2.Prem0
         premises:
           - h: (0 :: int) ≤ k

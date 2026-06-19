@@ -12,7 +12,7 @@ variables:
   - P: nat ⇒ bool
 goal: R (0 :: nat)
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After deriving conjunct
 --------------------------------------------------
@@ -36,7 +36,7 @@ proof:
       - h_conj: P (0 :: nat) ∧ Q (0 :: nat)
     resulting facts:
       - q0: Q (0 :: nat)
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   R (0 :: nat)
 --------------------------------------------------
@@ -62,7 +62,7 @@ proof:
       - h_conj: P (0 :: nat) ∧ Q (0 :: nat)
     resulting facts:
       - q0: Q (0 :: nat)
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   R (0 :: nat)
 Is error: True

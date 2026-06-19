@@ -4,7 +4,7 @@ Initial YAML
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: XXX (1 :: int) (2 :: int) = (3 :: int)
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After Unfold
 --------------------------------------------------
@@ -16,7 +16,7 @@ proof:
     operation: Unfold
     targets:
       - XXX
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   (1 :: int) + (2 :: int) = (3 :: int)
 --------------------------------------------------
@@ -37,7 +37,7 @@ proof:
     operation: Unfold
     targets:
       - XXX
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   (2 :: int) + (1 :: int) = (3 :: int)
 Unfinished nodes: 1

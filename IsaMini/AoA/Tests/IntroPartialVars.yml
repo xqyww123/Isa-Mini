@@ -12,7 +12,7 @@ proof:
       - b: nat
     assuming premises:
       - premise0: a + b ≤ n
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   a ≤ n
 --------------------------------------------------
@@ -30,7 +30,7 @@ proof:
       - b: nat
     assuming premises:
       - premise1: a + b ≤ n
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   a ≤ n
 --------------------------------------------------
@@ -48,6 +48,6 @@ proof:
       - b: nat
     assuming premises:
       - premise1: a + b ≤ n
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   a ≤ n

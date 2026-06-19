@@ -4,15 +4,15 @@ Quickview after Rewrite
 step 1: Rewrite goal
   goal changes into:
     x < x + (1 :: int) ∧ x + (1 :: int) < x + (2 :: int)
-Error: Unfinished Proof. Call command `edit` with action `fill` and target step `2`
+Unfinished Proof. Call command `edit` with action `fill` and target step `2`
 --------------------------------------------------
 Quickview after Have+Obvious
 --------------------------------------------------
 step 1: Rewrite goal
 step 2: Have helper (proven)
-Error: Unfinished Proof. Fill step `3`
+Unfinished Proof. Fill step `3`
 --------------------------------------------------
 Quickview after deleting Have (Rewrite must not be changed)
 --------------------------------------------------
 step 1: Rewrite goal
-Error: Unfinished Proof. Fill step `2`
+Unfinished Proof. Fill step `2`

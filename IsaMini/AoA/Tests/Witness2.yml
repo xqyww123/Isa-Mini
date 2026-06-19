@@ -7,7 +7,7 @@ variables:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: P = Q
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 outcome.failure: None
 --------------------------------------------------
 After Witness (error visible in tree)
@@ -23,6 +23,6 @@ proof:
     operation: Witness
     witness: 1
     Error: The proof goal is not led by an existential quantification
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   P = Q

@@ -4,7 +4,7 @@ Initial YAML
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∃(f :: nat ⇒ nat). f (3 :: nat) = (8 :: nat)
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After Define (Suc pattern)
 --------------------------------------------------
@@ -20,7 +20,7 @@ proof:
       - pow2 0 = (1::nat)
       - pow2 (Suc n) = (2::nat) * pow2 n
     proof of termination: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   ∃(f :: nat ⇒ nat). f (3 :: nat) = (8 :: nat)
 --------------------------------------------------
@@ -42,7 +42,7 @@ proof:
     thought: Use pow2 as witness
     operation: Witness
     witness: pow2
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
   pow2 (3 :: nat) = (8 :: nat)
 --------------------------------------------------

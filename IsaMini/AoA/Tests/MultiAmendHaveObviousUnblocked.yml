@@ -6,7 +6,7 @@ variables:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: (0 :: int) ≤ x * x
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 [1] Have False — open subgoal
 --------------------------------------------------
@@ -23,10 +23,10 @@ proof:
       conclusion: False
     name: absurd
     proof: empty
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
     pending proof goal:
       False
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
 --------------------------------------------------
 [2] fill 1.1 with [Have True, Obvious] — Obvious fails and is kept, _is_trivial=False
 --------------------------------------------------
@@ -56,10 +56,10 @@ proof:
       - step id: 1.2
         operation: Obvious
         Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2` to replace it with a proof.
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.2` to replace it with a proof.
     pending proof goal:
       False
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
 --------------------------------------------------
 [3] multi-amend 1.2 → [Have(True), Obvious] — must not be blocked
 --------------------------------------------------
@@ -71,9 +71,9 @@ Outline:
     step 1.2: Have triv (proven)
     step 1.3: Obvious (failed)
       Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
-    Error: Unfinished Proof. Call command `edit` with action `fill` and target step `1.3`
+    Unfinished Proof. Call command `edit` with action `fill` and target step `1.3`
     goal: False
-  Error: Unfinished Proof. Fill step `2`
+  Unfinished Proof. Fill step `2`
   goal: (0 :: int) ≤ x * x
 is_error: False
 --------------------------------------------------
@@ -117,7 +117,7 @@ proof:
         with facts:
           - triv: True
         Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.3` to replace it with a proof.
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.3` to replace it with a proof.
     pending proof goal:
       False
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.

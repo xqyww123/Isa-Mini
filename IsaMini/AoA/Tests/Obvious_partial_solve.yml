@@ -44,10 +44,10 @@ proof:
       conclusion: log (8::real) (log (2::real) x) = log (2::real) (log (2::real) x) / (3::real)
     name: h4
     proof: empty
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3.1` to provide the proof for the following goal.
+    Unfinished Proof! Call command `edit` with action `fill` and target step `3.1` to provide the proof for the following goal.
     pending proof goal:
       log (8 :: real) (log (2 :: real) x) = log (2 :: real) (log (2 :: real) x) / (3 :: real)
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `4` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `4` to provide the proof.
 --------------------------------------------------
 After step 3.1 (unexpected Intro at 3.2)
 --------------------------------------------------
@@ -99,4 +99,4 @@ proof:
         with facts:
           - log_base_change: (0 :: real) < ?a ⟶ ?a ≠ (1 :: real) ⟶ log ?b ?x = log ?a ?x / log ?a ?b
           - h2: log (2 :: real) (8 :: real) = (3 :: real)
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `4` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `4` to provide the proof.

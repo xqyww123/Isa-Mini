@@ -28,7 +28,7 @@ proof:
       conclusion: f i < n
     name: h
     proof: empty
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
     pending proof goal:
       f i < n
 --------------------------------------------------
@@ -52,7 +52,7 @@ proof:
       conclusion: f i < n
     name: h
     proof: empty
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
     pending proof goal:
       f i < n
   - step id: 2

@@ -9,7 +9,7 @@ proof:
     fixing variables:
       - a: nat
       - b: nat
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   (0 :: nat) ≤ a + b
 EXCEPTION: IsabelleError: ['Bad operation: Too many variable names: goal has 2 leading quantifier(s) but 3 name(s) were provided']
@@ -27,7 +27,7 @@ proof:
       - b
       - c
     Error: Not yet evaluated
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   variables:
     - a: nat

@@ -17,7 +17,7 @@ variables:
   - y: 'a
 goal: x = z ∧ PP z ∧ (∀(x :: 'b). AA z x)
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After Rewrite
 --------------------------------------------------
@@ -47,7 +47,7 @@ proof:
       - h2
     resulting premises:
       - premise0: ∃(aAa :: 'a). z = (x + (0 :: 'a)) * (1 :: 'a) + aAa
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   x = z ∧ PP z ∧ (∀(x :: 'b). AA z x)
 --------------------------------------------------
@@ -79,7 +79,7 @@ proof:
       - h2
     resulting premises:
       - my_premise: ∃(aAa :: 'a). z = (x + (0 :: 'a)) * (1 :: 'a) + aAa
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   x = z ∧ PP z ∧ (∀(x :: 'b). AA z x)
 --------------------------------------------------
@@ -101,4 +101,4 @@ variables:
   - y: 'a
 goal: x = z ∧ PP z ∧ (∀(x :: 'b). AA z x)
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.

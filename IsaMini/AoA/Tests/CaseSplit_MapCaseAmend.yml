@@ -7,7 +7,7 @@ variables:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: P b
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After fill with wrong names (both dropped)
 --------------------------------------------------
@@ -27,13 +27,13 @@ proof:
           - True.prem0: b
         goal: P True
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.1` to provide the proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.1` to provide the proof.
       - goal id: 1.False
         premises:
           - False.prem0: ¬ b
         goal: P False
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.1` to provide the proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.1` to provide the proof.
     notice:
       - The cases `wrong1`, `wrong2` are not found in the resulting cases of the case-split and are thus dropped.
 --------------------------------------------------
@@ -58,7 +58,7 @@ proof:
           - step id: 1.True.1
             operation: Obvious
             Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.1` to replace it with a proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.1` to replace it with a proof.
         pending proof goal:
           P True
       - goal id: 1.False
@@ -69,7 +69,7 @@ proof:
           - step id: 1.False.1
             operation: Obvious
             Error: Automatic proof fails. The goal is non-trivial and a step-by-step proof is required.
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.1` to replace it with a proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.1` to replace it with a proof.
         pending proof goal:
           P False
 Interactions after amend: 0 (expected 0)

@@ -11,7 +11,7 @@ proof:
       - b: nat
     assuming premises:
       - premise0: a * b + (1 :: nat) dvd a² + b²
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   ∃(x :: nat). real (x²) = real (a² + b²) / real (a * b + (1 :: nat))
 --------------------------------------------------
@@ -27,7 +27,7 @@ proof:
       - b: nat
     assuming premises:
       - premise0: a * b + (1 :: nat) dvd a² + b²
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   ∃(x :: nat). real (x²) = real (a² + b²) / real (a * b + (1 :: nat))
 --------------------------------------------------
@@ -58,10 +58,10 @@ proof:
       conclusion: \<exists>x::nat. real (x^2) = real (a^2 + b^2) / real (a * b + 1)
     name: main
     proof: empty
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
+    Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
     pending proof goal:
       ∃(x :: nat). real (x²) = real (a² + b²) / real (a * b + (1 :: nat))
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
   ∃(x :: nat). real (x²) = real (a² + b²) / real (a * b + (1 :: nat))
 Have status: success

@@ -19,7 +19,7 @@ proof:
           - Nil.prem0: l = []
         goal: P []
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Nil.1` to provide the proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.Nil.1` to provide the proof.
       - goal id: 1.Cons
         variables:
           - a: 'a
@@ -28,7 +28,7 @@ proof:
           - Cons.prem0: l = a # list
         goal: P (a # list)
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.Cons.1` to provide the proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.Cons.1` to provide the proof.
 --------------------------------------------------
 Quickview (should show variables and premises too)
 --------------------------------------------------
@@ -36,7 +36,7 @@ step 1: CaseSplit l
   - 1.Nil
     premises:
       - Nil.prem0: l = []
-    Error: Unfinished Proof. Call command `edit` with action `fill` and target step `1.Nil.1`
+    Unfinished Proof. Call command `edit` with action `fill` and target step `1.Nil.1`
     goal: P []
   - 1.Cons
     variables:
@@ -44,5 +44,5 @@ step 1: CaseSplit l
       - list: 'a list
     premises:
       - Cons.prem0: l = a # list
-    Error: Unfinished Proof. Fill step `1.Cons.1`
+    Unfinished Proof. Fill step `1.Cons.1`
     goal: P (a # list)

@@ -8,7 +8,7 @@ premises:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: (0 :: int) ≤ x * x
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 Goal context inspection
 --------------------------------------------------
@@ -41,7 +41,7 @@ statement:
   conclusion: 1 = (2::int)
 name: h_target
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `global.2.1` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `global.2.1` to provide the proof for the following goal.
 pending proof goal:
   (1 :: int) = (2 :: int)
 - step id: global.3
@@ -56,13 +56,13 @@ statement:
   conclusion: y * y ≥ 0
 name: h_forany
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `global.3.1` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `global.3.1` to provide the proof for the following goal.
 pending proof goal:
   (0 :: int) ≤ y * y
 You can write global declarations by calling command `edit` with action `fill` and target step `global.4`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: (0 :: int) ≤ x * x
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 h_triv status: success
 h_target status: success
 --------------------------------------------------
@@ -75,13 +75,13 @@ premises:
   - h_triv: True
 goal: (1 :: int) = (2 :: int)
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof for the following goal.
 pending proof goal:
   (1 :: int) = (2 :: int)
 --------------------------------------------------
 quickview_proof_scope (lemma_anchor = h_target)
 --------------------------------------------------
-Error: Unfinished Proof. Call command `edit` with action `fill` and target step `1`
+Unfinished Proof. Call command `edit` with action `fill` and target step `1`
 goal: (1 :: int) = (2 :: int)
 
 print_proof_scope contains 'available declarations': False
@@ -113,7 +113,7 @@ statement:
   conclusion: 1 = (2::int)
 name: h_target
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `global.2.1` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `global.2.1` to provide the proof for the following goal.
 pending proof goal:
   (1 :: int) = (2 :: int)
 - step id: global.3
@@ -128,13 +128,13 @@ statement:
   conclusion: y * y ≥ 0
 name: h_forany
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `global.3.1` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `global.3.1` to provide the proof for the following goal.
 pending proof goal:
   (0 :: int) ≤ y * y
 You can write global declarations by calling command `edit` with action `fill` and target step `global.4`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: (0 :: int) ≤ x * x
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 Final tree (reference)
 --------------------------------------------------
@@ -158,7 +158,7 @@ statement:
   conclusion: 1 = (2::int)
 name: h_target
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `global.2.1` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `global.2.1` to provide the proof for the following goal.
 pending proof goal:
   (1 :: int) = (2 :: int)
 - step id: global.3
@@ -173,10 +173,10 @@ statement:
   conclusion: y * y ≥ 0
 name: h_forany
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `global.3.1` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `global.3.1` to provide the proof for the following goal.
 pending proof goal:
   (0 :: int) ≤ y * y
 You can write global declarations by calling command `edit` with action `fill` and target step `global.4`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: (0 :: int) ≤ x * x
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.

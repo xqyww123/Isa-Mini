@@ -4,7 +4,7 @@ Initial YAML
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After Define (deferred block opened)
 --------------------------------------------------
@@ -25,7 +25,7 @@ proof:
       - goal id: 1.1
         goal: wf (measure (λ(n :: nat). n))
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1` to provide the proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1` to provide the proof.
       - goal id: 1.2
         goal: ∀(n :: nat). (n, Suc (Suc n)) ∈ measure (λ(n1 :: nat). n1)
         proof:
@@ -33,10 +33,10 @@ proof:
             operation: Intro
             fixing variables:
               - n: nat
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.2` to provide the proof for the following goal.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.2` to provide the proof for the following goal.
         pending proof goal:
           (n, Suc (Suc n)) ∈ measure (λ(n :: nat). n)
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
 --------------------------------------------------
@@ -68,10 +68,10 @@ proof:
             operation: Intro
             fixing variables:
               - n: nat
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.2` to provide the proof for the following goal.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.2` to provide the proof for the following goal.
         pending proof goal:
           (n, Suc (Suc n)) ∈ measure (λ(n :: nat). n)
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
 --------------------------------------------------
@@ -105,7 +105,7 @@ proof:
               - n: nat
           - step id: 1.2.2
             operation: Obvious
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
 --------------------------------------------------
@@ -143,7 +143,7 @@ proof:
     thought: Pick the freshly-defined `halve` as the witness
     operation: Witness
     witness: halve
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
   halve (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
 --------------------------------------------------

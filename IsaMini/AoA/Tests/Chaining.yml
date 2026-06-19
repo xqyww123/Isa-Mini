@@ -12,7 +12,7 @@ variables:
   - b: nat
 goal: a ≤ c
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After Chaining (named)
 --------------------------------------------------
@@ -34,7 +34,7 @@ proof:
       - bc: b ≤ c
     resulting:
       ac: a ≤ c
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   premises:
     - ac: a ≤ c

@@ -6,7 +6,7 @@ variables:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: (0 :: int) ≤ x * x
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 [1] fill [Obvious] — goal is non-trivial
 --------------------------------------------------
@@ -43,9 +43,9 @@ Outline:
         Automatic proof fails on the subgoal:
           False
         The goal is non-trivial and a step-by-step proof is required.
-    Error: Unfinished Proof. Call command `edit` with action `fill` and target step `1.1`
+    Unfinished Proof. Call command `edit` with action `fill` and target step `1.1`
     goal: (1 :: int) = (2 :: int)
-  Error: Unfinished Proof. Fill step `2`
+  Unfinished Proof. Fill step `2`
   goal: (0 :: int) ≤ x * x
 ---------------
 is_error: False
@@ -56,7 +56,7 @@ Amended step 1.
 All proof goals of step 1 are now completed.
 Outline:
   step 1: Have aux2 (proven)
-  Error: Unfinished Proof. Fill step `2`
+  Unfinished Proof. Fill step `2`
 ---------------
 is_error: False
 --------------------------------------------------
@@ -68,6 +68,6 @@ Outline:
   step 0A: Have h1 (proven)
   step 0B: Have h2 (proven)
   step 1: Have aux2 (proven)
-  Error: Unfinished Proof. Fill step `2`
+  Unfinished Proof. Fill step `2`
 ---------------
 is_error: False

@@ -33,7 +33,7 @@ proof:
             operation: Obvious
       - step id: 1.2
         operation: Obvious
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
 after FINISHING refresh:
 obvious_lv2._is_sorry_degraded: False
 obvious_lv2.status: success

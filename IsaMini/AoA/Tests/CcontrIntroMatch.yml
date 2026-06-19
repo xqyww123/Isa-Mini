@@ -16,7 +16,7 @@ proof:
       - i: nat
     assuming premises:
       - premise0: i ≤ p - (2 :: nat)
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   prime (f i)
 --------------------------------------------------
@@ -46,7 +46,7 @@ proof:
     assuming premises:
       - premise0: n ≤ p - (2 :: nat)
       - 1.IH: ∀m<n. m ≤ p - (2 :: nat) ⟶ prime (f m)
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
   prime (f n)
 --------------------------------------------------
@@ -101,7 +101,7 @@ proof:
           - large: ¬ int n ≤ ⌊sqrt (real p / (3 :: real))⌋
         goal: prime (f n)
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3.2.1` to provide the proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `3.2.1` to provide the proof.
 --------------------------------------------------
 After case 3.2 setup (Rewrite + 7 Haves)
 --------------------------------------------------
@@ -262,7 +262,7 @@ proof:
                 operation: Obvious
                 with facts:
                   - pge2: (2 :: nat) ≤ p
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3.2.9` to provide the proof for the following goal.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `3.2.9` to provide the proof for the following goal.
         pending proof goal:
           prime (n² + n + p)
 is_error: False
@@ -438,6 +438,6 @@ proof:
             operation: Intro
             assuming premises:
               - nprime: ¬ prime (n² + n + p)
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3.2.11` to provide the proof for the following goal.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `3.2.11` to provide the proof for the following goal.
         pending proof goal:
           False

@@ -10,7 +10,7 @@ proof:
     operation: Intro
     assuming premises:
       - premise0: ∃(k :: nat). k = m ∧ k ≤ m
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   m = m
 --------------------------------------------------
@@ -40,7 +40,7 @@ proof:
     proof:
       - step id: 2.1
         operation: Obvious
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
   m = m
 Unfinished nodes: 1

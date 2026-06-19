@@ -9,7 +9,7 @@ variables:
   - a: nat
 goal: False
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After Rewrite
 --------------------------------------------------
@@ -30,7 +30,7 @@ proof:
       - h
     resulting premises:
       - premise0: ¬ f a ≠ (0 :: nat)
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   False
 success: False

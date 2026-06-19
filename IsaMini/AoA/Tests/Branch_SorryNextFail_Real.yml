@@ -10,7 +10,7 @@ proof:
       - f: real ⇒ real
     assuming premises:
       - premise0: f ∈ {(g :: real ⇒ real). ∃a (c :: real). (0 :: real) ≤ a ∧ g = (λ(x :: real). a / ((1 :: real) - c * x)²)}
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   hfinf f ∨ (∃e>(0 :: real). hf e f)
 --------------------------------------------------
@@ -25,7 +25,7 @@ proof:
       - f: real ⇒ real
     assuming premises:
       - premise0: f ∈ {(g :: real ⇒ real). ∃a (c :: real). (0 :: real) ≤ a ∧ g = (λ(x :: real). a / ((1 :: real) - c * x)²)}
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   hfinf f ∨ (∃e>(0 :: real). hf e f)
 Branch fill succeeded
@@ -49,19 +49,19 @@ proof:
         thought: We first show exhaustiveness of the case split
         goal: (0 :: real) < c ∨ c ≤ (0 :: real)
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.0.1` to provide the proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `2.0.1` to provide the proof.
       - goal id: 2.1
         premises:
           - c_pos: (0 :: real) < c
         goal: hfinf f ∨ (∃e>(0 :: real). hf e f)
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1.1` to provide the proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `2.1.1` to provide the proof.
       - goal id: 2.2
         premises:
           - c_nonpos: c ≤ (0 :: real)
         goal: hfinf f ∨ (∃e>(0 :: real). hf e f)
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.2.1` to provide the proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `2.2.1` to provide the proof.
 Branch sub_nodes: 3
   2.0: status=success
   2.1: status=success
@@ -94,10 +94,10 @@ proof:
           - c_pos: (0 :: real) < c
         goal: hfinf f ∨ (∃e>(0 :: real). hf e f)
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1.1` to provide the proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `2.1.1` to provide the proof.
       - goal id: 2.2
         premises:
           - c_nonpos: c ≤ (0 :: real)
         goal: hfinf f ∨ (∃e>(0 :: real). hf e f)
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.2.1` to provide the proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `2.2.1` to provide the proof.

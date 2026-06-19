@@ -14,7 +14,7 @@ variables:
   - z: int
 goal: x mod q = y mod q
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 Sub-test 1: Type clash
 --------------------------------------------------
@@ -45,4 +45,4 @@ variables:
   - z: int
 goal: x mod q = y mod q
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.

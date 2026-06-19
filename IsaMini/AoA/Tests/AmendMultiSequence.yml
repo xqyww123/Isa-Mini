@@ -6,7 +6,7 @@ variables:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: (0 :: int) ≤ x * x
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 [1] seed fill: single Have
 --------------------------------------------------
@@ -14,7 +14,7 @@ Filled step 1.
 All proof goals of step 1 are now completed.
 Outline:
   step 1: Have seed (proven)
-  Error: Unfinished Proof. Call command `edit` with action `fill` and target step `2`
+  Unfinished Proof. Call command `edit` with action `fill` and target step `2`
   goal: (0 :: int) ≤ x * x
 ---------------
 is_error: False
@@ -27,7 +27,7 @@ Outline:
   step 1: Have rA (proven)
   step 2: Have rB (proven)
   step 3: Have rC (proven)
-  Error: Unfinished Proof. Fill step `4`
+  Unfinished Proof. Fill step `4`
 ---------------
 is_error: False
 --------------------------------------------------
@@ -40,6 +40,6 @@ Outline:
   step 1A: Have m1 (proven)
   step 1B: Have m2 (proven)
   step 3: Have rC (proven)
-  Error: Unfinished Proof. Fill step `4`
+  Unfinished Proof. Fill step `4`
 ---------------
 is_error: False

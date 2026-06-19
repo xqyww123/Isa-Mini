@@ -4,7 +4,7 @@ Initial YAML
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: ∃(g :: real × real ⇒ real). g ((0 :: real), (0 :: real)) = (0 :: real)
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 outcome.failure: None
 --------------------------------------------------
 After Witness (type-mismatch error visible in tree)
@@ -17,6 +17,6 @@ proof:
     operation: Witness
     witness: \<lambda>(x::real) (y::real). 0
     Error: The witness `λx y. 0` has type `real ⇒ real ⇒ 'a`, which does not match the expected type `real × real ⇒ real` of the existential variable.
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   ∃(g :: real × real ⇒ real). g ((0 :: real), (0 :: real)) = (0 :: real)

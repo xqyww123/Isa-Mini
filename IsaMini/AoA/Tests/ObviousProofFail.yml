@@ -6,7 +6,7 @@ variables:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: (0 :: int) ≤ x * x
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After Have x=x (Obvious succeeds)
 --------------------------------------------------
@@ -23,10 +23,10 @@ proof:
       conclusion: x = x
     name: lem1
     proof: empty
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
     pending proof goal:
       x = x
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
 --------------------------------------------------
 After Have x=x+1 (Obvious fails)
 --------------------------------------------------
@@ -43,7 +43,7 @@ proof:
       conclusion: x = x
     name: lem1
     proof: empty
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
     pending proof goal:
       x = x
   - step id: 2
@@ -54,19 +54,19 @@ proof:
       conclusion: x = x + 1
     name: bad
     proof: empty
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
+    Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
     pending proof goal:
       x = x + (1 :: int)
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof.
 --------------------------------------------------
 Overview
 --------------------------------------------------
 step 1: Have lem1
-  Error: Unfinished Proof. Call command `edit` with action `fill` and target step `1.1`
+  Unfinished Proof. Call command `edit` with action `fill` and target step `1.1`
   goal: x = x
 step 2: Have bad
-  Error: Unfinished Proof. Fill step `2.1`
+  Unfinished Proof. Fill step `2.1`
   goal: x = x + (1 :: int)
-Error: Unfinished Proof. Fill step `3`
+Unfinished Proof. Fill step `3`
 goal: (0 :: int) ≤ x * x
 Unfinished nodes: 3

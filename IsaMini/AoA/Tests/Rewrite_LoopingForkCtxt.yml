@@ -9,7 +9,7 @@ premises:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: g (f a) = c
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 forking_mode: FORKING_WITH_CTXT
 fix_verified: True
 --------------------------------------------------
@@ -40,6 +40,6 @@ proof:
       - the goal
     goal changes into:
       g (g (f a)) = c
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   g (g (f a)) = c

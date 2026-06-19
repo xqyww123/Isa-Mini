@@ -13,7 +13,7 @@ variables:
   - P: nat ⇒ bool
 goal: R (0 :: nat)
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 Parse_Op_List: accepted (correct)
 gen_single: accepted (correct)
 --------------------------------------------------
@@ -40,7 +40,7 @@ proof:
       - h1: P (0 :: nat)
     resulting facts:
       - derived_with_gap: R (0 :: nat)
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   R (0 :: nat)
 failure: None

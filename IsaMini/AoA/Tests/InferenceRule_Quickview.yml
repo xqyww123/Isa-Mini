@@ -17,7 +17,7 @@ proof:
     operation: Intro
     assuming premises:
       - premise0: ¬ (0 :: int) ≤ x * x
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
   False
 --------------------------------------------------
@@ -28,5 +28,5 @@ step 1: Inference Rule ccontr
 step 2: Intro
   assuming premises:
     - premise0: ¬ (0 :: int) ≤ x * x
-Error: Unfinished Proof. Call command `edit` with action `fill` and target step `3`
+Unfinished Proof. Call command `edit` with action `fill` and target step `3`
 goal: False

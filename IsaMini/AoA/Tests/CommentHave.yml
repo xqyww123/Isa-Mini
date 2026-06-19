@@ -16,7 +16,7 @@ proof:
     proof:
       - step id: 1.1
         operation: Obvious
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
 unfinished before comment: 1
 comment Have affected: ['1']
 --------------------------------------------------
@@ -35,13 +35,13 @@ proof:
       conclusion: (0::int) \<le> x * x
     name: sq
     (commented out)
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
 --------------------------------------------------
 Quickview after commenting Have
 --------------------------------------------------
 step 1: Have sq (commented)
   (commented out)
-Error: Unfinished Proof. Call command `edit` with action `fill` and target step `2`
+Unfinished Proof. Call command `edit` with action `fill` and target step `2`
 goal: (0 :: int) ≤ x * x
 unfinished after comment Have: 1
 assembled ops count: 1
@@ -64,6 +64,6 @@ proof:
     proof:
       - step id: 1.1
         operation: Obvious
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
 unfinished after uncomment Have: 1
 assembled ops count after uncomment: 4

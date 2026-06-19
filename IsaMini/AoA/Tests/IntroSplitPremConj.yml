@@ -40,7 +40,7 @@ proof:
       - premise2(1): D ⟶ E
       - premise2(2): D ⟶ F
       - premise3: big1 ∧ big2 ∧ big3 ∧ big4 ∧ big5 ∧ big6 ∧ big7 ∧ big8 ∧ big9 ∧ big10 ∧ big11 ∧ big12 ⟶ G ∧ H
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   A ∧ B ∧ C ∧ P (SOME (x :: 'a). True) ∧ Q (SOME (x :: 'a). True) ∧ (D ⟶ E) ∧ (D ⟶ F)
 --------------------------------------------------
@@ -56,7 +56,7 @@ step 1: Intro
     - premise2(1): D ⟶ E
     - premise2(2): D ⟶ F
     - premise3: big1 ∧ big2 ∧ big3 ∧ big4 ∧ big5 ∧ big6 ∧ big7 ∧ big8 ∧ big9 ∧ big10 ∧ big11 ∧ big12 ⟶ G ∧ H
-Error: Unfinished Proof. Call command `edit` with action `fill` and target step `2`
+Unfinished Proof. Call command `edit` with action `fill` and target step `2`
 goal: A ∧ B ∧ C ∧ P (SOME (x :: 'a). True) ∧ Q (SOME (x :: 'a). True) ∧ (D ⟶ E) ∧ (D ⟶ F)
 --------------------------------------------------
 After Obvious on 2

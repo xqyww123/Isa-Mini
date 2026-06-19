@@ -6,7 +6,7 @@ variables:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: n + (0 :: nat) = n
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 global.1 has children: True
 --------------------------------------------------
 After global Have + Obvious
@@ -26,7 +26,7 @@ proof:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.2`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: n + (0 :: nat) = n
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 Amend committed: True
 Amended node status: success
 Amended node warnings: 1
@@ -53,7 +53,7 @@ proof:
       - goal id: global.1.1.0
         goal: (0 :: nat) + (0 :: nat) = (0 :: nat)
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `global.1.1.0.1` to provide the proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `global.1.1.0.1` to provide the proof.
       - goal id: global.1.1.Suc
         variables:
           - m: nat
@@ -66,7 +66,7 @@ notice:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.2`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: n + (0 :: nat) = n
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After amend (quickview)
 --------------------------------------------------
@@ -76,10 +76,10 @@ global declarations:
       - Due to changes in the proof structure, previous proof step step global.1.1 has been discarded
     step global.1.1: Induction m
       - global.1.1.0
-        Error: Unfinished Proof. Call command `edit` with action `fill` and target step `global.1.1.0.1`
+        Unfinished Proof. Call command `edit` with action `fill` and target step `global.1.1.0.1`
         goal: (0 :: nat) + (0 :: nat) = (0 :: nat)
       - global.1.1.Suc (proven)
     the statement is quantified over m
 proof:
-  Error: Unfinished Proof. Fill step `1`
+  Unfinished Proof. Fill step `1`
   goal: n + (0 :: nat) = n

@@ -8,7 +8,7 @@ variables:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: a * b * (a² - b²) + b * c * (b² - c²) + c * a * (c² - a²) ≤ (9 :: real) * sqrt (2 :: real) / (32 :: real) * (a² + b² + c²)²
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 three terms spaced (succeeds)
 --------------------------------------------------
@@ -27,10 +27,10 @@ proof:
       conclusion: (a - 2 * b + c)^2 * (2 * a - b - c)^2 * (a + b - 2 * c)^2 = (0::real)
     name: three_terms_spaced
     proof: empty
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
     pending proof goal:
       (a - (2 :: real) * b + c)² * ((2 :: real) * a - b - c)² * (a + b - (2 :: real) * c)² = (0 :: real)
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
 --------------------------------------------------
 three terms no-space (fails)
 --------------------------------------------------
@@ -49,7 +49,7 @@ proof:
       conclusion: (a - 2 * b + c)^2 * (2 * a - b - c)^2 * (a + b - 2 * c)^2 = (0::real)
     name: three_terms_spaced
     proof: empty
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
     pending proof goal:
       (a - (2 :: real) * b + c)² * ((2 :: real) * a - b - c)² * (a + b - (2 :: real) * c)² = (0 :: real)
   - step id: 2
@@ -60,7 +60,7 @@ proof:
       conclusion: (a - 2*b + c)^2 * (2*a - b - c)^2 * (a + b - 2*c)^2 = (0::real)
     name: three_terms_nospace
     proof: empty
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
+    Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
     pending proof goal:
       (a - (2 :: real) * b + c)² * ((2 :: real) * a - b - c)² * (a + b - (2 :: real) * c)² = (0 :: real)
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof.

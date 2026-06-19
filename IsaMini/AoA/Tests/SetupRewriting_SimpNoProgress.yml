@@ -9,7 +9,7 @@ premises:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: f (5 :: int) = (13 :: int)
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After SetupRewriting
 --------------------------------------------------
@@ -35,7 +35,7 @@ proof:
         operation: Obvious
         with facts:
           - h0: ∀(x :: int). f x + f (x - (1 :: int)) = x²
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   premises:
     - setup_rewriting__1: (3 :: int) ≤ ?x2 ⟶ f ?x2 = ?x2² - f (?x2 - (1 :: int))

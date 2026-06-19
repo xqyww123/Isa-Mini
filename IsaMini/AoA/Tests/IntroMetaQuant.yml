@@ -8,7 +8,7 @@ proof:
     operation: Intro
     fixing variables:
       - n: int
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   (0 :: int) ≤ n * n
 --------------------------------------------------
@@ -37,10 +37,10 @@ proof:
         assuming premises:
           - premise0: (0 :: int) < a
           - premise1: (0 :: int) < b
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.2` to provide the proof for the following goal.
+    Unfinished Proof! Call command `edit` with action `fill` and target step `2.2` to provide the proof for the following goal.
     pending proof goal:
       (0 :: int) < a * b
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
   (0 :: int) ≤ n * n
 --------------------------------------------------
@@ -70,10 +70,10 @@ proof:
         assuming premises:
           - a_pos: (0 :: int) < a
           - b_pos: (0 :: int) < b
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.2` to provide the proof for the following goal.
+    Unfinished Proof! Call command `edit` with action `fill` and target step `2.2` to provide the proof for the following goal.
     pending proof goal:
       (0 :: int) < a * b
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
   (0 :: int) ≤ n * n
 --------------------------------------------------
@@ -103,9 +103,9 @@ proof:
         assuming premises:
           - a_pos: (0 :: int) < a
           - b_pos: (0 :: int) < b
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2.2` to provide the proof for the following goal.
+    Unfinished Proof! Call command `edit` with action `fill` and target step `2.2` to provide the proof for the following goal.
     pending proof goal:
       (0 :: int) < a * b
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
   (0 :: int) ≤ n * n

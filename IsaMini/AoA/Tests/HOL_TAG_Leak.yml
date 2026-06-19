@@ -12,7 +12,7 @@ proof:
     operation: Intro
     assuming premises:
       - premise0: i ≤ p
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   P i
 --------------------------------------------------
@@ -39,7 +39,7 @@ proof:
     assuming premises:
       - premise0: i ≤ p
       - 1.IH: ∀m<i. m ≤ p ⟶ P m
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
   P i
 

@@ -22,7 +22,7 @@ proof:
       conclusion: (0::nat) < 1
     name: trivial_fact
     proof: empty
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
     pending proof goal:
       (0 :: nat) < (1 :: nat)
 --------------------------------------------------
@@ -41,7 +41,7 @@ proof:
       conclusion: (0::nat) < 1
     name: trivial_fact
     proof: empty
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
     pending proof goal:
       (0 :: nat) < (1 :: nat)
   - step id: 2
@@ -74,7 +74,7 @@ proof:
       conclusion: (0::nat) < 1
     name: trivial_fact
     proof: empty
-    Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
     pending proof goal:
       (0 :: nat) < (1 :: nat)
   - step id: 2

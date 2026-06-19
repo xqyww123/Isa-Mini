@@ -7,7 +7,7 @@ variables:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 goal: P b
 proof: empty
-Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After CaseSplit
 --------------------------------------------------
@@ -27,13 +27,13 @@ proof:
           - True.prem0: b
         goal: P True
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.1` to provide the proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.1` to provide the proof.
       - goal id: 1.False
         premises:
           - False.prem0: ¬ b
         goal: P False
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.1` to provide the proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.1` to provide the proof.
 [probe] 1.True: display_goals_count=1, leading=P True
 --------------------------------------------------
 edit_message: Intro under 1.True
@@ -45,12 +45,12 @@ Outline:
       premises:
         - True.prem0: b
       step 1.True.1: Intro
-      Error: Unfinished Proof. Call command `edit` with action `fill` and target step `1.True.2`
+      Unfinished Proof. Call command `edit` with action `fill` and target step `1.True.2`
       goal: P True
     - 1.False
       premises:
         - False.prem0: ¬ b
-      Error: Unfinished Proof. Fill step `1.False.1`
+      Unfinished Proof. Fill step `1.False.1`
       goal: P False
 ---------------
 --------------------------------------------------
@@ -82,7 +82,7 @@ proof:
           - step id: 1.True.1
             thought: Rename the case hypothesis
             operation: Intro
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.2` to provide the proof for the following goal.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.True.2` to provide the proof for the following goal.
         pending proof goal:
           P True
       - goal id: 1.False
@@ -90,4 +90,4 @@ proof:
           - False.prem0: ¬ b
         goal: P False
         proof: empty
-        Error: Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.1` to provide the proof.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.False.1` to provide the proof.
