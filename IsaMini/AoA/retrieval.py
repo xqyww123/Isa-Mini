@@ -324,10 +324,13 @@ def _collect_query_warnings(
     per_query: list[list[str]] = []
     for _fetched, warnings, error, _total in knn_results:
         qwarns: list[str] = []
+        # Render Isabelle \<name> symbols to unicode so the marked snippet matches
+        # the unicode entity names shown elsewhere in query output (the 【 】 marker
+        # bytes are not Isabelle symbols and pass through untouched).
         if error:
-            qwarns.append(f"Warning: {error}")
+            qwarns.append(f"Warning: {pretty_unicode(error)}")
         for w in warnings:
-            qwarns.append(f"Warning: {w}")
+            qwarns.append(f"Warning: {pretty_unicode(w)}")
         per_query.append(qwarns)
     return per_query
 

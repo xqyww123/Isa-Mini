@@ -1,0 +1,23 @@
+Step 1 status: failure
+--------------------------------------------------
+After malformed Have
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: intentionally malformed binder group
+    operation: Have
+    statement:
+      english: malformed
+      conclusion: \<forall>(f :: nat \<Rightarrow> real) (m n :: nat). f m \<le> f n
+    name: bad
+    Error: |
+      Fail to claim the intermediate subgoal because: Inner syntax error
+      Failed to parse prop
+        ↳ parse failed; the offending token is wrapped in 【 】: …eal) (m 【n】 :: nat)…
+    proof: empty
+    Error: Evaluation cancelled due to failures above
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.

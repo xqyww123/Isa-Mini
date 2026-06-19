@@ -2258,6 +2258,23 @@ async def _test_Have1(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1.1", [Obvious.gen_single({"facts": []})])
 
+@model_test("HaveParseError", "Test_HaveParseError.thy", 9)
+async def _test_HaveParseError(root: Root, file: MyIO):
+    """log-2: a Have whose conclusion is an inner-syntax parse error must report a
+    precise 【marked token】 location (here the `n` in the typed group `(m n :: nat)`),
+    not the opaque `at ""`. Mirrors ForeNodeFail's failed-Have rendering."""
+    root.session.age += 1
+    await root.fill("1", [Have.gen_single({
+        "thought": "intentionally malformed binder group",
+        "statement": {"english": "malformed",
+                      "conclusion": r"\<forall>(f :: nat \<Rightarrow> real) (m n :: nat). f m \<le> f n"},
+        "name": "bad"
+    })])
+    step = root.locate_node("1")
+    file.write(f"Step 1 status: {step.status.status.value}\n")
+    print_header("After malformed Have", file)
+    root.print(0, file)
+
 @model_test("SubagentSlotResolve", "Test_SubagentSlotResolve.thy", 8)
 async def _test_SubagentSlotResolve(root: Root, file: MyIO):
     """`Node.locate_node_or_slot` resolves the address space that `subagent`

@@ -315,37 +315,46 @@ fun release_par_error exn =
 
 (* Customized read functions with bound name deconfliction *)
 
+(* All readers feed the agent string(s) as POSITIONED input via Inner_Syntax_Error
+   so a parse failure brackets the offending token with 【 】 (see that module).
+   The list/typed variants implode each element under a distinct id, keeping the
+   single batched read call (joint type inference unchanged).  On a non-position
+   error the original exception propagates to the existing release_par_error. *)
+
 fun read_term ctxt s =
-  \<^try>\<open>Syntax.read_term ctxt s
+  \<^try>\<open>Inner_Syntax_Error.read_positioned Syntax.read_term ctxt s
    catch exn => release_par_error exn\<close>
   |> Minilang.deconflict_bound_names
 
 (* Like read_term, but in mode_abbrev: the checked term keeps non-internal
    abbreviation constants instead of expanding them. *)
 fun read_term_abbrev ctxt s =
-  \<^try>\<open>Proof_Context.read_term_abbrev ctxt s
+  \<^try>\<open>Inner_Syntax_Error.read_positioned Proof_Context.read_term_abbrev ctxt s
    catch exn => release_par_error exn\<close>
   |> Minilang.deconflict_bound_names
 
 fun read_terms ctxt ss =
-  \<^try>\<open>Syntax.read_terms ctxt ss
+  \<^try>\<open>Inner_Syntax_Error.read_positioned_list Syntax.read_terms ctxt ss
    catch exn => release_par_error exn\<close>
   |> map (Minilang.deconflict_bound_names)
 
 fun read_terms_with_type ctxt ss =
-  map (fn (typ, raw_tm) =>
-      Const ("_type_constraint_", typ --> typ)
-        $ Syntax.parse_term ctxt raw_tm) ss
-  |> (fn ts => \<^try>\<open>Syntax.check_terms ctxt ts
-       catch exn => release_par_error exn\<close>)
+  \<^try>\<open>
+    Inner_Syntax_Error.read_positioned_typed
+      (fn ctxt' => fn tss =>
+         map (fn (typ, raw_tm) =>
+           Const ("_type_constraint_", typ --> typ) $ Syntax.parse_term ctxt' raw_tm) tss
+         |> Syntax.check_terms ctxt')
+      ctxt ss
+   catch exn => release_par_error exn\<close>
 
 fun read_prop ctxt s =
-  \<^try>\<open>Syntax.read_prop ctxt s
+  \<^try>\<open>Inner_Syntax_Error.read_positioned Syntax.read_prop ctxt s
    catch exn => release_par_error exn\<close>
   |> Minilang.deconflict_bound_names
 
 fun read_props ctxt ss =
-  \<^try>\<open>Syntax.read_props ctxt ss
+  \<^try>\<open>Inner_Syntax_Error.read_positioned_list Syntax.read_props ctxt ss
    catch exn => release_par_error exn\<close>
   |> map (Minilang.deconflict_bound_names)
 
@@ -1013,15 +1022,24 @@ val auto_apply_attrib : attribute =
 (* Fold the recorded post-rule instantiation rounds onto the post-rule
    state. Per round: parse each var-name to an indexname, partition into
    type insts (?'a) and term insts (?x) by leading "'", then apply the
-   2-phase Minilang.INST_GOAL_VARS primitive (types first, then terms). *)
+   2-phase Minilang.INST_GOAL_VARS primitive (types first, then terms).
+   The instantiation VALUE strings are agent-supplied; INST_GOAL_VARS runs on the
+   plain strings, and a parse failure is re-probed positioned for a 【 】 marker
+   (term values via read_term, type values via read_typ) (M1). *)
 fun apply_post_insts rounds state =
   fold (fn round => fn st =>
     let
+      val ctxt = Minilang.context_of st
       val parsed = map (fn (name, value) => (Minilang_Aux.parse_var name, value)) round
       val (tinsts, insts) =
         List.partition (fn (idx, _) => Minilang_Aux.is_tvar_name (Minilang_Aux.VN_IndexName idx))
           parsed
-    in Minilang.INST_GOAL_VARS (tinsts, insts) st end)
+      fun reprobe () =
+        case Inner_Syntax_Error.marker_strings Syntax.read_term ctxt (map snd insts) of
+          SOME m => SOME m
+        | NONE => Inner_Syntax_Error.marker_strings Syntax.read_typ ctxt (map snd tinsts)
+    in Inner_Syntax_Error.guard reprobe (fn () => Minilang.INST_GOAL_VARS (tinsts, insts) st)
+    end)
   rounds state
 
 fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
@@ -1099,7 +1117,10 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
                   ([], ([], [], [((Binding.name name, []), [(br, [])])]))
                 | (NONE, _) => error "Branch case name is required"
               ) branches
-        in Minilang.CONSIDER brs s
+        in Inner_Syntax_Error.guard
+             (fn () => Inner_Syntax_Error.marker_strings Syntax.read_prop
+                         (Minilang.context_of s) (map snd branches))
+             (fn () => Minilang.CONSIDER brs s)
         end
     | HAVE (name, fixes, assumes, conclusion, auto_apply) =>
         let val prem_ctr = #prem_counter counters
@@ -1116,7 +1137,10 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
                   else []
             val fixes' = map (fn (n, T) => (Binding.name n, T, NoSyn)) fixes
             val shows = [((Binding.name name, attr_srcs), [(conclusion, [])])]
-         in Minilang.HAVE fixes' named_assumes shows s
+         in Inner_Syntax_Error.guard
+              (fn () => Inner_Syntax_Error.marker_strings Syntax.read_prop
+                          (Minilang.context_of s) (conclusion :: map snd assumes))
+              (fn () => Minilang.HAVE fixes' named_assumes shows s)
         end
     | SUFFICES (fixes, assumes, conclusion) =>
         let val prem_ctr = #prem_counter counters
@@ -1130,7 +1154,10 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
             val _ = Synchronized.change prem_ctr (K final_counter)
             val fixes' = map (fn (n, T) => (Binding.name n, T, NoSyn)) fixes
             val shows = [((Binding.empty, []), [(conclusion, [])])]
-         in Minilang.SUFFICES fixes' named_assumes shows s
+         in Inner_Syntax_Error.guard
+              (fn () => Inner_Syntax_Error.marker_strings Syntax.read_prop
+                          (Minilang.context_of s) (conclusion :: map snd assumes))
+              (fn () => Minilang.SUFFICES fixes' named_assumes shows s)
         end
     | OBTAIN (vars, constraints) =>
         let val named_constraints = map (fn (SOME name, goal) =>
@@ -1139,7 +1166,10 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
               ) constraints
             val arg = [(map (fn (v,T) => (Binding.name v, T, NoSyn)) vars,
                        ([], [], named_constraints))]
-        in Minilang.CONSIDER arg s
+        in Inner_Syntax_Error.guard
+             (fn () => Inner_Syntax_Error.marker_strings Syntax.read_prop
+                         (Minilang.context_of s) (map snd constraints))
+             (fn () => Minilang.CONSIDER arg s)
         end
     | SORRY_NEXT vars =>
         Minilang.SORRY_NEXT vars s
@@ -1264,6 +1294,12 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
           val specs : Specification.multi_specs_cmd =
             map (fn eq => ((Binding.empty_atts, eq), [], [])) equations
           val ctxt0 = Minilang.context_of s
+          (* equations + optional type string are agent-supplied; on a parse
+             failure re-probe them positioned for a 【 】 marker (M3). *)
+          fun reprobe () =
+            case Inner_Syntax_Error.marker_strings Syntax.read_prop ctxt0 equations of
+              SOME m => SOME m
+            | NONE => Inner_Syntax_Error.marker_strings Syntax.read_typ ctxt0 (the_list ty_opt)
           (* A nullary constant (head applied to no arguments, e.g.
              `P = 5`) cannot go through the function/fun package — it
              rejects an argument-free LHS with "Function has no
@@ -1279,7 +1315,7 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
              ambient context*, which on the define path is some unrelated
              leftover — so the define path reads the freshly-fixed head
              directly instead. *)
-          val (s', ty_str) =
+          val (s', ty_str) = Inner_Syntax_Error.guard reprobe (fn () =>
             if Minilang.is_nullary_def_cmd decls specs ctxt0
             then
               let
@@ -1302,7 +1338,7 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
                     SOME {fs = f :: _, ...} =>
                       string_of_type ctxt' (fastype_of f)
                   | _ => the_default "?" ty_opt
-              in (s', ty_str) end
+              in (s', ty_str) end)
           val _ = Minilang.get_reporter ()
                     (Minilang.Internal (DEFINE_RESULT (name, ty_str)))
         in s' end

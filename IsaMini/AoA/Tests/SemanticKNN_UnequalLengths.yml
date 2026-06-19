@@ -1,10 +1,15 @@
 Mismatched parens: 5 results, 1 warnings
-  Warning: Inner syntax error: unexpected end of input
+  Warning: Term pattern was ignored — results are NOT filtered by it.
+Inner syntax error
 Failed to parse term
+  ↳ parse failed; the offending token is wrapped in 【 】: f (【x】
 Mixed patterns: 5 results, 1 warnings
-  Warning: Inner syntax error: unexpected end of input
+  Warning: Term pattern was ignored — results are NOT filtered by it.
+Inner syntax error
 Failed to parse term
+  ↳ parse failed; the offending token is wrapped in 【 】: g (【z】
 Schematic in binder: 5 results, 1 warnings
-  Warning: Inner syntax error
-at ". ?N div ?d )"
+  Warning: Term pattern was ignored — results are NOT filtered by it.
+Inner syntax error
 Failed to parse term
+  ↳ parse failed; the offending token is wrapped in 【 】: …_on (λ?d【.】 ?N div …
