@@ -1,0 +1,17 @@
+H kind: Have
+pre-amend child kinds: ['Obvious']
+=== BEFORE amend ===
+H.worker_handle is set: True
+task.cancelled() before: False
+task.done() before: False
+=== AFTER amend ===
+new node kind: Suffices
+worker task.cancelled() after: True
+old H.worker_handle is None: True
+new node is old H: False
+new node.worker_handle: None
+post-amend child kinds: ['Obvious']
+children preserved (post == pre): True
+settle_exc: None
+CONTRAST: delete -> Node.discard removes the subtree; amend -> _amend_from re-parents children, only the worker dies.
+CLAIM CONFIRMED: worker torn down, handle detached, children re-parented.

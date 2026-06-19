@@ -8095,6 +8095,196 @@ async def _test_AmendSingleKeepsChildren(root: Root, file: MyIO):
     file.write("_amend_from preservation verified.\n")
 
 
+@model_test("AmendTearsDownWorker", "Test_AmendTearsDownWorker.thy", 8)
+async def _test_AmendTearsDownWorker(root: Root, file: MyIO):
+    """A CLASS-CHANGING single-op amend (here Have→Suffices) of a node X that
+    carries a live WorkerHandle must TEAR DOWN that worker. Under the
+    non-destructive-amend policy the worker is kept only when the top-level class
+    is UNCHANGED (see `AmendKeepsWorker`); a class change fails
+    `_amend_preserves_worker`, so `amend_me`'s commit branch takes
+    `await saved.aclose()` — cancelling the worker task and detaching the handle
+    (X.worker_handle = None) — while X's partial proof sub-tree is still
+    re-parented onto the new (amended) node by `_amend_from`."""
+    from .model import WorkerHandle
+
+    def obs(line: str) -> None:
+        # Stream every observation to BOTH the golden buffer and stderr, so the
+        # observations survive even if a later assert aborts before the golden
+        # diff dump (the buffer is only written to .actual.yml on a diff).
+        file.write(line + "\n")
+        print("[ATDW] " + line, file=sys.stderr, flush=True)
+
+    # 1. Seed step "1" with a Have carrying a small nested proof.
+    await root.fill("1", [Have.gen_single({
+        "thought": "initial",
+        "statement": {"english": "init", "conclusion": r"x * x \<ge> 0"},
+        "name": "orig",
+        "proof": [{"operation": "Obvious", "facts": []}],
+    })])
+    H = root.locate_node("1")
+    assert isinstance(H, NonLeaf_Node), f"expected NonLeaf_Node, got {type(H).__name__}"
+    pre_ids = [id(c) for c in H.sub_nodes]   # kept for the assertion; NOT printed
+    obs(f"H kind: {type(H).__name__}")
+    obs(f"pre-amend child kinds: {[type(c).__name__ for c in H.sub_nodes]}")
+
+    # 2. Attach a worker with a REAL spinning asyncio task so cancellation is
+    #    observable. WorkerHandle(target, session); task attr is `_task`.
+    handle = WorkerHandle(H, root.session)
+
+    async def _spin():
+        await asyncio.sleep(3600)
+
+    handle._task = asyncio.ensure_future(_spin())
+    H.worker_handle = handle
+    # let the spinning task actually start running before we cancel it
+    await asyncio.sleep(0)
+
+    # 3. Observations BEFORE amend.
+    obs("=== BEFORE amend ===")
+    obs(f"H.worker_handle is set: {H.worker_handle is handle}")
+    obs(f"task.cancelled() before: {handle._task.cancelled()}")
+    obs(f"task.done() before: {handle._task.done()}")
+
+    # 4. Single-op amend → inheritance path. The amended op carries NO proof body
+    #    so the ONLY children on the new node are those re-parented by
+    #    `_amend_from` from H (the worker's partial sub-tree).
+    settle_exc = None
+    try:
+        await root.amend("1", [Suffices.gen_single({
+            "thought": "amended replacement — should tear down the worker",
+            "statement": {"english": "repl", "conclusion": r"x * x \<ge> 0"},
+        })])
+    except Exception as e:  # _settle_costs may raise if the handle never ran
+        settle_exc = e
+        obs(f"amend raised (teardown path still executed): {type(e).__name__}: {e}")
+
+    new_node = root.locate_node("1")
+    assert isinstance(new_node, NonLeaf_Node), \
+        f"expected NonLeaf_Node, got {type(new_node).__name__}"
+    post_ids = [id(c) for c in new_node.sub_nodes]
+
+    # 5. Observations AFTER amend.
+    obs("=== AFTER amend ===")
+    obs(f"new node kind: {type(new_node).__name__}")
+    obs(f"worker task.cancelled() after: {handle._task.cancelled()}")
+    obs(f"old H.worker_handle is None: {H.worker_handle is None}")
+    obs(f"new node is old H: {new_node is H}")
+    obs(f"new node.worker_handle: {new_node.worker_handle!r}")
+    obs(f"post-amend child kinds: {[type(c).__name__ for c in new_node.sub_nodes]}")
+    obs(f"children preserved (post == pre): {post_ids == pre_ids}")
+    obs(f"settle_exc: {type(settle_exc).__name__ if settle_exc else None}")
+
+    # CONTRAST (from code, not run here): `delete` routes through `Node.discard`
+    # (NonLeaf_Node.discard recurses aclose over the WHOLE subtree AND removes
+    # the node from its parent's sub_nodes), so the partial proof sub-tree would
+    # be DESTROYED. `amend` instead re-parents the children onto the replacement
+    # via `_amend_from`, tearing down only the worker on the replaced node.
+    obs("CONTRAST: delete -> Node.discard removes the subtree; "
+        "amend -> _amend_from re-parents children, only the worker dies.")
+
+    # 6. Assert the claim (all observations already emitted above).
+    assert handle._task.cancelled(), "REFUTED: worker task not cancelled"
+    assert H.worker_handle is None, \
+        "REFUTED: old node's worker_handle not detached"
+    assert new_node.worker_handle is None, \
+        "REFUTED: new (amended) node has a worker_handle"
+    assert post_ids == pre_ids, \
+        "REFUTED: single-op amend did not re-parent the partial sub-tree"
+    obs("CLAIM CONFIRMED: worker torn down, handle detached, children re-parented.")
+
+
+@model_test("AmendKeepsWorker", "Test_AmendKeepsWorker.thy", 8)
+async def _test_AmendKeepsWorker(root: Root, file: MyIO):
+    """A SAME-CLASS, non-destructive single-op amend (Have→Have, still-open goal)
+    of a node carrying a live WorkerHandle must KEEP the worker alive and MIGRATE
+    its handle onto the amended node — NOT cancel it. This exercises
+    `_amend_preserves_worker` (top-class unchanged, non-SubgoalMaker, the new block
+    re-opened SUCCESS, goal not proved out) → `amend_me` commit branch →
+    `WorkerHandle.retarget`, which re-points `node.worker_handle`, `handle.target`,
+    and the worker session's `role.target`, and clears the stale
+    `_initial_prompt_cache`. Contrast `AmendTearsDownWorker` (a class change, which
+    still cancels)."""
+    from .model import WorkerHandle
+
+    def obs(line: str) -> None:
+        file.write(line + "\n")
+        print("[AKW] " + line, file=sys.stderr, flush=True)
+
+    # 1. Seed step "1" with a Have whose goal is left OPEN (no proof body), so
+    #    `is_proof_finished()` is False and the keep-predicate is not disqualified
+    #    by an already-proved goal (the K2 guard).
+    await root.fill("1", [Have.gen_single({
+        "thought": "initial",
+        "statement": {"english": "init", "conclusion": r"x * x \<ge> 0"},
+        "name": "orig",
+    })])
+    H = root.locate_node("1")
+    assert isinstance(H, NonLeaf_Node), f"expected NonLeaf_Node, got {type(H).__name__}"
+    obs(f"H kind: {type(H).__name__}")
+    obs(f"H is_proof_finished (want False): {H.is_proof_finished()}")
+
+    # 2. Attach a worker with a REAL spinning task plus a FAKE worker sub-session
+    #    (only the fields `retarget` touches: `role` (a Role_Worker) and
+    #    `_initial_prompt_cache`), so we can verify all three handle references and
+    #    the cache clear migrate.
+    handle = WorkerHandle(H, root.session)
+
+    async def _spin():
+        await asyncio.sleep(3600)
+
+    handle._task = asyncio.ensure_future(_spin())
+
+    class _FakeSub:
+        pass
+    fake_sub = _FakeSub()
+    fake_sub.role = model.Role_Worker(target=H)
+    fake_sub._initial_prompt_cache = "STALE-HEADER"
+    handle._sub = cast(Any, fake_sub)
+    # The kept handle is swept by the session-close `aclose_all_subagents`; its
+    # `_settle_costs` would call `session._accumulate_subagent_costs` (an LMDriver
+    # method absent on the bare test Session). Mark costs settled so the sweep
+    # skips cost-accounting on our fake sub-session.
+    handle._costs_accumulated = True
+
+    H.worker_handle = handle
+    await asyncio.sleep(0)  # let the spinning task start
+    obs("=== BEFORE amend ===")
+    obs(f"H.worker_handle is set: {H.worker_handle is handle}")
+    obs(f"task.cancelled() before: {handle._task.cancelled()}")
+
+    # 3. SAME-CLASS amend (Have→Have), same still-open conclusion → KEEP.
+    await root.amend("1", [Have.gen_single({
+        "thought": "amended — same class, should keep & migrate the worker",
+        "statement": {"english": "repl", "conclusion": r"x * x \<ge> 0"},
+        "name": "orig",
+    })])
+
+    new_node = root.locate_node("1")
+    assert isinstance(new_node, NonLeaf_Node), \
+        f"expected NonLeaf_Node, got {type(new_node).__name__}"
+    obs("=== AFTER amend ===")
+    obs(f"new node kind: {type(new_node).__name__}")
+    obs(f"new node is old H: {new_node is H}")
+    obs(f"worker task.cancelled() after (want False): {handle._task.cancelled()}")
+    obs(f"old H.worker_handle is None (want True): {H.worker_handle is None}")
+    obs(f"new_node.worker_handle is handle (want True): {new_node.worker_handle is handle}")
+    obs(f"handle.target is new_node (want True): {handle.target is new_node}")
+    obs(f"role.target is new_node (want True): {handle._sub.role.target is new_node}")
+    obs(f"_initial_prompt_cache cleared (want True): {handle._sub._initial_prompt_cache is None}")
+
+    # 4. Assert the keep + migrate.
+    assert not handle._task.cancelled(), "REFUTED: worker task was cancelled (should be kept)"
+    assert H.worker_handle is None, "REFUTED: old node still holds the handle"
+    assert new_node.worker_handle is handle, "REFUTED: handle not migrated onto the new node"
+    assert handle.target is new_node, "REFUTED: handle.target not retargeted"
+    assert handle._sub.role.target is new_node, "REFUTED: worker role.target not retargeted"
+    assert handle._sub._initial_prompt_cache is None, "REFUTED: stale prompt cache not cleared"
+    obs("CLAIM CONFIRMED: worker kept alive, handle + role.target migrated, cache cleared.")
+
+    # 5. Cleanup: stop the spinning task we kept alive.
+    handle._task.cancel()
+
+
 @model_test("ValidatorNestedPath", "Test_ValidatorNestedPath.thy", 8)
 async def _test_ValidatorNestedPath(root: Root, file: MyIO):
     """Verify `Parse_Op_List` reports path-annotated errors at the

@@ -1,0 +1,15 @@
+H kind: Have
+H is_proof_finished (want False): False
+=== BEFORE amend ===
+H.worker_handle is set: True
+task.cancelled() before: False
+=== AFTER amend ===
+new node kind: Have
+new node is old H: False
+worker task.cancelled() after (want False): False
+old H.worker_handle is None (want True): True
+new_node.worker_handle is handle (want True): True
+handle.target is new_node (want True): True
+role.target is new_node (want True): True
+_initial_prompt_cache cleared (want True): True
+CLAIM CONFIRMED: worker kept alive, handle + role.target migrated, cache cleared.

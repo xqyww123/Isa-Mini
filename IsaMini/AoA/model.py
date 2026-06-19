@@ -4284,7 +4284,7 @@ class Node(ABC):
             return outcome, self
         if len(gns) == 1:
             try:
-                new_node, old = await self.parent._amend_child(self, gns[0])
+                new_node, old, saved = await self.parent._amend_child(self, gns[0])
             except (GoalIsNontrivial, ProofTreeTooDeep, CannotEdit_NonDeclarative) as e:
                 if isinstance(e, ProofTreeTooDeep):
                     the_session()._depth_limit_exceeded = True
@@ -4320,7 +4320,25 @@ class Node(ABC):
                             await old._refresh_all_after_me()
                             break
                     outcome.committed.pop()
+                    # Revert restores `old` (which kept its handle) into the tree
+                    # at `parent.sub_nodes[i] = old` above, before its refresh — so
+                    # the worker rides along on an in-tree node; no worker code here.
                     return outcome, old
+            # COMMIT (SUCCESS or FAILURE-non-revert): decide the worker's fate.
+            # Reached for both because only TERMINATE_AND_REVERT returns early above.
+            if saved is not None:
+                if (isinstance(new_node, StdBlock)
+                        and _amend_preserves_worker(old, new_node)
+                        and not new_node.is_proof_finished()):
+                    saved.retarget(new_node)
+                else:
+                    # Cancel the parked worker, then sweep any nested sub-agent now
+                    # hosted under new_node (a base-NonLeaf `_amend_from` moved
+                    # child's sub_nodes — and any nested worker — onto new_node; the
+                    # cancelled worker's own wind-down iterates the now-empty
+                    # child.sub_nodes and would miss it).
+                    await saved.aclose()
+                    await new_node.aclose_all_subagents()
             return outcome, old
         # Multi-amend: delete self + insert gns at former slot.
         parent = self.parent
@@ -4500,6 +4518,19 @@ async def _refresh_child_replace_aware(child: 'Node', auto_intro: bool) -> 'Node
         return e.new_node
     finally:
         container._child_replace_enabled = prev
+
+def _amend_preserves_worker(old: 'Node', final: 'Node') -> bool:
+    """The keep-worker condition for a non-destructive single-op ``amend`` (used by
+    ``Node.amend_me``): the top-level node class is unchanged, it is NOT a
+    SubgoalMaker (those re-parse their bodies — the live carried nodes don't
+    survive), and the new block cleanly re-opened against Isabelle. The status gate
+    is ``== SUCCESS`` deliberately — ``!= FAILURE`` would also admit CANCELLED (e.g.
+    a broken predecessor sibling makes ``_amend_child`` ``_cancel`` the new node and
+    reset its goal state) and COMMENTED, neither of which is a live, re-opened
+    target."""
+    return (type(final) is type(old)
+            and not isinstance(old, SubgoalMaker)
+            and final.status.status == EvaluationStatus.Status.SUCCESS)
 
 class NonLeaf_Node(Node):
     _closed_by: Node | None # Some proof operation (e.g. Branch) may close a block, preventing all later appending to this block.
@@ -4831,7 +4862,7 @@ class NonLeaf_Node(Node):
                     self._closed_by = None
                 return
         raise InternalError("The target node is not my children")
-    async def _amend_child(self, child: 'Node', gn: Parsed_Opr) -> 'tuple[Node, Node]':
+    async def _amend_child(self, child: 'Node', gn: Parsed_Opr) -> 'tuple[Node, Node, WorkerHandle | None]':
         child_err = self._validate_child_class(gn.cls)
         if child_err is not None:
             raise child_err
@@ -4843,28 +4874,32 @@ class NonLeaf_Node(Node):
                 self._is_trivial = None
                 for sibling in self.sub_nodes[i+1:]:
                     sibling._on_upstream_change()
-                # `child` is being replaced; its descendants are kept and
-                # re-parented onto new_node by `_amend_from`. Only tear down the
-                # sub-agents that this amend actually invalidates:
-                #   - `child` has its OWN worker ⟺ (dispatch gate) its entire
-                #     subtree is that worker's exclusive territory → amending
-                #     `child` kills that worker → cascade-close the whole subtree.
-                #   - `child` has NO worker ⟺ any sub-agent below it was
-                #     dispatched from OUTSIDE this subtree (dispatcher + target
-                #     both survive the re-parent) → leave them intact.
-                # The discarded *children* of an amended SubgoalMaker (old case
-                # GoalNodes that don't survive) are torn down by `_amend_from`.
-                if isinstance(child, NonLeaf_Node) and child.worker_handle is not None:
-                    await child.aclose_all_subagents()
-                await new_node._amend_from(child)
-                if self._can_continue_before_child(new_node):
-                    # replace-aware: a fresh-fill InferenceRule amended in may
-                    # self-convert to a Rewrite (rebinds new_node).
-                    new_node = await _refresh_child_replace_aware(new_node, True)
-                else:
-                    await new_node._cancel(self._failed_predecessor_id(new_node))
-                await new_node._refresh_all_after_me()
-                return new_node, child
+                # Non-destructive amend: the worker handle (if any) STAYS on
+                # `child` through the refresh; the sole caller `amend_me` makes the
+                # keep/cancel decision once it sees the commit-vs-revert outcome.
+                # `saved` is surfaced so `amend_me` can retarget/aclose it. (Leaf
+                # has no `worker_handle`.)
+                saved = child.worker_handle if isinstance(child, NonLeaf_Node) else None
+                try:
+                    await new_node._amend_from(child)
+                    if self._can_continue_before_child(new_node):
+                        # replace-aware: a fresh-fill InferenceRule amended in may
+                        # self-convert to a Rewrite (rebinds new_node).
+                        new_node = await _refresh_child_replace_aware(new_node, True)
+                    else:
+                        await new_node._cancel(self._failed_predecessor_id(new_node))
+                    await new_node._refresh_all_after_me()
+                except BaseException:
+                    # amend hard-failed (incl. cancellation — CancelledError is a
+                    # BaseException): cancel the parked worker AND any nested
+                    # sub-agent. `child.sub_nodes` may already be moved onto
+                    # new_node by `_amend_from`, so sweep BOTH locations (aclose is
+                    # idempotent).
+                    if isinstance(child, NonLeaf_Node):
+                        await child.aclose_all_subagents()
+                    await new_node.aclose_all_subagents()
+                    raise
+                return new_node, child, saved
         raise InternalError("The target node is not my children")
     async def _amend_from(self, old: 'Node') -> None:
         await super()._amend_from(old)
@@ -12199,6 +12234,26 @@ class WorkerHandle:
         if self.target.worker_handle is self:
             self.target.worker_handle = None
         self.session.refresh_YAML()
+
+    def retarget(self, new_node: 'NonLeaf_Node') -> None:
+        """Migrate this LIVE handle from its current target to ``new_node`` (the
+        same tree slot/id) WITHOUT tearing the worker down — used by non-destructive
+        ``amend`` (commit-keep). Updates the three references that anchor the worker:
+        the node attr, ``self.target``, and the worker session's ``role.target``
+        (everything else derives from ``role.target`` + the live id)."""
+        old = self.target
+        if old.worker_handle is self:
+            old.worker_handle = None
+        new_node.worker_handle = self
+        self.target = new_node
+        if self._sub is not None and isinstance(self._sub.role, Role_Worker):
+            self._sub.role.target = new_node
+            # The worker's memoized opening prompt bakes the OLD lemma name/english
+            # (`initial_prompt` -> `_initial_prompt_cache`). Clear it so an SDK
+            # restart/compaction rebuilds the header from the amended target rather
+            # than re-seeding the stale goal. (Hygiene for this helper; NOT the
+            # deferred active "your goal changed" worker notification.)
+            self._sub._initial_prompt_cache = None
 
     def resolve_review(self, accepted: bool, reason: str | None = None) -> None:
         fut = self._pending_review
