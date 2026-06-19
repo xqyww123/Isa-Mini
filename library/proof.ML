@@ -5269,6 +5269,187 @@ fun remove_looping_simps lthy =
       in fold Simplifier.del_simp looping lthy end
   | _ => lthy
 
+(* ===== Numeral->Suc bridge synthesis =============================
+   After a proof-local recursive function f is defined, its .simps use
+   Suc-patterns (f (Suc n) = ...), so a goal like `f 3 = 8` never fires
+   the recursion (3 is `numeral`, not Suc-form), and the code/eval backend
+   is inapplicable (f is a Free). We synthesise extra simp rules
+   `f (numeral K) = body[rec_var := smaller numeral]` by PURE FORWARD
+   derivation (infer_instantiate + Conv; NO Goal.prove/tactics), covering
+   depth-d nesting (Suc (Suc .. n)) AND multiple Suc-operands (non-empty
+   subset x cartesian product over positions). Bridges fire only on
+   applications of the head, their RHS is the recursion body applied
+   (bare-numeral args, strictly decreasing) so they are loop-free, and
+   unrelated numerals are untouched. Verified standalone in
+   /tmp/isa_numeral_probe/Scratch_FullMerge.thy (depth-2 multi-operand)
+   and Scratch_D2_explore.thy (depth d=1..4). *)
+local
+  fun reflp t = @{thm eq_reflection} OF [t]
+  val p_bit0 = reflp (nth @{thms eval_nat_numeral} 1) (* numeral(Bit0 n) == Suc(numeral(BitM n)) *)
+  val p_bit1 = reflp (nth @{thms eval_nat_numeral} 2) (* numeral(Bit1 n) == Suc(numeral(Bit0 n)) *)
+  val p_one  = reflp (nth @{thms eval_nat_numeral} 0) (* Numeral1 == Suc 0 *)
+  val bitM_rules = map reflp @{thms BitM.simps}
+  fun c_Bit0 n = \<^Const>\<open>num.Bit0\<close> $ n
+  fun c_Bit1 n = \<^Const>\<open>num.Bit1\<close> $ n
+  val c_One    = \<^Const>\<open>num.One\<close>
+  fun c_BitM n = \<^Const>\<open>Num.BitM\<close> $ n
+  fun nnum k   = \<^Const>\<open>numeral \<^typ>\<open>nat\<close>\<close> $ k
+  val numT = \<^typ>\<open>num\<close>
+  fun fresh ix = Var (("i", ix), numT)
+  (* normalize the top BitM of a num term, case-splitting an unknown leaf
+     into One/Bit0/Bit1 (and nested BitM recursively). Returns a list of
+     (refine-leaf-subst, normalized-num). *)
+  fun norm_top (subst, m) ix =
+    case m of
+      Var _ =>
+        let val i = fresh ix in
+          [ (Term.subst_atomic [(m, c_One)]    o subst, c_One)
+          , (Term.subst_atomic [(m, c_Bit0 i)] o subst, c_Bit0 i)
+          , (Term.subst_atomic [(m, c_Bit1 i)] o subst, c_Bit1 i) ]
+        end
+    | \<^Const_>\<open>Num.BitM\<close> $ a =>
+        (case a of
+           Var _ =>
+             let val i = fresh ix in
+               [ (Term.subst_atomic [(a, c_One)]    o subst, c_One)
+               , (Term.subst_atomic [(a, c_Bit0 i)] o subst, c_Bit1 (c_BitM i))
+               , (Term.subst_atomic [(a, c_Bit1 i)] o subst, c_Bit1 (c_Bit0 i)) ]
+             end
+         | \<^Const_>\<open>num.One\<close>     => [ (subst, c_One) ]
+         | \<^Const_>\<open>num.Bit0\<close> $ b => [ (subst, c_Bit1 (c_BitM b)) ]
+         | \<^Const_>\<open>num.Bit1\<close> $ b => [ (subst, c_Bit1 (c_Bit0 b)) ]
+         | _ =>
+             norm_top (subst, a) (2*ix)
+             |> maps (fn (subst', a') => norm_top (subst', c_BitM a') (2*ix+1)))
+    | _ => [ (subst, m) ]
+  fun peel_norm m =
+    case m of
+      \<^Const_>\<open>num.Bit0\<close> $ a => SOME (c_BitM a)
+    | \<^Const_>\<open>num.Bit1\<close> $ a => SOME (c_Bit0 a)
+    | \<^Const_>\<open>num.One\<close>     => NONE
+    | _ => raise TERM ("peel_norm: top not normalized", [m])
+  fun step (subst, SOME m) ix =
+        norm_top (subst, m) ix |> map (fn (s', m') => (s', peel_norm m'))
+    | step (_, NONE) _ = raise Fail "cannot peel 0"
+  (* (K-arg-pattern, residual-after-d-Suc) branches over a single leaf var *)
+  fun enumerate d =
+    let val v = Var (("m", 0), numT)
+        fun go 0 br = [br]
+          | go k (subst, cur) =
+              (case cur of
+                 SOME _ => maps (fn br' => go (k-1) br') (step (subst, cur) (1000+k))
+               | NONE => [])
+    in map (fn (subst, cur) => (subst v, cur)) (go d (I, SOME v)) end
+  (* bounded forward exposure: numeral K == Suc^d Y (Conv -> thm, no tactic) *)
+  fun norm_bitM_head ctxt =
+    Conv.try_conv (Conv.arg_conv
+      (Conv.repeat_conv (Conv.changed_conv (Conv.bottom_rewrs_conv bitM_rules ctxt))))
+  val peel_head = Conv.rewrs_conv [p_bit0, p_bit1, p_one]
+  fun expose_conv _ 0 = Conv.all_conv
+    | expose_conv ctxt d =
+        (norm_bitM_head ctxt then_conv peel_head)
+        then_conv (Conv.arg_conv (expose_conv ctxt (d - 1)))
+  fun exposure_thm_in ctxt d K = expose_conv ctxt d (Thm.cterm_of ctxt (nnum K))
+  fun int_to_num 1 = c_One
+    | int_to_num n = if n mod 2 = 0 then c_Bit0 (int_to_num (n div 2))
+                                    else c_Bit1 (int_to_num (n div 2))
+  datatype kind = RVAR of int * int * (indexname * typ) | RZERO of int * int
+  fun suc_depth t =
+    let fun go d (\<^Const_>\<open>Suc\<close> $ u) = go (d+1) u
+          | go d (Var v) = SOME (d, SOME v)
+          | go d \<^Const_>\<open>Groups.zero \<^typ>\<open>nat\<close>\<close> = SOME (d, NONE)
+          | go _ _ = NONE
+    in go 0 t end
+  fun depth_positions lhs =
+    let val (_, args) = Term.strip_comb lhs in
+      map_index I args
+      |> map_filter (fn (i, a) =>
+           case suc_depth a of
+             SOME (d, SOME v) => if d >= 1 then SOME (RVAR (i, d, v)) else NONE
+           | SOME (d, NONE)   => if d >= 2 then SOME (RZERO (i, d)) else NONE
+           | NONE => NONE)
+    end
+  fun arg_pos_conv nargs pos cv =
+    funpow (nargs - 1 - pos) Conv.fun_conv (Conv.arg_conv cv)
+  fun strip_suc 0 t = t
+    | strip_suc k (\<^Const_>\<open>Suc\<close> $ u) = strip_suc (k-1) u
+    | strip_suc _ t = t
+  fun nonempty_subsets [] = []
+    | nonempty_subsets (x :: xs) =
+        let val r = nonempty_subsets xs in [x] :: map (fn s => x :: s) r @ r end
+  fun products [] = [[]]
+    | products (xs :: rest) = maps (fn x => map (fn p => x :: p) (products rest)) xs
+  val stride = 1000000
+  val cap = 64
+  (* Proof-local .simps are stated META-QUANTIFIED, e.g.
+     `\<And>n. f (Suc n) = body` (n a bound var), whereas a theory-level `fun`
+     gives the flat schematic `f (Suc ?n) = body`. Strip the leading `\<And>`
+     and instantiate with fresh schematic Vars (forall_elim_vars) so
+     depth_positions / infer_instantiate see them; the function head stays a
+     Free. No-op when there is no leading `\<And>` (theory-level fun). *)
+  fun bridges_of_eq ctxt R0 =
+    let
+      val R = Thm.forall_elim_vars (Thm.maxidx_of R0 + 1) R0
+      val (lhs, _) = HOLogic.dest_eq (HOLogic.dest_Trueprop (Thm.concl_of R))
+      val nargs = length (snd (Term.strip_comb lhs))
+      val poss = depth_positions lhs
+      val Rbase = Thm.maxidx_of R + 1
+      (* per-position branch set, reindexed by slot so positions never collide *)
+      fun pos_branches slot (RVAR (pos, d, (vn, _))) =
+            map (fn (K, _) =>
+              let val expo0 = exposure_thm_in ctxt d K
+                  val expo = Thm.incr_indexes (Rbase + slot*stride) expo0
+                  val (_, sucdY) = Logic.dest_equals (Thm.prop_of expo)
+                  val Y = strip_suc d sucdY
+              in (pos, SOME vn, Y, expo) end) (enumerate d)
+        | pos_branches slot (RZERO (pos, d)) =
+            let val K = int_to_num d
+                val expo0 = exposure_thm_in ctxt d K
+                val expo = Thm.incr_indexes (Rbase + slot*stride) expo0
+            in [ (pos, NONE, \<^Const>\<open>Groups.zero \<^typ>\<open>nat\<close>\<close>, expo) ] end
+      fun branchcount (RVAR (_, d, _)) = length (enumerate d)
+        | branchcount (RZERO _) = 1
+      val total = fold (fn p => fn acc => acc * (1 + branchcount p)) poss 1 - 1
+      val indexed = map_index I poss
+      (* Over the cap, degrade to single-position bridges only (each cheap)
+         so common single-operand goals still close, instead of dropping
+         every bridge for the equation. *)
+      val subsets = if total > cap then map single indexed
+                    else nonempty_subsets indexed
+      fun one_combo combo =
+        let val insts = map_filter (fn (_, vnopt, Y, _) =>
+                          case vnopt of SOME vn => SOME (vn, Thm.cterm_of ctxt Y)
+                                      | NONE => NONE) combo
+            val R' = infer_instantiate ctxt insts R
+            val conv = fold (fn (pos, _, _, expo) => fn c =>
+                          c then_conv arg_pos_conv nargs pos
+                                        (Conv.rewr_conv (Thm.symmetric expo)))
+                        combo Conv.all_conv
+        in Conv.fconv_rule (Conv.arg_conv (Conv.arg1_conv conv)) R' end
+      fun build subset =
+        products (map (fn (slot, p) => pos_branches slot p) subset)
+        |> map_filter (fn combo => \<^try>\<open>SOME (one_combo combo) catch _ => NONE\<close>)
+    in maps build subsets end
+in
+  (* one bad equation drops only its own bridges, never the whole Define *)
+  fun synth_numeral_bridges ctxt simps =
+    maps (fn R => \<^try>\<open>bridges_of_eq ctxt R catch _ => []\<close>) simps
+end
+
+(* Register the numeral bridges as proof-local simp rules. Pure proof-context
+   simpset mutation (the dual of remove_looping_simps' Simplifier.del_simp),
+   deliberately NOT Local_Theory.note: the post context is a level-0 proof
+   context (Proof_Local_Function avoids Local_Theory ops), and the bridges
+   carry the same Free-def hyps as .simps, discharged at the enclosing export
+   boundary. No-op for non-recursive defs (no Suc positions -> []). *)
+fun add_numeral_bridges lthy =
+  case Function_Common.import_last_function lthy of
+    SOME {simps = SOME simps, ...} =>
+      (case synth_numeral_bridges lthy simps of
+         [] => lthy
+       | bridges => Simplifier.add_simps bridges lthy)
+  | _ => lthy
+
 (* Extended FUN entrypoint. Runs phase 1 (pat-completeness) then phase 2
    (termination), with escalation + optional deferred-block handoff. *)
 fun FUN_by_fun_ext fixes specs config metric_strs open_on_fail
@@ -5307,7 +5488,7 @@ fun FUN_by_fun_ext fixes specs config metric_strs open_on_fail
                      ((Binding.suffix_name "_def" b, []), [(simps, [])]))
                 fixes lthy
        | _ => lthy)
-    fun post lthy = bind_def_alias (remove_looping_simps lthy)
+    fun post lthy = add_numeral_bridges (bind_def_alias (remove_looping_simps lthy))
     val {pat_goal_state, pat_afterqed, lthy_after_prepare} =
       Proof_Local_Function.prepare_pat_goal fixes specs config false ctxt_fn
     val pat_state = escalate_pat lthy_after_prepare pat_goal_state

@@ -1,0 +1,72 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(f :: nat ⇒ nat). f (4 :: nat) = (3 :: nat)
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Define
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(f :: nat ⇒ nat). f (4 :: nat) = (3 :: nat)
+proof:
+  - step id: 1
+    thought: Define fib2
+    operation: Define
+    name: fib2
+    type: nat ⇒ nat
+    equations:
+      - fib2 0 = (0::nat)
+      - fib2 (Suc 0) = (1::nat)
+      - fib2 (Suc (Suc n)) = fib2 (Suc n) + fib2 n
+    proof of termination: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  ∃(f :: nat ⇒ nat). f (4 :: nat) = (3 :: nat)
+--------------------------------------------------
+After Witness
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(f :: nat ⇒ nat). f (4 :: nat) = (3 :: nat)
+proof:
+  - step id: 1
+    thought: Define fib2
+    operation: Define
+    name: fib2
+    type: nat ⇒ nat
+    equations:
+      - fib2 0 = (0::nat)
+      - fib2 (Suc 0) = (1::nat)
+      - fib2 (Suc (Suc n)) = fib2 (Suc n) + fib2 n
+    proof of termination: empty
+  - step id: 2
+    thought: Use fib2 as witness
+    operation: Witness
+    witness: fib2
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  fib2 (4 :: nat) = (3 :: nat)
+--------------------------------------------------
+After Obvious
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(f :: nat ⇒ nat). f (4 :: nat) = (3 :: nat)
+proof:
+  - step id: 1
+    thought: Define fib2
+    operation: Define
+    name: fib2
+    type: nat ⇒ nat
+    equations:
+      - fib2 0 = (0::nat)
+      - fib2 (Suc 0) = (1::nat)
+      - fib2 (Suc (Suc n)) = fib2 (Suc n) + fib2 n
+    proof of termination: empty
+  - step id: 2
+    thought: Use fib2 as witness
+    operation: Witness
+    witness: fib2
+  - step id: 3
+    operation: Obvious
+Unfinished nodes: 0

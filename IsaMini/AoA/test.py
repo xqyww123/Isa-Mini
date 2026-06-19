@@ -1520,6 +1520,95 @@ async def _test_Define_SucPattern(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
 
+async def _define_close(root: Root, file: MyIO, name: str, typ: str,
+                        equations: list[str], witness: str):
+    """Shared driver for the numeral-bridge Define tests: Define a recursive
+    function, Witness it for an existential goal, then close the residual
+    numeral goal with Obvious (which only succeeds if the synthesized
+    numeral->Suc bridge simp rules fired)."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    await root.fill("1", [Define.gen_single({
+        "thought": f"Define {name}",
+        "name": name,
+        "type": typ,
+        "equations": equations,
+    })])
+    print_header("After Define", file)
+    root.print(0, file)
+
+    await root.fill("2", [Witness.gen_single({
+        "thought": f"Use {name} as witness",
+        "witnesses": [witness],
+    })])
+    print_header("After Witness", file)
+    root.print(0, file)
+
+    await root.fill("3", [Obvious.gen_single({"facts": []})])
+    print_header("After Obvious", file)
+    root.print(0, file)
+
+    unfinished_nodes = set()
+    root.unfinished_nodes(unfinished_nodes)
+    file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+
+@model_test("Define_Fib2Close", "Test_Define_Fib2Close.thy", 11)
+async def _test_Define_Fib2Close(root: Root, file: MyIO):
+    """Depth-2 single-operand: a numeral goal (fib2 4 = 3) closes via the
+    synthesized depth-2 bridges (fib2 recurses on Suc (Suc n))."""
+    await _define_close(root, file, "fib2", r"nat \<Rightarrow> nat", [
+        "fib2 0 = (0::nat)",
+        "fib2 (Suc 0) = (1::nat)",
+        "fib2 (Suc (Suc n)) = fib2 (Suc n) + fib2 n",
+    ], "fib2")
+
+@model_test("Define_MaxClose", "Test_Define_MaxClose.thy", 11)
+async def _test_Define_MaxClose(root: Root, file: MyIO):
+    """Depth-1 multi-Suc-operand: maxf (Suc m) (Suc n) matches Suc in both
+    positions; the both-numeral goal maxf 2 3 = 3 needs the cross-position
+    (subset x product) bridge."""
+    await _define_close(root, file, "maxf", r"nat \<Rightarrow> nat \<Rightarrow> nat", [
+        "maxf 0 n = n",
+        "maxf m 0 = m",
+        "maxf (Suc m) (Suc n) = Suc (maxf m n)",
+    ], "maxf")
+
+@model_test("Define_IrrelevantArg", "Test_Define_IrrelevantArg.thy", 11)
+async def _test_Define_IrrelevantArg(root: Root, file: MyIO):
+    """Non-recursive extra parameter: gadd a (Suc n) recurses only on the
+    second argument; bridges must target position 1 only and keep `a`
+    general. Goal gadd 5 3 = 8."""
+    await _define_close(root, file, "gadd", r"nat \<Rightarrow> nat \<Rightarrow> nat", [
+        "gadd a 0 = a",
+        "gadd a (Suc n) = Suc (gadd a n)",
+    ], "gadd")
+
+@model_test("Define_G2Close", "Test_Define_G2Close.thy", 11)
+async def _test_Define_G2Close(root: Root, file: MyIO):
+    """Depth-2 multi-operand (the merge's distinguishing path): g2 recurses
+    on Suc (Suc n) / Suc (Suc k); the both-numeral goal g2 2 2 = 2 hits the
+    depth-2 x depth-2 cross-position bridges."""
+    await _define_close(root, file, "g2", r"nat \<Rightarrow> nat \<Rightarrow> nat", [
+        "g2 0 m = m",
+        "g2 (Suc 0) m = Suc m",
+        "g2 (Suc (Suc n)) 0 = g2 (Suc n) 0 + 1",
+        "g2 (Suc (Suc n)) (Suc 0) = g2 (Suc n) 0 + 2",
+        "g2 (Suc (Suc n)) (Suc (Suc k)) = g2 (Suc n) (Suc k) + g2 n k",
+    ], "g2")
+
+@model_test("Define_TernClose", "Test_Define_TernClose.thy", 11)
+async def _test_Define_TernClose(root: Root, file: MyIO):
+    """Depth-3 RVAR plus a depth-2 RZERO base case (tern (Suc (Suc 0)) = 2);
+    tern 5 = 5 closes via both the recursive depth-3 bridges and the ground
+    RZERO bridge."""
+    await _define_close(root, file, "tern", r"nat \<Rightarrow> nat", [
+        "tern 0 = (0::nat)",
+        "tern (Suc 0) = (1::nat)",
+        "tern (Suc (Suc 0)) = (2::nat)",
+        "tern (Suc (Suc (Suc n))) = tern (Suc (Suc n)) + n",
+    ], "tern")
+
 @model_test("Witness2", "Test_Witness2.thy", 8)
 async def _test_Witness2(root: Root, file: MyIO):
     """Witness on a non-existential goal: the node stays in the tree

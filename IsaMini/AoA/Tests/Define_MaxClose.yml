@@ -1,0 +1,72 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(f :: nat ⇒ nat ⇒ nat). f (2 :: nat) (3 :: nat) = (3 :: nat)
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Define
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(f :: nat ⇒ nat ⇒ nat). f (2 :: nat) (3 :: nat) = (3 :: nat)
+proof:
+  - step id: 1
+    thought: Define maxf
+    operation: Define
+    name: maxf
+    type: nat ⇒ nat ⇒ nat
+    equations:
+      - maxf 0 n = n
+      - maxf m 0 = m
+      - maxf (Suc m) (Suc n) = Suc (maxf m n)
+    proof of termination: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  ∃(f :: nat ⇒ nat ⇒ nat). f (2 :: nat) (3 :: nat) = (3 :: nat)
+--------------------------------------------------
+After Witness
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(f :: nat ⇒ nat ⇒ nat). f (2 :: nat) (3 :: nat) = (3 :: nat)
+proof:
+  - step id: 1
+    thought: Define maxf
+    operation: Define
+    name: maxf
+    type: nat ⇒ nat ⇒ nat
+    equations:
+      - maxf 0 n = n
+      - maxf m 0 = m
+      - maxf (Suc m) (Suc n) = Suc (maxf m n)
+    proof of termination: empty
+  - step id: 2
+    thought: Use maxf as witness
+    operation: Witness
+    witness: maxf
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  maxf (2 :: nat) (3 :: nat) = (3 :: nat)
+--------------------------------------------------
+After Obvious
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(f :: nat ⇒ nat ⇒ nat). f (2 :: nat) (3 :: nat) = (3 :: nat)
+proof:
+  - step id: 1
+    thought: Define maxf
+    operation: Define
+    name: maxf
+    type: nat ⇒ nat ⇒ nat
+    equations:
+      - maxf 0 n = n
+      - maxf m 0 = m
+      - maxf (Suc m) (Suc n) = Suc (maxf m n)
+    proof of termination: empty
+  - step id: 2
+    thought: Use maxf as witness
+    operation: Witness
+    witness: maxf
+  - step id: 3
+    operation: Obvious
+Unfinished nodes: 0

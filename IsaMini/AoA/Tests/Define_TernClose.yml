@@ -1,0 +1,75 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(f :: nat ⇒ nat). f (5 :: nat) = (5 :: nat)
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Define
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(f :: nat ⇒ nat). f (5 :: nat) = (5 :: nat)
+proof:
+  - step id: 1
+    thought: Define tern
+    operation: Define
+    name: tern
+    type: nat ⇒ nat
+    equations:
+      - tern 0 = (0::nat)
+      - tern (Suc 0) = (1::nat)
+      - tern (Suc (Suc 0)) = (2::nat)
+      - tern (Suc (Suc (Suc n))) = tern (Suc (Suc n)) + n
+    proof of termination: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  ∃(f :: nat ⇒ nat). f (5 :: nat) = (5 :: nat)
+--------------------------------------------------
+After Witness
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(f :: nat ⇒ nat). f (5 :: nat) = (5 :: nat)
+proof:
+  - step id: 1
+    thought: Define tern
+    operation: Define
+    name: tern
+    type: nat ⇒ nat
+    equations:
+      - tern 0 = (0::nat)
+      - tern (Suc 0) = (1::nat)
+      - tern (Suc (Suc 0)) = (2::nat)
+      - tern (Suc (Suc (Suc n))) = tern (Suc (Suc n)) + n
+    proof of termination: empty
+  - step id: 2
+    thought: Use tern as witness
+    operation: Witness
+    witness: tern
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  tern (5 :: nat) = (5 :: nat)
+--------------------------------------------------
+After Obvious
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(f :: nat ⇒ nat). f (5 :: nat) = (5 :: nat)
+proof:
+  - step id: 1
+    thought: Define tern
+    operation: Define
+    name: tern
+    type: nat ⇒ nat
+    equations:
+      - tern 0 = (0::nat)
+      - tern (Suc 0) = (1::nat)
+      - tern (Suc (Suc 0)) = (2::nat)
+      - tern (Suc (Suc (Suc n))) = tern (Suc (Suc n)) + n
+    proof of termination: empty
+  - step id: 2
+    thought: Use tern as witness
+    operation: Witness
+    witness: tern
+  - step id: 3
+    operation: Obvious
+Unfinished nodes: 0

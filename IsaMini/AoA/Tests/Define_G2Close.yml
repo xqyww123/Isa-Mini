@@ -1,0 +1,78 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(f :: nat ⇒ nat ⇒ nat). f (2 :: nat) (2 :: nat) = (2 :: nat)
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Define
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(f :: nat ⇒ nat ⇒ nat). f (2 :: nat) (2 :: nat) = (2 :: nat)
+proof:
+  - step id: 1
+    thought: Define g2
+    operation: Define
+    name: g2
+    type: nat ⇒ nat ⇒ nat
+    equations:
+      - g2 0 m = m
+      - g2 (Suc 0) m = Suc m
+      - g2 (Suc (Suc n)) 0 = g2 (Suc n) 0 + 1
+      - g2 (Suc (Suc n)) (Suc 0) = g2 (Suc n) 0 + 2
+      - g2 (Suc (Suc n)) (Suc (Suc k)) = g2 (Suc n) (Suc k) + g2 n k
+    proof of termination: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  ∃(f :: nat ⇒ nat ⇒ nat). f (2 :: nat) (2 :: nat) = (2 :: nat)
+--------------------------------------------------
+After Witness
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(f :: nat ⇒ nat ⇒ nat). f (2 :: nat) (2 :: nat) = (2 :: nat)
+proof:
+  - step id: 1
+    thought: Define g2
+    operation: Define
+    name: g2
+    type: nat ⇒ nat ⇒ nat
+    equations:
+      - g2 0 m = m
+      - g2 (Suc 0) m = Suc m
+      - g2 (Suc (Suc n)) 0 = g2 (Suc n) 0 + 1
+      - g2 (Suc (Suc n)) (Suc 0) = g2 (Suc n) 0 + 2
+      - g2 (Suc (Suc n)) (Suc (Suc k)) = g2 (Suc n) (Suc k) + g2 n k
+    proof of termination: empty
+  - step id: 2
+    thought: Use g2 as witness
+    operation: Witness
+    witness: g2
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  g2 (2 :: nat) (2 :: nat) = (2 :: nat)
+--------------------------------------------------
+After Obvious
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(f :: nat ⇒ nat ⇒ nat). f (2 :: nat) (2 :: nat) = (2 :: nat)
+proof:
+  - step id: 1
+    thought: Define g2
+    operation: Define
+    name: g2
+    type: nat ⇒ nat ⇒ nat
+    equations:
+      - g2 0 m = m
+      - g2 (Suc 0) m = Suc m
+      - g2 (Suc (Suc n)) 0 = g2 (Suc n) 0 + 1
+      - g2 (Suc (Suc n)) (Suc 0) = g2 (Suc n) 0 + 2
+      - g2 (Suc (Suc n)) (Suc (Suc k)) = g2 (Suc n) (Suc k) + g2 n k
+    proof of termination: empty
+  - step id: 2
+    thought: Use g2 as witness
+    operation: Witness
+    witness: g2
+  - step id: 3
+    operation: Obvious
+Unfinished nodes: 0
