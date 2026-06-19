@@ -1518,7 +1518,7 @@ class Minilang_Operation(NamedTuple):
     def CHAINING(name: str, fact_refs: 'list[IsabelleFact]') -> 'Minilang_Operation':
         return Minilang_Operation("CHAINING", (name, [r.pack() for r in fact_refs]))
     @staticmethod
-    def INTRO(bindings: Bindings | None) -> 'Minilang_Operation':
+    def INTRO(bindings: Bindings | None, allow_standard_fallback: bool) -> 'Minilang_Operation':
         if bindings is not None:
             var_bindings = [(vb.internal_varname.ascii, vb.external_varname.ascii, vb.type.ascii)
                            for vb in bindings[0]]
@@ -1527,7 +1527,9 @@ class Minilang_Operation(NamedTuple):
             packed_bindings: Any = (var_bindings, fact_bindings)
         else:
             packed_bindings = None
-        return Minilang_Operation("INTRO", (packed_bindings, False))
+        # 2nd slot was the dead `split_conj` flag (always False); repurposed as
+        # `allow_standard_fallback` (True only for explicit/agent-issued Intro).
+        return Minilang_Operation("INTRO", (packed_bindings, allow_standard_fallback))
     @staticmethod
     def SPLIT_CONJS() -> 'Minilang_Operation':
         return Minilang_Operation("SPLIT_CONJS", None)
@@ -4662,7 +4664,7 @@ class NonLeaf_Node(Node):
         ml_state = await child.resulting_state().clone(None)
         config = NodeConfig(new_id, ml_state, self)
         try:
-            intro = Intro(config, "", None)
+            intro = Intro(config, "", None, _auto_injected=True)
         except ProofTreeTooDeep:
             return
         the_session().auto_intro_nodes.append(intro)
@@ -5367,7 +5369,7 @@ class StdBlock(NonLeaf_Node):
                 ml_state = await self._state_after_beginning().clone(None)
                 config = NodeConfig(local_step, ml_state, self)
                 try:
-                    intro = Intro(config, "", None)
+                    intro = Intro(config, "", None, _auto_injected=True)
                 except ProofTreeTooDeep:
                     pass
                 else:
@@ -5409,7 +5411,7 @@ class StdBlock(NonLeaf_Node):
             ml_state = await self._state_after_beginning().clone(None)
             config = NodeConfig(local_step, ml_state, self)
             try:
-                intro = Intro(config, "", None)
+                intro = Intro(config, "", None, _auto_injected=True)
             except ProofTreeTooDeep:
                 pass
             else:
@@ -5668,7 +5670,7 @@ class GoalNode(StdBlock):
                 ml_state = await self.ml_state.clone(None)
                 config = NodeConfig(local_step, ml_state, self)
                 try:
-                    intro = Intro(config, "", None)
+                    intro = Intro(config, "", None, _auto_injected=True)
                 except ProofTreeTooDeep:
                     pass
                 else:
@@ -5689,7 +5691,7 @@ class GoalNode(StdBlock):
             ml_state = await self.ml_state.clone(None)
             config = NodeConfig(local_step, ml_state, self)
             try:
-                intro = Intro(config, "", None)
+                intro = Intro(config, "", None, _auto_injected=True)
             except ProofTreeTooDeep:
                 pass
             else:
@@ -8793,12 +8795,17 @@ class Intro_ToolArg(TypedDict):
 @proof_operation("Intro", Intro_ToolArg)
 class Intro(Leaf):
     def __init__(self, config: NodeConfig, thought: str, bindings: Bindings | None = None,
-                 _pending_bindings: tuple[list, list] | None = None):
+                 _pending_bindings: tuple[list, list] | None = None,
+                 _auto_injected: bool = False):
         super().__init__(config, thought)
         self.bindings = bindings
         self.running_time = 0
         self._pending_bindings = _pending_bindings
         self._prev_bindings: Bindings | None = None
+        # Provenance: True iff this Intro node was auto-injected by the framework
+        # (not written by the agent). Only an explicit Intro may use the silent
+        # standard_tac fallback, so it is gated on `not _auto_injected`.
+        self._auto_injected = _auto_injected
     @classmethod
     def gen_single(cls, arg: Intro_ToolArg,
                    path: str = "<direct>") -> Parsed_Opr:
@@ -8843,7 +8850,7 @@ class Intro(Leaf):
             self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
         return indent
     def the_operation(self) -> Minilang_Operation:
-        return Minilang_Operation.INTRO(self.bindings)
+        return Minilang_Operation.INTRO(self.bindings, not self._auto_injected)
     async def _refresh_me_alone(self, auto_intro: bool):
         is_init = self._first_time
         if self._pending_bindings is not None:

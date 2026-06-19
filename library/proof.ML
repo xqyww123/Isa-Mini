@@ -101,7 +101,7 @@ val SPLIT_CONJS_CMD : command
 
 (* Helper functions for INTRO *)
 val need_intro : thm -> bool
-val standard_intro_fallback : state -> state option
+val raw_apply_state : string -> (message -> unit) -> context_tactic -> Time.time option -> state -> state
 val strip_meta_and_hol_hhf : term -> (string * typ) list * term list * term
 val deep_destruct_prem : Proof.context -> thm -> thm list
 val deep_destruct_term : Proof.context -> term -> term list
@@ -1603,22 +1603,13 @@ fun apply msg tac time s = apply' msg (get_reporter()) tac time s
 
 fun apply_method msg using meth timeout s = apply msg (meth using) timeout s
 
-fun standard_intro_fallback ((ctxt, HHF (st, items) :: L), his, ID) =
-      if need_intro st then NONE
-      else
-        (case try (SINGLE (Classical.standard_tac ctxt [])) st of
-          SOME (SOME st') =>
-            let
-              val n_new = Thm.nprems_of st' - Thm.nprems_of st + 1
-              val stack' = maintain (ctxt, HHF (protect_goals st', items) :: L)
-              val state' = (stack', his, ID)
-              val st'' = leading_proof_sequent_of state'
-            in
-              if n_new = 1 andalso need_intro st'' then SOME state'
-              else NONE
-            end
-        | _ => NONE)
-  | standard_intro_fallback _ = raise BROKEN_INVARIANT
+(* State-level `raw_apply`: thread history/cache-id through the stack-level
+   primitive. Unlike `apply'`/`apply` it does NOT run `maintain` (no
+   block-advance / MAGIC side effects) and lets the caller pass its own
+   `report` — so a caller can run a tactic speculatively and silently, e.g.
+   with a counting/discarding report. *)
+fun raw_apply_state msg report tac timeout ((stk, his, ID): state) : state =
+      (raw_apply msg report tac timeout stk, his, ID)
 
 
 fun record_history name (s,his,ID) = (s, Symtab.update (name,s) his,ID)

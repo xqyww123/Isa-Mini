@@ -54,7 +54,7 @@ datatype ('term, 'thm, 'fact) command =
   | SORRY_ONLY
   | HAMMER   of ('term, 'fact) extended_fact list (*with facts*) * int (*timeout in seconds*)
               * (string * int) option (*cached proof: method_string * time_ms; NONE = no cache*)
-  | INTRO    of bindings option
+  | INTRO    of bindings option * bool
   | SPLIT_CONJS
   | SIMPLIFY of (('term, 'fact) extended_fact * term list option) list (*simp facts with optional targets*)
               * bool (*use_system_simps*)
@@ -228,7 +228,7 @@ datatype ('term, 'thm, 'fact) command =
   | SORRY_ONLY
   | HAMMER   of ('term, 'fact) extended_fact list (*with facts*) * int (*timeout in seconds*)
               * (string * int) option (*cached proof: method_string * time_ms; NONE = no cache*)
-  | INTRO    of bindings option
+  | INTRO    of bindings option * bool
   | SPLIT_CONJS
   | SIMPLIFY of (('term, 'fact) extended_fact * term list option) list (*simp facts with optional targets*)
               * bool (*use_system_simps*)
@@ -379,14 +379,35 @@ fun get_witness_types s =
    in extract_leading_ex_types goal
   end
 
-fun intro_subject_state (s: Minilang.state) : Minilang.state option =
-  let val st = Minilang.leading_proof_sequent_of s
-   in if Minilang.need_intro st
-      then SOME s
-      else Minilang.standard_intro_fallback s
-  end
+(* Resolve the state an Intro should introduce from. If the leading goal
+   already needs Intro, that is the subject. Otherwise — ONLY when
+   `allow_fallback` is set (an explicit/agent-issued Intro, never an
+   auto-injected one) — try ONE `standard_tac` step silently (report is
+   captured, not forwarded) via the no-`maintain` state-level raw_apply,
+   accepting it only when it yields exactly one new goal that itself needs
+   Intro. NONE means Intro cannot proceed. `report (Goals gs)` carries the new
+   subgoals, so its length is the new-goal count. *)
+fun resolve_intro_state allow_fallback (s: Minilang.state) : Minilang.state option =
+  if Minilang.need_intro (Minilang.leading_proof_sequent_of s)
+  then SOME s
+  else if not allow_fallback then NONE
+  else
+    let
+      val ctxt = Minilang.context_of s
+      val n_new = Unsynchronized.ref ~1
+      fun report (Minilang.Goals gs) = n_new := length gs
+        | report _ = ()
+    in
+      case try (Minilang.raw_apply_state "" report
+                  (CONTEXT_TACTIC (Classical.standard_tac ctxt [])) NONE) s of
+        SOME s' =>
+          if !n_new = 1
+             andalso Minilang.need_intro (Minilang.leading_proof_sequent_of s')
+          then SOME s' else NONE
+      | NONE => NONE
+    end
 
-fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option)
+fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (allow_fallback: bool)
                (s:Minilang.state)
   : bindings * Minilang.state =
   let
@@ -399,8 +420,8 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option)
     val report_missing = is_some opt_bindings
   in
     (* Step 1: Check if INTRO is applicable, possibly after one silent
-       standard_tac step that exposes an intro-able goal. *)
-    case intro_subject_state s of
+       standard_tac step that exposes an intro-able goal (explicit Intro only). *)
+    case resolve_intro_state allow_fallback s of
       NONE =>
       let
         (* No leading ⋀/⟹/∀/⟶ to introduce: nothing is bound. Still emit
@@ -603,7 +624,9 @@ fun AUTO_SPLIT_CONJS (s: Minilang.state) : Minilang.state =
 fun compute_bindings (s:Minilang.state)
                      (var_names: string list) (fact_names: string list)
   : bindings =
-  case intro_subject_state s of
+  (* compute_bindings only runs for an explicit Intro that supplied bindings
+     (auto-injected Intros carry none), so the fallback is always allowed here. *)
+  case resolve_intro_state true s of
     NONE => ([], [])
   | SOME intro_s =>
       let
@@ -1244,8 +1267,8 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
               raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL,
                 "No cached proof available and replay mode forbids sledgehammer")
         end
-    | INTRO opt_bindings =>
-        #2 (AUTO_INTRO counters opt_bindings s)
+    | INTRO (opt_bindings, allow_fallback) =>
+        #2 (AUTO_INTRO counters opt_bindings allow_fallback s)
     | SPLIT_CONJS => AUTO_SPLIT_CONJS s
     | SPECIALIZE (name, rule_fact, insts, discharge_facts) =>
         let val ctxt = Minilang.context_of s

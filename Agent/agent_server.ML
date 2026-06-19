@@ -1242,7 +1242,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
 
       (* Build AoA command with local callbacks *)
       val raw_goal_hash = Hasher.goal (ctxt, sequent)
-      val goal_hash = "intro-standard-v2:" ^ raw_goal_hash
+      val goal_hash = "intro-standard-v3:" ^ raw_goal_hash
       val thy = Proof_Context.theory_of ctxt
       val aoa_cache_key = "aoa:" ^ goal_hash
       val use_cache = Config.get ctxt AoA_use_proof_cache

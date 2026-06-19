@@ -175,12 +175,9 @@ val unpacker =
      | "HAMMER"   => apfst HAMMER o unpackTuple3 (unpackList unpack_extended_fact, unpackInt,
                         unpackOption (unpackPair (unpackString, unpackInt)))
      | "INTRO"    => (fn s =>
-            let val ((bindings, split_conj), s') =
+            let val ((bindings, allow_standard_fallback), s') =
                     unpackPair (unpackOption unpack_bindings, unpackBool) s
-                val _ = if split_conj
-                        then error "INTRO no longer supports split_conj; use SPLIT_CONJS"
-                        else ()
-            in (INTRO bindings, s') end)
+            in (INTRO (bindings, allow_standard_fallback), s') end)
      | "SPLIT_CONJS" => apfst (K SPLIT_CONJS) o unpackUnit
      | "SPECIALIZE" => apfst SPECIALIZE o unpackTuple4 (
                         unpackString,
@@ -272,7 +269,9 @@ fun packer (SIMPLIFY data) =
       packPair (packString, packTuple3 (packList pack_extended_fact, packInt,
                 packOption (packPair (packString, packInt))))
         ("HAMMER", (facts, timeout, cached))
-  | packer (INTRO data) = packPair (packString, packOption pack_bindings) ("INTRO", data)
+  | packer (INTRO (bindings, allow_standard_fallback)) =
+      packPair (packString, packPair (packOption pack_bindings, packBool))
+               ("INTRO", (bindings, allow_standard_fallback))
   | packer SPLIT_CONJS = packPair (packString, packUnit) ("SPLIT_CONJS", ())
   | packer (SPECIALIZE data) =
       packPair (packString, packTuple4 (
