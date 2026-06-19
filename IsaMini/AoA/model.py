@@ -2223,7 +2223,11 @@ class Minilang_State:
         result = await self.connection.callback(
             "IsaMini.check_looping_rules",
             (self.name, fact_names, simplify_goal, premise_names))
-        return result
+        # Decode the agent-facing display strings (rule_pretty / match_pretty) at
+        # the boundary; match_raw stays ascii — it is re-sent to Isabelle.
+        return [(idx, pretty_unicode(rule_pretty),
+                 [(pretty_unicode(mp), mr) for mp, mr in matches])
+                for idx, rule_pretty, matches in result]
 
     async def validate_prove_in_time(self, statements: list[str]) -> list[str | None]:
         """Validate prove-in-time statements. Returns None per provable, error string per unprovable."""
@@ -3227,7 +3231,7 @@ class Interaction_InstantiateSchematics(Interaction):
             (self.state.name, self.rule_name.ascii, insts))
         if err is not None:
             raise Interaction_BadAnswer(
-                f"Instantiation rejected by Isabelle:\n{err}")
+                f"Instantiation rejected by Isabelle:\n{pretty_unicode(err)}")
         where_parts = " and ".join(
             f"{v} = \N{SINGLE LEFT-POINTING ANGLE QUOTATION MARK}{t}\N{SINGLE RIGHT-POINTING ANGLE QUOTATION MARK}"
             for v, t in insts)
@@ -3303,7 +3307,7 @@ class Interaction_InstantiatePostSchematics(Interaction):
             (self.state.name, [(ascii_of_unicode(n), ascii_of_unicode(t)) for n, t in insts]))
         if err is not None:
             raise Interaction_BadAnswer(
-                f"Instantiation rejected by Isabelle:\n{err}")
+                f"Instantiation rejected by Isabelle:\n{pretty_unicode(err)}")
         return insts
 
 
@@ -6390,6 +6394,11 @@ class CaseSplit_Like(SubgoalMaker):
         # 3. instantiate schematic vars if any
         if analysis is not None:
             picked_name, _, consume_prems, _, schematic_vars = analysis
+            # Decode agent-facing display strings at the boundary: the consume
+            # premises and the schematic-var TYPES (the var names are data used
+            # for validation, so left as-is).
+            consume_prems = [pretty_unicode(p) for p in consume_prems]
+            schematic_vars = [(n, pretty_unicode(t)) for n, t in schematic_vars]
             if schematic_vars:
                 final_name = rule_name if rule_name is not None else picked_name
                 if final_name is None:
