@@ -2237,7 +2237,12 @@ class Minilang_State:
                 "IsaMini.validate_prove_in_time", (self.name, statements))
             session.on_operation_end(self.name, "PROVE_IN_TIME", statements,
                 EvaluationStatus.Success(time() - now))
-            return result
+            # Decode Isabelle RPC output at the boundary (same rule as
+            # IsaTerm.from_isabelle / IsabelleError): these error strings carry
+            # \<name> symbols that must render as unicode for the agent. Unlike
+            # raised errors (wrapped by IsabelleError) this callback RETURNS its
+            # text, so it must decode here.
+            return [pretty_unicode(r) if r is not None else None for r in result]
         except IsabelleError as err:
             session.on_operation_end(self.name, "PROVE_IN_TIME", statements,
                 EvaluationStatus.Failure(time() - now, FailureReason(''.join(err.errors))))
