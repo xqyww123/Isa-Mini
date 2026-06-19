@@ -350,6 +350,31 @@ async def _test_IntroStandardSolves(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
+@model_test("IntroStandardBindings", "Test_IntroStandardBindings.thy", 8)
+async def _test_IntroStandardBindings(root: Root, file: MyIO):
+    """ACCEPT path WITH explicit agent-provided bindings — pins the
+    load-bearing coupling that `compute_bindings` and `AUTO_INTRO` resolve the
+    SAME post-fallback state. Goal `A ⊆ B` needs the silent standard_tac step
+    (subsetI) to expose `⋀x. x ∈ A ⟹ x ∈ B`; the agent names the introduced
+    element `y` and the membership premise `hyp`. Because compute_bindings runs
+    through the same `resolve_intro_state`, those names must land on the
+    fallback-exposed goal (fixing `y`, assuming `hyp: y ∈ A`, leaving `y ∈ B`)
+    rather than being dropped. A regression where compute_bindings stopped
+    consulting the fallback would surface here as lost/auto-renamed bindings."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    await root.fill("1", [Intro.gen_single({
+        "thought": "introduce the element y and name the membership premise hyp",
+        "variable_bindings": ["y"],
+        "fact_bindings": ["hyp"],
+    })])
+    print_header("After Intro (standard_tac fallback + explicit agent bindings y/hyp)", file)
+    root.print(0, file)
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 @model_test("PostInstRule", "Test_PostInstRule.thy", 19)
 async def _test_PostInstRule(root: Root, file: MyIO):
     # `myrule` applied to `P k` pins ?m:=k but leaves ?c residual in the
