@@ -369,17 +369,31 @@ fun read_props ctxt ss =
    Gated on `has_const_hints` so the hot path pays no extra parse when nothing
    is registered. Call this INSIDE an op's `Inner_Syntax_Error.guard` action
    thunk: a genuine parse error then still surfaces with the 【 】 marker, and a
-   reject's `OPR_FAIL` (non-ERROR) propagates untouched through `guard`. *)
-fun check_authored_props ctxt strs =
+   reject's `OPR_FAIL` (non-ERROR) propagates untouched through `guard`.
+
+   `fix_names` are the op's own bound names (HAVE/SUFFICES `for_any`, OBTAIN
+   vars). They are fixed (untyped) into the scan context so a bound var whose
+   short name equals a registered const resolves to a `Free` here — exactly as
+   it will in the op's authoritative parse — instead of the global `Const`,
+   preventing a spurious hint fire (A2).
+
+   The scan is best-effort: the authoritative parse is the op's own (e.g.
+   `Minilang.HAVE`). If this standalone parse fails for ANY reason (a wrapped
+   `Par_Exn`, a `TYPE`/`TERM`, or a plain `ERROR` — e.g. a still-missing type),
+   swallow it and let the real op report it; never let scanning change the op's
+   success/failure. Only `Interrupt` is re-raised; a `check_term` reject
+   (`OPR_FAIL`, raised OUTSIDE the capture) still propagates. *)
+fun check_authored_props ctxt fix_names strs =
   if Agent_Hint.has_const_hints ctxt
   then
-    (* This is a best-effort re-parse for hint scanning only; the authoritative
-       parse is the op's own (e.g. Minilang.HAVE, with `fixes` in scope). If
-       this standalone parse fails (e.g. a fixed var needs its declared type to
-       disambiguate), skip the scan and let the real op report the parse error —
-       never let scanning change the op's success/failure. A hint reject from
-       `check_term` (OPR_FAIL, not ERROR) still propagates. *)
-    List.app (Agent_Hint.check_term ctxt) (read_props ctxt strs handle ERROR _ => [])
+    let
+      val (_, ctxt') =
+        Proof_Context.add_fixes (map (fn n => (Binding.name n, NONE, NoSyn)) fix_names) ctxt
+      val ts =
+        (case Exn.capture (fn () => read_props ctxt' strs) () of
+           Exn.Res ts => ts
+         | Exn.Exn e => if Exn.is_interrupt e then Exn.reraise e else [])
+    in List.app (Agent_Hint.check_term ctxt') ts end
   else ()
 
 (* Extract types of leading existential quantifiers from a goal *)
@@ -1280,7 +1294,7 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
         in Inner_Syntax_Error.guard
              (fn () => Inner_Syntax_Error.marker_strings Syntax.read_prop
                          (Minilang.context_of s) (map snd branches))
-             (fn () => ( check_authored_props (Minilang.context_of s) (map snd branches)
+             (fn () => ( check_authored_props (Minilang.context_of s) [] (map snd branches)
                        ; reject_stray_assumption_frees "Branch"
                            (Minilang.context_of s) (goal_intro_var_names s)
                            [] (map snd branches)  (* Branch fixes no variables *)
@@ -1305,7 +1319,7 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
               (fn () => Inner_Syntax_Error.marker_strings Syntax.read_prop
                           (Minilang.context_of s) (conclusion :: map snd assumes))
               (fn () => ( check_authored_props (Minilang.context_of s)
-                            (conclusion :: map snd assumes)
+                            (map fst fixes) (conclusion :: map snd assumes)
                         ; Minilang.HAVE fixes' named_assumes shows s ))
         end
     | SUFFICES (fixes, assumes, conclusion) =>
@@ -1324,7 +1338,7 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
               (fn () => Inner_Syntax_Error.marker_strings Syntax.read_prop
                           (Minilang.context_of s) (conclusion :: map snd assumes))
               (fn () => ( check_authored_props (Minilang.context_of s)
-                            (conclusion :: map snd assumes)
+                            (map fst fixes) (conclusion :: map snd assumes)
                         ; reject_stray_assumption_frees "Suffices"
                             (Minilang.context_of s) (goal_intro_var_names s) fixes'
                             (conclusion :: map snd assumes)
@@ -1340,7 +1354,7 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
         in Inner_Syntax_Error.guard
              (fn () => Inner_Syntax_Error.marker_strings Syntax.read_prop
                          (Minilang.context_of s) (map snd constraints))
-             (fn () => ( check_authored_props (Minilang.context_of s) (map snd constraints)
+             (fn () => ( check_authored_props (Minilang.context_of s) (map fst vars) (map snd constraints)
                        ; reject_stray_assumption_frees "Obtain"
                            (Minilang.context_of s) (goal_intro_var_names s)
                            (map (fn (v,T) => (Binding.name v, T, NoSyn)) vars)

@@ -650,7 +650,7 @@
     },
     "Chaining": {
       "additionalProperties": false,
-      "description": "chain facts via transitivity (example: deriving a \u2264 c from a = b, b \u2264 c)",
+      "description": "chain facts via transitivity. Example: deriving `a \u2264 c` from `a = b`, `b \u2264 c`. Example: deriving `a = d` from `a = b`, `b = c`, and `c = d`",
       "properties": {
         "operation": {
           "const": "Chaining",

@@ -4,8 +4,9 @@ begin
 
 declare [[agent_AoA_driver="test.HintRejectFact"]]
 
-(* DRAFT message text — final wording pending user sign-off. *)
-declare refl [agent_reject "DRAFT: refl is registered as a rejected fact for this test; do not reference it."]
+(* Test-only entry (refl is not a real production hint): exercises the fact
+   REJECT path. *)
+declare refl [agent_reject "refl is registered as a rejected fact for this test; do not reference it."]
 
 lemma hint_reject_fact: "(x::int) * x \<ge> 0"
   by   aoa

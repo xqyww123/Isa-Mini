@@ -1,0 +1,10 @@
+--------------------------------------------------
+After Obvious using rejected fact refl (expect REJECT)
+--------------------------------------------------
+committed: 0, failure: True
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.

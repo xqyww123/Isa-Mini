@@ -75,9 +75,22 @@ fun check_term ctxt t =
       end
   end
 
+(* `Thm.get_name_hint` returns this sentinel for a nameless thm; it must never
+   be used as a registry key (it would match every other nameless thm). *)
+val nameless_thm = "??.unknown"
+
 fun check_thm ftab th =
   let val name = #1 (Thm.get_name_hint th) in
-    (case Symtab.lookup ftab name of SOME e => fire (name, e) | NONE => ())
+    if name = nameless_thm then ()
+    else (case Symtab.lookup ftab name of SOME e => fire (name, e) | NONE => ())
+  end
+
+(* Register a fact hint keyed by the thm's name hint; skip nameless thms so we
+   never create a `"??.unknown"` key. Used by the `agent_notice`/`agent_reject`
+   fact attributes. *)
+fun add_fact_hint sev text th =
+  let val name = #1 (Thm.get_name_hint th) in
+    if name = nameless_thm then I else add_fact (name, (sev, text))
   end
 
 fun check_fact_refs ctxt refs =
@@ -112,13 +125,11 @@ val _ =
       "register an agent REJECT hint on a constant the agent must not use" #>
     Attrib.setup \<^binding>\<open>agent_notice\<close>
       (Scan.lift Parse.embedded >>
-        (fn text => Thm.declaration_attribute (fn th =>
-          add_fact (#1 (Thm.get_name_hint th), (Notice, text)))))
+        (fn text => Thm.declaration_attribute (add_fact_hint Notice text)))
       "register an agent NOTICE hint on a fact the agent should avoid" #>
     Attrib.setup \<^binding>\<open>agent_reject\<close>
       (Scan.lift Parse.embedded >>
-        (fn text => Thm.declaration_attribute (fn th =>
-          add_fact (#1 (Thm.get_name_hint th), (Reject, text)))))
+        (fn text => Thm.declaration_attribute (add_fact_hint Reject text)))
       "register an agent REJECT hint on a fact the agent must not use")
 
 end

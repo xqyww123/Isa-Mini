@@ -972,6 +972,50 @@ async def _test_Rewrite_NoProgress(root: Root, file: MyIO):
     print_header("After Rewrite", file)
     root.print(0, file)
 
+@model_test("RewriteBoundCapture", "Test_RewriteBoundCapture.thy", 26)
+async def _test_RewriteBoundCapture(root: Root, file: MyIO):
+    """Reproduces the Rewrite bound-variable display collision.
+
+    Goal: `c * (∑k = 0..n. g k) = 0`, with `n` a free (induction-style)
+    variable appearing ONLY in the summation range `{0..n}`. Distributing the
+    scalar with `sum_distrib_left` — whose RHS binder is literally named `n`
+    (`?r * sum ?f ?A = (∑n∈?A. ?r * ?f n)`) — makes the summation index inherit
+    the name `n`. The rendered goal then reads `∑n = 0..n. c * g n`, where the
+    bound `n` is indistinguishable from the free `n` of the range. An LLM agent
+    reads this as variable capture and gets stuck.
+
+    Confirmed NOT real capture — the kernel term is sound, carrying `Bound 0`
+    for the index vs `Free "n"` for the range. The defect is purely in display:
+    the serializer `MiniLang_Agent.string_of_term` (agent.ML) prints via
+    `Minilang.deconflict_bound_names` + `RPC_Pretty.print_term`, and
+    `deconflict_bound_names` (library/aux.ML) only renames a binder against
+    names found INSIDE its own body and seeds its name context with schematic-
+    variable names but NOT the term's free variables. So a free `n` sitting in
+    a sibling subterm (the range) never forces a rename.
+
+    (When the colliding free `n` instead appears inside the binder body — e.g.
+    `(x + y - real n) * (∑k. real (n choose k) …)` from the original report —
+    both this serializer AND stock Isabelle DO rename it to `na`/`n1`, so that
+    variant does not collide under the current code; only the sibling-only case
+    reproduced here does.)
+
+    This golden output pins whether the binder is disambiguated against the
+    free `n`; a fix to `deconflict_bound_names` (seed the name context with the
+    term's free variables) would flip `∑n = 0..n` to `∑na = 0..n`."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    # Distribute the scalar `c` into the summation with sum_distrib_left, whose
+    # RHS binder `n` collides with the free range variable `n` of `{0..n}`.
+    await root.fill("1", [Rewrite.gen_single({
+        "thought": "Distribute the scalar c into the sum over {0..n}",
+        "using": [{"name": "sum_distrib_left"}],
+        "use system simplifiers": False,
+        "rewrite goal": True,
+        "rewrite premises": []
+    })])
+    print_header("After Rewrite (binder n collides with free range n)", file)
+    root.print(0, file)
+
 @model_test("Rewrite_OF_ZeroPremise", "Test_Rewrite_OF_ZeroPremise.thy", 10)
 async def _test_Rewrite_OF_ZeroPremise(root: Root, file: MyIO):
     """Regression test for OF _ on zero-premise facts.
@@ -14316,6 +14360,127 @@ async def _test_HaveWorkerForAny(root: Root, file: MyIO):
     file.write(f"premise 'sy' visible: {'sy' in ps}\n")
 
 
+@model_test("NewScopeFactsOnResume", "Test_NewScopeFactsOnResume.thy", 11)
+async def _test_new_scope_facts_on_resume(root: Root, file: MyIO):
+    """`consume_new_scope_facts_notice`: on resume a parked worker is told ONLY the
+    facts the parent added to its before-target scope since it last saw them — not its
+    initial premises (seeded at init), and not its own subtree edits (never in
+    `_ctxt_before_me().hyps`). Seeding and the diff both key off `_ctxt_before_me().hyps`
+    (NOT `_worker_premise_cache.keys()`), so the baseline matches the diff domain.
+
+    The worker target is the top-level goal node "1"; the parent's helper lemmas go into
+    the global env, which sits before that goal, i.e. into the worker's before-target scope."""
+    session = root.session
+
+    def before_names(target) -> list:
+        return sorted(n.ascii for n in target._ctxt_before_me().hyps)
+
+    target = root.sub_nodes[1]   # top-level goal node "1"
+
+    # --- 0. Parent seeds one helper lemma into global env, then dispatches the worker.
+    session.age += 1
+    session.role = model.Role_Major()
+    [g1] = (await root.global_env.append([Have.gen_single({
+        "thought": "pre-existing helper",
+        "statement": {"english": "x squared is non-negative",
+                      "conclusion": r"(0::int) \<le> x * x"},
+        "name": "g1"})])).committed
+
+    session.role = model.Role_Worker(target=target)
+    await session._prefetch_worker_premises()
+    session._seed_reported_scope_facts()        # production seed (single source of truth)
+
+    print_header("0. Worker init", file)
+    file.write(f"before-target facts: {before_names(target)}\n")
+    file.write(f"cache keys: {sorted(session._worker_premise_cache.keys())}\n")
+    file.write(f"reported seed: {sorted(session.reported_scope_facts)}\n")
+    # C1 invariant: the seed keys off _ctxt_before_me().hyps, and the cache is a subset.
+    file.write(f"seed == before-target names: "
+               f"{session.reported_scope_facts == {n.ascii for n in target._ctxt_before_me().hyps}}\n")
+    file.write(f"cache keys subset of seed: "
+               f"{set(session._worker_premise_cache.keys()) <= session.reported_scope_facts}\n")
+
+    print_header("1. Initial resume: nothing new", file)
+    notice0 = session.consume_new_scope_facts_notice()
+    file.write(f"initial notice empty: {notice0 == ''}\n")
+
+    # --- 2. Parent proves a NEW helper into global env while the worker is parked.
+    session.role = model.Role_Major()
+    [g2] = (await root.global_env.append([Have.gen_single({
+        "thought": "new helper proved while worker parked",
+        "statement": {"english": "x plus zero is x",
+                      "conclusion": r"x + (0::int) = x"},
+        "name": "g2"})])).committed
+    session.role = model.Role_Worker(target=target)
+    await session._prefetch_worker_premises()   # resume re-prefetch (NO re-seed)
+
+    print_header("2. Resume: one new fact (g2)", file)
+    file.write(f"before-target facts: {before_names(target)}\n")
+    notice1 = session.consume_new_scope_facts_notice()
+    file.write("--- notice text ---\n")
+    file.write(notice1)
+    file.write("--- end ---\n")
+    file.write(f"reports g2: {'g2' in notice1}\n")
+    file.write(f"does NOT report g1: {'g1' not in notice1}\n")
+
+    print_header("3. Idempotent: second consume is empty", file)
+    notice2 = session.consume_new_scope_facts_notice()
+    file.write(f"second consume empty: {notice2 == ''}\n")
+
+    # --- 4. View reset (compaction/restart) re-seeds to the CURRENT scope (D5), so the
+    #        already-shown facts are not re-dumped as "new" on the next park.
+    session._reset_view_state()
+    print_header("4. After view reset: re-seeded, nothing new", file)
+    file.write(f"reported after reset: {sorted(session.reported_scope_facts)}\n")
+    notice3 = session.consume_new_scope_facts_notice()
+    file.write(f"post-reset notice empty: {notice3 == ''}\n")
+
+    # --- 5. Another new fact after the reset is still reported correctly.
+    session.role = model.Role_Major()
+    [g3] = (await root.global_env.append([Have.gen_single({
+        "thought": "helper added after a reset",
+        "statement": {"english": "zero is at most x squared",
+                      "conclusion": r"(0::int) \<le> x * x"},
+        "name": "g3"})])).committed
+    session.role = model.Role_Worker(target=target)
+    await session._prefetch_worker_premises()
+    print_header("5. New fact after reset (g3)", file)
+    notice4 = session.consume_new_scope_facts_notice()
+    file.write(f"reports g3: {'g3' in notice4}\n")
+    file.write(f"does NOT report g2: {'g2' not in notice4}\n")
+
+    # --- 6. Non-worker never emits a notice.
+    session.role = model.Role_Major()
+    print_header("6. Non-worker: no notice", file)
+    file.write(f"non-worker notice empty: {session.consume_new_scope_facts_notice() == ''}\n")
+
+    # --- 7. C1 REGRESSION: an UNRESOLVABLE before-target fact must NOT be falsely
+    #        reported. A malformed Have's op FAILS, yet `Have._fixed_facts_after_me`
+    #        still exposes its name into `_ctxt_before_me().hyps` (no status guard) while
+    #        the ML side drops it from the prefetch cache (it was never posed). The seed
+    #        keys off `_ctxt_before_me().hyps` (NOT `_worker_premise_cache.keys()`), so it
+    #        still baselines `bad` and the notice stays empty. A cache-keys seed would
+    #        leave `bad` un-baselined and report it as "new" — this section catches that.
+    session.role = model.Role_Major()
+    await root.global_env.append([Have.gen_single({
+        "thought": "intentionally malformed: op fails, name still exposed, unresolvable in ML",
+        "statement": {"english": "malformed",
+                      "conclusion": r"\<forall>(f :: nat \<Rightarrow> real) (m n :: nat). f m \<le> f n"},
+        "name": "bad"})])
+    session.role = model.Role_Worker(target=target)
+    await session._prefetch_worker_premises()
+    before = {n.ascii for n in target._ctxt_before_me().hyps}
+    cache = set(session._worker_premise_cache.keys())
+    print_header("7. C1 regression: unresolvable before-target fact", file)
+    file.write(f"'bad' in before-target names: {'bad' in before}\n")
+    file.write(f"'bad' resolved into cache: {'bad' in cache}\n")
+    file.write(f"cache strictly inside before-target names (C1 divergence present): {cache < before}\n")
+    session._seed_reported_scope_facts()
+    file.write(f"'bad' in seed: {'bad' in session.reported_scope_facts}\n")
+    file.write(f"after seed, notice empty (bad NOT falsely reported): "
+               f"{session.consume_new_scope_facts_notice() == ''}\n")
+
+
 @model_test("Rewrite_ConjSplit", "Test_Rewrite_ConjSplit.thy", 12)
 async def _test_Rewrite_ConjSplit(root: Root, file: MyIO):
     """Reproduce UnequalLengths when Rewrite produces a conjunction in a premise.
@@ -14675,6 +14840,120 @@ async def _test_CommentHave(root: Root, file: MyIO):
     file.write(f"assembled ops count after uncomment: {len(assembled2)}\n")
 
 
+@model_test("CommentUnfinishedGoal", "Test_CommentUnfinishedGoal.thy", 9)
+async def _test_CommentUnfinishedGoal(root: Root, file: MyIO):
+    """Regression for the putnam_1962_b3 worker:2 soundness defect: commenting
+    out the tail steps that were holding a goal open must NOT make the proof
+    report as finished.
+
+    Mirrors the report's node 11.2.  A SURVIVING step (Intro) leaves the goal as
+    an open existential `∃x. P x ∧ Q x`; then a chain of tail steps — Have h_k,
+    a Have *depending* on h_k (so commenting h_k breaks it on re-evaluation,
+    like the report's Obtain depending on Have h_exists_K), a Witness that
+    instantiates the ∃, and a SplitConjs whose abstract leaves cannot be
+    discharged (→ sorried) — is commented out.  After commenting, the goal
+    reverts to the still-open existential, so the proof MUST stay unfinished.
+
+    BUG (pre-fix): `unfinished_nodes()` becomes empty and `is_proof_finished()`
+    returns True — the open (only sorry-closed) goal is silently dropped and the
+    agent is told "Congratulations! All goals are proven."  Only deterministic
+    summary booleans go into the golden (no tree print — hammer output is
+    nondeterministic)."""
+    # Build the incomplete proof: surviving Intro + four tail steps to comment.
+    root.session.age += 1
+    await root.fill("1", [Intro.gen_single({
+        "thought": "assume the trivial premise; the goal becomes the existential"})])
+    root.session.age += 1
+    await root.fill("2", [Have.gen_single({
+        "thought": "side helper (analog of Have h_exists_K)",
+        "statement": {"english": "P holds at 0", "conclusion": r"(P::nat\<Rightarrow>bool) 0"},
+        "name": "h_k"})])
+    root.session.age += 1
+    await root.fill("3", [Have.gen_single({
+        "thought": "depends on h_k (analog of Obtain K0 from h_exists_K)",
+        "statement": {"english": "P holds at 0, again", "conclusion": r"(P::nat\<Rightarrow>bool) 0"},
+        "name": "h_k2"})])
+    await root.fill("3.1", [Obvious.gen_single({"facts": [{"name": "h_k"}]})])
+    root.session.age += 1
+    await root.fill("4", [Witness.gen_single({
+        "thought": "instantiate the existential with 0", "witnesses": ["0"]})])
+    root.session.age += 1
+    await root.fill("5", [SplitConjs.gen_single({
+        "thought": "split P 0 ∧ Q 0 into two abstract (unprovable) leaves"})])
+
+    def _ids(s: 'set[Node]') -> list[str]:
+        return sorted(the_session()._display_id(n.id) or "<goal>" for n in s)
+
+    before = set(); root.unfinished_nodes(before)
+    file.write(f"finished before comment: {root.is_proof_finished()}\n")
+    file.write(f"unfinished before comment: {_ids(before)}\n")
+
+    # Comment the four tail steps (the report's delete->comment of 11.2.4-7).
+    root.session.age += 1
+    await root.comment(["2", "3", "4", "5"])
+
+    after = set(); root.unfinished_nodes(after)
+    finished = root.is_proof_finished()
+    file.write(f"finished after comment: {finished}\n")
+    file.write(f"unfinished after comment empty: {len(after) == 0}\n")
+
+    # The goal `∃x. P x ∧ Q x` is still open after commenting everything that
+    # was meant to discharge it — the proof must NOT be considered finished.
+    if finished or len(after) == 0:
+        raise TestFailed(
+            "Commenting out the steps that held `∃x. P x ∧ Q x` open left the "
+            f"proof reported as finished (is_proof_finished={finished}, "
+            f"unfinished_nodes={len(after)}); the open goal was silently dropped.")
+
+    # Round-trip: uncommenting the same steps must restore the original
+    # unfinished set (pins the post-uncomment state; the re-opened parent must
+    # not be left wrongly flagged once its subgoals are live again).
+    root.session.age += 1
+    await root.uncomment(["2", "3", "4", "5"])
+    restored = set(); root.unfinished_nodes(restored)
+    file.write(f"round-trip restores original unfinished set: {_ids(restored) == _ids(before)}\n")
+    if _ids(restored) != _ids(before):
+        raise TestFailed(
+            "comment/uncomment round-trip did not restore the unfinished set: "
+            f"before={_ids(before)} after_uncomment={_ids(restored)}")
+
+
+@model_test("CommentClosingStep", "Test_CommentClosingStep.thy", 8)
+async def _test_CommentClosingStep(root: Root, file: MyIO):
+    """Isolates the fix: commenting ONLY the parent-closing step must re-open
+    the parent and re-flag its now-open goal.
+
+    Goal `∃x. P x ∧ Q x`; Witness 0 turns it into `P 0 ∧ Q 0`; SplitConjs opens
+    two abstract subgoals and (as a SubgoalMaker opening >1 subgoals) closes its
+    parent block via `_close_by`. Commenting just the SplitConjs reverts the
+    parent goal to the open `P 0 ∧ Q 0`. Pre-fix, the parent stayed
+    `opening()==False` (never re-opened) so the open goal vanished and the proof
+    was reported finished; the fix re-opens the parent on comment."""
+    root.session.age += 1
+    await root.fill("1", [Witness.gen_single({
+        "thought": "instantiate the existential with 0", "witnesses": ["0"]})])
+    root.session.age += 1
+    await root.fill("2", [SplitConjs.gen_single({
+        "thought": "split P 0 ∧ Q 0 into two abstract (unprovable) leaves"})])
+
+    file.write(f"finished before comment: {root.is_proof_finished()}\n")
+
+    # Comment only the parent-closing SplitConjs.
+    root.session.age += 1
+    await root.comment(["2"])
+
+    after = set(); root.unfinished_nodes(after)
+    finished = root.is_proof_finished()
+    file.write(f"finished after commenting the closer: {finished}\n")
+    file.write(f"unfinished after comment empty: {len(after) == 0}\n")
+
+    if finished or len(after) == 0:
+        raise TestFailed(
+            "Commenting the parent-closing SplitConjs left the proof reported as "
+            f"finished (is_proof_finished={finished}, unfinished_nodes={len(after)}); "
+            "the reverted goal `P 0 ∧ Q 0` was silently dropped.")
+
+
 @model_test("SubtreeStats", "Test_SubtreeStats.thy", 8)
 async def _test_SubtreeStats(root: Root, file: MyIO):
     """Pin `Node.subtree_stats` = (total, proved), the metric of the
@@ -14811,6 +15090,74 @@ async def _test_unfold_cert_join(root: Root, file: MyIO):
     # success line keeps the golden stable.
     assert isinstance(defs, list)
     file.write(r"potential_defs_of((\<in>)) succeeded (no cert-join error)" + "\n")
+
+
+# ----- Agent Hint Registry (notice/reject on used constants/facts) -----------
+
+@model_test("HintRejectConst", "Test_HintRejectConst.thy", 11)
+async def _test_hint_reject_const(root: Root, file: MyIO):
+    """Authoring a term that uses a REJECT-registered constant (Rat.of_int)
+    fails the op with the hint message. The coercion rat_of_int — a different
+    Const — must NOT trigger it (fully-qualified-name match)."""
+    session = root.session
+    session.age += 1
+    outcome = await root.fill("1", [Have.gen_single({
+        "thought": "use the of_int shadow constant",
+        "statement": {"english": "positivity via Rat.of_int",
+                      "conclusion": r"(0::rat) < Rat.of_int x"},
+        "name": "bad"})])
+    print_header("After Have with Rat.of_int (expect REJECT)", file)
+    file.write(f"committed: {len(outcome.committed)}, failure: {outcome.failure is not None}\n")
+    session.print_proof_scope(0, file, show_warnings=True)
+
+
+@model_test("HintNoticeConst", "Test_HintNoticeConst.thy", 13)
+async def _test_hint_notice_const(root: Root, file: MyIO):
+    """Same const as the reject seed but registered as a NOTICE: the op proceeds
+    and the note is surfaced once per session. proof.yaml shows it without
+    consuming the one-shot; the inline quickview shows + consumes it; a later
+    re-render does not repeat it."""
+    session = root.session
+    session.age += 1
+    await root.fill("1", [Have.gen_single({
+        "thought": "use of_int",
+        "statement": {"english": "positivity via Rat.of_int",
+                      "conclusion": r"(0::rat) < Rat.of_int x"},
+        "name": "h1"})])
+    print_header("proof.yaml scope (notice shows, not consumed)", file)
+    session.print_proof_scope(0, file, show_warnings=True)
+    print_header("inline quickview scope (notice shows + consumed)", file)
+    session.quickview_proof_scope(0, file)
+    session.age += 1
+    print_header("re-render quickview (one-shot: notice gone)", file)
+    session.quickview_proof_scope(0, file)
+
+
+@model_test("HintRejectFact", "Test_HintRejectFact.thy", 12)
+async def _test_hint_reject_fact(root: Root, file: MyIO):
+    """Referencing a REJECT-registered fact (refl) by name fails the op."""
+    session = root.session
+    session.age += 1
+    outcome = await root.fill("1", [Obvious.gen_single({"facts": [{"name": "refl"}]})])
+    print_header("After Obvious using rejected fact refl (expect REJECT)", file)
+    file.write(f"committed: {len(outcome.committed)}, failure: {outcome.failure is not None}\n")
+    session.print_proof_scope(0, file, show_warnings=True)
+
+
+@model_test("HintNoticeFact", "Test_HintNoticeFact.thy", 12)
+async def _test_hint_notice_fact(root: Root, file: MyIO):
+    """Referencing a NOTICE-registered fact (conjI) surfaces the note once; the
+    op proceeds."""
+    session = root.session
+    session.age += 1
+    await root.fill("1", [Obvious.gen_single({"facts": [{"name": "conjI"}]})])
+    print_header("proof.yaml scope (notice shows, not consumed)", file)
+    session.print_proof_scope(0, file, show_warnings=True)
+    print_header("inline quickview scope (notice shows + consumed)", file)
+    session.quickview_proof_scope(0, file)
+    session.age += 1
+    print_header("re-render quickview (one-shot: notice gone)", file)
+    session.quickview_proof_scope(0, file)
 
 
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):

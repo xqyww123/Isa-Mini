@@ -15,7 +15,7 @@ premises:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 variables:
   - y: 'a
-goal: x = z ∧ PP z ∧ (∀(x :: 'b). AA z x)
+goal: x = z ∧ PP z ∧ (∀(x1 :: 'b). AA z x1)
 proof: empty
 Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
@@ -35,7 +35,7 @@ premises:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 variables:
   - y: 'a
-goal: x = z ∧ PP z ∧ (∀(x :: 'b). AA z x)
+goal: x = z ∧ PP z ∧ (∀(x1 :: 'b). AA z x1)
 proof:
   - step id: 1
     thought: Rewrite the premises to simplify the equations
@@ -49,7 +49,7 @@ proof:
       - premise0: ∃(aAa :: 'a). z = (x + (0 :: 'a)) * (1 :: 'a) + aAa
 Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
-  x = z ∧ PP z ∧ (∀(x :: 'b). AA z x)
+  x = z ∧ PP z ∧ (∀(x1 :: 'b). AA z x1)
 --------------------------------------------------
 After Rename Fact
 --------------------------------------------------
@@ -67,7 +67,7 @@ premises:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 variables:
   - y: 'a
-goal: x = z ∧ PP z ∧ (∀(x :: 'b). AA z x)
+goal: x = z ∧ PP z ∧ (∀(x1 :: 'b). AA z x1)
 proof:
   - step id: 1
     thought: Rewrite the premises to simplify the equations
@@ -81,7 +81,7 @@ proof:
       - my_premise: ∃(aAa :: 'a). z = (x + (0 :: 'a)) * (1 :: 'a) + aAa
 Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
-  x = z ∧ PP z ∧ (∀(x :: 'b). AA z x)
+  x = z ∧ PP z ∧ (∀(x1 :: 'b). AA z x1)
 --------------------------------------------------
 After Remove the Rewrite
 --------------------------------------------------
@@ -99,6 +99,6 @@ premises:
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
 variables:
   - y: 'a
-goal: x = z ∧ PP z ∧ (∀(x :: 'b). AA z x)
+goal: x = z ∧ PP z ∧ (∀(x1 :: 'b). AA z x1)
 proof: empty
 Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.

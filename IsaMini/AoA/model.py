@@ -3843,31 +3843,20 @@ class Node(ABC):
         """
         self.age = the_session().age
         self._first_time = False
-        self._ingest_hint_notices()
     def _hint_notice_state(self) -> 'Minilang_State | None':
-        """The state whose `.messages` carry Agent Hint Registry notices emitted
+        """The state whose `.messages` carry Agent Hint Registry NOTICEs emitted
         while this node's own operation parsed its authored terms. For a leaf
         that is its resulting state; `StdBlock` overrides it to the
         after-beginning state (where its beginning op's messages live).
-        None when the node authored nothing / has no such state."""
+        None when the node authored nothing / has no such state.
+
+        Read at RENDER time by `Session._emit_pending_hint_notices` (NOT at
+        refresh time): at render the node's status is already final, so the
+        SUCCESS gate is satisfied, and `Minilang_State.messages` survives
+        `root.reset()` (which clears only `warnings`)."""
         if self.parent is None or self.status.status != EvaluationStatus.Status.SUCCESS:
             return None
         return self.resulting_state()
-    def _ingest_hint_notices(self) -> None:
-        """Turn any `Hint_Notice_Msg` from this node's authoring op into a
-        HEADER notice warning, once per session per registered name (the same
-        one-shot discipline as `showed_suffices_notice`). Re-derived each
-        refresh (warnings are cleared on reset); the per-session `shown_hints`
-        set keeps it to a single surfacing. REJECT hints never arrive here —
-        they fail the op via an error instead."""
-        state = self._hint_notice_state()
-        if state is None:
-            return
-        shown = the_session().shown_hints
-        for m in state.messages:
-            if isinstance(m, Hint_Notice_Msg) and m.name not in shown:
-                shown.add(m.name)
-                self.warnings.append(Warning(Warning.Position.HEADER, m.text))
     async def _auto_intro_after_me(self) -> None:
         if self.parent is not None:
             await self.parent._auto_Intro_after_child(self)
@@ -5048,7 +5037,11 @@ class StdBlock(NonLeaf_Node):
     def _hint_notice_state(self) -> 'Minilang_State | None':
         # A block's authored term (e.g. a Have/Suffices conclusion) is parsed by
         # its beginning op, so any hint notice lands in the after-beginning state.
-        if self.status.status != EvaluationStatus.Status.SUCCESS:
+        # Guard on `beginning_opr() is None` (B6): blocks with no own beginning op
+        # (Root, GlobalEnv) author nothing, so they must not re-scan their first
+        # child's input state.
+        if (self.status.status != EvaluationStatus.Status.SUCCESS
+                or self.beginning_opr() is None):
             return None
         return self._state_after_beginning()
     def goal(self) -> 'Goal | None':
@@ -10045,6 +10038,15 @@ class Root(GoalContainer, StdBlock):
                     f"Step {the_session()._display_id(sid)} is already commented out.")
                 continue
             node.status = EVALUATION_COMMENTED
+            # A commented node is "not code": if it was the closer of its parent
+            # block (a SubgoalMaker that opened >1 subgoals → parent._close_by),
+            # re-open the parent so its still-open goal is tracked again — exactly
+            # as `_delete_child` does on deletion. Without this the parent stays
+            # opening()==False, so `unfinished_nodes` skips its open-goal check and
+            # a goal closed only by runtime sorry is silently reported as proven.
+            parent = node.parent
+            if parent is not None and parent._closed_by is node:
+                parent._open()
             await node._refresh_me_alone(auto_intro=False)
             await node._refresh_all_after_me()
             affected.append(sid)
@@ -10469,6 +10471,12 @@ class Session:
         # Worker-only: ascii fact name -> standard-printed proposition (IsaTerm),
         # prefetched once at init (see _prefetch_worker_premises).
         self._worker_premise_cache: 'dict[str, IsaTerm]' = {}
+        # Worker-only: ascii names of in-scope-before-target facts already surfaced
+        # to this agent (initial proof.yaml + prior resume notices). Diffed on resume
+        # to report ONLY newly-added contextual facts. Seeded/re-seeded from
+        # `_ctxt_before_me().hyps` (see _seed_reported_scope_facts /
+        # consume_new_scope_facts_notice).
+        self.reported_scope_facts: 'set[str]' = set()
         # Memoized `initial_prompt()`: its content is fixed for the session's
         # lifetime, but computing it resolves worker-suggested lemmas via RPC, so
         # repeat callers (compaction / restart / `_find_recent_start`) reuse it.
@@ -11109,6 +11117,9 @@ class Session:
                     self.role.target if isinstance(self.role, Role_Worker)
                     else root)
                 await self._prefetch_worker_premises()
+                # Baseline the resume-notice diff: everything in scope now counts as
+                # already-shown (it is in the opening proof.yaml). No-op for non-workers.
+                self._seed_reported_scope_facts()
                 # A worker's opening message is `initial_prompt()` (sent by the
                 # driver loop); interaction forks use their own prompts instead,
                 # so only log here for genuine workers.
@@ -11446,6 +11457,12 @@ class Session:
         self.showed_fill_hint = False
         self.showed_cancelled_notice = False
         self.shown_HAVE_fact_names.clear()
+        # Unlike the dedup fields above, reported_scope_facts has NO render surface that
+        # naturally re-populates it (only the resume notice emits it). After a reset the
+        # worker re-reads the current proof.yaml (full premises), so `.clear()` would dump
+        # the whole premise set as "new" on the next park. Re-seed to the current
+        # before-target names instead (no-op for non-workers).
+        self._seed_reported_scope_facts()
 
     @property
     def proof_scope_root(self) -> 'Node':
@@ -11773,6 +11790,48 @@ class Session:
         pairs = await target.ml_state.fact_propositions(names)
         self._worker_premise_cache = {n: IsaTerm.from_isabelle(p) for n, p in pairs}
 
+    def _seed_reported_scope_facts(self) -> None:
+        """Baseline the resume-notice diff: mark every fact currently in scope BEFORE
+        the worker's target as already reported, so the next
+        ``consume_new_scope_facts_notice`` surfaces only facts the parent adds afterwards.
+
+        Keyed off ``target._ctxt_before_me().hyps`` — the SAME set the notice iterates —
+        NOT ``_worker_premise_cache.keys()``. The cache drops names the ML side cannot
+        resolve (``fact_propositions``; e.g. a before-target ``Have`` whose op FAILED yet
+        still exposes its name, model.py ``Have._fixed_facts_after_me``), so seeding from
+        the cache would leave such names un-baselined and falsely report them as "new" on
+        the first resume. Reading the live context here is also driver- and
+        cache-freshness-independent. No-op for non-workers."""
+        if self.is_worker:
+            target = self.role.target  # type: ignore[attr-defined]  — is_worker ⟹ role is Role_Worker
+            self.reported_scope_facts = {n.ascii for n in target._ctxt_before_me().hyps}
+
+    def consume_new_scope_facts_notice(self) -> str:
+        """Render a notice listing the in-scope-before-target facts added since the last
+        report, and mark them reported. Returns "" if there are none / this is not a
+        worker. Idempotent: each fact is surfaced exactly once across repeated calls.
+
+        The worker's OWN subtree edits live AFTER the before-target context, so they are
+        never in ``_ctxt_before_me().hyps`` and can never be falsely reported here."""
+        if not self.is_worker:
+            return ""
+        target = self.role.target  # type: ignore[attr-defined]  — is_worker ⟹ role is Role_Worker
+        new: 'list[tuple[varname, term]]' = []
+        for name, raw in target._ctxt_before_me().hyps.items():
+            if name.ascii in self.reported_scope_facts:
+                continue
+            # Upgrade to the standard-printed proposition when prefetched (mirror the
+            # merge in print_proof_scope); else fall back to the raw stored term.
+            new.append((name, self._worker_premise_cache.get(name.ascii, raw)))
+            self.reported_scope_facts.add(name.ascii)
+        if not new:
+            return ""
+        buf = StringIO()
+        print_hyps(new, 0, buf, {},
+                   banner="New facts have been provided by the external "
+                          "environment and may help your proof")
+        return buf.getvalue()
+
     async def _render_useful_lemmas(self) -> str:
         """Resolve this worker's ``useful_lemmas`` (theorem names the planner
         suggested at ``subagent`` dispatch) to their statements and render a
@@ -11826,6 +11885,51 @@ class Session:
             self.seen_manual_note = True
         return "Useful lemmas:\n" + body
 
+    def _emit_pending_hint_notices(self, indent: int, file: MyIO, *, consume: bool) -> None:
+        """Surface Agent Hint Registry NOTICEs at RENDER time (REJECT is a
+        separate op-failure path). Walks the rendered proof scope, reads each
+        node's authoring-op messages (`_hint_notice_state`), and emits one
+        `notice:` block listing each distinct, not-yet-shown `Hint_Notice_Msg`.
+
+        Both surfaces filter against `self.shown_hints`, so a name shows at most
+        once per session. Only the inline Outline (`quickview_proof_scope`,
+        `consume=True`) MARKS names as shown; `proof.yaml` (`print_proof_scope`,
+        `consume=False`) does not mark. Since `proof.yaml` renders BEFORE the
+        inline Outline in a tool-call turn, a non-consuming `proof.yaml` cannot
+        steal the inline one-shot: on the authoring turn the name is unshown so
+        both surfaces show it; the inline render then marks it, and neither
+        surface repeats it afterwards. (Mirrors the `showed_suffices_notice`
+        render-time precedent.)"""
+        emitted: list[str] = []
+        seen_here: set[str] = set()
+        def walk(node: 'Node') -> None:
+            st = node._hint_notice_state()
+            if st is not None:
+                for m in st.messages:
+                    if (isinstance(m, Hint_Notice_Msg)
+                            and m.name not in seen_here
+                            and m.name not in self.shown_hints):
+                        seen_here.add(m.name)
+                        emitted.append(m.text)
+            for c in getattr(node, 'sub_nodes', ()):
+                walk(c)
+        walk(self.proof_scope_root)
+        if not emitted:
+            return
+        if consume:
+            self.shown_hints.update(seen_here)
+        print_indent(indent, file)
+        file.write("notice:\n")
+        for text in emitted:
+            t = self._relativize_text(text)
+            for i, line in enumerate(t.splitlines() or [""]):
+                if i == 0:
+                    print_indent(indent + 1, file)
+                    file.write(f"- {line}\n")
+                else:
+                    print_indent(indent + 2, file)
+                    file.write(f"{line}\n")
+
     def print_proof_scope(self, indent: int, file: MyIO,
                           update_line: bool = False, show_warnings: bool = False):
         """Print the proof state scoped to this session's responsibility.
@@ -11833,6 +11937,7 @@ class Session:
         standard-printed via the prefetched cache) + the bare target goal + own steps."""
         if not self.is_worker:
             self.root.print(indent, file, update_line=update_line, show_warnings=show_warnings)
+            self._emit_pending_hint_notices(indent, file, consume=False)
             return
         target = self.proof_scope_root
 
@@ -11881,15 +11986,18 @@ class Session:
             file.write("proof: empty\n")
 
         target._print_footer(indent, file, show_warnings=show_warnings)  # type: ignore[attr-defined]  — target is role.target (NonLeaf_Node)
+        self._emit_pending_hint_notices(indent, file, consume=False)
 
     def quickview_proof_scope(self, indent: int, file: MyIO):
         """Quickview scoped to this session's proof responsibility."""
         if not self.is_worker:
             self.root.quickview(indent, file)
+            self._emit_pending_hint_notices(indent, file, consume=True)
             return
         target = self.proof_scope_root
         _quickview_children_compressed(target.sub_nodes, indent, file)  # type: ignore[attr-defined]  — target is role.target (NonLeaf_Node)
         target._quickview_pending_footer(indent, file)  # type: ignore[attr-defined]
+        self._emit_pending_hint_notices(indent, file, consume=True)
 
     async def request_restart(self):
         """Request a context restart.  Sets ``self.quit_info = Restart()`` to

@@ -1588,7 +1588,7 @@ class APIDriver_ChatGPT(APIDriver):
 
 @agent_driver("K2-Think")
 class APIDriver_K2Think(APIDriver):
-    DEFAULT_MODEL = "k2moe375B_mid2_v3-checkpoint_0015000"
+    DEFAULT_MODEL = "k2moe375B_mid2_v3-checkpoint_0015000_BF16"
 
     def __init__(self, *args, provider: Provider | None = None,
                  argument: str | None = None, **kwargs):

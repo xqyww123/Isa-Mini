@@ -1,0 +1,33 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - n: nat
+  - g: nat ⇒ real
+  - c: real
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: c * sum g {(0 :: nat) ..n} = (0 :: real)
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Rewrite (binder n collides with free range n)
+--------------------------------------------------
+variables:
+  - n: nat
+  - g: nat ⇒ real
+  - c: real
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: c * sum g {(0 :: nat) ..n} = (0 :: real)
+proof:
+  - step id: 1
+    thought: Distribute the scalar c into the sum over {0..n}
+    operation: Rewrite
+    using:
+      - sum_distrib_left: ?r * sum ?f ?A = (∑n ∈?A. ?r * ?f n)
+    targets:
+      - the goal
+    goal changes into:
+      (∑n1 = (0 :: nat)..n. c * g n1) = (0 :: real)
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  (∑n1 = (0 :: nat)..n. c * g n1) = (0 :: real)

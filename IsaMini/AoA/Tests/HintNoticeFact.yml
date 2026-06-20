@@ -1,0 +1,24 @@
+--------------------------------------------------
+proof.yaml scope (notice shows, not consumed)
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    operation: Obvious
+    with facts:
+      - conjI: ?P ⟶ ?Q ⟶ ?P ∧ ?Q
+notice:
+  - conjI is registered as a noticed fact for this test; proceeding.
+--------------------------------------------------
+inline quickview scope (notice shows + consumed)
+--------------------------------------------------
+proven
+notice:
+  - conjI is registered as a noticed fact for this test; proceeding.
+--------------------------------------------------
+re-render quickview (one-shot: notice gone)
+--------------------------------------------------
+proven

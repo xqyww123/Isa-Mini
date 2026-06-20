@@ -1366,6 +1366,13 @@ val strip_meta_and_hol_hhf = Minilang_Aux.strip_meta_and_hol_hhf
 fun quantifier_bindings ctxt st =
          Thm.prop_of st
       |> Logic.dest_implies |> fst
+      (* Harvest INTRO's default binder names from the SAME deconflicted prop
+         the agent sees displayed (see Minilang_Aux.deconflict_bound_names),
+         so the default/displayed name agrees with the matched name
+         (cf. the raw-name match in the agent layer). Without this, fixing
+         the display alone would skew INTRO's default off the shown name for
+         binders clashing with a constant or a non-context free var. *)
+      |> deconflict_bound_names
       |> strip_meta_hhf
       |> #1
       |> (fn L => fold_map (fn (name, ty) => fn ctxt =>

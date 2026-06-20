@@ -1,0 +1,48 @@
+--------------------------------------------------
+0. Worker init
+--------------------------------------------------
+before-target facts: ['g1', 'hx']
+cache keys: ['g1', 'hx']
+reported seed: ['g1', 'hx']
+seed == before-target names: True
+cache keys subset of seed: True
+--------------------------------------------------
+1. Initial resume: nothing new
+--------------------------------------------------
+initial notice empty: True
+--------------------------------------------------
+2. Resume: one new fact (g2)
+--------------------------------------------------
+before-target facts: ['g1', 'g2', 'hx']
+--- notice text ---
+New facts have been provided by the external environment and may help your proof:
+  - g2: x + (0 :: int) = x
+--- end ---
+reports g2: True
+does NOT report g1: True
+--------------------------------------------------
+3. Idempotent: second consume is empty
+--------------------------------------------------
+second consume empty: True
+--------------------------------------------------
+4. After view reset: re-seeded, nothing new
+--------------------------------------------------
+reported after reset: ['g1', 'g2', 'hx']
+post-reset notice empty: True
+--------------------------------------------------
+5. New fact after reset (g3)
+--------------------------------------------------
+reports g3: True
+does NOT report g2: True
+--------------------------------------------------
+6. Non-worker: no notice
+--------------------------------------------------
+non-worker notice empty: True
+--------------------------------------------------
+7. C1 regression: unresolvable before-target fact
+--------------------------------------------------
+'bad' in before-target names: True
+'bad' resolved into cache: False
+cache strictly inside before-target names (C1 divergence present): True
+'bad' in seed: True
+after seed, notice empty (bad NOT falsely reported): True

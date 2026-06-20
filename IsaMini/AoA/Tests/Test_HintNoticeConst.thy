@@ -4,10 +4,10 @@ begin
 
 declare [[agent_AoA_driver="test.HintNoticeConst"]]
 
-(* DRAFT message text — final wording pending user sign-off. A NOTICE does not
-   block the operation; it is surfaced once per session per registered name. *)
+(* Same const/message as the reject seed, but registered as a NOTICE (severity
+   flag flipped): the op proceeds and the note is surfaced once per session. *)
 declare [[agent_notice_constant Rat.of_int
-  "DRAFT: you wrote Rat.of_int; the coercion is rat_of_int. Proceeding, but prefer rat_of_int."]]
+  "Rat.of_int is a code-generation shadow constant that the of_int_* lemmas do not apply to. Use rat_of_int instead."]]
 
 lemma hint_notice_const: "(x::int) * x \<ge> 0"
   by   aoa

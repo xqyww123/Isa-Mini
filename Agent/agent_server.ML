@@ -399,15 +399,22 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
         function = (fn (from, to, opr) =>
           let val _ = Minilang.set_reporter listen_report
               val s0 = get_state from
-              val (cfg', budget) = cfg
-              val mode = if !replay_mode then MiniLang_Agent.REPLAY
-                         else MiniLang_Agent.LIVE
-              val full_config = (cfg', budget, counters, mode) : MiniLang_Agent.config
-              val s1 = MiniLang_Agent.interpret full_config opr s0
-              val ctxt' = Minilang.context_of s1
-              val msgs = clean_report ()
-              val _ = state := Symtab.update (to, s1) (!state)
-           in (ctxt', msgs, Minilang.leading_goal_data s1)
+              val result = Exn.capture (fn () =>
+                let val (cfg', budget) = cfg
+                    val mode = if !replay_mode then MiniLang_Agent.REPLAY
+                               else MiniLang_Agent.LIVE
+                    val full_config = (cfg', budget, counters, mode) : MiniLang_Agent.config
+                    val s1 = MiniLang_Agent.interpret full_config opr s0
+                    val ctxt' = Minilang.context_of s1
+                    val msgs = clean_report ()
+                    val _ = state := Symtab.update (to, s1) (!state)
+                 in (ctxt', msgs, Minilang.leading_goal_data s1) end) ()
+              (* Drain reporter messages on EVERY path: the success branch already
+                 drained via clean_report, but a NOTICE pushed before a failure
+                 (e.g. an Agent Hint notice fired during term checking) would
+                 otherwise leak into the next op's report (A3). *)
+              val _ = messages := []
+           in Exn.release result
           end handle Minilang.OPR_FAIL (Minilang.PROOF_FAIL, msg) =>
               error (REPL.trim_makrup msg)
             | Minilang.OPR_FAIL (Minilang.INVALID_OPR, msg) =>

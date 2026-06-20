@@ -1,0 +1,22 @@
+--------------------------------------------------
+After Have with Rat.of_int (expect REJECT)
+--------------------------------------------------
+committed: 1, failure: False
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: use the of_int shadow constant
+    operation: Have
+    statement:
+      english: positivity via Rat.of_int
+      conclusion: (0::rat) < Rat.of_int x
+    name: bad
+    Error: |
+      Fail to claim the intermediate subgoal because: Syntax Error in Term Language.
+      Rat.of_int is a code-generation shadow constant that the of_int_* lemmas do not apply to. Use rat_of_int instead.
+    proof: empty
+    Error: Evaluation cancelled due to failures above
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.

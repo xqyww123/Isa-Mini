@@ -576,7 +576,19 @@ fun deconflict_bound_names' term =
   let
     val var_idxnames = Term.add_var_names term []
     val var_display_names = map display_of_indexname var_idxnames
-    val initial_name_ctx = fold Name.declare var_display_names (Name.make_context [])
+    (* Seed the avoidance context with the term's free variables AND the short
+       (base) names of constants occurring in the term, not only schematic
+       display names: a bound variable whose name clashes with a free var or a
+       constant short-name sitting in a SIBLING subterm (e.g. the range `{0..n}`
+       of a summation) is otherwise left un-renamed, because the per-binder
+       check below only sees names inside that binder's own body. *)
+    val free_names = Term.add_free_names term []
+    val const_base_names = map Long_Name.base_name (Term.add_const_names term [])
+    val initial_name_ctx =
+      Name.make_context []
+      |> fold Name.declare var_display_names
+      |> fold Name.declare free_names
+      |> fold Name.declare const_base_names
     fun declare_all tab ctx = Symtab.fold (fn (n, _) => Name.declare n) tab ctx
     fun deconflict name_ctx (Abs (name, ty, body)) =
           let val (body', body_names) = deconflict (Name.declare name name_ctx) body

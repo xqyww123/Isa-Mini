@@ -1163,6 +1163,12 @@ async def _run_struggle_checkpoint(session: Session) -> str | None:
 
     await session._prefetch_worker_premises()
     session.refresh_YAML()
+    # Append a notice of any facts the planner added to this worker's scope while it
+    # was parked (appended at the end for LLM recency/salience). Reached only when the
+    # checkpoint actually parked+resumed the worker, so no extra guard is needed.
+    notice = session.consume_new_scope_facts_notice()
+    if notice:
+        feedback = feedback + "\n\n" + notice
     session.log_interaction("struggle_checkpoint",
         f"checkpoint #{checkpoint_num}: stuck, parked, resumed with: {feedback}")
     return feedback
@@ -1302,6 +1308,11 @@ async def _request_lemmas_tool_logic(session: Session, args: dict) -> tuple[str,
         # feedback string also names the proven lemmas.
         await session._prefetch_worker_premises()
         session.refresh_YAML()
+        # Append a notice of any facts the planner added to this worker's scope
+        # while it was parked (appended at the end for LLM recency/salience).
+        notice = session.consume_new_scope_facts_notice()
+        if notice:
+            feedback = feedback + "\n\n" + notice
         session.log_tool_response(_tn, feedback)
         return (feedback, False)
 
