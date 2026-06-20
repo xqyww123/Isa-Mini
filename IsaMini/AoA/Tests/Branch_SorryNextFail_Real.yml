@@ -28,45 +28,23 @@ proof:
 Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   hfinf f ∨ (∃e>(0 :: real). hf e f)
-Branch fill succeeded
 --------------------------------------------------
-After Branch attempt
+Branch over stray free var `c` (must be rejected, no THM 0)
 --------------------------------------------------
-You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
-goal: ∀f ∈{(g :: real ⇒ real). ∃a (c :: real). (0 :: real) ≤ a ∧ g = (λ(x :: real). a / ((1 :: real) - c * x)²)}. hfinf f ∨ (∃e>(0 :: real). hf e f)
-proof:
-  - step id: 1
-    operation: Intro
+Filled step 2.
+Outline:
+  step 1: Intro
     fixing variables:
       - f: real ⇒ real
     assuming premises:
       - premise0: f ∈ {(g :: real ⇒ real). ∃a (c :: real). (0 :: real) ≤ a ∧ g = (λ(x :: real). a / ((1 :: real) - c * x)²)}
-  - step id: 2
-    thought: Case split: c > 0 or c <= 0
-    operation: Branch
-    cases:
-      - goal id: 2.0
-        thought: We first show exhaustiveness of the case split
-        goal: (0 :: real) < c ∨ c ≤ (0 :: real)
-        proof: empty
-        Unfinished Proof! Call command `edit` with action `fill` and target step `2.0.1` to provide the proof.
-      - goal id: 2.1
-        premises:
-          - c_pos: (0 :: real) < c
-        goal: hfinf f ∨ (∃e>(0 :: real). hf e f)
-        proof: empty
-        Unfinished Proof! Call command `edit` with action `fill` and target step `2.1.1` to provide the proof.
-      - goal id: 2.2
-        premises:
-          - c_nonpos: c ≤ (0 :: real)
-        goal: hfinf f ∨ (∃e>(0 :: real). hf e f)
-        proof: empty
-        Unfinished Proof! Call command `edit` with action `fill` and target step `2.2.1` to provide the proof.
-Branch sub_nodes: 3
-  2.0: status=success
-  2.1: status=success
-  2.2: status=success
-Fill 2.0.1 succeeded
+  step 2: Branch (failed)
+    Error: Fail to anlysis the proof goal by cases because: This Branch mentions the free variable "c", which is not declared in scope. This indicates a bug in your statement: check whether you mistyped the name.
+  Unfinished Proof. Call command `edit` with action `fill` and target step `3`
+  goal: hfinf f ∨ (∃e>(0 :: real). hf e f)
+Note: step 1 was auto-introduced. You may delete it using `delete` if unhelpful.
+---------------
+is_error: False
 --------------------------------------------------
 Final state
 --------------------------------------------------
@@ -82,22 +60,8 @@ proof:
   - step id: 2
     thought: Case split: c > 0 or c <= 0
     operation: Branch
-    cases:
-      - goal id: 2.0
-        thought: We first show exhaustiveness of the case split
-        goal: (0 :: real) < c ∨ c ≤ (0 :: real)
-        proof:
-          - step id: 2.0.1
-            operation: Obvious
-      - goal id: 2.1
-        premises:
-          - c_pos: (0 :: real) < c
-        goal: hfinf f ∨ (∃e>(0 :: real). hf e f)
-        proof: empty
-        Unfinished Proof! Call command `edit` with action `fill` and target step `2.1.1` to provide the proof.
-      - goal id: 2.2
-        premises:
-          - c_nonpos: c ≤ (0 :: real)
-        goal: hfinf f ∨ (∃e>(0 :: real). hf e f)
-        proof: empty
-        Unfinished Proof! Call command `edit` with action `fill` and target step `2.2.1` to provide the proof.
+    Error: Fail to anlysis the proof goal by cases because: This Branch mentions the free variable "c", which is not declared in scope. This indicates a bug in your statement: check whether you mistyped the name.
+    cases: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  hfinf f ∨ (∃e>(0 :: real). hf e f)

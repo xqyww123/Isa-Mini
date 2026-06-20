@@ -364,6 +364,24 @@ fun read_props ctxt ss =
    catch exn => release_par_error exn\<close>
   |> map (Minilang.deconflict_bound_names)
 
+(* Agent Hint Registry — proposition path. For each agent-authored prop string,
+   parse it (plain) and fire any registered constant hint (notice/reject).
+   Gated on `has_const_hints` so the hot path pays no extra parse when nothing
+   is registered. Call this INSIDE an op's `Inner_Syntax_Error.guard` action
+   thunk: a genuine parse error then still surfaces with the 【 】 marker, and a
+   reject's `OPR_FAIL` (non-ERROR) propagates untouched through `guard`. *)
+fun check_authored_props ctxt strs =
+  if Agent_Hint.has_const_hints ctxt
+  then
+    (* This is a best-effort re-parse for hint scanning only; the authoritative
+       parse is the op's own (e.g. Minilang.HAVE, with `fixes` in scope). If
+       this standalone parse fails (e.g. a fixed var needs its declared type to
+       disambiguate), skip the scan and let the real op report the parse error —
+       never let scanning change the op's success/failure. A hint reject from
+       `check_term` (OPR_FAIL, not ERROR) still propagates. *)
+    List.app (Agent_Hint.check_term ctxt) (read_props ctxt strs handle ERROR _ => [])
+  else ()
+
 (* Extract types of leading existential quantifiers from a goal *)
 fun extract_leading_ex_types goal =
   let
@@ -1096,6 +1114,94 @@ fun apply_post_insts rounds state =
     end)
   rounds state
 
+(* Names bound by the current goal's leading binders that an `Intro` would
+   introduce (meta `⋀`, object `∀`, bounded `∀`), recursing through leading
+   `⟹`/`⟶` premises.  Used to tell apart "you referred to a goal parameter you
+   have not Intro'd yet" (harmless but unintended) from a genuine stray/typo.
+   Mirrors the positive cases of `Minilang.need_intro`. *)
+fun leading_intro_var_names t =
+  (case t of
+     Const (\<^const_name>\<open>Pure.all\<close>, _) $ Abs (n, _, b) => n :: leading_intro_var_names b
+   | Const (\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ b => leading_intro_var_names b
+   | Const (\<^const_name>\<open>Trueprop\<close>, _) $ x => leading_intro_var_names x
+   | Const (\<^const_name>\<open>HOL.All\<close>, _) $ Abs (n, _, b) => n :: leading_intro_var_names b
+   | Const (\<^const_name>\<open>HOL.implies\<close>, _) $ _ $ b => leading_intro_var_names b
+   | Const (\<^const_name>\<open>Ball\<close>, _) $ _ $ Abs (n, _, b) => n :: leading_intro_var_names b
+   | _ => [])
+
+fun goal_intro_var_names s =
+  (case Minilang.leading_goal_data s of
+     (SOME (_, g), _) => leading_intro_var_names g
+   | (NONE, _) => [])
+
+(* Guard for assumption-introducing operations (Obtain `where`, Suffices `if`,
+   Branch cases): reject a proposition that refers to a free variable which is
+   neither already fixed in the context nor introduced by this operation, before
+   it is planted as a stray `Free` inside a hypothesis (which a later
+   block-conclude `Proof_Context.export` would generalize → raw kernel
+   `THM 0 ... generalize: variable free in assumptions`).  (Have is intentionally
+   NOT guarded: it quantifies the free variables of its own statement.)
+
+   `op_fixes` are the operation's own binders (Obtain variables / Suffices
+   for_any), as `(binding, string option, mixfix)` triples.  We parse the
+   propositions WITH those binders declared, via `Proof_Context.read_stmt` (the
+   parser the real CONSIDER/SUFFICES uses), so the binders shadow any same-named
+   goal variable and type inference matches the real operation.  A variable is a
+   stray iff it is not fixed in that augmented context and not an `op_fixes`
+   binder.  Each stray is then classified by `goal_params` — the names the
+   current goal's leading binders would yield under `Intro`: a stray that IS a
+   goal parameter only means the agent referred to it before running `Intro`
+   (harmless but unintended — we point it at `Intro`); any other stray is a
+   genuinely undeclared variable, i.e. a real bug in the statement.  In practice
+   AoA's auto-Intro fixes the goal's leading binders before these ops run, so the
+   goal-parameter branch is a defensive fallback; the genuinely-stray branch is
+   the one the THM-0 bug actually exercises (a variable trapped in a
+   comprehension / premise binder, which auto-Intro does NOT touch).
+
+   This runs inside `Inner_Syntax_Error.guard`'s action thunk, which executes
+   BEFORE the `marker_strings` reprobe; the `OPR_FAIL` we raise (not an ERROR)
+   propagates unchanged.  `handle ERROR` covers a prop that does not parse in
+   this pre-operation context (e.g. an op binder shadows a goal variable of a
+   different type); the real operation then parses it in its own prepared
+   context (after TRANSPARENT_INTRO') and plants or reports it itself. *)
+fun reject_stray_assumption_frees opr_kind ctxt goal_params op_fixes prop_strs =
+  let
+    val strays =
+      (let
+         val ({propss, ...}, ctxt') =
+             Proof_Context.read_stmt op_fixes (map (fn s => [(s, [])]) prop_strs) ctxt
+       in
+         fold (fold (fn t =>
+                 fold (fn (nm, _) =>
+                         if Variable.is_fixed ctxt' nm then I else insert (op =) nm)
+                      (Term.add_frees t [])))
+              propss []
+         |> rev
+       end)
+      handle ERROR _ => []
+    val (params, genuine) =
+      List.partition (fn nm => member (op =) goal_params nm) strays
+    fun listed names = commas (map quote names)
+  in
+    if null strays then ()
+    else if not (null genuine) then
+      let val many = length genuine > 1
+      in raise Minilang.OPR_FAIL (Minilang.INVALID_OPR,
+           "This " ^ opr_kind ^ " mentions the free variable" ^ (if many then "s " else " ") ^
+           listed genuine ^ ", which " ^ (if many then "are" else "is") ^
+           " not declared in scope. This indicates a bug in your statement: check whether you mistyped " ^
+           (if many then "a name" else "the name") ^ ".")
+      end
+    else
+      let val many = length params > 1
+      in raise Minilang.OPR_FAIL (Minilang.INVALID_OPR,
+           "This " ^ opr_kind ^ " refers to " ^ listed params ^ ", " ^
+           (if many then "which are bound parameters" else "a bound parameter") ^
+           " of the current goal. Introduce " ^ (if many then "them" else "it") ^
+           " with Intro before referring to " ^ (if many then "them" else "it") ^ ".")
+      end
+  end
+
 fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
   case cmd of
       SIMPLIFY (simp_facts_with_targets, use_system_simps, premise_names, simplify_goal, user_bindings_opt) =>
@@ -1174,7 +1280,11 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
         in Inner_Syntax_Error.guard
              (fn () => Inner_Syntax_Error.marker_strings Syntax.read_prop
                          (Minilang.context_of s) (map snd branches))
-             (fn () => Minilang.CONSIDER brs s)
+             (fn () => ( check_authored_props (Minilang.context_of s) (map snd branches)
+                       ; reject_stray_assumption_frees "Branch"
+                           (Minilang.context_of s) (goal_intro_var_names s)
+                           [] (map snd branches)  (* Branch fixes no variables *)
+                       ; Minilang.CONSIDER brs s ))
         end
     | HAVE (name, fixes, assumes, conclusion, auto_apply) =>
         let val prem_ctr = #prem_counter counters
@@ -1194,7 +1304,9 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
          in Inner_Syntax_Error.guard
               (fn () => Inner_Syntax_Error.marker_strings Syntax.read_prop
                           (Minilang.context_of s) (conclusion :: map snd assumes))
-              (fn () => Minilang.HAVE fixes' named_assumes shows s)
+              (fn () => ( check_authored_props (Minilang.context_of s)
+                            (conclusion :: map snd assumes)
+                        ; Minilang.HAVE fixes' named_assumes shows s ))
         end
     | SUFFICES (fixes, assumes, conclusion) =>
         let val prem_ctr = #prem_counter counters
@@ -1211,7 +1323,12 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
          in Inner_Syntax_Error.guard
               (fn () => Inner_Syntax_Error.marker_strings Syntax.read_prop
                           (Minilang.context_of s) (conclusion :: map snd assumes))
-              (fn () => Minilang.SUFFICES fixes' named_assumes shows s)
+              (fn () => ( check_authored_props (Minilang.context_of s)
+                            (conclusion :: map snd assumes)
+                        ; reject_stray_assumption_frees "Suffices"
+                            (Minilang.context_of s) (goal_intro_var_names s) fixes'
+                            (conclusion :: map snd assumes)
+                        ; Minilang.SUFFICES fixes' named_assumes shows s ))
         end
     | OBTAIN (vars, constraints) =>
         let val named_constraints = map (fn (SOME name, goal) =>
@@ -1223,7 +1340,12 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
         in Inner_Syntax_Error.guard
              (fn () => Inner_Syntax_Error.marker_strings Syntax.read_prop
                          (Minilang.context_of s) (map snd constraints))
-             (fn () => Minilang.CONSIDER arg s)
+             (fn () => ( check_authored_props (Minilang.context_of s) (map snd constraints)
+                       ; reject_stray_assumption_frees "Obtain"
+                           (Minilang.context_of s) (goal_intro_var_names s)
+                           (map (fn (v,T) => (Binding.name v, T, NoSyn)) vars)
+                           (map snd constraints)
+                       ; Minilang.CONSIDER arg s ))
         end
     | SORRY_NEXT vars =>
         Minilang.SORRY_NEXT vars s
@@ -1369,6 +1491,9 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
              ambient context*, which on the define path is some unrelated
              leftover — so the define path reads the freshly-fixed head
              directly instead. *)
+          (* NB: DEFINE equations reference the not-yet-declared head, so they
+             cannot be parsed as standalone props in ctxt0 — the agent hint
+             const-check (which re-parses) is therefore NOT applied here. *)
           val (s', ty_str) = Inner_Syntax_Error.guard reprobe (fn () =>
             if Minilang.is_nullary_def_cmd decls specs ctxt0
             then
@@ -1540,9 +1665,14 @@ fun chk_single _ _ [x] = x
         ^ String.concat (map (fn th => "- " ^ string_of_thm ctxt th ^ "\n") lst)
         ^ "You may select the i-th rule by using \"" ^ the rule ^ "(i)\".")
 
-fun check_extended_fact ctxt (FactByName name) = FactByName (read_fact name)
+fun check_extended_fact ctxt (FactByName name) =
+      let val fact = read_fact name
+          val _ = Agent_Hint.check_fact_refs ctxt [fact]
+      in FactByName fact end
   | check_extended_fact ctxt (FactInTime (assigned_name, stmt)) =
-      FactInTime (assigned_name, read_prop ctxt stmt)
+      let val t = read_prop ctxt stmt
+          val _ = Agent_Hint.check_term ctxt t
+      in FactInTime (assigned_name, t) end
 
 in
 
@@ -1584,17 +1714,21 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
                     ])
                   else ()
           val typed_terms = ListPair.zip (typs, terms)
-       in WITNESS (read_terms_with_type ctxt typed_terms)
+          val ws = read_terms_with_type ctxt typed_terms
+          val _ = List.app (Agent_Hint.check_term ctxt) ws
+       in WITNESS ws
       end
   | check_command_i s (CASE_SPLIT (target, vars, rule, no_simp, insts)) =
       let val ctxt = Minilang.context_of s
           val rule' = Option.map (chk_single ctxt rule o read_thms ctxt) rule
           val target' = read_term ctxt target
+          val _ = Agent_Hint.check_term ctxt target'
        in CASE_SPLIT (target', vars, rule', no_simp, insts) (*insts: parsed at interpret time*)
       end
   | check_command_i s (INDUCT (target, vars, arbitrary, gen_fact_names, rule, no_simp, insts)) =
       let val ctxt = Minilang.context_of s
           val (target' :: arbitrary') = read_terms ctxt (target :: arbitrary)
+          val _ = List.app (Agent_Hint.check_term ctxt) (target' :: arbitrary')
           val rule' = Option.map (chk_single ctxt rule o read_thms ctxt) rule
           (* Parse each facts_to_generalize name string into a
            * Facts.ref (via the standard Parse.thm path). Supports
@@ -1602,6 +1736,7 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
            * strip matches items-channel naming. *)
           val gen_fact_refs =
             map (read_fact o Minilang_Aux.simp_fact_name') gen_fact_names
+          val _ = Agent_Hint.check_fact_refs ctxt gen_fact_refs
        in INDUCT (target', vars, arbitrary', gen_fact_refs, rule', no_simp, insts) (*insts: parsed at interpret time*)
       end
   | check_command_i s (NEXT_OR_END (facts, vars)) =
@@ -1629,6 +1764,7 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
       let val ctxt = Minilang.context_of s
           val (names, raws) = ListPair.unzip insts
           val terms = read_terms ctxt raws
+          val _ = List.app (Agent_Hint.check_term ctxt) terms
       in SPECIALIZE (name,
                      check_extended_fact ctxt rule_fact,
                      names ~~ terms,
@@ -1645,6 +1781,7 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
   | check_command_i s (COMPUTE (name, raw_term)) =
       let val ctxt = Minilang.context_of s
           val term = read_term ctxt raw_term
+          val _ = Agent_Hint.check_term ctxt term
           (* Enumerate exactly which atoms make the term non-ground, so the
              agent can spot e.g. a free variable that merely *looks* like a
              type (an induction case var named `nat` reads as `nat :: nat`). *)

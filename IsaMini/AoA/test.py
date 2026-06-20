@@ -10943,7 +10943,6 @@ async def _test_AmendInductionNested(root: Root, file: MyIO):
         },
         "name": "helper",
         "proof": [
-            {"operation": "Intro", "thought": "intro"},
             {"operation": "Induction",
              "thought": "induction on n",
              "target_isabelle_term": "n",
@@ -12591,6 +12590,7 @@ async def _test_Branch_SorryNextFail_Real(root: Root, file: MyIO):
     `THM 0 ... generalize: variable free in assumptions`.  RED before the guard
     (the Branch wrongly succeeded with a disconnected `c`), GREEN after.
     """
+    from .mcp_http_server import _edit_tool_logic
     print_header("Initial YAML", file)
     root.print(0, file)
 
@@ -12606,29 +12606,31 @@ async def _test_Branch_SorryNextFail_Real(root: Root, file: MyIO):
     root.print(0, file)
 
     root.session.age += 1
-    outcome2 = await root.fill("2", [Branch.gen_single({
-        "thought": "Case split: c > 0 or c <= 0",
-        "cases": [
-            {"statement": {"english": "c is positive", "isabelle": "(0::real) < c"},
-             "name": "c_pos"},
-            {"statement": {"english": "c is non-positive", "isabelle": "c \\<le> (0::real)"},
-             "name": "c_nonpos"},
-        ]
-    })])
-    fail_str = "" if outcome2.failure is None else str(outcome2.failure)
+    result, is_error = await _edit_tool_logic(
+        root.session,
+        {"target_step": "2", "action": "fill", "proof_operations": [
+            {"operation": "Branch",
+             "thought": "Case split: c > 0 or c <= 0",
+             "cases": [
+                 {"statement": {"english": "c is positive", "isabelle": "(0::real) < c"},
+                  "name": "c_pos"},
+                 {"statement": {"english": "c is non-positive", "isabelle": "c \\<le> (0::real)"},
+                  "name": "c_nonpos"},
+             ]}]})
     print_header("Branch over stray free var `c` (must be rejected, no THM 0)", file)
-    file.write(f"Branch rejected: {outcome2.failure is not None}\n")
-    file.write(fail_str + "\n")
+    file.write(result)
+    file.write("---------------\n")
+    file.write(f"is_error: {is_error}\n")
     print_header("Final state", file)
     root.print(0, file)
 
-    # Invariants: the guard rejects the stray-free Branch, and no raw kernel
-    # THM-0 string ever surfaces to the agent.
-    assert outcome2.failure is not None, \
-        "Branch over the stray free variable `c` was not rejected"
-    assert ("THM 0" not in fail_str and "thm.ML" not in fail_str
-            and "generalize: variable free in assumptions" not in fail_str), \
+    # Invariants: the guard rejects the stray-free Branch with the clean
+    # diagnostic, and no raw kernel THM-0 string ever surfaces to the agent.
+    assert ("THM 0" not in result and "thm.ML" not in result
+            and "generalize: variable free in assumptions" not in result), \
         "raw kernel `THM 0 ... generalize: variable free in assumptions` leaked to the agent"
+    assert "not declared in scope" in result, \
+        "Branch over the stray free variable `c` was not rejected by the guard"
 
 
 @model_test("FillCancelledPredecessor", "Test_FillCancelledPredecessor.thy", 11)
@@ -14703,8 +14705,8 @@ async def _test_SubtreeStats(root: Root, file: MyIO):
     stats_line("proved Have (1)", "1")
     stats_line("SUCCESS Obvious leaf (1.1)", "1.1")
 
-    # Step 2: Have left open after a structural Intro — a SUCCESS Intro leaf
-    # alone is not proved work.
+    # Step 2: a Have deliberately left unproved — an open block (its beginning
+    # op succeeds, but the subtree is not proved).
     root.session.age += 1
     await root.fill("2", [Have.gen_single({
         "thought": "identity implication, deliberately left unproved",
@@ -14714,12 +14716,7 @@ async def _test_SubtreeStats(root: Root, file: MyIO):
                       "conclusion": r"(0::int) \<le> y"},
         "name": "h2",
     })])
-    root.session.age += 1
-    await root.fill("2.1", [Intro.gen_single({
-        "thought": "fix y and assume the premise",
-    })])
-    file.write(f"step 2.1 status: {root.locate_node('2.1').status.status.value}\n")
-    stats_line("open Have with SUCCESS Intro (2)", "2")
+    stats_line("open Have (2)", "2")
 
     # Step 3: Have over a conjunction; SplitConjs; close ONLY the first
     # subgoal. The finished GoalNode covers itself + its Obvious as proved;

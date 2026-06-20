@@ -13,7 +13,7 @@ Obtain with stray free var `r` in constraint
 Filled step 1.
 Outline:
   step 1: Obtain a, b (failed)
-    Error: Fail to claim the existential subgoal because: This Obtain refers to the free variable "r" that is not in scope: it is neither fixed in the current context nor introduced by this Obtain. If the goal was not introduced yet (for example a goal `{x. P x} ⊆ S` whose `x` is only bound, not fixed), introduce it first; otherwise fix this variable or correct the proposition.
+    Error: Fail to claim the existential subgoal because: This Obtain mentions the free variable "r", which is not declared in scope. This indicates a bug in your statement: check whether you mistyped the name.
     Evaluation pending
   Unfinished Proof. Call command `edit` with action `fill` and target step `2`
   goal: {(r :: rat). (0 :: rat) < r} ⊆ S
@@ -37,7 +37,7 @@ proof:
       name: h_quot
       english: quotient representation of r
       conclusion: quotient_of r = (a, b)
-    Error: Fail to claim the existential subgoal because: This Obtain refers to the free variable "r" that is not in scope: it is neither fixed in the current context nor introduced by this Obtain. If the goal was not introduced yet (for example a goal `{x. P x} ⊆ S` whose `x` is only bound, not fixed), introduce it first; otherwise fix this variable or correct the proposition.
+    Error: Fail to claim the existential subgoal because: This Obtain mentions the free variable "r", which is not declared in scope. This indicates a bug in your statement: check whether you mistyped the name.
     proof: empty
     Error: Evaluation cancelled due to failures above
 Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
