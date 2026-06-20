@@ -320,17 +320,27 @@ _KnnQueryResult = tuple[list[RetrievedEntity], list[str], str | None, int]
 def _collect_query_warnings(
     knn_results: list[_KnnQueryResult],
 ) -> list[list[str]]:
-    """Collect warnings from each knn result into per-query lists."""
+    """Collect warnings from each knn result into per-query lists.
+
+    Warnings are de-duplicated (order-preserving) per query: one query enumerates
+    several entity kinds (e.g. THEOREM + THEOREM_COLLECTION, see
+    ``_augment_kinds_with_theorem_collection``), and each kind's ML callback parses
+    the same ``term_patterns`` independently, so a parse failure would otherwise be
+    reported once per kind."""
     per_query: list[list[str]] = []
     for _fetched, warnings, error, _total in knn_results:
         qwarns: list[str] = []
+        seen: set[str] = set()
         # Render Isabelle \<name> symbols to unicode so the marked snippet matches
         # the unicode entity names shown elsewhere in query output (the 【 】 marker
         # bytes are not Isabelle symbols and pass through untouched).
         if error:
             qwarns.append(f"Warning: {pretty_unicode(error)}")
         for w in warnings:
-            qwarns.append(f"Warning: {pretty_unicode(w)}")
+            line = f"Warning: {pretty_unicode(w)}"
+            if line not in seen:
+                seen.add(line)
+                qwarns.append(line)
         per_query.append(qwarns)
     return per_query
 

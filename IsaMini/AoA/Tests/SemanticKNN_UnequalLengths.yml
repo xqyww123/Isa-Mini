@@ -8,8 +8,8 @@ Mixed patterns: 5 results, 1 warnings
 Inner syntax error
 Failed to parse term
   ↳ parse failed; the offending token is wrapped in 【 】: g (【z】
-Schematic in binder: 5 results, 1 warnings
-  Warning: Term pattern was ignored — results are NOT filtered by it.
-Inner syntax error
+Schematic in binder: 1 results, 1 warnings
+  Warning: Inner syntax error
 Failed to parse term
   ↳ parse failed; the offending token is wrapped in 【 】: …_on (λ?d【.】 ?N div …
+Fell back to anonymous wildcards, which parsed.

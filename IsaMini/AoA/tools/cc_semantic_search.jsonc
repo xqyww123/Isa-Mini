@@ -27,7 +27,7 @@
               "type": "string",
               "description": "Must be syntactically valid Isabelle term (example: `_ ^ 2` but never `^2`)"
             },
-            "description": "Term patterns that lemmas/rules must contain. Use _ for wildcard and ?name for named wildcards (example: ?P ⟶ ?Q ⟶ ?P ∧ ?Q)."
+            "description": "Term patterns that lemmas/rules must contain. Use _ for wildcard, ?name for named term wildcards, and ?'name for named type wildcards. Must distinguish type wildcards from term wildcards. Example: (?x :: (real, ?'n) vec)"
           },
           "type_patterns": {
             "type": "array",
