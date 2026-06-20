@@ -15447,6 +15447,26 @@ async def _test_hint_notice_fact(root: Root, file: MyIO):
     session.quickview_proof_scope(0, file)
 
 
+@model_test("HintRejectSetupRewriting", "Test_HintRejectSetupRewriting.thy", 11)
+async def _test_hint_reject_setup_rewriting(root: Root, file: MyIO):
+    """SETUP_REWRITING's redex/residue are agent-authored terms: a
+    REJECT-registered const (Rat.of_int) in the residue must fail the op with
+    the hint message (covers the SetupRewriting authoring path)."""
+    session = root.session
+    session.age += 1
+    outcome = await root.fill("1", [SetupRewriting.gen_single({
+        "thought": "rewrite the coercion into the shadow constant",
+        "for_any": [{"name": "n", "type": "int"}],
+        "redex": "rat_of_int n",
+        "residue": "Rat.of_int n",
+        "conditions": [],
+    })])
+    print_header("After SetupRewriting with Rat.of_int in residue (expect REJECT)", file)
+    file.write(f"committed: {len(outcome.committed)}, failure: {outcome.failure is not None}\n")
+    file.write(f"failure: {outcome.failure}\n")
+    session.print_proof_scope(0, file, show_warnings=True)
+
+
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
     import msgpack as mp
     from IsaREPL import Client
