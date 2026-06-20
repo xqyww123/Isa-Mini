@@ -70,3 +70,4 @@ Reason: Cannot fill a node with id 2
 OF: the fact has 0 premise(s), but 2 discharge argument(s) were given
 the fact is:
   P 0 ∧ Q 0
+Each `discharge` entry corresponds to one premise of the fact (left-to-right). `discharge` must have at most 0 entries.

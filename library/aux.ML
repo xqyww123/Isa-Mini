@@ -262,20 +262,11 @@ fun xOF prove_discharge ctxt opt_thms st =
 
       val max_prems = count_prems (Thm.prop_of st)
       val _ = if LEN > max_prems
-              then let
-                val prem_strs = list_prems (Thm.prop_of st)
-                val prem_section = case prem_strs of
-                    [] => "the fact has no premises.\n"
-                  | _ => "the premises are:\n" ^
-                         String.concat (map_index (fn (i, s) =>
-                           "  " ^ string_of_int (i + 1) ^ ". " ^ s ^ "\n") prem_strs)
-              in error ("OF: the fact has " ^ string_of_int max_prems ^
-                        " premise(s), but " ^ string_of_int LEN ^
-                        " discharge argument(s) were given\n" ^
-                        prem_section ^
-                        "the fact is:\n  " ^
-                        Thm.string_of_thm ctxt st)
-              end
+              then error ("OF: the fact has " ^ string_of_int max_prems ^
+                          " premise(s), but " ^ string_of_int LEN ^
+                          " discharge argument(s) were given\n" ^
+                          "the fact is:\n  " ^
+                          Thm.string_of_thm ctxt st)
               else ()
 
       fun rulify N ctxt ctm =
@@ -742,7 +733,28 @@ fun inst_universal_quantifiers ctxt (insts, tinsts) thm =
           | NONE =>
           case AList.lookup (op =) hol_raw_map name of
             SOME raw => R_HOL raw
-          | NONE => error ("Variable " ^ quote name ^ " is not found in the rule")
+          | NONE =>
+          (* Base-name fallback: a bare name matches a schematic by base name,
+             ignoring index, when unambiguous — rescues facts whose schematic
+             landed at a non-zero index (e.g. ?k1, from Variable.export bumping a
+             for_any var past a co-occurring schematic) that the agent only ever
+             saw / named as `k`. Reached only when every preceding clause
+             returned NONE, i.e. the original error path; an index-0 ?k is
+             already caught by the display match above, so this only ever sees
+             non-zero-index schematics. *)
+          (case filter (fn ((n, _), _) => n = name) schematic_vars of
+             [(idx, _)] => R_Schematic idx
+           | [] => error ("Variable " ^ quote name ^ " is not found in the rule")
+           | matches =>
+               let val cands = matches
+                     |> sort (int_ord o apply2 (snd o #1))   (* ascending by index: ?k1, ?k2 *)
+                     |> map (Term.string_of_vname o #1)
+               in error ("Variable " ^ quote name ^
+                         " is ambiguous in the rule; it matches multiple schematic \
+                         \variables: " ^ commas cands ^
+                         ". Write the indexed form to disambiguate, e.g. " ^
+                         hd cands ^ ".")
+               end)
 
     val (schematic_insts, pure_insts, hol_insts) =
       fold_rev (fn (vn, t) => fn (si, pi, hi) =>
@@ -856,7 +868,9 @@ fun xwhere ctxt inst0 fixes thm =
       |> Variable.export_terms ctxt1 ctxt
 
     val insts = vns ~~ ts
-  in inst_universal_quantifiers ctxt (insts, tinsts) thm
+  in (inst_universal_quantifiers ctxt (insts, tinsts) thm
+        handle ERROR msg =>
+          error (msg ^ "\nthe rule is:\n  " ^ Thm.string_of_thm ctxt thm))
      |> Rule_Cases.save thm
   end
 

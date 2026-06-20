@@ -1,0 +1,56 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - S: rat set
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: {(r :: rat). (0 :: rat) < r} ⊆ S
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+Obtain with stray free var `r` in constraint
+--------------------------------------------------
+Filled step 1.
+Outline:
+  step 1: Obtain a, b (failed)
+    Error: Fail to claim the existential subgoal because: This Obtain refers to the free variable "r" that is not in scope: it is neither fixed in the current context nor introduced by this Obtain. If the goal was not introduced yet (for example a goal `{x. P x} ⊆ S` whose `x` is only bound, not fixed), introduce it first; otherwise fix this variable or correct the proposition.
+    Evaluation pending
+  Unfinished Proof. Call command `edit` with action `fill` and target step `2`
+  goal: {(r :: rat). (0 :: rat) < r} ⊆ S
+---------------
+is_error: False
+--------------------------------------------------
+After Obtain
+--------------------------------------------------
+variables:
+  - S: rat set
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: {(r :: rat). (0 :: rat) < r} ⊆ S
+proof:
+  - step id: 1
+    thought: quotient representation of r
+    operation: Obtain
+    variables:
+      - a: int
+      - b: int
+    constraint:
+      name: h_quot
+      english: quotient representation of r
+      conclusion: quotient_of r = (a, b)
+    Error: Fail to claim the existential subgoal because: This Obtain refers to the free variable "r" that is not in scope: it is neither fixed in the current context nor introduced by this Obtain. If the goal was not introduced yet (for example a goal `{x. P x} ⊆ S` whose `x` is only bound, not fixed), introduce it first; otherwise fix this variable or correct the proposition.
+    proof: empty
+    Error: Evaluation cancelled due to failures above
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+--------------------------------------------------
+Have over stray free var `r`
+--------------------------------------------------
+Filled step 2.
+Outline:
+  step 1: Obtain a, b (failed)
+    Evaluation pending
+  step 2: Have r_eq (pending)
+    Error: the evaluation is cancelled due to failure of step `1`
+    Evaluation pending
+  Evaluation pending
+---------------
+is_error: False

@@ -4936,11 +4936,16 @@ async def _test_Derive_OverDischarge(root: Root, file: MyIO):
     """Reproduce exception THM 3: xOF attribute on a fact with more discharge
     slots than the fact has premises.
 
-    The LLM may emit ``discharge: [null, null]`` on a conjunction fact that has
-    zero Pure premises, causing the ``xOF _ _`` attribute to raise ``THM 3``
-    during fact-reference evaluation (Attrib.eval_thms), which is BEFORE the
-    ``handle THM`` in SPECIALIZE.  The raw ML exception trace leaks to the
-    agent instead of a clean OPR_FAIL message.
+    The LLM may attach an ``OF`` discharge to a conjunction fact that has zero
+    Pure premises, causing the ``xOF`` attribute to raise ``THM 3`` during
+    fact-reference evaluation (Attrib.eval_thms), which is BEFORE the
+    ``handle THM`` in SPECIALIZE.  The raw ML exception trace must NOT leak to
+    the agent; a clean OPR_FAIL diagnostic must be produced instead.
+
+    NB: the discharge entries here must be REAL facts, not ``null``.  ``_of_clause``
+    strips trailing ``null`` entries (commit 923e624: an all-``null`` discharge
+    such as ``[null, null]`` collapses to ``[]`` and emits no ``OF`` clause at
+    all), so a genuine over-discharge has to be expressed with named facts.
     """
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -4959,8 +4964,10 @@ async def _test_Derive_OverDischarge(root: Root, file: MyIO):
     # Step 2: Derive h_rule using a discharging fact that carries
     # an xOF attribute with more slots than the fact has premises.
     # h_conj is "P 0 ∧ Q 0" (0 Pure premises).
-    # discharge: [null, null] → xOF _ _ → tries to discharge 2 premises
-    # from a conjunction with 0 premises → THM 3.
+    # discharge: [q0, h_rule] → xOF q0 h_rule → tries to discharge 2 premises
+    # from a conjunction with 0 premises → THM 3.  (Two REAL facts, because an
+    # all-null discharge would be stripped to nothing by _of_clause — see the
+    # docstring.)
     #
     # ROOT CAUSE: The THM 3 exception is raised during Attrib.eval_thms
     # (fact-reference evaluation at proof.ML:3540), which is BEFORE the
@@ -4972,7 +4979,7 @@ async def _test_Derive_OverDischarge(root: Root, file: MyIO):
         "thought": "xOF over-discharge on conjunction fact",
         "rule": {"name": "h_rule"},
         "discharging_facts": [
-            {"name": "h_conj", "discharge": [None, None]}
+            {"name": "h_conj", "discharge": [{"name": "q0"}, {"name": "h_rule"}]}
         ],
         "result_name": "should_fail"
     })])
@@ -7153,6 +7160,90 @@ async def _test_Obtain_Skip_Introduced(root: Root, file: MyIO):
 
     print_header("Quickview", file)
     root.quickview(0, file)
+
+
+@model_test("HaveGenLeakObtain", "Test_HaveGenLeakObtain.thy", 13)
+async def _test_HaveGenLeakObtain(root: Root, file: MyIO):
+    """Repro: a Have referencing a STRAY free variable leaks the raw kernel
+    exception `THM 0 ... generalize: variable free in assumptions`.
+
+    Root cause: the goal `{r. 0<r} ⊆ S` is a set-subset, which Minilang INTRO
+    does NOT introduce (it only fires on Pure/HOL ⋀/⟶/∀, never `subsetI`), so
+    `r` is never fixed.  An Obtain whose constraint mentions `r` then introduces
+    it as a stray Free living inside hyp `h_quot`.  A subsequent Have over `r`
+    makes the block-conclude `Proof_Context.export` (in `gen_HAVE'`) generalize
+    `r`, but `r` is free in the hypothesis `h_quot` → the kernel `Thm.generalize`
+    raises `THM 0 ... generalize: variable free in assumptions`, which leaks
+    verbatim to the agent instead of a clean, actionable diagnostic.
+
+    Mirrors putnam_1962_a6 (log `edbca7bee_1`, worker 2.2, step 7).  See
+    `/tmp/aoa_bug_have_generalize_thm_leak.md`.
+
+    The agreed fix rejects the offending constraint at the OBTAIN step (a
+    constraint referencing a free variable that is neither already fixed nor
+    introduced by this Obtain is refused with a clean diagnostic), so this test
+    captures BOTH the Obtain-step outcome and the downstream Have-step outcome:
+
+      * CURRENT (buggy): the Obtain at step 1 wrongly succeeds (planting the
+        stray `r`), and the raw kernel `THM 0` then leaks at the Have (step 2).
+      * AFTER FIX: the Obtain at step 1 is rejected with a clean diagnostic and
+        the Have step is never reached.
+
+    Either way the hard invariant is: **no raw `THM 0` / `thm.ML` kernel string
+    may ever surface to the agent.**  The trailing assertion enforces exactly
+    that — so this test is RED until the fix lands and GREEN afterwards.
+
+    This golden captures the CURRENT (buggy) behavior.  When the defect is
+    fixed, the golden must be updated with user approval."""
+    from .mcp_http_server import _edit_tool_logic
+
+    def _leaks_thm0(s: str) -> bool:
+        return ('THM 0' in s) or ('thm.ML' in s) \
+            or ('generalize: variable free in assumptions' in s)
+
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    # Step 1: Obtain a,b with the quotient constraint.  `r` is unfixed (the goal
+    # `{r.0<r} ⊆ S` was never intro'd), so it enters as a stray Free inside hyp
+    # `h_quot`.  The nested Obvious discharges `∃a b. quotient_of r = (a, b)`.
+    obtain_res, obtain_err = await _edit_tool_logic(
+        root.session,
+        {"target_step": "1", "action": "fill", "proof_operations": [
+            {"operation": "Obtain",
+             "thought": "quotient representation of r",
+             "variables": [{"name": "a", "type": "int"}, {"name": "b", "type": "int"}],
+             "constraints": [{"name": "h_quot",
+                              "isabelle": "quotient_of r = (a, b)",
+                              "english": "quotient representation of r"}],
+             "proof": [{"operation": "Obvious", "facts": []}]}]})
+    print_header("Obtain with stray free var `r` in constraint", file)
+    file.write(obtain_res)
+    file.write("---------------\n")
+    file.write(f"is_error: {obtain_err}\n")
+    print_header("After Obtain", file)
+    root.print(0, file)
+    root.session.age += 1
+    # Step 2: Have over the stray `r`.  CURRENT behavior: raw kernel `THM 0`
+    # leaks here.  (After the fix the proof never reaches this step, because
+    # the Obtain above is rejected.)
+    have_res, have_err = await _edit_tool_logic(
+        root.session,
+        {"target_step": "2", "action": "fill", "proof_operations": [
+            {"operation": "Have",
+             "thought": "express r via its quotient",
+             "statement": {"english": "quotient representation",
+                           "conclusion": "quotient_of r = (a, b)"},
+             "name": "r_eq"}]})
+    print_header("Have over stray free var `r`", file)
+    file.write(have_res)
+    file.write("---------------\n")
+    file.write(f"is_error: {have_err}\n")
+
+    # Hard invariant (the user's directive): a raw kernel THM-0 string must NEVER
+    # surface to the agent — not at Obtain, not at Have.  RED now, GREEN post-fix.
+    assert not _leaks_thm0(obtain_res) and not _leaks_thm0(have_res), \
+        "raw kernel `THM 0 ... generalize: variable free in assumptions` leaked to the agent"
 
 
 @model_test("Obtain_Rewrite_Scope", "Test_Obtain_Rewrite_Scope.thy", 8)
@@ -12485,9 +12576,20 @@ async def _test_Branch_SorryNextFail(root: Root, file: MyIO):
 
 @model_test("Branch_SorryNextFail_Real", "Test_BranchSorryNextFail.thy", 16)
 async def _test_Branch_SorryNextFail_Real(root: Root, file: MyIO):
-    """Reproduce the actual ML-level sorry_next failure from conversation
-    e5fe3afb6_6.  Uses the same goal structure: Ball quantifier over a set
-    of functions, Rewrite with Ball_def to fix variables, then Branch.
+    """Guard test (repurposed from the conversation-e5fe3afb6_6 sorry_next repro).
+
+    The goal is a Ball over `{g. ∃a c. 0≤a ∧ g = (λx. a/(1-c*x)²)}`.  After
+    Rewrite Ball_def fixes `f`, the variable `c` stays existentially bound inside
+    the membership premise and is NOT a fixed variable.  A Branch case-splitting
+    on `(0::real) < c` therefore references the stray, un-introduced free `c` —
+    a genuine proof bug: the agent should `Obtain a c` from the existential
+    first, then split.  (Branch deliberately cannot introduce a variable; that
+    is `Obtain`'s job.)
+
+    The Obtain/Suffices/Branch free-variable guard must REJECT this Branch with a
+    clean diagnostic and must NEVER leak the raw kernel exception
+    `THM 0 ... generalize: variable free in assumptions`.  RED before the guard
+    (the Branch wrongly succeeded with a disconnected `c`), GREEN after.
     """
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -12504,49 +12606,29 @@ async def _test_Branch_SorryNextFail_Real(root: Root, file: MyIO):
     root.print(0, file)
 
     root.session.age += 1
-    try:
-        outcome2 = await root.fill("2", [Branch.gen_single({
-            "thought": "Case split: c > 0 or c <= 0",
-            "cases": [
-                {"statement": {"english": "c is positive", "isabelle": "(0::real) < c"},
-                 "name": "c_pos"},
-                {"statement": {"english": "c is non-positive", "isabelle": "c \\<le> (0::real)"},
-                 "name": "c_nonpos"},
-            ]
-        })])
-        if outcome2.failure is not None:
-            file.write(f"Branch fill failure: {outcome2.failure}\n")
-        else:
-            file.write("Branch fill succeeded\n")
-    except IsabelleError as e:
-        file.write(f"Branch raised IsabelleError: {e}\n")
-    except InternalError as e:
-        file.write(f"BUG (Branch): InternalError: {e}\n")
-
-    print_header("After Branch attempt", file)
-    root.print(0, file)
-
-    br = root.locate_node("2")
-    if isinstance(br, NonLeaf_Node) and br.sub_nodes:
-        file.write(f"Branch sub_nodes: {len(br.sub_nodes)}\n")
-        for gn in br.sub_nodes:
-            file.write(f"  {gn.id}: status={gn.status.status.value}\n")
-        root.session.age += 1
-        try:
-            outcome3 = await root.fill("2.0.1", [Obvious.gen_single({"facts": []})])
-            if outcome3.failure:
-                file.write(f"Fill 2.0.1 failure: {outcome3.failure}\n")
-            else:
-                file.write(f"Fill 2.0.1 succeeded\n")
-        except InternalError as e:
-            file.write(f"BUG (Fill): InternalError: {e}\n")
-        except Exception as e:
-            file.write(f"Fill 2.0.1 raised {type(e).__name__}: {e}\n")
-    else:
-        file.write("Branch has no sub_nodes\n")
-
+    outcome2 = await root.fill("2", [Branch.gen_single({
+        "thought": "Case split: c > 0 or c <= 0",
+        "cases": [
+            {"statement": {"english": "c is positive", "isabelle": "(0::real) < c"},
+             "name": "c_pos"},
+            {"statement": {"english": "c is non-positive", "isabelle": "c \\<le> (0::real)"},
+             "name": "c_nonpos"},
+        ]
+    })])
+    fail_str = "" if outcome2.failure is None else str(outcome2.failure)
+    print_header("Branch over stray free var `c` (must be rejected, no THM 0)", file)
+    file.write(f"Branch rejected: {outcome2.failure is not None}\n")
+    file.write(fail_str + "\n")
     print_header("Final state", file)
     root.print(0, file)
+
+    # Invariants: the guard rejects the stray-free Branch, and no raw kernel
+    # THM-0 string ever surfaces to the agent.
+    assert outcome2.failure is not None, \
+        "Branch over the stray free variable `c` was not rejected"
+    assert ("THM 0" not in fail_str and "thm.ML" not in fail_str
+            and "generalize: variable free in assumptions" not in fail_str), \
+        "raw kernel `THM 0 ... generalize: variable free in assumptions` leaked to the agent"
 
 
 @model_test("FillCancelledPredecessor", "Test_FillCancelledPredecessor.thy", 11)

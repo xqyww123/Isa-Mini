@@ -37,7 +37,6 @@ Rewrite with discharge: [h1] on zero-premise fact
 is_error: True
 reason: Cannot fill a node with id 1
 OF: the fact has 0 premise(s), but 1 discharge argument(s) were given
-the fact has no premises.
 the fact is:
   y = x + 0
 Each `discharge` entry corresponds to one premise of the fact (left-to-right). `discharge` must have at most 0 entries.
