@@ -1,0 +1,5 @@
+unfinished before comment: ['2.1', '2.2']
+finished before comment: False
+finished after comment closer: False
+comment did not hide all goals: True
+round-trip idempotent: True

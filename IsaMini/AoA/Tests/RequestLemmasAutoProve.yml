@@ -1,0 +1,21 @@
+--------------------------------------------------
+1. general lemma proved → kept + now-available + notice
+--------------------------------------------------
+  [stub] headless=True on global.1
+proved is_error: False
+proved kept global Have 'myrefl': True
+proved says now-available: True
+proved scope notice present: True
+--------------------------------------------------
+2. general lemma failed → deleted + relayed reason
+--------------------------------------------------
+failed is_error: False
+failed deleted global Have 'myfail': True
+failed says could-not-be-established: True
+failed relays prover reason: True
+--------------------------------------------------
+3. headless requester, non-general lemma → reject
+--------------------------------------------------
+headless reject is_error: True
+headless reject names undeclared free 'c': True
+headless reject mentions for_any: True

@@ -16,7 +16,7 @@ Obvious.facts[0] = {bogus}  (FactByName | FactByProposition)
 --------------------------------------------------
 rejected: True
 message: Bad Argument
-`proof_operations[0] (Obvious).facts[0]` must be one of `FactByName` or `FactByProposition`
+`proof_operations[0] (Obvious).facts[0]` must be one of `FactByName`, `FactByProposition`, or `FactByDescription`
 --------------------------------------------------
 CaseSplit.rule = {bogus}  (Literal['default'] | FactByName | FactByDescription)
 --------------------------------------------------

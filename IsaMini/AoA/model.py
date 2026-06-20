@@ -2096,8 +2096,17 @@ class Minilang_State:
             vars = {IsaTerm.from_isabelle(k): IsaTerm.from_isabelle(v) for k, v in vars_list}
             return (IsaTerm.from_isabelle(term_type), frees, vars)
         except IsabelleError as e:
-            if len(e.errors) >= 2 and e.errors[0] == "Unparsed":
-                raise InternalError_UnparsedTerm(term_str, e.errors[1])
+            # The ML check_term callback signals a parse/type failure as a single
+            # `error "Unparsed: <msg>"` string (agent_server.ML), so `e.errors` is a
+            # one-element list `["Unparsed: <msg>"]`. Match that prefix (mirrors
+            # `unfold_syntax` below). The old `len(e.errors) >= 2 and
+            # e.errors[0] == "Unparsed"` guard expected a 2-element list the ML never
+            # produces, so it never fired — InternalError_UnparsedTerm was dead and a
+            # bare IsabelleError leaked to callers (e.g. the Induction syntax-error
+            # message path).
+            _PREFIX = "Unparsed: "
+            if e.errors and e.errors[0].startswith(_PREFIX):
+                raise InternalError_UnparsedTerm(term_str, e.errors[0][len(_PREFIX):])
             else:
                 raise
 
@@ -4008,6 +4017,12 @@ class Node(ABC):
         if parent._id_of_openning_prf_to_fill() == id:
             return Resolved_Slot(parent, id)
         raise NodeNotFound(id)
+    def _closes_my_parent(self) -> bool:
+        # Whether, as the live tail child of my parent, I close my parent's
+        # proof line (so the parent itself is not flagged; its obligation is
+        # carried by my subgoal children). Default: a node does not close its
+        # parent. SubgoalMaker overrides this. Read by NonLeaf_Node.opening().
+        return False
     def unfinished_nodes(self, ret: set['Node']) -> None:
         if not _status_can_continue(self.status.status):
             ret.add(self)
@@ -4570,7 +4585,6 @@ def _amend_preserves_worker(old: 'Node', final: 'Node') -> bool:
             and final.status.status == EvaluationStatus.Status.SUCCESS)
 
 class NonLeaf_Node(Node):
-    _closed_by: Node | None # Some proof operation (e.g. Branch) may close a block, preventing all later appending to this block.
     sub_nodes: list['Node']
     # A live sub-agent (running or parked) proving this node's subtree, or None.
     worker_handle: 'WorkerHandle | None'
@@ -4586,7 +4600,6 @@ class NonLeaf_Node(Node):
     def __init__(self, config: NodeConfig, thought: str, sub_nodes: list['Node']):
         super().__init__(config, thought)
         self.sub_nodes = sub_nodes
-        self._closed_by = None
         self.worker_handle = None
         # True while a child of this node is refreshed inside a context that
         # catches NodeReplaced (set by `_refresh_child_replace_aware`); an
@@ -4598,13 +4611,20 @@ class NonLeaf_Node(Node):
             child._on_upstream_change()
 
     def opening(self) -> bool:
-        return self._closed_by is None
-    def _open(self) -> None:
-        self._closed_by = None
-    async def _close_by(self, child: Node) -> None:
+        # Derived (not stored): a block is closed iff its live tail child is a
+        # SubgoalMaker that opened a parent-closing block and still holds all the
+        # cases it opened (see `_closes_my_parent`). Deriving this on every read
+        # — rather than mutating a stored `_closed_by` flag in comment /
+        # uncomment / delete / refresh — is what keeps open/closed consistent
+        # across every edit. SubgoalMaker and Root override to a constant.
+        tail = self.sub_nodes[-1] if self.sub_nodes else None
+        return not (tail is not None and tail._closes_my_parent())
+    async def _truncate_siblings_after(self, child: Node) -> None:
+        # Drop the siblings AFTER `child` once `child` opened a subgoal block;
+        # they are meaningless. Does NOT mark the parent closed — `opening()`
+        # derives that from `child` being the live tail (see `opening`).
         for i, c in enumerate(self.sub_nodes):
             if c is child:
-                self._closed_by = child
                 discarded_nodes = self.sub_nodes[i+1:]
                 del self.sub_nodes[i+1:]
                 if discarded_nodes:
@@ -4895,8 +4915,6 @@ class NonLeaf_Node(Node):
         for i, c in enumerate(self.sub_nodes):
             if c is child:
                 self.sub_nodes.pop(i)
-                if self._closed_by is child:
-                    self._closed_by = None
                 return
         raise InternalError("The target node is not my children")
     async def _amend_child(self, child: 'Node', gn: Parsed_Opr) -> 'tuple[Node, Node, WorkerHandle | None]':
@@ -5502,8 +5520,9 @@ class StdBlock(NonLeaf_Node):
         outcome = EditOutcome(operation=op, request=gns)
         def _block_closed(unapplied: 'list[Parsed_Opr]',
                           failed_index: int) -> CannotEdit_BlockClosed:
+            closer = self.sub_nodes[-1] if self.sub_nodes else None
             return CannotEdit_BlockClosed(
-                self._closed_by.id if self._closed_by is not None else None,
+                closer.id if (closer is not None and closer._closes_my_parent()) else None,
                 self.id,
                 operation=op, unapplied_oprs=unapplied,
                 is_error=len(outcome.committed) == 0,
@@ -5852,6 +5871,13 @@ class SubgoalMaker(GoalContainer, StdBlock):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._initial_goal_index : int = 1
+        # Latched parent-closing decision, set in `_refresh_the_beginning_opr` on
+        # EVERY refresh branch (incl. the reuse `pass`) so `opening()` can derive
+        # my parent's closed-ness from me without a stored `_closed_by`.
+        # `_opened_count` = number of subgoals I opened; `_closes_my_parent`
+        # requires my live case children to still equal it (the delete-case fix).
+        self._opened_closing_block: bool = False
+        self._opened_count: int = 0
         self._supplied_proofs: 'dict[str, proof_with_case_vars] | None' = None
         # Post-rule schematic instantiation (RULE/CaseSplit/Induction only).
         # `None` = not yet probed; otherwise the ordered list of instantiation
@@ -6249,6 +6275,13 @@ class SubgoalMaker(GoalContainer, StdBlock):
         decision = self._should_open_proof_block(s0)
         if decision != _OpenSubgoalBlock.NO:
             goals_count = s0.new_subgoals_count or 0
+            # Latch the parent-closing decision on BOTH the reuse and regenerate
+            # paths — this assignment MUST stay ABOVE the if/else: `opening()`
+            # derives my parent's closed-ness from these fields, so the reuse
+            # `pass` path must set them too, or a re-refresh (e.g. uncomment)
+            # would wrongly leave the parent open. (canary: CaseSplit_AmendReconcile_ExactMatch)
+            self._opened_closing_block = (decision == _OpenSubgoalBlock.YES_AND_CLOSE_PARENT_BLOCK)
+            self._opened_count = goals_count if self._opened_closing_block else 0
             # TODO: try to reuse the existing subnodes instead of discarding them.
             if not self._first_time and goals_count == len(self.sub_nodes):
                 pass
@@ -6256,7 +6289,7 @@ class SubgoalMaker(GoalContainer, StdBlock):
                 self._on_regenerating_goals(goals_count)
                 if (decision == _OpenSubgoalBlock.YES_AND_CLOSE_PARENT_BLOCK
                         and self.parent is not None):
-                    await self.parent._close_by(self)
+                    await self.parent._truncate_siblings_after(self)
                 if self.sub_nodes:
                     self._warn_discarded_nodes(
                         list(self.sub_nodes),
@@ -6277,6 +6310,8 @@ class SubgoalMaker(GoalContainer, StdBlock):
                     if i < goals_count - 1:
                         ml_state = await ml_state.sorry_next(None, None)
         else:
+            self._opened_closing_block = False
+            self._opened_count = 0
             if self.sub_nodes:
                 self._warn_discarded_nodes(
                     list(self.sub_nodes),
@@ -6286,18 +6321,9 @@ class SubgoalMaker(GoalContainer, StdBlock):
                 for d in list(self.sub_nodes):
                     await d.aclose_all_subagents()
                 self.sub_nodes = []
-            # Re-open the parent iff the parent is currently closed (by any
-            # closer) AND we are the tail of its sub_nodes — i.e., whatever
-            # closing happened previously is now effectively undone because
-            # this refresh doesn't open a block.  (`_close_by` always
-            # truncates the parent to end at the closer, so the "I'm the
-            # tail" check is how we identify the closer without tracking
-            # identity across refresh cycles.)
-            if (self.parent is not None
-                    and self.parent._closed_by is not None
-                    and self.parent.sub_nodes
-                    and self.parent.sub_nodes[-1] is self):
-                self.parent._open()
+            # opening() is derived from the live tail, so a no-block refresh
+            # needs no explicit parent re-open: clearing _opened_closing_block
+            # (above) makes my parent read open automatically.
         if not is_init and len(self.sub_nodes) != old_n_subnodes:
             self.changed = True
         if self._supplied_proofs:
@@ -6306,7 +6332,23 @@ class SubgoalMaker(GoalContainer, StdBlock):
     def _id_of_openning_prf_to_fill(self) -> step | None:
         return None
     def opening(self) -> bool:
+        # LOAD-BEARING override (do NOT remove): a SubgoalMaker must never
+        # self-flag and must stay non-appendable, so the derived NonLeaf
+        # opening() must NOT apply to it. Whether it closes its PARENT is a
+        # separate question answered by `_closes_my_parent`.
         return False
+    def _closes_my_parent(self) -> bool:
+        # I close my parent's proof line iff I successfully opened a
+        # parent-closing block AND still hold every case I opened. A
+        # COMMENTED/CANCELLED/FAILED closer (status != SUCCESS) closes nothing,
+        # so the parent re-opens and its leftover goal is flagged (DEFECT 1). A
+        # deleted case makes live < _opened_count → not closing (DEFECT 2).
+        if self.status.status != EvaluationStatus.Status.SUCCESS:
+            return False
+        if not self._opened_closing_block:
+            return False
+        live = sum(1 for c in self.sub_nodes if isinstance(c, GoalNode))
+        return self._opened_count > 0 and live == self._opened_count
 
 
 class CaseSplit_Like(SubgoalMaker):
@@ -9893,10 +9935,15 @@ class Root(GoalContainer, StdBlock):
         self.global_env = GlobalEnv(NodeConfig("global", Minilang_State.assign(ml_state0), self))
         self.sub_nodes.append(self.global_env)
         self.final_ml_state = Minilang_State.assign(ml_state0)
-        self._closed_by = self
     @property
     def session(self) -> 'Session':
         return the_session()
+    def opening(self) -> bool:
+        # Root is a permanent container, never "open for appending". Replaces the
+        # old `self._closed_by = self` sentinel now that opening() is derived —
+        # without this, derived opening() would read True via Root's GoalNode tail
+        # and Root would self-flag in StdBlock.unfinished_nodes on every proof.
+        return False
     async def _refresh_me_alone(self, auto_intro: bool):
         if self._first_time:
             ml_state = await self.ml_state.skip(None)
@@ -10042,15 +10089,9 @@ class Root(GoalContainer, StdBlock):
                     f"Step {the_session()._display_id(sid)} is already commented out.")
                 continue
             node.status = EVALUATION_COMMENTED
-            # A commented node is "not code": if it was the closer of its parent
-            # block (a SubgoalMaker that opened >1 subgoals → parent._close_by),
-            # re-open the parent so its still-open goal is tracked again — exactly
-            # as `_delete_child` does on deletion. Without this the parent stays
-            # opening()==False, so `unfinished_nodes` skips its open-goal check and
-            # a goal closed only by runtime sorry is silently reported as proven.
-            parent = node.parent
-            if parent is not None and parent._closed_by is node:
-                parent._open()
+            # opening() is derived from the live tail (see NonLeaf_Node.opening),
+            # so commenting the closer makes the parent read open automatically —
+            # no _closed_by mutation needed here (DEFECT 1 fix is structural).
             await node._refresh_me_alone(auto_intro=False)
             await node._refresh_all_after_me()
             affected.append(sid)
@@ -11847,8 +11888,8 @@ class Session:
             return ""
         buf = StringIO()
         print_hyps(new, 0, buf, {},
-                   banner="New facts have been provided by the external "
-                          "environment and may help your proof")
+                   banner="New facts have arrived and are now available "
+                          "in your scope")
         return buf.getvalue()
 
     async def _render_useful_lemmas(self) -> str:

@@ -1,0 +1,5 @@
+general(a/b<1, for_any a,b): general=True blocking=[] -> PASS
+undeclared(a<c, for_any a): general=False blocking=['c'] -> PASS
+schematic(?x<1): general=False blocking=[] -> PASS
+define-ref(myc=5, no for_any): general=False blocking=['myc'] -> PASS
+define-ref(myc=5, for_any myc): general=True blocking=[] -> PASS

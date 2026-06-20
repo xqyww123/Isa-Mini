@@ -1276,6 +1276,18 @@ async def _lemma_statement_is_general(state, statement) -> 'tuple[bool, list[str
             _typ, frees, schematics = await state.check_term(term)
         except InternalError_UnparsedTerm:
             return (False, [])
+        except IsabelleError as e:
+            # `check_term` re-raises a bare IsabelleError for a read_term failure
+            # (the ML callback tags it "Unparsed: ..."); a top-level unbound
+            # schematic `?x` arrives this way too, so it lands here rather than the
+            # `schematics`-set branch below. Treat an "Unparsed" failure as
+            # non-general (the lemma can't be cleanly anchored at this slot), but let
+            # a genuine infrastructure fault (connection drop, state-not-found, ...)
+            # PROPAGATE rather than silently classifying every requested lemma
+            # non-general.
+            if e.errors and str(e.errors[0]).startswith("Unparsed"):
+                return (False, [])
+            raise
         # A schematic ?x.i is reported as "?x.i"; its base name `x` is what the
         # agent would declare in for_any (and write as a fixed `x`).
         for s in schematics:
@@ -1399,6 +1411,12 @@ async def _request_lemmas_tool_logic(session: Session, args: dict) -> tuple[str,
         outcome_lines: list[str] = []
         any_scope_change = False
 
+        # `root.fill` retargets `session.working_block` to the fill's parent (the
+        # global env); save the worker's own working block and restore it after, so
+        # the worker's retrieval context (the `query` tool) is unaffected by the
+        # global-Have declarations we make here.
+        saved_working_block = session.working_block
+
         # --- GENERAL path: auto-declare a global Have + prove it with a headless
         # prover, synchronously. proved → keep; otherwise → delete + relay reason. ---
         for lem in general_items:
@@ -1440,6 +1458,13 @@ async def _request_lemmas_tool_logic(session: Session, args: dict) -> tuple[str,
             # worker's target subtree), so it holds no handle and blocks nobody.
             assert node.worker_handle is None
             outcome = await _run_worker_on(session, node, "", [], headless=True)
+            # A headless prover yields ONLY terminal outcomes (建议1/建议2 remove the
+            # difficulty/lemmas park arms; refute forks an autonomous adjudicator). A
+            # park kind here would mean that invariant broke — fail loudly instead of
+            # silently relaying a still-parked prover as a generic failure.
+            assert outcome.kind in {"proved", "could_not_prove",
+                                    "surrendered", "refute_accepted"}, (
+                f"headless prover yielded non-terminal {outcome.kind!r}")
             if outcome.kind == "proved" and node.is_proof_finished():
                 any_scope_change = True
                 outcome_lines.append(
@@ -1451,6 +1476,8 @@ async def _request_lemmas_tool_logic(session: Session, args: dict) -> tuple[str,
                 reason = outcome.detail or outcome.reason or ""
                 await session.root.delete([node.id])
                 outcome_lines.append(_requested_lemma_failed_line(nm, reason))
+
+        session.working_block = saved_working_block
 
         # --- NON-GENERAL path (normal worker only; headless rejected above): park
         # for the planner to author + prove, exactly as before, but only the
@@ -1517,7 +1544,17 @@ async def _run_worker_on(session: Session, node: NonLeaf_Node,
     handle = WorkerHandle(node, session)
     node.worker_handle = handle
     handle.start(suggestions, helpful_lemmas, headless=headless)
-    return await handle.run_until_yield()
+    try:
+        return await handle.run_until_yield()
+    except BaseException:
+        # On cancellation/error BEFORE a terminal yield, tear the worker down so its
+        # task is cancelled+awaited+settled rather than orphaned. This matters most
+        # for the auto-prove-general path, whose node (a global Have under GlobalEnv)
+        # lies OUTSIDE the dispatcher's own target subtree, so the dispatcher's normal
+        # finally-sweep would not reap it. A normal return — including a PARK yield —
+        # keeps the handle alive intentionally and is left untouched.
+        await handle.aclose()
+        raise
 
 
 def _subagent_resume_feedback(suggestions: str, helpful_lemmas: list) -> str:

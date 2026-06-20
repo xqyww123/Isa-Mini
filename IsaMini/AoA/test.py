@@ -10455,9 +10455,10 @@ async def _test_InferenceRuleBatch_MultiSubgoal(root: Root, file: MyIO):
         f"step 1 should be the InferenceRule, got {type(n1).__name__}"
     parent = n1.parent
     assert parent is not None
-    # Parent must be closed by the InferenceRule.
-    assert parent._closed_by is n1, \
-        f"parent._closed_by should be the InferenceRule; got {parent._closed_by!r}"
+    # Parent must be closed by the InferenceRule (opening() is now derived from
+    # the live tail child, so assert closed-ness + that the tail is n1).
+    assert not parent.opening() and parent.sub_nodes[-1] is n1, \
+        f"parent should be closed by the tail InferenceRule; tail={parent.sub_nodes[-1]!r}"
     # Parent's sub_nodes should contain only the InferenceRule (no stray siblings).
     assert parent.sub_nodes and parent.sub_nodes[-1] is n1, \
         f"InferenceRule should be parent's last child; kinds={[type(c).__name__ for c in parent.sub_nodes]}"
@@ -12946,8 +12947,9 @@ async def _test_RefuteOrSurrender(root: Root, file: MyIO):
     task = asyncio.ensure_future(_request_lemmas_tool_logic(session, {
         "detail": "need a helper about squares",
         "suggested_lemmas": [{
-            "name": "sq_nonneg", "english": "squares are non-negative",
-            "isabelle_statement": "0 ≤ x * x"}],
+            "name": "sq_nonneg",
+            "statement": {"english": "squares are non-negative",
+                          "conclusion": "0 ≤ x * x"}}],
     }))
     ev = await handle._event_queue.get()
     file.write(f"request_lemmas event: {type(ev).__name__}\n")
@@ -13860,8 +13862,9 @@ async def _test_nested_request_lemmas(root: Root, file: MyIO):
         # dispatcher answers; once resumed, W2 finishes (subtree already proved).
         handle._event_queue.put_nowait(WorkerRequestLemmas(
             detail="need a squares lemma", lemmas=[{
-                "name": "sq_nonneg", "english": "squares are non-negative",
-                "isabelle_statement": "0 ≤ x * x"}],
+                "name": "sq_nonneg",
+                "statement": {"english": "squares are non-negative",
+                              "conclusion": "0 ≤ x * x"}}],
             response_future=ev_fut))
         await ev_fut
         return None
@@ -13920,6 +13923,150 @@ async def _test_nested_request_lemmas(root: Root, file: MyIO):
     file.write(f"feedback carries helpful lemma: {'sq_nonneg' in fb}\n")
     file.write(f"dispatcher outcome (worker can't close 1.2): {'could not' in r.lower()}\n")
     file.write(f"detached after tool resume: {H12.worker_handle is None}\n")
+
+    session.role = model.Role_Major()
+
+
+@model_test("LemmaGenerality", "Test_LemmaGenerality.thy", 9)
+async def _test_lemma_generality(root: Root, file: MyIO):
+    """Unit-test the request_lemmas generality predicate
+    `_lemma_statement_is_general`: a lemma is GENERAL iff every free variable in
+    its conclusion + premises is declared in `for_any` and no schematic appears,
+    judged by parsing against the GLOBAL fill-slot state — so a prior global
+    `Define`'s constant resolves (FIX ②: slot state, not the empty `$init`).
+    Deterministic: no LLM, no prover dispatch."""
+    from .mcp_http_server import _lemma_statement_is_general
+    from .model import Define
+
+    async def check(label, statement, exp_general, exp_blocking):
+        st = root.global_env._resulting_state_of_all_children()
+        ok, blocking = await _lemma_statement_is_general(st, statement)
+        passed = (ok == exp_general and blocking == exp_blocking)
+        file.write(f"{label}: general={ok} blocking={blocking} "
+                   f"-> {'PASS' if passed else 'FAIL'}\n")
+
+    # 1. general — every free (conclusion + premise) declared in for_any.
+    await check("general(a/b<1, for_any a,b)",
+        {"english": "ratio bound", "conclusion": "a / b < 1",
+         "for_any": [{"name": "a"}, {"name": "b"}],
+         "premises": [{"name": "posb", "term": "(0::real) < b"}]},
+        True, [])
+
+    # 2. an undeclared free variable (`c` not in for_any).
+    await check("undeclared(a<c, for_any a)",
+        {"english": "lt", "conclusion": "a < c", "for_any": [{"name": "a"}]},
+        False, ["c"])
+
+    # 3. a top-level schematic variable ⟹ non-general (the parser rejects an
+    # unbound `?x`, so it is caught as a parse failure with no extractable names).
+    await check("schematic(?x<1)",
+        {"english": "schematic", "conclusion": "?x < (1::nat)"},
+        False, [])
+
+    # 4. A global `Define` introduces its name as a LOCAL FIXED VARIABLE inside the
+    # proof (not a theory constant), so it appears as a free in the slot state. A
+    # lemma that references such a problem-specific name WITHOUT declaring it in
+    # for_any is therefore non-general — exactly the over-generalisation guard we
+    # want. (The predicate parses against the GLOBAL fill-slot state, FIX ②, so it
+    # sees this `Define` at all — `global_env.ml_state` is the pre-children state.)
+    await root.fill("global.1", [Define.gen_single({
+        "thought": "a problem-specific local", "name": "myc", "type": "nat",
+        "equations": ["myc = 5"]})])
+    await check("define-ref(myc=5, no for_any)",
+        {"english": "uses a Define'd local", "conclusion": "myc = (5::nat)"},
+        False, ["myc"])
+    # Declaring that same name in for_any makes the lemma general again.
+    await check("define-ref(myc=5, for_any myc)",
+        {"english": "quantifies the name", "conclusion": "myc = (5::nat)",
+         "for_any": [{"name": "myc"}]},
+        True, [])
+
+
+@model_test("RequestLemmasAutoProve", "Test_RequestLemmasAutoProve.thy", 9)
+async def _test_request_lemmas_auto_prove(root: Root, file: MyIO):
+    """Stub-prover test of the request_lemmas GENERAL auto-prove orchestration.
+    The LLM prover is stubbed by monkeypatching `_run_worker_on`, so the dispatch
+    mechanism (build a global Have, dispatch a headless prover, keep-on-proved /
+    delete-on-fail, §G4 outcome lines, the resume-scope notice) is exercised
+    deterministically. Covers: (1) general lemma proved → kept + 'now available' +
+    scope notice; (2) general lemma failed → deleted + relayed reason; (3) a
+    HEADLESS requester's non-general lemma → §G3 reject (no dispatch)."""
+    from . import mcp_http_server as mcp
+    from .model import WorkerHandle, WorkerYield
+    session = root.session
+    session.age += 1
+
+    # Requester worker scoped to a Have target under the top goal.
+    goal_node = root.sub_nodes[1]
+    await goal_node.fill("1", [Have.gen_single({
+        "thought": "target",
+        "statement": {"english": "trivial", "conclusion": "True"},
+        "name": "h_target"})])
+    have_node = goal_node.sub_nodes[0]
+    handle = WorkerHandle(have_node, session)
+    session.role = model.Role_Worker(target=have_node, worker_handle=handle)
+    await session._prefetch_worker_premises()
+    session._seed_reported_scope_facts()
+
+    def global_has(name):
+        return any(getattr(n, "name", None) == name
+                   for n in root.global_env.sub_nodes)
+
+    orig = mcp._run_worker_on
+    try:
+        # --- 1. GENERAL lemma, stub PROVES it (closes the Have body) ---
+        print_header("1. general lemma proved → kept + now-available + notice", file)
+        async def stub_proves(s, node, sug, hl, *, headless=False):
+            file.write(f"  [stub] headless={headless} on {node.id}\n")
+            await s.root.fill(f"{node.id}.1", [Obvious.gen_single({"facts": []})])
+            return WorkerYield.PROVED()
+        mcp._run_worker_on = stub_proves
+        result, is_error = await mcp._request_lemmas_tool_logic(session, {
+            "detail": "need reflexivity",
+            "suggested_lemmas": [{
+                "name": "myrefl",
+                "statement": {"english": "reflexivity", "conclusion": "x = x",
+                              "for_any": [{"name": "x"}]}}]})
+        file.write(f"proved is_error: {is_error}\n")
+        file.write(f"proved kept global Have 'myrefl': {global_has('myrefl')}\n")
+        file.write(f"proved says now-available: "
+                   f"{'has been proved and is now available' in result}\n")
+        file.write(f"proved scope notice present: "
+                   f"{'New facts have arrived' in result}\n")
+
+        # --- 2. GENERAL lemma, stub FAILS → deleted + relayed reason ---
+        print_header("2. general lemma failed → deleted + relayed reason", file)
+        async def stub_fails(s, node, sug, hl, *, headless=False):
+            return WorkerYield.COULD_NOT_PROVE("the stub prover gave up")
+        mcp._run_worker_on = stub_fails
+        result, is_error = await mcp._request_lemmas_tool_logic(session, {
+            "detail": "need it",
+            "suggested_lemmas": [{
+                "name": "myfail",
+                "statement": {"english": "f", "conclusion": "y = y",
+                              "for_any": [{"name": "y"}]}}]})
+        file.write(f"failed is_error: {is_error}\n")
+        file.write(f"failed deleted global Have 'myfail': {not global_has('myfail')}\n")
+        file.write(f"failed says could-not-be-established: "
+                   f"{'could not be established' in result}\n")
+        file.write(f"failed relays prover reason: {'gave up' in result}\n")
+    finally:
+        mcp._run_worker_on = orig
+
+    # --- 3. HEADLESS requester + non-general lemma → §G3 reject (no dispatch) ---
+    print_header("3. headless requester, non-general lemma → reject", file)
+    session.role = model.Role_Worker(target=have_node, worker_handle=handle,
+                                     headless=True)
+    result, is_error = await mcp._request_lemmas_tool_logic(session, {
+        "detail": "bad",
+        "suggested_lemmas": [{
+            "name": "ng",
+            "statement": {"english": "n", "conclusion": "a < c",
+                          "for_any": [{"name": "a"}]}}]})
+    file.write(f"headless reject is_error: {is_error}\n")
+    file.write(f"headless reject names undeclared free 'c': "
+               f"{'free variable' in result and '`c`' in result}\n")
+    file.write(f"headless reject mentions for_any: {'for_any' in result}\n")
 
     session.role = model.Role_Major()
 
@@ -14856,7 +15003,7 @@ async def _test_CommentHave(root: Root, file: MyIO):
     file.write(f"assembled ops count after uncomment: {len(assembled2)}\n")
 
 
-@model_test("CommentUnfinishedGoal", "Test_CommentUnfinishedGoal.thy", 9)
+@model_test("CommentUnfinishedGoal", "Test_CommentUnfinishedGoal.thy", 8)
 async def _test_CommentUnfinishedGoal(root: Root, file: MyIO):
     """Regression for the putnam_1962_b3 worker:2 soundness defect: commenting
     out the tail steps that were holding a goal open must NOT make the proof
@@ -14954,6 +15101,89 @@ async def _test_DeleteCaseHole(root: Root, file: MyIO):
             "Deleting the unproven non-first case 1.2 (`P 0`) made the proof "
             "report as finished (is_proof_finished=True); the obligation was "
             "silently dropped — false 'all proven' (UNSAFE under-report).")
+
+
+@model_test("DeleteOneOfThreeCases", "Test_DeleteOneOfThreeCases.thy", 8)
+async def _test_DeleteOneOfThreeCases(root: Root, file: MyIO):
+    """Count-aware refinement (delete-1-of-3): deleting ONE case of a 3-way
+    split while the other TWO are PROVEN must STILL report unfinished — the
+    dropped case's obligation cannot vanish. Goal `0=0 ∧ 1=1 ∧ P 0` splits into
+    three cases (`split_conjs` flattens the conjunction); 1.1/1.2 are proven and
+    1.3 (`P 0`) is left open. After `delete(["1.3"])` two PROVEN cases remain.
+
+    A `len(sub_nodes) > 1` close predicate would wrongly treat the parent as
+    closed here (2 > 1) and report finished — the bug. The fix's count-aware
+    `_closes_my_parent` requires `live == _opened_count` (2 != 3), so the parent
+    re-opens and is flagged. Also guards against the rejected "regenerate"
+    alternative: the surviving proven cases must keep their proof bodies."""
+    def _ids(s: 'set[Node]') -> list[str]:
+        return sorted(the_session()._display_id(n.id) or "<goal>" for n in s)
+
+    root.session.age += 1
+    await root.fill("1", [SplitConjs.gen_single({"thought": "split the 3-way conjunction"})])
+    root.session.age += 1
+    await root.fill("1.1.1", [Obvious.gen_single({"facts": []})])  # prove case 1.1 (0 = 0)
+    root.session.age += 1
+    await root.fill("1.2.1", [Obvious.gen_single({"facts": []})])  # prove case 1.2 (1 = 1)
+    file.write(f"finished before delete (1.3 'P 0' open): {root.is_proof_finished()}\n")
+
+    # Delete the ONLY unproven case; the two PROVEN cases survive.
+    root.session.age += 1
+    await root.delete(["1.3"])
+    file.write(f"surviving cases: {_ids(set(root.locate_node('1').sub_nodes))}\n")
+    # Data-loss guard: surviving proven cases keep their proof bodies (the
+    # SubgoalMaker must NOT have been regenerated, which would empty them).
+    file.write(f"case 1.1 body preserved: {len(root.locate_node('1.1').sub_nodes) > 0}\n")
+    file.write(f"case 1.2 body preserved: {len(root.locate_node('1.2').sub_nodes) > 0}\n")
+    finished = root.is_proof_finished()
+    file.write(f"finished after deleting case 1.3 (2 proven remain): {finished}\n")
+
+    if finished:
+        raise TestFailed(
+            "Deleting one case of a 3-way split (other two PROVEN) reported the "
+            "proof finished — the dropped case's obligation vanished. Count-aware "
+            "_closes_my_parent (live == _opened_count) must catch this; a `>1` "
+            "predicate would not.")
+
+
+@model_test("CommentRoundTrip", "Test_CommentRoundTrip.thy", 8)
+async def _test_CommentRoundTrip(root: Root, file: MyIO):
+    """comment -> uncomment of a parent-closing SubgoalMaker must be IDEMPOTENT:
+    the unfinished set returns to its exact pre-comment value. The old `_closed_by`
+    band-aid left the parent over-flagged after uncomment (the reuse `pass`
+    branch never re-closed it); the derived `opening()` self-corrects because the
+    latch is re-derived on every refresh (incl. the reuse branch)."""
+    def _ids(s: 'set[Node]') -> list[str]:
+        return sorted(the_session()._display_id(n.id) or "<goal>" for n in s)
+
+    root.session.age += 1
+    await root.fill("1", [Witness.gen_single({
+        "thought": "instantiate the existential with 0", "witnesses": ["0"]})])
+    root.session.age += 1
+    await root.fill("2", [SplitConjs.gen_single({
+        "thought": "split P 0 ∧ Q 0 into two abstract leaves"})])
+
+    before = set(); root.unfinished_nodes(before)
+    file.write(f"unfinished before comment: {_ids(before)}\n")
+    file.write(f"finished before comment: {root.is_proof_finished()}\n")
+
+    # Comment the parent-closing SplitConjs.
+    root.session.age += 1
+    await root.comment(["2"])
+    mid = set(); root.unfinished_nodes(mid)
+    file.write(f"finished after comment closer: {root.is_proof_finished()}\n")
+    file.write(f"comment did not hide all goals: {len(mid) > 0}\n")
+
+    # Uncomment it: the parent must re-close and the unfinished set must return.
+    root.session.age += 1
+    await root.uncomment(["2"])
+    after = set(); root.unfinished_nodes(after)
+    file.write(f"round-trip idempotent: {_ids(after) == _ids(before)}\n")
+
+    if _ids(after) != _ids(before):
+        raise TestFailed(
+            "comment -> uncomment was not idempotent: "
+            f"before={_ids(before)} after={_ids(after)}")
 
 
 @model_test("CommentClosingStep", "Test_CommentClosingStep.thy", 8)

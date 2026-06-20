@@ -1717,6 +1717,11 @@ val read_thms = read_thms
 
 fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, bindings_opt)) =
       let val ctxt = Minilang.context_of s
+      (* NB: only the agent-authored `fact` is hint-scanned (via check_extended_fact).
+         `targets` are NOT scanned: they are goal/premise subterms the agent selects
+         BY INDEX (Interaction_SelectRewriteTargets → find_matching_subterms over the
+         goal), not authored terms — scanning them would falsely reject a legitimate
+         Simplify whenever a reject-hinted const already occurs in the goal. *)
       in SIMPLIFY (map (fn (fact, targets) => (check_extended_fact ctxt fact, targets)) facts_with_targets,
                    use_sys, prems, simp_goal, bindings_opt) end
   | check_command_i s (RULE (facts, insts)) =
