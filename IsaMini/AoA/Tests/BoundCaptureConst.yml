@@ -1,12 +1,9 @@
 --------------------------------------------------
-After Obvious using rejected fact refl (expect REJECT)
+Initial YAML (binder 'fact' disambiguated from constant 'fact')
 --------------------------------------------------
-committed: 0, failure: True
-failure: Cannot fill a node with id 1
-refl is registered as a rejected fact for this test; do not reference it.
 variables:
-  - x: int
+  - n: nat
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
-goal: (0 :: int) ≤ x * x
+goal: (∑fact1 = (0 :: nat)..n. real (fact1 + fact1)) = real (fact n)
 proof: empty
 Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.

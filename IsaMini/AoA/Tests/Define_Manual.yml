@@ -35,7 +35,7 @@ proof:
               - n: nat
         Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.2` to provide the proof for the following goal.
         pending proof goal:
-          (n, Suc (Suc n)) ∈ measure (λ(n :: nat). n)
+          (n, Suc (Suc n)) ∈ measure (λ(n1 :: nat). n1)
 Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
@@ -70,7 +70,7 @@ proof:
               - n: nat
         Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.2` to provide the proof for the following goal.
         pending proof goal:
-          (n, Suc (Suc n)) ∈ measure (λ(n :: nat). n)
+          (n, Suc (Suc n)) ∈ measure (λ(n1 :: nat). n1)
 Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))

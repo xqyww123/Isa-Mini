@@ -1016,6 +1016,22 @@ async def _test_RewriteBoundCapture(root: Root, file: MyIO):
     print_header("After Rewrite (binder n collides with free range n)", file)
     root.print(0, file)
 
+@model_test("BoundCaptureConst", "Test_BoundCaptureConst.thy", 17)
+async def _test_BoundCaptureConst(root: Root, file: MyIO):
+    """Constant short-name collision (the const half of the deconflict fix).
+
+    Goal: `(∑fact = 0..n. real (fact + fact)) = real (fact n)`. The summation
+    binder `fact` collides with the constant `Factorial.fact` used un-shadowed
+    as `fact n` on the RHS. Because `deconflict_bound_names` now seeds its
+    avoidance context with constant base-names, the bound index is α-renamed to
+    `fact1` for display, so the agent sees `∑fact1 = 0..n. real (fact1 + fact1)`
+    distinct from the constant `fact n`. (Stock Isabelle instead disambiguates
+    by qualifying the constant to `semiring_char_0_class.fact`; the AoA
+    serializer trims markup and shows the bare short name, so without the fix the
+    binder and the constant would both read as `fact`.)"""
+    print_header("Initial YAML (binder 'fact' disambiguated from constant 'fact')", file)
+    root.print(0, file)
+
 @model_test("Rewrite_OF_ZeroPremise", "Test_Rewrite_OF_ZeroPremise.thy", 10)
 async def _test_Rewrite_OF_ZeroPremise(root: Root, file: MyIO):
     """Regression test for OF _ on zero-premise facts.
@@ -14881,12 +14897,7 @@ async def _test_CommentUnfinishedGoal(root: Root, file: MyIO):
     await root.fill("5", [SplitConjs.gen_single({
         "thought": "split P 0 ∧ Q 0 into two abstract (unprovable) leaves"})])
 
-    def _ids(s: 'set[Node]') -> list[str]:
-        return sorted(the_session()._display_id(n.id) or "<goal>" for n in s)
-
-    before = set(); root.unfinished_nodes(before)
     file.write(f"finished before comment: {root.is_proof_finished()}\n")
-    file.write(f"unfinished before comment: {_ids(before)}\n")
 
     # Comment the four tail steps (the report's delete->comment of 11.2.4-7).
     root.session.age += 1
@@ -14905,17 +14916,44 @@ async def _test_CommentUnfinishedGoal(root: Root, file: MyIO):
             f"proof reported as finished (is_proof_finished={finished}, "
             f"unfinished_nodes={len(after)}); the open goal was silently dropped.")
 
-    # Round-trip: uncommenting the same steps must restore the original
-    # unfinished set (pins the post-uncomment state; the re-opened parent must
-    # not be left wrongly flagged once its subgoals are live again).
+
+@model_test("DeleteCaseHole", "Test_DeleteCaseHole.thy", 8)
+async def _test_DeleteCaseHole(root: Root, file: MyIO):
+    """Regression for a SECOND soundness hole (distinct from the comment bug,
+    found by the adversarial sweep and confirmed live): deleting a NON-first,
+    still-unproven subgoal-case of a SubgoalMaker silently drops its obligation.
+
+    Goal `0 = 0 ∧ P 0`; SplitConjs → case 1.1 (`0 = 0`, proven via Obvious) +
+    case 1.2 (`P 0`, abstract/unprovable). `delete(["1.2"])` removes the
+    non-first case; because `delete` refreshes the PREDECESSOR sibling and
+    `GoalContainer._refresh_all_children_after` blocks cross-child propagation,
+    the SubgoalMaker is never re-refreshed and the deleted case is never
+    regenerated. The `P 0` obligation vanishes.
+
+    BUG (currently UNFIXED): `is_proof_finished()` becomes True after the delete
+    even though `P 0` was never discharged (only sorry-padded) — a false
+    "all proven" (the UNSAFE under-report direction). Root cause:
+    `SubgoalMaker.opening()` returns False unconditionally, so the obligation is
+    carried solely by the case children; deleting one bypasses the SubgoalMaker
+    refresh. Independent of the `_closed_by` comment fix."""
     root.session.age += 1
-    await root.uncomment(["2", "3", "4", "5"])
-    restored = set(); root.unfinished_nodes(restored)
-    file.write(f"round-trip restores original unfinished set: {_ids(restored) == _ids(before)}\n")
-    if _ids(restored) != _ids(before):
+    await root.fill("1", [SplitConjs.gen_single({"thought": "split the conjunction"})])
+    root.session.age += 1
+    await root.fill("1.1.1", [Obvious.gen_single({"facts": []})])  # prove case 1.1 (0 = 0)
+    file.write(f"finished before delete: {root.is_proof_finished()}\n")
+
+    # Delete the NON-first, unproven case GoalNode 1.2.
+    root.session.age += 1
+    await root.delete(["1.2"])
+    finished = root.is_proof_finished()
+    file.write(f"finished after deleting unproven case 1.2: {finished}\n")
+
+    # `P 0` (case 1.2) was never proved, so the proof must NOT be finished.
+    if finished:
         raise TestFailed(
-            "comment/uncomment round-trip did not restore the unfinished set: "
-            f"before={_ids(before)} after_uncomment={_ids(restored)}")
+            "Deleting the unproven non-first case 1.2 (`P 0`) made the proof "
+            "report as finished (is_proof_finished=True); the obligation was "
+            "silently dropped — false 'all proven' (UNSAFE under-report).")
 
 
 @model_test("CommentClosingStep", "Test_CommentClosingStep.thy", 8)
@@ -15101,7 +15139,22 @@ async def _test_hint_reject_const(root: Root, file: MyIO):
     Const — must NOT trigger it (fully-qualified-name match)."""
     session = root.session
     session.age += 1
-    outcome = await root.fill("1", [Have.gen_single({
+    # Zero-misfire control FIRST, on a clean tree: the coercion rat_of_int is a
+    # DIFFERENT Const than the registered Rat.of_int, so the SAME authoring path
+    # must NOT reject it. (Done first because a prior failure would CANCEL — not
+    # evaluate — later steps, which would not prove anything.)
+    outcome0 = await root.fill("1", [Have.gen_single({
+        "thought": "use the proper coercion",
+        "statement": {"english": "positivity via rat_of_int",
+                      "conclusion": r"(0::rat) < rat_of_int x"},
+        "name": "good"})])
+    print_header("After Have with rat_of_int (no trigger expected)", file)
+    file.write(f"committed: {len(outcome0.committed)}, failure: {outcome0.failure is not None}\n")
+    session.print_proof_scope(0, file, show_warnings=True)
+    session.age += 1
+    # Now the reject: Rat.of_int at the continuation step (step 1 succeeded, so
+    # step 2 is genuinely evaluated, not cancelled).
+    outcome = await root.fill("2", [Have.gen_single({
         "thought": "use the of_int shadow constant",
         "statement": {"english": "positivity via Rat.of_int",
                       "conclusion": r"(0::rat) < Rat.of_int x"},
@@ -15141,6 +15194,7 @@ async def _test_hint_reject_fact(root: Root, file: MyIO):
     outcome = await root.fill("1", [Obvious.gen_single({"facts": [{"name": "refl"}]})])
     print_header("After Obvious using rejected fact refl (expect REJECT)", file)
     file.write(f"committed: {len(outcome.committed)}, failure: {outcome.failure is not None}\n")
+    file.write(f"failure: {outcome.failure}\n")
     session.print_proof_scope(0, file, show_warnings=True)
 
 

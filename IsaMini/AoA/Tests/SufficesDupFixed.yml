@@ -60,7 +60,7 @@ proof:
     proof: empty
     Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
     pending proof goal:
-      (∀a (b :: nat). (0 :: nat) < a ⟶ (0 :: nat) < b ⟶ a * b + (1 :: nat) dvd a² + b² ⟶ (∃(x :: nat). real (x²) = real (a² + b²) / real (a * b + (1 :: nat)))) ⟶ (∃(x :: nat). real (x²) = real (a² + b²) / real (a * b + (1 :: nat)))
+      (∀a1 (b1 :: nat). (0 :: nat) < a1 ⟶ (0 :: nat) < b1 ⟶ a1 * b1 + (1 :: nat) dvd a1² + b1² ⟶ (∃(x :: nat). real (x²) = real (a1² + b1²) / real (a1 * b1 + (1 :: nat)))) ⟶ (∃(x :: nat). real (x²) = real (a² + b²) / real (a * b + (1 :: nat)))
 Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
   premises:

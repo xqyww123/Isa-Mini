@@ -32,6 +32,9 @@ signature AGENT_HINT = sig
   (* Fire any registered hint on agent-referenced facts (keyed by the resolved
      thm's name hint). A no-op (no fact resolution) when no fact hints exist. *)
   val check_fact_refs : Proof.context -> (Facts.ref * Token.src list) list -> unit
+  (* Like check_fact_refs but for already-resolved thms (e.g. a CaseSplit /
+     Induction `rule`). *)
+  val check_thms : Proof.context -> thm list -> unit
 end
 
 structure Agent_Hint : AGENT_HINT = struct
@@ -52,9 +55,11 @@ structure Data = Generic_Data(
 fun add_const entry = Data.map (apfst (Symtab.update entry))
 fun add_fact entry = Data.map (apsnd (Symtab.update entry))
 
-(* Fire one registered hit. *)
+(* Fire one registered hit. A reject uses `OTHER` (not `TERMLANG`): the term
+   parsed fine and is then rejected on policy grounds, so the message must be
+   surfaced verbatim with no "Syntax Error in Term Language" framing. *)
 fun fire (_, (Reject, text)) =
-      raise Minilang.OPR_FAIL (Minilang.TERMLANG, text)
+      raise Minilang.OPR_FAIL (Minilang.OTHER, text)
   | fire (name, (Notice, text)) =
       Minilang.get_reporter () (Minilang.Internal (HINT_NOTICE {name = name, text = text}))
 
@@ -102,6 +107,11 @@ fun check_fact_refs ctxt refs =
          not change behaviour. A reject from `check_thm` (OPR_FAIL) propagates. *)
       List.app (fn r =>
         List.app (check_thm ftab) (Attrib.eval_thms ctxt [r] handle ERROR _ => [])) refs
+  end
+
+fun check_thms ctxt ths =
+  let val (_, ftab) = Data.get (Context.Proof ctxt) in
+    if Symtab.is_empty ftab then () else List.app (check_thm ftab) ths
   end
 
 (* Declaration attributes:

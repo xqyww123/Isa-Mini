@@ -6895,22 +6895,26 @@ def _validate_constraint_binding(data: Any, path: str) -> ConstraintBinding:
 
 class SuggestedLemma(TypedDict):
     """One item of the `request_lemmas` tool's `suggested_lemmas` wish-list
-    (a worker→planner channel)."""
+    (a worker→planner channel). `statement` reuses the `LongStatement` block
+    (`{english, conclusion, for_any?, premises?}`) shared with `Have`/`edit`, so
+    a worker can declare the lemma's universally-quantified variables (`for_any`)
+    and premises — exactly the structure the auto-prove-general path needs to
+    judge whether the lemma is general (every free variable declared in
+    `for_any`, no schematic variable)."""
     name: str
-    english: str
-    isabelle_statement: str
+    statement: LongStatement
 
 @validator(SuggestedLemma)
 def _validate_suggested_lemma(data: Any, path: str) -> SuggestedLemma:
-    # `_validate_typed_dict` checks dict-ness + required keys; then enforce that
-    # each field is genuinely a string (the framework's plain-`str` validation is
-    # a no-op). Enforce, never coerce: a non-string here is the LLM's mistake,
-    # and `str()`-coercing it would silently fabricate a bogus lemma.
+    # `_validate_typed_dict` checks dict-ness + required keys, and recurses into
+    # `statement` via the registered `LongStatement` validator (string-coercion,
+    # nested premise/for_any checks). Only `name` needs the explicit guard: the
+    # framework's plain-`str` validation is a no-op, and `str()`-coercing a
+    # non-string name would silently fabricate a bogus fact binding.
     data = _validate_typed_dict(SuggestedLemma, data, path)
-    for key in ("name", "english", "isabelle_statement"):
-        if not isinstance(data[key], str):
-            raise ArgumentError(
-                {}, f"{path}.{key}: expected a string, got {type(data[key]).__name__}")
+    if not isinstance(data["name"], str):
+        raise ArgumentError(
+            {}, f"{path}.name: expected a string, got {type(data['name']).__name__}")
     return data
 
 def print_statement(self: LongStatement, indent: int, file: MyIO):
@@ -10276,6 +10280,15 @@ class Role_Worker:
     # The live ``WorkerHandle`` mediating
     # this worker's events (``WorkerHandle`` is defined below in this module).
     worker_handle: 'WorkerHandle | None' = None
+    # True iff this worker was dispatched by the request_lemmas auto-prove-general
+    # path to prove an auto-declared global helper lemma, synchronously, on behalf
+    # of a NON-adjudicating requester (the requesting worker is not a planner — it
+    # cannot review a refutation or supply sub-lemmas). "Headless" = no supervising
+    # agent above it to resolve a non-terminal park, so such a prover must yield
+    # ONLY terminal outcomes: the struggle/difficulty checkpoint is disabled for it
+    # (`_should_struggle_checkpoint`) and its own `request_lemmas` is general-only
+    # (non-general items rejected, never parked). See `_run_worker_on`.
+    headless: bool = False
 
 @dataclass
 class Role_Interaction:
@@ -11333,6 +11346,12 @@ class Session:
         are excluded.  Drivers may override."""
         if not self.is_worker:
             return False
+        # A headless (auto-prove-general) prover must never park on a difficulty
+        # checkpoint: its requester is not an adjudicating planner, so a difficulty
+        # yield would surface on the requesting worker's channel with no one able to
+        # resolve it. Disabling the checkpoint keeps the prover's outcomes terminal-only.
+        if self.role.headless:  # type: ignore[union-attr]  — is_worker ⟹ Role_Worker
+            return False
         return (self._session_delete_count >= self._struggle_delete_threshold
                 and self._session_edit_count >= self._struggle_edit_threshold)
 
@@ -12177,8 +12196,10 @@ class WorkerRequestLemmas:
     """Worker asks the planning agent to author + prove helper lemmas, then
     resume. NON-terminal (the worker keeps working afterwards, like a rejected
     refutation). ``lemmas`` is the worker's *loose* wish-list
-    (``{name, english, isabelle_statement}`` items); the planner re-authors them
-    precisely. ``response_future`` is resolved with a feedback STRING by
+    (``{name, statement}`` items, ``statement`` a ``LongStatement``); the planner
+    re-authors them precisely. Only carries the NON-general items — general items
+    are auto-proved inline by the request_lemmas auto-prove path and never reach
+    the planner. ``response_future`` is resolved with a feedback STRING by
     ``WorkerHandle.resolve_resume``; the worker blocks on it inside the
     ``request_lemmas`` tool until then."""
     detail: str
@@ -12270,13 +12291,18 @@ class WorkerHandle:
         self._costs_accumulated: bool = False
 
     def start(self, suggestions: str = "",
-              useful_lemmas: list[str] | None = None) -> None:
+              useful_lemmas: list[str] | None = None,
+              *, headless: bool = False) -> None:
         ctx = contextvars.copy_context()
         loop = asyncio.get_running_loop()
+        # `headless` is captured into the coroutine args at task creation —
+        # BEFORE any worker code runs — so it threads to the prover's Role_Worker
+        # with no race (identical channel to suggestions/useful_lemmas).
         self._task = loop.create_task(
-            self._run(suggestions, useful_lemmas or []), context=ctx)
+            self._run(suggestions, useful_lemmas or [], headless), context=ctx)
 
-    async def _run(self, suggestions: str, useful_lemmas: list[str]) -> None:
+    async def _run(self, suggestions: str, useful_lemmas: list[str],
+                   headless: bool = False) -> None:
         _session_var.set(None)  # type: ignore
         session = self.session
         try:
@@ -12284,7 +12310,8 @@ class WorkerHandle:
                 session, role=Role_Worker(target=self.target,
                                           suggestions=suggestions,
                                           useful_lemmas=useful_lemmas,
-                                          worker_handle=self))
+                                          worker_handle=self,
+                                          headless=headless))
             sub._fork_name = f"{session._fork_name}.worker_{self.target.id}" # type: ignore
             self._sub = sub
             # The worker does NOT inherit the planner's view-dedup caches: that

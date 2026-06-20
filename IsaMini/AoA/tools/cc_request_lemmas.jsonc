@@ -3,14 +3,49 @@
   "properties": {
     "suggested_lemmas": {
       "type": "array",
+      "description": "Strongly recommend the most general form for each requested lemma (variables declared in for_any).",
       "items": {
         "type": "object",
         "properties": {
           "name": { "type": "string" },
-          "english": { "type": "string", "description": "Plain-English description of the lemma"},
-          "isabelle_statement": { "type": "string", "description": "Isabelle/HOL term with all literal numbers annotated with types" }
+          "statement": {
+            "type": "object",
+            "description": "The lemma statement.",
+            "properties": {
+              "english": { "type": "string", "description": "the statement in English" },
+              "for_any": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": { "type": "string" },
+                    "type": { "type": "string", "description": "An Isabelle type expression. Leave empty (\"\") if unsure" }
+                  },
+                  "required": ["name"],
+                  "additionalProperties": false
+                },
+                "description": "universally quantified variables to fix"
+              },
+              "premises": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": { "type": "string", "description": "binding name for the premise" },
+                    "term": { "type": "string", "description": "Isabelle/HOL term with all literal numbers annotated with types" }
+                  },
+                  "required": ["name", "term"]
+                },
+                "description": "named premises to assume"
+              },
+              "conclusion": { "type": "string", "description": "Isabelle/HOL term with all literal numbers annotated with types" }
+            },
+            "required": ["english", "conclusion"],
+            "additionalProperties": false
+          }
         },
-        "required": ["name", "english", "isabelle_statement"]
+        "required": ["name", "statement"]
       }
     },
     "detail": {

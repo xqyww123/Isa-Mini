@@ -43,7 +43,7 @@ from .model import (
     IsaTerm, ContinuingInteraction, ImmediateAnswer,
     AoA_Error, ArgumentError, IsabelleError, InternalError,
     CannotDelete_Root, NodeNotFound, ProofTreeTooDeep,
-    EvaluationStatus, WorkerHandle, EditVerdict, _is_strict_ancestor,
+    EvaluationStatus, WorkerHandle, WorkerYield, Have, EditVerdict, _is_strict_ancestor,
     Parse_Op_List, Interaction_BadAnswer,
     AnswerIndexes, AnswerIndex, AnswerIndexesOrName, AnswerIndexesOrSpec,
     AnswerInstantiate, AnswerRefutation, AnswerStruggleAssessment,
@@ -1249,6 +1249,63 @@ async def _report_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     return (msg, False)
 
 
+async def _lemma_statement_is_general(state, statement) -> 'tuple[bool, list[str]]':
+    """Judge whether a requested lemma (a ``LongStatement``) is GENERAL by term
+    structure: every free variable occurring in its ``conclusion`` and in each
+    ``premises[].term`` must be declared in ``for_any``, and no schematic variable
+    (``?x``) may appear anywhere. Returns ``(is_general, blocking_names)`` — the
+    second element lists the offending variable names (undeclared frees, plus any
+    schematic base names, deduped in first-seen order) used to build the rejection
+    message; empty when general or when the statement does not parse.
+
+    Each term is parsed against ``state`` — the proof state at the global fill slot
+    the lemma would occupy (``GlobalEnv._resulting_state_of_all_children()``), so a
+    constant from a PRIOR global ``Define`` resolves (not wrongly flagged) while a
+    worker-local fix does NOT mask an undeclared reference. A parse failure or an
+    uninitialised ``state`` ⟹ non-general (conservative: an unparseable/unanchored
+    lemma is never auto-proved; it falls through to the planner-park path)."""
+    from .model import InternalError_UnparsedTerm
+    if not state.initialized():
+        return (False, [])
+    declared = {v.get("name") for v in (statement.get("for_any") or [])}
+    terms = [statement["conclusion"]]
+    terms += [p["term"] for p in (statement.get("premises") or [])]
+    blocking: list[str] = []
+    for term in terms:
+        try:
+            _typ, frees, schematics = await state.check_term(term)
+        except InternalError_UnparsedTerm:
+            return (False, [])
+        # A schematic ?x.i is reported as "?x.i"; its base name `x` is what the
+        # agent would declare in for_any (and write as a fixed `x`).
+        for s in schematics:
+            base = s.unicode.lstrip("?").split(".", 1)[0]
+            if base and base not in blocking:
+                blocking.append(base)
+        for f in frees:
+            nm = f.unicode
+            if nm not in declared and nm not in blocking:
+                blocking.append(nm)
+    return (len(blocking) == 0, blocking)
+
+
+def _requested_lemma_failed_line(name: str, reason: str) -> str:
+    """§G4 failed-outcome line, relaying the prover's actual terminal reason."""
+    reason = (reason or "").strip()
+    if not reason:
+        return f"Requested lemma `{name}` could not be established."
+    if not reason.endswith((".", "!", "?")):
+        reason += "."
+    return f"Requested lemma `{name}` could not be established: {reason}"
+
+
+def _requested_lemma_undeclared_line(name: str, blocking: 'list[str]') -> str:
+    """§G3 line: a requested lemma's free variables are not declared in for_any."""
+    vlist = ", ".join(blocking)
+    return (f"Requested lemma `{name}` contains free variable(s) `{vlist}` that "
+            f"are not declared in `for_any`.")
+
+
 async def _request_lemmas_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     """Dual-role `request_lemmas`.
 
@@ -1281,8 +1338,8 @@ async def _request_lemmas_tool_logic(session: Session, args: dict) -> tuple[str,
             session.log_tool_response(_tn, f"ERROR: {msg}")
             return (msg, True)
         # Don't trust the MCP/SDK JSON-schema (some drivers don't enforce it):
-        # validate the wish-list shape in Python so the downstream renderer can
-        # trust each item is a dict with three string fields.
+        # validate the wish-list shape in Python (each item {name, statement},
+        # statement a LongStatement) before the generality check reads it.
         try:
             suggested_lemmas = validate(
                 list[SuggestedLemma], suggested_lemmas, "suggested_lemmas")
@@ -1290,29 +1347,143 @@ async def _request_lemmas_tool_logic(session: Session, args: dict) -> tuple[str,
             msg = str(e)
             session.log_tool_response(_tn, f"ERROR: {msg}")
             return (msg, True)
-        # Mirror the wish-list into missing_lemmas.yaml: a worker explicitly
-        # asking for lemmas is a free signal for the external import-expansion
-        # loop, independent of whether the planner can supply them.
+        # Mirror EVERY requested lemma (general + non-general) into
+        # missing_lemmas.yaml — a worker asking for a lemma is a free signal for the
+        # external import-expansion loop. Keep the FLAT {name, english,
+        # isabelle_statement} shape that loop's watcher reads
+        # (tools/missing_lemma_loop/watcher.py), deriving the two strings from the
+        # LongStatement; do NOT leak the nested shape into that file.
         session.log_missing_lemmas(
             "request_lemmas",
-            [dict(l, detail=detail) for l in suggested_lemmas])
-        fut: asyncio.Future = asyncio.get_running_loop().create_future()
-        handle._event_queue.put_nowait(
-            WorkerRequestLemmas(detail=detail, lemmas=suggested_lemmas,
-                                response_future=fut))
-        feedback = await fut
-        # New lemmas were added to the global env, i.e. into the facts in scope
-        # BEFORE this worker's target — which the worker premise cache assumed
-        # immutable. Re-prefetch so the worker's premises/scope view reflect
-        # them, then refresh proof.yaml (so a later `recall` does too). The
-        # feedback string also names the proven lemmas.
-        await session._prefetch_worker_premises()
-        session.refresh_YAML()
-        # Append a notice of any facts the planner added to this worker's scope
-        # while it was parked (appended at the end for LLM recency/salience).
+            [{"name": l["name"],
+              "english": l["statement"].get("english", ""),
+              "isabelle_statement": l["statement"].get("conclusion", ""),
+              "detail": detail}
+             for l in suggested_lemmas])
+
+        # Classify each lemma by generality against the GLOBAL fill-slot state
+        # (prior global declarations visible; worker-local fixes excluded).
+        global_env = session.root.global_env
+        slot_state = global_env._resulting_state_of_all_children()
+        general_items: list = []
+        nongeneral_items: list = []
+        blocking_by_name: dict[str, list[str]] = {}
+        for lem in suggested_lemmas:
+            ok, blocking = await _lemma_statement_is_general(
+                slot_state, lem["statement"])
+            if ok:
+                general_items.append(lem)
+            else:
+                nongeneral_items.append(lem)
+                blocking_by_name[lem["name"]] = blocking
+
+        # 建议2 — a headless prover's request_lemmas is GENERAL-ONLY: it has no
+        # planner to author non-general lemmas and must never park. Reject upfront
+        # (process nothing) so it resubmits with every free variable declared; the
+        # already-general items are then auto-proved cleanly on the retry, with no
+        # duplicate global Haves.
+        if session.role.headless and nongeneral_items:  # type: ignore[union-attr]
+            lines = [_requested_lemma_undeclared_line(lem["name"],
+                                                      blocking_by_name[lem["name"]])
+                     for lem in nongeneral_items if blocking_by_name.get(lem["name"])]
+            # Items non-general only because their term does not parse carry no
+            # variable names; relay that plainly so the message is never empty.
+            for nm in (lem["name"] for lem in nongeneral_items
+                       if not blocking_by_name.get(lem["name"])):
+                lines.append(f"Requested lemma `{nm}` could not be parsed as an "
+                             f"Isabelle term.")
+            msg = "\n".join(lines) + "\nYou must declare every free variable in `for_any`."
+            session.log_tool_response(_tn, f"ERROR: {msg}")
+            return (msg, True)
+
+        outcome_lines: list[str] = []
+        any_scope_change = False
+
+        # --- GENERAL path: auto-declare a global Have + prove it with a headless
+        # prover, synchronously. proved → keep; otherwise → delete + relay reason. ---
+        for lem in general_items:
+            nm = lem["name"]
+            stmt = lem["statement"]
+            slot = f"{global_env.id}.{len(global_env.sub_nodes) + 1}"
+            parsed = Have.gen_single({
+                "thought": detail or "requested helper lemma",
+                "statement": stmt,
+                "name": nm})
+            fill_outcome = await session.root.fill(slot, [parsed])
+            node = fill_outcome.committed[0] if fill_outcome.committed else None
+            if node is None or node.status.status == EvaluationStatus.Status.FAILURE:
+                # The statement itself is ill-formed / failed to open — no provable
+                # node. Clean up a committed-but-failed node and relay the reason.
+                reason = ""
+                if node is not None:
+                    r = node.status.reason
+                    reason = r.reason if r is not None else ""
+                    await session.root.delete([node.id])
+                elif fill_outcome.failure is not None:
+                    reason = getattr(fill_outcome.failure, "reason", "") or ""
+                outcome_lines.append(_requested_lemma_failed_line(nm, reason))
+                continue
+            assert isinstance(node, Have)  # just filled a Have at the global slot
+            # Defense-in-depth backstop: the Have's beginning op auto-FIXES any
+            # undeclared free into for_any, so extra fixes beyond the agent's
+            # `_input_for_any` mean the lemma was actually non-general (a predicate
+            # false positive). Drop it and report the offending frees (§G3).
+            if len(node.for_any) > len(node._input_for_any):
+                extra = [n.unicode for n, _ in node.for_any[len(node._input_for_any):]]
+                await session.root.delete([node.id])
+                outcome_lines.append(
+                    _requested_lemma_undeclared_line(nm, extra)
+                    + " You must declare every free variable in `for_any`.")
+                continue
+            # Synchronously dispatch the headless prover on the fresh global Have.
+            # The node is freshly created under GlobalEnv (disjoint from this
+            # worker's target subtree), so it holds no handle and blocks nobody.
+            assert node.worker_handle is None
+            outcome = await _run_worker_on(session, node, "", [], headless=True)
+            if outcome.kind == "proved" and node.is_proof_finished():
+                any_scope_change = True
+                outcome_lines.append(
+                    f"Requested lemma `{nm}` has been proved and is now available: "
+                    f"{stmt['conclusion']}.")
+            else:
+                # PROVED ⟺ no unfinished nodes, so proved-but-unfinished cannot
+                # happen; surrendered / could_not_prove / refute_accepted land here.
+                reason = outcome.detail or outcome.reason or ""
+                await session.root.delete([node.id])
+                outcome_lines.append(_requested_lemma_failed_line(nm, reason))
+
+        # --- NON-GENERAL path (normal worker only; headless rejected above): park
+        # for the planner to author + prove, exactly as before, but only the
+        # non-general subset. ---
+        planner_feedback = ""
+        if nongeneral_items:
+            fut: asyncio.Future = asyncio.get_running_loop().create_future()
+            handle._event_queue.put_nowait(
+                WorkerRequestLemmas(detail=detail, lemmas=nongeneral_items,
+                                    response_future=fut))
+            planner_feedback = await fut
+            any_scope_change = True
+
+        # New facts may now sit in scope BEFORE this worker's target (auto-proved
+        # general Haves and/or planner-authored lemmas) — the premise cache assumed
+        # that set immutable. Re-prefetch + refresh proof.yaml so the worker's view
+        # (and a later `recall`) reflect them.
+        if any_scope_change:
+            await session._prefetch_worker_premises()
+            session.refresh_YAML()
+
+        # Assemble ONE synchronous response: per-lemma outcomes, then the planner's
+        # guidance for any non-general subset, then a notice of the facts now newly
+        # in scope (appended at the end for LLM recency/salience).
+        parts = list(outcome_lines)
+        if planner_feedback:
+            parts.append(planner_feedback)
+        feedback = "\n".join(p for p in parts if p)
         notice = session.consume_new_scope_facts_notice()
         if notice:
-            feedback = feedback + "\n\n" + notice
+            feedback = (feedback + "\n\n" + notice) if feedback else notice
+        if not feedback:
+            feedback = "No lemmas were processed."
         session.log_tool_response(_tn, feedback)
         return (feedback, False)
 
@@ -1331,6 +1502,22 @@ async def _request_lemmas_tool_logic(session: Session, args: dict) -> tuple[str,
                f"`{target_step}`.")
     session.log_tool_response(_tn, msg)
     return (msg, False)
+
+
+async def _run_worker_on(session: Session, node: NonLeaf_Node,
+                         suggestions: str, helpful_lemmas: list,
+                         *, headless: bool = False) -> 'WorkerYield':
+    """Fresh-dispatch core: attach a fresh ``WorkerHandle`` to ``node``, start the
+    worker, and drive it to its first yield. Shared by the ``subagent`` tool
+    (``headless=False``) and the request_lemmas auto-prove-general path
+    (``headless=True``). The CALLER owns every pre-check (blocker / orphan / depth)
+    and the outcome ``match`` — this helper spans only the create→start→yield core.
+    Cost settlement is NOT here: it fires in ``WorkerHandle._run``'s finally /
+    ``aclose`` (idempotent), so every caller inherits exactly-once settlement."""
+    handle = WorkerHandle(node, session)
+    node.worker_handle = handle
+    handle.start(suggestions, helpful_lemmas, headless=headless)
+    return await handle.run_until_yield()
 
 
 def _subagent_resume_feedback(suggestions: str, helpful_lemmas: list) -> str:
@@ -1485,10 +1672,7 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
             return _err(f"You are too deeply nested to delegate further (limit: "
                         f"{session.SUBAGENT_NESTING_DEPTH} levels of sub-agents). Prove this goal "
                         f"yourself, or simplify the plan.")
-        handle = WorkerHandle(node, session)
-        node.worker_handle = handle
-        handle.start(suggestions, helpful_lemmas)
-        outcome = await handle.run_until_yield()
+        outcome = await _run_worker_on(session, node, suggestions, helpful_lemmas)
 
     # The worker authored `outcome.detail` with absolute ids (it absolutized them
     # on emission); re-relativize for THIS dispatcher's view (identity for a
@@ -1506,13 +1690,14 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
                    f"Reconsider the proof plan for this step.")
         case "refute_accepted":
             msg = f"The sub-agent argues the goal is unprovable:\n{detail_shown}"
-        case "lemmas":  # worker parked requesting helper lemmas
+        case "lemmas":  # worker parked requesting helper lemmas (non-general subset)
             buf = StringIO()
             for lem in (outcome.lemmas or []):
-                stmt = (lem.get("isabelle_statement") or "").replace("\n", " ")
-                buf.write(f"- {lem.get('name', '')}: {stmt}\n")
+                lstmt = lem.get("statement") or {}
+                concl = (lstmt.get("conclusion") or "").replace("\n", " ")
+                buf.write(f"- {lem.get('name', '')}: {concl}\n")
                 print_indent(2, buf)
-                buf.write(f"{lem.get('english', '')}\n")
+                buf.write(f"{lstmt.get('english', '')}\n")
             formulas = buf.getvalue()
             msg = (f"The sub-agent requests helper lemmas to continue:\n"
                    f"{formulas}\n"

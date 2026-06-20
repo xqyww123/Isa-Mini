@@ -421,6 +421,10 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
               error (REPL.trim_makrup msg)
             | Minilang.OPR_FAIL (Minilang.TERMLANG, msg) =>
               error (String.concat ["Syntax Error in Term Language.\n", REPL.trim_makrup msg])
+            | Minilang.OPR_FAIL (Minilang.OTHER, msg) =>
+              (* verbatim message: used e.g. by the Agent Hint Registry reject —
+                 the term parsed fine, so no "Syntax Error" framing. *)
+              error (REPL.trim_makrup msg)
             | MiniLang_Agent.FACT_IN_TIME_FAIL prop =>
               error (String.concat [
                 "The following indicated fact is non-trivial, you must prove it manually:\n",
@@ -1456,6 +1460,7 @@ fun AoA_REPL_App (cin, cout, toplevel) =
                         catch E as Minilang.OPR_FAIL (typ, msg) =>
                             let val typs = case typ of Minilang.INVALID_OPR => "INVALID_OPR : "
                                                      | Minilang.PROOF_FAIL  => "PROOF FAIL : "
+                                                     | _ => ""
                              in REPL_Server.output_err cout (typs ^ msg)
                               ; BinIO.StreamIO.flushOut cout
                               ; raise E

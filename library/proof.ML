@@ -25,7 +25,7 @@ val leading_goal_data : state -> (items * term) option * int
 val map_context : (Proof.context -> Proof.context) -> state -> state
 val schematic_vars_of_goal : bool -> state -> (indexname * typ) list * (indexname * sort) list
 
-datatype fail_reason = INVALID_OPR | PROOF_FAIL | TERMLANG
+datatype fail_reason = INVALID_OPR | PROOF_FAIL | TERMLANG | OTHER
 exception OPR_FAIL of fail_reason * string
 
 type with_clause = (bool (*with or without*) * string (*name*) * thm) list
@@ -505,7 +505,7 @@ fun get_local_facts (((_, SK), _, _): state) : local_facts =
 
 exception BROKEN_INVARIANT
 
-datatype fail_reason = INVALID_OPR | PROOF_FAIL | TERMLANG
+datatype fail_reason = INVALID_OPR | PROOF_FAIL | TERMLANG | OTHER
 exception OPR_FAIL of fail_reason * string
 
 (* Helpers *)

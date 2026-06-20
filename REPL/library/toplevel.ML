@@ -177,6 +177,7 @@ fun REPL cout cin msgs init_state =
           | Minilang.OPR_FAIL (typ, msg) =>
               let val typs = case typ of Minilang.INVALID_OPR => "INVALID_OPR : "
                                        | Minilang.PROOF_FAIL  => "PROOF FAIL : "
+                                       | _ => ""
                in REPL_Server.output_err cout (typs ^ msg)
                 ; BinIO.StreamIO.flushOut cout
               end

@@ -396,6 +396,23 @@ fun check_authored_props ctxt fix_names strs =
     in List.app (Agent_Hint.check_term ctxt') ts end
   else ()
 
+(* Like check_authored_props but for authored TERM strings (not propositions) —
+   e.g. post-rule instantiation values. Uses read_terms (no Trueprop wrapping)
+   and is likewise best-effort: swallow any parse failure, re-raise only
+   Interrupt, and let a hint reject (OPR_FAIL, outside the capture) propagate. *)
+fun check_authored_terms ctxt fix_names strs =
+  if Agent_Hint.has_const_hints ctxt andalso not (null strs)
+  then
+    let
+      val (_, ctxt') =
+        Proof_Context.add_fixes (map (fn n => (Binding.name n, NONE, NoSyn)) fix_names) ctxt
+      val ts =
+        (case Exn.capture (fn () => read_terms ctxt' strs) () of
+           Exn.Res ts => ts
+         | Exn.Exn e => if Exn.is_interrupt e then Exn.reraise e else [])
+    in List.app (Agent_Hint.check_term ctxt') ts end
+  else ()
+
 (* Extract types of leading existential quantifiers from a goal *)
 fun extract_leading_ex_types goal =
   let
@@ -1124,7 +1141,9 @@ fun apply_post_insts rounds state =
         case Inner_Syntax_Error.marker_strings Syntax.read_term ctxt (map snd insts) of
           SOME m => SOME m
         | NONE => Inner_Syntax_Error.marker_strings Syntax.read_typ ctxt (map snd tinsts)
-    in Inner_Syntax_Error.guard reprobe (fn () => Minilang.INST_GOAL_VARS (tinsts, insts) st)
+    in Inner_Syntax_Error.guard reprobe (fn () =>
+         ( check_authored_terms ctxt [] (map snd insts)
+         ; Minilang.INST_GOAL_VARS (tinsts, insts) st))
     end)
   rounds state
 
@@ -1578,6 +1597,10 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
           val cond_strs = map snd conditions
           val (redex_term :: residue_term :: cond_terms_raw) =
                 read_terms fixes_ctxt (redex :: residue :: cond_strs)
+          (* Agent Hint Registry: redex/residue/conditions are agent-authored and
+             already parsed here with for_any fixed, so scan them directly. *)
+          val _ = List.app (Agent_Hint.check_term fixes_ctxt)
+                    (redex_term :: residue_term :: cond_terms_raw)
 
           (* Wrap boolean conditions in Trueprop; leave prop-typed ones as-is *)
           val cond_terms = map (fn t =>
@@ -1735,6 +1758,7 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
   | check_command_i s (CASE_SPLIT (target, vars, rule, no_simp, insts)) =
       let val ctxt = Minilang.context_of s
           val rule' = Option.map (chk_single ctxt rule o read_thms ctxt) rule
+          val _ = Agent_Hint.check_thms ctxt (the_list rule')
           val target' = read_term ctxt target
           val _ = Agent_Hint.check_term ctxt target'
        in CASE_SPLIT (target', vars, rule', no_simp, insts) (*insts: parsed at interpret time*)
@@ -1744,6 +1768,7 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
           val (target' :: arbitrary') = read_terms ctxt (target :: arbitrary)
           val _ = List.app (Agent_Hint.check_term ctxt) (target' :: arbitrary')
           val rule' = Option.map (chk_single ctxt rule o read_thms ctxt) rule
+          val _ = Agent_Hint.check_thms ctxt (the_list rule')
           (* Parse each facts_to_generalize name string into a
            * Facts.ref (via the standard Parse.thm path). Supports
            * `h`, `h(i)`, `h(i-j)`, `h[attr]`. Defensive "local."
