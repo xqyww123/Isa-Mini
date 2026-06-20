@@ -33,6 +33,9 @@ proof:
         Error: Not yet evaluated
         proof: empty
         Error: Evaluation cancelled due to failures above
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  (0 :: int) ≤ x * x
 Branch sub_nodes count: 2
   1.0: status=failure
   1.1: status=failure
@@ -65,3 +68,6 @@ proof:
         Error: Not yet evaluated
         proof: empty
         Error: Evaluation cancelled due to failures above
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  (0 :: int) ≤ x * x

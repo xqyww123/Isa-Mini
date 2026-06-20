@@ -15077,12 +15077,15 @@ async def _test_DeleteCaseHole(root: Root, file: MyIO):
     the SubgoalMaker is never re-refreshed and the deleted case is never
     regenerated. The `P 0` obligation vanishes.
 
-    BUG (currently UNFIXED): `is_proof_finished()` becomes True after the delete
-    even though `P 0` was never discharged (only sorry-padded) — a false
-    "all proven" (the UNSAFE under-report direction). Root cause:
-    `SubgoalMaker.opening()` returns False unconditionally, so the obligation is
-    carried solely by the case children; deleting one bypasses the SubgoalMaker
-    refresh. Independent of the `_closed_by` comment fix."""
+    PRE-FIX BUG (now fixed by derived `opening()`): `is_proof_finished()` became
+    True after the delete even though `P 0` was never discharged (only
+    sorry-padded) — a false "all proven" (UNSAFE under-report). Old root cause:
+    a SubgoalMaker carried its obligation solely via its case children, and
+    deleting one bypassed the SubgoalMaker refresh while the parent stayed
+    closed. The fix makes `opening()` derive from the live tail via
+    `_closes_my_parent` (count-aware: `live == _opened_count`), so a deleted case
+    re-opens the parent. This case (delete 1 of 2) is the minimal trigger;
+    `DeleteOneOfThreeCases` covers the count-aware delete-1-of-3 variant."""
     root.session.age += 1
     await root.fill("1", [SplitConjs.gen_single({"thought": "split the conjunction"})])
     root.session.age += 1
