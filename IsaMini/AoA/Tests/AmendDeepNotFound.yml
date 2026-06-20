@@ -24,9 +24,9 @@ is_error: False
 [2] fill Obvious at 1.1 — closes step 1
 --------------------------------------------------
 Filled step 1.1.
-All proof goals of step 1 are completed.
+All proof goals of step 1 are now completed.
 Outline:
-  step 1: Have sq (done)
+  step 1: Have sq (proven)
   Unfinished Proof. Fill step `2`
 is_error: False
 --------------------------------------------------
@@ -92,7 +92,7 @@ committed: 1 node(s)
 --------------------------------------------------
 Filled step 1.
 Outline:
-  done
+  proven
 Congratulations! All goals are proven.
 is_error: False
 --------------------------------------------------

@@ -4,18 +4,18 @@ edit_message (completes everything)
 Filled step 1.
 Outline:
   global declarations:
-    step global.1: Have g_eq (done)
+    step global.1: Have g_eq (proven)
   proof:
-    done
+    proven
 Congratulations! All goals are proven.
 ---------------
 --------------------------------------------------
 Quickview after reset_changed (BUG REPRODUCTION)
 --------------------------------------------------
 global declarations:
-  step global.1: Have g_eq (done)
+  step global.1: Have g_eq (proven)
 proof:
-  done
+  proven
 
 Quickview text contains 'g_eq': True
 Quickview text contains 'global.1': True

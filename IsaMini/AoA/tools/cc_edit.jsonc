@@ -125,7 +125,7 @@
     },
     "Obvious": {
       "additionalProperties": false,
-      "description": "the goal holds trivially. Caution: this operation barely unfolds definitions unless you supply them in `facts`. This operation is SLOW!",
+      "description": "the goal holds trivially. Caution: this operation barely unfolds definitions unless you supply them in `facts`.",
       "properties": {
         "operation": {
           "const": "Obvious",
@@ -150,7 +150,7 @@
     },
     "Have": {
       "additionalProperties": false,
-      "description": "prove a lemma",
+      "description": "introduce an intermediate statement. This is your main building block: a pen-and-paper proof is essentially a chain of statements, each one obvious from those before it.",
       "properties": {
         "operation": {
           "const": "Have",
@@ -158,12 +158,12 @@
         },
         "thought": { "$ref": "#/$defs/Thought" },
         "statement": { "$ref": "#/$defs/LongStatement" },
-        "name": { "type": "string", "description": "binding of the lemma" },
+        "name": { "type": "string", "description": "binding name for the resulting fact" },
         "proof": { "$ref": "#/$defs/Proof" },
         "auto_apply": {
           "type": "boolean",
           "default": false,
-          "description": "register the proven lemma to the system simplifier and reasoners, to benefit subsequent proofs"
+          "description": "register the proven fact to the system simplifier and reasoners, to benefit subsequent proofs"
         }
       },
       "required": [
@@ -249,7 +249,7 @@
     },
     "Branch": {
       "additionalProperties": false,
-      "description": "split the proof goal into cases",
+      "description": "split the proof goal into cases that you specify; the cases must be exhaustive",
       "properties": {
         "operation": {
           "const": "Branch",
@@ -399,7 +399,7 @@
     },
     "InferenceRule": {
       "additionalProperties": false,
-      "description": "instruct an inference rule, e.g., proving equality by antisymmetry.",
+      "description": "apply an inference rule to the current goal by backward reasoning, reducing the proof goal into subgoals (example: reducing `a = b` to the subgoals `a ≤ b` and `b ≤ a` by `antisym`).",
       "properties": {
         "operation": {
           "const": "InferenceRule",
@@ -540,7 +540,7 @@
     },
     "Intro": {
       "additionalProperties": false,
-      "description": "introduce universal quantification and premises from the proof goal",
+      "description": "fix the leading universally-quantified variables and assume the leading premises of the goal",
       "properties": {
         "operation": {
           "const": "Intro",
@@ -682,7 +682,7 @@
     },
     "Compute": {
       "additionalProperties": false,
-      "description": "evaluate a ground term, resulting an equational fact `term = result`",
+      "description": "evaluate a ground term, yielding an equational fact `term = result`",
       "properties": {
         "operation": {
           "const": "Compute",

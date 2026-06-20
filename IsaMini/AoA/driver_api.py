@@ -25,7 +25,7 @@ import httpx
 import openai
 
 from .model import *
-from .language_model_driver import LMDriver, _TransientError, _QuotaError, _T, PRICING, pricing_for, Usage
+from .language_model_driver import LMDriver, _TransientError, _QuotaError, _T, PRICING, pricing_for, _parse_effort_suffix, Usage
 
 from .mcp_http_server import ToolExecutor, _cc_edit_schema_flat, _cc_edit_schema_raw
 from .helper import MyIO
@@ -333,8 +333,14 @@ class OpenAIBase(Provider):
                  strict_tools: bool = False,
                  cot_retention: str | None = None,
                  timeout: httpx.Timeout | None = None,
-                 max_stream_time: float = 1800):
+                 max_stream_time: float = 1800,
+                 use_stream: bool = True):
         self._model = model
+        # Whether ``chat`` streams the completion. Default on (low first-token
+        # latency + stall detection). A subclass sets this False when its backend
+        # mis-handles streaming — e.g. the K2 vLLM deployment emits no tool-call
+        # deltas while streaming, so tools silently never fire (see K2ThinkProvider).
+        self._use_stream = use_stream
         self._client = openai.AsyncOpenAI(
             api_key=api_key or os.environ.get("OPENAI_API_KEY"),
             base_url=base_url,
@@ -400,6 +406,15 @@ class OpenAIBase(Provider):
         return self._strict_tools
 
 
+class _WhitespaceRunaway(Exception):
+    """Raised internally when a streamed response degenerates into an unbounded
+    run of whitespace-only delta events — a known gpt-5.5 failure mode: the model
+    starts a tool call / message, then emits endless spaces/tabs/newlines and
+    never closes it (no ``response.completed``). Carries the whitespace-run
+    length; caught in the ``chat()`` stream loop, which aborts the stream and
+    retries (re-rolling the sample)."""
+
+
 class OpenAIChatProvider(OpenAIBase):
     """Chat completions protocol (/v1/chat/completions)."""
 
@@ -445,6 +460,42 @@ class OpenAIChatProvider(OpenAIBase):
         for i in strip:
             out[i] = {k: v for k, v in out[i].items() if k != "reasoning_content"}
 
+    async def _consume_stream(self, stream: Any, text_parts: list[str],
+                              rc_parts: list[str],
+                              tc_map: dict[int, dict[str, str]]) -> Any:
+        """Drain a streaming completion into the given accumulators; return the
+        final usage chunk. Raises ``TimeoutError`` if no chunk arrives within
+        ``_max_stream_time`` (caller maps it to a transient stall error)."""
+        stream_usage: Any = None
+        async with asyncio.timeout(self._max_stream_time):
+            async for chunk in stream:
+                if chunk.usage:
+                    stream_usage = chunk.usage
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                # DeepSeek-style plaintext CoT: a non-standard field the OpenAI
+                # SDK surfaces via model_extra / attribute. Capture it so it can
+                # be round-tripped (required on V4 thinking-mode tool calls).
+                rc = getattr(delta, "reasoning_content", None)
+                if rc:
+                    rc_parts.append(rc)
+                if delta.content:
+                    text_parts.append(delta.content)
+                if delta.tool_calls:
+                    for tcd in delta.tool_calls:
+                        idx = tcd.index
+                        if idx not in tc_map:
+                            tc_map[idx] = {"id": "", "name": "", "arguments": ""}
+                        if tcd.id:
+                            tc_map[idx]["id"] = tcd.id
+                        if tcd.function:
+                            if tcd.function.name:
+                                tc_map[idx]["name"] = tcd.function.name
+                            if tcd.function.arguments:
+                                tc_map[idx]["arguments"] += tcd.function.arguments
+        return stream_usage
+
     async def chat(self, messages: list[Msg], tools: list[dict],
                    *, previous_response_id: str | None = None,
                    allowed_tools: list[str] | None = None) -> ProviderResponse:
@@ -474,14 +525,43 @@ class OpenAIChatProvider(OpenAIBase):
             params.setdefault("extra_body", {})
             params["extra_body"].update(self._extra_params)
 
+        text_parts: list[str] = []
+        rc_parts: list[str] = []
+        tc_map: dict[int, dict[str, str]] = {}
+        stream_usage: Any = None
+
         try:
-            stream = await self._client.chat.completions.create(
-                **params, stream=True,
-                stream_options={"include_usage": True})
+            if self._use_stream:
+                stream = await self._client.chat.completions.create(
+                    **params, stream=True,
+                    stream_options={"include_usage": True})
+                stream_usage = await self._consume_stream(
+                    stream, text_parts, rc_parts, tc_map)
+            else:
+                # Non-streaming: the server assembles the whole completion (incl.
+                # tool_calls) and returns it in one shot. Used where the backend's
+                # streaming tool-call parsing is broken (K2 vLLM).
+                resp = await self._client.chat.completions.create(**params)
+                stream_usage = resp.usage
+                msg = resp.choices[0].message
+                if msg.content:
+                    text_parts.append(msg.content)
+                rc = getattr(msg, "reasoning_content", None)
+                if rc:
+                    rc_parts.append(rc)
+                for idx, tcd in enumerate(msg.tool_calls or []):
+                    tc_map[idx] = {
+                        "id": tcd.id or "",
+                        "name": tcd.function.name or "",
+                        "arguments": tcd.function.arguments or "",
+                    }
         except openai.RateLimitError as e:
             if "insufficient_quota" in str(e):
                 raise _QuotaError(str(e)) from e
             raise _TransientError(str(e)) from e
+        except TimeoutError:
+            raise _TransientError(
+                f"stream stalled: not completed within {self._max_stream_time}s")
         except openai.APIError as e:
             # Retry only where a retry can plausibly change the outcome: 5xx
             # (server-side), plus 408 (request timeout) and 409 (conflict); 429
@@ -493,47 +573,6 @@ class OpenAIChatProvider(OpenAIBase):
             # transient via the fall-through.
             if isinstance(e, openai.APIStatusError) and \
                     e.status_code < 500 and e.status_code not in (408, 409):
-                raise
-            raise _TransientError(str(e)) from e
-
-        text_parts: list[str] = []
-        rc_parts: list[str] = []
-        tc_map: dict[int, dict[str, str]] = {}
-        stream_usage: Any = None
-
-        try:
-            async with asyncio.timeout(self._max_stream_time):
-                async for chunk in stream:
-                    if chunk.usage:
-                        stream_usage = chunk.usage
-                    if not chunk.choices:
-                        continue
-                    delta = chunk.choices[0].delta
-                    # DeepSeek-style plaintext CoT: a non-standard field the OpenAI
-                    # SDK surfaces via model_extra / attribute. Capture it so it can
-                    # be round-tripped (required on V4 thinking-mode tool calls).
-                    rc = getattr(delta, "reasoning_content", None)
-                    if rc:
-                        rc_parts.append(rc)
-                    if delta.content:
-                        text_parts.append(delta.content)
-                    if delta.tool_calls:
-                        for tcd in delta.tool_calls:
-                            idx = tcd.index
-                            if idx not in tc_map:
-                                tc_map[idx] = {"id": "", "name": "", "arguments": ""}
-                            if tcd.id:
-                                tc_map[idx]["id"] = tcd.id
-                            if tcd.function:
-                                if tcd.function.name:
-                                    tc_map[idx]["name"] = tcd.function.name
-                                if tcd.function.arguments:
-                                    tc_map[idx]["arguments"] += tcd.function.arguments
-        except TimeoutError:
-            raise _TransientError(
-                f"stream stalled: not completed within {self._max_stream_time}s")
-        except openai.APIError as e:
-            if isinstance(e, openai.APIStatusError) and e.status_code < 500 and not isinstance(e, openai.RateLimitError):
                 raise
             raise _TransientError(str(e)) from e
         except httpx.TransportError as e:
@@ -679,6 +718,10 @@ class OpenAIResponsesProvider(OpenAIBase):
         _BACKGROUND_THRESHOLD = 900
         _MAX_CHAT_TIME = 3600
         _MAX_STREAM_TIME = self._max_stream_time
+        # Consecutive whitespace-only output chars that mark a runaway. Legit
+        # JSON/YAML tool args interleave whitespace with content every few dozen
+        # chars; thousands of pure-whitespace chars in a row never happen.
+        _MAX_WS_RUN = 4096
         _chat_t0 = time()
         attempt = 0
         while True:
@@ -717,10 +760,21 @@ class OpenAIResponsesProvider(OpenAIBase):
 
             try:
                 async with asyncio.timeout(_MAX_STREAM_TIME):
+                    ws_run = 0  # consecutive whitespace-only output chars
                     async for event in stream:
                         if event.type == "response.completed":
                             response = event.response
                             break
+                        elif event.type in (
+                                "response.function_call_arguments.delta",
+                                "response.output_text.delta"):
+                            d = getattr(event, "delta", "") or ""
+                            if d.strip():
+                                ws_run = 0
+                            else:
+                                ws_run += len(d)
+                                if ws_run > _MAX_WS_RUN:
+                                    raise _WhitespaceRunaway(ws_run)
                     else:
                         attempt += 1
                         wait = min(2 ** attempt, _BACKOFF_CAP)
@@ -728,6 +782,14 @@ class OpenAIResponsesProvider(OpenAIBase):
                                   f"(attempt {attempt}, retry in {wait:.0f}s)")
                         await asyncio.sleep(wait)
                         continue
+            except _WhitespaceRunaway as e:
+                attempt += 1
+                wait = min(2 ** attempt, _BACKOFF_CAP)
+                self._log(f"whitespace runaway: {e.args[0]} consecutive whitespace "
+                          f"chars in model output with no content; aborting and "
+                          f"retrying (attempt {attempt}, retry in {wait:.0f}s)")
+                await asyncio.sleep(wait)
+                continue
             except TimeoutError:
                 attempt += 1
                 wait = min(2 ** attempt, _BACKOFF_CAP)
@@ -894,7 +956,24 @@ class K2ThinkProvider(OpenAIProvider):
             default_context_window=context_window,
             temperature=0.2,
             extra_params={"think_budget_tokens": 32_768},
+            # The K2 vLLM deployment emits no tool-call deltas while streaming
+            # (finish_reason=stop, empty tool_calls) — tools silently never fire.
+            # Non-streaming returns the fully-assembled tool_calls correctly.
+            use_stream=False,
         )
+
+    def _msgs_to_dicts(self, messages: list[Msg]) -> list[dict]:
+        # The K2 vLLM server rejects (HTTP 400) any assistant message in the
+        # history that lacks a thinking field, even on turns the model emitted
+        # no CoT (e.g. a bare tool call) or that ``_apply_cot_retention`` stripped.
+        # It only checks for the field's *presence*, so backfill an empty
+        # ``reasoning_content`` placeholder. Replace (never mutate) so a stored
+        # ``native`` dict is left intact.
+        out = super()._msgs_to_dicts(messages)
+        for i, d in enumerate(out):
+            if d.get("role") == "assistant" and "reasoning_content" not in d:
+                out[i] = {**d, "reasoning_content": ""}
+        return out
 
     async def chat(self, messages: list[Msg], tools: list[dict],
                    *, previous_response_id: str | None = None,
@@ -1440,21 +1519,6 @@ class APIDriver(LMDriver):
 # ============================================================================
 # Concrete Driver Registrations
 # ============================================================================
-
-def _parse_effort_suffix(argument: str | None, default_model: str,
-                         default_effort: str = "medium",
-                         ) -> tuple[str, str]:
-    """Parse ``"model-effort"`` into ``(model, effort)``.
-
-    Recognised suffixes: ``-low``, ``-medium``, ``-high``, ``-xhigh``, ``-max``.
-    *default_effort* is returned when no suffix is present.
-    """
-    raw = argument or default_model
-    for suffix in ("-xhigh", "-medium", "-high", "-low", "-max"):
-        if raw.endswith(suffix):
-            return raw[: -len(suffix)], suffix[1:]
-    return raw, default_effort
-
 
 @agent_driver("ChatGPT")
 class APIDriver_ChatGPT(APIDriver):

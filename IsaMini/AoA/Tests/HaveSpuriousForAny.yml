@@ -2,21 +2,21 @@
 Initial YAML
 --------------------------------------------------
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
-goal: (∀x ∈{(1 :: nat)..(10 :: nat)}. (1 :: nat) < x + (1 :: nat)) ∧ True
+goal: (∀x ∈{(1 :: nat) ..(10 :: nat)}. (1 :: nat) < x + (1 :: nat)) ∧ True
 proof: empty
 Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After SplitConjs with Intro+Have
 --------------------------------------------------
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
-goal: (∀x ∈{(1 :: nat)..(10 :: nat)}. (1 :: nat) < x + (1 :: nat)) ∧ True
+goal: (∀x ∈{(1 :: nat) ..(10 :: nat)}. (1 :: nat) < x + (1 :: nat)) ∧ True
 proof:
   - step id: 1
     thought: split the conjunction
     operation: SplitConjs
     goals:
       - goal id: 1.1
-        goal: ∀x ∈{(1 :: nat)..(10 :: nat)}. (1 :: nat) < x + (1 :: nat)
+        goal: ∀x ∈{(1 :: nat) ..(10 :: nat)}. (1 :: nat) < x + (1 :: nat)
         proof:
           - step id: 1.1.1
             thought: introduce x and the membership
@@ -24,7 +24,7 @@ proof:
             fixing variables:
               - x: nat
             assuming premises:
-              - premise0: x ∈ {(1 :: nat)..(10 :: nat)}
+              - premise0: x ∈ {(1 :: nat) ..(10 :: nat)}
           - step id: 1.1.2
             thought: derive x+1>1 from membership
             operation: Have
@@ -54,14 +54,14 @@ OK: for_any is empty as expected
 After sequential Have fill
 --------------------------------------------------
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
-goal: (∀x ∈{(1 :: nat)..(10 :: nat)}. (1 :: nat) < x + (1 :: nat)) ∧ True
+goal: (∀x ∈{(1 :: nat) ..(10 :: nat)}. (1 :: nat) < x + (1 :: nat)) ∧ True
 proof:
   - step id: 1
     thought: split the conjunction
     operation: SplitConjs
     goals:
       - goal id: 1.1
-        goal: ∀x ∈{(1 :: nat)..(10 :: nat)}. (1 :: nat) < x + (1 :: nat)
+        goal: ∀x ∈{(1 :: nat) ..(10 :: nat)}. (1 :: nat) < x + (1 :: nat)
         proof:
           - step id: 1.1.1
             thought: introduce x and the membership
@@ -69,7 +69,7 @@ proof:
             fixing variables:
               - x: nat
             assuming premises:
-              - premise0: x ∈ {(1 :: nat)..(10 :: nat)}
+              - premise0: x ∈ {(1 :: nat) ..(10 :: nat)}
           - step id: 1.1.2
             thought: derive x+1>1 from membership (re-fill)
             operation: Have

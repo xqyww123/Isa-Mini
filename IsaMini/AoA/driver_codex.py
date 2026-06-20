@@ -6,23 +6,29 @@ import glob
 import json
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
-from datetime import datetime
-from io import StringIO
 from time import time
 
 import platformdirs
 
 from .model import *
-from .language_model_driver import LMDriver, _TransientError, _QuotaError, PRICING, pricing_for, Usage
+from .language_model_driver import LMDriver, _TransientError, _QuotaError, PRICING, pricing_for, _parse_effort_suffix, Usage
 
 from .mcp_http_server import ProofMCPHTTPServer
 
 
 @agent_driver("Codex")
 class Codex_Driver(LMDriver):
-    DEFAULT_MODEL = "gpt-5.3-codex"
+    # The full ``model-effort`` string (the codebase convention, e.g. parsed by
+    # `_parse_effort_suffix`). The effort suffix is split off and passed to Codex
+    # via `-c model_reasoning_effort=<effort>`; the bare model goes to `-m` and
+    # drives pricing (so it must be a key in `PRICING`).
+    DEFAULT_MODEL = "gpt-5.5-high"
+    DEFAULT_EFFORT = "high"
+    # Max attempts for an interaction fork to call its answer tool before giving up.
+    _FORK_ANSWER_MAX_ATTEMPTS = 4
 
 
     working_dir: str
@@ -32,10 +38,14 @@ class Codex_Driver(LMDriver):
     def __init__(self, *args, parent: 'Codex_Driver | None' = None,
                  model: str | None = None, argument: str | None = None, **kwargs):
         super().__init__(*args, parent=parent, **kwargs)
-        if parent is not None:
-            self._model = model or parent._model
+        if parent is not None and model is None:
+            # Forks inherit the parent's already-parsed model + effort.
+            self._model = parent._model
+            self._reasoning_effort = parent._reasoning_effort
         else:
-            self._model = model or argument or self.DEFAULT_MODEL
+            self._model, self._reasoning_effort = _parse_effort_suffix(
+                model or argument or self.DEFAULT_MODEL,
+                self.DEFAULT_MODEL, default_effort=self.DEFAULT_EFFORT)
         if parent is not None:
             self.working_dir = parent.working_dir
             self.YAML_path = parent.YAML_path
@@ -44,6 +54,7 @@ class Codex_Driver(LMDriver):
             self._fork_lock = parent._fork_lock
             self._codex_session_id = parent._codex_session_id
             self._codex_session_jsonl = parent._codex_session_jsonl
+            self._codex_home_dir = parent._codex_home_dir
             parent._fork_counter += 1
             self._fork_name = f"{parent._fork_name}.fork_{parent._fork_counter}"
         else:
@@ -57,17 +68,28 @@ class Codex_Driver(LMDriver):
             self._fork_name = "main"
             self._codex_session_id: str | None = None
             self._codex_session_jsonl: str | None = None
+            # Per-proof isolated CODEX_HOME (shared by this proof's forks/workers),
+            # kept separate from the agent's cwd (working_dir) so the copied
+            # credential does not sit in a directory the agent can read.
+            self._codex_home_dir = tempfile.mkdtemp(prefix="agent_AoA_codex_home_")
+            src_auth = os.path.join(Codex_Driver._codex_home(), "auth.json")
+            if not os.path.exists(src_auth):
+                raise InternalError(
+                    f"Codex credential not found at {src_auth}; run `codex login` first.")
+            shutil.copy2(src_auth, os.path.join(self._codex_home_dir, "auth.json"))
 
         self._model_time_start: float | None = None
         self._session_id: str | None = None
         self._mcp_url: str | None = None
+        self._model_instructions_path: str | None = None
         self._fork_counter = 0
         self._exec_process: asyncio.subprocess.Process | None = None
 
     def __str__(self) -> str:
-        if self._model == self.DEFAULT_MODEL:
+        label = f"{self._model}-{self._reasoning_effort}"
+        if label == self.DEFAULT_MODEL:
             return self._driver_name
-        return f"{self._driver_name}({self._model})"
+        return f"{self._driver_name}({label})"
 
     @classmethod
     def _make_fork(cls, parent: 'LMDriver', role=None) -> 'Codex_Driver':
@@ -83,9 +105,6 @@ class Codex_Driver(LMDriver):
         if not isinstance(parent, Codex_Driver):
             raise InternalError("Codex_Driver._make_fork got non-Codex parent")
         return cls(parent=parent, role=role)
-
-    def system_prompt(self) -> str | None:
-        return None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -106,13 +125,27 @@ class Codex_Driver(LMDriver):
         # worker — so a single call covers both. Interaction forks are neither
         # and intentionally write no YAML.
         if self.is_major or self.is_worker:
+            self._write_model_instructions()
             self.refresh_YAML()
 
     def _write_codex_config(self):
-        config_dir = os.path.join(self.working_dir, ".codex")
-        os.makedirs(config_dir, exist_ok=True)
-        with open(os.path.join(config_dir, "config.toml"), "w") as f:
+        # config.toml must be at the TOP level of CODEX_HOME to be read.
+        with open(os.path.join(self._codex_home_dir, "config.toml"), "w") as f:
             f.write(f'[mcp_servers.proof]\nurl = {json.dumps(self._mcp_url)}\n')
+
+    def _write_model_instructions(self):
+        # Replace Codex's built-in base prompt with the role-aware AoA system
+        # prompt, passed via `-c model_instructions_file=`. The native shell is
+        # disabled (no file reads), so steer the agent to the `recall` tool.
+        text = (self.system_prompt() or "") + (
+            "\n\nYou cannot read files from disk. Ignore any instruction to read "
+            f"or open `proof.yaml`; obtain the current proof state ONLY by calling "
+            f"the `{self.tool_name(TOOL_READ)}` tool.\n")
+        path = os.path.join(
+            self._codex_home_dir, f"model_instructions_{self._session_id}.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        self._model_instructions_path = path
 
     def _init_git_repo(self):
         subprocess.run(
@@ -136,24 +169,30 @@ class Codex_Driver(LMDriver):
         if self._http_server is not None and self._session_id is not None:
             await self._http_server.unregister_session(self._session_id)
             self._session_id = None
-        if self.is_major and hasattr(self, 'working_dir') and os.path.exists(self.working_dir):
-            try:
-                shutil.rmtree(self.working_dir)
-                self.debug_info(f"[CLEANUP] Removed temporary directory: {self.working_dir}")
-            except Exception as e:
-                self.debug_info(f"[CLEANUP] Failed to remove temporary directory {self.working_dir}: {e}")
-        if self.is_major and self._codex_session_jsonl and os.path.exists(self._codex_session_jsonl):
-            try:
-                os.unlink(self._codex_session_jsonl)
-            except OSError:
-                pass
+        if self.is_major:
+            # Only the major owns these; forks/workers share them. The rollout
+            # jsonl lives under _codex_home_dir, so it goes with the rmtree.
+            for d in (getattr(self, 'working_dir', None),
+                      getattr(self, '_codex_home_dir', None)):
+                if d and os.path.exists(d):
+                    try:
+                        shutil.rmtree(d)
+                        self.debug_info(f"[CLEANUP] Removed temporary directory: {d}")
+                    except Exception as e:
+                        self.debug_info(f"[CLEANUP] Failed to remove temporary directory {d}: {e}")
 
     def _on_start_run(self):
         self.log_AoA_opr(f"Working directory: {self.working_dir}, Log directory: {self.log_dir}")
 
     async def interrupt(self):
-        if self._exec_process is not None:
-            self._exec_process.terminate()
+        proc = self._exec_process
+        if proc is not None:
+            # Kill the whole process group (set up via start_new_session) so
+            # codex AND its child processes are reaped, not just the leader.
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            except ProcessLookupError:
+                pass
 
     def refresh_YAML(self):
         with open(self.YAML_path, 'w', encoding="utf-8") as f:
@@ -174,18 +213,17 @@ class Codex_Driver(LMDriver):
         return platformdirs.user_config_dir("codex", appauthor=False)
 
     def _find_session_jsonl(self, session_id: str) -> str:
-        sessions_dir = os.path.join(self._codex_home(), "sessions")
-        now = datetime.now()
-        date_dir = os.path.join(
-            sessions_dir, str(now.year), f"{now.month:02d}", f"{now.day:02d}")
-        matches = glob.glob(os.path.join(date_dir, f"*{session_id}.jsonl"))
-        if not matches:
-            matches = glob.glob(
-                os.path.join(sessions_dir, "**", f"*{session_id}.jsonl"),
-                recursive=True)
+        # Search this proof's own CODEX_HOME (set per-invocation via the
+        # subprocess env). A thread_id maps to exactly one rollout file on
+        # 0.139.0 (verified: no rotation, resume appends); the mtime tiebreak
+        # is a defensive guard. `.fork_bak` backups don't match `*.jsonl`.
+        matches = glob.glob(
+            os.path.join(self._codex_home_dir, "sessions", "**",
+                         f"*{session_id}.jsonl"),
+            recursive=True)
         if not matches:
             raise InternalError(f"Codex session JSONL not found for {session_id}")
-        return matches[0]
+        return max(matches, key=os.path.getmtime)
 
     async def _run_agent_loop(self):
         await self._with_retry(self._codex_loop)
@@ -263,12 +301,22 @@ class Codex_Driver(LMDriver):
         url = mcp_url or self._mcp_url
         if url is None:
             raise InternalError("Codex MCP URL is not initialized")
-        return [
+        args = [
             "--json",
             "--dangerously-bypass-approvals-and-sandbox",
             "-m", self._model,
             "-c", f"mcp_servers.proof.url={json.dumps(url)}",
+            "-c", f"model_reasoning_effort={json.dumps(self._reasoning_effort)}",
+            # Remove the native shell so the agent cannot run arbitrary commands;
+            # it operates only through the MCP proof tools. (apply_patch cannot be
+            # disabled on 0.139.0 — a known residual under bypass.)
+            "-c", "features.unified_exec=false",
+            "-c", "features.shell_tool=false",
         ]
+        if self._model_instructions_path is not None:
+            args += ["-c",
+                     f"model_instructions_file={json.dumps(self._model_instructions_path)}"]
+        return args
 
     def _build_exec_cmd(self, prompt: str) -> list[str]:
         return [
@@ -310,9 +358,11 @@ class Codex_Driver(LMDriver):
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=self.working_dir,
+                env={**os.environ, "CODEX_HOME": self._codex_home_dir},
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 limit=16 * 1024 * 1024,
+                start_new_session=True,
             )
         except FileNotFoundError as e:
             raise InternalError("Codex CLI executable `codex` was not found") from e
@@ -380,6 +430,14 @@ class Codex_Driver(LMDriver):
             returncode = await proc.wait()
             await stderr_task
         finally:
+            # On cancellation (e.g. Isabelle interrupt) proc.wait() never
+            # returned: kill the whole process group so codex and its children
+            # are reaped rather than orphaned (and keep burning the API).
+            if proc.returncode is None:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
             self._exec_process = None
             if not stderr_task.done():
                 stderr_task.cancel()
@@ -482,33 +540,46 @@ class Codex_Driver(LMDriver):
     ) -> None:
         jsonl = self._codex_session_jsonl
         assert jsonl is not None and os.path.exists(jsonl)
+        assert self._codex_session_id is not None
+        assert fork.fork_pending is not None
         bak = jsonl + ".fork_bak"
 
         shutil.copy2(jsonl, bak)
         try:
-            assert self._codex_session_id is not None
-            cmd = self._build_resume_cmd(
-                self._codex_session_id, fork_prompt, mcp_url=fork_url)
+            prompt = fork_prompt
+            for attempt in range(self._FORK_ANSWER_MAX_ATTEMPTS):
+                if attempt > 0:
+                    # Rewind to the parent baseline so each nudge resumes from
+                    # the same clean point, then re-snapshot for the next rewind.
+                    shutil.copy2(bak, jsonl)
+                    shutil.copy2(jsonl, bak)
+                cmd = self._build_resume_cmd(
+                    self._codex_session_id, prompt, mcp_url=fork_url)
 
-            fork._model_time_start = time()
-            events = await fork._run_codex_exec(cmd)
-            if fork._model_time_start is not None:
-                fork.total_model_time += time() - fork._model_time_start
-                fork._model_time_start = None
+                fork._model_time_start = time()
+                events = await fork._run_codex_exec(cmd)
+                if fork._model_time_start is not None:
+                    fork.total_model_time += time() - fork._model_time_start
+                    fork._model_time_start = None
 
-            fork._record_codex_usage(events.get("usage", {}))
+                # Record usage for EVERY resume (including nudges): each emits
+                # its own cumulative per-turn usage; missing one drops a whole
+                # turn's tokens from accounting.
+                fork._record_codex_usage(events.get("usage", {}))
 
-            assert fork.fork_pending is not None
-            if not fork.fork_pending.answer.done():
-                fork.log_interaction("fork", f"{tag} retrying: answer not received")
-                shutil.copy2(bak, jsonl)
-                shutil.copy2(jsonl, bak)
-                retry_cmd = self._build_resume_cmd(
-                    self._codex_session_id,
-                    "You haven't submitted your answer. "
-                    f"Call the `{self.tool_name(fork.fork_pending.interaction.answer_tool_name)}` tool to submit it.",
-                    mcp_url=fork_url)
-                await fork._run_codex_exec(retry_cmd)
+                if fork.fork_pending.answer.done():
+                    return
+                fork.log_interaction(
+                    "fork",
+                    f"{tag} answer not received "
+                    f"(attempt {attempt + 1}/{self._FORK_ANSWER_MAX_ATTEMPTS})")
+                prompt = (
+                    "You haven't submitted your answer. Call the "
+                    f"`{self.tool_name(fork.fork_pending.interaction.answer_tool_name)}` "
+                    "tool to submit it.")
+            raise InternalError(
+                f"{tag} fork did not submit an answer after "
+                f"{self._FORK_ANSWER_MAX_ATTEMPTS} attempts")
         finally:
             shutil.copy2(bak, jsonl)
             try:

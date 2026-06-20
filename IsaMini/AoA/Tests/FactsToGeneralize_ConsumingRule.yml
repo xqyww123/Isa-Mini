@@ -76,7 +76,7 @@ proof:
         proof: empty
 
 Observed interaction: rule=int_le_induct
-  schematic_vars: [['?k', 'int']]
-  consume_premises: ['i \\<le> ?k']
+  schematic_vars: [('?k', 'int')]
+  consume_premises: ['i ≤ ?k']
 
 All case-hyp names across induct subtree: ['h', 'h', 'Prem1.prem0', 'Prem1.prem1']

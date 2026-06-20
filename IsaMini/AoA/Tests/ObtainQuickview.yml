@@ -1,8 +1,8 @@
 --------------------------------------------------
 Quickview (first render — should show obtained vars/constraints)
 --------------------------------------------------
-done
+proven
 --------------------------------------------------
 Quickview (second render — dedup, should NOT repeat)
 --------------------------------------------------
-done
+proven

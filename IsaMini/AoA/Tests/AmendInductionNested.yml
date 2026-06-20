@@ -24,23 +24,20 @@ proof:
     name: helper
     proof:
       - step id: 1.1
-        thought: intro
-        operation: Intro
-      - step id: 1.2
         thought: induction on n
         operation: Induction
         target term: n
         cases:
-          - goal id: 1.2.0
+          - goal id: 1.1.0
             goal: ∑ {..(0 :: nat)} = (0 :: nat) * ((0 :: nat) + (1 :: nat)) div (2 :: nat)
             proof: empty
-            Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.0.1` to provide the proof.
-          - goal id: 1.2.Suc
+            Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.0.1` to provide the proof.
+          - goal id: 1.1.Suc
             variables:
               - n: nat
             premises:
               - Suc.IH: ∑ {..n} = n * (n + (1 :: nat)) div (2 :: nat)
             goal: (n + n * n) div (2 :: nat) + n = (n + (n + (n + n * n))) div (2 :: nat)
             proof: empty
-            Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.Suc.1` to provide the proof.
+            Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.Suc.1` to provide the proof.
 Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.

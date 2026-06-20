@@ -7,11 +7,11 @@ AoA is the AI-agent framework that drives Isabelle proofs through the Minilang p
 **ML side:** `../../Agent/` (`agent_server.ML`, `Minilang_Agent.thy`) and `../../library/proof.ML`
 **Note:** The live agent code is this directory — NOT the stray top-level `../../IsaMini_AoA/` (which holds only a leftover `driver_codex.py`). For the broader Minilang project layout see the `isa-mini` skill.
 
-Always also load the `isabelle-ML` skill before touching any `.ML` file (per project memory).
+Always also load the `isabelle-ml` skill before touching any `.ML` file.
 
 ---
 
-## ⚠️ #1 GOTCHA: a node's `status` is NOT its subtree's proof status
+## #1 GOTCHA: a node's `status` is NOT its subtree's proof status
 
 The most common mistake. `node.status.status` reports only the node's **own operation**; "is the subtree proved?" is a **separate** question with a separate test.
 
@@ -119,16 +119,15 @@ async def _test_Have1(root: Root, file: MyIO):
 
 ### Run & interpret
 - `python ../../test_AoA.py -f NAME` (`-x EXCL`, `--sh-timeout N`, `--repl-addr`). `-f`/`-x` are **substring** matches on the test name (`-f` accepts `,` or `|` as OR separators; `-x` is comma-separated). **Always redirect** (`> /tmp/aoa.txt 2>&1`) — output is huge — and run one at a time, foreground only.
-- **The REPL can auto-load a small unbuilt library such as `Minilang_Agent` on the fly — don't fuss over whether a `Minilang_Agent` heap has been built.**
 - Status classification in `run_all_tests`: `success` / `stuck` / `false_statement` / `resource_exhausted` → **pass**; anything else → **fail**.
 - **`remote_error` ALWAYS means a golden-YAML diff mismatch** — a `TestFailed` from `ModelTestCase.run` surfacing across the RPC bridge as `Remote_Calling_Failure`, NOT an RPC fault. The real diff is on disk: `Tests/<name>.diff` and `<name>.actual.yml` (both auto-cleaned at the start of the next run of that case).
 
-### Hard rules (from project memory / repo CLAUDE.md)
+### Hard rules (from project memory / repo AGENTS.md)
 - **NEVER modify, regenerate, overwrite, or delete a golden YAML (`Tests/*.yml`) without explicit user approval — no exceptions.** This holds even when you are certain the new output is correct: the test passing again is not authorization. Surface the `.diff`, explain why the golden should change, and wait for the user to approve before touching any `Tests/*.yml`.
 - **NEVER share a `.thy` file** between two `@model_test`s — each needs its own.
 - `../../test_AoA.py` output is **huge** → always redirect to a file (`> /tmp/aoa_test.txt 2>&1`).
 - **Never run `../../test_AoA.py` in parallel or in the background** — one at a time, foreground only.
-- **Shared working dir:** never `git stash` / `checkout` / `reset --hard` / `add` — other agents run concurrently.
+- **Shared working dir:** never `git stash` / `checkout` / `reset --hard`; stage only explicit paths when the user asks for a commit.
 - **Never send raw data to the REPL on 6666** — to check liveness use `ss -tlnp | grep 6666` or `lsof`.
 - **User-facing text** (prompts/warnings/errors): never author wording autonomously — propose scaffolding and let the user pick (memory).
 
@@ -136,7 +135,7 @@ async def _test_Have1(root: Root, file: MyIO):
 
 ## Development checklist
 1. "Is this (sub)tree proved?" → **always** `is_proof_finished()` / `unfinished_nodes()` empty. A node's `status` is only its *own* op's status (leaf op, or a block's *beginning* op), never its subtree's — don't use it to judge completion (the §1 gotcha).
-2. Editing `.ML`? Load `isabelle-ML` first.
+2. Editing `.ML`? Load `isabelle-ml` first.
 3. Agent-facing text uses `IsaTerm.unicode` / `MiniLang_Agent.string_of_*`; RPC uses `.ascii`. Never `str()` an `IsaTerm`.
 4. New rendering/behavior changes golden YAMLs → run the affected test, review the `.diff`, and **get explicit user approval before updating any golden** (never update them on your own — see Hard rules).
 5. Forks/workers must launch in a fresh contextvars context (`_make_fork` raises if `_session_var` is set).

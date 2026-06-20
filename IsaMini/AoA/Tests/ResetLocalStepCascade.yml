@@ -32,6 +32,7 @@ proof:
       - goal id: 1.Cons
         variables:
           - a: 'a
+          - l: 'a list
         premises:
           - Cons.IH: rev (rev l) = l
         goal: True

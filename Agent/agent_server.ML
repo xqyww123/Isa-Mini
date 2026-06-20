@@ -239,6 +239,9 @@ fun minilang_message_packer ctxt =
              | Minilang.SH_PRF (prf, time) =>
                  packPair (packInt, packPair (packString, packInt))
                           (15, (prf, Time.toMilliseconds time))
+             | Agent_Hint.HINT_NOTICE {name, text} =>
+                 packPair (packInt, packPair (packString, packString))
+                          (17, (name, text))
              | _ => error "BUG #adli: unexpected Internal message")
    in packList pack o filter (fn Minilang.Internal (MiniLang_Agent.INTRO_BINDINGS _) => true
                                  | Minilang.Internal MiniLang_Agent.SIMPLIFY_FALLBACK_NOSYS => true
@@ -253,6 +256,7 @@ fun minilang_message_packer ctxt =
                                  | Minilang.Internal MiniLang_Agent.SETUP_REWRITING_MAY_LOOP => true
                                  | Minilang.Internal (MiniLang_Agent.COMPUTE_RESULT _) => true
                                  | Minilang.Internal (Minilang.SH_PRF _) => true
+                                 | Minilang.Internal (Agent_Hint.HINT_NOTICE _) => true
                                  | Minilang.Internal _ => false
                                  | _ => true)
   end

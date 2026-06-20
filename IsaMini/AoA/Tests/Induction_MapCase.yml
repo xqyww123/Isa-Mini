@@ -17,7 +17,7 @@ The induction operation produced a case `Nil` (as follows) that does not match a
 Is any of your supplied proof intended for this case?
   0. new-nil_case
   1. new-cons_case
-Answer with the index if so, or with null to leave this case without a proof for now.
+Call `answer_index` with the `index` if so, or with null to leave this case without a proof for now.
 --------------------------------------------------
 Interaction Prompt for actual case `Cons`
 --------------------------------------------------
@@ -29,7 +29,7 @@ The induction operation produced a case `Cons` (as follows) that does not match 
   goal: True
 Is any of your supplied proof intended for this case?
   0. new-cons_case
-Answer with the index if so, or with null to leave this case without a proof for now.
+Call `answer_index` with the `index` if so, or with null to leave this case without a proof for now.
 --------------------------------------------------
 After Induction with mapped case_names
 --------------------------------------------------
@@ -53,6 +53,7 @@ proof:
       - goal id: 1.Cons
         variables:
           - a: 'a
+          - l: 'a list
         premises:
           - Cons.IH: rev (rev l) = l
         goal: True

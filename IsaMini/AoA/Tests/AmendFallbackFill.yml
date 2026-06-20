@@ -13,8 +13,9 @@ Unfinished Proof! Call command `edit` with action `fill` and target step `1` to 
 [1] fill [Have(sq)] — creates step 1
 --------------------------------------------------
 Filled step 1.
+All proof goals of step 1 are now completed.
 Outline:
-  step 1: Have sq (done)
+  step 1: Have sq (proven)
   Unfinished Proof. Call command `edit` with action `fill` and target step `2`
   goal: (0 :: int) ≤ x * x
 is_error: False
@@ -34,7 +35,7 @@ Unfinished Proof! Call command `edit` with action `fill` and target step `1` to 
 --------------------------------------------------
 Filled step 1.
 Outline:
-  done
+  proven
 Congratulations! All goals are proven.
 is_error: False
 --------------------------------------------------

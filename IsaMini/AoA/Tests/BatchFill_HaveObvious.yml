@@ -12,7 +12,7 @@ edit_message: batch fill [Have(proof:[Obvious]), Obvious]
 --------------------------------------------------
 Filled step 1-2.
 Outline:
-  done
+  proven
 Congratulations! All goals are proven.
 ---------------
 is_error: False

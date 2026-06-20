@@ -2061,8 +2061,9 @@ fun INIT_SYNTAX ctxt = ctxt
       (Const (\<^const_name>\<open>less_eq\<close>, dummyT), Mixfix (Input.string "(_/ \<le> _)", [50, 51], 50, Position.no_range)),
       (Const (\<^const_name>\<open>less\<close>,    dummyT), Mixfix (Input.string "(_/ < _)",     [50, 51], 50, Position.no_range))
     ]
-  |> Context.proof_map (
-        Syntax_Phases.term_check ~200  "a < b < c" (K (map term_check)))
+  (* DISABLED: the "a < b < c" chained-relation term_check phase. *)
+  (* |> Context.proof_map (
+        Syntax_Phases.term_check ~200  "a < b < c" (K (map term_check))) *)
 
 end
 

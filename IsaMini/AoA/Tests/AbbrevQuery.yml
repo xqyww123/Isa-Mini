@@ -12,10 +12,6 @@
 === abbreviation_defs on non-abbreviation ===
   Groups.plus_class.plus: None
 === semantic_knn abbreviation propagation ===
-  even_Suc_div_two: abbrevs=['Parity.semiring_parity_class.even']
-  even_two_times_div_two: abbrevs=['Parity.semiring_parity_class.even']
-  double_not_eq_Suc_double: abbrevs=['HOL.not_equal']
-  even_succ_div_two: abbrevs=['Parity.semiring_parity_class.even']
 === zero-parameter abbreviation ===
   my_true: abbrevs=['Test_AbbrevQuery.my_true']
   where `my_true` abbreviates `True`

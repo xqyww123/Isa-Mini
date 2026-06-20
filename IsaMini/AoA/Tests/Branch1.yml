@@ -82,7 +82,7 @@ proof:
 Overview after 1.0.1
 --------------------------------------------------
 step 1: Branch
-  - 1.0 (done)
+  - 1.0 (proven)
   - 1.1
     premises:
       - pos: (0 :: int) < x
@@ -139,8 +139,8 @@ proof:
 Overview after 1.1.1
 --------------------------------------------------
 step 1: Branch
-  - 1.0 (done)
-  - 1.1 (done)
+  - 1.0 (proven)
+  - 1.1 (proven)
   - 1.2
     Unfinished Proof. Fill step `1.2.1`
   - 1.3
@@ -187,9 +187,9 @@ proof:
 Overview after 1.2.1
 --------------------------------------------------
 step 1: Branch
-  - 1.0 (done)
-  - 1.1 (done)
-  - 1.2 (done)
+  - 1.0 (proven)
+  - 1.1 (proven)
+  - 1.2 (proven)
   - 1.3
     Unfinished Proof. Fill step `1.3.1`
 --------------------------------------------------
@@ -234,5 +234,5 @@ proof:
 --------------------------------------------------
 Overview after 1.3.1
 --------------------------------------------------
-done
+proven
 Unfinished nodes: 0

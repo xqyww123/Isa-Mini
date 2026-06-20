@@ -5,6 +5,12 @@ begin
 (* declare [[ML_debugger]] *)
 ML_file "helper.ML"
 
+(* Agent Hint Registry: theory-local notice/reject hints fired when the agent
+   uses a registered constant/fact. Loaded before agent.ML (which calls
+   Agent_Hint.check_ and before agent_packer.ML/agent_server.ML (which pack
+   Agent_Hint.HINT_NOTICE). *)
+ML_file "agent_hint.ML"
+
 attribute_setup xsymmetric = \<open>
   Scan.succeed (Thm.rule_attribute [] (fn context => fn th =>
     Minilang_Helper.xsymmetric (Context.proof_of context) th))

@@ -41,10 +41,10 @@ child: id='1.2', titled_id='goal 1.2', type=GoalNode, _kind='goal', id_of_goal='
 edit_message: fill 1.1.1 (first subgoal)
 --------------------------------------------------
 Filled step 1.1.1.
-All proof goals of goal 1.1 are completed.
+All proof goals of goal 1.1 are now completed.
 Outline:
   step 1: Inference Rule conjI
-    - 1.1 (done)
+    - 1.1 (proven)
     - 1.2
       Unfinished Proof. Fill step `1.2.1`
 ---------------
@@ -52,9 +52,8 @@ Outline:
 edit_message: fill 1.2.1 (second subgoal — should cascade)
 --------------------------------------------------
 Filled step 1.2.1.
-All proof goals of goal 1.2, step 1 are completed.
 Outline:
-  done
+  proven
 Congratulations! All goals are proven.
 ---------------
 Unfinished nodes: 0

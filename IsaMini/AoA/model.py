@@ -1309,6 +1309,17 @@ class SH_PRF_Msg(Message):
         self.method = method
         self.time_ms = time_ms
 
+class Hint_Notice_Msg(Message):
+    """Agent Hint Registry NOTICE: the operation used a registered constant/fact
+    that has a soft hint. `name` is the registered (fully-qualified) name — the
+    per-session dedup key; `text` is the authored notice shown to the agent.
+    The operation still proceeds (a REJECT hint instead fails the op via an
+    error, never reaching this message channel)."""
+    def __init__(self, name: str, text: str):
+        super().__init__()
+        self.name = name
+        self.text = text
+
 def unpack_message(data) -> Message:
     match data:
         case (0, x):
@@ -1345,6 +1356,8 @@ def unpack_message(data) -> Message:
             return Compute_Result_Msg(IsaTerm.from_isabelle(name), IsaTerm.from_isabelle(result))
         case (15, (method, time_ms)):
             return SH_PRF_Msg(method, time_ms)
+        case (17, (name, text)):
+            return Hint_Notice_Msg(name, text)
         case _:
             raise Exception(f"BUG bad message kind: {data}")
 
@@ -3830,6 +3843,31 @@ class Node(ABC):
         """
         self.age = the_session().age
         self._first_time = False
+        self._ingest_hint_notices()
+    def _hint_notice_state(self) -> 'Minilang_State | None':
+        """The state whose `.messages` carry Agent Hint Registry notices emitted
+        while this node's own operation parsed its authored terms. For a leaf
+        that is its resulting state; `StdBlock` overrides it to the
+        after-beginning state (where its beginning op's messages live).
+        None when the node authored nothing / has no such state."""
+        if self.parent is None or self.status.status != EvaluationStatus.Status.SUCCESS:
+            return None
+        return self.resulting_state()
+    def _ingest_hint_notices(self) -> None:
+        """Turn any `Hint_Notice_Msg` from this node's authoring op into a
+        HEADER notice warning, once per session per registered name (the same
+        one-shot discipline as `showed_suffices_notice`). Re-derived each
+        refresh (warnings are cleared on reset); the per-session `shown_hints`
+        set keeps it to a single surfacing. REJECT hints never arrive here —
+        they fail the op via an error instead."""
+        state = self._hint_notice_state()
+        if state is None:
+            return
+        shown = the_session().shown_hints
+        for m in state.messages:
+            if isinstance(m, Hint_Notice_Msg) and m.name not in shown:
+                shown.add(m.name)
+                self.warnings.append(Warning(Warning.Position.HEADER, m.text))
     async def _auto_intro_after_me(self) -> None:
         if self.parent is not None:
             await self.parent._auto_Intro_after_child(self)
@@ -5007,6 +5045,12 @@ class StdBlock(NonLeaf_Node):
             return self.sub_nodes[0].ml_state
         else:
             return self._state_before_ending_
+    def _hint_notice_state(self) -> 'Minilang_State | None':
+        # A block's authored term (e.g. a Have/Suffices conclusion) is parsed by
+        # its beginning op, so any hint notice lands in the after-beginning state.
+        if self.status.status != EvaluationStatus.Status.SUCCESS:
+            return None
+        return self._state_after_beginning()
     def goal(self) -> 'Goal | None':
         return self._state_after_beginning().leading_goal
     def assemble(self, output: list[Minilang_Operation] | None = None) -> list[Minilang_Operation]:
@@ -6988,7 +7032,13 @@ _SUBAGENT_HINT_DEPTH = 2
 SUBAGENT_NESTING_DEPTH = 3
 
 class Obvious_ToolArg(TypedDict):
-    facts: list[FactByName | FactByProposition]
+    # Validation accepts FactByDescription too (the schema the LLM sees, in
+    # tools/cc_edit.jsonc, still advertises only FactByName | FactByProposition):
+    # an LLM may violate the schema with a description fact, which fetch_facts
+    # turns into an Interaction_RetrieveForProof that the Obvious path filters
+    # out with a warning rather than crashing. Rejecting it at validation time
+    # would defeat that graceful handling (see test ObviousDescriptionFact).
+    facts: list[FactByName | FactByProposition | FactByDescription]
 
 @proof_operation("Obvious", Obvious_ToolArg)
 class Obvious(Leaf):
@@ -6996,7 +7046,7 @@ class Obvious(Leaf):
         if config.parent is not None and config.parent._is_trivial is False:
             raise GoalIsNontrivial(config.parent)
         super().__init__(config, "")
-        self._raw_facts: list[FactByName | FactByProposition] = [
+        self._raw_facts: list[FactByName | FactByProposition | FactByDescription] = [
             f for f in arg["facts"] if f is not None]
         self.fact_refs: list[IsabelleFact] | None = None
         self._found_tactic: str | None = None
@@ -10395,6 +10445,11 @@ class Session:
         self.search_summary_count: int = (
             _view_parent.search_summary_count if _view_parent is not None else 0)
         self.showed_suffices_notice: bool = False
+        # Agent Hint Registry: names of constants/facts whose NOTICE hint has
+        # already been surfaced this session (one-shot per name). Inherited by
+        # view-forks so a notice isn't repeated across the same agent context.
+        self.shown_hints: set[str] = (
+            set(_view_parent.shown_hints) if _view_parent is not None else set())
         self.seen_abbreviations: set[str] = (
             set(_view_parent.seen_abbreviations) if _view_parent is not None else set())
         self.showed_fill_hint: bool = False
@@ -11387,6 +11442,7 @@ class Session:
         self.search_summary_count = 0
         self.seen_abbreviations.clear()
         self.showed_suffices_notice = False
+        self.shown_hints.clear()
         self.showed_fill_hint = False
         self.showed_cancelled_notice = False
         self.shown_HAVE_fact_names.clear()

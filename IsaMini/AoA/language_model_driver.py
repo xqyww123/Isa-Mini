@@ -72,6 +72,21 @@ def pricing_for(model: str, default: dict[str, float]) -> dict[str, float]:
     return PRICING.get(model, default)
 
 
+def _parse_effort_suffix(argument: str | None, default_model: str,
+                         default_effort: str = "medium",
+                         ) -> tuple[str, str]:
+    """Parse ``"model-effort"`` into ``(model, effort)``.
+
+    Recognised suffixes: ``-low``, ``-medium``, ``-high``, ``-xhigh``, ``-max``.
+    *default_effort* is returned when no suffix is present.
+    """
+    raw = argument or default_model
+    for suffix in ("-xhigh", "-medium", "-high", "-low", "-max"):
+        if raw.endswith(suffix):
+            return raw[: -len(suffix)], suffix[1:]
+    return raw, default_effort
+
+
 @dataclass
 class Usage:
     """Canonical per-call token usage (see docs/COST_ACCOUNTING.md).

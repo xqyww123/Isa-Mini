@@ -322,7 +322,7 @@ fun release_par_error exn =
 (* Customized read functions with bound name deconfliction *)
 
 (* All readers feed the agent string(s) as POSITIONED input via Inner_Syntax_Error
-   so a parse failure brackets the offending token with 【 】 (see that module).
+   so a parse failure marks the failing spot with 【parsing fails here】 (see that module).
    The list/typed variants implode each element under a distinct id, keeping the
    single batched read call (joint type inference unchanged).  On a non-position
    error the original exception propagates to the existing release_par_error. *)

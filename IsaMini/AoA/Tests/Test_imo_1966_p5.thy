@@ -6,7 +6,7 @@ theory Test_imo_1966_p5 imports
 MathBench_Prover.MathBench_Prover
 Minilang_Agent.Minilang_Agent
 begin
-(* declare [[agent_AoA_driver="test.IMO_1966_p5"]] *) declare [[z3_extensions, auto_interpret_for_embedding=false, AoA_interactive_retrieval="no"]]
+(* declare [[agent_AoA_driver="test.IMO_1966_p5"]] *) declare [[z3_extensions, auto_interpret_for_embedding=false, AoA_interactive_retrieval="no"]] term 1
 theorem imo_1966_p5:
   fixes x a :: "nat \<Rightarrow> real"
   assumes "a 1 > a 2" and "a 2 > a 3" and "a 3 > a 4"
