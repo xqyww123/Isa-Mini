@@ -1,0 +1,22 @@
+--------------------------------------------------
+Prompt emitted on the channel
+--------------------------------------------------
+message type: InteractionPrompt
+Instantiate ?k :: int before the rule can be applied.
+
+Answer the question above by calling the `answer_instantiate` tool.
+--------------------------------------------------
+Answer resolved without crashing
+--------------------------------------------------
+result type: IsaTerm
+result.unicode: "int_ge_induct"[xwhere ?k = ‹0::int›]
+result.ascii:   "int_ge_induct"[xwhere ?k = \<open>0::int\<close>]
+--------------------------------------------------
+IsaTerm.to_unicode / to_ascii contract
+--------------------------------------------------
+to_unicode(IsaTerm):     "int_ge_induct"[xwhere ?k = ‹0::int›]
+to_ascii(IsaTerm):       "int_ge_induct"[xwhere ?k = \<open>0::int\<close>]
+to_unicode(None):        ''
+to_ascii(None):          ''
+to_unicode('plain str'): 'plain str'
+to_unicode([IsaTerm]):   [IsaTerm('"int_ge_induct"[xwhere ?k = ‹0::int›]')]

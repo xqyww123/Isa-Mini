@@ -80,6 +80,41 @@ class IsaTerm:
         raise TypeError(
             "str() on IsaTerm is ambiguous — use .unicode (for display) or .ascii (for Isabelle RPC) explicitly")
     def __repr__(self) -> str: return f'IsaTerm({self.unicode!r})'
+
+    @staticmethod
+    def to_unicode(x: Any) -> str:
+        """Display (Unicode) string of *any* value, resolving an ``IsaTerm``
+        via ``.unicode``.
+
+        The sanctioned way to stringify a value of statically-unknown type at
+        a generic display / logging sink (e.g. an ``Interaction.answer()``
+        result, which is one of several payload types and is occasionally a
+        bare ``IsaTerm``).  A plain ``str(x)`` / f-string there would trip the
+        deliberately-forbidden ``IsaTerm.__str__``; this routes an ``IsaTerm``
+        to ``.unicode`` instead.  ``None`` renders as the empty string; every
+        other non-``IsaTerm`` value falls back to ``str(x)`` (containers are
+        safe — they format their elements via ``repr``, and
+        ``IsaTerm.__repr__`` is safe)."""
+        if x is None:
+            return ""
+        if isinstance(x, IsaTerm):
+            return x.unicode
+        return str(x)
+
+    @staticmethod
+    def to_ascii(x: Any) -> str:
+        """ASCII (Isabelle-RPC) string of *any* value, resolving an ``IsaTerm``
+        via ``.ascii`` — the wire-boundary counterpart of ``to_unicode``.
+
+        A non-``IsaTerm`` value is assumed to be a Unicode string and is
+        converted with ``ascii_of_unicode`` (a no-op on already-ASCII text);
+        ``None`` renders as the empty string."""
+        if x is None:
+            return ""
+        if isinstance(x, IsaTerm):
+            return x.ascii
+        return ascii_of_unicode(x if isinstance(x, str) else str(x))
+
     def __hash__(self) -> int: return hash(self.ascii)
     def __eq__(self, other) -> bool:
         if isinstance(other, IsaTerm): return self.ascii == other.ascii
@@ -12124,7 +12159,7 @@ class Session:
                 try:
                     result = await interaction.answer(payload)
                     self.log_interaction("nf_answered",
-                        f"[inline] answered: {result}")
+                        f"[inline] answered: {IsaTerm.to_unicode(result)}")
                     return result
                 except Interaction_BadAnswer as e:
                     self.log_interaction("nf_bad_answer",
@@ -12145,7 +12180,7 @@ class Session:
                             text = await new_it._render_prompt()
                         except ImmediateAnswer as ia:
                             self.log_interaction("nf_immediate",
-                                f"[inline] replacement resolved: {ia.answer}")
+                                f"[inline] replacement resolved: {IsaTerm.to_unicode(ia.answer)}")
                             return ia.answer
                         interaction = new_it
                         self._nf_pending_interaction = new_it

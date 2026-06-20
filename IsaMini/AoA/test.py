@@ -543,6 +543,78 @@ async def _test_PostInstValidation(root: Root, file: MyIO):
     root.print(0, file)
     await _assert_schematic_free(root, file, ["term"])
 
+@model_test("InlineInteractionIsaTermLog", "Test_InlineInteractionIsaTermLog.thy", 8)
+async def _test_InlineInteractionIsaTermLog(root: Root, file: MyIO):
+    """Regression for the `_inline_interaction` `str() on IsaTerm` crash.
+
+    An interaction whose `answer()` returns a bare `IsaTerm` — like
+    `Interaction_InstantiateSchematics` (the pre-rule induction/case-split
+    schematic instantiation, the one `int_ge_induct` triggers) — must be
+    logged via `IsaTerm.to_unicode`, NOT a bare f-string. A bare
+    `f"...{result}"` invokes the deliberately-forbidden `IsaTerm.__str__`
+    (`TypeError: str() on IsaTerm is ambiguous`), which previously escaped the
+    edit task and crashed the whole proof step.
+
+    This is the ONLY test that drives the REAL `Session.launch_interaction`
+    through its non-forking `_inline_interaction` channel branch; every other
+    interaction test replaces `launch_interaction` with a stub that calls
+    `interaction.answer()` directly — which is exactly why the crash went
+    unnoticed. So here we undo the harness stub, attach a real
+    `InteractionChannel`, and pump it by hand."""
+    session = root.session
+    # Undo the harness's `launch_interaction` stub (restore the real method)
+    # and attach a channel so a non-forking interaction takes the
+    # `_inline_interaction` branch (the path that carried the bug).
+    del session.launch_interaction
+    session._channel = InteractionChannel()
+
+    # The exact shape `Interaction_InstantiateSchematics.answer` returns: an
+    # instantiated rule source carrying Isabelle cartouches (‹...›).
+    rule_src = ('"int_ge_induct"[xwhere ?k = '
+                '\N{SINGLE LEFT-POINTING ANGLE QUOTATION MARK}0::int'
+                '\N{SINGLE RIGHT-POINTING ANGLE QUOTATION MARK}]')
+
+    class _FakeInstantiate(Interaction):
+        """Minimal non-forking interaction whose `answer()` returns a bare
+        `IsaTerm`, mirroring `Interaction_InstantiateSchematics`."""
+        fork_allowed_tools = [TOOL_ANSWER_INSTANTIATE, TOOL_SEARCH]
+        @property
+        def is_non_forking(self) -> bool:
+            return True
+        async def prompt(self, indent: int, file: MyIO) -> None:
+            print_indent(indent, file)
+            file.write("Instantiate ?k :: int before the rule can be applied.\n")
+        async def answer(self, answer: AnswerInstantiate) -> IsaTerm:
+            return IsaTerm.from_agent(rule_src)
+
+    task = asyncio.create_task(session.launch_interaction(_FakeInstantiate()))
+    msg = await session._channel.outbox.get()
+    print_header("Prompt emitted on the channel", file)
+    file.write(f"message type: {type(msg).__name__}\n")
+    file.write(msg.text)
+    if not msg.text.endswith("\n"):
+        file.write("\n")
+
+    # Feed the answer; the suspended `_inline_interaction` resumes, calls
+    # `answer()` (→ bare IsaTerm), and hits the `nf_answered` log line that
+    # used to crash. With the fix it returns the IsaTerm cleanly.
+    await session._channel.inbox.put(
+        AnswerInstantiate(instantiations=[("?k", "0::int")]))
+    result = await task
+
+    print_header("Answer resolved without crashing", file)
+    file.write(f"result type: {type(result).__name__}\n")
+    file.write(f"result.unicode: {result.unicode}\n")
+    file.write(f"result.ascii:   {result.ascii}\n")
+
+    print_header("IsaTerm.to_unicode / to_ascii contract", file)
+    file.write(f"to_unicode(IsaTerm):     {IsaTerm.to_unicode(result)}\n")
+    file.write(f"to_ascii(IsaTerm):       {IsaTerm.to_ascii(result)}\n")
+    file.write(f"to_unicode(None):        {IsaTerm.to_unicode(None)!r}\n")
+    file.write(f"to_ascii(None):          {IsaTerm.to_ascii(None)!r}\n")
+    file.write(f"to_unicode('plain str'): {IsaTerm.to_unicode('plain str')!r}\n")
+    file.write(f"to_unicode([IsaTerm]):   {IsaTerm.to_unicode([result])}\n")
+
 @model_test("AutoRewriteFallback", "Test_AutoRewriteFallback.thy", 8)
 async def _test_AutoRewriteFallback(root: Root, file: MyIO):
     print_header("Initial", file)

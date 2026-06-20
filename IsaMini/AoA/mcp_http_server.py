@@ -763,7 +763,7 @@ async def _answer_tool_dispatch(session: Session, tool_name: str, args: dict) ->
                 text = await new_it._render_prompt()
             except ImmediateAnswer as ia:                         # replacement resolves without the LLM
                 pending.answer.set_result(ia.answer)              # reuse the existing future; do NOT swap
-                resolved = ia.answer.unicode if isinstance(ia.answer, IsaTerm) else str(ia.answer)
+                resolved = IsaTerm.to_unicode(ia.answer)
                 session.log_interaction(
                     _tn, f"interaction replaced+resolved: {type(new_it).__name__}")
                 session.log_tool_response(_tn, f"[INTERACTION RESOLVED] {resolved}")
@@ -779,13 +779,8 @@ async def _answer_tool_dispatch(session: Session, tool_name: str, args: dict) ->
 
         pending.answer.set_result(result)
         # ``answer()`` may legitimately return None — surface it as an empty
-        # tool response, not the string "None".
-        if result is None:
-            result_str = ""
-        elif isinstance(result, IsaTerm):
-            result_str = result.unicode
-        else:
-            result_str = str(result)
+        # tool response, not the string "None" (``to_unicode`` maps None → "").
+        result_str = IsaTerm.to_unicode(result)
         session.log_interaction(_tn, f"interaction answered: {result_str}")
         session.log_tool_response(_tn, f"[INTERACTION RESOLVED] {result_str}")
         if not session.is_major:
