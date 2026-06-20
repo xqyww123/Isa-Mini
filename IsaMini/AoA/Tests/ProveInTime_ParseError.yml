@@ -8,12 +8,12 @@ goal: (0 :: int) ≤ x * x
 proof: empty
 Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 validate_prove_in_time("if ?a < ?b then abs(?a - ?b) = ?b - ?a"):
-  returned: ['Inner syntax error\nFailed to parse prop\n  ↳ parse failed; the offending token is wrapped in 【 】: … - ?b) = ?b - 【?a】']
+  returned: ['Inner syntax error\nFailed to parse prop\n  ↳ …then abs(?a - ?b) = ?b - 【parsing fails here】?a']
 ascii_of_unicode("if ?a < ?b then ¦?a - ?b¦ = ?b - ?a") = "if ?a < ?b then \<bar>?a - ?b\<bar> = ?b - ?a"
 validate_prove_in_time("if ?a < ?b then \<bar>?a - ?b\<bar> = ?b - ?a"):
-  returned: ['Inner syntax error\nFailed to parse prop\n  ↳ parse failed; the offending token is wrapped in 【 】: … - ?b¦ = ?b - 【?a】']
-_filter_unprovable([ProveInTime("if ?a < ?b then abs(?a - ?b) = ?b - ?a")]): kept=0, warnings=['Ignored "if ?a < ?b then abs(?a - ?b) = ?b - ?a" — not a known Isabelle theorem nor trivially provable. Prove it manually using Have if needed.\nReason: Inner syntax error\nFailed to parse prop\n  ↳ parse failed; the offending token is wrapped in 【 】: … - ?b) = ?b - 【?a】']
-_filter_unprovable([ProveInTime(unicode ¦ variant)]): kept=0, warnings=['Ignored "if ?a < ?b then ¦?a - ?b¦ = ?b - ?a" — not a known Isabelle theorem nor trivially provable. Prove it manually using Have if needed.\nReason: Inner syntax error\nFailed to parse prop\n  ↳ parse failed; the offending token is wrapped in 【 】: … - ?b¦ = ?b - 【?a】']
+  returned: ['Inner syntax error\nFailed to parse prop\n  ↳ …?b then ¦?a - ?b¦ = ?b - 【parsing fails here】?a']
+_filter_unprovable([ProveInTime("if ?a < ?b then abs(?a - ?b) = ?b - ?a")]): kept=0, warnings=['Ignored "if ?a < ?b then abs(?a - ?b) = ?b - ?a" — not a known Isabelle theorem nor trivially provable. Prove it manually using Have if needed.\nReason: Inner syntax error\nFailed to parse prop\n  ↳ …then abs(?a - ?b) = ?b - 【parsing fails here】?a']
+_filter_unprovable([ProveInTime(unicode ¦ variant)]): kept=0, warnings=['Ignored "if ?a < ?b then ¦?a - ?b¦ = ?b - ?a" — not a known Isabelle theorem nor trivially provable. Prove it manually using Have if needed.\nReason: Inner syntax error\nFailed to parse prop\n  ↳ …?b then ¦?a - ?b¦ = ?b - 【parsing fails here】?a']
 Obvious created (should have failure status)
 Step 1 status: success
 --------------------------------------------------

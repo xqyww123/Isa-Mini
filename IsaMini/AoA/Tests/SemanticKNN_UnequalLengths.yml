@@ -2,14 +2,14 @@ Mismatched parens: 5 results, 1 warnings
   Warning: Term pattern was ignored — results are NOT filtered by it.
 Inner syntax error
 Failed to parse term
-  ↳ parse failed; the offending token is wrapped in 【 】: f (【x】
+  ↳ f (【parsing fails here】x
 Mixed patterns: 5 results, 1 warnings
   Warning: Term pattern was ignored — results are NOT filtered by it.
 Inner syntax error
 Failed to parse term
-  ↳ parse failed; the offending token is wrapped in 【 】: g (【z】
+  ↳ g (【parsing fails here】z
 Schematic in binder: 1 results, 1 warnings
   Warning: Inner syntax error
 Failed to parse term
-  ↳ parse failed; the offending token is wrapped in 【 】: …_on (λ?d【.】 ?N div …
+  ↳ inj_on (λ?d【parsing fails here】. ?N div ?d)
 Fell back to anonymous wildcards, which parsed.

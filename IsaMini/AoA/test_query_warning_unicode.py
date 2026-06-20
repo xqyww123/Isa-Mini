@@ -30,8 +30,7 @@ def main() -> None:
     marker_warning = (
         f"Term pattern was ignored {EMDASH} results are NOT filtered by it.\n"
         f"Inner syntax error\nFailed to parse term\n"
-        f"  {ARROW} parse failed; the offending token is wrapped in {LBRACK} {RBRACK}: "
-        f"x \\<oplus>"
+        f"  {ARROW} x \\<oplus> {LBRACK}parsing fails here{RBRACK}bad"
     )
     # _KnnQueryResult = (fetched, warnings, error, total)
     knn_results: list[_KnnQueryResult] = [([], [marker_warning], None, 0)]

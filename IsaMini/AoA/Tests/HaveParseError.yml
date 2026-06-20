@@ -17,7 +17,7 @@ proof:
     Error: |
       Fail to claim the intermediate subgoal because: Inner syntax error
       Failed to parse prop
-        ↳ parse failed; the offending token is wrapped in 【 】: …eal) (m 【n】 :: nat)…
+        ↳ …nat ⇒ real) (m 【parsing fails here】n :: nat). f m…
     proof: empty
     Error: Evaluation cancelled due to failures above
 Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.

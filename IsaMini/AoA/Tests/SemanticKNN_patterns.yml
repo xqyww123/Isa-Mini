@@ -79,11 +79,11 @@ Invalid term pattern: 5 results, 1 warnings
   Warning: Term pattern was ignored — results are NOT filtered by it.
 Inner syntax error
 Failed to parse term
-  ↳ parse failed; the offending token is wrapped in 【 】: 1 2 3 【?】?? bad sy…
+  ↳ 1 2 3 【parsing fails here】??? bad syntax
 Invalid type pattern: 5 results, 1 warnings
   Warning: Type pattern was ignored — results are NOT filtered by it.
 Undefined type name: "not_a_real_type_XYZ"
 Failed to parse type
-  ↳ parse failed; the offending token is wrapped in 【 】: 【not_a_real_type_XYZ】
+  ↳ 【parsing fails here】not_a_real_type_XYZ
 Misspelled pattern: 0 results, 1 warnings
   Warning: Term pattern "misspeled_ln ?x" contains undeclared free variable: "misspeled_ln". Use "?misspeled_ln" to express a named wildcard.
