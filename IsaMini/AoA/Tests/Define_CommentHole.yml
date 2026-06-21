@@ -102,9 +102,10 @@ proof:
     thought: Pick the freshly-defined halve as the witness
     operation: Witness
     witness: halve
+    Error: This Witness mentions the free variable "halve", which is not declared in scope. This indicates a bug in your witness term: check whether you mistyped the name.
 Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
-  halve (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
+  ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
 finished after comment: False
-unfinished after comment: ['<goal>']
-witness status after comment: SUCCESS
+unfinished after comment: ['2', '<goal>']
+witness status after comment: FAILURE

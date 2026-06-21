@@ -23,7 +23,12 @@ proof:
     thought: Pick halve as the witness for the generic goal
     operation: Witness
     witness: halve
+    Error: This Witness mentions the free variable "halve", which is not declared in scope. This indicates a bug in your witness term: check whether you mistyped the name.
   - step id: 3
     operation: Obvious
-finished after comment: True
-unfinished after comment: []
+    Error: the evaluation is cancelled due to failure of step `2`
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to replace it with a proof.
+pending proof goal:
+  ∃(f :: nat ⇒ nat). f (0 :: nat) = f (0 :: nat)
+finished after comment: False
+unfinished after comment: ['2', '3', '<goal>']

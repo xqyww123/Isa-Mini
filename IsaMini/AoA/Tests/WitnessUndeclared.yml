@@ -1,0 +1,39 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(f :: nat ⇒ nat). f (0 :: nat) = f (0 :: nat)
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+undeclared-free outcome.failure: None
+--------------------------------------------------
+After Witness ghost_witness (undeclared-free error in tree)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(f :: nat ⇒ nat). f (0 :: nat) = f (0 :: nat)
+proof:
+  - step id: 1
+    thought: Witness with a name that was never declared
+    operation: Witness
+    witness: ghost_witness
+    Error: This Witness mentions the free variable "ghost_witness", which is not declared in scope. This indicates a bug in your witness term: check whether you mistyped the name.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  ∃(f :: nat ⇒ nat). f (0 :: nat) = f (0 :: nat)
+schematic outcome.failure: None
+--------------------------------------------------
+After Witness ?x (schematic error in tree)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(f :: nat ⇒ nat). f (0 :: nat) = f (0 :: nat)
+proof:
+  - step id: 1
+    thought: Witness with a schematic unknown
+    operation: Witness
+    witness: ?x
+    Error: |
+      Syntax Error in Term Language.
+      Unbound schematic variable: ?x
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  ∃(f :: nat ⇒ nat). f (0 :: nat) = f (0 :: nat)

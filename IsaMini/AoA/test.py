@@ -1885,6 +1885,47 @@ async def _test_WitnessTypeMismatch(root: Root, file: MyIO):
     print_header("After Witness (type-mismatch error visible in tree)", file)
     root.print(0, file)
 
+@model_test("WitnessUndeclared", "Test_WitnessUndeclared.thy", 8)
+async def _test_WitnessUndeclared(root: Root, file: MyIO):
+    """A witness term may not introduce an undeclared variable. Goal
+    `∃f::nat⇒nat. f 0 = f 0`.
+
+    1. Witness with `ghost_witness` (an undeclared free, never in scope): the
+       Witness guard (`check_command_i`, agent.ML) rejects it with the
+       undeclared-free message. Like the other Witness `OPR_FAIL`s (Witness2 /
+       Witness5 / WitnessTypeMismatch) the node stays in the tree with that Error
+       status, `outcome.failure` stays None, and the goal stays pending. Without
+       the guard this parsed as a free variable and proved the existential
+       vacuously — silently masking a typo.
+    2. Witness with a schematic `?x`: a witness must be a concrete instance. This
+       is rejected upstream by the inner-syntax reader itself ("Unbound schematic
+       variable"), before the undeclared-free guard runs — so schematics need no
+       dedicated check."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # 1. Undeclared FREE variable as witness → rejected.
+    root.session.age += 1
+    o_free = await root.fill("1", [Witness.gen_single({
+        "thought": "Witness with a name that was never declared",
+        "witnesses": ["ghost_witness"],
+    })])
+    file.write(f"undeclared-free outcome.failure: {o_free.failure}\n")
+    print_header("After Witness ghost_witness (undeclared-free error in tree)", file)
+    root.print(0, file)
+
+    # 2. Schematic (?x) as witness → rejected upstream by the inner-syntax reader.
+    root.session.age += 1
+    await root.delete(["1"])
+    root.session.age += 1
+    o_sch = await root.fill("1", [Witness.gen_single({
+        "thought": "Witness with a schematic unknown",
+        "witnesses": ["?x"],
+    })])
+    file.write(f"schematic outcome.failure: {o_sch.failure}\n")
+    print_header("After Witness ?x (schematic error in tree)", file)
+    root.print(0, file)
+
 @model_test("Unfold1", "Test_Unfold1.thy", 15)
 async def _test_Unfold1(root: Root, file: MyIO):
     print_header("Initial YAML", file)
@@ -15319,7 +15360,15 @@ async def _test_Define_CommentOracle(root: Root, file: MyIO):
 
     If `is_proof_finished()` flips to True, this is a false 'all proven' for a
     proof that secretly rests on an un-discharged (sorried) termination — the
-    residual Define exposure. The verdict booleans are what matter."""
+    residual Define exposure. The verdict booleans are what matter.
+
+    NOTE — REDESIGN NEEDED (undeclared-witness guard): the Witness on `halve` is
+    now REJECTED after commenting. Once the Define is skipped, `halve` is an
+    undeclared free, and the Witness guard (`check_command_i`, agent.ML) fails
+    it — so `finished` is now False and this no longer reaches the refl-finish
+    exposure it was built to probe. To keep probing that exposure, witness the
+    generic goal with an IN-SCOPE term (e.g. `λx. x`) instead of the Define'd
+    function name; the golden was updated to the rejected-witness behavior."""
     def _ids(s: 'set[Node]') -> list[str]:
         return sorted(the_session()._display_id(n.id) or "<goal>" for n in s)
 
@@ -15358,7 +15407,7 @@ async def _test_Define_CommentOracle(root: Root, file: MyIO):
     file.write(f"unfinished after comment: {_ids(after)}\n")
 
 
-@model_test("Define_DeleteOracle", "Test_Define_DeleteOracle.thy", 16)
+@model_test("Define_DeleteOracle", "Test_Define_DeleteOracle.thy", 14)
 async def _test_Define_DeleteOracle(root: Root, file: MyIO):
     """Delete-vs-comment probe (answers: does DELETE share comment's
     live-vs-assembled divergence for Define?).
@@ -15373,7 +15422,14 @@ async def _test_Define_DeleteOracle(root: Root, file: MyIO):
 
     Records the verdict booleans + the resulting tree so we can see whether
     `halve` survives deletion (Witness still SUCCESS / finished True) or the
-    Witness breaks (halve undefined / finished False)."""
+    Witness breaks (halve undefined / finished False).
+
+    NOTE — REDESIGN NEEDED (undeclared-witness guard): the Witness on `halve` is
+    now REJECTED after deletion — `halve` is an undeclared free in the re-threaded
+    state, and the Witness guard (`check_command_i`, agent.ML) fails it, so the
+    verdict is now the "Witness breaks / finished False" branch. To keep probing
+    the refl-finish exposure, witness with an IN-SCOPE term (e.g. `λx. x`) instead
+    of the Define'd function name; the golden was updated to this behavior."""
     def _ids(s: 'set[Node]') -> list[str]:
         return sorted(the_session()._display_id(n.id) or "<goal>" for n in s)
 

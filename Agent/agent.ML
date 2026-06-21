@@ -1167,6 +1167,19 @@ fun goal_intro_var_names s =
      (SOME (_, g), _) => leading_intro_var_names g
    | (NONE, _) => [])
 
+(* Shared rejection message for undeclared free variable(s) in an agent-authored
+   term/proposition.  `opr_kind` names the operation ("Branch"/"Witness"/…) and
+   `subject_noun` the thing at fault ("statement"/"witness term").  Shared by
+   `reject_stray_assumption_frees` (assumption-introducing ops) and the Witness
+   pre-check below. *)
+fun undeclared_free_msg opr_kind subject_noun names =
+  let val many = length names > 1 in
+    "This " ^ opr_kind ^ " mentions the free variable" ^ (if many then "s " else " ") ^
+    commas (map quote names) ^ ", which " ^ (if many then "are" else "is") ^
+    " not declared in scope. This indicates a bug in your " ^ subject_noun ^
+    ": check whether you mistyped " ^ (if many then "a name" else "the name") ^ "."
+  end
+
 (* Guard for assumption-introducing operations (Obtain `where`, Suffices `if`,
    Branch cases): reject a proposition that refers to a free variable which is
    neither already fixed in the context nor introduced by this operation, before
@@ -1218,13 +1231,8 @@ fun reject_stray_assumption_frees opr_kind ctxt goal_params op_fixes prop_strs =
   in
     if null strays then ()
     else if not (null genuine) then
-      let val many = length genuine > 1
-      in raise Minilang.OPR_FAIL (Minilang.INVALID_OPR,
-           "This " ^ opr_kind ^ " mentions the free variable" ^ (if many then "s " else " ") ^
-           listed genuine ^ ", which " ^ (if many then "are" else "is") ^
-           " not declared in scope. This indicates a bug in your statement: check whether you mistyped " ^
-           (if many then "a name" else "the name") ^ ".")
-      end
+      raise Minilang.OPR_FAIL (Minilang.INVALID_OPR,
+        undeclared_free_msg opr_kind "statement" genuine)
     else
       let val many = length params > 1
       in raise Minilang.OPR_FAIL (Minilang.INVALID_OPR,
@@ -1757,6 +1765,24 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
                   else ()
           val typed_terms = ListPair.zip (typs, terms)
           val ws = read_terms_with_type ctxt typed_terms
+          (* Reject a witness that introduces an undeclared free variable.  Unlike
+             the assumption-introducing ops, a witness is substituted into the goal
+             *conclusion* (not planted as a hypothesis), so this cannot trigger the
+             THM-0 generalize bug — it is a fail-fast typo guard: a stray free would
+             otherwise leave a silently-unprovable residual goal.  A free is stray
+             iff it is not already fixed in the context.  (Schematic `?x` witnesses
+             are already rejected upstream by `read_terms_with_type` itself —
+             "Unbound schematic variable" — so they need no check here.) *)
+          val undeclared_frees =
+            fold (fn w =>
+                   fold (fn (nm, _) =>
+                           if Variable.is_fixed ctxt nm then I else insert (op =) nm)
+                        (Term.add_frees w []))
+                 ws []
+            |> rev
+          val _ = if null undeclared_frees then ()
+                  else raise Minilang.OPR_FAIL (Minilang.INVALID_OPR,
+                         undeclared_free_msg "Witness" "witness term" undeclared_frees)
           val _ = List.app (Agent_Hint.check_term ctxt) ws
        in WITNESS ws
       end
