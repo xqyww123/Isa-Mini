@@ -1748,7 +1748,20 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
                 except (AoA_Error, IsabelleError):
                     pass  # GoalNode or structural container — just cancel
                 session.refresh_YAML()
-                msg = "The sub-agent has been cancelled."
+                # Settle the "newly completed" delta HERE. Auto-commenting the
+                # node (and tearing down its sub-agents) can flip the scope's
+                # finishedness, but this abandon path does not otherwise flush
+                # the delta (unlike `edit`/`comment`/`delete`). Flushing now
+                # attributes any genuine completion to THIS action and marks it
+                # announced, so it cannot resurface — misattributed and
+                # contradictory — inside a later unrelated edit response (e.g. a
+                # failed `fill`). The just-commented node itself is excluded from
+                # the report by `Session.newly_completed_topmost`, so in the
+                # common case this writes nothing.
+                buf = MyIO(StringIO())
+                buf.write("The sub-agent has been cancelled.\n")
+                P._write_newly_completed(session, buf)
+                msg = buf.getvalue().rstrip("\n")
             else:  # continue
                 msg = (f"Noted. Resume the sub-agent by calling "
                        f"`{session.tool_name(TOOL_SUBAGENT)}` on step "

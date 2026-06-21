@@ -11674,8 +11674,17 @@ class Session:
                 # outline) and the declaration-only global env (id_of_goal() is
                 # None). Finishedness still propagates below regardless of type,
                 # so a finished leaf neither reports nor un-suppresses siblings.
+                #
+                # Also skip a COMMENTED node: it counts as "finished" only
+                # because a comment contributes no unfinished goals (it is not
+                # code), NOT because it was proved. Announcing "All proof goals
+                # of step N are now completed" for a commented step is misleading
+                # — the outline already shows it as `(commented out)`. The flag
+                # is left untouched, so if the step is later uncommented and
+                # genuinely proved, the completion is reported then.
                 if (isinstance(node, NonLeaf_Node)
                         and node.id_of_goal() is not None
+                        and node.status.status != EvaluationStatus.Status.COMMENTED
                         and not node._completion_announced):
                     node._completion_announced = True
                     newly.append(node)
