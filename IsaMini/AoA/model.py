@@ -8010,9 +8010,11 @@ class Interaction_SelectIHFacts(Interaction):
         vars_str = string_of_and_list(self.relevant_vars)
         print_indent(indent, file)
         file.write(
-            f"These in-scope facts mention {vars_str}. Select which to carry "
-            f"into the induction hypothesis (call `{tn(TOOL_ANSWER_INDEXES)}` "
-            f"with their indexes; empty = none).\n")
+            f"These in-scope facts mention {vars_str}. Select the ones you will "
+            f"need later in this induction proof. Facts you leave unselected "
+            f"become unusable after the induction! But selecting ones you won't "
+            f"need bloats the induction and makes it harder to work with. Call "
+            f"`{tn(TOOL_ANSWER_INDEXES)}` with their indexes; empty = none.\n")
         for i, (name, prop) in enumerate(self.candidates):
             print_indent(indent + 1, file)
             file.write(f"{i}. {name}: {prop.unicode}\n")

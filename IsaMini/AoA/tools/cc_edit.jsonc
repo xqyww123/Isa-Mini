@@ -358,11 +358,6 @@
           },
           "type": "array"
         },
-        "IH_facts": {
-          "description": "Facts to fold into the induction hypothesis. Example: an IH_facts `k ≤ n` strengthens the IH `P k n` to `k ≤ n ⟹ P k n`.",
-          "type": "array",
-          "items": { "$ref": "#/$defs/FactByName" }
-        },
         "simplify": {
           "type": "boolean",
           "default": true,

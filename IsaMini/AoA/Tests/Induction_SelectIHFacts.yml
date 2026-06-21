@@ -39,7 +39,7 @@ pending proof goal:
 --------------------------------------------------
 IH-fact selection prompt
 --------------------------------------------------
-These in-scope facts mention n and k. Select which to carry into the induction hypothesis (call `answer_indexes` with their indexes; empty = none).
+These in-scope facts mention n and k. Select the ones you will need later in this induction proof. Facts you leave unselected become unusable after the induction! But selecting ones you won't need bloats the induction and makes it harder to work with. Call `answer_indexes` with their indexes; empty = none.
   0. premise0: k ≤ n
 --------------------------------------------------
 After Induction (selected facts carried into IH)
