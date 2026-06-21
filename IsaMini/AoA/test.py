@@ -15221,6 +15221,240 @@ async def _test_DeleteOneOfThreeCases(root: Root, file: MyIO):
             "predicate would not.")
 
 
+@model_test("Define_CommentHole", "Test_Define_CommentHole.thy", 16)
+async def _test_Define_CommentHole(root: Root, file: MyIO):
+    """Deep-dive probe for the hypothesized "separate Define hole".
+
+    Under `fun_fake_automatic_failure`, Define `halve` opens a deferred
+    termination block (GoalNodes 1.1, 1.2) which we LEAVE OPEN. We then
+    Witness the outer existential with `halve` (so the function is *used*
+    downstream). With the residuals open the proof is unfinished.
+
+    We then comment the Define (step 1). Two things happen at once:
+      - its subtree (the open residuals) is skipped by `unfinished_nodes`, and
+      - `halve` is removed from scope (a commented declarative node is skipped
+        in `_fixed_*_after_me`), so the downstream Witness must be re-evaluated
+        and fail (`halve` undefined).
+
+    SOUNDNESS REQUIREMENT: the proof must STAY unfinished. If `is_proof_finished()`
+    flips to True, the open termination obligation was silently dropped — the
+    Define hole would be real. (Deterministic: no sledgehammer is invoked; Define
+    fails deterministically under the fake flag and Witness is hammer-free.)"""
+    def _ids(s: 'set[Node]') -> list[str]:
+        return sorted(the_session()._display_id(n.id) or "<goal>" for n in s)
+
+    print_header("Initial", file); root.print(0, file)
+
+    # 1. Define halve; the fake flag forces the deferred termination block.
+    root.session.age += 1
+    await root.fill("1", [Define.gen_single({
+        "thought": "Define halve; fake flag forces the deferred termination block",
+        "name": "halve",
+        "type": r"nat \<Rightarrow> nat",
+        "equations": [
+            "halve 0 = 0",
+            "halve (Suc 0) = 0",
+            "halve (Suc (Suc n)) = Suc (halve n)",
+        ],
+        "metric": [r"\<lambda>n::nat. n"],
+    })])
+    print_header("After Define (deferred block; residuals LEFT OPEN)", file)
+    root.print(0, file)
+
+    # 2. Use halve as the existential witness (residuals still undischarged).
+    root.session.age += 1
+    await root.fill("2", [Witness.gen_single({
+        "thought": "Pick the freshly-defined halve as the witness",
+        "witnesses": ["halve"]})])
+    print_header("After Witness halve (halve USED; residuals still open)", file)
+    root.print(0, file)
+
+    before = set(); root.unfinished_nodes(before)
+    witness_node = root.locate_node("2")
+    file.write(f"finished before comment: {root.is_proof_finished()}\n")
+    file.write(f"unfinished before comment: {_ids(before)}\n")
+    file.write(f"witness status before comment: {witness_node.status.status.name}\n")
+
+    # 3. Comment the Define — drops both `halve` and its open obligations.
+    root.session.age += 1
+    outcome = await root.comment(["1"])
+    file.write(f"comment affected: {outcome.affected}\n")
+    print_header("After commenting the Define", file)
+    root.print(0, file)
+
+    after = set(); root.unfinished_nodes(after)
+    finished = root.is_proof_finished()
+    witness_node = root.locate_node("2")
+    file.write(f"finished after comment: {finished}\n")
+    file.write(f"unfinished after comment: {_ids(after)}\n")
+    file.write(f"witness status after comment: {witness_node.status.status.name}\n")
+
+    # Soundness check: the surviving goal `halve 4 = 2` needs `halve`'s recursion
+    # equations (`.simps`), which require *real* termination — so with the
+    # residuals only sorried it can NEVER be closed (verified separately: `by simp`
+    # fails on `halve 4 = 2` for a partial function). Hence the proof stays
+    # unfinished; commenting the Define cannot turn a computation-dependent goal
+    # into a false 'finished'. If `is_proof_finished()` is True here, that
+    # invariant broke.
+    if finished:
+        raise TestFailed(
+            "Commenting a Define with OPEN termination residuals (whose function "
+            "`halve` was used as the existential witness for a computation-"
+            "dependent goal) made the proof report finished — a real under-report.")
+
+
+@model_test("Define_CommentOracle", "Test_Define_CommentOracle.thy", 16)
+async def _test_Define_CommentOracle(root: Root, file: MyIO):
+    """Case-2 probe: a GENERIC goal `∃f. f 0 = f 0` closable by reflexivity,
+    needing NONE of `halve`'s defining equations. We Define halve (deferred
+    termination block left OPEN), Witness halve, close `halve 0 = halve 0`,
+    then comment the Define.
+
+    Unlike Define_CommentHole (whose goal needed `halve`'s computation and so
+    became unprovable once termination was unproven), here the surviving goal
+    is refl-provable regardless. So after commenting:
+      - the termination obligation (1.1, 1.2) is HIDDEN (subtree skipped), and
+      - `halve` survives in the proof state (oracle-tainted: termination only
+        sorried), and the refl proof still closes.
+
+    If `is_proof_finished()` flips to True, this is a false 'all proven' for a
+    proof that secretly rests on an un-discharged (sorried) termination — the
+    residual Define exposure. The verdict booleans are what matter."""
+    def _ids(s: 'set[Node]') -> list[str]:
+        return sorted(the_session()._display_id(n.id) or "<goal>" for n in s)
+
+    root.session.age += 1
+    await root.fill("1", [Define.gen_single({
+        "thought": "Define halve; fake flag forces the deferred termination block",
+        "name": "halve",
+        "type": r"nat \<Rightarrow> nat",
+        "equations": [
+            "halve 0 = 0",
+            "halve (Suc 0) = 0",
+            "halve (Suc (Suc n)) = Suc (halve n)",
+        ],
+        "metric": [r"\<lambda>n::nat. n"],
+    })])
+    root.session.age += 1
+    await root.fill("2", [Witness.gen_single({
+        "thought": "Pick halve as the witness for the generic goal",
+        "witnesses": ["halve"]})])
+    root.session.age += 1
+    close1 = await root.fill("3", [Obvious.gen_single({"facts": []})])
+    file.write(f"close (pre-comment) fill error: {close1.failure}\n")
+    before = set(); root.unfinished_nodes(before)
+    file.write(f"finished before comment: {root.is_proof_finished()}\n")
+    file.write(f"unfinished before comment: {_ids(before)}\n")
+
+    # Comment the Define: hides the open termination block; halve survives.
+    root.session.age += 1
+    outcome = await root.comment(["1"])
+    file.write(f"comment affected: {outcome.affected}\n")
+    print_header("After commenting the Define (generic goal already closed)", file)
+    root.print(0, file)
+    after = set(); root.unfinished_nodes(after)
+    finished = root.is_proof_finished()
+    file.write(f"finished after comment: {finished}\n")
+    file.write(f"unfinished after comment: {_ids(after)}\n")
+
+
+@model_test("Define_DeleteOracle", "Test_Define_DeleteOracle.thy", 16)
+async def _test_Define_DeleteOracle(root: Root, file: MyIO):
+    """Delete-vs-comment probe (answers: does DELETE share comment's
+    live-vs-assembled divergence for Define?).
+
+    Same generic goal `∃f. f 0 = f 0` and setup as Define_CommentOracle:
+    Define halve (deferred termination block left OPEN), Witness halve, close
+    `halve 0 = halve 0` by reflexivity. Then DELETE the Define (instead of
+    commenting). Unlike comment (marks node + clone pass-through; live state
+    keeps `halve` via theory monotonicity), delete REMOVES the node and
+    re-threads — so the downstream Witness may now be re-evaluated against a
+    state that never ran the `function halve` command.
+
+    Records the verdict booleans + the resulting tree so we can see whether
+    `halve` survives deletion (Witness still SUCCESS / finished True) or the
+    Witness breaks (halve undefined / finished False)."""
+    def _ids(s: 'set[Node]') -> list[str]:
+        return sorted(the_session()._display_id(n.id) or "<goal>" for n in s)
+
+    root.session.age += 1
+    await root.fill("1", [Define.gen_single({
+        "thought": "Define halve; fake flag forces the deferred termination block",
+        "name": "halve",
+        "type": r"nat \<Rightarrow> nat",
+        "equations": [
+            "halve 0 = 0",
+            "halve (Suc 0) = 0",
+            "halve (Suc (Suc n)) = Suc (halve n)",
+        ],
+        "metric": [r"\<lambda>n::nat. n"],
+    })])
+    root.session.age += 1
+    await root.fill("2", [Witness.gen_single({
+        "thought": "Pick halve as the witness for the generic goal",
+        "witnesses": ["halve"]})])
+    root.session.age += 1
+    close1 = await root.fill("3", [Obvious.gen_single({"facts": []})])
+    file.write(f"close (pre-delete) fill error: {close1.failure}\n")
+    before = set(); root.unfinished_nodes(before)
+    file.write(f"finished before delete: {root.is_proof_finished()}\n")
+    file.write(f"unfinished before delete: {_ids(before)}\n")
+
+    # Delete the Define node entirely (not comment).
+    root.session.age += 1
+    outcome = await root.delete(["1"])
+    file.write(f"delete failure: {getattr(outcome, 'failure', None)}\n")
+    print_header("After deleting the Define (generic goal was already closed)", file)
+    root.print(0, file)
+    after = set(); root.unfinished_nodes(after)
+    finished = root.is_proof_finished()
+    file.write(f"finished after delete: {finished}\n")
+    file.write(f"unfinished after delete: {_ids(after)}\n")
+
+
+@model_test("DeleteBreaksDependent", "Test_DeleteBreaksDependent.thy", 8)
+async def _test_DeleteBreaksDependent(root: Root, file: MyIO):
+    """Discriminator: does DELETE genuinely re-thread the state of subsequent
+    steps (so a context-level dependency breaks), or does it leave them chained
+    to the deleted node's leftover state?
+
+    `have h_a: P 0` (declarative, sorried body) then `have h_b: P 0` proved by
+    `Obvious facts=[h_a]` (genuinely depends on h_a). Delete h_a. If delete
+    re-threads correctly, h_b's proof (Obvious using the now-gone h_a) must turn
+    FAILURE. If it stays SUCCESS, delete left a stale chain (the fact survived).
+
+    This is the control for the Define probes: `have` introduces a
+    PROOF-CONTEXT fact (removable by re-threading), unlike Define's
+    THEORY-level constant (monotone). Comparing the two isolates whether
+    `halve` surviving deletion is a threading gap or theory monotonicity."""
+    root.session.age += 1
+    await root.fill("1", [Have.gen_single({
+        "thought": "posit P 0 as a declarative fact",
+        "statement": {"english": "P holds at 0", "conclusion": r"(P::nat\<Rightarrow>bool) 0"},
+        "name": "h_a"})])
+    root.session.age += 1
+    await root.fill("2", [Have.gen_single({
+        "thought": "re-derive P 0 from h_a",
+        "statement": {"english": "P holds at 0 again", "conclusion": r"(P::nat\<Rightarrow>bool) 0"},
+        "name": "h_b"})])
+    await root.fill("2.1", [Obvious.gen_single({"facts": [{"name": "h_a"}]})])
+    file.write(f"h_b proof (2.1) status before delete: {root.locate_node('2.1').status.status.name}\n")
+
+    root.session.age += 1
+    await root.delete(["1"])
+    try:
+        n = root.locate_node("2.1")
+        file.write(f"h_b proof (2.1) status after delete: {n.status.status.name}\n")
+    except Exception as e:
+        file.write(f"2.1 not found after delete: {type(e).__name__}: {e}\n")
+    # Also report whether h_a is still locatable (should be gone).
+    try:
+        root.locate_node("1")
+        file.write("node '1' still present after delete: True\n")
+    except Exception:
+        file.write("node '1' still present after delete: False\n")
+
+
 @model_test("CommentRoundTrip", "Test_CommentRoundTrip.thy", 8)
 async def _test_CommentRoundTrip(root: Root, file: MyIO):
     """comment -> uncomment of a parent-closing SubgoalMaker must be IDEMPOTENT:

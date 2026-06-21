@@ -1,0 +1,18 @@
+close (pre-delete) fill error: None
+finished before delete: False
+unfinished before delete: ['1.1', '1.2']
+delete failure: None
+--------------------------------------------------
+After deleting the Define (generic goal was already closed)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(f :: nat ⇒ nat). f (0 :: nat) = f (0 :: nat)
+proof:
+  - step id: 2
+    thought: Pick halve as the witness for the generic goal
+    operation: Witness
+    witness: halve
+  - step id: 3
+    operation: Obvious
+finished after delete: True
+unfinished after delete: []

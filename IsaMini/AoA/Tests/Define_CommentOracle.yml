@@ -1,0 +1,29 @@
+close (pre-comment) fill error: None
+finished before comment: False
+unfinished before comment: ['1.1', '1.2']
+comment affected: ['1']
+--------------------------------------------------
+After commenting the Define (generic goal already closed)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(f :: nat ⇒ nat). f (0 :: nat) = f (0 :: nat)
+proof:
+  - step id: 1
+    thought: Define halve; fake flag forces the deferred termination block
+    operation: Define
+    name: halve
+    type: nat ⇒ nat
+    equations:
+      - halve 0 = 0
+      - halve (Suc 0) = 0
+      - halve (Suc (Suc n)) = Suc (halve n)
+    metric: \<lambda>n::nat. n
+    (commented out)
+  - step id: 2
+    thought: Pick halve as the witness for the generic goal
+    operation: Witness
+    witness: halve
+  - step id: 3
+    operation: Obvious
+finished after comment: True
+unfinished after comment: []
