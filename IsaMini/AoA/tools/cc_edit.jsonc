@@ -598,7 +598,7 @@
     },
     "Derive": {
       "additionalProperties": false,
-      "description": "instantiate universal quantifiers in a rule and discharge its premises, deriving a new fact in one forward-reasoning step",
+      "description": "instantiate universal quantifiers in a rule and discharge its premises, deriving a new fact in one forward-reasoning step. It does not close or reduce the proof goal.",
       "properties": {
         "operation": {
           "const": "Derive",
