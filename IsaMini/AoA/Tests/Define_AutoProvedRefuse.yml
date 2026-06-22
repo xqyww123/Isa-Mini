@@ -1,0 +1,10 @@
+--------------------------------------------------
+auto-proved Define state
+--------------------------------------------------
+obligations (unfinished in Define subtree): 0
+Define is_proof_finished: True
+--------------------------------------------------
+main agent subagent on auto-proved Define -> refuse 'already proved'
+--------------------------------------------------
+is_error=True
+That step is already proved.

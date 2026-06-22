@@ -15872,6 +15872,162 @@ async def _test_hint_reject_setup_rewriting(root: Root, file: MyIO):
     session.print_proof_scope(0, file, show_warnings=True)
 
 
+@model_test("Define_WorkerScope_Deferred", "Test_Define_WorkerScope_Deferred.thy", 10)
+async def _test_define_worker_scope_deferred(root: Root, file: MyIO):
+    """§7.1 (gates Change B): a worker scoped to a 2-obligation deferred Define
+    renders BOTH obligation goals + each obligation's own pending footer with
+    correct relative ids — NOT a single synthesized goal line / block footer."""
+    session = root.session
+    session.age += 1
+    await root.fill("1", [Define.gen_single({
+        "thought": "Define halve; fake flag forces manual termination residuals",
+        "name": "halve",
+        "type": r"nat \<Rightarrow> nat",
+        "equations": [
+            "halve 0 = 0",
+            "halve (Suc 0) = 0",
+            "halve (Suc (Suc n)) = Suc (halve n)",
+        ],
+        "metric": [r"\<lambda>n::nat. n"],
+    })])
+    define_node = root.locate_node("1")
+
+    print_header("Full tree (Plan role)", file)
+    session.print_proof_scope(0, file)
+
+    session.role = model.Role_Worker(target=define_node)
+    await session._prefetch_worker_premises()
+    try:
+        print_header("Worker scope (target = Define)", file)
+        session.print_proof_scope(0, file, show_warnings=True)
+        print_header("Worker quickview (target = Define)", file)
+        session.quickview_proof_scope(0, file)
+
+        buf = MyIO(io.StringIO())
+        session.print_proof_scope(0, buf)
+        ps = buf.getvalue()
+        file.write(f"\nboth obligation goals visible (wf & measure): "
+                   f"{('wf' in ps) and ('measure' in ps)}\n")
+        file.write(f"each obligation self-prints a pending footer (>=2): "
+                   f"{ps.count('Unfinished Proof') >= 2}\n")
+        file.write(f"no synthesized 'goal: evaluation pending' leak: "
+                   f"{'evaluation pending' not in ps}\n")
+    finally:
+        session.role = model.Role_Major()
+
+
+@model_test("Define_WorkerConfineReject", "Test_Define_WorkerConfineReject.thy", 10)
+async def _test_define_worker_confine_reject(root: Root, file: MyIO):
+    """§7.2 + §7.5 + §7.3a on one 2-obligation deferred Define:
+      - worker confinement: an obligation slot is in-scope, a global slot is OUT_OF_SCOPE;
+      - §7.5 (headline A+A2, through the dispatch gate): the worker is REJECTED when it
+        ``subagent``s one of its own obligations (obligation -> redirect-up -> Define = psr);
+      - §7.3a: after both obligations are filled, the Define subtree is finished."""
+    from .mcp_http_server import _subagent_tool_logic
+    from .model import WorkerHandle
+    session = root.session
+    session.age += 1
+    await root.fill("1", [Define.gen_single({
+        "thought": "Define halve; fake flag forces manual termination residuals",
+        "name": "halve",
+        "type": r"nat \<Rightarrow> nat",
+        "equations": [
+            "halve 0 = 0",
+            "halve (Suc 0) = 0",
+            "halve (Suc (Suc n)) = Suc (halve n)",
+        ],
+        "metric": [r"\<lambda>n::nat. n"],
+    })])
+    define_node = root.locate_node("1")
+    obl1 = root.locate_node("1.1")
+
+    session.role = model.Role_Worker(target=define_node, worker_handle=WorkerHandle(define_node, session))
+    try:
+        print_header("§7.2 worker confinement (_edit_verdict)", file)
+        v_in, _ = session._edit_verdict("1.1.1", "fill")      # inside the Define obligation
+        v_out, _ = session._edit_verdict("global.1", "fill")  # outside subtree(Define)
+        file.write(f"in-scope (obligation slot 1.1.1): {v_in}\n")
+        file.write(f"out-of-scope (global.1): {v_out}\n")
+
+        print_header("§7.5 worker subagent on its own obligation -> reject (whole goal)", file)
+        rel = session._display_id(obl1.id)   # obligation id relative to the Define scope
+        file.write(f"(obligation {obl1.id} shown to the worker as step `{rel}`)\n")
+        r, e = await _subagent_tool_logic(session, {"step_id": rel, "suggestions": "", "helpful_lemmas": []})
+        file.write(f"is_error={e}\n{r}\n")
+    finally:
+        session.role = model.Role_Major()
+
+    session.age += 1
+    await root.fill("1.1.1", [Obvious.gen_single({"facts": []})])
+    await root.fill("1.2.2", [Obvious.gen_single({"facts": []})])
+    s = set(); define_node.unfinished_nodes(s)
+    print_header("§7.3a after filling both obligations", file)
+    file.write(f"Define unfinished_nodes: {len(s)}\n")
+    file.write(f"Define is_proof_finished: {define_node.is_proof_finished()}\n")
+
+
+@model_test("Define_AutoProvedRefuse", "Test_Define_AutoProvedRefuse.thy", 8)
+async def _test_define_auto_proved_refuse(root: Root, file: MyIO):
+    """§7.3b: a structurally-recursive Define whose pat-completeness + termination
+    auto-close has ZERO deferred obligations and is_proof_finished() -> dispatching
+    ``subagent`` on it is refused 'already proved'."""
+    from .mcp_http_server import _subagent_tool_logic
+    session = root.session
+    session.age += 1
+    await root.fill("1", [Define.gen_single({
+        "thought": "structurally-recursive dbl auto-proves (no deferred obligations)",
+        "name": "dbl",
+        "type": r"nat \<Rightarrow> nat",
+        "equations": ["dbl 0 = 0", "dbl (Suc n) = Suc (Suc (dbl n))"],
+    })])
+    define_node = root.locate_node("1")
+    s = set(); define_node.unfinished_nodes(s)
+    print_header("auto-proved Define state", file)
+    file.write(f"obligations (unfinished in Define subtree): {len(s)}\n")
+    file.write(f"Define is_proof_finished: {define_node.is_proof_finished()}\n")
+    print_header("main agent subagent on auto-proved Define -> refuse 'already proved'", file)
+    r, e = await _subagent_tool_logic(session, {"step_id": "1", "suggestions": "", "helpful_lemmas": []})
+    file.write(f"is_error={e}\n{r}\n")
+
+
+@model_test("Define_DelegationSet", "Test_Define_DelegationSet.thy", 8)
+async def _test_define_delegation_set(root: Root, file: MyIO):
+    """§7.4 delegation set under A + A2:
+      - a Define ``_nearest_goal_for_subagent()`` returns the Define itself (A);
+      - a case GoalNode (a Branch INSIDE a Have) redirects UP to that enclosing
+        named block (A2) — NOT to itself and NOT to None."""
+    session = root.session
+    session.age += 1
+    await root.fill("1", [Have.gen_single({
+        "thought": "carve a sub-lemma to host a Branch",
+        "statement": {"english": "nonneg", "conclusion": r"(0::int) \<le> x * x"},
+        "name": "h1"})])
+    await root.fill("1.1", [Branch.gen_single({
+        "thought": "split on the sign of x",
+        "cases": [
+            {"statement": {"english": "x nonneg", "isabelle": r"x \<ge> 0", "name": "nonneg"}},
+            {"statement": {"english": "x negative", "isabelle": "x < 0", "name": "neg"}},
+        ]})])
+    have_node = root.locate_node("1")
+    branch_node = root.locate_node("1.1")
+    case_node = [c for c in branch_node.sub_nodes if isinstance(c, GoalNode)][-1]
+
+    await root.fill("2", [Define.gen_single({
+        "thought": "auto-proving define to check it returns self",
+        "name": "dbl2", "type": r"nat \<Rightarrow> nat",
+        "equations": ["dbl2 0 = 0", "dbl2 (Suc n) = Suc (dbl2 n)"]})])
+    define_node = root.locate_node("2")
+
+    print_header("§7.4 delegation set (A: Define->self; A2: case GoalNode->enclosing Have)", file)
+    file.write(f"Define {define_node.id} _nearest_goal_for_subagent() is the Define: "
+               f"{define_node._nearest_goal_for_subagent() is define_node}\n")
+    file.write(f"Have node id: {have_node.id}; case GoalNode id: {case_node.id}\n")
+    file.write(f"case GoalNode _nearest_goal_for_subagent() is the enclosing Have: "
+               f"{case_node._nearest_goal_for_subagent() is have_node}\n")
+    file.write(f"case GoalNode does NOT resolve to itself: "
+               f"{case_node._nearest_goal_for_subagent() is not case_node}\n")
+
+
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
     import msgpack as mp
     from IsaREPL import Client

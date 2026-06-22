@@ -1,0 +1,71 @@
+--------------------------------------------------
+Full tree (Plan role)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
+proof:
+  - step id: 1
+    thought: Define halve; fake flag forces manual termination residuals
+    operation: Define
+    name: halve
+    type: nat ⇒ nat
+    equations:
+      - halve 0 = 0
+      - halve (Suc 0) = 0
+      - halve (Suc (Suc n)) = Suc (halve n)
+    metric: \<lambda>n::nat. n
+    proof of termination:
+      - goal id: 1.1
+        goal: wf (measure (λ(n :: nat). n))
+        proof: empty
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1` to provide the proof.
+      - goal id: 1.2
+        goal: ∀(n :: nat). (n, Suc (Suc n)) ∈ measure (λ(n1 :: nat). n1)
+        proof:
+          - step id: 1.2.1
+            operation: Intro
+            fixing variables:
+              - n: nat
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.2` to provide the proof for the following goal.
+        pending proof goal:
+          (n, Suc (Suc n)) ∈ measure (λ(n1 :: nat). n1)
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  ∃(f :: nat ⇒ nat). f (Suc (Suc (Suc (Suc (0 :: nat))))) = Suc (Suc (0 :: nat))
+--------------------------------------------------
+Worker scope (target = Define)
+--------------------------------------------------
+variables:
+  - halve: nat ⇒ nat
+proof:
+  - goal id: 1
+    goal: wf (measure (λ(n :: nat). n))
+    proof: empty
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof.
+  - goal id: 2
+    goal: ∀(n :: nat). (n, Suc (Suc n)) ∈ measure (λ(n1 :: nat). n1)
+    proof:
+      - step id: 2.1
+        operation: Intro
+        fixing variables:
+          - n: nat
+    Unfinished Proof! Call command `edit` with action `fill` and target step `2.2` to provide the proof for the following goal.
+    pending proof goal:
+      (n, Suc (Suc n)) ∈ measure (λ(n1 :: nat). n1)
+--------------------------------------------------
+Worker quickview (target = Define)
+--------------------------------------------------
+- 1
+  Unfinished Proof. Call command `edit` with action `fill` and target step `1.1`
+  goal: wf (measure (λ(n :: nat). n))
+- 2
+  goal: ∀(n :: nat). (n, Suc (Suc n)) ∈ measure (λ(n1 :: nat). n1)
+  step 2.1: Intro
+    fixing variables:
+      - n: nat
+  Unfinished Proof. Fill step `2.2`
+  goal: (n, Suc (Suc n)) ∈ measure (λ(n1 :: nat). n1)
+
+both obligation goals visible (wf & measure): True
+each obligation self-prints a pending footer (>=2): True
+no synthesized 'goal: evaluation pending' leak: True

@@ -1,0 +1,16 @@
+--------------------------------------------------
+§7.2 worker confinement (_edit_verdict)
+--------------------------------------------------
+in-scope (obligation slot 1.1.1): EditVerdict.OK
+out-of-scope (global.1): EditVerdict.OUT_OF_SCOPE
+--------------------------------------------------
+§7.5 worker subagent on its own obligation -> reject (whole goal)
+--------------------------------------------------
+(obligation 1.1 shown to the worker as step `1`)
+is_error=True
+Delegating step `1` would hand the sub-agent the whole goal you are responsible for — there is no narrower sub-goal to scope it to. You should call `subagent` on a specific subgoal like Have, Suffices, Obtain etc, or prove the step `1` yourself.
+--------------------------------------------------
+§7.3a after filling both obligations
+--------------------------------------------------
+Define unfinished_nodes: 0
+Define is_proof_finished: True

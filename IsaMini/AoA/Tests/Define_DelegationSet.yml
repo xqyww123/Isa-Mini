@@ -1,0 +1,7 @@
+--------------------------------------------------
+§7.4 delegation set (A: Define->self; A2: case GoalNode->enclosing Have)
+--------------------------------------------------
+Define 2 _nearest_goal_for_subagent() is the Define: True
+Have node id: 1; case GoalNode id: 1.1.2
+case GoalNode _nearest_goal_for_subagent() is the enclosing Have: True
+case GoalNode does NOT resolve to itself: True
