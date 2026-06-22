@@ -1137,11 +1137,22 @@ val auto_apply_attrib : attribute =
      in fold apply_kind kinds context
     end)
 
-(* Names bound by the current goal's leading binders that an `Intro` would
+(* Names bound by the current goal's *leading* binders that an `Intro` would
    introduce (meta `⋀`, object `∀`, bounded `∀`), recursing through leading
-   `⟹`/`⟶` premises.  Used to tell apart "you referred to a goal parameter you
-   have not Intro'd yet" (harmless but unintended) from a genuine stray/typo.
-   Mirrors the positive cases of `Minilang.need_intro`. *)
+   `⟹`/`⟶` premises only.  Used to tell apart "you referred to a goal parameter
+   you have not Intro'd yet" (harmless but unintended) from a genuine stray/typo.
+   Mirrors the positive cases of `Minilang.need_intro`.
+
+   LEADING-ONLY ON PURPOSE — this collector is for `reject_stray_assumption_frees`
+   (Branch / Suffices / Obtain), which, when a stray free turns out to be a goal
+   binder, advises the agent to "introduce it with Intro first".  That advice
+   only WORKS for a leading ∀/⋀: `Intro` peels the goal's OUTERMOST binders, but
+   a variable bound deep under ∃ (or inside a comprehension / premise binder) it
+   cannot reach at all — reaching that needs `Witness`/`Obtain` instead.  So a
+   deeper binder must NOT be classified as a "goal parameter" here, or we'd emit
+   an instruction the agent literally cannot carry out.  This is exactly why this
+   stays leading-only while the term guard uses the RECURSIVE `term_binder_names`
+   below — see the note there for the other half of the contrast. *)
 fun leading_intro_var_names t =
   (case t of
      Const (\<^const_name>\<open>Pure.all\<close>, _) $ Abs (n, _, b) => n :: leading_intro_var_names b
@@ -1155,6 +1166,36 @@ fun leading_intro_var_names t =
 fun goal_intro_var_names s =
   (case Minilang.leading_goal_data s of
      (SOME (_, g), _) => leading_intro_var_names g
+   | (NONE, _) => [])
+
+(* Every bound-variable name occurring ANYWHERE in a term — under any quantifier
+   (∀/∃/⋀/Ball/Bex/…) or λ — collected recursively, not just along the leading
+   binder chain (contrast `leading_intro_var_names`).
+
+   RECURSIVE ON PURPOSE — this collector is for `reject_undeclared_frees`
+   (Witness / Induction / CaseSplit / instantiation values).  Those ops' terms
+   are NOT planted as hypotheses, so a free in them can never trigger the THM-0
+   "generalize: variable free in assumptions" bug that the assumption guard
+   exists to prevent.  The term guard's only job is therefore to ask "is this
+   name a typo the agent invented?": any variable the goal binds — even one deep
+   under ∃ / a comprehension — is NOT a typo, so it is silently PASSED THROUGH
+   (left to auto-Intro / the op itself / the kernel downstream).  Passing through
+   needs no judgement about whether the binder is reachable by `Intro`, so
+   recursing over the WHOLE goal is exactly right.  The assumption guard cannot do
+   this: it must REJECT a stray free (not pass it), and its "Intro first" advice
+   is only valid for leading binders — hence it keeps the leading-only
+   `leading_intro_var_names`.  See that function for the other half of the
+   contrast.  (e.g. `Induction (Suc n)` on `∀n. P n`, or an instantiation value
+   mentioning an `m` bound deep inside the goal: all passed through here.) *)
+fun term_binder_names t =
+  (case t of
+     Abs (n, _, b) => insert (op =) n (term_binder_names b)
+   | u $ v => union (op =) (term_binder_names u) (term_binder_names v)
+   | _ => [])
+
+fun goal_binder_names s =
+  (case Minilang.leading_goal_data s of
+     (SOME (_, g), _) => term_binder_names g
    | (NONE, _) => [])
 
 (* Shared rejection message for undeclared free variable(s) in an agent-authored
@@ -1171,19 +1212,20 @@ fun undeclared_free_msg opr_kind subject_noun names =
   end
 
 (* Reject an agent-authored term that mentions a genuinely undeclared free
-   variable — one that is neither fixed in the current context NOR a leading
-   ∀/⋀ binder of the current goal.  A typo guard shared by Witness, Induction
+   variable — one that is neither fixed in the current context NOR a variable
+   bound ANYWHERE in the current goal.  A typo guard shared by Witness, Induction
    (target / arbitrary), CaseSplit, and instantiation values: such a ghost is
    almost always a mistyped name, and proceeding leaves a silently wrong /
-   unprovable state.  A leading goal binder is deliberately NOT treated as a
-   ghost — an op may legitimately name it (e.g. `Induction n` on a goal
-   `∀n. P n`), which the framework auto-introduces; it is left to that
-   machinery, not reported here.  Schematic `?x` likewise need no handling —
-   the term readers reject them upstream (see `rewrite_term_read_error`). *)
+   unprovable state.  A variable the goal binds — a leading ∀/⋀, or one nested
+   under ∃ / a bounded quantifier / λ — is deliberately NOT treated as a ghost:
+   an op may legitimately name it (e.g. `Induction (Suc n)` on `∀n. P n`), and it
+   is left to the downstream machinery (auto-Intro / the op itself), not reported
+   here.  Schematic `?x` likewise need no handling — the term readers reject them
+   upstream (see `rewrite_term_read_error`). *)
 fun reject_undeclared_frees opr_kind subject_noun s terms =
   let
     val ctxt = Minilang.context_of s
-    val goal_params = goal_intro_var_names s
+    val goal_params = goal_binder_names s
     val ghosts =
       fold (fn t =>
              fold (fn (nm, _) =>
@@ -1249,6 +1291,16 @@ fun apply_post_insts rounds state =
    goal-parameter branch is a defensive fallback; the genuinely-stray branch is
    the one the THM-0 bug actually exercises (a variable trapped in a
    comprehension / premise binder, which auto-Intro does NOT touch).
+
+   Callers MUST pass `goal_intro_var_names` (leading-only) here, NOT the recursive
+   `goal_binder_names` the term guard (`reject_undeclared_frees`) uses.  The
+   goal-parameter branch's advice — "introduce it with Intro first" — only holds
+   for a leading ∀/⋀ binder; a deeper binder (under ∃, a comprehension, …) cannot
+   be reached by `Intro` at all, so it MUST fall through to the genuine/typo
+   branch rather than be told to Intro something Intro cannot touch.  (The term
+   guard has the opposite freedom — it passes goal-bound names through instead of
+   advising — so it recurses; see `leading_intro_var_names` / `term_binder_names`
+   for the full contrast.)
 
    This runs inside `Inner_Syntax_Error.guard`'s action thunk, which executes
    BEFORE the `marker_strings` reprobe; the `OPR_FAIL` we raise (not an ERROR)
