@@ -1,0 +1,28 @@
+{
+  "type": "object",
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["accept", "reject"]
+    },
+    "constraints": {
+      "type": "array",
+      "description": "Required when verdict is `accept`, restate the constraint(s) you accept. Correct the sub-agent's proposed constraints if theirs are not right.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "term": { "type": "string", "description": "Isabelle/HOL term with all literal numbers annotated with types" }
+        },
+        "required": ["name", "term"]
+      }
+    },
+    "reason": {
+      "type": "string",
+      "description": "An explanation. Required when you `reject`. Also give one when you `accept` but revised the proposed constraints, so the sub-agent learns what changed."
+    }
+  },
+  "required": ["verdict"],
+  "additionalProperties": false
+}

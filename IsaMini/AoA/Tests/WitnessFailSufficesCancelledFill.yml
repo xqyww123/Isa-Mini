@@ -1,0 +1,83 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Fill 1 (Witness) failure: None
+--------------------------------------------------
+After Witness (expected: FAILURE)
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: supply a witness (the goal is not existential, so this fails)
+    operation: Witness
+    witness: 0
+    Error: The proof goal is not led by an existential quantification
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  (0 :: int) ≤ x * x
+Fill 2 (Suffices) failure: None
+--------------------------------------------------
+After Suffices (expected: CANCELLED / pending)
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: supply a witness (the goal is not existential, so this fails)
+    operation: Witness
+    witness: 0
+    Error: The proof goal is not led by an existential quantification
+  - step id: 2
+    thought: it suffices to show a stronger statement
+    operation: Suffices
+    statement:
+      english: the square plus one is positive
+      conclusion: x * x + 1 > 0
+    Error: the evaluation is cancelled due to failure of step `1`
+    notice: Need to show the provided statement implies the goal
+    proof: empty
+    Error: Evaluation cancelled due to failures above
+Error: Evaluation cancelled due to failures above
+GoalNode children: 2
+  1: Witness status=failure
+    resulting_state initialized: True
+  2: Suffices status=cancelled
+    resulting_state initialized: False
+BUG: Fill 2.1 raised InternalError: The beginning state of the execution is not initialized!
+--------------------------------------------------
+Final state
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: supply a witness (the goal is not existential, so this fails)
+    operation: Witness
+    witness: 0
+    Error: The proof goal is not led by an existential quantification
+  - step id: 2
+    thought: it suffices to show a stronger statement
+    operation: Suffices
+    statement:
+      english: the square plus one is positive
+      conclusion: x * x + 1 > 0
+    Error: cancelled (step `1` failed)
+    proof:
+      - step id: 2.1
+        operation: Obvious
+        Error: Not yet evaluated
+    Error: Evaluation cancelled due to failures above
+Error: Evaluation cancelled due to failures above

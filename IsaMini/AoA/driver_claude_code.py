@@ -73,7 +73,7 @@ class ClaudeCode(LMDriver):
         "comment": "mcp__proof__comment",
         "recall": "Read",
         "recall_removed": "mcp__proof__recall_removed",
-        "request_lemmas": "mcp__proof__request_lemmas",
+        "request": "mcp__proof__request",
         "report": "mcp__proof__report",
         "subagent": "mcp__proof__subagent",
         "cancel_subagent": "mcp__proof__cancel_subagent",
@@ -85,6 +85,7 @@ class ClaudeCode(LMDriver):
         "answer_refutation": "mcp__proof__answer_refutation",
         "answer_struggle_assessment": "mcp__proof__answer_struggle_assessment",
         "answer_missing_lemmas": "mcp__proof__answer_missing_lemmas",
+        "answer_constraint_request": "mcp__proof__answer_constraint_request",
         "refresh": "mcp__proof__refresh",
     }
     TOOL_WHITELIST = _NON_PROOF_TOOLS + list(_TOOL_NAME_MAP.values())

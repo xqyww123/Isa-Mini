@@ -8,13 +8,13 @@ refute event detail: The goal contradicts premises
 refute rejected result mentions reject: True
 refute rejected is_error: False
 refute accepted result mentions accept: True
-request_lemmas event: WorkerRequestLemmas
-request_lemmas event lemmas count: 1
-request_lemmas resume mentions sq_nonneg: True
-request_lemmas resume is_error: False
-empty request_lemmas is_error: True
+non-general request is_error: True
+non-general request names undeclared 'x': True
+non-general request mentions for_any: True
+non-general request pushed NO event: True
+empty request is_error: True
 invalid type is_error: True
 invalid type result contains 'Invalid': True
 no-handle worker: InternalError raised
-planner request_lemmas is_error: False
-planner request_lemmas mentions global: True
+planner request is_error: False
+planner request mentions global: True

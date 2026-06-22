@@ -2865,14 +2865,18 @@ async def _validate_constraint_term(target: 'NonLeaf_Node', name: str,
       1. PARSE/TYPE — ``check_term`` succeeds;
       2. IS-A-PROPOSITION — its type is ``bool``/``prop`` (read off the SAME
          ``check_term`` return — pure Python, no extra ML round-trip);
-      3. SCOPE — no undeclared free variable, no schematic.
-    Parsed against ``target._state_after_beginning()``, where the target's
-    ``for_any`` vars and existing premises are IN SCOPE (fixed), so a declared
-    variable is NOT free and only a genuinely-undeclared variable is flagged
-    (the OPPOSITE policy from ``general_lemmas``: there an undeclared free means
-    "declare it"; here it means the constraint references something out of
-    scope). A bad constraint is rejected BEFORE any tree mutation; the in-place
-    ``add_constraints`` revert is the defence-in-depth backstop."""
+      3. SCOPE — every free variable is in scope (the target's ``for_any`` vars, or
+         the enclosing context); no schematic.
+    Parsed against ``target._state_after_beginning()``. The enclosing-context vars
+    are FIXED there (not free), but the target's ``for_any`` vars are BOUND in the
+    goal (``⋀x. …``, not fixed in the context — ``goal.context.vars`` is empty for a
+    ``for_any`` Have), so ``check_term`` reports them as frees; we ALLOW exactly
+    those (plus the enclosing fixed vars, which never surface as frees). A free that
+    is NEITHER is genuinely undeclared → reject (the OPPOSITE policy from
+    ``general_lemmas``: there an undeclared free means "declare it"; here it means
+    the constraint references something out of scope). A bad constraint is rejected
+    BEFORE any tree mutation; the in-place ``add_constraints`` revert is the
+    defence-in-depth backstop."""
     state = target._state_after_beginning()  # type: ignore[attr-defined]  — only ever an amendable StdBlock (Have/SetupRewriting)
     if not state.initialized():
         # No usable state to anchor the parse — defer to add_constraints'
@@ -2890,7 +2894,11 @@ async def _validate_constraint_term(target: 'NonLeaf_Node', name: str,
         return (f"The constraint `{name}` is not a proposition — its type is "
                 f"`{term_type.unicode}`. A constraint must be a true/false "
                 f"statement (a `bool`).")
-    bad = [f.unicode for f in frees] + [s.unicode for s in schematics]
+    # The target's for_any vars are legitimate frees here (bound in its goal); any
+    # OTHER free is undeclared. Schematics are always rejected.
+    allowed = {n.unicode for n, _ in getattr(target, "for_any", [])}
+    bad = [f.unicode for f in frees if f.unicode not in allowed]
+    bad += [s.unicode for s in schematics]
     if bad:
         vlist = ", ".join(f"`{b}`" for b in bad)
         return (f"The constraint `{name}` references undeclared variable(s) "
@@ -7201,8 +7209,8 @@ def _validate_constraint_binding(data: Any, path: str) -> ConstraintBinding:
     return _validate_typed_dict(ConstraintBinding, data, path)
 
 class SuggestedLemma(TypedDict):
-    """One item of the `request_lemmas` tool's `suggested_lemmas` wish-list
-    (a worker→planner channel). `statement` reuses the `LongStatement` block
+    """One item of the `request` tool's `general_lemmas` list (a worker→dispatcher
+    channel). `statement` reuses the `LongStatement` block
     (`{english, conclusion, for_any?, premises?}`) shared with `Have`/`edit`, so
     a worker can declare the lemma's universally-quantified variables (`for_any`)
     and premises — exactly the structure the auto-prove-general path needs to
@@ -10731,14 +10739,15 @@ class Role_Worker:
     # The live ``WorkerHandle`` mediating
     # this worker's events (``WorkerHandle`` is defined below in this module).
     worker_handle: 'WorkerHandle | None' = None
-    # True iff this worker was dispatched by the request_lemmas auto-prove-general
-    # path to prove an auto-declared global helper lemma, synchronously, on behalf
-    # of a NON-adjudicating requester (the requesting worker is not a planner — it
-    # cannot review a refutation or supply sub-lemmas). "Headless" = no supervising
-    # agent above it to resolve a non-terminal park, so such a prover must yield
-    # ONLY terminal outcomes: the struggle/difficulty checkpoint is disabled for it
-    # (`_should_struggle_checkpoint`) and its own `request_lemmas` is general-only
-    # (non-general items rejected, never parked). See `_run_worker_on`.
+    # True iff this worker was dispatched by the `request` auto-prove-general path
+    # to prove an auto-declared global helper lemma, synchronously, on behalf of a
+    # NON-adjudicating requester (the requesting worker is not a planner — it cannot
+    # review a refutation or supply sub-lemmas). "Headless" = no supervising agent
+    # above it to resolve a non-terminal park, so such a prover must yield ONLY
+    # terminal outcomes: the struggle/difficulty checkpoint is disabled for it
+    # (`_should_struggle_checkpoint`); its own `request` rejects non-general lemmas
+    # (never parks) and resolves any constraint it raises IN-LOOP (never parks).
+    # See `_run_worker_on`.
     headless: bool = False
 
 @dataclass
@@ -12290,11 +12299,12 @@ class Session:
         ``initialize``, and re-called when the in-scope facts change (see below).
 
         The facts in scope BEFORE the target are immutable for the worker's lifetime
-        with ONE exception: a ``request_lemmas`` call can have the planning agent
-        add (and prove) helper lemmas into the global env — i.e. into the facts in scope
-        before the target — while the worker is parked. The ``request_lemmas`` tool therefore
-        re-invokes this method when the worker resumes, so the cache picks up the new
-        lemmas. The method is idempotent: it just recomputes ``_worker_premise_cache``.
+        with ONE exception: a ``request`` call auto-proves general helper lemmas into
+        the global env — i.e. into the facts in scope before the target. (A ``request``
+        constraint instead amends the worker's OWN target, not a before-target fact.)
+        The ``request`` tool therefore re-invokes this method when the worker resumes,
+        so the cache picks up the new lemmas. The method is idempotent: it just
+        recomputes ``_worker_premise_cache``.
         """
         if not self.is_worker:
             return
@@ -12323,10 +12333,15 @@ class Session:
             target = self.role.target  # type: ignore[attr-defined]  — is_worker ⟹ role is Role_Worker
             self.reported_scope_facts = {n.ascii for n in target._ctxt_before_me().hyps}
 
-    def consume_new_scope_facts_notice(self) -> str:
+    def consume_new_scope_facts_notice(
+            self,
+            banner: str = "New facts have arrived and are now available "
+                          "in your scope") -> str:
         """Render a notice listing the in-scope-before-target facts added since the last
         report, and mark them reported. Returns "" if there are none / this is not a
         worker. Idempotent: each fact is surfaced exactly once across repeated calls.
+        ``banner`` is the heading (the ``request`` resume path overrides it to flag that
+        an accepted general lemma / constraint may have been revised by the dispatcher).
 
         The worker's OWN subtree edits live AFTER the before-target context, so they are
         never in ``_ctxt_before_me().hyps`` and can never be falsely reported here."""
@@ -12344,9 +12359,7 @@ class Session:
         if not new:
             return ""
         buf = StringIO()
-        print_hyps(new, 0, buf, {},
-                   banner="New facts have arrived and are now available "
-                          "in your scope")
+        print_hyps(new, 0, buf, {}, banner=banner)
         return buf.getvalue()
 
     async def _render_useful_lemmas(self) -> str:
@@ -12807,10 +12820,11 @@ class WorkerHandle:
         self._task: 'asyncio.Task | None' = None
         self._sub: 'LMDriver | None' = None
         self._pending_review: 'asyncio.Future[tuple[bool, str | None]] | None' = None
-        # Pending resume future for a PARKed worker — shared by both park kinds
-        # (request_lemmas and struggle-checkpoint difficulty), since a worker is
-        # only ever parked on one of them at a time. Resolved with a feedback
-        # STRING — a distinct result type from _pending_review's tuple.
+        # Pending resume future for a parked/suspended worker — shared by the
+        # constraint adjudication (resumed in-loop, or after a structural-restructure
+        # park) and the struggle-checkpoint difficulty park, since a worker is only
+        # ever waiting on one of them at a time. Resolved with a feedback STRING — a
+        # distinct result type from _pending_review's tuple.
         self._pending_resume: 'asyncio.Future[str] | None' = None
         # Set once the worker's accumulated cost has been rolled into the parent
         # (see _settle_costs) — makes the roll-up exactly-once across the _run
@@ -12907,7 +12921,7 @@ class WorkerHandle:
 
     async def _wait_next_event(self):
         """Return the next worker event. A queued event (refute / surrender /
-        request_lemmas / difficulty) always wins over task completion: ``put_nowait`` synchronously
+        request-constraints / difficulty) always wins over task completion: ``put_nowait`` synchronously
         resolves the pending ``queue.get()`` future, and FIFO callback
         ordering guarantees we observe it before the task's completion."""
         assert self._task is not None
@@ -12939,8 +12953,9 @@ class WorkerHandle:
 
     async def run_until_yield(self) -> 'WorkerYield':
         """Drive the worker until it yields control back to the main agent.
-        Re-entered on resume (after the main agent answers a request_lemmas or
-        a struggle-checkpoint difficulty park).
+        Re-entered on resume (after the main agent reworks the proof for a parked
+        constraint-needs-restructure worker, or answers a struggle-checkpoint
+        difficulty park).
 
         - ``WorkerRefute`` → reviewed in-loop via a fork
           (``Interaction_ReviewRefutation``). Reject → the worker resumes

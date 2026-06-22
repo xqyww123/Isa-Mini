@@ -1,19 +1,21 @@
 --------------------------------------------------
-1. handle-level park/resume (W1 dispatches W2 on 1.1)
+1. constraint REJECT -> in-loop resume (W1 dispatches W2 on 1.1)
 --------------------------------------------------
-park yield kind: lemmas
-park yield detail: 'need a squares lemma'
-park yield lemma count: 1
-handle still attached while parked: True
-pending_resume stored: True
-resume yield kind: proved
+interaction target: 1.1
+interaction constraint count: 1
+target amendable (Have): True
+reject terminal yield kind: proved
+worker resumed with rejection: True
 detached after finish: True
 --------------------------------------------------
-2. tool resume path + rebase-on-resume
+2. accept-restructure -> park -> subagent-tool resume + rebase
 --------------------------------------------------
+park yield kind: constraint_needs_restructure
+park yield detail: 'x ≠ 0'
+handle still attached while parked: True
+pending_resume stored: True
 resume tool is_error: False
 feedback delivered to worker: True
 feedback carries rebased 'step 1' (1.2.1 -> 1): True
-feedback carries helpful lemma: True
 dispatcher outcome (worker can't close 1.2): True
 detached after tool resume: True

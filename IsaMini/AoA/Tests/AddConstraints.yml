@@ -1,0 +1,28 @@
+--------------------------------------------------
+1. can_add_constraints per node type
+--------------------------------------------------
+Have amendable: True
+Have overrides: True
+SetupRewriting overrides: True
+Obtain NOT amendable: True
+Suffices NOT amendable: True
+--------------------------------------------------
+2. constraint pre-validation gates
+--------------------------------------------------
+gate rejects non-proposition (n+1): True
+gate rejects undeclared free z: True
+gate passes good proposition (n≠0): True
+--------------------------------------------------
+3. add_constraints amends IN PLACE
+--------------------------------------------------
+fact before amend: n * n ≥ 0
+add_constraints success (returns None): True
+SAME object after amend (no retarget): True
+fact after amend (conditional): (n ≠ (0::int)) ⟹ n * n ≥ 0
+premises now: [('hpos', 'n ≠ (0::int)')]
+--------------------------------------------------
+4. bad premise reverts (node survives)
+--------------------------------------------------
+bad premise rejected (returns a message): True
+fact unchanged after revert: (n ≠ (0::int)) ⟹ n * n ≥ 0
+premises unchanged after revert: True

@@ -1,9 +1,9 @@
 {
   "type": "object",
   "properties": {
-    "suggested_lemmas": {
+    "general_lemmas": {
       "type": "array",
-      "description": "Strongly recommend the most general form for each requested lemma (variables declared in for_any).",
+      "description": "Each MUST be fully general — every free variable declared in `for_any`. General lemmas are auto-proved and made available in your scope; a non-general item is rejected (declare its variables in `for_any` and resubmit).",
       "items": {
         "type": "object",
         "properties": {
@@ -46,6 +46,19 @@
           }
         },
         "required": ["name", "statement"]
+      }
+    },
+    "constraints": {
+      "type": "array",
+      "description": "Conditions you suspect were forgotten to be provided.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "description": { "type": "string", "description": "what the condition is and why your sub-goal needs it" },
+          "proposition": { "type": "string", "description": "Isabelle/HOL term with all literal numbers annotated with types" }
+        },
+        "required": ["description", "proposition"]
       }
     },
     "detail": {

@@ -47,13 +47,14 @@ from .model import (
     Parse_Op_List, Interaction_BadAnswer,
     AnswerIndexes, AnswerIndex, AnswerIndexesOrName, AnswerIndexesOrSpec,
     AnswerInstantiate, AnswerRefutation, AnswerStruggleAssessment,
-    AnswerMissingLemmas,
+    AnswerMissingLemmas, AnswerConstraintRequest,
     TOOL_EDIT, TOOL_DELETE, TOOL_COMMENT, TOOL_READ, TOOL_RECALL_REMOVED,
     TOOL_REQUEST_LEMMAS, TOOL_REPORT, TOOL_SUBAGENT, TOOL_CLOSE_SUBAGENT,
     DeletedEntry, CommentOutcome,
     TOOL_ANSWER_INDEXES, TOOL_ANSWER_INDEX, TOOL_ANSWER_INDEXES_OR_NAME,
     TOOL_ANSWER_INDEXES_OR_SPEC, TOOL_ANSWER_INSTANTIATE,
     TOOL_ANSWER_REFUTATION, TOOL_ANSWER_STRUGGLE_ASSESSMENT,
+    TOOL_ANSWER_CONSTRAINT_REQUEST,
     Interaction_StruggleCheckpoint, Interaction_DifficultyEvaluation,
     Interaction_ConfirmLargeDelete,
     LARGE_DELETE_PROVED_THRESHOLD, LARGE_DELETE_TOTAL_THRESHOLD,
@@ -89,7 +90,7 @@ def _load_schema(filename: str) -> dict:
 _cc_edit_schema_raw = _load_schema("cc_edit.jsonc")
 _cc_delete_schema = _load_schema("cc_delete.jsonc")
 _cc_read_schema = _load_schema("cc_recall.jsonc")
-_cc_request_lemmas_schema = _load_schema("cc_request_lemmas.jsonc")
+_cc_request_lemmas_schema = _load_schema("cc_request.jsonc")
 _cc_report_schema = _load_schema("cc_report.jsonc")
 _cc_answer_indexes_schema = _load_schema("cc_answer_indexes.jsonc")
 _cc_answer_index_schema = _load_schema("cc_answer_index.jsonc")
@@ -99,6 +100,7 @@ _cc_answer_instantiate_schema = _load_schema("cc_answer_instantiate.jsonc")
 _cc_answer_refutation_schema = _load_schema("cc_answer_refutation.jsonc")
 _cc_answer_struggle_assessment_schema = _load_schema("cc_answer_struggle_assessment.jsonc")
 _cc_answer_missing_lemmas_schema = _load_schema("cc_answer_missing_lemmas.jsonc")
+_cc_answer_constraint_request_schema = _load_schema("cc_answer_constraint_request.jsonc")
 _cc_subagent_schema = _load_schema("cc_subagent.jsonc")
 _cc_close_subagent_schema = _load_schema("cc_cancel_subagent.jsonc")
 _cc_recall_removed_schema = _load_schema("cc_recall_removed.jsonc")
@@ -214,16 +216,61 @@ def _assert_no_refs(schema: dict) -> None:
 _assert_no_refs(_cc_edit_schema_flat)
 
 
+def _merge_edit_operations_schema(flat: dict) -> dict:
+    """Codex variant of the ``edit`` schema: collapse the ``proof_operations``
+    item UNION into a SINGLE permissive object.
+
+    codex-cli 0.141.0's MCP->model schema sanitizer empties every ``anyOf``/
+    ``oneOf`` branch (and every ``$ref``) to ``{}`` (wire-verified), so a
+    discriminated union reaches the model as ``items: {anyOf: [{}, ...]}`` — the
+    ``operation`` discriminator and all field names lost, leaving the model to
+    guess. Merging the operation members into one object — ``operation`` as an
+    enum of the member consts, plus the union of all member properties (first wins
+    on key collision), ``required: ["operation"]`` — survives the sanitizer: the
+    model receives the discriminator enum and every field name. codex still
+    empties nested object/array property *values* to ``{}``, so structured
+    sub-fields keep only their name (their shape must be conveyed in the tool
+    description); the model's emitted ops are unchanged and still validated
+    against the real schema server-side."""
+    import copy
+    flat = copy.deepcopy(flat)
+    items = flat["properties"]["proof_operations"]["items"]
+    members = items.get("anyOf") or items.get("oneOf") or [items]
+    op_consts: list = []
+    merged_props: dict = {}
+    for m in members:
+        props = m.get("properties", {})
+        const = props.get("operation", {}).get("const")
+        if const is not None and const not in op_consts:
+            op_consts.append(const)
+        for k, v in props.items():
+            if k != "operation":
+                merged_props.setdefault(k, v)  # first wins on collision
+    flat["properties"]["proof_operations"]["items"] = {
+        "type": "object",
+        "properties": {"operation": {"type": "string", "enum": op_consts},
+                       **merged_props},
+        "required": ["operation"],
+        "additionalProperties": False,
+    }
+    return flat
+
+
+_cc_edit_schema_codex = _merge_edit_operations_schema(_cc_edit_schema_flat)
+_assert_no_refs(_cc_edit_schema_codex)
+
+
 # ============================================================================
 # Permission Check (both modes)
 # ============================================================================
 
 _MUTATION_TOOLS = frozenset({
     TOOL_EDIT, TOOL_DELETE, TOOL_COMMENT, TOOL_SUBAGENT, TOOL_CLOSE_SUBAGENT,
-    # `request_lemmas` is channel-routed (it can become the `_suspended_task`) and
-    # its auto-prove-general path mutates the global env — so, like the others, it
-    # must be blocked by `_check_tool_permission` while a non-forking interaction is
-    # pending (else it would slip past and hit the generic busy-guard instead).
+    # `request` is channel-routed (it can become the `_suspended_task`) and both its
+    # auto-prove-general path (global env) and its constraint path (an amend on a
+    # delegated block) mutate the tree — so, like the others, it must be blocked by
+    # `_check_tool_permission` while a non-forking interaction is pending (else it
+    # would slip past and hit the generic busy-guard instead).
     TOOL_REQUEST_LEMMAS,
 })
 
@@ -329,7 +376,7 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         if verdict is EditVerdict.OUT_OF_SCOPE:
             error_msg = ("This step is outside the goal you were asked to prove — you may "
                          "only edit within your own sub-proof. If you need a fact established "
-                         "elsewhere, use `request_lemmas`.")
+                         "elsewhere, use `request`.")
             session.log_tool_response(_tn, f"ERROR: {error_msg}")
             return (error_msg, True)
         if verdict is EditVerdict.LOCKED:
@@ -476,7 +523,7 @@ async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             if verdict is EditVerdict.OUT_OF_SCOPE:
                 error_msg = ("This step is outside the goal you were asked to prove — you may "
                              "only edit within your own sub-proof. If you need a fact established "
-                             "elsewhere, use `request_lemmas`.")
+                             "elsewhere, use `request`.")
                 session.log_tool_response(_tn, f"ERROR: {error_msg}")
                 return (error_msg, True)
         # Locate every unique target once; reused by the large-delete gate and
@@ -619,7 +666,7 @@ async def _comment_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             if verdict is EditVerdict.OUT_OF_SCOPE:
                 error_msg = ("This step is outside the goal you were asked to prove — you may "
                              "only edit within your own sub-proof. If you need a fact established "
-                             "elsewhere, use `request_lemmas`.")
+                             "elsewhere, use `request`.")
                 session.log_tool_response(_tn, f"ERROR: {error_msg}")
                 return (error_msg, True)
         if action == "comment":
@@ -718,6 +765,16 @@ def _parse_answer_payload(tool_name: str, args: dict):
             items = ([i for i in raw if isinstance(i, dict)]
                      if isinstance(raw, list) else [])
             return AnswerMissingLemmas(missing_lemmas=items)
+        case "answer_constraint_request":
+            raw = args.get("constraints")
+            # Defensive (mirrors answer_missing_lemmas): keep only dict items so a
+            # malformed answer can't crash the interaction's `answer()`.
+            cons = ([i for i in raw if isinstance(i, dict)]
+                    if isinstance(raw, list) else [])
+            return AnswerConstraintRequest(
+                verdict=str(args.get("verdict") or ""),
+                constraints=cons,
+                reason=str(args.get("reason") or ""))
         case _:
             return f"Unknown answer tool: {tool_name}"
 
@@ -1313,20 +1370,30 @@ def _requested_lemma_failed_line(name: str, reason: str) -> str:
 
 
 def _requested_lemma_undeclared_line(name: str, blocking: 'list[str]') -> str:
-    """§G3 line: a requested lemma's free variables are not declared in for_any."""
-    vlist = ", ".join(blocking)
-    return (f"Requested lemma `{name}` contains free variable(s) `{vlist}` that "
-            f"are not declared in `for_any`.")
+    """Force-general rejection line: a requested `general_lemmas` item has free
+    variables not declared in `for_any`. Singular/plural is COMPUTED (no lazy
+    "(s)"); "all its variables" stays plural — it is the rule."""
+    vlist = ", ".join(f"`{v}`" for v in blocking)
+    noun = "a free variable" if len(blocking) == 1 else "free variables"
+    return (f"A general lemma must declare all its variables in `for_any`, but "
+            f"the requested `{name}` has {noun} {vlist}.")
 
 
-async def _request_lemmas_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
-    """Dual-role `request_lemmas`.
+async def _request_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
+    """Dual-role `request`.
 
-    - **Worker (sub-agent)**: a worker→planner channel. The worker submits a
-      loose wish-list and BLOCKS until the planning agent reviews it, authors +
-      proves any accepted helper lemmas into the global env, and hands back a
-      feedback string. The worker then KEEPS WORKING (non-terminal, like a
-      rejected refutation), now with the proven lemmas in scope.
+    - **Worker (sub-agent)**: a worker→dispatcher channel with two parameters:
+      - `general_lemmas`: genuinely GENERAL helper lemmas (every free variable
+        declared in `for_any`). FORCE-checked — a non-general item is REJECTED
+        upfront (process nothing; the worker resubmits with `for_any` complete),
+        never parked. General items are auto-declared in the global env and proved
+        by a headless prover, synchronously; the worker resumes with them in scope.
+      - `constraints`: conditions the worker's sub-goal needs but was not given
+        (the dispatcher under-provisioned it). Each is routed to the DISPATCHER
+        via ``WorkerRequestConstraints`` → ``Interaction_ReviewConstraint``
+        (resolved IN-LOOP in ``run_until_yield``); on accept for an amendable
+        target the condition is added as a premise of the delegated block.
+      The worker BLOCKS until both are processed, then KEEPS WORKING (non-terminal).
     - **Planning agent**: a no-argument hint pointing it at the right action —
       formalize and prove the missing lemma under `global` via `edit`/`fill`, or,
       when the global-lemma gate is on, declare it under `global` and dispatch a
@@ -1336,7 +1403,8 @@ async def _request_lemmas_tool_logic(session: Session, args: dict) -> tuple[str,
     session.log_tool_call(_tn, args)
 
     if isinstance(session.role, Role_Worker):
-        from .model import WorkerRequestLemmas, validate, SuggestedLemma
+        from .model import (WorkerRequestConstraints, validate, SuggestedLemma,
+                            RequestConstraint)
         handle = session.role.worker_handle
         if handle is None:
             raise InternalError(
@@ -1344,68 +1412,63 @@ async def _request_lemmas_tool_logic(session: Session, args: dict) -> tuple[str,
                 "via WorkerHandle).")
         # Worker-authored: absolutize its relative step ids for the dispatcher.
         detail = session._absolutize_text(args.get("detail", ""))
-        suggested_lemmas = args.get("suggested_lemmas")
-        if not suggested_lemmas:
-            msg = ("The `suggested_lemmas` argument is compulsory for the "
-                   "`request_lemmas` tool.")
+        general_lemmas = args.get("general_lemmas")
+        constraints = args.get("constraints")
+        if not general_lemmas and not constraints:
+            msg = ("Provide at least one of `general_lemmas` (helper lemmas to "
+                   "auto-prove) or `constraints` (conditions your sub-goal is "
+                   "missing).")
             session.log_tool_response(_tn, f"ERROR: {msg}")
             return (msg, True)
         # Don't trust the MCP/SDK JSON-schema (some drivers don't enforce it):
-        # validate the wish-list shape in Python (each item {name, statement},
-        # statement a LongStatement) before the generality check reads it.
+        # validate both argument shapes in Python before reading them.
         try:
-            suggested_lemmas = validate(
-                list[SuggestedLemma], suggested_lemmas, "suggested_lemmas")
+            general_lemmas = validate(
+                list[SuggestedLemma], general_lemmas or [], "general_lemmas")
+            constraints = validate(
+                list[RequestConstraint], constraints or [], "constraints")
         except ArgumentError as e:
             msg = str(e)
             session.log_tool_response(_tn, f"ERROR: {msg}")
             return (msg, True)
-        # Mirror EVERY requested lemma (general + non-general) into
-        # missing_lemmas.yaml — a worker asking for a lemma is a free signal for the
-        # external import-expansion loop. Keep the FLAT {name, english,
-        # isabelle_statement} shape that loop's watcher reads
-        # (tools/missing_lemma_loop/watcher.py), deriving the two strings from the
-        # LongStatement; do NOT leak the nested shape into that file.
-        session.log_missing_lemmas(
-            "request_lemmas",
-            [{"name": l["name"],
-              "english": l["statement"].get("english", ""),
-              "isabelle_statement": l["statement"].get("conclusion", ""),
-              "detail": detail}
-             for l in suggested_lemmas])
+        # Mirror every requested general lemma into missing_lemmas.yaml — a worker
+        # asking for a lemma is a free signal for the external import-expansion
+        # loop. Keep the FLAT {name, english, isabelle_statement} shape that loop's
+        # watcher reads (tools/missing_lemma_loop/watcher.py), deriving the two
+        # strings from the LongStatement; do NOT leak the nested shape into it.
+        if general_lemmas:
+            session.log_missing_lemmas(
+                "request",
+                [{"name": l["name"],
+                  "english": l["statement"].get("english", ""),
+                  "isabelle_statement": l["statement"].get("conclusion", ""),
+                  "detail": detail}
+                 for l in general_lemmas])
 
-        # Classify each lemma by generality against the GLOBAL fill-slot state
-        # (prior global declarations visible; worker-local fixes excluded).
+        # FORCE-GENERAL (all workers): classify each requested lemma against the
+        # GLOBAL fill-slot state (prior global declarations visible; worker-local
+        # fixes excluded). Any non-general item REJECTS the whole call upfront
+        # (process nothing) so it resubmits with every free variable declared in
+        # `for_any` — the already-general items are then auto-proved cleanly on the
+        # retry, with no duplicate global Haves. This replaces v3's non-general
+        # planner-park branch entirely.
         global_env = session.root.global_env
         slot_state = global_env._resulting_state_of_all_children()
-        general_items: list = []
-        nongeneral_items: list = []
-        blocking_by_name: dict[str, list[str]] = {}
-        for lem in suggested_lemmas:
+        nongeneral_lines: list[str] = []
+        for lem in general_lemmas:
             ok, blocking = await _lemma_statement_is_general(
                 slot_state, lem["statement"])
-            if ok:
-                general_items.append(lem)
-            else:
-                nongeneral_items.append(lem)
-                blocking_by_name[lem["name"]] = blocking
-
-        # 建议2 — a headless prover's request_lemmas is GENERAL-ONLY: it has no
-        # planner to author non-general lemmas and must never park. Reject upfront
-        # (process nothing) so it resubmits with every free variable declared; the
-        # already-general items are then auto-proved cleanly on the retry, with no
-        # duplicate global Haves.
-        if session.role.headless and nongeneral_items:  # type: ignore[union-attr]
-            lines = [_requested_lemma_undeclared_line(lem["name"],
-                                                      blocking_by_name[lem["name"]])
-                     for lem in nongeneral_items if blocking_by_name.get(lem["name"])]
-            # Items non-general only because their term does not parse carry no
-            # variable names; relay that plainly so the message is never empty.
-            for nm in (lem["name"] for lem in nongeneral_items
-                       if not blocking_by_name.get(lem["name"])):
-                lines.append(f"Requested lemma `{nm}` could not be parsed as an "
-                             f"Isabelle term.")
-            msg = "\n".join(lines) + "\nYou must declare every free variable in `for_any`."
+            if not ok:
+                if blocking:
+                    nongeneral_lines.append(
+                        _requested_lemma_undeclared_line(lem["name"], blocking))
+                else:
+                    # Non-general only because the statement does not parse.
+                    nongeneral_lines.append(
+                        f"The requested lemma `{lem['name']}` could not be parsed "
+                        f"as an Isabelle term.")
+        if nongeneral_lines:
+            msg = "\n".join(nongeneral_lines)
             session.log_tool_response(_tn, f"ERROR: {msg}")
             return (msg, True)
 
@@ -1420,7 +1483,7 @@ async def _request_lemmas_tool_logic(session: Session, args: dict) -> tuple[str,
 
         # --- GENERAL path: auto-declare a global Have + prove it with a headless
         # prover, synchronously. proved → keep; otherwise → delete + relay reason. ---
-        for lem in general_items:
+        for lem in general_lemmas:
             nm = lem["name"]
             stmt = lem["statement"]
             slot = f"{global_env.id}.{len(global_env.sub_nodes) + 1}"
@@ -1446,31 +1509,32 @@ async def _request_lemmas_tool_logic(session: Session, args: dict) -> tuple[str,
             # Defense-in-depth backstop: the Have's beginning op auto-FIXES any
             # undeclared free into for_any, so extra fixes beyond the agent's
             # `_input_for_any` mean the lemma was actually non-general (a predicate
-            # false positive). Drop it and report the offending frees (§G3).
+            # false positive). Drop it and report the offending frees.
             if len(node.for_any) > len(node._input_for_any):
                 extra = [n.unicode for n, _ in node.for_any[len(node._input_for_any):]]
                 await session.root.delete([node.id])
-                outcome_lines.append(
-                    _requested_lemma_undeclared_line(nm, extra)
-                    + " You must declare every free variable in `for_any`.")
+                outcome_lines.append(_requested_lemma_undeclared_line(nm, extra))
                 continue
             # Synchronously dispatch the headless prover on the fresh global Have.
             # The node is freshly created under GlobalEnv (disjoint from this
             # worker's target subtree), so it holds no handle and blocks nobody.
             assert node.worker_handle is None
             outcome = await _run_worker_on(session, node, "", [], headless=True)
-            # A headless prover yields ONLY terminal outcomes (建议1/建议2 remove the
-            # difficulty/lemmas park arms; refute forks an autonomous adjudicator). A
-            # park kind here would mean that invariant broke — fail loudly instead of
-            # silently relaying a still-parked prover as a generic failure.
+            # A headless prover yields ONLY terminal outcomes (建议1 removes the
+            # difficulty park; refute forks an autonomous adjudicator; a constraint
+            # it raises on its OWN global Have is resolved IN-LOOP, never a park). A
+            # park kind here would mean that invariant broke — fail loudly.
             assert outcome.kind in {"proved", "could_not_prove",
                                     "surrendered", "refute_accepted"}, (
                 f"headless prover yielded non-terminal {outcome.kind!r}")
             if outcome.kind == "proved" and node.is_proof_finished():
                 any_scope_change = True
+                # Render the REAL (possibly constraint-amended) statement, not the
+                # originally-submitted bare conclusion — a constraint the prover
+                # raised on its own global Have may have made it conditional.
                 outcome_lines.append(
                     f"Requested lemma `{nm}` has been proved and is now available: "
-                    f"{stmt['conclusion']}.")
+                    f"{node.conditional_fact_statement()}.")
             else:
                 # PROVED ⟺ no unfinished nodes, so proved-but-unfinished cannot
                 # happen; surrendered / could_not_prove / refute_accepted land here.
@@ -1480,38 +1544,45 @@ async def _request_lemmas_tool_logic(session: Session, args: dict) -> tuple[str,
 
         session.working_block = saved_working_block
 
-        # --- NON-GENERAL path (normal worker only; headless rejected above): park
-        # for the planner to author + prove, exactly as before, but only the
-        # non-general subset. ---
-        planner_feedback = ""
-        if nongeneral_items:
+        # --- CONSTRAINTS path: route each to the DISPATCHER (the agent that
+        # dispatched this worker) for adjudication. The worker BLOCKS until the
+        # dispatcher's verdict comes back through run_until_yield's in-loop
+        # Interaction_ReviewConstraint (accept → amended in place / restructured;
+        # reject → rejection message). ---
+        constraint_feedback = ""
+        if constraints:
             fut: asyncio.Future = asyncio.get_running_loop().create_future()
             handle._event_queue.put_nowait(
-                WorkerRequestLemmas(detail=detail, lemmas=nongeneral_items,
-                                    response_future=fut))
-            planner_feedback = await fut
+                WorkerRequestConstraints(detail=detail, constraints=constraints,
+                                         response_future=fut))
+            constraint_feedback = await fut
             any_scope_change = True
 
         # New facts may now sit in scope BEFORE this worker's target (auto-proved
-        # general Haves and/or planner-authored lemmas) — the premise cache assumed
-        # that set immutable. Re-prefetch + refresh proof.yaml so the worker's view
-        # (and a later `recall`) reflect them.
+        # general Haves) and/or its OWN target may have gained a premise (an
+        # accepted constraint) — the premise cache assumed that set immutable.
+        # Re-prefetch + refresh proof.yaml so the worker's view (and a later
+        # `recall`) reflect them.
         if any_scope_change:
             await session._prefetch_worker_premises()
             session.refresh_YAML()
 
-        # Assemble ONE synchronous response: per-lemma outcomes, then the planner's
-        # guidance for any non-general subset, then a notice of the facts now newly
-        # in scope (appended at the end for LLM recency/salience).
+        # Assemble ONE synchronous response: per-lemma outcomes, then the
+        # constraint verdict, then a notice of the BEFORE-TARGET facts now newly in
+        # scope (auto-proved general lemmas; appended at the end for LLM recency).
+        # The constraint-amend of the worker's OWN target is NOT a before-target
+        # fact, so the notice does not cover it — `constraint_feedback` states it.
         parts = list(outcome_lines)
-        if planner_feedback:
-            parts.append(planner_feedback)
+        if constraint_feedback:
+            parts.append(constraint_feedback)
         feedback = "\n".join(p for p in parts if p)
-        notice = session.consume_new_scope_facts_notice()
+        notice = session.consume_new_scope_facts_notice(
+            banner="The following facts are now available in your scope "
+                   "(possibly modified from your original request)")
         if notice:
             feedback = (feedback + "\n\n" + notice) if feedback else notice
         if not feedback:
-            feedback = "No lemmas were processed."
+            feedback = "Nothing was processed."
         session.log_tool_response(_tn, feedback)
         return (feedback, False)
 
@@ -1537,7 +1608,7 @@ async def _run_worker_on(session: Session, node: NonLeaf_Node,
                          *, headless: bool = False) -> 'WorkerYield':
     """Fresh-dispatch core: attach a fresh ``WorkerHandle`` to ``node``, start the
     worker, and drive it to its first yield. Shared by the ``subagent`` tool
-    (``headless=False``) and the request_lemmas auto-prove-general path
+    (``headless=False``) and the ``request`` auto-prove-general path
     (``headless=True``). The CALLER owns every pre-check (blocker / orphan / depth)
     and the outcome ``match`` — this helper spans only the create→start→yield core.
     Cost settlement is NOT here: it fires in ``WorkerHandle._run``'s finally /
@@ -1575,9 +1646,10 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
     worker on the same node. Available to the main agent AND to workers (nested
     delegation). Drives the worker's event loop (`WorkerHandle.run_until_yield`)
     until it yields control back to the dispatcher (a terminal outcome, a
-    request_lemmas park, or a difficulty park from a system checkpoint).
-    When difficulty is yielded, a non-forking ``Interaction_DifficultyEvaluation``
-    asks the dispatcher to continue or abandon (auto-cancel + comment)."""
+    constraint-needs-restructure park, or a difficulty park from a system
+    checkpoint). When difficulty is yielded, a non-forking
+    ``Interaction_DifficultyEvaluation`` asks the dispatcher to continue or abandon
+    (auto-cancel + comment)."""
     _tn = session.tool_name(TOOL_SUBAGENT)
     session.log_tool_call(_tn, args)
 
@@ -1743,22 +1815,17 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
                    f"Reconsider the proof plan for this step.")
         case "refute_accepted":
             msg = f"The sub-agent argues the goal is unprovable:\n{detail_shown}"
-        case "lemmas":  # worker parked requesting helper lemmas (non-general subset)
-            buf = StringIO()
-            for lem in (outcome.lemmas or []):
-                lstmt = lem.get("statement") or {}
-                concl = (lstmt.get("conclusion") or "").replace("\n", " ")
-                buf.write(f"- {lem.get('name', '')}: {concl}\n")
-                print_indent(2, buf)
-                buf.write(f"{lstmt.get('english', '')}\n")
-            formulas = buf.getvalue()
-            msg = (f"The sub-agent requests helper lemmas to continue:\n"
-                   f"{formulas}\n"
-                   f"{detail_shown}\n"
-                   f"Consider providing these lemmas, then call `subagent` on step "
-                   f"{session._display_id(node.id)} again to resume the sub-agent, listing the lemmas you "
-                   f"built in `helpful_lemmas` and describing them in `suggestions` by name "
-                   f"or statement, NEVER by step id (the sub-agent cannot see your step numbering).")
+        case "constraint_needs_restructure":
+            # The dispatcher accepted a constraint the sub-agent reported, but the
+            # sub-agent's target cannot take it as a premise (Obtain/Suffices) — the
+            # proof structure must be reworked. The sub-agent is parked; resuming via
+            # `subagent` continues it, `cancel_subagent` drops it.
+            accepted = f"\nAccepted condition(s): {detail_shown}" if outcome.detail else ""
+            msg = (f"Sub-agent on step {session._display_id(node.id)} is suspended — "
+                   f"its sub-goal needs the proof structure reworked.{accepted}\n"
+                   f"Adjust the structure, then resume it via "
+                   f"`{session.tool_name(TOOL_SUBAGENT)}`, or drop it via "
+                   f"`{session.tool_name(TOOL_CLOSE_SUBAGENT)}`.")
         case _:  # "difficulty" — system checkpoint detected worker is struggling
             interaction = Interaction_DifficultyEvaluation(node, detail_shown)
             choice = await session.launch_interaction(interaction)
@@ -1899,8 +1966,8 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                "schema": _cc_query_schema, "annotations": _RO},
     "recall": {"description": "Recall proof state from `proof.yaml`. Use only when you have lost track.", "schema": _cc_read_schema, "annotations": _RO},
     "recall_removed": {"description": "Browse proof steps that were archived before deletion.", "schema": _cc_recall_removed_schema, "annotations": _RO},
-    "request_lemmas": {"description": "Report missing background lemmas and request that the external environment supply them.",
-                       "schema": _cc_request_lemmas_schema, "annotations": _ACT},
+    "request": {"description": "Request help with your sub-goal: declare general helper lemmas to be auto-proved, and/or report constraints your sub-goal is missing.",
+                "schema": _cc_request_lemmas_schema, "annotations": _ACT},
     "report": {"description": "Report that the goal is unprovable (refute), or surrender when you have exhausted your strategies.",
                  "schema": _cc_report_schema, "annotations": _ACT},
     "answer_indexes": {"description": "Answer by selecting indexes from the presented options", "schema": _cc_answer_indexes_schema, "annotations": _ACT},
@@ -1911,6 +1978,7 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "answer_refutation": {"description": "Accept or reject a subagent's claim that the goal is unprovable", "schema": _cc_answer_refutation_schema, "annotations": _ACT},
     "answer_struggle_assessment": {"description": "Internal tool; you will be explicitly prompted when to use it.", "schema": _cc_answer_struggle_assessment_schema, "annotations": _ACT},
     "answer_missing_lemmas": {"description": "Internal tool; you will be explicitly prompted when to use it.", "schema": _cc_answer_missing_lemmas_schema, "annotations": _ACT},
+    "answer_constraint_request": {"description": "Internal tool; you will be explicitly prompted when to use it.", "schema": _cc_answer_constraint_request_schema, "annotations": _ACT},
     "subagent": {"description": "Launch or resume a sub-agent to prove a goal or repair a proof in isolation. Call this when a goal is tedious and its proof would derail your main line of reasoning. Also call this to resume a suspended sub-agent.", "schema": _cc_subagent_schema, "annotations": _ACT},
     "cancel_subagent": {"description": "Permanently cancel and delete a sub-agent you dispatched.", "schema": _cc_close_subagent_schema, "annotations": _ACT},
     "refresh": {"description": "Reset the conversation and start over (the proof tree is kept). "
@@ -2174,18 +2242,19 @@ class ToolExecutor:
                     result, is_error = await _read_tool_logic(session, arguments)
                 case "recall_removed":
                     result, is_error = await _recall_removed_tool_logic(session, arguments)
-                case "request_lemmas":
+                case "request":
                     # Channel-route like `subagent` (it likewise dispatches a worker):
-                    # run as a Task so a non-forking interaction raised mid-call can
-                    # surface to this agent as a suspend-and-answer, instead of
+                    # run as a Task so a non-forking interaction raised mid-call (a
+                    # constraint adjudication, or a headless prover's own constraint)
+                    # can surface to this agent as a suspend-and-answer, instead of
                     # deadlocking on an un-pumped channel. Under `_subagent_lock` to
                     # keep worker dispatch serialized with `subagent`.
                     async with self._subagent_lock:
-                        async def _run_request_lemmas():
-                            r, e = await _request_lemmas_tool_logic(session, arguments)
+                        async def _run_request():
+                            r, e = await _request_tool_logic(session, arguments)
                             await self._channel.outbox.put(EditResult(r, e))
                         result, is_error = await self._run_tool_via_channel(
-                            _run_request_lemmas(), session, is_edit=False)
+                            _run_request(), session, is_edit=False)
                     session.last_proof_op_time = time()
                 case "report":
                     result, is_error = await _report_tool_logic(session, arguments)

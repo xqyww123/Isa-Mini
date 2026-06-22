@@ -13163,6 +13163,97 @@ async def _test_FillCancelledPredecessor(root: Root, file: MyIO):
     root.print(0, file)
 
 
+@model_test("WitnessFailSufficesCancelledFill",
+            "Test_WitnessFailSufficesCancelled.thy", 8)
+async def _test_WitnessFailSufficesCancelledFill(root: Root, file: MyIO):
+    """Reproduce the AoA-level fault behind the DeepSeek "protocol error"
+    outage (root-cause report: /tmp/deepseek_protocol_error_rootcause.md).
+
+    Scenario from the PutnamBench fleet log (worker:1.1.2.1, 2026-06-22
+    15:57:02), the natural Witness->Suffices path with NO monkeypatching:
+
+        step N   : Witness  -> FAILURE  (a witness on a NON-existential goal
+                                          cannot apply -> genuine leaf failure)
+        step N+1 : Suffices -> CANCELLED (predecessor failed, so its beginning
+                                          SUFFICES op is never executed and the
+                                          cancellation cascade resets its
+                                          ml_states / _state_before_ending_)
+        fill (N+1).1 (Obvious) -> drives Minilang_State.execute() from an
+                                  uninitialized ml_state; the ML side returns
+                                  ['beginning_state_not_found'], which model.py
+                                  escalates to
+                                  InternalError("The beginning state of the
+                                  execution is not initialized!").
+
+    In the field this InternalError was NOT caught as a per-request tool
+    error: it bubbled out of `_edit_tool_logic` and orderly-stopped the
+    central RPC host, killing every other case (the "Invalid response,
+    protocol error" / "Cannot connect to RPC host" cascade). This test
+    pins the AoA trigger; the host-isolation fix is a separate concern (see
+    sibling repros `Branch_SorryNextFail` and `FillCancelledPredecessor`,
+    which hit the same InternalError via other paths).
+
+    A fix should make `fill` on a cancelled block's sub-step return a
+    graceful `EditOutcome.failure` (the step is unfillable until the
+    predecessor is repaired), never raise InternalError.
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # The single-goal proof's GoalNode has id="" — children are "1", "2", ...
+    # Step 1: a Witness on the NON-existential goal `x * x >= 0`. WITNESS has
+    # no existential to instantiate, so the leaf op FAILS (FAILURE status).
+    root.session.age += 1
+    outcome1 = await root.fill("1", [Witness.gen_single({
+        "thought": "supply a witness (the goal is not existential, so this fails)",
+        "witnesses": ["0"]
+    })])
+    file.write(f"Fill 1 (Witness) failure: {outcome1.failure}\n")
+    print_header("After Witness (expected: FAILURE)", file)
+    root.print(0, file)
+
+    # Step 2: a Suffices appended after the failed Witness. Because its
+    # predecessor failed, the block is CANCELLED — its beginning SUFFICES op
+    # never runs and its ml_states are reset by the cancellation cascade.
+    root.session.age += 1
+    outcome2 = await root.fill("2", [Suffices.gen_single({
+        "thought": "it suffices to show a stronger statement",
+        "statement": {
+            "english": "the square plus one is positive",
+            "conclusion": "x * x + 1 > 0"
+        }
+    })])
+    file.write(f"Fill 2 (Suffices) failure: {outcome2.failure}\n")
+    print_header("After Suffices (expected: CANCELLED / pending)", file)
+    root.print(0, file)
+
+    gn = root.sub_nodes[1]
+    file.write(f"GoalNode children: {len(gn.sub_nodes)}\n")
+    for c in gn.sub_nodes:
+        file.write(f"  {c.id}: {type(c).__name__} status={c.status.status.value}\n")
+        file.write(f"    resulting_state initialized: {c.resulting_state().initialized()}\n")
+
+    # Step 2.1: fill the cancelled Suffices' first sub-step.
+    # BUG: append into the cancelled block executes from an uninitialized
+    # ml_state -> 'beginning_state_not_found' -> InternalError.
+    root.session.age += 1
+    try:
+        outcome3 = await root.fill("2.1", [Obvious.gen_single({"facts": []})])
+        if outcome3.failure:
+            file.write(f"Fill 2.1 returned failure (graceful): {outcome3.failure}\n")
+        else:
+            file.write("Fill 2.1 succeeded\n")
+    except InternalError as e:
+        file.write(f"BUG: Fill 2.1 raised InternalError: {e}\n")
+    except IsabelleError as e:
+        file.write(f"Fill 2.1 raised IsabelleError (graceful): {e}\n")
+    except Exception as e:
+        file.write(f"Fill 2.1 raised {type(e).__name__}: {e}\n")
+
+    print_header("Final state", file)
+    root.print(0, file)
+
+
 @model_test("GlobalEnv_LeafOps", "Test_GlobalEnv_LeafOps.thy", 11)
 async def _test_GlobalEnv_LeafOps(root: Root, file: MyIO):
     """Verify that non-declarative operations (Obvious, Rewrite, InferenceRule)
@@ -13264,9 +13355,9 @@ async def _test_GlobalEnv_LeafOps(root: Root, file: MyIO):
 async def _test_RefuteOrSurrender(root: Root, file: MyIO):
     """Test the split tools for Worker (event-based) and Plan roles:
     `report` (refute / surrender) and the dual-role
-    `request_lemmas` (worker channel + planner no-arg hint)."""
+    `request` (worker channel + planner no-arg hint)."""
     from .mcp_http_server import (
-        _report_tool_logic, _request_lemmas_tool_logic)
+        _report_tool_logic, _request_tool_logic)
     from .model import WorkerHandle
     session = root.session
 
@@ -13322,26 +13413,24 @@ async def _test_RefuteOrSurrender(root: Root, file: MyIO):
     result, is_error = await task
     file.write(f"refute accepted result mentions accept: {'accept' in result.lower()}\n")
 
-    # --- Worker: request_lemmas blocks on a feedback future, then resumes ---
-    task = asyncio.ensure_future(_request_lemmas_tool_logic(session, {
+    # --- Worker: request with a NON-general general_lemmas item is REJECTED
+    # upfront (force-general, all workers) — process nothing, no event pushed
+    # (the worker must declare every free variable in `for_any` and resubmit). ---
+    result, is_error = await _request_tool_logic(session, {
         "detail": "need a helper about squares",
-        "suggested_lemmas": [{
+        "general_lemmas": [{
             "name": "sq_nonneg",
             "statement": {"english": "squares are non-negative",
                           "conclusion": "0 ≤ x * x"}}],
-    }))
-    ev = await handle._event_queue.get()
-    file.write(f"request_lemmas event: {type(ev).__name__}\n")
-    file.write(f"request_lemmas event lemmas count: {len(ev.lemmas)}\n")
-    ev.response_future.set_result("Added lemma sq_nonneg; use it to continue.")
-    result, is_error = await task
-    file.write(f"request_lemmas resume mentions sq_nonneg: {'sq_nonneg' in result}\n")
-    file.write(f"request_lemmas resume is_error: {is_error}\n")
+    })
+    file.write(f"non-general request is_error: {is_error}\n")
+    file.write(f"non-general request names undeclared 'x': {'`x`' in result}\n")
+    file.write(f"non-general request mentions for_any: {'for_any' in result}\n")
+    file.write(f"non-general request pushed NO event: {handle._event_queue.empty()}\n")
 
-    # Worker request_lemmas with an empty wish-list is rejected.
-    result, is_error = await _request_lemmas_tool_logic(session, {
-        "detail": "vague", "suggested_lemmas": []})
-    file.write(f"empty request_lemmas is_error: {is_error}\n")
+    # Worker request with neither general_lemmas nor constraints is rejected.
+    result, is_error = await _request_tool_logic(session, {"detail": "vague"})
+    file.write(f"empty request is_error: {is_error}\n")
 
     # Invalid type (validated before the role branch).
     result, is_error = await _report_tool_logic(session, {
@@ -13359,11 +13448,11 @@ async def _test_RefuteOrSurrender(root: Root, file: MyIO):
     except model.InternalError:
         file.write("no-handle worker: InternalError raised\n")
 
-    # --- Plan: request_lemmas is a no-argument hint (no event, no error) ---
+    # --- Plan: request is a no-argument hint (no event, no error) ---
     session.role = model.Role_Major()
-    result, is_error = await _request_lemmas_tool_logic(session, {})
-    file.write(f"planner request_lemmas is_error: {is_error}\n")
-    file.write(f"planner request_lemmas mentions global: {'global' in result.lower()}\n")
+    result, is_error = await _request_tool_logic(session, {})
+    file.write(f"planner request is_error: {is_error}\n")
+    file.write(f"planner request mentions global: {'global' in result.lower()}\n")
 
     # NOTE: the Role_Major surrender path is intentionally NOT exercised here.
     # It calls request_restart(), which leaves a transient quit_info=Restart()
@@ -14295,101 +14384,124 @@ async def _test_worker_handle_lifecycle(root: Root, file: MyIO):
 
 @model_test("NestedRequestLemmas", "Test_NestedRequestLemmas.thy", 9)
 async def _test_nested_request_lemmas(root: Root, file: MyIO):
-    """The request_lemmas PARK -> resume cycle exercised NESTED — the dispatcher
-    is a worker W1 (scope 1), and its sub-agent W2 (scope 1.1) is the one parking
-    on a lemma request. RefuteOrSurrender covers the depth-1 (planner dispatcher)
-    case; this covers the genuinely stateful nesting transition through both the
-    handle API and the real `subagent` resume tool path. Deterministic: the W2
-    worker task is a stub coroutine that enqueues a WorkerRequestLemmas event,
-    blocks on its future, and completes once the dispatcher resolves it."""
-    from .mcp_http_server import _subagent_tool_logic, _subagent_resume_feedback
-    from .model import WorkerHandle, WorkerRequestLemmas
+    """The `request` CONSTRAINTS adjudication exercised NESTED — the dispatcher is a
+    worker W1 (scope 1) and its sub-agent W2 reports a missing constraint on its
+    target. `run_until_yield` resolves it IN-LOOP via a non-forking
+    `Interaction_ReviewConstraint`; the interaction is STUBBED here (a live one needs
+    the MCP channel) by shadowing the dispatcher's `launch_interaction` with a canned
+    verdict. Covers: (1) REJECT -> the worker resumes IN-LOOP with the rejection and
+    runs to a terminal outcome; (2) accept-restructure (the verdict for a target that
+    cannot take a premise) -> PARK as `constraint_needs_restructure`, then the
+    dispatcher resumes it via the real `subagent` tool after reworking (the tool-level
+    resume + suggestion rebase path)."""
+    from .mcp_http_server import _subagent_tool_logic
+    from .model import (WorkerHandle, WorkerRequestConstraints,
+                        Interaction_ReviewConstraint)
     session = root.session
     session.age += 1
     goal, H = await _make_lock_tree(root)
-    H11 = root.locate_node("1.1")          # W2's target (proved subtree)
+    H11 = root.locate_node("1.1")          # W2's target (proved subtree); an amendable Have
     loop = asyncio.get_running_loop()
 
     # W1 is the dispatcher session (a worker scoped to node 1).
     session.role = model.Role_Worker(target=H, worker_handle=WorkerHandle(H, session))
     await session._prefetch_worker_premises()
 
-    # --- 1. Handle-level PARK -> resume cycle (nested under W1) --------------
-    print_header("1. handle-level park/resume (W1 dispatches W2 on 1.1)", file)
-    ev_fut = loop.create_future()
-    async def _w2_requests_then_finishes():
-        # Model W2's request_lemmas tool: enqueue the event, then block until the
-        # dispatcher answers; once resumed, W2 finishes (subtree already proved).
-        handle._event_queue.put_nowait(WorkerRequestLemmas(
-            detail="need a squares lemma", lemmas=[{
-                "name": "sq_nonneg",
-                "statement": {"english": "squares are non-negative",
-                              "conclusion": "0 ≤ x * x"}}],
-            response_future=ev_fut))
-        await ev_fut
-        return None
-    handle = WorkerHandle(H11, session)
-    handle._task = asyncio.ensure_future(_w2_requests_then_finishes())
-    H11.worker_handle = handle
+    # Stub the dispatcher's interaction launch with a canned verdict so the nested
+    # WorkerRequestConstraints adjudication is deterministic (no channel/LLM). The
+    # stub records that it was handed the right Interaction_ReviewConstraint.
+    verdict_box: dict = {"v": None}
+    captured: dict = {}
+    async def stub_launch(interaction):
+        assert isinstance(interaction, Interaction_ReviewConstraint), type(interaction).__name__
+        captured["target"] = interaction.target.id
+        captured["n"] = len(interaction.constraints)
+        captured["amendable"] = interaction.target.can_add_constraints()
+        return verdict_box["v"]
+    session.launch_interaction = stub_launch
+    try:
+        # --- 1. REJECT -> worker resumes IN-LOOP, runs to a terminal outcome -----
+        print_header("1. constraint REJECT -> in-loop resume (W1 dispatches W2 on 1.1)", file)
+        got: dict = {}
+        req_fut = loop.create_future()
+        async def _w2_requests_then_finishes():
+            got["fb"] = await req_fut        # blocks until the dispatcher resolves
+            return None
+        handle = WorkerHandle(H11, session)
+        handle._task = asyncio.ensure_future(_w2_requests_then_finishes())
+        H11.worker_handle = handle
+        handle._event_queue.put_nowait(WorkerRequestConstraints(
+            detail="W2 needs x nonzero",
+            constraints=[{"description": "x is nonzero", "proposition": "x ≠ 0"}],
+            response_future=req_fut))
+        verdict_box["v"] = ("reject", "Your request is rejected because: not needed.")
+        y = await handle.run_until_yield()   # adjudicate -> reject -> resume -> finish
+        file.write(f"interaction target: {captured.get('target')}\n")
+        file.write(f"interaction constraint count: {captured.get('n')}\n")
+        file.write(f"target amendable (Have): {captured.get('amendable')}\n")
+        file.write(f"reject terminal yield kind: {y.kind}\n")
+        file.write(f"worker resumed with rejection: {'rejected' in got.get('fb', '')}\n")
+        file.write(f"detached after finish: {H11.worker_handle is None}\n")
 
-    y = await handle.run_until_yield()     # should PARK on the lemma request
-    file.write(f"park yield kind: {y.kind}\n")
-    file.write(f"park yield detail: {y.detail!r}\n")
-    file.write(f"park yield lemma count: {len(y.lemmas)}\n")
-    file.write(f"handle still attached while parked: {H11.worker_handle is handle}\n")
-    file.write(f"pending_resume stored: {handle._pending_resume is not None}\n")
+        # --- 2. accept-restructure -> PARK, then resume via the `subagent` tool ---
+        # The dispatcher accepts but the target needs reworking, so the worker PARKS
+        # as constraint_needs_restructure. Use the open Have 1.2 (give it an open
+        # child 1.2.1 so it stays unfinished yet has an in-scope step to cite); the
+        # real `subagent` tool refuses a finished node. W1 then resumes the worker
+        # citing a W1-relative id, which is re-based into W2's namespace.
+        print_header("2. accept-restructure -> park -> subagent-tool resume + rebase", file)
+        session.role = model.Role_Major()
+        s2 = {"english": "child", "conclusion": r"(0::int) \<le> x * x"}
+        await root.fill("1.2.1", [Have.gen_single({"thought": "c", "statement": s2, "name": "hGC"})])
+        H12 = root.locate_node("1.2")        # unfinished (1.2.1 open)
+        session.role = model.Role_Worker(target=H, worker_handle=WorkerHandle(H, session))
+        await session._prefetch_worker_premises()
 
-    handle.resolve_resume("Added lemma sq_nonneg; continue.")   # dispatcher answers
-    y2 = await handle.run_until_yield()    # resumes, then W2 finishes
-    file.write(f"resume yield kind: {y2.kind}\n")
-    file.write(f"detached after finish: {H11.worker_handle is None}\n")
+        received: list = []
+        resume_fut = loop.create_future()
+        async def _w2_park_then_resume():
+            fb = await resume_fut            # parked until the dispatcher resumes it
+            received.append(fb)
+            return None
+        handle2 = WorkerHandle(H12, session)
+        handle2._task = asyncio.ensure_future(_w2_park_then_resume())
+        H12.worker_handle = handle2
+        handle2._event_queue.put_nowait(WorkerRequestConstraints(
+            detail="W2 needs a structural change",
+            constraints=[{"description": "extra hyp", "proposition": "x ≠ 0"}],
+            response_future=resume_fut))
+        verdict_box["v"] = ("accept_restructure", "x ≠ 0")
+        y2 = await handle2.run_until_yield()   # adjudicate -> accept_restructure -> PARK
+        file.write(f"park yield kind: {y2.kind}\n")
+        file.write(f"park yield detail: {y2.detail!r}\n")
+        file.write(f"handle still attached while parked: {H12.worker_handle is handle2}\n")
+        file.write(f"pending_resume stored: {handle2._pending_resume is not None}\n")
 
-    # --- 2. Tool-level resume path with suggestion rebase-on-resume ----------
-    # The real `subagent` tool rejects a finished node ("already proved"), so a
-    # worker parked on a lemma request must sit on an UNFINISHED target. Give 1.2
-    # an open child 1.2.1 so node 1.2 stays unfinished yet has an in-scope step to
-    # cite. W1 resumes a worker parked on 1.2, passing a suggestion that cites a
-    # W1-relative id (2.1 == node 1.2.1) plus a helper lemma. Verify: the resume
-    # branch fires, the feedback reaches the worker, and the cited id is re-based
-    # into W2's namespace (1.2.1 -> "1"); the worker can't actually close 1.2, so
-    # the dispatcher sees could_not_prove.
-    print_header("2. tool resume path + rebase-on-resume", file)
-    session.role = model.Role_Major()
-    s2 = {"english": "child", "conclusion": r"(0::int) \<le> x * x"}
-    await root.fill("1.2.1", [Have.gen_single({"thought": "c", "statement": s2, "name": "hGC"})])
-    H12 = root.locate_node("1.2")          # unfinished (1.2.1 open)
-    session.role = model.Role_Worker(target=H, worker_handle=WorkerHandle(H, session))
-    await session._prefetch_worker_premises()
-
-    received = []
-    resume_fut = loop.create_future()
-    async def _w2_resume_then_finishes():
-        fb = await resume_fut
-        received.append(fb)
-        return None
-    handle2 = WorkerHandle(H12, session)
-    handle2._task = asyncio.ensure_future(_w2_resume_then_finishes())
-    handle2._pending_resume = resume_fut
-    H12.worker_handle = handle2
-
-    r, e = await _subagent_tool_logic(session, {
-        "step_id": "2",                    # W1-relative for node 1.2
-        "suggestions": "reuse step 2.1",   # W1-relative for node 1.2.1
-        "helpful_lemmas": ["sq_nonneg"]})
-    file.write(f"resume tool is_error: {e}\n")
-    file.write(f"feedback delivered to worker: {len(received) == 1}\n")
-    fb = received[0] if received else ""
-    file.write(f"feedback carries rebased 'step 1' (1.2.1 -> 1): {'reuse step 1' in fb and 'step 2.1' not in fb}\n")
-    file.write(f"feedback carries helpful lemma: {'sq_nonneg' in fb}\n")
-    file.write(f"dispatcher outcome (worker can't close 1.2): {'could not' in r.lower()}\n")
-    file.write(f"detached after tool resume: {H12.worker_handle is None}\n")
+        # Dispatcher reworks, then resumes via the real `subagent` tool, citing a
+        # W1-relative id (2 == node 1.2) + a suggestion citing 2.1 (== node 1.2.1).
+        session.role = model.Role_Major()
+        session.role = model.Role_Worker(target=H, worker_handle=WorkerHandle(H, session))
+        await session._prefetch_worker_premises()
+        r, e = await _subagent_tool_logic(session, {
+            "step_id": "2",                    # W1-relative for node 1.2
+            "suggestions": "reuse step 2.1",   # W1-relative for node 1.2.1
+            "helpful_lemmas": []})
+        file.write(f"resume tool is_error: {e}\n")
+        file.write(f"feedback delivered to worker: {len(received) == 1}\n")
+        fb = received[0] if received else ""
+        file.write(f"feedback carries rebased 'step 1' (1.2.1 -> 1): {'reuse step 1' in fb and 'step 2.1' not in fb}\n")
+        file.write(f"dispatcher outcome (worker can't close 1.2): {'could not' in r.lower()}\n")
+        file.write(f"detached after tool resume: {H12.worker_handle is None}\n")
+    finally:
+        if "launch_interaction" in session.__dict__:
+            del session.launch_interaction   # unshadow the class method
 
     session.role = model.Role_Major()
 
 
 @model_test("LemmaGenerality", "Test_LemmaGenerality.thy", 9)
 async def _test_lemma_generality(root: Root, file: MyIO):
-    """Unit-test the request_lemmas generality predicate
+    """Unit-test the `request` general-lemma predicate
     `_lemma_statement_is_general`: a lemma is GENERAL iff every free variable in
     its conclusion + premises is declared in `for_any` and no schematic appears,
     judged by parsing against the GLOBAL fill-slot state — so a prior global
@@ -14442,15 +14554,74 @@ async def _test_lemma_generality(root: Root, file: MyIO):
         True, [])
 
 
+@model_test("AddConstraints", "Test_AddConstraints.thy", 8)
+async def _test_add_constraints(root: Root, file: MyIO):
+    """Deterministic unit test of the `request` CONSTRAINT amend machinery:
+    `Node.can_add_constraints` per node type; the §2a' pre-validation gates
+    (`_validate_constraint_term`: parse/type, is-a-proposition, scope); and
+    `Have.add_constraints` appending a premise IN PLACE (SAME object) so the fact
+    it exposes becomes conditional — plus the REVERT on a refresh failure. No LLM."""
+    from .model import (Have, Obtain, Suffices, SetupRewriting, Node,
+                        _validate_constraint_term)
+    session = root.session
+    goal = root.sub_nodes[1]
+    session.age += 1
+
+    # A Have with a for_any var `n`; its conclusion is about `n`.
+    await goal.fill("1", [Have.gen_single({
+        "thought": "amendable target",
+        "statement": {"english": "n squared is non-negative",
+                      "for_any": [{"name": "n", "type": "int"}],
+                      "conclusion": "n * n ≥ 0"},
+        "name": "hn"})])
+    have = root.locate_node("1")
+
+    # --- 1. can_add_constraints per node type (class-level: which override) ---
+    print_header("1. can_add_constraints per node type", file)
+    file.write(f"Have amendable: {have.can_add_constraints()}\n")
+    file.write(f"Have overrides: {Have.can_add_constraints is not Node.can_add_constraints}\n")
+    file.write(f"SetupRewriting overrides: {SetupRewriting.can_add_constraints is not Node.can_add_constraints}\n")
+    file.write(f"Obtain NOT amendable: {Obtain.can_add_constraints is Node.can_add_constraints}\n")
+    file.write(f"Suffices NOT amendable: {Suffices.can_add_constraints is Node.can_add_constraints}\n")
+
+    # --- 2. §2a' gates (against the Have's after-beginning state: `n` is fixed) ---
+    print_header("2. constraint pre-validation gates", file)
+    err_nonprop = await _validate_constraint_term(have, "bad", "n + (1::int)")
+    file.write(f"gate rejects non-proposition (n+1): {err_nonprop is not None}\n")
+    err_undecl = await _validate_constraint_term(have, "bad", "n ≠ z")
+    file.write(f"gate rejects undeclared free z: "
+               f"{err_undecl is not None and '`z`' in err_undecl}\n")
+    err_ok = await _validate_constraint_term(have, "hpos", "n ≠ (0::int)")
+    file.write(f"gate passes good proposition (n≠0): {err_ok is None}\n")
+
+    # --- 3. add_constraints IN PLACE → fact becomes conditional ---
+    print_header("3. add_constraints amends IN PLACE", file)
+    file.write(f"fact before amend: {have.conditional_fact_statement()}\n")
+    same = have
+    ret = await have.add_constraints([{"name": "hpos", "term": "n ≠ (0::int)"}])
+    file.write(f"add_constraints success (returns None): {ret is None}\n")
+    file.write(f"SAME object after amend (no retarget): {root.locate_node('1') is same}\n")
+    file.write(f"fact after amend (conditional): {have.conditional_fact_statement()}\n")
+    file.write(f"premises now: {[(p['name'], p['term']) for p in have._input_premises]}\n")
+
+    # --- 4. a bad premise is REVERTED (node survives, fact unchanged) ---
+    print_header("4. bad premise reverts (node survives)", file)
+    ret_bad = await have.add_constraints([{"name": "bad", "term": "n = True"}])
+    file.write(f"bad premise rejected (returns a message): {ret_bad is not None}\n")
+    file.write(f"fact unchanged after revert: {have.conditional_fact_statement()}\n")
+    file.write(f"premises unchanged after revert: "
+               f"{[p['name'] for p in have._input_premises] == ['hpos']}\n")
+
+
 @model_test("RequestLemmasAutoProve", "Test_RequestLemmasAutoProve.thy", 9)
 async def _test_request_lemmas_auto_prove(root: Root, file: MyIO):
-    """Stub-prover test of the request_lemmas GENERAL auto-prove orchestration.
-    The LLM prover is stubbed by monkeypatching `_run_worker_on`, so the dispatch
-    mechanism (build a global Have, dispatch a headless prover, keep-on-proved /
-    delete-on-fail, §G4 outcome lines, the resume-scope notice) is exercised
-    deterministically. Covers: (1) general lemma proved → kept + 'now available' +
-    scope notice; (2) general lemma failed → deleted + relayed reason; (3) a
-    HEADLESS requester's non-general lemma → §G3 reject (no dispatch)."""
+    """Stub-prover test of the `request` GENERAL auto-prove orchestration. The LLM
+    prover is stubbed by monkeypatching `_run_worker_on`, so the dispatch mechanism
+    (build a global Have, dispatch a headless prover, keep-on-proved / delete-on-fail,
+    outcome lines, the resume-scope notice) is exercised deterministically. Covers:
+    (1) general lemma proved → kept + 'now available' + scope notice; (2) general
+    lemma failed → deleted + relayed reason; (3) a non-general lemma → force-general
+    reject (no dispatch; here exercised on a headless requester)."""
     from . import mcp_http_server as mcp
     from .model import WorkerHandle, WorkerYield
     session = root.session
@@ -14481,9 +14652,9 @@ async def _test_request_lemmas_auto_prove(root: Root, file: MyIO):
             await s.root.fill(f"{node.id}.1", [Obvious.gen_single({"facts": []})])
             return WorkerYield.PROVED()
         mcp._run_worker_on = stub_proves
-        result, is_error = await mcp._request_lemmas_tool_logic(session, {
+        result, is_error = await mcp._request_tool_logic(session, {
             "detail": "need reflexivity",
-            "suggested_lemmas": [{
+            "general_lemmas": [{
                 "name": "myrefl",
                 "statement": {"english": "reflexivity", "conclusion": "x = x",
                               "for_any": [{"name": "x"}]}}]})
@@ -14492,16 +14663,16 @@ async def _test_request_lemmas_auto_prove(root: Root, file: MyIO):
         file.write(f"proved says now-available: "
                    f"{'has been proved and is now available' in result}\n")
         file.write(f"proved scope notice present: "
-                   f"{'New facts have arrived' in result}\n")
+                   f"{'The following facts are now available' in result}\n")
 
         # --- 2. GENERAL lemma, stub FAILS → deleted + relayed reason ---
         print_header("2. general lemma failed → deleted + relayed reason", file)
         async def stub_fails(s, node, sug, hl, *, headless=False):
             return WorkerYield.COULD_NOT_PROVE("the stub prover gave up")
         mcp._run_worker_on = stub_fails
-        result, is_error = await mcp._request_lemmas_tool_logic(session, {
+        result, is_error = await mcp._request_tool_logic(session, {
             "detail": "need it",
-            "suggested_lemmas": [{
+            "general_lemmas": [{
                 "name": "myfail",
                 "statement": {"english": "f", "conclusion": "y = y",
                               "for_any": [{"name": "y"}]}}]})
@@ -14517,9 +14688,9 @@ async def _test_request_lemmas_auto_prove(root: Root, file: MyIO):
     print_header("3. headless requester, non-general lemma → reject", file)
     session.role = model.Role_Worker(target=have_node, worker_handle=handle,
                                      headless=True)
-    result, is_error = await mcp._request_lemmas_tool_logic(session, {
+    result, is_error = await mcp._request_tool_logic(session, {
         "detail": "bad",
-        "suggested_lemmas": [{
+        "general_lemmas": [{
             "name": "ng",
             "statement": {"english": "n", "conclusion": "a < c",
                           "for_any": [{"name": "a"}]}}]})
