@@ -1,0 +1,62 @@
+--------------------------------------------------
+positive: covered keywords (keyword, captured id)
+--------------------------------------------------
+'steps 1.2' -> [('steps', '1.2')]
+'goal `1.3`' -> [('goal', '1.3')]
+'Node 2.4' -> [('Node', '2.4')]
+'id 1.1' -> [('id', '1.1')]
+"case '3.2'" -> [('case', '3.2')]
+'fill 1.2' -> [('fill', '1.2')]
+'deleted 1.3' -> [('deleted', '1.3')]
+'amend 2.1' -> [('amend', '2.1')]
+'prove 1.4' -> [('prove', '1.4')]
+'delegate 1.5' -> [('delegate', '1.5')]
+'handle 2.2' -> [('handle', '2.2')]
+'Steps 1.2' -> [('Steps', '1.2')]
+'Goals 1.3' -> [('Goals', '1.3')]
+'Subgoals 2.4' -> [('Subgoals', '2.4')]
+'Nodes 1.1' -> [('Nodes', '1.1')]
+'IDs 1.1' -> [('IDs', '1.1')]
+'Cases 3.2' -> [('Cases', '3.2')]
+'Delete 1.3' -> [('Delete', '1.3')]
+'Amend 2.1' -> [('Amend', '2.1')]
+'step 1.1' -> [('step', '1.1')]
+'goal 1.2' -> [('goal', '1.2')]
+'Subgoal 2.3' -> [('Subgoal', '2.3')]
+--------------------------------------------------
+quote variants (open=grp2, id=grp3, close=grp4)
+--------------------------------------------------
+'step `4.2`' -> [(' `', '4.2', '`')]
+"step '4.2'" -> [(" '", '4.2', "'")]
+'step 4.2' -> [(' ', '4.2', '')]
+"step `4.2'" -> [(' `', '4.2', "'")]
+--------------------------------------------------
+negative: must be NO match (empty list)
+--------------------------------------------------
+'the value is 1.5' -> []
+'result 0.5' -> []
+'Nat.add' -> []
+'List.map' -> []
+'step 2' -> []
+'at 1.2' -> []
+'the 1.2' -> []
+'and 1.2' -> []
+'for 3.1' -> []
+--------------------------------------------------
+round-trip absolutize(postprocess(x)) == x (worker scope 1.1)
+--------------------------------------------------
+step: relativized='step 2.3 here' round-trip-eq=True
+goal: relativized='goal 2.3 here' round-trip-eq=True
+Node: relativized='Node 2.3 here' round-trip-eq=True
+case: relativized='case 2.3 here' round-trip-eq=True
+fill: relativized='fill 2.3 here' round-trip-eq=True
+prove: relativized='prove 2.3 here' round-trip-eq=True
+delegate: relativized='delegate 2.3 here' round-trip-eq=True
+--------------------------------------------------
+single-component relative does NOT round-trip (regex needs a dot)
+--------------------------------------------------
+relativized='Node 1 here' absolutized-back='Node 1 here' closes=False
+--------------------------------------------------
+out-of-scope id masks to <external> (not round-tripped)
+--------------------------------------------------
+'Node <external> is elsewhere'

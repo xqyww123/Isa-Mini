@@ -1926,6 +1926,70 @@ async def _test_WitnessUndeclared(root: Root, file: MyIO):
     print_header("After Witness ?x (schematic error in tree)", file)
     root.print(0, file)
 
+@model_test("InductionUndeclared", "Test_InductionUndeclared.thy", 8)
+async def _test_InductionUndeclared(root: Root, file: MyIO):
+    """An Induction target may not be a genuinely undeclared name. Goal
+    `rev (rev l) = l`. Inducting on `ghost_xyz` — neither fixed in scope nor a
+    leading ∀/⋀ binder of the goal — is rejected by the undeclared-free guard
+    (`reject_undeclared_frees`, agent.ML): the node stays in the tree with that
+    Error status, `outcome.failure` stays None, and the goal stays pending. A
+    leading goal binder is deliberately NOT rejected (it is auto-Intro territory,
+    see `Induction_AutoIntroBoundVar` / `Induction_IllTypedBoundVar`) — only a
+    genuine ghost is treated as a typo."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    o = await root.fill("1", [Induction.gen_single({
+        "thought": "Induct on a name that was never declared",
+        "target_isabelle_term": "ghost_xyz",
+        "variables": [],
+    })])
+    file.write(f"undeclared-free outcome.failure: {o.failure}\n")
+    print_header("After Induction ghost_xyz (undeclared-free error in tree)", file)
+    root.print(0, file)
+
+@model_test("CaseSplitUndeclared", "Test_CaseSplitUndeclared.thy", 8)
+async def _test_CaseSplitUndeclared(root: Root, file: MyIO):
+    """A CaseSplit target may not be a genuinely undeclared name. Goal
+    `rev (rev l) = l`. Splitting on `ghost_xyz` — neither fixed in scope nor a
+    leading ∀/⋀ binder of the goal — is rejected by the undeclared-free guard:
+    the node stays in the tree with that Error status, `outcome.failure` stays
+    None, and the goal stays pending. (A leading goal binder is passed through,
+    not rejected — only a genuine ghost is a typo.)"""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    o = await root.fill("1", [CaseSplit.gen_single({
+        "thought": "Case-split on a name that was never declared",
+        "target_isabelle_term": "ghost_xyz",
+    })])
+    file.write(f"undeclared-free outcome.failure: {o.failure}\n")
+    print_header("After CaseSplit ghost_xyz (undeclared-free error in tree)", file)
+    root.print(0, file)
+
+@model_test("InstUndeclared", "Test_InstUndeclared.thy", 11)
+async def _test_InstUndeclared(root: Root, file: MyIO):
+    """An instantiation value may not be a genuinely undeclared name. Deriving
+    from `h2` (∀x::nat. P x ⟶ Q x) while instantiating `x := ghost_xyz` — a name
+    neither fixed in scope nor a leading goal binder — is rejected by the
+    undeclared-free guard (`reject_undeclared_frees`, agent.ML, via the SPECIALIZE
+    branch of `check_command_i`): the node stays in the tree with that Error
+    status and `outcome.failure` stays None. (Instantiating with an in-scope or
+    leading-binder name is passed through; only a genuine ghost is a typo.)"""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    root.session.age += 1
+    o = await root.fill("1", [Derive.gen_single({
+        "thought": "Instantiate h2's x with a name that was never declared",
+        "rule": {"name": "h2"},
+        "instantiations": [{"name": "x", "value": "ghost_xyz"}],
+        "discharging_facts": [],
+        "result_name": "derived_bad",
+    })])
+    file.write(f"undeclared-free outcome.failure: {o.failure}\n")
+    print_header("After Derive x:=ghost_xyz (undeclared-free error in tree)", file)
+    root.print(0, file)
+
 @model_test("Unfold1", "Test_Unfold1.thy", 15)
 async def _test_Unfold1(root: Root, file: MyIO):
     print_header("Initial YAML", file)
@@ -13764,6 +13828,87 @@ async def _test_nested_worker_scope(root: Root, file: MyIO):
         ("in-scope cancelled_by 1.1.1", fa.getvalue().strip()),
         ("external cancelled_by 1.2",   fb.getvalue().strip()),
     ])
+
+    session.role = model.Role_Major()
+
+
+@model_test("IdInTextRegex", "Test_IdInTextRegex.thy", 9)
+async def _test_id_in_text_regex(root: Root, file: MyIO):
+    """Pin the broadened `_ID_IN_TEXT_RE` (model.py) — which free-text step-id
+    references the relativize / absolutize / suggestion-rebase passes detect.
+    The regex backs `_postprocess_outbound_text`, `_absolutize_text`, and
+    `_rebase_suggestion_ids`; all three rewrite ONLY capture group 3 (the dotted
+    id) and copy groups 1/2/4 (keyword, ws+open-quote, close-quote) verbatim. So
+    this case asserts BOTH the raw regex (which ids are detected + captured) and
+    an end-to-end round-trip through a worker scope. Pure string logic — no LLM."""
+    session = root.session
+    session.age += 1
+    RE = model._ID_IN_TEXT_RE
+
+    def hits(text):
+        """(keyword, dotted-id) per match — exactly what the passes act on
+        (they only ever rewrite group(3))."""
+        return [(m.group(1), m.group(3)) for m in RE.finditer(text)]
+
+    # --- 1. POSITIVE: every newly-covered keyword (nouns + plurals + case, and
+    # the id-verbs) detects the dotted id that follows it.  The original
+    # keywords are re-asserted at the end so the broadening is regression-safe. ---
+    print_header("positive: covered keywords (keyword, captured id)", file)
+    for t in ["steps 1.2", "goal `1.3`", "Node 2.4", "id 1.1", "case '3.2'",
+              "fill 1.2", "deleted 1.3", "amend 2.1", "prove 1.4",
+              "delegate 1.5", "handle 2.2",
+              "Steps 1.2", "Goals 1.3", "Subgoals 2.4", "Nodes 1.1",
+              "IDs 1.1", "Cases 3.2", "Delete 1.3", "Amend 2.1",
+              "step 1.1", "goal 1.2", "Subgoal 2.3"]:
+        file.write(f"{t!r} -> {hits(t)}\n")
+
+    # --- 2. QUOTES: backtick / single-quote / none all match; groups 2 & 4
+    # capture whichever quote was used so the repl round-trips it.  The last is
+    # the documented harmless mismatched-quote edge ( `...' ). ---
+    print_header("quote variants (open=grp2, id=grp3, close=grp4)", file)
+    for t in ["step `4.2`", "step '4.2'", "step 4.2", "step `4.2'"]:
+        caps = [(m.group(2), m.group(3), m.group(4)) for m in RE.finditer(t)]
+        file.write(f"{t!r} -> {caps}\n")
+
+    # --- 3. NEGATIVE: must NOT match (no keyword / decimals / theorem names /
+    # bare non-dotted id / generic leading words).  A spurious match corrupts
+    # prose, so this is the safety net for the broadened keyword set. ---
+    print_header("negative: must be NO match (empty list)", file)
+    for t in ["the value is 1.5", "result 0.5", "Nat.add", "List.map",
+              "step 2", "at 1.2", "the 1.2", "and 1.2", "for 3.1"]:
+        file.write(f"{t!r} -> {hits(t)}\n")
+
+    # --- 4. END-TO-END round-trip through a worker scope.  Build depth so an
+    # in-scope id is multi-component (the regex needs a dot), put the worker on
+    # 1.1, and check `absolutize ∘ postprocess == identity` for an in-scope id
+    # across a spread of the new keywords; an out-of-scope id masks to
+    # <external> (and is NOT round-tripped). ---
+    s = {"english": "nonneg", "conclusion": r"(0::int) \<le> x * x"}
+    goal = root.sub_nodes[1]
+    await goal.fill("1",     [Have.gen_single({"thought": "h1",   "statement": s, "name": "h1"})])
+    await root.fill("1.1",   [Have.gen_single({"thought": "h11",  "statement": s, "name": "h11"})])
+    await root.fill("1.1.1", [Have.gen_single({"thought": "h111", "statement": s, "name": "h111"})])
+    H11 = root.locate_node("1.1")
+    session.role = model.Role_Worker(target=H11, worker_handle=WorkerHandle(H11, session))
+    # Use a DOTTED in-scope id (1.1.2.3 -> rel '2.3', still dotted) so the
+    # relativized form is itself re-matchable on the inbound pass and the
+    # round-trip closes.  (Pure string logic — the node need not exist.)
+    print_header("round-trip absolutize(postprocess(x)) == x (worker scope 1.1)", file)
+    for kw in ["step", "goal", "Node", "case", "fill", "prove", "delegate"]:
+        x = f"{kw} 1.1.2.3 here"                      # 1.1.2.3 in-scope under 1.1 -> rel '2.3'
+        rel = session._postprocess_outbound_text(x)
+        back = session._absolutize_text(rel)
+        file.write(f"{kw}: relativized={rel!r} round-trip-eq={back == x}\n")
+    # Documented limitation (regression-locked, mirrors NestedWorkerScope's
+    # `step 2`): a SINGLE-component relative ('1') has no dot, so the regex
+    # cannot re-match it inbound and the round-trip does NOT close.
+    print_header("single-component relative does NOT round-trip (regex needs a dot)", file)
+    x1 = "Node 1.1.1 here"                            # 1.1.1 in-scope under 1.1 -> rel '1' (no dot)
+    rel1 = session._postprocess_outbound_text(x1)
+    back1 = session._absolutize_text(rel1)
+    file.write(f"relativized={rel1!r} absolutized-back={back1!r} closes={back1 == x1}\n")
+    print_header("out-of-scope id masks to <external> (not round-tripped)", file)
+    file.write(f"{session._postprocess_outbound_text('Node 1.2 is elsewhere')!r}\n")
 
     session.role = model.Role_Major()
 
