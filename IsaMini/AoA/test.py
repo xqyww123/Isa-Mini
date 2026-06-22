@@ -6564,12 +6564,13 @@ async def _test_OutScopeVar(root: Root, file: MyIO):
     induct_node = root.locate_node("1.2")
     file.write(f"\n_discarded_vars on 1.2: {getattr(induct_node, '_discarded_vars', None)}\n")
 
-    # The real Induction above recorded the discarded variable. A later
-    # reference to the stranded premise that fails to unify makes
-    # `Unify_Diagnostic.format_diag_body` emit `… the out-of-scope variable n__`
-    # (verified directly at the ML level). Feed that exact text through the
-    # outbound-text post-processor and confirm it resolves to the external name
-    # plus the discarding step, with no raw skolem name surviving.
+    # The real Induction above recorded the discarded variable. When a stale fact
+    # referencing it is later used and fails to unify, the ML diagnostic
+    # `Unify_Diagnostic.format_diag_body` emits `… the out-of-scope variable n__`
+    # (covered by Test/Unify_Diagnostic_OutScope_Test.thy). Feed that exact text
+    # through the outbound-text post-processor and confirm it resolves — against
+    # the REAL `_discarded_vars` recorded above — to the external name plus the
+    # discarding step, with no raw skolem name surviving.
     diag = ("the given fact `F` mismatches the target premise `0 < n`\n"
             "because of the out-of-scope variable n__")
     resolved = root.session._postprocess_outbound_text(diag)
