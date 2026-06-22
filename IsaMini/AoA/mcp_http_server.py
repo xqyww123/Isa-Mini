@@ -1936,7 +1936,14 @@ def _tool_schemas_for(session: Session) -> dict[str, dict[str, Any]]:
     from a session already at the maximum nesting depth (a sub-sub-agent cannot
     delegate further). The gate is ``Session._can_offer_dispatch_tools``; ``_TOOL_SCHEMAS_WORKER``
     keeps its name but is simply the full set minus the dispatch tools."""
-    return _TOOL_SCHEMAS if session._can_offer_dispatch_tools() else _TOOL_SCHEMAS_WORKER
+    base = _TOOL_SCHEMAS if session._can_offer_dispatch_tools() else _TOOL_SCHEMAS_WORKER
+    # Apply the driver's per-tool schema rewrite (default identity). Drivers whose
+    # model/client needs a different schema form override `transform_tool_schema` —
+    # e.g. codex-cli DROPS `$ref`/`$defs` (collapsing `cc_edit.jsonc`'s operation
+    # union to `{}`), so it swaps `edit` for the pre-flattened, `$ref`-free schema.
+    # Rebuilt non-destructively so the shared `_TOOL_SCHEMAS` dicts stay intact.
+    return {name: {**t, "schema": session.transform_tool_schema(name, t["schema"])}
+            for name, t in base.items()}
 
 
 class ToolExecutor:

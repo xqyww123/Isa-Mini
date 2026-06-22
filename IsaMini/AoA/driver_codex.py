@@ -17,29 +17,38 @@ import platformdirs
 from .model import *
 from .language_model_driver import LMDriver, _TransientError, _QuotaError, PRICING, pricing_for, _parse_effort_suffix, Usage
 
-from .mcp_http_server import ProofMCPHTTPServer
+from .mcp_http_server import ProofMCPHTTPServer, _cc_edit_schema_flat
 
 
-# PreToolUse hook source. codex 0.141.0 has no config switch for two native
-# tools — `apply_patch` (writes/edits/deletes files) and `view_image` (reads an
-# image file into context). With the OS sandbox disabled we deny them with this
-# hook instead: it reads the PreToolUse event JSON on stdin and prints the
-# schema-exact deny envelope (exit 0) for a denylisted tool, staying silent
-# (allow) otherwise. Verified to actually block apply_patch in `codex exec`.
-_DENY_HOOK_SOURCE = '''\
+# PreToolUse guard hook source (ALLOWLIST). With the OS sandbox disabled
+# (`-s danger-full-access`), this hook is the SOLE capability barrier, so it is a
+# default-DENY allowlist rather than a denylist: it permits ONLY (a) our proof MCP
+# tools — codex flattens them to `mcp__proof__<tool>`, matched by prefix — and
+# (b) a small fixed set of benign native tools with no host/file access; EVERY
+# other tool is denied. This blocks `apply_patch` (file write), `view_image`
+# (file read), and crucially ANY unknown or future native tool — including a
+# hypothetical file-read tool — without having to name it (a denylist could not).
+# The hook reads the PreToolUse event JSON on stdin and either stays silent (exit
+# 0 = allow) or prints the schema-exact deny envelope. It receives the flattened
+# name for MCP tools and the bare name for native tools (verified, codex 0.141.0).
+# `__ALLOW_PREFIX__` is substituted with the real MCP prefix at write time so it
+# can never drift from the configured server name.
+_GUARD_HOOK_SOURCE = '''\
 import json, sys
-DENY = {"apply_patch", "view_image"}
+ALLOW_PREFIX = "__ALLOW_PREFIX__"
+ALLOW_EXACT = {"update_plan", "request_user_input", "list_mcp_resources", "multi_tool_use.parallel"}
 try:
     ev = json.loads(sys.stdin.read() or "{}")
 except Exception:
     sys.exit(0)
-tool = ev.get("tool_name")
-if tool in DENY:
-    print(json.dumps({"hookSpecificOutput": {
-        "hookEventName": "PreToolUse",
-        "permissionDecision": "deny",
-        "permissionDecisionReason": str(tool) + " is disabled in this session.",
-    }}))
+tool = ev.get("tool_name") or ""
+if tool.startswith(ALLOW_PREFIX) or tool in ALLOW_EXACT:
+    sys.exit(0)
+print(json.dumps({"hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": str(tool) + " is disabled in this session.",
+}}))
 '''
 
 
@@ -142,6 +151,14 @@ class Codex_Driver(LMDriver):
         # id unchanged for anything outside the proof-tool set.
         return self._TOOL_NAME_MAP.get(t, t)
 
+    def transform_tool_schema(self, name: str, schema: dict) -> dict:
+        # codex-cli DROPS `$ref`/`$defs` when forwarding an MCP tool's inputSchema
+        # to the model (verified 0.141.0: the `edit` operation union collapses to
+        # `{}`, leaving the model no spec — it just flails). Serve the pre-flattened,
+        # `$ref`-free `edit` schema — the SAME flat schema the API drivers feed the
+        # model. `edit` is the only proof tool that carries `$ref`.
+        return _cc_edit_schema_flat if name == TOOL_EDIT else schema
+
     @classmethod
     def _make_fork(cls, parent: 'LMDriver', role=None) -> 'Codex_Driver':
         from .model import _session_var
@@ -180,13 +197,14 @@ class Codex_Driver(LMDriver):
 
     def _write_codex_config(self):
         # config.toml must be at the TOP level of CODEX_HOME to be read. Drop the
-        # PreToolUse deny-hook script beside it and wire it in: `features.hooks`
+        # PreToolUse guard-hook script beside it and wire it in: `features.hooks`
         # must be true (hooks are silent otherwise) and the hook is registered as
         # a single `[[hooks.PreToolUse]]` matcher group (no matcher = matches all
-        # tools; the script itself filters the denylist).
-        hook_path = os.path.join(self._codex_home_dir, "deny_hook.py")
+        # tools; the script itself applies the allowlist). The real MCP prefix is
+        # substituted in so the allowlist tracks the configured server name.
+        hook_path = os.path.join(self._codex_home_dir, "guard_hook.py")
         with open(hook_path, "w", encoding="utf-8") as f:
-            f.write(_DENY_HOOK_SOURCE)
+            f.write(_GUARD_HOOK_SOURCE.replace("__ALLOW_PREFIX__", _MCP_TOOL_PREFIX))
         hook_cmd = f"{shlex.quote(sys.executable)} {shlex.quote(hook_path)}"
         with open(os.path.join(self._codex_home_dir, "config.toml"), "w") as f:
             f.write(
@@ -352,10 +370,13 @@ class Codex_Driver(LMDriver):
         #
         # The OS sandbox is DISABLED (`-s danger-full-access`); control is done
         # with a PreToolUse HOOK instead (written by `_write_codex_config`). The
-        # hook DENIES the two native tools codex has no config switch for —
-        # `apply_patch` (file write) and `view_image` (file read) — and was
-        # verified to actually block them in `codex exec` ("Command blocked by
-        # PreToolUse hook"). `-s danger-full-access` is used rather than
+        # hook is an ALLOWLIST: it default-DENIES every tool except our proof MCP
+        # tools and a few benign natives, so `apply_patch` (file write),
+        # `view_image` (file read), and any unknown/future host-or-file tool are
+        # all blocked without being named (the hook firing + a deny were verified
+        # in `codex exec`: "Command blocked by PreToolUse hook"). The feature-flag
+        # `--disable`s below are kept as a second layer (they remove tools from the
+        # offered set entirely). `-s danger-full-access` is used rather than
         # `--dangerously-bypass-approvals-and-sandbox` because the bypass flag
         # may also drop hook enforcement, whereas danger-full-access keeps the
         # hook layer active. `--dangerously-bypass-hook-trust` lets the hook run

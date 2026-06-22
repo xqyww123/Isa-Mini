@@ -10375,10 +10375,17 @@ def _absolutize_id(rel: str, scope_prefix: str) -> str:
     rel = rel.strip()
     return scope_prefix if rel == "" else f"{scope_prefix}.{rel}"
 
-# Matches a step-id reference inside free text: a kind word (`step`/`goal`/
-# `Subgoal`) + a dotted id, with optional surrounding backtick.  The `\.`
-# requirement filters bare English ("step 2" is never matched).
-_ID_IN_TEXT_RE = re.compile(r'\b(step|goal|Subgoal)(\s+`?)(\w+(?:\.\w+)+)(`?)')
+# Matches a step-id reference inside free text: a kind word + a dotted id, with
+# an optional surrounding backtick or single-quote.  Kind words are a noun
+# (`step`/`goal`/`subgoal`/`node`/`id`/`case`, case-insensitive + plural) or an
+# id-verb (`fill`/`delete(d)`/`amend`/`prove`/`delegate`/`handle`).  The `\.`
+# requirement filters bare English ("step 2" is never matched).  Capture groups:
+# (1)=keyword (2)=ws+open-quote (3)=dotted id (4)=close-quote; all three
+# use-sites rewrite only group 3 and copy 1/2/4 verbatim.
+_ID_IN_TEXT_RE = re.compile(
+    r'\b([Ss]teps?|[Gg]oals?|[Ss]ubgoals?|[Nn]odes?|[Ii][Dd]s?|[Cc]ases?'
+    r'|[Ff]ill|[Dd]elete[d]?|[Aa]mend|prove|delegate|handle)'
+    r"(\s+[`']?)(\w+(?:\.\w+)+)([`']?)")
 # Matches `the out-of-scope variable <internal>` emitted by Unify_Diagnostic
 # (the captured group is the raw internal/skolem name, e.g. `n__`).
 _OUTSCOPE_VAR_RE = re.compile(r"the out-of-scope variable ([A-Za-z0-9_']+)")
@@ -11167,6 +11174,16 @@ class Session:
         """Translate abstract tool id to the name the LLM sees.
         Base implementation returns identity; drivers override."""
         return t
+
+    def transform_tool_schema(self, name: str, schema: dict) -> dict:
+        """Per-driver rewrite of a tool's advertised JSON input schema.
+
+        Base implementation returns it unchanged; drivers override to apply the
+        schema passes their model/client needs (e.g. dereferencing ``$ref`` for a
+        client that drops it). Applied by ``_tool_schemas_for`` to every advertised
+        tool, so future passes compose here rather than scattering per call site.
+        Mirrors ``tool_name``."""
+        return schema
 
     def is_proof_tool(self, external_name: str) -> bool:
         """Check whether an external tool name corresponds to a proof tool."""
