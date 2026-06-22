@@ -20,8 +20,8 @@ let
     writeln ("  " ^ name ^ " (" ^ string_of_int (length thms) ^ " thms): " ^
              String.concatWith "; " (map (Thm.string_of_thm ctxt1) thms)))
     double_facts
-  val results = Minilang.potential_defs_of_const ctxt1 "double" []
-  val _ = writeln ("=== potential_defs_of_const \"double\" => " ^
+  val results = Minilang.potential_defs_of ctxt1 (Term.head_of (Syntax.read_term ctxt1 "double")) []
+  val _ = writeln ("=== potential_defs_of \"double\" => " ^
                    string_of_int (length results) ^ " results ===")
   val _ = List.app (fn (name, thm) =>
     writeln ("  " ^ name ^ ": " ^ Thm.string_of_thm ctxt1 thm))

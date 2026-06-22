@@ -1,0 +1,56 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - f: int ⇒ int
+  - hfinf: (int ⇒ int) ⇒ int
+premises:
+  - f_form: f = (λ(x :: int). x + (1 :: int))
+  - hfinf_def: hfinf = (λ(g :: int ⇒ int). g (0 :: int))
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: hfinf f = f (0 :: int)
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Unfold [f x] (premise named f_form)
+--------------------------------------------------
+fill [f x] outcome.failure: None
+variables:
+  - f: int ⇒ int
+  - hfinf: (int ⇒ int) ⇒ int
+premises:
+  - f_form: f = (λ(x :: int). x + (1 :: int))
+  - hfinf_def: hfinf = (λ(g :: int ⇒ int). g (0 :: int))
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: hfinf f = f (0 :: int)
+proof:
+  - step id: 1
+    thought: Unfold f using its defining premise f_form
+    operation: Unfold
+    targets:
+      - f x
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  hfinf (λ(x :: int). x + (1 :: int)) = (0 :: int) + (1 :: int)
+--------------------------------------------------
+After amend to Unfold [hfinf f] (premise named hfinf_def)
+--------------------------------------------------
+amend [hfinf f] outcome.failure: None
+variables:
+  - f: int ⇒ int
+  - hfinf: (int ⇒ int) ⇒ int
+premises:
+  - f_form: f = (λ(x :: int). x + (1 :: int))
+  - hfinf_def: hfinf = (λ(g :: int ⇒ int). g (0 :: int))
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: hfinf f = f (0 :: int)
+proof:
+  - step id: 1
+    thought: Unfold hfinf using its defining premise hfinf_def
+    operation: Unfold
+    targets:
+      - hfinf f
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  f (0 :: int) = f (0 :: int)
+Unfinished nodes: 1

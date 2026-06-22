@@ -880,11 +880,22 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
       val potential_defs_callback = {
         name = "IsaMini.potential_defs_of",
         arg_schema = unpackPair (unpackString, unpackList unpackString),
-        ret_schema = packList (packTuple3 (packString, packString, packString)),
+        ret_schema = packList (packTuple4 (packString, packString, packString, packBool)),
         function = (fn (state_id, terms) =>
           let val s0 = get_state state_id
               val ctxt = Minilang.context_of s0
               val SOT = MiniLang_Agent.string_of_term ctxt
+              (* A candidate def is "conditional" if it carries a premise: a Pure ⟹
+                 premise (Thm.nprems_of > 0) or a leading object-level ⟶ in the
+                 conclusion. Unfold (Local_Defs.unfold_goals) only fires such a rule
+                 when the premise is dischargeable from the goal's own premises;
+                 otherwise it is a silent no-op, so the agent is warned (Python side). *)
+              fun is_conditional_thm thm =
+                Thm.nprems_of thm > 0 orelse
+                (case Thm.concl_of thm of
+                   @{const Trueprop} $ (Const (@{const_name HOL.implies}, _) $ _ $ _) => true
+                 | Const (@{const_name HOL.implies}, _) $ _ $ _ => true
+                 | _ => false)
               val facts = Proof_Context.facts_of ctxt
               (* Drop infrastructure / unciteable ("??.") definitions, mirroring
                  the filter applied to the semantic-search enumeration path. The
@@ -902,27 +913,23 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
               val goal_terms = goal_concl :: map snd goal_local_facts
               val results = List.concat (map (fn term =>
                 let val parsed_term = MiniLang_Agent.read_term ctxt term
-                    val const_name = case Term.head_of parsed_term of
-                                       Const (name, _) => name
-                                     | Free (name, _) => name
-                                     | _ => error "term_head_not_const"
-                    val defs = Minilang.potential_defs_of_const ctxt const_name goal_terms
+                    val defs = Minilang.potential_defs_of ctxt (Term.head_of parsed_term) goal_terms
                  in defs
                     |> map_filter (fn (name, thm) =>
                          let val ext = Facts.extern ctxt facts name
                          in if String.isPrefix "??." ext
                                orelse is_infra_thm (strip_sel name, thm)
                             then NONE
-                            else SOME (name, ext, SOT (Thm.prop_of thm))
+                            else SOME (name, ext, SOT (Thm.prop_of thm), is_conditional_thm thm)
                          end)
                     (* Cap AFTER the infra / "??." filter, so the limit counts
-                       citable defs (the ranking from potential_defs_of_const is
+                       citable defs (the ranking from potential_defs_of is
                        preserved by map_filter). *)
                     |> take 100
                 end) terms)
-              val (_, deduped) = fold (fn (triple as (_, _, prop)) => fn (seen, acc) =>
+              val (_, deduped) = fold (fn (q as (_, _, prop, _)) => fn (seen, acc) =>
                 if member (op =) seen prop then (seen, acc)
-                else (prop :: seen, acc @ [triple])) results ([], [])
+                else (prop :: seen, acc @ [q])) results ([], [])
            in deduped
           end handle ERROR msg => error (String.concat ["Error: ", msg])
             | TERM (msg, _) => error (String.concat ["Error: ", msg])

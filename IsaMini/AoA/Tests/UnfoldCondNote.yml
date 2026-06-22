@@ -1,0 +1,114 @@
+fill [g k] outcome.failure: None
+--------------------------------------------------
+proof.yaml render (notice fires; non-consuming)
+--------------------------------------------------
+variables:
+  - h: int ⇒ int
+  - k: int
+  - g: int ⇒ int
+premises:
+  - g_cond: (0 :: int) < n ⟶ g n = n + (1 :: int)
+  - h_eq: h = (λ(x :: int). x + (1 :: int))
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+variables:
+  - n: int
+goal: g k = h k
+proof:
+  - step id: 1
+    thought: Unfold g via conditional premise g_cond
+    operation: Unfold
+    targets:
+      - g k
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  g k = h k
+notice:
+  - Note: unfolding a conditional definition may have no effect (it only rewrites when the premise is already discharged from the current goal). If needed, use Derive first to discharge the premise.
+--------------------------------------------------
+Outline render (notice fires; consuming -> marks shown)
+--------------------------------------------------
+step 1: Unfold g k
+Unfinished Proof. Call command `edit` with action `fill` and target step `2`
+goal: g k = h k
+notice:
+  - Note: unfolding a conditional definition may have no effect (it only rewrites when the premise is already discharged from the current goal). If needed, use Derive first to discharge the premise.
+--------------------------------------------------
+proof.yaml render again (notice now suppressed)
+--------------------------------------------------
+variables:
+  - h: int ⇒ int
+  - k: int
+  - g: int ⇒ int
+premises:
+  - g_cond: (0 :: int) < n ⟶ g n = n + (1 :: int)
+  - h_eq: h = (λ(x :: int). x + (1 :: int))
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+variables:
+  - n: int
+goal: g k = h k
+proof:
+  - step id: 1
+    thought: Unfold g via conditional premise g_cond
+    operation: Unfold
+    targets:
+      - g k
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  g k = h k
+--------------------------------------------------
+after compaction reset (shown_hints cleared -> notice fires again)
+--------------------------------------------------
+variables:
+  - h: int ⇒ int
+  - k: int
+  - g: int ⇒ int
+premises:
+  - g_cond: (0 :: int) < n ⟶ g n = n + (1 :: int)
+  - h_eq: h = (λ(x :: int). x + (1 :: int))
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+variables:
+  - n: int
+goal: g k = h k
+proof:
+  - step id: 1
+    thought: Unfold g via conditional premise g_cond
+    operation: Unfold
+    targets:
+      - g k
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  g k = h k
+notice:
+  - Note: unfolding a conditional definition may have no effect (it only rewrites when the premise is already discharged from the current goal). If needed, use Derive first to discharge the premise.
+insert_before [h] outcome.failure: None
+--------------------------------------------------
+after refresh via insert_before (notice still fires for the conditional step)
+--------------------------------------------------
+variables:
+  - h: int ⇒ int
+  - k: int
+  - g: int ⇒ int
+premises:
+  - g_cond: (0 :: int) < n ⟶ g n = n + (1 :: int)
+  - h_eq: h = (λ(x :: int). x + (1 :: int))
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+variables:
+  - n: int
+goal: g k = h k
+proof:
+  - step id: 0A
+    thought: Unfold h via unconditional premise h_eq
+    operation: Unfold
+    targets:
+      - h
+  - step id: 1
+    thought: Unfold g via conditional premise g_cond
+    operation: Unfold
+    targets:
+      - g k
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  g k = k + (1 :: int)
+notice:
+  - Note: unfolding a conditional definition may have no effect (it only rewrites when the premise is already discharged from the current goal). If needed, use Derive first to discharge the premise.
+Unfinished nodes: 1

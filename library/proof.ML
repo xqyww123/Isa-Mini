@@ -127,7 +127,7 @@ val SIMPLIFY_GOAL_AND_PREMISES : thm list -> simproc list -> bool -> string list
 val SIMPLIFY_GOAL_AND_PREMISES'' : fact list -> bool -> string list -> bool -> operation
 val SIMPLIFY_CMD : command
 
-val potential_defs_of_const : Proof.context -> string -> term list -> (string * thm) list
+val potential_defs_of : Proof.context -> term -> term list -> (string * thm) list
 
 val UNFOLD : thm list -> operation
 val UNFOLD_CMD : command
@@ -1711,11 +1711,25 @@ val APPLY_CMD = (Method.parse -- Scan.optional WITH_CLAUSE [])
    about sets) and discards special-form rewrites that cannot fire here. Results
    are ranked type-exact-and-unconditional first; the output cap is applied by
    the caller after its infrastructure filter. *)
-fun potential_defs_of_const ctxt const_name goal_terms =
+fun potential_defs_of ctxt head_atom goal_terms =
   let
     val thy = Proof_Context.theory_of ctxt
+    val const_name = case head_atom of Const (n, _) => n | Free (n, _) => n
+                       | _ => raise TERM ("potential_defs_of: head is not a Const or Free", [head_atom])
     val base_name = Long_Name.base_name const_name
-    val const_type_opt = try (Sign.the_const_type thy) const_name
+    (* Head atom + its general type for the Find_Theorems pattern.
+       - global Const: the DECLARED, most-general type (Sign.the_const_type) and a
+         Const-headed pattern — IDENTICAL to prior behavior (so overloaded type-aware
+         ranking is unchanged).
+       - local Free: its OWN carried type and a Free-headed pattern, so a proof-local
+         `f = rhs` premise is reachable (Sign.the_const_type returns NONE for a Free,
+         which previously skipped channel B entirely). *)
+    val (head_for_pattern, const_type_opt) =
+      case head_atom of
+        Const (n, _) => (case try (Sign.the_const_type thy) n of
+                           SOME T => (Const (n, T), SOME T) | NONE => (head_atom, NONE))
+      | Free (n, T) => (Free (n, T), SOME T)
+      | _ => (head_atom, NONE)
 
     (* Standard definition suffixes to try *)
     val suffixes = ["_def", "_def2", "_alt", "_alt_def", "_altdef",
@@ -1794,7 +1808,7 @@ fun potential_defs_of_const ctxt const_name goal_terms =
                 val arg_vars = map_index
                   (fn (i, arg_ty) => Var (("x", i), arg_ty))
                   used_arg_types
-                val const_term = Const (const_name, const_type)
+                val const_term = head_for_pattern
                 val lhs = Term.list_comb (const_term, arg_vars)
 
                 val remaining_types = drop n_args arg_types

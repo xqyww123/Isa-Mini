@@ -308,11 +308,11 @@ class IsabelleFact_Presented(IsabelleFact, IsabelleEntity):
     lives only in the current proof context (assms, IH, named `have`),
     not in the global theory namespace — used by the Induction tool's
     `facts_to_generalize` filter."""
-    __slots__ = ('fact', 'is_local')
+    __slots__ = ('fact', 'is_local', 'is_conditional')
     def __init__(self, full_name: 'full_name', short_name: 'short_name', fact: Fact, expression: list[term],
                  kind: EntityKind = EntityKind.THEOREM, roles: list[str] = [],
                  abbreviation_names: 'list[full_name]' = [],
-                 is_local: bool = False):
+                 is_local: bool = False, is_conditional: bool = False):
         assert kind in _THEOREM_KINDS, \
             f"IsabelleFact_Presented requires a theorem-like kind, got {kind}"
         self.full_name = full_name
@@ -323,6 +323,10 @@ class IsabelleFact_Presented(IsabelleFact, IsabelleEntity):
         self.roles = roles
         self.abbreviation_names = abbreviation_names
         self.is_local = is_local
+        # True iff the fact carries a premise (Pure ⟹ or leading object ⟶), so an
+        # Unfold using it may silently no-op. Sourced from the potential_defs_of
+        # callback's flag; preserved across refresh_facts and re-resolution.
+        self.is_conditional = is_conditional
     def name(self) -> 'short_name':
         suffix = _fact_suffix(self.fact)
         if suffix:
@@ -1876,10 +1880,16 @@ class Minilang_State:
                 out[idx] = IsabelleFact_Unfound(original_fact)
             else:
                 short_name, exprs, roles, _, is_local = result
+                # Preserve is_conditional across refresh: _retrieve_entity does not
+                # carry it, but the input fact (if Presented) already knows it.
+                in_fact = facts[idx]
+                prev_cond = (in_fact.is_conditional
+                             if isinstance(in_fact, IsabelleFact_Presented) else False)
                 out[idx] = IsabelleFact_Presented(
                     full_name=query_name, short_name=short_name,
                     fact=original_fact, expression=exprs,
-                    kind=kind, roles=roles, is_local=is_local)
+                    kind=kind, roles=roles, is_local=is_local,
+                    is_conditional=prev_cond)
         return out
     async def semantic_knn(self, query: str | None, k: int,
                      kinds: list[EntityKind],
@@ -2278,7 +2288,9 @@ class Minilang_State:
         return [IsabelleFact_Presented(full_name=full_name,
                         short_name=IsaTerm.from_isabelle(sname),
                         fact=FactByName(name=sname),
-                        expression=[IsaTerm.from_isabelle(prop)]) for full_name, sname, prop in result]
+                        expression=[IsaTerm.from_isabelle(prop)],
+                        is_conditional=is_cond)
+                for full_name, sname, prop, is_cond in result]
 
     async def abbreviation_defs(self, full_names: list[str]) -> list[tuple[term, term] | None]:
         """Get pretty-printed abbreviation (lhs, rhs) pairs by full name.
@@ -2417,6 +2429,18 @@ class AnswerMissingLemmas:
     an empty list means "nothing is missing"."""
     missing_lemmas: list
 
+@dataclass(frozen=True)
+class AnswerConstraintRequest:
+    """Payload of `answer_constraint_request`: the dispatcher's verdict on a
+    worker's reported constraints (`Interaction_ReviewConstraint`). `verdict` is
+    "accept" or "reject". On accept, `constraints` RE-STATES (precisely) the
+    condition(s) to add as `{name, term}` items — possibly correcting the
+    worker's loose proposals. `reason` explains a rejection, or what changed when
+    an accept revised the proposals. See tools/cc_answer_constraint_request.jsonc."""
+    verdict: str
+    constraints: list  # list[{name, term}]
+    reason: str
+
 AnswerPayload = (AnswerIndexes | AnswerIndex | AnswerIndexesOrName
                  | AnswerIndexesOrSpec | AnswerInstantiate
                  | AnswerRefutation | AnswerStruggleAssessment
@@ -2434,7 +2458,7 @@ TOOL_DELETE: tool = "delete"
 TOOL_SEARCH: tool = "query"
 TOOL_READ:   tool = "recall"
 TOOL_RECALL_REMOVED: tool = "recall_removed"
-TOOL_REQUEST_LEMMAS: tool = "request_lemmas"
+TOOL_REQUEST_LEMMAS: tool = "request"
 TOOL_REPORT: tool = "report"
 TOOL_SUBAGENT: tool = "subagent"
 TOOL_CLOSE_SUBAGENT: tool = "cancel_subagent"
@@ -2449,12 +2473,13 @@ TOOL_ANSWER_INSTANTIATE:    tool = "answer_instantiate"
 TOOL_ANSWER_REFUTATION:     tool = "answer_refutation"
 TOOL_ANSWER_STRUGGLE_ASSESSMENT: tool = "answer_struggle_assessment"
 TOOL_ANSWER_MISSING_LEMMAS: tool = "answer_missing_lemmas"
+TOOL_ANSWER_CONSTRAINT_REQUEST: tool = "answer_constraint_request"
 
 ANSWER_TOOLS: frozenset[tool] = frozenset({
     TOOL_ANSWER_INDEXES, TOOL_ANSWER_INDEX, TOOL_ANSWER_INDEXES_OR_NAME,
     TOOL_ANSWER_INDEXES_OR_SPEC, TOOL_ANSWER_INSTANTIATE,
     TOOL_ANSWER_REFUTATION, TOOL_ANSWER_STRUGGLE_ASSESSMENT,
-    TOOL_ANSWER_MISSING_LEMMAS,
+    TOOL_ANSWER_MISSING_LEMMAS, TOOL_ANSWER_CONSTRAINT_REQUEST,
 })
 
 ALL_PROOF_TOOLS: tuple[tool, ...] = (
@@ -2831,6 +2856,148 @@ class Interaction_DifficultyEvaluation(Interaction):
         return answer.index
 
 
+async def _validate_constraint_term(target: 'NonLeaf_Node', name: str,
+                                    term: xterm) -> 'str | None':
+    """§2a' pre-validation for a constraint the dispatcher accepted, to be added
+    as a premise of `target` (an amendable Have/SetupRewriting). Returns an error
+    message (dispatcher-facing, for an ``Interaction_BadAnswer`` re-prompt) or
+    ``None`` when it passes all three gates:
+      1. PARSE/TYPE — ``check_term`` succeeds;
+      2. IS-A-PROPOSITION — its type is ``bool``/``prop`` (read off the SAME
+         ``check_term`` return — pure Python, no extra ML round-trip);
+      3. SCOPE — no undeclared free variable, no schematic.
+    Parsed against ``target._state_after_beginning()``, where the target's
+    ``for_any`` vars and existing premises are IN SCOPE (fixed), so a declared
+    variable is NOT free and only a genuinely-undeclared variable is flagged
+    (the OPPOSITE policy from ``general_lemmas``: there an undeclared free means
+    "declare it"; here it means the constraint references something out of
+    scope). A bad constraint is rejected BEFORE any tree mutation; the in-place
+    ``add_constraints`` revert is the defence-in-depth backstop."""
+    state = target._state_after_beginning()  # type: ignore[attr-defined]  — only ever an amendable StdBlock (Have/SetupRewriting)
+    if not state.initialized():
+        # No usable state to anchor the parse — defer to add_constraints'
+        # re-refresh (which reverts on failure). Lenient: never a false reject.
+        return None
+    try:
+        term_type, frees, schematics = await state.check_term(term)
+    except InternalError_UnparsedTerm as e:
+        return f"The constraint `{name}` does not parse as an Isabelle term: {e.reason}"
+    except IsabelleError as e:
+        if e.errors and str(e.errors[0]).startswith("Unparsed"):
+            return f"The constraint `{name}` does not parse as an Isabelle term."
+        raise
+    if term_type.unicode not in ("bool", "prop"):
+        return (f"The constraint `{name}` is not a proposition — its type is "
+                f"`{term_type.unicode}`. A constraint must be a true/false "
+                f"statement (a `bool`).")
+    bad = [f.unicode for f in frees] + [s.unicode for s in schematics]
+    if bad:
+        vlist = ", ".join(f"`{b}`" for b in bad)
+        return (f"The constraint `{name}` references undeclared variable(s) "
+                f"{vlist}. A constraint may only use variables already in the "
+                f"sub-goal's scope, not introduce new ones.")
+    return None
+
+
+class Interaction_ReviewConstraint(Interaction):
+    """Non-forking interaction: a worker reported that its sub-goal is missing
+    CONSTRAINTS (conditions it needs but was not given when dispatched); the
+    dispatcher — who owns the proof structure — adjudicates. Surfaces to the
+    dispatcher via the channel and is resolved IN-LOOP in
+    ``WorkerHandle.run_until_yield`` (never a park yield, so §B holds for a
+    headless prover). ``answer`` returns ``(kind, feedback)``:
+      - ``("reject", worker_msg)`` — the worker resumes with the rejection;
+      - ``("accept_amended", worker_msg)`` — for an AMENDABLE target
+        (Have/SetupRewriting): the re-stated constraint(s) are validated and
+        added IN PLACE here (the fact becomes conditional), and the worker
+        resumes with them in scope;
+      - ``("accept_restructure", dispatcher_msg)`` — for a NON-amendable target
+        (Obtain/Suffices): the constraints can't be added as premises, so the
+        worker PARKS and the dispatcher reworks the proof structure."""
+    fork_allowed_tools = [TOOL_ANSWER_CONSTRAINT_REQUEST]
+
+    @property
+    def is_non_forking(self) -> bool:
+        return True
+
+    def __init__(self, target: 'NonLeaf_Node', constraints: list,
+                 worker_handle: 'WorkerHandle'):
+        self.target = target
+        self.constraints = constraints  # list[RequestConstraint] {description, proposition}
+        self.worker_handle = worker_handle
+
+    async def prompt(self, indent: int, file: MyIO) -> None:
+        session = the_session()
+        sid = session._display_id(self.target.id)
+        file.write(f"The sub-agent on step `{sid}` reports its sub-goal is missing:\n")
+        for c in self.constraints:
+            desc = (c.get("description") or "").replace("\n", " ")
+            prop = c.get("proposition") or ""
+            file.write(f"  - {desc}: {prop}\n")
+        if self.target.can_add_constraints():
+            file.write(f"Accepting adds these as premises of step `{sid}` "
+                       f"(its fact becomes conditional).\n")
+        else:
+            file.write(f"Step `{sid}` cannot take added premises — accepting "
+                       f"means its proof plan needs restructuring, which you will "
+                       f"do once the sub-agent suspends.\n")
+        file.write("`accept` (these conditions are genuinely needed) or `reject`?\n")
+
+    async def answer(self, answer: 'AnswerConstraintRequest') -> 'tuple[str, str]':
+        the_session().log_interaction("constraint_review",
+            f"target={self.target.id} verdict={answer.verdict}")
+        verdict = (answer.verdict or "").strip().lower()
+        reason = (answer.reason or "").strip()
+        if verdict == "reject":
+            if not reason:
+                raise Interaction_BadAnswer(
+                    "A `reason` is required when you reject — explain why the "
+                    "sub-agent does not actually need the reported condition(s).")
+            if not reason.endswith((".", "!", "?")):
+                reason += "."
+            return ("reject", f"Your request is rejected because: {reason}")
+        if verdict != "accept":
+            raise Interaction_BadAnswer('`verdict` must be "accept" or "reject".')
+        # accept — restated constraints are required.
+        restated = answer.constraints or []
+        if not restated:
+            raise Interaction_BadAnswer(
+                "When you `accept`, restate the constraint(s) to add in "
+                "`constraints` — each with a `name` and an Isabelle `term`.")
+        parsed: list[PremiseBinding] = []
+        for c in restated:
+            if not isinstance(c, dict):
+                raise Interaction_BadAnswer(
+                    "Each constraint must be an object with `name` and `term`.")
+            nm = (c.get("name") or "").strip()
+            tm = c.get("term")
+            if not nm or not isinstance(tm, str) or not tm.strip():
+                raise Interaction_BadAnswer(
+                    "Each accepted constraint needs a non-empty `name` and `term`.")
+            parsed.append({"name": nm, "term": tm})
+        target = self.target
+        if target.can_add_constraints():
+            for c in parsed:
+                err = await _validate_constraint_term(target, c["name"], c["term"])
+                if err is not None:
+                    raise Interaction_BadAnswer(err)
+            fail = await target.add_constraints(parsed)
+            if fail is not None:
+                raise Interaction_BadAnswer(fail)
+            fb = "Your reported condition(s) were accepted and added to your goal."
+            if reason:
+                fb += f" {reason}"
+            return ("accept_amended", fb)
+        # NON-amendable target: the constraints are advisory (a thinking aid that
+        # articulates the missing condition); the fix is restructuring, done by
+        # the dispatcher once the worker parks. Validate leniently (no mutation).
+        rendered = "; ".join(f"{c['name']}: {c['term']}" for c in parsed)
+        detail = rendered
+        if reason:
+            detail += f"\nNote: {reason}"
+        return ("accept_restructure", detail)
+
+
 # Large-delete confirmation gate: both thresholds must be met (AND) over the
 # merged stats of all targets of one delete call (nested targets deduped).
 LARGE_DELETE_PROVED_THRESHOLD = 5
@@ -2955,11 +3122,16 @@ async def _try_resolve_as_named_fact(
     result = results[0]
     if result is not None:
         short_name, exprs, roles, abbrev, is_local = result
+        # Off-menu name resolution has no ML is_conditional flag (that arrives only
+        # via the potential_defs_of callback); detect a premise from the rendered
+        # prop as a best-effort instead — a conditional def shows a top-level
+        # implication, rendered as Pure ⟹ (U+27F9) or object ⟶ (U+27F6).
+        is_conditional = any(('⟹' in e.unicode) or ('⟶' in e.unicode) for e in exprs)
         return IsabelleFact_Presented(
             full_name=name, short_name=short_name,
             fact=FactByName(name=name),
             expression=exprs, roles=roles, abbreviation_names=abbrev,
-            is_local=is_local)
+            is_local=is_local, is_conditional=is_conditional)
     return None
 
 _retrieval_db_conn: sqlite3.Connection | None = None
@@ -3916,6 +4088,14 @@ class Node(ABC):
         if self.parent is None or self.status.status != EvaluationStatus.Status.SUCCESS:
             return None
         return self.resulting_state()
+    def _synthetic_hint_notices(self) -> 'list[Hint_Notice_Msg]':
+        """Agent Hint Registry NOTICEs synthesized by the Python model (not carried
+        on an ML `Minilang_State.messages`). Surfaced once per context by
+        `Session._emit_pending_hint_notices`, deduped via `Session.shown_hints`
+        (cleared on compaction so the notice re-shows). Default: none. Overrides
+        must self-gate on their own status (the render-time walk calls this on every
+        node, including FAILURE ones)."""
+        return []
     async def _auto_intro_after_me(self) -> None:
         if self.parent is not None:
             await self.parent._auto_Intro_after_child(self)
@@ -4126,6 +4306,22 @@ class Node(ABC):
         (GoalContainer/Root, GlobalEnv) override to return ``None`` directly (neither
         a target nor transparent — pointing at them is an error)."""
         return self.parent._nearest_goal_for_subagent() if self.parent is not None else None
+    def can_add_constraints(self) -> bool:
+        """Whether a missing CONSTRAINT (a condition the sub-goal needs but was
+        not given) can be ADDED to this node in place — i.e. appended as a premise
+        of the named fact this node poses. Default ``False``; ``Have`` and
+        ``SetupRewriting`` override to ``True``. A non-amendable target
+        (Obtain/Suffices) means the missing constraint is a structural problem the
+        dispatcher must fix by reworking the proof (see ``add_constraints``)."""
+        return False
+    async def add_constraints(self, constraints: 'list[PremiseBinding]') -> 'str | None':
+        """Append ``constraints`` (``{name, term}`` premises) to this node IN
+        PLACE — the named fact becomes conditional on them — re-refresh this node
+        and the downstream cascade, and return ``None`` on success or a rejection
+        message string on failure (the mutation is reverted). Only nodes whose
+        ``can_add_constraints()`` is True implement this; the default raises."""
+        raise NotImplementedError(
+            f"{type(self).__name__} cannot add constraints (can_add_constraints is False)")
     async def fill(self, id: step, gns: 'list[Parsed_Opr]') -> 'EditOutcome':
         """Fill a blank proof slot (or replace an existing failed step
         via the fallback path) with one or more newly-constructed
@@ -7028,6 +7224,27 @@ def _validate_suggested_lemma(data: Any, path: str) -> SuggestedLemma:
             {}, f"{path}.name: expected a string, got {type(data['name']).__name__}")
     return data
 
+class RequestConstraint(TypedDict):
+    """One item of the `request` tool's `constraints` list (a worker→dispatcher
+    channel). A worker reports a condition its sub-goal genuinely needs but was
+    not given when it was dispatched (the dispatcher under-provisioned the
+    sub-goal). `proposition` is a loose Isabelle term sketch; the dispatcher
+    adjudicates and RE-STATES it precisely (`Interaction_ReviewConstraint`) —
+    accept → added as a premise of the delegated block, or reject."""
+    description: str
+    proposition: xterm
+
+@validator(RequestConstraint)
+def _validate_request_constraint(data: Any, path: str) -> RequestConstraint:
+    # Mirrors `_validate_suggested_lemma`: `_validate_typed_dict` checks dict-ness
+    # + required keys + coerces `proposition` (an `xterm`); guard `description`
+    # explicitly so a non-string can't be silently `str()`-fabricated.
+    data = _validate_typed_dict(RequestConstraint, data, path)
+    if not isinstance(data["description"], str):
+        raise ArgumentError(
+            {}, f"{path}.description: expected a string, got {type(data['description']).__name__}")
+    return data
+
 def print_statement(self: LongStatement, indent: int, file: MyIO):
     print_indent(indent, file)
     file.write(f"- english: {self["english"]}\n")
@@ -7741,6 +7958,12 @@ class Unfold_ToolArg(TypedDict):
     targets: list[str]  # Isabelle/HOL terms to unfold
 
 
+_COND_UNFOLD_NOTE = (
+    "Note: unfolding a conditional definition may have no effect (it only rewrites "
+    "when the premise is already discharged from the current goal). If needed, use "
+    "Derive first to discharge the premise.")
+
+
 @proof_operation("Unfold", Unfold_ToolArg)
 class Unfold(Leaf):
     def __init__(self, config: NodeConfig, arg: Unfold_ToolArg):
@@ -7778,6 +8001,17 @@ class Unfold(Leaf):
         elif self.ml_state.initialized():
             self.fact_refs = await self.ml_state.refresh_facts(self.fact_refs)
         await super()._refresh_me_alone(auto_intro)
+
+    def _synthetic_hint_notices(self) -> 'list[Hint_Notice_Msg]':
+        # Warn once per context when a chosen definition carries a premise: the Unfold
+        # backend (Local_Defs.unfold_goals) only fires a conditional rule when the
+        # premise is dischargeable from the goal's own premises, else it silently
+        # no-ops. Self-gated on SUCCESS (the render walk calls this on every node).
+        if (self.status.status == EvaluationStatus.Status.SUCCESS
+                and self.fact_refs
+                and any(getattr(f, 'is_conditional', False) for f in self.fact_refs)):
+            return [Hint_Notice_Msg("unfold:conditional-definition", _COND_UNFOLD_NOTE)]
+        return []
 
     def _on_edit_failure(self, outcome: 'EditOutcome') -> 'tuple[EditFailureBehavior, EditOutcome]':
         if self.status.status == EvaluationStatus.Status.FAILURE:
@@ -8609,9 +8843,61 @@ class Have(StdBlock):
         for p in self._input_premises:
             ret[IsaTerm.from_agent(p["name"])] = IsaTerm.from_agent(p["term"])
         return ret
+    def conditional_fact_statement(self) -> str:
+        """The fact this Have exposes to successors, as agent-facing unicode:
+        ``(prem1) ⟹ … ⟹ conclusion`` when it carries premises, else the bare
+        conclusion. The kernel binds the real conditional fact
+        (``⋀fixes. assumes ⟹ shows``, via ``gen_HAVE``); this is its matching
+        display form, so a successor (and a constraint-amended worker) sees the
+        TRUE, now-conditional, statement rather than the bare conclusion."""
+        concl = self.statement['conclusion']
+        if not self._input_premises:
+            return concl
+        # Parenthesise each premise (a premise may itself be an implication, which
+        # would otherwise mis-associate); the conclusion stays bare in the final,
+        # lowest-precedence position. ⟹ is right-associative, matching Pure.
+        parts = [f"({p['term']})" for p in self._input_premises]
+        return " ⟹ ".join(parts) + " ⟹ " + concl
     def _fixed_facts_after_me(self, ret: Hyps) -> Hyps:
-        ret[IsaTerm.from_agent(self.name)] = IsaTerm.from_agent(self.statement['conclusion'])
+        ret[IsaTerm.from_agent(self.name)] = IsaTerm.from_agent(
+            self.conditional_fact_statement())
         return ret
+    def can_add_constraints(self) -> bool:
+        return True
+    async def add_constraints(self, constraints: 'list[PremiseBinding]') -> 'str | None':
+        """Append `constraints` as premises of this Have IN PLACE — the named fact
+        becomes conditional on them — then re-refresh this node and the downstream
+        cascade (`_refresh_all_after_me`, which re-runs downstream consumers of the
+        now-conditional fact; a consumer FAILURE there is EXPECTED/intended — it
+        surfaces that the consumer now needs the added condition, for the
+        dispatcher to fix; NOT auto-repaired here). On a refresh FAILURE of THIS
+        node (a bad premise the pre-validation missed), REVERT and return a
+        rejection message; the worker survives (SAME object — no replacement, no
+        ``aclose``)."""
+        if not constraints:
+            return None
+        saved_input = self._input_premises
+        saved_stmt_premises = self.statement.get("premises")
+        new_premises = list(self._input_premises) + list(constraints)
+        self._input_premises = new_premises
+        self.statement["premises"] = new_premises  # keep the two views in sync
+        await self._refresh_me_alone(auto_intro=True)
+        if self.status.status == EvaluationStatus.Status.FAILURE:
+            r = self.status.reason
+            reason = r.reason if r is not None else ""
+            self._input_premises = saved_input
+            if saved_stmt_premises is None:
+                self.statement.pop("premises", None)
+            else:
+                self.statement["premises"] = saved_stmt_premises
+            await self._refresh_me_alone(auto_intro=True)
+            await self._refresh_all_after_me()
+            names = ", ".join(f"`{c['name']}`" for c in constraints)
+            tail = f": {reason}" if reason else "."
+            return (f"Adding the constraint(s) {names} made step "
+                    f"`{the_session()._display_id(self.id)}` ill-formed{tail}")
+        await self._refresh_all_after_me()
+        return None
 
 #### SetupRewriting
 
@@ -8721,6 +9007,31 @@ class SetupRewriting(StdBlock):
             return FailureReason("The rewriting equation is nontrivial. Detailed proofs are required.")
     def _fixed_facts_after_me(self, ret: Hyps) -> Hyps:
         return ret
+    def can_add_constraints(self) -> bool:
+        return True
+    async def add_constraints(self, constraints: 'list[PremiseBinding]') -> 'str | None':
+        """Append `constraints` to this rewriting rule's `conditions` IN PLACE,
+        then re-refresh this node and the downstream cascade. On a refresh
+        FAILURE (a bad condition the pre-validation missed), REVERT and return a
+        rejection message; the worker survives (SAME object). Mirrors
+        ``Have.add_constraints`` (conditions ⇒ premises for a rewriting rule)."""
+        if not constraints:
+            return None
+        saved = self._input_conditions
+        self._input_conditions = list(self._input_conditions) + list(constraints)
+        await self._refresh_me_alone(auto_intro=True)
+        if self.status.status == EvaluationStatus.Status.FAILURE:
+            r = self.status.reason
+            reason = r.reason if r is not None else ""
+            self._input_conditions = saved
+            await self._refresh_me_alone(auto_intro=True)
+            await self._refresh_all_after_me()
+            names = ", ".join(f"`{c['name']}`" for c in constraints)
+            tail = f": {reason}" if reason else "."
+            return (f"Adding the condition(s) {names} made step "
+                    f"`{the_session()._display_id(self.id)}` ill-formed{tail}")
+        await self._refresh_all_after_me()
+        return None
 
 #### Suffices
 
@@ -11056,7 +11367,7 @@ class Session:
                 f"- {self.tool_name(TOOL_SEARCH)}: Search for theorems, constants, types, and rules; help you understand unfamiliar terms\n"
                 f"- {self.tool_name(TOOL_READ)}: Recall proof state from `proof.yaml`. Use only when you have lost track.\n"
                 f"- {self.tool_name(TOOL_RECALL_REMOVED)}: Browse deleted proof steps that were archived before removal.\n"
-                f"- {self.tool_name(TOOL_REQUEST_LEMMAS)}: Report missing background lemmas and request that they be supplied.\n"
+                f"- {self.tool_name(TOOL_REQUEST_LEMMAS)}: Request help with your sub-goal: declare general helper lemmas to be auto-proved, and/or report constraints your sub-goal is missing.\n"
                 f"- {self.tool_name(TOOL_REFRESH)}: Reset the conversation and start over (the proof tree is kept). "
                 "Write a briefing for your future self in `briefing` — it becomes your only memory. "
                 "Use when your edits keep failing.\n"
@@ -12117,6 +12428,11 @@ class Session:
                             and m.name not in self.shown_hints):
                         seen_here.add(m.name)
                         emitted.append(m.text)
+            for m in node._synthetic_hint_notices():
+                if (m.name not in seen_here
+                        and m.name not in self.shown_hints):
+                    seen_here.add(m.name)
+                    emitted.append(m.text)
             for c in getattr(node, 'sub_nodes', ()):
                 walk(c)
         walk(self.proof_scope_root)
@@ -12395,18 +12711,22 @@ class WorkerSurrender:
     detail: str
 
 @dataclass
-class WorkerRequestLemmas:
-    """Worker asks the planning agent to author + prove helper lemmas, then
-    resume. NON-terminal (the worker keeps working afterwards, like a rejected
-    refutation). ``lemmas`` is the worker's *loose* wish-list
-    (``{name, statement}`` items, ``statement`` a ``LongStatement``); the planner
-    re-authors them precisely. Only carries the NON-general items — general items
-    are auto-proved inline by the request_lemmas auto-prove path and never reach
-    the planner. ``response_future`` is resolved with a feedback STRING by
+class WorkerRequestConstraints:
+    """Worker reports that its sub-goal is missing CONSTRAINTS — conditions it
+    genuinely needs but was not given when dispatched (the dispatcher
+    under-provisioned the sub-goal). The dispatcher adjudicates each one via a
+    non-forking ``Interaction_ReviewConstraint`` resolved IN-LOOP in
+    ``run_until_yield`` (like a refute, never a park yield to the outer
+    dispatcher), so a headless prover's ``run_until_yield`` still returns only
+    terminal outcomes (§B). ``constraints`` is the worker's *loose* wish-list of
+    ``{description, proposition}`` items (``RequestConstraint``); the dispatcher
+    re-states each precisely. NON-terminal: the worker resumes afterwards (with
+    the accepted constraint(s) added as premises of its target, or a rejection).
+    ``response_future`` is resolved with a feedback STRING by
     ``WorkerHandle.resolve_resume``; the worker blocks on it inside the
-    ``request_lemmas`` tool until then."""
+    ``request`` tool until then."""
     detail: str
-    lemmas: list | None
+    constraints: list
     response_future: 'asyncio.Future[str]'
 
 @dataclass
@@ -12434,15 +12754,17 @@ class WorkerDone:
 class WorkerYield:
     """The outcome of one ``WorkerHandle.run_until_yield`` excursion, consumed by
     the ``subagent`` tool logic. ``kind`` discriminates; the other fields are
-    kind-specific. ``lemmas`` (the park case) is the worker's wish-list."""
-    kind: str  # proved | could_not_prove | surrendered | refute_accepted | lemmas | difficulty
+    kind-specific. The ``constraint_needs_restructure`` park case means: the
+    dispatcher ACCEPTED a constraint the worker reported, but the worker's target
+    is NOT amendable (an Obtain/Suffices cannot take an added premise), so the
+    accepted condition can only be honoured by REWORKING the proof structure — the
+    worker is suspended until the dispatcher does so and resumes it. ``detail``
+    carries the accepted constraint(s) for the dispatcher's reference."""
+    kind: str  # proved | could_not_prove | surrendered | refute_accepted | constraint_needs_restructure | difficulty
     detail: str = ""
     reason: 'str | None' = None
-    lemmas: 'list | None' = None
 
-    # Constructors are UPPER-CASE so they cannot collide with the data fields
-    # (notably the ``lemmas`` field — a lower-case ``lemmas`` classmethod would
-    # shadow it and become the field's dataclass default).
+    # Constructors are UPPER-CASE so they cannot collide with the data fields.
     @classmethod
     def PROVED(cls) -> 'WorkerYield':
         return cls(kind="proved")
@@ -12456,8 +12778,10 @@ class WorkerYield:
     def REFUTE_ACCEPTED(cls, reason: 'str | None', detail: str) -> 'WorkerYield':
         return cls(kind="refute_accepted", reason=reason, detail=detail)
     @classmethod
-    def LEMMAS(cls, detail: str, lemmas: 'list | None') -> 'WorkerYield':
-        return cls(kind="lemmas", detail=detail, lemmas=lemmas)
+    def CONSTRAINT_NEEDS_RESTRUCTURE(cls, detail: str) -> 'WorkerYield':
+        # A constraint the dispatcher accepted on a NON-amendable target — the
+        # worker is parked until the dispatcher reworks the proof structure.
+        return cls(kind="constraint_needs_restructure", detail=detail)
     @classmethod
     def DIFFICULTY(cls, detail: str) -> 'WorkerYield':
         return cls(kind="difficulty", detail=detail)
@@ -12468,13 +12792,13 @@ class WorkerHandle:
     main (planner) agent.
 
     The worker runs as its own asyncio task. Its lifecycle events arrive either
-    through ``_event_queue`` (refute / surrender / request_lemmas — pushed by
+    through ``_event_queue`` (refute / surrender / request-constraints — pushed by
     the worker's tools; difficulty — pushed by the system struggle checkpoint)
     or as task completion
     (mapped to ``WorkerDone``). The handle is attached to its target
     ``NonLeaf_Node`` (``node.worker_handle``) while the worker runs or is parked;
     ``run_until_yield`` drives it until it yields control back to the main agent
-    (terminal outcome or a request_lemmas / difficulty park)."""
+    (terminal outcome, a constraint-needs-restructure park, or a difficulty park)."""
 
     def __init__(self, target: NonLeaf_Node, session: 'LMDriver'):
         self.target = target
@@ -12622,9 +12946,15 @@ class WorkerHandle:
           (``Interaction_ReviewRefutation``). Reject → the worker resumes
           transparently (loop continues, main agent never sees it); accept → the
           worker winds down and we return a ``refute_accepted`` yield.
-        - ``WorkerRequestLemmas`` / ``WorkerDifficulty`` → PARK: keep the handle
-          on the node, store the pending resume future, and return the wish-list
-          (lemmas) / the difficulty to the main agent.
+        - ``WorkerRequestConstraints`` → adjudicated IN-LOOP via a NON-forking
+          ``Interaction_ReviewConstraint`` (surfaces to the dispatcher through
+          its channel; §B preserved — never a park yield). reject / accept on an
+          amendable target (the constraint is added IN-PLACE in ``answer()``) →
+          the worker resumes in-loop; accept on a NON-amendable target
+          (Obtain/Suffices) → PARK (``constraint_needs_restructure``) for the
+          dispatcher to rework the proof structure.
+        - ``WorkerDifficulty`` → PARK: keep the handle on the node, store the
+          pending resume future, and return the difficulty to the main agent.
         - ``WorkerSurrender`` / ``WorkerDone`` → detach and return the outcome."""
         while True:
             event = await self._wait_next_event()
@@ -12639,9 +12969,26 @@ class WorkerHandle:
                         self._detach()
                         return WorkerYield.REFUTE_ACCEPTED(reason, event.detail)
                     continue                      # rejected → worker resumed in-loop
-                case WorkerRequestLemmas():
+                case WorkerRequestConstraints():
                     self._pending_resume = event.response_future
-                    return WorkerYield.LEMMAS(event.detail, event.lemmas)  # PARK
+                    # Adjudicate the reported constraints IN-LOOP. The interaction
+                    # is non-forking, so it surfaces to the dispatcher via the
+                    # channel (it is awaited inside the dispatcher's channel-routed
+                    # `subagent`/`request` task); an amendable target is mutated
+                    # IN-PLACE inside `answer()`. The verdict is (kind, feedback):
+                    #   - "reject"            → resume the worker with the rejection
+                    #   - "accept_amended"    → resume the worker (target now C ⟹ …)
+                    #   - "accept_restructure" → PARK for the dispatcher to rework
+                    kind, feedback = await self.session.launch_interaction(
+                        Interaction_ReviewConstraint(
+                            self.target, event.constraints, self))
+                    if kind == "accept_restructure":
+                        return WorkerYield.CONSTRAINT_NEEDS_RESTRUCTURE(feedback)  # PARK
+                    # reject / accept_amended: resume the worker in-loop, exactly
+                    # like a rejected refutation (loop continues; the dispatcher
+                    # never sees a yield for this excursion).
+                    self.resolve_resume(feedback)
+                    continue
                 case WorkerDifficulty():
                     self._pending_resume = event.response_future
                     return WorkerYield.DIFFICULTY(event.detail)  # PARK
@@ -12691,9 +13038,11 @@ class WorkerHandle:
             fut.set_result((accepted, reason))
 
     def resolve_resume(self, feedback: str) -> None:
-        """Wake a PARKed worker (blocked in ``request_lemmas`` or a
-        struggle-checkpoint difficulty park), handing it the planner's feedback
-        string (mirrors ``resolve_review`` but with a plain-string result)."""
+        """Wake a worker blocked on a resume future — a `request` constraint
+        adjudication (resumed in-loop, or after a structural-park restructure) or
+        a struggle-checkpoint difficulty park — handing it the dispatcher's
+        feedback string (mirrors ``resolve_review`` but with a plain-string
+        result)."""
         fut = self._pending_resume
         self._pending_resume = None
         if fut is not None and not fut.done():

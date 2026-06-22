@@ -1404,6 +1404,71 @@ async def _test_Define_QueryConst(root: Root, file: MyIO):
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
     assert len(unfinished_nodes) == 0, "Expected proof to be complete"
 
+@model_test("Query_BundleBareName", "Test_Query_BundleBareName.thy", 14)
+async def _test_Query_BundleBareName(root: Root, file: MyIO):
+    """Reproduces the audit finding (aoa_audit_finding_query_exact_name_bundle):
+    `query` with `exact_name` on a multi-fact BUNDLE bare name misreports it as
+    'Undefined', even though the bundle exists and its members resolve fine.
+
+    Setup (.thy): `lemmas demo_bundle = conjI disjI1` — a 2-member bundle whose
+    real reference names are demo_bundle(1)/demo_bundle(2); the bare name
+    `demo_bundle` denotes the whole list.
+
+    Root cause (model.py semantic_knn_counted, exact_name branch): the ML
+    callback key_of_theorem FINDS the fact but, with 2 theorems and no index,
+    raises a *helpful* IsabelleError 'Fact ... has N theorems; specify an index
+    like ...(1)' (Universal_Key.ML). universal_key.py only maps messages
+    starting with 'Undefined ' to UndefinedEntity, so this surfaces as a plain
+    IsabelleError, which the exact_name loop SWALLOWS (`except IsabelleError:
+    continue`, model.py) and then synthesises the misleading
+    `Undefined: "demo_bundle"`.
+
+    This golden DOCUMENTS the current (buggy) behaviour:
+      - bare name via exact_name      -> 0 results + Undefined            (BUG)
+      - a member via exact_name       -> resolves to the member thm       (exists)
+      - the raw key_of_theorem call   -> shows the helpful 'has N theorems;
+                                          specify an index' message that model.py
+                                          throws away (the smoking gun)
+    (The audit also saw the contradiction via name_contains finding the members;
+    that pattern-only path enumerates only indexed/static facts, so for a freshly
+    declared local `lemmas` bundle it returns nothing — cf.
+    QueryLocalScore_PatternOnly. Here the bundle's existence is shown directly by
+    the member lookup + the raw callback message, which do not depend on the
+    embedding index.)
+    When the fix lands (expand a bundle bare name to its members), update this
+    golden — the before/after diff is the proof the fix works."""
+    from Isabelle_RPC_Host.universal_key import (
+        EntityKind, universal_key_and_name_of, UndefinedEntity)
+    from Isabelle_RPC_Host import IsabelleError
+
+    ml = root.session.retrieval_state()
+
+    # (1) BARE bundle name via exact_name -> the bug: 0 results + Undefined
+    results_bare, warnings_bare = await ml.semantic_knn(
+        None, 1, [EntityKind.THEOREM], exact_name="demo_bundle")
+    file.write(f"exact_name='demo_bundle' (bundle bare name): "
+               f"{len(results_bare)} results, warnings={warnings_bare}\n")
+
+    # (2) A MEMBER via exact_name -> resolves fine (proves the bundle exists)
+    results_m1, warnings_m1 = await ml.semantic_knn(
+        None, 1, [EntityKind.THEOREM], exact_name="demo_bundle(1)")
+    file.write(f"exact_name='demo_bundle(1)' (member): "
+               f"{len(results_m1)} results, warnings={warnings_m1}\n")
+    for r in results_m1:
+        file.write(f"  member(1) -> {r.entity.short_name.unicode}\n")
+
+    # (3) SMOKING GUN: the raw ML callback's helpful message that model.py swallows
+    try:
+        await universal_key_and_name_of(
+            ml.connection, EntityKind.THEOREM, "demo_bundle", ctxt=ml.name)
+        file.write("raw key_of_theorem('demo_bundle'): unexpectedly resolved\n")
+    except UndefinedEntity as e:
+        file.write(f"raw key_of_theorem('demo_bundle'): UndefinedEntity -> {e}\n")
+    except IsabelleError as e:
+        msg = e.errors[0] if e.errors else str(e)
+        file.write("raw key_of_theorem('demo_bundle'): IsabelleError "
+                   f"(SWALLOWED by model.py exact_name loop) -> {msg}\n")
+
 @model_test("QueryLocalScore_PatternOnly", "Test_QueryLocalScore_PatternOnly.thy", 9)
 async def _test_QueryLocalScore_PatternOnly(root: Root, file: MyIO):
     """Documents (and guards) current behavior: the pattern-only path (query=None)
@@ -2022,6 +2087,100 @@ async def _test_Unfold1(root: Root, file: MyIO):
     unfinished_nodes = set()
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+
+@model_test("UnfoldLocalEqNaming", "Test_UnfoldLocalEqNaming.thy", 23)
+async def _test_UnfoldLocalEqNaming(root: Root, file: MyIO):
+    r"""Regression for audit finding #1 (PutnamBench `putnam_1962_a2`): a LOCAL
+    equality premise is now unfoldable regardless of its fact NAME.
+
+    Before the fix, Unfold discovered a local `Free` head's defining premise only
+    when its fact name matched a hard-coded suffix (`_def`/`_alt`/`.simps`/...):
+    for a local `Free`, `Sign.the_const_type` returns NONE so the `Find_Theorems`
+    channel was skipped, leaving only the suffix lookup. So `hfinf_def` unfolded
+    but the identically-shaped `f_form` failed with "No definitions found for:
+    f x". The fix (library/proof.ML `potential_defs_of`) passes the parsed head
+    ATOM through and, for a local `Free`, uses its own type + a Free-headed
+    Find_Theorems pattern, so BOTH premises now unfold. This pins the symmetry:
+    `Unfold [f x]` (premise `f_form`) succeeds, and amending to `Unfold [hfinf f]`
+    (premise `hfinf_def`) also succeeds — outcome no longer depends on the name."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # `f` is defined by the premise `f_form` (NOT named `f_def`). Pre-fix this
+    # failed "No definitions found for: f x"; post-fix it is discovered via the
+    # repaired Free-headed Find_Theorems channel and unfolds.
+    root.session.age += 1
+    o_f = await root.fill("1", [Unfold.gen_single({
+        "thought": "Unfold f using its defining premise f_form",
+        "targets": ["f x"],
+    })])
+    print_header("After Unfold [f x] (premise named f_form)", file)
+    file.write(f"fill [f x] outcome.failure: {o_f.failure}\n")
+    root.print(0, file)
+
+    # The suffix-named premise `hfinf_def` was always unfoldable; confirm it still
+    # is, on the same fresh goal, via amend (replaces step 1's operation).
+    root.session.age += 1
+    o_h = await root.amend("1", [Unfold.gen_single({
+        "thought": "Unfold hfinf using its defining premise hfinf_def",
+        "targets": ["hfinf f"],
+    })])
+    print_header("After amend to Unfold [hfinf f] (premise named hfinf_def)", file)
+    file.write(f"amend [hfinf f] outcome.failure: {o_h.failure}\n")
+    root.print(0, file)
+
+    unfinished_nodes = set()
+    root.unfinished_nodes(unfinished_nodes)
+    file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+
+@model_test("UnfoldCondNote", "Test_UnfoldCondNote.thy", 17)
+async def _test_UnfoldCondNote(root: Root, file: MyIO):
+    r"""The one-shot "unfolding a conditional definition may have no effect" note.
+    Asserts it: (1) fires when an Unfold uses a definition carrying a premise
+    (is_conditional, here the auto-selected single candidate g_cond); (2) shows at
+    most once per context (consuming Outline render marks it; the next proof.yaml
+    render suppresses it); (3) re-shows after a compaction (shown_hints reset);
+    (4) SURVIVES a refresh of the Unfold node — inserting a step before it cascades
+    refresh_facts, and is_conditional must persist (concern #2); (5) does NOT fire
+    for an unconditional definition (the inserted Unfold [h] via h_eq)."""
+    session = root.session
+
+    # Unfold `g` via its CONDITIONAL premise g_cond (0 < n ⟹ g n = n+1). Single
+    # candidate -> auto-selected; the unfold succeeds (a no-op here, since 0 < k is
+    # not in scope) and is flagged conditional.
+    o = await root.fill("1", [Unfold.gen_single({
+        "thought": "Unfold g via conditional premise g_cond",
+        "targets": ["g k"],
+    })])
+    file.write(f"fill [g k] outcome.failure: {o.failure}\n")
+
+    print_header("proof.yaml render (notice fires; non-consuming)", file)
+    session.print_proof_scope(0, file)
+    print_header("Outline render (notice fires; consuming -> marks shown)", file)
+    session.quickview_proof_scope(0, file)
+    print_header("proof.yaml render again (notice now suppressed)", file)
+    session.print_proof_scope(0, file)
+
+    print_header("after compaction reset (shown_hints cleared -> notice fires again)", file)
+    session.shown_hints.clear()
+    session.print_proof_scope(0, file)
+
+    # Durability + negative: insert an UNCONDITIONAL Unfold before the conditional
+    # one. This cascades a refresh into the conditional node (refresh_facts rebuilds
+    # its fact_refs); the note must still fire (is_conditional preserved across
+    # refresh), and the unconditional Unfold [h] must NOT add a note of its own.
+    session.shown_hints.clear()
+    o2 = await root.insert_before("1", [Unfold.gen_single({
+        "thought": "Unfold h via unconditional premise h_eq",
+        "targets": ["h"],
+    })])
+    file.write(f"insert_before [h] outcome.failure: {o2.failure}\n")
+    print_header("after refresh via insert_before (notice still fires for the conditional step)", file)
+    session.print_proof_scope(0, file)
+
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
 @model_test("Delete1", "Test_Delete1.thy", 13)
 async def _test_Delete1(root: Root, file: MyIO):
