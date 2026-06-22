@@ -753,7 +753,7 @@ class CannotEdit(AoA_Error):
                relativize_text: 'Callable[[str], str]') -> str:
         """Render for an agent. Every node id this message exposes is projected
         from the absolute tree namespace into the caller's namespace via the two
-        mappers (`Session._display_id` / `Session._relativize_text`): a worker
+        mappers (`Session._display_id` / `Session._postprocess_outbound_text`): a worker
         sees ids relative to its scope, everyone else sees them unchanged. This
         is the single id-translation boundary for an edit failure — the stored
         fields stay absolute (see model.py's worker-scoped-id design note)."""
@@ -1325,6 +1325,16 @@ class Induction_Dropped_Facts_Msg(Message):
         super().__init__()
         self.dropped_names = dropped_names
 
+class Discarded_Vars_Msg(Message):
+    """Emitted by INDUCT for each variable it generalizes away (the induction
+    target). Each pair is (internal skolem name, external name). The Induction
+    node records these so that a later `the out-of-scope variable <internal>`
+    error message (produced by Unify_Diagnostic when a stale fact referencing
+    one of them clashes) resolves to the external name + the discarding step."""
+    def __init__(self, pairs: list[tuple[str, str]]) -> None:
+        super().__init__()
+        self.pairs = pairs
+
 class SetupRewriting_MayLoop_Msg(Message):
     """The rewriting rule may cause infinite looping in the simplifier."""
     pass
@@ -1393,6 +1403,8 @@ def unpack_message(data) -> Message:
             return SH_PRF_Msg(method, time_ms)
         case (17, (name, text)):
             return Hint_Notice_Msg(name, text)
+        case (18, pairs):
+            return Discarded_Vars_Msg([(str(i), str(e)) for (i, e) in pairs])
         case _:
             raise Exception(f"BUG bad message kind: {data}")
 
@@ -2534,7 +2546,7 @@ class Interaction_ReviewRefutation(Interaction):
         goal_str = f"\nGoal: {goal.conclusion.unicode}" if goal else ""
         file.write(
             f"A sub-agent attempted {the_session()._display_id(self.target.id)} but argues the goal is flawed — unprovable or extremely hard to prove as stated.{goal_str}\n\n"
-            f"Complaint: {the_session()._relativize_text(self.complaint.detail)}\n\n"
+            f"Complaint: {the_session()._postprocess_outbound_text(self.complaint.detail)}\n\n"
             f"Do you accept this complaint and want to revise the proof goal or your proof strategy? Use `{tn(TOOL_ANSWER_REFUTATION)}` with:\n"
             f"  - accept: true to accept (and revise the goal/strategy), false to reject\n"
             f"  - reason: explanation of your judgment\n")
@@ -2916,11 +2928,14 @@ class EditResult(NamedTuple):
     text: str
     is_error: bool
 
+# Outbox message (tool task → executor); see InteractionChannel.
+type executor_msg = InteractionPrompt | InteractionError | EditResult
+
 class InteractionChannel:
     """Persistent bidirectional channel between a tool task and ToolExecutor.
 
-    ``outbox`` (tool task → executor): ``InteractionPrompt``, ``InteractionError``,
-    or ``EditResult``.
+    ``outbox`` (tool task → executor): an ``executor_msg`` — ``InteractionPrompt``,
+    ``InteractionError``, or ``EditResult``.
     ``inbox`` (executor → tool task): parsed ``AnswerPayload``.
     """
     def __init__(self):
@@ -3760,7 +3775,7 @@ class Node(ABC):
                 file.write("Error:")
                 reason = self.status.reason
                 assert reason is not None
-                print_paragraph(indent, file, the_session()._relativize_text(reason.reason))
+                print_paragraph(indent, file, the_session()._postprocess_outbound_text(reason.reason))
             case EvaluationStatus.Status.CANCELLED:
                 print_indent(indent, file)
                 if self._cancelled_by:
@@ -3802,7 +3817,7 @@ class Node(ABC):
                         # Warning text is built at refresh time (possibly by a
                         # different session than the one rendering now), so any
                         # embedded step id is relativized here at render time.
-                        printer = the_session()._relativize_text(warning.printer)
+                        printer = the_session()._postprocess_outbound_text(warning.printer)
                         if '\n' in printer:
                             for i, line in enumerate(printer.splitlines()):
                                 if i == 0:
@@ -4228,6 +4243,19 @@ class Node(ABC):
         hyps = self._all_fixed_facts_before_me({})
         self._fixed_facts_at_me(hyps)
         return Context(vars, tvars, hyps)
+    def _collect_discarded_vars(self, ret: 'dict[str, tuple[str, str]]') -> 'dict[str, tuple[str, str]]':
+        """Collect, over this node's whole subtree, a mapping
+        internal-skolem-name -> (external-name, discarding-step-id) for every
+        variable an Induction generalized away (stored on each Induction node as
+        `_discarded_vars`). Consulted by `Session._postprocess_outbound_text` to
+        resolve `the out-of-scope variable <internal>` in error messages."""
+        dv: 'dict[str, str] | None' = getattr(self, '_discarded_vars', None)
+        if dv:
+            for internal, external in dv.items():
+                ret[internal] = (external, self.id)
+        for c in getattr(self, 'sub_nodes', ()):
+            c._collect_discarded_vars(ret)
+        return ret
     def _rename_var(self, old_name: varname, new_name: varname) -> 'Node | None':
         """
         Return the modified node if the variable is found and renamed, None otherwise.
@@ -5664,7 +5692,13 @@ class GoalNode(StdBlock):
     case_tvars: list[tuple[varname, typ]] | None
 
     def _nearest_goal_for_subagent(self) -> 'Node | None':
-        return self
+        # A2: a GoalNode (a case GoalNode from CaseSplit/Induction/Branch, or a
+        # Define's obligation GoalNode) is NOT a self-contained delegation unit —
+        # it carries local context (case hyps / IH). Redirect UP to the enclosing
+        # named block (Have/Obtain/Suffices/SetupRewriting) or Define, mirroring
+        # the SubgoalMaker base. Delegatable set = {Have, Obtain, Suffices,
+        # SetupRewriting, Define}.
+        return self.parent._nearest_goal_for_subagent() if self.parent is not None else None
     def __init__(self, config: NodeConfig, is_single_goal: bool, show_goal: bool,
                  pending_proof: 'proof | None' = None):
         super().__init__(config, "", [])
@@ -7534,6 +7568,14 @@ class Define(SubgoalMaker):
         # whether the block has GoalNode children / ending END.
         self._deferred_block_opened: bool = False
 
+    def _nearest_goal_for_subagent(self) -> 'Node | None':
+        # Change A: a Define IS a delegatable unit, overriding the base
+        # SubgoalMaker redirect-up. The other SubgoalMakers
+        # (CaseSplit/Induction/Branch) stay non-delegatable — their subgoals
+        # carry local context. A deferred Define's obligations (pat-completeness
+        # / termination) are self-contained — about the definition itself — so a
+        # worker may be dispatched on the whole Define to discharge all of them.
+        return self
     def quickview_title(self) -> str:
         return f"Define {self.name}"
     def _should_print_done(self) -> bool:
@@ -9666,6 +9708,11 @@ class Induction(CaseSplit_Like):
         self.fact_refs_to_generalize: list[IsabelleFact_Presented] = []
         self._supplied_proofs = proofs_by_case
         self.no_simp: bool = not arg.get("simplify", True)
+        # internal (skolem) name -> external name, for each variable this
+        # induction generalizes away. Re-derived each refresh from the
+        # DISCARDED_VARS message; consulted by `_collect_discarded_vars` to
+        # resolve `the out-of-scope variable <internal>` in later error messages.
+        self._discarded_vars: dict[str, str] = {}
     def quickview_title(self) -> str:
         return f"Induction {self.target_isabelle_term}"
     async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
@@ -9695,6 +9742,11 @@ class Induction(CaseSplit_Like):
         await self._resolve_facts_to_generalize()
         fail = await super()._refresh_the_beginning_opr()
         if fail is None:
+            self._discarded_vars = {
+                internal: external
+                for m in self._state_after_beginning().messages
+                if isinstance(m, Discarded_Vars_Msg)
+                for (internal, external) in m.pairs}
             for m in self._state_after_beginning().messages:
                 if isinstance(m, Induction_Dropped_Facts_Msg):
                     def _strip_local(n: str) -> str:
@@ -10303,7 +10355,7 @@ def tn(t: tool) -> str:
 # absolute id prefix stripped), so it sees `step 2.1` instead of the global
 # `step 1.1.1.1A.2.1`; non-workers are unchanged.  Translation lives entirely
 # at the agent boundary (`Session._display_id` / `_resolve_display_id` /
-# `_relativize_text` / `_absolutize_text`); the tree and proof cache stay
+# `_postprocess_outbound_text` / `_absolutize_text`); the tree and proof cache stay
 # absolute.  See the design plan for the full rationale.
 
 EXTERNAL_STEP = "<external>"   # marker shown for an out-of-scope id (placeholder wording)
@@ -10327,6 +10379,9 @@ def _absolutize_id(rel: str, scope_prefix: str) -> str:
 # `Subgoal`) + a dotted id, with optional surrounding backtick.  The `\.`
 # requirement filters bare English ("step 2" is never matched).
 _ID_IN_TEXT_RE = re.compile(r'\b(step|goal|Subgoal)(\s+`?)(\w+(?:\.\w+)+)(`?)')
+# Matches `the out-of-scope variable <internal>` emitted by Unify_Diagnostic
+# (the captured group is the raw internal/skolem name, e.g. `n__`).
+_OUTSCOPE_VAR_RE = re.compile(r"the out-of-scope variable ([A-Za-z0-9_']+)")
 
 
 # Custom string representer for literal block style on multiline strings
@@ -11585,10 +11640,14 @@ class Session:
         into the absolute id the tree uses.  Identity for non-workers."""
         return _absolutize_id(shown_id, self.proof_scope_root.id) if self.is_worker else shown_id
 
-    def _relativize_text(self, text: str) -> str:
-        """Outbound free text (e.g. a failure/cancel reason that embeds ids):
-        relativize each ``step``/``goal``/``Subgoal`` id reference for a worker,
-        masking out-of-scope ones as ``EXTERNAL_STEP``.  Identity otherwise."""
+    def _postprocess_outbound_text(self, text: str) -> str:
+        """Outbound free text shown to the agent. Two passes:
+        (1) resolve `the out-of-scope variable <internal>` (emitted by
+            Unify_Diagnostic) to the variable's external name plus the step that
+            discarded it — for ALL roles;
+        (2) for a worker, relativize each ``step``/``goal``/``Subgoal`` id
+            reference, masking out-of-scope ones as ``EXTERNAL_STEP``."""
+        text = self._resolve_outscope_vars(text)
         if not self.is_worker:
             return text
         prefix = self.proof_scope_root.id
@@ -11596,6 +11655,25 @@ class Session:
             rel = _relativize_id(m.group(3), prefix)
             return f"{m.group(1)}{m.group(2)}{EXTERNAL_STEP if rel is None else rel}{m.group(4)}"
         return _ID_IN_TEXT_RE.sub(repl, text)
+
+    def _resolve_outscope_vars(self, text: str) -> str:
+        """Rewrite each `the out-of-scope variable <internal>` (the raw skolem
+        name emitted by Unify_Diagnostic) to `the out-of-scope variable
+        <external> (removed by step <id>)`, using the discarded-vars map
+        collected over the proof scope. Falls back to `an out-of-scope variable`
+        when the internal name is not in the map — so a raw skolem name is never
+        shown to the agent even if no recording step was found."""
+        if "out-of-scope variable" not in text:
+            return text
+        discarded = self.proof_scope_root._collect_discarded_vars({})
+        def repl(m: 're.Match[str]') -> str:
+            hit = discarded.get(m.group(1))
+            if hit is None:
+                return "an out-of-scope variable"
+            external, step = hit
+            return (f"the out-of-scope variable {external} "
+                    f"(removed by step {self._display_id(step)})")
+        return _OUTSCOPE_VAR_RE.sub(repl, text)
 
     def _absolutize_text(self, text: str) -> str:
         """Inbound free text from a worker (e.g. a refutation reason surfaced to
@@ -11759,16 +11837,21 @@ class Session:
         error message should tell the major to ``subagent`` on — computed via
         ``_nearest_goal_for_subagent`` (exactly what ``_subagent_tool_logic`` will
         re-resolve), so it is a step the dispatcher accepts: the decl itself for
-        Have/Obtain/SetupRewriting, the child GoalNode for a deferred Define. If a
+        Have/Obtain/SetupRewriting, and the Define itself for a deferred Define. If a
         sub-agent is already parked inside that subtree (reachable via ``amend``,
         which does not LOCK on a descendant worker), the live worker's node is
         returned so calling ``subagent`` on it RESUMES it instead of pointing at an
         ancestor the dispatch gate would reject.
 
-        ``dispatch_target`` is None only for an INVALID fill directly on a Define
-        (which exposes no fillable slot — ``SubgoalMaker._id_of_openning_prf_to_fill``
-        is None); the caller's ``target is not None`` guard then falls through to the
-        normal fill-error path. Resolves the target like ``_edit_verdict``."""
+        Post-A, a fill directly on a Define resolves ``dispatch_target`` to the
+        **Define itself** (``Define._nearest_goal_for_subagent`` returns self), so the
+        gate steers the major to ``subagent`` on it — an improvement, since a direct
+        fill on a Define is invalid anyway. (Pre-A this was None because the redirect
+        walked Define -> GlobalEnv, whose ``_nearest_goal_for_subagent`` returns None —
+        NOT via ``_id_of_openning_prf_to_fill``, which the gate never consults.) A
+        residual ``None`` (redirect bottoming out at the Root container / GlobalEnv)
+        still returns ``(True, None)``; the caller's ``target is not None`` guard then
+        falls through to the normal fill-error path. Resolves the target like ``_edit_verdict``."""
         if action not in ('fill', 'insert_before', 'amend'):
             return (False, None)
         try:
@@ -12027,7 +12110,7 @@ class Session:
         print_indent(indent, file)
         file.write("notice:\n")
         for text in emitted:
-            t = self._relativize_text(text)
+            t = self._postprocess_outbound_text(text)
             for i, line in enumerate(t.splitlines() or [""]):
                 if i == 0:
                     print_indent(indent + 1, file)
@@ -12046,6 +12129,13 @@ class Session:
             self._emit_pending_hint_notices(indent, file, consume=False)
             return
         target = self.proof_scope_root
+        # A multi-goal target (a SubgoalMaker — currently only a delegatable
+        # Define) has N obligation GoalNode children that EACH self-print their
+        # own goal + "fill step" footer under `proof:` below. The single
+        # synthesized `goal:` line and the block footer are single-goal artifacts
+        # (`target.goal()` is only the leading obligation), so suppress them for
+        # multi-goal and let the per-child loop carry the scope.
+        is_multi = isinstance(target, SubgoalMaker)
 
         goal = target.goal() if hasattr(target, 'goal') else None  # type: ignore[attr-defined]  — target is role.target (NonLeaf_Node), guarded by hasattr
         before = target._ctxt_at_me()
@@ -12071,12 +12161,13 @@ class Session:
         print_type_vars(merged_tvars.items(), indent, file, {})
         print_hyps(merged_hyps.items(), indent, file, {})
 
-        if goal is not None:
-            # Suppress the goal's own context (already surfaced above) -> bare conclusion.
-            print_goal(goal, indent, True, file, goal.context)
-        else:
-            print_indent(indent, file)
-            file.write("goal: evaluation pending\n")
+        if not is_multi:
+            if goal is not None:
+                # Suppress the goal's own context (already surfaced above) -> bare conclusion.
+                print_goal(goal, indent, True, file, goal.context)
+            else:
+                print_indent(indent, file)
+                file.write("goal: evaluation pending\n")
 
         target._print_evaluation_status(indent, file)
         if show_warnings:
@@ -12091,7 +12182,12 @@ class Session:
             print_indent(indent, file)
             file.write("proof: empty\n")
 
-        target._print_footer(indent, file, show_warnings=show_warnings)  # type: ignore[attr-defined]  — target is role.target (NonLeaf_Node)
+        if not is_multi:
+            # Multi-goal: each obligation GoalNode self-prints its own footer in the
+            # loop above; the block-level footer is a single-goal artifact (and for a
+            # SubgoalMaker its pending-goal body is a no-op since `opening()` is False —
+            # its only live output would be FOOTER warnings, dropped here by design).
+            target._print_footer(indent, file, show_warnings=show_warnings)  # type: ignore[attr-defined]  — target is role.target (NonLeaf_Node)
         self._emit_pending_hint_notices(indent, file, consume=False)
 
     def quickview_proof_scope(self, indent: int, file: MyIO):
@@ -12102,7 +12198,10 @@ class Session:
             return
         target = self.proof_scope_root
         _quickview_children_compressed(target.sub_nodes, indent, file)  # type: ignore[attr-defined]  — target is role.target (NonLeaf_Node)
-        target._quickview_pending_footer(indent, file)  # type: ignore[attr-defined]
+        # Multi-goal (SubgoalMaker): each child self-prints its own pending footer;
+        # the block-level footer is a single-goal artifact (and a SubgoalMaker no-op).
+        if not isinstance(target, SubgoalMaker):
+            target._quickview_pending_footer(indent, file)  # type: ignore[attr-defined]
         self._emit_pending_hint_notices(indent, file, consume=True)
 
     async def request_restart(self):

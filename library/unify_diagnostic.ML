@@ -269,7 +269,17 @@ fun format_diag_body ctxt diag =
           val sU = Syntax.string_of_typ ctxt_sorts U
       in "because type " ^ sT ^ " does not unify with " ^ sU end
   | Clash (a, b) =>
-      "because head symbol " ^ a ^ " clashes with " ^ b
+      (* If a clashing head symbol is an out-of-scope fixed variable — a skolem
+         name the current context can no longer revert — explain that instead of
+         dumping the raw internal name (confusing to an LLM unfamiliar with
+         Isabelle internals).  The Python layer (`_postprocess_outbound_text`)
+         rewrites `the out-of-scope variable <internal_name>` to the variable's
+         original name plus the step that removed it. *)
+      let fun outdated s = Name.is_skolem s andalso Variable.revert_fixed ctxt s = s
+       in if outdated a then "because of the out-of-scope variable " ^ a
+          else if outdated b then "because of the out-of-scope variable " ^ b
+          else "because head symbol " ^ a ^ " clashes with " ^ b
+      end
   | BoundVar_Clash (i, j) =>
       "because bound variable at depth " ^
       string_of_int i ^ " clashes with depth " ^ string_of_int j

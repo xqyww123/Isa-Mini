@@ -394,6 +394,12 @@ exception PAT_COMPLETENESS_PROOF_OPENED
 exception TERMINATION_PROOF_OPENED
 exception DROPPED_INSERTION_FACTS of string list
 
+(* Fired by INDUCT for each variable it generalizes away (the induction
+   target), so the Python layer can remember which step put a now out-of-scope
+   variable out of scope and resolve `the out-of-scope variable <internal>` in
+   later error messages.  Each pair is (internal skolem name, external name). *)
+exception DISCARDED_VARS of (string * string) list
+
 end
 
 structure Minilang : MINILANG = struct
@@ -2572,6 +2578,7 @@ fun CASES' diff ADDITIONAL_NOTES safe_names smart_rename no_simp tac first_vars 
 
 
 exception IH_MAP of (string * string list) list
+exception DISCARDED_VARS of (string * string) list
 
 (* Auto-insert mechanism for induction (previously named induct_auto_use_facts).
  * When enabled, local facts mentioning "dirty" free variables (those being
@@ -3100,8 +3107,21 @@ fun INDUCT' (no_simp, (insts, ((arbitrary, taking), opt_rule))) first_vars
               [[SOME (_, (Free (n, T), _))]] =>
                 SOME (Variable.revert_fixed ctxt n, T)
             | _ => NONE
+      (* Variables generalized away by this induction (the induction targets).
+       * Pair each internal (skolem) name with its external name (reverted in
+       * the PRE-induction context, where it is still in scope) so the Python
+       * layer can later resolve `the out-of-scope variable <internal>` — emitted
+       * by Unify_Diagnostic when a stale reference to one of these clashes — to
+       * the external name plus the discarding step. *)
+      val discarded_vars =
+            maps (map_filter (fn SOME (_, (Free (n, _), _)) =>
+                                   SOME (n, Variable.revert_fixed ctxt n)
+                               | _ => NONE))
+                 insts
       val ret = CASES' diff (maps o update_tampered) induct_safe_names smart_rename no_simp tac first_vars (ctxt, SK)
    in get_reporter () (Internal (IH_MAP (!IH_map)))
+    ; (if null discarded_vars then ()
+       else get_reporter () (Internal (DISCARDED_VARS discarded_vars)))
     ; ret
   end
 

@@ -58,6 +58,7 @@ from .model import (
     Interaction_ConfirmLargeDelete,
     LARGE_DELETE_PROVED_THRESHOLD, LARGE_DELETE_TOTAL_THRESHOLD,
     InteractionPrompt, InteractionError, EditResult, InteractionChannel,
+    executor_msg,
     ANSWER_TOOLS,
     ALL_PROOF_TOOLS,
     Role_Worker,
@@ -219,6 +220,11 @@ _assert_no_refs(_cc_edit_schema_flat)
 
 _MUTATION_TOOLS = frozenset({
     TOOL_EDIT, TOOL_DELETE, TOOL_COMMENT, TOOL_SUBAGENT, TOOL_CLOSE_SUBAGENT,
+    # `request_lemmas` is channel-routed (it can become the `_suspended_task`) and
+    # its auto-prove-general path mutates the global env — so, like the others, it
+    # must be blocked by `_check_tool_permission` while a non-forking interaction is
+    # pending (else it would slip past and hit the generic busy-guard instead).
+    TOOL_REQUEST_LEMMAS,
 })
 
 def _check_tool_permission(session: Session, tool_name: str) -> str | None:
@@ -1585,6 +1591,18 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
         session.log_tool_response(_tn, f"ERROR: {full}")
         return (full, True)
 
+    def _whole_goal_err() -> tuple[str, bool]:
+        # Post-A2 the `target is None` case (no narrower named sub-goal above) and the
+        # `target is psr` whole-goal case are semantically identical — there is no
+        # narrower delegatable sub-goal, so delegating hands over the whole goal. One
+        # message, emitted at both sites (`step_id`/`_tn` resolve at call time).
+        return _err(
+            f"Delegating step `{step_id}` would hand the sub-agent the whole "
+            f"goal you are responsible for — there is no narrower sub-goal to "
+            f"scope it to. You should call `{_tn}` on a specific subgoal like "
+            f"Have, Suffices, Obtain etc, or prove the step `{step_id}` "
+            f"yourself.")
+
     step_id = str(args.get("step_id", "")).strip()   # dispatcher-relative (for display)
     if not step_id:
         return _err("`step_id` is required — specify which step to delegate.")
@@ -1613,31 +1631,34 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
     # node walks up to its enclosing goal; containers/directives return None).
     target = node._nearest_goal_for_subagent()
     if target is None:
-        return _err("That step has no enclosing goal to prove.")
+        # No narrower delegatable sub-goal: `_nearest_goal_for_subagent` walked up to
+        # the Root container / GlobalEnv without finding a named block or Define.
+        # Post-A2 this is how a main agent dispatching a (bare) top-level goal lands
+        # here — it IS the whole goal, just with no narrower unit (NOT "no goal").
+        return _whole_goal_err()
     # A goal-transforming step (e.g. Contradiction, or a freshly-emptied slot)
     # has no delegatable sub-goal of its own, so `_nearest_goal_for_subagent`
     # redirects UP to its enclosing goal. When that lands on the WHOLE goal the
     # session is responsible for, delegating it would hand the sub-agent the
     # entire proof — reject rather than silently scope the worker to it.
     #   - worker: its own target IS `proof_scope_root` → `target is psr`.
-    #   - main: `proof_scope_root` is the `Root` *container* (it oversees every
-    #     top-level theorem goal), and the redirect can only reach a top-level
-    #     `GoalNode` (never the container itself, which yields None above) — so
-    #     the whole-goal case is `target.parent is psr`.
+    #   - main: `proof_scope_root` is the `Root` *container*. Post-A2 a top-level
+    #     `GoalNode` redirects UP to `Root` (a GoalContainer → None), so it is caught
+    #     by the `target is None` arm above. The `target.parent is psr` clause below
+    #     is thus unreachable-by-construction (no delegatable node has `.parent is
+    #     Root`), KEPT only as a defensive guard should a future node resolve to a
+    #     direct child of `Root`.
     psr = session.proof_scope_root
     if target is psr or (not session.is_worker and target.parent is psr):
-        return _err(
-            f"Delegating step `{step_id}` would hand the sub-agent the whole "
-            f"goal you are responsible for — there is no narrower sub-goal to "
-            f"scope it to. You should call `{_tn}` on a specific subgoal like "
-            f"Have, Suffices, Obtain etc, or prove the step `{step_id}` "
-            f"yourself.")
+        return _whole_goal_err()
     if target is not node or from_slot:
         redirect_note = (f"Instead of step {step_id}, the sub-agent is working "
                          f"on step {session._display_id(target.id)}.\n")
     node = target
     # Invariant: _nearest_goal_for_subagent only ever returns a provable goal
-    # block (Have / Obtain / Suffices / SetupRewriting / GoalNode), all StdBlock subtypes.
+    # block (Have / Obtain / Suffices / SetupRewriting / Define), all StdBlock
+    # subtypes. (Post-A2 a bare GoalNode is never returned — obligation GoalNodes
+    # redirect to the Define; case GoalNodes redirect to the enclosing named block.)
     assert isinstance(node, StdBlock)
 
     # The goal block's own operation must be sound, and the goal not yet proved.
@@ -1709,7 +1730,7 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
     # The worker authored `outcome.detail` with absolute ids (it absolutized them
     # on emission); re-relativize for THIS dispatcher's view (identity for a
     # planner, dispatcher-scope-relative for a nested worker).
-    detail_shown = session._relativize_text(outcome.detail or "")
+    detail_shown = session._postprocess_outbound_text(outcome.detail or "")
     match outcome.kind:
         case "proved":
             msg = "The sub-agent proved the goal."
@@ -1941,7 +1962,7 @@ class ToolExecutor:
     # Channel helpers
     # ------------------------------------------------------------------
 
-    async def _race_outbox(self, task: asyncio.Task):
+    async def _race_outbox(self, task: asyncio.Task) -> executor_msg:
         """Await the next outbox message, or propagate task exception.
 
         Uses ``asyncio.wait`` to race ``outbox.get()`` against the task.
@@ -1972,7 +1993,7 @@ class ToolExecutor:
         suspended and the prompt returned to the agent.
         """
         if self._suspended_task is not None:
-            return ("An edit/delete/comment operation is in progress. "
+            return ("An operation is in progress. "
                     "Answer the pending interaction question first.", True)
 
         # Adopted by the session so a task suspended on a non-forking
@@ -1998,6 +2019,24 @@ class ToolExecutor:
             case InteractionPrompt():
                 self._suspended_task = task
                 return (msg.text, False)
+            case InteractionError(text):
+                # Protocol invariant violation. An InteractionError is emitted
+                # ONLY in reply to a submitted answer (model.py
+                # _inline_interaction, after channel.inbox.get()). This is the
+                # FIRST handshake call: nothing has been put on the inbox yet
+                # (that happens only in _handle_nf_answer), so reaching here
+                # means the tool task signalled a bad-answer error before any
+                # question was ever asked. The task is now parked on the next
+                # inbox.get(); cancel it so it does not dangle, then fail loud.
+                task.cancel()
+                with contextlib.suppress(BaseException):
+                    await task
+                raise InternalError(
+                    f"InteractionError on first channel handshake "
+                    f"(is_edit={is_edit}, is_batch={is_batch}): {text!r}. "
+                    f"An InteractionError is only valid as a reply to a "
+                    f"submitted answer, but none was submitted on this path — "
+                    f"the tool task violated the channel protocol.")
             case _:
                 raise InternalError(f"Unexpected channel message: {msg!r}")
 
@@ -2129,8 +2168,17 @@ class ToolExecutor:
                 case "recall_removed":
                     result, is_error = await _recall_removed_tool_logic(session, arguments)
                 case "request_lemmas":
-                    result, is_error = await _request_lemmas_tool_logic(
-                        session, arguments)
+                    # Channel-route like `subagent` (it likewise dispatches a worker):
+                    # run as a Task so a non-forking interaction raised mid-call can
+                    # surface to this agent as a suspend-and-answer, instead of
+                    # deadlocking on an un-pumped channel. Under `_subagent_lock` to
+                    # keep worker dispatch serialized with `subagent`.
+                    async with self._subagent_lock:
+                        async def _run_request_lemmas():
+                            r, e = await _request_lemmas_tool_logic(session, arguments)
+                            await self._channel.outbox.put(EditResult(r, e))
+                        result, is_error = await self._run_tool_via_channel(
+                            _run_request_lemmas(), session, is_edit=False)
                     session.last_proof_op_time = time()
                 case "report":
                     result, is_error = await _report_tool_logic(session, arguments)

@@ -33,7 +33,7 @@ proof:
     witness: ?x
     Error: |
       Syntax Error in Term Language.
-      Unbound schematic variable: ?x
+      The term must not contain the schematic variable ?x.
 Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   ∃(f :: nat ⇒ nat). f (0 :: nat) = f (0 :: nat)

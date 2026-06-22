@@ -6,8 +6,9 @@ import glob
 import json
 import os
 import shutil
+import shlex
 import signal
-import subprocess
+import sys
 import tempfile
 from time import time
 
@@ -17,6 +18,42 @@ from .model import *
 from .language_model_driver import LMDriver, _TransientError, _QuotaError, PRICING, pricing_for, _parse_effort_suffix, Usage
 
 from .mcp_http_server import ProofMCPHTTPServer
+
+
+# PreToolUse hook source. codex 0.141.0 has no config switch for two native
+# tools — `apply_patch` (writes/edits/deletes files) and `view_image` (reads an
+# image file into context). With the OS sandbox disabled we deny them with this
+# hook instead: it reads the PreToolUse event JSON on stdin and prints the
+# schema-exact deny envelope (exit 0) for a denylisted tool, staying silent
+# (allow) otherwise. Verified to actually block apply_patch in `codex exec`.
+_DENY_HOOK_SOURCE = '''\
+import json, sys
+DENY = {"apply_patch", "view_image"}
+try:
+    ev = json.loads(sys.stdin.read() or "{}")
+except Exception:
+    sys.exit(0)
+tool = ev.get("tool_name")
+if tool in DENY:
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": str(tool) + " is disabled in this session.",
+    }}))
+'''
+
+
+# Codex exposes every tool from an external MCP server to the model under a single
+# flattened name `mcp__<server>__<tool>` (double-underscore delimiter; the `mcp__`
+# prefix is present unless `non_prefixed_mcp_tool_names` is set, which we never do).
+# All AoA proof tools are served by one MCP server registered under this name, so
+# the agent-facing name of abstract tool id `t` is `mcp__proof__<t>`. Verified
+# against codex 0.141.0: the model tool-spec `name`, the PreToolUse hook
+# `tool_name`, and approval matchers all use this flattened form; the ONLY place
+# codex reports a bare name is the `exec --json` event, which splits it into
+# separate `server`/`tool` fields (reassembled in `_run_codex_exec`).
+_MCP_SERVER_NAME = "proof"
+_MCP_TOOL_PREFIX = f"mcp__{_MCP_SERVER_NAME}__"
 
 
 @agent_driver("Codex")
@@ -29,6 +66,14 @@ class Codex_Driver(LMDriver):
     DEFAULT_EFFORT = "high"
     # Max attempts for an interaction fork to call its answer tool before giving up.
     _FORK_ANSWER_MAX_ATTEMPTS = 4
+
+    # Agent-facing tool-name table. Every AoA proof tool is served by the `proof`
+    # MCP server, which codex flattens to `mcp__proof__<id>` (see _MCP_TOOL_PREFIX).
+    # Built from ALL_PROOF_TOOLS so it can never drift from the tool set. Note there
+    # is NO `recall`->`Read` special case (unlike ClaudeCode): codex has no built-in
+    # Read — the native shell is disabled — so `recall` is the MCP tool
+    # `mcp__proof__recall`.
+    _TOOL_NAME_MAP = {t: _MCP_TOOL_PREFIX + t for t in ALL_PROOF_TOOLS}
 
 
     working_dir: str
@@ -91,6 +136,12 @@ class Codex_Driver(LMDriver):
             return self._driver_name
         return f"{self._driver_name}({label})"
 
+    def tool_name(self, t: tool) -> str:
+        # Translate an abstract tool id to the flattened codex MCP name the model
+        # actually sees (e.g. `recall` -> `mcp__proof__recall`). Falls back to the
+        # id unchanged for anything outside the proof-tool set.
+        return self._TOOL_NAME_MAP.get(t, t)
+
     @classmethod
     def _make_fork(cls, parent: 'LMDriver', role=None) -> 'Codex_Driver':
         from .model import _session_var
@@ -119,7 +170,6 @@ class Codex_Driver(LMDriver):
             self._session_id, self)
         if self.is_major:
             self._write_codex_config()
-            self._init_git_repo()
         # Seed proof.yaml. `refresh_YAML` -> `print_proof_scope`, which renders
         # the full `root` for a major (non-worker) and the scoped view for a
         # worker — so a single call covers both. Interaction forks are neither
@@ -129,9 +179,23 @@ class Codex_Driver(LMDriver):
             self.refresh_YAML()
 
     def _write_codex_config(self):
-        # config.toml must be at the TOP level of CODEX_HOME to be read.
+        # config.toml must be at the TOP level of CODEX_HOME to be read. Drop the
+        # PreToolUse deny-hook script beside it and wire it in: `features.hooks`
+        # must be true (hooks are silent otherwise) and the hook is registered as
+        # a single `[[hooks.PreToolUse]]` matcher group (no matcher = matches all
+        # tools; the script itself filters the denylist).
+        hook_path = os.path.join(self._codex_home_dir, "deny_hook.py")
+        with open(hook_path, "w", encoding="utf-8") as f:
+            f.write(_DENY_HOOK_SOURCE)
+        hook_cmd = f"{shlex.quote(sys.executable)} {shlex.quote(hook_path)}"
         with open(os.path.join(self._codex_home_dir, "config.toml"), "w") as f:
-            f.write(f'[mcp_servers.proof]\nurl = {json.dumps(self._mcp_url)}\n')
+            f.write(
+                f"[mcp_servers.{_MCP_SERVER_NAME}]\nurl = {json.dumps(self._mcp_url)}\n\n"
+                "[features]\nhooks = true\n\n"
+                "[[hooks.PreToolUse]]\n"
+                "[[hooks.PreToolUse.hooks]]\n"
+                'type = "command"\n'
+                f"command = {json.dumps(hook_cmd)}\n")
 
     def _write_model_instructions(self):
         # Replace Codex's built-in base prompt with the role-aware AoA system
@@ -146,23 +210,6 @@ class Codex_Driver(LMDriver):
         with open(path, "w", encoding="utf-8") as f:
             f.write(text)
         self._model_instructions_path = path
-
-    def _init_git_repo(self):
-        subprocess.run(
-            ["git", "init"], cwd=self.working_dir,
-            capture_output=True, check=True)
-        subprocess.run(
-            ["git", "config", "user.email", "aoa-codex@example.invalid"],
-            cwd=self.working_dir, capture_output=True, check=True)
-        subprocess.run(
-            ["git", "config", "user.name", "AoA Codex Driver"],
-            cwd=self.working_dir, capture_output=True, check=True)
-        subprocess.run(
-            ["git", "add", "."], cwd=self.working_dir,
-            capture_output=True, check=True)
-        subprocess.run(
-            ["git", "commit", "-m", "init"],
-            cwd=self.working_dir, capture_output=True, check=True)
 
     async def close(self):
         await super().close()
@@ -301,17 +348,59 @@ class Codex_Driver(LMDriver):
         url = mcp_url or self._mcp_url
         if url is None:
             raise InternalError("Codex MCP URL is not initialized")
+        # Capability lockdown, verified end-to-end against codex-cli 0.141.0.
+        #
+        # The OS sandbox is DISABLED (`-s danger-full-access`); control is done
+        # with a PreToolUse HOOK instead (written by `_write_codex_config`). The
+        # hook DENIES the two native tools codex has no config switch for —
+        # `apply_patch` (file write) and `view_image` (file read) — and was
+        # verified to actually block them in `codex exec` ("Command blocked by
+        # PreToolUse hook"). `-s danger-full-access` is used rather than
+        # `--dangerously-bypass-approvals-and-sandbox` because the bypass flag
+        # may also drop hook enforcement, whereas danger-full-access keeps the
+        # hook layer active. `--dangerously-bypass-hook-trust` lets the hook run
+        # unattended (a fresh CODEX_HOME has no persisted trust, else the hook is
+        # silently skipped). `approval_policy="never"` stops prompts from blocking.
+        #
+        # MCP note: with approvals active, codex AUTO-CANCELS every MCP tool call
+        # unless the server is trusted, so the proof server is auto-approved via
+        # `default_tools_approval_mode="approve"` (its only effective value;
+        # `auto`/`prompt` still cancel). One server name "proof" covers
+        # major/worker/fork (all reuse it).
+        #
+        # The rest of the surface is stripped via feature flags: shell
+        # (`shell_tool`+`unified_exec`), web search (`web_search="disabled"` —
+        # the bool `tools.web_search=false` loads but does NOT remove `web.run`),
+        # image generation, the codex "apps" site-deploy MCP, goals,
+        # browser/computer-use, multi-agent and plugins. Hooks must stay ENABLED
+        # (features.hooks=true in config.toml) for the deny-hook to run, so hooks
+        # are NOT in the --disable list. Native `update_plan`/`request_user_input`
+        # are benign (no host access). `--strict-config` makes a future codex that
+        # renames any key fail loudly instead of silently re-enabling it.
         args = [
             "--json",
-            "--dangerously-bypass-approvals-and-sandbox",
+            "--skip-git-repo-check",
+            "-s", "danger-full-access",
             "-m", self._model,
-            "-c", f"mcp_servers.proof.url={json.dumps(url)}",
+            "-c", 'approval_policy="never"',
+            "--dangerously-bypass-hook-trust",
+            "-c", f"mcp_servers.{_MCP_SERVER_NAME}.url={json.dumps(url)}",
+            "-c", f'mcp_servers.{_MCP_SERVER_NAME}.default_tools_approval_mode="approve"',
             "-c", f"model_reasoning_effort={json.dumps(self._reasoning_effort)}",
-            # Remove the native shell so the agent cannot run arbitrary commands;
-            # it operates only through the MCP proof tools. (apply_patch cannot be
-            # disabled on 0.139.0 — a known residual under bypass.)
-            "-c", "features.unified_exec=false",
-            "-c", "features.shell_tool=false",
+            "-c", 'web_search="disabled"',
+            "--disable", "shell_tool",
+            "--disable", "unified_exec",
+            "--disable", "apps",
+            "--disable", "image_generation",
+            "--disable", "goals",
+            "--disable", "multi_agent",
+            "--disable", "browser_use",
+            "--disable", "browser_use_external",
+            "--disable", "computer_use",
+            "--disable", "in_app_browser",
+            "--disable", "plugins",
+            "--disable", "plugin_sharing",
+            "--strict-config",
         ]
         if self._model_instructions_path is not None:
             args += ["-c",
@@ -359,6 +448,11 @@ class Codex_Driver(LMDriver):
                 *cmd,
                 cwd=self.working_dir,
                 env={**os.environ, "CODEX_HOME": self._codex_home_dir},
+                # codex 0.141.0 reads stdin (appends it as a <stdin> block) even
+                # when the prompt is passed as an argv argument, and blocks until
+                # EOF. Hand it an immediate EOF so an inherited, non-EOF stdin in
+                # the AoA server process can never hang the codex subprocess.
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 limit=16 * 1024 * 1024,
@@ -408,10 +502,17 @@ class Codex_Driver(LMDriver):
                             if self._model_time_start is not None:
                                 self.total_model_time += time() - self._model_time_start
                                 self._model_time_start = None
-                            tool_name = item.get("tool", "")
+                            # The --json event splits an MCP call into bare
+                            # `server`/`tool` fields; codex's canonical name (what
+                            # `tool_name`/`is_proof_tool` operate on) is the
+                            # flattened mcp__<server>__<tool>, so reassemble it.
+                            server = item.get("server", "")
+                            bare_tool = item.get("tool", "")
+                            qualified = (f"mcp__{server}__{bare_tool}"
+                                         if server else bare_tool)
                             tool_args = item.get("arguments", {})
-                            if not self.is_proof_tool(tool_name):
-                                self.log_tool_call(tool_name, tool_args)
+                            if not self.is_proof_tool(qualified):
+                                self.log_tool_call(qualified, tool_args)
                     case "item.completed":
                         item = obj.get("item", {})
                         if item.get("type") == "mcp_tool_call":

@@ -6538,6 +6538,48 @@ async def _test_Induction_IHFactRef(root: Root, file: MyIO):
         "reason: " + reason_text)
 
 
+@model_test("OutScopeVar", "Test_OutScopeVar.thy", 18)
+async def _test_OutScopeVar(root: Root, file: MyIO):
+    """Out-of-scope-variable diagnostic pipeline. After Induction on a fixed `n`
+    (whose `0 < n` premise is NOT carried), the premise strands referencing the
+    internal skolem `n__`. Referencing it must produce an error naming `n` plus
+    the discarding step, never the raw `n__`."""
+    await root.fill("1", [Have.gen_single({
+        "thought": "sub-lemma over a fixed n with a positivity premise",
+        "statement": {
+            "english": "for every positive n, 0 < g n",
+            "conclusion": r"\<And>n::nat. 0 < n \<Longrightarrow> 0 < g n",
+        },
+        "name": "h",
+    })])
+    print_header("After Have h (auto-Intro at 1.1 fixes n, assumes premise0: 0 < n)", file)
+    root.print(0, file)
+    await root.fill("1.2", [Induction.gen_single({
+        "thought": "induct on n; do NOT carry the 0 < n premise",
+        "target_isabelle_term": "n :: nat",
+        "variables": [{"name": "n", "status": "generalized"}],
+    })])
+    print_header("After Induction on n (premise0 strands)", file)
+    root.print(0, file)
+    induct_node = root.locate_node("1.2")
+    file.write(f"\n_discarded_vars on 1.2: {getattr(induct_node, '_discarded_vars', None)}\n")
+
+    # The real Induction above recorded the discarded variable. A later
+    # reference to the stranded premise that fails to unify makes
+    # `Unify_Diagnostic.format_diag_body` emit `… the out-of-scope variable n__`
+    # (verified directly at the ML level). Feed that exact text through the
+    # outbound-text post-processor and confirm it resolves to the external name
+    # plus the discarding step, with no raw skolem name surviving.
+    diag = ("the given fact `F` mismatches the target premise `0 < n`\n"
+            "because of the out-of-scope variable n__")
+    resolved = root.session._postprocess_outbound_text(diag)
+    print_header("Resolved out-of-scope diagnostic", file)
+    file.write(f"resolved: {resolved.splitlines()[-1]}\n")
+    assert "n__" not in resolved, f"raw skolem name leaked to the agent: {resolved!r}"
+    assert "out-of-scope variable n (removed by step 1.2)" in resolved, \
+        f"expected resolved external name + discarding step, got: {resolved!r}"
+
+
 @model_test("Induction_SelectIHFacts", "Test_Induction_IHFacts.thy", 19)
 async def _test_Induction_SelectIHFacts(root: Root, file: MyIO):
     """The Induction pre-flight offers the in-scope facts mentioning the
@@ -10147,7 +10189,7 @@ async def _test_worker_err_id_leak(root: Root, file: MyIO):
     `CannotEdit_EvaluationFailed(self.id, ...)`), with no
     `Session._display_id` absolute→relative projection applied. Tellingly, the
     reason text emitted right beside it on the same code path IS relativized
-    (`Obvious._on_edit_failure` wraps it in `the_session()._relativize_text(...)`)
+    (`Obvious._on_edit_failure` wraps it in `the_session()._postprocess_outbound_text(...)`)
     — so the id leak is an inconsistency in that very method, not a missing
     feature. We assert the id rendered in the error equals the worker-relative id
     the worker actually used.
@@ -13500,7 +13542,7 @@ async def _test_nested_worker_scope(root: Root, file: MyIO):
     # Single-component refs (`step 2`) are intentionally NOT translated (regex
     # needs a dot) — asserted here so the limitation is regression-locked.
     show("free text (worker scope 1.1)", [
-        ("relativize", session._relativize_text(
+        ("relativize", session._postprocess_outbound_text(
             "Subgoal 1.1.1.1 fails; step 1.2 elsewhere; step 1.1.1 ok")),
         ("absolutize", session._absolutize_text("step 1.1 plus step 2")),
     ])
@@ -13564,7 +13606,7 @@ async def _test_nested_worker_scope(root: Root, file: MyIO):
     show("non-worker (planner) identity", [
         ("display_id 1.1.1",      session._display_id("1.1.1")),
         ("resolve 2.3.1",         session._resolve_display_id("2.3.1")),
-        ("relativize_text",       session._relativize_text("step 1.1.1 and Subgoal 2.4 ok")),
+        ("relativize_text",       session._postprocess_outbound_text("step 1.1.1 and Subgoal 2.4 ok")),
     ])
 
     # --- 8. _rebase_suggestion_ids: SAME input, planner vs worker dispatcher.
@@ -13668,9 +13710,9 @@ async def _test_nested_worker_scope(root: Root, file: MyIO):
     _W(Wd3)
     d_emit = session._absolutize_text(f"see step {session._display_id('1.1.1.1.1')}")  # 'see step 1.1' -> absolute
     chain = [("W3 authors", f"see step {a_w3}"), ("absolutized at emit", d_emit)]
-    _W(H11); chain.append(("W2(1.1) view", session._relativize_text(d_emit)))
-    _W(H1);  chain.append(("W1(1) view",   session._relativize_text(d_emit)))
-    session.role = model.Role_Major(); chain.append(("planner view", session._relativize_text(d_emit)))
+    _W(H11); chain.append(("W2(1.1) view", session._postprocess_outbound_text(d_emit)))
+    _W(H1);  chain.append(("W1(1) view",   session._postprocess_outbound_text(d_emit)))
+    session.role = model.Role_Major(); chain.append(("planner view", session._postprocess_outbound_text(d_emit)))
     show("depth (b): W3-authored detail re-relativized up the stack", chain)
 
     # (c) cross-namespace suggestion rebase at the W1->W2 dispatch boundary: an
@@ -13686,7 +13728,7 @@ async def _test_nested_worker_scope(root: Root, file: MyIO):
         ("display 1.1.True.1",  session._display_id("1.1.True.1")),    # True.1
         ("display 1.1.0.2",     session._display_id("1.1.0.2")),       # 0.2
         ("display 1.1.1.1A.2",  session._display_id("1.1.1.1A.2")),    # 1.1A.2
-        ("relativize_text",     session._relativize_text("step 1.1.True.1 and Subgoal 1.1.0.1 and step 1.2.9")),
+        ("relativize_text",     session._postprocess_outbound_text("step 1.1.True.1 and Subgoal 1.1.0.1 and step 1.2.9")),
     ])
 
     # (e) the SAME node 1.2 is internal to W1 but external to W2 (scope asymmetry).
@@ -14268,10 +14310,10 @@ async def _test_failure_propagation(root: Root, file: MyIO):
     w2_absolute = session._absolutize_text("blocked at step 1.1")      # 1.1 -> 1.1.1.1
     # W1 view (scope 1).
     session.role = model.Role_Worker(target=H, worker_handle=WorkerHandle(H, session))
-    w1_view = session._relativize_text(w2_absolute)                    # 1.1.1.1 -> step 1.1.1
+    w1_view = session._postprocess_outbound_text(w2_absolute)                    # 1.1.1.1 -> step 1.1.1
     # planner view (scope root) — identity.
     session.role = model.Role_Major()
-    planner_view = session._relativize_text(w2_absolute)
+    planner_view = session._postprocess_outbound_text(w2_absolute)
     file.write(f"W2-absolutized:  {w2_absolute!r}\n")
     file.write(f"W1 view:         {w1_view!r}\n")
     file.write(f"planner view:    {planner_view!r}\n")

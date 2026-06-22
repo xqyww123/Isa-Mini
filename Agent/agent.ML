@@ -309,15 +309,30 @@ fun string_of_thm ctxt th = string_of_term ctxt (Thm.prop_of th)
 (* Unwrap Par_Exn: if all inner exceptions are ERROR, merge into one ERROR.
    Syntax.read_prop/read_term use Par_List.map_independent internally, which wraps
    exceptions in Par_Exn via release_all. This prevents handle ERROR from matching. *)
+(* Rewrite Isabelle's terse "Unbound schematic variable: ?x" (raised by
+   Proof_Context when an agent-authored term contains a schematic `?x`) into a
+   directive the agent can act on.  Applied to every term reader below through
+   `release_par_error`, so Witness / Induction / CaseSplit / instantiation
+   values all share one message. *)
+fun rewrite_term_read_error msg =
+  (case try (unprefix "Unbound schematic variable: ") msg of
+     SOME var => "The term must not contain the schematic variable " ^ var ^ "."
+   | NONE => msg)
+
 fun release_par_error exn =
   (case Par_Exn.dest exn of
     SOME exns =>
       let val msgs = map_filter (fn ERROR msg => SOME msg | _ => NONE) exns
       in if null exns orelse length msgs <> length exns
          then Exn.reraise exn
-         else error (String.concatWith "\n" msgs)
+         else error (String.concatWith "\n" (map rewrite_term_read_error msgs))
       end
-  | NONE => Exn.reraise exn)
+  | NONE =>
+      (case exn of
+         ERROR msg =>
+           let val msg' = rewrite_term_read_error msg
+           in if msg' = msg then Exn.reraise exn else error msg' end
+       | _ => Exn.reraise exn))
 
 (* Customized read functions with bound name deconfliction *)
 
@@ -1122,31 +1137,6 @@ val auto_apply_attrib : attribute =
      in fold apply_kind kinds context
     end)
 
-(* Fold the recorded post-rule instantiation rounds onto the post-rule
-   state. Per round: parse each var-name to an indexname, partition into
-   type insts (?'a) and term insts (?x) by leading "'", then apply the
-   2-phase Minilang.INST_GOAL_VARS primitive (types first, then terms).
-   The instantiation VALUE strings are agent-supplied; INST_GOAL_VARS runs on the
-   plain strings, and a parse failure is re-probed positioned for a 【 】 marker
-   (term values via read_term, type values via read_typ) (M1). *)
-fun apply_post_insts rounds state =
-  fold (fn round => fn st =>
-    let
-      val ctxt = Minilang.context_of st
-      val parsed = map (fn (name, value) => (Minilang_Aux.parse_var name, value)) round
-      val (tinsts, insts) =
-        List.partition (fn (idx, _) => Minilang_Aux.is_tvar_name (Minilang_Aux.VN_IndexName idx))
-          parsed
-      fun reprobe () =
-        case Inner_Syntax_Error.marker_strings Syntax.read_term ctxt (map snd insts) of
-          SOME m => SOME m
-        | NONE => Inner_Syntax_Error.marker_strings Syntax.read_typ ctxt (map snd tinsts)
-    in Inner_Syntax_Error.guard reprobe (fn () =>
-         ( check_authored_terms ctxt [] (map snd insts)
-         ; Minilang.INST_GOAL_VARS (tinsts, insts) st))
-    end)
-  rounds state
-
 (* Names bound by the current goal's leading binders that an `Intro` would
    introduce (meta `⋀`, object `∀`, bounded `∀`), recursing through leading
    `⟹`/`⟶` premises.  Used to tell apart "you referred to a goal parameter you
@@ -1170,8 +1160,8 @@ fun goal_intro_var_names s =
 (* Shared rejection message for undeclared free variable(s) in an agent-authored
    term/proposition.  `opr_kind` names the operation ("Branch"/"Witness"/…) and
    `subject_noun` the thing at fault ("statement"/"witness term").  Shared by
-   `reject_stray_assumption_frees` (assumption-introducing ops) and the Witness
-   pre-check below. *)
+   `reject_undeclared_frees` (term ops), `reject_stray_assumption_frees`
+   (assumption-introducing ops) and the Witness pre-check below. *)
 fun undeclared_free_msg opr_kind subject_noun names =
   let val many = length names > 1 in
     "This " ^ opr_kind ^ " mentions the free variable" ^ (if many then "s " else " ") ^
@@ -1179,6 +1169,62 @@ fun undeclared_free_msg opr_kind subject_noun names =
     " not declared in scope. This indicates a bug in your " ^ subject_noun ^
     ": check whether you mistyped " ^ (if many then "a name" else "the name") ^ "."
   end
+
+(* Reject an agent-authored term that mentions a genuinely undeclared free
+   variable — one that is neither fixed in the current context NOR a leading
+   ∀/⋀ binder of the current goal.  A typo guard shared by Witness, Induction
+   (target / arbitrary), CaseSplit, and instantiation values: such a ghost is
+   almost always a mistyped name, and proceeding leaves a silently wrong /
+   unprovable state.  A leading goal binder is deliberately NOT treated as a
+   ghost — an op may legitimately name it (e.g. `Induction n` on a goal
+   `∀n. P n`), which the framework auto-introduces; it is left to that
+   machinery, not reported here.  Schematic `?x` likewise need no handling —
+   the term readers reject them upstream (see `rewrite_term_read_error`). *)
+fun reject_undeclared_frees opr_kind subject_noun s terms =
+  let
+    val ctxt = Minilang.context_of s
+    val goal_params = goal_intro_var_names s
+    val ghosts =
+      fold (fn t =>
+             fold (fn (nm, _) =>
+                     if Variable.is_fixed ctxt nm orelse member (op =) goal_params nm
+                     then I else insert (op =) nm)
+                  (Term.add_frees t []))
+           terms []
+      |> rev
+  in
+    if null ghosts then ()
+    else raise Minilang.OPR_FAIL (Minilang.INVALID_OPR,
+           undeclared_free_msg opr_kind subject_noun ghosts)
+  end
+
+(* Fold the recorded post-rule instantiation rounds onto the post-rule
+   state. Per round: parse each var-name to an indexname, partition into
+   type insts (?'a) and term insts (?x) by leading "'", then apply the
+   2-phase Minilang.INST_GOAL_VARS primitive (types first, then terms).
+   The instantiation VALUE strings are agent-supplied; INST_GOAL_VARS runs on the
+   plain strings, and a parse failure is re-probed positioned for a 【 】 marker
+   (term values via read_term, type values via read_typ) (M1). *)
+fun apply_post_insts rounds state =
+  fold (fn round => fn st =>
+    let
+      val ctxt = Minilang.context_of st
+      val parsed = map (fn (name, value) => (Minilang_Aux.parse_var name, value)) round
+      val (tinsts, insts) =
+        List.partition (fn (idx, _) => Minilang_Aux.is_tvar_name (Minilang_Aux.VN_IndexName idx))
+          parsed
+      fun reprobe () =
+        case Inner_Syntax_Error.marker_strings Syntax.read_term ctxt (map snd insts) of
+          SOME m => SOME m
+        | NONE => Inner_Syntax_Error.marker_strings Syntax.read_typ ctxt (map snd tinsts)
+    in Inner_Syntax_Error.guard reprobe (fn () =>
+         ( check_authored_terms ctxt [] (map snd insts)
+         ; reject_undeclared_frees "Instantiation" "instantiation value" st
+             (read_terms ctxt (map snd insts))
+         ; Minilang.INST_GOAL_VARS (tinsts, insts) st))
+    end)
+  rounds state
+
 
 (* Guard for assumption-introducing operations (Obtain `where`, Suffices `if`,
    Branch cases): reject a proposition that refers to a free variable which is
@@ -1769,20 +1815,10 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
              the assumption-introducing ops, a witness is substituted into the goal
              *conclusion* (not planted as a hypothesis), so this cannot trigger the
              THM-0 generalize bug — it is a fail-fast typo guard: a stray free would
-             otherwise leave a silently-unprovable residual goal.  A free is stray
-             iff it is not already fixed in the context.  (Schematic `?x` witnesses
-             are already rejected upstream by `read_terms_with_type` itself —
-             "Unbound schematic variable" — so they need no check here.) *)
-          val undeclared_frees =
-            fold (fn w =>
-                   fold (fn (nm, _) =>
-                           if Variable.is_fixed ctxt nm then I else insert (op =) nm)
-                        (Term.add_frees w []))
-                 ws []
-            |> rev
-          val _ = if null undeclared_frees then ()
-                  else raise Minilang.OPR_FAIL (Minilang.INVALID_OPR,
-                         undeclared_free_msg "Witness" "witness term" undeclared_frees)
+             otherwise leave a silently-unprovable residual goal.  (Schematic `?x`
+             witnesses are rejected upstream by `read_terms_with_type` — see
+             `rewrite_term_read_error` — so they need no check here.) *)
+          val _ = reject_undeclared_frees "Witness" "witness term" s ws
           val _ = List.app (Agent_Hint.check_term ctxt) ws
        in WITNESS ws
       end
@@ -1792,12 +1828,16 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
           val _ = Agent_Hint.check_thms ctxt (the_list rule')
           val target' = read_term ctxt target
           val _ = Agent_Hint.check_term ctxt target'
+          val _ = reject_undeclared_frees "CaseSplit" "case-split target" s [target']
        in CASE_SPLIT (target', vars, rule', no_simp, insts) (*insts: parsed at interpret time*)
       end
   | check_command_i s (INDUCT (target, vars, arbitrary, gen_fact_names, rule, no_simp, insts)) =
       let val ctxt = Minilang.context_of s
           val (target' :: arbitrary') = read_terms ctxt (target :: arbitrary)
           val _ = List.app (Agent_Hint.check_term ctxt) (target' :: arbitrary')
+          val _ = reject_undeclared_frees "Induction" "induction target" s [target']
+          val _ = reject_undeclared_frees "Induction"
+                    "generalized (arbitrary) variables" s arbitrary'
           val rule' = Option.map (chk_single ctxt rule o read_thms ctxt) rule
           val _ = Agent_Hint.check_thms ctxt (the_list rule')
           (* Parse each facts_to_generalize name string into a
@@ -1835,6 +1875,7 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
           val (names, raws) = ListPair.unzip insts
           val terms = read_terms ctxt raws
           val _ = List.app (Agent_Hint.check_term ctxt) terms
+          val _ = reject_undeclared_frees "Instantiation" "instantiation value" s terms
       in SPECIALIZE (name,
                      check_extended_fact ctxt rule_fact,
                      names ~~ terms,

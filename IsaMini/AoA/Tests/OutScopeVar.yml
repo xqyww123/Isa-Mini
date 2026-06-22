@@ -1,0 +1,70 @@
+--------------------------------------------------
+After Have h (auto-Intro at 1.1 fixes n, assumes premise0: 0 < n)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+variables:
+  - g: nat ⇒ nat
+goal: True
+proof:
+  - step id: 1
+    thought: sub-lemma over a fixed n with a positivity premise
+    operation: Have
+    statement:
+      english: for every positive n, 0 < g n
+      conclusion: \<And>n::nat. 0 < n \<Longrightarrow> 0 < g n
+    name: h
+    proof:
+      - step id: 1.1
+        operation: Intro
+        fixing variables:
+          - n: nat
+        assuming premises:
+          - premise0: (0 :: nat) < n
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.2` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: nat) < g n
+--------------------------------------------------
+After Induction on n (premise0 strands)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+variables:
+  - g: nat ⇒ nat
+goal: True
+proof:
+  - step id: 1
+    thought: sub-lemma over a fixed n with a positivity premise
+    operation: Have
+    statement:
+      english: for every positive n, 0 < g n
+      conclusion: \<And>n::nat. 0 < n \<Longrightarrow> 0 < g n
+    name: h
+    proof:
+      - step id: 1.1
+        operation: Intro
+        fixing variables:
+          - n: nat
+        assuming premises:
+          - premise0: (0 :: nat) < n
+      - step id: 1.2
+        thought: induct on n; do NOT carry the 0 < n premise
+        operation: Induction
+        target term: n :: nat
+        cases:
+          - goal id: 1.2.0
+            goal: (0 :: nat) < g (0 :: nat)
+            proof: empty
+            Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.0.1` to provide the proof.
+          - goal id: 1.2.Suc
+            variables:
+              - n: nat
+            premises:
+              - Suc.IH: (0 :: nat) < g n
+            goal: (0 :: nat) < g (Suc n)
+            proof: empty
+            Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.Suc.1` to provide the proof.
+
+_discarded_vars on 1.2: {'n__': 'n'}
+--------------------------------------------------
+Resolved out-of-scope diagnostic
+--------------------------------------------------
+resolved: because of the out-of-scope variable n (removed by step 1.2)
