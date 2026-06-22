@@ -1,0 +1,32 @@
+--------------------------------------------------
+Worker scope (1 obligation done, 1 open)
+--------------------------------------------------
+variables:
+  - halve: nat ⇒ nat
+proof:
+  - goal id: 1
+    goal: wf (measure (λ(n :: nat). n))
+    proof:
+      - step id: 1.1
+        operation: Obvious
+  - goal id: 2
+    goal: ∀(n :: nat). (n, Suc (Suc n)) ∈ measure (λ(n1 :: nat). n1)
+    proof:
+      - step id: 2.1
+        operation: Intro
+        fixing variables:
+          - n: nat
+    Unfinished Proof! Call command `edit` with action `fill` and target step `2.2` to provide the proof for the following goal.
+    pending proof goal:
+      (n, Suc (Suc n)) ∈ measure (λ(n1 :: nat). n1)
+--------------------------------------------------
+Worker quickview (1 obligation done, 1 open)
+--------------------------------------------------
+- 1 (proven)
+- 2
+  goal: ∀(n :: nat). (n, Suc (Suc n)) ∈ measure (λ(n1 :: nat). n1)
+  step 2.1: Intro
+    fixing variables:
+      - n: nat
+  Unfinished Proof. Call command `edit` with action `fill` and target step `2.2`
+  goal: (n, Suc (Suc n)) ∈ measure (λ(n1 :: nat). n1)

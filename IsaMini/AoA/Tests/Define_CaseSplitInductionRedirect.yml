@@ -1,0 +1,6 @@
+--------------------------------------------------
+Corner case: CaseSplit/Induction case GoalNode redirects to enclosing Have
+--------------------------------------------------
+CaseSplit case GoalNode 1.1.False _nearest is Have hcs (1): True
+Induction case GoalNode 2.1.Suc _nearest is Have hind (2): True
+neither resolves to itself: True

@@ -16028,6 +16028,80 @@ async def _test_define_delegation_set(root: Root, file: MyIO):
                f"{case_node._nearest_goal_for_subagent() is not case_node}\n")
 
 
+@model_test("Define_PartialObligation", "Test_Define_PartialObligation.thy", 10)
+async def _test_define_partial_obligation(root: Root, file: MyIO):
+    """Corner case (mixed done/open): a 2-obligation deferred Define with ONE
+    obligation discharged and one still open. Confirms Change B's worker-scope
+    render of a partially-proved multi-goal target — the proved obligation shows
+    `done`, the open one self-prints its goal + footer."""
+    session = root.session
+    session.age += 1
+    await root.fill("1", [Define.gen_single({
+        "thought": "Define halve; fake flag forces manual termination residuals",
+        "name": "halve",
+        "type": r"nat \<Rightarrow> nat",
+        "equations": [
+            "halve 0 = 0",
+            "halve (Suc 0) = 0",
+            "halve (Suc (Suc n)) = Suc (halve n)",
+        ],
+        "metric": [r"\<lambda>n::nat. n"],
+    })])
+    define_node = root.locate_node("1")
+    session.age += 1
+    # Discharge ONLY the first obligation (well-foundedness); leave the second open.
+    await root.fill("1.1.1", [Obvious.gen_single({"facts": []})])
+
+    session.role = model.Role_Worker(target=define_node)
+    await session._prefetch_worker_premises()
+    try:
+        print_header("Worker scope (1 obligation done, 1 open)", file)
+        session.print_proof_scope(0, file, show_warnings=True)
+        print_header("Worker quickview (1 obligation done, 1 open)", file)
+        session.quickview_proof_scope(0, file)
+    finally:
+        session.role = model.Role_Major()
+
+
+@model_test("Define_CaseSplitInductionRedirect", "Test_Define_CaseSplitInductionRedirect.thy", 8)
+async def _test_define_casesplit_induction_redirect(root: Root, file: MyIO):
+    """Corner case (A2 family, not just Branch): a `CaseSplit` and an `Induction`
+    each placed INSIDE a Have. Their case GoalNodes must redirect UP to the
+    enclosing Have (the same SubgoalMaker redirect Branch uses in §7.4)."""
+    session = root.session
+    session.age += 1
+    await root.fill("1", [Have.gen_single({
+        "thought": "host a CaseSplit",
+        "statement": {"english": "n is zero or positive", "conclusion": r"n = (0::nat) \<or> 0 < n"},
+        "name": "hcs"})])
+    await root.fill("1.1", [CaseSplit.gen_single({
+        "thought": "case split on whether n = 0",
+        "target_isabelle_term": r"n = 0"})])
+    hcs = root.locate_node("1")
+    cs = root.locate_node("1.1")
+    cs_case = [c for c in cs.sub_nodes if isinstance(c, GoalNode)][-1]
+
+    await root.fill("2", [Have.gen_single({
+        "thought": "host an Induction",
+        "statement": {"english": "n + 0 = n", "conclusion": r"n + (0::nat) = n"},
+        "name": "hind"})])
+    await root.fill("2.1", [Induction.gen_single({
+        "thought": "induct on n",
+        "target_isabelle_term": r"n",
+        "variables": [{"name": "n", "status": "fixed"}]})])
+    hind = root.locate_node("2")
+    ind = root.locate_node("2.1")
+    ind_case = [c for c in ind.sub_nodes if isinstance(c, GoalNode)][-1]
+
+    print_header("Corner case: CaseSplit/Induction case GoalNode redirects to enclosing Have", file)
+    file.write(f"CaseSplit case GoalNode {cs_case.id} _nearest is Have hcs ({hcs.id}): "
+               f"{cs_case._nearest_goal_for_subagent() is hcs}\n")
+    file.write(f"Induction case GoalNode {ind_case.id} _nearest is Have hind ({hind.id}): "
+               f"{ind_case._nearest_goal_for_subagent() is hind}\n")
+    file.write(f"neither resolves to itself: "
+               f"{cs_case._nearest_goal_for_subagent() is not cs_case and ind_case._nearest_goal_for_subagent() is not ind_case}\n")
+
+
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
     import msgpack as mp
     from IsaREPL import Client
