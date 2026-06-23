@@ -1099,6 +1099,11 @@ class APIDriver(LMDriver):
     COMPACTION_RECENT_ROUNDS = 3
     DEFAULT_MODEL: str = ""
     FORK_CHEAPER_MODEL: str | None = None
+    # Opt-in (env AOA_ASSUME_PERFECT_CACHE) "perfect input cache" cost
+    # accounting — only the codex stateless full-resend driver enables it.
+    # See _cache_assumed_usage.
+    _assume_perfect_cache: bool = False
+    _prev_prompt_total: int = 0
 
     working_dir: str
     YAML_path: str
@@ -1191,6 +1196,38 @@ class APIDriver(LMDriver):
     async def _run_agent_loop(self):
         await self._with_retry(self._api_loop)
 
+    def _cache_assumed_usage(self, usage: Usage,
+                             prev_prompt_total: int) -> tuple[Usage, int]:
+        """Optionally rewrite ``usage`` to assume a *perfect* input cache, and
+        return ``(usage, this_call_prompt_total)`` — the caller threads the
+        prompt total back in as ``prev_prompt_total`` next turn.
+
+        Gated by ``self._assume_perfect_cache`` (env ``AOA_ASSUME_PERFECT_CACHE``;
+        OFF by default; only the codex stateless full-resend driver turns it on).
+        OpenAI prompt caching is best-effort/intermittent (per-machine routing +
+        eviction), so on a stateless full-resend conversation a turn that re-sends
+        the entire prior transcript can still report ``cached_tokens=0``. We credit
+        the resent prefix as cached: ``effective = max(real_cached, theoretical)``
+        with ``theoretical = min(prev_prompt_total, this_prompt_total)`` — the
+        prior turn's full prompt is exactly this turn's resent prefix. The caller
+        resets ``prev_prompt_total`` to 0 across compaction/restart/refresh, so
+        those turns get ``theoretical=0`` (treated as a full cache miss). The
+        adjusted ``cached_tokens`` flows through the normal cost pipeline
+        (``_compute_cost`` bills it at the cached rate) → a notional 'ideal cache'
+        cost. NOTE: when ON this overwrites the real cache split, so the token
+        ledger then reports notional (not literally-sent) cache counts."""
+        prompt_total = (usage.input_tokens + usage.cached_tokens
+                        + usage.cache_creation_tokens)
+        if self._assume_perfect_cache:
+            theoretical = min(prev_prompt_total, prompt_total)
+            effective = max(usage.cached_tokens, theoretical)
+            usage = Usage.from_inclusive(
+                prompt_tokens=prompt_total,
+                output_tokens=usage.output_tokens,
+                cached=effective,
+                cache_creation=usage.cache_creation_tokens)
+        return usage, prompt_total
+
     async def _api_loop(self):
         assert self._executor is not None
         if self._budget_start_time is None:
@@ -1198,6 +1235,7 @@ class APIDriver(LMDriver):
         self._messages = await self._initial_messages()
         self._last_response_id = None
         self._msgs_sent_through = 0
+        self._prev_prompt_total = 0
         tools = self._provider.format_tools(self._executor.tool_schemas())
 
         while True:
@@ -1227,7 +1265,9 @@ class APIDriver(LMDriver):
                 if self._model_time_start is not None:
                     self.total_model_time += time() - self._model_time_start
                     self._model_time_start = None
-                self._accumulate_usage(response.usage)
+                adj_usage, self._prev_prompt_total = self._cache_assumed_usage(
+                    response.usage, self._prev_prompt_total)
+                self._accumulate_usage(adj_usage)
 
                 if response.thinking:
                     self.log_model_thinking(response.thinking)
@@ -1263,6 +1303,7 @@ class APIDriver(LMDriver):
                     if compacted is not self._messages:
                         self._last_response_id = None
                         self._msgs_sent_through = 0
+                        self._prev_prompt_total = 0  # compaction = full cache miss
                     self._messages = compacted
 
             if not isinstance(self.quit_info, (Restart, Refresh)):
@@ -1279,6 +1320,7 @@ class APIDriver(LMDriver):
                     append_briefing=refresh_info.briefing)
                 self._last_response_id = None
                 self._msgs_sent_through = 0
+                self._prev_prompt_total = 0  # refresh = full cache miss
                 self._total_calls_at_last_refresh = self.total_tool_calls
                 self.log_AoA_opr("Context refreshed")
                 self._log_meta("REFRESH", briefing=refresh_info.briefing)
@@ -1290,6 +1332,7 @@ class APIDriver(LMDriver):
             self._messages = await self._initial_messages()
             self._last_response_id = None
             self._msgs_sent_through = 0
+            self._prev_prompt_total = 0  # restart = full cache miss
             self.log_AoA_opr("Context restarted")
             self._log_meta("CONTEXT_RESTART")
 
@@ -1489,6 +1532,7 @@ class APIDriver(LMDriver):
         _pre_output = self.total_output_tokens
 
         fork_msgs_sent_through: int = 0
+        fork_prev_prompt_total: int = 0  # per-fork prev for _cache_assumed_usage
 
         try:
           while True:
@@ -1524,7 +1568,9 @@ class APIDriver(LMDriver):
                 if fork._model_time_start is not None:
                     fork.total_model_time += time() - fork._model_time_start
                     fork._model_time_start = None
-                self._accumulate_usage(resp.usage)
+                adj_usage, fork_prev_prompt_total = self._cache_assumed_usage(
+                    resp.usage, fork_prev_prompt_total)
+                self._accumulate_usage(adj_usage)
 
                 if resp.thinking:
                     fork.log_model_thinking(f"{tag} {resp.thinking}")
@@ -1698,6 +1744,12 @@ class APIDriver_OpenAICodex(APIDriver_ChatGPT):
                 reasoning_effort=effort,
             )
         super().__init__(*args, provider=provider, **kwargs)
+        # Opt-in "perfect input cache" cost accounting for this stateless
+        # full-resend path (codex prompt caching is best-effort/intermittent).
+        # OFF unless AOA_ASSUME_PERFECT_CACHE is truthy. See _cache_assumed_usage.
+        self._assume_perfect_cache = os.environ.get(
+            "AOA_ASSUME_PERFECT_CACHE", "").strip().lower() in (
+                "1", "true", "yes", "on")
 
 
 @agent_driver("K2-Think")
