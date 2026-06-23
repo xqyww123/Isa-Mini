@@ -11,6 +11,7 @@ import asyncio
 import contextvars
 import json
 import os
+import random
 import re
 import shutil
 import tempfile
@@ -1104,6 +1105,7 @@ class APIDriver(LMDriver):
     # See _cache_assumed_usage.
     _assume_perfect_cache: bool = False
     _prev_prompt_total: int = 0
+    _prev_output_tokens: int = 0
 
     working_dir: str
     YAML_path: str
@@ -1196,36 +1198,69 @@ class APIDriver(LMDriver):
     async def _run_agent_loop(self):
         await self._with_retry(self._api_loop)
 
-    def _cache_assumed_usage(self, usage: Usage,
-                             prev_prompt_total: int) -> tuple[Usage, int]:
-        """Optionally rewrite ``usage`` to assume a *perfect* input cache, and
-        return ``(usage, this_call_prompt_total)`` — the caller threads the
-        prompt total back in as ``prev_prompt_total`` next turn.
+    # --- "assume input cache" notional cost model (env AOA_ASSUME_PERFECT_CACHE) ---
+    # codex's ChatGPT-subscription prompt cache is best-effort/intermittent
+    # (per-machine routing + eviction); a stateless full-resend turn that re-sends
+    # the whole prior transcript often reports cached_tokens=0, inflating cost.
+    # When ON, we model a realistic cache instead of trusting the flaky real one.
+    _CACHE_MISS_P     = 0.142321   # P(hard miss this turn) -> sim cached = 0
+    _CACHE_LT70_P     = 0.24561    # P(turn < 70%); soft band [_CACHE_MISS_P, this) -> U(50,70)%
+    _CACHE_TRUST_REAL = 0.80       # real rate >= this -> trust real verbatim
+    _CACHE_BLEND_REAL = 0.60       # real rate in [this, TRUST) -> 0.3*real + 0.7*sim; below -> 100% sim
 
-        Gated by ``self._assume_perfect_cache`` (env ``AOA_ASSUME_PERFECT_CACHE``;
-        OFF by default; only the codex stateless full-resend driver turns it on).
-        OpenAI prompt caching is best-effort/intermittent (per-machine routing +
-        eviction), so on a stateless full-resend conversation a turn that re-sends
-        the entire prior transcript can still report ``cached_tokens=0``. We credit
-        the resent prefix as cached: ``effective = max(real_cached, theoretical)``
-        with ``theoretical = min(prev_prompt_total, this_prompt_total)`` — the
-        prior turn's full prompt is exactly this turn's resent prefix. The caller
-        resets ``prev_prompt_total`` to 0 across compaction/restart/refresh, so
-        those turns get ``theoretical=0`` (treated as a full cache miss). The
-        adjusted ``cached_tokens`` flows through the normal cost pipeline
-        (``_compute_cost`` bills it at the cached rate) → a notional 'ideal cache'
-        cost. NOTE: when ON this overwrites the real cache split, so the token
-        ledger then reports notional (not literally-sent) cache counts."""
+    def _cache_assumed_usage(self, usage: Usage, prev_prompt_total: int,
+                             prev_output: int) -> tuple[Usage, int]:
+        """Rewrite ``usage.cached_tokens`` to a NOTIONAL value modelling input
+        caching, returning ``(usage, this_call_prompt_total)`` (caller threads the
+        prompt total back as ``prev_prompt_total`` next turn; tracks ``prev_output``
+        separately). OFF by default ⇒ usage returned unchanged (byte-identical).
+
+        Pipeline (only when ``self._assume_perfect_cache``):
+          1. idealB (perfect prefix, never 100%): the resent prefix
+             ``min(prev_prompt_total, cur)`` is credited as cached — but capped at
+             ``cur - prev_output`` so this turn's genuinely-new content (>= the
+             prior model output, never seen before) stays fresh.
+          2. sim: degrade idealB by the measured random drop pattern — hard miss
+             (cached 0) w.p. _CACHE_MISS_P; soft (50-70% of cur) in the nested band;
+             else idealB. Fully random (non-reproducible by design).
+          3. tiered blend by this turn's REAL cache rate rp = real/cur:
+             rp >= TRUST -> real;  BLEND <= rp < TRUST -> 0.3*real+0.7*sim;
+             rp < BLEND -> sim (100% modelled).
+        The first turn after any reset (prev_prompt_total == 0: loop start /
+        compaction / refresh / restart) has no resent prefix, so it is left genuine.
+        The adjusted cached flows through the normal cost pipeline (_compute_cost
+        bills cached at the cached rate). NOTE: when ON this overwrites the real
+        cache split, so the token ledger reports notional cache counts."""
         prompt_total = (usage.input_tokens + usage.cached_tokens
                         + usage.cache_creation_tokens)
-        if self._assume_perfect_cache:
-            theoretical = min(prev_prompt_total, prompt_total)
-            effective = max(usage.cached_tokens, theoretical)
-            usage = Usage.from_inclusive(
-                prompt_tokens=prompt_total,
-                output_tokens=usage.output_tokens,
-                cached=effective,
-                cache_creation=usage.cache_creation_tokens)
+        if not self._assume_perfect_cache or prev_prompt_total <= 0 or prompt_total <= 0:
+            return usage, prompt_total
+        real = usage.cached_tokens
+        # 1. idealB: perfect prefix, keep this turn's new content fresh (never 100%)
+        theoretical = min(prev_prompt_total, prompt_total)
+        ideal = min(max(real, theoretical), max(0, prompt_total - prev_output))
+        # 2. sim: random degradation of idealB
+        r = random.random()
+        if r < self._CACHE_MISS_P:
+            sim = 0
+        elif r < self._CACHE_LT70_P:
+            sim = int(random.uniform(0.50, 0.70) * prompt_total)
+        else:
+            sim = ideal
+        # 3. tiered blend by real cache rate
+        rp = real / prompt_total
+        if rp >= self._CACHE_TRUST_REAL:
+            effective = real
+        elif rp >= self._CACHE_BLEND_REAL:
+            effective = round(0.3 * real + 0.7 * sim)
+        else:
+            effective = sim
+        effective = max(0, min(int(effective), prompt_total))  # bound: [0, prompt_total]
+        usage = Usage.from_inclusive(
+            prompt_tokens=prompt_total,
+            output_tokens=usage.output_tokens,
+            cached=effective,
+            cache_creation=usage.cache_creation_tokens)
         return usage, prompt_total
 
     async def _api_loop(self):
@@ -1236,6 +1271,7 @@ class APIDriver(LMDriver):
         self._last_response_id = None
         self._msgs_sent_through = 0
         self._prev_prompt_total = 0
+        self._prev_output_tokens = 0
         tools = self._provider.format_tools(self._executor.tool_schemas())
 
         while True:
@@ -1266,7 +1302,8 @@ class APIDriver(LMDriver):
                     self.total_model_time += time() - self._model_time_start
                     self._model_time_start = None
                 adj_usage, self._prev_prompt_total = self._cache_assumed_usage(
-                    response.usage, self._prev_prompt_total)
+                    response.usage, self._prev_prompt_total, self._prev_output_tokens)
+                self._prev_output_tokens = response.usage.output_tokens
                 self._accumulate_usage(adj_usage)
 
                 if response.thinking:
@@ -1304,6 +1341,7 @@ class APIDriver(LMDriver):
                         self._last_response_id = None
                         self._msgs_sent_through = 0
                         self._prev_prompt_total = 0  # compaction = full cache miss
+                        self._prev_output_tokens = 0
                     self._messages = compacted
 
             if not isinstance(self.quit_info, (Restart, Refresh)):
@@ -1321,6 +1359,7 @@ class APIDriver(LMDriver):
                 self._last_response_id = None
                 self._msgs_sent_through = 0
                 self._prev_prompt_total = 0  # refresh = full cache miss
+                self._prev_output_tokens = 0
                 self._total_calls_at_last_refresh = self.total_tool_calls
                 self.log_AoA_opr("Context refreshed")
                 self._log_meta("REFRESH", briefing=refresh_info.briefing)
@@ -1333,6 +1372,7 @@ class APIDriver(LMDriver):
             self._last_response_id = None
             self._msgs_sent_through = 0
             self._prev_prompt_total = 0  # restart = full cache miss
+            self._prev_output_tokens = 0
             self.log_AoA_opr("Context restarted")
             self._log_meta("CONTEXT_RESTART")
 
@@ -1533,6 +1573,7 @@ class APIDriver(LMDriver):
 
         fork_msgs_sent_through: int = 0
         fork_prev_prompt_total: int = 0  # per-fork prev for _cache_assumed_usage
+        fork_prev_output: int = 0
 
         try:
           while True:
@@ -1569,7 +1610,8 @@ class APIDriver(LMDriver):
                     fork.total_model_time += time() - fork._model_time_start
                     fork._model_time_start = None
                 adj_usage, fork_prev_prompt_total = self._cache_assumed_usage(
-                    resp.usage, fork_prev_prompt_total)
+                    resp.usage, fork_prev_prompt_total, fork_prev_output)
+                fork_prev_output = resp.usage.output_tokens
                 self._accumulate_usage(adj_usage)
 
                 if resp.thinking:
