@@ -1689,7 +1689,10 @@ class APIDriver_OpenAICodex(APIDriver_ChatGPT):
                 "OPENAI_OAUTH_BASE_URL", "http://127.0.0.1:10531/v1")
             provider = CodexResponsesProvider(
                 model=model,
-                api_key="openai-oauth-local",  # proxy needs none; SDK requires a non-empty string
+                # openai-oauth needs no key (the dummy satisfies the SDK's
+                # non-empty-string requirement); key-validating proxies such as
+                # auth2api need the configured key via OPENAI_OAUTH_API_KEY.
+                api_key=os.environ.get("OPENAI_OAUTH_API_KEY", "openai-oauth-local"),
                 base_url=base_url,
                 cache_key=f"proof-{uuid.uuid4().hex[:8]}",
                 reasoning_effort=effort,
