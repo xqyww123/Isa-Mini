@@ -44,6 +44,7 @@ from .model import (
     AoA_Error, ArgumentError, IsabelleError, InternalError,
     CannotDelete_Root, NodeNotFound, ProofTreeTooDeep,
     EvaluationStatus, WorkerHandle, WorkerYield, Have, EditVerdict, _is_strict_ancestor,
+    _is_direct_global_decl, _enclosing_global_decl,
     Parse_Op_List, Interaction_BadAnswer,
     AnswerIndexes, AnswerIndex, AnswerIndexesOrName, AnswerIndexesOrSpec,
     AnswerInstantiate, AnswerRefutation, AnswerStruggleAssessment,
@@ -64,6 +65,7 @@ from .model import (
     ALL_PROOF_TOOLS,
     Role_Worker,
     Surrender, Refute, Refresh,
+    LMUnreachable, ResourceUnavailable,
     TOOL_REFRESH,
     print_indent, print_goal, MyIO,
 )
@@ -1445,15 +1447,31 @@ async def _request_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
                   "detail": detail}
                  for l in general_lemmas])
 
-        # FORCE-GENERAL (all workers): classify each requested lemma against the
-        # GLOBAL fill-slot state (prior global declarations visible; worker-local
-        # fixes excluded). Any non-general item REJECTS the whole call upfront
-        # (process nothing) so it resubmits with every free variable declared in
-        # `for_any` — the already-general items are then auto-proved cleanly on the
-        # retry, with no duplicate global Haves. This replaces v3's non-general
-        # planner-park branch entirely.
+        # Where do auto-proved general lemmas go? They MUST land BEFORE the
+        # requesting worker's target so the worker can SEE them (a worker's scope is
+        # only the declarative facts of siblings PRECEDING its target —
+        # `_all_fixed_facts_before_a_child` stops at the target). A worker on a
+        # top-level goal has its target after every global child, so the END of the
+        # global env is already before it. But a worker whose target lives INSIDE
+        # the global env — a headless prover on a global Have, or a worker on a
+        # deferred global Define — would get an end-appended lemma placed AFTER its
+        # target, out of scope. For that case insert each lemma immediately before
+        # `gl_anchor`, the global-env-direct-child ancestor of the target.
         global_env = session.root.global_env
-        slot_state = global_env._resulting_state_of_all_children()
+        _tgt = session.role.target
+        gl_anchor = (_tgt if _is_direct_global_decl(_tgt)
+                     else _enclosing_global_decl(_tgt))
+        # FORCE-GENERAL (all workers): classify each requested lemma against the
+        # state at its ACTUAL insertion slot — the anchor's pre-state when inserting
+        # in-env (so a constant the anchor or a later global child declares is
+        # correctly out of scope), else the global end state. Prior global
+        # declarations visible; worker-local fixes excluded. Any non-general item
+        # REJECTS the whole call upfront (process nothing) so it resubmits with every
+        # free variable declared in `for_any` — the already-general items are then
+        # auto-proved cleanly on the retry, with no duplicate global Haves. This
+        # replaces v3's non-general planner-park branch entirely.
+        slot_state = (gl_anchor.ml_state if gl_anchor is not None
+                      else global_env._resulting_state_of_all_children())
         nongeneral_lines: list[str] = []
         for lem in general_lemmas:
             ok, blocking = await _lemma_statement_is_general(
@@ -1486,12 +1504,36 @@ async def _request_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         for lem in general_lemmas:
             nm = lem["name"]
             stmt = lem["statement"]
-            slot = f"{global_env.id}.{len(global_env.sub_nodes) + 1}"
             parsed = Have.gen_single({
                 "thought": detail or "requested helper lemma",
                 "statement": stmt,
                 "name": nm})
-            fill_outcome = await session.root.fill(slot, [parsed])
+            # Land the lemma where the worker can see it (see `gl_anchor` above). An
+            # in-env target: insert before the anchor. That re-evaluates the anchor
+            # and everything after it (the edit cascade) with the new fact in scope;
+            # the anchor keeps its live `worker_handle` (StdBlock._refresh_me_alone
+            # never clears it) and re-runs its partial proof against the superset
+            # state. Safe for a Have anchor (StdBlock reuses its children) and for a
+            # Define anchor (a Define's obligation count comes from its equations,
+            # not from preceding global facts, so re-exec stays on the child-reuse
+            # branch and the worker's partial proof survives). A mid-cascade Isabelle
+            # error would propagate out of insert_before — the same pre-existing
+            # exposure the end-append path already carries.
+            if gl_anchor is not None:
+                fill_outcome = await session.root.insert_before(
+                    gl_anchor.id, [parsed])
+            else:
+                # Ask the global env for its real open slot rather than assuming
+                # dense 1..N numbering. An earlier in-env request (above) may have
+                # left a fractional global child via insert_before (e.g. `global.0A`),
+                # so `len(sub_nodes)+1` could miss the actual append slot and make the
+                # fill spuriously fail. `_id_of_openning_prf_to_fill` returns
+                # `global.{incr(last local_step)}` — identical to `len+1` for dense
+                # children, correct for fractional ones. (GlobalEnv never ends, so it
+                # is always opening ⇒ never None.)
+                slot = global_env._id_of_openning_prf_to_fill()
+                assert slot is not None  # GlobalEnv is always opening
+                fill_outcome = await session.root.fill(slot, [parsed])
             node = fill_outcome.committed[0] if fill_outcome.committed else None
             if node is None or node.status.status == EvaluationStatus.Status.FAILURE:
                 # The statement itself is ill-formed / failed to open — no provable
@@ -2278,6 +2320,18 @@ class ToolExecutor:
                     result, is_error = await _refresh_tool_logic(session, arguments)
                 case _:
                     return (f"Unknown tool: {name}", True)
+        except LMUnreachable as e:
+            # The LM backend (e.g. the openai-oauth proxy, or its ChatGPT
+            # credentials) is unreachable. This can surface here when a fork
+            # (interaction sub-agent) makes the failing model call. Convert it to
+            # a clean terminal give-up via quit_info — the main loop sees
+            # quit_info and stops — instead of letting it fall to the
+            # `except Exception: sys.exit(1)` below, which would kill the whole
+            # (single-process) host. The main agent loop catches LMUnreachable
+            # directly (see driver_api._api_loop).
+            session.quit_info = ResourceUnavailable(detail=str(e))
+            session.log_tool_response(session.tool_name(name), f"LM UNREACHABLE: {e}")
+            return (str(e), True)
         except (ConnectionError, EOFError):
             raise asyncio.CancelledError("connection lost")
         except Exception as e:

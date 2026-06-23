@@ -12,9 +12,14 @@ from typing import Any, Awaitable, ClassVar, Iterable, Mapping, NamedTuple, Prot
 from Isabelle_RPC_Host import Connection, IsabelleError, pretty_unicode, ascii_of_unicode
 from Isabelle_RPC_Host.position import IsabellePosition
 from Isabelle_RPC_Host.universal_key import (
-    EntityKind, universal_key, universal_key_of, universal_key_and_name_of, UndefinedEntity,
+    EntityKind, universal_key, universal_key_of, universal_key_and_name_of,
+    key_of_theorems, UndefinedEntity,
 )
 from Isabelle_Semantic_Embedding.semantics import Semantic_Vector_Store, SemanticRecord, trunc_expr as _trunc_expr_base
+
+# Max number of members shown when an exact_name lookup hits a multi-theorem
+# fact (a bundle); any beyond this are summarised with a "use foo(k)…" note.
+EXACT_NAME_BUNDLE_LIMIT = 20
 
 if TYPE_CHECKING:
     # `LMDriver` (the session/driver base) lives in `language_model_driver`, which
@@ -283,6 +288,11 @@ class RetrievedEntity(NamedTuple):
     # hit by exact_name lookups ("Abbreviation constant ..." / "Raw constant ...").
     # None everywhere else (KNN / pattern paths never set it).
     semantics_heading: str | None = None
+    # True for a member surfaced by expanding a multi-theorem fact (bundle) via
+    # exact_name: the renderer skips the per-member declaring-definition fetch
+    # (they share one `lemmas`/`fun` declaration — fetching it per member is
+    # wasteful and, for fun/.simps bundles, repeats the same source N times).
+    suppress_def: bool = False
 
 class IsabelleFact(ABC):
     """A fact referenced in proof operations.
@@ -615,6 +625,16 @@ class ResourceExhausted:
     detail: str | None = None
 
 @dataclass
+class ResourceUnavailable:
+    # The LM backend itself could not be reached/used (infrastructure failure,
+    # e.g. the openai-oauth proxy is down or its ChatGPT credentials expired) —
+    # distinct from ResourceExhausted (budget/token/retry limits used up). Set by
+    # the driver/executor when ``LMUnreachable`` is caught (see driver_api).
+    reason: ClassVar[str] = "resource_unavailable"
+    is_terminal: ClassVar[bool] = True
+    detail: str | None = None
+
+@dataclass
 class Surrender:
     reason: ClassVar[str] = "surrender"
     is_terminal: ClassVar[bool] = True
@@ -639,7 +659,7 @@ class Refresh:
     briefing: str = ""
     detail: str | None = None
 
-QuitInfo = ResourceExhausted | Surrender | Refute | Restart | Refresh
+QuitInfo = ResourceExhausted | ResourceUnavailable | Surrender | Refute | Restart | Refresh
 
 
 class DriverArgumentError(AoA_Error):
@@ -647,6 +667,17 @@ class DriverArgumentError(AoA_Error):
 
 
 class OprError(AoA_Error):
+    pass
+
+
+class LMUnreachable(AoA_Error):
+    """The LM backend could not be reached/used (e.g. the openai-oauth proxy is
+    down, or its ChatGPT subscription credentials expired). Raised in-band by a
+    Provider's ``chat`` (a Provider cannot set ``quit_info`` itself); the driver
+    (``_api_loop``) and the tool executor (``ToolExecutor.execute``) catch it and
+    convert it to ``quit_info = ResourceUnavailable`` so the proof gives up
+    cleanly instead of an exception escaping (a fork's would hit
+    ``execute``'s ``sys.exit(1)`` and kill the host)."""
     pass
 
 class EditOperation(Enum):
@@ -1935,9 +1966,42 @@ class Minilang_State:
         # where it carries (semantics_heading, interpretation) from
         # constant_semantics_layers. The shapes MUST stay in sync — the three
         # construction sites converge on one shared unpacking loop at the end.
+        # Ref-names of members surfaced by a >1-member bundle expansion (exact_name);
+        # read by the shared unpacking loop to suppress their per-member declaring
+        # definition. Empty (and harmless) on the non-exact path.
+        bundle_member_names: set[str] = set()
         if exact_name is not None:
             scored_recs: list[tuple[float, SemanticRecord, tuple[str, str | None] | None]] = []
+            warnings: list[str] = []
+            # Full size of the multi-theorem fact (bundle) hit by exact_name, if
+            # any; only set on the THEOREM-success path, used solely for the
+            # truncation note. None when no bundle resolved.
+            bundle_N: int | None = None
             for tag in kinds:
+                if tag == EntityKind.THEOREM:
+                    # A fact name may bind several theorems (`foo`, members
+                    # `foo(1)/foo(2)`). Expand to its members (up to the cap)
+                    # rather than reporting the bare name "Undefined".
+                    try:
+                        n_total, members = await key_of_theorems(
+                            self.connection, exact_name,
+                            limit=EXACT_NAME_BUNDLE_LIMIT, ctxt=self.name)
+                    except UndefinedEntity:
+                        continue
+                    except IsabelleError as e:
+                        # e.g. an explicit out-of-range index — surface the
+                        # helpful message instead of the generic "Undefined".
+                        warnings.append(e.errors[0] if e.errors else str(e))
+                        continue
+                    bundle_N = n_total
+                    for uk, ref_name in members:
+                        rec = Semantic_DB[uk]
+                        rec = (rec._replace(name=ref_name) if rec is not None
+                               else SemanticRecord(EntityKind.THEOREM, ref_name, None, None))
+                        if n_total > 1:
+                            bundle_member_names.add(ref_name)
+                        scored_recs.append((1.0, rec, None))
+                    continue
                 try:
                     uk, full_name = await universal_key_and_name_of(self.connection, tag, exact_name, ctxt=self.name)
                 except UndefinedEntity:
@@ -1978,8 +2042,14 @@ class Minilang_State:
                 else:
                     scored_recs.append((1.0, SemanticRecord(tag, full_name, None, None), override))
             if not scored_recs:
-                return [], [f'Undefined: "{exact_name}"'], 0
-            warnings: list[str] = []
+                return [], (warnings or [f'Undefined: "{exact_name}"']), 0
+            if bundle_N is not None and bundle_N > EXACT_NAME_BUNDLE_LIMIT:
+                first_rest = EXACT_NAME_BUNDLE_LIMIT + 1
+                rest = (f"use {exact_name}({bundle_N})" if first_rest == bundle_N
+                        else f"use {exact_name}({first_rest}) … {exact_name}({bundle_N})")
+                warnings.append(
+                    f"{exact_name} has {bundle_N} theorems — showing the first "
+                    f"{EXACT_NAME_BUNDLE_LIMIT}; {rest} for the rest.")
             total = len(scored_recs)
             # Skip to entity resolution below
         else:
@@ -2050,7 +2120,8 @@ class Minilang_State:
             out.append(self._make_retrieved_entity(
                 rec.kind, rec.name, info, score,
                 ' '.join(interp.split()) if interp else None,
-                semantics_heading=heading))
+                semantics_heading=heading,
+                suppress_def=rec.name in bundle_member_names))
         return out, warnings, total
     async def compute_bindings(self, var_names: list[varname], fact_names: list[varname]) -> Bindings:
         """
@@ -2094,6 +2165,7 @@ class Minilang_State:
         info: 'tuple[short_name, list[term], list[str], list[full_name], bool] | None',
         score: float, interpretation: 'str | None',
         semantics_heading: 'str | None' = None,
+        suppress_def: bool = False,
     ) -> RetrievedEntity:
         """Build a ``RetrievedEntity`` from a ``_retrieve_entity`` result tuple
         (or a ``None`` placeholder → empty expression). Pure construction: no RPC,
@@ -2120,7 +2192,7 @@ class Minilang_State:
                 expression=exprs, kind=kind, roles=roles,
                 abbreviation_names=abbrev_names)
         return RetrievedEntity(entity=entity, score=score, interpretation=interpretation,
-                               semantics_heading=semantics_heading)
+                               semantics_heading=semantics_heading, suppress_def=suppress_def)
 
     async def retrieve_entities_by_name(
         self, names: list[str], kind: EntityKind = EntityKind.THEOREM,

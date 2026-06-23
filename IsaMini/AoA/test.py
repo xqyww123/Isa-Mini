@@ -1406,68 +1406,78 @@ async def _test_Define_QueryConst(root: Root, file: MyIO):
 
 @model_test("Query_BundleBareName", "Test_Query_BundleBareName.thy", 14)
 async def _test_Query_BundleBareName(root: Root, file: MyIO):
-    """Reproduces the audit finding (aoa_audit_finding_query_exact_name_bundle):
-    `query` with `exact_name` on a multi-fact BUNDLE bare name misreports it as
-    'Undefined', even though the bundle exists and its members resolve fine.
+    """Fix for the audit finding (aoa_audit_finding_query_exact_name_bundle):
+    `query exact_name` on a multi-theorem fact BARE name now EXPANDS to its
+    members instead of reporting 'Undefined'.
 
-    Setup (.thy): `lemmas demo_bundle = conjI disjI1` — a 2-member bundle whose
-    real reference names are demo_bundle(1)/demo_bundle(2); the bare name
-    `demo_bundle` denotes the whole list.
+    Setup (.thy): `lemmas demo_bundle = conjI disjI1` — a 2-member fact whose
+    members are demo_bundle(1)/demo_bundle(2); the bare name denotes the whole list.
 
-    Root cause (model.py semantic_knn_counted, exact_name branch): the ML
-    callback key_of_theorem FINDS the fact but, with 2 theorems and no index,
-    raises a *helpful* IsabelleError 'Fact ... has N theorems; specify an index
-    like ...(1)' (Universal_Key.ML). universal_key.py only maps messages
-    starting with 'Undefined ' to UndefinedEntity, so this surfaces as a plain
-    IsabelleError, which the exact_name loop SWALLOWS (`except IsabelleError:
-    continue`, model.py) and then synthesises the misleading
-    `Undefined: "demo_bundle"`.
-
-    This golden DOCUMENTS the current (buggy) behaviour:
-      - bare name via exact_name      -> 0 results + Undefined            (BUG)
-      - a member via exact_name       -> resolves to the member thm       (exists)
-      - the raw key_of_theorem call   -> shows the helpful 'has N theorems;
-                                          specify an index' message that model.py
-                                          throws away (the smoking gun)
-    (The audit also saw the contradiction via name_contains finding the members;
-    that pattern-only path enumerates only indexed/static facts, so for a freshly
-    declared local `lemmas` bundle it returns nothing — cf.
-    QueryLocalScore_PatternOnly. Here the bundle's existence is shown directly by
-    the member lookup + the raw callback message, which do not depend on the
-    embedding index.)
-    When the fix lands (expand a bundle bare name to its members), update this
-    golden — the before/after diff is the proof the fix works."""
+    Asserts:
+      - exact_name='demo_bundle' (bare) -> 2 members (was: 0 results + Undefined).
+      - key_of_theorems returns total=2 and the INTERNED qualified member names.
+      - the rendered query-tool output lists demo_bundle(1)/(2) with statements,
+        NO per-member declaring definition (suppressed for bundle members), and —
+        since N=2<=20 — NO truncation note.
+      - the OLD single-resolver key_of_theorem STILL errors on the bare name (by
+        design; key_of_theorems is the new sibling, not a replacement)."""
+    from IsaMini.AoA.retrieval import _semantic_search_direct
     from Isabelle_RPC_Host.universal_key import (
-        EntityKind, universal_key_and_name_of, UndefinedEntity)
+        EntityKind, universal_key_and_name_of, key_of_theorems, UndefinedEntity)
     from Isabelle_RPC_Host import IsabelleError
 
     ml = root.session.retrieval_state()
 
-    # (1) BARE bundle name via exact_name -> the bug: 0 results + Undefined
+    # (1) BARE bundle name via exact_name -> now expands to its 2 members.
     results_bare, warnings_bare = await ml.semantic_knn(
-        None, 1, [EntityKind.THEOREM], exact_name="demo_bundle")
-    file.write(f"exact_name='demo_bundle' (bundle bare name): "
-               f"{len(results_bare)} results, warnings={warnings_bare}\n")
+        None, 20, [EntityKind.THEOREM], exact_name="demo_bundle")
+    file.write(f"exact_name='demo_bundle': {len(results_bare)} results, "
+               f"warnings={warnings_bare}\n")
+    for r in results_bare:
+        file.write(f"  -> {r.entity.short_name.unicode}\n")
 
-    # (2) A MEMBER via exact_name -> resolves fine (proves the bundle exists)
-    results_m1, warnings_m1 = await ml.semantic_knn(
-        None, 1, [EntityKind.THEOREM], exact_name="demo_bundle(1)")
-    file.write(f"exact_name='demo_bundle(1)' (member): "
-               f"{len(results_m1)} results, warnings={warnings_m1}\n")
-    for r in results_m1:
-        file.write(f"  member(1) -> {r.entity.short_name.unicode}\n")
+    # (2) Direct key_of_theorems: total + interned/qualified member ref-names.
+    n_total, members = await key_of_theorems(ml.connection, "demo_bundle", 20, ml.name)
+    file.write(f"key_of_theorems('demo_bundle'): total={n_total}\n")
+    for _uk, ref in members:
+        file.write(f"  member ref -> {ref}\n")
 
-    # (3) SMOKING GUN: the raw ML callback's helpful message that model.py swallows
+    # (3) Rendered agent-facing query output (members + statements, def suppressed).
+    rendered = await _semantic_search_direct(root.session, [{"exact_name": "demo_bundle"}])
+    file.write("--- rendered query output ---\n")
+    file.write(rendered + "\n")
+
+    # (4) The OLD single-resolver still errors on the bare name (unchanged, by design).
     try:
         await universal_key_and_name_of(
             ml.connection, EntityKind.THEOREM, "demo_bundle", ctxt=ml.name)
-        file.write("raw key_of_theorem('demo_bundle'): unexpectedly resolved\n")
+        file.write("key_of_theorem('demo_bundle'): unexpectedly resolved\n")
     except UndefinedEntity as e:
-        file.write(f"raw key_of_theorem('demo_bundle'): UndefinedEntity -> {e}\n")
+        file.write(f"key_of_theorem('demo_bundle'): UndefinedEntity -> {e}\n")
     except IsabelleError as e:
         msg = e.errors[0] if e.errors else str(e)
-        file.write("raw key_of_theorem('demo_bundle'): IsabelleError "
-                   f"(SWALLOWED by model.py exact_name loop) -> {msg}\n")
+        file.write(f"key_of_theorem('demo_bundle'): IsabelleError -> {msg}\n")
+
+@model_test("Query_BundleTruncate", "Test_Query_BundleTruncate.thy", 12)
+async def _test_Query_BundleTruncate(root: Root, file: MyIO):
+    """A >20-member fact (`lemmas big_bundle = refl x21`) exercises the
+    truncation path: exact_name shows the first EXACT_NAME_BUNDLE_LIMIT (=20)
+    members and appends a 'has N theorems - showing the first 20; use ...'
+    warning. Drives the full render path via _semantic_search_direct."""
+    from IsaMini.AoA.retrieval import _semantic_search_direct
+    from Isabelle_RPC_Host.universal_key import key_of_theorems
+
+    ml = root.session.retrieval_state()
+
+    # Direct callback: total=21, capped to 20 members.
+    n_total, members = await key_of_theorems(ml.connection, "big_bundle", 20, ml.name)
+    file.write(f"key_of_theorems('big_bundle', limit=20): total={n_total}, "
+               f"{len(members)} members shown\n")
+
+    # Rendered agent-facing output: 20 members + the truncation Warning.
+    rendered = await _semantic_search_direct(root.session, [{"exact_name": "big_bundle"}])
+    file.write("--- rendered query output ---\n")
+    file.write(rendered + "\n")
 
 @model_test("QueryLocalScore_PatternOnly", "Test_QueryLocalScore_PatternOnly.thy", 9)
 async def _test_QueryLocalScore_PatternOnly(root: Root, file: MyIO):
@@ -14698,6 +14708,138 @@ async def _test_request_lemmas_auto_prove(root: Root, file: MyIO):
     file.write(f"headless reject names undeclared free 'c': "
                f"{'free variable' in result and '`c`' in result}\n")
     file.write(f"headless reject mentions for_any: {'for_any' in result}\n")
+
+    session.role = model.Role_Major()
+
+
+@model_test("RequestLemmasInEnvTarget", "Test_RequestLemmasInEnvTarget.thy", 15)
+async def _test_request_lemmas_in_env_target(root: Root, file: MyIO):
+    """Regression for the general-lemma PLACEMENT bug. When the requesting worker's
+    target lives INSIDE the global env, an auto-proved general lemma MUST be inserted
+    BEFORE the target — not appended at the end of the global env, where it would land
+    AFTER the target and be invisible to the very worker that asked for it. Cases:
+    (A) target = a global Have (the headless-prover-recursion trigger); (B) target =
+    a deferred global Define (delegatable since Part 0) — also asserts the insert
+    cascade re-evaluates the Define WITHOUT discarding its obligation children or its
+    live worker handle (the goals_count invariant); (C) after A/B have left FRACTIONAL
+    global children, a NORMAL-target request still appends at the correct open slot
+    (locks the `_id_of_openning_prf_to_fill` slot fix). LLM prover stubbed; no LLM."""
+    from . import mcp_http_server as mcp
+    from .model import WorkerHandle, WorkerYield
+    session = root.session
+    session.age += 1
+
+    def gidx(node):
+        return root.global_env.sub_nodes.index(node)
+    def find_global(name):
+        return next((n for n in root.global_env.sub_nodes
+                     if getattr(n, "name", None) == name), None)
+    def visible(target, name):
+        return any(k.unicode == name for k in target._ctxt_at_me().hyps)
+
+    async def stub_proves(s, node, sug, hl, *, headless=False):
+        # Close the inserted lemma's body so it is proved + kept.
+        await s.root.fill(f"{node.id}.1", [Obvious.gen_single({"facts": []})])
+        return WorkerYield.PROVED()
+
+    # A normal (non-global) target for case C, set up like RequestLemmasAutoProve.
+    goal_node = root.sub_nodes[1]
+    await goal_node.fill("1", [Have.gen_single({
+        "thought": "normal target",
+        "statement": {"english": "trivial", "conclusion": "True"},
+        "name": "n_target"})])
+    normal_target = goal_node.sub_nodes[0]
+
+    orig = mcp._run_worker_on
+    mcp._run_worker_on = stub_proves
+    try:
+        # === A. target = a global HAVE (headless-prover recursion) ===
+        print_header("A. in-env target = global Have; lemma inserted BEFORE it", file)
+        await root.fill("global.1", [Have.gen_single({
+            "thought": "global target lemma",
+            "statement": {"english": "target", "conclusion": "True"},
+            "name": "g_target"})])
+        g_target = find_global("g_target")
+        g_target.worker_handle = WorkerHandle(g_target, session)
+        session.role = model.Role_Worker(
+            target=g_target, worker_handle=g_target.worker_handle, headless=True)
+        await session._prefetch_worker_premises()
+        session._seed_reported_scope_facts()
+        result, is_error = await mcp._request_tool_logic(session, {
+            "detail": "need a reflexivity helper",
+            "general_lemmas": [{
+                "name": "help_refl",
+                "statement": {"english": "reflexivity", "conclusion": "x = x",
+                              "for_any": [{"name": "x"}]}}]})
+        help_refl = find_global("help_refl")
+        file.write(f"A is_error: {is_error}\n")
+        file.write(f"A lemma kept in global env: {help_refl is not None}\n")
+        file.write(f"A lemma BEFORE target "
+                   f"(help_refl@{gidx(help_refl)} < g_target@{gidx(g_target)}): "
+                   f"{gidx(help_refl) < gidx(g_target)}\n")
+        file.write(f"A lemma VISIBLE in target scope: "
+                   f"{visible(g_target, 'help_refl')}\n")
+        file.write(f"A target keeps its worker handle: "
+                   f"{g_target.worker_handle is not None}\n")
+
+        # === B. target = a deferred global DEFINE (goals_count invariant) ===
+        print_header("B. in-env target = deferred global Define; lemma BEFORE it, "
+                     "obligations + handle preserved", file)
+        b_slot = root.global_env._id_of_openning_prf_to_fill()
+        await root.fill(b_slot, [Define.gen_single({
+            "thought": "deferred global definition",
+            "name": "halve",
+            "type": r"nat \<Rightarrow> nat",
+            "equations": ["halve 0 = 0", "halve (Suc 0) = 0",
+                          "halve (Suc (Suc n)) = Suc (halve n)"],
+            "metric": [r"\<lambda>n::nat. n"]})])
+        halve = find_global("halve")
+        oblig_before = len(halve.sub_nodes)
+        halve.worker_handle = WorkerHandle(halve, session)
+        session.role = model.Role_Worker(
+            target=halve, worker_handle=halve.worker_handle, headless=True)
+        await session._prefetch_worker_premises()
+        result, is_error = await mcp._request_tool_logic(session, {
+            "detail": "need another helper",
+            "general_lemmas": [{
+                "name": "help_y",
+                "statement": {"english": "reflexivity y", "conclusion": "y = y",
+                              "for_any": [{"name": "y"}]}}]})
+        help_y = find_global("help_y")
+        file.write(f"B is_error: {is_error}\n")
+        file.write(f"B lemma kept in global env: {help_y is not None}\n")
+        file.write(f"B lemma BEFORE Define "
+                   f"(help_y@{gidx(help_y)} < halve@{gidx(halve)}): "
+                   f"{gidx(help_y) < gidx(halve)}\n")
+        file.write(f"B Define obligations preserved across cascade "
+                   f"({oblig_before} -> {len(halve.sub_nodes)}, both > 0): "
+                   f"{len(halve.sub_nodes) == oblig_before and oblig_before > 0}\n")
+        file.write(f"B Define keeps its worker handle: "
+                   f"{halve.worker_handle is not None}\n")
+
+        # === C. NORMAL target after fractional children exist → append OK ===
+        print_header("C. normal (non-global) target; append still hits the real "
+                     "open slot despite fractional global children", file)
+        frac = [n.local_step for n in root.global_env.sub_nodes]
+        file.write(f"C global local_steps now (note fractional): {frac}\n")
+        session.role = model.Role_Worker(
+            target=normal_target, worker_handle=WorkerHandle(normal_target, session))
+        await session._prefetch_worker_premises()
+        session._seed_reported_scope_facts()
+        result, is_error = await mcp._request_tool_logic(session, {
+            "detail": "normal worker helper",
+            "general_lemmas": [{
+                "name": "help_norm",
+                "statement": {"english": "reflexivity z", "conclusion": "z = z",
+                              "for_any": [{"name": "z"}]}}]})
+        help_norm = find_global("help_norm")
+        file.write(f"C is_error: {is_error}\n")
+        file.write(f"C lemma kept (append did NOT spuriously fail): "
+                   f"{help_norm is not None}\n")
+        file.write(f"C lemma appended at the END of global env: "
+                   f"{help_norm is root.global_env.sub_nodes[-1]}\n")
+    finally:
+        mcp._run_worker_on = orig
 
     session.role = model.Role_Major()
 

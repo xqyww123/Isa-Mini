@@ -1,0 +1,24 @@
+key_of_theorems('big_bundle', limit=20): total=21, 20 members shown
+--- rendered query output ---
+- big_bundle(1): ?t = ?t
+- big_bundle(2): ?t = ?t
+- big_bundle(3): ?t = ?t
+- big_bundle(4): ?t = ?t
+- big_bundle(5): ?t = ?t
+- big_bundle(6): ?t = ?t
+- big_bundle(7): ?t = ?t
+- big_bundle(8): ?t = ?t
+- big_bundle(9): ?t = ?t
+- big_bundle(10): ?t = ?t
+- big_bundle(11): ?t = ?t
+- big_bundle(12): ?t = ?t
+- big_bundle(13): ?t = ?t
+- big_bundle(14): ?t = ?t
+- big_bundle(15): ?t = ?t
+- big_bundle(16): ?t = ?t
+- big_bundle(17): ?t = ?t
+- big_bundle(18): ?t = ?t
+- big_bundle(19): ?t = ?t
+- big_bundle(20): ?t = ?t
+20 new, 0 shown earlier are not shown again.
+Warning: big_bundle has 21 theorems — showing the first 20; use big_bundle(21) for the rest.
