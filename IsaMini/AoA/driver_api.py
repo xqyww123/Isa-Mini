@@ -654,6 +654,31 @@ class OpenAIResponsesProvider(OpenAIBase):
     exhausting the 1-hour background retry budget propagate.
     """
 
+    # --- Endpoint policy (overridable per subclass; defaults == platform
+    # behavior, so APIDriver_ChatGPT is byte-identical). `chat` reads these so
+    # there is no per-request "mode" branching. CodexResponsesProvider flips them
+    # for the stateless ChatGPT-subscription codex backend. ---
+    STORE: bool                     = True   # params["store"]
+    SEND_PREVIOUS_RESPONSE_ID: bool = True   # chain via previous_response_id
+    SURFACE_RESPONSE_ID: bool       = True   # return response.id (False -> None -> full resend)
+    SEND_CACHE_RETENTION: bool      = True   # params["prompt_cache_retention"] = "24h"
+    SEND_MAX_OUTPUT_TOKENS: bool    = True   # params["max_output_tokens"]
+    BACKGROUND_FALLBACK: bool       = True   # allow _resubmit_background on stream timeout
+    FAIL_FAST_NON_TRANSIENT: bool   = False  # conn-refused / 401 -> LMUnreachable (not a retry-spin)
+
+    def _fail_fast(self, e: Exception):
+        """Raise ``LMUnreachable`` with an actionable message. Called only when
+        ``FAIL_FAST_NON_TRANSIENT`` is set (subscription mode) on a
+        connection/auth failure, so the proof gives up cleanly instead of
+        spinning in the transient-retry loop for an hour."""
+        if isinstance(e, openai.AuthenticationError):
+            raise LMUnreachable(
+                "OpenAI-Codex-API: ChatGPT subscription credentials invalid/expired. "
+                "Run `codex login` and retry.") from e
+        raise LMUnreachable(
+            f"OpenAI-Codex-API: local openai-oauth proxy unreachable at {self._client.base_url}. "
+            "Start it (e.g. `npx openai-oauth`) and retry.") from e
+
     def _msgs_to_input(self, messages: list[Msg]) -> list[Any]:
         """Convert Msg list → input_items.
 
@@ -703,12 +728,13 @@ class OpenAIResponsesProvider(OpenAIBase):
         if self._extra_params:
             params.setdefault("extra_body", {})
             params["extra_body"].update(self._extra_params)
-        params["store"] = True
+        params["store"] = self.STORE
         params["include"] = ["reasoning.encrypted_content"]
-        params["prompt_cache_retention"] = "24h"
-        if self.max_output_tokens is not None:
+        if self.SEND_CACHE_RETENTION:
+            params["prompt_cache_retention"] = "24h"
+        if self.SEND_MAX_OUTPUT_TOKENS and self.max_output_tokens is not None:
             params["max_output_tokens"] = self.max_output_tokens
-        if previous_response_id is not None:
+        if self.SEND_PREVIOUS_RESPONSE_ID and previous_response_id is not None:
             params["previous_response_id"] = previous_response_id
 
         # Stream the response, retrying transient errors internally.
@@ -724,6 +750,13 @@ class OpenAIResponsesProvider(OpenAIBase):
         _MAX_WS_RUN = 4096
         _chat_t0 = time()
         attempt = 0
+        # Output items streamed via ``response.output_item.done``. Some backends
+        # (the openai-oauth proxy fronting the codex backend) emit a
+        # ``response.completed`` whose ``output`` is EMPTY even though they
+        # streamed the items — so accumulate them and fall back to them when
+        # ``response.output`` is empty. The platform API populates
+        # ``response.output`` and is therefore unaffected.
+        done_items: list[Any] = []
         while True:
             if time() - _chat_t0 >= _MAX_CHAT_TIME:
                 self._log("chat() retry budget exhausted (1 hour); giving up")
@@ -750,6 +783,9 @@ class OpenAIResponsesProvider(OpenAIBase):
                 await asyncio.sleep(wait)
                 continue
             except openai.APIError as e:
+                if self.FAIL_FAST_NON_TRANSIENT and isinstance(
+                        e, (openai.APIConnectionError, openai.AuthenticationError)):
+                    self._fail_fast(e)
                 attempt += 1
                 wait = min(2 ** attempt, _BACKOFF_CAP)
                 self._log(f"responses.create API error "
@@ -761,10 +797,15 @@ class OpenAIResponsesProvider(OpenAIBase):
             try:
                 async with asyncio.timeout(_MAX_STREAM_TIME):
                     ws_run = 0  # consecutive whitespace-only output chars
+                    done_items = []  # reset per streaming attempt
                     async for event in stream:
                         if event.type == "response.completed":
                             response = event.response
                             break
+                        elif event.type == "response.output_item.done":
+                            _it = getattr(event, "item", None)
+                            if _it is not None:
+                                done_items.append(_it)
                         elif event.type in (
                                 "response.function_call_arguments.delta",
                                 "response.output_text.delta"):
@@ -799,10 +840,20 @@ class OpenAIResponsesProvider(OpenAIBase):
                 await asyncio.sleep(wait)
                 continue
             except httpx.ReadTimeout:
+                if not self.BACKGROUND_FALLBACK:
+                    attempt += 1
+                    wait = min(2 ** attempt, _BACKOFF_CAP)
+                    self._log(f"read timeout while streaming; retrying in {wait:.0f}s "
+                              f"(background disabled)")
+                    await asyncio.sleep(wait)
+                    continue
                 self._log("read timeout while streaming; falling back to background mode")
                 response = await self._resubmit_background(params)
             except (openai.APIError, httpx.TransportError) as e:
-                if time() - t0 > _BACKGROUND_THRESHOLD:
+                if self.FAIL_FAST_NON_TRANSIENT and isinstance(
+                        e, (openai.APIConnectionError, openai.AuthenticationError)):
+                    self._fail_fast(e)
+                if self.BACKGROUND_FALLBACK and time() - t0 > _BACKGROUND_THRESHOLD:
                     self._log(f"streaming failed after {time() - t0:.0f}s "
                               f"({type(e).__name__}); falling back to background mode: {e}")
                     response = await self._resubmit_background(params)
@@ -823,7 +874,7 @@ class OpenAIResponsesProvider(OpenAIBase):
         thinking_parts: list[str] = []
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
-        output_items = list(response.output) if response.output else []
+        output_items = list(response.output) if response.output else done_items
 
         for item in output_items:
             if item.type == "reasoning":
@@ -864,7 +915,7 @@ class OpenAIResponsesProvider(OpenAIBase):
             thinking="\n".join(thinking_parts) if thinking_parts else None,
             tool_calls=tool_calls,
             usage=usage,
-            response_id=response.id,
+            response_id=(response.id if self.SURFACE_RESPONSE_ID else None),
         )
 
     async def _resubmit_background(self, params: dict[str, Any]):
@@ -935,6 +986,28 @@ class OpenAIResponsesProvider(OpenAIBase):
 
     def format_assistant_msg(self, response: ProviderResponse) -> AssistantMsg:
         return AssistantMsg(response=response, native=self._last_output_items)
+
+
+class CodexResponsesProvider(OpenAIResponsesProvider):
+    """Responses provider for the ChatGPT-subscription codex backend, reached via
+    the local ``openai-oauth`` proxy. Stateless (store=false, no
+    ``previous_response_id``, full transcript resent each turn — the backend
+    rejects ``previous_response_id`` over HTTP) and fail-fast when the proxy is
+    unreachable. Reasoning items are still resent verbatim (codex-faithful; never
+    stripped). See ``OpenAI_Codex_API_driver_plan.md``."""
+    STORE                     = False   # codex backend
+    SEND_PREVIOUS_RESPONSE_ID = False   # probe-3: 400 over HTTP -> full transcript each turn
+    SURFACE_RESPONSE_ID       = False   # response_id None -> loop/fork resend full transcript
+    SEND_CACHE_RETENTION      = False   # probe-4: 400 "Unsupported parameter"
+    SEND_MAX_OUTPUT_TOKENS    = False   # probe-4: 400 "Unsupported parameter"
+    BACKGROUND_FALLBACK       = False   # probe-5: 400 (backend requires stream=true)
+    FAIL_FAST_NON_TRANSIENT   = True    # proxy down / 401 -> LMUnreachable -> ResourceUnavailable
+
+    def _supports_allowed_tools_choice(self) -> bool:
+        # The allowed_tools object `tool_choice` form is untested on this backend;
+        # be conservative (a fork just won't *force* its answer tool — the fork
+        # loop re-prompts when no tool is called).
+        return False
 
 
 # ============================================================================
@@ -1135,10 +1208,17 @@ class APIDriver(LMDriver):
                     msgs_to_send = self._messages
 
                 self._model_time_start = time()
-                response = await self._retry_transient(
-                    lambda: self._provider.chat(
-                        msgs_to_send, tools,
-                        previous_response_id=self._last_response_id))
+                try:
+                    response = await self._retry_transient(
+                        lambda: self._provider.chat(
+                            msgs_to_send, tools,
+                            previous_response_id=self._last_response_id))
+                except LMUnreachable as e:
+                    # Proxy down / creds expired (subscription mode): give up
+                    # cleanly via quit_info instead of spinning or letting the
+                    # exception escape. Terminal ⇒ the outer loop breaks.
+                    self.quit_info = ResourceUnavailable(detail=str(e))
+                    break
 
                 if response.response_id is not None:
                     self._last_response_id = response.response_id
@@ -1584,6 +1664,37 @@ class APIDriver_ChatGPT(APIDriver):
             cheaper._log = self.warn_AoA_opr
             return cheaper
         return self._provider
+
+
+@agent_driver("OpenAI-Codex-API")
+class APIDriver_OpenAICodex(APIDriver_ChatGPT):
+    """gpt-5.5 via the ChatGPT-subscription codex backend, through the local
+    ``openai-oauth`` proxy (OpenAI-compatible; the proxy owns the OAuth
+    lifecycle, so this driver carries no auth code). Reuses APIDriver_ChatGPT
+    wholesale; only swaps in ``CodexResponsesProvider`` (stateless + fail-fast)
+    pointed at the proxy. The proxy is launcher-owned — this driver never starts
+    it and fails fast (``LMUnreachable`` -> ``ResourceUnavailable``) if it is
+    unreachable. See ``OpenAI_Codex_API_driver_plan.md``."""
+    DEFAULT_MODEL      = "gpt-5.5"
+    # None ⇒ APIDriver_ChatGPT._fork_provider's cheaper-fork guard is falsy, so
+    # every fork reuses self._provider (the proxy-configured CodexResponsesProvider)
+    # — no second provider is ever built against the real api.openai.com.
+    FORK_CHEAPER_MODEL = None
+
+    def __init__(self, *args, provider: Provider | None = None,
+                 argument: str | None = None, **kwargs):
+        if provider is None:
+            model, effort = _parse_effort_suffix(argument, self.DEFAULT_MODEL)
+            base_url = os.environ.get(
+                "OPENAI_OAUTH_BASE_URL", "http://127.0.0.1:10531/v1")
+            provider = CodexResponsesProvider(
+                model=model,
+                api_key="openai-oauth-local",  # proxy needs none; SDK requires a non-empty string
+                base_url=base_url,
+                cache_key=f"proof-{uuid.uuid4().hex[:8]}",
+                reasoning_effort=effort,
+            )
+        super().__init__(*args, provider=provider, **kwargs)
 
 
 @agent_driver("K2-Think")
