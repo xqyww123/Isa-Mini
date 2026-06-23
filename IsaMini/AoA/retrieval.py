@@ -442,7 +442,7 @@ def _augment_kinds_with_theorem_collection(
     """Append THEOREM_COLLECTION when the agent asked for lemmas AND gave a semantic
     description (the ranked discovery path). exact_name and pure-pattern (no
     description) queries are excluded: a theorem collection IS now pattern-filterable
-    (the ML half-member-match gate), but without a description it cannot be semantically
+    (the ML any-member-match gate), but without a description it cannot be semantically
     ranked (the gate only filters, it does not rank), so auto-adding it there would only
     add noise / crowd out the structural matches the agent asked for. To target a
     collection on those paths
@@ -536,7 +536,7 @@ async def _render_fetched_entities(
     for f in entities:
         await _format_fetched_entity(f, buf, indent=indent, session=session,
                                      ml_state=ml_state,
-                                     def_info=True,
+                                     def_info=not getattr(f, 'suppress_def', False),
                                      potential_defs=(f.score == 1.0),
                                      abbreviation_defs=abbrev_defs,
                                      force_definition=(f.entity.short_name in force_names))
@@ -573,7 +573,10 @@ async def _semantic_search_direct(
         is_exact = bool(q.get("exact_name"))
         new = 0
         before_names: list[short_name] = []
-        for f in fetched[:k]:
+        # An exact_name lookup of a multi-theorem fact (bundle) is already capped
+        # at EXACT_NAME_BUNDLE_LIMIT members by key_of_theorems; show them all
+        # rather than re-truncating to the semantic-query default k.
+        for f in (fetched if is_exact else fetched[:k]):
             sn = f.entity.short_name
             if sn in encountered:
                 if is_exact and sn not in force_names:
