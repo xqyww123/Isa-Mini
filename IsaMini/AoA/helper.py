@@ -96,6 +96,68 @@ def incr_id_major(id : str) -> str:
     segs = split_id_into_segs(id)
     return cat_segs_into_id([segs[0] + 1])
 
+def _segs_between(lo: list[int], hi: list[int]) -> list[int]:
+    """A segment list strictly between `lo` and `hi` in the id order (lists of
+    non-negative ints compared lexicographically, where a proper prefix sorts
+    BEFORE its extensions). Caller passes `lo < hi`. The result is biased to end
+    in a `1` segment so it keeps room on both sides for future insertions.
+
+    TOTAL by design — it never raises. The id order is dense *except* when `hi`
+    equals `lo` followed by only zeros (e.g. lo=[0,1], hi=[0,1,0]): no key exists
+    strictly between them. No id this scheme generates is ever zero-tailed (every
+    generator — incr_id_*, the front-insert branch, and this function — ends in a
+    segment >= 1), so that case is unreachable in practice. Should it ever arise,
+    we still return a deterministic value > lo rather than raise: an uncaught
+    error here would escape `insert_before`'s no-raise contract and kill the
+    single-process MCP host (`call_tool` ends in `sys.exit(1)`)."""
+    out: list[int] = []
+    i = 0
+    while True:
+        l = lo[i] if i < len(lo) else None
+        h = hi[i] if i < len(hi) else None
+        if l is None:
+            # lo exhausted: `out` == lo so far; extend to land below hi.
+            if h is None:          # hi also exhausted (only via the zero-descent below)
+                out.append(1); return out
+            if h >= 1:
+                out += [0, 1]; return out
+            out.append(0); i += 1; continue   # h == 0: descend, hi tail still bounds us
+        if h is None:
+            # hi exhausted while lo continues (only reachable on a lo>hi misuse).
+            out.append(l + 1); return out
+        if l == h:
+            out.append(l); i += 1; continue   # shared prefix, descend
+        if h - l >= 2:
+            out.append(l + 1); return out      # room between l and h
+        # adjacent (h == l + 1): keep l, then exceed lo's tail (now unbounded above)
+        out.append(l); i += 1
+        nxt = lo[i] if i < len(lo) else None
+        out.append(1 if nxt is None else nxt + 1); return out
+
+def local_step_between(prev: str, before: str) -> str:
+    """A fresh local-step strictly between two existing adjacent siblings `prev`
+    and `before` (with `prev < before` in proof order).
+
+    The first branch reproduces the historical id formula verbatim and is
+    returned UNCHANGED whenever it already yields a strictly-between id — this is
+    a byte-compatibility shim, not an optimization: it keeps every previously
+    generated id (and thus every golden) identical. `_segs_between` is the actual
+    specification and the only correct path for the cases the old formula got
+    wrong (it returned an id equal to / past `before` when `before` had no
+    fractional gap above `prev`, e.g. prev=`0A`, before=`0A1` -> `0A1`, a
+    collision). DO NOT delete the fast path as a redundant branch — that would
+    move goldens."""
+    p = split_id_into_segs(prev)
+    b = split_id_into_segs(before)
+    if len(p) > len(b):
+        cand = p[:len(b) + 1]
+        cand[-1] += 1
+    else:
+        cand = p + [1]
+    if p < cand < b:
+        return cat_segs_into_id(cand)
+    return cat_segs_into_id(_segs_between(p, b))
+
 
 from typing import TextIO, Optional
 import io

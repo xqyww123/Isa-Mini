@@ -5,7 +5,7 @@ from time import time
 from datetime import datetime
 from io import StringIO
 from pathlib import Path
-from .helper import split_id_into_segs, cat_segs_into_id, incr_id_major, incr_id_minor, MyIO
+from .helper import split_id_into_segs, cat_segs_into_id, incr_id_major, incr_id_minor, local_step_between, MyIO
 from .linked_list import Cons, LinkedList, from_iterable, iterate, concat
 import types as _types
 from typing import Any, Awaitable, ClassVar, Iterable, Mapping, NamedTuple, Protocol, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired, TypeAliasType, Union, get_type_hints, get_origin, get_args, is_typeddict, TYPE_CHECKING
@@ -5052,14 +5052,11 @@ class NonLeaf_Node(Node):
         if not await child.resulting_state().need_intro(False):
             return
         if next_idx < len(self.sub_nodes):
-            child_segs = split_id_into_segs(child.local_step)
-            next_segs = split_id_into_segs(self.sub_nodes[next_idx].local_step)
-            if len(child_segs) > len(next_segs):
-                segs = child_segs[:len(next_segs) + 1]
-                segs[-1] += 1
-                new_id = cat_segs_into_id(segs)
-            else:
-                new_id = cat_segs_into_id(child_segs + [1])
+            # Same fractional-id arithmetic as _insert_before_child: route it
+            # through the shared, collision-free primitive (the old inline form
+            # had the byte-identical collision bug when next == child + [1]).
+            new_id = local_step_between(child.local_step,
+                                        self.sub_nodes[next_idx].local_step)
         else:
             if not self.opening():
                 return
@@ -5112,13 +5109,11 @@ class NonLeaf_Node(Node):
                 new_id = cat_segs_into_id(segs)
             else:
                 prev_step = created[k - 1].local_step if k > 0 else self.sub_nodes[insert_idx - 1].local_step
-                prev_id = split_id_into_segs(prev_step)
-                if len(prev_id) > len(before_segs):
-                    segs = prev_id[:len(before_segs) + 1]
-                    segs[-1] += 1
-                    new_id = cat_segs_into_id(segs)
-                else:
-                    new_id = cat_segs_into_id(prev_id + [1])
+                # Fractional id strictly between `prev_step` and `before`. The old
+                # inline `prev + [1]` collided when `before` had no gap above its
+                # predecessor (e.g. before=`0A1`, predecessor=`0A`); local_step_between
+                # is byte-identical where it was correct and fixes the collision.
+                new_id = local_step_between(prev_step, before.local_step)
             config = NodeConfig(new_id, await before.ml_state.clone(None), self)
             try:
                 node = gn.factory(config)

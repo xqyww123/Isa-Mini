@@ -1520,8 +1520,17 @@ async def _request_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             # error would propagate out of insert_before — the same pre-existing
             # exposure the end-append path already carries.
             if gl_anchor is not None:
-                fill_outcome = await session.root.insert_before(
-                    gl_anchor.id, [parsed])
+                # Insert against the held anchor OBJECT, not a re-resolved id
+                # string. `insert_before(gl_anchor.id, …)` round-trips the id
+                # through `locate_node`, which returns the FIRST sibling matching
+                # that local_step — so were a duplicate id ever to exist it would
+                # silently retarget the wrong node. We already hold the exact
+                # anchor; use it. `insert_before`'s one side effect is setting
+                # working_block to the anchor's parent (always the global env
+                # here); replicate it so behavior is otherwise identical (the loop
+                # saves/restores working_block across all iterations).
+                session.working_block = global_env
+                fill_outcome = await gl_anchor.insert_before_me([parsed])
             else:
                 # Ask the global env for its real open slot rather than assuming
                 # dense 1..N numbering. An earlier in-env request (above) may have
