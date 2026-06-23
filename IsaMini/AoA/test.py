@@ -188,6 +188,51 @@ async def _test_branch(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
+@model_test("InsertBeforeSubgoalRejected", "Test_InsertBeforeSubgoalRejected.thy", 8)
+async def _test_insert_before_subgoal_rejected(root: Root, file: MyIO):
+    """Gate: inserting a user op before a subgoal container's STRUCTURAL child
+    (e.g. a Branch's `1.0` exhaustiveness obligation) must be rejected cleanly
+    with CannotEdit_SubgoalSibling — never mint a corrupt `1.-1A` id — while a
+    legit fill INTO a goal body (self = GoalNode) must still succeed."""
+    await root.fill("1", [Branch.gen_single({
+        "thought": "trichotomy",
+        "cases": [
+            {"statement": {"english": "x positive", "isabelle": "x > 0", "name": "pos"}},
+            {"statement": {"english": "x negative", "isabelle": "x < 0", "name": "neg"}},
+            {"statement": {"english": "x zero", "isabelle": "x = 0", "name": "zero"}},
+        ]})])
+    branch = root.locate_node("1")
+    oblig = branch.sub_nodes[0]
+    file.write(f"obligation id: {oblig.id}\n")
+
+    # (1) REJECT: insert_before the obligation goal -> clean CannotEdit_SubgoalSibling.
+    root.session.age += 1
+    out = await root.insert_before("1.0", [Have.gen_single({
+        "thought": "bad",
+        "statement": {"english": "trivial", "conclusion": r"(0::int) \<le> (0::int)"},
+        "name": "bad"})])
+    file.write(f"reject committed: {[n.id for n in out.committed]}\n")
+    file.write(f"reject failure: {type(out.failure).__name__ if out.failure is not None else None}\n")
+    if out.failure is not None:
+        file.write(f"reject reason: {out.failure._reason(lambda s: s, lambda s: s)}\n")
+    all_ids: list[str] = []
+    def _collect(n: 'Node') -> None:
+        all_ids.append(n.id)
+        for c in getattr(n, "sub_nodes", []):
+            _collect(c)
+    _collect(root)
+    file.write(f"any garbage '-1' id: {any('-1' in i for i in all_ids)}\n")
+    file.write(f"obligation still locatable: {root.locate_node('1.0') is oblig}\n")
+
+    # (2) LEGIT: fill INTO a goal body (container is the GoalNode, not the Branch).
+    root.session.age += 1
+    out2 = await root.fill("1.0.1", [Have.gen_single({
+        "thought": "ok",
+        "statement": {"english": "trivial", "conclusion": r"(0::int) \<le> (0::int)"},
+        "name": "ok"})])
+    file.write(f"legit committed: {[n.id for n in out2.committed]}\n")
+    file.write(f"legit failure: {type(out2.failure).__name__ if out2.failure is not None else None}\n")
+
 @model_test("DoneGoalHidesPremises", "Test_DoneGoalHidesPremises.thy", 8)
 async def _test_done_goal_hides_premises(root: Root, file: MyIO):
     """Bug: quickview shows premises for goals marked 'done'.

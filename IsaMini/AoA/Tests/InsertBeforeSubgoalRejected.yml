@@ -1,0 +1,8 @@
+obligation id: 1.0
+reject committed: []
+reject failure: CannotEdit_SubgoalSibling
+reject reason: Cannot insert before a subgoal.
+any garbage '-1' id: False
+obligation still locatable: True
+legit committed: ['1.0.1']
+legit failure: None

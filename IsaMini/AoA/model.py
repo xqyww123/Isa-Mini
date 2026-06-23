@@ -886,6 +886,16 @@ class CannotEdit_NonDeclarative(CannotEdit):
                 f"cannot be used as a global declaration. "
                 f"Use it inside a proof step instead.")
 
+class CannotEdit_SubgoalSibling(CannotEdit):
+    """`insert_before` targeted a direct child of a subgoal container
+    (Branch / CaseSplit / Induction / SplitConjs / InferenceRule / Define).
+    Those children are STRUCTURAL goals (the exhaustiveness obligation + case
+    nodes), created internally — not editable steps — so nothing can be inserted
+    before them."""
+    def _reason(self, display_id: 'Callable[[str], str]',
+                relativize_text: 'Callable[[str], str]') -> str:
+        return "Cannot insert before a subgoal."
+
 
 class InternalError(OprError):
     pass
@@ -4294,6 +4304,18 @@ class Node(ABC):
                 return await self.fill(step, gns)
             outcome.failure = CannotEdit_NodeNotFound(
                 target_step=step, operation=op, unapplied_oprs=list(gns), is_error=True)
+            return outcome
+        # A SubgoalMaker's children are STRUCTURAL goals (the exhaustiveness
+        # obligation + case GoalNodes), created internally — not editable steps.
+        # Inserting a user op before one is meaningless and used to mint a corrupt
+        # id (the front-insert arithmetic underflows on the obligation's [0]
+        # local_step, e.g. `1.0` -> `1.-1A`). Reject cleanly via the no-raise
+        # outcome.failure channel. Only the insert path is gated here; amend has
+        # its own separate, pre-existing issues that are intentionally untouched.
+        if isinstance(node.parent, SubgoalMaker):
+            outcome.failure = CannotEdit_SubgoalSibling(
+                target_step=step, operation=op,
+                unapplied_oprs=list(gns), is_error=True)
             return outcome
         if node.parent is not None and isinstance(node.parent, NonLeaf_Node):
             the_session().working_block = node.parent
