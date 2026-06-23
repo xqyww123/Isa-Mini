@@ -10403,16 +10403,21 @@ class GlobalEnv(StdBlock):
     def _print_footer(self, indent: int, file: MyIO, show_warnings: bool = False) -> None:
         print_indent(indent, file)
         sess = _session_var.get(None)
+        # Real open slot — handles fractional global children a prior in-env
+        # insert_before may have left (identical to `len+1` for dense children), so
+        # the suggested `edit fill` target is one the agent can actually fill.
+        # GlobalEnv never ends ⇒ always opening ⇒ never None.
+        slot = self._id_of_openning_prf_to_fill()
         if (sess is not None and sess.is_major and not sess.is_worker
                 and sess.gate_global_lemma_proofs):
             file.write(
                 f"You can write global declarations by calling command `edit` with action `fill` "
-                f"and target step `{self.id}.{len(self.sub_nodes)+1}`. If the background theory is "
+                f"and target step `{slot}`. If the background theory is "
                 f"missing any lemmas you need, declare them here and dispatch a sub-agent to prove each.\n")
         else:
             file.write(
                 f"You can write global declarations by calling command `edit` with action `fill` "
-                f"and target step `{self.id}.{len(self.sub_nodes)+1}`. If you find the "
+                f"and target step `{slot}`. If you find the "
                 f"background theory is missing any lemmas you need, formalize and prove them here.\n")
     def unfinished_nodes(self, ret: set['Node']) -> None:
         for child in self.sub_nodes:

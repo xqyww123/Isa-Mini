@@ -1630,7 +1630,12 @@ async def _request_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
 
     # Role_Major: no-argument hint — the planner formalizes the lemma itself.
     global_env = session.root.global_env
-    target_step = f"{global_env.id}.{len(global_env.sub_nodes) + 1}"
+    # Real open slot — handles fractional global children a prior in-env
+    # insert_before may have left (identical to `len+1` for dense children), so the
+    # suggested `edit fill` target is one the planner can actually fill. GlobalEnv
+    # never ends ⇒ always opening ⇒ never None. (Mirrors the worker-path slot fix.)
+    target_step = global_env._id_of_openning_prf_to_fill()
+    assert target_step is not None  # GlobalEnv is always opening
     if (session.is_major and not session.is_worker
             and session.gate_global_lemma_proofs):
         msg = ("You should declare the lemmas you need under `global` and dispatch a "
