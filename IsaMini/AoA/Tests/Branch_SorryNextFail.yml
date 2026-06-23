@@ -39,7 +39,7 @@ pending proof goal:
 Branch sub_nodes count: 2
   1.0: status=failure
   1.1: status=failure
-BUG: Fill 1.0.1 raised InternalError: The beginning state of the execution is not initialized!
+Fill 1.0.1 succeeded
 --------------------------------------------------
 Final state
 --------------------------------------------------
@@ -59,7 +59,7 @@ proof:
         proof:
           - step id: 1.0.1
             operation: Obvious
-            Error: Not yet evaluated
+            Error: the evaluation is cancelled due to failures in preceding nodes
         Error: Evaluation cancelled due to failures above
       - goal id: 1.1
         premises:
