@@ -25,7 +25,7 @@ proof:
     target term: l
     cases:
       - goal id: 1.Nil
-        goal: rev (rev []) = []
+        goal: rev (rev ([] :: 'a list)) = ([] :: 'a list)
         proof:
           - step id: 1.Nil.1
             operation: Obvious

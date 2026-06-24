@@ -17299,6 +17299,107 @@ async def _test_define_casesplit_induction_redirect(root: Root, file: MyIO):
                f"{cs_case._nearest_goal_for_subagent() is not cs_case and ind_case._nearest_goal_for_subagent() is not ind_case}\n")
 
 
+@model_test("QueryWholeFileDump", "Test_QueryWholeFileDump.thy", 8)
+async def _test_query_whole_file_dump(root: Root, file: MyIO):
+    """Regression: the `query` tool must never echo a whole theory's source
+    back to the agent.
+
+    Incident (2026-06-24, log dir EFA1A274B_24A8BD4): an
+    `exact_name: tendsto_sandwich` query returned the lemma's `[manual]`
+    statement followed by the ENTIRE `Topological_Spaces.thy` source
+    (~1270 rendered lines) — see that run's `interaction.yaml` TOOL_RESPONSE.
+
+    Root cause has two layers:
+
+    * Upstream (ML, environment-dependent): `pide_state.command_at_position`
+      can return a DEGENERATE session-export-DB snapshot in which the whole
+      theory file is a single `Command.unparsed`, so the "declaring command
+      source" of a library theorem (`_get_definition_with_pos`) comes back as
+      the entire theory.  `PIDE_State.command_at_position` has a guard that
+      re-cuts such a dump (Tools/pide_state.ML, the `s <= 1` branch), but it
+      falls through to `NONE => SOME r` (returns the whole file) when the
+      entity offset does not land inside a re-cut command span.  This only
+      fires for theories resolved purely via a degenerate export DB, so it is
+      NOT reproducible on demand against a healthy REPL — against this REPL all
+      library theorems return a proper single-command source.
+
+    * Downstream (Python, deterministic — what THIS test pins): the query
+      renderer (`_format_fetched_entity` -> `_format_with_definition`) only
+      suppresses the declaring-command source when it *starts* with a proof
+      keyword (`retrieval._PROOF_COMMAND_RE`).  A whole-theory blob starts with
+      a comment / `section` / `theory ...`, so it slips past that guard and is
+      printed verbatim, with NO length cap.
+
+    The test forces the one environment-dependent upstream call
+    (`retrieval._get_definition_with_pos`) to return a whole-theory blob —
+    exactly what the degenerate DB snapshot produces — and asserts the full
+    `query` tool (`_query_tool_logic`, real path) does NOT echo the theory body
+    back.  It fails today (no downstream cap) and passes once the renderer
+    guards against a whole-theory / oversized declaring-command source.
+    """
+    from Isabelle_RPC_Host.position import IsabellePosition
+    from .retrieval import _query_tool_logic
+    from . import retrieval as _retrieval
+
+    # Force the direct (non-fork) search path.
+    root.session.interactive_retrieval = InteractiveRetrievalMode.NO
+
+    # A whole-theory blob, shaped exactly like the degenerate snapshot in the
+    # incident: a Title comment, then `section`, then `theory .. begin .. end`
+    # with many interior commands.  Crucially it does NOT start with a proof
+    # keyword, so `_PROOF_COMMAND_RE` does not catch it.
+    interior = "\n\n".join(
+        f'lemma mock_interior_lemma_{i}: "({i}::nat) = {i}" by simp'
+        for i in range(1, 40))
+    WHOLE_THEORY = (
+        "(*  Title:      HOL/MockTopo.thy\n"
+        "    Author:     Regression Fixture\n"
+        "*)\n\n"
+        "section ‹Mock topological spaces›\n\n"
+        "theory MockTopo\n"
+        "  imports Main\n"
+        "begin\n\n"
+        f"{interior}\n\n"
+        "end\n"
+    )
+    assert len(WHOLE_THEORY) > 2000, "fixture blob should be clearly theory-sized"
+
+    # Patch the (environment-dependent) declaring-command fetch so the degenerate
+    # whole-theory dump is produced deterministically, regardless of REPL/DB
+    # health. `_get_def_for_fetched` calls this as a module global of retrieval.
+    orig = _retrieval._get_definition_with_pos
+
+    async def _fake_def(connection, kind, uk, ctxt=None):
+        return (WHOLE_THEORY, IsabellePosition(0, 1, "/mock/MockTopo.thy"))
+
+    _retrieval._get_definition_with_pos = _fake_def  # type: ignore[assignment]
+    try:
+        result, is_error = await _query_tool_logic(
+            root.session,
+            {'queries': [{'kinds': ['lemma'], 'exact_name': 'tendsto_sandwich'}]})
+    finally:
+        _retrieval._get_definition_with_pos = orig
+
+    leaked_header = "theory MockTopo" in result
+    leaked_body = "mock_interior_lemma_30" in result
+    file.write(f"is_error: {is_error}\n")
+    file.write(f"reports the looked-up entity: {'tendsto_sandwich' in result}\n")
+    file.write(f"leaks theory header: {leaked_header}\n")
+    file.write(f"leaks theory body: {leaked_body}\n")
+    file.write(f"result within size cap (<1500): {len(result) < 1500}\n")
+
+    assert not is_error, f"query tool must not error: {result}"
+    # The looked-up entity itself must still be reported.
+    assert "tendsto_sandwich" in result, f"entity went missing: {result[:500]}"
+    # ...but NONE of the theory body may leak into the agent-facing output.
+    assert not leaked_body, (
+        "query tool dumped the theory body (whole-theory leak):\n"
+        f"{result[:1500]}")
+    assert len(result) < 1500, (
+        f"query tool output is {len(result)} chars — a whole-theory dump leaked "
+        f"into the agent context:\n{result[:1500]}")
+
+
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
     import msgpack as mp
     from IsaREPL import Client

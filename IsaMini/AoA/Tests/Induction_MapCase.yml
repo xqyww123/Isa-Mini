@@ -13,7 +13,7 @@ Unfinished Proof! Call command `edit` with action `fill` and target step `1` to 
 Interaction Prompt for actual case `Nil`
 --------------------------------------------------
 The induction operation produced a case `Nil` (as follows) that does not match any `case_name` you supplied.
-  goal: rev (rev []) = []
+  goal: rev (rev ([] :: 'a list)) = ([] :: 'a list)
 Is any of your supplied proof intended for this case?
   0. new-nil_case
   1. new-cons_case
@@ -46,7 +46,7 @@ proof:
     target term: l
     cases:
       - goal id: 1.Nil
-        goal: rev (rev []) = []
+        goal: rev (rev ([] :: 'a list)) = ([] :: 'a list)
         proof:
           - step id: 1.Nil.1
             operation: Obvious

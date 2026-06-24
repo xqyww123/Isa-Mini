@@ -2,14 +2,14 @@
 Initial
 --------------------------------------------------
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
-goal: filterlim harm at_top sequentially = (∀(Z :: real). ∀⇩F t in sequentially. Z < harm t)
+goal: filterlim (harm :: nat ⇒ ('a :: {order,real_normed_field})) at_top sequentially = (∀(Z :: real). ∀⇩F t in sequentially. Z < harm t)
 proof: empty
 Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
 After Obvious [filterlim_at_top_dense] (expected: FAILED)
 --------------------------------------------------
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
-goal: filterlim harm at_top sequentially = (∀(Z :: real). ∀⇩F t in sequentially. Z < harm t)
+goal: filterlim (harm :: nat ⇒ ('a :: {order,real_normed_field})) at_top sequentially = (∀(Z :: real). ∀⇩F t in sequentially. Z < harm t)
 proof: empty
 Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 unfinished: 1

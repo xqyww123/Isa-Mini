@@ -25,7 +25,7 @@ proof:
     target term: l
     cases:
       - goal id: 1.Nil
-        goal: rev (rev []) = []
+        goal: rev (rev ([] :: 'a list)) = ([] :: 'a list)
         proof: empty
         Unfinished Proof! Call command `edit` with action `fill` and target step `1.Nil.1` to provide the proof.
       - goal id: 1.Cons

@@ -19,7 +19,7 @@ type mismatch in instantiation of HOL-universal (∀) or bounded-universal (∀�
   ?x :: nat
   0 :: 'a
 the rule is:
-  ∀x∈A. P x
+  ∀x::nat∈A::nat set. (P::nat ⇒ bool) x
 --------------------------------------------------
 After Derive
 --------------------------------------------------

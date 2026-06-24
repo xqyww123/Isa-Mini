@@ -1,11 +1,11 @@
 === operator section (*) ===
   head: Groups.times_class.times
-  normal: (*)
-  raw: (*)
+  normal: ((*) :: ('a :: times) ⇒ ('a :: times) ⇒ ('a :: times))
+  raw: ((*) :: ('a :: times) ⇒ ('a :: times) ⇒ ('a :: times))
 === operator section (+) ===
   head: Groups.plus_class.plus
-  normal: (+)
-  raw: (+)
+  normal: ((+) :: ('a :: plus) ⇒ ('a :: plus) ⇒ ('a :: plus))
+  raw: ((+) :: ('a :: plus) ⇒ ('a :: plus) ⇒ ('a :: plus))
 --------------------------------------------------
 Done
 --------------------------------------------------
