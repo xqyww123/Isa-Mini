@@ -4,5 +4,5 @@ call 3: 746 match 5 shown — 5 new, 0 shown earlier.
 call 4: 549 match 5 shown — 5 new, 0 shown earlier.
 call 5: 416 match 5 shown — 5 new, 0 shown earlier.
 call 6: 460 match 5 shown — 5 new, 0 shown earlier.
-repeat: 132 match 5 shown — 0 new, 5 shown earlier: plus_int_code(3), plus_integer_code(3), plus_int_code(1), plus_finite_1_def, plus_int_code(2).
+repeat: 132 match 5 shown — 0 new, 5 shown earlier: plus_integer_code(3), int_plus, plus_int_code(3), plus_natural.abs_eq, nat_plus_as_int.
 no-filter: 5 new, 0 shown earlier.
