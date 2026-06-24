@@ -1228,8 +1228,8 @@ class APIDriver(LMDriver):
     # (per-machine routing + eviction); a stateless full-resend turn that re-sends
     # the whole prior transcript often reports cached_tokens=0, inflating cost.
     # When ON, we model a realistic cache instead of trusting the flaky real one.
-    _CACHE_MISS_P     = 0.142321   # P(hard miss this turn) -> sim cached = 0
-    _CACHE_LT70_P     = 0.24561    # P(turn < 70%); soft band [_CACHE_MISS_P, this) -> U(50,70)%
+    _CACHE_MISS_P     = 0.112321   # P(hard miss this turn) -> sim cached = 0
+    _CACHE_LT70_P     = 0.18561    # P(turn < 70%); soft band [_CACHE_MISS_P, this) -> U(50,70)% (width 0.073289)
     _CACHE_TRUST_REAL = 0.80       # real rate >= this -> trust real verbatim
     _CACHE_BLEND_REAL = 0.60       # real rate in [this, TRUST) -> 0.3*real + 0.7*sim; below -> 100% sim
 
