@@ -970,9 +970,12 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
           let val s0 = get_state state_id
               val ctxt = Minilang.context_of s0
           in map (fn stmt => \<^try>\<open>
-               let val prop = MiniLang_Agent.read_prop ctxt stmt
-                   val goal = Goal.init (Thm.cterm_of ctxt prop)
-               in case Seq.pull (Phi_Sledgehammer_Solver.fast_mepo_tac (Time.fromSeconds 3) ctxt 1 goal)
+               (* Mirror pre_resolve_fact: allow schematic vars and fix them
+                  before probing, so edit-time validation matches execution. *)
+               let val prop = MiniLang_Agent.read_prop_schematic ctxt stmt
+                   val (props', inner) = Variable.import_terms true [prop] ctxt
+                   val goal = Goal.init (Thm.cterm_of inner (hd props'))
+               in case Seq.pull (Phi_Sledgehammer_Solver.fast_mepo_tac (Time.fromSeconds 3) inner 1 goal)
                     of SOME _ => NONE
                      | NONE => SOME "Proof failed"
                end

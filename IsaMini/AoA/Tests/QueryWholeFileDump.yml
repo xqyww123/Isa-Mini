@@ -1,0 +1,5 @@
+is_error: False
+reports the looked-up entity: True
+leaks theory header: False
+leaks theory body: False
+result within size cap (<1500): True

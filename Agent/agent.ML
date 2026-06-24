@@ -143,6 +143,7 @@ val read_term_abbrev : Proof.context -> string -> term
 val read_terms : Proof.context -> string list -> term list
 val read_terms_with_type : Proof.context -> (typ * string) list -> term list
 val read_prop : Proof.context -> string -> term
+val read_prop_schematic : Proof.context -> string -> term
 val read_props : Proof.context -> string list -> term list
 val read_thms : Proof.context -> string -> thm list
 
@@ -373,6 +374,26 @@ fun read_prop ctxt s =
   \<^try>\<open>Inner_Syntax_Error.read_positioned Syntax.read_prop ctxt s
    catch exn => release_par_error exn\<close>
   |> Minilang.deconflict_bound_names
+
+(* Like read_prop, but ALLOWS schematic variables (?x), used only by the
+   Prove-In-Time fact path: the parsed Vars are later fixed/exported by
+   pre_resolve_fact so the statement is proven as a general lemma.
+   We must STRIP TERM BINDINGS before entering schematic mode: in mode_schematic
+   Syntax.read_prop still runs Variable.expand_binds (proof_context.ML:716-717),
+   which would SILENTLY substitute any ?name occurring in binds_of (e.g. ?thesis
+   / ?this from auto_bind, or a let-bound ?P) with its bound term instead of
+   keeping it as a generalizable schematic. Emptying the bind table guarantees
+   every ?name stays a real schematic to be generalized. *)
+fun read_prop_schematic ctxt s =
+  let
+    val ctxt_s = ctxt
+      |> fold Variable.unbind_term (Vartab.keys (Variable.binds_of ctxt))
+      |> Proof_Context.set_mode Proof_Context.mode_schematic
+  in
+    \<^try>\<open>Inner_Syntax_Error.read_positioned Syntax.read_prop ctxt_s s
+     catch exn => release_par_error exn\<close>
+    |> Minilang.deconflict_bound_names
+  end
 
 fun read_props ctxt ss =
   \<^try>\<open>Inner_Syntax_Error.read_positioned_list Syntax.read_props ctxt ss
@@ -1033,13 +1054,22 @@ exception FACT_IN_TIME_FAIL of term
    The assigned name comes from the FactInTime tuple (set by Python). *)
 fun pre_resolve_fact (FactByName fref) ctxt = (fref, ctxt)
   | pre_resolve_fact (FactInTime (assigned_name, prop)) ctxt =
-      let val goal = Goal.init (Thm.cterm_of ctxt prop)
+      let
+          (* `prop` may contain schematic vars (parsed via read_prop_schematic).
+             import_terms fixes them (term Vars -> Frees, type Vars -> TFrees)
+             into `inner`; `ctxt` (outer) is the pre-import context, so the later
+             export generalizes ONLY these freshly-fixed vars, never the prop's
+             pre-existing locals. With no schematic, import/export are no-ops. *)
+          val (props', inner) = Variable.import_terms true [prop] ctxt
+          val prop' = hd props'
+          val goal = Goal.init (Thm.cterm_of inner prop')
           val proved =
-            (case Seq.pull (Phi_Sledgehammer_Solver.fast_mepo_tac (Time.fromSeconds 10) ctxt 1 goal)
+            (case Seq.pull (Phi_Sledgehammer_Solver.fast_mepo_tac (Time.fromSeconds 10) inner 1 goal)
                of SOME (st', _) => st'
                 | NONE => raise FACT_IN_TIME_FAIL prop)
             handle ERROR _ => raise FACT_IN_TIME_FAIL prop
-          val thm = Goal.finish ctxt proved
+          val thm0 = Goal.finish inner proved
+          val thm = singleton (Variable.export inner ctxt) thm0
           val ((_, _), ctxt') = Proof_Context.note_thms ""
                 ((Binding.name assigned_name, []), [([thm], [])]) ctxt
       in ((Facts.Named ((assigned_name, Position.none), NONE), []), ctxt') end
@@ -1813,7 +1843,7 @@ fun check_extended_fact ctxt (FactByName name) =
           val _ = Agent_Hint.check_fact_refs ctxt [fact]
       in FactByName fact end
   | check_extended_fact ctxt (FactInTime (assigned_name, stmt)) =
-      let val t = read_prop ctxt stmt
+      let val t = read_prop_schematic ctxt stmt
           val _ = Agent_Hint.check_term ctxt t
       in FactInTime (assigned_name, t) end
 
