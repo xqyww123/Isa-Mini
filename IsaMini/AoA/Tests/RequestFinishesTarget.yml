@@ -1,0 +1,15 @@
+target starts unfinished: True
+--------------------------------------------------
+negative: request proves a lemma, target stays open
+--------------------------------------------------
+neg is_error: False
+neg target still unfinished: True
+neg announces all goals proven: False
+neg interrupt NOT called: True
+--------------------------------------------------
+positive: request discharges the whole target scope
+--------------------------------------------------
+pos is_error: False
+pos target finished: True
+pos announces all goals proven: True
+pos interrupt called once: True
