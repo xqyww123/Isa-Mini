@@ -103,6 +103,29 @@ _PROOF_COMMAND_RE = re.compile(
     r"(?:lemma|lemmas|theorem|corollary|proposition|schematic_goal|by|apply|done)\s"
 )
 
+# A declaring-command source is supposed to be a SINGLE Isabelle command.  A
+# degenerate session-export-DB snapshot can instead hand back the whole theory
+# file as one `Command.unparsed` (see PIDE_State.command_at_position): such a
+# "source" carries a `theory <name> ... begin` header and/or runs hundreds of
+# lines.  Rendering it verbatim floods the agent context (observed: ~1270 lines
+# of Topological_Spaces leaked through the `query` tool).  This is downstream
+# defense-in-depth — the upstream ML guard is the primary fix, but the renderer
+# must never echo a whole theory regardless of what the fetch returns.  The
+# entity's own statement / interpretation is shown either way, so suppressing
+# the source loses nothing.
+_THEORY_HEADER_RE = re.compile(r"(?m)^\s*theory\s+\S+")
+_DEF_SOURCE_MAX_LINES = 100
+
+def _is_whole_theory_source(source: str) -> bool:
+    """Whether *source* looks like a whole theory file rather than one command.
+
+    A single declaring command never contains a top-level ``theory NAME``
+    header; a whole-file dump always does, and is also far longer than any real
+    single-entity command (the line cap is a catch-all for any other
+    pathological oversize)."""
+    return bool(_THEORY_HEADER_RE.search(source)) or \
+        source.count('\n') + 1 > _DEF_SOURCE_MAX_LINES
+
 def _parse_command_header(source: str) -> str:
     """Extract a concise header like ``fun fib`` from Isabelle command source.
 
@@ -230,7 +253,7 @@ async def _format_fetched_entity(
         def_info = await _get_def_for_fetched(rs.connection, f, ctxt=rs.name)
     if isinstance(def_info, tuple) and session is not None:
         source, cmd_pos = def_info
-        if not _PROOF_COMMAND_RE.match(source):
+        if not _PROOF_COMMAND_RE.match(source) and not _is_whole_theory_source(source):
             _format_with_definition(session, source, cmd_pos, indent=indent + 1, out=buf,
                                     force=force_definition)
     if abbreviation_defs and session is not None:
