@@ -387,6 +387,51 @@ async def _test_structural_target_rejected(root: Root, file: MyIO):
     file.write(f"legit amend committed: {[n.id for n in out4.committed]}\n")
     file.write(f"legit amend failure: {type(out4.failure).__name__ if out4.failure is not None else None}\n")
 
+@model_test("DeleteStructuralRejected", "Test_DeleteStructuralRejected.thy", 8)
+async def _test_delete_structural_rejected(root: Root, file: MyIO):
+    """Gate: `delete` of a Root structural child — the GlobalEnv "global" block (or
+    the Root / a top-level goal) — must be rejected with CannotDelete_StructuralContainer,
+    WITHOUT detaching it. BUT a SubgoalMaker's OWN case/obligation GoalNode children
+    must STILL be deletable (the engine re-opens the parent; see DeleteCaseHole /
+    DeleteOneOfThreeCases) — the gate deliberately spares them (parent is a
+    SubgoalMaker, not Root). delete raises (its convention), so rejects are caught."""
+    def _gone(sid: str) -> bool:
+        try:
+            root.locate_node(sid); return False
+        except model.NodeNotFound:
+            return True
+
+    await root.fill("1", [Branch.gen_single({
+        "thought": "trichotomy",
+        "cases": [
+            {"statement": {"english": "x positive", "isabelle": "x > 0", "name": "pos"}},
+            {"statement": {"english": "x negative", "isabelle": "x < 0", "name": "neg"}},
+            {"statement": {"english": "x zero", "isabelle": "x = 0", "name": "zero"}},
+        ]})])
+    file.write(f"branch children: {[c.id for c in root.locate_node('1').sub_nodes]}\n")
+
+    # (1) REJECT delete("global") -> CannotDelete_StructuralContainer; not detached.
+    root.session.age += 1
+    try:
+        await root.delete(["global"])
+        file.write("delete(global): NO RAISE (BUG)\n")
+    except model.CannotDelete as e:
+        file.write(f"delete(global) raised: {type(e).__name__}\n")
+        file.write(f"delete(global) message: {e}\n")
+    file.write(f"global unchanged (same object): {root.locate_node('global') is root.global_env}\n")
+    file.write(f"root children intact: {[c.id for c in root.sub_nodes]}\n")
+
+    # (2) BOUNDARY: deleting a SubgoalMaker CASE GoalNode must STILL SUCCEED (the
+    #     gate spares SubgoalMaker children — parent is a SubgoalMaker, not Root).
+    #     This is exactly what the over-broad blanket-GoalNode gate would have broken.
+    root.session.age += 1
+    nf = await root.delete(["1.2"])
+    file.write("=== boundary: delete a case still succeeds ===\n")
+    file.write(f"delete(1.2) not_found: {nf}\n")
+    file.write(f"1.2 gone: {_gone('1.2')}\n")
+    file.write(f"branch children after delete 1.2: {[c.id for c in root.locate_node('1').sub_nodes]}\n")
+    file.write(f"proof finished after case delete: {root.is_proof_finished()}\n")
+
 @model_test("DoneGoalHidesPremises", "Test_DoneGoalHidesPremises.thy", 8)
 async def _test_done_goal_hides_premises(root: Root, file: MyIO):
     """Bug: quickview shows premises for goals marked 'done'.
@@ -4831,6 +4876,35 @@ async def _test_prove_in_time_parse_error(root: Root, file: MyIO):
     print_header("Final State", file)
     root.print(0, file)
 
+
+@model_test("ProveInTime_Schematic", "Test_ProveInTime_Schematic.thy", 8)
+async def _test_prove_in_time_schematic(root: Root, file: MyIO):
+    """Verify the schematic-variable Prove-In-Time feature at the validate layer
+    (reliable: no flaky downstream hammer goal):
+    - schematic vars (?x) are accepted and the statement proven as a general
+      lemma (provable -> None);
+    - an undeclared free in a PIT statement is rejected (reject_undeclared_frees);
+    - an unannotated `?x+?y=?y+?x` infers `'a::plus` and is NOT provable;
+    - ground statements are unaffected."""
+    ml_state = root.global_env.ml_state
+    cases = [
+        ("schematic refl ", "(?x::nat) = ?x",           "None"),
+        ("schematic comm ", "?x + ?y = ?y + (?x::nat)", "None"),
+        ("undeclared free", "?a = (a::nat)",            "reject"),
+        ("no annotation  ", "?x + ?y = ?y + ?x",        "error"),
+        ("ground         ", "(8::nat) = 2 ^ 3",         "None"),
+    ]
+    results = await ml_state.validate_prove_in_time(
+        [ascii_of_unicode(stmt) for _, stmt, _ in cases])
+    for (label, stmt, expect), r in zip(cases, results):
+        if expect == "None":
+            ok = r is None
+        elif expect == "reject":
+            ok = r is not None and "not declared in scope" in r
+        else:  # "error": unprovable / parse / sort -> any non-None
+            ok = r is not None
+        file.write(f"{label} {stmt!r}: result={r!r} expect={expect} -> "
+                   f"{'OK' if ok else 'WRONG'}\n")
 
 @model_test("Obvious_ClassFactRSN", "Test_Obvious_ClassFactRSN.thy", 11)
 async def _test_Obvious_ClassFactRSN(root: Root, file: MyIO):
@@ -17418,8 +17492,10 @@ async def _test_query_whole_file_dump(root: Root, file: MyIO):
     # whole-theory dump is produced deterministically, regardless of REPL/DB
     # health. `_get_def_for_fetched` calls this as a module global of retrieval.
     orig = _retrieval._get_definition_with_pos
+    fetch_called = []
 
     async def _fake_def(connection, kind, uk, ctxt=None):
+        fetch_called.append(True)
         return (WHOLE_THEORY, IsabellePosition(0, 1, "/mock/MockTopo.thy"))
 
     _retrieval._get_definition_with_pos = _fake_def  # type: ignore[assignment]
@@ -17439,6 +17515,12 @@ async def _test_query_whole_file_dump(root: Root, file: MyIO):
     file.write(f"result within size cap (<1500): {len(result) < 1500}\n")
 
     assert not is_error, f"query tool must not error: {result}"
+    # The patched whole-theory fetch MUST have been consulted — otherwise the
+    # def-source never reached the renderer guard and the test would pass
+    # vacuously (e.g. if `tendsto_sandwich` failed to resolve in the live DB).
+    assert fetch_called, (
+        "_get_definition_with_pos was never invoked: the whole-theory source "
+        "never reached the renderer guard, so this test would pass vacuously")
     # The looked-up entity itself must still be reported.
     assert "tendsto_sandwich" in result, f"entity went missing: {result[:500]}"
     # ...but NONE of the theory body may leak into the agent-facing output.
