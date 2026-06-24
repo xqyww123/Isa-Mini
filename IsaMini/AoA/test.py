@@ -14889,6 +14889,91 @@ async def _test_request_lemmas_in_env_target(root: Root, file: MyIO):
     session.role = model.Role_Major()
 
 
+@model_test("RequestFinishesTarget", "Test_RequestFinishesTarget.thy", 9)
+async def _test_request_finishes_target(root: Root, file: MyIO):
+    """Worker-target COMPLETION reporting on the `request` path (the conditionally-
+    terminal handshake added alongside the auto-prove/constraint machinery). When the
+    processing leaves the worker's ENTIRE target scope discharged, the response
+    announces 'Congratulations! All goals are proven.' and fires `session.interrupt()`
+    (mirroring `edit`); when the target stays open, it does neither and the worker
+    keeps working. The target here is a real (non-`True`) goal so it starts UNFINISHED
+    — and the dispatch stub closes its body in the positive case, standing in for the
+    in-env cascade / constraint-amend that finishes the target in the field. This is
+    an OBSERVABILITY test for behavior the existing request goldens cannot see: base
+    `interrupt()` is a no-op and those goldens pin only derived booleans, never the
+    `result` text. LLM prover stubbed; no LLM."""
+    from . import mcp_http_server as mcp
+    from .model import WorkerHandle, WorkerYield
+    session = root.session
+    session.age += 1
+
+    # Observe the otherwise-invisible interrupt handshake (base interrupt() is a no-op).
+    interrupt_calls: list = []
+    async def rec_interrupt():
+        interrupt_calls.append(True)
+    session.interrupt = rec_interrupt
+
+    # One worker on a real (non-`True`) target → it starts UNFINISHED.
+    goal_node = root.sub_nodes[1]
+    await goal_node.fill("1", [Have.gen_single({
+        "thought": "target",
+        "statement": {"english": "trivial", "conclusion": "(1::nat) = 1"},
+        "name": "t_target"})])
+    t = goal_node.sub_nodes[0]
+    session.role = model.Role_Worker(target=t, worker_handle=WorkerHandle(t, session))
+    await session._prefetch_worker_premises()
+    session._seed_reported_scope_facts()
+    s0 = set(); t.unfinished_nodes(s0)
+    file.write(f"target starts unfinished: {len(s0) > 0}\n")
+
+    orig = mcp._run_worker_on
+    try:
+        # --- NEGATIVE: lemma proved but the target stays open → no announce, no interrupt ---
+        print_header("negative: request proves a lemma, target stays open", file)
+        async def stub_proves_only(s, node, sug, hl, *, headless=False):
+            await s.root.fill(f"{node.id}.1", [Obvious.gen_single({"facts": []})])
+            return WorkerYield.PROVED()
+        mcp._run_worker_on = stub_proves_only
+        interrupt_calls.clear()
+        result, is_error = await mcp._request_tool_logic(session, {
+            "detail": "need a helper",
+            "general_lemmas": [{
+                "name": "neg_refl",
+                "statement": {"english": "reflexivity", "conclusion": "x = x",
+                              "for_any": [{"name": "x"}]}}]})
+        sN = set(); t.unfinished_nodes(sN)
+        file.write(f"neg is_error: {is_error}\n")
+        file.write(f"neg target still unfinished: {len(sN) > 0}\n")
+        file.write(f"neg announces all goals proven: "
+                   f"{'Congratulations! All goals are proven.' in result}\n")
+        file.write(f"neg interrupt NOT called: {len(interrupt_calls) == 0}\n")
+
+        # --- POSITIVE: the dispatch also closes the target body → announce + interrupt ---
+        print_header("positive: request discharges the whole target scope", file)
+        async def stub_proves_and_closes(s, node, sug, hl, *, headless=False):
+            await s.root.fill(f"{node.id}.1", [Obvious.gen_single({"facts": []})])
+            await s.root.fill(f"{t.id}.1", [Obvious.gen_single({"facts": []})])
+            return WorkerYield.PROVED()
+        mcp._run_worker_on = stub_proves_and_closes
+        interrupt_calls.clear()
+        result, is_error = await mcp._request_tool_logic(session, {
+            "detail": "need the finishing helper",
+            "general_lemmas": [{
+                "name": "pos_refl",
+                "statement": {"english": "reflexivity", "conclusion": "y = y",
+                              "for_any": [{"name": "y"}]}}]})
+        sP = set(); t.unfinished_nodes(sP)
+        file.write(f"pos is_error: {is_error}\n")
+        file.write(f"pos target finished: {len(sP) == 0}\n")
+        file.write(f"pos announces all goals proven: "
+                   f"{'Congratulations! All goals are proven.' in result}\n")
+        file.write(f"pos interrupt called once: {len(interrupt_calls) == 1}\n")
+    finally:
+        mcp._run_worker_on = orig
+
+    session.role = model.Role_Major()
+
+
 @model_test("FailurePropagation", "Test_FailurePropagation.thy", 9)
 async def _test_failure_propagation(root: Root, file: MyIO):
     """Failure outcomes bubbling UP a nesting chain with per-level step-id
@@ -15377,9 +15462,9 @@ async def _test_new_scope_facts_on_resume(root: Root, file: MyIO):
     file.write(f"reported seed: {sorted(session.reported_scope_facts)}\n")
     # C1 invariant: the seed keys off _ctxt_before_me().hyps, and the cache is a subset.
     file.write(f"seed == before-target names: "
-               f"{session.reported_scope_facts == {n.ascii for n in target._ctxt_before_me().hyps}}\n")
+               f"{session.reported_scope_facts.keys() == {n.ascii for n in target._ctxt_before_me().hyps}}\n")
     file.write(f"cache keys subset of seed: "
-               f"{set(session._worker_premise_cache.keys()) <= session.reported_scope_facts}\n")
+               f"{set(session._worker_premise_cache.keys()) <= session.reported_scope_facts.keys()}\n")
 
     print_header("1. Initial resume: nothing new", file)
     notice0 = session.consume_new_scope_facts_notice()
@@ -15460,6 +15545,59 @@ async def _test_new_scope_facts_on_resume(root: Root, file: MyIO):
     file.write(f"'bad' in seed: {'bad' in session.reported_scope_facts}\n")
     file.write(f"after seed, notice empty (bad NOT falsely reported): "
                f"{session.consume_new_scope_facts_notice() == ''}\n")
+
+    # --- 8. SAME-NAME AMEND (#1): the parent amends g3 to a DIFFERENT statement under
+    #        the SAME name. Change-detection keys on the live-hyps raw ascii, so the
+    #        resume notice re-reports g3 with its LATEST statement (not the first one).
+    #        First drop section 7's FAILED `bad` (the last global child): a failed tail
+    #        sibling blocks GlobalEnv->GoalNode propagation, which would otherwise leave
+    #        the prefetch cache stale and render the OLD statement.
+    session.age += 1
+    session.role = model.Role_Major()
+    await root.delete([root.global_env.sub_nodes[-1].id])   # the malformed `bad`
+    old_g3_key = session.reported_scope_facts.get("g3")
+    await root.amend(g3.id, [Have.gen_single({
+        "thought": "g3 amended to a new statement under the same name",
+        "statement": {"english": "x times one is x",
+                      "conclusion": r"x * (1::int) = x"},
+        "name": "g3"})])
+    session.role = model.Role_Worker(target=target)
+    await session._prefetch_worker_premises()
+    print_header("8. Same-name amend: g3 re-reported with the LATEST statement", file)
+    notice5 = session.consume_new_scope_facts_notice()
+    file.write("--- notice text ---\n")
+    file.write(notice5)
+    file.write("--- end ---\n")
+    file.write(f"reports g3 (changed under same name): {'g3' in notice5}\n")
+    file.write(f"g3 identity updated to latest: "
+               f"{session.reported_scope_facts.get('g3') != old_g3_key}\n")
+    notice6 = session.consume_new_scope_facts_notice()
+    file.write(f"second consume empty (idempotent after the change): {notice6 == ''}\n")
+
+    # --- 9. RECYCLE (#3): delete g2, then re-add a DIFFERENT statement under the SAME
+    #        name `g2`. `append` recycles the NAME but lands at a fresh TAIL id (after
+    #        g3) and re-orders the before-target hyps (g2 -> last); with no failed tail
+    #        it comes back SUCCESS. The proposition changed under the reused name, so the
+    #        raw-ascii diff re-reports it — #3 falls out of the same override semantics.
+    session.age += 1
+    session.role = model.Role_Major()
+    old_g2_key = session.reported_scope_facts.get("g2")
+    await root.delete([g2.id])
+    await root.global_env.append([Have.gen_single({
+        "thought": "g2 recycled with a different statement",
+        "statement": {"english": "x minus x is zero",
+                      "conclusion": r"x - x = (0::int)"},
+        "name": "g2"})])
+    session.role = model.Role_Worker(target=target)
+    await session._prefetch_worker_premises()
+    print_header("9. Recycle: delete g2, re-add `g2` with a different statement", file)
+    notice7 = session.consume_new_scope_facts_notice()
+    file.write("--- notice text ---\n")
+    file.write(notice7)
+    file.write("--- end ---\n")
+    file.write(f"reports recycled g2: {'g2' in notice7}\n")
+    file.write(f"g2 identity changed under reused name: "
+               f"{session.reported_scope_facts.get('g2') != old_g2_key}\n")
 
 
 @model_test("Rewrite_ConjSplit", "Test_Rewrite_ConjSplit.thy", 12)

@@ -7,6 +7,7 @@ from io import StringIO
 from pathlib import Path
 from .helper import split_id_into_segs, cat_segs_into_id, incr_id_major, incr_id_minor, local_step_between, MyIO
 from .linked_list import Cons, LinkedList, from_iterable, iterate, concat
+from . import config
 import types as _types
 from typing import Any, Awaitable, ClassVar, Iterable, Mapping, NamedTuple, Protocol, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired, TypeAliasType, Union, get_type_hints, get_origin, get_args, is_typeddict, TYPE_CHECKING
 from Isabelle_RPC_Host import Connection, IsabelleError, pretty_unicode, ascii_of_unicode
@@ -11054,12 +11055,16 @@ class Session:
         # Worker-only: ascii fact name -> standard-printed proposition (IsaTerm),
         # prefetched once at init (see _prefetch_worker_premises).
         self._worker_premise_cache: 'dict[str, IsaTerm]' = {}
-        # Worker-only: ascii names of in-scope-before-target facts already surfaced
-        # to this agent (initial proof.yaml + prior resume notices). Diffed on resume
-        # to report ONLY newly-added contextual facts. Seeded/re-seeded from
-        # `_ctxt_before_me().hyps` (see _seed_reported_scope_facts /
-        # consume_new_scope_facts_notice).
-        self.reported_scope_facts: 'set[str]' = set()
+        # Worker-only: ascii fact name -> ascii of the proposition (the live
+        # `_ctxt_before_me().hyps` raw term) last surfaced to this agent under that
+        # name. Diffed on resume to report a before-target fact whose proposition is
+        # NEW, or has CHANGED under the same name since last shown — an amended global
+        # lemma, or a deleted-then-recycled name — so the worker always sees the LATEST
+        # statement (a re-stated lemma is re-notified on purpose, to flag the update).
+        # The change-detection identity is the live-hyps raw ascii, independent of
+        # `_worker_premise_cache` freshness. Seeded/re-seeded from `_ctxt_before_me().hyps`
+        # (see _seed_reported_scope_facts / consume_new_scope_facts_notice).
+        self.reported_scope_facts: 'dict[str, str]' = {}
         # Memoized `initial_prompt()`: its content is fixed for the session's
         # lifetime, but computing it resolves worker-suggested lemmas via RPC, so
         # repeat callers (compaction / restart / `_find_recent_start`) reuse it.
@@ -11367,11 +11372,21 @@ class Session:
         """The "if a needed lemma doesn't exist, ..." guidance clause, shared by
         ``system_prompt`` and ``_compute_initial_prompt`` so the two cannot drift.
         When the global-lemma gate is active for this non-worker major, steer to
-        declare-then-delegate; otherwise keep the legacy "prove it" wording so
-        flag-off output is byte-identical and the worker string is unchanged."""
+        declare-then-delegate; a worker is steered to prove inline or `request`;
+        otherwise keep the legacy "prove it" wording so flag-off planner output is
+        byte-identical."""
         if self.is_major and not self.is_worker and self.gate_global_lemma_proofs:
             return ("if a needed lemma truly does not exist, declare it as a `Have` node "
                     "under `global`, then dispatch a sub-agent to prove it.\n")
+        if self.is_worker:
+            # A worker can prove a needed fact inline as a LOCAL `Have` (cheap), or
+            # — for a general lemma it cannot prove inline — raise a `request` (the
+            # worker→planner channel, which dispatches a prover sub-agent; the cost
+            # caution lives on the `request` tool itself). The planner branch above
+            # deliberately does NOT mention `request`: the planner is the RECIPIENT
+            # of requests, not a caller.
+            return ("if a needed lemma truly does not exist, prove it inline as a "
+                    "`Have`, or raise a `request`.\n")
         suffix = " under `global`" if under_global else ""
         return f"if a needed lemma truly does not exist, prove it as a `Have` node{suffix}.\n"
 
@@ -11486,7 +11501,7 @@ class Session:
                 f"- {self.tool_name(TOOL_SEARCH)}: Search for theorems, constants, types, and rules; help you understand unfamiliar terms\n"
                 f"- {self.tool_name(TOOL_READ)}: Recall proof state from `proof.yaml`. Use only when you have lost track.\n"
                 f"- {self.tool_name(TOOL_RECALL_REMOVED)}: Browse deleted proof steps that were archived before removal.\n"
-                f"- {self.tool_name(TOOL_REQUEST_LEMMAS)}: Request help with your sub-goal: declare general helper lemmas to be auto-proved, and/or report constraints your sub-goal is missing.\n"
+                f"- {self.tool_name(TOOL_REQUEST_LEMMAS)}: {config.request_tool_description()}\n"
                 f"- {self.tool_name(TOOL_REFRESH)}: Reset the conversation and start over (the proof tree is kept). "
                 "Write a briefing for your future self in `briefing` — it becomes your only memory. "
                 "Use when your edits keep failing.\n"
@@ -12428,9 +12443,10 @@ class Session:
         self._worker_premise_cache = {n: IsaTerm.from_isabelle(p) for n, p in pairs}
 
     def _seed_reported_scope_facts(self) -> None:
-        """Baseline the resume-notice diff: mark every fact currently in scope BEFORE
-        the worker's target as already reported, so the next
-        ``consume_new_scope_facts_notice`` surfaces only facts the parent adds afterwards.
+        """Baseline the resume-notice diff: record every fact currently in scope BEFORE
+        the worker's target as already reported, keyed to its CURRENT proposition (the
+        live-hyps raw ascii), so the next ``consume_new_scope_facts_notice`` surfaces
+        only facts the parent adds — or amends under the same name — afterwards.
 
         Keyed off ``target._ctxt_before_me().hyps`` — the SAME set the notice iterates —
         NOT ``_worker_premise_cache.keys()``. The cache drops names the ML side cannot
@@ -12441,15 +12457,19 @@ class Session:
         cache-freshness-independent. No-op for non-workers."""
         if self.is_worker:
             target = self.role.target  # type: ignore[attr-defined]  — is_worker ⟹ role is Role_Worker
-            self.reported_scope_facts = {n.ascii for n in target._ctxt_before_me().hyps}
+            self.reported_scope_facts = {
+                n.ascii: raw.ascii
+                for n, raw in target._ctxt_before_me().hyps.items()}
 
     def consume_new_scope_facts_notice(
             self,
             banner: str = "New facts have arrived and are now available "
                           "in your scope") -> str:
-        """Render a notice listing the in-scope-before-target facts added since the last
-        report, and mark them reported. Returns "" if there are none / this is not a
-        worker. Idempotent: each fact is surfaced exactly once across repeated calls.
+        """Render a notice listing the in-scope-before-target facts added — or amended
+        under the same name — since the last report, and mark them reported. Returns ""
+        if there are none / this is not a worker. Idempotent: an UNCHANGED fact is
+        surfaced exactly once across repeated calls; a fact re-amended to a new
+        proposition is surfaced again (the worker always gets the latest statement).
         ``banner`` is the heading (the ``request`` resume path overrides it to flag that
         an accepted general lemma / constraint may have been revised by the dispatcher).
 
@@ -12460,12 +12480,18 @@ class Session:
         target = self.role.target  # type: ignore[attr-defined]  — is_worker ⟹ role is Role_Worker
         new: 'list[tuple[varname, term]]' = []
         for name, raw in target._ctxt_before_me().hyps.items():
-            if name.ascii in self.reported_scope_facts:
+            # Change-detection keys on the LIVE-hyps raw ascii (independent of
+            # `_worker_premise_cache` freshness): report a fact whose proposition is
+            # new, or has CHANGED under the same name since last shown (an amended
+            # global lemma / a recycled name) — so the worker always gets the LATEST
+            # statement. A reformat-only re-amend re-notifies on purpose.
+            key = raw.ascii
+            if self.reported_scope_facts.get(name.ascii) == key:
                 continue
             # Upgrade to the standard-printed proposition when prefetched (mirror the
             # merge in print_proof_scope); else fall back to the raw stored term.
             new.append((name, self._worker_premise_cache.get(name.ascii, raw)))
-            self.reported_scope_facts.add(name.ascii)
+            self.reported_scope_facts[name.ascii] = key
         if not new:
             return ""
         buf = StringIO()

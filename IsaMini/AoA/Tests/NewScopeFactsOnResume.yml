@@ -15,7 +15,7 @@ initial notice empty: True
 --------------------------------------------------
 before-target facts: ['g1', 'g2', 'hx']
 --- notice text ---
-New facts have been provided by the external environment and may help your proof:
+New facts have arrived and are now available in your scope:
   - g2: x + (0 :: int) = x
 --- end ---
 reports g2: True
@@ -46,3 +46,22 @@ non-worker notice empty: True
 cache strictly inside before-target names (C1 divergence present): True
 'bad' in seed: True
 after seed, notice empty (bad NOT falsely reported): True
+--------------------------------------------------
+8. Same-name amend: g3 re-reported with the LATEST statement
+--------------------------------------------------
+--- notice text ---
+New facts have arrived and are now available in your scope:
+  - g3: x * (1 :: int) = x
+--- end ---
+reports g3 (changed under same name): True
+g3 identity updated to latest: True
+second consume empty (idempotent after the change): True
+--------------------------------------------------
+9. Recycle: delete g2, re-add `g2` with a different statement
+--------------------------------------------------
+--- notice text ---
+New facts have arrived and are now available in your scope:
+  - g2: x - x = (0 :: int)
+--- end ---
+reports recycled g2: True
+g2 identity changed under reused name: True
