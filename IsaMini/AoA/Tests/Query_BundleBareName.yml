@@ -1,0 +1,13 @@
+exact_name='demo_bundle': 2 results, warnings=[]
+  -> demo_bundle(1)
+  -> demo_bundle(2)
+key_of_theorems('demo_bundle'): total=2
+  member ref -> Test_Query_BundleBareName.demo_bundle(1)
+  member ref -> Test_Query_BundleBareName.demo_bundle(2)
+--- rendered query output ---
+- demo_bundle(1): ?P ⟶ ?Q ⟶ ?P ∧ ?Q
+- demo_bundle(2) [manual]: ?P ⟶ ?P ∨ ?Q
+2 new, 0 shown earlier are not shown again.
+
+Lemmas marked with [manual] must be specified manually for Rewrite/Obvious to use them.
+key_of_theorem('demo_bundle'): IsabelleError -> Fact Test_Query_BundleBareName.demo_bundle has 2 theorems; specify an index like Test_Query_BundleBareName.demo_bundle(1)

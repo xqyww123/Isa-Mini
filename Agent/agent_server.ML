@@ -1273,7 +1273,9 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
       val raw_goal_hash = Hasher.goal (ctxt, sequent)
       val goal_hash = "intro-standard-v4:" ^ raw_goal_hash
       val thy = Proof_Context.theory_of ctxt
-      val aoa_cache_key = "aoa:" ^ goal_hash
+      (* ML L2 Phi_Cache key uses the raw hash (aoa:<hash>); the epoch-prefixed
+         goal_hash is kept only for the Python L1 SQLite key (passed below). *)
+      val aoa_cache_key = "aoa:" ^ raw_goal_hash
       val use_cache = Config.get ctxt AoA_use_proof_cache
       val cached_xcmd_json =
             if use_cache
@@ -1346,6 +1348,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
           mk_callback validate_prove_in_time_callback,
           mk_callback check_looping_rules_callback,
           Universal_Key.make_universal_key_callback' (SOME thm_cache) au,
+          Universal_Key.make_key_of_theorems_callback' (SOME thm_cache) au,
           Config.make_config_lookup_callback au,
           constants, theorems, types, classes, locales, named_theorems, methods,
           introduction_rules, elimination_rules,
