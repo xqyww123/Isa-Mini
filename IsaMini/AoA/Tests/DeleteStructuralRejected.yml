@@ -1,0 +1,10 @@
+branch children: ['1.0', '1.1', '1.2', '1.3']
+delete(global) raised: CannotDelete_StructuralContainer
+delete(global) message: You can only delete a proof step, not a structural container.
+global unchanged (same object): True
+root children intact: ['global', '']
+=== boundary: delete a case still succeeds ===
+delete(1.2) not_found: []
+1.2 gone: True
+branch children after delete 1.2: ['1.0', '1.1', '1.3']
+proof finished after case delete: False

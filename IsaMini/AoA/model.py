@@ -962,6 +962,16 @@ class CannotDelete_NodeNotFound(CannotDelete):
 class CannotDelete_Root(CannotDelete):
     def __str__(self) -> str:
         return f"Cannot delete the root node"
+class CannotDelete_StructuralContainer(CannotDelete):
+    """`delete` targeted a Root structural child that holds steps but is not a
+    deletable step — the global declarations block (GlobalEnv) or a top-level goal
+    (a GoalNode whose parent is the Root) / the Root itself. (A SubgoalMaker's own
+    case/obligation children are NOT here — deleting one of those is supported: the
+    parent re-opens via count-aware `_closes_my_parent`.)"""
+    def __init__(self, id: step):
+        self.id = id
+    def __str__(self) -> str:
+        return "You can only delete a proof step, not a structural container."
 
 class ArgumentError(AoA_Error):
     def __init__(self, arg: ToolCall_arg, reason: str):
@@ -4668,6 +4678,21 @@ class Node(ABC):
             if node.id not in seen:
                 seen.add(node.id)
                 nodes.append(node)
+        # Root structural children that hold steps but are not deletable: the
+        # GlobalEnv ("global") block and a TOP-LEVEL goal (a GoalNode parented by
+        # Root). Deleting one detaches it from Root.sub_nodes -> dangling
+        # global_env / num_goals desync / render+locate corruption. A SubgoalMaker's
+        # OWN case/obligation GoalNode children are intentionally NOT gated —
+        # deleting a case is supported (the parent re-opens via count-aware
+        # _closes_my_parent; see DeleteCaseHole / DeleteOneOfThreeCases). Reject the
+        # whole batch BEFORE any teardown (raise is delete's convention;
+        # _delete_tool_logic catches AoA_Error and rolls back its archive). Stricter
+        # than Root.comment, which mutates earlier targets before raising on a later
+        # structural one — here nothing is discarded/deleted on reject.
+        for node in nodes:
+            if (isinstance(node, (Root, GlobalEnv))
+                    or (isinstance(node, GoalNode) and isinstance(node.parent, Root))):
+                raise CannotDelete_StructuralContainer(node.id)
         if nodes and nodes[0].parent is not None and isinstance(nodes[0].parent, NonLeaf_Node):
             the_session().working_block = nodes[0].parent
         # Tear down any worker sub-agents within the subtrees being removed (the
