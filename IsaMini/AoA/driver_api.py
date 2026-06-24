@@ -680,6 +680,23 @@ class OpenAIResponsesProvider(OpenAIBase):
             f"OpenAI-Codex-API: local openai-oauth proxy unreachable at {self._client.base_url}. "
             "Start it (e.g. `npx openai-oauth`) and retry.") from e
 
+    @staticmethod
+    def _is_transient_upstream_error(e: Exception) -> bool:
+        """True for an ``upstream_error``-typed 4xx coming from the local
+        codex proxy (auth2api / openai-oauth). That ``type`` means the codex
+        backend's OWN internal upstream momentarily failed — surfaced as e.g. a
+        400 ``"Unsupported content type"`` — which is transient and worth
+        retrying. A genuine client-side 400 (malformed request) carries a
+        different ``type`` (e.g. ``invalid_request_error``) and is NOT matched,
+        so it still fails fast. The platform OpenAI API never emits
+        ``upstream_error``, so this stays a no-op there."""
+        body = getattr(e, "body", None)
+        if isinstance(body, dict):
+            err = body.get("error")
+            if isinstance(err, dict) and err.get("type") == "upstream_error":
+                return True
+        return "upstream_error" in str(e)
+
     def _msgs_to_input(self, messages: list[Msg]) -> list[Any]:
         """Convert Msg list → input_items.
 
@@ -770,6 +787,14 @@ class OpenAIResponsesProvider(OpenAIBase):
                     self._log(f"responses.create rejected previous_response_id "
                               f"({type(e).__name__}); retrying without it: {e}")
                     params.pop("previous_response_id", None)
+                    continue
+                if self._is_transient_upstream_error(e):
+                    attempt += 1
+                    wait = min(2 ** attempt, _BACKOFF_CAP)
+                    self._log(f"responses.create upstream_error "
+                              f"({type(e).__name__}, attempt {attempt}, "
+                              f"retry in {wait:.0f}s): {e}")
+                    await asyncio.sleep(wait)
                     continue
                 self._log(f"responses.create failed, non-retryable ({type(e).__name__}): {e}")
                 raise
