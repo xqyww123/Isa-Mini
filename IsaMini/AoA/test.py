@@ -1503,6 +1503,30 @@ async def _test_Query_BundleBareName(root: Root, file: MyIO):
         msg = e.errors[0] if e.errors else str(e)
         file.write(f"key_of_theorem('demo_bundle'): IsabelleError -> {msg}\n")
 
+    # (5) An EXPLICIT member index resolves to just that one member.
+    results_m2, warnings_m2 = await ml.semantic_knn(
+        None, 20, [EntityKind.THEOREM], exact_name="demo_bundle(2)")
+    file.write(f"exact_name='demo_bundle(2)' (explicit member): {len(results_m2)} results, "
+               f"warnings={warnings_m2}\n")
+    for r in results_m2:
+        file.write(f"  -> {r.entity.short_name.unicode}\n")
+    n2, members2 = await key_of_theorems(ml.connection, "demo_bundle(2)", 20, ml.name)
+    file.write(f"key_of_theorems('demo_bundle(2)'): total={n2}, "
+               f"refs={[ref for _u, ref in members2]}\n")
+    assert len(results_m2) == 1, f"explicit member should resolve to 1, got {len(results_m2)}"
+    assert n2 == 1 and [r for _u, r in members2] == ["Test_Query_BundleBareName.demo_bundle(2)"], \
+        f"key_of_theorems('demo_bundle(2)') unexpected: ({n2}, {members2})"
+
+    # (6) An OUT-OF-RANGE index surfaces the 'out of range' message, NOT 'Undefined'.
+    results_oor, warnings_oor = await ml.semantic_knn(
+        None, 20, [EntityKind.THEOREM], exact_name="demo_bundle(99)")
+    file.write(f"exact_name='demo_bundle(99)' (out of range): {len(results_oor)} results, "
+               f"warnings={warnings_oor}\n")
+    assert results_oor == [] and any("out of range" in w for w in warnings_oor), \
+        f"out-of-range should surface 'out of range', got: {warnings_oor}"
+    assert not any("Undefined" in w for w in warnings_oor), \
+        f"out-of-range must NOT report 'Undefined', got: {warnings_oor}"
+
 @model_test("Query_BundleTruncate", "Test_Query_BundleTruncate.thy", 12)
 async def _test_Query_BundleTruncate(root: Root, file: MyIO):
     """A >20-member fact (`lemmas big_bundle = refl x21`) exercises the

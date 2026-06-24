@@ -11,3 +11,7 @@ key_of_theorems('demo_bundle'): total=2
 
 Lemmas marked with [manual] must be specified manually for Rewrite/Obvious to use them.
 key_of_theorem('demo_bundle'): IsabelleError -> Fact Test_Query_BundleBareName.demo_bundle has 2 theorems; specify an index like Test_Query_BundleBareName.demo_bundle(1)
+exact_name='demo_bundle(2)' (explicit member): 1 results, warnings=[]
+  -> demo_bundle(2)
+key_of_theorems('demo_bundle(2)'): total=1, refs=['Test_Query_BundleBareName.demo_bundle(2)']
+exact_name='demo_bundle(99)' (out of range): 0 results, warnings=['Theorem index 99 out of range for Test_Query_BundleBareName.demo_bundle (has 2 theorems)']
