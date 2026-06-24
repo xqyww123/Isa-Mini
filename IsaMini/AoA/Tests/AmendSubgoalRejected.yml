@@ -1,0 +1,23 @@
+obligation id: 1.0
+obligation is GoalNode: True
+parent of 1.0 is SubgoalMaker: True
+branch children: ['1.0', '1.1', '1.2', '1.3']
+=== single-op amend reject ===
+reject committed: []
+reject failure: CannotEdit_SubgoalSibling
+reject reason: You can only amend a proof step but not a subgoal.
+obligation unchanged (same object): True
+obligation still GoalNode: True
+any garbage '-1' id: False
+=== multi-op amend reject ===
+reject2 committed: []
+reject2 failure: CannotEdit_SubgoalSibling
+reject2 reason: You can only amend a proof step but not a subgoal.
+obligation unchanged (same object): True
+branch children after rejects: ['1.0', '1.1', '1.2', '1.3']
+=== legit fill + amend into goal body ===
+parent of 1.0.1 is SubgoalMaker: False
+parent of 1.0.1 is GoalNode: True
+legit fill committed: ['1.0.1']
+legit amend committed: ['1.0.1']
+legit amend failure: None

@@ -888,13 +888,15 @@ class CannotEdit_NonDeclarative(CannotEdit):
                 f"Use it inside a proof step instead.")
 
 class CannotEdit_SubgoalSibling(CannotEdit):
-    """`insert_before` targeted a direct child of a subgoal container
+    """`insert_before` or `amend` targeted a direct child of a subgoal container
     (Branch / CaseSplit / Induction / SplitConjs / InferenceRule / Define).
     Those children are STRUCTURAL goals (the exhaustiveness obligation + case
     nodes), created internally — not editable steps — so nothing can be inserted
-    before them."""
+    before them, nor can one be amended."""
     def _reason(self, display_id: 'Callable[[str], str]',
                 relativize_text: 'Callable[[str], str]') -> str:
+        if self.operation == EditOperation.AMEND:
+            return "You can only amend a proof step but not a subgoal."
         return "Cannot insert before a subgoal."
 
 
@@ -4311,8 +4313,8 @@ class Node(ABC):
         # Inserting a user op before one is meaningless and used to mint a corrupt
         # id (the front-insert arithmetic underflows on the obligation's [0]
         # local_step, e.g. `1.0` -> `1.-1A`). Reject cleanly via the no-raise
-        # outcome.failure channel. Only the insert path is gated here; amend has
-        # its own separate, pre-existing issues that are intentionally untouched.
+        # outcome.failure channel. Both the insert path (here) and the amend path
+        # (`Node.amend`) are gated against a SubgoalMaker's structural children.
         if isinstance(node.parent, SubgoalMaker):
             outcome.failure = CannotEdit_SubgoalSibling(
                 target_step=step, operation=op,
@@ -4812,6 +4814,19 @@ class Node(ABC):
             ):
                 return fill_outcome
             outcome.failure = CannotEdit_NodeNotFound(
+                target_step=id, operation=op,
+                unapplied_oprs=list(gns), is_error=True)
+            return outcome
+        # A SubgoalMaker's direct children are STRUCTURAL goals (the exhaustiveness
+        # obligation + case GoalNodes), created internally — not editable steps.
+        # Amending one would silently replace the GoalNode with an arbitrary op-node
+        # (single op, model.py `_amend_child`) or destructively delete it then
+        # re-insert among the structural children (multi op) — both corrupt the
+        # tree. Reject cleanly via outcome.failure; NEVER raise here (a CannotEdit
+        # raised through `_amend_child` would escape `amend_me`'s catch tuple and
+        # `sys.exit(1)` the host). Parallel to the gate in `Node.insert_before`.
+        if isinstance(old_node.parent, SubgoalMaker):
+            outcome.failure = CannotEdit_SubgoalSibling(
                 target_step=id, operation=op,
                 unapplied_oprs=list(gns), is_error=True)
             return outcome

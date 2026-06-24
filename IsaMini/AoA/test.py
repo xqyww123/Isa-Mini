@@ -233,6 +233,90 @@ async def _test_insert_before_subgoal_rejected(root: Root, file: MyIO):
     file.write(f"legit committed: {[n.id for n in out2.committed]}\n")
     file.write(f"legit failure: {type(out2.failure).__name__ if out2.failure is not None else None}\n")
 
+@model_test("AmendSubgoalRejected", "Test_AmendSubgoalRejected.thy", 8)
+async def _test_amend_subgoal_rejected(root: Root, file: MyIO):
+    """Gate: amending a subgoal container's STRUCTURAL child (a Branch's `1.0`
+    exhaustiveness obligation) must be rejected cleanly with
+    CannotEdit_SubgoalSibling — for BOTH single-op and multi-op amend — WITHOUT
+    replacing or destructively deleting the GoalNode, while a legit amend of a
+    step INSIDE a goal body (parent = GoalNode, a StdBlock) must still succeed.
+    NB: a Branch has NUMERIC case ids (1.0/1.1/1.2/1.3) with in-body steps
+    1.0.1…; named ids like `1.True` are CaseSplit-only (see Branch1.yml)."""
+    await root.fill("1", [Branch.gen_single({
+        "thought": "trichotomy",
+        "cases": [
+            {"statement": {"english": "x positive", "isabelle": "x > 0", "name": "pos"}},
+            {"statement": {"english": "x negative", "isabelle": "x < 0", "name": "neg"}},
+            {"statement": {"english": "x zero", "isabelle": "x = 0", "name": "zero"}},
+        ]})])
+    branch = root.locate_node("1")
+    oblig = branch.sub_nodes[0]
+    file.write(f"obligation id: {oblig.id}\n")
+    file.write(f"obligation is GoalNode: {isinstance(oblig, model.GoalNode)}\n")
+    file.write(f"parent of 1.0 is SubgoalMaker: {isinstance(oblig.parent, model.SubgoalMaker)}\n")
+    file.write(f"branch children: {[c.id for c in branch.sub_nodes]}\n")
+
+    def _all_ids() -> 'list[str]':
+        ids: list[str] = []
+        def _collect(n: 'Node') -> None:
+            ids.append(n.id)
+            for c in getattr(n, "sub_nodes", []):
+                _collect(c)
+        _collect(root)
+        return ids
+
+    # (1) REJECT single-op amend of the obligation goal -> clean
+    #     CannotEdit_SubgoalSibling; the GoalNode must NOT be replaced.
+    root.session.age += 1
+    out = await root.amend("1.0", [Have.gen_single({
+        "thought": "bad",
+        "statement": {"english": "trivial", "conclusion": r"(0::int) \<le> (0::int)"},
+        "name": "bad"})])
+    file.write("=== single-op amend reject ===\n")
+    file.write(f"reject committed: {[n.id for n in out.committed]}\n")
+    file.write(f"reject failure: {type(out.failure).__name__ if out.failure is not None else None}\n")
+    if out.failure is not None:
+        file.write(f"reject reason: {out.failure._reason(lambda s: s, lambda s: s)}\n")
+    file.write(f"obligation unchanged (same object): {root.locate_node('1.0') is oblig}\n")
+    file.write(f"obligation still GoalNode: {isinstance(root.locate_node('1.0'), model.GoalNode)}\n")
+    file.write(f"any garbage '-1' id: {any('-1' in i for i in _all_ids())}\n")
+
+    # (2) REJECT multi-op amend -> same gate; must NOT destructively delete the
+    #     case first (the gate fires before amend_me's delete-then-reinsert path).
+    root.session.age += 1
+    out2 = await root.amend("1.0", [
+        Have.gen_single({"thought": "bad1",
+            "statement": {"english": "t", "conclusion": r"(0::int) \<le> (0::int)"}, "name": "bad1"}),
+        Have.gen_single({"thought": "bad2",
+            "statement": {"english": "t", "conclusion": r"(0::int) \<le> (0::int)"}, "name": "bad2"})])
+    file.write("=== multi-op amend reject ===\n")
+    file.write(f"reject2 committed: {[n.id for n in out2.committed]}\n")
+    file.write(f"reject2 failure: {type(out2.failure).__name__ if out2.failure is not None else None}\n")
+    if out2.failure is not None:
+        file.write(f"reject2 reason: {out2.failure._reason(lambda s: s, lambda s: s)}\n")
+    file.write(f"obligation unchanged (same object): {root.locate_node('1.0') is oblig}\n")
+    file.write(f"branch children after rejects: {[c.id for c in branch.sub_nodes]}\n")
+
+    # (3) LEGIT: fill a step INTO the obligation body, then amend THAT step. Its
+    #     parent is the GoalNode (StdBlock), not the SubgoalMaker -> spared.
+    root.session.age += 1
+    out3 = await root.fill("1.0.1", [Have.gen_single({
+        "thought": "ok",
+        "statement": {"english": "trivial", "conclusion": r"(0::int) \<le> (0::int)"},
+        "name": "ok"})])
+    file.write("=== legit fill + amend into goal body ===\n")
+    step = root.locate_node("1.0.1")
+    file.write(f"parent of 1.0.1 is SubgoalMaker: {isinstance(step.parent, model.SubgoalMaker)}\n")
+    file.write(f"parent of 1.0.1 is GoalNode: {isinstance(step.parent, model.GoalNode)}\n")
+    file.write(f"legit fill committed: {[n.id for n in out3.committed]}\n")
+    root.session.age += 1
+    out4 = await root.amend("1.0.1", [Have.gen_single({
+        "thought": "ok2",
+        "statement": {"english": "trivial", "conclusion": r"(0::int) \<le> (0::int)"},
+        "name": "ok2"})])
+    file.write(f"legit amend committed: {[n.id for n in out4.committed]}\n")
+    file.write(f"legit amend failure: {type(out4.failure).__name__ if out4.failure is not None else None}\n")
+
 @model_test("DoneGoalHidesPremises", "Test_DoneGoalHidesPremises.thy", 8)
 async def _test_done_goal_hides_premises(root: Root, file: MyIO):
     """Bug: quickview shows premises for goals marked 'done'.
