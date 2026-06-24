@@ -1,0 +1,16 @@
+exact_name='myeven_myodd.intros' kinds=[introduction rule]: 3 results, warnings=[]
+  -> myeven_myodd.intros(1)
+  -> myeven_myodd.intros(2)
+  -> myeven_myodd.intros(3)
+key_of_theorems('myeven_myodd.intros', intro): total=3, refs=['Test_Query_BundleRuleKind.myeven_myodd.intros(1)', 'Test_Query_BundleRuleKind.myeven_myodd.intros(2)', 'Test_Query_BundleRuleKind.myeven_myodd.intros(3)']
+exact_name='myeven_myodd.inducts' kinds=[induction rule]: 2 results, warnings=[]
+  -> myeven_myodd.inducts(1)
+  -> myeven_myodd.inducts(2)
+--- rendered query output (intro bundle) ---
+- myeven_myodd.intros(1) [manual]: myeven (0 :: nat)
+- myeven_myodd.intros(2) [manual]: myeven ?n ⟶ myodd (Suc ?n)
+- myeven_myodd.intros(3) [manual]: myodd ?n ⟶ myeven (Suc ?n)
+3 new, 0 shown earlier are not shown again.
+
+Lemmas marked with [manual] must be specified manually for Rewrite/Obvious to use them.
+exact_name='myeven_myodd.intros(99)' (out of range): 0 results, warnings=['Theorem index 99 out of range for Test_Query_BundleRuleKind.myeven_myodd.intros (has 3 theorems)']

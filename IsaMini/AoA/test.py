@@ -1702,6 +1702,56 @@ async def _test_Query_BundleTruncate(root: Root, file: MyIO):
     file.write("--- rendered query output ---\n")
     file.write(rendered + "\n")
 
+@model_test("Query_BundleRuleKind", "Test_Query_BundleRuleKind.thy", 18)
+async def _test_Query_BundleRuleKind(root: Root, file: MyIO):
+    """Rule-kind bundle expansion: a multi-theorem fact queried as a RULE kind
+    (introduction / induction) expands to its members instead of 'Undefined'.
+    Fixture: mutual `inductive myeven and myodd` → myeven_myodd.intros (3-member
+    intro bundle, in _THEOREM_KINDS render path) + myeven_myodd.inducts (2-member
+    induction bundle, IsabelleEntity render path)."""
+    from IsaMini.AoA.retrieval import _semantic_search_direct
+    from Isabelle_RPC_Host.universal_key import EntityKind, key_of_theorems
+
+    ml = root.session.retrieval_state()
+
+    # (1) Intro-rule bundle -> expands to its 3 members (was: 'Undefined').
+    res_intro, w_intro = await ml.semantic_knn(
+        None, 20, [EntityKind.INTRODUCTION_RULE], exact_name="myeven_myodd.intros")
+    file.write(f"exact_name='myeven_myodd.intros' kinds=[introduction rule]: "
+               f"{len(res_intro)} results, warnings={w_intro}\n")
+    for r in res_intro:
+        file.write(f"  -> {r.entity.short_name.unicode}\n")
+    n_i, mem_i = await key_of_theorems(ml.connection, "myeven_myodd.intros", 20, ml.name,
+                                       kind=EntityKind.INTRODUCTION_RULE)
+    file.write(f"key_of_theorems('myeven_myodd.intros', intro): total={n_i}, "
+               f"refs={[r for _u, r in mem_i]}\n")
+    assert len(res_intro) == 3, f"expected 3 intro members, got {len(res_intro)}"
+
+    # (2) Induction-rule bundle -> IsabelleEntity render path (not in _THEOREM_KINDS).
+    res_ind, w_ind = await ml.semantic_knn(
+        None, 20, [EntityKind.INDUCTION_RULE], exact_name="myeven_myodd.inducts")
+    file.write(f"exact_name='myeven_myodd.inducts' kinds=[induction rule]: "
+               f"{len(res_ind)} results, warnings={w_ind}\n")
+    for r in res_ind:
+        file.write(f"  -> {r.entity.short_name.unicode}\n")
+    assert len(res_ind) == 2, f"expected 2 induction members, got {len(res_ind)}"
+
+    # (3) Rendered agent-facing output for the intro bundle (statements, def suppressed).
+    rendered = await _semantic_search_direct(
+        root.session, [{"exact_name": "myeven_myodd.intros", "kinds": ["introduction rule"]}])
+    file.write("--- rendered query output (intro bundle) ---\n")
+    file.write(rendered + "\n")
+
+    # (4) Out-of-range index on a rule kind -> 'out of range', NOT 'Undefined'.
+    res_oor, w_oor = await ml.semantic_knn(
+        None, 20, [EntityKind.INTRODUCTION_RULE], exact_name="myeven_myodd.intros(99)")
+    file.write(f"exact_name='myeven_myodd.intros(99)' (out of range): "
+               f"{len(res_oor)} results, warnings={w_oor}\n")
+    assert res_oor == [] and any("out of range" in w for w in w_oor), \
+        f"rule-kind out-of-range should surface 'out of range', got: {w_oor}"
+    assert not any("Undefined" in w for w in w_oor), \
+        f"rule-kind out-of-range must NOT report 'Undefined', got: {w_oor}"
+
 @model_test("QueryLocalScore_PatternOnly", "Test_QueryLocalScore_PatternOnly.thy", 9)
 async def _test_QueryLocalScore_PatternOnly(root: Root, file: MyIO):
     """Documents (and guards) current behavior: the pattern-only path (query=None)

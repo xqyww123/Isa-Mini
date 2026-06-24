@@ -13,7 +13,7 @@ from typing import Any, Awaitable, ClassVar, Iterable, Mapping, NamedTuple, Prot
 from Isabelle_RPC_Host import Connection, IsabelleError, pretty_unicode, ascii_of_unicode
 from Isabelle_RPC_Host.position import IsabellePosition
 from Isabelle_RPC_Host.universal_key import (
-    EntityKind, universal_key, universal_key_of, universal_key_and_name_of,
+    EntityKind, THM_RULE_KINDS, universal_key, universal_key_of, universal_key_and_name_of,
     key_of_theorems, UndefinedEntity,
 )
 from Isabelle_Semantic_Embedding.semantics import Semantic_Vector_Store, SemanticRecord, trunc_expr as _trunc_expr_base
@@ -2000,14 +2000,19 @@ class Minilang_State:
             # truncation note. None when no bundle resolved.
             bundle_N: int | None = None
             for tag in kinds:
-                if tag == EntityKind.THEOREM:
+                if tag in THM_RULE_KINDS:
                     # A fact name may bind several theorems (`foo`, members
                     # `foo(1)/foo(2)`). Expand to its members (up to the cap)
-                    # rather than reporting the bare name "Undefined".
+                    # rather than reporting the bare name "Undefined". Covers
+                    # THEOREM and the rule kinds (intro/elim/induction/case-split);
+                    # `kind=tag` tags each member key with the requested face.
+                    # NOTE: unlike the universal_key_and_name_of path below, this
+                    # does not retry a dotted xname under its short base name — a
+                    # fully-qualified fact name interns directly, so it is moot here.
                     try:
                         n_total, members = await key_of_theorems(
                             self.connection, exact_name,
-                            limit=EXACT_NAME_BUNDLE_LIMIT, ctxt=self.name)
+                            limit=EXACT_NAME_BUNDLE_LIMIT, ctxt=self.name, kind=tag)
                     except UndefinedEntity:
                         continue
                     except IsabelleError as e:
@@ -2018,8 +2023,8 @@ class Minilang_State:
                     bundle_N = n_total
                     for uk, ref_name in members:
                         rec = Semantic_DB[uk]
-                        rec = (rec._replace(name=ref_name) if rec is not None
-                               else SemanticRecord(EntityKind.THEOREM, ref_name, None, None))
+                        rec = (rec._replace(name=ref_name, kind=tag) if rec is not None
+                               else SemanticRecord(tag, ref_name, None, None))
                         if n_total > 1:
                             bundle_member_names.add(ref_name)
                         scored_recs.append((1.0, rec, None))
