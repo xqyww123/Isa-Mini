@@ -1,0 +1,5 @@
+schematic refl  '(?x::nat) = ?x': result=None expect=None -> OK
+schematic comm  '?x + ?y = ?y + (?x::nat)': result=None expect=None -> OK
+undeclared free '?a = (a::nat)': result='This Prove-in-time mentions the free variable "a", which is not declared in scope. This indicates a bug in your fact statement: check whether you mistyped the name.' expect=reject -> OK
+no annotation   '?x + ?y = ?y + ?x': result='Proof failed' expect=error -> OK
+ground          '(8::nat) = 2 ^ 3': result=None expect=None -> OK

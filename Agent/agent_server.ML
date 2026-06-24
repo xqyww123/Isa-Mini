@@ -973,6 +973,10 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                (* Mirror pre_resolve_fact: allow schematic vars and fix them
                   before probing, so edit-time validation matches execution. *)
                let val prop = MiniLang_Agent.read_prop_schematic ctxt stmt
+                   (* Same undeclared-free guard as check_extended_fact, so the
+                      edit-time prefilter rejects what execution would reject. *)
+                   val _ = MiniLang_Agent.reject_undeclared_frees
+                             "Prove-in-time" "fact statement" s0 [prop]
                    val (props', inner) = Variable.import_terms true [prop] ctxt
                    val goal = Goal.init (Thm.cterm_of inner (hd props'))
                in case Seq.pull (Phi_Sledgehammer_Solver.fast_mepo_tac (Time.fromSeconds 3) inner 1 goal)
@@ -980,6 +984,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                      | NONE => SOME "Proof failed"
                end
                catch ERROR msg => SOME (REPL.trim_makrup msg)
+                   | Minilang.OPR_FAIL (_, msg) => SOME (REPL.trim_makrup msg)
                    | Timeout.TIMEOUT _ => SOME "Timed out"
                    | exn => SOME (REPL.trim_makrup (Runtime.exn_message exn))\<close>
             ) stmts

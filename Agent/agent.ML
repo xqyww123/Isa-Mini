@@ -89,6 +89,7 @@ type counters = {
 type config = cfg * budget * counters * exec_mode
 
 val check_command : Minilang.state -> xcmd -> icmd
+val reject_undeclared_frees : string -> string -> Minilang.state -> term list -> unit
 val interpret_i : config -> icmd -> Minilang.state -> Minilang.state
 val interpret : config -> xcmd -> Minilang.state -> Minilang.state
 
@@ -1838,13 +1839,19 @@ fun chk_single _ _ [x] = x
         ^ String.concat (map (fn th => "- " ^ string_of_thm ctxt th ^ "\n") lst)
         ^ "You may select the i-th rule by using \"" ^ the rule ^ "(i)\".")
 
-fun check_extended_fact ctxt (FactByName name) =
+fun check_extended_fact _ ctxt (FactByName name) =
       let val fact = read_fact name
           val _ = Agent_Hint.check_fact_refs ctxt [fact]
       in FactByName fact end
-  | check_extended_fact ctxt (FactInTime (assigned_name, stmt)) =
+  | check_extended_fact s ctxt (FactInTime (assigned_name, stmt)) =
       let val t = read_prop_schematic ctxt stmt
           val _ = Agent_Hint.check_term ctxt t
+          (* Guard (as Witness/Induction/Instantiation do): reject undeclared
+             frees in a PIT statement. Essential now that read_prop_schematic
+             allows ?x: otherwise import_terms (pre_resolve_fact) would fix a
+             schematic ?a onto a same-named undeclared free, silently registering
+             a different (often vacuous) lemma than the agent authored. *)
+          val _ = reject_undeclared_frees "Prove-in-time" "fact statement" s [t]
       in FactInTime (assigned_name, t) end
 
 in
@@ -1858,14 +1865,14 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
          BY INDEX (Interaction_SelectRewriteTargets → find_matching_subterms over the
          goal), not authored terms — scanning them would falsely reject a legitimate
          Simplify whenever a reject-hinted const already occurs in the goal. *)
-      in SIMPLIFY (map (fn (fact, targets) => (check_extended_fact ctxt fact, targets)) facts_with_targets,
+      in SIMPLIFY (map (fn (fact, targets) => (check_extended_fact s ctxt fact, targets)) facts_with_targets,
                    use_sys, prems, simp_goal, bindings_opt) end
   | check_command_i s (RULE (facts, insts)) =
       let val ctxt = Minilang.context_of s
-      in RULE (map (check_extended_fact ctxt) facts, insts) (*insts: parsed at interpret time*) end
+      in RULE (map (check_extended_fact s ctxt) facts, insts) (*insts: parsed at interpret time*) end
   | check_command_i s (UNFOLD facts) =
       let val ctxt = Minilang.context_of s
-      in UNFOLD (map (check_extended_fact ctxt) facts) end
+      in UNFOLD (map (check_extended_fact s ctxt) facts) end
   | check_command_i s (WITNESS terms) =
       let val ctxt = Minilang.context_of s
           val typs = get_witness_types s
@@ -1933,13 +1940,13 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
       end
   | check_command_i s (NEXT_OR_END (facts, vars)) =
       let val ctxt = Minilang.context_of s
-      in NEXT_OR_END (map (check_extended_fact ctxt) facts, vars) end
+      in NEXT_OR_END (map (check_extended_fact s ctxt) facts, vars) end
   | check_command_i s (NEXT (facts, vars)) =
       let val ctxt = Minilang.context_of s
-      in NEXT (map (check_extended_fact ctxt) facts, vars) end
+      in NEXT (map (check_extended_fact s ctxt) facts, vars) end
   | check_command_i s (END facts) =
       let val ctxt = Minilang.context_of s
-      in END (map (check_extended_fact ctxt) facts) end
+      in END (map (check_extended_fact s ctxt) facts) end
   | check_command_i _ (BRANCH brs) = BRANCH brs (*name_opt * string passthrough*)
   | check_command_i _ (HAVE data) = HAVE data
   | check_command_i _ (SUFFICES data) = SUFFICES data
@@ -1949,7 +1956,7 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
   | check_command_i _ SORRY_ONLY = SORRY_ONLY
   | check_command_i s (HAMMER (facts, timeout, cached_proof)) =
       let val ctxt = Minilang.context_of s
-      in HAMMER (map (check_extended_fact ctxt) facts, timeout, cached_proof) end
+      in HAMMER (map (check_extended_fact s ctxt) facts, timeout, cached_proof) end
   | check_command_i _ (INTRO opt_bindings) = INTRO opt_bindings
   | check_command_i _ SPLIT_CONJS = SPLIT_CONJS
   | check_command_i s (SPECIALIZE (name, rule_fact, insts, discharge_facts)) =
@@ -1959,13 +1966,13 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
           val _ = List.app (Agent_Hint.check_term ctxt) terms
           val _ = reject_undeclared_frees "Instantiation" "instantiation value" s terms
       in SPECIALIZE (name,
-                     check_extended_fact ctxt rule_fact,
+                     check_extended_fact s ctxt rule_fact,
                      names ~~ terms,
-                     map (check_extended_fact ctxt) discharge_facts)
+                     map (check_extended_fact s ctxt) discharge_facts)
       end
   | check_command_i s (CHAINING (name_opt, facts)) =
       let val ctxt = Minilang.context_of s
-      in CHAINING (name_opt, map (check_extended_fact ctxt) facts) end
+      in CHAINING (name_opt, map (check_extended_fact s ctxt) facts) end
   | check_command_i _ (DEFINE d) = DEFINE d
     (* strings passthrough — Minilang.FUN'' parses them internally *)
   | check_command_i _ SKIP = SKIP
