@@ -3,7 +3,7 @@
   "properties": {
     "general_lemmas": {
       "type": "array",
-      "description": "Each MUST be fully general — every free variable declared in `for_any`. General lemmas are auto-proved and made available in your scope; a non-general item is rejected (declare its variables in `for_any` and resubmit).",
+      "description": "Each MUST be fully general — all free variables MUST be declared in `for_any`.",
       "items": {
         "type": "object",
         "properties": {

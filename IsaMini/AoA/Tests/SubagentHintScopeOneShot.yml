@@ -1,0 +1,305 @@
+--------------------------------------------------
+structure (absolute levels; obv must be FAILURE)
+--------------------------------------------------
+1: Have _subgoal_level=1 status=SUCCESS
+1.1: Have _subgoal_level=2 status=SUCCESS
+1.1.1: Have _subgoal_level=3 status=SUCCESS
+1.1.1.1: Obvious _subgoal_level=3 status=FAILURE
+--------------------------------------------------
+major proof.yaml -- base level 0, obv rel depth 3 -> HINT
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: level-1 helper
+    operation: Have
+    statement:
+      english: x squared nonneg
+      conclusion: (0::int) \<le> x * x
+    name: h1
+    proof:
+      - step id: 1.1
+        thought: level-2 helper
+        operation: Have
+        statement:
+          english: x squared nonneg
+          conclusion: (0::int) \<le> x * x
+        name: h2
+        proof:
+          - step id: 1.1.1
+            thought: level-3 false claim
+            operation: Have
+            statement:
+              english: x equals x plus one
+              conclusion: (x::int) = x + 1
+            name: h3
+            proof:
+              - step id: 1.1.1.1
+                operation: Obvious
+                Error: |
+                  Automatic proof fails on the subgoal:
+                    False
+                  The goal is non-trivial and a step-by-step proof is required.
+                This goal is deep. Consider calling `subagent` with step 1.1.1
+            Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1.1` to replace it with a proof.
+            pending proof goal:
+              x = x + (1 :: int)
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.2` to provide the proof for the following goal.
+        pending proof goal:
+          (0 :: int) ≤ x * x
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.2` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: int) ≤ x * x
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+--------------------------------------------------
+worker@H1 proof.yaml -- base level 1, obv rel depth 2 -> HINT
+--------------------------------------------------
+variables:
+  - x: int
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: level-2 helper
+    operation: Have
+    statement:
+      english: x squared nonneg
+      conclusion: (0::int) \<le> x * x
+    name: h2
+    proof:
+      - step id: 1.1
+        thought: level-3 false claim
+        operation: Have
+        statement:
+          english: x equals x plus one
+          conclusion: (x::int) = x + 1
+        name: h3
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+            Error: |
+              Automatic proof fails on the subgoal:
+                False
+              The goal is non-trivial and a step-by-step proof is required.
+            This goal is deep. Consider calling `subagent` with step 1.1
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1` to replace it with a proof.
+        pending proof goal:
+          x = x + (1 :: int)
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.2` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: int) ≤ x * x
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  (0 :: int) ≤ x * x
+--------------------------------------------------
+worker@H2 proof.yaml -- base level 2, obv rel depth 1 -> no hint
+--------------------------------------------------
+variables:
+  - x: int
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: level-3 false claim
+    operation: Have
+    statement:
+      english: x equals x plus one
+      conclusion: (x::int) = x + 1
+    name: h3
+    proof:
+      - step id: 1.1
+        operation: Obvious
+        Error: |
+          Automatic proof fails on the subgoal:
+            False
+          The goal is non-trivial and a step-by-step proof is required.
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to replace it with a proof.
+    pending proof goal:
+      x = x + (1 :: int)
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  (0 :: int) ≤ x * x
+--------------------------------------------------
+worker@H3 proof.yaml -- base level 3, obv rel depth 0 -> no hint
+--------------------------------------------------
+variables:
+  - x: int
+goal: x = x + (1 :: int)
+proof:
+  - step id: 1
+    operation: Obvious
+    Error: |
+      Automatic proof fails on the subgoal:
+        False
+      The goal is non-trivial and a step-by-step proof is required.
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to replace it with a proof.
+pending proof goal:
+  x = x + (1 :: int)
+--------------------------------------------------
+proof.yaml render (hint fires; non-consuming, does NOT mark)
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: level-1 helper
+    operation: Have
+    statement:
+      english: x squared nonneg
+      conclusion: (0::int) \<le> x * x
+    name: h1
+    proof:
+      - step id: 1.1
+        thought: level-2 helper
+        operation: Have
+        statement:
+          english: x squared nonneg
+          conclusion: (0::int) \<le> x * x
+        name: h2
+        proof:
+          - step id: 1.1.1
+            thought: level-3 false claim
+            operation: Have
+            statement:
+              english: x equals x plus one
+              conclusion: (x::int) = x + 1
+            name: h3
+            proof:
+              - step id: 1.1.1.1
+                operation: Obvious
+                Error: |
+                  Automatic proof fails on the subgoal:
+                    False
+                  The goal is non-trivial and a step-by-step proof is required.
+                This goal is deep. Consider calling `subagent` with step 1.1.1
+            Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1.1` to replace it with a proof.
+            pending proof goal:
+              x = x + (1 :: int)
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.2` to provide the proof for the following goal.
+        pending proof goal:
+          (0 :: int) ≤ x * x
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.2` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: int) ≤ x * x
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+--------------------------------------------------
+Outline render (hint fires; consuming -> marks shown)
+--------------------------------------------------
+step 1: Have h1
+  step 1.1: Have h2
+    step 1.1.1: Have h3
+      step 1.1.1.1: Obvious (failed)
+        Error: |
+          Automatic proof fails on the subgoal:
+            False
+          The goal is non-trivial and a step-by-step proof is required.
+        This goal is deep. Consider calling `subagent` with step 1.1.1
+      Unfinished Proof. Call command `edit` with action `fill` and target step `1.1.1.1`
+      goal: x = x + (1 :: int)
+    Unfinished Proof. Fill step `1.1.2`
+    goal: (0 :: int) ≤ x * x
+  Unfinished Proof. Fill step `1.2`
+  goal: (0 :: int) ≤ x * x
+Unfinished Proof. Fill step `2`
+goal: (0 :: int) ≤ x * x
+--------------------------------------------------
+proof.yaml render again (hint now suppressed)
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: level-1 helper
+    operation: Have
+    statement:
+      english: x squared nonneg
+      conclusion: (0::int) \<le> x * x
+    name: h1
+    proof:
+      - step id: 1.1
+        thought: level-2 helper
+        operation: Have
+        statement:
+          english: x squared nonneg
+          conclusion: (0::int) \<le> x * x
+        name: h2
+        proof:
+          - step id: 1.1.1
+            thought: level-3 false claim
+            operation: Have
+            statement:
+              english: x equals x plus one
+              conclusion: (x::int) = x + 1
+            name: h3
+            proof:
+              - step id: 1.1.1.1
+                operation: Obvious
+                Error: |
+                  Automatic proof fails on the subgoal:
+                    False
+                  The goal is non-trivial and a step-by-step proof is required.
+            Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1.1` to replace it with a proof.
+            pending proof goal:
+              x = x + (1 :: int)
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.2` to provide the proof for the following goal.
+        pending proof goal:
+          (0 :: int) ≤ x * x
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.2` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: int) ≤ x * x
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+--------------------------------------------------
+after compaction reset (shown_subagent_hints cleared -> hint fires again)
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: level-1 helper
+    operation: Have
+    statement:
+      english: x squared nonneg
+      conclusion: (0::int) \<le> x * x
+    name: h1
+    proof:
+      - step id: 1.1
+        thought: level-2 helper
+        operation: Have
+        statement:
+          english: x squared nonneg
+          conclusion: (0::int) \<le> x * x
+        name: h2
+        proof:
+          - step id: 1.1.1
+            thought: level-3 false claim
+            operation: Have
+            statement:
+              english: x equals x plus one
+              conclusion: (x::int) = x + 1
+            name: h3
+            proof:
+              - step id: 1.1.1.1
+                operation: Obvious
+                Error: |
+                  Automatic proof fails on the subgoal:
+                    False
+                  The goal is non-trivial and a step-by-step proof is required.
+                This goal is deep. Consider calling `subagent` with step 1.1.1
+            Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1.1` to replace it with a proof.
+            pending proof goal:
+              x = x + (1 :: int)
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.2` to provide the proof for the following goal.
+        pending proof goal:
+          (0 :: int) ≤ x * x
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.2` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: int) ≤ x * x
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+Unfinished nodes: 5

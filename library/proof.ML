@@ -3755,10 +3755,15 @@ fun SPECIALIZE' prep_thms prep_insts opt_name raw_rules raw_insts raw_facts
                         if Thm.has_name_hint rule
                         then Minilang_Aux.simp_fact_name' (Thm_Name.print (Thm.get_name_hint rule))
                         else "<anonymous>"
+                      (* show_sorts/show_types so the printed rule carries the same
+                         sort+type annotations as the embedded mismatch line in `msg`
+                         (rendered under show_sorts inside inst_universal_quantifiers);
+                         keeps both lines of this message consistent. *)
+                      val show_ctxt = Config.put show_types true (Config.put show_sorts true ctxt)
                   in raise OPR_FAIL (INVALID_OPR, String.concat [
                        "cannot instantiate rule \<open>", rule_name, "\<close>:\n",
                        msg, "\n",
-                       "the rule is:\n  ", Thm.string_of_thm ctxt rule]) end
+                       "the rule is:\n  ", Thm.string_of_thm show_ctxt rule]) end
 
     (* 3. Discharge premises with facts, anchored to original positions.
        xOF handles both Pure.imp and HOL.implies/HOL.All; on unification

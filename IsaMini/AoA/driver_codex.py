@@ -17,7 +17,7 @@ import platformdirs
 from .model import *
 from .language_model_driver import LMDriver, _TransientError, _QuotaError, PRICING, pricing_for, _parse_effort_suffix, Usage
 
-from .mcp_http_server import ProofMCPHTTPServer, _cc_edit_schema_flat
+from .mcp_http_server import ProofMCPHTTPServer, _cc_edit_schema_codex
 
 
 # PreToolUse guard hook source (ALLOWLIST). With the OS sandbox disabled
@@ -152,12 +152,14 @@ class Codex_Driver(LMDriver):
         return self._TOOL_NAME_MAP.get(t, t)
 
     def transform_tool_schema(self, name: str, schema: dict) -> dict:
-        # codex-cli DROPS `$ref`/`$defs` when forwarding an MCP tool's inputSchema
-        # to the model (verified 0.141.0: the `edit` operation union collapses to
-        # `{}`, leaving the model no spec — it just flails). Serve the pre-flattened,
-        # `$ref`-free `edit` schema — the SAME flat schema the API drivers feed the
-        # model. `edit` is the only proof tool that carries `$ref`.
-        return _cc_edit_schema_flat if name == TOOL_EDIT else schema
+        # codex-cli's MCP->model schema sanitizer empties every `$ref` AND every
+        # `anyOf`/`oneOf` branch to `{}` (wire-verified, 0.141.0), so the raw/flat
+        # `edit` discriminated operation union reaches the model with no
+        # `operation` discriminator and no field names — it can only guess. Serve
+        # the union-MERGED variant: one object with `operation` as an enum and all
+        # op field names merged, which survives the sanitizer intact. `edit` is the
+        # only proof tool with such a union.
+        return _cc_edit_schema_codex if name == TOOL_EDIT else schema
 
     @classmethod
     def _make_fork(cls, parent: 'LMDriver', role=None) -> 'Codex_Driver':

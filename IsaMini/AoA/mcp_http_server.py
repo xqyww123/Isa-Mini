@@ -76,6 +76,7 @@ from .retrieval import (
     _cc_query_schema,
 )
 from . import prompts as P
+from . import config
 
 
 # ============================================================================
@@ -1395,7 +1396,10 @@ async def _request_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         via ``WorkerRequestConstraints`` → ``Interaction_ReviewConstraint``
         (resolved IN-LOOP in ``run_until_yield``); on accept for an amendable
         target the condition is added as a premise of the delegated block.
-      The worker BLOCKS until both are processed, then KEEPS WORKING (non-terminal).
+      The worker BLOCKS until both are processed, then KEEPS WORKING — UNLESS the
+      processed lemmas/constraints discharge its ENTIRE target scope, in which case
+      the response announces completion and the worker terminates via the interrupt
+      handshake (conditionally terminal, mirroring `edit`'s finish path).
     - **Planning agent**: a no-argument hint pointing it at the right action —
       formalize and prove the missing lemma under `global` via `edit`/`fill`, or,
       when the global-lemma gate is on, declare it under `global` and dispatch a
@@ -1417,9 +1421,9 @@ async def _request_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         general_lemmas = args.get("general_lemmas")
         constraints = args.get("constraints")
         if not general_lemmas and not constraints:
-            msg = ("Provide at least one of `general_lemmas` (helper lemmas to "
-                   "auto-prove) or `constraints` (conditions your sub-goal is "
-                   "missing).")
+            msg = ("Provide at least one of `general_lemmas` (helper lemmas to be "
+                   "proved by an auto-dispatched sub-agent) or `constraints` "
+                   "(conditions your sub-goal is missing).")
             session.log_tool_response(_tn, f"ERROR: {msg}")
             return (msg, True)
         # Don't trust the MCP/SDK JSON-schema (some drivers don't enforce it):
@@ -1618,14 +1622,40 @@ async def _request_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             await session._prefetch_worker_premises()
             session.refresh_YAML()
 
+        # Worker's-own-target completion, mirroring `edit`'s finish handshake —
+        # but UNCONDITIONAL (not gated on any_scope_change): a worker is dispatched
+        # only on an UNfinished target, so an empty scope here means this work is
+        # genuinely done and the worker should terminate, regardless of whether
+        # THIS call is what closed it (a cascade/constraint can close the target on
+        # the failed-lemma path, which sets no any_scope_change flag). The absolute
+        # `proof_scope_unfinished_nodes()` empty-check is the worker-target signal —
+        # a before/after delta is unnecessary because the only way the scope is
+        # already empty at entry is a genuinely-finished target (e.g. a `True`-goal
+        # block, which carries no obligation), on which terminating is still right.
+        # `_write_newly_completed` separately reports newly-proved SUB-steps; it
+        # structurally excludes the scope root (== the worker's target), so it never
+        # carries the target itself — that is the empty-check's job.
+        comp_buf = MyIO(StringIO())
+        P._write_newly_completed(session, comp_buf)
+        finished = False
+        if not session.proof_scope_unfinished_nodes():
+            comp_buf.write("Congratulations! All goals are proven.\n")
+            finished = True
+        completion = comp_buf.getvalue()
+
         # Assemble ONE synchronous response: per-lemma outcomes, then the
-        # constraint verdict, then a notice of the BEFORE-TARGET facts now newly in
-        # scope (auto-proved general lemmas; appended at the end for LLM recency).
-        # The constraint-amend of the worker's OWN target is NOT a before-target
-        # fact, so the notice does not cover it — `constraint_feedback` states it.
+        # constraint verdict, then the completion announcement, then a notice of the
+        # BEFORE-TARGET facts now newly in scope (auto-proved general lemmas;
+        # appended at the end for LLM recency). The completion line is folded into
+        # `parts` (before the "Nothing was processed." fallback) so a genuine
+        # completion suppresses the fallback. The constraint-amend of the worker's
+        # OWN target is NOT a before-target fact, so the notice does not cover it —
+        # `constraint_feedback` states it.
         parts = list(outcome_lines)
         if constraint_feedback:
             parts.append(constraint_feedback)
+        if completion:
+            parts.append(completion.rstrip("\n"))
         feedback = "\n".join(p for p in parts if p)
         notice = session.consume_new_scope_facts_notice(
             banner="The following facts are now available in your scope "
@@ -1635,6 +1665,12 @@ async def _request_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         if not feedback:
             feedback = "Nothing was processed."
         session.log_tool_response(_tn, feedback)
+        # Whole worker-target scope discharged → terminate this worker now. The
+        # driver's end-of-turn gate (proof_scope_unfinished_nodes empty → break →
+        # WorkerDone) would catch it next turn regardless; this merely ends the
+        # current turn immediately, exactly as `edit` does on `finished`.
+        if finished:
+            await session.interrupt()
         return (feedback, False)
 
     # Role_Major: no-argument hint — the planner formalizes the lemma itself.
@@ -2022,7 +2058,7 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                "schema": _cc_query_schema, "annotations": _RO},
     "recall": {"description": "Recall proof state from `proof.yaml`. Use only when you have lost track.", "schema": _cc_read_schema, "annotations": _RO},
     "recall_removed": {"description": "Browse proof steps that were archived before deletion.", "schema": _cc_recall_removed_schema, "annotations": _RO},
-    "request": {"description": "Request help with your sub-goal: declare general helper lemmas to be auto-proved, and/or report constraints your sub-goal is missing.",
+    "request": {"description": config.request_tool_description(),
                 "schema": _cc_request_lemmas_schema, "annotations": _ACT},
     "report": {"description": "Report that the goal is unprovable (refute), or surrender when you have exhausted your strategies.",
                  "schema": _cc_report_schema, "annotations": _ACT},

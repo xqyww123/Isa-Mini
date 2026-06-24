@@ -7528,15 +7528,31 @@ class Obvious(Leaf):
         """A deeply-nested (>= _SUBAGENT_HINT_DEPTH) Obvious that FAILED: point the
         main agent at the `subagent` tool to delegate this sub-goal, naming the
         enclosing goal block (`_nearest_goal_for_subagent`) that `subagent` should
-        target. Shown to any agent that can dispatch (main or worker)."""
-        if (_rendering_for_dispatcher()
-                and self.status.status == EvaluationStatus.Status.FAILURE
-                and self._subgoal_level >= _SUBAGENT_HINT_DEPTH):
-            target = self._nearest_goal_for_subagent()
-            if target is None:
-                return
-            print_indent(indent, file)
-            file.write(f"Don't grind through this goal inline when it's off your main line of reasoning. Call `subagent` with step {the_session()._display_id(target.id)} to delegate it.\n")
+        target. Shown to any agent that can dispatch (main or worker). Depth is
+        measured RELATIVE to the dispatcher's focus scope (`proof_scope_root`: a
+        worker's `target`, else the global root) — like step ids, this rebasing
+        lives only here at the agent boundary; the tree keeps absolute levels.
+
+        One-shot per node id per session (`shown_subagent_hints`): marked only on
+        the consuming inline-Outline surface (`_consuming_subagent_hints`, set by
+        `quickview_proof_scope`), NOT on the non-consuming `proof.yaml` render, so
+        the authoring turn shows it on both surfaces and neither repeats it after
+        (mirrors the `_emit_pending_hint_notices` consume discipline)."""
+        if not (_rendering_for_dispatcher()
+                and self.status.status == EvaluationStatus.Status.FAILURE):
+            return
+        sess = the_session()
+        if self._subgoal_level - sess.proof_scope_root._subgoal_level < _SUBAGENT_HINT_DEPTH:
+            return
+        if self.id in sess.shown_subagent_hints:
+            return
+        target = self._nearest_goal_for_subagent()
+        if target is None:
+            return
+        if sess._consuming_subagent_hints:
+            sess.shown_subagent_hints.add(self.id)
+        print_indent(indent, file)
+        file.write(f"This goal is deep. Consider calling `subagent` with step {sess._display_id(target.id)}\n")
     async def _refresh_me_alone(self, auto_intro: bool) -> None:
         if self.fact_refs is None:
             if self._raw_facts:
@@ -11027,6 +11043,17 @@ class Session:
         # view-forks so a notice isn't repeated across the same agent context.
         self.shown_hints: set[str] = (
             set(_view_parent.shown_hints) if _view_parent is not None else set())
+        # Failed deep `Obvious` node ids whose `_print_subagent_hint` delegate
+        # suggestion has already been surfaced this session (one-shot per node,
+        # scope-relative depth). Mirrors `shown_hints`: workers get a fresh set
+        # (their own focus scope), interaction view-forks inherit a copy.
+        self.shown_subagent_hints: set[str] = (
+            set(_view_parent.shown_subagent_hints) if _view_parent is not None else set())
+        # Transient render flag: True only while the consuming inline-Outline
+        # surface (`quickview_proof_scope`) renders, so an inline subagent hint
+        # marks itself shown there but NOT in the non-consuming `proof.yaml`
+        # render (mirrors the `_emit_pending_hint_notices` consume discipline).
+        self._consuming_subagent_hints: bool = False
         self.seen_abbreviations: set[str] = (
             set(_view_parent.seen_abbreviations) if _view_parent is not None else set())
         self.showed_fill_hint: bool = False
@@ -12059,6 +12086,7 @@ class Session:
         self.seen_abbreviations.clear()
         self.showed_suffices_notice = False
         self.shown_hints.clear()
+        self.shown_subagent_hints.clear()
         self.showed_fill_hint = False
         self.showed_cancelled_notice = False
         self.shown_HAVE_fact_names.clear()
@@ -12665,17 +12693,23 @@ class Session:
 
     def quickview_proof_scope(self, indent: int, file: MyIO):
         """Quickview scoped to this session's proof responsibility."""
-        if not self.is_worker:
-            self.root.quickview(indent, file)
+        # Consuming surface: inline subagent hints emitted during this render mark
+        # themselves shown (one-shot), unlike the non-consuming `proof.yaml` render.
+        self._consuming_subagent_hints = True
+        try:
+            if not self.is_worker:
+                self.root.quickview(indent, file)
+                self._emit_pending_hint_notices(indent, file, consume=True)
+                return
+            target = self.proof_scope_root
+            _quickview_children_compressed(target.sub_nodes, indent, file)  # type: ignore[attr-defined]  — target is role.target (NonLeaf_Node)
+            # Multi-goal (SubgoalMaker): each child self-prints its own pending footer;
+            # the block-level footer is a single-goal artifact (and a SubgoalMaker no-op).
+            if not isinstance(target, SubgoalMaker):
+                target._quickview_pending_footer(indent, file)  # type: ignore[attr-defined]
             self._emit_pending_hint_notices(indent, file, consume=True)
-            return
-        target = self.proof_scope_root
-        _quickview_children_compressed(target.sub_nodes, indent, file)  # type: ignore[attr-defined]  — target is role.target (NonLeaf_Node)
-        # Multi-goal (SubgoalMaker): each child self-prints its own pending footer;
-        # the block-level footer is a single-goal artifact (and a SubgoalMaker no-op).
-        if not isinstance(target, SubgoalMaker):
-            target._quickview_pending_footer(indent, file)  # type: ignore[attr-defined]
-        self._emit_pending_hint_notices(indent, file, consume=True)
+        finally:
+            self._consuming_subagent_hints = False
 
     async def request_restart(self):
         """Request a context restart.  Sets ``self.quit_info = Restart()`` to

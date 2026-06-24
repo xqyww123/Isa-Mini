@@ -2237,6 +2237,94 @@ async def _test_UnfoldCondNote(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
+@model_test("SubagentHintScopeOneShot", "Test_SubagentHintScopeOneShot.thy", 8)
+async def _test_SubagentHintScopeOneShot(root: Root, file: MyIO):
+    r"""The failed-deep-`Obvious` `subagent` delegate hint, covering BOTH new
+    behaviours of `Obvious._print_subagent_hint`:
+      (A) SCOPE-RELATIVE depth — the hint's nesting depth is measured from the
+          dispatcher's focus scope (`proof_scope_root`), NOT the global root. So
+          the SAME failed Obvious triggers the hint for `Role_Major` (base level
+          0) and for a worker focused high (target=H1, rel depth 2) but is SILENT
+          for a worker focused close (target=H2 rel depth 1; target=H3 rel 0).
+      (B) ONE-SHOT per session — like `_emit_pending_hint_notices`, the hint is
+          marked shown only on the CONSUMING inline-Outline surface
+          (`quickview_proof_scope`), never on the non-consuming `proof.yaml`
+          (`print_proof_scope`); after a compaction reset it fires again.
+
+    Tree: three nested Haves H1>H2>H3 (absolute `_subgoal_level` 1,2,3); H1/H2
+    are left open (sorried SUCCESS, no HAMMER); H3 states the false `x = x + 1`
+    so its body `Obvious` (level 3) FAILS the hammer and renders the hint."""
+    session = root.session
+
+    # Build H1 > H2 > H3 > Obvious in one nested fill (id-agnostic; navigate by
+    # sub_nodes below). H1/H2 stay open (sorried SUCCESS, no HAMMER); H3 states
+    # the false `x = x + 1` so its body Obvious FAILS the hammer.
+    await root.fill("1", [Have.gen_single({
+        "thought": "level-1 helper",
+        "statement": {"english": "x squared nonneg", "conclusion": r"(0::int) \<le> x * x"},
+        "name": "h1",
+        "proof": [{
+            "operation": "Have",
+            "thought": "level-2 helper",
+            "statement": {"english": "x squared nonneg", "conclusion": r"(0::int) \<le> x * x"},
+            "name": "h2",
+            "proof": [{
+                "operation": "Have",
+                "thought": "level-3 false claim",
+                "statement": {"english": "x equals x plus one", "conclusion": r"(x::int) = x + 1"},
+                "name": "h3",
+                "proof": [{"operation": "Obvious", "facts": []}],
+            }],
+        }],
+    })])
+    goal = root.sub_nodes[1]
+    H1 = goal.sub_nodes[0]
+    H2 = cast(NonLeaf_Node, H1).sub_nodes[0]
+    H3 = cast(NonLeaf_Node, H2).sub_nodes[0]
+    obv = cast(NonLeaf_Node, H3).sub_nodes[0]
+    assert isinstance(H1, Have) and isinstance(H2, Have) and isinstance(H3, Have), \
+        f"expected 3 nested Haves, got {type(H1).__name__}/{type(H2).__name__}/{type(H3).__name__}"
+    assert isinstance(obv, Obvious), f"expected innermost Obvious, got {type(obv).__name__}"
+    assert obv.status.status.name == "FAILURE", \
+        f"expected obv HAMMER FAILURE, got {obv.status.status.name}"
+
+    print_header("structure (absolute levels; obv must be FAILURE)", file)
+    for n in (H1, H2, H3, obv):
+        file.write(f"{n.id}: {type(n).__name__} "
+                   f"_subgoal_level={n._subgoal_level} status={n.status.status.name}\n")
+
+    # ---- (A) scope-relative depth. Non-consuming proof.yaml renders only, so
+    #          nothing is marked and each render reflects pure scope depth. ----
+    session.shown_subagent_hints.clear()
+    print_header("major proof.yaml -- base level 0, obv rel depth 3 -> HINT", file)
+    session.print_proof_scope(0, file)
+    session.role = model.Role_Worker(target=H1)
+    print_header("worker@H1 proof.yaml -- base level 1, obv rel depth 2 -> HINT", file)
+    session.print_proof_scope(0, file)
+    session.role = model.Role_Worker(target=H2)
+    print_header("worker@H2 proof.yaml -- base level 2, obv rel depth 1 -> no hint", file)
+    session.print_proof_scope(0, file)
+    session.role = model.Role_Worker(target=H3)
+    print_header("worker@H3 proof.yaml -- base level 3, obv rel depth 0 -> no hint", file)
+    session.print_proof_scope(0, file)
+    session.role = model.Role_Major()
+
+    # ---- (B) one-shot per session via the consume discipline. ----
+    session.shown_subagent_hints.clear()
+    print_header("proof.yaml render (hint fires; non-consuming, does NOT mark)", file)
+    session.print_proof_scope(0, file)
+    print_header("Outline render (hint fires; consuming -> marks shown)", file)
+    session.quickview_proof_scope(0, file)
+    print_header("proof.yaml render again (hint now suppressed)", file)
+    session.print_proof_scope(0, file)
+    print_header("after compaction reset (shown_subagent_hints cleared -> hint fires again)", file)
+    session.shown_subagent_hints.clear()
+    session.print_proof_scope(0, file)
+
+    unfinished: set[Node] = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 @model_test("Delete1", "Test_Delete1.thy", 13)
 async def _test_Delete1(root: Root, file: MyIO):
     """Test deleting a single step."""
@@ -2527,6 +2615,39 @@ async def _test_Hammer_ProveInTime(root: Root, file: MyIO):
     ]})])
     print_header("After Obvious with ProveInTime", file)
     root.print(0, file)
+
+@model_test("Obvious_DenseIffFact", "Test_Obvious_DenseIffFact.thy", 10)
+async def _test_Obvious_DenseIffFact(root: Root, file: MyIO):
+    """Reproduce: HAMMER (Obvious) cannot close an iff goal about `harm` even when
+    handed the *exact* library fact that states it.
+
+    Goal:  filterlim harm at_top sequentially = (∀Z::real. eventually (λt. Z<harm t) sequentially)
+    Fact:  filterlim_at_top_dense  (= this goal, instantiated at ?f:=harm, ?F:=sequentially)
+
+    Obvious fails, splitting the iff and getting stuck on the forward direction
+        ∀Z. filterlim harm at_top sequentially ⟶ (∀⇩F t in sequentially. Z < harm t)
+    so the goal stays unfinished (unfinished >= 1).
+
+    This is exactly what stalled worker:1.1.2.2.1 in log AoA/EF80F4CB6_1E71024 for
+    ~13 min (`Obvious [filterlim_at_top_dense]` on its `harm_dense_char` step) before
+    it escaped via a type-annotated forward `Derive`.
+
+    NOTE: the constant `harm` is essential — with a free `f::nat⇒real` the hammer
+    closes the iff instantly (verified). The failure is triggered by `harm` being a
+    *defined* constant: the hammer's preprocessing unfolds it / pulls in harm-specific
+    lemmas, breaking the match against `filterlim_at_top_dense`'s LHS `filterlim ?f at_top ?F`."""
+    print_header("Initial", file)
+    root.print(0, file)
+    root.session.age += 1
+    # Obvious fails here: the goal stays unproved, so `proof` remains empty and
+    # `unfinished` stays 1.  (With a free `f::nat⇒real` instead of `harm` the same
+    # Obvious closes it instantly -> unfinished 0; the constant `harm` is what
+    # breaks the hammer's match against `filterlim_at_top_dense`.)
+    await root.fill("1", [Obvious.gen_single({"facts": [{"name": "filterlim_at_top_dense"}]})])
+    print_header("After Obvious [filterlim_at_top_dense] (expected: FAILED)", file)
+    root.print(0, file)
+    s = set(); root.unfinished_nodes(s)
+    file.write(f"unfinished: {len(s)}\n")
 
 @model_test("Simplify_stuck", "Test_Simplify_stuck.thy", 13)
 async def _test_Simplify_stuck(root: Root, file: MyIO):

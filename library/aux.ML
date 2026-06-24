@@ -811,7 +811,11 @@ fun inst_universal_quantifiers ctxt (insts, tinsts) thm =
           else error ("Variable " ^ Term.string_of_vname idx ^ " is not found in the rule"))
           insts
         val ct_insts = map (fn (idx, t) => (idx, Thm.cterm_of ctxt t)) insts
-      in Drule.infer_instantiate ctxt ct_insts thm
+        (* show_sorts so the type-mismatch message infer_instantiate_types
+           builds (Pure/drule.ML) annotates type variables with their sorts;
+           matches the convention in Unify_Diagnostic.format_diag_body. *)
+        val ctxt_sorts = Config.put show_sorts true ctxt
+      in Drule.infer_instantiate ctxt_sorts ct_insts thm
          handle THM (msg, _, _) =>
            let val cleaned =
                  perhaps (try (unprefix "infer_instantiate_types: ")) msg

@@ -232,7 +232,9 @@ A worker communicates back through events rather than dying:
 - `WorkerRefute` — "this goal looks unprovable"; the worker *blocks* on a review future while the
   planner decides, preserving its context.
 - `WorkerRequestLemmas` — "I need a background lemma" (via the worker-side `request_lemmas` tool);
-  the worker *blocks* while the planner authors + proves helper lemmas, then resumes (non-terminal).
+  the worker *blocks* while the planner authors + proves helper lemmas, then resumes — *conditionally
+  terminal*: if the new lemmas/constraints discharge the worker's whole target scope, the `request`
+  response announces completion and the worker terminates (the interrupt handshake, like `edit`).
 - `WorkerDifficulty` — emitted by the system struggle checkpoint when it detects a stuck worker;
   the worker *blocks* (PARK) while the dispatcher decides to continue or abandon (non-terminal).
   Shares the same `_pending_resume` slot + `resolve_resume` path as `WorkerRequestLemmas`.

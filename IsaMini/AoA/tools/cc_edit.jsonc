@@ -346,7 +346,7 @@
           "default": "default"
         },
         "variables": {
-          "description": "for each variable in the context, indicate whether it is fixed or generalized (universally quantified) across the induction",
+          "description": "for EVERY variable in the context, indicate whether it is fixed or generalized (universally quantified) across the induction",
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -598,7 +598,7 @@
     },
     "Derive": {
       "additionalProperties": false,
-      "description": "instantiate universal quantifiers in a rule and discharge its premises, deriving a new fact in one forward-reasoning step. It does not close or reduce the proof goal.",
+      "description": "instantiate universal quantifiers in a rule and discharge its premises, deriving a new fact in one forward-reasoning step. It merely introduces the new fact but does not close or reduce the proof goal.",
       "properties": {
         "operation": {
           "const": "Derive",
