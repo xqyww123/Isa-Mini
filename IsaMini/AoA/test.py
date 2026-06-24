@@ -317,6 +317,76 @@ async def _test_amend_subgoal_rejected(root: Root, file: MyIO):
     file.write(f"legit amend committed: {[n.id for n in out4.committed]}\n")
     file.write(f"legit amend failure: {type(out4.failure).__name__ if out4.failure is not None else None}\n")
 
+@model_test("StructuralTargetRejected", "Test_StructuralTargetRejected.thy", 8)
+async def _test_structural_target_rejected(root: Root, file: MyIO):
+    """Gate: insert_before/amend targeting a STRUCTURAL container that is not a
+    subgoal — the GlobalEnv "global" declarations block (or Root) — must be
+    rejected cleanly with CannotEdit_StructuralTarget, WITHOUT replacing the block
+    or minting a garbage id, while a legit fill/amend of a STEP inside the block
+    (target "global.N", parent = GlobalEnv) must still succeed. (The GoalNode arm
+    of the same node-type gate is covered by InsertBeforeSubgoalRejected /
+    AmendSubgoalRejected; top-level goalN needs num_goals>1, not producible by any
+    known fixture, so it is not tested here.)"""
+    file.write(f"root children: {[c.id for c in root.sub_nodes]}\n")
+    file.write(f"global is GlobalEnv: {isinstance(root.global_env, model.GlobalEnv)}\n")
+
+    def _all_ids() -> 'list[str]':
+        ids: list[str] = []
+        def _collect(n: 'Node') -> None:
+            ids.append(n.id)
+            for c in getattr(n, "sub_nodes", []):
+                _collect(c)
+        _collect(root)
+        return ids
+
+    # (1) REJECT amend("global") -> CannotEdit_StructuralTarget; block not replaced.
+    root.session.age += 1
+    out = await root.amend("global", [Have.gen_single({
+        "thought": "bad",
+        "statement": {"english": "trivial", "conclusion": r"(0::int) \<le> (0::int)"},
+        "name": "bad"})])
+    file.write("=== amend(global) reject ===\n")
+    file.write(f"reject committed: {[n.id for n in out.committed]}\n")
+    file.write(f"reject failure: {type(out.failure).__name__ if out.failure is not None else None}\n")
+    if out.failure is not None:
+        file.write(f"reject reason: {out.failure._reason(lambda s: s, lambda s: s)}\n")
+    file.write(f"global unchanged (same object): {root.locate_node('global') is root.global_env}\n")
+
+    # (2) REJECT insert_before("global") -> same gate; no garbage id minted.
+    root.session.age += 1
+    out2 = await root.insert_before("global", [Have.gen_single({
+        "thought": "bad2",
+        "statement": {"english": "trivial", "conclusion": r"(0::int) \<le> (0::int)"},
+        "name": "bad2"})])
+    file.write("=== insert_before(global) reject ===\n")
+    file.write(f"reject2 committed: {[n.id for n in out2.committed]}\n")
+    file.write(f"reject2 failure: {type(out2.failure).__name__ if out2.failure is not None else None}\n")
+    if out2.failure is not None:
+        file.write(f"reject2 reason: {out2.failure._reason(lambda s: s, lambda s: s)}\n")
+    file.write(f"global unchanged (same object): {root.locate_node('global') is root.global_env}\n")
+    file.write(f"root children after rejects: {[c.id for c in root.sub_nodes]}\n")
+    file.write(f"global children after rejects: {[c.id for c in root.global_env.sub_nodes]}\n")
+    file.write(f"any garbage id (8891/-1): {any(('8891' in i) or ('-1' in i) for i in _all_ids())}\n")
+
+    # (3) LEGIT: fill a declaration INTO the global env, then amend THAT step. Its
+    #     parent is the GlobalEnv (a StdBlock), not a structural target -> spared.
+    root.session.age += 1
+    out3 = await root.fill("global.1", [Have.gen_single({
+        "thought": "ok",
+        "statement": {"english": "trivial global lemma", "conclusion": r"(0::int) \<le> (0::int)"},
+        "name": "okglob"})])
+    file.write("=== legit fill + amend into global body ===\n")
+    step = root.locate_node("global.1")
+    file.write(f"parent of global.1 is GlobalEnv: {isinstance(step.parent, model.GlobalEnv)}\n")
+    file.write(f"legit fill committed: {[n.id for n in out3.committed]}\n")
+    root.session.age += 1
+    out4 = await root.amend("global.1", [Have.gen_single({
+        "thought": "ok2",
+        "statement": {"english": "trivial global lemma v2", "conclusion": r"(0::int) \<le> (0::int)"},
+        "name": "okglob2"})])
+    file.write(f"legit amend committed: {[n.id for n in out4.committed]}\n")
+    file.write(f"legit amend failure: {type(out4.failure).__name__ if out4.failure is not None else None}\n")
+
 @model_test("DoneGoalHidesPremises", "Test_DoneGoalHidesPremises.thy", 8)
 async def _test_done_goal_hides_premises(root: Root, file: MyIO):
     """Bug: quickview shows premises for goals marked 'done'.
@@ -3875,6 +3945,48 @@ async def _test_semantic_knn_patterns(root: Root, file: MyIO):
         file.write(f"  Warning: {w}\n")
     assert len(warnings_misspell) > 0, "Expected warning about undeclared free variable"
     assert "misspeled_ln" in warnings_misspell[0], "Warning should mention the misspelled name"
+
+
+@model_test("SemanticKNN_collection_gate", "Test_CollectionGate.thy", 8)
+async def _test_semantic_knn_collection_gate(root: Root, file: MyIO):
+    """Regression for the theorem-collection pattern gate (Isabelle_RPC
+    context.ML `any_member_matches`): a named_theorems BUNDLE is surfaced under a
+    patterned query when >= 1 of its members match — NOT the old `>= half` rule.
+
+    `continuous_intros` has 313 members; only the 2 power lemmas match
+    `continuous_on ?s (%x. ?f x ^ ?n)` (far under half). Under the old gate the
+    bundle was dropped; under `>= 1` it surfaces, ranked BELOW the specific
+    `continuous_on_power` lemma, so it never crowds out the precise match.
+    Scores are intentionally NOT written to the golden (DB-embedding-dependent)."""
+    from Isabelle_RPC_Host.universal_key import EntityKind
+    ml = root.ml_state
+
+    results, warnings = await ml.semantic_knn(
+        "continuous function raised to a power", 15,
+        [EntityKind.THEOREM, EntityKind.THEOREM_COLLECTION],
+        term_patterns=["continuous_on ?s (%x. ?f x ^ ?n)"])
+    names = [r.entity.short_name.unicode for r in results]
+    kinds = {r.entity.short_name.unicode: r.entity.kind.label for r in results}
+
+    bundle = "continuous_intros"
+    lemma = "continuous_on_power"
+    in_order = (bundle in names and lemma in names
+                and names.index(lemma) < names.index(bundle))
+    file.write("Collection pattern gate (>= 1 member match) regression:\n")
+    file.write("  query: term_patterns=['continuous_on ?s (%x. ?f x ^ ?n)'], "
+               "kinds=[lemma, named theorem bundles]\n")
+    file.write(f"  bundle '{bundle}' (313 members, 2 match) surfaced: {bundle in names}\n")
+    file.write(f"  bundle kind label: {kinds.get(bundle)}\n")
+    file.write(f"  specific lemma '{lemma}' surfaced: {lemma in names}\n")
+    file.write(f"  bundle ranked after the specific lemma: {in_order}\n")
+
+    assert bundle in names, (
+        f"REGRESSION: bundle '{bundle}' gated out of a patterned query — the "
+        f">= 1 member-match gate is broken (got {names})")
+    assert kinds.get(bundle) == "named theorem bundles", \
+        f"'{bundle}' should be a THEOREM_COLLECTION, got {kinds.get(bundle)!r}"
+    assert lemma in names, f"expected the specific lemma '{lemma}' too, got {names}"
+    assert in_order, "the specific lemma should rank above the bundle (no crowding)"
 
 
 @model_test("SemanticKNN_theories_include",

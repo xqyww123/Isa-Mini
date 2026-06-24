@@ -899,6 +899,15 @@ class CannotEdit_SubgoalSibling(CannotEdit):
             return "You can only amend a proof step but not a subgoal."
         return "Cannot insert before a subgoal."
 
+class CannotEdit_StructuralTarget(CannotEdit):
+    """`insert_before` or `amend` targeted a STRUCTURAL container that is not a
+    subgoal — the global declarations block (GlobalEnv, id "global") or the proof
+    Root. These are created internally and hold steps; a user op must edit a STEP
+    inside them (e.g. `global.N`), never the container itself."""
+    def _reason(self, display_id: 'Callable[[str], str]',
+                relativize_text: 'Callable[[str], str]') -> str:
+        return "You can only edit a proof step, not a structural container."
+
 
 class InternalError(OprError):
     pass
@@ -4308,15 +4317,21 @@ class Node(ABC):
             outcome.failure = CannotEdit_NodeNotFound(
                 target_step=step, operation=op, unapplied_oprs=list(gns), is_error=True)
             return outcome
-        # A SubgoalMaker's children are STRUCTURAL goals (the exhaustiveness
-        # obligation + case GoalNodes), created internally — not editable steps.
-        # Inserting a user op before one is meaningless and used to mint a corrupt
-        # id (the front-insert arithmetic underflows on the obligation's [0]
-        # local_step, e.g. `1.0` -> `1.-1A`). Reject cleanly via the no-raise
-        # outcome.failure channel. Both the insert path (here) and the amend path
-        # (`Node.amend`) are gated against a SubgoalMaker's structural children.
-        if isinstance(node.parent, SubgoalMaker):
+        # Root / GlobalEnv / GoalNode are STRUCTURAL containers, not editable steps
+        # (mirrors the guard in `Root.comment`). Editing one — a case/obligation or
+        # top-level goal (GoalNode), or the global declarations block (GlobalEnv) —
+        # is meaningless and corrupts the tree (a front-insert mints a garbage id;
+        # an amend replaces the structural node). Reject cleanly via the no-raise
+        # outcome.failure channel; legit edits target a STEP inside a container
+        # (parent = GoalNode/GlobalEnv), never the container itself. Both insert
+        # (here) and amend (`Node.amend`) gate on the located node's TYPE.
+        if isinstance(node, GoalNode):
             outcome.failure = CannotEdit_SubgoalSibling(
+                target_step=step, operation=op,
+                unapplied_oprs=list(gns), is_error=True)
+            return outcome
+        if isinstance(node, (GlobalEnv, Root)):
+            outcome.failure = CannotEdit_StructuralTarget(
                 target_step=step, operation=op,
                 unapplied_oprs=list(gns), is_error=True)
             return outcome
@@ -4817,16 +4832,21 @@ class Node(ABC):
                 target_step=id, operation=op,
                 unapplied_oprs=list(gns), is_error=True)
             return outcome
-        # A SubgoalMaker's direct children are STRUCTURAL goals (the exhaustiveness
-        # obligation + case GoalNodes), created internally — not editable steps.
-        # Amending one would silently replace the GoalNode with an arbitrary op-node
-        # (single op, model.py `_amend_child`) or destructively delete it then
-        # re-insert among the structural children (multi op) — both corrupt the
-        # tree. Reject cleanly via outcome.failure; NEVER raise here (a CannotEdit
-        # raised through `_amend_child` would escape `amend_me`'s catch tuple and
-        # `sys.exit(1)` the host). Parallel to the gate in `Node.insert_before`.
-        if isinstance(old_node.parent, SubgoalMaker):
+        # Root / GlobalEnv / GoalNode are STRUCTURAL containers, not editable steps
+        # (mirrors `Root.comment` and `Node.insert_before`). Amending one would
+        # silently replace the structural node with an arbitrary op-node (single op,
+        # `_amend_child`) or destructively delete it then re-insert (multi op) —
+        # both corrupt the tree. Reject cleanly via outcome.failure; NEVER raise
+        # here (a CannotEdit raised through `_amend_child` would escape `amend_me`'s
+        # catch tuple and `sys.exit(1)` the host). Gate on the located node's TYPE;
+        # legit edits target a STEP inside a container, never the container itself.
+        if isinstance(old_node, GoalNode):
             outcome.failure = CannotEdit_SubgoalSibling(
+                target_step=id, operation=op,
+                unapplied_oprs=list(gns), is_error=True)
+            return outcome
+        if isinstance(old_node, (GlobalEnv, Root)):
+            outcome.failure = CannotEdit_StructuralTarget(
                 target_step=id, operation=op,
                 unapplied_oprs=list(gns), is_error=True)
             return outcome

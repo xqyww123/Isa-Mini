@@ -1,0 +1,20 @@
+root children: ['global', '']
+global is GlobalEnv: True
+=== amend(global) reject ===
+reject committed: []
+reject failure: CannotEdit_StructuralTarget
+reject reason: You can only edit a proof step, not a structural container.
+global unchanged (same object): True
+=== insert_before(global) reject ===
+reject2 committed: []
+reject2 failure: CannotEdit_StructuralTarget
+reject2 reason: You can only edit a proof step, not a structural container.
+global unchanged (same object): True
+root children after rejects: ['global', '']
+global children after rejects: []
+any garbage id (8891/-1): False
+=== legit fill + amend into global body ===
+parent of global.1 is GlobalEnv: True
+legit fill committed: ['global.1']
+legit amend committed: ['global.1']
+legit amend failure: None

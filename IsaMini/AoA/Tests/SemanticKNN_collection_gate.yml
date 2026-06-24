@@ -1,0 +1,6 @@
+Collection pattern gate (>= 1 member match) regression:
+  query: term_patterns=['continuous_on ?s (%x. ?f x ^ ?n)'], kinds=[lemma, named theorem bundles]
+  bundle 'continuous_intros' (313 members, 2 match) surfaced: True
+  bundle kind label: named theorem bundles
+  specific lemma 'continuous_on_power' surfaced: True
+  bundle ranked after the specific lemma: True

@@ -118,7 +118,7 @@ async def _test_Have1(root: Root, file: MyIO):
 - `session.age += 1` between edits: rendering is age-aware (diffs against the previous render to decide what detail to reprint), mirroring the live agent's per-tool-call generations. Omit it only when deliberately exercising the no-bump render path.
 
 ### Run & interpret
-- `python ../../test_AoA.py -f NAME` (`-x EXCL`, `--sh-timeout N`, `--repl-addr`). `-f`/`-x` are **substring** matches on the test name (`-f` accepts `,` or `|` as OR separators; `-x` is comma-separated). **Always redirect** (`> /tmp/aoa.txt 2>&1`) — output is huge — and run one at a time, foreground only.
+- `python ../../test_AoA.py -f NAME` (`-x EXCL`, `--sh-timeout N`, `--repl-addr`). `-f`/`-x` are **substring** matches on the test name (`-f` accepts `,` or `|` as OR separators; `-x` is comma-separated). **Always redirect** (`> /tmp/aoa.txt 2>&1`) — output is huge — and run one at a time.
 - **The REPL can auto-load a small unbuilt library such as `Minilang_Agent` on the fly — don't fuss over whether a `Minilang_Agent` heap has been built.**
 - Status classification in `run_all_tests`: `success` / `stuck` / `false_statement` / `resource_exhausted` → **pass**; anything else → **fail**.
 - **`remote_error` ALWAYS means a golden-YAML diff mismatch** — a `TestFailed` from `ModelTestCase.run` surfacing across the RPC bridge as `Remote_Calling_Failure`, NOT an RPC fault. The real diff is on disk: `Tests/<name>.diff` and `<name>.actual.yml` (both auto-cleaned at the start of the next run of that case).
@@ -127,7 +127,7 @@ async def _test_Have1(root: Root, file: MyIO):
 - **NEVER modify, regenerate, overwrite, or delete a golden YAML (`Tests/*.yml`) without explicit user approval — no exceptions.** This holds even when you are certain the new output is correct: the test passing again is not authorization. Surface the `.diff`, explain why the golden should change, and wait for the user to approve before touching any `Tests/*.yml`.
 - **NEVER share a `.thy` file** between two `@model_test`s — each needs its own.
 - `../../test_AoA.py` output is **huge** → always redirect to a file (`> /tmp/aoa_test.txt 2>&1`).
-- **Never run `../../test_AoA.py` in parallel or in the background** — one at a time, foreground only.
+- **Never run `../../test_AoA.py` in parallel** — one at a time (shared REPL on 6666). Background (a single detached run) is fine; two concurrent runs against the same REPL corrupt each other.
 - **Shared working dir:** never `git stash` / `checkout` / `reset --hard` / `add` — other agents run concurrently.
 - **Never send raw data to the REPL on 6666** — to check liveness use `ss -tlnp | grep 6666` or `lsof`.
 - **User-facing text** (prompts/warnings/errors): never author wording autonomously — propose scaffolding and let the user pick (memory).
