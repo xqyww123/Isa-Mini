@@ -341,7 +341,7 @@ fun xOF prove_discharge ctxt opt_thms st =
                 \other discharge arguments (or a non-unique unifier)"
         in
           error (trim_line
-                ("OF: cannot discharge premise " ^ string_of_int i ^
+                ("cannot discharge premise " ^ string_of_int i ^
                  " of " ^ st_desc ^ " with discharge argument " ^
                  string_of_int i ^ " (" ^ thm_desc "<unnamed>" fact ^ ")\n" ^
                  "the premise is:\n  " ^ Syntax.string_of_term ctxt prem ^ "\n" ^
