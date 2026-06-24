@@ -5000,20 +5000,18 @@ class NonLeaf_Node(Node):
         raise InternalError("The target node is not my children")
     async def _refresh_footer(self) -> FailureReason | None:
         return None
-    def _can_host_first_child(self) -> bool:
-        """Whether this block's own proof state is established enough that a
-        *first* child appended/inserted into it should be refreshed (executed)
-        rather than cancelled. Default True. `StdBlock` overrides: a block torn
-        down by a cancellation cascade (or whose beginning op never succeeded)
-        has an uninitialized post-beginning state, so its first child must be
-        cancelled, not executed — executing it would run a Minilang op from a
-        non-existent ML state (`beginning_state_not_found` -> InternalError)."""
-        return True
     def _can_continue_before_child(self, child: 'Node') -> bool:
         for i, c in enumerate(self.sub_nodes):
             if c is child:
                 if i == 0:
-                    return self._can_host_first_child()
+                    # The firstborn's "predecessor" is the parent block itself:
+                    # it can be executed iff the block's own beginning op
+                    # succeeded (status can continue). A cancelled/failed block
+                    # has no post-beginning state to chain from, so its first
+                    # child must be cancelled, not executed — else it would run a
+                    # Minilang op from a non-existent ML state
+                    # (`beginning_state_not_found` -> InternalError).
+                    return _status_can_continue(self.status.status)
                 return _status_can_continue(self.sub_nodes[i-1].status.status)
         raise InternalError("The target node is not my children")
     def _failed_predecessor_id(self, child: 'Node') -> str | None:
@@ -5418,13 +5416,6 @@ class StdBlock(NonLeaf_Node):
             return self.sub_nodes[0].ml_state
         else:
             return self._state_before_ending_
-    def _can_host_first_child(self) -> bool:
-        # The first appended/inserted child seeds from `_state_before_ending_`
-        # (see `StdBlock.append`'s `self._state_before_ending_.clone(None)`); if
-        # a cancellation cascade reset it (or the beginning op never succeeded)
-        # the block cannot host a first child that would be executed — it must be
-        # cancelled instead, exactly as a child after a failed sibling is.
-        return self._state_before_ending_.initialized()
     def _hint_notice_state(self) -> 'Minilang_State | None':
         # A block's authored term (e.g. a Have/Suffices conclusion) is parsed by
         # its beginning op, so any hint notice lands in the after-beginning state.

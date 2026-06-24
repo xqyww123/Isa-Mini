@@ -13309,6 +13309,62 @@ async def _test_WitnessFailSufficesCancelledFill(root: Root, file: MyIO):
     root.print(0, file)
 
 
+@model_test("AmendFirstChildAfterCancelledTail",
+            "Test_AmendFirstChildAfterCancelledTail.thy", 11)
+async def _test_AmendFirstChildAfterCancelledTail(root: Root, file: MyIO):
+    """Regression: amending the FIRST child of a healthy block whose LAST child
+    was cancelled must REFRESH the amended child, not cancel it.
+
+    A cancelled tail child resets the block's `_state_before_ending_` (the
+    post-last-child state). The first-child guard `_can_host_first_child` must
+    therefore consult `_state_after_beginning()` (the state the first child
+    chains from), NOT `_state_before_ending_` -- otherwise a cancelled tail
+    spuriously makes the firstborn un-hostable and the amend silently cancels
+    a step that should execute (observed in the field: a worker amending
+    1.2.1 got "the evaluation is cancelled due to failures in preceding nodes").
+
+    Setup: Have poses subgoal P; its body is [Witness (fails -- P is not
+    existential), Obvious (cancelled -> resets the Have's
+    _state_before_ending_)]. Amending step 1.1 with `Obvious [hP]` must execute
+    and prove P, leaving 1.1 SUCCESS.
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("1", [Have.gen_single({
+        "thought": "pose P as a helper",
+        "statement": {"english": "P holds", "conclusion": "P"},
+        "name": "hh"
+    })])
+
+    root.session.age += 1
+    await root.fill("1.1", [
+        Witness.gen_single({"thought": "bogus witness (P is not existential)",
+                            "witnesses": ["0"]}),
+        Obvious.gen_single({"facts": []}),
+    ])
+    have = root.locate_node("1")
+    file.write(f"Have status: {have.status.status.value}\n")
+    file.write("Have _state_after_beginning initialized: "
+               f"{have._state_after_beginning().initialized()}\n")
+    file.write("Have _state_before_ending_ initialized: "
+               f"{have._state_before_ending_.initialized()}\n")
+    for c in have.sub_nodes:
+        file.write(f"  {c.id}: {type(c).__name__} status={c.status.status.value}\n")
+    print_header("After Have + [Witness(fail), Obvious(cancelled)]", file)
+    root.print(0, file)
+
+    # Amend the FIRST child (1.1) with a real proof of P.
+    root.session.age += 1
+    outcome = await root.amend("1.1", [Obvious.gen_single({"facts": [{"name": "hP"}]})])
+    file.write(f"amend 1.1 failure: {outcome.failure}\n")
+    amended = root.locate_node("1.1")
+    file.write(f"1.1 after amend: status={amended.status.status.value}\n")
+    print_header("After amend 1.1 -> Obvious [hP] (must execute, not cancel)", file)
+    root.print(0, file)
+
+
 @model_test("GlobalEnv_LeafOps", "Test_GlobalEnv_LeafOps.thy", 11)
 async def _test_GlobalEnv_LeafOps(root: Root, file: MyIO):
     """Verify that non-declarative operations (Obvious, Rewrite, InferenceRule)
