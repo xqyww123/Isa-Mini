@@ -2054,7 +2054,9 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "use description and filters for discovery. "
                 "If you fail to find a key lemma, increase `number`, retry with only `description`, "
                 "and drop all other constraints like `term_patterns`, `exact_name`, and `name_contains`. "
-                "Conversely, if a query returns too many irrelevant results, add the constraints to narrow down.",
+                "Conversely, if a query returns too many irrelevant results, add the constraints to narrow down. "
+                "Some trivial facts (e.g. `prime 7`) may not be found by `query` — declare them "
+                "with `Have` and prove them with `Obvious`.",
                "schema": _cc_query_schema, "annotations": _RO},
     "recall": {"description": "Recall proof state from `proof.yaml`. Use only when you have lost track.", "schema": _cc_read_schema, "annotations": _RO},
     "recall_removed": {"description": "Browse proof steps that were archived before deletion.", "schema": _cc_recall_removed_schema, "annotations": _RO},
