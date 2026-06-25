@@ -28,7 +28,7 @@ from io import StringIO
 import Isabelle_Semantic_Embedding
 
 _COMPACT_HEADROOM = 13_000
-_DEFAULT_MODEL = "claude-opus-4-6[1m]"
+_DEFAULT_MODEL = "claude-opus-4-8[1m]"
 
 def _derive_cheaper_model(model: str) -> str:
     m = re.match(r'(claude-)(opus)(-[\d\w.-]+)((?:\[.*\])?)', model)
