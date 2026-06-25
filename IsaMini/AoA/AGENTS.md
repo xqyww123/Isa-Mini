@@ -139,7 +139,7 @@ async def _test_Have1(root: Root, file: MyIO):
 3. Agent-facing text uses `IsaTerm.unicode` / `MiniLang_Agent.string_of_*`; RPC uses `.ascii`. Never `str()` an `IsaTerm`.
 4. New rendering/behavior changes golden YAMLs → run the affected test, review the `.diff`, and **get explicit user approval before updating any golden** (never update them on your own — see Hard rules).
 5. Forks/workers must launch in a fresh contextvars context (`_make_fork` raises if `_session_var` is set).
-6. Logs land in `<AoA_log_dir>/<invocation_id>/`: `interaction.yaml`, `proofs.yaml`, `proof_oprs.yaml`, `meta.jsonl.zst`, `proof.json`.
+6. Logs land in `<AoA_log_dir>/<leaf>/`: `interaction.yaml`, `proofs.yaml`, `proof_oprs.yaml`, `meta.jsonl.zst`, `proof.json`. The `<leaf>` name is whatever invocation-id the caller passes; the minilang evaluators now pass the sanitized benchmark case name (so logs land in `<log_dir>/<case-name>/`).
 
 ## Key files
 - `model.py` — proof tree, nodes, `Session`/`Role`, `Minilang_State`, rendering (the bulk).
