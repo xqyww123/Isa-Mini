@@ -163,6 +163,9 @@ class ClaudeCode(LMDriver):
         self._client: ClaudeSDKClient | None = None
         self._mcp_url: str | None = None
         self._proof_complete: asyncio.Event | None = None
+        # Detached interrupt tasks (see `interrupt`). Held so they aren't
+        # garbage-collected mid-flight; auto-discarded on completion.
+        self._interrupt_tasks: set[asyncio.Task] = set()
         if parent is None:
             self._on_yaml_refresh: Callable[[str], Any] | None = None
             self._on_operation_status: Callable[[dict], Any] | None = None
@@ -252,7 +255,29 @@ class ClaudeCode(LMDriver):
                 self._on_operation_status({"type": "proof_complete", "success": True})
             self._proof_complete.set()
         if self._client is not None:
-            await self._client.interrupt()
+            # Fire-and-forget. The proof loop's exit is driven by the end-of-turn
+            # gate, NOT by this interrupt: once `receive_response()` returns, the
+            # loop breaks on a terminal `quit_info`, OR an emptied
+            # `proof_scope_unfinished_nodes()` (the completion paths, which do NOT
+            # set `quit_info`), OR (in a fork) the resolved `answer` future. The
+            # interrupt only nudges the in-flight `receive_response()` to end early.
+            # We must NOT await the interrupt control request inline here, because
+            # `interrupt()` is reached from inside an MCP tool handler while the
+            # CLI is still awaiting that very tool call's HTTP result — awaiting
+            # the ack would block the handler until the CLI replies, and the two
+            # can deadlock until the SDK's 60s control-request timeout fires and
+            # escapes as an unhandled "Exception in ASGI application". Detach it
+            # and swallow timeouts / connection errors (e.g. the client already
+            # closed): correctness is guaranteed by the end-of-turn gate, not the ack.
+            task = asyncio.create_task(self._safe_interrupt(self._client))
+            self._interrupt_tasks.add(task)
+            task.add_done_callback(self._interrupt_tasks.discard)
+
+    async def _safe_interrupt(self, client: 'ClaudeSDKClient'):
+        try:
+            await client.interrupt()
+        except Exception as e:
+            self.debug_info(f"[INTERRUPT] control request failed (ignored): {e}")
 
     async def _run_agent_loop(self):
         if self._interactive_web_terminal:
@@ -263,6 +288,17 @@ class ClaudeCode(LMDriver):
     async def close(self):
         """Clean up the session and remove the temporary directory."""
         await super().close()
+        # Cancel any still-pending detached interrupt (see `interrupt`) so it
+        # cannot outlive the session and fire against a torn-down client. Await
+        # the cancellations (suppressing their CancelledError via
+        # return_exceptions) so the tasks are finalized rather than GC'd while
+        # pending ("Task was destroyed but it is pending"). cancel() unwinds the
+        # SDK's 60s ack wait promptly, so this does not block.
+        for task in list(self._interrupt_tasks):
+            task.cancel()
+        if self._interrupt_tasks:
+            await asyncio.gather(*self._interrupt_tasks, return_exceptions=True)
+        self._interrupt_tasks.clear()
         # Unregister from HTTP server if registered
         if self._http_server is not None and self._session_id is not None:
             await self._http_server.unregister_session(self._session_id)
