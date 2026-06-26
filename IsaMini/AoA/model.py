@@ -11604,7 +11604,7 @@ class Session:
         # agent AND workers, which may delegate nested sub-goals), not interaction forks.
         if self.is_major or self.is_worker:
             parts.append(
-                f"- {self.tool_name(TOOL_SUBAGENT)}: Launch a sub-agent to prove a subgoal whose proof would derail your main line of reasoning.\n"
+                f"- {self.tool_name(TOOL_SUBAGENT)}: Launch a sub-agent to prove a subgoal whose proof would derail your main line of reasoning.{config.subagent_cost_caution()}\n"
                 f"- {self.tool_name(TOOL_CLOSE_SUBAGENT)}: Cancel and remove a sub-agent you dispatched (the sub-agent is terminated; to resume it instead, call `subagent` again).\n"
             )
         return "".join(parts)

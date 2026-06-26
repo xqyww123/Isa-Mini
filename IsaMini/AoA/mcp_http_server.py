@@ -2073,7 +2073,7 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "answer_struggle_assessment": {"description": "Internal tool; you will be explicitly prompted when to use it.", "schema": _cc_answer_struggle_assessment_schema, "annotations": _ACT},
     "answer_missing_lemmas": {"description": "Internal tool; you will be explicitly prompted when to use it.", "schema": _cc_answer_missing_lemmas_schema, "annotations": _ACT},
     "answer_constraint_request": {"description": "Internal tool; you will be explicitly prompted when to use it.", "schema": _cc_answer_constraint_request_schema, "annotations": _ACT},
-    "subagent": {"description": "Launch or resume a sub-agent to prove a goal or repair a proof in isolation. Call this when a goal is tedious and its proof would derail your main line of reasoning. Also call this to resume a suspended sub-agent.", "schema": _cc_subagent_schema, "annotations": _ACT},
+    "subagent": {"description": "Launch or resume a sub-agent to prove a goal or repair a proof in isolation. Call this when a goal is tedious and its proof would derail your main line of reasoning. Also call this to resume a suspended sub-agent." + config.subagent_cost_caution(), "schema": _cc_subagent_schema, "annotations": _ACT},
     "cancel_subagent": {"description": "Permanently cancel and delete a sub-agent you dispatched.", "schema": _cc_close_subagent_schema, "annotations": _ACT},
     "refresh": {"description": "Reset the conversation and start over (the proof tree is kept). "
                 "Write a briefing for your future self in `briefing` — "

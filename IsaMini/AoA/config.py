@@ -9,11 +9,12 @@ import it cheaply, and so a gated string has a SINGLE source of truth: the
 tool advertisement), so the two copies cannot drift.
 """
 
-# When True, the `request`-tool description carries a reminder that requesting a
-# general lemma dispatches a sub-agent to prove it (which burns tokens) and so
-# should be done only when necessary. Set False to drop that reminder; the
-# factual base description — that a dispatched sub-agent is what proves the
-# lemma — is kept either way.
+# When True, two agent-facing reminders are shown: (1) the `request`-tool
+# description carries a reminder that requesting a general lemma dispatches a
+# sub-agent to prove it (which burns tokens) and so should be done only when
+# necessary; (2) both `subagent`-tool descriptions carry a cost caution that
+# dispatching a sub-agent is expensive. Set False to drop both reminders; the
+# factual base descriptions are kept either way.
 REMIND_REQUEST_ONLY_WHEN_NECESSARY = True
 
 # Base (ALWAYS shown): the two things `request` does. States — factually, in
@@ -40,3 +41,19 @@ def request_tool_description() -> str:
     if REMIND_REQUEST_ONLY_WHEN_NECESSARY:
         return _REQUEST_TOOL_BASE + _REQUEST_TOOL_CAUTION
     return _REQUEST_TOOL_BASE
+
+
+# Caution (shown only when REMIND_REQUEST_ONLY_WHEN_NECESSARY): the cost nudge
+# for dispatching a sub-agent. Appended to BOTH `subagent`-tool descriptions —
+# the system-prompt tool list (``model.py``) and the MCP advertisement
+# (``mcp_http_server.py``) — from this single source so the two cannot drift.
+_SUBAGENT_TOOL_CAUTION = (
+    " Dispatching a sub-agent spawns a whole separate proving agent and burns "
+    "a large amount of tokens. Dispatch a sub-agent only when necessary."
+)
+
+
+def subagent_cost_caution() -> str:
+    """The cost caution appended to the `subagent`-tool descriptions when
+    ``REMIND_REQUEST_ONLY_WHEN_NECESSARY`` is on; empty string otherwise."""
+    return _SUBAGENT_TOOL_CAUTION if REMIND_REQUEST_ONLY_WHEN_NECESSARY else ""
