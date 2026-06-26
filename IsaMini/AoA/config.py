@@ -14,7 +14,7 @@ tool advertisement), so the two copies cannot drift.
 # should be done only when necessary. Set False to drop that reminder; the
 # factual base description — that a dispatched sub-agent is what proves the
 # lemma — is kept either way.
-REMIND_REQUEST_ONLY_WHEN_NECESSARY = False
+REMIND_REQUEST_ONLY_WHEN_NECESSARY = True
 
 # Base (ALWAYS shown): the two things `request` does. States — factually, in
 # place of the misleading word "auto-proved" — that a dispatched sub-agent is

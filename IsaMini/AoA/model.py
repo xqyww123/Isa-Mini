@@ -7515,7 +7515,7 @@ def _fetched_to_facts(fetched: 'list[IsabelleFact | Interaction_RetrieveForProof
 # Depth (count of enclosing Have/Obtain/Suffices blocks) at or beyond which a
 # FAILED Obvious is rendered with a hint to delegate the goal via the `subagent`
 # tool. Formerly the deep-Obvious auto-sorry threshold; now used only by the hint.
-_SUBAGENT_HINT_DEPTH = 2
+_SUBAGENT_HINT_DEPTH = 3
 
 # Maximum worker-nesting depth: main -> worker (sub-agent) is layer 1, its worker
 # (sub-sub-agent) is layer 2, and so on. A session already at this depth may not
@@ -10057,6 +10057,11 @@ class Branch(SubgoalMaker):
             raise ArgumentError(arg,
                 f"{path}.cases: expected an array, "
                 f"got {type(cases).__name__}")
+        if len(cases) < 2:
+            raise ArgumentError(arg,
+                f"{path}.cases: a Branch needs at least two jointly-exhaustive "
+                f"cases, got {len(cases)}. For a single assumption use two cases "
+                f"(P and \\<not> P), or `Contradiction` to assume the goal false.")
         parsed_cases: list[proof | None] = []
         for ci, case in enumerate(cases):
             case_path = f"{path}.cases[{ci}]"
