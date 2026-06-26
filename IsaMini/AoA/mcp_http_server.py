@@ -93,7 +93,10 @@ def _load_schema(filename: str) -> dict:
 _cc_edit_schema_raw = _load_schema("cc_edit.jsonc")
 _cc_delete_schema = _load_schema("cc_delete.jsonc")
 _cc_read_schema = _load_schema("cc_recall.jsonc")
-_cc_request_lemmas_schema = _load_schema("cc_request.jsonc")
+_cc_request_lemmas_schema = _load_schema(
+    "cc_request_no_general.jsonc"
+    if config.DISABLE_REQUEST_GENERAL_LEMMAS
+    else "cc_request.jsonc")
 _cc_report_schema = _load_schema("cc_report.jsonc")
 _cc_answer_indexes_schema = _load_schema("cc_answer_indexes.jsonc")
 _cc_answer_index_schema = _load_schema("cc_answer_index.jsonc")
@@ -1421,7 +1424,10 @@ async def _request_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         general_lemmas = args.get("general_lemmas")
         constraints = args.get("constraints")
         if not general_lemmas and not constraints:
-            msg = ("Provide at least one of `general_lemmas` (helper lemmas to be "
+            msg = ("Provide at least one constraint (a condition your sub-goal "
+                   "is missing)."
+                   if config.DISABLE_REQUEST_GENERAL_LEMMAS else
+                   "Provide at least one of `general_lemmas` (helper lemmas to be "
                    "proved by an auto-dispatched sub-agent) or `constraints` "
                    "(conditions your sub-goal is missing).")
             session.log_tool_response(_tn, f"ERROR: {msg}")
@@ -1450,6 +1456,17 @@ async def _request_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
                   "isabelle_statement": l["statement"].get("conclusion", ""),
                   "detail": detail}
                  for l in general_lemmas])
+
+        # Gate: general-lemma requests are disabled for this case. The lemmas were
+        # already mirrored into missing_lemmas.yaml above (the external loop's
+        # signal is kept); here we DROP them from the auto-prove path and nudge the
+        # worker to prove the needed special case directly. Any `constraints` in
+        # the same call are still processed below. Emptying the list makes the
+        # force-general check and the GENERAL auto-prove loop no-op cleanly.
+        gated_general_msg = ""
+        if config.DISABLE_REQUEST_GENERAL_LEMMAS and general_lemmas:
+            gated_general_msg = config.DISABLED_GENERAL_LEMMA_REQUEST_MSG
+            general_lemmas = []
 
         # Where do auto-proved general lemmas go? They MUST land BEFORE the
         # requesting worker's target so the worker can SEE them (a worker's scope is
@@ -1652,6 +1669,8 @@ async def _request_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         # OWN target is NOT a before-target fact, so the notice does not cover it —
         # `constraint_feedback` states it.
         parts = list(outcome_lines)
+        if gated_general_msg:
+            parts.insert(0, gated_general_msg)
         if constraint_feedback:
             parts.append(constraint_feedback)
         if completion:

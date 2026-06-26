@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "properties": {
+    "constraints": {
+      "type": "array",
+      "description": "Conditions you suspect were forgotten to be provided.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "description": { "type": "string", "description": "what the condition is and why your sub-goal needs it" },
+          "proposition": { "type": "string", "description": "Isabelle/HOL term with all literal numbers annotated with types" }
+        },
+        "required": ["description", "proposition"]
+      }
+    },
+    "detail": {
+      "type": "string",
+      "description": "Explanations."
+    }
+  },
+  "additionalProperties": false
+}

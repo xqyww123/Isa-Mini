@@ -7515,7 +7515,7 @@ def _fetched_to_facts(fetched: 'list[IsabelleFact | Interaction_RetrieveForProof
 # Depth (count of enclosing Have/Obtain/Suffices blocks) at or beyond which a
 # FAILED Obvious is rendered with a hint to delegate the goal via the `subagent`
 # tool. Formerly the deep-Obvious auto-sorry threshold; now used only by the hint.
-_SUBAGENT_HINT_DEPTH = 3
+_SUBAGENT_HINT_DEPTH = 5
 
 # Maximum worker-nesting depth: main -> worker (sub-agent) is layer 1, its worker
 # (sub-sub-agent) is layer 2, and so on. A session already at this depth may not
@@ -11472,7 +11472,11 @@ class Session:
             # worker→planner channel, which dispatches a prover sub-agent; the cost
             # caution lives on the `request` tool itself). The planner branch above
             # deliberately does NOT mention `request`: the planner is the RECIPIENT
-            # of requests, not a caller.
+            # of requests, not a caller. When general-lemma requests are disabled,
+            # drop the `request` option and steer to proving the special case inline.
+            if config.DISABLE_REQUEST_GENERAL_LEMMAS:
+                return ("if a needed lemma truly does not exist, prove the specific "
+                        "instance you need inline as a `Have`.\n")
             return ("if a needed lemma truly does not exist, prove it inline as a "
                     "`Have`, or raise a `request`.\n")
         suffix = " under `global`" if under_global else ""

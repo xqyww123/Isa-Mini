@@ -15,7 +15,7 @@ tool advertisement), so the two copies cannot drift.
 # necessary; (2) both `subagent`-tool descriptions carry a cost caution that
 # dispatching a sub-agent is expensive. Set False to drop both reminders; the
 # factual base descriptions are kept either way.
-REMIND_REQUEST_ONLY_WHEN_NECESSARY = True
+REMIND_REQUEST_ONLY_WHEN_NECESSARY = False
 
 # Base (ALWAYS shown): the two things `request` does. States — factually, in
 # place of the misleading word "auto-proved" — that a dispatched sub-agent is
@@ -34,10 +34,37 @@ _REQUEST_TOOL_CAUTION = (
     "more efficient."
 )
 
+# When True (the current default), a worker may no longer request GENERAL lemmas
+# via `request` (the path that auto-dispatches a headless prover sub-agent — the
+# token burn). Such a request is rejected with a nudge to prove the needed
+# special case directly; any `constraints` in the same call are still processed;
+# the `request` tool description and JSON schema drop the general-lemma part; and
+# the worker system-prompt guidance drops the "raise a request" option. The
+# requested lemmas are STILL mirrored into missing_lemmas.yaml (the external
+# import-expansion loop's signal is kept). Set back to False to restore the old
+# behavior byte-identical. Deployment-static: the MCP tool advertisement and
+# schema resolve once at import, so set this before the process starts.
+DISABLE_REQUEST_GENERAL_LEMMAS = True
+
+# Shown (in place of the base) when DISABLE_REQUEST_GENERAL_LEMMAS is on: only the
+# constraint half of `request` remains, so the description advertises just that.
+_REQUEST_TOOL_BASE_NO_GENERAL = "Report constraints your sub-goal is missing."
+
+# Rejection shown to a worker that requested general lemmas while the gate is on
+# (the general lemmas are dropped; constraints, if any, are still processed).
+DISABLED_GENERAL_LEMMA_REQUEST_MSG = (
+    "Requesting general lemmas is disabled for this case. Instead of a general "
+    "lemma, prove the specific instance your sub-goal needs directly (e.g. "
+    "inline as a `Have`).")
+
 
 def request_tool_description() -> str:
-    """The `request`-tool description shown to the agent: the factual base, plus
-    the cost caution when ``REMIND_REQUEST_ONLY_WHEN_NECESSARY`` is on."""
+    """The `request`-tool description shown to the agent. When general-lemma
+    requests are disabled, only the constraint half remains; otherwise the
+    factual base, plus the cost caution when ``REMIND_REQUEST_ONLY_WHEN_NECESSARY``
+    is on."""
+    if DISABLE_REQUEST_GENERAL_LEMMAS:
+        return _REQUEST_TOOL_BASE_NO_GENERAL
     if REMIND_REQUEST_ONLY_WHEN_NECESSARY:
         return _REQUEST_TOOL_BASE + _REQUEST_TOOL_CAUTION
     return _REQUEST_TOOL_BASE
