@@ -4159,7 +4159,20 @@ class Node(ABC):
             return
         self._cancelled_by = cancelled_by
         self.status = EVALUATION_CACNCELLED
-        await self.resulting_state().reset()
+        # TODO(revert): temporarily NOT resetting the resulting state on cancel.
+        # Bug: `request`/request_lemmas auto-proves a general lemma into the
+        # GlobalEnv; `Root._refresh_all_children_after` then re-evaluates EVERY
+        # top-level goal, including the subtree where the requesting worker is
+        # PARKED mid-proof. That re-eval cancels nodes in the parked subtree, and
+        # this `reset()` removes (server-side) the `Minilang_State` the worker
+        # still holds as `target.ml_state`. On resume, `_prefetch_worker_premises`
+        # queries that dead state -> ML `beginning_state_not_found` -> uncaught
+        # IsabelleError -> `call_tool` does `sys.exit(1)`, killing the host.
+        # Skipping the reset keeps the (possibly stale/wrong) state alive so the
+        # worker survives instead of the whole process dying. Restore this once
+        # the cascade no longer touches parked subtrees (and/or prefetch guards
+        # on `initialized()`).
+        # await self.resulting_state().reset()
     def _on_edit_failure(
         self, outcome: 'EditOutcome'
     ) -> 'tuple[EditFailureBehavior, EditOutcome]':
@@ -5447,7 +5460,13 @@ class StdBlock(NonLeaf_Node):
                                   EvaluationStatus.Status.COMMENTED):
             return
         await super()._cancel(cancelled_by)
-        await self._state_before_ending_.reset()
+        # TODO(revert): temporarily NOT resetting `_state_before_ending_` on
+        # cancel, for the same reason as `Node._cancel` above (a request_lemmas
+        # global-env cascade re-evaluates a parked worker's subtree; resetting
+        # here removes server states the worker still references, leading to
+        # `beginning_state_not_found` and a host `sys.exit(1)`). Restore together
+        # with the `Node._cancel` reset.
+        # await self._state_before_ending_.reset()
         for child in self.sub_nodes:
             await child._cancel(cancelled_by)
     @abstractmethod
