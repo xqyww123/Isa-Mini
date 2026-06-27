@@ -366,10 +366,21 @@ class ClaudeCode(LMDriver):
             }
 
         # 2. Check proof MCP tool interaction state.
-        # Only forks assigned to answer an interaction may call answer tools.
+        # An answer tool is allowed when THIS session has an interaction awaiting
+        # an answer — either a forking one (interaction fork: `fork_pending`) or a
+        # non-forking inline one raised mid-edit (`_nf_pending_interaction`, e.g.
+        # Interaction_ClassifyInductionVars; answered via the executor's
+        # `_handle_nf_answer`). Keying only on `fork_pending` here deadlocked the
+        # main agent: a non-forking question blocks mutations (mcp_http_server
+        # `_check_tool_permission`) while every answer tool was denied below.
+        # (`fork_open` keeps the original `not answer.done()` semantics — a fork
+        # whose answer future is already resolved must still be denied; do NOT
+        # collapse this to `pending_interaction is not None`, which drops it.)
         is_answer_tool = any(tool == self.tool_name(t) for t in ANSWER_TOOLS)
-        if is_answer_tool and (
-                self.fork_pending is None or self.fork_pending.answer.done()):
+        fork_open = (self.fork_pending is not None
+                     and not self.fork_pending.answer.done())
+        nf_open = self._nf_pending_interaction is not None
+        if is_answer_tool and not (fork_open or nf_open):
             return {
                 "continue_": False,
                 "hookSpecificOutput": {
