@@ -1503,7 +1503,7 @@
           },
           {
             "title": "SplitConjs",
-            "description": "split a conjunctive goal (A ∧ B ∧ ...) into separate subgoals, one per conjunct",
+            "description": "split a conjunctive goal (A ∧ B ∧ ...) into separate subgoals, one per conjunct; can also penetrate leading ∀ and ⟶ (distributing over ∧).",
             "properties": {
               "operation": {
                 "const": "SplitConjs",
