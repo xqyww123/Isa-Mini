@@ -179,6 +179,7 @@ val unpacker =
                     unpackPair (unpackOption unpack_bindings, unpackBool) s
             in (INTRO (bindings, allow_standard_fallback), s') end)
      | "SPLIT_CONJS" => apfst (K SPLIT_CONJS) o unpackUnit
+     | "SPLIT_CONJS2" => apfst (K SPLIT_CONJS2) o unpackUnit
      | "SPECIALIZE" => apfst SPECIALIZE o unpackTuple4 (
                         unpackString,
                         unpack_extended_fact,
@@ -273,6 +274,7 @@ fun packer (SIMPLIFY data) =
       packPair (packString, packPair (packOption pack_bindings, packBool))
                ("INTRO", (bindings, allow_standard_fallback))
   | packer SPLIT_CONJS = packPair (packString, packUnit) ("SPLIT_CONJS", ())
+  | packer SPLIT_CONJS2 = packPair (packString, packUnit) ("SPLIT_CONJS2", ())
   | packer (SPECIALIZE data) =
       packPair (packString, packTuple4 (
           packString,

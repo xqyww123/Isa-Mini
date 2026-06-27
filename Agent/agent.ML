@@ -56,6 +56,7 @@ datatype ('term, 'thm, 'fact) command =
               * (string * int) option (*cached proof: method_string * time_ms; NONE = no cache*)
   | INTRO    of bindings option * bool
   | SPLIT_CONJS
+  | SPLIT_CONJS2
   | SIMPLIFY of (('term, 'fact) extended_fact * term list option) list (*simp facts with optional targets*)
               * bool (*use_system_simps*)
               * string list (*premise_names*) * bool (*simplify_goal*)
@@ -238,6 +239,7 @@ datatype ('term, 'thm, 'fact) command =
               * (string * int) option (*cached proof: method_string * time_ms; NONE = no cache*)
   | INTRO    of bindings option * bool
   | SPLIT_CONJS
+  | SPLIT_CONJS2
   | SIMPLIFY of (('term, 'fact) extended_fact * term list option) list (*simp facts with optional targets*)
               * bool (*use_system_simps*)
               * string list (*premise_names*) * bool (*simplify_goal*)
@@ -728,6 +730,13 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (allow_fallba
 
 fun AUTO_SPLIT_CONJS (s: Minilang.state) : Minilang.state =
   let val s' = Minilang.SPLIT_CONJS s
+      val _ = Minilang.get_reporter ()
+                (Minilang.Goals (Minilang.goals_of'
+                                   (Minilang.leading_proof_sequent_of s')))
+  in s' end
+
+fun AUTO_SPLIT_CONJS2 (s: Minilang.state) : Minilang.state =
+  let val s' = Minilang.SPLIT_CONJS2 s
       val _ = Minilang.get_reporter ()
                 (Minilang.Goals (Minilang.goals_of'
                                    (Minilang.leading_proof_sequent_of s')))
@@ -1593,6 +1602,7 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
     | INTRO (opt_bindings, allow_fallback) =>
         #2 (AUTO_INTRO counters opt_bindings allow_fallback s)
     | SPLIT_CONJS => AUTO_SPLIT_CONJS s
+    | SPLIT_CONJS2 => AUTO_SPLIT_CONJS2 s
     | SPECIALIZE (name, rule_fact, insts, discharge_facts) =>
         let val ctxt = Minilang.context_of s
             val rule_thms = resolve_to_thms ctxt [rule_fact]
@@ -1959,6 +1969,7 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
       in HAMMER (map (check_extended_fact s ctxt) facts, timeout, cached_proof) end
   | check_command_i _ (INTRO opt_bindings) = INTRO opt_bindings
   | check_command_i _ SPLIT_CONJS = SPLIT_CONJS
+  | check_command_i _ SPLIT_CONJS2 = SPLIT_CONJS2
   | check_command_i s (SPECIALIZE (name, rule_fact, insts, discharge_facts)) =
       let val ctxt = Minilang.context_of s
           val (names, raws) = ListPair.unzip insts

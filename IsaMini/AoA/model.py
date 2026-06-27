@@ -1669,6 +1669,13 @@ class Minilang_Operation(NamedTuple):
     def SPLIT_CONJS() -> 'Minilang_Operation':
         return Minilang_Operation("SPLIT_CONJS", None)
     @staticmethod
+    def SPLIT_CONJS2() -> 'Minilang_Operation':
+        # Like SPLIT_CONJS, but the ML side first distributes object-level ∀/⟶
+        # over ∧ in the goal before splitting, so a nested ∀x. A ∧ (∀y. …) goal is
+        # flattened and split in one step instead of forcing a deep Intro/SplitConjs
+        # recursion. SPLIT_CONJS is kept for replaying older packed proofs.
+        return Minilang_Operation("SPLIT_CONJS2", None)
+    @staticmethod
     def SIMPLIFY(facts_with_targets: 'list[tuple[IsabelleFact, list[lambda_term] | None]]', use_system_simps: bool, premise_names: list[str], simplify_goal: bool, bindings: tuple[list[tuple[str, str, str]], list[tuple[lambda_term, str, str]]] | None) -> 'Minilang_Operation':
         packed_facts = [(r.pack(), targets) for r, targets in facts_with_targets]
         return Minilang_Operation("SIMPLIFY", (packed_facts, use_system_simps, premise_names, simplify_goal, bindings))
@@ -9668,7 +9675,7 @@ class SplitConjs(SubgoalMaker):
         self._print_evaluation_status(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
     def beginning_opr(self) -> Minilang_Operation:
-        return Minilang_Operation.SPLIT_CONJS()
+        return Minilang_Operation.SPLIT_CONJS2()
     def _beginning_opr_err_msgs(self, err: IsabelleError) -> FailureReason:
         return FailureReason(f"Failed to split conjunctive goal: {'\n'.join(err.errors)}")
     def _child_refresh_failure_err_msgs(self, child: Node) -> FailureReason:

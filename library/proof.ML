@@ -98,6 +98,8 @@ val TRANSPARENT_INTRO : operation
 val is_conj_goal : thm -> bool
 val SPLIT_CONJS : operation
 val SPLIT_CONJS_CMD : command
+val SPLIT_CONJS2 : operation
+val SPLIT_CONJS2_CMD : command
 
 (* Helper functions for INTRO *)
 val need_intro : thm -> bool
@@ -1440,6 +1442,56 @@ local
         arg_conv (traverse_to_conclusion transform ctxt') ctm
     | _ => transform ctm
 
+  (* Object-level distribution of ∀ over ∧ and ⟶ over ∧, applied recursively
+     to a Trueprop'd conclusion so that, e.g.
+
+        ∀x. P x ⟶ (A x ∧ B x)   ↝   (∀x. P x ⟶ A x) ∧ (∀x. P x ⟶ B x)
+
+     fully flattening nested quantifier/implication/conjunction structure into a
+     top-level conjunction.  A subsequent split_conjs then discharges the whole
+     nest in one SPLIT_CONJS2, instead of the Intro/SplitConjs recursion that the
+     plain SPLIT_CONJS forces (which doesn't look through object-level ∀/⟶). *)
+  (* As meta-equalities (≡), so Conv.rewr_conv can apply them. *)
+  val all_conj_distrib = @{thm all_conj_distrib[THEN eq_reflection]}   (* (∀x. P x ∧ Q x) ≡ (∀x. P x) ∧ (∀x. Q x) *)
+  val ball_conj_distrib = @{thm ball_conj_distrib[THEN eq_reflection]} (* (∀x∈A. P x ∧ Q x) ≡ (∀x∈A. P x) ∧ (∀x∈A. Q x) *)
+  val imp_conjR = @{thm imp_conjR[THEN eq_reflection]}                 (* (P ⟶ Q ∧ R) ≡ (P ⟶ Q) ∧ (P ⟶ R) *)
+  val conj_assoc = @{thm conj_assoc[THEN eq_reflection]}               (* ((P ∧ Q) ∧ R) ≡ (P ∧ (Q ∧ R)) *)
+
+  fun distrib_conj_conv ctxt ctm =
+    (case Thm.term_of ctm of
+       Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs _ =>
+         (* normalize under the binder, then try to distribute ∀ over a ∧ head *)
+         (arg_conv (abs_conv (distrib_conj_conv o snd) ctxt) then_conv
+          try_distrib ctxt) ctm
+     | Const(\<^const_name>\<open>Set.Ball\<close>, _) $ _ $ Abs _ =>
+         (* bounded ∀x∈A: normalize under the binder, then try ball_conj_distrib *)
+         (arg_conv (abs_conv (distrib_conj_conv o snd) ctxt) then_conv
+          try_distrib ctxt) ctm
+     | Const(\<^const_name>\<open>HOL.implies\<close>, _) $ _ $ _ =>
+         (* normalize the consequent only, then try to distribute ⟶ over a ∧ head *)
+         (arg_conv (distrib_conj_conv ctxt) then_conv try_distrib ctxt) ctm
+     | Const(\<^const_name>\<open>HOL.conj\<close>, _) $ _ $ _ =>
+         (arg1_conv (distrib_conj_conv ctxt) then_conv
+          arg_conv (distrib_conj_conv ctxt)) ctm
+     | _ => all_conv ctm)
+  and try_distrib ctxt ctm =
+    ((rewrs_conv [all_conj_distrib, ball_conj_distrib, imp_conjR] then_conv
+      (arg1_conv (distrib_conj_conv ctxt) then_conv
+       arg_conv (distrib_conj_conv ctxt)))
+     else_conv all_conv) ctm
+
+  (* Right-associate a conjunction tree, so that (A ∧ B) ∧ C ↝ A ∧ (B ∧ C)
+     recursively: distribution above can produce left-nested conjuncts, but
+     split_conjs only walks the right spine.  After this pass every conjunction
+     is right-nested, so the whole ∀/⟶/∧ tree splits into atomic goals at once. *)
+  fun reassoc_conj_conv ctm =
+    (case Thm.term_of ctm of
+       Const(\<^const_name>\<open>HOL.conj\<close>, _) $ (Const(\<^const_name>\<open>HOL.conj\<close>, _) $ _ $ _) $ _ =>
+         (rewr_conv conj_assoc then_conv reassoc_conj_conv) ctm
+     | Const(\<^const_name>\<open>HOL.conj\<close>, _) $ _ $ _ =>
+         arg_conv reassoc_conj_conv ctm
+     | _ => all_conv ctm)
+
 in
   fun wrap_goal_conclusion_NO_SIMP ctxt =
     traverse_to_conclusion (rewr_conv NO_SIMP_def_sym) ctxt
@@ -1451,7 +1503,29 @@ in
               (rewr_conv NO_SIMP_def then_conv unwrap) ctm
           | _ => all_conv ctm
     in traverse_to_conclusion unwrap ctxt end
+
+  (* Goal-level conv: descend through meta ⋀/⟹ to the Trueprop'd conclusion and
+     distribute ∀/⟶ over ∧ inside it. *)
+  fun distrib_goal_conj_conv ctxt =
+    traverse_to_conclusion
+      (fn ctm => try_conv (HOLogic.Trueprop_conv
+                   (distrib_conj_conv ctxt then_conv reassoc_conj_conv)) ctm)
+      ctxt
 end
+
+(* SPLIT_CONJS2: like SPLIT_CONJS, but first distributes object-level ∀/⟶ over ∧
+   in the goal conclusion, so a nested goal such as ∀x. A x ∧ (∀y. B x y ∧ C x y)
+   is flattened and split in one step instead of forcing a deep Intro/SplitConjs
+   recursion.  SPLIT_CONJS is kept unchanged for replay/back-compat. *)
+fun SPLIT_CONJS2' (ctxt, HHF (st, items) :: L) =
+    let val st' = Conv.gconv_rule (distrib_goal_conj_conv ctxt) 1 st
+     in if is_conj_goal st'
+        then (ctxt, HHF (protect_goals (split_conjs st'), items) :: L)
+        (* Same message as SPLIT_CONJS' verbatim: keeps the MetaConjFromMultiShows
+           golden green and authors no new user-facing wording. *)
+        else raise OPR_FAIL (INVALID_OPR, "SPLIT_CONJS: the leading goal is not a conjunction")
+    end
+  | SPLIT_CONJS2' _ = raise BROKEN_INVARIANT
 
 (* INTRO'' performs introduction rules (allI and impI) on the current goal.
    Parameters:
@@ -1660,6 +1734,8 @@ fun timed_OPR_with_ret t f s
 
 val SPLIT_CONJS = timed_OPR 5 SPLIT_CONJS'
 val SPLIT_CONJS_CMD = Scan.succeed (timed_OPR 5 SPLIT_CONJS')
+val SPLIT_CONJS2 = timed_OPR 5 SPLIT_CONJS2'
+val SPLIT_CONJS2_CMD = Scan.succeed (timed_OPR 5 SPLIT_CONJS2')
 
 fun CONTEXTUAL_CMD (parser : Proof.context -> command)
                    (toks : Token.src)
@@ -5727,6 +5803,7 @@ val CMDS = Symtab.make [
       ("INTRO",   INTRO_CMD),
       ("ALL_INTRO",INTRO_ALL_CMD),
       ("SPLIT_CONJS", SPLIT_CONJS_CMD),
+      ("SPLIT_CONJS2", SPLIT_CONJS2_CMD),
       ("HAMMER",  HAMMER_CMD),
       ("PRINT",   PRINT_CMD),
       ("RULE",    RULE_CMD),
@@ -5809,6 +5886,7 @@ val keywords = let open Keyword
            (("INTRO", \<^here>), command_spec (prf_goal, [])),
            (("ALL_INTRO", \<^here>), command_spec (prf_goal, [])),
            (("SPLIT_CONJS", \<^here>), command_spec (prf_goal, [])),
+           (("SPLIT_CONJS2", \<^here>), command_spec (prf_goal, [])),
            (("HAMMER",\<^here>), command_spec (prf_goal, [])),
            (("PRINT", \<^here>), command_spec (diag,     [])),
            (("RULE",  \<^here>), command_spec (prf_decl, [])),
