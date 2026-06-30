@@ -2291,6 +2291,18 @@ class ToolExecutor:
         session = self._session
         _session_var.set(session)
 
+        # Hard budget enforcement at per-tool-call granularity, BEFORE the
+        # permission check (so even a would-be-denied call halts immediately).
+        # check_budget() reads the runtime-global wall clock + tool-call count
+        # (correct on workers/forks too) and, when exhausted, sets
+        # quit_info=ResourceExhausted (idempotent). interrupt() then stops the
+        # in-flight agent: the API drivers set _interrupted, so the loop breaks
+        # at the next boundary. Without this a single overlong tool batch could
+        # overshoot the deadline (check_budget otherwise runs only between turns).
+        if session.check_budget():
+            await session.interrupt()
+            return ("Budget exhausted (time/tool-call limit reached). Halting.", True)
+
         perm_error = _check_tool_permission(session, name)
         if perm_error:
             return (perm_error, True)

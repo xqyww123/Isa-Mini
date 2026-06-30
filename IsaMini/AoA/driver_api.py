@@ -1307,16 +1307,40 @@ class APIDriver(LMDriver):
                     msgs_to_send = self._messages
 
                 self._model_time_start = time()
+                # Cap this model turn (INCLUDING transient retries) at the
+                # remaining wall-clock budget. check_budget() only runs AFTER a
+                # turn, so without this a single slow/stalled chat could
+                # overshoot the deadline by up to max_stream_time (~1800s) — the
+                # actual cause of observed 14400s->15883s overshoots. The outer
+                # asyncio.timeout injects CancelledError (NOT the TimeoutError
+                # that chat() maps to a retriable stall), so it propagates out
+                # of _retry_transient and surfaces here as TimeoutError.
+                # _budget_left is None in test mode (no budget set) =>
+                # asyncio.timeout(None) imposes no cap.
+                _bstart = self._budget_start_time
+                _budget_left = (None if _bstart is None
+                                else self.timeout_seconds - (time() - _bstart))
                 try:
-                    response = await self._retry_transient(
-                        lambda: self._provider.chat(
-                            msgs_to_send, tools,
-                            previous_response_id=self._last_response_id))
+                    async with asyncio.timeout(_budget_left):
+                        response = await self._retry_transient(
+                            lambda: self._provider.chat(
+                                msgs_to_send, tools,
+                                previous_response_id=self._last_response_id))
                 except LMUnreachable as e:
                     # Proxy down / creds expired (subscription mode): give up
                     # cleanly via quit_info instead of spinning or letting the
                     # exception escape. Terminal ⇒ the outer loop breaks.
                     self.quit_info = ResourceUnavailable(detail=str(e))
+                    break
+                except TimeoutError:
+                    # Wall-clock budget ran out mid model turn. check_budget()
+                    # now sees elapsed >= timeout_seconds and sets
+                    # quit_info=ResourceExhausted (and logs); the explicit
+                    # fallback covers any scheduling/clock-skew corner where it
+                    # reads just under. Terminal ⇒ the outer loop breaks.
+                    if not self.check_budget():
+                        self.quit_info = ResourceExhausted(
+                            detail="model turn exceeded the remaining time budget")
                     break
 
                 if response.response_id is not None:
