@@ -225,6 +225,23 @@ async def _format_fetched_entity(
     ``potential_defs``: if True and entity is a constant, append relevant definitions.
     ``abbreviation_defs``: map from abbreviation full name to (lhs, rhs) pretty-printed strings.
     """
+    if f.entity.kind == EntityKind.EXPERIENCE:
+        # Experience memory (§7.4 of docs/EXPERIENCE_MEMORY.md): name + WHEN-to-use
+        # (interpretation) + how-to-prove payload. No definition / abbreviation /
+        # role machinery applies. Both texts may be multi-paragraph, so they go
+        # through print_paragraph: single line -> inline after the label; multi
+        # line -> a `|` block scalar with the body indented one level deeper.
+        print_indent(indent, buf)
+        buf.write(f"{prefix}experience `{f.entity.short_name.unicode}`:\n")
+        if f.interpretation:
+            print_indent(indent + 1, buf)
+            buf.write("When to use:")
+            print_paragraph(indent + 1, buf, f.interpretation)
+        if f.experience:
+            print_indent(indent + 1, buf)
+            buf.write("Experience:")
+            print_paragraph(indent + 1, buf, f.experience)
+        return
     exprs = f.entity.expression
     roles = getattr(f.entity, 'roles', [])
     tag = "" if (roles or f.entity.kind not in _THEOREM_KINDS) else " [manual]"

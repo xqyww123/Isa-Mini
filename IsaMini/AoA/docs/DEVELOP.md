@@ -24,7 +24,7 @@ operations. Two kinds of agent operate on that tree:
 The agents never speak raw Isar. They emit **Minilang operations** (a small high-level vocabulary),
 which the ML side executes against a live Isabelle proof state. Agents perceive the proof as a
 YAML-shaped rendering (`proof.yaml`) and act through a handful of MCP tools (`edit`, `delete`,
-`query`, `recall`, `report`, `request_lemmas`).
+`query`, `recall`, `report`, `request_lemmas`, `write_memory`).
 
 ---
 
@@ -279,8 +279,9 @@ retry layers (`_with_retry` for quota — 20-minute wait; `_retry_transient` —
 | `driver_openai/anthropic/gemini/codex.py` | Provider variants, lazily imported in `toplevel.py`. |
 
 **Tools** (abstract ids in `model.py`) map to external names per driver: `edit`, `delete`,
-`query` (search), `recall` (read `proof.yaml`), `report` (refute/surrender),
-`request_lemmas` (dual-role: a worker→planner channel, or a planner self-formalize hint), answer-*. The tool→operation logic is in `mcp_http_server.py`: `_edit_tool_logic` parses the agent's
+`query` (search — incl. `kinds:["experience"]` for saved proof strategies), `recall` (read `proof.yaml`), `report` (refute/surrender),
+`request_lemmas` (dual-role: a worker→planner channel, or a planner self-formalize hint),
+`write_memory` (save a reusable experience; `_write_memory_tool_logic`), answer-*. The tool→operation logic is in `mcp_http_server.py`: `_edit_tool_logic` parses the agent's
 `proof_operations` and dispatches to `root.fill` / `insert_before` / `amend`. Tool JSON schemas live in `tools/*.jsonc`.
 
 The **MCP server** (`ProofMCPHTTPServer` in `mcp_http_server.py`) is a singleton, multi-session HTTP

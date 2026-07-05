@@ -7,7 +7,7 @@
         "type": "string",
         "enum": ["constant", "lemma", "type", "typeclass", "locale",
                  "introduction rule", "elimination rule",
-                 "induction rule", "case-split rule"]
+                 "induction rule", "case-split rule", "experience"]
       }
     },
     "description": {

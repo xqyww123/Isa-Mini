@@ -66,7 +66,7 @@ from .model import (
     Role_Worker,
     Surrender, Refute, Refresh,
     LMUnreachable, ResourceUnavailable,
-    TOOL_REFRESH,
+    TOOL_REFRESH, TOOL_WRITE_MEMORY,
     print_indent, print_goal, MyIO,
 )
 import yaml as _yaml
@@ -112,6 +112,7 @@ _cc_close_subagent_schema = _load_schema("cc_cancel_subagent.jsonc")
 _cc_recall_removed_schema = _load_schema("cc_recall_removed.jsonc")
 _cc_refresh_schema = _load_schema("cc_refresh.jsonc")
 _cc_comment_schema = _load_schema("cc_comment.jsonc")
+_cc_write_memory_schema = _load_schema("cc_write_memory.jsonc")
 
 
 
@@ -2098,6 +2099,11 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "Write a briefing for your future self in `briefing` — "
                 "it becomes your only memory. Use when your edits keep failing.",
                 "schema": _cc_refresh_schema, "annotations": _ACT},
+    "write_memory": {"description":
+                "Save an experience or a proof strategy so future proofs can reuse it. "
+                "Note: what you save must generalize to a specific class of problems — "
+                "not a single one-off goal.",
+                "schema": _cc_write_memory_schema, "annotations": _MUT},
 }
 
 
@@ -2125,6 +2131,97 @@ def _tool_schemas_for(session: Session) -> dict[str, dict[str, Any]]:
     # Rebuilt non-destructively so the shared `_TOOL_SCHEMAS` dicts stay intact.
     return {name: {**t, "schema": session.transform_tool_schema(name, t["schema"])}
             for name, t in base.items()}
+
+
+def _experience_document_text(patterns: list[str], goal_description: str) -> str:
+    """Text embedded for an experience memory (§8.1 of docs/EXPERIENCE_MEMORY.md):
+    the goal patterns it targets plus the WHEN-to-use description. The
+    how-to-prove payload is deliberately NOT embedded."""
+    lines = ["This is an experience that aims to help prove goals of the following forms:"]
+    lines += [f"- {p}" for p in patterns]
+    lines.append("The experience should be used in the following situation:")
+    lines.append(goal_description)
+    return "\n".join(lines)
+
+
+async def _write_memory_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
+    """`write_memory`: save/refresh a reusable proof experience (a strategy for a
+    general class of goals; see docs/EXPERIENCE_MEMORY.md).
+
+    Identity is the `name`. Re-writing the same name THIS AoA run overwrites the
+    prior record: its old universal key is deleted from the semantic DB, the vector
+    store, and the inverted index before the new record is written. A name not in
+    ``runtime.created_memories`` is a fresh create that never scans for, nor touches,
+    a pre-existing memory from a prior run. The universal key is content-addressed
+    (theory-constituent prefix + xxhash of name/patterns/description/experience), so
+    an identical re-write is absorbed idempotently."""
+    import xxhash
+    from Isabelle_RPC_Host.universal_key import xor_theory_prefix, EntityKind
+    from Isabelle_Semantic_Embedding.semantics import Semantic_DB, SemanticRecord
+    from Isabelle_Semantic_Embedding.experience_index import Experience_Index
+
+    _tn = session.tool_name(TOOL_WRITE_MEMORY)
+    session.log_tool_call(_tn, args)
+
+    name = args.get("name")
+    patterns = args.get("goal_patterns")
+    desc = args.get("goal_description")
+    experience = args.get("experience")
+    if not isinstance(name, str) or not name.strip():
+        return ("`name` must be a non-empty string.", True)
+    if (not isinstance(patterns, list) or not patterns
+            or not all(isinstance(p, str) and p.strip() for p in patterns)):
+        return ("`goal_patterns` must be a non-empty list of Isabelle term pattern strings.", True)
+    if not isinstance(desc, str) or not desc.strip():
+        return ("`goal_description` must be a non-empty string.", True)
+    if not isinstance(experience, str) or not experience.strip():
+        return ("`experience` must be a non-empty string.", True)
+
+    ml_state = session.retrieval_state()
+    conn = ml_state.connection
+
+    # 1. minimal-antichain constituent theories of the patterns (ML side).
+    try:
+        consts_raw = await conn.callback(
+            "Experience.constituents", (ml_state.name, patterns))
+    except IsabelleError as e:
+        msg = e.errors[0] if e.errors else str(e)
+        return (f"Could not process goal_patterns: {msg}", True)
+    constituents = [((n if isinstance(n, str) else n.decode("utf-8")), bytes(h))
+                    for n, h in consts_raw]
+
+    # 2. assemble the content-addressed universal key.
+    prefix = xor_theory_prefix([h for _, h in constituents])
+    def _norm(s: str) -> str:
+        return " ".join(s.split())
+    payload = "\x00".join([_norm(name), *(_norm(p) for p in patterns),
+                           _norm(desc), _norm(experience)]).encode("utf-8")
+    hash15 = xxhash.xxh128(payload).digest()[:15]
+    key = prefix + bytes([int(EntityKind.EXPERIENCE)]) + hash15
+
+    # 3. overwrite a same-name memory created earlier THIS run.
+    old_uk = session.runtime.created_memories.get(name)
+    updated = old_uk is not None
+    store = await conn.semantic_vector_store()
+    if old_uk is not None and old_uk != key:
+        old_rec = Semantic_DB[old_uk]
+        Semantic_DB.delete(old_uk)
+        store.delete(old_uk)
+        old_consts = old_rec.theory_constituents if old_rec is not None else None
+        if old_consts:
+            Experience_Index.remove(old_uk, [h for _, h in old_consts])
+        else:
+            Experience_Index.remove_scanning(old_uk)
+
+    # 4. write record + inverted index + document embedding.
+    Semantic_DB[key] = SemanticRecord(
+        EntityKind.EXPERIENCE, name, json.dumps(patterns), desc,
+        None, constituents, experience)
+    Experience_Index.add(key, [h for _, h in constituents])
+    await store.embed([(key, _experience_document_text(patterns, desc))])
+    session.runtime.created_memories[name] = key
+
+    return (f"{'Updated' if updated else 'Saved'} experience `{name}`.", False)
 
 
 class ToolExecutor:
@@ -2401,6 +2498,8 @@ class ToolExecutor:
                     session.last_proof_op_time = time()
                 case "refresh":
                     result, is_error = await _refresh_tool_logic(session, arguments)
+                case "write_memory":
+                    result, is_error = await _write_memory_tool_logic(session, arguments)
                 case _:
                     return (f"Unknown tool: {name}", True)
         except LMUnreachable as e:

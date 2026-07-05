@@ -1,0 +1,28 @@
+{
+    "type": "object",
+    "properties": {
+        "name": {
+            "type": "string",
+            "description": "A short, stable, descriptive identifier for this experience; reuse the same name to update it."
+        },
+        "goal_patterns": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "string",
+                "description": "An Isabelle term pattern. Use ?x for a named wildcard and _ for an anonymous one. Any literal number MUST be annotated with its type, e.g. (0::real), (2::nat). Example: `DERIV ?f ?x :> ?D`."
+            },
+            "description": "Non-empty list of Isabelle term patterns characterizing the proof goals this experience applies to. Be comprehensive — include enough patterns to cover the goal shapes it handles, not just one."
+        },
+        "goal_description": {
+            "type": "string",
+            "description": "English description of WHEN to use this experience. E.g. \"Establishing the derivative of a function.\""
+        },
+        "experience": {
+            "type": "string",
+            "description": "How to complete the proof — the strategy and any useful specifics, e.g. which proof operations, lemmas, or named theorem bundles to use, and whatever else helps. For instance: \"Use `Obvious with facts derivative_eq_intros` for derivative goals; it also discharges a pre-simplified derivative value.\""
+        }
+    },
+    "required": ["name", "goal_patterns", "goal_description", "experience"],
+    "additionalProperties": false
+}

@@ -294,6 +294,10 @@ class RetrievedEntity(NamedTuple):
     # (they share one `lemmas`/`fun` declaration — fetching it per member is
     # wasteful and, for fun/.simps bundles, repeats the same source N times).
     suppress_def: bool = False
+    # EXPERIENCE-kind only: the how-to-prove payload (SemanticRecord.experience),
+    # rendered below the goal_description (which is carried in `interpretation`).
+    # None for every other kind.
+    experience: str | None = None
 
 class IsabelleFact(ABC):
     """A fact referenced in proof operations.
@@ -2153,16 +2157,45 @@ class Minilang_State:
                         scored_recs.append((_pat_score(uk), rec, None))
                     else:
                         scored_recs.append((_pat_score(uk), SemanticRecord(EntityKind(uk[16]), name, None, None), None))
+                # No query vector here, so experiences can't be cosine-ranked, but
+                # they CAN be ranked by pattern hit_rate. Merge available experiences
+                # (hit_rate>0) using hit_rate as their score, then re-sort/slice.
+                # (Scale-mixing hit_rate∈[0,1] with the provider default scores is
+                # inherent to this vectorless path — cf. Q5 numeric mixing.)
+                if EntityKind.EXPERIENCE in kinds:
+                    exp_hit = await store._experience_hits(term_patterns, self.name)
+                    total += len(exp_hit)
+                    for uk, hr in exp_hit.items():
+                        rec = Semantic_DB[uk]
+                        if rec is not None:
+                            scored_recs.append((hr, rec, None))
+                    scored_recs.sort(key=lambda x: x[0], reverse=True)
+                    scored_recs = scored_recs[:k]
         if not scored_recs:
             return [], warnings, total
-        # Resolve entities via RPC
-        entity_keys = [(rec.kind, rec.name) for _, rec, _ in scored_recs]
-        infos = await self._retrieve_entity(entity_keys)
+        # Resolve entities via RPC — but NOT experiences, which are not Isabelle
+        # namespace entities (IsaMini.retrieve_entity has no branch for them). They
+        # are built directly from their SemanticRecord, carrying the how-to-prove
+        # payload for rendering.
+        ent_idx = [i for i, (_, rec, _) in enumerate(scored_recs)
+                   if rec.kind != EntityKind.EXPERIENCE]
+        infos = await self._retrieve_entity(
+            [(scored_recs[i][1].kind, scored_recs[i][1].name) for i in ent_idx])
+        info_by_idx = dict(zip(ent_idx, infos))
         out: list[RetrievedEntity] = []
-        for (score, rec, override), info in zip(scored_recs, infos):
+        for i, (score, rec, override) in enumerate(scored_recs):
+            if rec.kind == EntityKind.EXPERIENCE:
+                entity = IsabelleEntity(
+                    full_name=rec.name, short_name=IsaTerm.from_isabelle(rec.name),
+                    expression=[], kind=EntityKind.EXPERIENCE)
+                out.append(RetrievedEntity(
+                    entity=entity, score=score,
+                    interpretation=' '.join(rec.interpretation.split()) if rec.interpretation else None,
+                    experience=rec.experience))
+                continue
             heading, interp = override if override is not None else (None, rec.interpretation)
             out.append(self._make_retrieved_entity(
-                rec.kind, rec.name, info, score,
+                rec.kind, rec.name, info_by_idx.get(i), score,
                 ' '.join(interp.split()) if interp else None,
                 semantics_heading=heading,
                 suppress_def=rec.name in bundle_member_names))
@@ -2580,6 +2613,7 @@ TOOL_SUBAGENT: tool = "subagent"
 TOOL_CLOSE_SUBAGENT: tool = "cancel_subagent"
 TOOL_REFRESH: tool = "refresh"
 TOOL_COMMENT: tool = "comment"
+TOOL_WRITE_MEMORY: tool = "write_memory"
 
 TOOL_ANSWER_INDEXES:        tool = "answer_indexes"
 TOOL_ANSWER_INDEX:          tool = "answer_index"
@@ -2601,7 +2635,7 @@ ANSWER_TOOLS: frozenset[tool] = frozenset({
 ALL_PROOF_TOOLS: tuple[tool, ...] = (
     TOOL_EDIT, TOOL_DELETE, TOOL_COMMENT, TOOL_SEARCH, TOOL_READ,
     TOOL_RECALL_REMOVED, TOOL_REQUEST_LEMMAS, TOOL_REPORT,
-    TOOL_SUBAGENT, TOOL_CLOSE_SUBAGENT, TOOL_REFRESH,
+    TOOL_SUBAGENT, TOOL_CLOSE_SUBAGENT, TOOL_REFRESH, TOOL_WRITE_MEMORY,
     *ANSWER_TOOLS,
 )
 
@@ -10994,6 +11028,15 @@ class Runtime:
         # runtime singleton. Rendered into later survey prompts so the model
         # stops re-reporting the same fact within one run.
         self.reported_missing_lemmas: list = []
+        # Experience memories (write_memory) CREATED during this AoA invocation:
+        # name -> universal key of the record last written under that name.
+        # Shared across planner + all workers via this runtime singleton. Drives
+        # the update semantics: re-writing the same name THIS run overwrites (the
+        # old uk is deleted from the semantic DB / vector store / inverted index
+        # before the new record is written); a name not in this map is a fresh
+        # create that never scans for, nor touches, a pre-existing memory from a
+        # prior run. See _write_memory_tool_logic and docs/EXPERIENCE_MEMORY.md.
+        self.created_memories: dict[str, bytes] = {}
 
     def next_pit_name(self) -> str:
         i = self._pit_counter
@@ -11564,6 +11607,9 @@ class Session:
                 f"4. If you need a background lemma, `{self.tool_name(TOOL_SEARCH)}` for it "
                 f"first; if it truly doesn't exist, {lemma_step}.\n"
                 "\n"
+                f'You can also `{self.tool_name(TOOL_SEARCH)}` with `kinds: ["experience"]` to '
+                "retrieve saved proof experiences (strategies) relevant to your goal.\n"
+                "\n"
                 + declarative_style +
                 "\n"
                 "Holes are expected:\n"
@@ -11591,7 +11637,9 @@ class Session:
                 "The goal may rely on background lemmas that are not yet available. "
                 f"Search for them with `{self.tool_name(TOOL_SEARCH)}` first; "
                 + self._lemma_guidance(self.is_major) +
-                report_line +
+                f'You can also `{self.tool_name(TOOL_SEARCH)}` with `kinds: ["experience"]` to '
+                "retrieve saved proof experiences (strategies) relevant to your goal.\n"
+                + report_line +
                 "Be concise in text output.\n"
                 "Continue until the goal is fully proved and no errors remain.\n"
             )
@@ -11616,7 +11664,7 @@ class Session:
                 f"- {self.tool_name(TOOL_EDIT)}: Fill, insert, or amend proof steps (your primary tool)\n"
                 f"- {self.tool_name(TOOL_DELETE)}: Delete proof steps\n"
                 f"- {self.tool_name(TOOL_COMMENT)}: Comment out or uncomment proof steps\n"
-                f"- {self.tool_name(TOOL_SEARCH)}: Search for theorems, constants, types, and rules; help you understand unfamiliar terms\n"
+                f"- {self.tool_name(TOOL_SEARCH)}: Search for theorems, constants, types, rules, and saved experiences (proof strategies); also help you understand unfamiliar terms\n"
                 f"- {self.tool_name(TOOL_READ)}: Recall proof state from `proof.yaml`. Use only when you have lost track.\n"
                 f"- {self.tool_name(TOOL_RECALL_REMOVED)}: Browse deleted proof steps that were archived before removal.\n"
                 f"- {self.tool_name(TOOL_REQUEST_LEMMAS)}: {config.request_tool_description()}\n"
@@ -11636,6 +11684,7 @@ class Session:
             parts.append(
                 f"- {self.tool_name(TOOL_SUBAGENT)}: Launch a sub-agent to prove a subgoal whose proof would derail your main line of reasoning.{config.subagent_cost_caution()}\n"
                 f"- {self.tool_name(TOOL_CLOSE_SUBAGENT)}: Cancel and remove a sub-agent you dispatched (the sub-agent is terminated; to resume it instead, call `subagent` again).\n"
+                f"- {self.tool_name(TOOL_WRITE_MEMORY)}: Save a reusable proof experience or a strategy for a general class of goals, so future proofs can retrieve it using the `{self.tool_name(TOOL_SEARCH)}` tool.\n"
             )
         return "".join(parts)
 

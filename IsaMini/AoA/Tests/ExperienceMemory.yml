@@ -1,0 +1,12 @@
+--------------------------------------------------
+write_memory
+--------------------------------------------------
+is_error=False
+Saved experience `deriv_strategy`.
+--------------------------------------------------
+query kinds=[experience]
+--------------------------------------------------
+- experience `deriv_strategy`:
+  When to use: Establishing the derivative of a function.
+  Experience: Use `Obvious with facts derivative_eq_intros`; it also discharges a pre-simplified derivative value.
+1 entities match the filters — 1 new, 0 shown earlier are not shown again.

@@ -188,6 +188,47 @@ async def _test_branch(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
+@model_test("ExperienceMemory", "Test_ExperienceMemory.thy", 8)
+async def _test_experience_memory(root: Root, file: MyIO):
+    """End-to-end for the experience-memory feature: `write_memory` saves a
+    reusable derivative-proof strategy, then a `kinds=["experience"]` query
+    retrieves and renders it. The record is removed from every store afterwards
+    so re-runs stay deterministic and the shared semantic DB is not polluted."""
+    from .mcp_http_server import _write_memory_tool_logic
+    from .retrieval import _semantic_search_direct
+    from Isabelle_Semantic_Embedding.semantics import Semantic_DB
+    from Isabelle_Semantic_Embedding.experience_index import Experience_Index
+    session = root.session
+
+    print_header("write_memory", file)
+    wr, werr = await _write_memory_tool_logic(session, {
+        "name": "deriv_strategy",
+        "goal_patterns": ["DERIV ?f ?x :> ?D"],
+        "goal_description": "Establishing the derivative of a function.",
+        "experience": "Use `Obvious with facts derivative_eq_intros`; it also "
+                      "discharges a pre-simplified derivative value.",
+    })
+    file.write(f"is_error={werr}\n{wr}\n")
+
+    # Retrieval via the non-forking direct path (the interactive-retrieval fork is
+    # a UX layer, not part of the experience-memory plumbing under test).
+    print_header("query kinds=[experience]", file)
+    qr = await _semantic_search_direct(session, [{
+        "kinds": ["experience"],
+        "description": "how to prove that a function has a given derivative",
+        "term_patterns": ["DERIV ?g ?a :> ?v"],
+    }], None)
+    file.write(f"{qr}\n")
+
+    # Cleanup so re-runs are deterministic and the real DB stays clean.
+    store = await session.retrieval_state().connection.semantic_vector_store()
+    for _name, uk in list(session.runtime.created_memories.items()):
+        rec = Semantic_DB[uk]
+        Semantic_DB.delete(uk)
+        store.delete(uk)
+        if rec is not None and rec.theory_constituents:
+            Experience_Index.remove(uk, [h for _, h in rec.theory_constituents])
+
 @model_test("InsertBeforeSubgoalRejected", "Test_InsertBeforeSubgoalRejected.thy", 8)
 async def _test_insert_before_subgoal_rejected(root: Root, file: MyIO):
     """Gate: inserting a user op before a subgoal container's STRUCTURAL child

@@ -1362,6 +1362,9 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
           introduction_rules, elimination_rules,
           induction_rules, case_split_rules,
           Context_Callbacks.make_theory_long_name_callback au,
+          Context_Callbacks.make_experience_constituents_callback au,
+          Context_Callbacks.make_experiences_callback au,
+          Context_Callbacks.make_loaded_theory_hashes_callback au,
           Semantic_Store.make_interpret_theory_callback au
         ]
       }
