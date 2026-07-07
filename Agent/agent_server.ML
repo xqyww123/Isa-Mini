@@ -10,6 +10,7 @@ val AoA_interactive_retrieval: string Config.T
 val AoA_retrieval_forking: string Config.T
 val AoA_use_proof_cache: bool Config.T
 val AoA_store_proof_cache: bool Config.T
+val AoA_enable_write_memory: bool Config.T
 
 type state_id = string
 type states = Minilang.state Symtab.table
@@ -328,6 +329,14 @@ val AoA_use_proof_cache = Attrib.setup_config_bool \<^binding>\<open>AoA_use_pro
    second pass / resume does not self-hit and skip learning). Reading is a
    separate toggle (AoA_use_proof_cache). *)
 val AoA_store_proof_cache = Attrib.setup_config_bool \<^binding>\<open>AoA_store_proof_cache\<close>
+      (K true);
+
+(* Whether the `write_memory` tool (save a reusable proof experience) is offered
+   to the agent at all. true (default) — advertised as before. false — dropped
+   from every advertised tool set (Python side), so it never appears in available
+   tools, and the LearningTask memorize interaction becomes a no-op. Experience
+   RETRIEVAL (`query kinds:["experience"]`) is ALWAYS available regardless. *)
+val AoA_enable_write_memory = Attrib.setup_config_bool \<^binding>\<open>AoA_enable_write_memory\<close>
       (K true);
 
 fun make_invocation_id () =
@@ -1332,16 +1341,18 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (task_kind, task_payload_packer) (c
                 val retrieval_forking = Config.get ctxt AoA_retrieval_forking
                 val interactive_retrieval = Config.get ctxt AoA_interactive_retrieval
                 val (_, budget) = cfg
-            in packTuple11 (context_packer ctxt, minilang_flat_goal_packer ctxt,
+                val enable_write_memory = Config.get ctxt AoA_enable_write_memory
+            in packTuple12 (context_packer ctxt, minilang_flat_goal_packer ctxt,
                            packString, packString, packString, packString, packString,
                            packTuple3 (packInt, packInt, packInt),
                            packString, packTuple3 (packBool, packOption packString, packBool),
-                           packPair (packString, fn () => task_payload_packer))
+                           packPair (packString, fn () => task_payload_packer),
+                           packBool)
                           (global_context, s0_flat_goal, driver, log_dir, invocation_id,
                            retrieval_forking, interactive_retrieval,
                            (#timeout_seconds budget, #max_tool_calls budget, #max_retries budget),
                            goal_hash, (use_cache, cached_xcmd_json, store_cache),
-                           (task_kind, ()))
+                           (task_kind, ()), enable_write_memory)
             end),
         ret_schema = unpackTuple6 (unpackList MiniLang_Agent.xcmd_unpacker,
                                    unpackOption unpackString,

@@ -11135,6 +11135,13 @@ class Runtime:
         # forks inherit it through this shared runtime singleton. Drives the
         # system prompt and initial-message injection (see Session.task).
         self.task: Task = UsualTask()
+        # Whether the `write_memory` tool exists this run (from the Isabelle
+        # `AoA_enable_write_memory` declaration, threaded via the RPC payload).
+        # When False, write_memory is dropped from every advertised tool set (so it
+        # never appears in available tools) and the LearningTask memorize
+        # interaction is a no-op; experience RETRIEVAL (`query kinds:["experience"]`)
+        # is unaffected. Tree-wide (like task): forks inherit it via this runtime.
+        self.enable_write_memory: bool = True
 
     def next_pit_name(self) -> str:
         i = self._pit_counter
@@ -11383,6 +11390,12 @@ class Session:
     @task.setter
     def task(self, v: Task):
         self.runtime.task = v
+    @property
+    def enable_write_memory(self) -> bool:
+        return self.runtime.enable_write_memory
+    @enable_write_memory.setter
+    def enable_write_memory(self, v: bool):
+        self.runtime.enable_write_memory = v
     @property
     def age(self) -> int:
         return self.runtime.age
@@ -11815,8 +11828,14 @@ class Session:
             parts.append(
                 f"- {self.tool_name(TOOL_SUBAGENT)}: Launch a sub-agent to prove a subgoal whose proof would derail your main line of reasoning.{config.subagent_cost_caution()}\n"
                 f"- {self.tool_name(TOOL_CLOSE_SUBAGENT)}: Cancel and remove a sub-agent you dispatched (the sub-agent is terminated; to resume it instead, call `subagent` again).\n"
-                f"- {self.tool_name(TOOL_WRITE_MEMORY)}: Save a reusable proof experience or a strategy for a general class of goals, so future proofs can retrieve it using the `{self.tool_name(TOOL_SEARCH)}` tool.\n"
             )
+            # write_memory is gated by AoA_enable_write_memory (see Runtime); when
+            # off it is absent from the advertised tools, so it must not be listed
+            # here either. Experience retrieval via `query` stays regardless.
+            if self.enable_write_memory:
+                parts.append(
+                    f"- {self.tool_name(TOOL_WRITE_MEMORY)}: Save a reusable proof experience or a strategy for a general class of goals, so future proofs can retrieve it using the `{self.tool_name(TOOL_SEARCH)}` tool.\n"
+                )
         return "".join(parts)
 
     async def initial_prompt(self) -> str:
@@ -12312,6 +12331,8 @@ class Session:
         (intended, so subsystem bugs are caught early). No budget credit-back
         (decision C16)."""
         from .task import LearningTask
+        if not self.enable_write_memory:
+            return          # write_memory disabled -> nothing to distil into
         if not isinstance(self.task, LearningTask):
             return
         if self.is_interaction:

@@ -2125,6 +2125,12 @@ def _tool_schemas_for(session: Session) -> dict[str, dict[str, Any]]:
     delegate further). The gate is ``Session._can_offer_dispatch_tools``; ``_TOOL_SCHEMAS_WORKER``
     keeps its name but is simply the full set minus the dispatch tools."""
     base = _TOOL_SCHEMAS if session._can_offer_dispatch_tools() else _TOOL_SCHEMAS_WORKER
+    # write_memory feature gate (AoA_enable_write_memory, tree-wide via Runtime):
+    # when off, drop it from the advertised set entirely so it never appears in the
+    # agent's available tools — for BOTH drivers (CC builds its Tool list from here;
+    # APIDriver reads it via ToolExecutor.tool_schemas). Retrieval via `query` stays.
+    if not session.enable_write_memory:
+        base = {k: v for k, v in base.items() if k != TOOL_WRITE_MEMORY}
     # Apply the driver's per-tool schema rewrite (default identity). Drivers whose
     # model/client needs a different schema form override `transform_tool_schema` —
     # e.g. codex-cli DROPS `$ref`/`$defs` (collapsing `cc_edit.jsonc`'s operation

@@ -65,12 +65,14 @@ async def _replay_cached_proof(connection: Connection, packed_ops: list[Any],
 async def IsaMini_AoA(data: tuple, connection: Connection):
     (global_context, ptree, driver, log_dir, invocation_id,
      retrieval_forking_str, interactive_retrieval_str, budget_tuple,
-     goal_hash, cache_flags, task_info) = data
+     goal_hash, cache_flags, task_info, enable_write_memory) = data
     # ML pairs the read-cache toggle with the L2 (Phi_Cache_DB) payload and the
     # store toggle.
     use_cache, cached_xcmd_json, store_cache = cache_flags
     # Task = (kind, payload); "usual" (empty payload) or "learning" (Isar proof).
     task_kind, task_payload = task_info
+    # AoA_enable_write_memory (Isabelle declaration): when False, the write_memory
+    # tool is dropped from every advertised tool set and memorize is a no-op.
     timeout_seconds, max_tool_calls, max_retries = budget_tuple
 
     # Environment variable AoA_LOG_DIR overrides user-provided log_dir
@@ -195,6 +197,7 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
             # the system prompt and initial message pick it up. Forks inherit it
             # through the shared runtime singleton.
             session.task = task_obj
+            session.enable_write_memory = enable_write_memory
             root = Root((global_context, ptree), connection)
             await session.initialize(root)
             await session.run()

@@ -1,0 +1,8 @@
+--- enable_write_memory=True ---
+write_memory advertised: True
+write_memory in system prompt: True
+query (retrieval) advertised: True
+--- enable_write_memory=False ---
+write_memory advertised: False
+write_memory in system prompt: False
+query (retrieval) advertised: True

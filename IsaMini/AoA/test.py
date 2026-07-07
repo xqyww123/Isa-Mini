@@ -376,6 +376,27 @@ async def _test_memorize_interaction_stages(root: Root, file: MyIO):
         session.written_names.clear()
 
 
+@model_test("WriteMemoryGate", "Test_WriteMemoryGate.thy", 8)
+async def _test_write_memory_gate(root: Root, file: MyIO):
+    """[AoA_enable_write_memory gate] When enabled, write_memory is advertised in
+    the available tools and listed in the system prompt; when disabled it is absent
+    from BOTH — while the `query` tool (experience RETRIEVAL) stays available
+    regardless. Gated per-session via Runtime.enable_write_memory (set from the
+    Isabelle declaration, threaded through the RPC payload)."""
+    from .mcp_http_server import _tool_schemas_for
+    from .model import TOOL_WRITE_MEMORY, TOOL_SEARCH
+    session = root.session
+    for enabled in (True, False):
+        session.enable_write_memory = enabled
+        schemas = _tool_schemas_for(session)
+        sysprompt = session.system_prompt() or ""
+        file.write(f"--- enable_write_memory={enabled} ---\n")
+        file.write(f"write_memory advertised: {TOOL_WRITE_MEMORY in schemas}\n")
+        file.write(f"write_memory in system prompt: {TOOL_WRITE_MEMORY in sysprompt}\n")
+        file.write(f"query (retrieval) advertised: {TOOL_SEARCH in schemas}\n")
+    session.enable_write_memory = True
+
+
 @model_test("MemorizeGuard", "Test_MemorizeGuard.thy", 8)
 async def _test_memorize_guard(root: Root, file: MyIO):
     """[Trigger guard] maybe_run_memorize_interaction fires an Interaction_Memorize
