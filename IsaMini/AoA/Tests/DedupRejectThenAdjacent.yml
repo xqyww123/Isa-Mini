@@ -1,0 +1,20 @@
+--------------------------------------------------
+seed A
+--------------------------------------------------
+A_saved=True result=Saved experience `dup_adj_a`.
+--------------------------------------------------
+near-dup B, first attempt
+--------------------------------------------------
+is_error=False
+rejected=True
+dedup_block_armed=True
+match_names_A=True
+B_saved_yet=False
+--------------------------------------------------
+near-dup B, adjacent re-call
+--------------------------------------------------
+is_error=False
+result=Saved experience `dup_adj_b`.
+B_now_saved=True
+dedup_block_cleared=True
+written_names=['dup_adj_a', 'dup_adj_b']

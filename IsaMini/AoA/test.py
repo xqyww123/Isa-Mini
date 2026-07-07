@@ -229,6 +229,191 @@ async def _test_experience_memory(root: Root, file: MyIO):
         if rec is not None and rec.theory_constituents:
             Experience_Index.remove(uk, [h for _, h in rec.theory_constituents])
 
+async def _cleanup_created_memories(session):
+    """Remove every memory this session created, from all three stores, so the
+    shared semantic DB is not polluted and re-runs stay deterministic (mirrors
+    the ExperienceMemory test's teardown)."""
+    from Isabelle_Semantic_Embedding.semantics import Semantic_DB
+    from Isabelle_Semantic_Embedding.experience_index import Experience_Index
+    store = await session.retrieval_state().connection.semantic_vector_store()
+    for _name, uk in list(session.runtime.created_memories.items()):
+        rec = Semantic_DB[uk]
+        if rec is None:
+            continue
+        Semantic_DB.delete(uk)
+        store.delete(uk)
+        if rec.theory_constituents:
+            Experience_Index.remove(uk, [h for _, h in rec.theory_constituents])
+        else:
+            Experience_Index.remove_scanning(uk)
+
+
+@model_test("DedupOverwriteSameRun", "Test_DedupOverwriteSameRun.thy", 8)
+async def _test_dedup_overwrite_same_run(root: Root, file: MyIO):
+    """[Case 1 — same-run overwrite] Re-writing the SAME name within one run
+    overwrites in place: the 2nd call returns 'Updated', the old universal key is
+    deleted from every store, and runtime.created_memories points at the new key.
+    No corpus dedup search is involved — same-name authorization comes from
+    runtime.created_memories."""
+    from .mcp_http_server import _write_memory_tool_logic
+    from Isabelle_Semantic_Embedding.semantics import Semantic_DB
+    session = root.session
+
+    r1, e1 = await _write_memory_tool_logic(session, {
+        "name": "dup_ovw_x",
+        "goal_patterns": ["DERIV ?f ?x :> ?D"],
+        "goal_description": "Establishing the derivative of a function.",
+        "experience": "First version of the how-to text.",
+    })
+    k1 = session.runtime.created_memories.get("dup_ovw_x")
+    print_header("first write", file)
+    file.write(f"is_error={e1}\nresult={r1}\n")
+
+    r2, e2 = await _write_memory_tool_logic(session, {
+        "name": "dup_ovw_x",                       # SAME name -> overwrite
+        "goal_patterns": ["DERIV ?f ?x :> ?D"],
+        "goal_description": "Establishing the derivative of a function.",
+        "experience": "SECOND, improved how-to text.",
+    })
+    k2 = session.runtime.created_memories.get("dup_ovw_x")
+    print_header("second write (same name, new content)", file)
+    file.write(f"is_error={e2}\nresult={r2}\n")
+    file.write(f"key_changed={k1 != k2}\n")
+    file.write(f"old_key_deleted={Semantic_DB[k1] is None}\n")
+    file.write(f"new_key_present={Semantic_DB[k2] is not None}\n")
+    file.write(f"written_names={session.written_names}\n")
+
+    await _cleanup_created_memories(session)
+
+
+@model_test("DedupRejectThenAdjacent", "Test_DedupRejectThenAdjacent.thy", 8)
+async def _test_dedup_reject_then_adjacent(root: Root, file: MyIO):
+    """[Adjacency mechanism] A non-adjacent near-duplicate write is REJECTED (T3,
+    'The memory was NOT written') and arms a dedup_block; an immediately-adjacent
+    re-call (nothing destructive in between) is then ACCEPTED (Case 2), even with
+    identical content. tool_call_log appends here mirror the dispatch layer
+    (ToolExecutor.execute appends on exit), which _write_memory_tool_logic relies
+    on for its adjacency window."""
+    from .mcp_http_server import _write_memory_tool_logic
+    session = root.session
+    base = {
+        "goal_patterns": ["DERIV ?f ?x :> ?D"],
+        "goal_description": "Establishing the derivative of a function via derivative_eq_intros.",
+    }
+    # Seed A (fresh; no near-dup expected in the shared corpus for this topic).
+    ra, ea = await _write_memory_tool_logic(session, {
+        **base, "name": "dup_adj_a", "experience": "Use Obvious with derivative_eq_intros."})
+    session.tool_call_log.append("write_memory")     # dispatch-layer append (simulated)
+    print_header("seed A", file)
+    file.write(f"A_saved={ra.startswith('Saved')} result={ra}\n")
+
+    # Near-dup B (same patterns+desc), NON-adjacent -> T3 rejection.
+    rb1, eb1 = await _write_memory_tool_logic(session, {
+        **base, "name": "dup_adj_b", "experience": "Different how-to, same goal class."})
+    print_header("near-dup B, first attempt", file)
+    file.write(f"is_error={eb1}\n")
+    file.write(f"rejected={rb1.startswith('**The memory was NOT written.**')}\n")
+    file.write(f"dedup_block_armed={session.dedup_block is not None}\n")
+    file.write(f"match_names_A={'dup_adj_a' in rb1}\n")
+    file.write(f"B_saved_yet={'dup_adj_b' in session.runtime.created_memories}\n")
+    session.tool_call_log.append("write_memory")     # dispatch append for the rejected call
+
+    # Adjacent re-call of B (no destructive tool in between) -> Case 2 accept.
+    rb2, eb2 = await _write_memory_tool_logic(session, {
+        **base, "name": "dup_adj_b", "experience": "Different how-to, same goal class."})
+    print_header("near-dup B, adjacent re-call", file)
+    file.write(f"is_error={eb2}\nresult={rb2}\n")
+    file.write(f"B_now_saved={'dup_adj_b' in session.runtime.created_memories}\n")
+    file.write(f"dedup_block_cleared={session.dedup_block is None}\n")
+    file.write(f"written_names={session.written_names}\n")
+
+    await _cleanup_created_memories(session)
+
+
+@model_test("MemorizeInteractionStages", "Test_MemorizeInteractionStages.thy", 8)
+async def _test_memorize_interaction_stages(root: Root, file: MyIO):
+    """[Interaction_Memorize state machine] The ASK_HAS/ASK_ALL flow is driven
+    purely by session.written_names, no DB / LLM: 'yes' with nothing saved is
+    rejected (BadAnswer), 'yes' after a save advances to ASK_ALL, 'more' with
+    nothing new is rejected, 'more' after a new save loops, 'that's all' ends."""
+    from .model import (Interaction_Memorize, AnswerIndex, ContinuingInteraction,
+                        Interaction_BadAnswer, _session_var)
+    session = root.session
+    token = _session_var.set(session)
+
+    async def drive(im, idx, label):
+        file.write(f"--- {label}: answer index={idx} (stage={im._stage}) ---\n")
+        try:
+            res = await im.answer(AnswerIndex(index=idx))
+            file.write(f"  -> ended, returned {res!r}\n")
+        except ContinuingInteraction:
+            file.write(f"  -> ContinuingInteraction (re-prompt); stage now {im._stage}\n")
+        except Interaction_BadAnswer:
+            file.write(f"  -> Interaction_BadAnswer (re-ask)\n")
+
+    try:
+        # ASK_HAS, nothing saved, 'no' -> ends
+        session.written_names.clear()
+        await drive(Interaction_Memorize("proof_done"), 1, "ASK_HAS no-experience")
+
+        # ASK_HAS, nothing saved, 'yes' -> BadAnswer (must save first)
+        session.written_names.clear()
+        await drive(Interaction_Memorize("proof_done"), 0, "ASK_HAS yes-but-empty")
+
+        # ASK_HAS, one saved, 'yes' -> advances to ASK_ALL
+        session.written_names.clear(); session.written_names.append("m1")
+        im = Interaction_Memorize("proof_done")
+        await drive(im, 0, "ASK_HAS yes-with-save")
+        # ASK_ALL, nothing new, 'more' -> BadAnswer
+        await drive(im, 1, "ASK_ALL more-but-nothing-new")
+        # a new save landed, 'more' -> loops
+        session.written_names.append("m2")
+        await drive(im, 1, "ASK_ALL more-with-new-save")
+        # 'that's all' -> ends
+        await drive(im, 0, "ASK_ALL thats-all")
+    finally:
+        _session_var.reset(token)
+        session.written_names.clear()
+
+
+@model_test("MemorizeGuard", "Test_MemorizeGuard.thy", 8)
+async def _test_memorize_guard(root: Root, file: MyIO):
+    """[Trigger guard] maybe_run_memorize_interaction fires an Interaction_Memorize
+    ONLY for a LearningTask on a non-interaction role. UsualTask (default) is a
+    no-op; an interaction fork (is_interaction) is a no-op even under a
+    LearningTask — the guard that stops a memorize fork re-triggering on its own
+    compaction / sibling interaction forks mis-firing it."""
+    from .task import UsualTask, LearningTask
+    from .model import Role_Interaction, ForkingMode, Role_Major
+    session = root.session
+
+    fired: list[str] = []
+    async def stub_launch(interaction):
+        fired.append(type(interaction).__name__)
+        return None
+    session.launch_interaction = stub_launch
+
+    # 1) UsualTask -> no-op
+    session.task = UsualTask(); session.role = Role_Major()
+    fired.clear()
+    await session.maybe_run_memorize_interaction("proof_done")
+    file.write(f"UsualTask_fired={fired}\n")
+
+    # 2) LearningTask, normal role -> fires Interaction_Memorize
+    session.task = LearningTask("proof ... qed"); session.role = Role_Major()
+    fired.clear()
+    await session.maybe_run_memorize_interaction("proof_done")
+    file.write(f"LearningTask_fired={fired}\n")
+
+    # 3) LearningTask but on an interaction fork -> no-op (is_interaction guard)
+    session.role = Role_Interaction(pending=None, prompt="", resume_id=None,
+                                    mode=ForkingMode.FORKING_WITH_CTXT)  # type: ignore[arg-type]
+    fired.clear()
+    await session.maybe_run_memorize_interaction("proof_done")
+    file.write(f"LearningTask_is_interaction_fired={fired}\n")
+    session.role = Role_Major()
+
+
 @model_test("InsertBeforeSubgoalRejected", "Test_InsertBeforeSubgoalRejected.thy", 8)
 async def _test_insert_before_subgoal_rejected(root: Root, file: MyIO):
     """Gate: inserting a user op before a subgoal container's STRUCTURAL child

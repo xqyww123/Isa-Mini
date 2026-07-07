@@ -1,0 +1,12 @@
+--- ASK_HAS no-experience: answer index=1 (stage=ASK_HAS) ---
+  -> ended, returned None
+--- ASK_HAS yes-but-empty: answer index=0 (stage=ASK_HAS) ---
+  -> Interaction_BadAnswer (re-ask)
+--- ASK_HAS yes-with-save: answer index=0 (stage=ASK_HAS) ---
+  -> ContinuingInteraction (re-prompt); stage now ASK_ALL
+--- ASK_ALL more-but-nothing-new: answer index=1 (stage=ASK_ALL) ---
+  -> Interaction_BadAnswer (re-ask)
+--- ASK_ALL more-with-new-save: answer index=1 (stage=ASK_ALL) ---
+  -> ContinuingInteraction (re-prompt); stage now ASK_ALL
+--- ASK_ALL thats-all: answer index=0 (stage=ASK_ALL) ---
+  -> ended, returned None

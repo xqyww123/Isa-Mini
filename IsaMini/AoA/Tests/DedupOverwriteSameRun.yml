@@ -1,0 +1,14 @@
+--------------------------------------------------
+first write
+--------------------------------------------------
+is_error=False
+result=Saved experience `dup_ovw_x`.
+--------------------------------------------------
+second write (same name, new content)
+--------------------------------------------------
+is_error=False
+result=Updated experience `dup_ovw_x`.
+key_changed=True
+old_key_deleted=True
+new_key_present=True
+written_names=['dup_ovw_x', 'dup_ovw_x']
