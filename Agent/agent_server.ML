@@ -9,6 +9,7 @@ val AoA_log_dir: string Config.T
 val AoA_interactive_retrieval: string Config.T
 val AoA_retrieval_forking: string Config.T
 val AoA_use_proof_cache: bool Config.T
+val AoA_store_proof_cache: bool Config.T
 
 type state_id = string
 type states = Minilang.state Symtab.table
@@ -18,9 +19,17 @@ type agent_cost = {input: int, cache_write: int, cache_read: int, output: int,
                    quota_wait_time: real}
 val zero_cost: agent_cost
 
+(* The extra `string * raw_packer` group is the Task: a task-kind tag plus a
+   packer that writes the task payload (empty for "usual"; the original Isar proof
+   for "learning"). Sent to Python as the 11th arg-schema element, a 2-array
+   (task_kind, payload). *)
 val AoA_RPC : driver * (MiniLang_Agent.cfg * MiniLang_Agent.budget) * string
+           -> string * MessagePackBinIO.Pack.raw_packer
            -> Proof.context * thm
            -> MiniLang_Agent.xcmd list * thm * agent_cost
+
+(* The "usual" (ordinary `by aoa` / eval) Task: empty payload. *)
+val usual_task : string * MessagePackBinIO.Pack.raw_packer
 
 val method : thm list -> context_state -> context_state Seq.result Seq.seq
 
@@ -311,6 +320,16 @@ val _ = Config.register_rpc_option "AoA_retrieval_forking"
 val AoA_use_proof_cache = Attrib.setup_config_bool \<^binding>\<open>AoA_use_proof_cache\<close>
       (K true);
 
+(* Whether a finished proof is STORED into the caches on success.
+   true (default) — write both cache levels (L1 Python SQLite, L2 ML
+   Phi_Cache_DB) as before.
+   false           — skip BOTH stores. Used by the AoA-learning run so its
+   reconstructed proofs never pollute the shared production cache (and so a
+   second pass / resume does not self-hit and skip learning). Reading is a
+   separate toggle (AoA_use_proof_cache). *)
+val AoA_store_proof_cache = Attrib.setup_config_bool \<^binding>\<open>AoA_store_proof_cache\<close>
+      (K true);
+
 fun make_invocation_id () =
   let val ms = Time.toMilliseconds (Time.now ())
       val ser = serial ()
@@ -322,7 +341,7 @@ fun make_invocation_id () =
 
 end
 
-fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
+fun AoA_RPC (driver, cfg:cfg, invocation_id) (task_kind, task_payload_packer) (ctxt0, sequent) =
   let open MessagePackBinIO.Pack MessagePackBinIO.Unpack Remote_Procedure_Calling
       val _ = Remote_Procedure_Calling.load ["IsaMini.AoA"]
 
@@ -1285,6 +1304,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
          goal_hash is kept only for the Python L1 SQLite key (passed below). *)
       val aoa_cache_key = "aoa:" ^ raw_goal_hash
       val use_cache = Config.get ctxt AoA_use_proof_cache
+      val store_cache = Config.get ctxt AoA_store_proof_cache
       val cached_xcmd_json =
             if use_cache
             then case Phi_Cache_DB.get_cached_proof thy aoa_cache_key of
@@ -1312,14 +1332,16 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                 val retrieval_forking = Config.get ctxt AoA_retrieval_forking
                 val interactive_retrieval = Config.get ctxt AoA_interactive_retrieval
                 val (_, budget) = cfg
-            in packTuple10 (context_packer ctxt, minilang_flat_goal_packer ctxt,
+            in packTuple11 (context_packer ctxt, minilang_flat_goal_packer ctxt,
                            packString, packString, packString, packString, packString,
                            packTuple3 (packInt, packInt, packInt),
-                           packString, packPair (packBool, packOption packString))
+                           packString, packTuple3 (packBool, packOption packString, packBool),
+                           packPair (packString, fn () => task_payload_packer))
                           (global_context, s0_flat_goal, driver, log_dir, invocation_id,
                            retrieval_forking, interactive_retrieval,
                            (#timeout_seconds budget, #max_tool_calls budget, #max_retries budget),
-                           goal_hash, (use_cache, cached_xcmd_json))
+                           goal_hash, (use_cache, cached_xcmd_json, store_cache),
+                           (task_kind, ()))
             end),
         ret_schema = unpackTuple6 (unpackList MiniLang_Agent.xcmd_unpacker,
                                    unpackOption unpackString,
@@ -1396,7 +1418,9 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                          | _ => false) xcmds
            then error "Internal Error: the returned proofs contains axiomatic sorry."
            else ()
-           ; (case proof_json_opt of
+           ; (if not store_cache
+              then tracing "[AoA-cache] L2 Phi_Cache_DB store SKIPPED (AoA_store_proof_cache=false)"
+              else case proof_json_opt of
                 SOME json => (
                   tracing (String.concat [
                     "[AoA-cache] L2 Phi_Cache_DB store key=", aoa_cache_key,
@@ -1420,6 +1444,11 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (ctxt0, sequent) =
                          quota_wait_time=quota_wait_time})
            | NONE => error "Agent gives up (protocol error: missing reason)")
   end
+
+(* The "usual" Task (ordinary `by aoa` / eval): empty payload. The AoA-learning
+   App supplies its own ("learning", packString isar_proof) instead. *)
+val usual_task : string * MessagePackBinIO.Pack.raw_packer =
+      ("usual", MessagePackBinIO.Pack.packString "")
 
 
 (*** REPL App ***)
@@ -1470,7 +1499,7 @@ fun AoA_REPL_App (cin, cout, toplevel) =
                                           packTuple9 (packInt, packInt, packInt, packInt,
                                                       packReal, packInt, packReal, packReal, packReal))
                      in \<^try>\<open>
-                        let val (_, seq, aoa_cost) = AoA_RPC (driver, cfg, invocation_id) (ctxt, sequent)
+                        let val (_, seq, aoa_cost) = AoA_RPC (driver, cfg, invocation_id) usual_task (ctxt, sequent)
                             val time = Timing.result start_time
                          in REPL_Server.output cout pack_result
                                  ( "success",
@@ -1562,7 +1591,7 @@ fun method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
              (case SINGLE (Goal_Preprocess.preprocess_split_tac ctxt) sequent of
                 SOME st' => st'
               | NONE => sequent)
-        in AoA_RPC (driver, MiniLang_Agent.default_cfg, invocation_id) (ctxt, sequent)
+        in AoA_RPC (driver, MiniLang_Agent.default_cfg, invocation_id) usual_task (ctxt, sequent)
            |> (fn (_, sequent', _) => SOME (Seq.Result (ctxt, sequent'), Seq.empty))
        end )
 

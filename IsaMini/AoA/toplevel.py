@@ -65,9 +65,12 @@ async def _replay_cached_proof(connection: Connection, packed_ops: list[Any],
 async def IsaMini_AoA(data: tuple, connection: Connection):
     (global_context, ptree, driver, log_dir, invocation_id,
      retrieval_forking_str, interactive_retrieval_str, budget_tuple,
-     goal_hash, cache_flags) = data
-    # ML pairs the read-cache toggle with the L2 (Phi_Cache_DB) payload.
-    use_cache, cached_xcmd_json = cache_flags
+     goal_hash, cache_flags, task_info) = data
+    # ML pairs the read-cache toggle with the L2 (Phi_Cache_DB) payload and the
+    # store toggle.
+    use_cache, cached_xcmd_json, store_cache = cache_flags
+    # Task = (kind, payload); "usual" (empty payload) or "learning" (Isar proof).
+    task_kind, task_payload = task_info
     timeout_seconds, max_tool_calls, max_retries = budget_tuple
 
     # Environment variable AoA_LOG_DIR overrides user-provided log_dir
@@ -178,6 +181,9 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
                     f"falling back to 'no'. "
                     f"Known: {sorted(INTERACTIVE_RETRIEVAL_MAP)}")
             interactive_retrieval = InteractiveRetrievalMode.NO
+        from .task import UsualTask, LearningTask
+        task_obj = (LearningTask(task_payload) if task_kind == "learning"
+                    else UsualTask())
         async with drv(connection.server.logger, actual_log_path,
                        argument=argument,
                        retrieval_forking_mode=retrieval_forking,
@@ -185,6 +191,10 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
                        timeout_seconds=timeout_seconds,
                        max_tool_calls=max_tool_calls,
                        max_retries=max_retries) as session:
+            # Set the Task on the runtime (via the session shim) before init/run so
+            # the system prompt and initial message pick it up. Forks inherit it
+            # through the shared runtime singleton.
+            session.task = task_obj
             root = Root((global_context, ptree), connection)
             await session.initialize(root)
             await session.run()
@@ -201,6 +211,11 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
             # here, matching worker_end's "not on cancellation" semantics.
             if session._query_calls_since_survey >= 1:
                 await session.run_missing_lemma_survey("session_end")
+            # LearningTask reflection on success: distil reusable experience into
+            # memories. No-op for a UsualTask (see maybe_run_memorize_interaction);
+            # gated on a finished proof (decision 6: proof_done fires on success).
+            if root.is_proof_finished():
+                await session.maybe_run_memorize_interaction("proof_done")
             quit_obj = session.quit_info
             cost = (session.total_input_tokens,
                     session.total_cache_creation_input_tokens,
@@ -221,10 +236,16 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
 
     if root.is_proof_finished():
         proof_json = json.dumps(assembled)
-        # Store in Python SQLite cache
-        get_proof_cache().store(goal_hash, assembled)
-        logger.info("[AoA-cache] L1 SQLite STORE goal_hash=%s (%d ops) db=%s",
-                    goal_hash, len(assembled), get_proof_cache().db_path)
+        # Store in Python SQLite cache (gated: the learning run sets
+        # store_cache=false so its reconstructed proofs never pollute the shared
+        # production cache).
+        if store_cache:
+            get_proof_cache().store(goal_hash, assembled)
+            logger.info("[AoA-cache] L1 SQLite STORE goal_hash=%s (%d ops) db=%s",
+                        goal_hash, len(assembled), get_proof_cache().db_path)
+        else:
+            logger.info("[AoA-cache] L1 SQLite STORE SKIPPED (AoA_store_proof_cache=false) goal_hash=%s",
+                        goal_hash)
         # Write to log directory
         if actual_log_path:
             try:

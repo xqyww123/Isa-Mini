@@ -1488,6 +1488,11 @@ class APIDriver(LMDriver):
             f"Compaction triggered: {len(messages)} messages, "
             f"input={self.total_input_tokens} output={self.total_output_tokens}")
 
+        # LearningTask reflection at the compaction seam (mirrors ClaudeCode
+        # on_compact): distil experience before the context is summarized away.
+        # No-op for a UsualTask / interaction fork; best-effort (swallows failures).
+        await self.maybe_run_memorize_interaction("pre_compact")
+
         effective_rounds = recent_rounds if recent_rounds is not None else self.COMPACTION_RECENT_ROUNDS
         if effective_rounds == 0:
             recent_messages: list[Msg] = []

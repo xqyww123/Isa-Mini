@@ -49,7 +49,7 @@ from .model import (
     AnswerIndexes, AnswerIndex, AnswerIndexesOrName, AnswerIndexesOrSpec,
     AnswerInstantiate, AnswerRefutation, AnswerStruggleAssessment,
     AnswerMissingLemmas, AnswerConstraintRequest,
-    TOOL_EDIT, TOOL_DELETE, TOOL_COMMENT, TOOL_READ, TOOL_RECALL_REMOVED,
+    TOOL_EDIT, TOOL_DELETE, TOOL_COMMENT, TOOL_SEARCH, TOOL_READ, TOOL_RECALL_REMOVED,
     TOOL_REQUEST_LEMMAS, TOOL_REPORT, TOOL_SUBAGENT, TOOL_CLOSE_SUBAGENT,
     DeletedEntry, CommentOutcome,
     TOOL_ANSWER_INDEXES, TOOL_ANSWER_INDEX, TOOL_ANSWER_INDEXES_OR_NAME,
@@ -70,6 +70,7 @@ from .model import (
     print_indent, print_goal, MyIO,
 )
 import yaml as _yaml
+from dataclasses import dataclass, field
 from .retrieval import (
     BATCHED_SEMANTIC_SEARCH,
     _query_tool_logic,
@@ -2144,6 +2145,87 @@ def _experience_document_text(patterns: list[str], goal_description: str) -> str
     return "\n".join(lines)
 
 
+# --- write_memory corpus-dedup (adjacency mechanism, §3.1) -------------------
+# Cosine threshold above which an existing experience is treated as a possible
+# duplicate of a new one. Named constant (validate the embedding model's
+# `normalize` so this sits on a [0,1] cosine — see EXPERIENCE_MEMORY docs).
+_EXPERIENCE_DUP_THRESHOLD = 0.7
+# How many nearest neighbours to fetch for the dedup check.
+_EXPERIENCE_DUP_K = 5
+
+# Tools that may be interleaved between a dedup rejection and the agent's
+# confirming re-call without breaking "adjacency": read-only / interaction tools.
+# MODULE-PRIVATE — this classification is the dedup mechanism's, and must NOT be
+# pushed down into the generic Session.tool_call_log (modularity red line).
+_ADJACENCY_SAFE: frozenset = frozenset(
+    {TOOL_SEARCH, TOOL_READ, TOOL_RECALL_REMOVED}) | ANSWER_TOOLS
+
+
+@dataclass
+class DedupBlock:
+    """A pending write_memory dedup rejection. `log_len` = the tool_call_log index
+    just AFTER the rejecting write_memory call (len at rejection + 1, since that
+    call's own entry is appended only on dispatch exit); the adjacency window is
+    tool_call_log[log_len:]. `shown` = the matches displayed to the agent
+    (name -> set of universal keys), authorizing an adjacent overwrite of those
+    names."""
+    log_len: int
+    shown: 'dict[str, set[bytes]]' = field(default_factory=dict)
+
+
+async def _experience_dup_search(store, doc_text: str, k: int) -> 'list[tuple[bytes, float]]':
+    """Corpus-wide near-duplicate search over ALL experience keys (NOT the
+    availability-scoped `_experience_hits`), so cross-theory duplicates are found.
+    Returns raw (key, cosine) from `topk` — deliberately bypassing lookup()'s
+    stage-1 boost and reranker."""
+    from Isabelle_Semantic_Embedding.experience_index import Experience_Index
+    from Isabelle_Semantic_Embedding import embedding_config as _ecfg
+    keys = list(Experience_Index.all_keys())
+    if not keys:
+        return []
+    qvec = (await store.emb_provider.embed(
+        [doc_text], role="query",
+        task_override=_ecfg.experience_task_description())).vectors[0]
+    return await store.topk(qvec, keys, k)
+
+
+def _render_dup_rejection(session: Session, name: str,
+                          matches: 'list[tuple[bytes, Any]]') -> str:
+    """[T3] The dedup rejection message: the overlapping experiences plus the
+    three next-step options. Agent-facing wording is fixed (approved)."""
+    wm = session.tool_name(TOOL_WRITE_MEMORY)
+    n = len(matches)
+    lines = [
+        f"**The memory was NOT written.** {n} existing experience(s) may overlap "
+        f"with yours (semantic relevance > {_EXPERIENCE_DUP_THRESHOLD:g}):",
+        "",
+    ]
+    for _uk, rec in matches:
+        lines.append(f"- experience `{rec.name}`:")
+        if rec.interpretation:
+            lines.append(f"    - When to use: {rec.interpretation}")
+        try:
+            pats = json.loads(rec.expr) if rec.expr else []
+        except (json.JSONDecodeError, TypeError):
+            pats = [rec.expr] if rec.expr else []
+        if pats:
+            # rec.expr stores patterns in ASCII (\<notin> ...); render Unicode.
+            lines.append("    - Goal patterns:")
+            lines += [f"        - {pretty_unicode(p)}" for p in pats]
+        if rec.experience:
+            lines.append(f"    - Experience: {rec.experience}")
+        lines.append("")
+    lines += [
+        f"- If you are confident yours is genuinely **new** (not covered above), "
+        f"call `{wm}` again with the same name (`{name}`) to save it.",
+        f"- If one of the above **is** the right memory but is not comprehensive "
+        f"enough, call `{wm}` again using **that memory's exact `name`** to "
+        f"overwrite and improve it.",
+        "- Otherwise, don't save this one.",
+    ]
+    return "\n".join(lines)
+
+
 async def _write_memory_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     """`write_memory`: save/refresh a reusable proof experience (a strategy for a
     general class of goals; see docs/EXPERIENCE_MEMORY.md).
@@ -2177,51 +2259,130 @@ async def _write_memory_tool_logic(session: Session, args: dict) -> tuple[str, b
     if not isinstance(experience, str) or not experience.strip():
         return ("`experience` must be a non-empty string.", True)
 
+    # goal_patterns arrive as agent Unicode; model them as IsaTerm so the
+    # Unicode<->ASCII boundary is explicit and cannot be skipped. `.ascii` (e.g.
+    # `\<notin>`) is the canonical form fed to Isabelle — the ML constituents
+    # callback AND the stored rec.expr (which retrieval re-parses). `.unicode` is
+    # used only for embedding (semantic form) and agent-facing display. Passing
+    # raw Unicode to Isabelle's inner lexer silently fails to parse (∉ ℚ ¬ ...),
+    # dropping the pattern and orphaning the memory from the constituent index.
+    pats = [IsaTerm.from_agent(p) for p in patterns]
+    pats_ascii = [p.ascii for p in pats]
+    pats_uni = [p.unicode for p in pats]
+
     ml_state = session.retrieval_state()
     conn = ml_state.connection
 
     # 1. minimal-antichain constituent theories of the patterns (ML side).
     try:
         consts_raw = await conn.callback(
-            "Experience.constituents", (ml_state.name, patterns))
+            "Experience.constituents", (ml_state.name, pats_ascii))
     except IsabelleError as e:
-        msg = e.errors[0] if e.errors else str(e)
-        return (f"Could not process goal_patterns: {msg}", True)
+        # The ML side self-describes (per-pattern "Could not parse pattern ..."),
+        # so return it verbatim rather than wrapping in a generic prefix.
+        return (e.errors[0] if e.errors else str(e), True)
     constituents = [((n if isinstance(n, str) else n.decode("utf-8")), bytes(h))
                     for n, h in consts_raw]
+    # An empty `constituents` list is INTENTIONAL: a valid pattern that resolves to
+    # no library theory (e.g. `?P`) becomes a GLOBAL experience — Experience_Index
+    # registers it under the _GLOBAL bucket (always a retrieval/dedup candidate),
+    # and xor_theory_prefix([]) gives the all-zero key prefix. (Genuinely malformed
+    # patterns are rejected upstream by the Experience.constituents callback, which
+    # errors on any pattern unparseable even after fallbacks -> `except IsabelleError`.)
 
     # 2. assemble the content-addressed universal key.
     prefix = xor_theory_prefix([h for _, h in constituents])
     def _norm(s: str) -> str:
         return " ".join(s.split())
-    payload = "\x00".join([_norm(name), *(_norm(p) for p in patterns),
+    payload = "\x00".join([_norm(name), *(_norm(p) for p in pats_ascii),
                            _norm(desc), _norm(experience)]).encode("utf-8")
     hash15 = xxhash.xxh128(payload).digest()[:15]
     key = prefix + bytes([int(EntityKind.EXPERIENCE)]) + hash15
 
-    # 3. overwrite a same-name memory created earlier THIS run.
-    old_uk = session.runtime.created_memories.get(name)
-    updated = old_uk is not None
+    # 3. adjacency handshake (§3.1). "adjacent" = a dedup rejection is pending and
+    # only read-only / interaction tools have been called since it was raised.
+    created = session.runtime.created_memories
     store = await conn.semantic_vector_store()
-    if old_uk is not None and old_uk != key:
-        old_rec = Semantic_DB[old_uk]
-        Semantic_DB.delete(old_uk)
-        store.delete(old_uk)
+    block = session.dedup_block
+    adjacent = (block is not None and
+                all(t in _ADJACENCY_SAFE
+                    for t in session.tool_call_log[block.log_len:]))
+
+    def _delete_uk(uk: bytes) -> None:
+        old_rec = Semantic_DB[uk]
+        Semantic_DB.delete(uk)
+        store.delete(uk)
         old_consts = old_rec.theory_constituents if old_rec is not None else None
         if old_consts:
-            Experience_Index.remove(old_uk, [h for _, h in old_consts])
+            Experience_Index.remove(uk, [h for _, h in old_consts])
         else:
-            Experience_Index.remove_scanning(old_uk)
+            Experience_Index.remove_scanning(uk)
 
-    # 4. write record + inverted index + document embedding.
-    Semantic_DB[key] = SemanticRecord(
-        EntityKind.EXPERIENCE, name, json.dumps(patterns), desc,
-        None, constituents, experience)
-    Experience_Index.add(key, [h for _, h in constituents])
-    await store.embed([(key, _experience_document_text(patterns, desc))])
-    session.runtime.created_memories[name] = key
+    async def _persist(verb: str) -> tuple[str, bool]:
+        # Embed FIRST: it is the only fallible/remote step. If it raises, nothing
+        # is written to Semantic_DB / Experience_Index (and, on the overwrite
+        # path below, the prior memory has not been deleted yet). A written-but-
+        # unreferenced vector is harmless; a record/index entry without a vector
+        # would be an invisible orphan (retrieval + dedup both need the vector).
+        await store.embed([(key, _experience_document_text(pats_uni, desc))])
+        Semantic_DB[key] = SemanticRecord(
+            EntityKind.EXPERIENCE, name, json.dumps(pats_ascii), desc,
+            None, constituents, experience)
+        Experience_Index.add(key, [h for _, h in constituents])
+        created[name] = key
+        session.written_names.append(name)
+        session.dedup_block = None
+        return (f"{verb} experience `{name}`.", False)
 
-    return (f"{'Updated' if updated else 'Saved'} experience `{name}`.", False)
+    # Case 1: overwrite an *authorized* same-name memory — this run's own creation
+    # (any time), or one shown to the agent during an adjacent dedup rejection.
+    # A same-name entry that was NEVER shown is never silently removed.
+    targets: set[bytes] = set()
+    if name in created:
+        targets.add(created[name])
+    if adjacent and block is not None:
+        targets |= block.shown.get(name, set())
+    if targets:
+        # Persist the new record durably FIRST, then delete the old one(s): a
+        # transient embed failure in _persist must not have already destroyed the
+        # prior good memory (concern #4). _delete_uk of the same `key` is guarded.
+        result = await _persist("Updated")
+        for uk in targets:
+            if uk != key:            # never delete the very key we just wrote
+                _delete_uk(uk)
+        return result
+
+    # Case 2: an adjacent re-call is the agent confirming "not a duplicate" —
+    # accept it, even if the content changed since the rejection. One block
+    # authorizes exactly one write.
+    if adjacent:
+        return await _persist("Saved")
+
+    # 4. fresh corpus-wide dedup search (non-adjacent). NOT availability-scoped:
+    # Experience_Index.all_keys() so cross-theory duplicates are caught.
+    doc_text = _experience_document_text(pats_uni, desc)
+    hits = await _experience_dup_search(store, doc_text, _EXPERIENCE_DUP_K)
+    matches: list[tuple[bytes, Any]] = []
+    for uk, score in hits:
+        if uk == key or score <= _EXPERIENCE_DUP_THRESHOLD:
+            continue
+        rec = Semantic_DB[uk]
+        if rec is not None and rec.kind == EntityKind.EXPERIENCE:
+            matches.append((uk, rec))
+    if matches:
+        shown: dict[str, set[bytes]] = {}
+        for uk, rec in matches:
+            shown.setdefault(rec.name, set()).add(uk)
+        # +1 reserves the slot this very write_memory call will occupy: its own
+        # tool_call_log entry is appended only on dispatch exit (see execute's
+        # `finally`), so at this point len() does not yet count it. Without the +1
+        # the rejecting call itself would fall inside the next call's adjacency
+        # window and (being write_memory, not _ADJACENCY_SAFE) force adjacent=False.
+        session.dedup_block = DedupBlock(log_len=len(session.tool_call_log) + 1, shown=shown)
+        return (_render_dup_rejection(session, name, matches), False)
+
+    # No near-duplicate — write it.
+    return await _persist("Saved")
 
 
 class ToolExecutor:
@@ -2404,6 +2565,14 @@ class ToolExecutor:
         if perm_error:
             return (perm_error, True)
 
+        # Generic per-session tool-call log (abstract id). Single dispatch
+        # chokepoint for BOTH drivers: the ClaudeCode MCP `call_tool` and the
+        # APIDriver both route built-in proof tools through here. Drives the
+        # write_memory dedup adjacency check (see _ADJACENCY_SAFE). The append is
+        # deferred to the `finally` below (on dispatch exit): a tool must NOT see
+        # its own entry while its logic runs — write_memory computing adjacency
+        # would otherwise always find itself in the window. The rejection path
+        # compensates with block.log_len = len + 1.
         is_error = False
         try:
             match name:
@@ -2521,6 +2690,12 @@ class ToolExecutor:
                 session.tool_name(name),
                 f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
             sys.exit(1)
+        finally:
+            # Append AFTER dispatch (see the note at the top of execute): the
+            # in-flight call must not be part of its own adjacency window. Runs on
+            # every exit path (normal return, LMUnreachable return, re-raise,
+            # sys.exit), matching the prior always-append-once-dispatched behaviour.
+            session.tool_call_log.append(name)
 
         if name == "query" and not is_error:
             if time() - session.last_proof_op_time >= self._SEARCH_HINT_THRESHOLD:

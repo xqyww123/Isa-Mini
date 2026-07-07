@@ -8,6 +8,7 @@ from pathlib import Path
 from .helper import split_id_into_segs, cat_segs_into_id, incr_id_major, incr_id_minor, local_step_between, MyIO
 from .linked_list import Cons, LinkedList, from_iterable, iterate, concat
 from . import config
+from .task import Task, UsualTask
 import types as _types
 from typing import Any, Awaitable, ClassVar, Iterable, Mapping, NamedTuple, Protocol, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired, TypeAliasType, Union, get_type_hints, get_origin, get_args, is_typeddict, TYPE_CHECKING
 from Isabelle_RPC_Host import Connection, IsabelleError, pretty_unicode, ascii_of_unicode
@@ -2968,6 +2969,97 @@ class Interaction_MissingLemmaSurvey(Interaction):
 
     async def answer(self, answer: 'AnswerMissingLemmas') -> list:
         return answer.missing_lemmas
+
+
+class Interaction_Memorize(Interaction):
+    """LearningTask reflection: after a proof / sub-goal completes, or before a
+    context compaction, ask the agent to distil reusable proof experience into
+    memories (``write_memory``). Two stages:
+
+      - ASK_HAS: is there any reusable experience worth saving? (encourages many
+        small, focused memories; prompts a `query` first to avoid duplicates)
+      - ASK_ALL: loop, re-prompting "anything else?" until the agent says it has
+        saved everything (or fails to save anything new).
+
+    The fork inherits full context and may `query` / `write_memory` / answer. The
+    stage flow is driven purely by ``session.written_names`` (the names actually
+    persisted THIS fork). Launched — and its failures swallowed — by
+    ``Session.maybe_run_memorize_interaction``."""
+    forking = ForkingMode.FORKING_WITH_CTXT
+    fork_allowed_tools = [TOOL_ANSWER_INDEX, TOOL_WRITE_MEMORY, TOOL_SEARCH]
+
+    _OPENERS = {
+        "proof_done": "You've just finished this proof.",
+        "pre_compact": "Your working context is about to be compacted.",
+        "worker_end": "You've just finished this sub-goal.",
+    }
+
+    def __init__(self, trigger: str):
+        self.trigger = trigger
+        self._stage = "ASK_HAS"
+        # len(written_names) snapshot at the last ASK_ALL (re-)prompt, so a
+        # "there's more" answer is only accepted when something new landed.
+        self._written_at_last_ask_all = 0
+
+    async def prompt(self, indent: int, file: MyIO) -> None:
+        session = the_session()
+        if self._stage == "ASK_HAS":
+            opener = self._OPENERS.get(self.trigger, "")
+            file.write(
+                f"{opener} Did this proof teach you something **non-obvious** — a "
+                f"lesson worth saving for a **general class** of future goals? Save "
+                f"an insight **only if it was not obvious to you beforehand** — "
+                f"something you did **not already know**, or would not have "
+                f"predicted, that this proof revealed. If the approach was obvious "
+                f"from the start, or automation simply closed it, there is nothing "
+                f"worth saving — answer no. Prefer several small, focused memories "
+                f"over one catch-all. First `{tn(TOOL_SEARCH)}` with "
+                f"`kinds:[\"experience\"]` to avoid duplicating what's already "
+                f"stored. If you have such an insight, call `{tn(TOOL_WRITE_MEMORY)}` "
+                f"now (once per distinct lesson). Then answer with "
+                f"`{tn(TOOL_ANSWER_INDEX)}`: `0` = yes, `1` = no.\n")
+        else:  # ASK_ALL
+            # written_names logs persist EVENTS, so an 'Updated' overwrite re-adds
+            # an already-saved name; dedup for display (order-preserving) so the
+            # saved-list never shows the same name twice.
+            saved = ", ".join(f"`{n}`" for n in dict.fromkeys(session.written_names))
+            file.write(
+                f"You've saved: {saved}. Is there **another distinct non-obvious "
+                f"insight** worth its own memory — again, only something you "
+                f"**didn't already know**, not a routine step? If so, **save it "
+                f"now** with `{tn(TOOL_WRITE_MEMORY)}`, **then answer**. Answer with "
+                f"`{tn(TOOL_ANSWER_INDEX)}`: `0` = that's all, `1` = I've added more.\n")
+
+    async def answer(self, answer: 'AnswerIndex') -> None:
+        session = the_session()
+        idx = answer.index
+        if self._stage == "ASK_HAS":
+            if idx is None or idx == 1:            # no reusable experience → done
+                return None
+            _check_index(idx, 2)
+            # idx == 0: the agent claims it has something worth saving.
+            if not session.written_names:
+                raise Interaction_BadAnswer(
+                    f"You answered yes, but nothing has been saved yet. Call "
+                    f"`{tn(TOOL_WRITE_MEMORY)}` (split distinct insights into "
+                    f"separate memories), then answer again — or answer `1` if "
+                    f"there's really nothing to save.")
+            self._stage = "ASK_ALL"
+            self._written_at_last_ask_all = len(session.written_names)
+            raise ContinuingInteraction(new_prompt=await self._render_prompt())
+        else:  # ASK_ALL
+            if idx is None or idx == 0:            # that's all → done
+                return None
+            _check_index(idx, 2)
+            # idx == 1: the agent says there is more to add.
+            if len(session.written_names) > self._written_at_last_ask_all:
+                self._written_at_last_ask_all = len(session.written_names)
+                raise ContinuingInteraction(new_prompt=await self._render_prompt())
+            raise Interaction_BadAnswer(
+                f"You answered that you have more to add, but nothing new has "
+                f"been saved. Call `{tn(TOOL_WRITE_MEMORY)}` (split distinct "
+                f"insights into separate memories), then answer again — or "
+                f"answer `0` if that's really all.")
 
 
 class Interaction_DifficultyEvaluation(Interaction):
@@ -11037,6 +11129,12 @@ class Runtime:
         # create that never scans for, nor touches, a pre-existing memory from a
         # prior run. See _write_memory_tool_logic and docs/EXPERIENCE_MEMORY.md.
         self.created_memories: dict[str, bytes] = {}
+        # The Task this proof tree is executing (UsualTask by default). One per
+        # tree — shared by planner + workers + interaction forks. Set by the
+        # top-level session at construction from the ML-supplied task payload;
+        # forks inherit it through this shared runtime singleton. Drives the
+        # system prompt and initial-message injection (see Session.task).
+        self.task: Task = UsualTask()
 
     def next_pit_name(self) -> str:
         i = self._pit_counter
@@ -11226,6 +11324,23 @@ class Session:
         # lifetime, but computing it resolves worker-suggested lemmas via RPC, so
         # repeat callers (compaction / restart / `_find_recent_start`) reuse it.
         self._initial_prompt_cache: 'str | None' = None
+        # --- write_memory corpus-dedup handshake (adjacency mechanism) ---
+        # Generic per-session tool-call log: abstract tool ids appended at the
+        # single dispatch chokepoint (ToolExecutor.execute). MODULARITY red line:
+        # this stays a neutral log — the adjacency classification (_ADJACENCY_SAFE)
+        # is private to the dedup module (mcp_http_server), never mixed in here.
+        self.tool_call_log: 'list[tool]' = []
+        # Set when a write_memory was rejected as a possible duplicate; the next
+        # write_memory that is "adjacent" (only read/answer tools interleaved
+        # since) is accepted as the agent's confirmation. Per-session (each
+        # session runs its own handshake; forks are isolated). See DedupBlock in
+        # mcp_http_server and _write_memory_tool_logic.
+        self.dedup_block: 'Any' = None
+        # Names actually PERSISTED (Saved/Updated) this session — drives the
+        # memorize interaction's stage flow. A dedup-rejected first call that did
+        # not land does NOT count. Per-session (a memorize fork accumulates only
+        # what it wrote).
+        self.written_names: 'list[str]' = []
         if parent is not None:
             # Subsessions share parent's log files
             self.log_dir = parent.log_dir
@@ -11262,6 +11377,12 @@ class Session:
                 self._setup_log_directory(log_dir)
 
     # --- Forwarding properties to Runtime ---
+    @property
+    def task(self) -> Task:
+        return self.runtime.task
+    @task.setter
+    def task(self, v: Task):
+        self.runtime.task = v
     @property
     def age(self) -> int:
         return self.runtime.age
@@ -11552,7 +11673,16 @@ class Session:
         return f"if a needed lemma truly does not exist, prove it as a `Have` node{suffix}.\n"
 
     def system_prompt(self) -> str | None:
-        """Return the system prompt, or None if the driver folds it into the initial message."""
+        """Return the system prompt, or None if the driver folds it into the initial
+        message. Delegates to the session's Task (UsualTask by default reproduces the
+        legacy `_build_system_prompt("")` bytes); a driver may override this method."""
+        return self.task.system_prompt(self)
+
+    def _build_system_prompt(self, reference_note: str = "") -> str | None:
+        """Construct the system prompt body. `reference_note`, when non-empty, is
+        injected into the **major** branch only (workers / interaction forks never
+        see it) — used by LearningTask to note that the original Isar proof is
+        provided for reference (see task.py). `""` yields the legacy bytes."""
         report_line = (
             "If the goal itself looks flawed or unprovable, or you have exhausted "
             f"your strategies — report it with `{self.tool_name(TOOL_REPORT)}`.\n"
@@ -11596,6 +11726,7 @@ class Session:
                 "goal step by step — it is to formalize a *plan* for the proof. The MCP tools "
                 "below are the medium in which you write that plan; the goal and the current "
                 "(incomplete) plan are in `./proof.yaml`.\n"
+                + reference_note +
                 "\n"
                 "Work breadth-first:\n"
                 "1. Formalize the top-level structure first — decompose the goal into a few "
@@ -11701,7 +11832,14 @@ class Session:
         return self._initial_prompt_cache
 
     async def _compute_initial_prompt(self) -> str:
-        """Build the initial user message (uncached — call `initial_prompt`)."""
+        """Build the initial user message (uncached — call `initial_prompt`), then
+        append any Task-supplied extra (UsualTask adds nothing → legacy bytes;
+        LearningTask appends the original Isar proof block, major only)."""
+        base = await self._compute_initial_prompt_base()
+        return base + self.task.initial_prompt_extra(self)
+
+    async def _compute_initial_prompt_base(self) -> str:
+        """Build the initial user message body (uncached — call `initial_prompt`)."""
         # Render the proof scope for its side effect: ``update_line=True``
         # populates each node's ``.line`` (shown by drivers that enable
         # ``quickview_line_numbers``). The rendered text itself is unused — the
@@ -12157,6 +12295,28 @@ class Session:
             if self._budget_start_time is not None:
                 self._budget_start_time += time() - _t0
         self.log_missing_lemmas(trigger, lemmas)
+
+    async def maybe_run_memorize_interaction(self, trigger: str) -> None:
+        """LearningTask reflection hook: fork an ``Interaction_Memorize`` to distil
+        reusable experience into memories. Three triggers — ``proof_done`` /
+        ``worker_end`` (after a natural completion) and ``pre_compact`` (at the
+        compaction seam). No-op for any non-LearningTask, and — crucially — for an
+        interaction fork itself: the ``is_interaction`` guard stops a memorize fork
+        from re-triggering on its own compaction and stops sibling interaction
+        forks (Struggle/Refutation/Survey) from mis-firing it (they share the
+        tree-wide Task). Fail-fast: a failure inside the fork PROPAGATES. A bug in
+        the memory subsystem (a bad write, an embed/index error, a pattern-
+        conversion throw) must surface loudly rather than hide behind a warning
+        while the proof still reports success — so a memorize failure CAN now abort
+        the enclosing ``proof_done``/``worker_end`` path or the ``pre_compact`` hook
+        (intended, so subsystem bugs are caught early). No budget credit-back
+        (decision C16)."""
+        from .task import LearningTask
+        if not isinstance(self.task, LearningTask):
+            return
+        if self.is_interaction:
+            return
+        await self.launch_interaction(Interaction_Memorize(trigger))
 
     # Proof tree logging methods
     def log_proof_operation(self, step: str, operation: str, details: dict[str, Any]):
@@ -13184,6 +13344,10 @@ class WorkerHandle:
             # every natural exit (proved / surrendered / budget exhausted), not
             # on cancellation. No-op unless AOA_MISSING_LEMMA_SURVEY is set.
             await sub.run_missing_lemma_survey("worker_end")
+            # LearningTask reflection before the worker winds down (decision 6:
+            # worker_end fires regardless of success, like the survey above).
+            # No-op for a UsualTask; runs on the worker's OWN session.
+            await sub.maybe_run_memorize_interaction("worker_end")
         except asyncio.CancelledError:
             session.warn_AoA_opr(f"{tag} cancelled")
             raise

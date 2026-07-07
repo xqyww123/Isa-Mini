@@ -87,6 +87,7 @@ class ClaudeCode(LMDriver):
         "answer_missing_lemmas": "mcp__proof__answer_missing_lemmas",
         "answer_constraint_request": "mcp__proof__answer_constraint_request",
         "refresh": "mcp__proof__refresh",
+        "write_memory": "mcp__proof__write_memory",
     }
     TOOL_WHITELIST = _NON_PROOF_TOOLS + list(_TOOL_NAME_MAP.values())
     # subagent/cancel_subagent are dispatch tools (the main agent AND workers); only
@@ -336,6 +337,11 @@ class ClaudeCode(LMDriver):
         context: HookContext,
     ) -> HookJSONOutput:
         """Clear view caches before context compaction so the agent re-discovers entities."""
+        # LearningTask reflection at the compaction seam: distil experience before
+        # the working context is summarized away. No-op for a UsualTask / on an
+        # interaction fork; best-effort (swallows failures so the PreCompact hook
+        # response is never turned into an error). See maybe_run_memorize_interaction.
+        await self.maybe_run_memorize_interaction("pre_compact")
         self._reset_view_state()
         self._log_meta("COMPACTION")
         return {}
