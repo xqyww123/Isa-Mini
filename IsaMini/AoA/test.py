@@ -137,6 +137,7 @@ async def _test_sqrt2(root: Root, file: MyIO):
     print_header("Have", file)
     root.print(0, file)
 
+
 @model_test("Branch1", "Test_Branch.thy", 8)
 async def _test_branch(root: Root, file: MyIO):
     print_header("Initial YAML", file)
@@ -187,6 +188,7 @@ async def _test_branch(root: Root, file: MyIO):
     unfinished = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 
 @model_test("ExperienceMemory", "Test_ExperienceMemory.thy", 8)
 async def _test_experience_memory(root: Root, file: MyIO):
@@ -480,6 +482,7 @@ async def _test_insert_before_subgoal_rejected(root: Root, file: MyIO):
     file.write(f"legit committed: {[n.id for n in out2.committed]}\n")
     file.write(f"legit failure: {type(out2.failure).__name__ if out2.failure is not None else None}\n")
 
+
 @model_test("AmendSubgoalRejected", "Test_AmendSubgoalRejected.thy", 8)
 async def _test_amend_subgoal_rejected(root: Root, file: MyIO):
     """Gate: amending a subgoal container's STRUCTURAL child (a Branch's `1.0`
@@ -564,6 +567,7 @@ async def _test_amend_subgoal_rejected(root: Root, file: MyIO):
     file.write(f"legit amend committed: {[n.id for n in out4.committed]}\n")
     file.write(f"legit amend failure: {type(out4.failure).__name__ if out4.failure is not None else None}\n")
 
+
 @model_test("StructuralTargetRejected", "Test_StructuralTargetRejected.thy", 8)
 async def _test_structural_target_rejected(root: Root, file: MyIO):
     """Gate: insert_before/amend targeting a STRUCTURAL container that is not a
@@ -634,6 +638,7 @@ async def _test_structural_target_rejected(root: Root, file: MyIO):
     file.write(f"legit amend committed: {[n.id for n in out4.committed]}\n")
     file.write(f"legit amend failure: {type(out4.failure).__name__ if out4.failure is not None else None}\n")
 
+
 @model_test("DeleteStructuralRejected", "Test_DeleteStructuralRejected.thy", 8)
 async def _test_delete_structural_rejected(root: Root, file: MyIO):
     """Gate: `delete` of a Root structural child — the GlobalEnv "global" block (or
@@ -679,6 +684,7 @@ async def _test_delete_structural_rejected(root: Root, file: MyIO):
     file.write(f"branch children after delete 1.2: {[c.id for c in root.locate_node('1').sub_nodes]}\n")
     file.write(f"proof finished after case delete: {root.is_proof_finished()}\n")
 
+
 @model_test("DoneGoalHidesPremises", "Test_DoneGoalHidesPremises.thy", 8)
 async def _test_done_goal_hides_premises(root: Root, file: MyIO):
     """Bug: quickview shows premises for goals marked 'done'.
@@ -706,6 +712,7 @@ async def _test_done_goal_hides_premises(root: Root, file: MyIO):
     print_header("Quickview (done goals should hide premises)", file)
     root.quickview(0, file)
 
+
 @model_test("EquivDerive", "Test003.thy", 8)
 async def _test_EquivDerive(root: Root, file: MyIO):
     print_header("Initial YAML", file)
@@ -716,6 +723,7 @@ async def _test_EquivDerive(root: Root, file: MyIO):
     })])
     print_header("Inference Rule", file)
     root.print(0, file)
+
 
 @model_test("IntroConj", "Test_IntroConj.thy", 8)
 async def _test_IntroConj(root: Root, file: MyIO):
@@ -728,6 +736,7 @@ async def _test_IntroConj(root: Root, file: MyIO):
     print_header("Inference Rule", file)
     root.print(0, file)
 
+
 @model_test("IntroConj_short", "Test_IntroConj_short.thy", 8)
 async def _test_IntroConj_short(root: Root, file: MyIO):
     print_header("Initial YAML", file)
@@ -738,6 +747,7 @@ async def _test_IntroConj_short(root: Root, file: MyIO):
     })])
     print_header("Inference Rule", file)
     root.print(0, file)
+
 
 @model_test("InferenceRuleSolvesGoal", "Test_InferenceRule_SolvesGoal.thy", 8)
 async def _test_InferenceRuleSolvesGoal(root: Root, file: MyIO):
@@ -770,6 +780,7 @@ async def _test_InferenceRuleSolvesGoal(root: Root, file: MyIO):
 # behaviour of one bare `rule` step on each fixture was verified empirically.
 # ----------------------------------------------------------------------------
 
+
 @model_test("IntroStandardSubset", "Test_IntroStandardSubset.thy", 8)
 async def _test_IntroStandardSubset(root: Root, file: MyIO):
     """ACCEPT path. Goal `A ⊆ B` has no leading ⋀/⟹/∀/⟶, so normal Intro
@@ -787,6 +798,7 @@ async def _test_IntroStandardSubset(root: Root, file: MyIO):
     unfinished = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 
 @model_test("IntroStandardMultiGoal", "Test_IntroStandardMultiGoal.thy", 8)
 async def _test_IntroStandardMultiGoal(root: Root, file: MyIO):
@@ -807,6 +819,7 @@ async def _test_IntroStandardMultiGoal(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
+
 @model_test("IntroStandardNoIntroAfter", "Test_IntroStandardNoIntroAfter.thy", 8)
 async def _test_IntroStandardNoIntroAfter(root: Root, file: MyIO):
     """REJECT path — one new goal, but it still does not need Intro. Goal
@@ -825,6 +838,7 @@ async def _test_IntroStandardNoIntroAfter(root: Root, file: MyIO):
     unfinished = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 
 @model_test("IntroStandardSolves", "Test_IntroStandardSolves.thy", 8)
 async def _test_IntroStandardSolves(root: Root, file: MyIO):
@@ -845,6 +859,7 @@ async def _test_IntroStandardSolves(root: Root, file: MyIO):
     unfinished = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 
 @model_test("IntroStandardBindings", "Test_IntroStandardBindings.thy", 8)
 async def _test_IntroStandardBindings(root: Root, file: MyIO):
@@ -870,6 +885,7 @@ async def _test_IntroStandardBindings(root: Root, file: MyIO):
     unfinished = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 
 @model_test("PostInstRule", "Test_PostInstRule.thy", 19)
 async def _test_PostInstRule(root: Root, file: MyIO):
@@ -932,6 +948,7 @@ async def _assert_schematic_free(root: Root, file: MyIO, captured_kinds: list[st
     file.write(f"residual term schematics: {sorted(t.unicode for t in tvs)}\n")
     file.write(f"residual type schematics: {sorted(t.unicode for t in tyvs)}\n")
 
+
 @model_test("PostInstRuleType", "Test_PostInstRuleType.thy", 16)
 async def _test_PostInstRuleType(root: Root, file: MyIO):
     # `?'a` occurs only in the premise → residual TYPE variable → kind=type.
@@ -946,6 +963,7 @@ async def _test_PostInstRuleType(root: Root, file: MyIO):
     print_header("After InferenceRule (residual ?'a instantiated to nat)", file)
     root.print(0, file)
     await _assert_schematic_free(root, file, kinds)
+
 
 @model_test("PostInstRuleMultiTerm", "Test_PostInstRuleMultiTerm.thy", 18)
 async def _test_PostInstRuleMultiTerm(root: Root, file: MyIO):
@@ -963,6 +981,7 @@ async def _test_PostInstRuleMultiTerm(root: Root, file: MyIO):
     root.print(0, file)
     await _assert_schematic_free(root, file, kinds)
 
+
 @model_test("PostInstRuleTermPinsType", "Test_PostInstRuleTermPinsType.thy", 18)
 async def _test_PostInstRuleTermPinsType(root: Root, file: MyIO):
     # ?x :: ?'a; answering ?x:=0::nat pins ?'a, so only ONE term round fires.
@@ -977,6 +996,7 @@ async def _test_PostInstRuleTermPinsType(root: Root, file: MyIO):
     print_header("After InferenceRule (?x and its type ?'a both eliminated)", file)
     root.print(0, file)
     await _assert_schematic_free(root, file, kinds)
+
 
 @model_test("PostInstRuleTermThenType", "Test_PostInstRuleTermThenType.thy", 18)
 async def _test_PostInstRuleTermThenType(root: Root, file: MyIO):
@@ -993,6 +1013,7 @@ async def _test_PostInstRuleTermThenType(root: Root, file: MyIO):
     print_header("After InferenceRule (term then type round)", file)
     root.print(0, file)
     await _assert_schematic_free(root, file, kinds)
+
 
 @model_test("PostInstValidation", "Test_PostInstValidation.thy", 19)
 async def _test_PostInstValidation(root: Root, file: MyIO):
@@ -1033,6 +1054,7 @@ async def _test_PostInstValidation(root: Root, file: MyIO):
     print_header("After InferenceRule (validation passed)", file)
     root.print(0, file)
     await _assert_schematic_free(root, file, ["term"])
+
 
 @model_test("InlineInteractionIsaTermLog", "Test_InlineInteractionIsaTermLog.thy", 8)
 async def _test_InlineInteractionIsaTermLog(root: Root, file: MyIO):
@@ -1106,6 +1128,7 @@ async def _test_InlineInteractionIsaTermLog(root: Root, file: MyIO):
     file.write(f"to_unicode('plain str'): {IsaTerm.to_unicode('plain str')!r}\n")
     file.write(f"to_unicode([IsaTerm]):   {IsaTerm.to_unicode([result])}\n")
 
+
 @model_test("AutoRewriteFallback", "Test_AutoRewriteFallback.thy", 8)
 async def _test_AutoRewriteFallback(root: Root, file: MyIO):
     print_header("Initial", file)
@@ -1124,6 +1147,7 @@ async def _test_AutoRewriteFallback(root: Root, file: MyIO):
     unfinished = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 
 @model_test("AutoRewriteFallbackCascade", "Test_AutoRewriteFallbackCascade.thy", 8)
 async def _test_AutoRewriteFallbackCascade(root: Root, file: MyIO):
@@ -1160,6 +1184,7 @@ async def _test_AutoRewriteFallbackCascade(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
+
 @model_test("CaseSplit", "Test006.thy", 9)
 async def _test_CaseSplit(root: Root, file: MyIO):
     print_header("Initial YAML", file)
@@ -1177,6 +1202,7 @@ async def _test_CaseSplit(root: Root, file: MyIO):
     print_header("Case Split", file)
     root.print(0, file)
 
+
 @model_test("CaseSplit_Bool", "Test_CaseSplit_Bool.thy", 8)
 async def _test_CaseSplit_Bool(root: Root, file: MyIO):
     print_header("Initial YAML", file)
@@ -1188,6 +1214,7 @@ async def _test_CaseSplit_Bool(root: Root, file: MyIO):
     print_header("Case Split Bool", file)
     root.print(0, file)
 
+
 @model_test("CaseSplit_NoSimp", "Test_CaseSplit_NoSimp.thy", 8)
 async def _test_CaseSplit_NoSimp(root: Root, file: MyIO):
     await root.fill("1", [CaseSplit.gen_single({
@@ -1197,6 +1224,7 @@ async def _test_CaseSplit_NoSimp(root: Root, file: MyIO):
     })])
     print_header("CaseSplit with simplify=false", file)
     root.print(0, file)
+
 
 @model_test("Induction_NoSimp", "Test_Induction_NoSimp.thy", 8)
 async def _test_Induction_NoSimp(root: Root, file: MyIO):
@@ -1208,6 +1236,7 @@ async def _test_Induction_NoSimp(root: Root, file: MyIO):
     })])
     print_header("Induction with simplify=false", file)
     root.print(0, file)
+
 
 @model_test("CaseSplit_Quickview", "Test_CaseSplit_Quickview.thy", 8)
 async def _test_CaseSplit_Quickview(root: Root, file: MyIO):
@@ -1224,6 +1253,7 @@ async def _test_CaseSplit_Quickview(root: Root, file: MyIO):
     root.print(0, file)
     print_header("Quickview (should show variables and premises too)", file)
     root.quickview(0, file)
+
 
 @model_test("GoalCtxQuickview", "Test_GoalCtxQuickview.thy", 8)
 async def _test_GoalCtxQuickview(root: Root, file: MyIO):
@@ -1243,6 +1273,7 @@ async def _test_GoalCtxQuickview(root: Root, file: MyIO):
     root.print(0, file)
     print_header("Quickview (should show x in subgoal context)", file)
     root.quickview(0, file)
+
 
 @model_test("ResetLocalStepCascade", "Test_ResetLocalStepCascade.thy", 8)
 async def _test_ResetLocalStepCascade(root: Root, file: MyIO):
@@ -1280,6 +1311,7 @@ async def _test_ResetLocalStepCascade(root: Root, file: MyIO):
     file.write(
         f"rename cascade verified: parent={nil_gn.id}, child={nil_child.id}\n")
 
+
 @model_test("Induction", "Test_Induction.thy", 8)
 async def _test_Induction(root: Root, file: MyIO):
     print_header("Initial YAML", file)
@@ -1302,6 +1334,7 @@ async def _test_Induction(root: Root, file: MyIO):
     unfinished_nodes = set()
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+
 
 @model_test("Induction_IllTypedBoundVar", "Test_Induction_IllTypedBoundVar.thy", 8)
 async def _test_Induction_IllTypedBoundVar(root: Root, file: MyIO):
@@ -1369,6 +1402,7 @@ async def _test_Induction_IllTypedBoundVar(root: Root, file: MyIO):
     print_header("Amend 1.1 → Induction n (rule nat.induct) — Ill-typed instantiation n :: 'a", file)
     root.print(0, file)
 
+
 @model_test("Induction_AutoIntroBoundVar", "Test_Induction_AutoIntroBoundVar.thy", 8)
 async def _test_Induction_AutoIntroBoundVar(root: Root, file: MyIO):
     """A1′ fix: a `Have` whose body LEADS with an `Induction` on a ∀-bound
@@ -1401,6 +1435,7 @@ async def _test_Induction_AutoIntroBoundVar(root: Root, file: MyIO):
     print_header("After Have (auto-Intro injected before body-leading Induction)", file)
     root.print(0, file)
 
+
 @model_test("Suffices", "Test_Suffices.thy", 9)
 async def _test_Suffices(root: Root, file: MyIO):
     print_header("Initial YAML", file)
@@ -1427,6 +1462,7 @@ async def _test_Suffices(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
 
+
 @model_test("Rewrite1", "Test_Rewrite.thy", 12)
 async def _test_Rewrite1(root: Root, file: MyIO):
     print_header("Initial YAML", file)
@@ -1444,6 +1480,7 @@ async def _test_Rewrite1(root: Root, file: MyIO):
     await root.rename_fact("premise0", "my_premise")
     print_header("After Rename Fact", file)
     root.print(0, file)
+
 
 @model_test("Rewrite2", "Test_Rewrite2.thy", 12)
 async def _test_Rewrite2(root: Root, file: MyIO):
@@ -1465,6 +1502,7 @@ async def _test_Rewrite2(root: Root, file: MyIO):
     await root.delete(["1"])
     print_header("After Remove the Rewrite", file)
     root.print(0, file)
+
 
 @model_test("Rewrite3", "Test_Rewrite3.thy", 13)
 async def _test_Rewrite3(root: Root, file: MyIO):
@@ -1512,6 +1550,7 @@ async def _test_Rewrite3(root: Root, file: MyIO):
     print_header("After Amend Have", file)
     root.print(0, file)
 
+
 @model_test("Rewrite_NoProgress", "Test_Rewrite_NoProgress.thy", 13)
 async def _test_Rewrite_NoProgress(root: Root, file: MyIO):
     """Rewrite with an irrelevant rule should fail with 'no progress' after the
@@ -1534,6 +1573,7 @@ async def _test_Rewrite_NoProgress(root: Root, file: MyIO):
     file.write(f"Reason: {reason}\n")
     print_header("After Rewrite", file)
     root.print(0, file)
+
 
 @model_test("RewriteBoundCapture", "Test_RewriteBoundCapture.thy", 26)
 async def _test_RewriteBoundCapture(root: Root, file: MyIO):
@@ -1579,6 +1619,7 @@ async def _test_RewriteBoundCapture(root: Root, file: MyIO):
     print_header("After Rewrite (binder n collides with free range n)", file)
     root.print(0, file)
 
+
 @model_test("BoundCaptureConst", "Test_BoundCaptureConst.thy", 17)
 async def _test_BoundCaptureConst(root: Root, file: MyIO):
     """Constant short-name collision (the const half of the deconflict fix).
@@ -1594,6 +1635,7 @@ async def _test_BoundCaptureConst(root: Root, file: MyIO):
     binder and the constant would both read as `fact`.)"""
     print_header("Initial YAML (binder 'fact' disambiguated from constant 'fact')", file)
     root.print(0, file)
+
 
 @model_test("Rewrite_OF_ZeroPremise", "Test_Rewrite_OF_ZeroPremise.thy", 10)
 async def _test_Rewrite_OF_ZeroPremise(root: Root, file: MyIO):
@@ -1642,6 +1684,7 @@ async def _test_Rewrite_OF_ZeroPremise(root: Root, file: MyIO):
     file.write(f"is_error: {is_error}\n")
     file.write(f"reason: {_outcome2.failure}\n")
 
+
 @model_test("SuppressParentGoal", "Test_SuppressParentGoal.thy", 10)
 async def _test_SuppressParentGoal(root: Root, file: MyIO):
     """When Rewrite changes the goal, quickview should show 'goal changes into'
@@ -1658,6 +1701,7 @@ async def _test_SuppressParentGoal(root: Root, file: MyIO):
     root.quickview(0, file)
     print_header("Quickview again (should not re-print)", file)
     root.quickview(0, file)
+
 
 @model_test("Rewrite_DeleteSiblingNoChange", "Test_Rewrite_DeleteSiblingNoChange.thy", 10)
 async def _test_Rewrite_DeleteSiblingNoChange(root: Root, file: MyIO):
@@ -1746,6 +1790,7 @@ async def _test_Rewrite_DeleteSiblingNoChange(root: Root, file: MyIO):
 #     print_header("After failed Obvious (bug point)", file)
 #     root.print(0, file)
 
+
 @model_test("Witness1", "Test_Witness.thy", 9)
 async def _test_Witness1(root: Root, file: MyIO):
     print_header("Initial YAML", file)
@@ -1767,6 +1812,7 @@ async def _test_Witness1(root: Root, file: MyIO):
     unfinished_nodes = set()
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+
 
 @model_test("Define_AutoProved", "Test_Define_AutoProved.thy", 14)
 async def _test_Define_AutoProved(root: Root, file: MyIO):
@@ -1807,6 +1853,7 @@ async def _test_Define_AutoProved(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
 
+
 @model_test("Define_QuerySimps", "Test_Define_QuerySimps.thy", 8)
 async def _test_Define_QuerySimps(root: Root, file: MyIO):
     """After defining a proof-local function, verify that its .simps
@@ -1844,6 +1891,7 @@ async def _test_Define_QuerySimps(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
     assert len(unfinished_nodes) == 0, "Expected proof to be complete"
+
 
 @model_test("Define_QueryConst", "Test_Define_QueryConst.thy", 8)
 async def _test_Define_QueryConst(root: Root, file: MyIO):
@@ -1894,6 +1942,7 @@ async def _test_Define_QueryConst(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
     assert len(unfinished_nodes) == 0, "Expected proof to be complete"
+
 
 @model_test("Query_BundleBareName", "Test_Query_BundleBareName.thy", 14)
 async def _test_Query_BundleBareName(root: Root, file: MyIO):
@@ -1973,6 +2022,7 @@ async def _test_Query_BundleBareName(root: Root, file: MyIO):
     assert not any("Undefined" in w for w in warnings_oor), \
         f"out-of-range must NOT report 'Undefined', got: {warnings_oor}"
 
+
 @model_test("Query_BundleTruncate", "Test_Query_BundleTruncate.thy", 12)
 async def _test_Query_BundleTruncate(root: Root, file: MyIO):
     """A >20-member fact (`lemmas big_bundle = refl x21`) exercises the
@@ -1993,6 +2043,7 @@ async def _test_Query_BundleTruncate(root: Root, file: MyIO):
     rendered = await _semantic_search_direct(root.session, [{"exact_name": "big_bundle"}])
     file.write("--- rendered query output ---\n")
     file.write(rendered + "\n")
+
 
 @model_test("Query_BundleRuleKind", "Test_Query_BundleRuleKind.thy", 18)
 async def _test_Query_BundleRuleKind(root: Root, file: MyIO):
@@ -2044,6 +2095,7 @@ async def _test_Query_BundleRuleKind(root: Root, file: MyIO):
     assert not any("Undefined" in w for w in w_oor), \
         f"rule-kind out-of-range must NOT report 'Undefined', got: {w_oor}"
 
+
 @model_test("QueryLocalScore_PatternOnly", "Test_QueryLocalScore_PatternOnly.thy", 9)
 async def _test_QueryLocalScore_PatternOnly(root: Root, file: MyIO):
     """Documents (and guards) current behavior: the pattern-only path (query=None)
@@ -2070,6 +2122,7 @@ async def _test_QueryLocalScore_PatternOnly(root: Root, file: MyIO):
     for r in results:
         file.write(f"  {r.score:.3f} {r.entity.kind.label} {r.entity.short_name.unicode}\n")
 
+
 @model_test("QueryLocalScore_KNN", "Test_QueryLocalScore_KNN.thy", 9)
 async def _test_QueryLocalScore_KNN(root: Root, file: MyIO):
     """Same as QueryLocalScore_PatternOnly but via the semantic KNN path (a query
@@ -2094,6 +2147,7 @@ async def _test_QueryLocalScore_KNN(root: Root, file: MyIO):
     file.write(f"knn 'x squared is non-negative' name_contains=[uniqLocalLemmaZZ]: {len(results)} results, warnings={warnings}\n")
     for r in results:
         file.write(f"  {r.score:.3f} {r.entity.kind.label} {r.entity.short_name.unicode}\n")
+
 
 @model_test("Define_Manual", "Test_Define_Manual.thy", 16)
 async def _test_Define_Manual(root: Root, file: MyIO):
@@ -2170,6 +2224,7 @@ async def _test_Define_Manual(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
 
+
 @model_test("Define_Nullary", "Test_Define_Nullary.thy", 16)
 async def _test_Define_Nullary(root: Root, file: MyIO):
     """Define DOES support a nullary constant. The function/fun package
@@ -2208,6 +2263,7 @@ async def _test_Define_Nullary(root: Root, file: MyIO):
         f"Nullary Define should be satisfied (only outer goal left), " \
         f"got {len(unfinished_nodes)} unfinished"
 
+
 @model_test("Define_CaseExpr", "Test_Define_CaseExpr.thy", 16)
 async def _test_Define_CaseExpr(root: Root, file: MyIO):
     """Reproducer for fastype_of: Bound.
@@ -2234,6 +2290,7 @@ async def _test_Define_CaseExpr(root: Root, file: MyIO):
     print_header("After Define", file)
     root.print(0, file)
 
+
 @model_test("Define_SucIMO", "Test_Define_SucIMO.thy", 16)
 async def _test_Define_SucIMO(root: Root, file: MyIO):
     """Same as Define_SucPattern but under imo_1974_p3 imports
@@ -2258,6 +2315,7 @@ async def _test_Define_SucIMO(root: Root, file: MyIO):
     unfinished_nodes = set()
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+
 
 @model_test("Define_SucPattern", "Test_Define_SucPattern.thy", 19)
 async def _test_Define_SucPattern(root: Root, file: MyIO):
@@ -2330,6 +2388,7 @@ async def _define_close(root: Root, file: MyIO, name: str, typ: str,
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
 
+
 @model_test("Define_Fib2Close", "Test_Define_Fib2Close.thy", 11)
 async def _test_Define_Fib2Close(root: Root, file: MyIO):
     """Depth-2 single-operand: a numeral goal (fib2 4 = 3) closes via the
@@ -2339,6 +2398,7 @@ async def _test_Define_Fib2Close(root: Root, file: MyIO):
         "fib2 (Suc 0) = (1::nat)",
         "fib2 (Suc (Suc n)) = fib2 (Suc n) + fib2 n",
     ], "fib2")
+
 
 @model_test("Define_MaxClose", "Test_Define_MaxClose.thy", 11)
 async def _test_Define_MaxClose(root: Root, file: MyIO):
@@ -2351,6 +2411,7 @@ async def _test_Define_MaxClose(root: Root, file: MyIO):
         "maxf (Suc m) (Suc n) = Suc (maxf m n)",
     ], "maxf")
 
+
 @model_test("Define_IrrelevantArg", "Test_Define_IrrelevantArg.thy", 11)
 async def _test_Define_IrrelevantArg(root: Root, file: MyIO):
     """Non-recursive extra parameter: gadd a (Suc n) recurses only on the
@@ -2360,6 +2421,7 @@ async def _test_Define_IrrelevantArg(root: Root, file: MyIO):
         "gadd a 0 = a",
         "gadd a (Suc n) = Suc (gadd a n)",
     ], "gadd")
+
 
 @model_test("Define_G2Close", "Test_Define_G2Close.thy", 11)
 async def _test_Define_G2Close(root: Root, file: MyIO):
@@ -2374,6 +2436,7 @@ async def _test_Define_G2Close(root: Root, file: MyIO):
         "g2 (Suc (Suc n)) (Suc (Suc k)) = g2 (Suc n) (Suc k) + g2 n k",
     ], "g2")
 
+
 @model_test("Define_TernClose", "Test_Define_TernClose.thy", 11)
 async def _test_Define_TernClose(root: Root, file: MyIO):
     """Depth-3 RVAR plus a depth-2 RZERO base case (tern (Suc (Suc 0)) = 2);
@@ -2385,6 +2448,7 @@ async def _test_Define_TernClose(root: Root, file: MyIO):
         "tern (Suc (Suc 0)) = (2::nat)",
         "tern (Suc (Suc (Suc n))) = tern (Suc (Suc n)) + n",
     ], "tern")
+
 
 @model_test("Witness2", "Test_Witness2.thy", 8)
 async def _test_Witness2(root: Root, file: MyIO):
@@ -2401,6 +2465,7 @@ async def _test_Witness2(root: Root, file: MyIO):
     file.write(f"outcome.failure: {_outcome.failure}\n")
     print_header("After Witness (error visible in tree)", file)
     root.print(0, file)
+
 
 @model_test("Witness3", "Test_Witness3.thy", 9)
 async def _test_Witness3(root: Root, file: MyIO):
@@ -2427,6 +2492,7 @@ async def _test_Witness3(root: Root, file: MyIO):
     unfinished_nodes = set()
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+
 
 @model_test("Witness4", "Test_Witness4.thy", 9)
 async def _test_Witness4(root: Root, file: MyIO):
@@ -2461,6 +2527,7 @@ async def _test_Witness4(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
 
+
 @model_test("Witness5", "Test_Witness5.thy", 9)
 async def _test_Witness5(root: Root, file: MyIO):
     """Too many witnesses: the goal `∃ x. x=0` has a single leading
@@ -2484,6 +2551,7 @@ async def _test_Witness5(root: Root, file: MyIO):
     print_header("Quickview (multi-witness title)", file)
     root.quickview(0, file)
 
+
 @model_test("Witness6", "Test_Witness6.thy", 9)
 async def _test_Witness6(root: Root, file: MyIO):
     """The empty-witness guard: an empty `witnesses` list is rejected by the
@@ -2498,6 +2566,7 @@ async def _test_Witness6(root: Root, file: MyIO):
         file.write("ERROR: empty witnesses was NOT rejected\n")
     except model.ArgumentError as e:
         file.write(f"ArgumentError: {e}\n")
+
 
 @model_test("WitnessTypeMismatch", "Test_WitnessTypeMismatch.thy", 14)
 async def _test_WitnessTypeMismatch(root: Root, file: MyIO):
@@ -2524,6 +2593,7 @@ async def _test_WitnessTypeMismatch(root: Root, file: MyIO):
     file.write(f"outcome.failure: {_outcome.failure}\n")
     print_header("After Witness (type-mismatch error visible in tree)", file)
     root.print(0, file)
+
 
 @model_test("WitnessUndeclared", "Test_WitnessUndeclared.thy", 8)
 async def _test_WitnessUndeclared(root: Root, file: MyIO):
@@ -2566,6 +2636,7 @@ async def _test_WitnessUndeclared(root: Root, file: MyIO):
     print_header("After Witness ?x (schematic error in tree)", file)
     root.print(0, file)
 
+
 @model_test("InductionUndeclared", "Test_InductionUndeclared.thy", 8)
 async def _test_InductionUndeclared(root: Root, file: MyIO):
     """An Induction target may not be a genuinely undeclared name. Goal
@@ -2588,6 +2659,7 @@ async def _test_InductionUndeclared(root: Root, file: MyIO):
     print_header("After Induction ghost_xyz (undeclared-free error in tree)", file)
     root.print(0, file)
 
+
 @model_test("CaseSplitUndeclared", "Test_CaseSplitUndeclared.thy", 8)
 async def _test_CaseSplitUndeclared(root: Root, file: MyIO):
     """A CaseSplit target may not be a genuinely undeclared name. Goal
@@ -2606,6 +2678,7 @@ async def _test_CaseSplitUndeclared(root: Root, file: MyIO):
     file.write(f"undeclared-free outcome.failure: {o.failure}\n")
     print_header("After CaseSplit ghost_xyz (undeclared-free error in tree)", file)
     root.print(0, file)
+
 
 @model_test("InstUndeclared", "Test_InstUndeclared.thy", 11)
 async def _test_InstUndeclared(root: Root, file: MyIO):
@@ -2629,6 +2702,7 @@ async def _test_InstUndeclared(root: Root, file: MyIO):
     file.write(f"undeclared-free outcome.failure: {o.failure}\n")
     print_header("After Derive x:=ghost_xyz (undeclared-free error in tree)", file)
     root.print(0, file)
+
 
 @model_test("Unfold1", "Test_Unfold1.thy", 15)
 async def _test_Unfold1(root: Root, file: MyIO):
@@ -2662,6 +2736,7 @@ async def _test_Unfold1(root: Root, file: MyIO):
     unfinished_nodes = set()
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+
 
 @model_test("UnfoldLocalEqNaming", "Test_UnfoldLocalEqNaming.thy", 23)
 async def _test_UnfoldLocalEqNaming(root: Root, file: MyIO):
@@ -2707,6 +2782,7 @@ async def _test_UnfoldLocalEqNaming(root: Root, file: MyIO):
     unfinished_nodes = set()
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+
 
 @model_test("UnfoldCondNote", "Test_UnfoldCondNote.thy", 17)
 async def _test_UnfoldCondNote(root: Root, file: MyIO):
@@ -2756,6 +2832,7 @@ async def _test_UnfoldCondNote(root: Root, file: MyIO):
     unfinished = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 
 @model_test("SubagentHintScopeOneShot", "Test_SubagentHintScopeOneShot.thy", 8)
 async def _test_SubagentHintScopeOneShot(root: Root, file: MyIO):
@@ -2844,6 +2921,7 @@ async def _test_SubagentHintScopeOneShot(root: Root, file: MyIO):
     unfinished: set[Node] = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 
 @model_test("Delete1", "Test_Delete1.thy", 13)
 async def _test_Delete1(root: Root, file: MyIO):
@@ -2966,6 +3044,7 @@ async def _test_Delete1(root: Root, file: MyIO):
 #     root.quickview(0, file)
 #     root.reset()
 
+
 @model_test("ReferFactByProposition", "Test001.thy", 6)
 async def _test_ReferFactByProposition(root: Root, file: MyIO):
     print_header("Initial YAML", file)
@@ -2973,6 +3052,7 @@ async def _test_ReferFactByProposition(root: Root, file: MyIO):
     fullname = await root.ml_state.fetch_facts([{"name": "notI"}])
     file.write(f"Fullname of notI: {fullname}\n")
     return
+
 
 @model_test("RetrieveFact", "Test_RetrieveFact1.thy", 6)
 async def _test_RetrieveFact(root: Root, file: MyIO):
@@ -3008,6 +3088,7 @@ async def _test_RetrieveFact(root: Root, file: MyIO):
     print_header("After fill", file)
     root.print(0, file)
     return
+
 
 @model_test("RetrieveFact2", "Test_RetrieveFact2.thy", 6)
 async def _test_RetrieveFact2(root: Root, file: MyIO):
@@ -3053,6 +3134,7 @@ async def _test_RetrieveFact2(root: Root, file: MyIO):
     print_header("After fill", file)
     root.print(0, file)
     return
+
 
 @model_test("Obvious_partial_solve", "Test_Obvious_partial_solve.thy", 13)
 async def _test_Obvious_partial_solve(root: Root, file: MyIO):
@@ -3109,6 +3191,7 @@ async def _test_Obvious_partial_solve(root: Root, file: MyIO):
     print_header("After step 3.1 (unexpected Intro at 3.2)", file)
     root.print(0, file)
 
+
 @model_test("Hammer_ProveInTime", "Test_Hammer_ProveInTime.thy", 13)
 async def _test_Hammer_ProveInTime(root: Root, file: MyIO):
     """Reproduces OutOfData error when HAMMER uses a ProveInTime fact."""
@@ -3135,6 +3218,7 @@ async def _test_Hammer_ProveInTime(root: Root, file: MyIO):
     ]})])
     print_header("After Obvious with ProveInTime", file)
     root.print(0, file)
+
 
 @model_test("Obvious_DenseIffFact", "Test_Obvious_DenseIffFact.thy", 10)
 async def _test_Obvious_DenseIffFact(root: Root, file: MyIO):
@@ -3168,6 +3252,7 @@ async def _test_Obvious_DenseIffFact(root: Root, file: MyIO):
     root.print(0, file)
     s = set(); root.unfinished_nodes(s)
     file.write(f"unfinished: {len(s)}\n")
+
 
 @model_test("Simplify_stuck", "Test_Simplify_stuck.thy", 13)
 async def _test_Simplify_stuck(root: Root, file: MyIO):
@@ -3211,6 +3296,7 @@ async def _test_Simplify_stuck(root: Root, file: MyIO):
     })])
     print_header("After Rewrite", file)
     root.print(0, file)
+
 
 @model_test("Simplify_no_intro_bindings", "Test_Simplify_no_intro_bindings.thy", 13)
 async def _test_Simplify_no_intro_bindings(root: Root, file: MyIO):
@@ -3295,6 +3381,7 @@ async def _test_Simplify_no_intro_bindings(root: Root, file: MyIO):
     print_header("After step 2.1.1", file)
     root.print(0, file)
 
+
 @model_test("Intro_no_intro_bindings", "Test_Intro_no_intro_bindings.thy", 8)
 async def _test_Intro_no_intro_bindings(root: Root, file: MyIO):
     """Explicit Intro inside a case, on a residual goal with nothing to
@@ -3360,6 +3447,7 @@ async def _test_Intro_no_intro_bindings(root: Root, file: MyIO):
     print_header("Full tree after Intro", file)
     root.print(0, file)
 
+
 @model_test("InferenceRule_in_CaseSplit", "Test_InferenceRule_in_CaseSplit.thy", 8)
 async def _test_InferenceRule_in_CaseSplit(root: Root, file: MyIO):
     """Verify that an InferenceRule producing exactly 1 subgoal inside a
@@ -3407,6 +3495,7 @@ async def _test_InferenceRule_in_CaseSplit(root: Root, file: MyIO):
     file.write(f"[probe] InferenceRule sub_nodes ids: {[c.id for c in cast(NonLeaf_Node, ir_node).sub_nodes]}\n")
     print_header("After InferenceRule (expect spurious 2nd sibling-leak subgoal)", file)
     root.print(0, file)
+
 
 @model_test("Nested_InferenceRule_Leak",
             "Test_Nested_InferenceRule_Leak.thy", 8)
@@ -3457,6 +3546,7 @@ async def _test_Nested_InferenceRule_Leak(root: Root, file: MyIO):
     print_header("After inner conjI (2 expected; 3 if leak present)", file)
     root.print(0, file)
 
+
 @model_test("Have1", "Test_Have1.thy", 9)
 async def _test_Have1(root: Root, file: MyIO):
     print_header("Initial YAML", file)
@@ -3471,6 +3561,7 @@ async def _test_Have1(root: Root, file: MyIO):
     root.print(0, file)
     root.session.age += 1
     await root.fill("1.1", [Obvious.gen_single({"facts": []})])
+
 
 @model_test("HaveParseError", "Test_HaveParseError.thy", 9)
 async def _test_HaveParseError(root: Root, file: MyIO):
@@ -3488,6 +3579,7 @@ async def _test_HaveParseError(root: Root, file: MyIO):
     file.write(f"Step 1 status: {step.status.status.value}\n")
     print_header("After malformed Have", file)
     root.print(0, file)
+
 
 @model_test("SubagentSlotResolve", "Test_SubagentSlotResolve.thy", 8)
 async def _test_SubagentSlotResolve(root: Root, file: MyIO):
@@ -3519,6 +3611,7 @@ async def _test_SubagentSlotResolve(root: Root, file: MyIO):
     # 1.1.1 : slot whose parent (1.1) doesn't exist -> NodeNotFound
     for id in ["1", "1.1", "2", "1.9", "1.1.1"]:
         file.write(f"{id} -> {probe(id)}\n")
+
 
 @model_test("HaveAutoApply", "Test_Have_AutoApply.thy", 10)
 async def _test_HaveAutoApply(root: Root, file: MyIO):
@@ -3575,6 +3668,7 @@ async def _test_HaveAutoApply(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
+
 @model_test("SetupRewriting", "Test_SetupRewriting.thy", 10)
 async def _test_SetupRewriting(root: Root, file: MyIO):
     """SetupRewriting proves a rewriting equation and auto-registers it as a
@@ -3614,6 +3708,7 @@ async def _test_SetupRewriting(root: Root, file: MyIO):
     unfinished = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 
 @model_test("SetupRewriting_SimpNoProgress", "Test_SetupRewriting_SimpNoProgress.thy", 12)
 async def _test_SetupRewriting_SimpNoProgress(root: Root, file: MyIO):
@@ -3662,6 +3757,7 @@ async def _test_SetupRewriting_SimpNoProgress(root: Root, file: MyIO):
     file.write(f"Failure reason: {outcome.failure}\n")
     root.print(0, file)
 
+
 @model_test("Rewrite_Contradictory_Premise", "Test_Rewrite_Contradictory_Premise.thy", 13)
 async def _test_Rewrite_Contradictory_Premise(root: Root, file: MyIO):
     """Reproduces gconv_rule crash when Rewrite completely solves the goal
@@ -3688,6 +3784,7 @@ async def _test_Rewrite_Contradictory_Premise(root: Root, file: MyIO):
     root.print(0, file)
     file.write(f"is_error: {is_error}\n")
     file.write(f"reason: {reason.reason if isinstance(reason, FailureReason) else reason}\n")
+
 
 @model_test("Rewrite_NO_SIMP_Leak", "Test_Rewrite_NO_SIMP_Leak.thy", 33)
 async def _test_Rewrite_NO_SIMP_Leak(root: Root, file: MyIO):
@@ -3738,6 +3835,7 @@ async def _test_Rewrite_NO_SIMP_Leak(root: Root, file: MyIO):
     file.write(f"reason: {reason.reason if isinstance(reason, FailureReason) else reason}\n")
     assert_no_NO_SIMP("NO_SIMP leaked via classical reasoning on wrapped conclusion")
 
+
 @model_test("Rewrite_Once_Simproc", "Test_Rewrite_Once_Simproc.thy", 27)
 async def _test_Rewrite_Once_Simproc(root: Root, file: MyIO):
     """Test that a genuinely looping rewrite rule triggers the once-simproc
@@ -3770,6 +3868,7 @@ async def _test_Rewrite_Once_Simproc(root: Root, file: MyIO):
     file.write(f"success: {success}\n")
     file.write(f"reason: {reason.reason if isinstance(reason, FailureReason) else reason}\n")
 
+
 @model_test("Rewrite_Targeted", "Test_Rewrite_Targeted.thy", 25)
 async def _test_Rewrite_Targeted(root: Root, file: MyIO):
     """Test interactive target selection for a looping rewrite rule.
@@ -3799,6 +3898,7 @@ async def _test_Rewrite_Targeted(root: Root, file: MyIO):
     file.write(f"success: {success}\n")
     file.write(f"reason: {reason.reason if isinstance(reason, FailureReason) else reason}\n")
 
+
 @model_test("Rewrite_Targeted_Drop", "Test_Rewrite_Targeted_Drop.thy", 23)
 async def _test_Rewrite_Targeted_Drop(root: Root, file: MyIO):
     """Test that selecting no targets during the interaction drops the looping
@@ -3825,6 +3925,7 @@ async def _test_Rewrite_Targeted_Drop(root: Root, file: MyIO):
     root.print(0, file)
     file.write(f"success: {success}\n")
     file.write(f"reason: {reason.reason if isinstance(reason, FailureReason) else reason}\n")
+
 
 @model_test("Rewrite_LoopingForkCtxt", "Test_Rewrite_LoopingForkCtxt.thy", 16)
 async def _test_Rewrite_LoopingForkCtxt(root: Root, file: MyIO):
@@ -3903,6 +4004,7 @@ async def _test_Rewrite_LoopingForkCtxt(root: Root, file: MyIO):
     print_header("After Rewrite", file)
     root.print(0, file)
 
+
 @model_test("Rewrite_QuantifiedGoal", "Test_Rewrite_QuantifiedGoal.thy", 28)
 async def _test_Rewrite_QuantifiedGoal(root: Root, file: MyIO):
     """Regression test: applying a looping rewrite rule to a quantified goal
@@ -3935,6 +4037,7 @@ async def _test_Rewrite_QuantifiedGoal(root: Root, file: MyIO):
     root.print(0, file)
     file.write(f"success: {success}\n")
     file.write(f"reason: {reason.reason if isinstance(reason, FailureReason) else reason}\n")
+
 
 @model_test("Rewrite_Targeted_Where", "Test_Rewrite_Targeted_Where.thy", 16)
 async def _test_Rewrite_Targeted_Where(root: Root, file: MyIO):
@@ -3970,6 +4073,7 @@ async def _test_Rewrite_Targeted_Where(root: Root, file: MyIO):
         file.write(f"FAILURE: {_outcome.failure}\n")
     else:
         file.write("SUCCESS\n")
+
 
 @model_test("Rewrite_InternalError", "Test_Rewrite_InternalError.thy", 21)
 async def _test_Rewrite_InternalError(root: Root, file: MyIO):
@@ -4015,6 +4119,7 @@ async def _test_Rewrite_InternalError(root: Root, file: MyIO):
 
 # class TestCase_Interactive_Unfold:
 #     pass
+
 
 @model_test("IMO_1966_p5", "Test_imo_1966_p5.thy", 19)
 async def _test_imo_1966_p5(root: Root, file: MyIO):
@@ -4128,6 +4233,7 @@ async def _test_imo_1966_p5(root: Root, file: MyIO):
     print_header("Overview", file)
     root.quickview(0, file)
     root.reset()
+
 
 @model_test("SemanticKNN_patterns", "Test_RetrieveFact.thy", 8)
 async def _test_semantic_knn_patterns(root: Root, file: MyIO):
@@ -5153,6 +5259,7 @@ async def _test_prove_in_time_schematic(root: Root, file: MyIO):
         file.write(f"{label} {stmt!r}: result={r!r} expect={expect} -> "
                    f"{'OK' if ok else 'WRONG'}\n")
 
+
 @model_test("Obvious_ClassFactRSN", "Test_Obvious_ClassFactRSN.thy", 11)
 async def _test_Obvious_ClassFactRSN(root: Root, file: MyIO):
     """Regression for the raw `exception THM 1 raised ... RSN: no unifiers`
@@ -5250,6 +5357,7 @@ async def _test_ObviousProofFail(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
+
 @model_test("HaveObviousProof", "Test_ObviousProof.thy", 8)
 async def _test_HaveObviousProof(root: Root, file: MyIO):
     """Test that Have with proof='Obvious' auto-creates an Obvious sub-node."""
@@ -5279,6 +5387,7 @@ async def _test_HaveObviousProof(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
+
 @model_test("SufficesObviousProof", "Test_SufficesObviousProof.thy", 8)
 async def _test_SufficesObviousProof(root: Root, file: MyIO):
     """Test that Suffices with proof='Obvious' auto-creates an Obvious sub-node."""
@@ -5299,6 +5408,7 @@ async def _test_SufficesObviousProof(root: Root, file: MyIO):
     unfinished = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 
 @model_test("HaveStructured", "Test_HaveStructured.thy", 8)
 async def _test_HaveStructured(root: Root, file: MyIO):
@@ -5336,6 +5446,7 @@ async def _test_HaveStructured(root: Root, file: MyIO):
     unfinished = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 
 @model_test("HaveDupFixed", "Test_HaveDupFixed.thy", 8)
 async def _test_HaveDupFixed(root: Root, file: MyIO):
@@ -5377,6 +5488,7 @@ async def _test_HaveDupFixed(root: Root, file: MyIO):
     file.write(f"Have status: {have_node.status.status.value}\n")
     if outcome.failure:
         file.write(f"Failure: {outcome.failure}\n")
+
 
 @model_test("HaveSpuriousForAny", "Test_HaveSpuriousForAny.thy", 8)
 async def _test_HaveSpuriousForAny(root: Root, file: MyIO):
@@ -5450,6 +5562,7 @@ async def _test_HaveSpuriousForAny(root: Root, file: MyIO):
     else:
         file.write("OK: for_any is empty as expected\n")
 
+
 @model_test("SufficesDupFixed", "Test_SufficesDupFixed.thy", 8)
 async def _test_SufficesDupFixed(root: Root, file: MyIO):
     """Mirror of HaveDupFixed but with Suffices: for_any names a variable
@@ -5488,6 +5601,7 @@ async def _test_SufficesDupFixed(root: Root, file: MyIO):
     file.write(f"Suffices status: {suffices_node.status.status.value}\n")
     if outcome.failure:
         file.write(f"Failure: {outcome.failure}\n")
+
 
 @model_test("SufficesStructured", "Test_SufficesStructured.thy", 8)
 async def _test_SufficesStructured(root: Root, file: MyIO):
@@ -5529,6 +5643,7 @@ async def _test_SufficesStructured(root: Root, file: MyIO):
     unfinished = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 
 @model_test("SufficesPartialForAny", "Test_SufficesPartialForAny.thy", 8)
 async def _test_SufficesPartialForAny(root: Root, file: MyIO):
@@ -5573,6 +5688,7 @@ async def _test_SufficesPartialForAny(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
+
 @model_test("InductionObviousProof", "Test_ObviousProof_Induction.thy", 8)
 async def _test_InductionObviousProof(root: Root, file: MyIO):
     """Test that Induction with proof='Obvious' auto-creates Obvious in all case GoalNodes."""
@@ -5591,6 +5707,7 @@ async def _test_InductionObviousProof(root: Root, file: MyIO):
     unfinished = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 
 @model_test("MultiGoalQuickview", "Test_MultiGoalQuickview.thy", 10)
 async def _test_multi_goal_quickview(root: Root, file: MyIO):
@@ -5621,6 +5738,7 @@ async def _test_multi_goal_quickview(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
+
 @model_test("ObviousTimeout_default", "Test_ObviousTimeout2.thy", 8)
 async def _test_ObviousTimeout_default(root: Root, file: MyIO):
     """Test Obvious without explicit timeout (should default to 20)."""
@@ -5636,6 +5754,7 @@ async def _test_ObviousTimeout_default(root: Root, file: MyIO):
     unfinished = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 
 @model_test("ObviousTimeout_subproof", "Test_ObviousTimeout3.thy", 8)
 async def _test_ObviousTimeout_subproof(root: Root, file: MyIO):
@@ -5666,6 +5785,7 @@ async def _test_ObviousTimeout_subproof(root: Root, file: MyIO):
     unfinished = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 
 @model_test("Derive1", "Test_Specialize1.thy", 11)
 async def _test_Derive1(root: Root, file: MyIO):
@@ -5699,6 +5819,7 @@ async def _test_Derive1(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
 
+
 @model_test("Derive2", "Test_Specialize2.thy", 11)
 async def _test_Derive2(root: Root, file: MyIO):
     """Test Derive with discharge only (no instantiation)."""
@@ -5725,6 +5846,7 @@ async def _test_Derive2(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
 
+
 @model_test("Derive3", "Test_Specialize3.thy", 10)
 async def _test_Derive3(root: Root, file: MyIO):
     """Test Derive with unfound rule fact — should fail gracefully."""
@@ -5744,6 +5866,7 @@ async def _test_Derive3(root: Root, file: MyIO):
     file.write(f"Reason: {reason}\n")
     print_header("After Derive (unfound)", file)
     root.print(0, file)
+
 
 @model_test("Derive4", "Test_Specialize4.thy", 11)
 async def _test_Derive4(root: Root, file: MyIO):
@@ -5768,6 +5891,7 @@ async def _test_Derive4(root: Root, file: MyIO):
     file.write(f"Reason: {reason}\n")
     print_header("After Derive (no unifiers)", file)
     root.print(0, file)
+
 
 @model_test("Derive5", "Test_Specialize5.thy", 12)
 async def _test_Derive5(root: Root, file: MyIO):
@@ -5811,6 +5935,7 @@ async def _test_Derive5(root: Root, file: MyIO):
     print_header("After Derive", file)
     root.print(0, file)
 
+
 @model_test("Derive6", "Test_Specialize6.thy", 11)
 async def _test_Derive6(root: Root, file: MyIO):
     """Derive with mult_mod_cancel_left on nat — OF fails because
@@ -5842,6 +5967,7 @@ async def _test_Derive6(root: Root, file: MyIO):
         )
     print_header("After Derive", file)
     root.print(0, file)
+
 
 @model_test("Derive7", "Test_Specialize7.thy", 16)
 async def _test_Derive7(root: Root, file: MyIO):
@@ -5875,6 +6001,7 @@ async def _test_Derive7(root: Root, file: MyIO):
 
     print_header("Final state", file)
     root.print(0, file)
+
 
 @model_test("Derive_NullGap", "Test_Specialize_NullGap.thy", 12)
 async def _test_Derive_NullGap(root: Root, file: MyIO):
@@ -5939,6 +6066,7 @@ async def _test_Derive_NullGap(root: Root, file: MyIO):
     await root.fill("1" if _outcome.failure is not None else "2",
                     [Obvious.gen_single({"facts": [{"name": "h1"}, {"name": "h2"}, {"name": "h3"}]})])
 
+
 @model_test("DeriveWhereOF_Quickview", "Test_DeriveWhereOF_Quickview.thy", 10)
 async def _test_DeriveWhereOF_Quickview(root: Root, file: MyIO):
     """Test two rendering fixes:
@@ -5962,6 +6090,7 @@ async def _test_DeriveWhereOF_Quickview(root: Root, file: MyIO):
     unfinished = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 
 @model_test("Derive_NestedDischargeTHMLeak", "Test_Derive_NestedDischargeTHMLeak.thy", 15)
 async def _test_Derive_NestedDischargeTHMLeak(root: Root, file: MyIO):
@@ -6021,6 +6150,7 @@ async def _test_Derive_NestedDischargeTHMLeak(root: Root, file: MyIO):
     file.write("Derive succeeded (rulify resolved the nested discharge); "
                "no raw THM leak\n")
 
+
 @model_test("Derive_OrderSafety", "Test_Derive_OrderSafety.thy", 16)
 async def _test_Derive_OrderSafety(root: Root, file: MyIO):
     r"""Order safety of the per-argument discharge fallback in xOF.
@@ -6061,6 +6191,7 @@ async def _test_Derive_OrderSafety(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("2", [Obvious.gen_single({"facts": []})])
 
+
 @model_test("DeriveBall", "Test_DeriveBall.thy", 11)
 async def _test_DeriveBall(root: Root, file: MyIO):
     """Test Derive on a Ball-quantified rule: ∀x∈A. P x.
@@ -6093,6 +6224,7 @@ async def _test_DeriveBall(root: Root, file: MyIO):
     unfinished = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 
 @model_test("Derive_OverDischarge", "Test_Specialize_OverDischarge.thy", 14)
 async def _test_Derive_OverDischarge(root: Root, file: MyIO):
@@ -6164,6 +6296,7 @@ async def _test_Derive_OverDischarge(root: Root, file: MyIO):
         "facts": [{"name": "q0"}, {"name": "h_rule"}]
     })])
 
+
 @model_test("Derive_DischargeNullName", "Test_Derive_DischargeNullName.thy", 10)
 async def _test_Derive_DischargeNullName(root: Root, file: MyIO):
     """A nested `discharge` entry `{"name": None, ...}` — an object with a
@@ -6231,6 +6364,7 @@ async def _test_Derive_DischargeNullName(root: Root, file: MyIO):
     root.session.age += 1
     await root.fill("1", [Obvious.gen_single({"facts": [{"name": "h"}]})])
 
+
 @model_test("FactByNameWhereBall", "Test_FactByNameWhereBall.thy", 11)
 async def _test_FactByNameWhereBall(root: Root, file: MyIO):
     """Test FactByName with [xwhere] on a Ball-quantified fact: ∀x∈A. P x.
@@ -6251,6 +6385,7 @@ async def _test_FactByNameWhereBall(root: Root, file: MyIO):
     unfinished = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 
 @model_test("GlobalEnv", "Test_GlobalEnv.thy", 11)
 async def _test_GlobalEnv(root: Root, file: MyIO):
@@ -6368,6 +6503,7 @@ async def _test_GlobalEnv(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
+
 @model_test("GlobalEnv_BodyDone", "Test_GlobalEnv_BodyDone.thy", 10)
 async def _test_GlobalEnv_BodyDone(root: Root, file: MyIO):
     """The body is discharged early and then the global environment is
@@ -6411,6 +6547,7 @@ async def _test_GlobalEnv_BodyDone(root: Root, file: MyIO):
         file.write((await _P.edit_message(root, _outcome, root.session))[0])
         file.write("---------------\n")
 
+
 @model_test("GlobalEnv_BodyUnfilled", "Test_GlobalEnv_BodyUnfilled.thy", 10)
 async def _test_GlobalEnv_BodyUnfilled(root: Root, file: MyIO):
     """The single proof body is never filled (stays pending).  We
@@ -6449,6 +6586,7 @@ async def _test_GlobalEnv_BodyUnfilled(root: Root, file: MyIO):
     not_found = await root.delete(["global.1"])
     file.write(f"Delete global.1 not_found: {not_found}\n")
     file.write(f"GlobalEnv children after delete: {len(root.global_env.sub_nodes)}\n")
+
 
 @model_test("GlobalEnv_happy", "Test_GlobalEnv_happy.thy", 11)
 async def _test_GlobalEnv_happy(root: Root, file: MyIO):
@@ -6567,6 +6705,7 @@ async def _test_GlobalEnv_happy(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
+
 @model_test("GlobalEnv_DoneQuickview", "Test_GlobalEnv_DoneQuickview.thy", 11)
 async def _test_GlobalEnv_DoneQuickview(root: Root, file: MyIO):
     """Bug reproduction: when all global declarations are proved and
@@ -6617,6 +6756,7 @@ async def _test_GlobalEnv_DoneQuickview(root: Root, file: MyIO):
     file.write(f"\nQuickview text contains 'g_eq': {'g_eq' in qv_text}\n")
     file.write(f"Quickview text contains 'global.1': {'global.1' in qv_text}\n")
     file.write(f"Expected: both True (global Have headers should remain visible)\n")
+
 
 @model_test("GlobalEnvFill", "Test_GlobalEnvFill.thy", 11)
 async def _test_GlobalEnvFill(root: Root, file: MyIO):
@@ -6681,6 +6821,7 @@ async def _test_GlobalEnvFill(root: Root, file: MyIO):
     assert next_id == "global.2", \
         f"Expected next target 'global.2', got {next_id!r}"
 
+
 @model_test("Chaining", "Test_Chaining.thy", 12)
 async def _test_Chaining(root: Root, file: MyIO):
     """Chain `ab : a = b` and `bc : b <= c` into `ac : a <= c` via registered
@@ -6714,6 +6855,7 @@ async def _test_Chaining(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
 
+
 @model_test("Chaining_NoCounter_AutoName", "Test_Chaining_NoCounter_AutoName.thy", 14)
 async def _test_Chaining_NoCounter_AutoName(root: Root, file: MyIO):
     """Chaining without an explicit name under No_Counter mode.
@@ -6745,6 +6887,7 @@ async def _test_Chaining_NoCounter_AutoName(root: Root, file: MyIO):
     unfinished_nodes = set()
     root.unfinished_nodes(unfinished_nodes)
     file.write(f"Unfinished nodes: {len(unfinished_nodes)}\n")
+
 
 @model_test("FillOrphanedNode", "Test_FillOrphanedNode.thy", 11)
 async def _test_FillOrphanedNode(root: Root, file: MyIO):
@@ -6824,6 +6967,7 @@ async def _test_FillOrphanedNode(root: Root, file: MyIO):
     unfinished = set()
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
 
 @model_test("AbbrevQuery", "Test_AbbrevQuery.thy", 11)
 async def _test_abbrev_query(root: Root, file: MyIO):
@@ -7090,6 +7234,7 @@ async def _test_IntroMetaQuant(root: Root, file: MyIO):
 # Goal in each test has ≥2 leading ∀s; we drive Intro with varied
 # `variable_bindings` lengths and record what happens.
 # ---------------------------------------------------------------------------
+
 
 @model_test("IntroPartialVars", "Test_IntroPartialVars.thy", 8)
 async def _test_IntroPartialVars(root: Root, file: MyIO):
@@ -8499,6 +8644,7 @@ async def _test_Obtain_Rewrite_Scope(root: Root, file: MyIO):
         file.write(f"fact_not_found: {fact_not_found}\n")
     else:
         file.write("SUCCESS\n")
+
 
 @model_test("UpstreamChangeResetsObvious", "Test_UpstreamChangeResetsObvious.thy", 11)
 async def _test_UpstreamChangeResetsObvious(root: Root, file: MyIO):
@@ -10120,7 +10266,6 @@ async def _test_Induction_MapCase(root: Root, file: MyIO):
     })])
     print_header("After Induction with mapped case_names", file)
     root.print(0, file, show_warnings=True)
-
 
 
 @model_test("CaseSplit_MapCaseAmend", "Test_CaseSplit_MapCaseAmend.thy", 8)
@@ -12504,6 +12649,7 @@ async def _test_MultilineThought(root: Root, file: MyIO):
     print_header("After Have with multiline thought", file)
     root.print(0, file)
 
+
 @model_test("RenameVarNotFound", "Test_RenameVarNotFound.thy", 8)
 async def _test_RenameVarNotFound(root: Root, file: MyIO):
     """Exercise rename_var raising CannotRename_VariableNotFound (lines 2754-2760).
@@ -12516,6 +12662,7 @@ async def _test_RenameVarNotFound(root: Root, file: MyIO):
         file.write("BUG: rename_var should have raised CannotRename_VariableNotFound\n")
     except CannotRename_VariableNotFound as e:
         file.write(f"OK: rename_var raised CannotRename_VariableNotFound\n")
+
 
 @model_test("RenameFactNotFound", "Test_RenameFactNotFound.thy", 8)
 async def _test_RenameFactNotFound(root: Root, file: MyIO):
@@ -12530,6 +12677,7 @@ async def _test_RenameFactNotFound(root: Root, file: MyIO):
     except CannotRename_FactNotFound as e:
         file.write(f"OK: rename_fact raised CannotRename_FactNotFound\n")
 
+
 @model_test("RenameIntroVar", "Test_RenameIntroVar.thy", 8)
 async def _test_RenameIntroVar(root: Root, file: MyIO):
     """Exercise Intro._rename_var (lines 6358-6364) and the successful
@@ -12539,6 +12687,7 @@ async def _test_RenameIntroVar(root: Root, file: MyIO):
     await root.rename_var(IsaTerm.from_agent("x"), IsaTerm.from_agent("y"))
     print_header("After renaming x to y", file)
     root.print(0, file)
+
 
 @model_test("ObtainMultiConstraint", "Test_ObtainMultiConstraint.thy", 8)
 async def _test_ObtainMultiConstraint(root: Root, file: MyIO):
@@ -12563,6 +12712,7 @@ async def _test_ObtainMultiConstraint(root: Root, file: MyIO):
     root.unfinished_nodes(unfinished)
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
+
 @model_test("ObtainQuickview", "Test_ObtainQuickview.thy", 8)
 async def _test_ObtainQuickview(root: Root, file: MyIO):
     """Exercise Obtain.quickview dedup (lines 6069-6084).
@@ -12584,6 +12734,7 @@ async def _test_ObtainQuickview(root: Root, file: MyIO):
     print_header("Quickview (second render — dedup, should NOT repeat)", file)
     root.quickview(0, file)
 
+
 @model_test("FailedLeafQuickview", "Test_FailedLeafQuickview.thy", 8)
 async def _test_FailedLeafQuickview(root: Root, file: MyIO):
     """Exercise _print_evaluation_status_quickview FAILURE path (lines 2431-2439).
@@ -12604,6 +12755,7 @@ async def _test_FailedLeafQuickview(root: Root, file: MyIO):
     root.print(0, file)
     print_header("Quickview (should show evaluation status)", file)
     root.quickview(0, file)
+
 
 @model_test("FactByNameWhere", "Test_FactByNameWhere.thy", 10)
 async def _test_FactByNameWhere(root: Root, file: MyIO):
@@ -12951,6 +13103,7 @@ async def _test_QuickviewCollapse(root: Root, file: MyIO):
     print_header("Quickview with 6 done steps (should collapse)", file)
     root.quickview(0, file)
 
+
 @model_test("Contradiction_notI", "Test_Contradiction_notI.thy", 8)
 async def _test_Contradiction_notI(root: Root, file: MyIO):
     """Contradiction on a ¬-led goal uses notI internally.
@@ -12974,6 +13127,7 @@ async def _test_Contradiction_notI(root: Root, file: MyIO):
     await root.fill("2", [Obvious.gen_single({"facts": [{"name": "neg_hyp"}]})])
     print_header("After Obvious to close False", file)
     root.print(0, file)
+
 
 @model_test("Contradiction_ccontr", "Test_Contradiction_ccontr.thy", 8)
 async def _test_Contradiction_ccontr(root: Root, file: MyIO):
@@ -12999,6 +13153,7 @@ async def _test_Contradiction_ccontr(root: Root, file: MyIO):
     print_header("After Obvious to close False", file)
     root.print(0, file)
 
+
 @model_test("Contradiction_double_neg", "Test_Contradiction_double_neg.thy", 8)
 async def _test_Contradiction_double_neg(root: Root, file: MyIO):
     """Nested negation: goal ¬ ¬ True uses notI (¬-led).
@@ -13022,6 +13177,7 @@ async def _test_Contradiction_double_neg(root: Root, file: MyIO):
     await root.fill("2", [Obvious.gen_single({"facts": [{"name": "h"}]})])
     print_header("After closing False", file)
     root.print(0, file)
+
 
 @model_test("Contradiction_false_goal", "Test_Contradiction_false_goal.thy", 8)
 async def _test_Contradiction_false_goal(root: Root, file: MyIO):
@@ -13055,6 +13211,7 @@ async def _test_Contradiction_false_goal(root: Root, file: MyIO):
     await root.fill("3", [Obvious.gen_single({"facts": []})])
     print_header("After closing", file)
     root.print(0, file)
+
 
 @model_test("Contradiction_Derive", "Test_Contradiction_Derive.thy", 11)
 async def _test_Contradiction_Derive(root: Root, file: MyIO):
@@ -13111,6 +13268,7 @@ async def _test_Contradiction_Derive(root: Root, file: MyIO):
         file.write(f"Reason: {reason_b}\n")
     root.print(0, file)
 
+
 @model_test("ForkDeletesRefreshingNode", "Test_Unfold1.thy", 15)
 async def _test_ForkDeletesRefreshingNode(root: Root, file: MyIO):
     """Reproduce crash: fork sub-agent deletes the node being refreshed.
@@ -13149,6 +13307,7 @@ async def _test_ForkDeletesRefreshingNode(root: Root, file: MyIO):
 
     print_header("After fill", file)
     root.print(0, file)
+
 
 @model_test("AmendFallbackFill", "Test_AmendFallbackFill.thy", 11)
 async def _test_AmendFallbackFill(root: Root, file: MyIO):
@@ -16069,6 +16228,7 @@ async def _test_nested_antichain(root: Root, file: MyIO):
 
     session.role = model.Role_Major()
 
+
 @model_test("HaveWorkerForAny", "Test_HaveWorkerForAny.thy", 11)
 async def _test_HaveWorkerForAny(root: Root, file: MyIO):
     """Worker scope must include the target Have/Suffices for_any variables and premises.
@@ -16614,180 +16774,6 @@ async def _test_InsertBeforeSlot(root: Root, file: MyIO):
         "insert_before on genuinely nonexistent node should fail"
 
 
-@model_test("Comment1", "Test_Comment.thy", 8)
-async def _test_Comment1(root: Root, file: MyIO):
-    """Comment/uncomment a Leaf (Obvious), verify state clones through,
-    siblings still evaluate, unfinished_nodes correct, quickview rendering."""
-    # Build a small proof: Have + Obvious
-    print_header("Initial", file)
-    root.print(0, file)
-
-    root.session.age += 1
-    await root.fill("1", [Have.gen_single({
-        "thought": "helper",
-        "statement": {"english": "non-negative", "conclusion": r"(0::int) \<le> x * x"},
-        "name": "sq",
-    })])
-    print_header("After Have", file)
-    root.print(0, file)
-
-    root.session.age += 1
-    await root.fill("1.1", [Obvious.gen_single({"facts": []})])
-    print_header("After Obvious (1.1 proved)", file)
-    root.print(0, file)
-
-    unfinished = set()
-    root.unfinished_nodes(unfinished)
-    file.write(f"unfinished before comment: {len(unfinished)}\n")
-
-    # Comment out the Obvious
-    root.session.age += 1
-    outcome = await root.comment(["1.1"])
-    file.write(f"comment affected: {outcome.affected}, not_found: {outcome.not_found}, warnings: {outcome.warnings}\n")
-    print_header("After commenting 1.1", file)
-    root.print(0, file)
-    print_header("Quickview after commenting 1.1", file)
-    root.quickview(0, file)
-
-    unfinished = set()
-    root.unfinished_nodes(unfinished)
-    file.write(f"unfinished after comment: {len(unfinished)}\n")
-
-    # Double-comment should warn
-    root.session.age += 1
-    outcome2 = await root.comment(["1.1"])
-    file.write(f"double-comment warnings: {outcome2.warnings}\n")
-
-    # Uncomment
-    root.session.age += 1
-    outcome3 = await root.uncomment(["1.1"])
-    file.write(f"uncomment affected: {outcome3.affected}\n")
-    print_header("After uncommenting 1.1", file)
-    root.print(0, file)
-
-    unfinished = set()
-    root.unfinished_nodes(unfinished)
-    file.write(f"unfinished after uncomment: {len(unfinished)}\n")
-
-    # Uncomment non-commented should warn
-    root.session.age += 1
-    outcome4 = await root.uncomment(["1.1"])
-    file.write(f"uncomment-non-commented warnings: {outcome4.warnings}\n")
-
-@model_test("CommentHave", "Test_CommentHave.thy", 8)
-async def _test_CommentHave(root: Root, file: MyIO):
-    """Comment a StdBlock (Have): entire subtree skipped, fact hidden from
-    successors, assemble skips it, siblings evaluate normally."""
-    # Build: Have sq (with Obvious proof) + second Obvious at top level
-    root.session.age += 1
-    await root.fill("1", [Have.gen_single({
-        "thought": "helper",
-        "statement": {"english": "non-negative", "conclusion": r"(0::int) \<le> x * x"},
-        "name": "sq",
-    })])
-    root.session.age += 1
-    await root.fill("1.1", [Obvious.gen_single({"facts": []})])
-    print_header("Proof built (Have + Obvious)", file)
-    root.print(0, file)
-
-    unfinished = set()
-    root.unfinished_nodes(unfinished)
-    file.write(f"unfinished before comment: {len(unfinished)}\n")
-
-    # Comment the whole Have block
-    root.session.age += 1
-    outcome = await root.comment(["1"])
-    file.write(f"comment Have affected: {outcome.affected}\n")
-    print_header("After commenting Have (step 1)", file)
-    root.print(0, file)
-    print_header("Quickview after commenting Have", file)
-    root.quickview(0, file)
-
-    unfinished = set()
-    root.unfinished_nodes(unfinished)
-    file.write(f"unfinished after comment Have: {len(unfinished)}\n")
-
-    # Verify assemble skips the commented block
-    assembled = root.assemble()
-    file.write(f"assembled ops count: {len(assembled)}\n")
-
-    # Uncomment and verify re-evaluation
-    root.session.age += 1
-    outcome2 = await root.uncomment(["1"])
-    file.write(f"uncomment Have affected: {outcome2.affected}\n")
-    print_header("After uncommenting Have (step 1)", file)
-    root.print(0, file)
-
-    unfinished = set()
-    root.unfinished_nodes(unfinished)
-    file.write(f"unfinished after uncomment Have: {len(unfinished)}\n")
-
-    # Verify assemble includes the block again
-    assembled2 = root.assemble()
-    file.write(f"assembled ops count after uncomment: {len(assembled2)}\n")
-
-
-@model_test("CommentUnfinishedGoal", "Test_CommentUnfinishedGoal.thy", 8)
-async def _test_CommentUnfinishedGoal(root: Root, file: MyIO):
-    """Regression for the putnam_1962_b3 worker:2 soundness defect: commenting
-    out the tail steps that were holding a goal open must NOT make the proof
-    report as finished.
-
-    Mirrors the report's node 11.2.  A SURVIVING step (Intro) leaves the goal as
-    an open existential `∃x. P x ∧ Q x`; then a chain of tail steps — Have h_k,
-    a Have *depending* on h_k (so commenting h_k breaks it on re-evaluation,
-    like the report's Obtain depending on Have h_exists_K), a Witness that
-    instantiates the ∃, and a SplitConjs whose abstract leaves cannot be
-    discharged (→ sorried) — is commented out.  After commenting, the goal
-    reverts to the still-open existential, so the proof MUST stay unfinished.
-
-    BUG (pre-fix): `unfinished_nodes()` becomes empty and `is_proof_finished()`
-    returns True — the open (only sorry-closed) goal is silently dropped and the
-    agent is told "Congratulations! All goals are proven."  Only deterministic
-    summary booleans go into the golden (no tree print — hammer output is
-    nondeterministic)."""
-    # Build the incomplete proof: surviving Intro + four tail steps to comment.
-    root.session.age += 1
-    await root.fill("1", [Intro.gen_single({
-        "thought": "assume the trivial premise; the goal becomes the existential"})])
-    root.session.age += 1
-    await root.fill("2", [Have.gen_single({
-        "thought": "side helper (analog of Have h_exists_K)",
-        "statement": {"english": "P holds at 0", "conclusion": r"(P::nat\<Rightarrow>bool) 0"},
-        "name": "h_k"})])
-    root.session.age += 1
-    await root.fill("3", [Have.gen_single({
-        "thought": "depends on h_k (analog of Obtain K0 from h_exists_K)",
-        "statement": {"english": "P holds at 0, again", "conclusion": r"(P::nat\<Rightarrow>bool) 0"},
-        "name": "h_k2"})])
-    await root.fill("3.1", [Obvious.gen_single({"facts": [{"name": "h_k"}]})])
-    root.session.age += 1
-    await root.fill("4", [Witness.gen_single({
-        "thought": "instantiate the existential with 0", "witnesses": ["0"]})])
-    root.session.age += 1
-    await root.fill("5", [SplitConjs.gen_single({
-        "thought": "split P 0 ∧ Q 0 into two abstract (unprovable) leaves"})])
-
-    file.write(f"finished before comment: {root.is_proof_finished()}\n")
-
-    # Comment the four tail steps (the report's delete->comment of 11.2.4-7).
-    root.session.age += 1
-    await root.comment(["2", "3", "4", "5"])
-
-    after = set(); root.unfinished_nodes(after)
-    finished = root.is_proof_finished()
-    file.write(f"finished after comment: {finished}\n")
-    file.write(f"unfinished after comment empty: {len(after) == 0}\n")
-
-    # The goal `∃x. P x ∧ Q x` is still open after commenting everything that
-    # was meant to discharge it — the proof must NOT be considered finished.
-    if finished or len(after) == 0:
-        raise TestFailed(
-            "Commenting out the steps that held `∃x. P x ∧ Q x` open left the "
-            f"proof reported as finished (is_proof_finished={finished}, "
-            f"unfinished_nodes={len(after)}); the open goal was silently dropped.")
-
-
 @model_test("DeleteCaseHole", "Test_DeleteCaseHole.thy", 8)
 async def _test_DeleteCaseHole(root: Root, file: MyIO):
     """Regression for a SECOND soundness hole (distinct from the comment bug,
@@ -16873,163 +16859,15 @@ async def _test_DeleteOneOfThreeCases(root: Root, file: MyIO):
             "predicate would not.")
 
 
-@model_test("Define_CommentHole", "Test_Define_CommentHole.thy", 16)
-async def _test_Define_CommentHole(root: Root, file: MyIO):
-    """Deep-dive probe for the hypothesized "separate Define hole".
-
-    Under `fun_fake_automatic_failure`, Define `halve` opens a deferred
-    termination block (GoalNodes 1.1, 1.2) which we LEAVE OPEN. We then
-    Witness the outer existential with `halve` (so the function is *used*
-    downstream). With the residuals open the proof is unfinished.
-
-    We then comment the Define (step 1). Two things happen at once:
-      - its subtree (the open residuals) is skipped by `unfinished_nodes`, and
-      - `halve` is removed from scope (a commented declarative node is skipped
-        in `_fixed_*_after_me`), so the downstream Witness must be re-evaluated
-        and fail (`halve` undefined).
-
-    SOUNDNESS REQUIREMENT: the proof must STAY unfinished. If `is_proof_finished()`
-    flips to True, the open termination obligation was silently dropped — the
-    Define hole would be real. (Deterministic: no sledgehammer is invoked; Define
-    fails deterministically under the fake flag and Witness is hammer-free.)"""
-    def _ids(s: 'set[Node]') -> list[str]:
-        return sorted(the_session()._display_id(n.id) or "<goal>" for n in s)
-
-    print_header("Initial", file); root.print(0, file)
-
-    # 1. Define halve; the fake flag forces the deferred termination block.
-    root.session.age += 1
-    await root.fill("1", [Define.gen_single({
-        "thought": "Define halve; fake flag forces the deferred termination block",
-        "name": "halve",
-        "type": r"nat \<Rightarrow> nat",
-        "equations": [
-            "halve 0 = 0",
-            "halve (Suc 0) = 0",
-            "halve (Suc (Suc n)) = Suc (halve n)",
-        ],
-        "metric": [r"\<lambda>n::nat. n"],
-    })])
-    print_header("After Define (deferred block; residuals LEFT OPEN)", file)
-    root.print(0, file)
-
-    # 2. Use halve as the existential witness (residuals still undischarged).
-    root.session.age += 1
-    await root.fill("2", [Witness.gen_single({
-        "thought": "Pick the freshly-defined halve as the witness",
-        "witnesses": ["halve"]})])
-    print_header("After Witness halve (halve USED; residuals still open)", file)
-    root.print(0, file)
-
-    before = set(); root.unfinished_nodes(before)
-    witness_node = root.locate_node("2")
-    file.write(f"finished before comment: {root.is_proof_finished()}\n")
-    file.write(f"unfinished before comment: {_ids(before)}\n")
-    file.write(f"witness status before comment: {witness_node.status.status.name}\n")
-
-    # 3. Comment the Define — drops both `halve` and its open obligations.
-    root.session.age += 1
-    outcome = await root.comment(["1"])
-    file.write(f"comment affected: {outcome.affected}\n")
-    print_header("After commenting the Define", file)
-    root.print(0, file)
-
-    after = set(); root.unfinished_nodes(after)
-    finished = root.is_proof_finished()
-    witness_node = root.locate_node("2")
-    file.write(f"finished after comment: {finished}\n")
-    file.write(f"unfinished after comment: {_ids(after)}\n")
-    file.write(f"witness status after comment: {witness_node.status.status.name}\n")
-
-    # Soundness check: the surviving goal `halve 4 = 2` needs `halve`'s recursion
-    # equations (`.simps`), which require *real* termination — so with the
-    # residuals only sorried it can NEVER be closed (verified separately: `by simp`
-    # fails on `halve 4 = 2` for a partial function). Hence the proof stays
-    # unfinished; commenting the Define cannot turn a computation-dependent goal
-    # into a false 'finished'. If `is_proof_finished()` is True here, that
-    # invariant broke.
-    if finished:
-        raise TestFailed(
-            "Commenting a Define with OPEN termination residuals (whose function "
-            "`halve` was used as the existential witness for a computation-"
-            "dependent goal) made the proof report finished — a real under-report.")
-
-
-@model_test("Define_CommentOracle", "Test_Define_CommentOracle.thy", 16)
-async def _test_Define_CommentOracle(root: Root, file: MyIO):
-    """Case-2 probe: a GENERIC goal `∃f. f 0 = f 0` closable by reflexivity,
-    needing NONE of `halve`'s defining equations. We Define halve (deferred
-    termination block left OPEN), Witness halve, close `halve 0 = halve 0`,
-    then comment the Define.
-
-    Unlike Define_CommentHole (whose goal needed `halve`'s computation and so
-    became unprovable once termination was unproven), here the surviving goal
-    is refl-provable regardless. So after commenting:
-      - the termination obligation (1.1, 1.2) is HIDDEN (subtree skipped), and
-      - `halve` survives in the proof state (oracle-tainted: termination only
-        sorried), and the refl proof still closes.
-
-    If `is_proof_finished()` flips to True, this is a false 'all proven' for a
-    proof that secretly rests on an un-discharged (sorried) termination — the
-    residual Define exposure. The verdict booleans are what matter.
-
-    NOTE — REDESIGN NEEDED (undeclared-witness guard): the Witness on `halve` is
-    now REJECTED after commenting. Once the Define is skipped, `halve` is an
-    undeclared free, and the Witness guard (`check_command_i`, agent.ML) fails
-    it — so `finished` is now False and this no longer reaches the refl-finish
-    exposure it was built to probe. To keep probing that exposure, witness the
-    generic goal with an IN-SCOPE term (e.g. `λx. x`) instead of the Define'd
-    function name; the golden was updated to the rejected-witness behavior."""
-    def _ids(s: 'set[Node]') -> list[str]:
-        return sorted(the_session()._display_id(n.id) or "<goal>" for n in s)
-
-    root.session.age += 1
-    await root.fill("1", [Define.gen_single({
-        "thought": "Define halve; fake flag forces the deferred termination block",
-        "name": "halve",
-        "type": r"nat \<Rightarrow> nat",
-        "equations": [
-            "halve 0 = 0",
-            "halve (Suc 0) = 0",
-            "halve (Suc (Suc n)) = Suc (halve n)",
-        ],
-        "metric": [r"\<lambda>n::nat. n"],
-    })])
-    root.session.age += 1
-    await root.fill("2", [Witness.gen_single({
-        "thought": "Pick halve as the witness for the generic goal",
-        "witnesses": ["halve"]})])
-    root.session.age += 1
-    close1 = await root.fill("3", [Obvious.gen_single({"facts": []})])
-    file.write(f"close (pre-comment) fill error: {close1.failure}\n")
-    before = set(); root.unfinished_nodes(before)
-    file.write(f"finished before comment: {root.is_proof_finished()}\n")
-    file.write(f"unfinished before comment: {_ids(before)}\n")
-
-    # Comment the Define: hides the open termination block; halve survives.
-    root.session.age += 1
-    outcome = await root.comment(["1"])
-    file.write(f"comment affected: {outcome.affected}\n")
-    print_header("After commenting the Define (generic goal already closed)", file)
-    root.print(0, file)
-    after = set(); root.unfinished_nodes(after)
-    finished = root.is_proof_finished()
-    file.write(f"finished after comment: {finished}\n")
-    file.write(f"unfinished after comment: {_ids(after)}\n")
-
-
 @model_test("Define_DeleteOracle", "Test_Define_DeleteOracle.thy", 14)
 async def _test_Define_DeleteOracle(root: Root, file: MyIO):
-    """Delete-vs-comment probe (answers: does DELETE share comment's
-    live-vs-assembled divergence for Define?).
+    """Delete probe for a Define with a deferred (open) termination block.
 
-    Same generic goal `∃f. f 0 = f 0` and setup as Define_CommentOracle:
-    Define halve (deferred termination block left OPEN), Witness halve, close
-    `halve 0 = halve 0` by reflexivity. Then DELETE the Define (instead of
-    commenting). Unlike comment (marks node + clone pass-through; live state
-    keeps `halve` via theory monotonicity), delete REMOVES the node and
-    re-threads — so the downstream Witness may now be re-evaluated against a
-    state that never ran the `function halve` command.
+    Generic goal `∃f. f 0 = f 0`, with setup: Define halve (deferred termination
+    block left OPEN), Witness halve, close `halve 0 = halve 0` by reflexivity.
+    Then DELETE the Define. Delete REMOVES the node and re-threads — so the
+    downstream Witness may now be re-evaluated against a state that never ran the
+    `function halve` command.
 
     Records the verdict booleans + the resulting tree so we can see whether
     `halve` survives deletion (Witness still SUCCESS / finished True) or the
@@ -17122,89 +16960,12 @@ async def _test_DeleteBreaksDependent(root: Root, file: MyIO):
         file.write("node '1' still present after delete: False\n")
 
 
-@model_test("CommentRoundTrip", "Test_CommentRoundTrip.thy", 8)
-async def _test_CommentRoundTrip(root: Root, file: MyIO):
-    """comment -> uncomment of a parent-closing SubgoalMaker must be IDEMPOTENT:
-    the unfinished set returns to its exact pre-comment value. The old `_closed_by`
-    band-aid left the parent over-flagged after uncomment (the reuse `pass`
-    branch never re-closed it); the derived `opening()` self-corrects because the
-    latch is re-derived on every refresh (incl. the reuse branch)."""
-    def _ids(s: 'set[Node]') -> list[str]:
-        return sorted(the_session()._display_id(n.id) or "<goal>" for n in s)
-
-    root.session.age += 1
-    await root.fill("1", [Witness.gen_single({
-        "thought": "instantiate the existential with 0", "witnesses": ["0"]})])
-    root.session.age += 1
-    await root.fill("2", [SplitConjs.gen_single({
-        "thought": "split P 0 ∧ Q 0 into two abstract leaves"})])
-
-    before = set(); root.unfinished_nodes(before)
-    file.write(f"unfinished before comment: {_ids(before)}\n")
-    file.write(f"finished before comment: {root.is_proof_finished()}\n")
-
-    # Comment the parent-closing SplitConjs.
-    root.session.age += 1
-    await root.comment(["2"])
-    mid = set(); root.unfinished_nodes(mid)
-    file.write(f"finished after comment closer: {root.is_proof_finished()}\n")
-    file.write(f"comment did not hide all goals: {len(mid) > 0}\n")
-
-    # Uncomment it: the parent must re-close and the unfinished set must return.
-    root.session.age += 1
-    await root.uncomment(["2"])
-    after = set(); root.unfinished_nodes(after)
-    file.write(f"round-trip idempotent: {_ids(after) == _ids(before)}\n")
-
-    if _ids(after) != _ids(before):
-        raise TestFailed(
-            "comment -> uncomment was not idempotent: "
-            f"before={_ids(before)} after={_ids(after)}")
-
-
-@model_test("CommentClosingStep", "Test_CommentClosingStep.thy", 8)
-async def _test_CommentClosingStep(root: Root, file: MyIO):
-    """Isolates the fix: commenting ONLY the parent-closing step must re-open
-    the parent and re-flag its now-open goal.
-
-    Goal `∃x. P x ∧ Q x`; Witness 0 turns it into `P 0 ∧ Q 0`; SplitConjs opens
-    two abstract subgoals and (as a SubgoalMaker opening >1 subgoals) closes its
-    parent block via `_close_by`. Commenting just the SplitConjs reverts the
-    parent goal to the open `P 0 ∧ Q 0`. Pre-fix, the parent stayed
-    `opening()==False` (never re-opened) so the open goal vanished and the proof
-    was reported finished; the fix re-opens the parent on comment."""
-    root.session.age += 1
-    await root.fill("1", [Witness.gen_single({
-        "thought": "instantiate the existential with 0", "witnesses": ["0"]})])
-    root.session.age += 1
-    await root.fill("2", [SplitConjs.gen_single({
-        "thought": "split P 0 ∧ Q 0 into two abstract (unprovable) leaves"})])
-
-    file.write(f"finished before comment: {root.is_proof_finished()}\n")
-
-    # Comment only the parent-closing SplitConjs.
-    root.session.age += 1
-    await root.comment(["2"])
-
-    after = set(); root.unfinished_nodes(after)
-    finished = root.is_proof_finished()
-    file.write(f"finished after commenting the closer: {finished}\n")
-    file.write(f"unfinished after comment empty: {len(after) == 0}\n")
-
-    if finished or len(after) == 0:
-        raise TestFailed(
-            "Commenting the parent-closing SplitConjs left the proof reported as "
-            f"finished (is_proof_finished={finished}, unfinished_nodes={len(after)}); "
-            "the reverted goal `P 0 ∧ Q 0` was silently dropped.")
-
-
 @model_test("SubtreeStats", "Test_SubtreeStats.thy", 8)
 async def _test_SubtreeStats(root: Root, file: MyIO):
     """Pin `Node.subtree_stats` = (total, proved), the metric of the
     large-delete confirmation gate: a finished block covers its whole subtree
     as proved; SUCCESS Obvious leaves count individually; cheap structural
-    successes (Intro, SplitConjs) do not; FAILURE/CANCELLED never count;
-    a COMMENTED subtree counts (0, 0) entirely — comments are not code. Only
+    successes (Intro, SplitConjs) do not; FAILURE/CANCELLED never count. Only
     numeric stat lines and statuses go into the golden — no tree prints
     (hammer output is nondeterministic)."""
     def stats_line(label: str, sid: str | None) -> None:
@@ -17278,18 +17039,6 @@ async def _test_SubtreeStats(root: Root, file: MyIO):
 
     stats_line("root with all steps", None)
 
-    # A COMMENTED subtree counts (0, 0) entirely — comments are not code.
-    root.session.age += 1
-    await root.comment(["1"])
-    file.write(f"step 1 status after comment: {root.locate_node('1').status.status.value}\n")
-    stats_line("commented Have (1)", "1")
-    stats_line("root with step 1 commented", None)
-
-    root.session.age += 1
-    await root.uncomment(["1"])
-    stats_line("uncommented Have (1)", "1")
-    stats_line("root after uncomment", None)
-
 
 @model_test("UnfoldCertJoin", "Test_UnfoldCertJoin.thy", 12)
 async def _test_unfold_cert_join(root: Root, file: MyIO):
@@ -17337,6 +17086,7 @@ async def _test_unfold_cert_join(root: Root, file: MyIO):
 
 
 # ----- Agent Hint Registry (notice/reject on used constants/facts) -----------
+
 
 @model_test("HintRejectConst", "Test_HintRejectConst.thy", 11)
 async def _test_hint_reject_const(root: Root, file: MyIO):

@@ -1176,7 +1176,6 @@ class EvaluationStatus(NamedTuple):
         SUCCESS = "success"
         CANCELLED = "cancelled"
         FAILURE = "failure"
-        COMMENTED = "commented"
     status: Status
     time: timedelta
     reason: 'FailureReason | None'
@@ -1189,10 +1188,9 @@ class EvaluationStatus(NamedTuple):
         return EvaluationStatus(EvaluationStatus.Status.FAILURE, time, reason)
 EVALUATION_CACNCELLED = EvaluationStatus(EvaluationStatus.Status.CANCELLED, 0.0, None)
 EVALUATION_NOT_YET = EvaluationStatus.Failure(0.0, FailureReason("Not yet evaluated"))
-EVALUATION_COMMENTED = EvaluationStatus(EvaluationStatus.Status.COMMENTED, 0.0, None)
 
 def _status_can_continue(status: EvaluationStatus.Status) -> bool:
-    return status in (EvaluationStatus.Status.SUCCESS, EvaluationStatus.Status.COMMENTED)
+    return status is EvaluationStatus.Status.SUCCESS
 
 ### Bindings
 
@@ -2613,7 +2611,6 @@ TOOL_REPORT: tool = "report"
 TOOL_SUBAGENT: tool = "subagent"
 TOOL_CLOSE_SUBAGENT: tool = "cancel_subagent"
 TOOL_REFRESH: tool = "refresh"
-TOOL_COMMENT: tool = "comment"
 TOOL_WRITE_MEMORY: tool = "write_memory"
 
 TOOL_ANSWER_INDEXES:        tool = "answer_indexes"
@@ -2634,7 +2631,7 @@ ANSWER_TOOLS: frozenset[tool] = frozenset({
 })
 
 ALL_PROOF_TOOLS: tuple[tool, ...] = (
-    TOOL_EDIT, TOOL_DELETE, TOOL_COMMENT, TOOL_SEARCH, TOOL_READ,
+    TOOL_EDIT, TOOL_DELETE, TOOL_SEARCH, TOOL_READ,
     TOOL_RECALL_REMOVED, TOOL_REQUEST_LEMMAS, TOOL_REPORT,
     TOOL_SUBAGENT, TOOL_CLOSE_SUBAGENT, TOOL_REFRESH, TOOL_WRITE_MEMORY,
     *ANSWER_TOOLS,
@@ -3066,7 +3063,7 @@ class Interaction_DifficultyEvaluation(Interaction):
     """Non-forking interaction presented to the parent agent when a system
     checkpoint detects that a worker is struggling.  The parent evaluates the
     target step's importance and chooses to let the worker continue or to
-    abandon the step (auto-cancel + comment out)."""
+    abandon the step (cancel the sub-agent)."""
     fork_allowed_tools = [TOOL_ANSWER_INDEX]
 
     @property
@@ -3088,7 +3085,7 @@ class Interaction_DifficultyEvaluation(Interaction):
         file.write(
             f"\nEvaluate this step's importance in the overall proof.\n\n"
             f"  0. Continue — let the sub-agent keep trying\n"
-            f"  1. Abandon — cancel the sub-agent and comment out this step\n\n"
+            f"  1. Abandon — cancel the sub-agent\n\n"
             f"Call `{tn(TOOL_ANSWER_INDEX)}` with your choice.\n")
 
     async def answer(self, answer: 'AnswerIndex') -> int:
@@ -3258,21 +3255,17 @@ class Interaction_ConfirmLargeDelete(Interaction):
     """Confirmation gate for deletions that would discard substantial
     completed proof work (see the ``LARGE_DELETE_*`` thresholds). Non-forking:
     the same agent that issued the ``delete`` answers inline, mid-call. The
-    answer is ``"comment"`` / ``"cancel"`` / ``"proceed"``; a ``null`` index
-    takes the recommended option (comment when available, else cancel).
-    ``comment_available`` is False when a target is a structural container
-    that ``Root.comment`` rejects — the comment option is then omitted."""
+    answer is ``"cancel"`` / ``"proceed"``; a ``null`` index is rejected with
+    ``Interaction_BadAnswer`` — the agent must choose explicitly (no default)."""
     fork_allowed_tools = [TOOL_ANSWER_INDEX]
 
     @property
     def is_non_forking(self) -> bool:
         return True
 
-    def __init__(self, entries: 'list[tuple[step, int, int]]',
-                 comment_available: bool):
+    def __init__(self, entries: 'list[tuple[step, int, int]]'):
         # entries: (absolute id, subtree total, subtree proved)
         self.entries = entries
-        self.comment_available = comment_available
 
     async def prompt(self, indent: int, file: MyIO) -> None:
         session = the_session()
@@ -3286,33 +3279,18 @@ class Interaction_ConfirmLargeDelete(Interaction):
                 f"  - step {session._display_id(sid)},"
                 f" total {total} {op_noun}, {proved} proved\n")
         file.write(
-            "This would discard a large amount of your previous proof work.\n\n"
-            "Please reconsider whether you want to:\n")
-        if self.comment_available:
-            if singular:
-                file.write(
-                    "  0. Comment the step out instead (recommended) — it remains visible\n"
-                    "     and can be restored later with `uncomment`.\n")
-            else:
-                file.write(
-                    "  0. Comment the steps out instead (recommended) — they remain visible\n"
-                    "     and can be restored later with `uncomment`.\n")
-            file.write(
-                "  1. Cancel the deletion and keep everything as is.\n"
-                "  2. Proceed with the deletion anyway.\n")
-        else:
-            file.write(
-                "  0. Cancel the deletion and keep everything as is.\n"
-                "  1. Proceed with the deletion anyway.\n")
+            "Deleting this discards that proved work; afterwards it can only be\n"
+            f"viewed via `{tn(TOOL_RECALL_REMOVED)}`, not restored into the proof.\n\n"
+            "  0. Cancel the deletion and keep everything as is.\n"
+            "  1. Proceed with the deletion anyway.\n"
+            f"Call `{tn(TOOL_ANSWER_INDEX)}` with your choice.\n")
 
     async def answer(self, answer: 'AnswerIndex') -> str:
-        if self.comment_available:
-            if answer.index is None:
-                return "comment"
-            _check_index(answer.index, 3)
-            return ("comment", "cancel", "proceed")[answer.index]
         if answer.index is None:
-            return "cancel"
+            raise Interaction_BadAnswer(
+                "You must choose explicitly: answer `0` to cancel and keep the "
+                "work, or `1` to proceed with the deletion. There is no default "
+                "for this decision.")
         _check_index(answer.index, 2)
         return ("cancel", "proceed")[answer.index]
 
@@ -4155,8 +4133,6 @@ class Node(ABC):
         return type(self).__name__
     _done_label: str = "proven"
     def _should_print_done(self) -> bool:
-        if self.status.status == EvaluationStatus.Status.COMMENTED:
-            return False
         return not self.does_quickview_need_detail()
     def quickview_header(self, indent: int, file: MyIO) -> int:
         print_indent(indent, file)
@@ -4167,8 +4143,6 @@ class Node(ABC):
                 status_mark = "failed, "
             case EvaluationStatus.Status.CANCELLED:
                 status_mark = "pending, "
-            case EvaluationStatus.Status.COMMENTED:
-                status_mark = "commented, "
             case _:
                 status_mark = ""
         line_mark = f"line {self.line}, " if the_session().quickview_line_numbers else ""
@@ -4209,9 +4183,6 @@ class Node(ABC):
                         file.write(f"Error: cancelled (step `{cb}` failed)\n")
                 else:
                     file.write("Error: the evaluation is cancelled due to failures in preceding nodes\n")
-            case EvaluationStatus.Status.COMMENTED:
-                print_indent(indent, file)
-                file.write("(commented out)\n")
     def _print_evaluation_status_quickview(self, indent: int, file: MyIO) -> None:
         match self.status.status:
             case EvaluationStatus.Status.SUCCESS:
@@ -4280,8 +4251,7 @@ class Node(ABC):
             return self.parent._resulting_state_of_child(self)
 
     async def _cancel(self, cancelled_by: str | None = None) -> None:
-        if self.status.status in (EvaluationStatus.Status.CANCELLED,
-                                  EvaluationStatus.Status.COMMENTED):
+        if self.status.status is EvaluationStatus.Status.CANCELLED:
             return
         self._cancelled_by = cancelled_by
         self.status = EVALUATION_CACNCELLED
@@ -4544,14 +4514,11 @@ class Node(ABC):
         block (``StdBlock`` override), plus SUCCESS ``Obvious`` leaves (goals
         closed by the hammer; ``Obvious`` override) outside such blocks.
         Cheap structural successes (``Intro``, ``SplitConjs``, …) do not
-        count on their own. A COMMENTED node and its entire subtree count as
-        ``(0, 0)`` — comments are not code. Subclasses override
-        ``_subtree_stats_live``, not this method."""
-        if self.status.status == EvaluationStatus.Status.COMMENTED:
-            return (0, 0)
+        count on their own. Subclasses override ``_subtree_stats_live``, not
+        this method."""
         return self._subtree_stats_live()
     def _subtree_stats_live(self) -> 'tuple[int, int]':
-        """`subtree_stats` of a non-COMMENTED node. Base case covers plain
+        """The live ``subtree_stats`` computation. Base case covers plain
         leaves; ``NonLeaf_Node`` overrides to recurse."""
         return (1, 0)
     async def aclose_all_subagents(self) -> None:
@@ -5045,18 +5012,12 @@ class Leaf(Node):
     def assemble(self, output: list[Minilang_Operation] | None = None) -> list[Minilang_Operation]:
         if output is None:
             output = []
-        if self.status.status == EvaluationStatus.Status.COMMENTED:
-            return output
         op = self.the_operation()
         if isinstance(op, FailureReason):
             raise InternalError(f"Cannot assemble a node with failed operation: {op.reason}")
         output.append(op)
         return output
     async def _refresh_me_alone(self, auto_intro: bool) -> None:
-        if self.status.status == EvaluationStatus.Status.COMMENTED:
-            await self.ml_state.clone(self.resulting_state())
-            self.age = the_session().age
-            return
         now = time()
         await super()._refresh_me_alone(auto_intro)
         op = self.the_operation()
@@ -5151,8 +5112,7 @@ def _amend_preserves_worker(old: 'Node', final: 'Node') -> bool:
     survive), and the new block cleanly re-opened against Isabelle. The status gate
     is ``== SUCCESS`` deliberately — ``!= FAILURE`` would also admit CANCELLED (e.g.
     a broken predecessor sibling makes ``_amend_child`` ``_cancel`` the new node and
-    reset its goal state) and COMMENTED, neither of which is a live, re-opened
-    target."""
+    reset its goal state), which is not a live, re-opened target."""
     return (type(final) is type(old)
             and not isinstance(old, SubgoalMaker)
             and final.status.status == EvaluationStatus.Status.SUCCESS)
@@ -5187,8 +5147,8 @@ class NonLeaf_Node(Node):
         # Derived (not stored): a block is closed iff its live tail child is a
         # SubgoalMaker that opened a parent-closing block and still holds all the
         # cases it opened (see `_closes_my_parent`). Deriving this on every read
-        # — rather than mutating a stored `_closed_by` flag in comment /
-        # uncomment / delete / refresh — is what keeps open/closed consistent
+        # — rather than mutating a stored `_closed_by` flag in delete / refresh —
+        # is what keeps open/closed consistent
         # across every edit. SubgoalMaker and Root override to a constant.
         tail = self.sub_nodes[-1] if self.sub_nodes else None
         return not (tail is not None and tail._closes_my_parent())
@@ -5409,8 +5369,7 @@ class NonLeaf_Node(Node):
         for c in self.sub_nodes:
             if c is child:
                 return ret
-            elif c.status.status != EvaluationStatus.Status.COMMENTED:
-                c._fixed_vars_after_me(ret)
+            c._fixed_vars_after_me(ret)
         raise InternalError("The target node is not my children")
     def _all_fixed_facts_before_a_child(self, child: Node, ret: Hyps) -> Hyps:
         self._all_fixed_facts_before_me(ret)
@@ -5418,8 +5377,7 @@ class NonLeaf_Node(Node):
         for c in self.sub_nodes:
             if c is child:
                 return ret
-            elif c.status.status != EvaluationStatus.Status.COMMENTED:
-                c._fixed_facts_after_me(ret)
+            c._fixed_facts_after_me(ret)
         raise InternalError("The target node is not my children")
     def _all_fixed_tvars_before_a_child(self, child: Node, ret: TVars) -> TVars:
         self._all_fixed_tvars_before_me(ret)
@@ -5427,14 +5385,12 @@ class NonLeaf_Node(Node):
         for c in self.sub_nodes:
             if c is child:
                 return ret
-            elif c.status.status != EvaluationStatus.Status.COMMENTED:
-                c._fixed_tvars_after_me(ret)
+            c._fixed_tvars_after_me(ret)
         raise InternalError("The target node is not my children")
     def unfinished_nodes(self, ret: set['Node']) -> None:
         super().unfinished_nodes(ret)
-        if self.status.status != EvaluationStatus.Status.COMMENTED:
-            for child in self.sub_nodes:
-                child.unfinished_nodes(ret)
+        for child in self.sub_nodes:
+            child.unfinished_nodes(ret)
     def _subtree_stats_live(self) -> 'tuple[int, int]':
         total = 1
         proved = 0
@@ -5460,8 +5416,6 @@ class NonLeaf_Node(Node):
             child._print_all_warnings(file)
         self._print_warnings(0, file, [Warning.Position.FOOTER], show_at=True)
     def does_quickview_need_detail(self) -> bool:
-        if self.status.status == EvaluationStatus.Status.COMMENTED:
-            return self.changed
         return super().does_quickview_need_detail() or \
             any(child.does_quickview_need_detail() for child in self.sub_nodes)
     def _print_suspended_worker_hint(self, indent: int, file: MyIO) -> None:
@@ -5582,8 +5536,7 @@ class StdBlock(NonLeaf_Node):
             factory=lambda cfg: cast(Any, cls)(cfg, arg, parsed),
             raw=arg)
     async def _cancel(self, cancelled_by: str | None = None) -> None:
-        if self.status.status in (EvaluationStatus.Status.CANCELLED,
-                                  EvaluationStatus.Status.COMMENTED):
+        if self.status.status is EvaluationStatus.Status.CANCELLED:
             return
         await super()._cancel(cancelled_by)
         # TODO(revert): temporarily NOT resetting `_state_before_ending_` on
@@ -5648,8 +5601,6 @@ class StdBlock(NonLeaf_Node):
     def assemble(self, output: list[Minilang_Operation] | None = None) -> list[Minilang_Operation]:
         if output is None:
             output = []
-        if self.status.status == EvaluationStatus.Status.COMMENTED:
-            return output
         opr = self.beginning_opr()
         if isinstance(opr, FailureReason):
             raise InternalError(f"Cannot assemble a node with failed beginning operation: {opr.reason}")
@@ -5734,11 +5685,6 @@ class StdBlock(NonLeaf_Node):
             if self.parent is not None:
                 await self.parent._refresh_all_children_after(self, can_continue)
     async def _refresh_me_alone(self, auto_intro: bool):
-        if self.status.status == EvaluationStatus.Status.COMMENTED:
-            await self.ml_state.clone(self.resulting_state())
-            await self._state_before_ending_.reset()
-            self.age = the_session().age
-            return
         begin_opr = self.beginning_opr()
         now = time()
         reason: FailureReason | None = None
@@ -5763,12 +5709,11 @@ class StdBlock(NonLeaf_Node):
                 # replace-aware: a fresh-fill InferenceRule child failing its first
                 # execution during whole-container re-refresh may self-convert.
                 child = await _refresh_child_replace_aware(child, True)
-                if child.status.status != EvaluationStatus.Status.COMMENTED:
-                    can_continue = child.status.status == EvaluationStatus.Status.SUCCESS
-                    if not can_continue:
-                        reason = self._child_refresh_failure_err_msgs(child)
-                        failed_child = child
-                        cancel_by = child.id
+                can_continue = child.status.status == EvaluationStatus.Status.SUCCESS
+                if not can_continue:
+                    reason = self._child_refresh_failure_err_msgs(child)
+                    failed_child = child
+                    cancel_by = child.id
             else:
                 await child._cancel(cancel_by)
         if can_continue:
@@ -5799,10 +5744,9 @@ class StdBlock(NonLeaf_Node):
         self._fixed_tvars_at_me(tvars)
         self._fixed_facts_at_me(hyps)
         for child in self.sub_nodes:
-            if child.status.status != EvaluationStatus.Status.COMMENTED:
-                child._fixed_vars_after_me(vars)
-                child._fixed_tvars_after_me(tvars)
-                child._fixed_facts_after_me(hyps)
+            child._fixed_vars_after_me(vars)
+            child._fixed_tvars_after_me(tvars)
+            child._fixed_facts_after_me(hyps)
         return Context(vars, tvars, hyps)
     @abstractmethod
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False) -> None:
@@ -5858,8 +5802,6 @@ class StdBlock(NonLeaf_Node):
         return (total, proved)
     def unfinished_nodes(self, ret: set['Node']) -> None:
         super().unfinished_nodes(ret)
-        if self.status.status == EvaluationStatus.Status.COMMENTED:
-            return
         if self.opening():
             if not self._state_before_ending_.initialized() or self.has_pending_goal():
                 ret.add(self)
@@ -5888,8 +5830,6 @@ class StdBlock(NonLeaf_Node):
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False):
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
         self._print_header(indent, file, show_warnings=show_warnings)
-        if self.status.status == EvaluationStatus.Status.COMMENTED:
-            return indent
         self._print_suspended_worker_hint(indent, file)
         title, child_indent = self._title_of_children(indent)
         if title is None:
@@ -5921,8 +5861,6 @@ class StdBlock(NonLeaf_Node):
             s = the_session()
             file.write(f"A sub-agent is suspended on this step. Call `{s.tool_name(TOOL_SUBAGENT)}` with step {sid} to resume it, or `{s.tool_name(TOOL_CLOSE_SUBAGENT)}` with step {sid} to cancel and remove it.\n")
     def does_quickview_need_detail(self) -> bool:
-        if self.status.status == EvaluationStatus.Status.COMMENTED:
-            return self.changed
         if super().does_quickview_need_detail():
             return True
         if self.opening():
@@ -5930,8 +5868,6 @@ class StdBlock(NonLeaf_Node):
                 return True
         return False
     def _quickview_pending_footer(self, indent: int, file: MyIO) -> None:
-        if self.status.status == EvaluationStatus.Status.COMMENTED:
-            return
         if self.opening():
             if not self._state_before_ending_.initialized():
                 print_indent(indent, file)
@@ -6865,7 +6801,7 @@ class SubgoalMaker(GoalContainer, StdBlock):
             # Latch the parent-closing decision on BOTH the reuse and regenerate
             # paths — this assignment MUST stay ABOVE the if/else: `opening()`
             # derives my parent's closed-ness from these fields, so the reuse
-            # `pass` path must set them too, or a re-refresh (e.g. uncomment)
+            # `pass` path must set them too, or a re-refresh (e.g. amend)
             # would wrongly leave the parent open. (canary: CaseSplit_AmendReconcile_ExactMatch)
             self._opened_closing_block = (decision == _OpenSubgoalBlock.YES_AND_CLOSE_PARENT_BLOCK)
             self._opened_count = goals_count if self._opened_closing_block else 0
@@ -6927,7 +6863,7 @@ class SubgoalMaker(GoalContainer, StdBlock):
     def _closes_my_parent(self) -> bool:
         # I close my parent's proof line iff I successfully opened a
         # parent-closing block AND still hold every case I opened. A
-        # COMMENTED/CANCELLED/FAILED closer (status != SUCCESS) closes nothing,
+        # CANCELLED/FAILED closer (status != SUCCESS) closes nothing,
         # so the parent re-opens and its leftover goal is flagged (DEFECT 1). A
         # deleted case makes live < _opened_count → not closing (DEFECT 2).
         if self.status.status != EvaluationStatus.Status.SUCCESS:
@@ -7806,8 +7742,6 @@ class Obvious(Leaf):
     def assemble(self, output: 'list[Minilang_Operation] | None' = None) -> 'list[Minilang_Operation]':
         if output is None:
             output = []
-        if self.status.status == EvaluationStatus.Status.COMMENTED:
-            return output
         facts = self.fact_refs if self.fact_refs is not None else []
         cached: tuple[str, int] | None = None
         if self._found_tactic and self._found_tactic != "" and self._eval_time_ms is not None:
@@ -9835,43 +9769,37 @@ class SplitConjs(SubgoalMaker):
     def _all_fixed_facts_before_a_child(self, child: Node, ret: Hyps) -> Hyps:
         self._all_fixed_facts_before_me(ret)
         self._fixed_facts_at_me(ret)
-        _COMMENTED = EvaluationStatus.Status.COMMENTED
         for c in self.sub_nodes:
             if c is child:
                 return ret
             elif isinstance(c, GoalNode):
                 for gc in c.sub_nodes:
-                    if gc.status.status != _COMMENTED:
-                        gc._fixed_facts_after_me(ret)
-            elif c.status.status != _COMMENTED:
+                    gc._fixed_facts_after_me(ret)
+            else:
                 c._fixed_facts_after_me(ret)
         raise InternalError("The target node is not my children")
     def _all_fixed_vars_before_a_child(self, child: Node, ret: Vars) -> Vars:
         self._all_fixed_vars_before_me(ret)
         self._fixed_vars_at_me(ret)
-        _COMMENTED = EvaluationStatus.Status.COMMENTED
         for c in self.sub_nodes:
             if c is child:
                 return ret
             elif isinstance(c, GoalNode):
                 for gc in c.sub_nodes:
-                    if gc.status.status != _COMMENTED:
-                        gc._fixed_vars_after_me(ret)
-            elif c.status.status != _COMMENTED:
+                    gc._fixed_vars_after_me(ret)
+            else:
                 c._fixed_vars_after_me(ret)
         raise InternalError("The target node is not my children")
     def _all_fixed_tvars_before_a_child(self, child: Node, ret: TVars) -> TVars:
         self._all_fixed_tvars_before_me(ret)
         self._fixed_tvars_at_me(ret)
-        _COMMENTED = EvaluationStatus.Status.COMMENTED
         for c in self.sub_nodes:
             if c is child:
                 return ret
             elif isinstance(c, GoalNode):
                 for gc in c.sub_nodes:
-                    if gc.status.status != _COMMENTED:
-                        gc._fixed_tvars_after_me(ret)
-            elif c.status.status != _COMMENTED:
+                    gc._fixed_tvars_after_me(ret)
+            else:
                 c._fixed_tvars_after_me(ret)
         raise InternalError("The target node is not my children")
 
@@ -10630,22 +10558,16 @@ class GlobalEnv(StdBlock):
             self.line = file.current_line()
         return indent
     def _fixed_vars_after_me(self, ret: Vars) -> Vars:
-        _COMMENTED = EvaluationStatus.Status.COMMENTED
         for child in self.sub_nodes:
-            if child.status.status != _COMMENTED:
-                child._fixed_vars_after_me(ret)
+            child._fixed_vars_after_me(ret)
         return ret
     def _fixed_tvars_after_me(self, ret: TVars) -> TVars:
-        _COMMENTED = EvaluationStatus.Status.COMMENTED
         for child in self.sub_nodes:
-            if child.status.status != _COMMENTED:
-                child._fixed_tvars_after_me(ret)
+            child._fixed_tvars_after_me(ret)
         return ret
     def _fixed_facts_after_me(self, ret: Hyps) -> Hyps:
-        _COMMENTED = EvaluationStatus.Status.COMMENTED
         for child in self.sub_nodes:
-            if child.status.status != _COMMENTED:
-                child._fixed_facts_after_me(ret)
+            child._fixed_facts_after_me(ret)
         return ret
     def _print_footer(self, indent: int, file: MyIO, show_warnings: bool = False) -> None:
         print_indent(indent, file)
@@ -10817,59 +10739,6 @@ class Root(GoalContainer, StdBlock):
 
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         raise InternalError("Depreciated")
-
-    async def comment(self, steps: list[step]) -> 'CommentOutcome':
-        affected: list[step] = []
-        not_found: list[step] = []
-        warnings: list[str] = []
-        for sid in steps:
-            try:
-                node = self.locate_node(sid)
-            except NodeNotFound:
-                not_found.append(sid)
-                continue
-            if isinstance(node, (Root, GlobalEnv, GoalNode)):
-                raise AoA_Error(
-                    f"Step {the_session()._display_id(sid)} is a structural container "
-                    f"({type(node).__name__}) and cannot be commented out.")
-            if node.status.status == EvaluationStatus.Status.COMMENTED:
-                warnings.append(
-                    f"Step {the_session()._display_id(sid)} is already commented out.")
-                continue
-            node.status = EVALUATION_COMMENTED
-            # opening() is derived from the live tail (see NonLeaf_Node.opening),
-            # so commenting the closer makes the parent read open automatically —
-            # no _closed_by mutation needed here (DEFECT 1 fix is structural).
-            await node._refresh_me_alone(auto_intro=False)
-            await node._refresh_all_after_me()
-            affected.append(sid)
-        return CommentOutcome(affected, not_found, warnings)
-
-    async def uncomment(self, steps: list[step]) -> 'CommentOutcome':
-        affected: list[step] = []
-        not_found: list[step] = []
-        warnings: list[str] = []
-        for sid in steps:
-            try:
-                node = self.locate_node(sid)
-            except NodeNotFound:
-                not_found.append(sid)
-                continue
-            if node.status.status != EvaluationStatus.Status.COMMENTED:
-                warnings.append(
-                    f"Step {the_session()._display_id(sid)} is not commented out.")
-                continue
-            node.status = EVALUATION_NOT_YET
-            node._has_considered_auto_intro = False
-            await node._refresh_me_alone(auto_intro=True)
-            await node._refresh_all_after_me()
-            affected.append(sid)
-        return CommentOutcome(affected, not_found, warnings)
-
-class CommentOutcome(NamedTuple):
-    affected: list[step]
-    not_found: list[step]
-    warnings: list[str]
 
 # class Hierarchy
 
@@ -11807,7 +11676,6 @@ class Session:
                 "## Tools\n"
                 f"- {self.tool_name(TOOL_EDIT)}: Fill, insert, or amend proof steps (your primary tool)\n"
                 f"- {self.tool_name(TOOL_DELETE)}: Delete proof steps\n"
-                f"- {self.tool_name(TOOL_COMMENT)}: Comment out or uncomment proof steps\n"
                 f"- {self.tool_name(TOOL_SEARCH)}: Search for theorems, constants, types, rules, and saved experiences (proof strategies); also help you understand unfamiliar terms\n"
                 f"- {self.tool_name(TOOL_READ)}: Recall proof state from `proof.yaml`. Use only when you have lost track.\n"
                 f"- {self.tool_name(TOOL_RECALL_REMOVED)}: Browse deleted proof steps that were archived before removal.\n"
@@ -12563,17 +12431,8 @@ class Session:
                 # outline) and the declaration-only global env (id_of_goal() is
                 # None). Finishedness still propagates below regardless of type,
                 # so a finished leaf neither reports nor un-suppresses siblings.
-                #
-                # Also skip a COMMENTED node: it counts as "finished" only
-                # because a comment contributes no unfinished goals (it is not
-                # code), NOT because it was proved. Announcing "All proof goals
-                # of step N are now completed" for a commented step is misleading
-                # — the outline already shows it as `(commented out)`. The flag
-                # is left untouched, so if the step is later uncommented and
-                # genuinely proved, the completion is reported then.
                 if (isinstance(node, NonLeaf_Node)
                         and node.id_of_goal() is not None
-                        and node.status.status != EvaluationStatus.Status.COMMENTED
                         and not node._completion_announced):
                     node._completion_announced = True
                     newly.append(node)

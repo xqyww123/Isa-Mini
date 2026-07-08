@@ -70,7 +70,6 @@ class ClaudeCode(LMDriver):
         "query":  "mcp__proof__query",
         "edit":   "mcp__proof__edit",
         "delete": "mcp__proof__delete",
-        "comment": "mcp__proof__comment",
         "recall": "Read",
         "recall_removed": "mcp__proof__recall_removed",
         "request": "mcp__proof__request",

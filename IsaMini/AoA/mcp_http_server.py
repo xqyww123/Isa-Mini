@@ -49,9 +49,9 @@ from .model import (
     AnswerIndexes, AnswerIndex, AnswerIndexesOrName, AnswerIndexesOrSpec,
     AnswerInstantiate, AnswerRefutation, AnswerStruggleAssessment,
     AnswerMissingLemmas, AnswerConstraintRequest,
-    TOOL_EDIT, TOOL_DELETE, TOOL_COMMENT, TOOL_SEARCH, TOOL_READ, TOOL_RECALL_REMOVED,
+    TOOL_EDIT, TOOL_DELETE, TOOL_SEARCH, TOOL_READ, TOOL_RECALL_REMOVED,
     TOOL_REQUEST_LEMMAS, TOOL_REPORT, TOOL_SUBAGENT, TOOL_CLOSE_SUBAGENT,
-    DeletedEntry, CommentOutcome,
+    DeletedEntry,
     TOOL_ANSWER_INDEXES, TOOL_ANSWER_INDEX, TOOL_ANSWER_INDEXES_OR_NAME,
     TOOL_ANSWER_INDEXES_OR_SPEC, TOOL_ANSWER_INSTANTIATE,
     TOOL_ANSWER_REFUTATION, TOOL_ANSWER_STRUGGLE_ASSESSMENT,
@@ -112,7 +112,6 @@ _cc_subagent_schema = _load_schema("cc_subagent.jsonc")
 _cc_close_subagent_schema = _load_schema("cc_cancel_subagent.jsonc")
 _cc_recall_removed_schema = _load_schema("cc_recall_removed.jsonc")
 _cc_refresh_schema = _load_schema("cc_refresh.jsonc")
-_cc_comment_schema = _load_schema("cc_comment.jsonc")
 _cc_write_memory_schema = _load_schema("cc_write_memory.jsonc")
 
 
@@ -273,7 +272,7 @@ _assert_no_refs(_cc_edit_schema_codex)
 # ============================================================================
 
 _MUTATION_TOOLS = frozenset({
-    TOOL_EDIT, TOOL_DELETE, TOOL_COMMENT, TOOL_SUBAGENT, TOOL_CLOSE_SUBAGENT,
+    TOOL_EDIT, TOOL_DELETE, TOOL_SUBAGENT, TOOL_CLOSE_SUBAGENT,
     # `request` is channel-routed (it can become the `_suspended_task`) and both its
     # auto-prove-general path (global env) and its constraint path (an amend on a
     # delegated block) mutate the tree — so, like the others, it must be blocked by
@@ -565,23 +564,11 @@ async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             proved = sum(p for _, _, p in entries)
             if (proved >= LARGE_DELETE_PROVED_THRESHOLD
                     and total >= LARGE_DELETE_TOTAL_THRESHOLD):
-                comment_available = not any(
-                    isinstance(n, (Root, GlobalEnv, GoalNode)) for n in nodes)
                 choice = await session.launch_interaction(
-                    Interaction_ConfirmLargeDelete(entries, comment_available))
+                    Interaction_ConfirmLargeDelete(entries))
                 if choice == "cancel":
                     response = P.delete_cancelled_message()
                     session.log_tool_response(_tn, response)
-                    return (response, False)
-                if choice == "comment":
-                    outcome = await session.root.comment(abs_steps)
-                    session.refresh_YAML()
-                    response, finished = await P.comment_message(
-                        outcome, "comment", session.root, session)
-                    if finished:
-                        await session.interrupt()
-                    session.log_tool_response(_tn, response)
-                    session.log_proof_tree_snapshot("after_comment")
                     return (response, False)
                 # choice == "proceed": fall through to the normal delete path.
 
@@ -639,61 +626,6 @@ async def _delete_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         return (response, False)
     except IsabelleError as e:
         del session.runtime.deleted_archive[archive_len_before:]
-        error_msg = f"Isabelle error: {'; '.join(pretty_unicode(err) for err in e.errors)}"
-        session.log_tool_response(_tn, f"ERROR: {error_msg}")
-        return (error_msg, True)
-
-
-async def _comment_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
-    _tn = session.tool_name(TOOL_COMMENT)
-    session.log_tool_call(_tn, args)
-    try:
-        target_steps = args.get("target_steps")
-        if isinstance(target_steps, str):
-            try:
-                parsed = json.loads(target_steps)
-                target_steps = parsed if isinstance(parsed, list) else [target_steps]
-            except (json.JSONDecodeError, ValueError):
-                target_steps = [target_steps]
-        if isinstance(target_steps, int):
-            target_steps = [target_steps]
-        if not isinstance(target_steps, list) or not target_steps:
-            error_msg = "target_steps must be a non-empty array of strings"
-            session.log_tool_response(_tn, f"ERROR: {error_msg}")
-            return (error_msg, True)
-        action = args.get("action")
-        if action not in ("comment", "uncomment"):
-            error_msg = f"Invalid action: {action!r}. Must be 'comment' or 'uncomment'."
-            session.log_tool_response(_tn, f"ERROR: {error_msg}")
-            return (error_msg, True)
-        session.age += 1
-        steps = [str(s) for s in target_steps]
-        abs_steps = [session._resolve_display_id(s) for s in steps]
-        for sid in abs_steps:
-            verdict, _ = session._edit_verdict(sid, "amend")
-            if verdict is EditVerdict.OUT_OF_SCOPE:
-                error_msg = ("This step is outside the goal you were asked to prove — you may "
-                             "only edit within your own sub-proof. If you need a fact established "
-                             "elsewhere, use `request`.")
-                session.log_tool_response(_tn, f"ERROR: {error_msg}")
-                return (error_msg, True)
-        if action == "comment":
-            outcome = await session.root.comment(abs_steps)
-        else:
-            outcome = await session.root.uncomment(abs_steps)
-        session.refresh_YAML()
-        response, finished = await P.comment_message(
-            outcome, action, session.root, session)
-        if finished:
-            await session.interrupt()
-        session.log_tool_response(_tn, response)
-        session.log_proof_tree_snapshot(f"after_{action}")
-        return (response, False)
-    except AoA_Error as e:
-        error_msg = str(e)
-        session.log_tool_response(_tn, f"ERROR: {error_msg}")
-        return (error_msg, True)
-    except IsabelleError as e:
         error_msg = f"Isabelle error: {'; '.join(pretty_unicode(err) for err in e.errors)}"
         session.log_tool_response(_tn, f"ERROR: {error_msg}")
         return (error_msg, True)
@@ -1944,21 +1876,17 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
             choice = await session.launch_interaction(interaction)
             if choice == 1:  # abandon
                 await node.aclose_all_subagents()
-                try:
-                    await session.root.comment([node.id])
-                except (AoA_Error, IsabelleError):
-                    pass  # GoalNode or structural container — just cancel
                 session.refresh_YAML()
-                # Settle the "newly completed" delta HERE. Auto-commenting the
-                # node (and tearing down its sub-agents) can flip the scope's
-                # finishedness, but this abandon path does not otherwise flush
-                # the delta (unlike `edit`/`comment`/`delete`). Flushing now
-                # attributes any genuine completion to THIS action and marks it
-                # announced, so it cannot resurface — misattributed and
+                # Settle the "newly completed" delta HERE. Tearing down the
+                # sub-agents can flip the scope's finishedness, but this abandon
+                # path does not otherwise flush the delta (unlike `edit`/`delete`).
+                # Flushing now attributes any genuine completion to THIS action and
+                # marks it announced, so it cannot resurface — misattributed and
                 # contradictory — inside a later unrelated edit response (e.g. a
-                # failed `fill`). The just-commented node itself is excluded from
-                # the report by `Session.newly_completed_topmost`, so in the
-                # common case this writes nothing.
+                # failed `fill`). The abandoned node itself stays UNFINISHED (it
+                # still has a pending goal), so it is naturally excluded from
+                # `Session.newly_completed_topmost`; in the common case this
+                # writes nothing.
                 buf = MyIO(StringIO())
                 buf.write("The sub-agent has been cancelled.\n")
                 P._write_newly_completed(session, buf)
@@ -2068,7 +1996,6 @@ _ACT = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=
 _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "edit":   {"description": "Edit the proof.yaml file", "schema": _cc_edit_schema_raw, "annotations": _MUT},
     "delete": {"description": "Delete proof steps", "schema": _cc_delete_schema, "annotations": _MUT},
-    "comment": {"description": "Comment out or uncomment proof steps", "schema": _cc_comment_schema, "annotations": _MUT},
     "query":  {"description": "Search for Isabelle entities by semantic similarity, patterns, or exact name/term. "
                 "Use exact_name to look up definitions; "
                 "use exact_term to unfold fancy syntax and retrieve semantic explanations; "
@@ -2604,12 +2531,6 @@ class ToolExecutor:
                             await self._channel.outbox.put(EditResult(r, e))
                         result, is_error = await self._run_tool_via_channel(
                             _run_delete(), session, is_edit=False)
-                case "comment":
-                    async def _run_comment():
-                        r, e = await _comment_tool_logic(session, arguments)
-                        await self._channel.outbox.put(EditResult(r, e))
-                    result, is_error = await self._run_tool_via_channel(
-                        _run_comment(), session, is_edit=False)
                 case n if n in ANSWER_TOOLS:
                     if self._suspended_task is not None:
                         result, is_error = await self._handle_nf_answer(
