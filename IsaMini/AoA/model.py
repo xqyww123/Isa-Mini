@@ -7839,7 +7839,7 @@ class Obvious(Leaf):
         return super()._on_edit_failure(outcome)
 
 class Chaining_ToolArg(TypedDict):
-    thought: str
+    thought: NotRequired[str]
     name: NotRequired[str]
     facts: list[FactByName | FactByProposition]
 
@@ -7960,14 +7960,14 @@ class Chaining(Leaf):
 #### Compute
 
 class Compute_ToolArg(TypedDict):
-    thought: str
+    thought: NotRequired[str]
     term: xterm
     name: str
 
 @proof_operation("Compute", Compute_ToolArg)
 class Compute(Leaf):
     def __init__(self, config: NodeConfig, arg: Compute_ToolArg):
-        super().__init__(config, arg["thought"])
+        super().__init__(config, arg.get("thought", ""))
         self.term_str: xterm = arg["term"]
         self.result_name: str = arg["name"]
         self.result_fact: tuple[varname, term] | None = None
@@ -8023,7 +8023,7 @@ class Compute(Leaf):
 #### Witness
 
 class Witness_ToolArg(TypedDict):
-    thought: str
+    thought: NotRequired[str]
     witnesses: list[xterm]
 
 @validator(Witness_ToolArg)
@@ -8040,7 +8040,7 @@ def _validate_witness_tool_arg(data: Any, path: str) -> Witness_ToolArg:
 @proof_operation("Witness", Witness_ToolArg)
 class Witness(Leaf):
     def __init__(self, config: NodeConfig, arg: Witness_ToolArg):
-        super().__init__(config, arg["thought"])
+        super().__init__(config, arg.get("thought", ""))
         self.witnesses = list(arg["witnesses"])
     def quickview_title(self) -> str:
         # The witness terms can be long; the full list is shown in `print`.
@@ -8070,7 +8070,7 @@ class Witness(Leaf):
 #### Define
 
 class Define_ToolArg(TypedDict):
-    thought: str
+    thought: NotRequired[str]
     name: str
     type: NotRequired[xtyp]
     equations: list[xterm]
@@ -8113,7 +8113,7 @@ class Define(SubgoalMaker):
     """
 
     def __init__(self, config: NodeConfig, arg: Define_ToolArg):
-        super().__init__(config, arg["thought"], [])
+        super().__init__(config, arg.get("thought", ""), [])
         self.name = arg["name"]
         self.type: str | None = arg.get("type") or None
         self.equations = list(arg["equations"])
@@ -8292,7 +8292,7 @@ class Interaction_ChooseDef(Interaction):
 
 
 class Unfold_ToolArg(TypedDict):
-    thought: str
+    thought: NotRequired[str]
     targets: list[str]  # Isabelle/HOL terms to unfold
 
 
@@ -8305,7 +8305,7 @@ _COND_UNFOLD_NOTE = (
 @proof_operation("Unfold", Unfold_ToolArg)
 class Unfold(Leaf):
     def __init__(self, config: NodeConfig, arg: Unfold_ToolArg):
-        super().__init__(config, arg["thought"])
+        super().__init__(config, arg.get("thought", ""))
         self.targets: list[str] = arg["targets"]
         self.fact_refs: list[IsabelleFact] | None = None
     def quickview_title(self) -> str:
@@ -8389,7 +8389,7 @@ class Unfold(Leaf):
 #### Derive
 
 class Derive_ToolArg(TypedDict):
-    thought: str
+    thought: NotRequired[str]
     rule: FactByName                                          # The rule to specialize
     instantiations: NotRequired[list[Instantiation | None]]    # Variable instantiations (default: []); null entries are skipped
     discharging_facts: NotRequired[list[FactByName | None]]   # Facts to discharge premises (default: []); null entries skip a position
@@ -8398,7 +8398,7 @@ class Derive_ToolArg(TypedDict):
 @proof_operation("Derive", Derive_ToolArg)
 class Derive(Leaf):
     def __init__(self, config: NodeConfig, arg: Derive_ToolArg):
-        super().__init__(config, arg["thought"])
+        super().__init__(config, arg.get("thought", ""))
         self.rule: FactByName = arg["rule"]
         self.instantiations: list[Instantiation] = [
             x for x in (arg.get("instantiations") or []) if x is not None]
@@ -8678,7 +8678,7 @@ class Interaction_ClassifyInductionVars(Interaction):
         return chosen
 
 Rewrite_ToolArg = TypedDict('Rewrite_ToolArg', {
-    'thought': str,
+    'thought': NotRequired[str],
     'using': list[FactByName | FactByProposition],
     'use system simplifiers': bool,
     'rewrite goal': bool,
@@ -8692,7 +8692,7 @@ AUTOCONVERT_REWRITE_MSG = (
 @proof_operation("Rewrite", Rewrite_ToolArg)
 class Rewrite(Leaf):
     def __init__(self, config: NodeConfig, arg: Rewrite_ToolArg):
-        super().__init__(config, arg["thought"])
+        super().__init__(config, arg.get("thought", ""))
         self.use_system_simplifiers: bool = arg["use system simplifiers"]
         self.rewrite_goal: bool = arg["rewrite goal"]
         self.rewrite_premises: list[str] = arg["rewrite premises"]
@@ -9047,7 +9047,7 @@ class Rewrite(Leaf):
 #### Have
 
 class Have_ToolArg(TypedDict):
-    thought: str
+    thought: NotRequired[str]
     statement: Statement
     name: str
     proof: NotRequired[raw_proof | None]
@@ -9061,7 +9061,7 @@ class Have(StdBlock):
         return self
     def __init__(self, config: NodeConfig, arg : Have_ToolArg,
                  parsed_proof: 'proof | None' = None):
-        super().__init__(config, arg["thought"], [])
+        super().__init__(config, arg.get("thought", ""), [])
         self.statement = arg["statement"]
         self.name = arg["name"]
         self.auto_apply = arg.get("auto_apply", False)
@@ -9240,7 +9240,7 @@ class Have(StdBlock):
 #### SetupRewriting
 
 class SetupRewriting_ToolArg(TypedDict):
-    thought: str
+    thought: NotRequired[str]
     for_any: NotRequired[list[Explicit_Var]]
     redex: xterm
     residue: xterm
@@ -9255,7 +9255,7 @@ class SetupRewriting(StdBlock):
         return self  # delegatable: a nontrivial rewriting equation has a provable body
     def __init__(self, config: NodeConfig, arg: SetupRewriting_ToolArg,
                  parsed_proof: 'proof | None' = None):
-        super().__init__(config, arg["thought"], [])
+        super().__init__(config, arg.get("thought", ""), [])
         self.redex: xterm = arg["redex"]
         self.residue: xterm = arg["residue"]
         self._input_conditions: list[PremiseBinding] = arg.get("conditions") or []
@@ -9374,7 +9374,7 @@ class SetupRewriting(StdBlock):
 #### Suffices
 
 class Suffices_ToolArg(TypedDict):
-    thought: str
+    thought: NotRequired[str]
     statement: Statement
     proof: NotRequired[raw_proof | None]
 
@@ -9384,7 +9384,7 @@ class Suffices(StdBlock):
         return self
     def __init__(self, config: NodeConfig, arg : Suffices_ToolArg,
                  parsed_proof: 'proof | None' = None):
-        super().__init__(config, arg["thought"], [])
+        super().__init__(config, arg.get("thought", ""), [])
         self.statement = arg["statement"]
         self._subgoal_level = (0 if self.parent is None
                                else self.parent._subgoal_level + 1)
@@ -9466,7 +9466,7 @@ class Suffices(StdBlock):
 #### Obtain
 
 class Obtain_ToolArg(TypedDict):
-    thought: str
+    thought: NotRequired[str]
     variables: list[Explicit_Var]
     constraints: list[ConstraintBinding]
     proof: NotRequired[raw_proof | None]
@@ -9479,7 +9479,7 @@ class Obtain(StdBlock):
         return self
     def __init__(self, config: NodeConfig, arg : Obtain_ToolArg,
                  parsed_proof: 'proof | None' = None):
-        super().__init__(config, arg["thought"], [])
+        super().__init__(config, arg.get("thought", ""), [])
         self.variables = arg["variables"]
         self.constraints = arg["constraints"]
         self._subgoal_level = (0 if self.parent is None
@@ -9613,7 +9613,7 @@ class Obtain(StdBlock):
 #### INTRO
 
 class Intro_ToolArg(TypedDict):
-    thought: str
+    thought: NotRequired[str]
     variable_bindings: NotRequired[list[xvarname]]
     fact_bindings: NotRequired[list[xvarname]]
 
@@ -9640,7 +9640,7 @@ class Intro(Leaf):
         var_bindings = arg.get("variable_bindings") or []
         fact_bindings = arg.get("fact_bindings") or []
         pending = (var_bindings, fact_bindings) if var_bindings or fact_bindings else None
-        thought = arg["thought"]
+        thought = arg.get("thought", "")
         factory = lambda cfg: Intro(cfg, thought, None, _pending_bindings=pending)
         return Parsed_Opr(cls=cls, factory=factory, raw=arg)
 
@@ -9791,7 +9791,7 @@ class Intro(Leaf):
 #### SplitConjs
 
 class SplitConjs_ToolArg(TypedDict):
-    thought: str
+    thought: NotRequired[str]
     proofs: NotRequired[list[raw_proof] | None]
 
 @proof_operation("SplitConjs", SplitConjs_ToolArg)
@@ -9809,7 +9809,7 @@ class SplitConjs(SubgoalMaker):
                    path: str = "<direct>") -> Parsed_Opr:
         parsed_proofs = _parse_positional_proofs(
             arg.get("proofs"), f"{path}.proofs")
-        thought = arg["thought"]
+        thought = arg.get("thought", "")
         return Parsed_Opr(
             cls=cls, factory=lambda cfg: cls(cfg, thought, parsed_proofs),
             raw=arg)
@@ -9879,7 +9879,7 @@ class SplitConjs(SubgoalMaker):
 #### InferenceRule
 
 class InferenceRule_ToolArg(TypedDict):
-    thought: str
+    thought: NotRequired[str]
     rule: FactByName | FactByDescription | None
     proofs: NotRequired[list[raw_proof] | None]
     # TODO: write some skills telling the agent how to associate common operations (e.g., proof by contradiction, proof by cases, etc.) with the inference rules
@@ -9888,7 +9888,7 @@ class InferenceRule_ToolArg(TypedDict):
 class InferenceRule(SubgoalMaker):
     def __init__(self, config: NodeConfig, arg: InferenceRule_ToolArg,
                  parsed_proofs: 'list[proof] | None' = None):
-        super().__init__(config, arg["thought"], [])
+        super().__init__(config, arg.get("thought", ""), [])
         self.rule: FactByName | FactByDescription | None = arg["rule"]
         self.rule_ref: IsabelleFact | None = None
         self._opening = False
@@ -10182,17 +10182,17 @@ def _validate_branch_case(data: Any, path: str) -> Branch_Case_ToolArg:
         data["name"] = data["statement"].pop("name")
     return _validate_typed_dict(Branch_Case_ToolArg, data, path)
 class Branch_ToolArg(TypedDict):
-    thought: str
+    thought: NotRequired[str]
     cases: list[Branch_Case_ToolArg]
 #class Branch_ToolArg(TypedDict):
-#    thought: str
+#    thought: NotRequired[str]
 #    cases: list[NamedStatement]
 
 @proof_operation("Branch", Branch_ToolArg)
 class Branch(SubgoalMaker):
     def __init__(self, config: NodeConfig, arg: Branch_ToolArg,
                  parsed_cases: 'list[proof | None] | None' = None):
-        super().__init__(config, arg["thought"], [])
+        super().__init__(config, arg.get("thought", ""), [])
         self.cases = arg["cases"]
         self._initial_goal_index = 0
         if parsed_cases is not None:
@@ -10276,7 +10276,7 @@ class Proof_PerCase(TypedDict):
 
 
 class CaseSplit_ToolArg(TypedDict):
-    thought: str
+    thought: NotRequired[str]
     target_isabelle_term: xterm
     rule: NotRequired[Literal["default"] | FactByName | FactByDescription]
     proofs: NotRequired[list[Proof_PerCase] | None]
@@ -10288,7 +10288,7 @@ class CaseSplit(CaseSplit_Like):
 
     def __init__(self, config: NodeConfig, arg: CaseSplit_ToolArg,
                  proofs_by_case: 'dict[str, proof_with_case_vars] | None' = None):
-        super().__init__(config, arg["thought"], [])
+        super().__init__(config, arg.get("thought", ""), [])
         self.target_isabelle_term = arg["target_isabelle_term"]
         self.rule_spec: 'Literal["default"] | FactByName | FactByDescription' = \
             arg.get("rule", "default")
@@ -10332,7 +10332,7 @@ class Induction_ToolArg_Variable(TypedDict):
     name: xvarname
     status: Literal["fixed", "generalized"]
 class Induction_ToolArg(TypedDict):
-    thought: str
+    thought: NotRequired[str]
     target_isabelle_term: xterm
     rule: NotRequired[Literal["default"] | FactByName | FactByDescription]
     variables: list[Induction_ToolArg_Variable]
@@ -10346,7 +10346,7 @@ class Induction(CaseSplit_Like):
 
     def __init__(self, config: NodeConfig, arg: Induction_ToolArg,
                  proofs_by_case: 'dict[str, proof_with_case_vars] | None' = None):
-        super().__init__(config, arg["thought"], [])
+        super().__init__(config, arg.get("thought", ""), [])
         self.arg = arg
         self.target_isabelle_term = arg["target_isabelle_term"]
         self.rule_spec: 'Literal["default"] | FactByName | FactByDescription' = \
