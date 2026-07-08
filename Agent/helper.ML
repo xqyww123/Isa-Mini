@@ -8,10 +8,11 @@ end
 
 structure Minilang_Helper : MINILANG_HELPER = struct
 
+val realT = Type("Real.real", [])
 fun guess_default_num_typ prop =
-  if exists_type (exists_subtype (fn Type (\<^type_name>\<open>real\<close>, _) => true | _ => false)) prop
-  then SOME \<^typ>\<open>real\<close>
-  else if exists_type (exists_subtype (fn Type (\<^type_name>\<open>int\<close>, _) => true | _ => false)) prop
+  if exists_type (exists_subtype (fn Type ("Real.real", _) => true | _ => false)) prop
+  then SOME realT
+  else if exists_type (exists_subtype (fn Type ("Int.int", _) => true | _ => false)) prop
   then SOME \<^typ>\<open>int\<close>
   else if exists_type (exists_subtype (fn Type (\<^type_name>\<open>nat\<close>, _) => true | _ => false)) prop
   then SOME \<^typ>\<open>nat\<close>

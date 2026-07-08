@@ -14,6 +14,6 @@ theorem aime_1988_p3:
     and h1 : "log 2 (log 8 x) = log 8 (log 2 x)"
     and valid: "0 < log 8 x" "0 < log 2 x"
   shows "(log 2 x)^2 = 27"
-  by aoa
+  by ao a
 
 end

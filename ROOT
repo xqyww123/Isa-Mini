@@ -33,6 +33,10 @@ session Minilang_Agent in Agent = Minilang +
   theories
     Minilang_Agent
 
+session Minilang_Agent_Injector in "Agent/Injector" = Minilang_Agent +
+  theories
+    Minilang_Agent_Injector
+
 (*
 session Infra_Filter_Test in Test_InfraFilter = "HOL-Analysis" +
   sessions

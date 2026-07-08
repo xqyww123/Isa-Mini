@@ -282,7 +282,7 @@ fun string_of_term ctxt =
     end
 
 val string_of_term_main_syntax =
-    string_of_term (Proof_Context.init_global @{theory Main})
+    string_of_term (Proof_Context.init_global (Thy_Info.get_theory "Main"))
 
 fun string_of_type ctxt =
     let val ctxt' = ctxt

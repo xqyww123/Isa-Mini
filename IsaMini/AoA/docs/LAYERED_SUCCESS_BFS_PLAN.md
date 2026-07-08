@@ -157,9 +157,8 @@ consulted by the `Obvious` and `StdBlock` overrides).
 
 ```python
 super().unfinished_nodes(ret, paper_level, papered)
-if self.status.status != EvaluationStatus.Status.COMMENTED:
-    for child in self.sub_nodes:
-        child.unfinished_nodes(ret, paper_level, papered)
+for child in self.sub_nodes:
+    child.unfinished_nodes(ret, paper_level, papered)
 ```
 Pure pass-through.
 
@@ -198,8 +197,6 @@ def unfinished_nodes(self, ret, paper_level=None, papered=None) -> None:
     if papered is not None and papered_local[0]:
         papered[0] = True                                       # OR up to caller
 
-    if self.status.status == EvaluationStatus.Status.COMMENTED:
-        return
     if self.opening() and (not self._state_before_ending_.initialized()
                            or self.has_pending_goal()):
         if (paper_level is not None
@@ -385,9 +382,9 @@ def _papered_for_display(self) -> bool:
 
 ### 3.6 Shared bump helper (prompts.py)
 
-All FOUR post-tool tails share one helper (S2 resolved: bump on all four).
+All THREE post-tool tails share one helper (S2 resolved: bump on all three).
 Today each of `edit_message` (prompts.py:92), `deleted_steps_message` (138),
-`comment_message`, and `subagent_overall` (209) independently writes
+and `subagent_overall` (209) independently writes
 `Outline:` + `quickview_proof_scope(1,file)` + the unfinished/Congratulations
 check. Factor that duplicated tail into one helper that all four call (for the
 major session it bumps; for a worker it is truthful, never papers, never bumps).
@@ -428,8 +425,8 @@ def _bump_and_render_outline(session, file) -> bool:
 (Could be folded into the same `unfinished_nodes` pass via the `papered`
 carrier; the explicit walker is acceptable, O(n), and keeps the loop legible.)
 
-Each of the four tails (`edit_message`, `deleted_steps_message`,
-`comment_message`, `subagent_overall`) replaces its inlined
+Each of the three tails (`edit_message`, `deleted_steps_message`,
+`subagent_overall`) replaces its inlined
 `Outline:`/quickview/unfinished/Congratulations block with:
 
 ```python
@@ -502,9 +499,9 @@ flag.**
   `target.is_proof_finished()` (REAL); worker rendering, `newly_completed_topmost`,
   final assemble/termination ALL use `paper_level=None`. Workers never read
   `runtime.bfs_level`.
-- Only the major session bumps, via the shared helper called from all four tails
-  (`edit_message` / `deleted_steps_message` / `comment_message` /
-  `subagent_overall`); it is the single caller passing a non-None `paper_level`.
+- Only the major session bumps, via the shared helper called from all three tails
+  (`edit_message` / `deleted_steps_message` / `subagent_overall`); it is the
+  single caller passing a non-None `paper_level`.
 - **Why this is coherent under a globally-shared `bfs_level`:** `bfs_level` only
   monotonically increases and gates DISPLAY + the major's effective-completion
   judgement only. A worker's concurrent real progress (mutating the shared tree)
@@ -649,9 +646,9 @@ the test passing again is not authorization. Surface the `.diff`
    `_print_evaluation_status_quickview` / `_papered_for_display`, token wording
    per E3. Keep `_print_subagent_hint`. Add golden case (1).
 8. **Bump helper** `_bump_and_render_outline` in `prompts.py` (§3.6); factor the
-   duplicated Outline tail out of all four message functions (`edit_message`,
-   `deleted_steps_message`, `comment_message`, `subagent_overall`) and route each
-   through it (S2: all four bump). Encouragement wording per E3. Add golden cases
+   duplicated Outline tail out of all three message functions (`edit_message`,
+   `deleted_steps_message`, `subagent_overall`) and route each
+   through it (S2: all three bump). Encouragement wording per E3. Add golden cases
    (7)-(8).
 9. **Full regression:** run the entire existing suite; confirm every existing
    golden unchanged (purity). Surface any `.diff` to the user; never auto-update.

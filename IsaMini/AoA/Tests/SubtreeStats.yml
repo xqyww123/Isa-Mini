@@ -12,8 +12,3 @@ step 5 status: cancelled
 FAILURE Have (4): total=1, proved=0
 CANCELLED Obvious (5): total=1, proved=0
 root with all steps: total=13, proved=4
-step 1 status after comment: commented
-commented Have (1): total=0, proved=0
-root with step 1 commented: total=11, proved=2
-uncommented Have (1): total=2, proved=2
-root after uncomment: total=13, proved=4

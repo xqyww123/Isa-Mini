@@ -1055,6 +1055,11 @@ class K2ThinkProvider(OpenAIProvider):
             default_context_window=context_window,
             temperature=0.2,
             extra_params={"think_budget_tokens": 32_768},
+            # 10-min response cap (read timeout). K2 is non-streaming, so the
+            # streaming ``max_stream_time`` never applies — the httpx read
+            # timeout is the only per-response deadline. Overrides the 1500s
+            # ``_DEFAULT_TIMEOUT`` inherited from OpenAIBase.
+            timeout=httpx.Timeout(connect=5.0, read=600.0, write=600.0, pool=600.0),
             # The K2 vLLM deployment emits no tool-call deltas while streaming
             # (finish_reason=stop, empty tool_calls) — tools silently never fire.
             # Non-streaming returns the fully-assembled tool_calls correctly.
@@ -1851,7 +1856,7 @@ class APIDriver_OpenAICodex(APIDriver_ChatGPT):
 
 @agent_driver("K2-Think")
 class APIDriver_K2Think(APIDriver):
-    DEFAULT_MODEL = "k2moe375B_mid2_v3-checkpoint_0015000_BF16"
+    DEFAULT_MODEL = "k2moe375B_mid4_v2_checkpoint_0004000"
 
     def __init__(self, *args, provider: Provider | None = None,
                  argument: str | None = None, **kwargs):
