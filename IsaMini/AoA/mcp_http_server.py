@@ -2596,6 +2596,14 @@ class ToolExecutor:
                     result, is_error = await _refresh_tool_logic(session, arguments)
                 case "write_memory":
                     result, is_error = await _write_memory_tool_logic(session, arguments)
+                    # Logged here rather than inside the tool logic (which every
+                    # other tool does for itself) because that logic has five
+                    # return points — the feature gate, the dedup rejection, and
+                    # three `_persist` calls. Without this the "Saved"/"Updated"
+                    # verb never reaches interaction.yaml / meta.jsonl.zst, and a
+                    # write_memory call is indistinguishable from a rejected one
+                    # in the logs.
+                    session.log_tool_response(session.tool_name(name), result)
                 case _:
                     return (f"Unknown tool: {name}", True)
         except LMUnreachable as e:
