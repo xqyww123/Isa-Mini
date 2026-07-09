@@ -106,6 +106,24 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
     # bypassed for lookup; a finished proof is still WRITTEN on success (see L1
     # SQLite store below and the ML-side L2 Phi_Cache_DB store).
     is_test_driver = driver.split(".", 1)[0] == "test"
+
+    # Tell the user when a newer Semantic-Embedding DB is published: an out-of-date
+    # one makes AoA re-interpret and re-embed theories another machine already did,
+    # at API cost.  Warns only; `pull` merges, and only when you run it.
+    #
+    # Called inline, not on a thread.  Inside the weekly throttle it costs ~1ms and
+    # does not even import boto3; on the one call a week that actually probes, it
+    # blocks this event loop for ~0.9s (~0.4s of that is importing botocore, which
+    # holds the GIL, so a thread would not help).  If R2 is unreachable it blocks
+    # for the boto3 timeouts, ~30s: nothing breaks (MCP's read timeout is 300s and
+    # the REPL client has none), and asyncio.to_thread would only move that wait to
+    # interpreter exit, where asyncio.run joins the default executor anyway.
+    #
+    # Skipped under the test driver: snapshot tests must not touch the network.
+    if not is_test_driver:
+        from Isabelle_Semantic_Embedding.r2_sync import check_update
+        check_update(logger.warning)   # never raises; logs at most one line
+
     if not use_cache or is_test_driver:
         why = ("test driver: run by hand, never replay cache" if is_test_driver
                else "AoA_use_proof_cache=false")
