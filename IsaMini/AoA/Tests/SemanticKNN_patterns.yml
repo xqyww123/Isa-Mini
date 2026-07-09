@@ -1,70 +1,70 @@
 Baseline (no patterns): 5 results, 0 warnings
-  0.745 lemma log_powr: log ?b (?x powr ?y) = ?y * log ?b ?x
-  0.716 lemma ln_powr: ln (?x powr ?y) = ?y * ln ?x
-  0.707 lemma log_base_powr: ?a ≠ (0 :: real) ⟶ log (?a powr ?b) ?x = log ?a ?x / ?b
-  0.706 lemma powr_eq_iff: (0 :: real) < ?y ⟶ (1 :: real) < ?a ⟶ (?a powr ?x = ?y) = (log ?a ?y = ?x)
-  0.696 lemma log_of_power_eq: real ?m = ?b ^ ?n ⟶ (1 :: real) < ?b ⟶ real ?n = log ?b (real ?m)
+  0.814 lemma log_powr: log ?b (?x powr ?y) = ?y * log ?b ?x
+  0.807 lemma log_nat_power: (0 :: real) ≤ ?x ⟶ log ?b (?x ^ ?n) = real ?n * log ?b ?x
+  0.806 lemma log_of_power_eq: real ?m = ?b ^ ?n ⟶ (1 :: real) < ?b ⟶ real ?n = log ?b (real ?m)
+  0.800 lemma ln_powr: ln (?x powr ?y) = ?y * ln ?x
+  0.798 lemma log_pow_cancel: (0 :: real) < ?a ⟶ ?a ≠ (1 :: real) ⟶ log ?a (?a ^ ?b) = real ?b
 With term_patterns=["ln ?x"]: 10 results, 0 warnings
-  0.716 lemma ln_powr: ln (?x powr ?y) = ?y * ln ?x
-  0.687 lemma ln_realpow: ln (?x ^ ?n) = real ?n * ln ?x
-  0.640 lemma log_def: log ?a ?x = ln ?x / ln ?a
-  0.640 lemma powr_def: ?x powr ?a = (if ?x = (0 :: ?'a) then (0 :: ?'a) else exp (?a * ln ?x))
-  0.632 lemma log_exp: log ?b (exp ?x) = ?x / ln ?b
-  0.628 lemma ln_powr_bound: (1 :: real) ≤ ?x ⟶ (0 :: real) < ?a ⟶ ln ?x ≤ ?x powr ?a / ?a
-  0.623 lemma ln_powr_bound2: (1 :: real) < ?x ⟶ (0 :: real) < ?a ⟶ ln ?x powr ?a ≤ ?a powr ?a * ?x
-  0.607 lemma ln_inverse: ln (inverse ?x) = - ln ?x
-  0.590 lemma ln_unique: exp ?y = ?x ⟶ ln ?x = ?y
-  0.583 lemma derivative_eq_intros(57): (∀(x :: ?'a). (?f1 has_derivative ?f'1) (at x)) ⟶ (λ(y :: ?'a). ?f'1 y * ln ?a1 * ?a1 powr ?f1 ?x1) = ?g' ⟶ ((λ(x :: ?'a). ?a1 powr ?f1 x) has_derivative ?g') (at ?x1)
-With type_patterns=["nat"]: 10 results, 0 warnings
-  0.663 lemma log_base_pow: (0 :: real) < ?a ⟶ log (?a ^ ?n) ?x = log ?a ?x / real ?n
-  0.663 lemma log_nat_power: (0 :: real) ≤ ?x ⟶ log ?b (?x ^ ?n) = real ?n * log ?b ?x
-  0.657 lemma log_of_power_eq: real ?m = ?b ^ ?n ⟶ (1 :: real) < ?b ⟶ real ?n = log ?b (real ?m)
-  0.648 lemma log_base_root: (0 :: nat) < ?n ⟶ log (root ?n ?b) ?x = real ?n * log ?b ?x
-  0.646 lemma ln_realpow: ln (?x ^ ?n) = real ?n * ln ?x
-  0.642 lemma log_pow_cancel: (0 :: real) < ?a ⟶ ?a ≠ (1 :: real) ⟶ log ?a (?a ^ ?b) = real ?b
-  0.640 lemma le_log_of_power: ?b ^ ?n ≤ ?m ⟶ (1 :: real) < ?b ⟶ real ?n ≤ log ?b ?m
-  0.629 lemma log_root: (0 :: nat) < ?n ⟶ (0 :: real) ≤ ?a ⟶ log ?b (root ?n ?a) = log ?b ?a / real ?n
-  0.626 lemma ln_root: (0 :: nat) < ?n ⟶ ln (root ?n ?b) = ln ?b / real ?n
-  0.622 lemma less_log_of_power: ?b ^ ?n < ?m ⟶ (1 :: real) < ?b ⟶ real ?n < log ?b ?m
-With theories_include=["HOL.Transcendental"]: 10 results, 0 warnings
-  0.724 lemma log_inverse: log ?a (inverse ?x) = - log ?a ?x
-  0.721 lemma log_one: log ?a (1 :: real) = (0 :: real)
-  0.714 lemma log_recip: log ?a ((1 :: real) / ?x) = - log ?a ?x
+  0.800 lemma ln_powr: ln (?x powr ?y) = ?y * ln ?x
+  0.795 lemma ln_realpow: ln (?x ^ ?n) = real ?n * ln ?x
+  0.735 lemma ln_powr_bound2: (1 :: real) < ?x ⟶ (0 :: real) < ?a ⟶ ln ?x powr ?a ≤ ?a powr ?a * ?x
+  0.731 lemma ln_powr_bound: (1 :: real) ≤ ?x ⟶ (0 :: real) < ?a ⟶ ln ?x ≤ ?x powr ?a / ?a
   0.707 lemma log_def: log ?a ?x = ln ?x / ln ?a
-  0.688 lemma ln_inverse: ln (inverse ?x) = - ln ?x
-  0.677 lemma log_eq_one: (0 :: real) < ?a ⟶ ?a ≠ (1 :: real) ⟶ log ?a ?a = (1 :: real)
-  0.670 lemma log_powr: log ?b (?x powr ?y) = ?y * log ?b ?x
-  0.670 lemma log_exp: log ?b (exp ?x) = ?x / ln ?b
-  0.663 lemma log_base_pow: (0 :: real) < ?a ⟶ log (?a ^ ?n) ?x = log ?a ?x / real ?n
-  0.663 lemma log_nat_power: (0 :: real) ≤ ?x ⟶ log ?b (?x ^ ?n) = real ?n * log ?b ?x
+  0.687 lemma ln_root: (0 :: nat) < ?n ⟶ ln (root ?n ?b) = ln ?b / real ?n
+  0.684 lemma log_exp: log ?b (exp ?x) = ?x / ln ?b
+  0.681 lemma powr_def: ?x powr ?a = (if ?x = (0 :: ?'a) then (0 :: ?'a) else exp (?a * ln ?x))
+  0.680 lemma ln_inverse: ln (inverse ?x) = - ln ?x
+  0.670 lemma log_eq_div_ln_mult_log: (0 :: real) < ?b ⟶ ?b ≠ (1 :: real) ⟶ (0 :: real) < ?x ⟶ log ?a ?x = ln ?b / ln ?a * log ?b ?x
+With type_patterns=["nat"]: 10 results, 0 warnings
+  0.751 lemma log2_of_power_le: ?m ≤ (2 :: nat) ^ ?n ⟶ (0 :: nat) < ?m ⟶ log (2 :: real) (real ?m) ≤ real ?n
+  0.744 lemma log_of_power_eq: real ?m = ?b ^ ?n ⟶ (1 :: real) < ?b ⟶ real ?n = log ?b (real ?m)
+  0.744 lemma le_log2_of_power: (2 :: nat) ^ ?n ≤ ?m ⟶ real ?n ≤ log (2 :: real) (real ?m)
+  0.742 lemma le_log_of_power: ?b ^ ?n ≤ ?m ⟶ (1 :: real) < ?b ⟶ real ?n ≤ log ?b ?m
+  0.741 lemma log_pow_cancel: (0 :: real) < ?a ⟶ ?a ≠ (1 :: real) ⟶ log ?a (?a ^ ?b) = real ?b
+  0.740 lemma log_nat_power: (0 :: real) ≤ ?x ⟶ log ?b (?x ^ ?n) = real ?n * log ?b ?x
+  0.740 lemma log2_of_power_eq: ?m = (2 :: nat) ^ ?n ⟶ real ?n = log (2 :: real) (real ?m)
+  0.739 lemma log2_of_power_less: ?m < (2 :: nat) ^ ?n ⟶ (0 :: nat) < ?m ⟶ log (2 :: real) (real ?m) < real ?n
+  0.735 lemma log_base_pow: (0 :: real) < ?a ⟶ log (?a ^ ?n) ?x = log ?a ?x / real ?n
+  0.730 lemma less_log2_of_power: (2 :: nat) ^ ?n < ?m ⟶ real ?n < log (2 :: real) (real ?m)
+With theories_include=["HOL.Transcendental"]: 10 results, 0 warnings
+  0.751 lemma log_def: log ?a ?x = ln ?x / ln ?a
+  0.751 lemma log2_of_power_le: ?m ≤ (2 :: nat) ^ ?n ⟶ (0 :: nat) < ?m ⟶ log (2 :: real) (real ?m) ≤ real ?n
+  0.745 lemma log_eq_one: (0 :: real) < ?a ⟶ ?a ≠ (1 :: real) ⟶ log ?a ?a = (1 :: real)
+  0.744 lemma log_of_power_eq: real ?m = ?b ^ ?n ⟶ (1 :: real) < ?b ⟶ real ?n = log ?b (real ?m)
+  0.744 lemma le_log2_of_power: (2 :: nat) ^ ?n ≤ ?m ⟶ real ?n ≤ log (2 :: real) (real ?m)
+  0.742 lemma le_log_of_power: ?b ^ ?n ≤ ?m ⟶ (1 :: real) < ?b ⟶ real ?n ≤ log ?b ?m
+  0.741 lemma log_pow_cancel: (0 :: real) < ?a ⟶ ?a ≠ (1 :: real) ⟶ log ?a (?a ^ ?b) = real ?b
+  0.740 lemma log_nat_power: (0 :: real) ≤ ?x ⟶ log ?b (?x ^ ?n) = real ?n * log ?b ?x
+  0.740 lemma log2_of_power_eq: ?m = (2 :: nat) ^ ?n ⟶ real ?n = log (2 :: real) (real ?m)
+  0.739 lemma log2_of_power_less: ?m < (2 :: nat) ^ ?n ⟶ (0 :: nat) < ?m ⟶ log (2 :: real) (real ?m) < real ?n
 Constants with type_patterns=["real => real"]: 5 results, 0 warnings
-  0.735 constant log: real ⇒ real ⇒ real
-  0.618 constant raw_ln_real: real ⇒ real
-  0.523 constant powr_real: real ⇒ real ⇒ real
-  0.462 constant root: nat ⇒ real ⇒ real
-  0.443 constant sqrt: real ⇒ real
+  0.775 constant log: real ⇒ real ⇒ real
+  0.704 constant raw_ln_real: real ⇒ real
+  0.588 constant powr_real: real ⇒ real ⇒ real
+  0.533 constant root: nat ⇒ real ⇒ real
+  0.501 constant sqrt: real ⇒ real
 Empty patterns: 5 results, 0 warnings
 With name_contains=["ln"]: 10 results
-  0.688 lemma ln_inverse: ln (inverse ?x) = - ln ?x
-  0.651 lemma ln_minus: ln (- ?x) = ln ?x
-  0.651 lemma ln_powr: ln (?x powr ?y) = ?y * ln ?x
-  0.651 lemma ln_one: ln (1 :: ?'a) = (0 :: ?'a)
-  0.649 lemma ln_less_self: (0 :: real) < ?x ⟶ ln ?x < ?x
-  0.646 lemma ln_realpow: ln (?x ^ ?n) = real ?n * ln ?x
-  0.643 lemma ln_unique': exp ?y = ¦?x¦ ⟶ ln ?x = ?y
-  0.641 lemma ln_unique: exp ?y = ?x ⟶ ln ?x = ?y
-  0.639 lemma ln_ge_zero: (1 :: real) ≤ ?x ⟶ (0 :: real) ≤ ln ?x
-  0.635 lemma ln_eq_zero_iff: (0 :: real) < ?x ⟶ (ln ?x = (0 :: real)) = (?x = (1 :: real))
+  0.734 lemma ln_bound: (0 :: real) < ?x ⟶ ln ?x ≤ ?x
+  0.733 lemma ln_less_self: (0 :: real) < ?x ⟶ ln ?x < ?x
+  0.727 lemma ln_ge_zero: (1 :: real) ≤ ?x ⟶ (0 :: real) ≤ ln ?x
+  0.725 lemma ln_mono: ?x ≤ ?y ⟶ (0 :: real) < ?x ⟶ ln ?x ≤ ln ?y
+  0.725 lemma ln_inverse: ln (inverse ?x) = - ln ?x
+  0.723 lemma ln_le_cancel_iff: (0 :: real) < ?x ⟶ (0 :: real) < ?y ⟶ (ln ?x ≤ ln ?y) = (?x ≤ ?y)
+  0.718 lemma ln_realpow: ln (?x ^ ?n) = real ?n * ln ?x
+  0.717 lemma ln_one: ln (1 :: (?'a :: ln)) = (0 :: (?'a :: ln))
+  0.715 lemma ln_gt_zero: (1 :: real) < ?x ⟶ (0 :: real) < ln ?x
+  0.710 lemma ln_strict_mono: ?x < ?y ⟶ (0 :: real) < ?x ⟶ ln ?x < ln ?y
 With name_contains=["ln", "real"]: 6 results
-  0.646 lemma ln_realpow: ln (?x ^ ?n) = real ?n * ln ?x
-  0.591 lemma ln_real_def: ln = (λ(x :: real). if x = (0 :: real) then (0 :: real) else raw_ln_real ¦x¦)
-  0.586 lemma raw_ln_real_def: raw_ln_real ?x = (THE (u :: real). exp u = ?x)
-  0.300 lemma cosh_ln_real: (0 :: real) < ?x ⟶ cosh (ln ?x) = (?x + inverse ?x) / (2 :: real)
-  0.300 lemma sinh_ln_real: (0 :: real) < ?x ⟶ sinh (ln ?x) = (?x - inverse ?x) / (2 :: real)
-  0.300 lemma tanh_ln_real: (0 :: real) < ?x ⟶ tanh (ln ?x) = (?x² - (1 :: real)) / (?x² + (1 :: real))
+  0.718 lemma ln_realpow: ln (?x ^ ?n) = real ?n * ln ?x
+  0.695 lemma ln_real_def: ln = (λ(x :: real). if x = (0 :: real) then (0 :: real) else raw_ln_real ¦x¦)
+  0.691 lemma raw_ln_real_def: raw_ln_real ?x = (THE (u :: real). exp u = ?x)
+  0.595 lemma cosh_ln_real: (0 :: real) < ?x ⟶ cosh (ln ?x) = (?x + inverse ?x) / (2 :: real)
+  0.593 lemma sinh_ln_real: (0 :: real) < ?x ⟶ sinh (ln ?x) = (?x - inverse ?x) / (2 :: real)
+  0.574 lemma tanh_ln_real: (0 :: real) < ?x ⟶ tanh (ln ?x) = (?x² - (1 :: real)) / (?x² + (1 :: real))
 Constants with name_contains=["ln"]: 2 results
-  0.618 constant ln: ?'a ⇒ ?'a
-  0.618 constant raw_ln_real: real ⇒ real
+  0.736 constant ln: ?'a ⇒ ?'a
+  0.704 constant raw_ln_real: real ⇒ real
 Pattern-only with limit=3, name_contains=["ln"]: 3 results
   lemma lnear_order_on_empty: linear_order_on {} {}
   lemma ln_2_less_1: ln (2 :: real) < (1 :: real)

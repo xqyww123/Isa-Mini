@@ -9,9 +9,9 @@ Result (is_error=False):
 - iffCE: ?P = ?Q ⟶ (?P ⟶ ?Q ⟶ ?R) ⟶ (¬ ?P ⟶ ¬ ?Q ⟶ ?R) ⟶ ?R
 - cnf.iff_trans [manual]: ?P = ?Q ⟶ ?Q = ?R ⟶ ?P = ?R
 - cnf.iff_refl [manual]: ?P = ?P
-- Meson.iff_to_disjD [manual]: ?P = ?Q ⟶ (¬ ?P ∨ ?Q) ∧ (¬ ?Q ∨ ?P)
 - iffI_np [manual]: (?x ⟶ ¬ ?y) ⟶ (¬ ?x ⟶ ?y) ⟶ (¬ ?x) = ?y
 - imp_conj_iff [manual]: ((?P ⟶ ?Q) ∧ ?P) = (?P ∧ ?Q)
+- Meson.iff_to_disjD [manual]: ?P = ?Q ⟶ (¬ ?P ∨ ?Q) ∧ (¬ ?Q ∨ ?P)
 - eq_iff_swap [manual]: (?x = ?y) = ?P ⟶ (?y = ?x) = ?P
 - Not_eq_iff: ((¬ ?P) = (¬ ?Q)) = (?P = ?Q)
 - bool.expand [manual]: (?bool = True) = (?bool' = True) ⟶ ?bool = ?bool'

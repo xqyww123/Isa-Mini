@@ -23,7 +23,7 @@ Filled node: Obvious, id=2
     operation: Obvious
     with facts:
       - (8::nat) = 2^3
-      - log_nat_power: (0 :: real) < ?x ⟶ log ?b (?x ^ ?n) = real ?n * log ?b ?x
+      - log_nat_power: (0 :: real) ≤ ?x ⟶ log ?b (?x ^ ?n) = real ?n * log ?b ?x
 --------------------------------------------------
 After fill
 --------------------------------------------------
@@ -41,4 +41,4 @@ proof:
     operation: Obvious
     with facts:
       - (8::nat) = 2^3
-      - log_nat_power: (0 :: real) < ?x ⟶ log ?b (?x ^ ?n) = real ?n * log ?b ?x
+      - log_nat_power: (0 :: real) ≤ ?x ⟶ log ?b (?x ^ ?n) = real ?n * log ?b ?x
