@@ -17,7 +17,7 @@ Response
 --------------------------------------------------
 Is error: True
 Reason: Cannot fill a node with id 1
-OF: cannot discharge premise 1 of GCD.mult_mod_cancel_left with discharge argument 1 (h1)
+cannot discharge premise 1 of GCD.mult_mod_cancel_left with discharge argument 1 (h1)
 the premise is:
   (?n::?'a::{euclidean_ring_cancel,semiring_gcd}) * (?a::?'a::{euclidean_ring_cancel,semiring_gcd}) mod (?m::?'a::{euclidean_ring_cancel,semiring_gcd}) = ?n * (?b::?'a::{euclidean_ring_cancel,semiring_gcd}) mod ?m
 the discharge argument is:

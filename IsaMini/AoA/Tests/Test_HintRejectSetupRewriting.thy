@@ -1,5 +1,5 @@
 theory Test_HintRejectSetupRewriting
-  imports Minilang_Agent.Minilang_Agent
+  imports Complex_Main Minilang_Agent.Minilang_Agent
 begin
 
 declare [[agent_AoA_driver="test.HintRejectSetupRewriting"]]

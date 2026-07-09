@@ -33,6 +33,11 @@ if TYPE_CHECKING:
 AGENT_EXPR_LIMIT = 200
 AGENT_GOAL_CHAR_LIMIT = 400
 
+# Runaway-loop guard: this many back-to-back identical tool calls from the main
+# agent forces a context restart. Shared by ToolExecutor.execute (proof tools)
+# and ClaudeCode.permission_control (SDK-native recall/Read).
+LOOP_REPEAT_THRESHOLD = 5
+
 LONG_GOAL_HINT = (
     "note: the resulting goal is unusually long, "
     "which is often a sign of a wrong direction.\n"
@@ -4255,20 +4260,7 @@ class Node(ABC):
             return
         self._cancelled_by = cancelled_by
         self.status = EVALUATION_CACNCELLED
-        # TODO(revert): temporarily NOT resetting the resulting state on cancel.
-        # Bug: `request`/request_lemmas auto-proves a general lemma into the
-        # GlobalEnv; `Root._refresh_all_children_after` then re-evaluates EVERY
-        # top-level goal, including the subtree where the requesting worker is
-        # PARKED mid-proof. That re-eval cancels nodes in the parked subtree, and
-        # this `reset()` removes (server-side) the `Minilang_State` the worker
-        # still holds as `target.ml_state`. On resume, `_prefetch_worker_premises`
-        # queries that dead state -> ML `beginning_state_not_found` -> uncaught
-        # IsabelleError -> `call_tool` does `sys.exit(1)`, killing the host.
-        # Skipping the reset keeps the (possibly stale/wrong) state alive so the
-        # worker survives instead of the whole process dying. Restore this once
-        # the cascade no longer touches parked subtrees (and/or prefetch guards
-        # on `initialized()`).
-        # await self.resulting_state().reset()
+        await self.resulting_state().reset()
     def _on_edit_failure(
         self, outcome: 'EditOutcome'
     ) -> 'tuple[EditFailureBehavior, EditOutcome]':
@@ -5539,13 +5531,7 @@ class StdBlock(NonLeaf_Node):
         if self.status.status is EvaluationStatus.Status.CANCELLED:
             return
         await super()._cancel(cancelled_by)
-        # TODO(revert): temporarily NOT resetting `_state_before_ending_` on
-        # cancel, for the same reason as `Node._cancel` above (a request_lemmas
-        # global-env cascade re-evaluates a parked worker's subtree; resetting
-        # here removes server states the worker still references, leading to
-        # `beginning_state_not_found` and a host `sys.exit(1)`). Restore together
-        # with the `Node._cancel` reset.
-        # await self._state_before_ending_.reset()
+        await self._state_before_ending_.reset()
         for child in self.sub_nodes:
             await child._cancel(cancelled_by)
     @abstractmethod
@@ -11104,6 +11090,10 @@ class Session:
             self.max_tool_calls = max_tool_calls
             self.max_retries = max_retries
         self._retry_count: int = 0
+        # Runaway-loop detection (see ToolExecutor.execute): signature of the
+        # last proof-tool call and how many times it has repeated back-to-back.
+        self._repeat_sig: str | None = None
+        self._repeat_count: int = 0
         self.quit_info: 'QuitInfo | None' = None
         self._session_edit_count: int = 0
         self._session_delete_count: int = 0
@@ -12908,6 +12898,24 @@ class Session:
         self._reset_view_state()
         self.quit_info = Restart()
         await self.interrupt()
+
+    def _note_repeat(self, sig: str) -> bool:
+        """Advance the runaway-loop counter for call signature *sig* and return
+        True iff it has now repeated ``LOOP_REPEAT_THRESHOLD`` times in a row
+        (resetting the counter when it fires). A different *sig* restarts the
+        count at 1. Pure bookkeeping — the caller does the gating and the
+        restart action (see ToolExecutor._should_loop_restart and
+        ClaudeCode.permission_control)."""
+        if sig == self._repeat_sig:
+            self._repeat_count += 1
+        else:
+            self._repeat_sig = sig
+            self._repeat_count = 1
+        if self._repeat_count >= LOOP_REPEAT_THRESHOLD:
+            self._repeat_sig = None
+            self._repeat_count = 0
+            return True
+        return False
 
     async def interrupt(self):
         """Interrupt the agent's processing immediately.  Default no-op — the

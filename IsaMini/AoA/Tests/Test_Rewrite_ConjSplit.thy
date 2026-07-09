@@ -1,4 +1,4 @@
-theory Test_Rewrite_ConjSplit imports
+theory Test_Rewrite_ConjSplit imports Complex_Main
   Minilang_Agent.Minilang_Agent
 begin
 

@@ -2,7 +2,7 @@
   Authors: Wenda Li
 *)
 
-theory Test_imo_2006_p3 imports
+theory Test_imo_2006_p3 imports Complex_Main
   MathBench_Prover.MathBench_Prover Minilang_Agent.Minilang_Agent
 begin
 declare [[auto_interpret_for_embedding=false, agent_AoA_driver="Claude"]]

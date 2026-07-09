@@ -20,7 +20,7 @@ Sub-test 1: Type clash
 --------------------------------------------------
 Is error: True
 Reason: Cannot fill a node with id 1
-OF: cannot discharge premise 1 of GCD.mult_mod_cancel_left with discharge argument 1 (h1)
+cannot discharge premise 1 of GCD.mult_mod_cancel_left with discharge argument 1 (h1)
 the premise is:
   ?n * ?a mod ?m = ?n * ?b mod ?m
 the discharge argument is:

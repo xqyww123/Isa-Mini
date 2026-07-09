@@ -1,5 +1,5 @@
 theory Test_HaveGenLeakObtain
-  imports Minilang_Agent.Minilang_Agent
+  imports Complex_Main Minilang_Agent.Minilang_Agent
 begin
 
 (* The set-subset goal {r. 0<r} \<subseteq> S is NOT introducible by Minilang INTRO

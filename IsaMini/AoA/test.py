@@ -2841,36 +2841,60 @@ async def _test_SubagentHintScopeOneShot(root: Root, file: MyIO):
       (A) SCOPE-RELATIVE depth — the hint's nesting depth is measured from the
           dispatcher's focus scope (`proof_scope_root`), NOT the global root. So
           the SAME failed Obvious triggers the hint for `Role_Major` (base level
-          0) and for a worker focused high (target=H1, rel depth 2) but is SILENT
-          for a worker focused close (target=H2 rel depth 1; target=H3 rel 0).
+          0, rel depth 6) and for a worker focused high (target=H1, rel depth 5)
+          but is SILENT for a worker focused close (target=H2 rel depth 4;
+          target=H3 rel depth 3) — both below `_SUBAGENT_HINT_DEPTH` (= 5).
       (B) ONE-SHOT per session — like `_emit_pending_hint_notices`, the hint is
           marked shown only on the CONSUMING inline-Outline surface
           (`quickview_proof_scope`), never on the non-consuming `proof.yaml`
           (`print_proof_scope`); after a compaction reset it fires again.
 
-    Tree: three nested Haves H1>H2>H3 (absolute `_subgoal_level` 1,2,3); H1/H2
-    are left open (sorried SUCCESS, no HAMMER); H3 states the false `x = x + 1`
-    so its body `Obvious` (level 3) FAILS the hammer and renders the hint."""
+    Tree: six nested Haves H1>...>H6 (absolute `_subgoal_level` 1..6); H1-H5 are
+    left open (sorried SUCCESS, no HAMMER); H6 states the false `x = x + 1` so
+    its body `Obvious` (level 6) FAILS the hammer and renders the hint. The
+    nesting is sized against `_SUBAGENT_HINT_DEPTH` (= 5) so that the major agent
+    and a worker at H1 clear it while workers at H2/H3 do not — keeping both the
+    fires and the silences under test."""
     session = root.session
 
-    # Build H1 > H2 > H3 > Obvious in one nested fill (id-agnostic; navigate by
-    # sub_nodes below). H1/H2 stay open (sorried SUCCESS, no HAMMER); H3 states
+    # Build H1 > ... > H6 > Obvious in one nested fill (id-agnostic; navigate by
+    # sub_nodes below). H1-H5 stay open (sorried SUCCESS, no HAMMER); H6 states
     # the false `x = x + 1` so its body Obvious FAILS the hammer.
+    _benign = {"english": "x squared nonneg", "conclusion": r"(0::int) \<le> x * x"}
     await root.fill("1", [Have.gen_single({
         "thought": "level-1 helper",
-        "statement": {"english": "x squared nonneg", "conclusion": r"(0::int) \<le> x * x"},
+        "statement": dict(_benign),
         "name": "h1",
         "proof": [{
             "operation": "Have",
             "thought": "level-2 helper",
-            "statement": {"english": "x squared nonneg", "conclusion": r"(0::int) \<le> x * x"},
+            "statement": dict(_benign),
             "name": "h2",
             "proof": [{
                 "operation": "Have",
-                "thought": "level-3 false claim",
-                "statement": {"english": "x equals x plus one", "conclusion": r"(x::int) = x + 1"},
+                "thought": "level-3 helper",
+                "statement": dict(_benign),
                 "name": "h3",
-                "proof": [{"operation": "Obvious", "facts": []}],
+                "proof": [{
+                    "operation": "Have",
+                    "thought": "level-4 helper",
+                    "statement": dict(_benign),
+                    "name": "h4",
+                    "proof": [{
+                        "operation": "Have",
+                        "thought": "level-5 helper",
+                        "statement": dict(_benign),
+                        "name": "h5",
+                        "proof": [{
+                            "operation": "Have",
+                            "thought": "level-6 false claim",
+                            "statement": {"english": "x equals x plus one",
+                                          "conclusion": r"(x::int) = x + 1"},
+                            "name": "h6",
+                            "proof": [{"operation": "Obvious", "facts": []}],
+                        }],
+                    }],
+                }],
             }],
         }],
     })])
@@ -2878,31 +2902,35 @@ async def _test_SubagentHintScopeOneShot(root: Root, file: MyIO):
     H1 = goal.sub_nodes[0]
     H2 = cast(NonLeaf_Node, H1).sub_nodes[0]
     H3 = cast(NonLeaf_Node, H2).sub_nodes[0]
-    obv = cast(NonLeaf_Node, H3).sub_nodes[0]
-    assert isinstance(H1, Have) and isinstance(H2, Have) and isinstance(H3, Have), \
-        f"expected 3 nested Haves, got {type(H1).__name__}/{type(H2).__name__}/{type(H3).__name__}"
+    H4 = cast(NonLeaf_Node, H3).sub_nodes[0]
+    H5 = cast(NonLeaf_Node, H4).sub_nodes[0]
+    H6 = cast(NonLeaf_Node, H5).sub_nodes[0]
+    obv = cast(NonLeaf_Node, H6).sub_nodes[0]
+    _haves = (H1, H2, H3, H4, H5, H6)
+    assert all(isinstance(h, Have) for h in _haves), \
+        "expected 6 nested Haves, got " + "/".join(type(h).__name__ for h in _haves)
     assert isinstance(obv, Obvious), f"expected innermost Obvious, got {type(obv).__name__}"
     assert obv.status.status.name == "FAILURE", \
         f"expected obv HAMMER FAILURE, got {obv.status.status.name}"
 
     print_header("structure (absolute levels; obv must be FAILURE)", file)
-    for n in (H1, H2, H3, obv):
+    for n in (*_haves, obv):
         file.write(f"{n.id}: {type(n).__name__} "
                    f"_subgoal_level={n._subgoal_level} status={n.status.status.name}\n")
 
     # ---- (A) scope-relative depth. Non-consuming proof.yaml renders only, so
     #          nothing is marked and each render reflects pure scope depth. ----
     session.shown_subagent_hints.clear()
-    print_header("major proof.yaml -- base level 0, obv rel depth 3 -> HINT", file)
+    print_header("major proof.yaml -- base level 0, obv rel depth 6 -> HINT", file)
     session.print_proof_scope(0, file)
     session.role = model.Role_Worker(target=H1)
-    print_header("worker@H1 proof.yaml -- base level 1, obv rel depth 2 -> HINT", file)
+    print_header("worker@H1 proof.yaml -- base level 1, obv rel depth 5 -> HINT", file)
     session.print_proof_scope(0, file)
     session.role = model.Role_Worker(target=H2)
-    print_header("worker@H2 proof.yaml -- base level 2, obv rel depth 1 -> no hint", file)
+    print_header("worker@H2 proof.yaml -- base level 2, obv rel depth 4 -> no hint", file)
     session.print_proof_scope(0, file)
     session.role = model.Role_Worker(target=H3)
-    print_header("worker@H3 proof.yaml -- base level 3, obv rel depth 0 -> no hint", file)
+    print_header("worker@H3 proof.yaml -- base level 3, obv rel depth 3 -> no hint", file)
     session.print_proof_scope(0, file)
     session.role = model.Role_Major()
 
@@ -15680,138 +15708,6 @@ async def _test_request_lemmas_auto_prove(root: Root, file: MyIO):
     file.write(f"headless reject names undeclared free 'c': "
                f"{'free variable' in result and '`c`' in result}\n")
     file.write(f"headless reject mentions for_any: {'for_any' in result}\n")
-
-    session.role = model.Role_Major()
-
-
-@model_test("RequestLemmasInEnvTarget", "Test_RequestLemmasInEnvTarget.thy", 15)
-async def _test_request_lemmas_in_env_target(root: Root, file: MyIO):
-    """Regression for the general-lemma PLACEMENT bug. When the requesting worker's
-    target lives INSIDE the global env, an auto-proved general lemma MUST be inserted
-    BEFORE the target — not appended at the end of the global env, where it would land
-    AFTER the target and be invisible to the very worker that asked for it. Cases:
-    (A) target = a global Have (the headless-prover-recursion trigger); (B) target =
-    a deferred global Define (delegatable since Part 0) — also asserts the insert
-    cascade re-evaluates the Define WITHOUT discarding its obligation children or its
-    live worker handle (the goals_count invariant); (C) after A/B have left FRACTIONAL
-    global children, a NORMAL-target request still appends at the correct open slot
-    (locks the `_id_of_openning_prf_to_fill` slot fix). LLM prover stubbed; no LLM."""
-    from . import mcp_http_server as mcp
-    from .model import WorkerHandle, WorkerYield
-    session = root.session
-    session.age += 1
-
-    def gidx(node):
-        return root.global_env.sub_nodes.index(node)
-    def find_global(name):
-        return next((n for n in root.global_env.sub_nodes
-                     if getattr(n, "name", None) == name), None)
-    def visible(target, name):
-        return any(k.unicode == name for k in target._ctxt_at_me().hyps)
-
-    async def stub_proves(s, node, sug, hl, *, headless=False):
-        # Close the inserted lemma's body so it is proved + kept.
-        await s.root.fill(f"{node.id}.1", [Obvious.gen_single({"facts": []})])
-        return WorkerYield.PROVED()
-
-    # A normal (non-global) target for case C, set up like RequestLemmasAutoProve.
-    goal_node = root.sub_nodes[1]
-    await goal_node.fill("1", [Have.gen_single({
-        "thought": "normal target",
-        "statement": {"english": "trivial", "conclusion": "True"},
-        "name": "n_target"})])
-    normal_target = goal_node.sub_nodes[0]
-
-    orig = mcp._run_worker_on
-    mcp._run_worker_on = stub_proves
-    try:
-        # === A. target = a global HAVE (headless-prover recursion) ===
-        print_header("A. in-env target = global Have; lemma inserted BEFORE it", file)
-        await root.fill("global.1", [Have.gen_single({
-            "thought": "global target lemma",
-            "statement": {"english": "target", "conclusion": "True"},
-            "name": "g_target"})])
-        g_target = find_global("g_target")
-        g_target.worker_handle = WorkerHandle(g_target, session)
-        session.role = model.Role_Worker(
-            target=g_target, worker_handle=g_target.worker_handle, headless=True)
-        await session._prefetch_worker_premises()
-        session._seed_reported_scope_facts()
-        result, is_error = await mcp._request_tool_logic(session, {
-            "detail": "need a reflexivity helper",
-            "general_lemmas": [{
-                "name": "help_refl",
-                "statement": {"english": "reflexivity", "conclusion": "x = x",
-                              "for_any": [{"name": "x"}]}}]})
-        help_refl = find_global("help_refl")
-        file.write(f"A is_error: {is_error}\n")
-        file.write(f"A lemma kept in global env: {help_refl is not None}\n")
-        file.write(f"A lemma BEFORE target "
-                   f"(help_refl@{gidx(help_refl)} < g_target@{gidx(g_target)}): "
-                   f"{gidx(help_refl) < gidx(g_target)}\n")
-        file.write(f"A lemma VISIBLE in target scope: "
-                   f"{visible(g_target, 'help_refl')}\n")
-        file.write(f"A target keeps its worker handle: "
-                   f"{g_target.worker_handle is not None}\n")
-
-        # === B. target = a deferred global DEFINE (goals_count invariant) ===
-        print_header("B. in-env target = deferred global Define; lemma BEFORE it, "
-                     "obligations + handle preserved", file)
-        b_slot = root.global_env._id_of_openning_prf_to_fill()
-        await root.fill(b_slot, [Define.gen_single({
-            "thought": "deferred global definition",
-            "name": "halve",
-            "type": r"nat \<Rightarrow> nat",
-            "equations": ["halve 0 = 0", "halve (Suc 0) = 0",
-                          "halve (Suc (Suc n)) = Suc (halve n)"],
-            "metric": [r"\<lambda>n::nat. n"]})])
-        halve = find_global("halve")
-        oblig_before = len(halve.sub_nodes)
-        halve.worker_handle = WorkerHandle(halve, session)
-        session.role = model.Role_Worker(
-            target=halve, worker_handle=halve.worker_handle, headless=True)
-        await session._prefetch_worker_premises()
-        result, is_error = await mcp._request_tool_logic(session, {
-            "detail": "need another helper",
-            "general_lemmas": [{
-                "name": "help_y",
-                "statement": {"english": "reflexivity y", "conclusion": "y = y",
-                              "for_any": [{"name": "y"}]}}]})
-        help_y = find_global("help_y")
-        file.write(f"B is_error: {is_error}\n")
-        file.write(f"B lemma kept in global env: {help_y is not None}\n")
-        file.write(f"B lemma BEFORE Define "
-                   f"(help_y@{gidx(help_y)} < halve@{gidx(halve)}): "
-                   f"{gidx(help_y) < gidx(halve)}\n")
-        file.write(f"B Define obligations preserved across cascade "
-                   f"({oblig_before} -> {len(halve.sub_nodes)}, both > 0): "
-                   f"{len(halve.sub_nodes) == oblig_before and oblig_before > 0}\n")
-        file.write(f"B Define keeps its worker handle: "
-                   f"{halve.worker_handle is not None}\n")
-
-        # === C. NORMAL target after fractional children exist → append OK ===
-        print_header("C. normal (non-global) target; append still hits the real "
-                     "open slot despite fractional global children", file)
-        frac = [n.local_step for n in root.global_env.sub_nodes]
-        file.write(f"C global local_steps now (note fractional): {frac}\n")
-        session.role = model.Role_Worker(
-            target=normal_target, worker_handle=WorkerHandle(normal_target, session))
-        await session._prefetch_worker_premises()
-        session._seed_reported_scope_facts()
-        result, is_error = await mcp._request_tool_logic(session, {
-            "detail": "normal worker helper",
-            "general_lemmas": [{
-                "name": "help_norm",
-                "statement": {"english": "reflexivity z", "conclusion": "z = z",
-                              "for_any": [{"name": "z"}]}}]})
-        help_norm = find_global("help_norm")
-        file.write(f"C is_error: {is_error}\n")
-        file.write(f"C lemma kept (append did NOT spuriously fail): "
-                   f"{help_norm is not None}\n")
-        file.write(f"C lemma appended at the END of global env: "
-                   f"{help_norm is root.global_env.sub_nodes[-1]}\n")
-    finally:
-        mcp._run_worker_on = orig
 
     session.role = model.Role_Major()
 

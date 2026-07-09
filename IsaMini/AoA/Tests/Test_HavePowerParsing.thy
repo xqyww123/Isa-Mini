@@ -1,5 +1,5 @@
 theory Test_HavePowerParsing
-  imports MathBench_Prover.MathBench_Prover Minilang_Agent.Minilang_Agent
+  imports Complex_Main MathBench_Prover.MathBench_Prover Minilang_Agent.Minilang_Agent
 begin
 
 declare [[auto_interpret_for_embedding=false, AoA_interactive_retrieval="no"]]

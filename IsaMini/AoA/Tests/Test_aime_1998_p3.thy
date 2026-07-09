@@ -2,7 +2,7 @@
   Authors: Albert Qiaochu Jiang
 *)
 
-theory Test_aime_1998_p3 imports
+theory Test_aime_1998_p3 imports Complex_Main
   MathBench_Prover.MathBench_Prover Minilang_Agent.Minilang_Agent
 begin
 declare [[auto_interpret_for_embedding=false (*, agent_AoA_driver="ChatGPT.gpt-5.5-medium"*) ]]

@@ -2,7 +2,7 @@
   Authors: Albert Qiaochu Jiang
 *)
 
-theory Test_imo_1966_p5 imports
+theory Test_imo_1966_p5 imports Complex_Main
 MathBench_Prover.MathBench_Prover
 Minilang_Agent.Minilang_Agent
 begin
