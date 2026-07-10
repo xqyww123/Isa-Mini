@@ -58,13 +58,13 @@ dependencies = [
 # is absent, so an under-declared extra does not fail loudly -- it makes the driver
 # vanish and surfaces much later as `Unknown driver: <name>`.
 openai = ["openai>=2.33.0", "openai-agents>=0.15.1"]
-# driver_api.py is the shared base of every HTTP-API driver, and its module-level
-# `import openai` (OpenAIBase, APIDriver_ChatGPT) and `import httpx` come along with
-# driver_anthropic, which imports it. Hence one base extra rather than two copies.
-# tiktoken: APIDriver_ChatGPT.estimate_tokens only.
-api-base = ["openai>=2.33.0", "httpx>=0.28.1", "tiktoken"]
-openai-api = ["IsaMini[api-base]"]
-anthropic = ["IsaMini[api-base]", "anthropic>=0.52.0"]
+# driver_openai_api.py: the openai SDK, plus tiktoken for APIDriver_ChatGPT.estimate_tokens.
+# Every driver registered there (ChatGPT, OpenAI-Codex-API, K2-Think, Chat, DeepSeekV4)
+# is an openai-SDK client, even the ones whose names do not say so.
+openai-api = ["openai>=2.33.0", "httpx>=0.28.1", "tiktoken"]
+# driver_anthropic.py. It imports driver_api for Provider/APIDriver/the Msg types, and
+# since the openai half moved to driver_openai_api that no longer drags in openai.
+anthropic = ["anthropic>=0.52.0", "httpx>=0.28.1"]
 api = ["IsaMini[openai-api,anthropic]"]
 # There is no `gemini` extra, and toplevel.py does not register driver_gemini: the
 # driver is unexercised. The module is still shipped -- install google-genai and

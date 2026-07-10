@@ -16,6 +16,7 @@ from . import driver_claude_code
 _try_import_driver("driver_openai")
 _try_import_driver("driver_codex")
 _try_import_driver("driver_api")
+_try_import_driver("driver_openai_api")
 # driver_gemini is not registered: GeminiProvider implements the whole Provider
 # interface and rides along with refactorings (the 2026-06-04 cost accounting unified
 # its cached-token handling), but the driver has never been exercised against the live
