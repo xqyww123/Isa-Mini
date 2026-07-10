@@ -1,0 +1,5 @@
+live target: terminated=False queue=0 quit=None
+dead target: terminated=True reason=technical_failure terminal=True
+detail names absolute ids: True (target=2 culprit=1A)
+second call: terminated=False queue=0
+non-worker: terminated=False

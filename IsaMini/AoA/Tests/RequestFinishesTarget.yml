@@ -10,6 +10,6 @@ neg interrupt NOT called: True
 positive: request discharges the whole target scope
 --------------------------------------------------
 pos is_error: False
-pos target finished: False
-pos announces all goals proven: False
-pos interrupt called once: False
+pos target finished: True
+pos announces all goals proven: True
+pos interrupt called once: True

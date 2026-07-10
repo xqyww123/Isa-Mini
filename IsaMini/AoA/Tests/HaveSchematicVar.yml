@@ -1,0 +1,31 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: real
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ¦x¦ = max x (0 :: real) + max (- x) (0 :: real)
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+one-var Have -> raised IsabelleError: ['exception UnequalLengths raised (line 492 of "library.ML")']
+--------------------------------------------------
+After Have with one schematic variable
+--------------------------------------------------
+variables:
+  - x: real
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ¦x¦ = max x (0 :: real) + max (- x) (0 :: real)
+proof:
+  - step id: 1
+    thought: an identity stated with a schematic variable
+    operation: Have
+    statement:
+      english: for any real x, |x| = max(x,0) + max(-x,0)
+      conclusion: \<bar>?x::real\<bar> = max ?x 0 + max (- ?x) 0
+    name: one_var
+    Error: Not yet evaluated
+    proof: empty
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      ¦?x¦ = max ?x (0 :: real) + max (- ?x) (0 :: real)
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.

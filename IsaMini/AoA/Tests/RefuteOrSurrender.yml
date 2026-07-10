@@ -8,9 +8,9 @@ refute event detail: The goal contradicts premises
 refute rejected result mentions reject: True
 refute rejected is_error: False
 refute accepted result mentions accept: True
-non-general request is_error: False
-non-general request names undeclared 'x': False
-non-general request mentions for_any: False
+non-general request is_error: True
+non-general request names undeclared 'x': True
+non-general request mentions for_any: True
 non-general request pushed NO event: True
 empty request is_error: True
 invalid type is_error: True

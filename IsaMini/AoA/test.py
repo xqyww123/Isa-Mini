@@ -3609,6 +3609,80 @@ async def _test_HaveParseError(root: Root, file: MyIO):
     root.print(0, file)
 
 
+@model_test("HaveSchematicVar", "Test_HaveSchematicVar.thy", 13)
+async def _test_HaveSchematicVar(root: Root, file: MyIO):
+    """Reproduce `exception UnequalLengths raised (line 492 of "library.ML")`
+    when a Have's conclusion carries schematic variables.
+
+    Root cause: `HAVE = gen_HAVE Specification.schematic_theorem_cmd`
+    (library/proof.ML), so `?x` is accepted in the statement.  Isar's
+    `generic_goal` then prepends one `TERM ?v` conjunct per schematic variable
+    (`implicit_vars`, Pure/Isar/proof.ML), so the goal has `n_vars + n_shows`
+    conjuncts.  `gen_HAVE'` assumes `n_shows` and calls `unflat (map snd shows)`
+    on the conjuncts -- `unflat` raises UnequalLengths once the leftover is
+    non-empty.  Two distinct crash sites:
+
+      * >= 2 schematic vars: `preruns` (unflat over the goal's conjuncts) blows
+        up while the Have is being *opened*.
+      * exactly 1 schematic var: opening survives (one leftover conjunct is
+        absorbed by `chop`), and the crash moves to the block-closing callback,
+        where `Conjunction.elim_conjunctions` yields the `TERM ?x` theorem plus
+        the real one.
+
+    Observed in the wild: an AoA worker posed
+    `Have abs_max_identity: "|?x::real| = max ?x 0 + max (- ?x) 0"`.
+
+    Note the crash escapes `fill` as a raw `IsabelleError` rather than landing
+    in `EditOutcome.failure`: for the one-var case it fires inside
+    `NonLeaf_Node._refresh_me_alone`'s `_skip_proof`, outside the guarded op."""
+    from Isabelle_RPC_Host import IsabelleError
+
+    async def try_fill(id: str, op) -> str:
+        try:
+            outcome = await root.fill(id, [op])
+            return f"failure: {outcome.failure}"
+        except IsabelleError as e:
+            return f"raised IsabelleError: {e}"
+
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    # --- one schematic variable: opening succeeds, closing the block crashes
+    root.session.age += 1
+    file.write("one-var Have -> " + await try_fill("1", Have.gen_single({
+        "thought": "an identity stated with a schematic variable",
+        "statement": {"english": "for any real x, |x| = max(x,0) + max(-x,0)",
+                      "conclusion": r"\<bar>?x::real\<bar> = max ?x 0 + max (- ?x) 0"},
+        "name": "one_var"
+    })) + "\n")
+    print_header("After Have with one schematic variable", file)
+    root.print(0, file)
+
+
+@model_test("HaveSchematicVar2", "Test_HaveSchematicVar2.thy", 12)
+async def _test_HaveSchematicVar2(root: Root, file: MyIO):
+    """Companion of `HaveSchematicVar`: the *other* crash site of the same root
+    cause.  With two schematic variables the goal carries two `TERM ?v`
+    conjuncts, so `gen_HAVE'`'s `preruns` (`unflat (map snd shows)` over the
+    goal's conjuncts) already has a leftover -- the Have dies while being
+    opened, before its body runs.  The edit still commits, so the crash is
+    recorded as the node's own FAILURE ("Fail to claim the intermediate
+    subgoal because: ...") instead of escaping as a raw `IsabelleError`."""
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("1", [Have.gen_single({
+        "thought": "an identity stated with two schematic variables",
+        "statement": {"english": "addition on nat commutes",
+                      "conclusion": r"?x + ?y = ?y + (?x::nat)"},
+        "name": "two_vars"
+    })])
+    file.write(f"Step 1 status: {root.locate_node('1').status.status.value}\n")
+    print_header("After Have with two schematic variables", file)
+    root.print(0, file)
+
+
 @model_test("SubagentSlotResolve", "Test_SubagentSlotResolve.thy", 8)
 async def _test_SubagentSlotResolve(root: Root, file: MyIO):
     """`Node.locate_node_or_slot` resolves the address space that `subagent`
@@ -9973,6 +10047,153 @@ async def _test_AmendCancelSweepsNested(root: Root, file: MyIO):
     assert hG._task.cancelled(), \
         "REFUTED: nested sub-agent not swept (new_node.aclose_all_subagents missing/broken)"
     obs("CLAIM CONFIRMED: class-changing amend cancels the node's worker AND sweeps the nested sub-agent.")
+
+
+@model_test("TerminateOnDeadRegion", "Test_TerminateOnDeadRegion.thy", 8)
+async def _test_TerminateOnDeadRegion(root: Root, file: MyIO):
+    """`Session._terminate_if_region_dead`: the consumer-side gate that stops a
+    sub-agent from continuing on a region the cancel cascade destroyed (D1).
+
+    Checks, on the SAME session, in order:
+      1. live target                -> no-op (False), no event, no quit_info
+      2. CANCELLED target           -> True; WorkerRegionDead queued; terminal
+                                       `quit_info = TechnicalFailure`
+      3. called again after that    -> False (idempotent) — a second event would
+                                       desync the dispatcher's `run_until_yield`,
+                                       which consumes one event per yield
+      4. non-worker (Role_Major)    -> no-op (False)
+
+    `is_terminal` on the quit_info is asserted explicitly: it is what makes a
+    follow-up tool call short-circuit in `ToolExecutor.execute`'s `check_budget()`
+    before it can touch the deleted `Minilang_State`. See the comment on
+    `TechnicalFailure`.
+    """
+    from .model import WorkerHandle, WorkerRegionDead, TechnicalFailure
+
+    def have(name: str) -> Parsed_Opr:
+        return Have.gen_single({
+            "thought": name,
+            "statement": {"english": name, "conclusion": r"(0::int) \<le> x * x"},
+            "name": name, "proof": [{"operation": "Obvious", "facts": []}]})
+
+    for slot, nm in (("1", "a"), ("2", "b")):
+        await root.fill(slot, [have(nm)])
+    target = root.locate_node("2")
+    assert isinstance(target, NonLeaf_Node)
+
+    session = root.session
+    handle = WorkerHandle(target, session)
+    handle._task = asyncio.ensure_future(asyncio.sleep(3600))
+    target.worker_handle = handle
+    session.role = model.Role_Worker(target=target, worker_handle=handle)
+
+    # 1. live target -> no-op
+    assert target.status.status is EvaluationStatus.Status.SUCCESS
+    fired_live = await session._terminate_if_region_dead()
+    file.write(f"live target: terminated={fired_live} "
+               f"queue={handle._event_queue.qsize()} quit={session.quit_info}\n")
+    assert not fired_live and handle._event_queue.qsize() == 0 and session.quit_info is None
+
+    # kill the region: a failing Have before the target cancels it
+    await root.insert_before("2", [Have.gen_single({
+        "thought": "intentionally ill-typed", "name": "bad",
+        "statement": {"english": "bad", "conclusion": "1 1 1"}})])
+    assert target.status.status is EvaluationStatus.Status.CANCELLED
+
+    # 2. dead target -> terminate
+    fired = await session._terminate_if_region_dead()
+    assert fired, "REFUTED: a CANCELLED target did not terminate the worker"
+    assert handle._event_queue.qsize() == 1, "expected exactly one WorkerRegionDead"
+    event = handle._event_queue.get_nowait()
+    assert isinstance(event, WorkerRegionDead), f"got {type(event).__name__}"
+    assert isinstance(session.quit_info, TechnicalFailure)
+    assert session.quit_info.is_terminal, (
+        "REFUTED: TechnicalFailure.is_terminal is False. It is what makes a "
+        "follow-up tool call short-circuit in check_budget() before reaching ML "
+        "with a deleted state name. Without it the host dies on sys.exit(1).")
+    file.write(f"dead target: terminated={fired} "
+               f"reason={session.quit_info.reason} terminal={session.quit_info.is_terminal}\n")
+    # The detail is LOG-facing (`quit_info.detail`), never shown to an agent, so it
+    # must carry ABSOLUTE ids: `_display_id` is relative to the session's scope root,
+    # which in a worker IS the target ("" for itself, "<external>" for the culprit).
+    culprit = target._cancelled_by
+    assert culprit is not None, "expected a blamed predecessor"
+    assert event.detail == (f"target step {target.id} fell into a cancelled region "
+                            f"(step {culprit} failed); cannot continue"), event.detail
+    file.write(f"detail names absolute ids: True (target={target.id} culprit={culprit})\n")
+
+    # 3. idempotent
+    again = await session._terminate_if_region_dead()
+    file.write(f"second call: terminated={again} queue={handle._event_queue.qsize()}\n")
+    assert not again and handle._event_queue.qsize() == 0, \
+        "REFUTED: a second call queued another event; run_until_yield would desync"
+
+    # 4. non-worker
+    session.role = model.Role_Major()
+    session.quit_info = None
+    nonworker = await session._terminate_if_region_dead()
+    file.write(f"non-worker: terminated={nonworker}\n")
+    assert not nonworker
+
+    handle._task.cancel()
+
+
+@model_test("CancelledNodeMayKeepLiveState", "Test_CancelledNodeMayKeepLiveState.thy", 8)
+async def _test_CancelledNodeMayKeepLiveState(root: Root, file: MyIO):
+    """A CANCELLED node's `ml_state` is NOT necessarily dead. Guards the predicate
+    choice in `Session._terminate_if_region_dead` (see docs/D1_FIX_PLAN.md §3, §6b).
+
+    `X.ml_state` is destroyed **iff X's immediate predecessor sibling was `_cancel`ed**
+    — because `_cancel` resets `self.resulting_state()`, and a node's resulting state
+    IS its next sibling's `ml_state` object (`NonLeaf_Node._resulting_state_of_child`).
+    A node whose predecessor merely FAILED keeps a LIVE — but STALE — `ml_state`:
+    nobody reset it, and nobody rewrote it either (its producer never ran).
+
+    Consequence, and the reason this test exists: a sub-agent parked on such a node
+    must be gated on its **status**, NOT on `ml_state.initialized()`. An
+    `.initialized()` guard would wave it through to prove against a stale context in
+    a region that no longer exists — silent wrongness, worse than the crash it
+    prevents. (`docs/D1_CANCEL_STATE_OWNERSHIP.md` §10.3 asserts the opposite
+    equivalence; it is wrong, and this test pins that down.)
+
+    Tree `1,2,3` = three `Have`s; insert a FAILING `Have` before `2`, so:
+      inserted → FAILURE (its own op)   [not cancelled ⇒ resets nothing]
+      2        → CANCELLED, ml_state LIVE-but-stale   (predecessor FAILED)
+      3        → CANCELLED, ml_state DEAD             (predecessor 2 was CANCELLED)
+    """
+    def have(name: str) -> Parsed_Opr:
+        return Have.gen_single({
+            "thought": name,
+            "statement": {"english": name, "conclusion": r"(0::int) \<le> x * x"},
+            "name": name, "proof": [{"operation": "Obvious", "facts": []}]})
+
+    for slot, nm in (("1", "a"), ("2", "b"), ("3", "c")):
+        await root.fill(slot, [have(nm)])
+
+    # Hold object refs: `insert_before` renumbers the display ids.
+    n2 = root.locate_node("2")
+    n3 = root.locate_node("3")
+
+    await root.insert_before("2", [Have.gen_single({
+        "thought": "intentionally ill-typed", "name": "bad",
+        "statement": {"english": "bad", "conclusion": "1 1 1"}})])
+
+    CANCELLED = EvaluationStatus.Status.CANCELLED
+    file.write(f"n2: status={n2.status.status.value} ml_state_live={n2.ml_state.initialized()}\n")
+    file.write(f"n3: status={n3.status.status.value} ml_state_live={n3.ml_state.initialized()}\n")
+
+    assert n2.status.status is CANCELLED, f"n2 should be CANCELLED, got {n2.status.status.value}"
+    assert n3.status.status is CANCELLED, f"n3 should be CANCELLED, got {n3.status.status.value}"
+
+    assert n2.ml_state.initialized(), (
+        "REFUTED: a CANCELLED node whose predecessor merely FAILED has a DEAD ml_state. "
+        "If that is now true, `initialized()` and the status predicate coincide, and "
+        "`_terminate_if_region_dead` could be simplified. Re-check "
+        "`Node._cancel` / `_resulting_state_of_child` before trusting this.")
+    assert not n3.ml_state.initialized(), (
+        "REFUTED: a CANCELLED node whose predecessor was CANCELLED still has a LIVE "
+        "ml_state — `Node._cancel` no longer resets `resulting_state()`. The whole D1 "
+        "crash analysis rests on it doing so.")
 
 
 @model_test("ValidatorNestedPath", "Test_ValidatorNestedPath.thy", 8)

@@ -1,7 +1,35 @@
 # D1 — `_cancel` destroys a `Minilang_State` that a parked sub-agent still holds
 
-> **Status:** root cause fully traced (static, evidence-backed). **Not reproduced.** **Not fixed.**
-> **Audience:** a fresh Claude Code session picking this up from zero.
+> ## ⚠️ SUPERSEDED (2026-07-09) — read `D1_FIX_PLAN.md` first
+>
+> This document's **analysis of the mechanism** (§0–§9) is correct and still worth
+> reading. Its **proposed fix** (§13) and **open questions** (§14) are NOT: they were
+> superseded by the design in `D1_FIX_PLAN.md`, which is what shipped.
+>
+> Two of its claims are now **empirically refuted** — do not act on them:
+>
+> - **§10.3's invariant is FALSE.** It asserts
+>   `target.ml_state.initialized() ⟺ the chain leading to target is live`, and builds
+>   "the fix that makes it simple" on top. A node whose predecessor merely **FAILED**
+>   (rather than being `_cancel`ed) keeps a **LIVE-but-STALE** `ml_state`: nobody reset
+>   it, and nobody rewrote it. Pinned by the `CancelledNodeMayKeepLiveState` model test.
+> - **§14 Q2 is therefore answered:** the two predicates do **not** coincide. The
+>   shipped gate is `not _status_can_continue(target.status.status)` — strictly stronger
+>   than `.initialized()`, and the same predicate `_subagent_tool_logic`'s dispatch gate
+>   and `Root.delete`'s refresh loop already use. An `.initialized()` guard would wave a
+>   worker through onto a stale context in a region that no longer exists — silent
+>   wrongness, worse than the crash it prevents.
+>
+> Consequently **§13.1** (extract an `.initialized()`-based `in_dead_region` helper) and
+> **§13.4 / §14 Q1** (producer-side teardown inside `_cancel`) were NOT implemented.
+> `_cancel` and `reset()` are untouched — they were always correct. The fix is entirely
+> consumer-side: a worker whose target is no longer usable **terminates itself**, and
+> control passes up to a living parent. **§14 Q4's "BLOCKING" enumeration is closed**:
+> the ML side funnels every state-id callback through one `get_state`, and on the Python
+> side every worker-reachable ML touch was enumerated and gated (see `D1_FIX_PLAN.md` §4).
+>
+> **Status:** mechanism traced; fix designed, reviewed, implemented, and tested.
+> **The production crash was never reproduced end-to-end** — see `D1_FIX_PLAN.md` §7.
 > **Line numbers drift** — every claim below is anchored on a *symbol name*. Grep for it.
 
 ---

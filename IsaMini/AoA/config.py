@@ -44,7 +44,7 @@ _REQUEST_TOOL_CAUTION = (
 # import-expansion loop's signal is kept). Set back to False to restore the old
 # behavior byte-identical. Deployment-static: the MCP tool advertisement and
 # schema resolve once at import, so set this before the process starts.
-DISABLE_REQUEST_GENERAL_LEMMAS = True
+DISABLE_REQUEST_GENERAL_LEMMAS = False
 
 # Shown (in place of the base) when DISABLE_REQUEST_GENERAL_LEMMAS is on: only the
 # constraint half of `request` remains, so the description advertises just that.

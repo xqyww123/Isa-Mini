@@ -1,0 +1,31 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - y: nat
+  - x: nat
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: x + y = y + x
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+Step 1 status: failure
+--------------------------------------------------
+After Have with two schematic variables
+--------------------------------------------------
+variables:
+  - y: nat
+  - x: nat
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: x + y = y + x
+proof:
+  - step id: 1
+    thought: an identity stated with two schematic variables
+    operation: Have
+    statement:
+      english: addition on nat commutes
+      conclusion: ?x + ?y = ?y + (?x::nat)
+    name: two_vars
+    Error: Fail to claim the intermediate subgoal because: exception UnequalLengths raised (line 492 of "library.ML")
+    proof: empty
+    Error: Evaluation cancelled due to failures above
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.

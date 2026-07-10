@@ -652,6 +652,28 @@ class Surrender:
     detail: str | None = None
 
 @dataclass
+class TechnicalFailure:
+    # A worker stopped for a TECHNICAL reason, not because its proof approach was
+    # wrong: its target lost a usable proof state (cancelled by an earlier failure,
+    # or its own op failed in a re-refreshed context). Set by
+    # ``Session._terminate_if_region_dead``.
+    #
+    # ``is_terminal = True`` IS LOAD-BEARING, not boilerplate. After the worker
+    # self-terminates it still finishes its current tool call and its LLM may emit
+    # another one. Nothing in ``call_tool`` / ``_check_tool_permission`` inspects
+    # ``quit_info``; what stops that follow-up call from touching the dead
+    # ``Minilang_State`` is ``ToolExecutor.execute``'s opening
+    # ``if session.check_budget()`` -> ``check_budget``'s opening
+    # ``if self.quit_info is not None: return self.quit_info.is_terminal``.
+    # Flip this to False and the follow-up reaches ML with a deleted state name ->
+    # ``beginning_state_not_found`` -> ``InternalError`` -> ``call_tool``'s
+    # ``except Exception: sys.exit(1)`` kills the host. ``interrupt()`` does NOT
+    # provide this guarantee (it is fire-and-forget). Same rail ``Surrender`` rides.
+    reason: ClassVar[str] = "technical_failure"
+    is_terminal: ClassVar[bool] = True
+    detail: str | None = None
+
+@dataclass
 class Refute:
     reason: ClassVar[str] = "refute"
     is_terminal: ClassVar[bool] = True
@@ -670,7 +692,8 @@ class Refresh:
     briefing: str = ""
     detail: str | None = None
 
-QuitInfo = ResourceExhausted | ResourceUnavailable | Surrender | Refute | Restart | Refresh
+QuitInfo = (ResourceExhausted | ResourceUnavailable | Surrender | Refute
+            | TechnicalFailure | Restart | Refresh)
 
 
 class DriverArgumentError(AoA_Error):
@@ -12616,6 +12639,88 @@ class Session:
         return ((self.is_major or self.is_worker)
                 and self._subagent_nesting_depth() < self.SUBAGENT_NESTING_DEPTH)
 
+    async def _wind_down_worker(self, quit_info: 'QuitInfo',
+                                event: Any = None) -> None:
+        """Terminally wind THIS worker down: optionally notify its dispatcher with
+        ``event``, set ``quit_info``, and interrupt. The single rail every terminal
+        worker outcome rides (``report``'s surrender / accepted-refutation,
+        ``_terminate_if_region_dead``).
+
+        ``quit_info.is_terminal`` MUST be True — it is what actually stops the
+        worker. ``interrupt()`` is best-effort (fire-and-forget under ClaudeCode), so
+        the worker still finishes its current tool call; the follow-up tool call is
+        what short-circuits, in ``ToolExecutor.execute``'s opening ``check_budget()``,
+        which returns ``self.quit_info.is_terminal``. Without a terminal quit_info the
+        loop would keep issuing tool calls until its budget ran out while the
+        dispatcher blocks in ``wait_finish``.
+
+        Emit ``event`` only for a wind-down the dispatcher must observe as a distinct
+        yield; a refutation the dispatcher already adjudicated needs none.
+        """
+        if event is not None:
+            handle = cast(Role_Worker, self.role).worker_handle
+            if handle is None:
+                raise InternalError(
+                    "Role_Worker has no worker_handle (worker must be spawned "
+                    "via WorkerHandle).")
+            handle._event_queue.put_nowait(event)
+        self.quit_info = quit_info
+        await self.interrupt()
+
+    async def _terminate_if_region_dead(self) -> bool:
+        """Terminate this worker if its target no longer has a usable proof state.
+        Returns True iff it terminated. No-op (False) for a non-worker, and for a
+        live target.
+
+        "No usable proof state" == ``not _status_can_continue(target.status.status)``,
+        i.e. the target was CANCELLED by an earlier failure, or its OWN operation
+        FAILED when a re-refresh re-ran it. This is the SAME predicate the dispatch
+        gate in ``_subagent_tool_logic`` already applies before handing a goal TO a
+        sub-agent (and that ``Root.delete`` applies before refreshing a point); we
+        apply it before letting a sub-agent KEEP one.
+
+        Why status and not ``target.ml_state.initialized()``: a node whose
+        predecessor merely FAILED keeps a LIVE-but-STALE ``ml_state`` (nobody reset
+        it, nobody rewrote it) — an ``initialized()`` guard would wave such a worker
+        through to prove against a stale context in a region that no longer exists.
+        Pinned by the ``CancelledNodeMayKeepLiveState`` model test.
+
+        Nested sub-agents under the target are swept by ``WorkerHandle._run``'s
+        finally, so nothing extra is needed here. Wind-down itself is
+        ``_wind_down_worker`` — see there for why ``is_terminal`` is what stops the
+        worker.
+        """
+        if not self.is_worker:
+            return False
+        if self.quit_info is not None and self.quit_info.is_terminal:
+            # Already winding down (possibly from an earlier call to this very
+            # method). Emitting a second WorkerRegionDead would desync the
+            # dispatcher's `run_until_yield`, which consumes one event per yield.
+            return False
+        target = cast(Role_Worker, self.role).target
+        if _status_can_continue(target.status.status):
+            return False
+        # ABSOLUTE ids. `_display_id` is relative to the *current* session's scope
+        # root — which, in a worker, IS the target — so it would render the target as
+        # "" and blame an "<external>" culprit. Absolute ids stay meaningful wherever
+        # this string surfaces:
+        #   - `quit_info.detail` -> the operator log;
+        #   - `WorkerYield.REGION_DEAD.detail` -> relayed to the REQUESTER's agent by
+        #     `_request_tool_logic`'s auto-prove `else` branch, as the reason a
+        #     requested lemma could not be established (a headless prover's target
+        #     lives under `global.*`, outside the requester's scope, where a display
+        #     id would be masked anyway).
+        # `_subagent_tool_logic`'s `region_dead` case does NOT use it — it names the
+        # step from ITS own display id.
+        culprit = target._cancelled_by
+        detail = (f"target step {target.id} fell into a cancelled region "
+                  f"(step {culprit} failed); cannot continue"
+                  if culprit is not None else
+                  f"target step {target.id} failed in the updated context; cannot continue")
+        await self._wind_down_worker(TechnicalFailure(detail),
+                                     WorkerRegionDead(detail=detail))
+        return True
+
     async def _prefetch_worker_premises(self) -> None:
         """Resolve the standard-printed propositions of every fact in scope before the
         worker's target and cache them (ascii name -> IsaTerm).  Called at worker
@@ -13082,6 +13187,15 @@ class WorkerSurrender:
     detail: str
 
 @dataclass
+class WorkerRegionDead:
+    """The worker's target no longer has a usable proof state: it was CANCELLED by
+    an earlier failure, or its own operation FAILED in a re-refreshed context. Says
+    NOTHING about the worker's proof approach — the steps it wrote stay in the tree.
+    Terminal — the worker interrupts itself right after emitting this (see
+    ``Session._terminate_if_region_dead``)."""
+    detail: str
+
+@dataclass
 class WorkerRequestConstraints:
     """Worker reports that its sub-goal is missing CONSTRAINTS — conditions it
     genuinely needs but was not given when dispatched (the dispatcher
@@ -13131,7 +13245,7 @@ class WorkerYield:
     accepted condition can only be honoured by REWORKING the proof structure — the
     worker is suspended until the dispatcher does so and resumes it. ``detail``
     carries the accepted constraint(s) for the dispatcher's reference."""
-    kind: str  # proved | could_not_prove | surrendered | refute_accepted | constraint_needs_restructure | difficulty
+    kind: str  # proved | could_not_prove | surrendered | refute_accepted | constraint_needs_restructure | difficulty | region_dead
     detail: str = ""
     reason: 'str | None' = None
 
@@ -13145,6 +13259,13 @@ class WorkerYield:
     @classmethod
     def SURRENDERED(cls, detail: str) -> 'WorkerYield':
         return cls(kind="surrendered", detail=detail)
+    @classmethod
+    def REGION_DEAD(cls, detail: str) -> 'WorkerYield':
+        # The worker's target lost its usable proof state (cancelled by an earlier
+        # failure, or its own op failed on re-refresh). Terminal, NOT a park: the
+        # handle is detached, so the dispatcher must dispatch a FRESH sub-agent
+        # after repairing the earlier step — it cannot "resume" this one.
+        return cls(kind="region_dead", detail=detail)
     @classmethod
     def REFUTE_ACCEPTED(cls, reason: 'str | None', detail: str) -> 'WorkerYield':
         return cls(kind="refute_accepted", reason=reason, detail=detail)
@@ -13373,6 +13494,10 @@ class WorkerHandle:
                     await self.wait_finish()
                     self._detach()
                     return WorkerYield.SURRENDERED(event.detail)
+                case WorkerRegionDead():
+                    await self.wait_finish()
+                    self._detach()
+                    return WorkerYield.REGION_DEAD(event.detail)
                 case WorkerDone(success=True):
                     await self.wait_finish()
                     self._detach()

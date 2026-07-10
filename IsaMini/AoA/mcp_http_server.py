@@ -63,6 +63,7 @@ from .model import (
     executor_msg,
     ANSWER_TOOLS,
     ALL_PROOF_TOOLS,
+    LOOP_REPEAT_THRESHOLD,
     Role_Worker,
     Surrender, Refute, Refresh,
     LMUnreachable, ResourceUnavailable,
@@ -1118,6 +1119,21 @@ async def _run_struggle_checkpoint(session: Session) -> str | None:
     if handle is None:
         return None
 
+    # Should be unreachable: a worker's own confined edits cannot cancel or fail its
+    # own target (`_edit_verdict` confinement + `_body_affects_siblings = False` on an
+    # ordinary StdBlock), and the nested-sub-agent cascade is caught at the `subagent`
+    # boundary first. If we DO land here, an invariant broke — terminate loudly rather
+    # than merely skipping the assessment and letting the worker's next `edit` clone a
+    # dead state into the host's fatal handler.
+    if await session._terminate_if_region_dead():
+        # ABSOLUTE id: `_display_id` is relative to this session's scope root, which
+        # in a worker IS the target — it would render as "". Operator log, not agent
+        # facing. (Same trap `_terminate_if_region_dead` documents.)
+        session.warn_AoA_opr(
+            f"struggle checkpoint on a dead region (target {target.id} "
+            f"is {target.status.status.value}) — invariant broken; worker terminated")
+        return None
+
     delete_count = session._session_delete_count
     edit_count = session._session_edit_count
     checkpoint_num = session._struggle_checkpoint_count + 1
@@ -1203,12 +1219,12 @@ async def _report_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
                 WorkerRefute(detail=detail, response_future=fut))
             accepted, review_reason = await fut
             if accepted:
-                # Set a terminal quit_info so the worker's agent loop actually
-                # winds down: the ClaudeCode loop breaks on quit_info, not on an
-                # interrupt alone, so without this it would retry until its budget
-                # exhausts while the planner blocks on wait_finish.
-                session.quit_info = Refute(review_reason or detail)
-                await session.interrupt()
+                # No event: the dispatcher adjudicated this refutation itself, so it
+                # already knows. `_wind_down_worker` sets the terminal quit_info the
+                # agent loop actually breaks on (an interrupt alone would let it
+                # retry until its budget exhausts while the planner blocks in
+                # `wait_finish`).
+                await session._wind_down_worker(Refute(review_reason or detail))
                 msg = "Refutation accepted; concluding this goal."
                 session.log_tool_response(_tn, msg)
                 return (msg, False)
@@ -1217,11 +1233,8 @@ async def _report_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             session.log_tool_response(_tn, msg)
             return (msg, False)
 
-        # kind == "surrender": terminal — notify, then wind down.
-        handle._event_queue.put_nowait(WorkerSurrender(detail=detail))
-        # Terminal quit_info so the worker's loop breaks cleanly (see refute above).
-        session.quit_info = Surrender(detail)
-        await session.interrupt()
+        # kind == "surrender": terminal — notify the dispatcher, then wind down.
+        await session._wind_down_worker(Surrender(detail), WorkerSurrender(detail=detail))
         msg = f"Complaint recorded ({kind})."
         session.log_tool_response(_tn, msg)
         return (msg, False)
@@ -1530,8 +1543,16 @@ async def _request_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             # difficulty park; refute forks an autonomous adjudicator; a constraint
             # it raises on its OWN global Have is resolved IN-LOOP, never a park). A
             # park kind here would mean that invariant broke — fail loudly.
-            assert outcome.kind in {"proved", "could_not_prove",
-                                    "surrendered", "refute_accepted"}, (
+            #
+            # `region_dead` is terminal too, and REACHABLE here: an accepted
+            # constraint amends the prover's own global Have in place, and the
+            # `_refresh_all_after_me` cascade can leave that target non-SUCCESS, so
+            # the prover's own `_terminate_if_region_dead` fires. It falls into the
+            # `else` below and is reported as a lemma we could not establish — the
+            # right outcome, and `Root.delete` is safe on a dead node (it skips
+            # non-SUCCESS refresh points).
+            assert outcome.kind in {"proved", "could_not_prove", "surrendered",
+                                    "refute_accepted", "region_dead"}, (
                 f"headless prover yielded non-terminal {outcome.kind!r}")
             if outcome.kind == "proved" and node.is_proof_finished():
                 any_scope_change = True
@@ -1543,12 +1564,28 @@ async def _request_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
                     f"{node.conditional_fact_statement()}.")
             else:
                 # PROVED ⟺ no unfinished nodes, so proved-but-unfinished cannot
-                # happen; surrendered / could_not_prove / refute_accepted land here.
+                # happen; surrendered / could_not_prove / refute_accepted /
+                # region_dead land here.
                 reason = outcome.detail or outcome.reason or ""
                 await session.root.delete([node.id])
                 outcome_lines.append(_requested_lemma_failed_line(nm, reason))
 
         session.working_block = saved_working_block
+
+        # An auto-proved general lemma lands in the GlobalEnv, whose
+        # `_body_affects_siblings` re-evaluates EVERY top-level goal — which can make
+        # an earlier step newly fail and CANCEL this very worker's target. Check that
+        # BEFORE the constraints block, not merely before the prefetch below: emitting
+        # `WorkerRequestConstraints` hands control to the DISPATCHER, whose
+        # `Interaction_ReviewConstraint.answer` calls `Have.add_constraints` ->
+        # `_refresh_me_alone` -> executes the target's beginning op from its (now
+        # deleted) `ml_state`. That raises `InternalError`, which is not an
+        # `IsabelleError`, so `add_constraints`' revert-on-FAILURE never fires and it
+        # reaches `call_tool`'s `except Exception: sys.exit(1)`. The crash would run in
+        # the dispatcher's coroutine while this worker sleeps on `await fut`, so no
+        # check further down could ever stop it. Terminating here means the event is
+        # never emitted and the dispatcher never touches the dead state.
+        region_dead = await session._terminate_if_region_dead()
 
         # --- CONSTRAINTS path: route each to the DISPATCHER (the agent that
         # dispatched this worker) for adjudication. The worker BLOCKS until the
@@ -1556,20 +1593,31 @@ async def _request_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         # Interaction_ReviewConstraint (accept → amended in place / restructured;
         # reject → rejection message). ---
         constraint_feedback = ""
-        if constraints:
+        if constraints and not region_dead:
             fut: asyncio.Future = asyncio.get_running_loop().create_future()
             handle._event_queue.put_nowait(
                 WorkerRequestConstraints(detail=detail, constraints=constraints,
                                          response_future=fut))
             constraint_feedback = await fut
             any_scope_change = True
+            # An accepted constraint amends the target in place; a `_refresh_all_after_me`
+            # cascade from it can leave the target itself unusable. Re-check before the
+            # prefetch below (no-op if the check above already terminated).
+            region_dead = await session._terminate_if_region_dead()
 
         # New facts may now sit in scope BEFORE this worker's target (auto-proved
         # general Haves) and/or its OWN target may have gained a premise (an
         # accepted constraint) — the premise cache assumed that set immutable.
         # Re-prefetch + refresh proof.yaml so the worker's view (and a later
         # `recall`) reflect them.
-        if any_scope_change:
+        #
+        # SKIPPED on a dead region: `_prefetch_worker_premises` resolves the
+        # before-target hyps against `target.ml_state`, which the cancel cascade
+        # deleted server-side. Everything below this block is ML-safe on a dead region
+        # (`has_pending_goal` short-circuits on `not initialized()`), so we fall
+        # through to the normal response assembly rather than returning early — an
+        # early return would drop the newly-completed-substeps line.
+        if any_scope_change and not region_dead:
             await session._prefetch_worker_premises()
             session.refresh_YAML()
 
@@ -1860,6 +1908,19 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
                    f"Reconsider the proof plan for this step.")
         case "refute_accepted":
             msg = f"The sub-agent argues the goal is unprovable:\n{detail_shown}"
+        case "region_dead":
+            # The sub-agent's target lost its usable proof state — an earlier step
+            # failed (typically after a `request`ed global lemma re-evaluated the
+            # tree) and cancelled its region. TERMINAL, not a park: the handle is
+            # detached, so "resume" is impossible; a fresh sub-agent must be
+            # dispatched once the earlier step is repaired. The proof steps the old
+            # sub-agent wrote remain in the tree (`aclose_all_subagents` keeps them),
+            # so a new one continues from there rather than starting over.
+            msg = (f"The sub-agent on step {session._display_id(node.id)} was "
+                   f"terminated for a technical reason. This says nothing about "
+                   f"whether its proof approach was wrong — the steps it wrote "
+                   f"remain in the tree. You may dispatch a new sub-agent on this "
+                   f"step to carry on.")
         case "constraint_needs_restructure":
             # The dispatcher accepted a constraint the sub-agent reported, but the
             # sub-agent's target cannot take it as a premise (Obtain/Suffices) — the
@@ -1901,6 +1962,15 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
     msg = redirect_note + msg + "\n" + outline
     if finished:
         await session.interrupt()
+
+    # A sub-agent's `request` inserts its lemma into the GLOBAL env, so the resulting
+    # cascade is Root-wide: it can cancel not only that sub-agent's target but MINE
+    # too (I am a worker one level up). Having handed control back to me, I must not
+    # keep working on a region that no longer exists — my next `edit` would clone a
+    # reset `_state_before_ending_` and kill the host. Terminate and pass control up.
+    # Recursion bottoms out at the planner: `Role_Major` has no target, so
+    # `is_worker` is False and the helper is a no-op there.
+    await session._terminate_if_region_dead()
 
     session.log_tool_response(_tn, msg)
     return (msg, False)
@@ -2337,6 +2407,25 @@ class ToolExecutor:
         self._suspended_task: asyncio.Task | None = None
         session._channel = self._channel
 
+    def _should_loop_restart(self, session: Session, name: str,
+                             arguments: dict) -> bool:
+        """Count this proof-tool call toward the runaway-loop guard and report
+        whether the main agent has now issued ``LOOP_REPEAT_THRESHOLD`` identical
+        calls (same name + arguments) in a row.
+
+        Returns False (no counting) unless: the session is the main agent, no
+        restart/refresh is already pending, and no non-forking interaction is
+        parked. The parked-interaction skip is deliberate — a restart does not
+        cancel ``_suspended_task``, so firing here would strand it and wedge
+        every later mutation; repeated answers there are the interaction layer's
+        concern. Workers/forks are left to the global budget."""
+        if not (session.is_major and session.quit_info is None
+                and self._suspended_task is None
+                and session._nf_pending_interaction is None):
+            return False
+        sig = f"{name}\x00{json.dumps(arguments, sort_keys=True, default=str)}"
+        return session._note_repeat(sig)
+
     # ------------------------------------------------------------------
     # Channel helpers
     # ------------------------------------------------------------------
@@ -2493,6 +2582,24 @@ class ToolExecutor:
         if session.check_budget():
             await session.interrupt()
             return ("Budget exhausted (time/tool-call limit reached). Halting.", True)
+
+        # Runaway-loop guard. A model can get stuck re-issuing the exact same
+        # tool call over and over (identical name + arguments), making no
+        # progress. Because it never ends its turn, this slips past the
+        # between-turn retry limit; only the budget check above would stop it,
+        # after burning the whole timeout. When _should_loop_restart reports the
+        # main agent has repeated one call LOOP_REPEAT_THRESHOLD times in a row,
+        # force a context restart via the shared request_restart() (which resets
+        # view-state dedup, then sets quit_info=Restart and interrupts): the
+        # driver loop rebuilds a fresh context, breaking the loop.
+        if self._should_loop_restart(session, name, arguments):
+            session.log_AoA_opr(
+                f"Loop detected: {LOOP_REPEAT_THRESHOLD} identical "
+                f"`{name}` calls in a row; restarting context")
+            session._log_meta("LOOP_RESTART", tool=name)
+            await session.request_restart()
+            return (f"Loop detected: {LOOP_REPEAT_THRESHOLD} identical calls; "
+                    f"restarting context.", True)
 
         perm_error = _check_tool_permission(session, name)
         if perm_error:
