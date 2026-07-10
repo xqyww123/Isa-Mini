@@ -1809,6 +1809,11 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
           val attr_srcs = [Token.make_src ("Minilang_Agent.mini_auto_apply", Position.none) []]
           val shows = [((Binding.name name, attr_srcs), [(equation, [])])]
           val s' = Minilang.HAVE'' fixes' named_assumes shows s
+          (* Same AoA policy as the HAVE branch: `read_terms` turns an authored
+             `?x` in the redex/residue into a real Var, and `HAVE''` is the very
+             `gen_HAVE'` that supports them -- so without this the agent could
+             smuggle a schematic rewrite rule in through SetupRewriting. *)
+          val _ = reject_schematic_goal "SetupRewriting" s'
         in s' end
     | COMPUTE (name, term) =>
         let val facts_before = Minilang.get_local_facts s

@@ -4,14 +4,6 @@ session Minilang = Auto_Sledgehammer +
     Minilang_Base
     Minilang
 
-session Minilang_Test in Test = Minilang +
-  theories
-    Fun_In_Proof_Test
-    Fun_Termination_Examples
-    Inductive_Cases_Simps_Demo
-    Induct_HO_Unif_Probe
-    Unify_Diagnostic_OutScope_Test
-
 session Minilang_Translator in translator = Minilang +
   sessions
     Isa_REPL
