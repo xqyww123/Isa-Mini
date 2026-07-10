@@ -100,6 +100,26 @@ class ModelTestCase(TestCase):
         with open(correct_yaml_path, 'w') as f:
             f.write(yaml)
 
+class TheoryTestCase(TestCase):
+    """Evaluate a whole `.thy` and require it to be error-free.
+
+    For regressions that live BELOW the agent: the proof runs during theory
+    evaluation (`by (min_script ...)`), so there is no `by aoa`, no proof tree to
+    drive and no golden to diff -- `repl.file` raising `REPLFail` IS the
+    assertion.  `run_all_tests` special-cases these: it evaluates to the last
+    line and never calls `run_app`.
+
+    Some Minilang behaviour is unreachable from the AoA layer and can only be
+    pinned this way.  Example: agent.ML's `reject_schematic_goal` refuses a
+    schematic HAVE when the block is OPENED, so no model test can ever exercise
+    `gen_HAVE'`'s block-CLOSING continuation."""
+    def __init__(self, name: str, file: str):
+        super().__init__(name, file, -1)
+    async def run(self, connection: Connection, log_dir: str, global_context: Context, ptree: tuple['Goal | None', int]) -> Root:
+        raise AssertionError(
+            "TheoryTestCase.run must never be called: run_all_tests evaluates the "
+            "theory directly and does not dispatch through the AoA driver.")
+
 TESTS : dict[str, TestCase] = {}
 # IMPORTANT: Each @model_test must have its own dedicated .thy file.
 # Never share a .thy file between different test cases.
@@ -109,6 +129,11 @@ def model_test(name: str, file: str, line: int):
         TESTS[name] = ModelTestCase(name, file, line, func)
         return func
     return decorator
+
+def theory_test(name: str, file: str):
+    """Register a `.thy` under Tests/ to be evaluated end-to-end, expecting no
+    errors. Takes no line and no body -- see `TheoryTestCase`."""
+    TESTS[name] = TheoryTestCase(name, file)
 
 def print_header(msg: str, file: MyIO):
     print("-"*50, file=file)
@@ -3607,6 +3632,12 @@ async def _test_HaveParseError(root: Root, file: MyIO):
     file.write(f"Step 1 status: {step.status.status.value}\n")
     print_header("After malformed Have", file)
     root.print(0, file)
+
+
+# Minilang-level counterpart of the two schematic-Have tests below. The agent
+# guard rejects a schematic Have at block OPEN, so no model test can reach
+# `gen_HAVE'`'s block-closing continuation; this theory drives raw Minilang.
+theory_test("HaveSchematicVars_Minilang", "Have_Schematic_Vars_Test.thy")
 
 
 @model_test("HaveSchematicVar", "Test_HaveSchematicVar.thy", 13)
@@ -17661,6 +17692,16 @@ async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | No
             await repl.rollback('init')
             print(f"Running test [{i+1}/{case_num}] {test_case.name}")
             abs_file_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "Tests", test_case.file))
+            if isinstance(test_case, TheoryTestCase):
+                # No `by aoa`, no proof tree: evaluating the theory IS the test.
+                try:
+                    await repl.file(abs_file_path, -1, 0, cache_position=False, use_cache=False)
+                except REPLFail as e:
+                    print(f"\033[91mTest {test_case.name} failed: {e}\033[0m")
+                    continue
+                passed += 1
+                print(f"\033[92mTest {test_case.name} passed\033[0m")
+                continue
             await repl.file(abs_file_path, test_case.line, 0, cache_position=False, use_cache=False)
             if sh_timeout is not None:
                 try:
