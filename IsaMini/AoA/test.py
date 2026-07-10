@@ -3611,73 +3611,62 @@ async def _test_HaveParseError(root: Root, file: MyIO):
 
 @model_test("HaveSchematicVar", "Test_HaveSchematicVar.thy", 13)
 async def _test_HaveSchematicVar(root: Root, file: MyIO):
-    """Reproduce `exception UnequalLengths raised (line 492 of "library.ML")`
-    when a Have's conclusion carries schematic variables.
+    """A Have whose conclusion carries a schematic variable is rejected by
+    `reject_schematic_goal` (Agent/agent.ML), with the variable named and
+    `for_any` offered as the way to state a universally quantified lemma.
 
-    Root cause: `HAVE = gen_HAVE Specification.schematic_theorem_cmd`
-    (library/proof.ML), so `?x` is accepted in the statement.  Isar's
-    `generic_goal` then prepends one `TERM ?v` conjunct per schematic variable
-    (`implicit_vars`, Pure/Isar/proof.ML), so the goal has `n_vars + n_shows`
-    conjuncts.  `gen_HAVE'` assumes `n_shows` and calls `unflat (map snd shows)`
-    on the conjuncts -- `unflat` raises UnequalLengths once the leftover is
-    non-empty.  Two distinct crash sites:
+    Minilang's `HAVE` itself DOES support schematic variables (it is built on
+    `Specification.schematic_theorem_cmd`); the guard is an AoA-level policy, so
+    the rejection must come from the agent layer, not from a crash below it.
 
-      * >= 2 schematic vars: `preruns` (unflat over the goal's conjuncts) blows
-        up while the Have is being *opened*.
-      * exactly 1 schematic var: opening survives (one leftover conjunct is
-        absorbed by `chop`), and the crash moves to the block-closing callback,
-        where `Conjunction.elim_conjunctions` yields the `TERM ?x` theorem plus
-        the real one.
+    Regression value: this used to die with `exception UnequalLengths raised
+    (line 492 of "library.ML")`.  Isar's `generic_goal` prepends one `TERM ?v`
+    conjunct per schematic variable (`implicit_vars`, Pure/Isar/proof.ML), and
+    `gen_HAVE'` sliced those conjuncts against `shows` without dropping the
+    markers -- for exactly one variable the `preruns` slice survived via `chop`
+    and the crash surfaced only when the block was CLOSED (escaping `fill` as a
+    raw `IsabelleError` from `_refresh_me_alone`'s `_skip_proof`).  See
+    `HaveSchematicVar2` for the >= 2 variable case.
 
     Observed in the wild: an AoA worker posed
-    `Have abs_max_identity: "|?x::real| = max ?x 0 + max (- ?x) 0"`.
-
-    Note the crash escapes `fill` as a raw `IsabelleError` rather than landing
-    in `EditOutcome.failure`: for the one-var case it fires inside
-    `NonLeaf_Node._refresh_me_alone`'s `_skip_proof`, outside the guarded op."""
-    from Isabelle_RPC_Host import IsabelleError
-
-    async def try_fill(id: str, op) -> str:
-        try:
-            outcome = await root.fill(id, [op])
-            return f"failure: {outcome.failure}"
-        except IsabelleError as e:
-            return f"raised IsabelleError: {e}"
-
+    `Have abs_max_identity: "|?x::real| = max ?x 0 + max (- ?x) 0"`."""
     print_header("Initial YAML", file)
     root.print(0, file)
 
-    # --- one schematic variable: opening succeeds, closing the block crashes
     root.session.age += 1
-    file.write("one-var Have -> " + await try_fill("1", Have.gen_single({
+    outcome = await root.fill("1", [Have.gen_single({
         "thought": "an identity stated with a schematic variable",
         "statement": {"english": "for any real x, |x| = max(x,0) + max(-x,0)",
                       "conclusion": r"\<bar>?x::real\<bar> = max ?x 0 + max (- ?x) 0"},
         "name": "one_var"
-    })) + "\n")
+    })])
+    file.write(f"edit failure: {outcome.failure}\n")
+    file.write(f"Step 1 status: {root.locate_node('1').status.status.value}\n")
     print_header("After Have with one schematic variable", file)
     root.print(0, file)
 
 
-@model_test("HaveSchematicVar2", "Test_HaveSchematicVar2.thy", 12)
+@model_test("HaveSchematicVar2", "Test_HaveSchematicVar2.thy", 11)
 async def _test_HaveSchematicVar2(root: Root, file: MyIO):
-    """Companion of `HaveSchematicVar`: the *other* crash site of the same root
-    cause.  With two schematic variables the goal carries two `TERM ?v`
-    conjuncts, so `gen_HAVE'`'s `preruns` (`unflat (map snd shows)` over the
-    goal's conjuncts) already has a leftover -- the Have dies while being
-    opened, before its body runs.  The edit still commits, so the crash is
-    recorded as the node's own FAILURE ("Fail to claim the intermediate
-    subgoal because: ...") instead of escaping as a raw `IsabelleError`."""
+    """Companion of `HaveSchematicVar`: two schematic variables, so the message
+    names both.  `reject_schematic_goal` reads them off the subgoal that HAVE
+    just opened (`Minilang.schematic_vars_of_goal`), which covers the conclusion
+    and the premises at once without re-parsing the statement strings.
+
+    Regression value: this arity used to crash EARLIER than the one-variable
+    case -- in `gen_HAVE'`'s `preruns`, while the Have was being opened -- since
+    two leftover `TERM ?v` conjuncts overflow `unflat`'s `chop`."""
     print_header("Initial YAML", file)
     root.print(0, file)
 
     root.session.age += 1
-    await root.fill("1", [Have.gen_single({
+    outcome = await root.fill("1", [Have.gen_single({
         "thought": "an identity stated with two schematic variables",
         "statement": {"english": "addition on nat commutes",
                       "conclusion": r"?x + ?y = ?y + (?x::nat)"},
         "name": "two_vars"
     })])
+    file.write(f"edit failure: {outcome.failure}\n")
     file.write(f"Step 1 status: {root.locate_node('1').status.status.value}\n")
     print_header("After Have with two schematic variables", file)
     root.print(0, file)
@@ -16976,7 +16965,7 @@ async def _test_DeleteOneOfThreeCases(root: Root, file: MyIO):
             "predicate would not.")
 
 
-@model_test("Define_DeleteOracle", "Test_Define_DeleteOracle.thy", 14)
+@model_test("Define_DeleteOracle", "Test_Define_DeleteOracle.thy", 12)
 async def _test_Define_DeleteOracle(root: Root, file: MyIO):
     """Delete probe for a Define with a deferred (open) termination block.
 

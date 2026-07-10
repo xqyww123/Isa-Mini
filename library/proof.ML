@@ -3417,6 +3417,15 @@ val HAVE_CMD =
      >> (fn (name, expr) => HAVE name expr)
 *)
 
+(* `TERM ?v`, i.e. `Logic.mk_term (Var v)`. When a HAVE statement carries
+   schematic variables, Isar's `generic_goal` prefixes one such conjunct per
+   variable (`implicit_vars`, Pure/Isar/proof.ML) to carry the instantiation the
+   proof picks, and discharges them right away with `refine_terms`/`Drule.termI`.
+   They survive in the goal's protected conclusion, so BOTH places that slice
+   those conjuncts against `shows` must drop them first — Isar's own `generic_qed`
+   does the same, via the `tl` on `conclude_goal`'s result. *)
+val is_term_marker = can Logic.dest_term
+
 fun gen_HAVE' mkG shows (ctxt0, HHF (st,items) :: S) =
       let
           val s01 = mkG ctxt0
@@ -3444,6 +3453,7 @@ fun gen_HAVE' mkG shows (ctxt0, HHF (st,items) :: S) =
             let val lems = Goal.conclude st'
                         |> finalize_goal ctxt'
                         |> Conjunction.elim_conjunctions
+                        |> filter_out (is_term_marker o Thm.prop_of)
                         |> Proof_Context.export ctxt' ctxt0
                         |> unflat (map snd shows)
                 val (lems, ctxt02) = Proof_Context.note_thmss "" (binds ~~ map (fn x => [(x, [])]) lems) ctxt0
@@ -3457,8 +3467,7 @@ fun gen_HAVE' mkG shows (ctxt0, HHF (st,items) :: S) =
           val thy01 = Proof_Context.theory_of ctxt01
           val preruns = concl_of (Thm.prop_of goal)
                   |> Logic.dest_conjunctions
-                  |> filter_out (fn Const(\<^const_name>\<open>Pure.term\<close>, _) $ _ => false
-                                  | _ => true)
+                  |> filter_out is_term_marker
                   |> map (Skip_Proof.make_thm thy01)
                   |> unflat (map snd shows)
           val (fakes, _) = Proof_Context.note_thmss "" (binds ~~ map (fn x => [(x, [])]) preruns) ctxt0

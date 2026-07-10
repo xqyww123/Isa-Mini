@@ -4,10 +4,10 @@ begin
 
 declare [[agent_AoA_driver="test.HaveSchematicVar"]]
 
-(* HAVE is built on `Specification.schematic_theorem_cmd`, so a `?x` in the
-   statement is accepted.  Isar's `generic_goal` then prepends one `TERM ?v`
-   conjunct per schematic variable (Pure/Isar/proof.ML `implicit_vars`), which
-   `gen_HAVE'` does not account for -> `unflat` raises UnequalLengths. *)
+(* AoA rejects a Have whose statement carries schematic variables (agent.ML
+   `reject_schematic_goal`), pointing the agent at `for_any` instead.  Minilang's
+   own HAVE supports them -- the guard is an AoA-level policy, not a limitation
+   of the proof language. *)
 
 lemma have_schematic_var_test: "\<bar>x::real\<bar> = max x 0 + max (- x) 0"
   by aoa

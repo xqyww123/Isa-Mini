@@ -8,6 +8,7 @@ You can write global declarations by calling command `edit` with action `fill` a
 goal: x + y = y + x
 proof: empty
 Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+edit failure: None
 Step 1 status: failure
 --------------------------------------------------
 After Have with two schematic variables
@@ -25,7 +26,7 @@ proof:
       english: addition on nat commutes
       conclusion: ?x + ?y = ?y + (?x::nat)
     name: two_vars
-    Error: Fail to claim the intermediate subgoal because: exception UnequalLengths raised (line 492 of "library.ML")
+    Error: Fail to claim the intermediate subgoal because: This Have mentions the schematic variables "?y", "?x". A Have statement cannot have schematic variables. If they are meant to be universally quantified, declare them in `for_any` instead.
     proof: empty
     Error: Evaluation cancelled due to failures above
 Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.

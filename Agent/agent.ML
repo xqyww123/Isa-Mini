@@ -1381,6 +1381,30 @@ fun reject_stray_assumption_frees opr_kind ctxt goal_params op_fixes prop_strs =
       end
   end
 
+(* Reject an agent-authored statement that carries schematic variables.
+   `Minilang.HAVE` itself supports them (it is built on
+   `Specification.schematic_theorem_cmd`), but the AoA proof tree is not meant to
+   carry schematic facts: `for_any` is the declared way to state a universally
+   quantified lemma. Ask the state that HAVE just produced rather than
+   re-parsing the statement strings — the freshly opened subgoal IS the
+   statement, so this covers the conclusion and the premises at once, needs no
+   guessing about parse modes / term bindings, and never mistakes a `?thesis`
+   (long since expanded by then) for an authored schematic. *)
+fun reject_schematic_goal opr_kind s =
+  case #1 (Minilang.schematic_vars_of_goal false s) of
+    [] => ()
+  | vars =>
+      let val names = map (Term.string_of_vname o #1) vars
+          val many = length names > 1
+      in raise Minilang.OPR_FAIL (Minilang.INVALID_OPR,
+           "This " ^ opr_kind ^ " mentions the schematic variable" ^
+           (if many then "s " else " ") ^ commas (map quote names) ^
+           ". A " ^ opr_kind ^ " statement cannot have schematic variables. If " ^
+           (if many then "they are" else "it is") ^
+           " meant to be universally quantified, declare " ^
+           (if many then "them" else "it") ^ " in `for_any` instead.")
+      end
+
 fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
   case cmd of
       SIMPLIFY (simp_facts_with_targets, use_system_simps, premise_names, simplify_goal, user_bindings_opt) =>
@@ -1485,7 +1509,8 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
                           (Minilang.context_of s) (conclusion :: map snd assumes))
               (fn () => ( check_authored_props (Minilang.context_of s)
                             (map fst fixes) (conclusion :: map snd assumes)
-                        ; Minilang.HAVE fixes' named_assumes shows s ))
+                        ; let val s' = Minilang.HAVE fixes' named_assumes shows s
+                           in reject_schematic_goal "Have" s'; s' end ))
         end
     | SUFFICES (fixes, assumes, conclusion) =>
         let val prem_ctr = #prem_counter counters

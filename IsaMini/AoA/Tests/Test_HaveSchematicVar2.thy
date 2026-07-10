@@ -4,9 +4,8 @@ begin
 
 declare [[agent_AoA_driver="test.HaveSchematicVar2"]]
 
-(* Companion of Test_HaveSchematicVar.thy: with >= 2 schematic variables the
-   `unflat` in `gen_HAVE'`'s `preruns` already has a leftover conjunct, so the
-   Have blows up while being *opened*, before its body ever runs. *)
+(* Companion of Test_HaveSchematicVar.thy: two schematic variables, so the
+   rejection message must name both. *)
 
 lemma have_schematic_var2_test: "(x::nat) + y = y + x"
   by aoa

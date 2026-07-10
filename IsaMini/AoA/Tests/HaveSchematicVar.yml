@@ -7,7 +7,8 @@ You can write global declarations by calling command `edit` with action `fill` a
 goal: ¦x¦ = max x (0 :: real) + max (- x) (0 :: real)
 proof: empty
 Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
-one-var Have -> raised IsabelleError: ['exception UnequalLengths raised (line 492 of "library.ML")']
+edit failure: None
+Step 1 status: failure
 --------------------------------------------------
 After Have with one schematic variable
 --------------------------------------------------
@@ -23,9 +24,7 @@ proof:
       english: for any real x, |x| = max(x,0) + max(-x,0)
       conclusion: \<bar>?x::real\<bar> = max ?x 0 + max (- ?x) 0
     name: one_var
-    Error: Not yet evaluated
+    Error: Fail to claim the intermediate subgoal because: This Have mentions the schematic variable "?x". A Have statement cannot have schematic variables. If it is meant to be universally quantified, declare it in `for_any` instead.
     proof: empty
-    Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
-    pending proof goal:
-      ¦?x¦ = max ?x (0 :: real) + max (- ?x) (0 :: real)
+    Error: Evaluation cancelled due to failures above
 Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
