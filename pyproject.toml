@@ -8,8 +8,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "IsaMini"
-version = "0.3.5"
-description = "The minimal proof language for Isabelle"
+version = "0.4.0"
+description = "Isabelle/Minilang"
 # The file is Readme.md. setuptools does not error on a readme it cannot find --
 # it silently emits METADATA with no body, and the PyPI page renders blank.
 readme = "Readme.md"
@@ -25,6 +25,10 @@ classifiers = [
 # `isabelle-rpc` is what pip resolves -- the former 404s on PyPI, so the published
 # 0.3.5 could never be installed. The floor is 0.3.0 because that is the only release
 # under this name, and Isabelle_Semantic_Embedding already requires it.
+#
+# Everything here is reached by a module-level import from `IsaMini` or `IsaMini.AoA`.
+# Nothing that is only reached from a driver, or only from inside a function, belongs
+# in this list -- see optional-dependencies below.
 dependencies = [
     "msgpack>=1.1.2",
     "isabelle-rpc>=0.3.0",
@@ -38,22 +42,37 @@ dependencies = [
     "jsoncomment>=0.4.2",
     "claude-agent-sdk>=0.1.72",
     "zstandard>=0.23.0",
-    # mcp_http_server._write_memory_tool_logic hashes the record into its universal
-    # key. Core, not part of the `mcp` extra: that module is on the import path of
-    # `IsaMini.AoA` itself (__init__ -> toplevel -> driver_claude_code -> here).
+    # mcp_http_server._write_memory_tool_logic hashes the record into its universal key.
     "xxhash",
+    # mcp_http_server imports both at module level, and it sits on the import path of
+    # IsaMini.AoA itself: __init__ -> toplevel -> driver_claude_code:14 -> here, all
+    # hard imports. Declaring them as an `mcp` extra shipped a package that
+    # `pip install IsaMini` could not import.
+    "mcp>=1.26.0",
+    "uvicorn>=0.41.0",
 ]
 
 [project.optional-dependencies]
+# One extra per driver, each naming exactly what that driver's module-level imports
+# need. `toplevel._try_import_driver` swallows the ImportError of a driver whose extra
+# is absent, so an under-declared extra does not fail loudly -- it makes the driver
+# vanish and surfaces much later as `Unknown driver: <name>`.
 openai = ["openai>=2.33.0", "openai-agents>=0.15.1"]
-# tiktoken: only APIDriver_ChatGPT.estimate_tokens (driver_api.py:1780) reaches it.
-openai-api = ["openai>=2.33.0", "httpx>=0.28.1", "tiktoken"]
-gemini = ["google-genai>=1.75.0", "httpx>=0.28.1"]
-anthropic = ["anthropic>=0.52.0", "httpx>=0.28.1"]
-api = ["IsaMini[openai-api,gemini,anthropic]"]
-mcp = ["uvicorn>=0.41.0", "mcp>=1.26.0"]
+# driver_api.py is the shared base of every HTTP-API driver, and its module-level
+# `import openai` (OpenAIBase, APIDriver_ChatGPT) and `import httpx` come along with
+# driver_anthropic, which imports it. Hence one base extra rather than two copies.
+# tiktoken: APIDriver_ChatGPT.estimate_tokens only.
+api-base = ["openai>=2.33.0", "httpx>=0.28.1", "tiktoken"]
+openai-api = ["IsaMini[api-base]"]
+anthropic = ["IsaMini[api-base]", "anthropic>=0.52.0"]
+api = ["IsaMini[openai-api,anthropic]"]
+# There is no `gemini` extra, and toplevel.py does not register driver_gemini: the
+# driver is unexercised. The module is still shipped -- install google-genai and
+# uncomment the _try_import_driver line to use it.
+# `web`: driver_claude_code imports web_terminal from inside a function, so aiohttp is
+# genuinely optional. (There is no `mcp` extra: see mcp/uvicorn in dependencies.)
 web = ["aiohttp>=3.13.5"]
-all = ["IsaMini[openai,api,mcp,web]"]
+all = ["IsaMini[openai,api,web]"]
 
 [project.urls]
 "Homepage" = "https://github.com/xqyww123/Isa-Mini"

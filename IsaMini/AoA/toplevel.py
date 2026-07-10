@@ -16,7 +16,12 @@ from . import driver_claude_code
 _try_import_driver("driver_openai")
 _try_import_driver("driver_codex")
 _try_import_driver("driver_api")
-_try_import_driver("driver_gemini")
+# driver_gemini is not registered: GeminiProvider implements the whole Provider
+# interface and rides along with refactorings (the 2026-06-04 cost accounting unified
+# its cached-token handling), but the driver has never been exercised against the live
+# API. The file stays; uncomment to try it, and install google-genai yourself -- the
+# `gemini` extra is gone too.
+# _try_import_driver("driver_gemini")
 _try_import_driver("driver_anthropic")
 import sys
 import io
