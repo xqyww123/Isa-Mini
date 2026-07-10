@@ -49,7 +49,7 @@
       "minimum": 1,
       "maximum": 50,
       "default": 15,
-      "description": "Number of results to return."
+      "description": "Number of top results to return (default 15, max 50). Entries already shown in earlier results are skipped."
     },
     "context_at": {
       "type": "string",

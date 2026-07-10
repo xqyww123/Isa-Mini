@@ -1,12 +1,18 @@
 [build-system]
-requires = ["setuptools>=42", "wheel"]
+# setup.py drops IsaMini.AoA's pytest modules from the wheel; 77 is the first
+# setuptools that reads `license` below as an SPDX expression rather than free-form
+# text. Under build isolation pip fetches the latest anyway, which is why the old
+# floor of 42 never failed.
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "IsaMini"
 version = "0.3.5"
 description = "The minimal proof language for Isabelle"
-readme = "README.md"
+# The file is Readme.md. setuptools does not error on a readme it cannot find --
+# it silently emits METADATA with no body, and the PyPI page renders blank.
+readme = "Readme.md"
 license = "LGPL-2.1-or-later"
 authors = [
     { name="Qiyuan Xu", email="xqyww123@gmail.com" },
@@ -15,20 +21,33 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
+# Distribution names, not import names: `Isabelle_RPC_Host` is what you import, but
+# `isabelle-rpc` is what pip resolves -- the former 404s on PyPI, so the published
+# 0.3.5 could never be installed. The floor is 0.3.0 because that is the only release
+# under this name, and Isabelle_Semantic_Embedding already requires it.
 dependencies = [
     "msgpack>=1.1.2",
-    "Isabelle_RPC_Host>=0.2.0",
+    "isabelle-rpc>=0.3.0",
     "Isabelle_Semantic_Embedding>=0.1.0",
+    # REPL.py and AoA/test.py import it at module level, and toplevel.py reaches
+    # test.py for TESTS. No floor: no release is known to be too old.
+    "IsaREPL",
+    "rich",  # main.py, module level
     "PyYAML>=6.0.3",
     "platformdirs>=4.9.4",
     "jsoncomment>=0.4.2",
     "claude-agent-sdk>=0.1.72",
     "zstandard>=0.23.0",
+    # mcp_http_server._write_memory_tool_logic hashes the record into its universal
+    # key. Core, not part of the `mcp` extra: that module is on the import path of
+    # `IsaMini.AoA` itself (__init__ -> toplevel -> driver_claude_code -> here).
+    "xxhash",
 ]
 
 [project.optional-dependencies]
 openai = ["openai>=2.33.0", "openai-agents>=0.15.1"]
-openai-api = ["openai>=2.33.0", "httpx>=0.28.1"]
+# tiktoken: only APIDriver_ChatGPT.estimate_tokens (driver_api.py:1780) reaches it.
+openai-api = ["openai>=2.33.0", "httpx>=0.28.1", "tiktoken"]
 gemini = ["google-genai>=1.75.0", "httpx>=0.28.1"]
 anthropic = ["anthropic>=0.52.0", "httpx>=0.28.1"]
 api = ["IsaMini[openai-api,gemini,anthropic]"]
@@ -43,4 +62,8 @@ all = ["IsaMini[openai,api,mcp,web]"]
 include = ["IsaMini", "IsaMini.*"]
 
 [tool.setuptools.package-data]
-"IsaMini.AoA" = ["tools/*.json"]
+# tools/ holds one .json and 23 .jsonc; mcp_http_server._load_schema opens the .jsonc
+# ones at import time, so `tools/*.json` alone made the installed module unimportable.
+# assets/ is read by driver_claude_code._copy_skills. AoA/abstract_demon.yml is left
+# out: nothing in the tree references it.
+"IsaMini.AoA" = ["tools/*.json", "tools/*.jsonc", "assets/*.md"]

@@ -463,6 +463,34 @@ class ClaudeCode(LMDriver):
         self.total_tool_calls += 1
         if not self.is_proof_tool(tool) or tool == self.tool_name(TOOL_READ):
             self.log_tool_call(tool, tool_input)
+
+        # Runaway-loop guard for `recall`, which maps to the SDK-native `Read`
+        # and so never reaches ToolExecutor.execute (where proof tools are
+        # counted). Count identical Reads here and force a restart at the
+        # threshold — same gating as execute (main agent, no restart/refresh
+        # already pending, no parked non-forking interaction). Only `Read` is
+        # counted here, so proof tools (also seen by this hook) are not
+        # double-counted. Deny the repeated Read; the restart discards the turn.
+        if (tool == self.tool_name(TOOL_READ) and self.is_major
+                and self.quit_info is None
+                and self._nf_pending_interaction is None):
+            sig = f"recall\x00{json.dumps(tool_input, sort_keys=True, default=str)}"
+            if self._note_repeat(sig):
+                self.log_AoA_opr(
+                    f"Loop detected: {LOOP_REPEAT_THRESHOLD} identical recall "
+                    f"calls in a row; restarting context")
+                self._log_meta("LOOP_RESTART", tool="recall")
+                await self.request_restart()
+                return {
+                    "continue_": False,
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": (
+                            f"Loop detected: {LOOP_REPEAT_THRESHOLD} identical "
+                            f"recall calls; restarting context."),
+                    },
+                }
         return {}
 
     async def _resume_model_timer(

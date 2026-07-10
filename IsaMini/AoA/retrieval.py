@@ -357,6 +357,21 @@ def _format_query_header(q: dict) -> str:
 _KnnQueryResult = tuple[list[RetrievedEntity], list[str], str | None, int]
 # (fetched, warnings, error, total) — total = entities matching the filters
 
+def _number_overflow_warning(q: dict) -> str | None:
+    """Notice for a ``number`` above MAX_QUERY_K, which ``_query_k`` silently clamps.
+    Without it the agent sees an unchanged (already-seen) result set and keeps raising
+    ``number``, never learning that the clamp makes every further raise a no-op.
+    Skipped for exact lookups, where ``number`` is ignored altogether."""
+    if q.get("exact_name") or q.get("exact_term"):
+        return None
+    n = q.get("number")
+    if isinstance(n, int) and n > MAX_QUERY_K:
+        return (f"Warning: `number` {n} exceeds the maximum {MAX_QUERY_K}. "
+                f"Raising it further has no effect — refine `description`, "
+                f"add `term_patterns`/`name_contains`, or try a different query.")
+    return None
+
+
 def _collect_query_warnings(
     knn_results: list[_KnnQueryResult],
 ) -> list[list[str]]:
@@ -422,13 +437,36 @@ def _has_structural_filter(q: dict) -> bool:
                 or q.get("target_type"))
 
 
+def _more_available_clause(q: dict, total: int, k: int) -> str:
+    """Tell the agent that raising ``number`` would yield more, and only when it
+    actually would. Two guards, both load-bearing:
+
+    ``total - k <= MAX_QUERY_K`` — ``total`` is the whole candidate pool, so a bare
+    semantic query (no structural filter) has a pool the size of the corpus. Reporting
+    its remainder would read as "hundreds of thousands more available" and invite the
+    very ``number`` ratchet this clause exists to stop. Capping at MAX_QUERY_K keeps
+    the clause to pools that raising ``number`` can plausibly drain.
+
+    ``k < MAX_QUERY_K`` — at the cap, ``number`` cannot be raised at all, so the advice
+    would be unfollowable; the overflow warning takes over on the agent's next attempt.
+
+    Skipped for exact lookups, which ignore ``number`` and are never truncated to it."""
+    if q.get("exact_name") or q.get("exact_term"):
+        return ""
+    remaining = total - k
+    if 0 < remaining <= MAX_QUERY_K and k < MAX_QUERY_K:
+        return f" {remaining} more available — raise `number` (max {MAX_QUERY_K})."
+    return ""
+
+
 def _format_search_summary(q: dict, total: int, k: int, new: int,
                            before_names: 'list[short_name]',
                            verbose: bool) -> str:
     """One-line per-query count summary: how many entities match the filters
     (XX, only when the query is filtered), how many are new this call (YY),
-    and which were already shown earlier. The first few lines per session use
-    a self-explanatory phrasing; the rest a terse one."""
+    which were already shown earlier, and whether raising ``number`` would yield
+    more. The first few lines per session use a self-explanatory phrasing; the
+    rest a terse one."""
     show_xx = _has_structural_filter(q)
     before = len(before_names)
     if before_names:
@@ -442,11 +480,14 @@ def _format_search_summary(q: dict, total: int, k: int, new: int,
         names_suffix = ""
         end = "."
     k_shown = f" {k} shown" if k < total else ""
+    more = _more_available_clause(q, total, k)
     if verbose:
         tail = f"{new} new, {before} shown earlier are not shown again{names_suffix}{end}"
-        return f"{total} entities match the filters{k_shown} — {tail}" if show_xx else tail
+        line = f"{total} entities match the filters{k_shown} — {tail}" if show_xx else tail
+        return line + more
     tail = f"{new} new, {before} shown earlier{names_suffix}{end}"
-    return f"{total} match{k_shown} — {tail}" if show_xx else tail
+    line = f"{total} match{k_shown} — {tail}" if show_xx else tail
+    return line + more
 
 
 def _format_search_report(
@@ -600,6 +641,10 @@ async def _semantic_search_direct(
     seen = session.seen_entities
     seen_before = set(seen)
     per_query_warnings = _collect_query_warnings(knn_results)
+    for q, qwarns in zip(queries, per_query_warnings):
+        overflow = _number_overflow_warning(q)
+        if overflow:
+            qwarns.append(overflow)
     # Collect new entities, tracking per-query (new / shown-before) counts for
     # the summary lines.  exact_name queries bypass the seen_entities dedup so
     # the agent always gets the full entity info on an explicit lookup.
