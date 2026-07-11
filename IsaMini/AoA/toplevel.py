@@ -73,8 +73,9 @@ _DB_PULL_HEARTBEAT_SECS = 10   # cadence of the "still preparing..." progress li
 
 
 async def _ensure_semantic_db(logger) -> bool:
-    """When the semantic embedding database is missing, block AoA and pull it once,
-    reporting progress; return whether the caller should still run `check_update`.
+    """When the local semantic database is missing or a previous pull was
+    interrupted, block AoA and (re-)pull it once, reporting progress; return
+    whether the caller should still run `check_update`.
 
     AoA retrieves from this database, so with none present there is nothing to run
     against -- we download it before starting rather than proceed blind.  The
@@ -82,16 +83,30 @@ async def _ensure_semantic_db(logger) -> bool:
     the winner downloads and reports; everyone else fails fast (R2Busy) and runs
     this one proof bare.  `require_idle=False` keeps a sibling RPC host's open (and,
     while empty, useless) handle from refusing the pull; `backup=False` because an
-    empty cache has nothing worth saving.
+    empty cache has nothing worth saving; `force=True` because the DB is empty or
+    incomplete regardless of what a stale marker's ETag claims, so the ETag
+    short-circuit must not skip the download.
 
-    Returns True only when the DB was already present -- then `check_update` should
-    still run its weekly staleness warning.  Returns False when it was empty
-    (whether we just pulled the latest, or ran bare): no point checking staleness.
+    This never raises: an unreadable/corrupt DB, a lock held elsewhere, or any
+    download/extract/merge error all degrade to a loud warning and a bare run -- a
+    missing DB must never take down the proof RPC.
+
+    Returns True only when the DB was already present and whole -- then
+    `check_update` still runs its weekly staleness warning.  Returns False otherwise
+    (we just pulled, or ran bare): no point checking staleness.
     """
     from Isabelle_Semantic_Embedding.r2_sync import (
-        semantic_db_is_empty, semantic_db_record_count, pull_snapshot,
-        R2Busy, R2Error)
-    if not semantic_db_is_empty():
+        semantic_db_is_empty, semantic_db_record_count, pull_was_interrupted,
+        pull_snapshot, R2Busy)
+    try:
+        needs_pull = semantic_db_is_empty() or pull_was_interrupted()
+    except Exception as e:
+        logger.warning(
+            f"Could not read the local semantic database ({e}) — it may be corrupt. "
+            "Running this proof without it; check with 'semantics_manage.py fsck' or "
+            "delete it and re-pull.")
+        return False
+    if not needs_pull:
         return True
 
     logger.warning(
@@ -101,8 +116,11 @@ async def _ensure_semantic_db(logger) -> bool:
     phase = {"now": "starting"}
     started = time.monotonic()
     task = asyncio.create_task(asyncio.to_thread(
-        pull_snapshot, require_idle=False, backup=False,
+        pull_snapshot, require_idle=False, backup=False, force=True,
         on_phase=lambda p: phase.__setitem__("now", p)))
+    # asyncio.to_thread cannot cancel its worker: if this by-aoa is cancelled during
+    # the wait, the pull thread runs on (holding the filelock) until it finishes --
+    # harmless, and the download is not wasted, it just benefits the next run.
     while True:
         done, _ = await asyncio.wait({task}, timeout=_DB_PULL_HEARTBEAT_SECS)
         if task in done:
@@ -116,14 +134,17 @@ async def _ensure_semantic_db(logger) -> bool:
         logger.warning(
             "Another process is already downloading the semantic database; "
             "running this proof without it for now.")
-    except R2Error as e:
+    except Exception as e:
         logger.warning(
-            f"Semantic database download failed ({e}); running this proof "
+            f"Failed to prepare the semantic database ({e}); running this proof "
             "without it for now.")
     else:
-        logger.warning(
-            f"Semantic database ready ({semantic_db_record_count()} records). "
-            "Starting AoA.")
+        try:
+            ready = (f"Semantic database ready ({semantic_db_record_count()} "
+                     "records). Starting AoA.")
+        except Exception:
+            ready = "Semantic database ready. Starting AoA."
+        logger.warning(ready)
     return False
 
 
