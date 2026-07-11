@@ -477,6 +477,18 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         error_msg = f"Isabelle error: {'; '.join(pretty_unicode(err) for err in e.errors)}"
         session.log_tool_response(_tn, f"ERROR: {error_msg}")
         return (error_msg, True)
+    except AoA_Error as e:
+        # A recoverable, agent-facing error raised anywhere in the edit's
+        # EXECUTION (not just the up-front `Parse_Op_List` guard above) — e.g. a
+        # re-parse deep inside `root.fill`/`amend`, such as InferenceRule's
+        # auto-convert-to-Rewrite. Return it as (msg, True) so the agent can
+        # retry, matching the delete tool's whole-body `except AoA_Error`.
+        # Without this it would escape to `ToolExecutor.execute`'s fail-fast
+        # `except Exception: sys.exit(1)` and kill the whole host. Genuinely
+        # unexpected (non-AoA_Error) exceptions still reach that fail-fast net.
+        error_msg = str(e)
+        session.log_tool_response(_tn, f"ERROR: {error_msg}")
+        return (error_msg, True)
 
 
 def _archive_node(node: Node, session: Session) -> DeletedEntry:

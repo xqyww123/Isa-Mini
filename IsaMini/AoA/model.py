@@ -11,7 +11,7 @@ from . import config
 from .task import Task, UsualTask
 import types as _types
 from typing import Any, Awaitable, ClassVar, Iterable, Mapping, NamedTuple, Protocol, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired, TypeAliasType, Union, get_type_hints, get_origin, get_args, is_typeddict, TYPE_CHECKING
-from Isabelle_RPC_Host import Connection, IsabelleError, pretty_unicode, ascii_of_unicode
+from Isabelle_RPC_Host import Connection, IsabelleError, pretty_unicode, ascii_of_unicode, get_LETTER_SYMBOLS
 from Isabelle_RPC_Host.position import IsabellePosition
 from Isabelle_RPC_Host.universal_key import (
     EntityKind, THM_RULE_KINDS, universal_key, universal_key_of, universal_key_and_name_of,
@@ -7341,46 +7341,94 @@ class LongStatement(TypedDict):
 # proposition pasted where a fact NAME belongs.  Deliberately NOT listed:
 # `.` `'` `_` (legal in names), `,` `-` (legal in selectors), `(` `)` `[` `]`
 # `‹` `›` (handled structurally below).
-_FACT_REF_BANNED_CHARS = frozenset(
-    '\\"?=<>+*/|&%@!;:~^'
-    '∀∃λ⟶⟹⟷↔→⇒↦∧∨¬≤≥≠∈∉⊆⊂⊇⊃∪∩⋀⋁⋂⋃≡−×÷±√∑∏')
+def _is_identifier_symbol(sym: str, letters: 'frozenset[str]') -> bool:
+    """Whether one Isabelle symbol may occur inside an identifier / fact name:
+    an ascii letter/digit/`_`/`'`, the `.` longident separator, an Isabelle
+    letter-symbol (``Symbol.is_letter_symbol``, approximated by *letters*), or
+    any ``\\<^…>`` control symbol (e.g. the subscript ``\\<^sub>``).  Lenient by
+    design — accepting a non-letter control only risks a harmless false negative
+    (one ML round-trip), never a legal reference blocked."""
+    if len(sym) == 1:
+        return sym.isascii() and (sym.isalnum() or sym in "_'.")
+    if sym.startswith('\\<^'):   # control symbol, e.g. \<^sub>
+        return True
+    return sym in letters        # plain \<name>: an identifier letter only if letter-symbol
 
 def _fact_ref_is_proposition(s: str) -> bool:
-    """High-precision test that `s` is a proposition pasted where a fact
-    reference belongs.  Only top-level characters are inspected — content
-    inside `‹...›` cartouches (literal facts, `where`-values), `[...]`
-    attribute groups, and `(...)` selectors is legitimately arbitrary, so
-    whitespace or a banned character there proves nothing.  Anything not
-    clearly propositional (including empty or ill-nested strings) returns
-    False and flows through to the ML-side fact parser unchanged: a false
-    positive here would block a legal reference, a false negative merely
-    costs one ML round-trip."""
+    """Test whether `s` is a proposition pasted where a fact reference belongs
+    (e.g. `x + y = z`) rather than a real reference (`add.commute`,
+    `foo\\<^sub>d [simp] (1-3)`).
+
+    A fact reference is a longident — `ident(.ident)*` — optionally trailed by
+    `[attribute]` groups, `(selector)` groups, and `‹…›` cartouche term-args.
+    Scanning the TOP LEVEL (outside every such group, whose content is
+    legitimately arbitrary), `s` is a proposition iff some top-level Isabelle
+    symbol cannot occur in an identifier.
+
+    Input may be ASCII (`\\<^sub>`) or Unicode — we normalise to ASCII symbol
+    form first so the letter-symbol test is representation-independent (mixing
+    the two forms was the original bug).  Biased toward false negatives: an
+    over-permissive accept merely costs one ML round-trip, whereas a false
+    positive would block a legal reference.  A fully `"…"`-quoted literal name
+    may legally contain spaces, so it is always accepted.  Empty / ill-nested
+    strings return False and flow through to the ML-side fact parser."""
+    s = ascii_of_unicode(s).strip()
+    if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
+        return False
+    letters = get_LETTER_SYMBOLS()
+    i, n = 0, len(s)
     cart = brack = paren = 0
-    for ch in s:
-        if ch == '\N{SINGLE LEFT-POINTING ANGLE QUOTATION MARK}':
+    # A reference is `longident (WS* group)* WS*` where a group is `[...]` /
+    # `(...)` / `‹...›`.  Once the leading longident ends — at the first
+    # top-level gap or group (Isabelle accepts `foo [simp]` with a space, tested)
+    # — only further whitespace and groups may follow; a bare identifier token
+    # after that gap means juxtaposition (`f x y`), i.e. a proposition.
+    name_ended = False
+    while i < n:
+        # Consume one Isabelle symbol: a `\<…>` escape, or a single character.
+        if s.startswith('\\<', i):
+            j = s.find('>', i + 2)
+            sym = s[i:j + 1] if j != -1 else s[i:]
+            i = j + 1 if j != -1 else n
+        else:
+            sym = s[i]
+            i += 1
+        # Structural nesting — arbitrary content inside proves nothing.  Handle
+        # both the Unicode cartouche marks and their ASCII \<open>/\<close> forms.
+        if sym == '\N{SINGLE LEFT-POINTING ANGLE QUOTATION MARK}' or sym == '\\<open>':
             cart += 1
-        elif ch == '\N{SINGLE RIGHT-POINTING ANGLE QUOTATION MARK}':
+            name_ended = True
+        elif sym == '\N{SINGLE RIGHT-POINTING ANGLE QUOTATION MARK}' or sym == '\\<close>':
             if cart == 0:
                 return False
             cart -= 1
         elif cart > 0:
             continue
-        elif ch == '[':
+        elif sym == '[':
             brack += 1
-        elif ch == ']':
+            name_ended = True
+        elif sym == ']':
             if brack == 0:
                 return False
             brack -= 1
         elif brack > 0:
             continue
-        elif ch == '(':
+        elif sym == '(':
             paren += 1
-        elif ch == ')':
+            name_ended = True
+        elif sym == ')':
             if paren == 0:
                 return False
             paren -= 1
-        elif paren == 0 and (ch.isspace() or ch in _FACT_REF_BANNED_CHARS):
-            return True
+        elif paren > 0:
+            continue
+        elif sym.isspace():
+            name_ended = True  # a gap; only groups may follow a legal reference
+        elif _is_identifier_symbol(sym, letters):
+            if name_ended:
+                return True    # identifier content after a gap/group -> proposition
+        else:
+            return True         # operator / non-letter symbol -> proposition
     return False
 
 @validator(FactByName)
@@ -10024,25 +10072,36 @@ class InferenceRule(SubgoalMaker):
         # preserved); else the resolved full name with baked attributes. `using`
         # stays None at construction so the node runs the normal resolve +
         # looping-target interaction path identically to a hand-authored Rewrite.
-        rule = self.rule
-        if rule is not None and "name" in rule:
-            using_ref: 'FactByName' = cast('FactByName', rule)
-        else:
-            using_ref = FactByName(name=self.rule_ref.pack()[0])
         parent = self.parent
         idx = parent.sub_nodes.index(self)
-        rw = Rewrite.gen_single({
-            "thought": self.thought,
-            "using": [using_ref],
-            "use system simplifiers": False,
-            "rewrite goal": True,
-            "rewrite premises": [],
-        })
-        config = NodeConfig(self.local_step, await self.ml_state.clone(None), parent)
-        new = rw.factory(config)
-        new._was_autoconverted = True  # type: ignore[attr-defined]  — Rewrite; narrowing erased by @proof_operation
-        parent.sub_nodes[idx] = new
-        await new._refresh_me_alone(auto_intro=True)
+        # Best-effort conversion — the contract at the top of this method is that
+        # any error leaves the original RULE failure intact, never crashing the
+        # edit. A malformed/unresolvable fact ref surfaces here as an AoA_Error
+        # out of `gen_single`, and the live Rewrite's own execution as an
+        # IsabelleError; swallow both, restore the original node, and keep its
+        # FAILURE (which the agent then sees and can act on). Anything else is an
+        # unexpected bug and is deliberately left to propagate (fail-fast).
+        try:
+            rule = self.rule
+            if rule is not None and "name" in rule:
+                using_ref: 'FactByName' = cast('FactByName', rule)
+            else:
+                using_ref = FactByName(name=self.rule_ref.pack()[0])
+            rw = Rewrite.gen_single({
+                "thought": self.thought,
+                "using": [using_ref],
+                "use system simplifiers": False,
+                "rewrite goal": True,
+                "rewrite premises": [],
+            })
+            config = NodeConfig(self.local_step, await self.ml_state.clone(None), parent)
+            new = rw.factory(config)
+            new._was_autoconverted = True  # type: ignore[attr-defined]  — Rewrite; narrowing erased by @proof_operation
+            parent.sub_nodes[idx] = new
+            await new._refresh_me_alone(auto_intro=True)
+        except (AoA_Error, IsabelleError):
+            parent.sub_nodes[idx] = self
+            return None
         if new.status.status == EvaluationStatus.Status.FAILURE:
             # Live execution diverged from the probe — restore the original failure.
             parent.sub_nodes[idx] = self
