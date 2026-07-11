@@ -29,6 +29,8 @@ import io
 import os
 import tempfile
 import subprocess
+import asyncio
+import time
 
 class UnknownDriver(AoA_Error):
     def __init__(self, driver: str):
@@ -66,6 +68,64 @@ async def _replay_cached_proof(connection: Connection, packed_ops: list[Any],
         return (False, None)
     finally:
         await connection.callback("IsaMini.set_replay_mode", False)
+
+_DB_PULL_HEARTBEAT_SECS = 10   # cadence of the "still preparing..." progress line
+
+
+async def _ensure_semantic_db(logger) -> bool:
+    """When the semantic embedding database is missing, block AoA and pull it once,
+    reporting progress; return whether the caller should still run `check_update`.
+
+    AoA retrieves from this database, so with none present there is nothing to run
+    against -- we download it before starting rather than proceed blind.  The
+    filelock inside `pull_snapshot` serialises this across coroutines AND processes:
+    the winner downloads and reports; everyone else fails fast (R2Busy) and runs
+    this one proof bare.  `require_idle=False` keeps a sibling RPC host's open (and,
+    while empty, useless) handle from refusing the pull; `backup=False` because an
+    empty cache has nothing worth saving.
+
+    Returns True only when the DB was already present -- then `check_update` should
+    still run its weekly staleness warning.  Returns False when it was empty
+    (whether we just pulled the latest, or ran bare): no point checking staleness.
+    """
+    from Isabelle_Semantic_Embedding.r2_sync import (
+        semantic_db_is_empty, semantic_db_record_count, pull_snapshot,
+        R2Busy, R2Error)
+    if not semantic_db_is_empty():
+        return True
+
+    logger.warning(
+        "AoA cannot start without the semantic embedding database, which is not "
+        "present on this machine. Downloading it now (~0.7 GB, one-time setup) — "
+        "this may take a few minutes. AoA will begin automatically when it is ready.")
+    phase = {"now": "starting"}
+    started = time.monotonic()
+    task = asyncio.create_task(asyncio.to_thread(
+        pull_snapshot, require_idle=False, backup=False,
+        on_phase=lambda p: phase.__setitem__("now", p)))
+    while True:
+        done, _ = await asyncio.wait({task}, timeout=_DB_PULL_HEARTBEAT_SECS)
+        if task in done:
+            break
+        logger.warning(
+            f"Preparing the semantic database — {phase['now']}… "
+            f"({int(time.monotonic() - started)}s elapsed). AoA is waiting.")
+    try:
+        task.result()
+    except R2Busy:
+        logger.warning(
+            "Another process is already downloading the semantic database; "
+            "running this proof without it for now.")
+    except R2Error as e:
+        logger.warning(
+            f"Semantic database download failed ({e}); running this proof "
+            "without it for now.")
+    else:
+        logger.warning(
+            f"Semantic database ready ({semantic_db_record_count()} records). "
+            "Starting AoA.")
+    return False
+
 
 @isabelle_remote_procedure("IsaMini.AoA")
 async def IsaMini_AoA(data: tuple, connection: Connection):
@@ -126,8 +186,13 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
     #
     # Skipped under the test driver: snapshot tests must not touch the network.
     if not is_test_driver:
-        from Isabelle_Semantic_Embedding.r2_sync import check_update
-        check_update(logger.warning)   # never raises; logs at most one line
+        # Empty DB -> block and pull it (with progress warnings) before starting;
+        # present DB -> just warn if a newer snapshot is published.  _ensure_...
+        # returns False after handling an empty DB, so check_update is skipped then
+        # (a fresh pull already has the latest; a bare run has nothing to compare).
+        if await _ensure_semantic_db(logger):
+            from Isabelle_Semantic_Embedding.r2_sync import check_update
+            check_update(logger.warning)   # never raises; logs at most one line
 
     if not use_cache or is_test_driver:
         why = ("test driver: run by hand, never replay cache" if is_test_driver
