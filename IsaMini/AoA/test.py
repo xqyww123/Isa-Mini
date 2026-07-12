@@ -17653,6 +17653,474 @@ async def _test_query_whole_file_dump(root: Root, file: MyIO):
         f"into the agent context:\n{result[:1500]}")
 
 
+# ---------------------------------------------------------------------------
+# Interpret_Locale — locale interpretation.
+#
+# The witness obligation Isabelle produces for an interpretation is always ONE
+# opaque locale predicate `L args`; on the agent path the kernel eagerly applies
+# `unfold_locales`, so what the node actually exposes is the locale's REAL leaf
+# assumptions — each an independently provable (and delegatable) subgoal. When
+# they are all discharged AND the node's trailing END closes the ML block, the
+# interpretation is registered and the locale's theorems become available as
+# `<qualifier>.<name>`.
+#
+# The cases below pin, one fixture each: N>=2 leaves, N=1 leaf (the corner case
+# that the *unconditional* block/END would silently break), N=0 obligations
+# (no phantom child, registration still happens), qualifier reuse, multi-token
+# (type-annotated) instantiation values (the cartouche path), the >16-facts
+# footer, worker scoping of the imported facts, an omitted `instantiations`, and
+# an unknown locale name.
+# ---------------------------------------------------------------------------
+
+def _dump_successor_premises(node: 'Interpret_Locale', file: MyIO, banner: str):
+    """What a SUCCESSOR of the interpretation sees as premises: the hyps of the
+    leading goal in the state the node's END produced. This is where the
+    imported facts land when there are few enough (<=16) to inject."""
+    file.write(f"{banner}\n")
+    file.write(f"  facts_count reported by kernel: {node._facts_count}\n")
+    goal = node.resulting_state().leading_goal
+    hyps = [] if goal is None else sorted(goal.context.hyps.keys())
+    file.write(f"  premises visible to successors ({len(hyps)}):\n")
+    for h in hyps:
+        file.write(f"    - {h}\n")
+
+
+@model_test("Interpret_MultiLeaf", "Test_Interpret_MultiLeaf.thy", 19)
+async def _test_Interpret_MultiLeaf(root: Root, file: MyIO):
+    """N >= 2 leaves — the core happy path. `il_derived = il_base1 + il_base2`
+    has two assumptions, so `unfold_locales` splits the single locale predicate
+    into TWO leaf subgoals. Discharge each, let the END register the
+    interpretation, then close the outer goal with the imported `d.il_sum_pos`.
+    """
+    goal = root.sub_nodes[1]
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    [interp] = (await goal.append([Interpret_Locale.gen_single({
+        "thought": "instantiate the two-assumption locale at p=1, s=2",
+        "qualifier": "d",
+        "locale": "il_derived",
+        "instantiations": [{"name": "p", "value": "1"},
+                           {"name": "s", "value": "2"}],
+    })])).committed
+    assert isinstance(interp, Interpret_Locale)
+    print_header("After Interpret_Locale (2 leaf obligations)", file)
+    root.print(0, file)
+    file.write(f"leaf subgoals opened: {len(interp.sub_nodes)}\n")
+    for leaf in interp.sub_nodes:
+        file.write(f"  - {leaf.id}\n")
+    assert len(interp.sub_nodes) == 2, \
+        f"expected 2 unfolded leaf obligations, got {len(interp.sub_nodes)}"
+
+    root.session.age += 1
+    for leaf in list(interp.sub_nodes):
+        await cast(NonLeaf_Node, leaf).append([Obvious.gen_single({"facts": []})])
+    print_header("After discharging both leaves (END registers the interpretation)", file)
+    root.print(0, file)
+    _dump_successor_premises(interp, file, "Imported facts (<=16 -> injected as premises)")
+
+    root.session.age += 1
+    await goal.append([InferenceRule.gen_single({
+        "thought": "close the goal with the theorem the interpretation brought in",
+        "rule": {"name": "d.il_sum_pos"}})])
+    print_header("After closing the goal with d.il_sum_pos", file)
+    root.print(0, file)
+
+    unfinished: set[Node] = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+    assert len(unfinished) == 0, \
+        f"proof should be complete, unfinished: {[n.id for n in unfinished]}"
+
+
+@model_test("Interpret_SingleLeaf", "Test_Interpret_SingleLeaf.thy", 20)
+async def _test_Interpret_SingleLeaf(root: Root, file: MyIO):
+    """N = 1 leaf — THE corner case. A one-assumption locale unfolds to exactly
+    one subgoal. The default SubgoalMaker rule ("open a block only when the
+    operation reports more than one new subgoal") would open no block and emit
+    no END here; the ML block would stay open and the interpretation would NEVER
+    register. `Interpret_Locale` therefore opens the block and emits the END
+    unconditionally — this test pins that: a single leaf, and `s.is1_dbl_pos`
+    really becomes available afterwards."""
+    goal = root.sub_nodes[1]
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    [interp] = (await goal.append([Interpret_Locale.gen_single({
+        "thought": "instantiate the single-assumption locale at p=3",
+        "qualifier": "s",
+        "locale": "is1_pos",
+        "instantiations": [{"name": "p", "value": "3"}],
+    })])).committed
+    assert isinstance(interp, Interpret_Locale)
+    print_header("After Interpret_Locale (exactly 1 leaf obligation)", file)
+    root.print(0, file)
+    file.write(f"leaf subgoals opened: {len(interp.sub_nodes)}\n")
+    assert len(interp.sub_nodes) == 1, \
+        f"expected exactly 1 unfolded leaf obligation, got {len(interp.sub_nodes)}"
+    # The block must exist even for a single leaf, and it must carry the END
+    # that fires the registration callback.
+    assert interp.has_ending_opr() and interp.ending_opr() is not None, \
+        "the single-leaf interpretation emitted no END -> nothing would register"
+
+    root.session.age += 1
+    await cast(NonLeaf_Node, interp.sub_nodes[0]).append([Obvious.gen_single({"facts": []})])
+    print_header("After discharging the single leaf", file)
+    root.print(0, file)
+    _dump_successor_premises(interp, file, "Imported facts")
+
+    root.session.age += 1
+    await goal.append([InferenceRule.gen_single({
+        "thought": "the interpretation registered, so its theorem is usable",
+        "rule": {"name": "s.is1_dbl_pos"}})])
+    print_header("After closing the goal with s.is1_dbl_pos", file)
+    root.print(0, file)
+
+    unfinished: set[Node] = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+    assert len(unfinished) == 0, \
+        f"proof should be complete, unfinished: {[n.id for n in unfinished]}"
+
+
+@model_test("Interpret_ZeroObligation", "Test_Interpret_ZeroObligation.thy", 20)
+async def _test_Interpret_ZeroObligation(root: Root, file: MyIO):
+    """N = 0 obligations. `iz_triv` fixes a parameter but assumes nothing, so
+    the interpretation has no witness obligation. Two things must hold: (a) NO
+    phantom finished child appears (a solved state's `goals_of'` is `[True]`,
+    length 1 — the count has to come from `num_goals_of'`), and (b) the block is
+    still opened and still closed by END, so the registration happens anyway and
+    `z.iz_add0` becomes available."""
+    goal = root.sub_nodes[1]
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    [interp] = (await goal.append([Interpret_Locale.gen_single({
+        "thought": "an assumption-free locale: nothing to witness",
+        "qualifier": "z",
+        "locale": "iz_triv",
+        "instantiations": [{"name": "c", "value": "5"}],
+    })])).committed
+    assert isinstance(interp, Interpret_Locale)
+    print_header("After Interpret_Locale (0 obligations, no phantom child)", file)
+    root.print(0, file)
+    file.write(f"leaf subgoals opened: {len(interp.sub_nodes)}\n")
+    assert len(interp.sub_nodes) == 0, \
+        ("a 0-obligation interpretation must open NO child; got a phantom: "
+         f"{[n.id for n in interp.sub_nodes]}")
+    _dump_successor_premises(interp, file, "Imported facts (registration fired on END)")
+
+    root.session.age += 1
+    await goal.append([InferenceRule.gen_single({
+        "thought": "registration must have happened even with no obligation",
+        "rule": {"name": "z.iz_add0"}})])
+    print_header("After closing the goal with z.iz_add0", file)
+    root.print(0, file)
+
+    unfinished: set[Node] = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+    assert len(unfinished) == 0, \
+        f"proof should be complete, unfinished: {[n.id for n in unfinished]}"
+
+
+@model_test("Interpret_QualifierConflict", "Test_Interpret_QualifierConflict.thy", 19)
+async def _test_Interpret_QualifierConflict(root: Root, file: MyIO):
+    """A qualifier must be unique in scope. Re-using one is a retryable
+    operation FAILURE carrying the fixed message
+    `Qualifier "<q>" is already used in this proof. Pick a fresh one.`
+    The qualifier only enters the (Proof_Data) table when the first
+    interpretation's block CLOSES, so the collision is checked against the
+    context the second node starts from. Retrying with a fresh qualifier must
+    then work."""
+    goal = root.sub_nodes[1]
+
+    [interp1] = (await goal.append([Interpret_Locale.gen_single({
+        "thought": "first interpretation, qualifier q",
+        "qualifier": "q",
+        "locale": "iq_pos",
+        "instantiations": [{"name": "p", "value": "4"}],
+    })])).committed
+    await cast(NonLeaf_Node, interp1).append([Obvious.gen_single({"facts": []})])
+    print_header("First interpretation (qualifier q) registered", file)
+    root.print(0, file)
+
+    # --- the collision ---
+    root.session.age += 1
+    out = await goal.append([Interpret_Locale.gen_single({
+        "thought": "re-use the same qualifier -- must be rejected",
+        "qualifier": "q",
+        "locale": "iq_pos",
+        "instantiations": [{"name": "p", "value": "7"}],
+    })])
+    [clash] = out.committed
+    file.write(f"clash status: {clash.status.status.name}\n")
+    file.write("clash reason: "
+               f"{clash.status.reason.reason if clash.status.reason else None}\n")
+    assert clash.status.status is EvaluationStatus.Status.FAILURE, \
+        "re-using a qualifier must fail the operation"
+    assert 'Qualifier "q" is already used in this proof. Pick a fresh one.' \
+        in (clash.status.reason.reason if clash.status.reason else ""), \
+        f"unexpected failure message: {clash.status.reason}"
+    print_header("After the qualifier clash (node kept, marked FAILURE)", file)
+    root.print(0, file)
+
+    # --- recovery: drop the failed node, retry with a fresh qualifier ---
+    root.session.age += 1
+    await root.delete([clash.id])
+    [interp2] = (await goal.append([Interpret_Locale.gen_single({
+        "thought": "retry with a fresh qualifier",
+        "qualifier": "r",
+        "locale": "iq_pos",
+        "instantiations": [{"name": "p", "value": "7"}],
+    })])).committed
+    await cast(NonLeaf_Node, interp2).append([Obvious.gen_single({"facts": []})])
+    print_header("Retry with a fresh qualifier r", file)
+    root.print(0, file)
+    assert interp2.status.status is EvaluationStatus.Status.SUCCESS, \
+        "a fresh qualifier must be accepted"
+
+    root.session.age += 1
+    await goal.append([InferenceRule.gen_single({
+        "thought": "close with the first interpretation's theorem",
+        "rule": {"name": "q.iq_dbl_pos"}})])
+    print_header("After closing the goal with q.iq_dbl_pos", file)
+    root.print(0, file)
+
+    unfinished: set[Node] = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+    assert len(unfinished) == 0, \
+        f"proof should be complete, unfinished: {[n.id for n in unfinished]}"
+
+
+@model_test("Interpret_TypedInst", "Test_Interpret_TypedInst.thy", 18)
+async def _test_Interpret_TypedInst(root: Root, file: MyIO):
+    """Multi-token instantiation values. `where p = v` reads `v` with
+    `Parse.term`, which consumes exactly ONE outer token, so `(0::int)` (and
+    `1 + (1::int)`) only parse because `interpret_i` wraps every value in a
+    cartouche. Without that wrapping the whole locale expression fails to
+    parse."""
+    goal = root.sub_nodes[1]
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    [interp] = (await goal.append([Interpret_Locale.gen_single({
+        "thought": "type-annotated, multi-token instantiation values",
+        "qualifier": "it",
+        "locale": "it_ord",
+        "instantiations": [{"name": "lo", "value": "(0::int)"},
+                           {"name": "hi", "value": "1 + (1::int)"}],
+    })])).committed
+    assert isinstance(interp, Interpret_Locale)
+    assert interp.status.status is EvaluationStatus.Status.SUCCESS, \
+        ("multi-token instantiation values failed to parse (cartouche wrapping "
+         f"broken?): {interp.status.reason}")
+    print_header("After Interpret_Locale with (0::int) / 1 + (1::int)", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    for leaf in list(interp.sub_nodes):
+        await cast(NonLeaf_Node, leaf).append([Obvious.gen_single({"facts": []})])
+    print_header("After discharging the obligation", file)
+    root.print(0, file)
+    _dump_successor_premises(interp, file, "Imported facts (instantiated at 0 and 1 + 1)")
+
+    root.session.age += 1
+    await goal.append([InferenceRule.gen_single({
+        "thought": "the instantiated theorem is exactly the goal",
+        "rule": {"name": "it.it_le"}})])
+    print_header("After closing the goal with it.it_le", file)
+    root.print(0, file)
+
+    unfinished: set[Node] = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+    assert len(unfinished) == 0, \
+        f"proof should be complete, unfinished: {[n.id for n in unfinished]}"
+
+
+@model_test("Interpret_ManyFacts", "Test_Interpret_ManyFacts.thy", 37)
+async def _test_Interpret_ManyFacts(root: Root, file: MyIO):
+    """More than 16 imported facts. They are ALL registered (so `mf.imf_l01`
+    still resolves by name) but NONE is injected into the successors' premises;
+    instead the kernel reports the count and the node's footer says
+    "N facts are available now. Use `query` to search them semantically"."""
+    goal = root.sub_nodes[1]
+
+    [interp] = (await goal.append([Interpret_Locale.gen_single({
+        "thought": "this locale carries 20+ theorems",
+        "qualifier": "mf",
+        "locale": "imf_pos",
+        "instantiations": [{"name": "p", "value": "1"}],
+    })])).committed
+    assert isinstance(interp, Interpret_Locale)
+    await cast(NonLeaf_Node, interp.sub_nodes[0]).append([Obvious.gen_single({"facts": []})])
+    print_header("After the interpretation closed (footer must announce the count)", file)
+    root.print(0, file)
+
+    _dump_successor_premises(interp, file, "Imported facts (>16 -> NOT injected)")
+    assert interp._facts_count is not None and interp._facts_count > 16, \
+        f"expected >16 imported facts to be reported, got {interp._facts_count}"
+    st_goal = interp.resulting_state().leading_goal
+    hyps = {} if st_goal is None else st_goal.context.hyps
+    assert not any(h.startswith("mf.") for h in hyps), \
+        f"more than 16 facts must NOT be injected into the premises, got {list(hyps)}"
+
+    # ...yet every one of them is still reachable by name.
+    root.session.age += 1
+    await goal.append([InferenceRule.gen_single({
+        "thought": "an un-injected fact is still reachable by its qualified name",
+        "rule": {"name": "mf.imf_l01"}})])
+    print_header("After closing the goal with the by-name fact mf.imf_l01", file)
+    root.print(0, file)
+
+    unfinished: set[Node] = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+    assert len(unfinished) == 0, \
+        f"proof should be complete, unfinished: {[n.id for n in unfinished]}"
+
+
+@model_test("Interpret_WorkerScope", "Test_Interpret_WorkerScope.thy", 22)
+async def _test_Interpret_WorkerScope(root: Root, file: MyIO):
+    """The imported facts must NOT be visible to a sub-agent whose target lies
+    INSIDE the interpretation's own obligation subtree — they are the reward for
+    discharging it, so seeing them there would be circular. They are attached to
+    the block's RESULT state, hence visible to successors only. Rendered through
+    `Session.print_proof_scope` with `Role_Worker(target=<leaf>)`, both while the
+    obligation is still open and after the whole interpretation has registered."""
+    session = root.session
+    goal = root.sub_nodes[1]
+
+    [interp] = (await goal.append([Interpret_Locale.gen_single({
+        "thought": "two obligations, each delegatable",
+        "qualifier": "w",
+        "locale": "iw_derived",
+        "instantiations": [{"name": "p", "value": "2"},
+                           {"name": "s", "value": "3"}],
+    })])).committed
+    assert isinstance(interp, Interpret_Locale)
+    leaf1, leaf2 = interp.sub_nodes
+
+    print_header("worker@leaf2 while the obligations are still open", file)
+    session.role = model.Role_Worker(target=leaf2)
+    session.print_proof_scope(0, file)
+    session.role = model.Role_Major()
+
+    # Discharge everything: the interpretation registers, and its facts become
+    # premises for the SUCCESSORS of the block.
+    root.session.age += 1
+    for leaf in (leaf1, leaf2):
+        await cast(NonLeaf_Node, leaf).append([Obvious.gen_single({"facts": []})])
+    print_header("major view after registration (facts are in scope here)", file)
+    session.print_proof_scope(0, file)
+    _dump_successor_premises(interp, file, "Imported facts")
+
+    root.session.age += 1
+    print_header("worker@leaf1 AFTER registration -- still no w.* facts in scope", file)
+    session.role = model.Role_Worker(target=leaf1)
+    session.print_proof_scope(0, file)
+    session.role = model.Role_Major()
+
+    for leaf in (leaf1, leaf2):
+        g = cast(NonLeaf_Node, leaf).goal()
+        hyps = {} if g is None else g.context.hyps
+        file.write(f"{leaf.id} obligation premises: {sorted(hyps)}\n")
+        assert not any(h.startswith("w.") for h in hyps), \
+            f"interpretation facts leaked into its own obligation {leaf.id}: {list(hyps)}"
+
+    root.session.age += 1
+    await goal.append([InferenceRule.gen_single({
+        "thought": "close with the imported theorem",
+        "rule": {"name": "w.iw_sum_pos"}})])
+    unfinished: set[Node] = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+    assert len(unfinished) == 0, \
+        f"proof should be complete, unfinished: {[n.id for n in unfinished]}"
+
+
+@model_test("Interpret_NoInstantiations", "Test_Interpret_NoInstantiations.thy", 17)
+async def _test_Interpret_NoInstantiations(root: Root, file: MyIO):
+    """`instantiations` is optional. A parameterless locale is interpreted with
+    no `where` clause at all — the empty branch of the where-clause assembly."""
+    goal = root.sub_nodes[1]
+
+    [interp] = (await goal.append([Interpret_Locale.gen_single({
+        "thought": "no parameters, so no instantiations at all",
+        "qualifier": "ini",
+        "locale": "ini_two",
+    })])).committed
+    assert isinstance(interp, Interpret_Locale)
+    assert interp.instantiations == [], "expected no instantiations"
+    assert interp.status.status is EvaluationStatus.Status.SUCCESS, \
+        f"a bare `q: locale` expression must parse: {interp.status.reason}"
+    print_header("After Interpret_Locale with no `where` clause", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    for leaf in list(interp.sub_nodes):
+        await cast(NonLeaf_Node, leaf).append([Obvious.gen_single({"facts": []})])
+    print_header("After discharging the obligation", file)
+    root.print(0, file)
+    _dump_successor_premises(interp, file, "Imported facts")
+
+    root.session.age += 1
+    await goal.append([InferenceRule.gen_single({
+        "thought": "close with the imported theorem",
+        "rule": {"name": "ini.ini_zero_lt"}})])
+    print_header("After closing the goal with ini.ini_zero_lt", file)
+    root.print(0, file)
+
+    unfinished: set[Node] = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+    assert len(unfinished) == 0, \
+        f"proof should be complete, unfinished: {[n.id for n in unfinished]}"
+
+
+@model_test("Interpret_UnknownLocale", "Test_Interpret_UnknownLocale.thy", 13)
+async def _test_Interpret_UnknownLocale(root: Root, file: MyIO):
+    """Error path: an unknown locale name. The locale-expression parser inside
+    `interpret_i` rejects it; that must surface as a plain operation FAILURE on
+    the node (retryable), leaving the proof session intact and the slot
+    fillable."""
+    goal = root.sub_nodes[1]
+
+    out = await goal.append([Interpret_Locale.gen_single({
+        "thought": "this locale does not exist",
+        "qualifier": "u",
+        "locale": "no_such_locale_here",
+        "instantiations": [{"name": "p", "value": "1"}],
+    })])
+    [bad] = out.committed
+    file.write(f"status: {bad.status.status.name}\n")
+    file.write("reason: "
+               f"{bad.status.reason.reason if bad.status.reason else None}\n")
+    assert bad.status.status is EvaluationStatus.Status.FAILURE, \
+        "an unknown locale must fail the operation"
+    print_header("After the failed Interpret_Locale", file)
+    root.print(0, file)
+
+    # The session is intact: drop the failed node and finish the proof normally.
+    root.session.age += 1
+    await root.delete([bad.id])
+    await goal.append([Obvious.gen_single({"facts": []})])
+    print_header("After recovering with Obvious", file)
+    root.print(0, file)
+
+    unfinished: set[Node] = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+    assert len(unfinished) == 0, \
+        f"proof should be complete, unfinished: {[n.id for n in unfinished]}"
+
+
 async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | None = None, sh_timeout: int | None = 10):
     import msgpack as mp
     from IsaREPL import Client
