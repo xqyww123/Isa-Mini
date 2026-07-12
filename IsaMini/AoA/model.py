@@ -1416,6 +1416,15 @@ class Define_Result_Msg(Message):
         self.name = name
         self.type = type
 
+class Interpret_Facts_Count_Msg(Message):
+    """Emitted by OPEN_MODULE when an interpretation brought in more facts than
+    the items-injection cap. Every fact IS registered in the context and is
+    reachable by name (`<qualifier>.<name>`) or via `query`; only the injection
+    into the goal's premises is bounded. This carries the count so the agent
+    learns how many became available."""
+    def __init__(self, count: int):
+        self.count = count
+
 class Induction_Dropped_Facts_Msg(Message):
     """Emitted by INDUCT' when some `facts_to_generalize` were dropped
     because they don't mention any generalized variable."""
@@ -1503,6 +1512,8 @@ def unpack_message(data) -> Message:
             return Hint_Notice_Msg(name, text)
         case (18, pairs):
             return Discarded_Vars_Msg([(str(i), str(e)) for (i, e) in pairs])
+        case (19, n):
+            return Interpret_Facts_Count_Msg(int(n))
         case _:
             raise Exception(f"BUG bad message kind: {data}")
 
@@ -1763,6 +1774,16 @@ class Minilang_Operation(NamedTuple):
     @staticmethod
     def CONTRADICTION(hypothesis_name: str) -> 'Minilang_Operation':
         return Minilang_Operation("CONTRADICTION", hypothesis_name)
+    @staticmethod
+    def INTERPRET(qualifier: str, locale: str,
+                  instantiations: 'list[tuple[str, str]]') -> 'Minilang_Operation':
+        """Interpret a locale. The ML side assembles the locale expression
+        `<qualifier>: <locale> where p = <v> and ...` (each value cartouche-wrapped,
+        since a `where` value is read by `Parse.term`, which takes exactly one outer
+        token), parses it, and runs OPEN_MODULE with `auto_unfold_locale=true` --
+        so the opaque locale predicate is eagerly split into the locale's real leaf
+        assumptions, each an independently provable subgoal."""
+        return Minilang_Operation("INTERPRET", (qualifier, locale, instantiations))
     @staticmethod
     def COMPUTE(name: str, term: 'xterm') -> 'Minilang_Operation':
         return Minilang_Operation("COMPUTE", (name, ascii_of_unicode(term)))
@@ -8292,6 +8313,107 @@ _COND_UNFOLD_NOTE = (
     "when the premise is already discharged from the current goal). If needed, use "
     "Derive first to discharge the premise.")
 
+
+class Instantiation_ToolArg(TypedDict):
+    name: str
+    value: xterm
+
+class Interpret_Locale_ToolArg(TypedDict):
+    thought: NotRequired[str]
+    qualifier: str
+    locale: str
+    instantiations: NotRequired[list[Instantiation_ToolArg]]
+
+@proof_operation("Interpret_Locale", Interpret_Locale_ToolArg)
+class Interpret_Locale(SubgoalMaker):
+    """Interpret a locale (module) with concrete parameters.
+
+    Isabelle presents an interpretation's witness obligation as a single opaque
+    locale predicate `L args`. The kernel eagerly applies `unfold_locales`, so
+    what the agent actually gets is the locale's REAL leaf assumptions -- each an
+    independently provable (and delegatable) subgoal. Once they are all
+    discharged, the interpretation is registered and every theorem of the locale
+    becomes available as `<qualifier>.<name>`."""
+
+    def __init__(self, config: NodeConfig, arg: Interpret_Locale_ToolArg):
+        super().__init__(config, arg.get("thought", ""), [])
+        self.qualifier = arg["qualifier"]
+        self.locale = arg["locale"]
+        self.instantiations: list[tuple[str, str]] = [
+            (i["name"], i["value"]) for i in (arg.get("instantiations") or [])]
+        # Set when the block closes: how many facts the interpretation brought in,
+        # in the case where there were too many to inject into the premises. See
+        # `_refresh_footer`.
+        self._facts_count: int | None = None
+
+    def quickview_title(self) -> str:
+        return f"Interpret_Locale {self.locale}"
+
+    async def _refresh_footer(self) -> 'FailureReason | None':
+        # The interpretation is only registered when the trailing END closes the
+        # ML block, so the imported facts (and their count) exist only in the
+        # state the ending operation produces -- not in the beginning state.
+        reason = await super()._refresh_footer()
+        self._facts_count = None
+        for m in self.resulting_state().messages:
+            if isinstance(m, Interpret_Facts_Count_Msg):
+                self._facts_count = m.count
+                break
+        return reason
+
+    def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
+        self._print_thought(indent, file)
+        print_indent(indent, file)
+        file.write("operation: Interpret_Locale\n")
+        print_indent(indent, file)
+        file.write(f"locale: {self.locale}\n")
+        print_indent(indent, file)
+        file.write(f"qualifier: {self.qualifier}\n")
+        if self.instantiations:
+            print_indent(indent, file)
+            file.write("instantiations:\n")
+            for (n, v) in self.instantiations:
+                print_indent(indent + 1, file)
+                file.write(f"- {n} = {v}\n")
+
+    def _print_footer(self, indent: int, file: MyIO, show_warnings: bool = False) -> None:
+        super()._print_footer(indent, file, show_warnings=show_warnings)
+        # A small number of imported facts is injected into the premises and is
+        # therefore already visible there. When there were too many to inject, say
+        # how many became available instead: they are all registered in the context
+        # and remain reachable by name and by semantic search.
+        if self._facts_count is not None:
+            print_indent(indent, file)
+            file.write(f"{self._facts_count} facts are available now. "
+                       f"Use `{the_session().tool_name(TOOL_SEARCH)}` "
+                       f"to search them semantically\n")
+
+    def beginning_opr(self) -> Minilang_Operation:
+        return Minilang_Operation.INTERPRET(
+            self.qualifier, self.locale, self.instantiations)
+
+    def _should_open_proof_block(self, s0: Minilang_State) -> _OpenSubgoalBlock:
+        # OPEN_MODULE *unconditionally* pushes a deferred (MAGIC) block onto the
+        # minilang stack, and the interpretation only registers when that block is
+        # closed by the trailing END. So unlike the default rule (open only when
+        # the operation reported more than one new subgoal) this must open
+        # ALWAYS: after `unfold_locales` a locale with a single assumption -- the
+        # common case -- reports exactly one leaf, and under the default rule no
+        # block would open, no END would be emitted, the ML block would never
+        # close, and nothing would ever register.
+        #
+        # Like Define's deferred block, this one is internal and bracketed by an
+        # explicit END, so the enclosing proof line continues past it: YES, never
+        # YES_AND_CLOSE_PARENT_BLOCK.
+        return _OpenSubgoalBlock.YES
+
+    def has_ending_opr(self) -> bool:
+        # Always: see _should_open_proof_block. The END is what fires the ML
+        # callback that registers the interpretation.
+        return True
+
+    def ending_opr(self) -> Minilang_Operation | None:
+        return Minilang_Operation.END()
 
 @proof_operation("Unfold", Unfold_ToolArg)
 class Unfold(Leaf):

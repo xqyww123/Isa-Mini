@@ -78,6 +78,13 @@ datatype ('term, 'thm, 'fact) command =
                     * (string option * string) list (*conditions: name_opt × prop_string*)
                     * string (*redex*) * string (*residue*)
   | COMPUTE of string (*result name*) * 'term (*term to evaluate*)
+  | INTERPRET of string (*qualifier: the imported facts are named `<qualifier>.<name>`*)
+               * string (*locale name*)
+               * (string * string) list
+                   (*instantiations: (parameter name, Isabelle term).  All plain
+                     strings in both xcmd and icmd -- the terms are checked by
+                     Isabelle's locale-expression parser, so `check_command` just
+                     passes this through.*)
 
 type xcmd = (string, string, string) command
 type icmd = (term, thm, Facts.ref * Token.src list) command
@@ -261,6 +268,13 @@ datatype ('term, 'thm, 'fact) command =
                     * (string option * string) list (*conditions: name_opt × prop_string*)
                     * string (*redex*) * string (*residue*)
   | COMPUTE of string (*result name*) * 'term (*term to evaluate*)
+  | INTERPRET of string (*qualifier: the imported facts are named `<qualifier>.<name>`*)
+               * string (*locale name*)
+               * (string * string) list
+                   (*instantiations: (parameter name, Isabelle term).  All plain
+                     strings in both xcmd and icmd -- the terms are checked by
+                     Isabelle's locale-expression parser, so `check_command` just
+                     passes this through.*)
 
 type xcmd = (string, string, string) command
 type icmd = (term, thm, Facts.ref * Token.src list) command
@@ -1827,6 +1841,36 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
                                   (Minilang.Internal (COMPUTE_RESULT (rn, string_of_term ctxt' rt)))
                 | _ => ()
         in s' end
+    | INTERPRET (qualifier, locale, insts) =>
+        let val ctxt = Minilang.context_of s
+            (* Build the locale expression `<qualifier>: <locale> [where p = <v> and ...]`
+               and hand it to the kernel directly.
+
+               We deliberately do NOT rebuild a Minilang *command* string and run it
+               through `parse_cmds`: that dispatches on the head keyword through the
+               CMDS table to `OPEN_MODULE_CMD`, which is pinned to the legacy
+               `auto_unfold_locale=false` entry -- the agent would silently get the
+               single opaque predicate instead of the unfolded leaf assumptions, with
+               no error at build or run time.
+
+               Every instantiation value is cartouche-wrapped: inside a locale
+               expression, `where p = v` reads `v` with `Parse.term`, which consumes
+               exactly ONE outer token.  A type-annotated literal such as `(0::int)`
+               is several tokens and would not parse bare. *)
+            val where_clause =
+              if null insts then ""
+              else " where " ^
+                   space_implode " and "
+                     (map (fn (n, v) => n ^ " = " ^ Symbol.open_ ^ v ^ Symbol.close) insts)
+            val src = qualifier ^ ": " ^ locale ^ where_clause
+            val expr =
+              Token.explode (Thy_Header.get_keywords' ctxt) Position.none src
+              |> filter Token.is_proper
+              |> Scan.error (Scan.finite Token.stopper
+                   (Parse.!!! (Parse_Spec.locale_expression --| Scan.ahead Parse.eof)))
+              |> #1
+         in Minilang.OPEN_MODULE'' {auto_unfold_locale=true} expr s
+        end
 
 local
 val keywords = Thy_Header.get_keywords @{theory Pure}
@@ -2019,6 +2063,9 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
   | check_command_i _ SKIP = SKIP
   | check_command_i _ (CONTRADICTION hyp) = CONTRADICTION hyp
   | check_command_i _ (SETUP_REWRITING data) = SETUP_REWRITING data
+  | check_command_i _ (INTERPRET data) = INTERPRET data
+    (* strings passthrough — the parameter terms are read by Isabelle's
+       locale-expression parser inside `interpret_i` *)
   | check_command_i s (COMPUTE (name, raw_term)) =
       let val ctxt = Minilang.context_of s
           val term = read_term ctxt raw_term

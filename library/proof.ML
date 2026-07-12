@@ -304,8 +304,14 @@ val context_of_leading_goal : tree -> items * term (*goal*)
 val PRINT : operation
 val PRINT_CMD : command
 
+(* `auto_unfold_locale = true` (the AoA agent path): after setting up the
+   interpretation, eagerly apply `unfold_locales` so the opaque locale predicate
+   `L args` is split into the real leaf assumptions, each reported as an
+   independently provable / delegatable subgoal.  `false` (bare REPL, text
+   command, translator replay) keeps the historic behaviour verbatim: a single
+   opaque predicate goal. *)
 val OPEN_MODULE   : Expression.expression_i -> state -> state
-val OPEN_MODULE'' : Expression.expression   -> state -> state
+val OPEN_MODULE'' : {auto_unfold_locale: bool} -> Expression.expression -> state -> state
 val OPEN_MODULE_CMD : Token.T list -> (state -> state) * Token.T list
 
 datatype config = CFG_NOTE   of Thm.binding * (thm list * attribute list) list
@@ -395,6 +401,12 @@ exception REPLACE_CMD of string * string
 exception PAT_COMPLETENESS_PROOF_OPENED
 exception TERMINATION_PROOF_OPENED
 exception DROPPED_INSERTION_FACTS of string list
+
+(* Fired by OPEN_MODULE when an interpretation brings in more facts than the
+   items-injection cap: the facts ARE all registered in the context (reachable
+   by name / `query`), only their injection into the local items is bounded, so
+   we tell the agent how many became available. *)
+exception INTERPRET_FACTS_COUNT of int
 
 (* Fired by INDUCT for each variable it generalizes away (the induction
    target), so the Python layer can remember which step put a now out-of-scope
@@ -488,6 +500,8 @@ exception PAT_COMPLETENESS_PROOF_OPENED
 exception TERMINATION_PROOF_OPENED
 
 exception DROPPED_INSERTION_FACTS of string list
+
+exception INTERPRET_FACTS_COUNT of int
 
 type stack = Proof.context * (frame list)
   (*invariant: the head must be an HHF*)
@@ -4879,43 +4893,124 @@ fun interpretation_cmd expression =
     notes_kind add_registration expression [];
 
 
-fun OPEN_MODULE' interp expr (lthy, HHF (st, items) :: SK) =
+(* Qualifiers already used by locale interpretations in the current context.
+   Kept in the Proof.context itself, so it is rebuilt automatically together with
+   the context on refresh / amend / delete / cache replay -- there is no parallel
+   bookkeeping to keep in sync. *)
+structure Locale_Interpretation_Qualifiers = Proof_Data (
+  type T = Symtab.set
+  fun init _ = Symtab.empty
+)
+
+(* The qualifier is not a separate argument: it is the `locale_prefix` of the head
+   instance inside the parsed expression (cf. Parse_Spec.locale_expression, where
+   an instance is `(name_pos, ((qualifier, mandatory), (insts, rewrites)))`).
+   The agent schema admits a single instance, so only the head is inspected. *)
+fun qualifier_of_expr (insts, _) =
+  (case insts of (_, ((q, _), _)) :: _ => q | [] => "")
+
+fun OPEN_MODULE' ({auto_unfold_locale} : {auto_unfold_locale: bool})
+                 interp expr (lthy, HHF (st, items) :: SK) =
   let val _ = Local_Theory.assert lthy
+
+      val qualifier = qualifier_of_expr expr
+      (* In-scope uniqueness, tested against the INPUT context -- which never yet
+         holds this interpretation's own qualifier, so a node can never collide
+         with itself on re-refresh.  Only on the agent path: the legacy path must
+         neither check nor mutate the table. *)
+      val _ = if auto_unfold_locale andalso qualifier <> "" andalso
+                 Symtab.defined (Locale_Interpretation_Qualifiers.get lthy) qualifier
+              then error ("Qualifier \"" ^ qualifier ^
+                          "\" is already used in this proof. Pick a fresh one.")
+              else ()
+
       val ps = interp expr lthy
       val ctxtp = Proof.context_of ps
-      
+      val raw_goal = #goal (Proof.raw_goal ps)
+
+      (* An interpretation's witness obligation is always ONE opaque locale
+         predicate `L args`.  On the agent path we split it into the real leaf
+         assumptions with `unfold_locales` (the method the locale package provides
+         for exactly this), so each leaf is separately provable and delegatable.
+         `intro_locales_tac` is TRYALL-based: it never fails, it may only make no
+         progress, in which case the goal simply stays the predicate. *)
+      val unfolded_goal =
+        if auto_unfold_locale
+        then (case Seq.pull (Locale.intro_locales_tac {strict = false, eager = true}
+                                                      ctxtp [] raw_goal)
+                of SOME (g, _) => g
+                 | NONE => raw_goal)
+        else raw_goal
+
+      (* goals_of'/num_goals_of' walk a `Minilang.GOAL` chain, so a multi-subgoal
+         state must be wrapped before it can live on the stack (cf. FUN's deferred
+         termination block).  For a single subgoal this is a no-op beyond the
+         conclusion's iso_atomize, so the no-progress case needs no special path. *)
+      val init_st =
+        if auto_unfold_locale then init_goal ctxtp unfolded_goal else unfolded_goal
+
       fun PRT _ t = BUNDL (items, [t, print_stack [HHF (st, empty_items)]])
       fun CB ctxt' (raw_st', _, SK', _) =
-        let val st' = singleton (Proof_Context.export ctxt' ctxtp) raw_st'
+        let (* Invert `init_goal` on the solved state.  `refine_primitive` consumes
+               ONE solved goal thm -- never a thm list, so do NOT reach for
+               `Conjunction.elim_conjunctions`: that is the fact-harvest shape used
+               by FUN/HAVE, not a refine-completion shape. *)
+            val unwrapped =
+              if auto_unfold_locale
+              then raw_st' |> conclude_goal |> finalize_goal ctxt'
+              else raw_st'
+            val st' = singleton (Proof_Context.export ctxt' ctxtp) unwrapped
             val ctxt'' = Proof.refine_primitive (K (K st')) ps
                       |> Proof.global_done_proof
 
             val facts = Proof_Context.facts_of ctxt'';
-            val local_facts =
+            val new_facts =
               Facts.dest_static false [Proof_Context.facts_of lthy] facts
                 |> map (apsnd (map Thm.prop_of))
                 |> flatten_facts
-            val local_facts = if length local_facts > 16 then [] else local_facts
-                  (*Trim off facts if too many*)
+            val n_facts = length new_facts
+            val local_facts = if n_facts > 16 then [] else new_facts
+                  (*Trim the injection into the local items only.  Every fact is
+                    registered in ctxt'' regardless, so by-name reference and
+                    `query` reach them all; the cap merely keeps the successors'
+                    premises bounded.*)
             val items' = ([],local_facts)
+            (* Trimmed: tell the agent how many became available, so it can query. *)
+            val _ = if n_facts > 16
+                    then get_reporter () (Internal (INTERPRET_FACTS_COUNT n_facts))
+                    else ()
+            val ctxt''' =
+              if auto_unfold_locale andalso qualifier <> ""
+              then Locale_Interpretation_Qualifiers.put
+                     (Symtab.insert_set qualifier
+                        (Locale_Interpretation_Qualifiers.get lthy)) ctxt''
+              else ctxt''
          in get_reporter () (New_Items items')
-          ; (ctxt'',
+          ; (ctxt''',
              HHF (st, cat_items items' items) :: SK')
         end
 
-   in (ctxtp,
-       HHF (#goal (Proof.raw_goal ps), empty_items)
-       :: ENDBLK T_END
-       :: MAGIC (CB, PRT, NO_PARAM)
-       :: SK)
-   |> report_goal
+      val stack = (ctxtp,
+                   HHF (init_st, empty_items)
+                   :: ENDBLK T_END
+                   :: MAGIC (CB, PRT, NO_PARAM)
+                   :: SK)
+   in if auto_unfold_locale
+      then (* Report the residual leaves ourselves (mirroring FUN) and do NOT also
+              run `report_goal`, which would emit a second Goals message for the
+              same operation.  A solved state has `goals_of' = [True]` (length 1)
+              while carrying no real goal, so report the empty list instead --
+              otherwise a 0-obligation interpretation would open a phantom child. *)
+           ( get_reporter () (Goals (if no_goal' init_st then [] else goals_of' init_st))
+           ; stack )
+      else stack |> report_goal
   end
-  | OPEN_MODULE' _ _ _ = raise BROKEN_INVARIANT
+  | OPEN_MODULE' _ _ _ _ = raise BROKEN_INVARIANT
 
-val OPEN_MODULE   = timed_OPR 60 o OPEN_MODULE' interpretation
-val OPEN_MODULE'' = timed_OPR 60 o OPEN_MODULE' interpretation_cmd
+val OPEN_MODULE   = timed_OPR 60 o OPEN_MODULE' {auto_unfold_locale=false} interpretation
+fun OPEN_MODULE'' flags = timed_OPR 60 o OPEN_MODULE' flags interpretation_cmd
 val OPEN_MODULE_CMD = Parse.!!! Parse_Spec.locale_expression
-                  >> (timed_OPR 60 o OPEN_MODULE' interpretation_cmd)
+                  >> (timed_OPR 60 o OPEN_MODULE' {auto_unfold_locale=false} interpretation_cmd)
 
 (** LOCAL DEFINITION **)
 

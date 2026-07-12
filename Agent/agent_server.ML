@@ -242,6 +242,11 @@ fun minilang_message_packer ctxt =
                           (10, (name, ty))
              | Minilang.DROPPED_INSERTION_FACTS names =>
                  packPair (packInt, packList packString) (12, names)
+             (* How many facts an interpretation brought in, when there were too
+                many to inject into the local items.  They are all registered and
+                reachable by name / `query`; this only tells the agent the count. *)
+             | Minilang.INTERPRET_FACTS_COUNT n =>
+                 packPair (packInt, packInt) (19, n)
              | MiniLang_Agent.SETUP_REWRITING_MAY_LOOP => packInt 13
              | MiniLang_Agent.COMPUTE_RESULT (name, result) =>
                  packPair (packInt, packPair (packString, packString))
@@ -266,6 +271,7 @@ fun minilang_message_packer ctxt =
                                  | Minilang.Internal Minilang.TERMINATION_PROOF_OPENED => true
                                  | Minilang.Internal (MiniLang_Agent.DEFINE_RESULT _) => true
                                  | Minilang.Internal (Minilang.DROPPED_INSERTION_FACTS _) => true
+                                 | Minilang.Internal (Minilang.INTERPRET_FACTS_COUNT _) => true
                                  | Minilang.Internal MiniLang_Agent.SETUP_REWRITING_MAY_LOOP => true
                                  | Minilang.Internal (MiniLang_Agent.COMPUTE_RESULT _) => true
                                  | Minilang.Internal (Minilang.SH_PRF _) => true

@@ -2149,15 +2149,10 @@ def _tool_schemas_for(session: Session) -> dict[str, dict[str, Any]]:
             for name, t in base.items()}
 
 
-def _experience_document_text(patterns: list[str], goal_description: str) -> str:
-    """Text embedded for an experience memory (§8.1 of docs/EXPERIENCE_MEMORY.md):
-    the goal patterns it targets plus the WHEN-to-use description. The
-    how-to-prove payload is deliberately NOT embedded."""
-    lines = ["This is an experience that aims to help prove goals of the following forms:"]
-    lines += [f"- {p}" for p in patterns]
-    lines.append("The experience should be used in the following situation:")
-    lines.append(goal_description)
-    return "\n".join(lines)
+# The experience document text is now assembled by the single authority
+# Isabelle_Semantic_Embedding.document_text.document_text_of (moved down from here, as
+# experience_document_text, so write and re-embed share one convention -- see
+# EMBED_TEXT_LAYERING_REFACTOR).
 
 
 # --- write_memory corpus-dedup (adjacency mechanism, §3.1) -------------------
@@ -2255,7 +2250,7 @@ async def _write_memory_tool_logic(session: Session, args: dict) -> tuple[str, b
     import xxhash
     from Isabelle_RPC_Host.universal_key import xor_theory_prefix, EntityKind
     from Isabelle_Semantic_Embedding.semantics import Semantic_DB, SemanticRecord
-    from Isabelle_Semantic_Embedding.experience_index import Experience_Index
+    from Isabelle_Semantic_Embedding.document_text import document_text_of
 
     _tn = session.tool_name(TOOL_WRITE_MEMORY)
     session.log_tool_call(_tn, args)
@@ -2277,13 +2272,14 @@ async def _write_memory_tool_logic(session: Session, args: dict) -> tuple[str, b
     # goal_patterns arrive as agent Unicode; model them as IsaTerm so the
     # Unicode<->ASCII boundary is explicit and cannot be skipped. `.ascii` (e.g.
     # `\<notin>`) is the canonical form fed to Isabelle — the ML constituents
-    # callback AND the stored rec.expr (which retrieval re-parses). `.unicode` is
-    # used only for embedding (semantic form) and agent-facing display. Passing
-    # raw Unicode to Isabelle's inner lexer silently fails to parse (∉ ℚ ¬ ...),
-    # dropping the pattern and orphaning the memory from the constituent index.
+    # callback AND the stored rec.expr, from which the embedding document text is
+    # reconstructed: document_text_of applies pretty_unicode to rec.expr, so the
+    # embedded "semantic form" is derived reproducibly from the record itself (not
+    # from a separate transient unicode list). Passing raw Unicode to Isabelle's
+    # inner lexer silently fails to parse (∉ ℚ ¬ ...), dropping the pattern and
+    # orphaning the memory from the constituent index.
     pats = [IsaTerm.from_agent(p) for p in patterns]
     pats_ascii = [p.ascii for p in pats]
-    pats_uni = [p.unicode for p in pats]
 
     ml_state = session.retrieval_state()
     conn = ml_state.connection
@@ -2314,6 +2310,13 @@ async def _write_memory_tool_logic(session: Session, args: dict) -> tuple[str, b
     hash15 = xxhash.xxh128(payload).digest()[:15]
     key = prefix + bytes([int(EntityKind.EXPERIENCE)]) + hash15
 
+    # Build the record ONCE, up front. put_experience embeds document_text_of(rec) and
+    # the dedup search below queries document_text_of(rec) too, so write, dedup, and
+    # any later re-embed all derive their text from this single record -- byte-identical
+    # by construction (the core invariant of EMBED_TEXT_LAYERING_REFACTOR).
+    rec = SemanticRecord(EntityKind.EXPERIENCE, name, json.dumps(pats_ascii), desc,
+                         None, constituents, experience)
+
     # 3. adjacency handshake (§3.1). "adjacent" = a dedup rejection is pending and
     # only read-only / interaction tools have been called since it was raised.
     created = session.runtime.created_memories
@@ -2323,27 +2326,18 @@ async def _write_memory_tool_logic(session: Session, args: dict) -> tuple[str, b
                 all(t in _ADJACENCY_SAFE
                     for t in session.tool_call_log[block.log_len:]))
 
-    def _delete_uk(uk: bytes) -> None:
-        old_rec = Semantic_DB[uk]
-        Semantic_DB.delete(uk)
-        store.delete(uk)
-        old_consts = old_rec.theory_constituents if old_rec is not None else None
-        if old_consts:
-            Experience_Index.remove(uk, [h for _, h in old_consts])
-        else:
-            Experience_Index.remove_scanning(uk)
+    # Deletion of an experience (record + vectors in ALL model stores + availability
+    # index) is now the single transaction store.delete_experience(uk); see
+    # experience_store.delete_experience (Del1: purges every vector_*.lmdb, not just
+    # the active model, so a content-addressed overwrite leaves no orphan vectors).
 
     async def _persist(verb: str) -> tuple[str, bool]:
-        # Embed FIRST: it is the only fallible/remote step. If it raises, nothing
-        # is written to Semantic_DB / Experience_Index (and, on the overwrite
-        # path below, the prior memory has not been deleted yet). A written-but-
-        # unreferenced vector is harmless; a record/index entry without a vector
-        # would be an invisible orphan (retrieval + dedup both need the vector).
-        await store.embed([(key, _experience_document_text(pats_uni, desc))])
-        Semantic_DB[key] = SemanticRecord(
-            EntityKind.EXPERIENCE, name, json.dumps(pats_ascii), desc,
-            None, constituents, experience)
-        Experience_Index.add(key, [h for _, h in constituents])
+        # put_experience embeds FIRST -- the only fallible/remote step -- then writes
+        # the record and the availability index. If the embed raises, nothing below
+        # runs (and, on the overwrite path, the prior memory has not been deleted yet):
+        # a record/index entry never exists without a vector (an invisible orphan;
+        # retrieval + dedup both need the vector). Text is document_text_of(rec).
+        await store.put_experience(key, rec)
         created[name] = key
         session.written_names.append(name)
         session.dedup_block = None
@@ -2360,11 +2354,12 @@ async def _write_memory_tool_logic(session: Session, args: dict) -> tuple[str, b
     if targets:
         # Persist the new record durably FIRST, then delete the old one(s): a
         # transient embed failure in _persist must not have already destroyed the
-        # prior good memory (concern #4). _delete_uk of the same `key` is guarded.
+        # prior good memory (concern #4). delete_experience of the same `key` is
+        # guarded by the `if uk != key` check below (C2).
         result = await _persist("Updated")
         for uk in targets:
-            if uk != key:            # never delete the very key we just wrote
-                _delete_uk(uk)
+            if uk != key:            # C2: never delete the very key we just wrote
+                store.delete_experience(uk)
         return result
 
     # Case 2: an adjacent re-call is the agent confirming "not a duplicate" —
@@ -2375,19 +2370,23 @@ async def _write_memory_tool_logic(session: Session, args: dict) -> tuple[str, b
 
     # 4. fresh corpus-wide dedup search (non-adjacent). NOT availability-scoped:
     # Experience_Index.all_keys() so cross-theory duplicates are caught.
-    doc_text = _experience_document_text(pats_uni, desc)
+    doc_text = document_text_of(rec)
     hits = await _experience_dup_search(store, doc_text, _EXPERIENCE_DUP_K)
     matches: list[tuple[bytes, Any]] = []
     for uk, score in hits:
         if uk == key or score <= _EXPERIENCE_DUP_THRESHOLD:
             continue
-        rec = Semantic_DB[uk]
-        if rec is not None and rec.kind == EntityKind.EXPERIENCE:
-            matches.append((uk, rec))
+        # NB: a DISTINCT name -- `rec` is the new experience's record and is captured by
+        # the `_persist` closure above (resolved at call time). Rebinding `rec` here
+        # would make the fall-through `_persist("Saved")` below embed and store THIS
+        # record (or None, on a stale index entry) under the new experience's key.
+        hit_rec = Semantic_DB[uk]
+        if hit_rec is not None and hit_rec.kind == EntityKind.EXPERIENCE:
+            matches.append((uk, hit_rec))
     if matches:
         shown: dict[str, set[bytes]] = {}
-        for uk, rec in matches:
-            shown.setdefault(rec.name, set()).add(uk)
+        for uk, hit_rec in matches:
+            shown.setdefault(hit_rec.name, set()).add(uk)
         # +1 reserves the slot this very write_memory call will occupy: its own
         # tool_call_log entry is appended only on dispatch exit (see execute's
         # `finally`), so at this point len() does not yet count it. Without the +1

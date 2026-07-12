@@ -223,8 +223,6 @@ async def _test_experience_memory(root: Root, file: MyIO):
     so re-runs stay deterministic and the shared semantic DB is not polluted."""
     from .mcp_http_server import _write_memory_tool_logic
     from .retrieval import _semantic_search_direct
-    from Isabelle_Semantic_Embedding.semantics import Semantic_DB
-    from Isabelle_Semantic_Embedding.experience_index import Experience_Index
     session = root.session
 
     print_header("write_memory", file)
@@ -248,31 +246,20 @@ async def _test_experience_memory(root: Root, file: MyIO):
     file.write(f"{qr}\n")
 
     # Cleanup so re-runs are deterministic and the real DB stays clean.
-    store = await session.retrieval_state().connection.semantic_vector_store()
-    for _name, uk in list(session.runtime.created_memories.items()):
-        rec = Semantic_DB[uk]
-        Semantic_DB.delete(uk)
-        store.delete(uk)
-        if rec is not None and rec.theory_constituents:
-            Experience_Index.remove(uk, [h for _, h in rec.theory_constituents])
+    await _cleanup_created_memories(session)
 
 async def _cleanup_created_memories(session):
     """Remove every memory this session created, from all three stores, so the
-    shared semantic DB is not polluted and re-runs stay deterministic (mirrors
-    the ExperienceMemory test's teardown)."""
-    from Isabelle_Semantic_Embedding.semantics import Semantic_DB
-    from Isabelle_Semantic_Embedding.experience_index import Experience_Index
+    shared semantic DB is not polluted and re-runs stay deterministic.
+
+    Delegates to the single deletion transaction (experience_store.delete_experience,
+    reached via the store): record + vectors in EVERY model store + availability index.
+    Hand-rolling it here purged only the ACTIVE model's vector and could leave a stale
+    index entry (an Experience_Index key whose record is gone) -- which write_memory's
+    dedup then looks up and finds missing."""
     store = await session.retrieval_state().connection.semantic_vector_store()
     for _name, uk in list(session.runtime.created_memories.items()):
-        rec = Semantic_DB[uk]
-        if rec is None:
-            continue
-        Semantic_DB.delete(uk)
-        store.delete(uk)
-        if rec.theory_constituents:
-            Experience_Index.remove(uk, [h for _, h in rec.theory_constituents])
-        else:
-            Experience_Index.remove_scanning(uk)
+        store.delete_experience(uk)
 
 
 @model_test("DedupOverwriteSameRun", "Test_DedupOverwriteSameRun.thy", 8)

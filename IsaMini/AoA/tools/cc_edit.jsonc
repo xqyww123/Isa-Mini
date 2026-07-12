@@ -596,6 +596,28 @@
       },
       "required": ["name", "value"]
     },
+    "Interpret_Locale": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation": { "const": "Interpret_Locale", "type": "string" },
+        "thought": { "$ref": "#/$defs/Thought" },
+        "qualifier": {
+          "type": "string",
+          "description": "A short name used to namespace every fact this interpretation brings in. Pick a fresh one not used anywhere."
+        },
+        "locale": {
+          "type": "string",
+          "description": "The name of the locale (module) to interpret."
+        },
+        "instantiations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Instantiation" },
+          "description": "A map from the locale's parameter names to the Isabelle terms you instantiate them with (by the parameters' full names). Leave empty if you are unsure — you will be asked for any that are missing."
+        }
+      },
+      "required": ["operation", "thought", "qualifier", "locale"]
+    },
     "Derive": {
       "additionalProperties": false,
       "description": "instantiate universal quantifiers in a rule and discharge its premises, deriving a new fact in one forward-reasoning step. It merely introduces the new fact but does not close or reduce the proof goal.",
@@ -763,6 +785,7 @@
         { "$ref": "#/$defs/Chaining" },
         { "$ref": "#/$defs/Compute" },
         { "$ref": "#/$defs/Define" },
+        { "$ref": "#/$defs/Interpret_Locale" },
         { "$ref": "#/$defs/SetupRewriting" }
       ]
     }
