@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import inspect
 import os
 import time
@@ -75,9 +76,15 @@ class ModelTestCase(TestCase):
                     f"{type(interaction).__name__}")
             session.launch_interaction = _default_launch_interaction
             buffer = io.StringIO()
-            result = self.opr(root, MyIO(buffer))
-            if inspect.iscoroutine(result):
-                await result
+            # A test that writes an experience memory runs against a THROWAWAY semantic DB:
+            # write_memory's dedup search is corpus-wide, so otherwise the test's outcome
+            # (and its golden) depends on whatever else is in this machine's DB. See
+            # _isolated_semantic_db.
+            async with (_isolated_semantic_db(session) if getattr(self, "isolated_db", False)
+                        else contextlib.nullcontext()):
+                result = self.opr(root, MyIO(buffer))
+                if inspect.iscoroutine(result):
+                    await result
             correct_yaml_path = self.correct_yaml_path()
             if correct_yaml_path is not None:
                 with open(correct_yaml_path, 'r') as f:
@@ -124,9 +131,18 @@ TESTS : dict[str, TestCase] = {}
 # IMPORTANT: Each @model_test must have its own dedicated .thy file.
 # Never share a .thy file between different test cases.
 # The `line` argument must be the line number of `by aoa` in the .thy file.
-def model_test(name: str, file: str, line: int):
+def model_test(name: str, file: str, line: int, isolated_db: bool = False):
+    """Register a model test.
+
+    ``isolated_db``: run it against a throwaway, EMPTY semantic DB rather than the real
+    shared one.  Set it for any test that writes an experience memory: write_memory's
+    dedup search is corpus-wide, so such a test's outcome (and its golden) otherwise
+    depends on what else happens to be in the machine's DB.  See _isolated_semantic_db.
+    """
     def decorator(func: _TestOpr):
-        TESTS[name] = ModelTestCase(name, file, line, func)
+        case = ModelTestCase(name, file, line, func)
+        case.isolated_db = isolated_db
+        TESTS[name] = case
         return func
     return decorator
 
@@ -215,7 +231,63 @@ async def _test_branch(root: Root, file: MyIO):
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
 
-@model_test("ExperienceMemory", "Test_ExperienceMemory.thy", 8)
+@contextlib.asynccontextmanager
+async def _isolated_semantic_db(session):
+    """Run the body against a THROWAWAY semantic DB (an empty SEMANTIC_DB_DIR).
+
+    The memory tests write experiences and exercise write_memory's corpus-wide dedup
+    search, so their outcome depends on what ELSE is in the experience corpus -- i.e. on
+    whichever semantic DB happens to be on the machine. Against a realistic corpus that
+    breaks: `ExperienceMemory` writes a derivative strategy, a real derivative experience
+    in the corpus scores above the 0.7 dedup threshold, write_memory correctly REFUSES
+    the write, the test has no key, and it dies on `Semantic_DB[None]`. The goldens were
+    likewise pinning experiences that merely happened to be in one machine's DB.
+
+    So give these tests their own empty corpus: they then test the CODE, not the contents
+    of somebody's cache, and their goldens contain only what they themselves create.
+    They also stop polluting the real shared DB (a teardown that never runs -- because the
+    test raised first -- used to leave its experiences in it forever).
+
+    Mechanics: `semantic_DB_dir()` re-reads SEMANTIC_DB_DIR on every call, so swapping the
+    env var and dropping the cached singletons (Semantic_DB, Experience_Index) and the
+    connection's per-model vector stores is enough to re-point the whole database set.
+    """
+    import shutil, tempfile
+    from Isabelle_Semantic_Embedding.semantics import _Semantic_DB
+    from Isabelle_Semantic_Embedding.experience_index import _Experience_Index
+    from Isabelle_Semantic_Embedding.semantic_embedding import _lmdb_envs, _lmdb_lock
+
+    conn = session.retrieval_state().connection
+    stores = getattr(conn, "_semantic_vector_stores", None)
+    saved_stores = dict(stores) if stores else None
+    saved_env = os.environ.get("SEMANTIC_DB_DIR")
+    tmp = tempfile.mkdtemp(prefix="aoa_test_semdb_")
+
+    def _reset() -> None:
+        _Semantic_DB._close()
+        _Experience_Index._close()
+        if stores is not None:
+            stores.clear()          # each store's path is fixed at construction
+
+    os.environ["SEMANTIC_DB_DIR"] = tmp
+    _reset()
+    try:
+        yield tmp
+    finally:
+        _reset()
+        with _lmdb_lock:            # release the throwaway envs before the dir goes
+            for path in [p for p in _lmdb_envs if p.startswith(tmp)]:
+                _lmdb_envs.pop(path).close()
+        if saved_env is None:
+            os.environ.pop("SEMANTIC_DB_DIR", None)
+        else:
+            os.environ["SEMANTIC_DB_DIR"] = saved_env
+        if stores is not None and saved_stores:
+            stores.update(saved_stores)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+@model_test("ExperienceMemory", "Test_ExperienceMemory.thy", 8, isolated_db=True)
 async def _test_experience_memory(root: Root, file: MyIO):
     """End-to-end for the experience-memory feature: `write_memory` saves a
     reusable derivative-proof strategy, then a `kinds=["experience"]` query
@@ -262,7 +334,7 @@ async def _cleanup_created_memories(session):
         store.delete_experience(uk)
 
 
-@model_test("DedupOverwriteSameRun", "Test_DedupOverwriteSameRun.thy", 8)
+@model_test("DedupOverwriteSameRun", "Test_DedupOverwriteSameRun.thy", 8, isolated_db=True)
 async def _test_dedup_overwrite_same_run(root: Root, file: MyIO):
     """[Case 1 — same-run overwrite] Re-writing the SAME name within one run
     overwrites in place: the 2nd call returns 'Updated', the old universal key is
@@ -300,7 +372,7 @@ async def _test_dedup_overwrite_same_run(root: Root, file: MyIO):
     await _cleanup_created_memories(session)
 
 
-@model_test("DedupRejectThenAdjacent", "Test_DedupRejectThenAdjacent.thy", 8)
+@model_test("DedupRejectThenAdjacent", "Test_DedupRejectThenAdjacent.thy", 8, isolated_db=True)
 async def _test_dedup_reject_then_adjacent(root: Root, file: MyIO):
     """[Adjacency mechanism] A non-adjacent near-duplicate write is REJECTED (T3,
     'The memory was NOT written') and arms a dedup_block; an immediately-adjacent
@@ -17678,11 +17750,17 @@ def _dump_successor_premises(node: 'Interpret_Locale', file: MyIO, banner: str):
     imported facts land when there are few enough (<=16) to inject."""
     file.write(f"{banner}\n")
     file.write(f"  facts_count reported by kernel: {node._facts_count}\n")
-    goal = node.resulting_state().leading_goal
-    hyps = [] if goal is None else sorted(goal.context.hyps.keys())
-    file.write(f"  premises visible to successors ({len(hyps)}):\n")
-    for h in hyps:
+    file.write(f"  premises visible to successors ({len(_premise_names(node))}):\n")
+    for h in _premise_names(node):
         file.write(f"    - {h}\n")
+
+
+def _premise_names(node: 'Interpret_Locale') -> list[str]:
+    """Names of the premises the interpretation's END state hands to successors."""
+    goal = node.resulting_state().leading_goal
+    if goal is None:
+        return []
+    return sorted(n.unicode for n in goal.context.hyps.keys())
 
 
 @model_test("Interpret_MultiLeaf", "Test_Interpret_MultiLeaf.thy", 19)
@@ -17844,7 +17922,7 @@ async def _test_Interpret_QualifierConflict(root: Root, file: MyIO):
         "locale": "iq_pos",
         "instantiations": [{"name": "p", "value": "4"}],
     })])).committed
-    await cast(NonLeaf_Node, interp1).append([Obvious.gen_single({"facts": []})])
+    await cast(NonLeaf_Node, interp1.sub_nodes[0]).append([Obvious.gen_single({"facts": []})])
     print_header("First interpretation (qualifier q) registered", file)
     root.print(0, file)
 
@@ -17877,7 +17955,7 @@ async def _test_Interpret_QualifierConflict(root: Root, file: MyIO):
         "locale": "iq_pos",
         "instantiations": [{"name": "p", "value": "7"}],
     })])).committed
-    await cast(NonLeaf_Node, interp2).append([Obvious.gen_single({"facts": []})])
+    await cast(NonLeaf_Node, interp2.sub_nodes[0]).append([Obvious.gen_single({"facts": []})])
     print_header("Retry with a fresh qualifier r", file)
     root.print(0, file)
     assert interp2.status.status is EvaluationStatus.Status.SUCCESS, \
@@ -17964,12 +18042,12 @@ async def _test_Interpret_ManyFacts(root: Root, file: MyIO):
     root.print(0, file)
 
     _dump_successor_premises(interp, file, "Imported facts (>16 -> NOT injected)")
+
     assert interp._facts_count is not None and interp._facts_count > 16, \
         f"expected >16 imported facts to be reported, got {interp._facts_count}"
-    st_goal = interp.resulting_state().leading_goal
-    hyps = {} if st_goal is None else st_goal.context.hyps
-    assert not any(h.startswith("mf.") for h in hyps), \
-        f"more than 16 facts must NOT be injected into the premises, got {list(hyps)}"
+    names = _premise_names(interp)
+    assert not any(h.startswith("mf.") for h in names), \
+        f"more than 16 facts must NOT be injected into the premises, got {names}"
 
     # ...yet every one of them is still reachable by name.
     root.session.age += 1
@@ -18029,10 +18107,10 @@ async def _test_Interpret_WorkerScope(root: Root, file: MyIO):
 
     for leaf in (leaf1, leaf2):
         g = cast(NonLeaf_Node, leaf).goal()
-        hyps = {} if g is None else g.context.hyps
-        file.write(f"{leaf.id} obligation premises: {sorted(hyps)}\n")
-        assert not any(h.startswith("w.") for h in hyps), \
-            f"interpretation facts leaked into its own obligation {leaf.id}: {list(hyps)}"
+        names = [] if g is None else sorted(n.unicode for n in g.context.hyps.keys())
+        file.write(f"{leaf.id} obligation premises: {names}\n")
+        assert not any(h.startswith("w.") for h in names), \
+            f"interpretation facts leaked into its own obligation {leaf.id}: {names}"
 
     root.session.age += 1
     await goal.append([InferenceRule.gen_single({
