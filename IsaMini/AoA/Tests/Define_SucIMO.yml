@@ -23,7 +23,6 @@ proof:
     equations:
       - pow2 0 = (1::nat)
       - pow2 (Suc n) = (2::nat) * pow2 n
-    proof of termination: empty
 Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   ¬ (5 :: nat) dvd (∑k≤n. ((2 :: nat) * n + (1 :: nat) choose (2 :: nat) * k + (1 :: nat)) * (2 :: nat) ^ ((3 :: nat) * k))

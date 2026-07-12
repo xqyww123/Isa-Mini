@@ -19,7 +19,6 @@ proof:
     equations:
       - pow2 0 = (1::nat)
       - pow2 (Suc n) = (2::nat) * pow2 n
-    proof of termination: empty
 Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   ∃(f :: nat ⇒ nat). f (3 :: nat) = (8 :: nat)
@@ -37,7 +36,6 @@ proof:
     equations:
       - pow2 0 = (1::nat)
       - pow2 (Suc n) = (2::nat) * pow2 n
-    proof of termination: empty
   - step id: 2
     thought: Use pow2 as witness
     operation: Witness
@@ -59,7 +57,6 @@ proof:
     equations:
       - pow2 0 = (1::nat)
       - pow2 (Suc n) = (2::nat) * pow2 n
-    proof of termination: empty
   - step id: 2
     thought: Use pow2 as witness
     operation: Witness

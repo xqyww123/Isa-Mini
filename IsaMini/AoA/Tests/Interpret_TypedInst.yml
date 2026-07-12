@@ -1,0 +1,92 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ (1 :: int) + (1 :: int)
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Interpret_Locale with (0::int) / 1 + (1::int)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ (1 :: int) + (1 :: int)
+proof:
+  - step id: 1
+    thought: type-annotated, multi-token instantiation values
+    operation: Interpret_Locale
+    locale: it_ord
+    qualifier: it
+    instantiations:
+      - lo = (0::int)
+      - hi = 1 + (1::int)
+    proof:
+      - goal id: 1.1
+        goal: (0 :: int) < (1 :: int) + (1 :: int)
+        proof: empty
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  premises:
+    - it.it_le: (0 :: int) ≤ (1 :: int) + (1 :: int)
+    - it.it_lt: (0 :: int) < (1 :: int) + (1 :: int)
+    - it.it_ord_axioms: it_ord (0 :: int) ((1 :: int) + (1 :: int))
+  goal: (0 :: int) ≤ (1 :: int) + (1 :: int)
+--------------------------------------------------
+After discharging the obligation
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ (1 :: int) + (1 :: int)
+proof:
+  - step id: 1
+    thought: type-annotated, multi-token instantiation values
+    operation: Interpret_Locale
+    locale: it_ord
+    qualifier: it
+    instantiations:
+      - lo = (0::int)
+      - hi = 1 + (1::int)
+    proof:
+      - goal id: 1.1
+        goal: (0 :: int) < (1 :: int) + (1 :: int)
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  premises:
+    - it.it_le: (0 :: int) ≤ (1 :: int) + (1 :: int)
+    - it.it_lt: (0 :: int) < (1 :: int) + (1 :: int)
+    - it.it_ord_axioms: it_ord (0 :: int) ((1 :: int) + (1 :: int))
+  goal: (0 :: int) ≤ (1 :: int) + (1 :: int)
+Imported facts (instantiated at 0 and 1 + 1)
+  facts_count reported by kernel: None
+  premises visible to successors (3):
+    - it.it_le
+    - it.it_lt
+    - it.it_ord_axioms
+--------------------------------------------------
+After closing the goal with it.it_le
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ (1 :: int) + (1 :: int)
+proof:
+  - step id: 1
+    thought: type-annotated, multi-token instantiation values
+    operation: Interpret_Locale
+    locale: it_ord
+    qualifier: it
+    instantiations:
+      - lo = (0::int)
+      - hi = 1 + (1::int)
+    proof:
+      - goal id: 1.1
+        goal: (0 :: int) < (1 :: int) + (1 :: int)
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+  - step id: 2
+    thought: the instantiated theorem is exactly the goal
+    operation: Inference Rule
+    rule:
+      - it.it_le: (0 :: int) ≤ (1 :: int) + (1 :: int)
+Unfinished nodes: 0

@@ -19,7 +19,6 @@ proof:
     equations:
       - gadd a 0 = a
       - gadd a (Suc n) = Suc (gadd a n)
-    proof of termination: empty
 Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   ∃(f :: nat ⇒ nat ⇒ nat). f (5 :: nat) (3 :: nat) = (8 :: nat)
@@ -37,7 +36,6 @@ proof:
     equations:
       - gadd a 0 = a
       - gadd a (Suc n) = Suc (gadd a n)
-    proof of termination: empty
   - step id: 2
     thought: Use gadd as witness
     operation: Witness
@@ -59,7 +57,6 @@ proof:
     equations:
       - gadd a 0 = a
       - gadd a (Suc n) = Suc (gadd a n)
-    proof of termination: empty
   - step id: 2
     thought: Use gadd as witness
     operation: Witness

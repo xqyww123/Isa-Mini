@@ -18,7 +18,6 @@ proof:
     type: nat
     equations:
       - P = 5
-    proof of termination: empty
 Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   ∃(P :: nat). P = (5 :: nat)

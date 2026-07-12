@@ -22,7 +22,6 @@ proof:
       - g2 (Suc (Suc n)) 0 = g2 (Suc n) 0 + 1
       - g2 (Suc (Suc n)) (Suc 0) = g2 (Suc n) 0 + 2
       - g2 (Suc (Suc n)) (Suc (Suc k)) = g2 (Suc n) (Suc k) + g2 n k
-    proof of termination: empty
 Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   ∃(f :: nat ⇒ nat ⇒ nat). f (2 :: nat) (2 :: nat) = (2 :: nat)
@@ -43,7 +42,6 @@ proof:
       - g2 (Suc (Suc n)) 0 = g2 (Suc n) 0 + 1
       - g2 (Suc (Suc n)) (Suc 0) = g2 (Suc n) 0 + 2
       - g2 (Suc (Suc n)) (Suc (Suc k)) = g2 (Suc n) (Suc k) + g2 n k
-    proof of termination: empty
   - step id: 2
     thought: Use g2 as witness
     operation: Witness
@@ -68,7 +66,6 @@ proof:
       - g2 (Suc (Suc n)) 0 = g2 (Suc n) 0 + 1
       - g2 (Suc (Suc n)) (Suc 0) = g2 (Suc n) 0 + 2
       - g2 (Suc (Suc n)) (Suc (Suc k)) = g2 (Suc n) (Suc k) + g2 n k
-    proof of termination: empty
   - step id: 2
     thought: Use g2 as witness
     operation: Witness

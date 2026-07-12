@@ -1,0 +1,49 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (5 :: nat) + (0 :: nat) = (5 :: nat)
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Interpret_Locale (0 obligations, no phantom child)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (5 :: nat) + (0 :: nat) = (5 :: nat)
+proof:
+  - step id: 1
+    thought: an assumption-free locale: nothing to witness
+    operation: Interpret_Locale
+    locale: iz_triv
+    qualifier: z
+    instantiations:
+      - c = 5
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  premises:
+    - z.iz_add0: (5 :: nat) + (0 :: nat) = (5 :: nat)
+  goal: (5 :: nat) + (0 :: nat) = (5 :: nat)
+leaf subgoals opened: 0
+Imported facts (registration fired on END)
+  facts_count reported by kernel: None
+  premises visible to successors (1):
+    - z.iz_add0
+--------------------------------------------------
+After closing the goal with z.iz_add0
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (5 :: nat) + (0 :: nat) = (5 :: nat)
+proof:
+  - step id: 1
+    thought: an assumption-free locale: nothing to witness
+    operation: Interpret_Locale
+    locale: iz_triv
+    qualifier: z
+    instantiations:
+      - c = 5
+  - step id: 2
+    thought: registration must have happened even with no obligation
+    operation: Inference Rule
+    rule:
+      - z.iz_add0: (5 :: nat) + (0 :: nat) = (5 :: nat)
+Unfinished nodes: 0

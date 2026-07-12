@@ -1,0 +1,90 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: nat) < (3 :: nat) + (3 :: nat)
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Interpret_Locale (exactly 1 leaf obligation)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: nat) < (3 :: nat) + (3 :: nat)
+proof:
+  - step id: 1
+    thought: instantiate the single-assumption locale at p=3
+    operation: Interpret_Locale
+    locale: is1_pos
+    qualifier: s
+    instantiations:
+      - p = 3
+    proof:
+      - goal id: 1.1
+        goal: (0 :: nat) < (3 :: nat)
+        proof: empty
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  premises:
+    - s.is1_bp: (0 :: nat) < (3 :: nat)
+    - s.is1_dbl_pos: (0 :: nat) < (3 :: nat) + (3 :: nat)
+    - s.is1_pos_axioms: is1_pos (3 :: nat)
+  goal: (0 :: nat) < (3 :: nat) + (3 :: nat)
+leaf subgoals opened: 1
+--------------------------------------------------
+After discharging the single leaf
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: nat) < (3 :: nat) + (3 :: nat)
+proof:
+  - step id: 1
+    thought: instantiate the single-assumption locale at p=3
+    operation: Interpret_Locale
+    locale: is1_pos
+    qualifier: s
+    instantiations:
+      - p = 3
+    proof:
+      - goal id: 1.1
+        goal: (0 :: nat) < (3 :: nat)
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  premises:
+    - s.is1_bp: (0 :: nat) < (3 :: nat)
+    - s.is1_dbl_pos: (0 :: nat) < (3 :: nat) + (3 :: nat)
+    - s.is1_pos_axioms: is1_pos (3 :: nat)
+  goal: (0 :: nat) < (3 :: nat) + (3 :: nat)
+Imported facts
+  facts_count reported by kernel: None
+  premises visible to successors (3):
+    - s.is1_bp
+    - s.is1_dbl_pos
+    - s.is1_pos_axioms
+--------------------------------------------------
+After closing the goal with s.is1_dbl_pos
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: nat) < (3 :: nat) + (3 :: nat)
+proof:
+  - step id: 1
+    thought: instantiate the single-assumption locale at p=3
+    operation: Interpret_Locale
+    locale: is1_pos
+    qualifier: s
+    instantiations:
+      - p = 3
+    proof:
+      - goal id: 1.1
+        goal: (0 :: nat) < (3 :: nat)
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+  - step id: 2
+    thought: the interpretation registered, so its theorem is usable
+    operation: Inference Rule
+    rule:
+      - s.is1_dbl_pos: (0 :: nat) < (3 :: nat) + (3 :: nat)
+Unfinished nodes: 0

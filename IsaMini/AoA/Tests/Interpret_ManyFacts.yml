@@ -1,0 +1,52 @@
+--------------------------------------------------
+After the interpretation closed (footer must announce the count)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (1 :: nat) < (1 :: nat) + (1 :: nat)
+proof:
+  - step id: 1
+    thought: this locale carries 20+ theorems
+    operation: Interpret_Locale
+    locale: imf_pos
+    qualifier: mf
+    instantiations:
+      - p = 1
+    proof:
+      - goal id: 1.1
+        goal: (0 :: nat) < (1 :: nat)
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+    22 facts are available now. Use `query` to search them semantically
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  (1 :: nat) < (1 :: nat) + (1 :: nat)
+Imported facts (>16 -> NOT injected)
+  facts_count reported by kernel: 22
+  premises visible to successors (0):
+--------------------------------------------------
+After closing the goal with the by-name fact mf.imf_l01
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (1 :: nat) < (1 :: nat) + (1 :: nat)
+proof:
+  - step id: 1
+    thought: this locale carries 20+ theorems
+    operation: Interpret_Locale
+    locale: imf_pos
+    qualifier: mf
+    instantiations:
+      - p = 1
+    proof:
+      - goal id: 1.1
+        goal: (0 :: nat) < (1 :: nat)
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+    22 facts are available now. Use `query` to search them semantically
+  - step id: 2
+    thought: an un-injected fact is still reachable by its qualified name
+    operation: Inference Rule
+    rule:
+      - mf.imf_l01: (1 :: nat) < (1 :: nat) + (1 :: nat)
+Unfinished nodes: 0

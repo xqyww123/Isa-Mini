@@ -5872,7 +5872,15 @@ class StdBlock(NonLeaf_Node):
                 file.write(":\n")
                 for step in self.sub_nodes:
                     step.print(child_indent, file, update_line, show_warnings=show_warnings)
-            else:
+            elif self.opening():
+                # "<title>: empty" means "this block is open and awaiting your
+                # proof" -- which is exactly what `opening()` says. A block that
+                # is NOT opening (every SubgoalMaker: Define on the auto-prove
+                # path, Interpret_Locale of an assumption-free locale, a Branch
+                # whose beginning op failed) has no obligation to discharge and
+                # offers no fill target (`_id_of_openning_prf_to_fill` is None),
+                # so printing ": empty" for it reads as "the proof is missing"
+                # when it means "there is nothing to prove". Print nothing.
                 print_indent(indent, file)
                 file.write(title)
                 file.write(": empty\n")
@@ -8349,17 +8357,30 @@ class Interpret_Locale(SubgoalMaker):
     def quickview_title(self) -> str:
         return f"Interpret_Locale {self.locale}"
 
-    async def _refresh_footer(self) -> 'FailureReason | None':
-        # The interpretation is only registered when the trailing END closes the
-        # ML block, so the imported facts (and their count) exist only in the
-        # state the ending operation produces -- not in the beginning state.
-        reason = await super()._refresh_footer()
+    def _read_facts_count(self) -> None:
+        # The count rides on whatever CLOSES the ML block: OPEN_MODULE's callback
+        # registers the interpretation when the block is popped, and it is popped
+        # by END *or* by SORRY_END_ALL (`gen_END` drives both -- proof.ML). So it
+        # must be read on BOTH paths. Reading it only in `_refresh_footer` loses it
+        # whenever an obligation is still open: the END fails there, and the state
+        # carrying the message is not written until `_skip_proof` runs afterwards.
+        # Same shape, and same reason, as `Obtain._read_introduced`.
         self._facts_count = None
         for m in self.resulting_state().messages:
             if isinstance(m, Interpret_Facts_Count_Msg):
                 self._facts_count = m.count
                 break
-        return reason
+
+    async def _refresh_footer(self) -> 'FailureReason | None':
+        fail = await super()._refresh_footer()
+        if fail is not None:
+            return fail
+        self._read_facts_count()
+        return None
+
+    async def _skip_proof(self) -> None:
+        await super()._skip_proof()
+        self._read_facts_count()
 
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         self._print_thought(indent, file)
@@ -8375,6 +8396,9 @@ class Interpret_Locale(SubgoalMaker):
             for (n, v) in self.instantiations:
                 print_indent(indent + 1, file)
                 file.write(f"- {n} = {v}\n")
+        self._print_evaluation_status(indent, file)
+        if show_warnings:
+            self._print_warnings(indent, file, [Warning.Position.HEADER])
 
     def _print_footer(self, indent: int, file: MyIO, show_warnings: bool = False) -> None:
         super()._print_footer(indent, file, show_warnings=show_warnings)
@@ -8414,6 +8438,23 @@ class Interpret_Locale(SubgoalMaker):
 
     def ending_opr(self) -> Minilang_Operation | None:
         return Minilang_Operation.END()
+
+    def _beginning_opr_err_msgs(self, err: IsabelleError) -> FailureReason:
+        # The only one of the three that actually reaches the agent: a failing
+        # beginning op puts the node in FAILURE, and FAILURE is the sole status
+        # `_print_evaluation_status` renders. Carries the ML text verbatim --
+        # unknown locale, ill-typed instantiation, or a reused qualifier.
+        return FailureReason(
+            "Failed to interpret the locale: " + "\n".join(err.errors))
+
+    def _child_refresh_failure_err_msgs(self, child: Node) -> FailureReason:
+        return FailureReason(
+            "One of the interpretation's assumptions failed to be proven.")
+
+    def _ending_opr_err_msgs(self, err: IsabelleError) -> FailureReason:
+        return FailureReason(
+            "The interpretation cannot be established because its "
+            "assumptions are not fully discharged.")
 
 @proof_operation("Unfold", Unfold_ToolArg)
 class Unfold(Leaf):

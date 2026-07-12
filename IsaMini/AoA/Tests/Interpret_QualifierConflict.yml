@@ -1,0 +1,142 @@
+--------------------------------------------------
+First interpretation (qualifier q) registered
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: nat) < (4 :: nat) + (4 :: nat)
+proof:
+  - step id: 1
+    thought: first interpretation, qualifier q
+    operation: Interpret_Locale
+    locale: iq_pos
+    qualifier: q
+    instantiations:
+      - p = 4
+    proof:
+      - goal id: 1.1
+        goal: (0 :: nat) < (4 :: nat)
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  premises:
+    - q.iq_bp: (0 :: nat) < (4 :: nat)
+    - q.iq_dbl_pos: (0 :: nat) < (4 :: nat) + (4 :: nat)
+    - q.iq_pos_axioms: iq_pos (4 :: nat)
+  goal: (0 :: nat) < (4 :: nat) + (4 :: nat)
+clash status: FAILURE
+clash reason: Failed to interpret the locale: Qualifier "q" is already used in this proof. Pick a fresh one.
+--------------------------------------------------
+After the qualifier clash (node kept, marked FAILURE)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: nat) < (4 :: nat) + (4 :: nat)
+proof:
+  - step id: 1
+    thought: first interpretation, qualifier q
+    operation: Interpret_Locale
+    locale: iq_pos
+    qualifier: q
+    instantiations:
+      - p = 4
+    proof:
+      - goal id: 1.1
+        goal: (0 :: nat) < (4 :: nat)
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+  - step id: 2
+    thought: re-use the same qualifier -- must be rejected
+    operation: Interpret_Locale
+    locale: iq_pos
+    qualifier: q
+    instantiations:
+      - p = 7
+    Error: Failed to interpret the locale: Qualifier "q" is already used in this proof. Pick a fresh one.
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  premises:
+    - q.iq_bp: (0 :: nat) < (4 :: nat)
+    - q.iq_dbl_pos: (0 :: nat) < (4 :: nat) + (4 :: nat)
+    - q.iq_pos_axioms: iq_pos (4 :: nat)
+  goal: (0 :: nat) < (4 :: nat) + (4 :: nat)
+--------------------------------------------------
+Retry with a fresh qualifier r
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: nat) < (4 :: nat) + (4 :: nat)
+proof:
+  - step id: 1
+    thought: first interpretation, qualifier q
+    operation: Interpret_Locale
+    locale: iq_pos
+    qualifier: q
+    instantiations:
+      - p = 4
+    proof:
+      - goal id: 1.1
+        goal: (0 :: nat) < (4 :: nat)
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+  - step id: 2
+    thought: retry with a fresh qualifier
+    operation: Interpret_Locale
+    locale: iq_pos
+    qualifier: r
+    instantiations:
+      - p = 7
+    proof:
+      - goal id: 2.1
+        goal: (0 :: nat) < (7 :: nat)
+        proof:
+          - step id: 2.1.1
+            operation: Obvious
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
+pending proof goal:
+  premises:
+    - q.iq_bp: (0 :: nat) < (4 :: nat)
+    - q.iq_dbl_pos: (0 :: nat) < (4 :: nat) + (4 :: nat)
+    - q.iq_pos_axioms: iq_pos (4 :: nat)
+    - r.iq_bp: (0 :: nat) < (7 :: nat)
+    - r.iq_dbl_pos: (0 :: nat) < (7 :: nat) + (7 :: nat)
+    - r.iq_pos_axioms: iq_pos (7 :: nat)
+  goal: (0 :: nat) < (4 :: nat) + (4 :: nat)
+--------------------------------------------------
+After closing the goal with q.iq_dbl_pos
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: nat) < (4 :: nat) + (4 :: nat)
+proof:
+  - step id: 1
+    thought: first interpretation, qualifier q
+    operation: Interpret_Locale
+    locale: iq_pos
+    qualifier: q
+    instantiations:
+      - p = 4
+    proof:
+      - goal id: 1.1
+        goal: (0 :: nat) < (4 :: nat)
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+  - step id: 2
+    thought: retry with a fresh qualifier
+    operation: Interpret_Locale
+    locale: iq_pos
+    qualifier: r
+    instantiations:
+      - p = 7
+    proof:
+      - goal id: 2.1
+        goal: (0 :: nat) < (7 :: nat)
+        proof:
+          - step id: 2.1.1
+            operation: Obvious
+  - step id: 3
+    thought: close with the first interpretation's theorem
+    operation: Inference Rule
+    rule:
+      - q.iq_dbl_pos: (0 :: nat) < (4 :: nat) + (4 :: nat)
+Unfinished nodes: 0

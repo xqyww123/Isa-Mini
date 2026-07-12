@@ -11,7 +11,6 @@ proof:
     type: nat ⇒ nat
     equations:
       - double n = n + n
-    proof of termination: empty
 Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   ∃(f :: nat ⇒ nat). f (2 :: nat) = (4 :: nat)
@@ -30,7 +29,6 @@ proof:
     type: nat ⇒ nat
     equations:
       - double n = n + n
-    proof of termination: empty
   - step id: 2
     thought: Use double as witness
     operation: Witness

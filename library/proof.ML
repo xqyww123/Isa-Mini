@@ -4945,9 +4945,32 @@ fun OPEN_MODULE' ({auto_unfold_locale} : {auto_unfold_locale: bool})
       (* goals_of'/num_goals_of' walk a `Minilang.GOAL` chain, so a multi-subgoal
          state must be wrapped before it can live on the stack (cf. FUN's deferred
          termination block).  For a single subgoal this is a no-op beyond the
-         conclusion's iso_atomize, so the no-progress case needs no special path. *)
-      val init_st =
-        if auto_unfold_locale then init_goal ctxtp unfolded_goal else unfolded_goal
+         conclusion's iso_atomize, so the no-progress case needs no special path.
+
+         BUT an interpretation with NO obligation at all -- an assumption-free
+         locale, or one whose obligation `unfold_locales` discharged outright --
+         hands us Isar's EMPTY goal state `#(⋀dummy. PROP dummy ⟹ PROP dummy)`,
+         which is already finished.  There is nothing to protect, and iso_atomize
+         cannot rewrite that degenerate shape (it raises CTERM in rewr_conv).  So
+         gate the wrap on `no_goal'`, and gate the CB's matching unwrap on the
+         SAME flag -- the two must never disagree.  The block is still pushed and
+         still closed by END: that END is what fires the CB, and the CB is what
+         registers the interpretation.
+
+         The `Goals` report below is gated on the same flag for a second reason:
+         `goals_of'` on an empty state returns `[True]` (LENGTH 1, a phantom),
+         while `num_goals_of'` returns 0.  Reporting `goals_of'` unguarded would
+         make the agent grow a phantom subgoal `True` and ask an LLM to prove it.
+
+         The predicate MUST be `no_subgoal'`, never `no_goal'`: `unfolded_goal` is
+         still RAW (that is the whole point -- we are deciding whether to protect
+         it), and `no_goal` only recognises an ALREADY-protected shape.  On a raw
+         two-premise state `g1 ⟹ g2 ⟹ #C` every `no_goal` clause misses and it
+         falls through to `no_goal _ = true` -- claiming "no obligation" for the
+         one case that has the most.  `no_subgoal` keys on the conclusion instead
+         and is correct for 0, 1 and N premises alike. *)
+      val wrapped = auto_unfold_locale andalso not (no_subgoal' unfolded_goal)
+      val init_st = if wrapped then init_goal ctxtp unfolded_goal else unfolded_goal
 
       fun PRT _ t = BUNDL (items, [t, print_stack [HHF (st, empty_items)]])
       fun CB ctxt' (raw_st', _, SK', _) =
@@ -4956,7 +4979,7 @@ fun OPEN_MODULE' ({auto_unfold_locale} : {auto_unfold_locale: bool})
                `Conjunction.elim_conjunctions`: that is the fact-harvest shape used
                by FUN/HAVE, not a refine-completion shape. *)
             val unwrapped =
-              if auto_unfold_locale
+              if wrapped
               then raw_st' |> conclude_goal |> finalize_goal ctxt'
               else raw_st'
             val st' = singleton (Proof_Context.export ctxt' ctxtp) unwrapped
@@ -4998,10 +5021,10 @@ fun OPEN_MODULE' ({auto_unfold_locale} : {auto_unfold_locale: bool})
    in if auto_unfold_locale
       then (* Report the residual leaves ourselves (mirroring FUN) and do NOT also
               run `report_goal`, which would emit a second Goals message for the
-              same operation.  A solved state has `goals_of' = [True]` (length 1)
-              while carrying no real goal, so report the empty list instead --
-              otherwise a 0-obligation interpretation would open a phantom child. *)
-           ( get_reporter () (Goals (if no_goal' init_st then [] else goals_of' init_st))
+              same operation.  `wrapped` is false exactly when there is no
+              obligation, and then the empty list MUST be reported: see the phantom
+              `[True]` of `goals_of'` explained at `wrapped`. *)
+           ( get_reporter () (Goals (if wrapped then goals_of' init_st else []))
            ; stack )
       else stack |> report_goal
   end

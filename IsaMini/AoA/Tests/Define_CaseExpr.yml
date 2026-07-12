@@ -19,7 +19,6 @@ proof:
     equations:
       - sa 0 = ((1::nat), (1::nat))
       - sa (Suc n) = (case sa n of (s, a) \<Rightarrow> (s + a, s))
-    proof of termination: empty
 Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   ∃(f :: nat ⇒ nat × nat). fst (f (Suc (0 :: nat))) = (2 :: nat)

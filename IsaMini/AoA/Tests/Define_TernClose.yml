@@ -21,7 +21,6 @@ proof:
       - tern (Suc 0) = (1::nat)
       - tern (Suc (Suc 0)) = (2::nat)
       - tern (Suc (Suc (Suc n))) = tern (Suc (Suc n)) + n
-    proof of termination: empty
 Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   ∃(f :: nat ⇒ nat). f (5 :: nat) = (5 :: nat)
@@ -41,7 +40,6 @@ proof:
       - tern (Suc 0) = (1::nat)
       - tern (Suc (Suc 0)) = (2::nat)
       - tern (Suc (Suc (Suc n))) = tern (Suc (Suc n)) + n
-    proof of termination: empty
   - step id: 2
     thought: Use tern as witness
     operation: Witness
@@ -65,7 +63,6 @@ proof:
       - tern (Suc 0) = (1::nat)
       - tern (Suc (Suc 0)) = (2::nat)
       - tern (Suc (Suc (Suc n))) = tern (Suc (Suc n)) + n
-    proof of termination: empty
   - step id: 2
     thought: Use tern as witness
     operation: Witness

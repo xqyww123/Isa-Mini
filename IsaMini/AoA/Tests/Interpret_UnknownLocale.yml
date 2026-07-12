@@ -1,40 +1,28 @@
+status: FAILURE
+reason: Failed to interpret the locale: Undefined locale: "no_such_locale_here"
 --------------------------------------------------
-After Define
+After the failed Interpret_Locale
 --------------------------------------------------
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
-goal: ∃(f :: nat ⇒ nat). f (2 :: nat) = (4 :: nat)
+goal: (0 :: nat) < (1 :: nat)
 proof:
   - step id: 1
-    thought: Define doubling function
-    operation: Define
-    name: double
-    type: nat ⇒ nat
-    equations:
-      - double n = n + n
+    thought: this locale does not exist
+    operation: Interpret_Locale
+    locale: no_such_locale_here
+    qualifier: u
+    instantiations:
+      - p = 1
+    Error: Failed to interpret the locale: Undefined locale: "no_such_locale_here"
 Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
-  ∃(f :: nat ⇒ nat). f (2 :: nat) = (4 :: nat)
-Query double.simps (lemma): 1 results, warnings=[]
-  Found: double.simps
-Query double (constant): 1 results, warnings=[]
-  Found: double
+  (0 :: nat) < (1 :: nat)
 --------------------------------------------------
-After proof complete
+After recovering with Obvious
 --------------------------------------------------
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
-goal: ∃(f :: nat ⇒ nat). f (2 :: nat) = (4 :: nat)
+goal: (0 :: nat) < (1 :: nat)
 proof:
   - step id: 1
-    thought: Define doubling function
-    operation: Define
-    name: double
-    type: nat ⇒ nat
-    equations:
-      - double n = n + n
-  - step id: 2
-    thought: Use double as witness
-    operation: Witness
-    witness: double
-  - step id: 3
     operation: Obvious
 Unfinished nodes: 0

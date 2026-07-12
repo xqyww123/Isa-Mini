@@ -1,0 +1,118 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: nat) < (1 :: nat) + (2 :: nat)
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Interpret_Locale (2 leaf obligations)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: nat) < (1 :: nat) + (2 :: nat)
+proof:
+  - step id: 1
+    thought: instantiate the two-assumption locale at p=1, s=2
+    operation: Interpret_Locale
+    locale: il_derived
+    qualifier: d
+    instantiations:
+      - p = 1
+      - s = 2
+    proof:
+      - goal id: 1.1
+        goal: (0 :: nat) < (1 :: nat)
+        proof: empty
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1` to provide the proof.
+      - goal id: 1.2
+        goal: (0 :: nat) < (2 :: nat)
+        proof: empty
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  premises:
+    - d.il_base1_axioms: il_base1 (1 :: nat)
+    - d.il_base2_axioms: il_base2 (2 :: nat)
+    - d.il_bp: (0 :: nat) < (1 :: nat)
+    - d.il_bs: (0 :: nat) < (2 :: nat)
+    - d.il_derived_axioms: il_derived (1 :: nat) (2 :: nat)
+    - d.il_sum_pos: (0 :: nat) < (1 :: nat) + (2 :: nat)
+  goal: (0 :: nat) < (1 :: nat) + (2 :: nat)
+leaf subgoals opened: 2
+  - 1.1
+  - 1.2
+--------------------------------------------------
+After discharging both leaves (END registers the interpretation)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: nat) < (1 :: nat) + (2 :: nat)
+proof:
+  - step id: 1
+    thought: instantiate the two-assumption locale at p=1, s=2
+    operation: Interpret_Locale
+    locale: il_derived
+    qualifier: d
+    instantiations:
+      - p = 1
+      - s = 2
+    proof:
+      - goal id: 1.1
+        goal: (0 :: nat) < (1 :: nat)
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+      - goal id: 1.2
+        goal: (0 :: nat) < (2 :: nat)
+        proof:
+          - step id: 1.2.1
+            operation: Obvious
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  premises:
+    - d.il_base1_axioms: il_base1 (1 :: nat)
+    - d.il_base2_axioms: il_base2 (2 :: nat)
+    - d.il_bp: (0 :: nat) < (1 :: nat)
+    - d.il_bs: (0 :: nat) < (2 :: nat)
+    - d.il_derived_axioms: il_derived (1 :: nat) (2 :: nat)
+    - d.il_sum_pos: (0 :: nat) < (1 :: nat) + (2 :: nat)
+  goal: (0 :: nat) < (1 :: nat) + (2 :: nat)
+Imported facts (<=16 -> injected as premises)
+  facts_count reported by kernel: None
+  premises visible to successors (6):
+    - d.il_base1_axioms
+    - d.il_base2_axioms
+    - d.il_bp
+    - d.il_bs
+    - d.il_derived_axioms
+    - d.il_sum_pos
+--------------------------------------------------
+After closing the goal with d.il_sum_pos
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: nat) < (1 :: nat) + (2 :: nat)
+proof:
+  - step id: 1
+    thought: instantiate the two-assumption locale at p=1, s=2
+    operation: Interpret_Locale
+    locale: il_derived
+    qualifier: d
+    instantiations:
+      - p = 1
+      - s = 2
+    proof:
+      - goal id: 1.1
+        goal: (0 :: nat) < (1 :: nat)
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+      - goal id: 1.2
+        goal: (0 :: nat) < (2 :: nat)
+        proof:
+          - step id: 1.2.1
+            operation: Obvious
+  - step id: 2
+    thought: close the goal with the theorem the interpretation brought in
+    operation: Inference Rule
+    rule:
+      - d.il_sum_pos: (0 :: nat) < (1 :: nat) + (2 :: nat)
+Unfinished nodes: 0

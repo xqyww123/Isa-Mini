@@ -20,7 +20,6 @@ proof:
       - fib2 0 = (0::nat)
       - fib2 (Suc 0) = (1::nat)
       - fib2 (Suc (Suc n)) = fib2 (Suc n) + fib2 n
-    proof of termination: empty
 Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
 pending proof goal:
   ∃(f :: nat ⇒ nat). f (4 :: nat) = (3 :: nat)
@@ -39,7 +38,6 @@ proof:
       - fib2 0 = (0::nat)
       - fib2 (Suc 0) = (1::nat)
       - fib2 (Suc (Suc n)) = fib2 (Suc n) + fib2 n
-    proof of termination: empty
   - step id: 2
     thought: Use fib2 as witness
     operation: Witness
@@ -62,7 +60,6 @@ proof:
       - fib2 0 = (0::nat)
       - fib2 (Suc 0) = (1::nat)
       - fib2 (Suc (Suc n)) = fib2 (Suc n) + fib2 n
-    proof of termination: empty
   - step id: 2
     thought: Use fib2 as witness
     operation: Witness

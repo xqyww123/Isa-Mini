@@ -61,7 +61,6 @@ proof:
     thought: Case split: c > 0 or c <= 0
     operation: Branch
     Error: Fail to anlysis the proof goal by cases because: This Branch mentions the free variable "c", which is not declared in scope. This indicates a bug in your statement: check whether you mistyped the name.
-    cases: empty
 Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
   hfinf f ∨ (∃e>(0 :: real). hf e f)
