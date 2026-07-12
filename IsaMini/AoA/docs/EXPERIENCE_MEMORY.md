@@ -38,7 +38,7 @@ document the EXPERIENCE-specific field meanings:
 |---|---|
 | `kind` | `EXPERIENCE` |
 | `name` | agent-provided `name` (short, stable, descriptive id) |
-| `expr` | the `goal_patterns` joined (implementation delimiter, e.g. length-prefixed / JSON) |
+| `goal_patterns` | the goal patterns, a real `list[str]` field (ASCII form). `expr` is `None` for an experience -- the patterns used to be JSON-packed into it, which forced every reader to parse them and made `pretty_print` render raw JSON. Legacy records are unpacked by `_Semantic_DB._decode`. |
 | `interpretation` | `goal_description` (the "WHEN to use" NL; this is what is embedded) |
 | `theory_constituents` | the **minimal antichain** of constituent theories `[(long_name, 16B hash)]` — drives availability |
 | `experience` (new) | the how-to-prove payload (NL); **NOT embedded** |
@@ -321,7 +321,7 @@ invocation (planner + all workers). Flow:
 3. **If `name` in `created_memories`** (created earlier THIS run) → update: delete
    the recorded old uk from `semantics.lmdb` + vector store + every inverted-index
    bucket (skip if old uk == new key).
-4. Write `Record(EXPERIENCE, name, expr=join(patterns), interpretation=desc,
+4. Write `Record(EXPERIENCE, name, expr=None, interpretation=desc, goal_patterns=patterns,
    theory_constituents=constituents, experience=payload)`; add uk to the inverted
    index; embed the document text (§8.1); set `created_memories[name] = key`.
 5. **If `name` NOT in the map** → fresh create (never scans the DB, never touches a
