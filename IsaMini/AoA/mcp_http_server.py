@@ -2214,14 +2214,10 @@ def _render_dup_rejection(session: Session, name: str,
         lines.append(f"- experience `{rec.name}`:")
         if rec.interpretation:
             lines.append(f"    - When to use: {rec.interpretation}")
-        try:
-            pats = json.loads(rec.expr) if rec.expr else []
-        except (json.JSONDecodeError, TypeError):
-            pats = [rec.expr] if rec.expr else []
-        if pats:
-            # rec.expr stores patterns in ASCII (\<notin> ...); render Unicode.
+        if rec.goal_patterns:
+            # goal_patterns are stored in ASCII (\<notin> ...); render Unicode.
             lines.append("    - Goal patterns:")
-            lines += [f"        - {pretty_unicode(p)}" for p in pats]
+            lines += [f"        - {pretty_unicode(p)}" for p in rec.goal_patterns]
         if rec.experience:
             lines.append(f"    - Experience: {rec.experience}")
         lines.append("")
@@ -2272,12 +2268,12 @@ async def _write_memory_tool_logic(session: Session, args: dict) -> tuple[str, b
     # goal_patterns arrive as agent Unicode; model them as IsaTerm so the
     # Unicode<->ASCII boundary is explicit and cannot be skipped. `.ascii` (e.g.
     # `\<notin>`) is the canonical form fed to Isabelle — the ML constituents
-    # callback AND the stored rec.expr, from which the embedding document text is
-    # reconstructed: document_text_of applies pretty_unicode to rec.expr, so the
-    # embedded "semantic form" is derived reproducibly from the record itself (not
-    # from a separate transient unicode list). Passing raw Unicode to Isabelle's
-    # inner lexer silently fails to parse (∉ ℚ ¬ ...), dropping the pattern and
-    # orphaning the memory from the constituent index.
+    # callback AND the stored rec.goal_patterns, from which the embedding document text
+    # is reconstructed: document_text_of applies pretty_unicode to goal_patterns, so the
+    # embedded "semantic form" is derived reproducibly from the record itself (not from
+    # a separate transient unicode list). Passing raw Unicode to Isabelle's inner lexer
+    # silently fails to parse (∉ ℚ ¬ ...), dropping the pattern and orphaning the memory
+    # from the constituent index.
     pats = [IsaTerm.from_agent(p) for p in patterns]
     pats_ascii = [p.ascii for p in pats]
 
@@ -2314,8 +2310,11 @@ async def _write_memory_tool_logic(session: Session, args: dict) -> tuple[str, b
     # the dedup search below queries document_text_of(rec) too, so write, dedup, and
     # any later re-embed all derive their text from this single record -- byte-identical
     # by construction (the core invariant of EMBED_TEXT_LAYERING_REFACTOR).
-    rec = SemanticRecord(EntityKind.EXPERIENCE, name, json.dumps(pats_ascii), desc,
-                         None, constituents, experience)
+    # expr stays None: goal_patterns is a real list field now (it used to be JSON-packed
+    # into expr, which forced every reader to parse it and made pretty_print render raw
+    # JSON for an experience).
+    rec = SemanticRecord(EntityKind.EXPERIENCE, name, None, desc,
+                         None, constituents, experience, pats_ascii)
 
     # 3. adjacency handshake (§3.1). "adjacent" = a dedup rejection is pending and
     # only read-only / interaction tools have been called since it was raised.
