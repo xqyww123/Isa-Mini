@@ -17838,10 +17838,13 @@ async def _test_Interpret_SingleLeaf(root: Root, file: MyIO):
     file.write(f"leaf subgoals opened: {len(interp.sub_nodes)}\n")
     assert len(interp.sub_nodes) == 1, \
         f"expected exactly 1 unfolded leaf obligation, got {len(interp.sub_nodes)}"
-    # The block must exist even for a single leaf, and it must carry the END
-    # that fires the registration callback.
-    assert interp.has_ending_opr() and interp.ending_opr() is not None, \
-        "the single-leaf interpretation emitted no END -> nothing would register"
+    # The block must exist even for a single leaf, and the ASSEMBLED op list --
+    # the one that is replayed to build the real theorem -- must be bracketed by
+    # INTERPRET ... END. (Asserting `has_ending_opr()`/`ending_opr()` instead
+    # would be vacuous: both are hard-coded constants and could never fail.)
+    ops = [o.command for o in interp.assemble()]
+    assert ops[0] == "INTERPRET" and ops[-1] == "END", \
+        f"the interpretation's block is not bracketed by INTERPRET..END: {ops}"
 
     root.session.age += 1
     await cast(NonLeaf_Node, interp.sub_nodes[0]).append([Obvious.gen_single({"facts": []})])

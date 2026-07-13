@@ -4952,7 +4952,7 @@ fun OPEN_MODULE' ({auto_unfold_locale} : {auto_unfold_locale: bool})
          hands us Isar's EMPTY goal state `#(⋀dummy. PROP dummy ⟹ PROP dummy)`,
          which is already finished.  There is nothing to protect, and iso_atomize
          cannot rewrite that degenerate shape (it raises CTERM in rewr_conv).  So
-         gate the wrap on `no_goal'`, and gate the CB's matching unwrap on the
+         gate the wrap on `no_subgoal'`, and gate the CB's matching unwrap on the
          SAME flag -- the two must never disagree.  The block is still pushed and
          still closed by END: that END is what fires the CB, and the CB is what
          registers the interpretation.

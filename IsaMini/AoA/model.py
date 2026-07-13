@@ -6860,16 +6860,24 @@ class SubgoalMaker(GoalContainer, StdBlock):
                     for d in list(self.sub_nodes):
                         await d.aclose_all_subagents()
                 self.sub_nodes = []
-                ml_state = await s0.clone(None)
-                for i in range(goals_count):
-                    try:
-                        new_node = self._new_goal_node(i, ml_state)
-                    except ProofTreeTooDeep:
-                        the_session()._depth_limit_exceeded = True
-                        return FailureReason("Proof tree depth exceeds the limit")
-                    self.sub_nodes.append(new_node)
-                    if i < goals_count - 1:
-                        ml_state = await ml_state.sorry_next(None, None)
+                # Guard the clone: it allocates a fresh NAMED state in the Isabelle
+                # state table, freed only by `reset()`. With `goals_count == 0` the
+                # loop never attaches it to a GoalNode, so an unguarded clone leaks
+                # one state per refresh. Only `Interpret_Locale` reaches here with 0
+                # goals -- it opens its block unconditionally, because the block's
+                # END is what registers the interpretation; every other SubgoalMaker
+                # has at least one goal whenever it opens one.
+                if goals_count > 0:
+                    ml_state = await s0.clone(None)
+                    for i in range(goals_count):
+                        try:
+                            new_node = self._new_goal_node(i, ml_state)
+                        except ProofTreeTooDeep:
+                            the_session()._depth_limit_exceeded = True
+                            return FailureReason("Proof tree depth exceeds the limit")
+                        self.sub_nodes.append(new_node)
+                        if i < goals_count - 1:
+                            ml_state = await ml_state.sorry_next(None, None)
         else:
             self._opened_closing_block = False
             self._opened_count = 0
@@ -8406,7 +8414,16 @@ class Interpret_Locale(SubgoalMaker):
         # therefore already visible there. When there were too many to inject, say
         # how many became available instead: they are all registered in the context
         # and remain reachable by name and by semantic search.
-        if self._facts_count is not None:
+        #
+        # Gate on SUCCESS: only a node whose own operation ran has imported
+        # anything. `_facts_count` is written solely by the two paths that CLOSE
+        # the block (_refresh_footer / _skip_proof), so a node that later
+        # re-refreshes into FAILURE (amended to an unknown locale, or to a
+        # qualifier already taken) or gets CANCELLED keeps the count its previous
+        # successful run left behind -- and would advertise names that are not in
+        # scope, right underneath its own `Error:` line.
+        if (self._facts_count is not None
+                and self.status.status == EvaluationStatus.Status.SUCCESS):
             print_indent(indent, file)
             file.write(f"{self._facts_count} facts are available now. "
                        f"Use `{the_session().tool_name(TOOL_SEARCH)}` "
