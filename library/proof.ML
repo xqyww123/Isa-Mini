@@ -4361,6 +4361,38 @@ val HAMMER_CMD = orverride_parser >> (fn ovr =>
 
 (** END / NEXT **)
 
+(* A leading subgoal whose CONCLUSION is `True` is a real open subgoal that
+   `chk_block_*` rejects before the hammer sees it -- e.g. `CASES'` under
+   `high_auto_mode` simp-rewrites each case's goal in place, so a case the simplifier
+   discharges comes back as the residue `True`.  Close such goals here.
+
+   The guard is on the CONCLUSION (only it is rewritten: `⋀x. A x ⟹ True`), and it is
+   what makes `resolve_tac` safe -- unguarded it would instantiate a schematic goal
+   `?P := True`.  `maintain` afterwards, as `HAMMER_i` does: a frame closed here must
+   pop its MAGIC continuation or `gen_NXT'` raises BROKEN_INVARIANT. *)
+fun leading_concl_is_True st =
+  (case Thm.prems_of st
+     of [] => false
+      | goal :: _ =>
+          (case Logic.strip_assums_concl goal
+             of Const (\<^const_name>\<open>HOL.Trueprop\<close>, _)
+                  $ Const (\<^const_name>\<open>HOL.True\<close>, _) => true
+              | _ => false))
+
+fun close_leading_True ctxt st =
+  if leading_concl_is_True st
+  then (case Seq.pull (resolve_tac ctxt [Thms.TrueI] 1 st)
+          of SOME (st', _) => close_leading_True ctxt st'
+           | NONE => st)
+  else st
+
+fun close_trivial_True (stack as (ctxt, HHF (st, items) :: SK)) =
+      let val st' = close_leading_True ctxt st
+       in if Thm.eq_thm (st, st') then stack
+          else maintain (ctxt, HHF (st', items) :: SK)
+      end
+  | close_trivial_True stack = stack
+
 fun chk_block_end (stack as (ctxt, _)) =
       if Config.get ctxt strict_end andalso not (stack_top_finished stack)
       then raise OPR_FAIL (PROOF_FAIL,
@@ -4447,8 +4479,9 @@ fun gen_NXT' param (F : stack -> stack) on_end stack =
 
 (* END' and NXT' are now thin wrappers that parameterize the generalized
    helpers with the Sledgehammer-backed closing tactic. *)
-fun END' param SH_override ID (stack as (_, HHF _ :: _)) =
-  let val _ = chk_block_end stack
+fun END' param SH_override ID (stack0 as (_, HHF _ :: _)) =
+  let val stack = close_trivial_True stack0
+      val _ = chk_block_end stack
       val ctxt0 = #1 stack
       val end_all = not (Config.get ctxt0 strict_end) andalso
                     member (op =) ["COMPLETE_NEXT", "RELAXED"]
@@ -4462,8 +4495,11 @@ fun END' param SH_override ID (stack as (_, HHF _ :: _)) =
   in gen_END end_all F stack end
   | END' _ _ _ _ = raise BROKEN_INVARIANT
 
-fun NXT' param SH_override ID (origin as stack as (_, HHF _ :: _)) =
-  let val ctxt0 = #1 stack
+fun NXT' param SH_override ID (stack0 as (_, HHF _ :: _)) =
+  (* `origin` is aliased to the DISCHARGED stack, so RELAXED's fallback keeps both
+     the discharge and the MAGIC pop `maintain` may have done -- both sound steps. *)
+  let val origin as stack = close_trivial_True stack0
+      val ctxt0 = #1 stack
       val prover = default_prover NONE SH_override ctxt0
       val F = HAMMER_i prover (string_of_int ID)
       fun on_end () =
@@ -4512,8 +4548,9 @@ fun gen_END_or_NXT' param F stack =
     else report_goal (ctxt, SK'1)
   end
 
-fun END_or_NXT' param SH_override ID stack =
-  let val ID_BASE = string_of_int ID
+fun END_or_NXT' param SH_override ID stack0 =
+  let val stack = close_trivial_True stack0
+      val ID_BASE = string_of_int ID
    in chk_block_next_or_end stack
     ; gen_END_or_NXT' param (HAMMER_i (default_prover NONE SH_override (#1 stack)) ID_BASE) stack
   end

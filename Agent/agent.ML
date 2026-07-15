@@ -635,20 +635,33 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (allow_fallba
         val (prem_names_for_intro, matched_prem_terms) =
           let
             val counter_start = Synchronized.value prem_counter
-            val (names_with_flags, final_counter) =
-              fold_map (fn prem_term => fn counter_val =>
-                case find_first (fn {internal_term, ...} => internal_term aconv prem_term)
-                                provided_prem_names of
-                  SOME {external_name, ...} =>
-                    (* Matched: strip any "(k)" suffix to recover the base. *)
-                    let val base = Minilang_Aux.base_name external_name
-                     in ((SOME base, SOME prem_term), counter_val)
-                    end
-                | NONE =>
-                    let val name = "premise" ^ string_of_int counter_val
-                     in ((SOME name, NONE), counter_val + 1)
-                    end
-              ) prems counter_start
+            (* Bindings are per ATOM: a conj premise destructured by
+               INTRO_split_prem_conj gives base(1), base(2), ..., all carrying the
+               origin premise's term.  Collapse each run of one base back into the
+               single goal premise it came from. *)
+            val provided_groups =
+              provided_prem_names
+              |> map (fn {external_name, internal_term, ...} => (external_name, internal_term))
+              |> Minilang_Aux.unflatten_facts
+              |> map (fn (base, atoms) => (base, snd (hd atoms)))
+            (* The match CONSUMES the binding: the term is not a key, since two goal
+               premises can be aconv-identical (`⟦A ∧ B; A ∧ B⟧ ⟹ …`).  A
+               non-consuming `find_first` gives both the same name; INTRO' then merges
+               them into one `note_thmss` group (`bindings_grouped`, library/proof.ML),
+               breaking the one-group-per-premise invariant `prem_bindings_final`
+               relies on -- UnequalLengths. *)
+            val (names_with_flags, (final_counter, _)) =
+              fold_map (fn prem_term => fn (counter_val, avail) =>
+                case find_index (fn (_, t) => t aconv prem_term) avail
+                  of ~1 =>
+                       let val name = "premise" ^ string_of_int counter_val
+                        in ((SOME name, NONE), (counter_val + 1, avail))
+                       end
+                   | i =>
+                       let val (base, _) = nth avail i
+                        in ((SOME base, SOME prem_term), (counter_val, nth_drop i avail))
+                       end
+              ) prems (counter_start, provided_groups)
             val _ = Synchronized.change prem_counter (K final_counter)
             val matched = map_filter snd names_with_flags
            in (map fst names_with_flags, matched)

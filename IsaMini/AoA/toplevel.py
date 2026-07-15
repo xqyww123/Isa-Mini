@@ -51,9 +51,15 @@ async def _query_by_name_rpc(arg: tuple[int, str], connection: Connection) -> tu
     return (text, is_error)
 
 async def _replay_cached_proof(connection: Connection, packed_ops: list[Any],
-                               cache_source: str = "") -> tuple[bool, str | None]:
-    """Replay a cached proof by feeding operations through proof_opr callbacks.
-    Returns (success, final_state_name)."""
+                               cache_source: str = "") -> tuple[bool, str | None, str | None]:
+    """Replay a proof by feeding its operations through proof_opr callbacks.
+
+    Used for BOTH a cache hit and a freshly found proof: it is the only path whose
+    resulting state the Isabelle kernel has actually derived from the proof, so it
+    is what the returned theorem must be concluded from.
+
+    Returns (success, final_state_name, error).
+    """
     await connection.callback("IsaMini.set_replay_mode", True)
     try:
         state_name = "$init"
@@ -62,10 +68,10 @@ async def _replay_cached_proof(connection: Connection, packed_ops: list[Any],
             await connection.callback("IsaMini.proof_opr",
                 (state_name, dest_name, packed_op))
             state_name = dest_name
-        return (True, state_name)
+        return (True, state_name, None)
     except Exception as e:
         connection.server.logger.info(f"[AoA-cache] Proof replay failed ({cache_source}): {e}")
-        return (False, None)
+        return (False, None, f"{type(e).__name__}: {e}")
     finally:
         await connection.callback("IsaMini.set_replay_mode", False)
 
@@ -245,7 +251,7 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
 
         if cached_ops is not None:
             cache_source = "SQLite" if not cached_xcmd_json or pc.lookup(goal_hash) is not None else "Phi_Cache_DB"
-            ok, final_state = await _replay_cached_proof(connection, cached_ops, cache_source)
+            ok, final_state, _ = await _replay_cached_proof(connection, cached_ops, cache_source)
             logger.info("[AoA-cache] replay from %s: %s (%d ops)",
                         cache_source, "OK" if ok else "FAILED", len(cached_ops))
             if ok:
@@ -348,9 +354,28 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
 
     if root.is_proof_finished():
         proof_json = json.dumps(assembled)
-        # Store in Python SQLite cache (gated: the learning run sets
-        # store_cache=false so its reconstructed proofs never pollute the shared
-        # production cache).
+
+        # ML concludes the theorem from the state named here (`Minilang.conclude`,
+        # agent_server.ML), so it must be one the kernel derived from the agent's
+        # proof. `root.final_ml_state` is not: its only writer runs once at
+        # `Session.initialize`, while the goal is still open, and `_skip_proof` ->
+        # SORRY_END_ALL closes it with a `Skip_Proof.cheat_tac` ORACLE, which nothing
+        # recomputes. Return the replay of the assembled, sorry-free op list instead.
+        ok, replayed_state, replay_err = await _replay_cached_proof(
+            connection, assembled, "fresh proof")
+        if not ok:
+            # Never fall back to `final_ml_state` -- that is the hole this closes.
+            raise InternalError(
+                f"The proof tree reports the proof is finished, but replaying its "
+                f"own {len(assembled)} assembled operations from $init failed. "
+                f"Refusing to conclude the theorem from `final_ml_state`, which is "
+                f"closed by a skip_proof oracle.\n"
+                f"goal_hash={goal_hash}\nreplay failed with: {replay_err}")
+        logger.info("[AoA] replayed the fresh proof from $init: OK (%d ops) -> %s",
+                    len(assembled), replayed_state)
+
+        # Store only AFTER the replay succeeded: a proof that does not replay must
+        # never enter the cache.
         if store_cache:
             get_proof_cache().store(goal_hash, assembled)
             logger.info("[AoA-cache] L1 SQLite STORE goal_hash=%s (%d ops) db=%s",
@@ -366,7 +391,7 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
                     f.write(proof_json)
             except Exception as e:
                 _logger.warning(f"Failed to write proof.json: {e}")
-        return (assembled, root.final_ml_state.name, cost, None, None, proof_json)
+        return (assembled, replayed_state, cost, None, None, proof_json)
     else:
         reason = quit_obj.reason if quit_obj is not None else "resource_exhausted"
         detail = quit_obj.detail if quit_obj is not None else None
