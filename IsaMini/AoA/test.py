@@ -258,16 +258,23 @@ async def _isolated_semantic_db(session):
     from Isabelle_Semantic_Embedding.semantic_embedding import _lmdb_envs, _lmdb_lock
 
     conn = session.retrieval_state().connection
-    stores = getattr(conn, "_semantic_vector_stores", None)
-    saved_stores = dict(stores) if stores else None
+    had_stores = hasattr(conn, "_semantic_vector_stores")
+    saved_stores = dict(conn._semantic_vector_stores) if had_stores else None
     saved_env = os.environ.get("SEMANTIC_DB_DIR")
     tmp = tempfile.mkdtemp(prefix="aoa_test_semdb_")
 
     def _reset() -> None:
+        # Re-fetch the live dict each call: the body may be what CREATES it (the
+        # first store construction attaches it to the connection), so a snapshot
+        # taken at entry -- possibly absent, hence None -- must not gate cleanup.
+        # Missing that was the leak: a throwaway tmp-path store built during the
+        # body survived teardown and a later non-isolated test reused it, opening
+        # an lmdb under the by-then-deleted tmp dir.
         _Semantic_DB._close()
         _Experience_Index._close()
-        if stores is not None:
-            stores.clear()          # each store's path is fixed at construction
+        live = getattr(conn, "_semantic_vector_stores", None)
+        if live is not None:
+            live.clear()            # each store's path is fixed at construction
 
     os.environ["SEMANTIC_DB_DIR"] = tmp
     _reset()
@@ -282,8 +289,12 @@ async def _isolated_semantic_db(session):
             os.environ.pop("SEMANTIC_DB_DIR", None)
         else:
             os.environ["SEMANTIC_DB_DIR"] = saved_env
-        if stores is not None and saved_stores:
-            stores.update(saved_stores)
+        # Restore the connection's store cache to its exact pre-fixture state:
+        # refill the original dict, or drop the one the body created.
+        if had_stores:
+            conn._semantic_vector_stores.update(saved_stores)
+        elif hasattr(conn, "_semantic_vector_stores"):
+            delattr(conn, "_semantic_vector_stores")
         shutil.rmtree(tmp, ignore_errors=True)
 
 
