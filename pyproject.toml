@@ -33,9 +33,6 @@ dependencies = [
     "msgpack>=1.1.2",
     "isabelle-rpc>=0.3.0",
     "Isabelle_Semantic_Embedding>=0.1.0",
-    # REPL.py and AoA/test.py import it at module level, and toplevel.py reaches
-    # test.py for TESTS. No floor: no release is known to be too old.
-    "IsaREPL",
     "rich",  # main.py, module level
     "PyYAML>=6.0.3",
     "platformdirs>=4.9.4",
@@ -53,6 +50,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The Minilang REPL client (`IsaMini.REPL`, the `IsaMini` CLI) and the AoA test
+# driver wrap IsaREPL. AoA's own runtime talks to Isabelle via Isabelle_RPC_Host
+# and never touches IsaREPL, so it is optional: `pip install IsaMini` gets AoA,
+# `pip install IsaMini[repl]` additionally enables the CLI and test driver.
+# `IsaMini/__init__.py` imports `.REPL` lazily so its absence is not an eager
+# import error. No floor: no release is known to be too old.
+repl = ["IsaREPL"]
 # One extra per driver, each naming exactly what that driver's module-level imports
 # need. `toplevel._try_import_driver` swallows the ImportError of a driver whose extra
 # is absent, so an under-declared extra does not fail loudly -- it makes the driver
@@ -72,6 +76,9 @@ api = ["IsaMini[openai-api,anthropic]"]
 # `web`: driver_claude_code imports web_terminal from inside a function, so aiohttp is
 # genuinely optional. (There is no `mcp` extra: see mcp/uvicorn in dependencies.)
 web = ["aiohttp>=3.13.5"]
+# `repl` is intentionally NOT in `all`: keeping IsaREPL optional (so `pip install
+# IsaMini` gives the AoA agent without it) is the whole point -- do not add it back.
+# Users who want the Minilang REPL client / CLI ask for `IsaMini[repl]` explicitly.
 all = ["IsaMini[openai,api,web]"]
 
 [project.urls]
