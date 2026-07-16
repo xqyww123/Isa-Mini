@@ -18223,7 +18223,7 @@ async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | No
     )
     _cfg = None  # unit
     async with Client(repl_addr, 'HOL', timeout=1200) as repl:
-        await repl.load_theory(['Minilang_Agent.Minilang_Agent'])
+        await repl.load_theory(['Minilang_AoA_REPL.Minilang_AoA_App'])
         await repl.record_state("init")
         _test_filter = os.environ.get("TEST_FILTER", None)
         _test_exclude = os.environ.get("TEST_EXCLUDE", None)

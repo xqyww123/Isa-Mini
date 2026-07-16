@@ -20,6 +20,11 @@ type agent_cost = {input: int, cache_write: int, cache_read: int, output: int,
                    quota_wait_time: real}
 val zero_cost: agent_cost
 
+(* Raised by AoA_RPC to signal the agent gave up (surrender/refute/resource
+   exhaustion). Exposed so the REPL-app wrapper in the Minilang_AoA_REPL session
+   can catch it after the app moved out of this structure. *)
+exception Agent_Give_Up of string * string * agent_cost
+
 (* The extra `string * raw_packer` group is the Task: a task-kind tag plus a
    packer that writes the task payload (empty for "usual"; the original Isar proof
    for "learning"). Sent to Python as the 11th arg-schema element, a 2-array
@@ -289,7 +294,7 @@ fun intervals_to_string ivs = "(" :: implode_with "," (map interval_to_string iv
 fun FactRef_to_string (Named ((name, _), NONE)) = name
   | FactRef_to_string (Named ((name, _), SOME [])) = name
   | FactRef_to_string (Named ((name, _), SOME ivs)) = String.concat (name :: intervals_to_string ivs)
-  | FactRef_to_string (Fact s) = String.concat ["\<open>", REPL.trim_makrup s, "\<close>"]
+  | FactRef_to_string (Fact s) = String.concat ["\<open>", RPC_Pretty.trim_markup s, "\<close>"]
 val pack_FactRef = packString o FactRef_to_string
 end
 
@@ -454,22 +459,22 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (task_kind, task_payload_packer) (c
               val _ = messages := []
            in Exn.release result
           end handle Minilang.OPR_FAIL (Minilang.PROOF_FAIL, msg) =>
-              error (REPL.trim_makrup msg)
+              error (RPC_Pretty.trim_markup msg)
             | Minilang.OPR_FAIL (Minilang.INVALID_OPR, msg) =>
-              error (REPL.trim_makrup msg)
+              error (RPC_Pretty.trim_markup msg)
             | Minilang.OPR_FAIL (Minilang.TERMLANG, msg) =>
-              error (String.concat ["Syntax Error in Term Language.\n", REPL.trim_makrup msg])
+              error (String.concat ["Syntax Error in Term Language.\n", RPC_Pretty.trim_markup msg])
             | Minilang.OPR_FAIL (Minilang.OTHER, msg) =>
               (* verbatim message: used e.g. by the Agent Hint Registry reject —
                  the term parsed fine, so no "Syntax Error" framing. *)
-              error (REPL.trim_makrup msg)
+              error (RPC_Pretty.trim_markup msg)
             | MiniLang_Agent.FACT_IN_TIME_FAIL prop =>
               error (String.concat [
                 "The following indicated fact is non-trivial, you must prove it manually:\n",
-                REPL.trim_makrup (MiniLang_Agent.string_of_term (Minilang.context_of s0) prop)])
+                RPC_Pretty.trim_markup (MiniLang_Agent.string_of_term (Minilang.context_of s0) prop)])
             | Phi_Sledgehammer_Solver.Auto_Fail _ =>
               error "Proof operation failed."
-            | ERROR msg => error (REPL.trim_makrup msg)),
+            | ERROR msg => error (RPC_Pretty.trim_markup msg)),
         timeout = NONE
       }
 
@@ -681,7 +686,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (task_kind, task_payload_packer) (c
           let val s0 = get_state state_id
            in MiniLang_Agent.compute_bindings s0 var_names fact_names
           end handle Minilang.OPR_FAIL (Minilang.INVALID_OPR, msg) =>
-              error (String.concat ["Bad operation: ", REPL.trim_makrup msg])),
+              error (String.concat ["Bad operation: ", RPC_Pretty.trim_markup msg])),
         timeout = NONE
       }
 
@@ -1017,10 +1022,10 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (task_kind, task_payload_packer) (c
                     of SOME _ => NONE
                      | NONE => SOME "Proof failed"
                end
-               catch ERROR msg => SOME (REPL.trim_makrup msg)
-                   | Minilang.OPR_FAIL (_, msg) => SOME (REPL.trim_makrup msg)
+               catch ERROR msg => SOME (RPC_Pretty.trim_markup msg)
+                   | Minilang.OPR_FAIL (_, msg) => SOME (RPC_Pretty.trim_markup msg)
                    | Timeout.TIMEOUT _ => SOME "Timed out"
-                   | exn => SOME (REPL.trim_makrup (Runtime.exn_message exn))\<close>
+                   | exn => SOME (RPC_Pretty.trim_markup (Runtime.exn_message exn))\<close>
             ) stmts
           end),
         timeout = NONE
@@ -1305,8 +1310,8 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (task_kind, task_payload_packer) (c
         function = (fn (state_id, round) =>
           let val s0 = get_state state_id
           in \<^try>\<open>(MiniLang_Agent.apply_post_insts [round] s0; NONE)
-               catch ERROR msg => SOME (REPL.trim_makrup msg)
-                   | exn => SOME (REPL.trim_makrup (Runtime.exn_message exn))\<close>
+               catch ERROR msg => SOME (RPC_Pretty.trim_markup msg)
+                   | exn => SOME (RPC_Pretty.trim_markup (Runtime.exn_message exn))\<close>
           end),
         timeout = NONE
       }
@@ -1467,117 +1472,6 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (task_kind, task_payload_packer) (c
 val usual_task : string * MessagePackBinIO.Pack.raw_packer =
       ("usual", MessagePackBinIO.Pack.packString "")
 
-
-(*** REPL App ***)
-
-local open MessagePackBinIO.Unpack
-val unpackBudget = unpackTuple3 (unpackInt, unpackInt, unpackInt)
-        #> apfst (fn (ts, mtc, mr) => ({
-              timeout_seconds = ts,
-              max_tool_calls = mtc,
-              max_retries = mr
-           } : MiniLang_Agent.budget))
-val unpackCfg = unpackOption unpackBool
-        #> apfst (fn aie => {auto_interpret_for_embedding = aie} : MiniLang_Agent.cfg)
- in
-
-fun AoA_REPL_App (cin, cout, toplevel) =
-  let open MessagePackBinIO.Unpack MessagePackBinIO.Pack
-      fun read packer = let val (ret, cin') = doUnpack packer (!cin)
-                         in cin := cin'
-                          ; ret
-                        end
-
-      val (invocation_id, driver, cfg, log_dir_override,
-           retrieval_forking_override, interactive_retrieval_override) =
-            read (unpackTuple6 (unpackString, unpackString,
-                    unpackPair (unpackCfg, unpackBudget), unpackOption unpackString,
-                    unpackOption unpackString, unpackOption unpackString))
-      val transition = Toplevel.empty
-            |> Toplevel.proof (
-                  Proof.refine_primitive (fn ctxt => fn sequent =>
-                    let val ctxt = case log_dir_override
-                                    of SOME dir => Config.put AoA_log_dir dir ctxt
-                                     | NONE => ctxt
-                        val ctxt = case retrieval_forking_override
-                                    of SOME v => Config.put AoA_retrieval_forking v ctxt
-                                     | NONE => ctxt
-                        val ctxt = case interactive_retrieval_override
-                                    of SOME v => Config.put AoA_interactive_retrieval v ctxt
-                                     | NONE => ctxt
-                        val start_time = Timing.start ()
-                        fun cost_tuple ({input, cache_write, cache_read, output,
-                                         cost, tool_calls, isabelle_time, model_time,
-                                         quota_wait_time} : agent_cost) =
-                            (input, cache_write, cache_read, output, cost, tool_calls, isabelle_time, model_time, quota_wait_time)
-                        val pack_result =
-                              packTuple5 (packString, packInt, packInt,
-                                          packOption packString,
-                                          packTuple9 (packInt, packInt, packInt, packInt,
-                                                      packReal, packInt, packReal, packReal, packReal))
-                     in \<^try>\<open>
-                        let val (_, seq, aoa_cost) = AoA_RPC (driver, cfg, invocation_id) usual_task (ctxt, sequent)
-                            val time = Timing.result start_time
-                         in REPL_Server.output cout pack_result
-                                 ( "success",
-                                   Time.toMilliseconds (#elapsed time),
-                                   Time.toMilliseconds (#cpu time),
-                                   NONE,
-                                   cost_tuple aoa_cost
-                                 )
-                          ; BinIO.StreamIO.flushOut cout
-                          ; seq
-                        end
-                        catch E as Minilang.OPR_FAIL (typ, msg) =>
-                            let val typs = case typ of Minilang.INVALID_OPR => "INVALID_OPR : "
-                                                     | Minilang.PROOF_FAIL  => "PROOF FAIL : "
-                                                     | _ => ""
-                             in REPL_Server.output_err cout (typs ^ msg)
-                              ; BinIO.StreamIO.flushOut cout
-                              ; raise E
-                            end
-                          | Remote_Procedure_Calling.Remote_Calling_Failure {message, ...} =>
-                            let val time = Timing.result start_time
-                             in REPL_Server.output cout pack_result
-                                   ( "remote_error",
-                                     Time.toMilliseconds (#elapsed time),
-                                     Time.toMilliseconds (#cpu time),
-                                     SOME message,
-                                     cost_tuple zero_cost
-                                   )
-                              ; BinIO.StreamIO.flushOut cout
-                              ; sequent
-                            end
-                          | Agent_Give_Up (reason, detail, aoa_cost) =>
-                            let val time = Timing.result start_time
-                                val det = if detail = "" then NONE
-                                          else SOME detail
-                             in REPL_Server.output cout pack_result
-                                   ( reason,
-                                     Time.toMilliseconds (#elapsed time),
-                                     Time.toMilliseconds (#cpu time),
-                                     det,
-                                     cost_tuple aoa_cost
-                                   )
-                              ; BinIO.StreamIO.flushOut cout
-                              ; sequent
-                            end
-                          | ERROR msg =>
-                            ( REPL_Server.output_err cout msg
-                            ; BinIO.StreamIO.flushOut cout
-                            ; raise (ERROR msg) )
-                          | E => (
-                                REPL_Server.output_err cout (Runtime.exn_message E)
-                              ; BinIO.StreamIO.flushOut cout
-                              ; raise E )\<close>
-                    end)
-                  )
-      val (_, toplevel') = Toplevel.command_errors false transition toplevel
-   in the_default toplevel toplevel'
-  end
-end
-
-val _ = REPL_Server.register_app "Minilang.AoA" AoA_REPL_App
 
 (*** The tactic ***)
 

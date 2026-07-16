@@ -1,5 +1,5 @@
 theory Minilang_Agent
-  imports Minilang.Minilang Isa_REPL.Isa_REPL Complex_Main
+  imports Minilang.Minilang Complex_Main
           Isabelle_RPC.Remote_Procedure_Calling Semantic_Embedding.Semantic_Embedding
 begin
 (* declare [[ML_debugger]] *)
@@ -85,7 +85,7 @@ fun print_const_location thy const_name =
     in
       "Constant " ^ quote const_name ^
       " defined in theory " ^ thy_name ^
-      REPL.trim_makrup (Position.here_strs pos |> fst)  (* Handles both file and ID positions *)
+      RPC_Pretty.trim_markup (Position.here_strs pos |> fst)  (* Handles both file and ID positions *)
     end
 ›
 

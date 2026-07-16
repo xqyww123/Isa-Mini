@@ -316,11 +316,11 @@ fun string_of_type_full_sort ctxt =
               |> Config.put Printer.show_structs false
               |> Config.put Printer.show_question_marks true
      in Syntax.string_of_typ ctxt'
-     #> REPL.trim_makrup
+     #> RPC_Pretty.trim_markup
     end
 
 fun string_of_sort ctxt =
-    Syntax.string_of_sort ctxt #> REPL.trim_makrup
+    Syntax.string_of_sort ctxt #> RPC_Pretty.trim_markup
 
 fun string_of_thm ctxt th = string_of_term ctxt (Thm.prop_of th)
 
@@ -1669,7 +1669,7 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
             val facts_before = Minilang.get_local_facts s
             val s' = Minilang.SPECIALIZE'' (SOME name) rule_thms (insts', []) discharge_thms s
                      handle ERROR msg => raise Minilang.OPR_FAIL (Minilang.INVALID_OPR,
-                               REPL.trim_makrup msg)
+                               RPC_Pretty.trim_markup msg)
             val facts_after = Minilang.get_local_facts s'
             val ctxt' = Minilang.context_of s'
             (* Compute newly introduced facts as (fact_name, pretty_expression) pairs *)

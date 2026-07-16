@@ -1,0 +1,5 @@
+session Minilang_REPL = Minilang +
+  sessions
+    Isa_REPL
+  theories
+    Minilang_Top
