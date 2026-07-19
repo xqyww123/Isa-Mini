@@ -6,10 +6,26 @@ import json
 import logging as _logging
 _logger = _logging.getLogger(__name__)
 
+# Why a driver failed to load, so `Unknown driver: X` can say so instead of leaving
+# the user to guess.  Populated by _try_import_driver.
+_driver_import_errors: dict[str, str] = {}
+
 def _try_import_driver(name: str):
+    """Import a driver module, tolerating ONLY a missing optional third-party dep.
+
+    An ImportError raised INSIDE the driver -- a typo'd import, a renamed sibling --
+    is a bug in our code, not an absent extra.  Swallowing it made the driver vanish
+    from Session.Driver with an INFO line, and the user met it much later as
+    `Unknown driver: X` with no mention of an import.  Same rule, same reason, as
+    IsaMini/__init__.py's IsaREPL guard: decide on the ROOT of the missing module.
+    """
     try:
         __import__(f"{__package__}.{name}")
     except ImportError as e:
+        root = (e.name or "").split(".")[0]
+        if root == "" or root == __package__.split(".")[0]:
+            raise
+        _driver_import_errors[name] = e.name or str(e)
         _logger.info(f"Driver {name} not loaded (missing dependency: {e.name})")
 
 from . import driver_claude_code
@@ -34,7 +50,14 @@ import time
 
 class UnknownDriver(AoA_Error):
     def __init__(self, driver: str):
-        super().__init__(f"Unknown driver: {driver}")
+        # Name the reason when we have one.  A driver absent because its optional
+        # dependency is missing is indistinguishable, at this point, from a driver
+        # that never existed -- and that ambiguity is the whole complaint.
+        msg = f"Unknown driver: {driver}"
+        if _driver_import_errors:
+            unloaded = ", ".join(f"{d} (needs {m})" for d, m in sorted(_driver_import_errors.items()))
+            msg += f". Drivers not loaded for want of a dependency: {unloaded}"
+        super().__init__(msg)
 
 _test_driver = object()
 Session.Driver["test"] = _test_driver  # type: ignore[assignment]
