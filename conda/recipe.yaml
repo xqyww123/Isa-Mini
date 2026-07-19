@@ -243,6 +243,19 @@ requirements:
     - pyyaml >=6.0.3
     - platformdirs >=4.9.4
     - jsoncomment >=0.4.2
+    # A TRANSITIVE dependency, pinned here on purpose.  jsoncomment imports json-spec at
+    # module level, and conda-forge has no usable version of it: 0.10.1 does
+    # `from collections import Mapping`, removed in Python 3.10, and 0.11.0 pins
+    # importlib-metadata <6, which no modern environment satisfies -- so the solver takes
+    # 0.11.0 off the table and falls back to the broken 0.10.1.  That resolves, installs
+    # green, and dies at `import jsoncomment`.  Measured: Isa-Mini release-conda run
+    # 29677008949, python 3.14.
+    #
+    # conda.qiyuan.me carries a repackage of upstream's fixed 0.12.0.  Leaving this
+    # implicit would leave the choice to the solver, and the broken version is the one it
+    # can reach; the floor turns a silent wrong pick into a loud solve failure.
+    # Drop it once conda-forge ships >= 0.12.
+    - json-spec >=0.12
     - claude-agent-sdk >=0.1.72
     - zstandard >=0.23.0
     - mcp >=1.26.0
