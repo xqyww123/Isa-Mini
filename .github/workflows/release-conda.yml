@@ -1,0 +1,322 @@
+# Build and publish isabelle-minilang to https://conda.qiyuan.me.
+#
+# One noarch: python artifact carrying both halves -- the Isabelle sessions and the Python
+# package IsaMini, including IsaMini.AoA.  There is no compiled artifact anywhere in this
+# repo, so unlike isabelle-semantic-embedding this needs no per-platform matrix and no
+# native runners: one build, one package, five platforms.
+#
+# This is the LAST package in the dependency order (isabelle -> isabelle-performant-ml ->
+# auto-sledgehammer -> isabelle-rpc -> isabelle-semantic-embedding -> isabelle-minilang),
+# because `verify` installs from the LIVE channel and every one of those must already be
+# published.
+name: release-conda
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and verify only -- do NOT publish to the channel"
+        type: boolean
+        default: true
+      build_number:
+        description: "BUMP if republishing the same VERSION with changed content"
+        type: string
+        default: "0"
+  push:
+    tags: ['v*']
+
+# Two releases of THIS package must never overlap.  (Overlap with a DIFFERENT package's
+# release is handled inside publish-conda.yml, which can only ever add to the channel.)
+concurrency:
+  group: release-conda
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: "Build isabelle-minilang (noarch)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Step outputs do NOT cross jobs -- `steps.ver.outputs.version` is empty anywhere but
+    # here, so the later jobs read it through this block.
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: ver
+        run: |
+          set -euo pipefail
+          v=$(tr -d '[:space:]' < VERSION)
+          [ -n "$v" ] || { echo "::error::VERSION is empty"; exit 1; }
+          case "$v" in *-*) echo "::error::conda versions cannot contain '-': $v"; exit 1 ;; esac
+          # pyproject reads this same file (tool.setuptools.dynamic), so the wheel and the
+          # conda package cannot disagree by construction.  Assert the tag agrees too.
+          if [ "${GITHUB_REF_TYPE:-}" = tag ]; then
+            [ "${GITHUB_REF_NAME#v}" = "$v" ] \
+              || { echo "::error::tag ${GITHUB_REF_NAME} disagrees with VERSION ($v)"; exit 1; }
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "version $v"
+
+      - name: Install rattler-build
+        run: |
+          set -euo pipefail
+          curl -fsSL -o rattler-build \
+            https://github.com/prefix-dev/rattler-build/releases/download/v0.69.1/rattler-build-x86_64-unknown-linux-musl
+          chmod +x rattler-build
+          ./rattler-build --version
+
+      - name: Build
+        env:
+          ISA_COMPONENT_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          # --build-num, NOT --build-number: rattler-build exits 2 on the long form.
+          # conda.qiyuan.me as well as conda-forge: isabelle-rpc, isabelle-semantic-embedding
+          # and auto-sledgehammer live there, not on conda-forge.
+          ./rattler-build build \
+            --recipe conda/recipe.yaml \
+            --output-dir out \
+            --build-num "${{ inputs.build_number || '0' }}" \
+            -c https://conda.qiyuan.me -c conda-forge
+          find out -name '*.conda' -print
+
+      - name: "Sanity: the payload contains both halves and NOTHING else"
+        run: |
+          set -euo pipefail
+          pkg=$(find out -name 'isabelle-minilang-*.conda' | head -1)
+          [ -n "$pkg" ] || { echo "::error::no package produced"; exit 1; }
+          python3 -m pip install --quiet zstandard
+          work=$(mktemp -d)
+          # A .conda is a zip of two zstd tarballs; listing the zip shows only
+          # ['metadata.json','pkg-*.tar.zst','info-*.tar.zst'] and proves nothing.
+          python3 -c "import sys,zipfile,tarfile,io,zstandard; z=zipfile.ZipFile(sys.argv[1]); b=next(n for n in z.namelist() if n.startswith('pkg-') and n.endswith('.tar.zst')); r=zstandard.ZstdDecompressor().stream_reader(io.BytesIO(z.read(b))); tarfile.open(fileobj=io.BytesIO(r.read())).extractall(sys.argv[2])" "$pkg" "$work"
+
+          comp="$work/share/isabelle-minilang"
+          for f in ROOT Minilang.thy library/proof.ML Agent/Minilang_Agent.thy \
+                   Agent/agent.ML Agent/agent_server.ML \
+                   Agent/Injector/Minilang_Agent_Injector.thy; do
+            [ -f "$comp/$f" ] || { echo "::error::missing $f"; find "$comp" | head -40; exit 1; }
+          done
+
+          # The assertions that matter most here are NEGATIVE.  This repo's Agent/ holds a
+          # gitignored secret.sh, an Isa_REPL session that must not be exposed through the
+          # component's ROOT, 33 files of dead IsaMini_Agent_old/, logs and scratch
+          # theories.  A whole-tree copy would publish all of it to a public channel.
+          for n in Agent/secret.sh Agent/AoA_REPL REPL Agent/logs \
+                   Agent/IsaMini_Agent_old Agent/Test Test doc; do
+            [ ! -e "$comp/$n" ] || { echo "::error::$n leaked into the package"; exit 1; }
+          done
+          if find "$comp" \( -name '*.proof-cache*' -o -name '*~' -o -name '*.old.ML' \) | grep -q .; then
+            echo "::error::caches, backups or dead .old.ML files leaked"
+            find "$comp" \( -name '*.proof-cache*' -o -name '*~' -o -name '*.old.ML' \) ; exit 1
+          fi
+          # There must be exactly ONE ROOT in the component -- `isabelle components -u`
+          # exposes it wholesale, and a second one would drag an Isa_REPL session into
+          # every `isabelle build` in the user's environment.
+          n=$(find "$comp" -name ROOT | wc -l)
+          [ "$n" -eq 1 ] || { echo "::error::expected exactly 1 ROOT, found $n"; find "$comp" -name ROOT; exit 1; }
+
+          # The Python half.
+          find "$work" -iname 'isamini-*.dist-info' -type d | grep -q . \
+            || { echo "::error::no dist-info -- pip would not see this package"; exit 1; }
+          # package-data: mcp_http_server opens these at import time.
+          find "$work" -path '*/IsaMini/AoA/tools/*.jsonc' | grep -q . \
+            || { echo "::error::IsaMini/AoA/tools/*.jsonc did not ship"; exit 1; }
+          find "$work" -path '*/IsaMini/AoA/assets/*.md' | grep -q . \
+            || { echo "::error::IsaMini/AoA/assets/*.md did not ship"; exit 1; }
+          # setup.py drops AoA's pytest modules; test.py is a real module and must stay.
+          if find "$work" -path '*/IsaMini/AoA/test_*.py' | grep -q .; then
+            echo "::error::AoA pytest modules leaked into the wheel"; exit 1
+          fi
+          find "$work" -path '*/IsaMini/AoA/test.py' | grep -q . \
+            || { echo "::error::IsaMini/AoA/test.py is missing -- toplevel imports TESTS from it"; exit 1; }
+
+          # The hooks live in python-scripts/ under noarch: python -- rattler-build rewrites
+          # both bin/ and Scripts/ there, and conda maps it back by the RUNNING platform.
+          for h in .isabelle-minilang-post-link .isabelle-minilang-pre-unlink; do
+            [ -f "$work/python-scripts/$h.sh" ] \
+              || { echo "::error::missing python-scripts/$h.sh"; ls "$work/python-scripts" || true; exit 1; }
+            [ -f "$work/python-scripts/$h.bat" ] \
+              || { echo "::error::missing python-scripts/$h.bat"; exit 1; }
+            # python, not `grep -U` (GNU-only), and ON ONE LINE -- a multi-line -c body
+            # would have to start at column 0, which ends this YAML block scalar.
+            python3 -c "import sys; b=open(sys.argv[1],'rb').read(); sys.exit(0 if b'\r\n' in b else 1)" "$work/python-scripts/$h.bat" \
+              || { echo "::error::python-scripts/$h.bat is not CRLF"; exit 1; }
+          done
+          echo "  OK  both halves present, nothing extra"
+
+      - name: Lay the package out as <subdir>/*.conda for publish-conda.yml
+        run: |
+          set -euo pipefail
+          mkdir -p pkgs/noarch
+          find out -name '*.conda' -exec cp {} pkgs/noarch/ \;
+          n=$(find pkgs -name '*.conda' | wc -l)
+          [ "$n" -eq 1 ] || { echo "::error::expected exactly 1 package, found $n"; exit 1; }
+          ls -l pkgs/noarch/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: conda-packages
+          path: pkgs/**/*.conda
+          if-no-files-found: error
+
+  # Install and USE the package BEFORE publishing.  Publishing is the point of no return:
+  # the channel never deletes, so a package with a broken post-link becomes the newest
+  # resolvable version and stays broken until someone hand-deletes the object from R2.
+  verify:
+    name: "Verify before publishing"
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash -l {0}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: conda-packages
+          path: ${{ runner.temp }}/pkgs
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-update-conda: true
+
+      - name: Index the freshly built package into a local channel
+        run: |
+          set -euo pipefail
+          CH="$RUNNER_TEMP/local-channel"
+          mkdir -p "$CH/noarch"
+          find "$RUNNER_TEMP/pkgs" -name '*.conda' -exec cp {} "$CH/noarch/" \;
+          # "$CONDA/bin/python", never bare python: setup-miniconda leaves /usr/bin/python
+          # first on PATH and conda_index is not installed there.
+          "$CONDA/bin/python" -m pip install --quiet conda-index
+          "$CONDA/bin/python" -m conda_index "$CH"
+          echo "CH=$CH" >> "$GITHUB_ENV"
+          ls -l "$CH/noarch/"
+
+      - name: Create the environment
+        run: |
+          set -euo pipefail
+          # conda-forge IS required: this package run-depends on python and ~17 libraries.
+          # conda.qiyuan.me carries isabelle, auto-sledgehammer, isabelle-rpc,
+          # isabelle-semantic-embedding and rocksdict.
+          conda create -y -n v -c "file://$CH" -c https://conda.qiyuan.me -c conda-forge \
+            --override-channels isabelle-minilang
+          conda list -n v | grep -E 'isabelle|minilang|python |openai|anthropic'
+
+      - name: "The component is REGISTERED (read it, do not infer)"
+        run: |
+          set -euo pipefail
+          eval "$(conda shell.bash hook)"; conda activate v
+          hu=$("$CONDA_PREFIX/bin/isabelle" getenv -b ISABELLE_HOME_USER)
+          echo "ISABELLE_HOME_USER=$hu"
+          cat "$hu/etc/components"
+          grep -q 'isabelle-minilang' "$hu/etc/components" \
+            || { echo "::error::the post-link hook did not register the component"; exit 1; }
+
+      - name: "The Python half imports, and the drivers are all there"
+        run: |
+          set -euo pipefail
+          eval "$(conda shell.bash hook)"; conda activate v
+          cd "$RUNNER_TEMP"
+          python -c "import IsaMini, IsaMini.AoA; print('IsaMini + AoA import')"
+          python -c "import IsaMini.AoA.mcp_http_server; print('mcp_http_server + tools/*.jsonc ok')"
+          # The check that catches what the folded-in extras exist to prevent.
+          # toplevel._try_import_driver SWALLOWS ImportError and only logs at INFO, so a
+          # missing dependency does not fail -- the driver simply is not registered, and
+          # the user meets it much later as `Unknown driver`.  Naming the drivers is the
+          # only way to notice.
+          python -c "from IsaMini.AoA.toplevel import Session; d=set(Session.Driver); need={'ClaudeCode','Codex','OpenAI','Claude','ChatGPT','DeepSeekV4'}; assert need<=d, f'missing {sorted(need-d)} (have {sorted(d)})'; print('drivers', sorted(d))"
+          # Without the dist-info, pip would fetch PyPI's copy over conda's files.
+          python -m pip install "IsaMini==${{ needs.build.outputs.version }}" 2>&1 | tee /tmp/pipout || true
+          grep -qi 'already satisfied' /tmp/pipout \
+            || { echo "::error::pip does not see the conda-installed package"; cat /tmp/pipout; exit 1; }
+
+      - name: "IsaREPL is absent, and says so LOUDLY"
+        run: |
+          set -euo pipefail
+          eval "$(conda shell.bash hook)"; conda activate v
+          cd "$RUNNER_TEMP"
+          # The one deliberate gap in this package: IsaREPL is on no conda channel.  Assert
+          # that touching it raises something that NAMES the problem, rather than failing
+          # obscurely much later -- the whole reason this is acceptable.
+          # Written with bash's $'...' so the newlines are real but the YAML sees ONE line.
+          # A multi-line `python -c "` body would have to begin at column 0, which ends the
+          # enclosing YAML block scalar and makes the whole workflow file unparseable --
+          # GitHub then runs nothing and reports it only as a repo-level annotation.
+          python -c $'import IsaMini\ntry:\n    IsaMini.REPL\n    ok = False\nexcept Exception as e:\n    ok = "IsaREPL" in str(e)\n    print("raised", type(e).__name__, e)\nassert ok, "IsaMini.REPL did not name IsaREPL in its error"' \
+            || { echo "::error::the IsaREPL absence is not reported clearly"; exit 1; }
+
+      - name: "Every shipped session BUILDS from the installed package"
+        run: |
+          set -euo pipefail
+          eval "$(conda shell.bash hook)"; conda activate v
+          # No -c.  A clean build would delete session images; this is an incremental build
+          # in a throwaway runner environment.
+          #
+          # ALL THREE, not just Minilang: `isabelle components -u` exposes the whole ROOT,
+          # so a session whose files were not shipped breaks every `isabelle build` in a
+          # user's environment, including builds of entirely unrelated sessions.
+          isabelle build -v Minilang Minilang_Agent Minilang_Agent_Injector
+          # A control: an invented session name must ERROR.  Without it, a `build` that
+          # silently did nothing would read as a pass.
+          if isabelle build -v Minilang_No_Such_Session 2>/dev/null; then
+            echo '::error::the control passed -- isabelle build is not proving anything'
+            exit 1
+          fi
+          echo "  OK  all three sessions build, control errors"
+
+  publish:
+    needs: [build, verify]
+    if: ${{ !inputs.dry_run }}
+    uses: xqyww123/isabelle-packaging-ci/.github/workflows/publish-conda.yml@main
+    with:
+      artifact: conda-packages
+      package_name: isabelle-minilang
+    # Passed EXPLICITLY, never `secrets: inherit`: a reusable workflow receives the CALLING
+    # repo's secrets, and `inherit` forwards empty strings while disabling the callee's
+    # `required: true` checks -- so a missing secret becomes a silent no-op rather than a
+    # named failure.
+    secrets:
+      CONDA_R2_ACCESS_KEY_ID: ${{ secrets.CONDA_R2_ACCESS_KEY_ID }}
+      CONDA_R2_SECRET_ACCESS_KEY: ${{ secrets.CONDA_R2_SECRET_ACCESS_KEY }}
+
+  # Install from the LIVE channel, on Windows as well as Linux.  Windows failure in this
+  # stack is silent and cannot be inferred from a green Linux leg -- the hooks are the
+  # part that differs, and a .sh-only package installs perfectly cleanly there while
+  # registering nothing.
+  smoke:
+    needs: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash -l {0}
+    steps:
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-update-conda: true
+      - name: Install from the published channel and use it
+        run: |
+          set -euo pipefail
+          conda create -y -n s -c https://conda.qiyuan.me -c conda-forge \
+            --override-channels isabelle-minilang
+          eval "$(conda shell.bash hook)"; conda activate s
+          # The entry point is <prefix>/bin/isabelle or <prefix>/Scripts/isabelle.bat --
+          # NOT <prefix>/isa/bin/isabelle, the distribution's unix launcher, which ships on
+          # Windows too and which Git-Bash happily calls executable.
+          if [ "$RUNNER_OS" = Windows ]; then ISA="$CONDA_PREFIX/Scripts/isabelle.bat"
+          else ISA="$CONDA_PREFIX/bin/isabelle"; fi
+          hu=$("$ISA" getenv -b ISABELLE_HOME_USER)
+          case "$hu" in /cygdrive/*) hu="/${hu#/cygdrive/}" ;; esac
+          grep -q 'isabelle-minilang' "$hu/etc/components" \
+            || { echo "::error::the component is not registered"; cat "$hu/etc/components"; exit 1; }
+          cd "$RUNNER_TEMP"
+          python -c "import IsaMini.AoA.mcp_http_server; print('AoA imports from the live channel')"

@@ -8,7 +8,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "IsaMini"
-version = "0.4.0"
+# Read from ./VERSION rather than written here, because there are now two consumers:
+# the wheel and the conda recipe (conda/recipe.yaml, fed by release-conda.yml). Two
+# independent literals for one number is how they drift, and the drift is silent --
+# a conda package whose version disagrees with the dist-info it installs.
+#
+# NOT to be confused with IsaMini/REPL.py's VERSION, which is a wire-protocol
+# handshake constant compared against the server's; bumping the package must not
+# touch it, even though the two happen to have coincided in the past.
+dynamic = ["version"]
 description = "Isabelle/Minilang"
 # The file is Readme.md. setuptools does not error on a readme it cannot find --
 # it silently emits METADATA with no body, and the PyPI page renders blank.
@@ -89,6 +97,9 @@ all = ["IsaMini[openai,api,web]"]
 
 [project.urls]
 "Homepage" = "https://github.com/xqyww123/Isa-Mini"
+
+[tool.setuptools.dynamic]
+version = { file = "VERSION" }
 
 [tool.setuptools.packages.find]
 include = ["IsaMini", "IsaMini.*"]

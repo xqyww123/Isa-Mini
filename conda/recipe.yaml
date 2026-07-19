@@ -1,0 +1,310 @@
+schema_version: 1
+
+# isabelle-minilang: ONE package carrying both halves of this repo -- the Isabelle sessions
+# (Minilang, Minilang_Agent, Minilang_Agent_Injector) and the Python package `IsaMini`,
+# including `IsaMini.AoA`, which is this project's main product.
+#
+# BOTH HALVES, ONE PACKAGE, for the isabelle-rpc reason: AoA drives the ML side over
+# Isabelle_RPC, and the `by aoa` method is implemented in Agent/agent.ML.  Neither half
+# does anything alone, and splitting them would force the two into version lockstep for no
+# gain while adding a second chance to install half the system.
+#
+# `noarch: python`, NOT `noarch: generic`.  For generic, conda installs every file at its
+# literal path, so the builder's `lib/python3.12/site-packages/...` would be baked in and,
+# installed into a 3.11 environment, would create a directory no interpreter reads: the
+# install succeeds, `conda list` shows it, `import IsaMini` fails.  `run: python >=3.x`
+# does not save it, because it PERMITS the other version.  noarch: python relocates
+# site-packages at link time, which is the missing piece.  (Verified in this project on
+# isabelle-rpc; see that recipe's header.)
+#
+# There is no compiled artifact anywhere in this repo -- no .so/.pyd/.dylib, no C/C++/Rust
+# tree, no jar, no etc/build.props Scala component -- so unlike isabelle-semantic-embedding
+# this package is architecture independent outright.
+#
+# ROOT EXPOSURE.  `isabelle components -u` exposes a component's WHOLE ROOT, so every
+# session declared in it must build from the files shipped here, in a user's environment.
+# The three that are declared need only Auto_Sledgehammer, Isabelle_RPC and
+# Semantic_Embedding, all published.  The two sessions that need Isa_REPL -- which we
+# deliberately do NOT publish -- live in their own ROOT files under REPL/ and
+# Agent/AoA_REPL/, and there is no ROOTS file, so `isabelle components -u` never sees them.
+# Do not add one.
+#
+# RELEASE DISCIPLINE, mandatory: the conda version must never fall BEHIND PyPI's.  If PyPI
+# gets ahead, `pip install -U` takes over, its uninstall removes conda's dist-info, and the
+# Isabelle half -- the sessions under share/, the pre-unlink hook, the etc/components
+# registration -- is orphaned beyond conda's reach.  PyPI IsaMini is at 0.3.5; this is
+# 0.4.0.
+
+context:
+  version: ${{ env.get("ISA_COMPONENT_VERSION", default="0.0.0") }}
+
+source:
+  - path: ../
+
+package:
+  name: isabelle-minilang
+  version: ${{ version }}
+
+build:
+  number: 0
+  noarch: python
+  # No entry_points: pyproject declares no [project.scripts].  IsaMini/main.py looks like a
+  # CLI but runs argparse at MODULE scope with no main() and no __main__ guard, so it
+  # cannot be an entry-point target as written -- importing it would parse sys.argv.  It is
+  # also the IsaREPL-dependent half, which conda cannot provide anyway (see run: below).
+  script:
+    # python, NOT bash.  A noarch package builds on one runner so bash would work here, but
+    # keeping one interpreter across the recipes removes a whole class of divergence, and
+    # rattler-build has no bash in the build environment on Windows should this ever need
+    # to build there.
+    interpreter: python
+    content: |
+      import os, pathlib, shutil, subprocess, sys
+
+      NAME = "isabelle-minilang"
+      SRC    = pathlib.Path(os.environ["SRC_DIR"])
+      PREFIX = pathlib.Path(os.environ["PREFIX"])
+
+      def die(msg):
+          print(f"::error::{msg}")
+          raise SystemExit(1)
+
+      # --- the Python half ------------------------------------------------------
+      # --no-deps: conda resolves the dependencies, pip must not.
+      # --no-build-isolation: the build env has what pyproject needs and the builder has no
+      # network.  pip install is also what WRITES THE DIST-INFO; without it pip cannot see
+      # this package at all and would install PyPI's copy over conda's files.
+      subprocess.run([sys.executable, "-m", "pip", "install", str(SRC),
+                      "--no-deps", "--no-build-isolation", "-vv"], check=True)
+
+      # setup.py drops IsaMini/AoA/test_*.py from the wheel, so those are gone for free.
+      # What must SURVIVE is the package data: mcp_http_server opens 20+ tools/*.jsonc at
+      # MODULE IMPORT time, so a package-data regression does not degrade anything -- it
+      # makes `import IsaMini.AoA` fail outright.  The tests: block below is the check.
+
+      # --- the Isabelle half ----------------------------------------------------
+      # An explicit whitelist, NOT a whole-tree copy.  This is not merely about size: the
+      # tree carries Agent/secret.sh (untracked, gitignored), Agent/IsaMini_Agent_old/,
+      # logs/, scratch theories, editor backups and proof caches.  A whole-tree copy would
+      # publish a secrets file to a public channel.
+      dest = PREFIX / "share" / NAME
+      dest.mkdir(parents=True, exist_ok=True)
+
+      JUNK_SUFFIX = (".swp", ".swo", ".bak", ".ll", ".old", "~",
+                     ".proof-cache", ".proof-cache.lock")
+
+      def junk(n):
+          return n.endswith(JUNK_SUFFIX) or n.startswith("#") or n.startswith(".#") \
+                 or n == "__pycache__"
+
+      def ignore(_dir, names):
+          return [n for n in names if junk(n)]
+
+      # Top level.  Readme.md is a SYMLINK to ./doc/Readme.md; copy2 follows it, so the
+      # component gets the real text without shipping doc/.  Do not "fix" it into a copy of
+      # the link.
+      for f in ["ROOT", "Minilang_Base.thy", "Minilang.thy",
+                "COPYING", "COPYING.LIB", "COPYRIGHT", "Readme.md"]:
+          shutil.copy2(SRC / f, dest / f)
+
+      # library/ wholesale: `git ls-files library` is exactly the seven .ML files that
+      # Minilang.thy ML_files, so there is nothing to prune and nothing to miss.
+      shutil.copytree(SRC / "library", dest / "library", ignore=ignore, dirs_exist_ok=True)
+
+      # Agent/ is ENUMERATED, not copied wholesale -- the opposite of the choice made for
+      # Isabelle_RPC's Tools/ and Semantic_Embedding's Tools/, and deliberately so.  This
+      # directory holds 60 tracked files of which seven belong to the shipped session, plus
+      # IsaMini_Agent_old/ (33 files), AoA_REPL/ (an Isa_REPL session that must NOT be
+      # exposed), Test/, three Scratch*.thy, *.old.ML, logs/ and secret.sh.  Enumerating
+      # risks dropping an indirectly-referenced file; copying wholesale risks shipping a
+      # secret.  Here the second risk wins, and the ML_file closure was traced by hand:
+      # Minilang_Agent.thy ML_files exactly these six (lines 6,12,19,22,23,24; 20,21,25-27
+      # are commented out), and none of the six ML_files anything further.
+      (dest / "Agent" / "Injector").mkdir(parents=True, exist_ok=True)
+      for f in ["Minilang_Agent.thy", "helper.ML", "agent_hint.ML", "agent.ML",
+                "agent_packer.ML", "preprocess.ML", "agent_server.ML"]:
+          shutil.copy2(SRC / "Agent" / f, dest / "Agent" / f)
+      shutil.copy2(SRC / "Agent" / "Injector" / "Minilang_Agent_Injector.thy",
+                   dest / "Agent" / "Injector" / "Minilang_Agent_Injector.thy")
+
+      for must in ["ROOT", "Minilang.thy", "library/proof.ML", "library/aux.ML",
+                   "Agent/Minilang_Agent.thy", "Agent/agent.ML", "Agent/agent_server.ML",
+                   "Agent/Injector/Minilang_Agent_Injector.thy"]:
+          if not (dest / must).is_file():
+              die(f"{must} did not reach the component directory")
+
+      # Positive assertions are not enough here: the failure that matters is something
+      # extra arriving, not something missing.
+      for never in ["Agent/secret.sh", "Agent/AoA_REPL", "REPL", "Agent/logs",
+                    "Agent/IsaMini_Agent_old", "Agent/Test", "Test", "doc"]:
+          if (dest / never).exists():
+              die(f"{never} leaked into the package")
+      if list(dest.rglob("*.proof-cache*")) or list(dest.rglob("*~")):
+          die("proof caches or editor backups leaked into the package")
+
+      # A size ceiling.  The whitelist above is ~700 KB tracked; the whole tracked repo is
+      # 5.0 MB, so a runaway whole-tree copy really does trip this.  A ceiling that cannot
+      # catch its own leak is decorative -- that was the mistake in an earlier draft of the
+      # semantic-embedding recipe.
+      kb = sum(p.stat().st_size for p in dest.rglob("*") if p.is_file()) >> 10
+      if kb >= 1536:
+          die(f"component payload is {kb} KB -- something leaked")
+      print(f"  OK  component payload {kb} KB")
+
+      # --- link hooks -----------------------------------------------------------
+      # Same idiom as isabelle-rpc; see that recipe for the full reasoning.  What is
+      # load-bearing:
+      #   * BOTH sets written unconditionally.  conda picks by the RUNNING platform and
+      #     returns success in SILENCE when the file is absent, so a .sh-only package
+      #     installs cleanly on Windows and is never registered.  Do NOT guard with
+      #     `case "$target_platform" in win-*)`: for noarch that value is `noarch` and the
+      #     branch never matches, so the guard looks applied and is not.
+      #   * the .bat is CRLF and exits /b 0 on every path: a nonzero post-link makes conda
+      #     roll the whole install back.
+      #   * the path goes over in CYGWIN form: `isabelle components` parses it with
+      #     Path.explode, whose Path.check_elem rejects `:` and `\`.
+      #   * the throwaway `getenv -b ISABELLE_HOME` warm-up is the difference between the
+      #     hook working and silently doing nothing: Cygwin heals on the FIRST isabelle
+      #     call, but that call's Java classpath is computed before the heal, so the first
+      #     invocation is precisely the one that cannot run a Scala tool -- and
+      #     `components` IS a Scala tool.
+      #
+      # Under noarch: python, rattler-build rewrites $PREFIX/bin and $PREFIX/Scripts into
+      # python-scripts/, and conda maps that back by the running platform at link time.
+      (PREFIX / "bin").mkdir(parents=True, exist_ok=True)
+      (PREFIX / "Scripts").mkdir(parents=True, exist_ok=True)
+
+      for action, verb in [("post-link", "-u"), ("pre-unlink", "-x")]:
+          sh = PREFIX / "bin" / f".{NAME}-{action}.sh"
+          sh.write_text(
+              '#!/bin/bash\n'
+              f'"$PREFIX/isa/bin/isabelle" components {verb} "$PREFIX/share/{NAME}" 2>/dev/null \\\n'
+              f'  || echo "warning: \'isabelle components {verb} {NAME}\' failed; '
+              'the sessions may be unavailable"\n'
+              'exit 0\n', newline="\n")
+          sh.chmod(0o755)
+
+          bat = PREFIX / "Scripts" / f".{NAME}-{action}.bat"
+          bat.write_text("\r\n".join([
+              '@echo off',
+              f'set "COMP=%PREFIX%\\share\\{NAME}"',
+              'set "DL=%COMP:~0,1%"',
+              'set "REST=%COMP:~2%"',
+              'set "REST=%REST:\\=/%"',
+              'set "CYG=/cygdrive/%DL%%REST%"',
+              'call "%PREFIX%\\isa\\bin\\isabelle.bat" getenv -b ISABELLE_HOME >nul 2>&1',
+              f'call "%PREFIX%\\isa\\bin\\isabelle.bat" components {verb} "%CYG%" >nul 2>&1',
+              'exit /b 0',
+              '']), newline="")
+
+      if f"share/{NAME}" not in (PREFIX / "bin" / f".{NAME}-post-link.sh").read_text():
+          die("the post-link hook does not name the component directory")
+      if b"\r\n" not in (PREFIX / "Scripts" / f".{NAME}-post-link.bat").read_bytes():
+          die("the .bat hook is not CRLF")
+
+requirements:
+  host:
+    - python >=3.11
+    - pip
+    - setuptools >=77   # first setuptools reading `license` as an SPDX expression
+  run:
+    - python >=3.11
+    # Bounded to the Isabelle SERIES these sessions are written against.  The base package
+    # keeps a constant name at a per-release version, so unbounded lets conda's newest-wins
+    # resolution pair this with a future Isabelle it was never built for.
+    - isabelle >=2025.2,<2025.3
+    # The three sessions ROOT names.  Performant_Isabelle_ML is deliberately NOT listed:
+    # this ROOT does not name it, it arrives through auto-sledgehammer and isabelle-rpc,
+    # and declaring transitive session deps is how a version bound ends up in two places.
+    - auto-sledgehammer >=0.1.0,<0.2.0        # ROOT:1  Minilang = Auto_Sledgehammer
+    - isabelle-rpc >=0.3.1                    # ROOT:7  Minilang_Agent sessions
+    - isabelle-semantic-embedding >=0.1.1     # ROOT:8  ditto; also a pyproject dependency
+    #
+    # The pyproject dependencies under their CONDA names.  TWO differ from PyPI, and in
+    # both cases the WRONG name resolves, installs green, and dies at `import`:
+    #
+    #   msgpack -> msgpack-python   (conda-forge has NO package called `msgpack`)
+    #   xxhash  -> python-xxhash    (conda-forge `xxhash` is the C LIBRARY)
+    #
+    # And `zstandard` is CORRECT as it stands -- there is no `python-zstandard` on
+    # conda-forge.  Do not "fix" it by analogy with the two above.
+    - msgpack-python >=1.1.2
+    - python-xxhash
+    - rich
+    - pyyaml >=6.0.3
+    - platformdirs >=4.9.4
+    - jsoncomment >=0.4.2
+    - claude-agent-sdk >=0.1.72
+    - zstandard >=0.23.0
+    - mcp >=1.26.0
+    - uvicorn >=0.41.0
+    #
+    # THE EXTRAS, FOLDED IN UNCONDITIONALLY.  conda has no concept of extras, and the
+    # failure mode of simply omitting them is silent: toplevel._try_import_driver catches
+    # ImportError and only logs at INFO, so a missing dependency does not fail -- the
+    # driver vanishes from the registry and the user meets it much later as
+    # `Unknown driver: <name>`.  Eight drivers hang off these six packages, including
+    # DeepSeekV4, the default driver of the PutnamBench eval pipeline.  A heavier package
+    # is the right trade against a silently incomplete one.
+    - openai >=2.33.0        # OpenAI driver, and every driver in driver_openai_api
+    - openai-agents >=0.15.1 # driver_openai
+    - tiktoken               # APIDriver_ChatGPT.estimate_tokens
+    - anthropic >=0.52.0     # driver_anthropic -> the Claude API driver
+    - httpx >=0.28.1         # driver_openai_api and driver_anthropic
+    - aiohttp >=3.13.5       # web_terminal, imported from inside a function
+    #
+    # NOT the `repl` extra.  IsaREPL is on PyPI but on no conda channel, and it is
+    # deliberately not published (it needs a patch the `isabelle` package does not carry).
+    # Its absence fails LOUDLY and well: IsaMini/__init__.py catches only the IsaREPL-named
+    # ImportError, re-raises everything else, and its __getattr__ raises a written install
+    # hint.  AoA itself never touches IsaREPL.  Documented in about.description.
+
+tests:
+  - python:
+      imports:
+        - IsaMini
+        - IsaMini.AoA
+      pip_check: true
+  - script:
+      # mcp_http_server opens 20+ tools/*.jsonc at MODULE IMPORT time, and
+      # driver_claude_code reads assets/*.md, so this import is the check that the
+      # package-data globs still match.  A regression there does not degrade behaviour --
+      # it makes the module unimportable, which nothing else here would notice.
+      - python -c "import IsaMini.AoA.mcp_http_server; print('mcp_http_server + tools/*.jsonc ok')"
+      # Every folded-in extra must actually IMPORT.  pip_check reads metadata; this
+      # executes.  Metadata is the wrong instrument for this project's real failure mode --
+      # naming conda's `xxhash` (the C library) instead of `python-xxhash` resolves,
+      # installs green, and dies only at `import xxhash`.
+      - python -c "import openai, agents, tiktoken, anthropic, httpx, aiohttp, xxhash, msgpack, rich, yaml, jsoncomment, mcp, uvicorn, zstandard, platformdirs; print('all declared dependencies import')"
+      # The drivers that must be present in a conda install.  This is the assertion that
+      # catches the silent-vanish failure the folded extras exist to prevent: it names the
+      # drivers rather than trusting that the dependencies imply them.
+      # (No ": " anywhere in the command -- a plain YAML scalar cannot contain that
+      # two-character sequence, and rattler-build then fails to parse the whole recipe.)
+      - python -c "from IsaMini.AoA.toplevel import Session; d=set(Session.Driver); need={'ClaudeCode','Codex','OpenAI','Claude','ChatGPT','DeepSeekV4'}; missing=need-d; assert not missing, f'drivers missing {sorted(missing)} (have {sorted(d)})'; print('drivers present', sorted(d))"
+
+about:
+  homepage: https://github.com/xqyww123/Isa-Mini
+  summary: "Isabelle/Minilang: an AI-friendly proof language, and the AoA proof agent"
+  description: |
+    A minimal proof language over Isabelle/HOL that strips away human-oriented
+    complexity, together with AoA -- the LLM-driven proof agent built on it, which is
+    this project's main product.
+
+    This package ships both halves: the Isabelle sessions (Minilang, Minilang_Agent,
+    Minilang_Agent_Injector), registered as an Isabelle component from a conda link
+    hook, and the Python package `IsaMini` with `IsaMini.AoA`.  The agent drives the ML
+    side over Isabelle_RPC, so neither half is useful alone.
+
+    The Minilang REPL client (`IsaMini.REPL` and its CLI) is NOT usable from this
+    package: it needs IsaREPL, which is published on PyPI but on no conda channel.
+    `pip install IsaREPL` into the same environment to enable it.  AoA does not use it.
+  license: LGPL-2.1-or-later
+  license_file:
+    # Paths relative to $SRC_DIR, NOT to this recipe directory -- `../COPYING` resolves
+    # outside the source root and rattler-build then fails with the flat, pathless message
+    # "No license files were copied".
+    - COPYING
+    - COPYING.LIB
+    - COPYRIGHT
+  repository: https://github.com/xqyww123/Isa-Mini
