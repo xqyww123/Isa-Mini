@@ -1,0 +1,32 @@
+(* Kept OUT of the top-level ROOT because this session needs a PATCHED Isabelle.
+
+   Minilang_Agent_Injector.thy's whole body is
+
+       setup \<open>Sign.map_syn (K Syntax.empty_syntax)\<close>
+
+   and `Sign.map_syn` does not exist in a stock Isabelle -- it is exported by
+   my-better-isabelle-prover's `expose_map_syn` patch, which is in the `dev`
+   category, not `user`.  my_better_isabelle_prover/README.md categorises this
+   session by name: "`dev` -- needed only by developer/experiment infrastructure:
+   Isa-REPL, and Isa-Mini's translator and AoA agent injector."
+
+   The conda `isabelle` package applies the `user` category only, deliberately and
+   for the same reason isabelle-repl is not published at all.  With this session
+   still declared in the top-level ROOT -- which `isabelle components -u` exposes
+   wholesale -- `isabelle build Minilang_Agent_Injector` fails for every user of
+   the published package with
+
+       *** Value or constructor (map_syn) has not been declared in structure Sign
+
+   Measured: Isa-Mini release-conda run 29677250284, where Minilang and
+   Minilang_Agent built cleanly and only this one failed.
+
+   The .thy still ships, so anyone running a `--category all` Isabelle can use it:
+
+       isabelle build -d . -d Agent/Injector Minilang_Agent_Injector
+
+   Same treatment, and the same reasoning, as REPL/ROOT and Agent/AoA_REPL/ROOT. *)
+
+session Minilang_Agent_Injector = Minilang_Agent +
+  theories
+    Minilang_Agent_Injector

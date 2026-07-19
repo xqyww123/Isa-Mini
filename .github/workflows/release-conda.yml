@@ -117,11 +117,19 @@ jobs:
             echo "::error::caches, backups or dead .old.ML files leaked"
             find "$comp" \( -name '*.proof-cache*' -o -name '*~' -o -name '*.old.ML' \) ; exit 1
           fi
-          # There must be exactly ONE ROOT in the component -- `isabelle components -u`
-          # exposes it wholesale, and a second one would drag an Isa_REPL session into
-          # every `isabelle build` in the user's environment.
-          n=$(find "$comp" -name ROOT | wc -l)
-          [ "$n" -eq 1 ] || { echo "::error::expected exactly 1 ROOT, found $n"; find "$comp" -name ROOT; exit 1; }
+          # A ROOTS file is the ONE thing that would pull a sub-ROOT into what
+          # `isabelle components -u` exposes.  Its absence is the real invariant --
+          # counting ROOT files was an indirect proxy, and a wrong one now that
+          # Agent/Injector legitimately ships its own.
+          [ ! -e "$comp/ROOTS" ] \
+            || { echo "::error::a ROOTS file would expose the sub-ROOTs to every user"; exit 1; }
+          # Agent/Injector must be present but NOT declared in the exposed ROOT: it needs
+          # Sign.map_syn, from the `dev` patch category the published isabelle does not
+          # carry.  Run 29677250284 is where that cost a dry run.
+          [ -f "$comp/Agent/Injector/ROOT" ] \
+            || { echo "::error::Agent/Injector/ROOT did not ship"; exit 1; }
+          ! grep -qE '^[^(]*session[[:space:]]+Minilang_Agent_Injector' "$comp/ROOT" \
+            || { echo "::error::the exposed ROOT declares Minilang_Agent_Injector, which cannot build on the published isabelle"; exit 1; }
 
           # The Python half.
           # setuptools >= 77 normalises the distribution name in the dist-info, so
@@ -278,14 +286,18 @@ jobs:
           # ALL THREE, not just Minilang: `isabelle components -u` exposes the whole ROOT,
           # so a session whose files were not shipped breaks every `isabelle build` in a
           # user's environment, including builds of entirely unrelated sessions.
-          isabelle build -v Minilang Minilang_Agent Minilang_Agent_Injector
+          # Minilang_Agent_Injector is NOT here: it is no longer in the exposed ROOT,
+          # because it needs `dev`-category expose_map_syn.  Building it would need
+          # -d Agent/Injector AND a patched Isabelle, which is exactly what a user of the
+          # published package does not have.
+          isabelle build -v Minilang Minilang_Agent
           # A control: an invented session name must ERROR.  Without it, a `build` that
           # silently did nothing would read as a pass.
           if isabelle build -v Minilang_No_Such_Session 2>/dev/null; then
             echo '::error::the control passed -- isabelle build is not proving anything'
             exit 1
           fi
-          echo "  OK  all three sessions build, control errors"
+          echo "  OK  both exposed sessions build, control errors"
 
   publish:
     needs: [build, verify]

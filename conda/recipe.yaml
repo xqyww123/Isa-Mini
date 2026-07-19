@@ -1,7 +1,7 @@
 schema_version: 1
 
 # isabelle-minilang: ONE package carrying both halves of this repo -- the Isabelle sessions
-# (Minilang, Minilang_Agent, Minilang_Agent_Injector) and the Python package `IsaMini`,
+# (Minilang and Minilang_Agent) and the Python package `IsaMini`,
 # including `IsaMini.AoA`, which is this project's main product.
 #
 # BOTH HALVES, ONE PACKAGE, for the isabelle-rpc reason: AoA drives the ML side over
@@ -22,12 +22,19 @@ schema_version: 1
 # this package is architecture independent outright.
 #
 # ROOT EXPOSURE.  `isabelle components -u` exposes a component's WHOLE ROOT, so every
-# session declared in it must build from the files shipped here, in a user's environment.
-# The three that are declared need only Auto_Sledgehammer, Isabelle_RPC and
-# Semantic_Embedding, all published.  The two sessions that need Isa_REPL -- which we
-# deliberately do NOT publish -- live in their own ROOT files under REPL/ and
-# Agent/AoA_REPL/, and there is no ROOTS file, so `isabelle components -u` never sees them.
-# Do not add one.
+# session declared in it must build from the files shipped here, against the PUBLISHED
+# isabelle, in a user's environment.  Two qualify: Minilang and Minilang_Agent, needing
+# only Auto_Sledgehammer, Isabelle_RPC and Semantic_Embedding.
+#
+# Three sessions are deliberately kept out, each in its own ROOT under a subdirectory:
+# Minilang_REPL (REPL/) and Minilang_AoA_REPL (Agent/AoA_REPL/) need Isa_REPL, which we do
+# not publish; Minilang_Agent_Injector (Agent/Injector/) needs `Sign.map_syn`, exported
+# only by my-better-isabelle-prover's `expose_map_syn` -- a `dev`-category patch that the
+# published isabelle package carries no more than it carries the Isa-REPL one.
+#
+# A component contributes its own top-level ROOT plus whatever a ROOTS file names.  This
+# component has NO ROOTS file, which is what keeps those three invisible.  Do not add
+# one.
 #
 # RELEASE DISCIPLINE, mandatory: the conda version must never fall BEHIND PyPI's.  If PyPI
 # gets ahead, `pip install -U` takes over, its uninstall removes conda's dist-info, and the
@@ -59,7 +66,7 @@ build:
     # to build there.
     interpreter: python
     content: |
-      import os, pathlib, shutil, subprocess, sys
+      import os, pathlib, re, shutil, subprocess, sys
 
       NAME = "isabelle-minilang"
       SRC    = pathlib.Path(os.environ["SRC_DIR"])
@@ -124,8 +131,56 @@ build:
       for f in ["Minilang_Agent.thy", "helper.ML", "agent_hint.ML", "agent.ML",
                 "agent_packer.ML", "preprocess.ML", "agent_server.ML"]:
           shutil.copy2(SRC / "Agent" / f, dest / "Agent" / f)
-      shutil.copy2(SRC / "Agent" / "Injector" / "Minilang_Agent_Injector.thy",
-                   dest / "Agent" / "Injector" / "Minilang_Agent_Injector.thy")
+
+      # Agent/Injector ships WITH its own ROOT but is NOT in the top-level one.  That
+      # session's single command is `setup <Sign.map_syn ...>`, and Sign.map_syn exists
+      # only with my-better-isabelle-prover's `expose_map_syn`, a `dev`-category patch
+      # that the published `isabelle` package deliberately does not carry -- the same
+      # reason isabelle-repl is not published.  Declared in the top-level ROOT, which
+      # `isabelle components -u` exposes wholesale, it fails for every user of that
+      # package ("Value or constructor (map_syn) has not been declared in structure
+      # Sign"; measured on release-conda run 29677250284).
+      #
+      # Shipping the sub-ROOT is safe and useful: a component contributes only its own
+      # top-level ROOT plus whatever a ROOTS file names, and this component has no ROOTS
+      # file, so nothing here reaches a stock user's session space.  Someone running a
+      # `--category all` Isabelle gets `isabelle build -d . -d Agent/Injector`.
+      for f in ["Minilang_Agent_Injector.thy", "ROOT"]:
+          shutil.copy2(SRC / "Agent" / "Injector" / f, dest / "Agent" / "Injector" / f)
+
+      # The mechanism, asserted directly.  A ROOTS file is the ONLY thing that would pull
+      # the sub-ROOT into what `components -u` exposes, so its absence is the real
+      # invariant -- counting ROOT files was an indirect proxy for it.
+      if (dest / "ROOTS").exists():
+          die("a ROOTS file would expose the sub-ROOTs to every user; this component must not have one")
+      # Which sessions the exposed ROOT actually DECLARES.  Comments must be stripped
+      # first, and that is not fussiness: this ROOT carries a commented-out
+      # Infra_Filter_Test session and a comment naming Minilang_Agent_Injector, so a
+      # regex over the raw text reports three sessions for a perfectly correct file.
+      # (Measured -- the first version of this check failed on a good ROOT.)  Isabelle
+      # comments nest, hence the scanner rather than a non-greedy regex.
+      def strip_comments(t):
+          out, depth, i = [], 0, 0
+          while i < len(t):
+              if t.startswith("(*", i):
+                  depth += 1; i += 2
+              elif t.startswith("*)", i) and depth:
+                  depth -= 1; i += 2
+              else:
+                  if not depth:
+                      out.append(t[i])
+                  i += 1
+          return "".join(out)
+
+      declared = set(re.findall(r"^\s*session\s+(\S+)",
+                                strip_comments((dest / "ROOT").read_text()), re.M))
+      expected = {"Minilang", "Minilang_Agent"}
+      if declared != expected:
+          die(f"the shipped ROOT declares {sorted(declared)}, expected {sorted(expected)}. "
+              "Every session here must build on the PUBLISHED isabelle, which carries the "
+              "`user` patch category only -- Minilang_Agent_Injector needs `dev`'s "
+              "expose_map_syn, and anything reaching Isa_REPL needs a package we do not "
+              "publish at all.")
 
       for must in ["ROOT", "Minilang.thy", "library/proof.ML", "library/aux.ML",
                    "Agent/Minilang_Agent.thy", "Agent/agent.ML", "Agent/agent_server.ML",
