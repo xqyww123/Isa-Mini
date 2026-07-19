@@ -133,8 +133,17 @@ build:
           if not (dest / must).is_file():
               die(f"{must} did not reach the component directory")
 
-      # Positive assertions are not enough here: the failure that matters is something
-      # extra arriving, not something missing.
+      # REGRESSION GUARDS, not evidence about this package.  Be honest about which is
+      # which: the copy above is a pure whitelist into a directory created empty, so
+      # nothing else CAN appear under dest and none of the checks below can fire today.
+      # (Agent/secret.sh is doubly unreachable -- it is gitignored, and rattler-build's
+      # path source honours .gitignore, so it is not even in $SRC_DIR.)
+      #
+      # They earn their place the day someone replaces the enumeration with a copytree,
+      # which is the tempting simplification precisely because enumerating risks dropping
+      # an indirectly-referenced file.  What they must NOT do is give a false sense that
+      # the current package was proved clean by testing -- it is clean by construction,
+      # and the construction is what a reviewer should read.
       for never in ["Agent/secret.sh", "Agent/AoA_REPL", "REPL", "Agent/logs",
                     "Agent/IsaMini_Agent_old", "Agent/Test", "Test", "doc"]:
           if (dest / never).exists():
@@ -142,10 +151,10 @@ build:
       if list(dest.rglob("*.proof-cache*")) or list(dest.rglob("*~")):
           die("proof caches or editor backups leaked into the package")
 
-      # A size ceiling.  The whitelist above is ~700 KB tracked; the whole tracked repo is
-      # 5.0 MB, so a runaway whole-tree copy really does trip this.  A ceiling that cannot
-      # catch its own leak is decorative -- that was the mistake in an earlier draft of the
-      # semantic-embedding recipe.
+      # Same status: a ceiling over a fixed-cardinality whitelist cannot trip.  It bounds
+      # the damage if the whitelist ever becomes a tree copy (the tracked repo is 5.0 MB
+      # against this payload's ~700 KB), and it reports the real number every build, which
+      # is how a slow drift would become visible.
       kb = sum(p.stat().st_size for p in dest.rglob("*") if p.is_file()) >> 10
       if kb >= 1536:
           die(f"component payload is {kb} KB -- something leaked")

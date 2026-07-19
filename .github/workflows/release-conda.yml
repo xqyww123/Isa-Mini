@@ -102,10 +102,13 @@ jobs:
             [ -f "$comp/$f" ] || { echo "::error::missing $f"; find "$comp" | head -40; exit 1; }
           done
 
-          # The assertions that matter most here are NEGATIVE.  This repo's Agent/ holds a
-          # gitignored secret.sh, an Isa_REPL session that must not be exposed through the
-          # component's ROOT, 33 files of dead IsaMini_Agent_old/, logs and scratch
-          # theories.  A whole-tree copy would publish all of it to a public channel.
+          # REGRESSION GUARDS, not evidence.  The recipe copies an explicit whitelist into
+          # an empty directory, so none of these can fire today -- they exist for the day
+          # someone replaces the enumeration with a tree copy, which would publish this
+          # repo's gitignored Agent/secret.sh, an Isa_REPL session that must not reach the
+          # component's ROOT, and 33 files of dead IsaMini_Agent_old/ to a public channel.
+          # The positive `must` list above and `isabelle build` in verify are what actually
+          # test this package.
           for n in Agent/secret.sh Agent/AoA_REPL REPL Agent/logs \
                    Agent/IsaMini_Agent_old Agent/Test Test doc; do
             [ ! -e "$comp/$n" ] || { echo "::error::$n leaked into the package"; exit 1; }
@@ -121,8 +124,23 @@ jobs:
           [ "$n" -eq 1 ] || { echo "::error::expected exactly 1 ROOT, found $n"; find "$comp" -name ROOT; exit 1; }
 
           # The Python half.
+          # setuptools >= 77 normalises the distribution name in the dist-info, so
+          # `IsaMini` becomes `isamini-0.4.0.dist-info`.  -iname rather than -name so the
+          # check survives either spelling.
           find "$work" -iname 'isamini-*.dist-info' -type d | grep -q . \
             || { echo "::error::no dist-info -- pip would not see this package"; exit 1; }
+          # THE check for the noarch: python shape, and the reason the recipe header spends
+          # eight lines on it.  Under noarch: generic conda would install every file at its
+          # literal path, so the builder's lib/python3.12/site-packages/ would be baked in
+          # and, installed under a different python, would create a directory no
+          # interpreter reads: green install, `conda list` shows it, `import IsaMini`
+          # fails.  Nothing else here would notice -- the site-packages globs below are
+          # written with a leading */ and match equally well under lib/python3.12/.
+          if find "$work" -path '*lib/python3*' -print -quit | grep -q .; then
+            echo "::error::payload contains a hardcoded lib/pythonX.Y path -- this is not a relocatable noarch: python package"
+            find "$work" -path '*lib/python3*' | head -5
+            exit 1
+          fi
           # package-data: mcp_http_server opens these at import time.
           find "$work" -path '*/IsaMini/AoA/tools/*.jsonc' | grep -q . \
             || { echo "::error::IsaMini/AoA/tools/*.jsonc did not ship"; exit 1; }
@@ -171,7 +189,7 @@ jobs:
     name: "Verify before publishing"
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     defaults:
       run:
         shell: bash -l {0}
@@ -320,3 +338,30 @@ jobs:
             || { echo "::error::the component is not registered"; cat "$hu/etc/components"; exit 1; }
           cd "$RUNNER_TEMP"
           python -c "import IsaMini.AoA.mcp_http_server; print('AoA imports from the live channel')"
+
+      - name: "the pre-unlink UNREGISTERS it"
+        run: |
+          set -euo pipefail
+          eval "$(conda shell.bash hook)"; conda activate s
+          if [ "$RUNNER_OS" = Windows ]; then ISA="$CONDA_PREFIX/Scripts/isabelle.bat"
+          else ISA="$CONDA_PREFIX/bin/isabelle"; fi
+          raw=$("$ISA" getenv -b ISABELLE_HOME_USER)
+          case "$raw" in /cygdrive/*) home="/${raw#/cygdrive/}" ;; *) home="$raw" ;; esac
+          comp="$home/etc/components"
+
+          # --force removes ONLY this package.  A plain `conda remove` would take the base
+          # `isabelle` with it, and isabelle's OWN pre-unlink deletes the whole namespaced
+          # ISABELLE_HOME_USER -- so etc/components would vanish wholesale and the check
+          # below would pass without proving anything.  That confound made an earlier
+          # "PASS" vacuous in the isabelle-rpc release.
+          conda remove -y --force isabelle-minilang
+
+          [ -f "$comp" ] || { echo "::error::etc/components vanished -- the removal took isabelle with it, so this assertion proves nothing"; exit 1; }
+          echo "----- etc/components after removal -----"; cat "$comp"
+          ! grep -q 'isabelle-minilang' "$comp" \
+            || { echo "::error::pre-unlink did NOT unregister isabelle-minilang"; exit 1; }
+          # A dangling entry is not cosmetic: `isabelle components -u` exposes a whole
+          # ROOT, so an entry pointing at a deleted directory breaks EVERY `isabelle build`
+          # in that environment, including builds of unrelated sessions.
+          "$ISA" version
+          echo "  OK  unregistered, and isabelle still works"
