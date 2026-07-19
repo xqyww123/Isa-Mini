@@ -14,6 +14,12 @@ description = "Isabelle/Minilang"
 # it silently emits METADATA with no body, and the PyPI page renders blank.
 readme = "Readme.md"
 license = "LGPL-2.1-or-later"
+# The GNU convention for a library under the LGPL 2.1: COPYING carries the ordinary
+# GPL (v2, the one LGPL-2.1 section 3 lets a recipient convert to) and COPYING.LIB the
+# Lesser one. Both ship, because a recipient cannot exercise that conversion right
+# without the GPL text. The repo previously carried the LGPL-3/GPL-3 pair under the
+# LGPL-3 filename COPYING.LESSER, which contradicted this very line.
+license-files = ["COPYING", "COPYING.LIB", "COPYRIGHT"]
 authors = [
     { name="Qiyuan Xu", email="xqyww123@gmail.com" },
 ]
