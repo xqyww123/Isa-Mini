@@ -5743,21 +5743,6 @@ fun FUN_by_fun_ext fixes specs config metric_strs open_on_fail
                    (outer_ctxt, SK) =
   let
     val ctxt_fn = Variable.set_body false outer_ctxt
-    (* DEBUG: check Ctr_Sugar for nat in both contexts *)
-    val _ = let
-      val trace_file = "/tmp/fun_debug_trace.txt"
-      val has_sugar_outer = is_some (Ctr_Sugar.ctr_sugar_of outer_ctxt \<^type_name>\<open>nat\<close>)
-      val has_sugar_fn = is_some (Ctr_Sugar.ctr_sugar_of ctxt_fn \<^type_name>\<open>nat\<close>)
-      val suc_const = (case try (Proof_Context.read_const {proper = true, strict = false} outer_ctxt) "Suc" of
-        SOME t => Syntax.string_of_term outer_ctxt t | NONE => "NOT FOUND")
-      val eq_strs = map (fn ((_, eq), _, _) => eq) specs
-      val msg = cat_lines ([
-        "=== FUN_by_fun_ext DEBUG ===",
-        "outer_ctxt has nat ctr_sugar: " ^ Bool.toString has_sugar_outer,
-        "ctxt_fn has nat ctr_sugar: " ^ Bool.toString has_sugar_fn,
-        "Suc resolves to: " ^ suc_const,
-        "equations:"] @ eq_strs @ ["=== END ===", ""])
-    in File.write (Path.explode trace_file) msg end
     (* After the function is defined, also expose its defining
        equations under the conventional `<name>_def` name, as an alias
        for `<name>.simps`. The function/fun package only registers
