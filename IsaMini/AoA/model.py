@@ -10853,9 +10853,52 @@ class Root(GoalContainer, StdBlock):
         self.global_env = GlobalEnv(NodeConfig("global", Minilang_State.assign(ml_state0), self))
         self.sub_nodes.append(self.global_env)
         self.final_ml_state = Minilang_State.assign(ml_state0)
+        # `[Turn n]` counter for the Isabelle tracing echo. One Root is built per
+        # `aoa` invocation, so this resets per invocation, and forked/worker
+        # sessions share it (they run against the same Root).
+        self._isabelle_turn = 0
+        # Strong refs to in-flight fire-and-forget tracing tasks: asyncio only
+        # holds weak references, so an unreferenced task can be collected mid-send.
+        self._tracing_tasks: set[asyncio.Task] = set()
     @property
     def session(self) -> 'Session':
         return the_session()
+
+    def next_isabelle_turn(self) -> int:
+        """Allocate the next `[Turn n]` index."""
+        self._isabelle_turn += 1
+        return self._isabelle_turn
+
+    async def trace_to_isabelle(self, msg: str) -> None:
+        """Echo `msg` into the Isabelle output panel via the RPC `log` callback.
+
+        Invokes the `log` callback directly rather than `Connection.tracing`,
+        which mirrors every message to the Python logger as well -- these payloads
+        (quickview outlines, reasoning) are already recorded in `interaction.yaml`,
+        so that mirror is pure duplication in the host log.
+
+        Best effort: the panel echo is cosmetic, so an RPC failure is logged and
+        swallowed rather than allowed to abort a proof in progress."""
+        conn = self.ml_state.connection
+        try:
+            await conn.callback("log", (int(conn.LogType.TRACING), msg))
+        except Exception as e:
+            logger = the_session().logger
+            if logger is not None:
+                logger.debug(f"[tracing] echo to Isabelle failed: {e}")
+
+    def trace_to_isabelle_nowait(self, msg: str) -> None:
+        """`trace_to_isabelle` for synchronous callers (e.g. `log_model_thinking`).
+
+        Schedules the send and returns immediately; with no running loop (unit
+        tests) there is nothing to echo to, so it is a no-op."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        task = loop.create_task(self.trace_to_isabelle(msg))
+        self._tracing_tasks.add(task)
+        task.add_done_callback(self._tracing_tasks.discard)
     def opening(self) -> bool:
         # Root is a permanent container, never "open for appending". Replaces the
         # old `self._closed_by = self` sentinel now that opening() is derived —
@@ -12272,14 +12315,32 @@ class Session:
 
     # Model interaction logging methods
     def log_model_output(self, text: str):
-        """Log model text output to interaction.yaml."""
+        """Log the model's assistant text to interaction.yaml, and echo it to the
+        Isabelle output panel.
+
+        This is the model's ordinary visible prose — a different content-block
+        type from the reasoning captured by `log_model_thinking`."""
         self._log(self.interaction_log_file, "MODEL_OUTPUT",
                   lambda: [f"[MODEL] {text}"], text=text)
+        root = getattr(self, 'root', None)
+        if root is not None:
+            root.trace_to_isabelle_nowait(f"Model output: {text}")
 
     def log_model_thinking(self, thinking: str):
-        """Log model thinking output to interaction.yaml."""
+        """Log model thinking output to interaction.yaml, and echo it to the
+        Isabelle output panel.
+
+        Every driver funnels reasoning through here, so this one hook covers the
+        API, Claude-Code and fork paths alike. Forks pass their text already
+        prefixed with `[main.fork_N]` (see `_run_fork`), which is what keeps
+        concurrent forks distinguishable in the panel."""
         self._log(self.interaction_log_file, "MODEL_THINKING",
                   lambda: [f"[THINKING] {thinking}"], thinking=thinking)
+        # `root` is only bound by `initialize`; skip the echo if reasoning somehow
+        # arrives before then rather than raising out of a logging call.
+        root = getattr(self, 'root', None)
+        if root is not None:
+            root.trace_to_isabelle_nowait(f"Model thinking: {thinking}")
 
     def log_tool_call(self, tool_name: str, tool_input: dict[str, Any]):
         """Log tool call to interaction.yaml."""
@@ -13549,6 +13610,22 @@ class WorkerHandle:
         # finally and the aclose fallback.
         self._costs_accumulated: bool = False
 
+    def _trace_subagent(self, event: str) -> None:
+        """Echo this worker's lifecycle to the Isabelle output panel.
+
+        Labels the line with the sub-session's own ``_fork_name`` — the same
+        identity its thinking and `[Turn n]` lines carry — so that concurrent
+        workers stay attributable in a single interleaved panel. ``event`` is a
+        readable predicate ("started on step 5"), not a symbolic suffix."""
+        sub = self._sub
+        if sub is None:
+            return
+        name = getattr(sub, '_fork_name', 'worker')
+        self.session.root.trace_to_isabelle_nowait(f"[Subagent] {name} {event}")
+
+    def _step_label(self) -> str:
+        return f"step {self.session._display_id(self.target.id)}"
+
     def start(self, suggestions: str = "",
               useful_lemmas: list[str] | None = None,
               *, headless: bool = False) -> None:
@@ -13586,6 +13663,7 @@ class WorkerHandle:
 
         tag = f"[{sub._fork_name}]" # type: ignore
         session.log_interaction("worker", f"{tag} spawned")
+        self._trace_subagent(f"started on {self._step_label()}")
         try:
             await sub.run()
             # Final missing-lemma survey before the worker winds down — runs on
@@ -13620,6 +13698,16 @@ class WorkerHandle:
             except Exception as e:
                 session.warn_AoA_opr(f"{tag} sub-agent cleanup failed: {e}")
             self._settle_costs()
+            # Proof status, not the worker's own exit path: a worker can return
+            # having surrendered, so the unfinished-node sweep is the only sound
+            # test (a node's `status` is its own operation's, never its subtree's).
+            # `unfinished_nodes` rather than `StdBlock.is_proof_finished` because
+            # `target` is typed as the wider `NonLeaf_Node`.
+            _unfinished: set['Node'] = set()
+            self.target.unfinished_nodes(_unfinished)
+            self._trace_subagent(
+                f"proved {self._step_label()}" if not _unfinished
+                else f"finished without proving {self._step_label()}")
             try:
                 await sub.close()
             except Exception as e:
@@ -13788,6 +13876,7 @@ class WorkerHandle:
         self._pending_resume = None
         if fut is not None and not fut.done():
             fut.set_result(feedback)
+            self._trace_subagent(f"resumed on {self._step_label()}")
 
     async def wait_finish(self) -> None:
         if self._task is not None:

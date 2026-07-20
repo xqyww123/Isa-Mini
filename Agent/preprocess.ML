@@ -6,6 +6,14 @@ implications, and universal quantifiers into smaller subgoals before the agent
 handles each piece.
 *)
 
+(* Whether AoA's internal progress chatter is echoed to the output panel.
+   false (default) — the `aoa` method stays quiet about its own bookkeeping.
+   true            — enable via `declare [[AoA_Debug]]` when diagnosing a run.
+   Declared here rather than in agent_server.ML because preprocess.ML is loaded
+   FIRST (see Minilang_Agent.thy), so a declaration there would be invisible to
+   the sites below. *)
+val AoA_Debug = Attrib.setup_config_bool \<^binding>\<open>AoA_Debug\<close> (K false);
+
 signature GOAL_PREPROCESS = sig
   val split_skip_size : int
   val preprocess_size_threshold : int
@@ -14,6 +22,9 @@ signature GOAL_PREPROCESS = sig
 end
 
 structure Goal_Preprocess : GOAL_PREPROCESS = struct
+
+(* Progress chatter, gated on AoA_Debug *)
+fun dbg ctxt msg = if Config.get ctxt AoA_Debug then writeln msg else ()
 
 (* Subgoal conclusions smaller than this are left unsplit *)
 val split_skip_size = 30
@@ -69,7 +80,7 @@ fun preprocess_split_tac ctxt st =
     if max_goal_size <= preprocess_size_threshold then Seq.single st
     else
       let
-        val _ = writeln ("Max subgoal size " ^
+        val _ = dbg ctxt ("Max subgoal size " ^
                   string_of_int max_goal_size ^ " > " ^
                   string_of_int preprocess_size_threshold ^
                   ", preprocessing by splitting...")
@@ -78,20 +89,20 @@ fun preprocess_split_tac ctxt st =
         (* Step 1: try auto with 8-second timeout *)
         (case try_tac_timeout timeout (Clasimp.auto_tac (Smart_Split.add_smart_split ctxt)) st of
           SOME st' =>
-            (writeln "auto succeeded in preprocessing";
+            (dbg ctxt "auto succeeded in preprocessing";
              Seq.single st')
         | NONE =>
           let
-            val _ = writeln "auto timed out or failed, trying clarsimp..."
+            val _ = dbg ctxt "auto timed out or failed, trying clarsimp..."
             (* Step 2: try clarsimp, then custom split *)
             val st' =
               (case try_tac_timeout timeout
                       (ALLGOALS (Clasimp.clarsimp_tac (Smart_Split.add_smart_split ctxt))) st of
                 SOME s =>
-                  (writeln "clarsimp succeeded, applying custom split..."; s)
+                  (dbg ctxt "clarsimp succeeded, applying custom split..."; s)
               | NONE =>
-                  (writeln "clarsimp timed out, applying custom split \
-                           \on original goal..."; st))
+                  (dbg ctxt "clarsimp timed out, applying custom split \
+                            \on original goal..."; st))
           in
             (* Step 3: custom split on whatever state we have *)
             ALLGOALS (custom_split_tac ctxt) st'

@@ -1085,11 +1085,12 @@ class APIDriver_OpenAICodex(APIDriver_ChatGPT):
             )
         super().__init__(*args, provider=provider, **kwargs)
         # "perfect input cache" cost accounting for this stateless full-resend
-        # path (codex prompt caching is best-effort/intermittent). ON by
-        # default; set AOA_ASSUME_PERFECT_CACHE to a falsy value (e.g. "0") to
-        # disable. See _cache_assumed_usage.
+        # path (codex prompt caching is best-effort/intermittent). This reports
+        # NOTIONAL, not real, cache counts, so it is OFF by default; set
+        # AOA_ASSUME_PERFECT_CACHE to a truthy value (e.g. "1") to enable.
+        # See _cache_assumed_usage.
         self._assume_perfect_cache = os.environ.get(
-            "AOA_ASSUME_PERFECT_CACHE", "1").strip().lower() in (
+            "AOA_ASSUME_PERFECT_CACHE", "0").strip().lower() in (
                 "1", "true", "yes", "on")
 
 

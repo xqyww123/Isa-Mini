@@ -27,6 +27,36 @@ _VERB = {
 }
 
 
+async def _write_quickview(session: 'model.Session', file: MyIO) -> None:
+    """Render the proof-scope quickview into `file` AND echo it to the Isabelle
+    output panel as `[Turn n] <quickview>`.
+
+    Rendered once into a scratch buffer and copied, rather than rendered twice:
+    `quickview_proof_scope` is a *consuming* surface (it marks one-shot subagent
+    hints as shown), so a second render would silently swallow them.  Quickview
+    itself records no line numbers -- only the `print` path does, via
+    `update_line` -- so the scratch buffer's independent line counter is
+    immaterial and the copied text is byte-identical."""
+    scratch = MyIO(StringIO())
+    session.quickview_proof_scope(1, scratch)
+    quickview = scratch.getvalue()
+    file.write(quickview)
+    turn = session.root.next_isabelle_turn()
+    # Name the emitting agent: the turn counter lives on the shared `Root`, so main
+    # and workers interleave in one sequence and the label is what keeps a line
+    # attributable. `_fork_name` is the same identity workers' thinking lines carry.
+    agent = getattr(session, '_fork_name', 'main')
+    # A worker is responsible for exactly one step, so name it. The main agent's
+    # scope is the whole `Root`, which has no meaningful step id, so it gets no
+    # `@ ...` part rather than a placeholder.
+    scope = (f" @ {session._display_id(session.proof_scope_root.id)}"
+             if session.is_worker else "")
+    # `quickview` is an indented multi-line block, so the header gets its own line
+    # rather than being run together with the first step.
+    await session.root.trace_to_isabelle(
+        f"[Turn {turn}] {agent}{scope}\n{quickview.rstrip()}")
+
+
 def _headline(outcome: 'model.EditOutcome', session: 'model.Session') -> str:
     verb = _VERB[outcome.operation]
     c = outcome.committed
@@ -122,7 +152,7 @@ async def edit_message(
         session.warnings.clear()
     if outcome.committed:
         file.write("Outline:\n")
-        session.quickview_proof_scope(1, file)
+        await _write_quickview(session, file)
         _render_auto_intro_warning(session, file)
         unfinished = session.proof_scope_unfinished_nodes()
         if not unfinished:
@@ -153,7 +183,7 @@ async def deleted_steps_message(steps: list[str], root: Root, session: 'model.Se
             file.write(f"  - {w}\n")
         session.warnings.clear()
     file.write("Outline:\n")
-    session.quickview_proof_scope(1, file)
+    await _write_quickview(session, file)
     _render_auto_intro_warning(session, file)
     unfinished = session.proof_scope_unfinished_nodes()
     if not unfinished:
