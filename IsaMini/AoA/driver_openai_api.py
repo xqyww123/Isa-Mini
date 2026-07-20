@@ -1061,7 +1061,7 @@ class APIDriver_OpenAICodex(APIDriver_OpenAI):
     pointed at the proxy. The proxy is launcher-owned — this driver never starts
     it and fails fast (``LMUnreachable`` -> ``ResourceUnavailable``) if it is
     unreachable. See ``OpenAI_Codex_API_driver_plan.md``."""
-    DEFAULT_MODEL      = "gpt-5.5"
+    DEFAULT_MODEL      = "gpt-5.5-high"
     # None ⇒ APIDriver_OpenAI._fork_provider's cheaper-fork guard is falsy, so
     # every fork reuses self._provider (the proxy-configured CodexResponsesProvider)
     # — no second provider is ever built against the real api.openai.com.
@@ -1072,13 +1072,13 @@ class APIDriver_OpenAICodex(APIDriver_OpenAI):
         if provider is None:
             model, effort = _parse_effort_suffix(argument, self.DEFAULT_MODEL)
             base_url = os.environ.get(
-                "OPENAI_OAUTH_BASE_URL", "http://127.0.0.1:10531/v1")
+                "AOA_CODEX_API_BASE_URL", "http://127.0.0.1:10531/v1")
             provider = CodexResponsesProvider(
                 model=model,
                 # openai-oauth needs no key (the dummy satisfies the SDK's
                 # non-empty-string requirement); key-validating proxies such as
-                # auth2api need the configured key via OPENAI_OAUTH_API_KEY.
-                api_key=os.environ.get("OPENAI_OAUTH_API_KEY", "openai-oauth-local"),
+                # auth2api need the configured key via AOA_CODEX_API_KEY.
+                api_key=os.environ.get("AOA_CODEX_API_KEY", "openai-oauth-local"),
                 base_url=base_url,
                 cache_key=f"proof-{uuid.uuid4().hex[:8]}",
                 reasoning_effort=effort,
