@@ -23,6 +23,15 @@ class _QuotaError(AoA_Error):
     pass
 
 
+class _TechnicalError(AoA_Error):
+    """The agent failed for a reason that is neither transient nor the backend's
+    availability: a request the API rejected as invalid, or a failure we have no
+    branch for.  Retrying cannot help and it is not a statement about the proof, so
+    the driver converts it to ``quit_info = TechnicalFailure`` — never to
+    ``ResourceExhausted``, which would misreport a defect as a spent budget."""
+    pass
+
+
 # --- Cost accounting (shared by every driver / provider) ---
 # Token-accounting standard for this package: docs/COST_ACCOUNTING.md.
 

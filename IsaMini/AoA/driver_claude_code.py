@@ -9,7 +9,8 @@ import shlex
 import tempfile
 import shutil
 from .model import *
-from .language_model_driver import LMDriver, _TransientError, _QuotaError, PRICING, pricing_for, Usage
+from .language_model_driver import (LMDriver, _TransientError, _QuotaError, _TechnicalError,
+                                    PRICING, pricing_for, Usage)
 from . import prompts as P
 from .mcp_http_server import ProofMCPHTTPServer
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, HookMatcher, ResultMessage
@@ -19,6 +20,7 @@ except ImportError:
     RateLimitEvent = None
 
 from claude_agent_sdk.types import (
+    AssistantMessage,
     HookInput,
     HookContext,
     HookJSONOutput,
@@ -223,7 +225,10 @@ class ClaudeCode(LMDriver):
             main_model = self._model
             self.options = ClaudeAgentOptions(
                 model=main_model,
-                thinking={"type": "adaptive"},
+                # `display` is required to get thinking TEXT back: Opus 4.7+
+                # defaults to "omitted", which returns signature-only blocks whose
+                # `.thinking` is empty — so `log_model_thinking` never fired.
+                thinking={"type": "adaptive", "display": "summarized"},
                 system_prompt=self.system_prompt(),
                 cwd=self.working_dir,
                 permission_mode="default",
@@ -523,9 +528,67 @@ class ClaudeCode(LMDriver):
         if event.rate_limit_info.status == "rejected":
             raise _QuotaError("Rate limit rejected")
 
+    def _check_message_error(self, message: Any) -> None:
+        """Classify a failure the SDK reports structurally, and raise.
+
+        `_check_error_text` alone is a whitelist of two string patterns, so every
+        failure outside it — an unauthenticated CLI above all — used to pass through as
+        if it were ordinary model output. The agent then made no progress, the retry
+        loop span to `max_retries`, and the run ended as
+        ``ResourceExhausted("retry limit")``: an infrastructure failure reported as a
+        proof failure, with cost $0 and zero tool calls as the only clue.
+
+        AssistantMessage.error (claude_agent_sdk.types.AssistantMessageError) is the
+        stable, version-independent signal; the ResultMessage.is_error fail-safe below
+        catches whatever the enum does not.
+        """
+        err = getattr(message, "error", None) if isinstance(message, AssistantMessage) else None
+        if err is None and isinstance(message, ResultMessage):
+            # Fail-safe. NB: do NOT branch on `subtype` — it still reads 'success' on an
+            # auth failure.
+            if not message.is_error:
+                return
+            err = "unknown"
+        if err is None:
+            return
+
+        detail = self._model_error_detail(message)
+        if err == "rate_limit":
+            raise _QuotaError(detail or "rate limit")
+        if err == "server_error":
+            raise _TransientError(detail or "server error")
+        if err in ("authentication_failed", "billing_error"):
+            # The backend itself cannot be used: give up cleanly through the existing
+            # LMUnreachable -> ResourceUnavailable rail (driver_api._api_loop:381), the
+            # same one driver_openai_api._fail_fast uses for a 401. Retrying cannot help.
+            raise LMUnreachable(
+                "Claude-Code: could not authenticate or the account is not billable. "
+                "Run `claude` and use /login, then retry."
+                + (f" The model reported: {detail!r}" if detail else ""))
+        # invalid_request / unknown: not the backend's fault and not transient — we sent
+        # something the API rejected, or hit a failure we have no branch for. Either way
+        # it is a defect to surface, not a proof outcome.
+        raise _TechnicalError(
+            f"Claude-Code: agent failure ({err})"
+            + (f": {detail}" if detail else ""))
+
+    @staticmethod
+    def _model_error_detail(message: Any) -> str:
+        """The model's own words for the failure. Worth carrying: an API relay that
+        signals an exhausted quota with HTTP 403 surfaces as `authentication_failed`,
+        where "run /login" would be exactly the wrong advice and only this text says so."""
+        content = getattr(message, "content", None)
+        texts = ([t for b in content
+                  if isinstance(t := getattr(b, "text", None), str) and t.strip()]
+                 if isinstance(content, list) else [])
+        if not texts and isinstance(message, ResultMessage):
+            texts = [message.result] if message.result else []
+        return " ".join(texts).strip()
+
     def _check_result_error(self, message: 'ResultMessage') -> None:
         if message.is_error and message.result:
             self._check_error_text(message.result)
+        self._check_message_error(message)
 
     async def _sdk_loop(self):
         """Run using the Claude Agent SDK (embedded mode)."""
@@ -548,6 +611,11 @@ class ClaudeCode(LMDriver):
                             if RateLimitEvent is not None and isinstance(message, RateLimitEvent):
                                 self._check_rate_limit_event(message)
                                 continue
+                            # Structural check first: an AssistantMessage carrying
+                            # error='authentication_failed' also carries the failure text
+                            # in its content, which would otherwise be logged as if the
+                            # model had said it.
+                            self._check_message_error(message)
                             content = getattr(message, "content", None)
                             if isinstance(content, list):
                                 for block in content:
@@ -577,6 +645,18 @@ class ClaudeCode(LMDriver):
                             self._model_time_start = time()
                         else:
                             break
+            except LMUnreachable as e:
+                # Credentials/billing: give up cleanly through quit_info rather than
+                # spinning to the retry limit (which would report the infrastructure
+                # failure as ResourceExhausted, i.e. as a proof that ran out of budget).
+                # Mirrors driver_api._api_loop:381. Terminal => the outer loop breaks.
+                self.quit_info = ResourceUnavailable(detail=str(e))
+                self.warn_AoA_opr(f"LM unreachable: {e}")
+                break
+            except _TechnicalError as e:
+                self.quit_info = TechnicalFailure(detail=str(e))
+                self.warn_AoA_opr(f"Technical failure: {e}")
+                break
             finally:
                 self._client = None
 
@@ -873,7 +953,9 @@ class ClaudeCode(LMDriver):
 
         fork_options = ClaudeAgentOptions(
             model=model,
-            thinking={"type": "adaptive"},
+            # See the main-options note: without `display` the thinking text is
+            # omitted on Opus 4.7+ and only a signature comes back.
+            thinking={"type": "adaptive", "display": "summarized"},
             system_prompt=self.system_prompt(),
             resume=resume,
             fork_session=fork_session,
@@ -924,6 +1006,7 @@ class ClaudeCode(LMDriver):
                         if RateLimitEvent is not None and isinstance(message, RateLimitEvent):
                             self._check_rate_limit_event(message)
                             continue
+                        self._check_message_error(message)
                         content = getattr(message, "content", None)
                         if isinstance(content, list):
                             for block in content:
@@ -959,6 +1042,11 @@ class ClaudeCode(LMDriver):
             except _TransientError as e:
                 self.warn_AoA_opr(f"{tag} Transient API error, retrying in 2s: {e}")
                 await asyncio.sleep(2)
+            # LMUnreachable / _TechnicalError are deliberately NOT caught here: this loop
+            # may only `break` once fork_pending.answer is done (the assert below relies
+            # on it), so swallowing them would trade a clean give-up for an AssertionError.
+            # They propagate to ToolExecutor.execute — which spawned this fork — and are
+            # converted to quit_info there, the same route driver_api._run_fork uses.
         finally:
             if self._http_server is not None and fork._session_id is not None:
                 await self._http_server.unregister_session(fork._session_id)

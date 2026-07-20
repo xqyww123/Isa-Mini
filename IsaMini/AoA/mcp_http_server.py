@@ -36,6 +36,7 @@ from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import Tool, ToolAnnotations, TextContent, CallToolResult
 
 from Isabelle_RPC_Host import pretty_unicode
+from .language_model_driver import _TechnicalError
 from .model import (
     _session_var, Session, Node, NonLeaf_Node, StdBlock,
     Root, GlobalEnv, GoalNode,
@@ -66,7 +67,7 @@ from .model import (
     LOOP_REPEAT_THRESHOLD,
     Role_Worker,
     Surrender, Refute, Refresh,
-    LMUnreachable, ResourceUnavailable,
+    LMUnreachable, ResourceUnavailable, TechnicalFailure,
     TOOL_REFRESH, TOOL_WRITE_MEMORY,
     print_indent, print_goal, MyIO,
 )
@@ -2734,6 +2735,16 @@ class ToolExecutor:
             # directly (see driver_api._api_loop).
             session.quit_info = ResourceUnavailable(detail=str(e))
             session.log_tool_response(session.tool_name(name), f"LM UNREACHABLE: {e}")
+            return (str(e), True)
+        except _TechnicalError as e:
+            # Same rail as LMUnreachable above, different verdict: the agent hit a
+            # failure that is neither transient nor an availability problem (a request
+            # the API rejected, or one we have no branch for). It must not fall to the
+            # `except Exception: sys.exit(1)` below, and it must not be reported as a
+            # proof outcome — TechnicalFailure says "this stopped for a technical
+            # reason", which is exactly what happened.
+            session.quit_info = TechnicalFailure(detail=str(e))
+            session.log_tool_response(session.tool_name(name), f"TECHNICAL FAILURE: {e}")
             return (str(e), True)
         except (ConnectionError, EOFError):
             raise asyncio.CancelledError("connection lost")
