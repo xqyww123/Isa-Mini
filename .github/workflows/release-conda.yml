@@ -96,7 +96,7 @@ jobs:
           python3 -c "import sys,zipfile,tarfile,io,zstandard; z=zipfile.ZipFile(sys.argv[1]); b=next(n for n in z.namelist() if n.startswith('pkg-') and n.endswith('.tar.zst')); r=zstandard.ZstdDecompressor().stream_reader(io.BytesIO(z.read(b))); tarfile.open(fileobj=io.BytesIO(r.read())).extractall(sys.argv[2])" "$pkg" "$work"
 
           comp="$work/share/isabelle-minilang"
-          for f in ROOT Minilang.thy library/proof.ML Agent/Minilang_Agent.thy \
+          for f in ROOT Minilang.thy library/proof.ML Agent/Minilang_AoA.thy \
                    Agent/agent.ML Agent/agent_server.ML \
                    Agent/Injector/Minilang_Agent_Injector.thy; do
             [ -f "$comp/$f" ] || { echo "::error::missing $f"; find "$comp" | head -40; exit 1; }
@@ -290,7 +290,7 @@ jobs:
           # because it needs `dev`-category expose_map_syn.  Building it would need
           # -d Agent/Injector AND a patched Isabelle, which is exactly what a user of the
           # published package does not have.
-          isabelle build -v Minilang Minilang_Agent
+          isabelle build -v Minilang Minilang_AoA
           # A control: an invented session name must ERROR.  Without it, a `build` that
           # silently did nothing would read as a pass.
           if isabelle build -v Minilang_No_Such_Session 2>/dev/null; then

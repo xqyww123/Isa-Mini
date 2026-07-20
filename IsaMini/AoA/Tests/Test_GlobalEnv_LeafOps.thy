@@ -1,5 +1,5 @@
 theory Test_GlobalEnv_LeafOps
-  imports Minilang_Agent.Minilang_Agent
+  imports Minilang_AoA.Minilang_AoA
 begin
 
 declare [[AoA_driver="test.GlobalEnv_LeafOps"]]

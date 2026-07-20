@@ -1,5 +1,5 @@
 theory Test_Obvious_DenseIffFact imports
-  "HOL-Analysis.Harmonic_Numbers" Minilang_Agent.Minilang_Agent
+  "HOL-Analysis.Harmonic_Numbers" Minilang_AoA.Minilang_AoA
 begin
 
 declare [[AoA_driver="test.Obvious_DenseIffFact"]]

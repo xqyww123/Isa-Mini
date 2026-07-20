@@ -1833,7 +1833,7 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
           val _ = Synchronized.change prem_ctr (K final_counter)
 
           val fixes' = vars
-          val attr_srcs = [Token.make_src ("Minilang_Agent.mini_auto_apply", Position.none) []]
+          val attr_srcs = [Token.make_src ("Minilang_AoA.mini_auto_apply", Position.none) []]
           val shows = [((Binding.name name, attr_srcs), [(equation, [])])]
           val s' = Minilang.HAVE'' fixes' named_assumes shows s
           (* Same AoA policy as the HAVE branch: `read_terms` turns an authored

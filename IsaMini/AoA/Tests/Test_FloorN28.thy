@@ -1,5 +1,5 @@
 theory Test_FloorN28
-  imports Complex_Main Minilang_Agent.Minilang_Agent
+  imports Complex_Main Minilang_AoA.Minilang_AoA
 begin
 declare [[auto_interpret_for_embedding=false, AoA_driver="ClaudeCode"]]
 (* Goal 2 from e1a98d264_3 step 25.2.2.1.3.1:

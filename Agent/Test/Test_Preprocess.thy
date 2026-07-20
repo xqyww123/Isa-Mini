@@ -1,5 +1,5 @@
 theory Test_Preprocess
-  imports Minilang_Agent.Minilang_Agent
+  imports Minilang_AoA.Minilang_AoA
 begin
 
 ML \<open>

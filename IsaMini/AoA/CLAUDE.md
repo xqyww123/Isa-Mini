@@ -1,10 +1,10 @@
-# AoA (All over Abstraction) — Developer Guide
+# AoA (Agent over AST) — Developer Guide
 
 AoA is the AI-agent framework that drives Isabelle proofs through the Minilang proof language. An agent (planner) builds a proof tree of high-level operations; sub-agents (workers) discharge individual lemmas. This document is the reference for working *on* AoA itself.
 
 > References below use stable symbol names (`Class.method`), never line numbers — line numbers drift. Grep for the symbol.
 
-**ML side:** `../../Agent/` (`agent_server.ML`, `Minilang_Agent.thy`) and `../../library/proof.ML`
+**ML side:** `../../Agent/` (`agent_server.ML`, `Minilang_AoA.thy`) and `../../library/proof.ML`
 **Note:** The live agent code is this directory — NOT the stray top-level `../../IsaMini_AoA/` (which holds only a leftover `driver_codex.py`). For the broader Minilang project layout see the `isa-mini` skill.
 
 Always also load the `isabelle-ML` skill before touching any `.ML` file (per project memory).
@@ -52,7 +52,7 @@ The Python `Session` is **not** an Isabelle session. Workers do not open a new I
 ## Architecture map
 
 ### Entry / RPC wiring
-- User writes `by aoa` → method registered by `method_setup aoa` in `../../Agent/Minilang_Agent.thy`; method body is `MiniLang_Agent_AoA.method` in `../../Agent/agent_server.ML`. Default driver `"ClaudeCode"` (config `AoA_driver`).
+- User writes `by aoa` → method registered by `method_setup aoa` in `../../Agent/Minilang_AoA.thy`; method body is `MiniLang_Agent_AoA.method` in `../../Agent/agent_server.ML`. Default driver `"ClaudeCode"` (config `AoA_driver`).
 - AoA is **one long-lived RPC command** `IsaMini.AoA` (ML builds `aoa_cmd` in `agent_server.ML`; Python handler `IsaMini_AoA`, decorated `@isabelle_remote_procedure("IsaMini.AoA")` in `toplevel.py`). Inside it, **Python calls back into ML** repeatedly (`IsaMini.proof_opr`, `reset_state`, `lookup_fact`, `check_term`, …; ML callbacks defined in `agent_server.ML`).
 - Registered as the Isa-REPL app `Minilang.AoA` (`REPL_Server.register_app` in `agent_server.ML`). Clients connect, advance to the `by aoa` line, `run_app('Minilang.AoA')`.
 - Caching (in `IsaMini_AoA`): Python SQLite (`proof_cache.py`) → ML Phi_Cache JSON → full run. Hits replay packed ops via `set_replay_mode` + `proof_opr` (`_replay_cached_proof`).
@@ -119,7 +119,7 @@ async def _test_Have1(root: Root, file: MyIO):
 
 ### Run & interpret
 - `python ../../test_AoA.py -f NAME` (`-x EXCL`, `--sh-timeout N`, `--repl-addr`). `-f`/`-x` are **substring** matches on the test name (`-f` accepts `,` or `|` as OR separators; `-x` is comma-separated). **Always redirect** (`> /tmp/aoa.txt 2>&1`) — output is huge — and run one at a time.
-- **The REPL can auto-load a small unbuilt library such as `Minilang_Agent` on the fly — don't fuss over whether a `Minilang_Agent` heap has been built.**
+- **The REPL can auto-load a small unbuilt library such as `Minilang_AoA` on the fly — don't fuss over whether a `Minilang_AoA` heap has been built.**
 - Status classification in `run_all_tests`: `success` / `stuck` / `false_statement` / `resource_exhausted` → **pass**; anything else → **fail**.
 - **`remote_error` ALWAYS means a golden-YAML diff mismatch** — a `TestFailed` from `ModelTestCase.run` surfacing across the RPC bridge as `Remote_Calling_Failure`, NOT an RPC fault. The real diff is on disk: `Tests/<name>.diff` and `<name>.actual.yml` (both auto-cleaned at the start of the next run of that case).
 
@@ -149,5 +149,5 @@ async def _test_Have1(root: Root, file: MyIO):
 - `language_model_driver.py` — driver base + worker plumbing.
 - `driver_*.py` — concrete drivers (`driver_claude_code.py` is default).
 - `test.py` / `Tests/*` (this directory) + the runner `../../test_AoA.py` — test framework + goldens.
-- `../../Agent/agent_server.ML`, `../../Agent/Minilang_Agent.thy`, `../../library/proof.ML` — ML side.
+- `../../Agent/agent_server.ML`, `../../Agent/Minilang_AoA.thy`, `../../library/proof.ML` — ML side.
 - `docs/DEVELOP.md` — the longer-form design document (same material, with rationale).

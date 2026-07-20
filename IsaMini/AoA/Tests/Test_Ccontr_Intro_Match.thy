@@ -1,5 +1,5 @@
 theory Test_Ccontr_Intro_Match imports
-MathBench_Prover.MathBench_Prover Minilang_Agent.Minilang_Agent
+MathBench_Prover.MathBench_Prover Minilang_AoA.Minilang_AoA
 begin
 
 declare [[auto_interpret_for_embedding=false]]

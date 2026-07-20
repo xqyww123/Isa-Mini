@@ -1,5 +1,5 @@
 theory test_simplify
-  imports Minilang_Agent.Minilang_Agent
+  imports Minilang_AoA.Minilang_AoA
 begin
 
 section \<open>Test Cases for SIMPLIFY operation\<close>

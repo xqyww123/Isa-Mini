@@ -1,5 +1,5 @@
 theory Test_Define_SucIMO
-  imports Minilang_Agent.Minilang_Agent
+  imports Minilang_AoA.Minilang_AoA
     Complex_Main
     "HOL-Computational_Algebra.Computational_Algebra"
     "HOL-Number_Theory.Number_Theory"

@@ -1,5 +1,5 @@
 theory ScratchInfraStudy
-  imports Minilang_Agent
+  imports Minilang_AoA
 begin
 
 (* scratch theory for infra-constant study; safe to delete *)

@@ -1,5 +1,5 @@
-theory Minilang_Agent_Test
-  imports Minilang_Agent
+theory Minilang_AoA_Test
+  imports Minilang_AoA
 begin
  
 

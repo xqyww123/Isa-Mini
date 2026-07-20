@@ -196,7 +196,7 @@ text \<open>Verify \<open>consumes_policy\<close> is accessible and the theory-l
       default is \<open>"require"\<close>. The AoA agent applies
       \<open>"subgoals"\<close> per-session in \<open>agent_server.ML\<close> via \<open>Config.put\<close>, not
       as a theory-wide \<open>declare\<close>, so theories that merely import
-      \<open>Minilang_Agent\<close> still see the stock default here.
+      \<open>Minilang_AoA\<close> still see the stock default here.
 
       Full behavior is exercised indirectly:
       - \<open>D1\<close> verified the \<open>"require"\<close> error-on-under behavior.

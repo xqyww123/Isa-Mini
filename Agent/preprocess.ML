@@ -14,7 +14,7 @@ handles each piece.
    debugging AoA" flag, and is registered for RPC lookup so the Python side can
    consult it too (Config.lookup "AoA_Debug", see Isabelle_RPC/Tools/config.ML).
    Declared here rather than in agent_server.ML because preprocess.ML is loaded
-   FIRST (see Minilang_Agent.thy), so a declaration there would be invisible to
+   FIRST (see Minilang_AoA.thy), so a declaration there would be invisible to
    the sites below. *)
 val AoA_Debug = Attrib.setup_config_bool \<^binding>\<open>AoA_Debug\<close> (K false);
 val _ = Config.register_rpc_option "AoA_Debug" (Config.bool_value AoA_Debug);

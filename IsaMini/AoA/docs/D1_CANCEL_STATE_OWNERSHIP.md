@@ -492,7 +492,7 @@ Relevant to this bug:
 - `Tests/` — `RequestLemmasInEnvTarget.{thy,yml}` deleted; 6 goldens re-blessed
   (`Derive6`, `Derive7`, `SubagentHintScopeOneShot`, `RequestLemmasAutoProve`,
   `RefuteOrSurrender`, `RequestFinishesTarget`); ~46 `Test_*.thy` gained
-  `imports Complex_Main` (because `Agent/Minilang_Agent.thy` intentionally dropped
+  `imports Complex_Main` (because `Agent/Minilang_AoA.thy` intentionally dropped
   `Complex_Main`, and `Minilang` only imports `HOL.List` + `Auto_Sledgehammer` — no `Main`,
   hence no `real`/`rat`/`complex`/`GCD`/coercion).
 

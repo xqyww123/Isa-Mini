@@ -1,5 +1,5 @@
 theory Test_Obvious_partial_solve imports
-  Complex_Main Minilang_Agent.Minilang_Agent
+  Complex_Main Minilang_AoA.Minilang_AoA
 begin
 
 declare [[AoA_driver="test.Obvious_partial_solve"]]

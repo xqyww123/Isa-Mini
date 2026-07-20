@@ -1489,7 +1489,7 @@ fun method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
            val log_dir = Config.get ctxt AoA_log_dir
            val log_path = if log_dir = "" then "(no logging)"
                           else log_dir ^ "/" ^ invocation_id
-           val _ = writeln ("Agent-of-Agents (driver: " ^ driver ^ ", logs: " ^ log_path ^ ")")
+           val _ = writeln ("AoA (driver: " ^ driver ^ ", logs: " ^ log_path ^ ")")
            (* Unfold locale/class instance goals (needs `standard`) before the agent runs *)
            val sequent =
              if Phi_Sledgehammer_Solver.need_standard_tac ctxt sequent

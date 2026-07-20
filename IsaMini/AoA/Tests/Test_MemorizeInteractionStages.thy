@@ -1,5 +1,5 @@
 theory Test_MemorizeInteractionStages
-  imports Complex_Main Minilang_Agent.Minilang_Agent
+  imports Complex_Main Minilang_AoA.Minilang_AoA
 begin
 
 declare [[AoA_driver="test.MemorizeInteractionStages"]]

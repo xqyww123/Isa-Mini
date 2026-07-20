@@ -1,4 +1,4 @@
-(**** Minilang Agent All over Abstraction ****)
+(**** Minilang AoA -- Agent over AST ****)
 structure MiniLang_Agent_AoA = struct
 
 type icmd = MiniLang_Agent.icmd

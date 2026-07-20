@@ -1,5 +1,5 @@
 theory Test_Define_WorkerScope_Deferred
-  imports Minilang_Agent.Minilang_Agent
+  imports Minilang_AoA.Minilang_AoA
 begin
 
 declare [[AoA_driver="test.Define_WorkerScope_Deferred"]]

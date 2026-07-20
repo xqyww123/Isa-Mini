@@ -4,12 +4,12 @@ session Minilang = Auto_Sledgehammer +
     Minilang_Base
     Minilang
 
-session Minilang_Agent in Agent = Minilang +
+session Minilang_AoA in Agent = Minilang +
   sessions
     Isabelle_RPC
     Semantic_Embedding
   theories
-    Minilang_Agent
+    Minilang_AoA
 
 (* Minilang_Agent_Injector lives in Agent/Injector/ROOT, NOT here: it needs
    `Sign.map_syn`, which only exists with my-better-isabelle-prover's `expose_map_syn`

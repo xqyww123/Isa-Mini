@@ -1,5 +1,5 @@
 theory Test_CaseSplit_ReservedName_Rejected
-  imports Minilang_Agent.Minilang_Agent
+  imports Minilang_AoA.Minilang_AoA
 begin
 
 declare [[AoA_driver="test.CaseSplit_ReservedName_Rejected"]]

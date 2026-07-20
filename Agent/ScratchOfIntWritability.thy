@@ -1,5 +1,5 @@
 theory ScratchOfIntWritability
-  imports Minilang_Agent
+  imports Minilang_AoA
 begin
 
 ML \<open>

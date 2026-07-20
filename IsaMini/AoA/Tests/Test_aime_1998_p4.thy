@@ -5,7 +5,7 @@
 theory Test_aime_1998_p4 imports
 Complex_Main
 (*MathBench_Prover.MathB ench_Prover
-Minilang_Agent.Minila ng_Agent *)
+Minilang_AoA.Minilang_AoA *)
 begin
 
 term \<open>a :: nat\<close>

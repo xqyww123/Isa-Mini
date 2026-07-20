@@ -1,5 +1,5 @@
 theory Test_RequestLemmas_FocusedView
-  imports Minilang_Agent.Minilang_Agent
+  imports Minilang_AoA.Minilang_AoA
 begin
 
 declare [[AoA_driver="test.RequestLemmas_FocusedView"]]

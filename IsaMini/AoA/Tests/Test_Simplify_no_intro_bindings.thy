@@ -1,5 +1,5 @@
 theory Test_Simplify_no_intro_bindings imports
-  Complex_Main Minilang_Agent.Minilang_Agent
+  Complex_Main Minilang_AoA.Minilang_AoA
 begin
 
 declare [[AoA_driver="test.Simplify_no_intro_bindings"]]

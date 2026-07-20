@@ -1,4 +1,4 @@
-theory Minilang_Agent
+theory Minilang_AoA
   imports Minilang.Minilang
           Isabelle_RPC.Remote_Procedure_Calling Semantic_Embedding.Semantic_Embedding
 begin

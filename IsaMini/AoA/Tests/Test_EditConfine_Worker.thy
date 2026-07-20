@@ -1,5 +1,5 @@
 theory Test_EditConfine_Worker
-  imports Minilang_Agent.Minilang_Agent
+  imports Minilang_AoA.Minilang_AoA
 begin
 
 declare [[AoA_driver="test.EditConfine_Worker"]]

@@ -1,5 +1,5 @@
 theory Test_Rewrite_Targeted imports
-  Minilang_Agent.Minilang_Agent
+  Minilang_AoA.Minilang_AoA
 begin
 
 declare [[AoA_driver="test.Rewrite_Targeted"]]

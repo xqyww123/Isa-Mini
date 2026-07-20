@@ -1,5 +1,5 @@
 theory Test_Define_SucPattern
-  imports Minilang_Agent.Minilang_Agent
+  imports Minilang_AoA.Minilang_AoA
 begin
 
 declare [[AoA_driver="test.Define_SucPattern"]]
@@ -10,7 +10,7 @@ declare [[AoA_driver="test.Define_SucPattern"]]
    HOL-Computational_Algebra), the LLM's Define with Suc patterns was
    rejected with "Non-constructor pattern not allowed in sequential
    mode".  This test verifies the same equations WORK in the standard
-   Minilang_Agent context — proving the bug is theory-import-dependent,
+   Minilang_AoA context — proving the bug is theory-import-dependent,
    not a universal Define defect.
 *)
 

@@ -4,7 +4,7 @@
 
 theory Test_imo_1966_p5 imports Complex_Main
 MathBench_Prover.MathBench_Prover
-Minilang_Agent.Minilang_Agent
+Minilang_AoA.Minilang_AoA
 begin
 (* declare [[AoA_driver="test.IMO_1966_p5"]] *) declare [[z3_extensions, auto_interpret_for_embedding=false, AoA_interactive_retrieval="no"]] term 1
 theorem imo_1966_p5:

@@ -281,9 +281,9 @@ rather than authored autonomously.
   `SetupRewriting` (intervening Have/Obtain add +1 each to `_subgoal_level`) to pin the new hint /
   dispatch target (formerly None → now naming the SetupRewriting). Turns the incidental D6 immunity
   into an audited tripwire. Needs user approval before blessing the `.yml`.
-- **§4 delegation (REPL-gated):** verify on a live Minilang_Agent REPL that a worker dispatched on a
+- **§4 delegation (REPL-gated):** verify on a live Minilang_AoA REPL that a worker dispatched on a
   global `SetupRewriting` can render and prove its body.
-- **Logistics:** golden runs need a Minilang_Agent REPL on 6666 (not currently running); editing
+- **Logistics:** golden runs need a Minilang_AoA REPL on 6666 (not currently running); editing
   `model.py` requires killing `Isabelle_RPC_Host` so fresh code loads. Coordinate the restart with the
   user. Never edit/regenerate/delete a `Tests/*.yml` without explicit approval.
 

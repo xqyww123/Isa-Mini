@@ -1,5 +1,5 @@
 theory Test_Chaining_NoCounter_AutoName
-  imports Minilang_Agent.Minilang_Agent
+  imports Minilang_AoA.Minilang_AoA
 begin
 
 declare [[AoA_driver="test.Chaining_NoCounter_AutoName"]]

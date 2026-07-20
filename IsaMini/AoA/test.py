@@ -2418,7 +2418,7 @@ async def _test_Define_SucPattern(root: Root, file: MyIO):
     The LLM tried `myf 0 = 1` / `myf (Suc n) = 2 * myf n` and got
     "Non-constructor pattern not allowed in sequential mode" every time.
     This test checks whether the same equations work in the standard
-    Minilang_Agent context.
+    Minilang_AoA context.
     """
     print_header("Initial YAML", file)
     root.print(0, file)

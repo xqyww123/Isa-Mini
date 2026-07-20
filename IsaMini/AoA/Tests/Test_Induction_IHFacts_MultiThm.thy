@@ -1,5 +1,5 @@
 theory Test_Induction_IHFacts_MultiThm
-  imports Minilang_Agent.Minilang_Agent
+  imports Minilang_AoA.Minilang_AoA
 begin
 
 declare [[AoA_driver="test.Induction_SelectIHFacts_MultiThm"]]

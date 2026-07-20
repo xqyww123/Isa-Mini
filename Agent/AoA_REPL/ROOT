@@ -1,8 +1,8 @@
-(* The AoA REPL-server app ("Minilang.AoA"). Kept out of Minilang_Agent so that
+(* The AoA REPL-server app ("Minilang.AoA"). Kept out of Minilang_AoA so that
    session stays free of Isa_REPL; clients that drive AoA over the REPL app load
    Minilang_AoA_App at runtime (add_lib), `by aoa` users import plain
-   Minilang_Agent. *)
-session Minilang_AoA_REPL = Minilang_Agent +
+   Minilang_AoA. *)
+session Minilang_AoA_REPL = Minilang_AoA +
   sessions
     Isa_REPL
   theories

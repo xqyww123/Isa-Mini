@@ -1,5 +1,5 @@
 theory Test_eval_simproc
-  imports MathBench_Prover.MathBench_Prover Minilang_Agent.Minilang_Agent
+  imports MathBench_Prover.MathBench_Prover Minilang_AoA.Minilang_AoA
     "Polynomial_Factorization.Prime_Factorization"
     "Catalan_Numbers.Catalan_Numbers"
     "Bernoulli.Bernoulli"

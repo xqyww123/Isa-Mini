@@ -1,6 +1,6 @@
 (* The AoA REPL-server app: registers "Minilang.AoA". Moved here out of
-   Agent/agent_server.ML so that the Minilang_Agent session no longer depends on
-   Isa_REPL. This session (Minilang_AoA_REPL) imports Minilang_Agent + Isa_REPL;
+   Agent/agent_server.ML so that the Minilang_AoA session no longer depends on
+   Isa_REPL. This session (Minilang_AoA_REPL) imports Minilang_AoA + Isa_REPL;
    the app just delegates to MiniLang_Agent_AoA.AoA_RPC (the same RPC core that
    `by aoa` uses), so no proof logic lives here. *)
 

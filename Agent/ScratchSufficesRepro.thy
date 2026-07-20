@@ -1,5 +1,5 @@
 theory ScratchSufficesRepro
-  imports Minilang_Agent
+  imports Minilang_AoA
 begin
 
 (* ===== Baseline: pure Isabelle behaviour of the rewrite on the implication ===== *)

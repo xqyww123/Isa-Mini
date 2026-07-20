@@ -3,7 +3,7 @@
 *)
 
 theory Test_imo_2006_p3 imports Complex_Main
-  MathBench_Prover.MathBench_Prover Minilang_Agent.Minilang_Agent
+  MathBench_Prover.MathBench_Prover Minilang_AoA.Minilang_AoA
 begin
 declare [[auto_interpret_for_embedding=false, AoA_driver="Claude"]]
 

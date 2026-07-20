@@ -1,5 +1,5 @@
 theory Test_Obtain_Skip_Introduced
-  imports Minilang_Agent.Minilang_Agent
+  imports Minilang_AoA.Minilang_AoA
 begin
 
 declare [[AoA_driver="test.Obtain_Skip_Introduced"]]

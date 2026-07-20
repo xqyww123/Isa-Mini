@@ -1,5 +1,5 @@
 theory Test_HaveSchematicVar imports Complex_Main
-  Minilang_Agent.Minilang_Agent
+  Minilang_AoA.Minilang_AoA
 begin
 
 declare [[AoA_driver="test.HaveSchematicVar"]]

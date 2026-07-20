@@ -3,7 +3,7 @@
 *)
 
 theory Test_imo_1961_p1 imports Complex_Main
-MathBench_Prover.MathBench_Prover Minilang_Agent.Minilang_Agent
+MathBench_Prover.MathBench_Prover Minilang_AoA.Minilang_AoA
 
 begin
 

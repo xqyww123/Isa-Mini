@@ -19,7 +19,7 @@
        *** Value or constructor (map_syn) has not been declared in structure Sign
 
    Measured: Isa-Mini release-conda run 29677250284, where Minilang and
-   Minilang_Agent built cleanly and only this one failed.
+   Minilang_AoA built cleanly and only this one failed.
 
    The .thy still ships, so anyone running a `--category all` Isabelle can use it:
 
@@ -27,6 +27,6 @@
 
    Same treatment, and the same reasoning, as REPL/ROOT and Agent/AoA_REPL/ROOT. *)
 
-session Minilang_Agent_Injector = Minilang_Agent +
+session Minilang_Agent_Injector = Minilang_AoA +
   theories
     Minilang_Agent_Injector

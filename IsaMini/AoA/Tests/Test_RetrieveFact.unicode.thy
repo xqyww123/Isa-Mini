@@ -1,5 +1,5 @@
 theory Test_RetrieveFact
-  imports Minilang_Agent.Minilang_Agent "HOL-Analysis.Derivative"
+  imports Minilang_AoA.Minilang_AoA "HOL-Analysis.Derivative"
 begin
 
 declare [[AoA_driver="test.RetrieveFact"]]

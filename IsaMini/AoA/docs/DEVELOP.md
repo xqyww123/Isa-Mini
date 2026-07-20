@@ -1,6 +1,6 @@
 # AoA Developer Guide
 
-**AoA** ("All over Abstraction") is the AI-agent framework that constructs Isabelle proofs
+**AoA** ("Agent over AST") is the AI-agent framework that constructs Isabelle proofs
 through the Minilang proof language. This document explains the design for people (and agents)
 working *on* AoA.
 
@@ -310,7 +310,7 @@ through `print_proof_scope`; the `recall` tool reads it back.
 
 ## 8. Entry, RPC, and caching
 
-- `by aoa` → the `method_setup aoa` in `Agent/Minilang_Agent.thy`; method body is
+- `by aoa` → the `method_setup aoa` in `Agent/Minilang_AoA.thy`; method body is
   `MiniLang_Agent_AoA.method` in `Agent/agent_server.ML`. Default driver from config
   `AoA_driver`.
 - AoA is **one long-lived RPC command** `IsaMini.AoA` (ML builds `aoa_cmd` in `agent_server.ML`;
@@ -349,7 +349,7 @@ sh_timeout=…)`.
 `run_all_tests` (in `contrib/Isa-Mini/IsaMini/AoA/test.py`):
 
 1. Opens `Client(repl_addr, 'HOL')` to the REPL (default `127.0.0.1:6666`),
-   `load_theory(['Minilang_Agent.Minilang_Agent'])`, then `record_state("init")` — a clean snapshot.
+   `load_theory(['Minilang_AoA.Minilang_AoA'])`, then `record_state("init")` — a clean snapshot.
 2. Filters `TESTS.values()` by the env-var patterns (§9.5).
 3. **Per case:**
    - `rollback('init')` — per-case reset (one long-lived Isabelle session; **not** a restart).
@@ -403,7 +403,7 @@ async def _test_Have1(root: Root, file: MyIO):
 ```
 
 - **`.thy` fixture** (in `contrib/Isa-Mini/IsaMini/AoA/Tests/`) — minimal: `imports
-  Minilang_Agent.Minilang_Agent`, the lemma, and `by aoa` at `line`. The lemma's goal becomes the
+  Minilang_AoA.Minilang_AoA`, the lemma, and `by aoa` at `line`. The lemma's goal becomes the
   `root`'s initial pending goal (one `GoalNode` per subgoal). Each test needs its **own dedicated
   `.thy`** (the `line` pins exactly one `by aoa`).
 - **Edit API** (all `async`, return an `EditOutcome`, never raise — a bad id lands in `.failure`):
@@ -480,7 +480,7 @@ unified diff is on disk at `Tests/<name>.diff` (and `<name>.actual.yml`).
   still set.
 - **ML side:** load the `isabelle-ML` skill before editing any `.ML`. The agent's operations
   ultimately drive `library/proof.ML`; AoA-specific wiring is `Agent/agent_server.ML` and
-  `Agent/Minilang_Agent.thy`.
+  `Agent/Minilang_AoA.thy`.
 - **Logging:** per invocation under `<AoA_log_dir>/<invocation_id>/` — `interaction.yaml`,
   `proofs.yaml`, `proof_oprs.yaml`, `meta.jsonl.zst`, `proof.json`.
 - **User-facing wording** (prompts, warnings, error text): propose scaffolding, let the maintainer
@@ -500,4 +500,4 @@ unified diff is on disk at `Tests/<name>.diff` (and `<name>.actual.yml`).
 | `driver_api.py` and `driver_{openai,anthropic,gemini,codex}.py` | Provider/driver variants. |
 | `prompts.py`, `retrieval.py`, `proof_cache.py`, `tools/*.jsonc` | Prompts, semantic retrieval, cache, tool schemas. |
 | `test.py`, `Tests/*`, and the runner `../../test_AoA.py` | Test framework + golden YAMLs + `.thy` fixtures. |
-| `../../Agent/agent_server.ML`, `../../Agent/Minilang_Agent.thy`, `../../library/proof.ML` | ML side. |
+| `../../Agent/agent_server.ML`, `../../Agent/Minilang_AoA.thy`, `../../library/proof.ML` | ML side. |

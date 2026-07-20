@@ -1,9 +1,9 @@
 (* Reproduces the field cert-join defect (see test.py: UnfoldCertJoin).
    Needs HOL-Analysis precompiled in the running heap (the 6666 eval REPL is
    MathBench_Prover, which includes HOL-Complex_Analysis); on a plain
-   Minilang_Agent / Complex_Main heap the import below source-compiles slowly. *)
+   Minilang_AoA / Complex_Main heap the import below source-compiles slowly. *)
 theory Test_UnfoldCertJoin
-  imports Minilang_Agent.Minilang_Agent "HOL-Analysis.Elementary_Metric_Spaces"
+  imports Minilang_AoA.Minilang_AoA "HOL-Analysis.Elementary_Metric_Spaces"
 begin
 declare [[AoA_driver="test.UnfoldCertJoin"]]
 

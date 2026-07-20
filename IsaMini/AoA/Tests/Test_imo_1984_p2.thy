@@ -3,7 +3,7 @@
 *)
 
 theory Test_imo_1984_p2 imports
-  MathBench_Prover.MathBench_Prover Minilang_Agent.Minilang_Agent
+  MathBench_Prover.MathBench_Prover Minilang_AoA.Minilang_AoA
 begin
 declare [[auto_interpret_for_embedding=false, AoA_driver="ChatGPT.gpt-5.5-medium"]]
 theorem imo_1984_p2:
