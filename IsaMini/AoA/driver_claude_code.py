@@ -342,8 +342,10 @@ class ClaudeCode(LMDriver):
         """Clear view caches before context compaction so the agent re-discovers entities."""
         # LearningTask reflection at the compaction seam: distil experience before
         # the working context is summarized away. No-op for a UsualTask / on an
-        # interaction fork; best-effort (swallows failures so the PreCompact hook
-        # response is never turned into an error). See maybe_run_memorize_interaction.
+        # interaction fork. NOT best-effort: failures PROPAGATE by design, so a bug in
+        # the memory subsystem surfaces loudly instead of hiding behind a warning while
+        # the proof still reports success -- which means one CAN abort this PreCompact
+        # hook. See maybe_run_memorize_interaction (model.py:12507-12513).
         await self.maybe_run_memorize_interaction("pre_compact")
         self._reset_view_state()
         self._log_meta("COMPACTION")
@@ -525,7 +527,12 @@ class ClaudeCode(LMDriver):
 
     def _check_rate_limit_event(self, event) -> None:
         if event.rate_limit_info.status == "rejected":
-            raise _QuotaError("Rate limit rejected")
+            # Carry resets_at: the wait that follows is 20 minutes long and silent
+            # otherwise, and "until when" is the one thing the user needs to decide
+            # whether to keep waiting or drop `by aoa` and prove it by hand.
+            resets = getattr(event.rate_limit_info, "resets_at", None)
+            raise _QuotaError("Rate limit rejected"
+                              + (f", resets at {resets}" if resets else ""))
 
     def _check_message_error(self, message: Any) -> None:
         """Classify a failure the SDK reports structurally, and raise.
@@ -657,7 +664,7 @@ class ClaudeCode(LMDriver):
                 # not loop again.
                 if self.quit_info is None or not self.quit_info.is_terminal:
                     self.quit_info = ResourceUnavailable(detail=str(e))
-                self.warn_AoA_opr(f"LM unreachable: {e}")
+                self.warn_AoA_opr(f"LM unreachable: {e}", to_isabelle=True)
                 break
             finally:
                 self._client = None
@@ -1035,8 +1042,9 @@ class ClaudeCode(LMDriver):
                     fork._model_time_start = time()
               fork._client = None
               break
-            except _QuotaError:
-                self.warn_AoA_opr(f"{tag} Quota exhausted, waiting 20min to retry")
+            except _QuotaError as e:
+                self.warn_AoA_opr(f"{tag} Quota exhausted, waiting 20min to retry"
+                                  + (f" ({e})" if str(e) else ""), to_isabelle=True)
                 t0 = time()
                 await asyncio.sleep(1200)
                 self.total_quota_wait_time += time() - t0

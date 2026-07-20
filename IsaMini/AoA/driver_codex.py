@@ -634,8 +634,9 @@ class Codex_Driver(LMDriver):
                     await self._run_fork_with_backup(
                         fork, fork_url, fork_prompt, tag)
                 break
-            except _QuotaError:
-                self.warn_AoA_opr(f"{tag} Quota exhausted, waiting 20min to retry")
+            except _QuotaError as e:
+                self.warn_AoA_opr(f"{tag} Quota exhausted, waiting 20min to retry"
+                                  + (f" ({e})" if str(e) else ""), to_isabelle=True)
                 t0 = time()
                 await asyncio.sleep(1200)
                 self.total_quota_wait_time += time() - t0

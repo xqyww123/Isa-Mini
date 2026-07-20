@@ -10869,8 +10869,11 @@ class Root(GoalContainer, StdBlock):
         self._isabelle_turn += 1
         return self._isabelle_turn
 
-    async def trace_to_isabelle(self, msg: str) -> None:
+    async def trace_to_isabelle(self, msg: str, *, warning: bool = False) -> None:
         """Echo `msg` into the Isabelle output panel via the RPC `log` callback.
+
+        `warning=True` sends it on Isabelle's warning channel (rendered "### ...")
+        instead of tracing -- for the few notices the user must actually notice.
 
         Invokes the `log` callback directly rather than `Connection.tracing`,
         which mirrors every message to the Python logger as well -- these payloads
@@ -10880,14 +10883,15 @@ class Root(GoalContainer, StdBlock):
         Best effort: the panel echo is cosmetic, so an RPC failure is logged and
         swallowed rather than allowed to abort a proof in progress."""
         conn = self.ml_state.connection
+        level = conn.LogType.WARNING if warning else conn.LogType.TRACING
         try:
-            await conn.callback("log", (int(conn.LogType.TRACING), msg))
+            await conn.callback("log", (int(level), msg))
         except Exception as e:
             logger = the_session().logger
             if logger is not None:
                 logger.debug(f"[tracing] echo to Isabelle failed: {e}")
 
-    def trace_to_isabelle_nowait(self, msg: str) -> None:
+    def trace_to_isabelle_nowait(self, msg: str, *, warning: bool = False) -> None:
         """`trace_to_isabelle` for synchronous callers (e.g. `log_model_thinking`).
 
         Schedules the send and returns immediately; with no running loop (unit
@@ -10896,7 +10900,7 @@ class Root(GoalContainer, StdBlock):
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        task = loop.create_task(self.trace_to_isabelle(msg))
+        task = loop.create_task(self.trace_to_isabelle(msg, warning=warning))
         self._tracing_tasks.add(task)
         task.add_done_callback(self._tracing_tasks.discard)
     def opening(self) -> bool:
@@ -12359,11 +12363,19 @@ class Session:
         self._log(self.interaction_log_file, "AOA_OPR",
                   lambda: [f"[AOA] {message}"], message=message)
 
-    def warn_AoA_opr(self, message: str):
-        """Log an AoA warning to interaction.yaml and logger at WARNING level."""
+    def warn_AoA_opr(self, message: str, *, to_isabelle: bool = False):
+        """Log an AoA warning to interaction.yaml and logger at WARNING level.
+
+        `to_isabelle` additionally surfaces it in the output panel.  OPT-IN, and
+        deliberately not the default: most warnings here are 2-second retry notices
+        and cleanup failures, and routing all ~27 of them to the panel would bury the
+        few that matter.  Set it where the user is left WAITING with no other sign
+        (a 20-minute quota sleep) or must ACT (an unusable backend)."""
         self._log(self.interaction_log_file, "AOA_WARNING", None, message=message)
         if self.logger is not None:
             self.logger.warning(f"[{self.role_label}] [AOA_WARN] {message}")
+        if to_isabelle:
+            self.trace_to_isabelle_nowait(f"[AoA] {message}", warning=True)
 
     def log_interaction(self, tool_name: str, prompt: str):
         """Log interaction prompt to interaction.yaml."""

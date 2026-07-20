@@ -148,8 +148,9 @@ class LMDriver(Session):
         while True:
             try:
                 return await fn()
-            except _QuotaError:
-                self.warn_AoA_opr("Quota exhausted, waiting 20min to retry")
+            except _QuotaError as e:
+                self.warn_AoA_opr("Quota exhausted, waiting 20min to retry"
+                                  + (f" ({e})" if str(e) else ""), to_isabelle=True)
                 t0 = time()
                 await asyncio.sleep(1200)
                 self.total_quota_wait_time += time() - t0

@@ -319,8 +319,9 @@ class OpenAI_Driver(LMDriver):
                         f"Call the `{self.tool_name(fork.fork_pending.interaction.answer_tool_name)}` tool to submit it.")
                     previous_response_id = fork._last_response_id
               break
-            except _QuotaError:
-                self.warn_AoA_opr(f"{tag} Quota exhausted, waiting 20min to retry")
+            except _QuotaError as e:
+                self.warn_AoA_opr(f"{tag} Quota exhausted, waiting 20min to retry"
+                                  + (f" ({e})" if str(e) else ""), to_isabelle=True)
                 t0 = time()
                 await asyncio.sleep(1200)
                 self.total_quota_wait_time += time() - t0
