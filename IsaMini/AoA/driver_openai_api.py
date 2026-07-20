@@ -543,7 +543,7 @@ class OpenAIResponsesProvider(OpenAIBase):
     """
 
     # --- Endpoint policy (overridable per subclass; defaults == platform
-    # behavior, so APIDriver_ChatGPT is byte-identical). `chat` reads these so
+    # behavior, so APIDriver_OpenAI is byte-identical). `chat` reads these so
     # there is no per-request "mode" branching. CodexResponsesProvider flips them
     # for the stateless ChatGPT-subscription codex backend. ---
     STORE: bool                     = True   # params["store"]
@@ -561,10 +561,10 @@ class OpenAIResponsesProvider(OpenAIBase):
         spinning in the transient-retry loop for an hour."""
         if isinstance(e, openai.AuthenticationError):
             raise LMUnreachable(
-                "OpenAI-Codex-API: ChatGPT subscription credentials invalid/expired. "
+                "Codex-API: ChatGPT subscription credentials invalid/expired. "
                 "Run `codex login` and retry.") from e
         raise LMUnreachable(
-            f"OpenAI-Codex-API: local openai-oauth proxy unreachable at {self._client.base_url}. "
+            f"Codex-API: local openai-oauth proxy unreachable at {self._client.base_url}. "
             "Start it (e.g. `npx openai-oauth`) and retry.") from e
 
     @staticmethod
@@ -986,8 +986,8 @@ class K2ThinkProvider(OpenAIProvider):
 # Concrete Driver Registrations
 # ============================================================================
 
-@agent_driver("ChatGPT")
-class APIDriver_ChatGPT(APIDriver):
+@agent_driver("OpenAI")
+class APIDriver_OpenAI(APIDriver):
     DEFAULT_MODEL = "gpt-5.5"
     FORK_CHEAPER_MODEL = "gpt-5.5"
 
@@ -1052,17 +1052,17 @@ class APIDriver_ChatGPT(APIDriver):
         return self._provider
 
 
-@agent_driver("OpenAI-Codex-API")
-class APIDriver_OpenAICodex(APIDriver_ChatGPT):
+@agent_driver("Codex-API")
+class APIDriver_OpenAICodex(APIDriver_OpenAI):
     """gpt-5.5 via the ChatGPT-subscription codex backend, through the local
     ``openai-oauth`` proxy (OpenAI-compatible; the proxy owns the OAuth
-    lifecycle, so this driver carries no auth code). Reuses APIDriver_ChatGPT
+    lifecycle, so this driver carries no auth code). Reuses APIDriver_OpenAI
     wholesale; only swaps in ``CodexResponsesProvider`` (stateless + fail-fast)
     pointed at the proxy. The proxy is launcher-owned — this driver never starts
     it and fails fast (``LMUnreachable`` -> ``ResourceUnavailable``) if it is
     unreachable. See ``OpenAI_Codex_API_driver_plan.md``."""
     DEFAULT_MODEL      = "gpt-5.5"
-    # None ⇒ APIDriver_ChatGPT._fork_provider's cheaper-fork guard is falsy, so
+    # None ⇒ APIDriver_OpenAI._fork_provider's cheaper-fork guard is falsy, so
     # every fork reuses self._provider (the proxy-configured CodexResponsesProvider)
     # — no second provider is ever built against the real api.openai.com.
     FORK_CHEAPER_MODEL = None
@@ -1219,7 +1219,7 @@ class APIDriver_Chat(APIDriver):
         return f"{self._driver_name}({prov.model_name}{effort})"
 
 
-class DeepSeekV4Provider(OpenAIChatProvider):
+class DeepSeekProvider(OpenAIChatProvider):
     """Chat Completions provider for DeepSeek V4 (``/beta`` strict).
 
     Strict mode is applied to the ``edit`` tool ONLY — its schema is sent fully
@@ -1240,11 +1240,11 @@ class DeepSeekV4Provider(OpenAIChatProvider):
         return schema
 
 
-@agent_driver("DeepSeekV4")
-class APIDriver_DeepSeekV4(APIDriver):
-    """DeepSeek V4 driver — ``/beta``, strict on the ``edit`` tool only.
+@agent_driver("DeepSeek")
+class APIDriver_DeepSeek(APIDriver):
+    """DeepSeek driver — ``/beta``, strict on the ``edit`` tool only.
 
-    Driver string ``DeepSeekV4.pro`` / ``DeepSeekV4.flash`` (default ``flash``);
+    Driver string ``DeepSeek.V4-pro`` / ``DeepSeek.V4-flash`` (default ``V4-pro``);
     a full model id (``deepseek-v4-...``) may also be passed after the dot.
     Reads ``DEEPSEEK_API_KEY`` (fallback ``CHAT_API_KEY``); base url defaults to
     ``https://api.deepseek.com/beta`` (overridable via ``DEEPSEEK_BASE_URL`` — strict
@@ -1252,7 +1252,7 @@ class APIDriver_DeepSeekV4(APIDriver):
     multi-turn tool calls otherwise).
     """
 
-    DEFAULT_MODEL = "deepseek-v4-flash"
+    DEFAULT_MODEL = "deepseek-v4-pro"
     SUBAGENT_NESTING_DEPTH = 2
     # The global-lemma delegation gate is ON for DeepSeek (declare global lemmas,
     # then dispatch a sub-agent to prove them — see model.py Session gate).
@@ -1261,19 +1261,19 @@ class APIDriver_DeepSeekV4(APIDriver):
     def __init__(self, *args, provider: Provider | None = None,
                  argument: str | None = None, **kwargs):
         if provider is None:
-            arg = (argument or "flash").strip().lower()
-            model = f"deepseek-v4-{arg}" if arg in ("pro", "flash") else arg
+            arg = (argument or "V4-pro").strip().lower()
+            model = f"deepseek-{arg}" if arg in ("v4-pro", "v4-flash") else arg
             api_key = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("CHAT_API_KEY")
             if not api_key:
                 raise InternalError(
-                    "DeepSeekV4 driver needs DEEPSEEK_API_KEY (or CHAT_API_KEY) set.")
+                    "DeepSeek driver needs DEEPSEEK_API_KEY (or CHAT_API_KEY) set.")
             # DeepSeek V4 flash & pro both support up to 1M; 384K is a practical
             # default. CHAT_CONTEXT_WINDOW may cap it lower to compact earlier.
             ctx = 384_000
             cap = os.environ.get("CHAT_CONTEXT_WINDOW")
             if cap:
                 ctx = min(ctx, int(cap))
-            provider = DeepSeekV4Provider(
+            provider = DeepSeekProvider(
                 model=model,
                 base_url=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/beta"),
                 api_key=api_key,

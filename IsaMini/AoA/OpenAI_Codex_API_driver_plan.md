@@ -1,4 +1,4 @@
-# Plan — `OpenAI-Codex-API` driver (ChatGPT-subscription gpt-5.5 via the `openai-oauth` proxy)
+# Plan — `Codex-API` driver (ChatGPT-subscription gpt-5.5 via the `openai-oauth` proxy)
 
 Status: **APPROVED — implementing.** Date: 2026-06-23.
 Folds in: the 12 surviving adversarial-review concerns + user directives
@@ -8,7 +8,7 @@ Folds in: the 12 surviving adversarial-review concerns + user directives
 
 ## 1. Goal & route
 
-New AoA driver `@agent_driver("OpenAI-Codex-API")` driving `gpt-5.5` on the **ChatGPT-subscription
+New AoA driver `@agent_driver("Codex-API")` driving `gpt-5.5` on the **ChatGPT-subscription
 codex backend**, reusing the existing OpenAI Responses machinery in `driver_api.py`.
 
 Why: the `Codex` (`codex exec`) driver runs a **lossy 4 KB tool-schema compaction** that strips our
@@ -45,7 +45,7 @@ Pin the provider overrides in §4; route-independent (the proxy forwards
 
 - **D1.** Route = the `openai-oauth` proxy (§1).
 - **D2.** **No token refresh / no `auth.json` in the driver.** Proxy owns it.
-- **D3.** New driver **subclasses `APIDriver_ChatGPT`**, registered **`"OpenAI-Codex-API"`**. `ChatGPT`
+- **D3.** New driver **subclasses `APIDriver_ChatGPT`**, registered **`"Codex-API"`**. `ChatGPT`
   is **NOT renamed** ⇒ no alias work, no fixture migration.
 - **D4.** Override form = **class attributes** on `OpenAIResponsesProvider` (defaults == current
   `ChatGPT` behavior); `CodexResponsesProvider` overrides them. `chat` reads them — no `if stateless`.
@@ -110,10 +110,10 @@ Make `chat` **read** them:
 def _fail_fast(self, e):
     if isinstance(e, openai.AuthenticationError):
         raise LMUnreachable(
-            "OpenAI-Codex-API: ChatGPT subscription credentials invalid/expired. "
+            "Codex-API: ChatGPT subscription credentials invalid/expired. "
             "Run `codex login` and retry.") from e
     raise LMUnreachable(
-        f"OpenAI-Codex-API: local openai-oauth proxy unreachable at {self._client.base_url}. "
+        f"Codex-API: local openai-oauth proxy unreachable at {self._client.base_url}. "
         "Start it (e.g. `npx openai-oauth`) and retry.") from e
 ```
 
@@ -146,7 +146,7 @@ class CodexResponsesProvider(OpenAIResponsesProvider):
 ### 4.3 New driver `APIDriver_OpenAICodex(APIDriver_ChatGPT)`
 
 ```python
-@agent_driver("OpenAI-Codex-API")
+@agent_driver("Codex-API")
 class APIDriver_OpenAICodex(APIDriver_ChatGPT):
     DEFAULT_MODEL      = "gpt-5.5"
     FORK_CHEAPER_MODEL = None   # [C1] disable the cheaper-fork branch
@@ -214,7 +214,7 @@ changes = `LMUnreachable` + `ResourceUnavailable` only.
 1. Restart the REPL / launcher to reload edited Python (no `.ML` change).
 2. Start `npx openai-oauth`; readiness via a **TCP connect probe on 127.0.0.1:10531** (NOT
    `GET /v1/models`; C8).
-3. **e2e**: `by aoa` with `AoA_driver="OpenAI-Codex-API.gpt-5.5-high"`. Confirm: `edit` fires
+3. **e2e**: `by aoa` with `AoA_driver="Codex-API.gpt-5.5-high"`. Confirm: `edit` fires
    with the **non-strict raw** schema (D6/C3); proof progresses; multi-turn full-resend works.
 4. **Reasoning round-trip** (D7): at real effort with **unforced** tool_choice, confirm resending
    emitted reasoning items returns 200. If rejected → loud crash by design; then a targeted fix (never

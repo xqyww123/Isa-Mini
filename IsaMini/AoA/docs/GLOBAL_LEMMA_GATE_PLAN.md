@@ -37,7 +37,7 @@ documentation/verification precision).
    role-flip on the parent-less root session.
 4. **Each driver self-specifies the gate** via a `Session` class attribute
    `gate_global_lemma_proofs` (NOT on `Runtime`): base `Session` default `False`; the DeepSeek driver
-   (`APIDriver_DeepSeekV4`) overrides to `True`. No `Session.__init__` parameter, no `toplevel.py` / ML
+   (`APIDriver_DeepSeek`) overrides to `True`. No `Session.__init__` parameter, no `toplevel.py` / ML
    / env wiring. Workers and interaction forks are the same driver class, but the predicate
    (`is_major and not is_worker`) already excludes them, so no per-instance inheritance is needed; tests
    force the gate by setting the instance attribute directly.
@@ -69,7 +69,7 @@ documentation/verification precision).
   exposes NO directly-fillable slot, so a valid Define body fill always lands at `global.N.k.x`
   strictly inside an existing child `GoalNode` (deferred path creates them at 7019-7032).
 - **The driver *is* a `Session` subclass** (`LMDriver(Session)` → `APIDriver`/`ClaudeCode`); driver
-  classes already carry config as class attributes (e.g. `APIDriver_DeepSeekV4.DEFAULT_MODEL`,
+  classes already carry config as class attributes (e.g. `APIDriver_DeepSeek.DEFAULT_MODEL`,
   `SUBAGENT_NESTING_DEPTH`), so the gate flag follows the same idiom — a class attribute the driver
   overrides. No constructor parameter / Protocol change is needed.
 - **Recoverable errors** reach the agent via the `(msg, True)` return from `_edit_tool_logic`
@@ -84,7 +84,7 @@ parameter):
 class Session:
     gate_global_lemma_proofs: bool = False   # base default OFF; drivers override
 
-class APIDriver_DeepSeekV4(APIDriver):
+class APIDriver_DeepSeek(APIDriver):
     gate_global_lemma_proofs = True          # gate ON for DeepSeek
 ```
 Read directly as `session.gate_global_lemma_proofs`. No `Session.__init__` change, no `toplevel.py` /
@@ -223,7 +223,7 @@ rather than authored autonomously.
 - `model.py` — `Session.gate_global_lemma_proofs` class attribute (default `False`); `_lemma_guidance`
   helper; two module helpers + `Session._global_lemma_gate`; `SetupRewriting._nearest_goal_for_subagent`
   → self (8014) + base docstring (3837-3839); prompt sites 10144, 10242, and `GlobalEnv._print_footer`.
-- `driver_api.py` — `APIDriver_DeepSeekV4.gate_global_lemma_proofs = True`.
+- `driver_api.py` — `APIDriver_DeepSeek.gate_global_lemma_proofs = True`.
 - `mcp_http_server.py` — the gate block in `_edit_tool_logic` (~349); the invariant comment
   (1386-1387); the `Role_Major` `_request_lemmas_tool_logic` arm (1295-1297) + docstring (1239-1241).
 - `Tests/` — new gate + delegation + D6-tripwire fixtures (see Verification).

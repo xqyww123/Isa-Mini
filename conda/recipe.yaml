@@ -321,10 +321,10 @@ requirements:
     # ImportError and only logs at INFO, so a missing dependency does not fail -- the
     # driver vanishes from the registry and the user meets it much later as
     # `Unknown driver: <name>`.  Eight drivers hang off these six packages, including
-    # DeepSeekV4, the default driver of the PutnamBench eval pipeline.  A heavier package
+    # DeepSeek, the default driver of the PutnamBench eval pipeline.  A heavier package
     # is the right trade against a silently incomplete one.
     - openai >=2.33.0        # every driver in driver_openai_api
-    - tiktoken               # APIDriver_ChatGPT.estimate_tokens
+    - tiktoken               # APIDriver_OpenAI.estimate_tokens
     - anthropic >=0.52.0     # driver_anthropic -> the Claude API driver
     - httpx >=0.28.1         # driver_openai_api and driver_anthropic
     - aiohttp >=3.13.5       # web_terminal, imported from inside a function
@@ -357,7 +357,7 @@ tests:
       # drivers rather than trusting that the dependencies imply them.
       # (No ": " anywhere in the command -- a plain YAML scalar cannot contain that
       # two-character sequence, and rattler-build then fails to parse the whole recipe.)
-      - python -c "from IsaMini.AoA.toplevel import Session; d=set(Session.Driver); need={'ClaudeCode','Codex','Claude','ChatGPT','DeepSeekV4'}; missing=need-d; assert not missing, f'drivers missing {sorted(missing)} (have {sorted(d)})'; print('drivers present', sorted(d))"
+      - python -c "from IsaMini.AoA.toplevel import Session; d=set(Session.Driver); need={'ClaudeCode','Codex','Claude','OpenAI','DeepSeek'}; missing=need-d; assert not missing, f'drivers missing {sorted(missing)} (have {sorted(d)})'; print('drivers present', sorted(d))"
 
 about:
   homepage: https://github.com/xqyww123/Isa-Mini

@@ -255,7 +255,7 @@ jobs:
           # missing dependency does not fail -- the driver simply is not registered, and
           # the user meets it much later as `Unknown driver`.  Naming the drivers is the
           # only way to notice.
-          python -c "from IsaMini.AoA.toplevel import Session; d=set(Session.Driver); need={'ClaudeCode','Codex','OpenAI','Claude','ChatGPT','DeepSeekV4'}; assert need<=d, f'missing {sorted(need-d)} (have {sorted(d)})'; print('drivers', sorted(d))"
+          python -c "from IsaMini.AoA.toplevel import Session; d=set(Session.Driver); need={'ClaudeCode','Codex','Claude','OpenAI','DeepSeek'}; assert need<=d, f'missing {sorted(need-d)} (have {sorted(d)})'; print('drivers', sorted(d))"
           # Without the dist-info, pip would fetch PyPI's copy over conda's files.
           python -m pip install "IsaMini==${{ needs.build.outputs.version }}" 2>&1 | tee /tmp/pipout || true
           grep -qi 'already satisfied' /tmp/pipout \

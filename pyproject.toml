@@ -75,8 +75,8 @@ repl = ["IsaREPL"]
 # need. `toplevel._try_import_driver` swallows the ImportError of a driver whose extra
 # is absent, so an under-declared extra does not fail loudly -- it makes the driver
 # vanish and surfaces much later as `Unknown driver: <name>`.
-# driver_openai_api.py: the openai SDK, plus tiktoken for APIDriver_ChatGPT.estimate_tokens.
-# Every driver registered there (ChatGPT, OpenAI-Codex-API, K2-Think, Chat, DeepSeekV4)
+# driver_openai_api.py: the openai SDK, plus tiktoken for APIDriver_OpenAI.estimate_tokens.
+# Every driver registered there (OpenAI, Codex-API, K2-Think, Chat, DeepSeek)
 # is an openai-SDK client, even the ones whose names do not say so.
 openai-api = ["openai>=2.33.0", "httpx>=0.28.1", "tiktoken"]
 # driver_anthropic.py. It imports driver_api for Provider/APIDriver/the Msg types, and
