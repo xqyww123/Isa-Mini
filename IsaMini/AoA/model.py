@@ -12328,7 +12328,7 @@ class Session:
                   lambda: [f"[MODEL] {text}"], text=text)
         root = getattr(self, 'root', None)
         if root is not None:
-            root.trace_to_isabelle_nowait(f"Model output: {text}")
+            root.trace_to_isabelle_nowait(f"[Model output] {text}")
 
     def log_model_thinking(self, thinking: str):
         """Log model thinking output to interaction.yaml, and echo it to the
@@ -12344,7 +12344,7 @@ class Session:
         # arrives before then rather than raising out of a logging call.
         root = getattr(self, 'root', None)
         if root is not None:
-            root.trace_to_isabelle_nowait(f"Model thinking: {thinking}")
+            root.trace_to_isabelle_nowait(f"[Model thinking] {thinking}")
 
     def log_tool_call(self, tool_name: str, tool_input: dict[str, Any]):
         """Log tool call to interaction.yaml."""
@@ -12375,7 +12375,12 @@ class Session:
         if self.logger is not None:
             self.logger.warning(f"[{self.role_label}] [AOA_WARN] {message}")
         if to_isabelle:
-            self.trace_to_isabelle_nowait(f"[AoA] {message}", warning=True)
+            # self.root, NOT self: the panel helpers live on Root, and Session is not a
+            # Root (neither subclasses the other), so `self.` here was an AttributeError
+            # raised from inside the very except handlers that set to_isabelle -- turning
+            # a 20-minute quota wait or a clean LMUnreachable give-up into a crashed
+            # `by aoa`, exactly when the user most needed the message.
+            self.root.trace_to_isabelle_nowait(f"[AoA] {message}", warning=True)
 
     def log_interaction(self, tool_name: str, prompt: str):
         """Log interaction prompt to interaction.yaml."""
