@@ -106,10 +106,7 @@ def _segs_between(lo: list[int], hi: list[int]) -> list[int]:
     equals `lo` followed by only zeros (e.g. lo=[0,1], hi=[0,1,0]): no key exists
     strictly between them. No id this scheme generates is ever zero-tailed (every
     generator — incr_id_*, the front-insert branch, and this function — ends in a
-    segment >= 1), so that case is unreachable in practice. Should it ever arise,
-    we still return a deterministic value > lo rather than raise: an uncaught
-    error here would escape `insert_before`'s no-raise contract and kill the
-    single-process MCP host (`call_tool` ends in `sys.exit(1)`)."""
+    segment >= 1), so that case is unreachable in practice."""
     out: list[int] = []
     i = 0
     while True:

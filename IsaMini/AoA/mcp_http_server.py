@@ -5,7 +5,9 @@ Architecture:
 - One HTTP server, one port, multiple proof sessions on different URL paths
 - Each session (including forks) gets its own endpoint: /mcp/<session_id>
 - Each endpoint has its own low-level mcp.server.Server with hand-written schemas
-- Tool handlers close over their Session instance and set _session_var per-request
+- Tool handlers close over their Session instance and call bind_session_context
+  per-request (uvicorn gives each request an empty contextvars.Context, so both
+  _session_var and the ambient Connection must be re-established here)
 - Both embedded (Agent SDK) and standalone (CLI in tmux) modes connect via HTTP URL
 
 Usage:
@@ -37,7 +39,7 @@ from mcp.types import Tool, ToolAnnotations, TextContent, CallToolResult
 
 from Isabelle_RPC_Host import pretty_unicode
 from .model import (
-    _session_var, Session, Node, NonLeaf_Node, StdBlock,
+    bind_session_context, Session, Node, NonLeaf_Node, StdBlock,
     Root, GlobalEnv, GoalNode,
     Resolved_Node, Resolved_Slot,
     IsaTerm, ContinuingInteraction, ImmediateAnswer,
@@ -66,7 +68,7 @@ from .model import (
     LOOP_REPEAT_THRESHOLD,
     Role_Worker,
     Surrender, Refute, Refresh,
-    LMUnreachable, ResourceUnavailable,
+    LMUnreachable, ResourceUnavailable, TechnicalFailure,
     TOOL_REFRESH, TOOL_WRITE_MEMORY,
     print_indent, print_goal, MyIO,
 )
@@ -2579,7 +2581,7 @@ class ToolExecutor:
         non-forking interactions); other tools run inline.
         """
         session = self._session
-        _session_var.set(session)
+        bind_session_context(session)
 
         # Hard budget enforcement at per-tool-call granularity, BEFORE the
         # permission check (so even a would-be-denied call halts immediately).
@@ -2738,10 +2740,15 @@ class ToolExecutor:
         except (ConnectionError, EOFError):
             raise asyncio.CancelledError("connection lost")
         except Exception as e:
-            session.log_tool_response(
-                session.tool_name(name),
-                f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
-            sys.exit(1)
+            msg = f"UNEXPECTED ERROR: {type(e).__name__}: {e}"
+            session.log_tool_response(session.tool_name(name), msg)
+            if session.runtime.debug:
+                sys.exit(1)      # declare [[AoA_Debug]]: surface latent bugs loudly
+            # Otherwise take the same rail as the LMUnreachable branch above: a
+            # terminal quit_info, which check_budget() honours, instead of taking
+            # the whole single-process host down with every concurrent proof on it.
+            session.quit_info = TechnicalFailure(detail=msg)
+            return (msg, True)
         finally:
             # Append AFTER dispatch (see the note at the top of execute): the
             # in-flight call must not be part of its own adjacency window. Runs on
@@ -2802,7 +2809,7 @@ def _create_mcp_server(session: Session, extra_sdk_tools: list | None = None) ->
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict) -> CallToolResult:
-        _session_var.set(session)
+        bind_session_context(session)
 
         # Permission check
         perm_error = _check_tool_permission(session, name)

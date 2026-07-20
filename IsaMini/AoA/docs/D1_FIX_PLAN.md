@@ -182,7 +182,7 @@ Add to the `QuitInfo` union.
 
 **No driver changes needed.** All four drivers only ever test
 `isinstance(self.quit_info, (Restart, Refresh))` and break otherwise. Verified in
-`driver_claude_code.py`, `driver_api.py`, `driver_openai.py`, `driver_codex.py`.
+`driver_claude_code.py`, `driver_api.py`, `driver_openai.py` (since removed), `driver_codex.py`.
 
 **No `toplevel` impact.** Per the ADT's own comment: *"The major/planner session's
 value is what `toplevel` reports to ML; a fork's value dies with the fork."* Only

@@ -11159,6 +11159,29 @@ _session_var: contextvars.ContextVar['Session'] = contextvars.ContextVar('_sessi
 def the_session() -> 'Session':
     return _session_var.get()
 
+def bind_session_context(session: 'Session') -> None:
+    """Establish the ambient context a tool handler runs in. Call this FIRST in
+    every MCP tool entry point.
+
+    Both bindings are per-request by necessity, not by preference: uvicorn starts
+    each ASGI request in a fresh, empty contextvars.Context (a workaround for
+    cpython#140947), so whatever was bound outside the request -- `_session_var`
+    in Session.__init__, `_connection_var` in the RPC handle_client -- is simply
+    not visible here. `_session_var` has always been re-set per request and so was
+    never affected; `Connection.current()` was NOT, which is why the
+    `[Embedding] ...` progress lines silently vanished on the AoA path while
+    `Semantic_Vector_Store`'s own tracing (an explicit `self.connection`
+    reference, immune to context resets) kept printing.
+
+    The connection is read off the Runtime, not the Session: one Connection serves
+    one proof tree, and Runtime is exactly the per-tree singleton that planner,
+    workers and interaction forks all share. Tolerates None so the by-hand test
+    harness, which builds a Session without an RPC connection, still works."""
+    _session_var.set(session)
+    conn = session.runtime.connection
+    if conn is not None:
+        Connection.set_current(conn)
+
 def _rendering_for_dispatcher() -> bool:
     """True when the current rendering session can dispatch sub-agents — the main
     agent OR a worker (both may call `subagent`). Excludes interaction forks; never
@@ -11268,6 +11291,22 @@ class Runtime:
     """Global singleton shared across all Sessions operating on the same proof tree.
     Holds counters and limits that must be unique/shared."""
     def __init__(self):
+        # The RPC Connection this proof tree talks to Isabelle over. One per tree,
+        # hence here rather than on Session: planner, workers and interaction forks
+        # share this Runtime and must all report over the same connection. Set once
+        # by the RPC entry point (toplevel.IsaMini_AoA); stays None in the by-hand
+        # test harness, which drives the tree without an RPC connection.
+        # Read by bind_session_context to re-establish Connection.current() inside
+        # MCP requests, where uvicorn has reset the context.
+        self.connection: 'Connection | None' = None
+        # Isabelle's AoA_Debug declaration, read once by the RPC entry point.
+        # Diagnosing a run wants an unexpected exception to abort loudly and
+        # immediately (sys.exit in the tool dispatchers); serving one wants it
+        # turned into a clean give-up instead, since the MCP host is shared and
+        # single-process. Read here rather than in the handlers: those run on the
+        # error path, where an extra RPC round-trip is exactly what should not be
+        # attempted. Defaults False -- the safe, non-host-killing behaviour.
+        self.debug: bool = False
         self.age: int = 0
         self.setup_rewriting_counter: int = 0
         self.fact_name_counter: int = 0

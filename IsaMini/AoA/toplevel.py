@@ -29,7 +29,6 @@ def _try_import_driver(name: str):
         _logger.info(f"Driver {name} not loaded (missing dependency: {e.name})")
 
 from . import driver_claude_code
-_try_import_driver("driver_openai")
 _try_import_driver("driver_codex")
 _try_import_driver("driver_api")
 _try_import_driver("driver_openai_api")
@@ -336,6 +335,21 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
             # through the shared runtime singleton.
             session.task = task_obj
             session.enable_write_memory = enable_write_memory
+            # Park the Connection on the shared Runtime so every tool entry point
+            # can rebind Connection.current() (see model.bind_session_context):
+            # uvicorn clears the context for each MCP request, so the binding made
+            # in the RPC handle_client does not reach the tool handlers.
+            session.runtime.connection = connection
+            # Tolerate the lookup failing: Config.lookup errors on an option that
+            # is not in the ML-side registry, and `AoA_Debug` only entered it when
+            # preprocess.ML gained its register_rpc_option call -- so any REPL
+            # started from older ML raises here. Debugging is opt-in; falling back
+            # to False costs nothing, whereas propagating would break every run.
+            try:
+                session.runtime.debug = bool(
+                    await connection.config_lookup("AoA_Debug"))
+            except Exception:
+                session.runtime.debug = False
             root = Root((global_context, ptree), connection)
             await session.initialize(root)
             await session.run()

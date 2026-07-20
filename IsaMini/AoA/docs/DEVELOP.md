@@ -276,7 +276,7 @@ retry layers (`_with_retry` for quota — 20-minute wait; `_retry_transient` —
 |---|---|
 | `driver_claude_code.py` | **default** (`ClaudeCode`). Uses the Claude Agent SDK pointed at the singleton HTTP MCP server (`mcp_servers={"proof": {type: http, url}}`). |
 | `driver_api.py` (`APIDriver`) | Owns its own chat loop; calls `Provider.chat()`; runs tools in-process via `ToolExecutor`; compacts context at ~80%. Concrete: ChatGPT, K2Think, … |
-| `driver_openai/anthropic/gemini/codex.py` | Provider variants, lazily imported in `toplevel.py`. |
+| `driver_openai_api/anthropic/gemini/codex.py` | Provider variants, lazily imported in `toplevel.py`. |
 
 **Tools** (abstract ids in `model.py`) map to external names per driver: `edit`, `delete`,
 `query` (search — incl. `kinds:["experience"]` for saved proof strategies), `recall` (read `proof.yaml`), `report` (refute/surrender),

@@ -29,7 +29,7 @@ from Isabelle_Semantic_Embedding.semantics import (
 
 from .model import (
     Session, Minilang_State, MyIO, short_name,
-    Interaction, IsabelleError, ArgumentError,
+    Interaction, IsabelleError, ArgumentError, TechnicalFailure,
     EntityKind, print_indent, print_paragraph, print_expression_list,
     Interaction_Retrieve, RetrievedEntity, IsabelleEntity,
     _THEOREM_KINDS, AGENT_EXPR_LIMIT,
@@ -1173,5 +1173,17 @@ async def _query_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     except (ConnectionError, EOFError):
         raise asyncio.CancelledError("connection lost")
     except Exception as e:
-        session.log_tool_response(session.tool_name(TOOL_SEARCH), f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
-        sys.exit(1)
+        msg = f"UNEXPECTED ERROR: {type(e).__name__}: {e}"
+        session.log_tool_response(session.tool_name(TOOL_SEARCH), msg)
+        if session.runtime.debug:
+            sys.exit(1)          # declare [[AoA_Debug]]: surface latent bugs loudly
+        # Otherwise give up cleanly rather than killing the host. Raising is NOT an
+        # option: this runs behind the MCP HTTP boundary, so an exception here
+        # becomes an HTTP/MCP error to the SDK client and never reaches the
+        # IsaMini.AoA RPC caller -- which is exactly why sys.exit was used. The
+        # quit_info rail is the mechanism that does cross: check_budget() reads
+        # quit_info.is_terminal at the top of ToolExecutor.execute and stops the
+        # follow-up call the model may already be emitting. Same treatment as
+        # LMUnreachable in mcp_http_server.
+        session.quit_info = TechnicalFailure(detail=msg)
+        return (msg, True)

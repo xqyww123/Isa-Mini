@@ -323,8 +323,7 @@ requirements:
     # `Unknown driver: <name>`.  Eight drivers hang off these six packages, including
     # DeepSeekV4, the default driver of the PutnamBench eval pipeline.  A heavier package
     # is the right trade against a silently incomplete one.
-    - openai >=2.33.0        # OpenAI driver, and every driver in driver_openai_api
-    - openai-agents >=0.15.1 # driver_openai
+    - openai >=2.33.0        # every driver in driver_openai_api
     - tiktoken               # APIDriver_ChatGPT.estimate_tokens
     - anthropic >=0.52.0     # driver_anthropic -> the Claude API driver
     - httpx >=0.28.1         # driver_openai_api and driver_anthropic

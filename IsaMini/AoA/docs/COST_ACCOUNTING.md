@@ -46,7 +46,6 @@ Sources:
   - `driver_anthropic.py` (`AnthropicProvider.chat`) → `from_uncached`
   - `driver_api.py` (OpenAI responses + chat-completions) → `from_inclusive`
   - `driver_gemini.py` (`GeminiProvider.chat`) → `from_inclusive`
-  - `driver_openai.py` (`_ProverHooks.on_llm_end`) → `from_inclusive`
   - `driver_codex.py` (`_record_codex_usage`) → `from_inclusive`
   - `driver_claude_code.py` (`_accumulate_cost`, `_read_cost_from_session_log`) → `from_uncached`
 - **ClaudeCode has two cost sources.** Primary in-process SDK mode
