@@ -2,7 +2,7 @@ theory Test_HaveWorkerForAny
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.HaveWorkerForAny"]]
+declare [[AoA_driver="test.HaveWorkerForAny"]]
 
 lemma have_worker_forany_test:
   fixes x :: "int"

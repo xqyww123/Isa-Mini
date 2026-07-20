@@ -2,7 +2,7 @@ theory Test_IntroObvious
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.IntroObvious"]]
+declare [[AoA_driver="test.IntroObvious"]]
 
 lemma conj_test:
   assumes "P" and "Q" and "R"

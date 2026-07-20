@@ -2,7 +2,7 @@ theory Test_NewScopeFactsOnResume
   imports Complex_Main Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.NewScopeFactsOnResume"]]
+declare [[AoA_driver="test.NewScopeFactsOnResume"]]
 
 lemma new_scope_facts_on_resume_test:
   fixes x :: "int"

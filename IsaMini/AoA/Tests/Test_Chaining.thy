@@ -2,7 +2,7 @@ theory Test_Chaining
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Chaining"]]
+declare [[AoA_driver="test.Chaining"]]
 
 (* Test: Chain two named facts via a mixed = / <= transitivity *)
 lemma chaining_test:

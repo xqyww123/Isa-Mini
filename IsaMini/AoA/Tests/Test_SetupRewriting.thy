@@ -2,7 +2,7 @@ theory Test_SetupRewriting
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.SetupRewriting"]]
+declare [[AoA_driver="test.SetupRewriting"]]
 
 definition myg :: "nat \<Rightarrow> nat" where "myg n = n + 5"
 

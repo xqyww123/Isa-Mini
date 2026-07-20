@@ -2,7 +2,7 @@ theory Test_Define_AutoProved
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Define_AutoProved"]]
+declare [[AoA_driver="test.Define_AutoProved"]]
 
 (* Happy path: `double n = n + n` is non-recursive and trivially
    terminating. Isabelle's default termination / pat-completeness

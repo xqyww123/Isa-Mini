@@ -2,7 +2,7 @@ theory Test_Specialize7
   imports Complex_Main Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Derive7"]]
+declare [[AoA_driver="test.Derive7"]]
 
 text \<open>Test diagnostic error messages from SPECIALIZE.
   h1 has type nat, but mult_mod_cancel_left requires euclidean_ring_cancel.

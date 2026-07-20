@@ -2,7 +2,7 @@ theory Test_Induction_ClassifyVars_Filter
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Induction_ClassifyVars_Filter"]]
+declare [[AoA_driver="test.Induction_ClassifyVars_Filter"]]
 
 text \<open>
   The classification offer is restricted to variables that appear in the

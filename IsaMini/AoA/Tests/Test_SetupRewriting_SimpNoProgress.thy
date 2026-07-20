@@ -2,7 +2,7 @@ theory Test_SetupRewriting_SimpNoProgress
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.SetupRewriting_SimpNoProgress"]]
+declare [[AoA_driver="test.SetupRewriting_SimpNoProgress"]]
 
 lemma setup_rewriting_simp_no_progress:
   fixes f :: "int \<Rightarrow> int"

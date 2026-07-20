@@ -3,7 +3,7 @@ MathBench_Prover.MathBench_Prover Minilang_Agent.Minilang_Agent
 begin
 
 declare [[auto_interpret_for_embedding=false]]
-declare [[agent_AoA_driver="test.CcontrIntroMatch"]]
+declare [[AoA_driver="test.CcontrIntroMatch"]]
 
 theorem rabinowitz:
   fixes p :: nat

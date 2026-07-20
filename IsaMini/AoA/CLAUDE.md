@@ -52,7 +52,7 @@ The Python `Session` is **not** an Isabelle session. Workers do not open a new I
 ## Architecture map
 
 ### Entry / RPC wiring
-- User writes `by aoa` → method registered by `method_setup aoa` in `../../Agent/Minilang_Agent.thy`; method body is `MiniLang_Agent_AoA.method` in `../../Agent/agent_server.ML`. Default driver `"ClaudeCode"` (config `agent_AoA_driver`).
+- User writes `by aoa` → method registered by `method_setup aoa` in `../../Agent/Minilang_Agent.thy`; method body is `MiniLang_Agent_AoA.method` in `../../Agent/agent_server.ML`. Default driver `"ClaudeCode"` (config `AoA_driver`).
 - AoA is **one long-lived RPC command** `IsaMini.AoA` (ML builds `aoa_cmd` in `agent_server.ML`; Python handler `IsaMini_AoA`, decorated `@isabelle_remote_procedure("IsaMini.AoA")` in `toplevel.py`). Inside it, **Python calls back into ML** repeatedly (`IsaMini.proof_opr`, `reset_state`, `lookup_fact`, `check_term`, …; ML callbacks defined in `agent_server.ML`).
 - Registered as the Isa-REPL app `Minilang.AoA` (`REPL_Server.register_app` in `agent_server.ML`). Clients connect, advance to the `by aoa` line, `run_app('Minilang.AoA')`.
 - Caching (in `IsaMini_AoA`): Python SQLite (`proof_cache.py`) → ML Phi_Cache JSON → full run. Hits replay packed ops via `set_replay_mode` + `proof_opr` (`_replay_cached_proof`).
@@ -94,7 +94,7 @@ The Python `Session` is **not** an Isabelle session. Workers do not open a new I
 `test.py` (this directory) holds the cases; `../../test_AoA.py` is the runner. A test drives the proof tree **by hand** (no LLM, no tool calls) and diffs the rendered output against a golden YAML. So these are deterministic snapshot tests of the model + renderer.
 
 ### How a run works
-> The case is selected by `name` via the `"test.<name>"` driver string the runner sends — **NOT** the `declare [[agent_AoA_driver=…]]` inside the `.thy` (existing fixtures carry stale/mismatched declares; in test mode they're ignored). One long-lived Isabelle session for the whole run; per-case isolation is a `rollback` to a recorded clean state, not a restart.
+> The case is selected by `name` via the `"test.<name>"` driver string the runner sends — **NOT** the `declare [[AoA_driver=…]]` inside the `.thy` (existing fixtures carry stale/mismatched declares; in test mode they're ignored). One long-lived Isabelle session for the whole run; per-case isolation is a `rollback` to a recorded clean state, not a restart.
 
 ### Authoring a case
 ```python

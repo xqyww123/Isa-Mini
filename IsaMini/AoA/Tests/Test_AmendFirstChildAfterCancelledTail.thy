@@ -2,7 +2,7 @@ theory Test_AmendFirstChildAfterCancelledTail
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.AmendFirstChildAfterCancelledTail"]]
+declare [[AoA_driver="test.AmendFirstChildAfterCancelledTail"]]
 
 lemma t1:
   assumes hP: "P"

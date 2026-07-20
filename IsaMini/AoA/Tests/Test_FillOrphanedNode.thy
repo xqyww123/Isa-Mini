@@ -2,7 +2,7 @@ theory Test_FillOrphanedNode
   imports Complex_Main Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.FillOrphanedNode"]]
+declare [[AoA_driver="test.FillOrphanedNode"]]
 
 lemma fill_orphaned_test:
   fixes x :: "int"

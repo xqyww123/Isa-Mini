@@ -2,7 +2,7 @@ theory Test_Derive_NestedDischargeTHMLeak
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Derive_NestedDischargeTHMLeak"]]
+declare [[AoA_driver="test.Derive_NestedDischargeTHMLeak"]]
 
 (* Regression fixture for the raw `THM 0 raised ... OF: no unifiers` leak.
    `step` is an object-level implication while nat_induct's second premise is

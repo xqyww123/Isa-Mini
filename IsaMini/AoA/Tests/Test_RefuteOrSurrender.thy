@@ -2,7 +2,7 @@ theory Test_RefuteOrSurrender
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.RefuteOrSurrender"]]
+declare [[AoA_driver="test.RefuteOrSurrender"]]
 
 lemma refute_or_surrender_test:
   fixes x :: "int"

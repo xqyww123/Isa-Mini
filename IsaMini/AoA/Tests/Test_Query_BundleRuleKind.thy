@@ -2,7 +2,7 @@ theory Test_Query_BundleRuleKind
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Query_BundleRuleKind"]]
+declare [[AoA_driver="test.Query_BundleRuleKind"]]
 declare [[AoA_use_proof_cache=false]]
 
 (* A mutual inductive. Its COMBINED facts are qualified by the conglomerate name

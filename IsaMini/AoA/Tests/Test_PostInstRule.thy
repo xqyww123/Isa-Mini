@@ -2,7 +2,7 @@ theory Test_PostInstRule
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.PostInstRule"]]
+declare [[AoA_driver="test.PostInstRule"]]
 
 consts P :: "nat \<Rightarrow> bool"
 consts Q :: "nat \<Rightarrow> bool"

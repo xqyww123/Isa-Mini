@@ -34,7 +34,7 @@ translations "\<Sigma>\<^sub>m x \<in> S. t" \<rightleftharpoons> "CONST my_sum 
 abbreviation my_twice :: "nat \<Rightarrow> nat" where
   "my_twice x \<equiv> my_op x (Suc x)"
 
-declare [[agent_AoA_driver="test.UnfoldSyntax"]]
+declare [[AoA_driver="test.UnfoldSyntax"]]
 
 lemma unfold_syntax_test: "even (n::nat) \<Longrightarrow> n mod 2 = 0"
   by  aoa

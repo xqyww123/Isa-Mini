@@ -2,7 +2,7 @@ theory Test_Define_CaseExpr
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Define_CaseExpr"]]
+declare [[AoA_driver="test.Define_CaseExpr"]]
 
 (* Reproducer for fastype_of: Bound.
    Defining a recursive function whose RHS uses a `case` expression

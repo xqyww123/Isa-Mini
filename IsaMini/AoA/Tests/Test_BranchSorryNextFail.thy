@@ -2,7 +2,7 @@ theory Test_BranchSorryNextFail
   imports Complex_Main Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Branch_SorryNextFail_Real"]]
+declare [[AoA_driver="test.Branch_SorryNextFail_Real"]]
 
 definition hfinf :: "(real \<Rightarrow> real) \<Rightarrow> bool" where
   "hfinf f \<equiv> (\<forall>x. 0 \<le> f x) \<and> continuous_on {0..} f"

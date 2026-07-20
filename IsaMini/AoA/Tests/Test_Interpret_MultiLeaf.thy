@@ -2,7 +2,7 @@ theory Test_Interpret_MultiLeaf
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Interpret_MultiLeaf"]]
+declare [[AoA_driver="test.Interpret_MultiLeaf"]]
 
 (* N >= 2 leaves: `il_derived` inherits from two one-assumption locales, so its
    locale predicate unfolds (via the kernel's eager `unfold_locales`) into TWO

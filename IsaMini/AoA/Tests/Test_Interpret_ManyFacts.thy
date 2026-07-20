@@ -2,7 +2,7 @@ theory Test_Interpret_ManyFacts
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Interpret_ManyFacts"]]
+declare [[AoA_driver="test.Interpret_ManyFacts"]]
 
 (* More than 16 imported facts. The kernel registers them all (so they stay
    reachable by name and by semantic search) but does NOT inject them into the

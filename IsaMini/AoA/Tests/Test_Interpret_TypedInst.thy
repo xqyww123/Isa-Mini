@@ -2,7 +2,7 @@ theory Test_Interpret_TypedInst
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Interpret_TypedInst"]]
+declare [[AoA_driver="test.Interpret_TypedInst"]]
 
 (* Multi-token instantiation values (the cartouche path). Inside a locale
    expression, `where p = v` reads `v` with `Parse.term`, which consumes exactly

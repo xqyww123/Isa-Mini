@@ -2,7 +2,7 @@ theory Test_Hammer_ProveInTime imports
   Complex_Main Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Hammer_ProveInTime"]]
+declare [[AoA_driver="test.Hammer_ProveInTime"]]
 
 theorem aime_1988_p3:
   fixes x :: real

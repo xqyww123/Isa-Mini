@@ -1,9 +1,6 @@
 # AoA — an AI proof agent for Isabelle/HOL
 
-AoA (*Agent over AST*) proves Isabelle goals for you. Write `by aoa` in place
-of a proof, and an LLM agent constructs the proof interactively against the real
-prover — every step it takes is checked by Isabelle, so a proof AoA reports as
-finished is a proof Isabelle accepts.
+AoA (Agent over AST) is a proof agent for Isabelle, built on Minilang. It comes as an ordinary proof method: write by aoa wherever you would write by auto or by blast, and everything from there is automatic and transparent. If the goal itself is flawed — not provable as stated — AoA will tell you that, too.
 
 ---
 
@@ -11,24 +8,21 @@ finished is a proof Isabelle accepts.
 
 ```bash
 conda create -n <YOUR_ENV> -c https://conda.qiyuan.me -c conda-forge isabelle-ai
-conda activate <YOUR_ENV>
-isabelle jedit
 ```
-
-This installs Isabelle together with AoA and registers it as an Isabelle
-component, so `by aoa` is available as soon as you import the agent theory.
-
-You also need credentials for whichever model you want AoA to drive. See
-[§3 Choosing a model](#3-choosing-a-model-and-providing-credentials) — the
-default driver needs the Claude Code CLI, which conda does **not** install for you.
 
 ---
 
 ## 2. Quick start
 
+Run:
+```bash
+conda activate <YOUR_ENV>
+isabelle jedit
+```
+and then type:
 ```isabelle
 theory Scratch
-  imports  Minilang_Agent.Minilang_Agent Main
+  imports Complex_Main Minilang_Agent.Minilang_Agent
 begin
 
 theorem sqrt2_not_rational: "sqrt 2 ∉ ℚ" by aoa
@@ -36,17 +30,14 @@ theorem sqrt2_not_rational: "sqrt 2 ∉ ℚ" by aoa
 end
 ```
 
-Process the theory in jEdit. AoA takes over the goal, and its progress — the
-model's reasoning and each proof step — streams into the output panel.
-
 ---
 
 ## 3. Choosing a model and providing credentials
 
-Pick the driver with the `agent_AoA_driver` attribute:
+Pick the driver with the `AoA_driver` attribute:
 
 ```isabelle
-declare [[agent_AoA_driver = "ChatGPT.gpt-5.5-high"]]
+declare [[AoA_driver = "ChatGPT.gpt-5.5-high"]]
 ```
 
 Put it anywhere before the `by aoa` that should use it — at the top of the
@@ -117,9 +108,9 @@ The argument is a Claude model id, optionally carrying a **context-window
 suffix** `[1m]` or `[200k]`:
 
 ```isabelle
-declare [[agent_AoA_driver = "ClaudeCode"]]                        (* default: claude-opus-4-8[1m] *)
-declare [[agent_AoA_driver = "ClaudeCode.claude-opus-4-8[1m]"]]
-declare [[agent_AoA_driver = "ClaudeCode.claude-sonnet-4-6[200k]"]]
+declare [[AoA_driver = "ClaudeCode"]]                        (* default: claude-opus-4-8[1m] *)
+declare [[AoA_driver = "ClaudeCode.claude-opus-4-8[1m]"]]
+declare [[AoA_driver = "ClaudeCode.claude-sonnet-4-6[200k]"]]
 ```
 
 > The suffix is how AoA learns the context size, and it is **not** inferred from
@@ -145,10 +136,10 @@ one of `-low`, `-medium`, `-high`, `-xhigh`, `-max`. Without a suffix the
 effort is `medium`.
 
 ```isabelle
-declare [[agent_AoA_driver = "ChatGPT"]]                  (* gpt-5.5, medium effort *)
-declare [[agent_AoA_driver = "ChatGPT.gpt-5.5-high"]]
-declare [[agent_AoA_driver = "ChatGPT.gpt-5.5-xhigh"]]
-declare [[agent_AoA_driver = "ChatGPT.gpt-5.5-pro-high"]]
+declare [[AoA_driver = "ChatGPT"]]                  (* gpt-5.5, medium effort *)
+declare [[AoA_driver = "ChatGPT.gpt-5.5-high"]]
+declare [[AoA_driver = "ChatGPT.gpt-5.5-xhigh"]]
+declare [[AoA_driver = "ChatGPT.gpt-5.5-pro-high"]]
 ```
 
 If the key is missing, the driver fails on startup with the OpenAI SDK's own
@@ -178,8 +169,8 @@ Start it (e.g. `npx openai-oauth`) and retry.
 Driver strings mirror `ChatGPT`, effort suffix included:
 
 ```isabelle
-declare [[agent_AoA_driver = "OpenAI-Codex-API"]]                (* gpt-5.5, medium effort *)
-declare [[agent_AoA_driver = "OpenAI-Codex-API.gpt-5.5-high"]]
+declare [[AoA_driver = "OpenAI-Codex-API"]]                (* gpt-5.5, medium effort *)
+declare [[AoA_driver = "OpenAI-Codex-API.gpt-5.5-high"]]
 ```
 
 Two optional settings, only if your proxy differs from the default:
@@ -203,10 +194,10 @@ DEEPSEEK_API_KEY=sk-...
 The argument is `pro` or `flash` (default `flash`), or a full model id:
 
 ```isabelle
-declare [[agent_AoA_driver = "DeepSeekV4"]]                    (* deepseek-v4-flash *)
-declare [[agent_AoA_driver = "DeepSeekV4.pro"]]                (* deepseek-v4-pro *)
-declare [[agent_AoA_driver = "DeepSeekV4.flash"]]
-declare [[agent_AoA_driver = "DeepSeekV4.deepseek-v4-pro"]]
+declare [[AoA_driver = "DeepSeekV4"]]                    (* deepseek-v4-flash *)
+declare [[AoA_driver = "DeepSeekV4.pro"]]                (* deepseek-v4-pro *)
+declare [[AoA_driver = "DeepSeekV4.flash"]]
+declare [[AoA_driver = "DeepSeekV4.deepseek-v4-pro"]]
 ```
 
 Missing key gives:

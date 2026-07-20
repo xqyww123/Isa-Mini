@@ -2,7 +2,7 @@ theory Test_Obvious_ClassFactRSN
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Obvious_ClassFactRSN"]]
+declare [[AoA_driver="test.Obvious_ClassFactRSN"]]
 
 (* Regression fixture for the raw `THM 1 raised ... RSN: no unifiers` leak.
    The goal is deliberately unprovable so that sledgehammer must fail, which

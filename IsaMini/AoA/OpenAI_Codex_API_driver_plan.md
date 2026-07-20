@@ -214,7 +214,7 @@ changes = `LMUnreachable` + `ResourceUnavailable` only.
 1. Restart the REPL / launcher to reload edited Python (no `.ML` change).
 2. Start `npx openai-oauth`; readiness via a **TCP connect probe on 127.0.0.1:10531** (NOT
    `GET /v1/models`; C8).
-3. **e2e**: `by aoa` with `agent_AoA_driver="OpenAI-Codex-API.gpt-5.5-high"`. Confirm: `edit` fires
+3. **e2e**: `by aoa` with `AoA_driver="OpenAI-Codex-API.gpt-5.5-high"`. Confirm: `edit` fires
    with the **non-strict raw** schema (D6/C3); proof progresses; multi-turn full-resend works.
 4. **Reasoning round-trip** (D7): at real effort with **unforced** tool_choice, confirm resending
    emitted reasoning items returns 200. If rejected → loud crash by design; then a targeted fix (never

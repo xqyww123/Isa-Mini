@@ -2,7 +2,7 @@ theory Test_AmendDeepNotFound
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.AmendDeepNotFound"]]
+declare [[AoA_driver="test.AmendDeepNotFound"]]
 
 lemma t1:
   fixes x :: "int"

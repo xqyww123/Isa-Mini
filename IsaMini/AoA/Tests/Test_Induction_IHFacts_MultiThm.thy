@@ -2,7 +2,7 @@ theory Test_Induction_IHFacts_MultiThm
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Induction_SelectIHFacts_MultiThm"]]
+declare [[AoA_driver="test.Induction_SelectIHFacts_MultiThm"]]
 
 text \<open>
   Multi-theorem fact coverage for the IH-fact picker (LOW 4). The conjunctive

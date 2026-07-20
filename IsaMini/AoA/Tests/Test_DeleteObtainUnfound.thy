@@ -2,7 +2,7 @@ theory Test_DeleteObtainUnfound
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.DeleteObtainUnfound"]]
+declare [[AoA_driver="test.DeleteObtainUnfound"]]
 
 lemma "\<lbrakk> \<exists>k::nat. k = m \<rbrakk> \<Longrightarrow> m = m"
   by aoa

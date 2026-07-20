@@ -1,7 +1,7 @@
 theory Test_NamedFactResolution
   imports Complex_Main Minilang_Agent.Minilang_Agent
 begin
-declare [[agent_AoA_driver="test.NamedFactResolution"]]
+declare [[AoA_driver="test.NamedFactResolution"]]
 
 definition NF_XXX where "NF_XXX (a::int) b = (a + b)"
 

@@ -2,7 +2,7 @@ theory Test_PostInstRuleTermThenType
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.PostInstRuleTermThenType"]]
+declare [[AoA_driver="test.PostInstRuleTermThenType"]]
 
 consts P :: "nat \<Rightarrow> bool"
 consts S :: "'a \<Rightarrow> bool"

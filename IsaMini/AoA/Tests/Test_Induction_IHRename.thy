@@ -2,7 +2,7 @@ theory Test_Induction_IHRename
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Induction_IHRename"]]
+declare [[AoA_driver="test.Induction_IHRename"]]
 
 text \<open>
   Reproducer: the Induction case's IH displays an Isabelle-internal

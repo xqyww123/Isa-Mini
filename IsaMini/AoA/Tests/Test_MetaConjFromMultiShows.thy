@@ -2,7 +2,7 @@ theory Test_MetaConjFromMultiShows
   imports Complex_Main Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.MetaConjFromMultiShows"]]
+declare [[AoA_driver="test.MetaConjFromMultiShows"]]
 
 (* Reproduces the "meta conjunction" obstacle seen in mbzuai log e9912b2bf_8
    (= avl_AVL_front_nodeqtvc). The why3->Isabelle VC export emits one `shows`

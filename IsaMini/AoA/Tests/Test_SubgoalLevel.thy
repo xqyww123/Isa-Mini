@@ -2,7 +2,7 @@ theory Test_SubgoalLevel
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.SubgoalLevel"]]
+declare [[AoA_driver="test.SubgoalLevel"]]
 
 lemma subgoal_level_test:
   fixes x :: "int"

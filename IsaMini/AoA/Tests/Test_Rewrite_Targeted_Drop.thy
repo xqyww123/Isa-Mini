@@ -2,7 +2,7 @@ theory Test_Rewrite_Targeted_Drop imports
   Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Rewrite_Targeted_Drop"]]
+declare [[AoA_driver="test.Rewrite_Targeted_Drop"]]
 
 text \<open>
   Test that dismissing the interaction (selecting no targets) drops the

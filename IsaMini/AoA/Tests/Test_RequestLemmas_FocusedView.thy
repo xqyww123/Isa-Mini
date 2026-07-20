@@ -2,7 +2,7 @@ theory Test_RequestLemmas_FocusedView
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.RequestLemmas_FocusedView"]]
+declare [[AoA_driver="test.RequestLemmas_FocusedView"]]
 
 lemma focused_view_test:
   fixes x :: "int"

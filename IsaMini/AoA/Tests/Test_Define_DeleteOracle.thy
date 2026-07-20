@@ -2,7 +2,7 @@ theory Test_Define_DeleteOracle
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Define_DeleteOracle"]]
+declare [[AoA_driver="test.Define_DeleteOracle"]]
 
 (* Generic Define setup: we DELETE the Define after using halve as the
    witness. Probes whether `halve` survives deletion in the live state. *)

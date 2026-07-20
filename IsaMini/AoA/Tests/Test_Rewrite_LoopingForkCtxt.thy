@@ -2,7 +2,7 @@ theory Test_Rewrite_LoopingForkCtxt imports
   Minilang_Agent.Minilang_Agent
 begin
 
- declare [[agent_AoA_driver="ClaudeCode"]] (* declare [[agent_AoA_driver="test.Rewrite_LoopingForkCtxt"]] *)
+ declare [[AoA_driver="ClaudeCode"]] (* declare [[AoA_driver="test.Rewrite_LoopingForkCtxt"]] *)
 
 definition "g (x::nat) \<equiv> x"
 consts f :: \<open>'a \<Rightarrow> 'a\<close>

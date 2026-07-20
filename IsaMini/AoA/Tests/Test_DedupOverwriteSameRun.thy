@@ -2,7 +2,7 @@ theory Test_DedupOverwriteSameRun
   imports Complex_Main Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.DedupOverwriteSameRun"]]
+declare [[AoA_driver="test.DedupOverwriteSameRun"]]
 
 lemma t1: "(1::real) \<le> 2"
   by   aoa

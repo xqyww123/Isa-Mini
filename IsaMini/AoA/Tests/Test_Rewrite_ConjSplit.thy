@@ -2,7 +2,7 @@ theory Test_Rewrite_ConjSplit imports Complex_Main
   Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Rewrite_ConjSplit"]]
+declare [[AoA_driver="test.Rewrite_ConjSplit"]]
 
 definition "mypred (x::real) \<equiv> (0 < x \<and> x < 1)"
 

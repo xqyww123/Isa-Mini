@@ -2,7 +2,7 @@ theory Test_Specialize6
   imports Complex_Main Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Derive6"]]
+declare [[AoA_driver="test.Derive6"]]
 declare [[unify_trace_failure, show_sorts]]
 lemma specialize_test6:
   assumes h1: "(x::nat) mod q = y mod q"

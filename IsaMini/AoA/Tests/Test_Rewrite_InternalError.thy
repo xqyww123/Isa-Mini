@@ -2,7 +2,7 @@ theory Test_Rewrite_InternalError
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Rewrite_InternalError"]]
+declare [[AoA_driver="test.Rewrite_InternalError"]]
 
 (* A constant whose presence triggers a faulty simproc. *)
 definition "trigger_thm_err (x::nat) \<equiv> (x > 0)"

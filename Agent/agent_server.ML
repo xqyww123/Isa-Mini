@@ -4,7 +4,7 @@ signature MINILANG_AGENT_AoA = sig
 
 type driver = string
 val default_driver: driver
-val agent_aoa_driver: string Config.T
+val aoa_driver: string Config.T
 val AoA_log_dir: string Config.T
 val AoA_interactive_retrieval: string Config.T
 val AoA_retrieval_forking: string Config.T
@@ -66,7 +66,7 @@ type driver = string
 val default_driver = "ClaudeCode"
 
 (* Config for driver selection *)
-val agent_aoa_driver = Attrib.setup_config_string \<^binding>\<open>agent_AoA_driver\<close> (K default_driver)
+val aoa_driver = Attrib.setup_config_string \<^binding>\<open>AoA_driver\<close> (K default_driver)
 
 type state_id = string
 type states = Minilang.state Symtab.table
@@ -1484,7 +1484,7 @@ fun is_dummy th =
 
 fun method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
   if is_dummy sequent then NONE
-  else let val driver = Config.get ctxt agent_aoa_driver
+  else let val driver = Config.get ctxt aoa_driver
            val invocation_id = make_invocation_id ()
            val log_dir = Config.get ctxt AoA_log_dir
            val log_path = if log_dir = "" then "(no logging)"

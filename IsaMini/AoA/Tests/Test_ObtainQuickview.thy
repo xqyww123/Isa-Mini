@@ -2,7 +2,7 @@ theory Test_ObtainQuickview
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.ObtainQuickview"]]
+declare [[AoA_driver="test.ObtainQuickview"]]
 
 lemma "\<lbrakk> \<exists>k::nat. k = m \<rbrakk> \<Longrightarrow> m = m"
   by aoa

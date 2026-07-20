@@ -2,7 +2,7 @@ theory Test_DispatchGate
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.DispatchGate"]]
+declare [[AoA_driver="test.DispatchGate"]]
 
 (* Distinctive goal, left unfinished by the test, to avoid the shared proof cache *)
 lemma dispatch_gate_test: "(0::int) \<le> x * x + (5::int)"

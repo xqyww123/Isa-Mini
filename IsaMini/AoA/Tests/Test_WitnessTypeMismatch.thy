@@ -2,7 +2,7 @@ theory Test_WitnessTypeMismatch
   imports Complex_Main Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.WitnessTypeMismatch"]]
+declare [[AoA_driver="test.WitnessTypeMismatch"]]
 
 (* Reproduces the THM 1 (RSN: no unifiers) crash from a Witness whose type
    does not match the existentially quantified variable. The goal binds g of

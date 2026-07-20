@@ -2,7 +2,7 @@ theory Test_Induction_ClassifyVars_PartialPremise
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Induction_ClassifyVars_PartialPremise"]]
+declare [[AoA_driver="test.Induction_ClassifyVars_PartialPremise"]]
 
 text \<open>
   Two coverage points at once. (a) Premise-only variable: \<open>j\<close> appears ONLY in

@@ -2,7 +2,7 @@ theory Test_Derive_OrderSafety
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Derive_OrderSafety"]]
+declare [[AoA_driver="test.Derive_OrderSafety"]]
 
 (* Regression fixture for the discharge-order bug: a discharge argument with
    its own premises (B) must not shift the premise a later argument (C)

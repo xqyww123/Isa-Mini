@@ -2,7 +2,7 @@ theory Test_Specialize_OverDischarge
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Derive_OverDischarge"]]
+declare [[AoA_driver="test.Derive_OverDischarge"]]
 
 text \<open>Test that supplying more discharging facts than the rule has premises
   produces a clear error (not a raw exception THM 3 trace).\<close>

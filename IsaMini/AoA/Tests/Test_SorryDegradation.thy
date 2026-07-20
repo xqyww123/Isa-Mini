@@ -2,7 +2,7 @@ theory Test_SorryDegradation
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.SorryDegradation"]]
+declare [[AoA_driver="test.SorryDegradation"]]
 
 lemma sorry_degradation_test:
   fixes x :: "int"

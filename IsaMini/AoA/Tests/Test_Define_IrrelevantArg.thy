@@ -2,7 +2,7 @@ theory Test_Define_IrrelevantArg
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Define_IrrelevantArg"]]
+declare [[AoA_driver="test.Define_IrrelevantArg"]]
 
 (* Non-recursive extra parameter: gadd a (Suc n); only position 1 gets bridges, a stays general. *)
 

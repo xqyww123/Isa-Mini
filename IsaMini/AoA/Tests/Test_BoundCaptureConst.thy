@@ -2,7 +2,7 @@ theory Test_BoundCaptureConst
   imports Complex_Main Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.BoundCaptureConst"]]
+declare [[AoA_driver="test.BoundCaptureConst"]]
 
 (* Constant short-name collision: the summation binder `fact` collides with the
    constant `Factorial.fact`, which is used un-shadowed as `fact n` on the RHS.

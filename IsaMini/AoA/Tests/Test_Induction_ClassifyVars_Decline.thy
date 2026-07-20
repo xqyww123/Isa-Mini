@@ -2,7 +2,7 @@ theory Test_Induction_ClassifyVars_Decline
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Induction_ClassifyVars_Decline"]]
+declare [[AoA_driver="test.Induction_ClassifyVars_Decline"]]
 
 text \<open>
   Decline path: when the agent selects none of the offered unclassified

@@ -2,7 +2,7 @@ theory Test_UpstreamChangeResetsObvious
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.UpstreamChangeResetsObvious"]]
+declare [[AoA_driver="test.UpstreamChangeResetsObvious"]]
 
 lemma upstream_change_test:
   assumes h1: "x = (1::nat)"

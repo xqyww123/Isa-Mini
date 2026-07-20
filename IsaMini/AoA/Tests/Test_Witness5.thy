@@ -2,7 +2,7 @@ theory Test_Witness5
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Witness5"]]
+declare [[AoA_driver="test.Witness5"]]
 
 (* Test 5: Too many witnesses for a single leading existential *)
 lemma witness_test5: "\<exists>(x::nat). x = 0"

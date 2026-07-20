@@ -2,7 +2,7 @@ theory Test_Define_TernClose
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Define_TernClose"]]
+declare [[AoA_driver="test.Define_TernClose"]]
 
 (* Depth-3 RVAR plus depth-2 RZERO base (tern (Suc (Suc 0))); tern 5 = 5 closes via both bridge kinds. *)
 

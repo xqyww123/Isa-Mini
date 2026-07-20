@@ -2,7 +2,7 @@ theory Test_IntroSplitPremConj_NoDestruct
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.IntroSplitPremConj_NoDestruct"]]
+declare [[AoA_driver="test.IntroSplitPremConj_NoDestruct"]]
 
 (* Corner case: no premise is destructible (all are atomic bool vars or
    non-conjunctive forms). split_prem_conj is a no-op here; the alias

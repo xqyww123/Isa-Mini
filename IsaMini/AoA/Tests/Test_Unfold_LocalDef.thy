@@ -2,7 +2,7 @@ theory Test_Unfold_LocalDef
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Unfold_LocalDef"]]
+declare [[AoA_driver="test.Unfold_LocalDef"]]
 
 (* Reproducer for term_head_not_const when Unfold targets a
    proof-local function defined via the Define operation.

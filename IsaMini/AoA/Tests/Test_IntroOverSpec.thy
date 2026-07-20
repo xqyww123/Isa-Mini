@@ -2,7 +2,7 @@ theory Test_IntroOverSpec
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.IntroOverSpec"]]
+declare [[AoA_driver="test.IntroOverSpec"]]
 
 lemma t_over: "\<forall>(a::nat) b. a + b \<ge> 0"
   by aoa

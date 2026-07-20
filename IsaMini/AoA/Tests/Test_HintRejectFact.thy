@@ -2,7 +2,7 @@ theory Test_HintRejectFact
   imports Complex_Main Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.HintRejectFact"]]
+declare [[AoA_driver="test.HintRejectFact"]]
 
 (* Test-only entry (refl is not a real production hint): exercises the fact
    REJECT path. *)

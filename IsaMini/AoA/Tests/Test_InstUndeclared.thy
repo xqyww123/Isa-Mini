@@ -2,7 +2,7 @@ theory Test_InstUndeclared
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.InstUndeclared"]]
+declare [[AoA_driver="test.InstUndeclared"]]
 
 lemma inst_undeclared_test:
   assumes h1: "P (0::nat)"

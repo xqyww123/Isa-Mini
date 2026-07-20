@@ -2,7 +2,7 @@ theory Test_Induction_IHFacts
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Induction_SelectIHFacts"]]
+declare [[AoA_driver="test.Induction_SelectIHFacts"]]
 
 text \<open>
   Fixture for the \<open>Induction_SelectIHFacts\<close> model test. Mirrors the lcm

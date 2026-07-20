@@ -2,7 +2,7 @@ theory Test_Interpret_QualifierConflict
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Interpret_QualifierConflict"]]
+declare [[AoA_driver="test.Interpret_QualifierConflict"]]
 
 (* A qualifier must be unique in scope: re-using one is a retryable operation
    failure carrying

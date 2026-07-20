@@ -5,7 +5,7 @@ theory Test_Define_SucIMO
     "HOL-Number_Theory.Number_Theory"
 begin
 
-declare [[agent_AoA_driver="test.Define_SucIMO"]]
+declare [[AoA_driver="test.Define_SucIMO"]]
 
 (* Same imports as imo_1974_p3. Test whether Define with Suc
    patterns fails under this theory context. *)

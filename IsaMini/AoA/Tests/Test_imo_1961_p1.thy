@@ -7,7 +7,7 @@ MathBench_Prover.MathBench_Prover Minilang_Agent.Minilang_Agent
 
 begin
 
-declare [[auto_interpret_for_embedding=false, agent_AoA_driver="ClaudeCode.claude-opus-4-5"]]
+declare [[auto_interpret_for_embedding=false, AoA_driver="ClaudeCode.claude-opus-4-5"]]
 theorem imo_1961_p1:
   fixes x y z a b :: real
   assumes h0 : "0 < x \<and> 0 < y \<and> 0 < z"

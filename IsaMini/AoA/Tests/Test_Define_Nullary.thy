@@ -2,7 +2,7 @@ theory Test_Define_Nullary
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Define_Nullary"]]
+declare [[AoA_driver="test.Define_Nullary"]]
 
 (* Reproduces the nullary-constant limitation of the Define operation.
    AoA's Define always routes the equations through Minilang.FUN'' (the

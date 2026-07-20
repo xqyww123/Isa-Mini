@@ -2,7 +2,7 @@ theory Test_CaseSplit_VarNames_Rename
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.CaseSplit_VarNames_Rename"]]
+declare [[AoA_driver="test.CaseSplit_VarNames_Rename"]]
 
 lemma "P (n::nat)"
   by aoa

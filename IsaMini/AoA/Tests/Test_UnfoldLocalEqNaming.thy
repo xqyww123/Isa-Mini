@@ -2,7 +2,7 @@ theory Test_UnfoldLocalEqNaming
   imports Complex_Main Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.UnfoldLocalEqNaming"]]
+declare [[AoA_driver="test.UnfoldLocalEqNaming"]]
 
 (* Finding #1 reproduction (real-time audit of PutnamBench putnam_1962_a2).
 

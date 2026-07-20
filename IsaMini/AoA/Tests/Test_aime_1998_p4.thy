@@ -16,7 +16,7 @@ lemma "a = a"
 term \<open>a :: nat\<close>
 
 
-(* declare [[auto_interpret_for_embedding=false, agent_AoA_driver="ClaudeCode"]] *)
+(* declare [[auto_interpret_for_embedding=false, AoA_driver="ClaudeCode"]] *)
 theorem aime_1988_p4:
   fixes n :: nat
     and a :: "nat \<Rightarrow> real"

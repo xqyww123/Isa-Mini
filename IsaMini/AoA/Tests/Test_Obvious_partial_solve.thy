@@ -2,7 +2,7 @@ theory Test_Obvious_partial_solve imports
   Complex_Main Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Obvious_partial_solve"]]
+declare [[AoA_driver="test.Obvious_partial_solve"]]
 
 theorem aime_1988_p3:
   fixes x :: real

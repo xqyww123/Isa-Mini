@@ -2,7 +2,7 @@ theory Test_FactsToGeneralize_ConsumingRule
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.FactsToGeneralize_ConsumingRule"]]
+declare [[AoA_driver="test.FactsToGeneralize_ConsumingRule"]]
 
 text \<open>
   End-to-end test combining two features:

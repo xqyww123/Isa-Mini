@@ -2,7 +2,7 @@ theory Test_Rewrite_Targeted imports
   Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Rewrite_Targeted"]]
+declare [[AoA_driver="test.Rewrite_Targeted"]]
 
 text \<open>
   Test interactive target selection for looping rewrite rules.

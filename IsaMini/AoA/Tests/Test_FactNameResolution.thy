@@ -2,7 +2,7 @@ theory Test_FactNameResolution
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.FactNameResolution"]]
+declare [[AoA_driver="test.FactNameResolution"]]
 
 lemma
   fixes x :: "nat"

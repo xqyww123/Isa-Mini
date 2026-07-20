@@ -2,7 +2,7 @@ theory Test_UnfoldCondNote
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.UnfoldCondNote"]]
+declare [[AoA_driver="test.UnfoldCondNote"]]
 
 (* Conditional vs unconditional local definitional premises, for the one-shot
    "unfolding a conditional definition may have no effect" agent note.

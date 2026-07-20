@@ -2,7 +2,7 @@ theory Test_Define_Fib2Close
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Define_Fib2Close"]]
+declare [[AoA_driver="test.Define_Fib2Close"]]
 
 (* Depth-2 numeral closing: fib2 (Suc (Suc n)) pattern; fib2 4 = 3 closes via depth-2 bridges. *)
 

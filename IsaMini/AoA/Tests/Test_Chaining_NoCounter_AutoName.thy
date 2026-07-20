@@ -2,7 +2,7 @@ theory Test_Chaining_NoCounter_AutoName
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Chaining_NoCounter_AutoName"]]
+declare [[AoA_driver="test.Chaining_NoCounter_AutoName"]]
 
 (* Test: Chaining without explicit name under No_Counter mode.
    The agent server sets counter_mode="none", so auto-name generation

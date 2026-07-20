@@ -2,7 +2,7 @@ theory Test_Interpret_WorkerScope
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Interpret_WorkerScope"]]
+declare [[AoA_driver="test.Interpret_WorkerScope"]]
 
 (* Scoping of the imported facts: they are attached to the interpretation
    block's RESULT state (`_fixed_facts_after_me`), so they are visible to the

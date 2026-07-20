@@ -2,7 +2,7 @@ theory Test_Rewrite_NO_SIMP_Leak imports
   Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Rewrite_NO_SIMP_Leak"]]
+declare [[AoA_driver="test.Rewrite_NO_SIMP_Leak"]]
 
 text \<open>
   Bug reproduction: Rewrite on a premise with conclusion False leaks NO_SIMP

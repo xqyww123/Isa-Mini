@@ -1,7 +1,7 @@
 theory Test_FloorN28
   imports Complex_Main Minilang_Agent.Minilang_Agent
 begin
-declare [[auto_interpret_for_embedding=false, agent_AoA_driver="ClaudeCode"]]
+declare [[auto_interpret_for_embedding=false, AoA_driver="ClaudeCode"]]
 (* Goal 2 from e1a98d264_3 step 25.2.2.1.3.1:
    Given the Archimedean bounds on N and the factored sum constraint,
    prove N = 28. Hammer failed even with harith (28*30=840, 29\<^sup>2=841). *)

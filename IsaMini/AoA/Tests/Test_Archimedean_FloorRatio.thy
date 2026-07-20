@@ -1,7 +1,7 @@
 theory Test_Archimedean_FloorRatio
   imports Complex_Main Minilang_Agent.Minilang_Agent
 begin
-declare [[auto_interpret_for_embedding=false, agent_AoA_driver="ClaudeCode"]]
+declare [[auto_interpret_for_embedding=false, AoA_driver="ClaudeCode"]]
 (* Goal 1 from e1a98d264_3 step 25.2.2.1.2.1:
    Given x0 with 1 < x0/\<lfloor>x0\<rfloor> < 2, find N such that
    N*(x0 - \<lfloor>x0\<rfloor>) < \<lfloor>x0\<rfloor> \<le> (N+1)*(x0 - \<lfloor>x0\<rfloor>).

@@ -2,7 +2,7 @@ theory Test_StruggleCheckpoint
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.StruggleCheckpoint"]]
+declare [[AoA_driver="test.StruggleCheckpoint"]]
 
 lemma struggle_checkpoint_test:
   fixes x :: "int"

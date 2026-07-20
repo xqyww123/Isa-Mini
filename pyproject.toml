@@ -75,7 +75,6 @@ repl = ["IsaREPL"]
 # need. `toplevel._try_import_driver` swallows the ImportError of a driver whose extra
 # is absent, so an under-declared extra does not fail loudly -- it makes the driver
 # vanish and surfaces much later as `Unknown driver: <name>`.
-openai = ["openai>=2.33.0"]
 # driver_openai_api.py: the openai SDK, plus tiktoken for APIDriver_ChatGPT.estimate_tokens.
 # Every driver registered there (ChatGPT, OpenAI-Codex-API, K2-Think, Chat, DeepSeekV4)
 # is an openai-SDK client, even the ones whose names do not say so.
@@ -93,7 +92,7 @@ web = ["aiohttp>=3.13.5"]
 # `repl` is intentionally NOT in `all`: keeping IsaREPL optional (so `pip install
 # IsaMini` gives the AoA agent without it) is the whole point -- do not add it back.
 # Users who want the Minilang REPL client / CLI ask for `IsaMini[repl]` explicitly.
-all = ["IsaMini[openai,api,web]"]
+all = ["IsaMini[api,web]"]
 
 [project.urls]
 "Homepage" = "https://github.com/xqyww123/Isa-Mini"

@@ -2,7 +2,7 @@ theory Test_Rewrite_NoProgress
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Rewrite_NoProgress"]]
+declare [[AoA_driver="test.Rewrite_NoProgress"]]
 
 definition "foo \<equiv> (0::nat) = 0"
 

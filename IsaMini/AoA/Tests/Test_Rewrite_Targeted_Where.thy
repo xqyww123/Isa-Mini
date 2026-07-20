@@ -2,7 +2,7 @@ theory Test_Rewrite_Targeted_Where imports
   Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Rewrite_Targeted_Where"]]
+declare [[AoA_driver="test.Rewrite_Targeted_Where"]]
 
 definition "g (x::nat) \<equiv> x"
 consts f :: \<open>'a \<Rightarrow> 'a\<close>

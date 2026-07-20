@@ -2,7 +2,7 @@ theory Test_Specialize4
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Specialize4"]]
+declare [[AoA_driver="test.Specialize4"]]
 
 lemma specialize_test4:
   assumes h1: "P (0::nat)"

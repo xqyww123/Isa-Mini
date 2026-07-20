@@ -2,7 +2,7 @@ theory Test_FillCancelledPredecessor
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.FillCancelledPredecessor"]]
+declare [[AoA_driver="test.FillCancelledPredecessor"]]
 
 lemma t1:
   assumes hP: "P"

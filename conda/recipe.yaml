@@ -351,13 +351,13 @@ tests:
       # executes.  Metadata is the wrong instrument for this project's real failure mode --
       # naming conda's `xxhash` (the C library) instead of `python-xxhash` resolves,
       # installs green, and dies only at `import xxhash`.
-      - python -c "import openai, agents, tiktoken, anthropic, httpx, aiohttp, xxhash, msgpack, rich, yaml, jsoncomment, mcp, uvicorn, zstandard, platformdirs; print('all declared dependencies import')"
+      - python -c "import openai, tiktoken, anthropic, httpx, aiohttp, xxhash, msgpack, rich, yaml, jsoncomment, mcp, uvicorn, zstandard, platformdirs; print('all declared dependencies import')"
       # The drivers that must be present in a conda install.  This is the assertion that
       # catches the silent-vanish failure the folded extras exist to prevent: it names the
       # drivers rather than trusting that the dependencies imply them.
       # (No ": " anywhere in the command -- a plain YAML scalar cannot contain that
       # two-character sequence, and rattler-build then fails to parse the whole recipe.)
-      - python -c "from IsaMini.AoA.toplevel import Session; d=set(Session.Driver); need={'ClaudeCode','Codex','OpenAI','Claude','ChatGPT','DeepSeekV4'}; missing=need-d; assert not missing, f'drivers missing {sorted(missing)} (have {sorted(d)})'; print('drivers present', sorted(d))"
+      - python -c "from IsaMini.AoA.toplevel import Session; d=set(Session.Driver); need={'ClaudeCode','Codex','Claude','ChatGPT','DeepSeekV4'}; missing=need-d; assert not missing, f'drivers missing {sorted(missing)} (have {sorted(d)})'; print('drivers present', sorted(d))"
 
 about:
   homepage: https://github.com/xqyww123/Isa-Mini

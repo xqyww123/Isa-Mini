@@ -2,7 +2,7 @@ theory Test_HaveSchematicVar imports Complex_Main
   Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.HaveSchematicVar"]]
+declare [[AoA_driver="test.HaveSchematicVar"]]
 
 (* AoA rejects a Have whose statement carries schematic variables (agent.ML
    `reject_schematic_goal`), pointing the agent at `for_any` instead.  Minilang's

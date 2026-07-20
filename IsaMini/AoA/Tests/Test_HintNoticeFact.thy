@@ -2,7 +2,7 @@ theory Test_HintNoticeFact
   imports Complex_Main Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.HintNoticeFact"]]
+declare [[AoA_driver="test.HintNoticeFact"]]
 
 (* Test-only entry (conjI is not a real production hint): exercises the fact
    NOTICE path (op proceeds, note surfaced once per session). *)

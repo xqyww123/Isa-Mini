@@ -2,7 +2,7 @@ theory Test_Specialize_NullGap
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Derive_NullGap"]]
+declare [[AoA_driver="test.Derive_NullGap"]]
 
 lemma specialize_null_gap:
   assumes h1: "P (0::nat)"

@@ -2,7 +2,7 @@ theory Test_DeriveBall
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.DeriveBall"]]
+declare [[AoA_driver="test.DeriveBall"]]
 
 lemma derive_ball_test:
   assumes h1: "(0::nat) \<in> A"

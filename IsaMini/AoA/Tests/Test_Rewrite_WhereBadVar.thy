@@ -2,7 +2,7 @@ theory Test_Rewrite_WhereBadVar
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Rewrite_WhereBadVar"]]
+declare [[AoA_driver="test.Rewrite_WhereBadVar"]]
 
 fun myf :: "nat \<Rightarrow> nat" where
   "myf n = n + 1"

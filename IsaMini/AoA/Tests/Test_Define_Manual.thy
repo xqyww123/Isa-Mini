@@ -2,7 +2,7 @@ theory Test_Define_Manual
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Define_Manual"]]
+declare [[AoA_driver="test.Define_Manual"]]
 
 (* Force the Define node's auto-prove path (default prover + BY_METRIC
    sledge fallback + auto+termination_simp simplification) to fail,

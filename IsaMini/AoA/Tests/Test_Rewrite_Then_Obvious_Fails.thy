@@ -2,7 +2,7 @@ theory Test_Rewrite_Then_Obvious_Fails
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.RewriteThenObviousFails"]]
+declare [[AoA_driver="test.RewriteThenObviousFails"]]
 
 (* Regression: after a successful Rewrite as the last child of a block,
    filling the next step with a failing Obvious must produce a graceful

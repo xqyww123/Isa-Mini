@@ -2,7 +2,7 @@ theory Test_Unfold1
   imports Minilang_Agent.Minilang_Agent
 begin
   
-declare [[agent_AoA_driver="test.Unfold1"]]
+declare [[AoA_driver="test.Unfold1"]]
 
 definition XXX where "XXX (a::int) b = (a + b)"
 

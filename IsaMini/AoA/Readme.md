@@ -12,9 +12,9 @@ In Isabelle, use `by aoa` to invoke the agent.
 
 ### Configuration Options
 
-- **`agent_aoa_driver`**: AI driver to use (default: `"ClaudeCode"`)
+- **`AoA_driver`**: AI driver to use (default: `"ClaudeCode"`)
   ```isabelle
-  declare [[agent_aoa_driver = "ClaudeCode"]]
+  declare [[AoA_driver = "ClaudeCode"]]
   ```
 
 - **`AoA_log_dir`**: Log directory path. Set to `""` to disable logging.

@@ -2,7 +2,7 @@ theory Test_Interpret_ZeroObligation
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Interpret_ZeroObligation"]]
+declare [[AoA_driver="test.Interpret_ZeroObligation"]]
 
 (* N = 0 obligations: `iz_triv` fixes a parameter but assumes nothing, so the
    interpretation has no witness obligation at all. The kernel must report

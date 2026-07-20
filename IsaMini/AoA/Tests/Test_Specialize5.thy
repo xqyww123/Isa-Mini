@@ -2,7 +2,7 @@ theory Test_Specialize5
   imports Complex_Main Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Derive5"]]
+declare [[AoA_driver="test.Derive5"]]
 
 lemma specialize_test5:
   assumes h1: "(x::int) mod q = y mod q"

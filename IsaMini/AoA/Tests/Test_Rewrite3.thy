@@ -2,7 +2,7 @@ theory Test_Rewrite3
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Rewrite3"]]
+declare [[AoA_driver="test.Rewrite3"]]
   
 (* Test rewriting premises with equations *)
 lemma rewrite_test:

@@ -2,7 +2,7 @@ theory Test_IntroSplitPremConj
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.IntroSplitPremConj"]]
+declare [[AoA_driver="test.IntroSplitPremConj"]]
 
 (* The goal has four premises exercising each destruct rule of
    deep_destruct_prem:

@@ -2,7 +2,7 @@ theory Test_Rewrite_QuantifiedGoal imports
   Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Rewrite_QuantifiedGoal"]]
+declare [[AoA_driver="test.Rewrite_QuantifiedGoal"]]
 
 text \<open>
   Regression test for fastype_of: Bound crash when a looping rewrite

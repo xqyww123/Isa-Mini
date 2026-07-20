@@ -2,7 +2,7 @@ theory Test_Interpret_NoInstantiations
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Interpret_NoInstantiations"]]
+declare [[AoA_driver="test.Interpret_NoInstantiations"]]
 
 (* `instantiations` is optional in the schema. A parameterless locale is
    interpreted with no `where` clause at all -- exercising the empty branch of

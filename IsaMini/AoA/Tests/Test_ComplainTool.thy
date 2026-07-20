@@ -2,7 +2,7 @@ theory Test_ComplainTool
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.ComplainTool"]]
+declare [[AoA_driver="test.ComplainTool"]]
 
 lemma complain_test:
   fixes x :: "int"

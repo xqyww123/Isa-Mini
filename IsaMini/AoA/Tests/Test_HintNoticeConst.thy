@@ -2,7 +2,7 @@ theory Test_HintNoticeConst
   imports Complex_Main Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.HintNoticeConst"]]
+declare [[AoA_driver="test.HintNoticeConst"]]
 
 (* Same const/message as the reject seed, but registered as a NOTICE (severity
    flag flipped): the op proceeds and the note is surfaced once per session. *)

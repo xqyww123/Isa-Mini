@@ -2,7 +2,7 @@ theory Test_Rewrite_Once_Simproc imports
   Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Rewrite_Once_Simproc"]]
+declare [[AoA_driver="test.Rewrite_Once_Simproc"]]
 
 text \<open>
   Test that the once-simproc fallback fires when a user-provided rewrite rule

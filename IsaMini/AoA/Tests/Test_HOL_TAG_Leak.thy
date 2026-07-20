@@ -2,7 +2,7 @@ theory Test_HOL_TAG_Leak
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.HOL_TAG_Leak"]]
+declare [[AoA_driver="test.HOL_TAG_Leak"]]
 
 text \<open>
   Reproducer for the HOL.TAG leak in induction hypotheses.

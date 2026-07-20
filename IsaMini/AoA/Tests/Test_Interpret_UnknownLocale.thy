@@ -2,7 +2,7 @@ theory Test_Interpret_UnknownLocale
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Interpret_UnknownLocale"]]
+declare [[AoA_driver="test.Interpret_UnknownLocale"]]
 
 (* Error path: a locale name that does not exist. The locale-expression parser
    inside `interpret_i` rejects it, which must surface as a plain (retryable)

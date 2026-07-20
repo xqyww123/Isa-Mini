@@ -312,7 +312,7 @@ through `print_proof_scope`; the `recall` tool reads it back.
 
 - `by aoa` → the `method_setup aoa` in `Agent/Minilang_Agent.thy`; method body is
   `MiniLang_Agent_AoA.method` in `Agent/agent_server.ML`. Default driver from config
-  `agent_AoA_driver`.
+  `AoA_driver`.
 - AoA is **one long-lived RPC command** `IsaMini.AoA` (ML builds `aoa_cmd` in `agent_server.ML`;
   Python handler `IsaMini_AoA`, decorated `@isabelle_remote_procedure("IsaMini.AoA")` in
   `toplevel.py`). Within it, **Python calls back into ML** repeatedly (`proof_opr`, `reset_state`,
@@ -367,7 +367,7 @@ The driver slot is `f"{mode}.{name}"` = `"test.<name>"`. On the Python side `Isa
 sequent the ML side captured via `Proof.refine_primitive`.
 
 > **The case is selected by `name`, via the `"test.<name>"` driver string the runner sends — NOT by
-> the `declare [[agent_AoA_driver=…]]` inside the `.thy`.** Existing fixtures carry stale/mismatched
+> the `declare [[AoA_driver=…]]` inside the `.thy`.** Existing fixtures carry stale/mismatched
 > declares (e.g. `Test_Have1.thy` declares `test.ProveInTime_ParseError` while the test is `Have1`);
 > in test mode that line is ignored.
 

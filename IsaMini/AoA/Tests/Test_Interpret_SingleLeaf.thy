@@ -2,7 +2,7 @@ theory Test_Interpret_SingleLeaf
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Interpret_SingleLeaf"]]
+declare [[AoA_driver="test.Interpret_SingleLeaf"]]
 
 (* N = 1 leaf -- the critical corner case. The default SubgoalMaker rule only
    opens a block when the operation reports MORE THAN ONE new subgoal; with a

@@ -2,7 +2,7 @@ theory Test_Delete1
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Delete1"]]
+declare [[AoA_driver="test.Delete1"]]
 
 (* Test rewriting premises with equations *)
 lemma rewrite_test:

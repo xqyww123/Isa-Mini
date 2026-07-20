@@ -2,7 +2,7 @@ theory Test_FactsToGeneralize_Filter
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.FactsToGeneralize_Filter"]]
+declare [[AoA_driver="test.FactsToGeneralize_Filter"]]
 
 text \<open>
   Cover the four partitioning paths of the `facts_to_generalize` field

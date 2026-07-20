@@ -2,7 +2,7 @@ theory Test_IntroOutOfOrderRename
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.IntroOutOfOrderRename"]]
+declare [[AoA_driver="test.IntroOutOfOrderRename"]]
 
 (* Goal's internal names are n (first) and m (second).
    We provide variable_bindings=["m"] — one binding only.

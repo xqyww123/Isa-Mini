@@ -2,7 +2,7 @@ theory Test_OutScopeVar
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.OutScopeVar"]]
+declare [[AoA_driver="test.OutScopeVar"]]
 
 text \<open>
   Fixture for the \<open>OutScopeVar\<close> model test. After \<open>Intro\<close> fixes \<open>n\<close> and

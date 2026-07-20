@@ -2,7 +2,7 @@ theory Test_Induction_ClassifyVars
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Induction_ClassifyVars"]]
+declare [[AoA_driver="test.Induction_ClassifyVars"]]
 
 text \<open>
   Fixture for the \<open>Induction_ClassifyVars\<close> model test. After \<open>Intro\<close> fixes the

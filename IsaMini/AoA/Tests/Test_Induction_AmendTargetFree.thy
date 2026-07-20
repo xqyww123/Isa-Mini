@@ -2,7 +2,7 @@ theory Test_Induction_AmendTargetFree
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Induction_AmendTargetFree"]]
+declare [[AoA_driver="test.Induction_AmendTargetFree"]]
 
 text \<open>
   Regression test for the "target-in-arbitrary on amend" bug

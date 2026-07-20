@@ -2,7 +2,7 @@ theory Test004
   imports Minilang_Agent.Minilang_Agent
 begin
 
-(* declare [[agent_AoA_driver="test.IntroConj"]] *)
+(* declare [[AoA_driver="test.IntroConj"]] *)
   
 lemma "rev (rev l) = l"
   by   aoa

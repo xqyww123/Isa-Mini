@@ -2,7 +2,7 @@ theory Test_RewriteNeqFlipNoOpDup
   imports Complex_Main Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.RewriteNeqFlipNoOpDup"]]
+declare [[AoA_driver="test.RewriteNeqFlipNoOpDup"]]
 
 lemma rewrite_neq_flip_dup_test:
   assumes ln2_ne_0: "ln (2::real) \<noteq> 0"

@@ -2,7 +2,7 @@ theory Test_RewriteBoundCapture
   imports Complex_Main Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.RewriteBoundCapture"]]
+declare [[AoA_driver="test.RewriteBoundCapture"]]
 
 (* Reproduces the Rewrite/Derive bound-variable display collision reported for
    `sum_distrib_left` (`?r * sum ?f ?A = (\<Sum>n\<in>?A. ?r * ?f n)`, whose RHS binder

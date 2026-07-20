@@ -2,7 +2,7 @@ theory Test_Define_SucPattern
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Define_SucPattern"]]
+declare [[AoA_driver="test.Define_SucPattern"]]
 
 (* Test: Define with Suc constructor patterns.
 

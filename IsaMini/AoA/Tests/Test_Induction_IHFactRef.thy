@@ -2,7 +2,7 @@ theory Test_Induction_IHFactRef
   imports Minilang_Agent.Minilang_Agent
 begin
 
-declare [[agent_AoA_driver="test.Induction_IHFactRef"]]
+declare [[AoA_driver="test.Induction_IHFactRef"]]
 
 text \<open>
   Reproducer: referencing the induction hypothesis by its displayed
