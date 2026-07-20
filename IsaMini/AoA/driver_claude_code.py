@@ -9,8 +9,7 @@ import shlex
 import tempfile
 import shutil
 from .model import *
-from .language_model_driver import (LMDriver, _TransientError, _QuotaError, _TechnicalError,
-                                    PRICING, pricing_for, Usage)
+from .language_model_driver import LMDriver, _TransientError, _QuotaError, PRICING, pricing_for, Usage
 from . import prompts as P
 from .mcp_http_server import ProofMCPHTTPServer
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, HookMatcher, ResultMessage
@@ -539,38 +538,40 @@ class ClaudeCode(LMDriver):
         proof failure, with cost $0 and zero tool calls as the only clue.
 
         AssistantMessage.error (claude_agent_sdk.types.AssistantMessageError) is the
-        stable, version-independent signal; the ResultMessage.is_error fail-safe below
-        catches whatever the enum does not.
+        stable, version-independent signal, and it is what an unauthenticated CLI sets.
+
+        DELIBERATELY ONLY AssistantMessage: there is no `is_error` fail-safe on
+        ResultMessage here, unlike the interpretation pipeline. In AoA an is_error
+        ResultMessage is NORMAL — every terminal path ends its turn by calling
+        interrupt() from inside an MCP tool handler (proof complete, surrender, refute,
+        refresh, budget exhausted), and the CLI answers that with
+        ResultMessage(subtype='error_during_execution', is_error=True, result=None).
+        Treating those as failures reported successful proofs as TechnicalFailure,
+        overwrote Surrender/Refute, and destroyed Refresh so context refresh could never
+        happen. ResultMessages stay with _check_result_error -> _check_error_text, which
+        keeps quota and rate-limit results on their wait-and-retry rails.
         """
         err = getattr(message, "error", None) if isinstance(message, AssistantMessage) else None
-        if err is None and isinstance(message, ResultMessage):
-            # Fail-safe. NB: do NOT branch on `subtype` — it still reads 'success' on an
-            # auth failure.
-            if not message.is_error:
-                return
-            err = "unknown"
         if err is None:
             return
 
+        if err != "authentication_failed":
+            # Deliberately ONE value, not a catch-all. rate_limit / server_error already
+            # have owners -- _check_error_text -> _QuotaError (20-min wait) and
+            # _TransientError (2 s backoff) -- and routing them from here preempted those
+            # rails, turning a recoverable usage cap into a terminal failure. No other
+            # value has ever been observed, and an unrecognised signal must not become a
+            # terminal verdict.
+            return
+
         detail = self._model_error_detail(message)
-        if err == "rate_limit":
-            raise _QuotaError(detail or "rate limit")
-        if err == "server_error":
-            raise _TransientError(detail or "server error")
-        if err in ("authentication_failed", "billing_error"):
-            # The backend itself cannot be used: give up cleanly through the existing
-            # LMUnreachable -> ResourceUnavailable rail (driver_api._api_loop:381), the
-            # same one driver_openai_api._fail_fast uses for a 401. Retrying cannot help.
-            raise LMUnreachable(
-                "Claude-Code: could not authenticate or the account is not billable. "
-                "Run `claude` and use /login, then retry."
-                + (f" The model reported: {detail!r}" if detail else ""))
-        # invalid_request / unknown: not the backend's fault and not transient — we sent
-        # something the API rejected, or hit a failure we have no branch for. Either way
-        # it is a defect to surface, not a proof outcome.
-        raise _TechnicalError(
-            f"Claude-Code: agent failure ({err})"
-            + (f": {detail}" if detail else ""))
+        # Give up cleanly through the existing LMUnreachable -> ResourceUnavailable rail
+        # (driver_api._api_loop:381), the same one driver_openai_api._fail_fast uses for a
+        # 401. Retrying cannot authenticate us.
+        raise LMUnreachable(
+            "Claude-Code: the CLI is not authenticated. Run `claude` and use /login, "
+            "then retry."
+            + (f" The CLI reported: {detail!r}" if detail else ""))
 
     @staticmethod
     def _model_error_detail(message: Any) -> str:
@@ -588,7 +589,6 @@ class ClaudeCode(LMDriver):
     def _check_result_error(self, message: 'ResultMessage') -> None:
         if message.is_error and message.result:
             self._check_error_text(message.result)
-        self._check_message_error(message)
 
     async def _sdk_loop(self):
         """Run using the Claude Agent SDK (embedded mode)."""
@@ -646,16 +646,18 @@ class ClaudeCode(LMDriver):
                         else:
                             break
             except LMUnreachable as e:
-                # Credentials/billing: give up cleanly through quit_info rather than
-                # spinning to the retry limit (which would report the infrastructure
-                # failure as ResourceExhausted, i.e. as a proof that ran out of budget).
-                # Mirrors driver_api._api_loop:381. Terminal => the outer loop breaks.
-                self.quit_info = ResourceUnavailable(detail=str(e))
+                # Unauthenticated CLI: give up cleanly through quit_info rather than
+                # spinning to the retry limit, which reported the infrastructure failure
+                # as ResourceExhausted -- a proof that ran out of budget. Mirrors
+                # driver_api._api_loop:381. Terminal => the outer loop breaks.
+                # Never clobber an already-terminal verdict: a tool handler may have set
+                # Surrender/Refute and called interrupt(), which is fire-and-forget
+                # (model.py:655-673), so the CLI can still emit one more turn. A
+                # non-terminal Restart/Refresh IS overwritten on purpose -- we must stop,
+                # not loop again.
+                if self.quit_info is None or not self.quit_info.is_terminal:
+                    self.quit_info = ResourceUnavailable(detail=str(e))
                 self.warn_AoA_opr(f"LM unreachable: {e}")
-                break
-            except _TechnicalError as e:
-                self.quit_info = TechnicalFailure(detail=str(e))
-                self.warn_AoA_opr(f"Technical failure: {e}")
                 break
             finally:
                 self._client = None
@@ -1006,7 +1008,6 @@ class ClaudeCode(LMDriver):
                         if RateLimitEvent is not None and isinstance(message, RateLimitEvent):
                             self._check_rate_limit_event(message)
                             continue
-                        self._check_message_error(message)
                         content = getattr(message, "content", None)
                         if isinstance(content, list):
                             for block in content:
@@ -1042,11 +1043,6 @@ class ClaudeCode(LMDriver):
             except _TransientError as e:
                 self.warn_AoA_opr(f"{tag} Transient API error, retrying in 2s: {e}")
                 await asyncio.sleep(2)
-            # LMUnreachable / _TechnicalError are deliberately NOT caught here: this loop
-            # may only `break` once fork_pending.answer is done (the assert below relies
-            # on it), so swallowing them would trade a clean give-up for an AssertionError.
-            # They propagate to ToolExecutor.execute — which spawned this fork — and are
-            # converted to quit_info there, the same route driver_api._run_fork uses.
         finally:
             if self._http_server is not None and fork._session_id is not None:
                 await self._http_server.unregister_session(fork._session_id)
