@@ -50,17 +50,16 @@ import time
 async def _resolve_isa_env(connection, name: str) -> 'str | None':
     """One env variable: the connected Isabelle's env -> this process's env -> None.
 
-    Thin wrapper over Semantic_Embedding's _resolve_env (the host loads that
-    package anyway -- see check_update below). This host is a long-lived daemon
-    whose os.environ is frozen at server start, while the Isabelle process
-    re-sources etc/settings at every restart -- so user configuration (driver
-    API keys above all) must be read through the connection to be fresh.
-    Degrades to os.getenv when Semantic_Embedding is absent (minimal installs).
+    Thin wrapper over Semantic_Embedding's _resolve_env. This host is a
+    long-lived daemon whose os.environ is frozen at server start, while the
+    Isabelle process re-sources etc/settings at every restart -- so user
+    configuration (driver API keys above all) must be read through the
+    connection to be fresh. The import is deferred per this module's style,
+    not guarded: AoA hard-depends on Isabelle_Semantic_Embedding (model.py
+    imports it at module top), so an absent-package fallback would protect a
+    deployment that cannot exist.
     """
-    try:
-        from Isabelle_Semantic_Embedding.semantic_embedding import _resolve_env
-    except ImportError:
-        return os.getenv(name)
+    from Isabelle_Semantic_Embedding.semantic_embedding import _resolve_env
     return await _resolve_env(connection, name)
 
 
